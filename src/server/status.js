@@ -2,6 +2,9 @@ import { buildProbeArgv } from './sshCommand.js';
 
 export const STATUS_FMT = '#{session_name}:#{session_windows}:#{session_attached}:#{session_activity}';
 
+export const PROBE_REMOTE =
+  `if command -v tmux >/dev/null 2>&1; then tmux ls -F '${STATUS_FMT}' 2>/dev/null || true; else echo __NO_TMUX__; fi`;
+
 export function parseTmuxSessions(stdout) {
   return String(stdout)
     .split(/\r?\n/)
@@ -13,7 +16,7 @@ export function parseTmuxSessions(stdout) {
 }
 
 export function createStatusChecker({ run, hostKeyPolicy = 'accept-new' }) {
-  const remote = `command -v tmux >/dev/null 2>&1 && tmux ls -F '${STATUS_FMT}' 2>/dev/null || echo __NO_TMUX__`;
+  const remote = PROBE_REMOTE;
   return {
     async checkBox(box) {
       try {
