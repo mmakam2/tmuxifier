@@ -15,9 +15,9 @@ let active;
 afterEach(async () => { if (active) await active(); active = null; });
 
 test('process started in tmux survives a killed local PTY and is visible on reattach', async () => {
-  const { box, session, env, cleanup } = await setupLocalBox();
+  const { box, session, env, sshConfigFile, cleanup } = await setupLocalBox();
   active = cleanup;
-  const mgr = createSessionManager({ spawnEnv: env, graceSeconds: 1 });
+  const mgr = createSessionManager({ sshConfigFile, spawnEnv: env, graceSeconds: 1 });
   const size = { cols: 80, rows: 24 };
 
   const e1 = mgr.open({ key: 'k1', box, session, size });
@@ -31,7 +31,7 @@ test('process started in tmux survives a killed local PTY and is visible on reat
   await delay(1800);                                       // grace (1s) expires -> local PTY killed
   expect(mgr._count()).toBe(0);
 
-  const probe = await sshRun(buildProbeArgv(box, `pgrep -f 'sleep 987' | head -1`), { env });
+  const probe = await sshRun(buildProbeArgv(box, `pgrep -f 'sleep 987' | head -1`, { sshConfigFile }), { env });
   expect(probe.stdout.trim()).not.toBe('');               // still running on the box
 
   const e2 = mgr.open({ key: 'k2', box, session, size });  // reattach to same session
@@ -42,9 +42,9 @@ test('process started in tmux survives a killed local PTY and is visible on reat
 });
 
 test('reconnect within grace reuses the same PTY entry', async () => {
-  const { box, session, env, cleanup } = await setupLocalBox();
+  const { box, session, env, sshConfigFile, cleanup } = await setupLocalBox();
   active = cleanup;
-  const mgr = createSessionManager({ spawnEnv: env, graceSeconds: 30 });
+  const mgr = createSessionManager({ sshConfigFile, spawnEnv: env, graceSeconds: 30 });
   const size = { cols: 80, rows: 24 };
   const e1 = mgr.open({ key: 'tab-1', box, session, size });
   await waitFor(() => true);

@@ -3,7 +3,7 @@ import { buildAttachArgv } from './sshCommand.js';
 
 const { spawn } = nodePty;
 
-export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSeconds = 45, spawnEnv = process.env } = {}) {
+export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSeconds = 45, spawnEnv = process.env, sshConfigFile } = {}) {
   const entries = new Map(); // key -> entry
 
   function open({ key, box, session, size }) {
@@ -12,7 +12,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       if (existing.graceTimer) { clearTimeout(existing.graceTimer); existing.graceTimer = null; }
       return existing;
     }
-    const argv = buildAttachArgv(box, session, size, { hostKeyPolicy });
+    const argv = buildAttachArgv(box, session, size, { hostKeyPolicy, sshConfigFile });
     const pty = spawn('ssh', argv, {
       name: 'xterm-color',
       cols: size.cols,

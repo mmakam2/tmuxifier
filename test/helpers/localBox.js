@@ -17,40 +17,27 @@ export async function setupLocalBox() {
   const realAk = path.join(os.homedir(), '.ssh', 'authorized_keys');
   await fs.appendFile(realAk, `\n${pub}\n`);
 
-  // OpenSSH ignores HOME env and uses getpwuid() for the home directory.
-  // Write the Host alias into the real ~/.ssh/config (which is absent here)
-  // and restore it on cleanup.
   const user = os.userInfo().username;
-  const realSshConfig = path.join(os.homedir(), '.ssh', 'config');
-  const configSnippet =
-    `# helm-test-${randomUUID().slice(0, 8)}\n` +
+  const sshConfigFile = path.join(tmp, 'ssh_config');
+  await fs.writeFile(
+    sshConfigFile,
     `Host helmlocal\n  HostName 127.0.0.1\n  User ${user}\n  IdentityFile ${keyPath}\n` +
-    `  IdentitiesOnly yes\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n`;
-
-  let prevConfig = null;
-  try { prevConfig = await fs.readFile(realSshConfig, 'utf8'); } catch {}
-  await fs.writeFile(realSshConfig, (prevConfig ?? '') + configSnippet, { mode: 0o600 });
+      `  IdentitiesOnly yes\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n`,
+    { mode: 0o600 },
+  );
 
   const env = { ...process.env };
   const box = { host: 'helmlocal' };
   const session = `helmtest-${randomUUID().slice(0, 8)}`;
 
   async function cleanup() {
-    try { await sshRun(buildProbeArgv(box, `tmux kill-session -t ${session}`), { env }); } catch {}
+    try { await sshRun(buildProbeArgv(box, `tmux kill-session -t ${session}`, { sshConfigFile }), { env }); } catch {}
     try {
       const cur = await fs.readFile(realAk, 'utf8');
       const kept = cur.split('\n').filter((l) => l.trim() && l.trim() !== pub);
-      await fs.writeFile(realAk, kept.join('\n') + '\n');
-    } catch {}
-    // Restore ssh config
-    try {
-      if (prevConfig === null) {
-        await fs.rm(realSshConfig, { force: true });
-      } else {
-        await fs.writeFile(realSshConfig, prevConfig, { mode: 0o600 });
-      }
+      await fs.writeFile(realAk, kept.length ? kept.join('\n') + '\n' : '');
     } catch {}
     await fs.rm(tmp, { recursive: true, force: true });
   }
-  return { tmp, env, box, session, cleanup };
+  return { tmp, env, box, session, sshConfigFile, cleanup };
 }

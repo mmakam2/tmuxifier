@@ -67,3 +67,12 @@ test('buildProbeArgv rejects flag-smuggling host', () => {
   expect(() => buildProbeArgv({ host: '-oProxyCommand=x' }, 'tmux ls'))
     .toThrow(/unsafe ssh host/);
 });
+test('buildAttachArgv: sshConfigFile prepends -F', () => {
+  const argv = buildAttachArgv({ host: 'h' }, 'web', { cols: 80, rows: 24 }, { sshConfigFile: '/tmp/cfg' });
+  expect(argv.slice(0, 2)).toEqual(['-F', '/tmp/cfg']);
+  expect(argv).toContain('-tt');
+});
+test('buildProbeArgv: sshConfigFile prepends -F', () => {
+  const argv = buildProbeArgv({ host: 'h' }, 'tmux ls', { sshConfigFile: '/tmp/cfg' });
+  expect(argv.slice(0, 2)).toEqual(['-F', '/tmp/cfg']);
+});

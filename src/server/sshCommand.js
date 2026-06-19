@@ -50,6 +50,7 @@ export function buildAttachArgv(box, session, size, opts = {}) {
   let remote = `tmux new-session -A -s ${sess}`;
   if (box.startupCommand) remote += ` ${shSingleQuote(box.startupCommand)}`;
   argv.push(remote);
+  if (opts.sshConfigFile) argv.unshift('-F', opts.sshConfigFile);
   return argv;
 }
 
@@ -64,5 +65,6 @@ export function buildProbeArgv(box, remoteCmd, opts = {}) {
   if (box.proxyJump) argv.push('-J', box.proxyJump);
   if (box.port) argv.push('-p', String(box.port));
   argv.push(target(box), remoteCmd);
+  if (opts.sshConfigFile) argv.unshift('-F', opts.sshConfigFile);
   return argv;
 }
