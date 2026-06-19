@@ -34,7 +34,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     cookieSecret: env.HELM_COOKIE_SECRET,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
-  merged.dataDir = merged.dataDir || path.join(cwd, 'data');
-  merged.sshConfigPath = merged.sshConfigPath || path.join(os.homedir(), '.ssh', 'config');
+  merged.dataDir = merged.dataDir ?? path.join(cwd, 'data');
+  merged.sshConfigPath = merged.sshConfigPath ?? path.join(os.homedir(), '.ssh', 'config');
   return merged;
 }
