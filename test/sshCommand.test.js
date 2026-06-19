@@ -46,3 +46,24 @@ test('buildProbeArgv: batch mode, no PTY, carries remote cmd', () => {
   expect(argv[argv.length - 1]).toBe('tmux ls');
   expect(argv[argv.length - 2]).toBe('prod');
 });
+
+test('buildAttachArgv rejects flag-smuggling host', () => {
+  expect(() => buildAttachArgv({ host: '-oProxyCommand=touch /tmp/pwn' }, 'web', { cols: 80, rows: 24 }))
+    .toThrow(/unsafe ssh host/);
+});
+test('buildAttachArgv rejects unsafe user', () => {
+  expect(() => buildAttachArgv({ host: 'h', user: '-x' }, 'web', { cols: 80, rows: 24 }))
+    .toThrow(/unsafe ssh user/);
+});
+test('buildAttachArgv rejects unsafe proxyJump', () => {
+  expect(() => buildAttachArgv({ host: 'h', proxyJump: '-x' }, 'web', { cols: 80, rows: 24 }))
+    .toThrow(/unsafe ssh proxyJump/);
+});
+test('buildAttachArgv rejects out-of-range port', () => {
+  expect(() => buildAttachArgv({ host: 'h', port: 99999 }, 'web', { cols: 80, rows: 24 }))
+    .toThrow(/unsafe ssh port/);
+});
+test('buildProbeArgv rejects flag-smuggling host', () => {
+  expect(() => buildProbeArgv({ host: '-oProxyCommand=x' }, 'tmux ls'))
+    .toThrow(/unsafe ssh host/);
+});
