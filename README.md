@@ -75,6 +75,11 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
   -addext "subjectAltName=IP:192.168.1.10,IP:127.0.0.1,DNS:localhost"
 ```
 
+## Deployment
+For running Tmuxifier as a long-lived service, see [docs/DEPLOY.md](docs/DEPLOY.md). It covers
+a self-contained layout (config in `.env`, certs in `tls/`, state in `data/` — all inside the
+repo) and ships a sample systemd unit at [deploy/tmuxifier.service](deploy/tmuxifier.service).
+
 ## Development
 ```bash
 npm run dev    # vite + node --watch, proxying /api and /term to the backend

@@ -18,6 +18,7 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
 - `.env` (gitignored) — all `TMUXIFIER_*` config, written by `npm run set-password`. See
   `.env.example`.
 - `config.json` (gitignored, optional) — camelCase alternative to `.env`.
+- `tls/` (gitignored) — `cert.pem`/`key.pem` for HTTPS; the private key never enters git.
 - `data/` (gitignored) — `boxes.json` and SSH ControlMaster sockets under `data/cm/`.
 
 When adding a new config knob or persisted file, keep it under the repo folder by default.
@@ -100,5 +101,7 @@ Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `a
 ## Docs
 
 - `README.md` — user-facing setup/config/security.
+- `docs/DEPLOY.md` + `deploy/tmuxifier.service` — running it as a systemd service (self-contained
+  layout, no secrets in the unit; `HOME` set in the unit so ssh children find `~/.ssh`).
 - `docs/superpowers/specs/` and `docs/superpowers/plans/` — point-in-time design/plan records;
   don't rewrite history there, add a new dated doc for new work.

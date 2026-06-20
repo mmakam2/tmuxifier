@@ -1,0 +1,32 @@
+# Sample systemd unit for Tmuxifier.
+#
+# Install:
+#   sudo cp deploy/tmuxifier.service /etc/systemd/system/tmuxifier.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now tmuxifier
+#
+# Adjust User=, WorkingDirectory=, the HOME value, and the node path to match
+# your install. All app configuration comes from the repo-local .env (see
+# .env.example) — this unit intentionally holds no secrets.
+
+[Unit]
+Description=Tmuxifier - web dashboard for managing SSH/tmux boxes
+Documentation=file:/root/tmuxifier/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/tmuxifier
+# Configuration is read from <WorkingDirectory>/.env. HOME must be set so the
+# ssh child processes can find ~/.ssh (keys, config, known_hosts); set it to the
+# home directory of User= above.
+Environment=HOME=/root
+ExecStart=/usr/bin/node /root/tmuxifier/src/server/index.js
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
