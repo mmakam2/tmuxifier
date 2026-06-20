@@ -32,6 +32,8 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     hostKeyPolicy: env.HELM_HOSTKEY_POLICY,
     passwordHash: env.HELM_PASSWORD_HASH,
     cookieSecret: env.HELM_COOKIE_SECRET,
+    dataDir: env.HELM_DATA_DIR,
+    sshConfigFile: env.HELM_SSH_CONFIG,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
   merged.dataDir = merged.dataDir ?? path.join(cwd, 'data');

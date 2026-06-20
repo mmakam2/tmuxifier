@@ -20,6 +20,12 @@ test('env overrides defaults; overrides arg wins over env', () => {
   expect(c.hostKeyPolicy).toBe('yes'); // from env
 });
 
+test('maps HELM_DATA_DIR and HELM_SSH_CONFIG from env', () => {
+  const c = loadConfig({}, { env: { HELM_DATA_DIR: '/tmp/helmdata', HELM_SSH_CONFIG: '/tmp/sshcfg' }, cwd: '/app' });
+  expect(c.dataDir).toBe('/tmp/helmdata');
+  expect(c.sshConfigFile).toBe('/tmp/sshcfg');
+});
+
 test('config.json overrides defaults and sits below env', async () => {
   const fs = await import('node:fs');
   const osMod = await import('node:os');

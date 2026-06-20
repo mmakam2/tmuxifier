@@ -15,10 +15,11 @@ if (!config.passwordHash || !config.cookieSecret) {
 }
 
 const store = createStore({ dataDir: config.dataDir, sshConfigPath: config.sshConfigPath });
-const sessions = createSessionManager({ hostKeyPolicy: config.hostKeyPolicy, graceSeconds: config.graceSeconds });
+const sessions = createSessionManager({ hostKeyPolicy: config.hostKeyPolicy, graceSeconds: config.graceSeconds, sshConfigFile: config.sshConfigFile });
 const statusChecker = createStatusChecker({
   run: (argv) => sshRun(argv),
   hostKeyPolicy: config.hostKeyPolicy,
+  sshConfigFile: config.sshConfigFile,
 });
 
 const app = buildServer({ config, store, sessions, statusChecker });
