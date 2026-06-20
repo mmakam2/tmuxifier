@@ -101,12 +101,60 @@ test('adding a box passes transient Oh My Tmux install option without persisting
 
   expect(created.statusCode).toBe(200);
   expect(calls).toHaveLength(1);
-  expect(calls[0].options).toEqual({ installOhMyTmux: true });
+  expect(calls[0].options).toEqual({ installOhMyTmux: true, installOhMyZsh: false });
   expect(calls[0].box).not.toHaveProperty('installOhMyTmux');
   expect(created.json()).not.toHaveProperty('installOhMyTmux');
 
   const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
   expect(list.json()[0]).not.toHaveProperty('installOhMyTmux');
+});
+
+test('adding a box passes transient Oh My Zsh install option without persisting it', async () => {
+  const calls = [];
+  const boxActions = {
+    async ensureReady(box, options) { calls.push({ box, options }); },
+  };
+  app = await makeApp({ boxActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/boxes',
+    headers,
+    payload: { host: 'h1', installOhMyZsh: true },
+  });
+
+  expect(created.statusCode).toBe(200);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].options).toEqual({ installOhMyTmux: false, installOhMyZsh: true });
+  expect(calls[0].box).not.toHaveProperty('installOhMyZsh');
+  expect(created.json()).not.toHaveProperty('installOhMyZsh');
+
+  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
+  expect(list.json()[0]).not.toHaveProperty('installOhMyZsh');
+});
+
+test('adding a box passes both Oh My Tmux and Oh My Zsh options together', async () => {
+  const calls = [];
+  const boxActions = {
+    async ensureReady(box, options) { calls.push({ box, options }); },
+  };
+  app = await makeApp({ boxActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/boxes',
+    headers,
+    payload: { host: 'h1', installOhMyTmux: true, installOhMyZsh: true },
+  });
+
+  expect(created.statusCode).toBe(200);
+  expect(calls[0].options).toEqual({ installOhMyTmux: true, installOhMyZsh: true });
+  expect(created.json()).not.toHaveProperty('installOhMyTmux');
+  expect(created.json()).not.toHaveProperty('installOhMyZsh');
 });
 
 test('rejects cross-origin state-changing requests', async () => {
