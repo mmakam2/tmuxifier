@@ -3,8 +3,9 @@ import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import { verifyPassword, COOKIE_NAME, cookieOptions } from './auth.js';
+import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
 
-export function buildServer({ config, store, sessions, statusChecker, boxActions }) {
+export function buildServer({ config, store, sessions, statusChecker, boxActions, googleAuth }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -12,6 +13,17 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
   const app = Fastify({ logger: false, ...httpsOpts });
   app.register(cookie, { secret: config.cookieSecret });
   app.register(websocket);
+
+  const OAUTH_COOKIE = 'tmuxifier_oauth';
+  let google = googleAuth;
+  if (config.authMode === 'google' && !google) {
+    google = createGoogleAuth({
+      clientId: config.googleClientId,
+      clientSecret: config.googleClientSecret,
+      redirectUri: `${String(config.publicUrl).replace(/\/+$/, '')}/api/auth/google/callback`,
+      allowedEmails: config.allowedEmails,
+    });
+  }
 
   const attempts = new Map(); // ip -> { count, ts } simple rate-limit
 
@@ -44,18 +56,54 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
     done();
   }
 
-  app.post('/api/login', async (req, reply) => {
-    const ip = req.ip;
-    const rec = attempts.get(ip) || { count: 0, ts: Date.now() };
-    if (Date.now() - rec.ts > 60000) { rec.count = 0; rec.ts = Date.now(); }
-    if (rec.count >= 10) return reply.code(429).send({ error: 'too many attempts' });
-    if (attempts.size > 1000) attempts.clear();
-    const ok = await verifyPassword(req.body?.password || '', config.passwordHash);
-    if (!ok) { rec.count += 1; attempts.set(ip, rec); return reply.code(401).send({ error: 'invalid' }); }
-    attempts.delete(ip);
-    reply.setCookie(COOKIE_NAME, 'ok', cookieOptions(config.secureCookie));
-    return { ok: true };
-  });
+  app.get('/api/auth/info', async () => ({ mode: config.authMode === 'google' ? 'google' : 'password' }));
+
+  if (config.authMode !== 'google') {
+    app.post('/api/login', async (req, reply) => {
+      const ip = req.ip;
+      const rec = attempts.get(ip) || { count: 0, ts: Date.now() };
+      if (Date.now() - rec.ts > 60000) { rec.count = 0; rec.ts = Date.now(); }
+      if (rec.count >= 10) return reply.code(429).send({ error: 'too many attempts' });
+      if (attempts.size > 1000) attempts.clear();
+      const ok = await verifyPassword(req.body?.password || '', config.passwordHash);
+      if (!ok) { rec.count += 1; attempts.set(ip, rec); return reply.code(401).send({ error: 'invalid' }); }
+      attempts.delete(ip);
+      reply.setCookie(COOKIE_NAME, 'ok', cookieOptions(config.secureCookie));
+      return { ok: true };
+    });
+  }
+
+  if (config.authMode === 'google') {
+    app.get('/api/auth/google/login', async (req, reply) => {
+      const state = randomState();
+      const { verifier, challenge } = pkcePair();
+      // SameSite=lax lets this short-lived state cookie survive Google's top-level redirect back.
+      reply.setCookie(OAUTH_COOKIE, `${state}.${verifier}`, {
+        httpOnly: true, sameSite: 'lax', secure: config.secureCookie, path: '/', signed: true, maxAge: 300,
+      });
+      return reply.redirect(google.authorizationUrl({ state, codeChallenge: challenge }));
+    });
+
+    app.get('/api/auth/google/callback', async (req, reply) => {
+      const raw = req.cookies?.[OAUTH_COOKIE];
+      reply.clearCookie(OAUTH_COOKIE, { path: '/' });
+      if (!raw) return reply.redirect('/?error=state');
+      const unsigned = app.unsignCookie(raw);
+      if (!unsigned.valid || !unsigned.value) return reply.redirect('/?error=state');
+      const [savedState, verifier] = unsigned.value.split('.');
+      const { code, state } = req.query;
+      if (!code || !state || state !== savedState) return reply.redirect('/?error=state');
+      let result;
+      try {
+        result = await google.exchangeCodeForEmail({ code, codeVerifier: verifier });
+      } catch {
+        return reply.redirect('/?error=google');
+      }
+      if (!result.emailVerified || !google.isAllowed(result.email)) return reply.redirect('/?error=forbidden');
+      reply.setCookie(COOKIE_NAME, 'ok', cookieOptions(config.secureCookie));
+      return reply.redirect('/');
+    });
+  }
 
   app.post('/api/logout', async (req, reply) => {
     reply.clearCookie(COOKIE_NAME, { path: '/' });

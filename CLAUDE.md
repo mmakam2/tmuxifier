@@ -30,6 +30,7 @@ Don't introduce dependencies on `$HOME`-level state other than the user's existi
 npm install
 npm run build        # vite build -> dist/ (server serves this statically; build before start)
 npm run set-password # writes TMUXIFIER_PASSWORD_HASH + TMUXIFIER_COOKIE_SECRET into ./.env
+npm run gen-secret   # writes only TMUXIFIER_COOKIE_SECRET for Google auth mode
 npm start            # node src/server/index.js
 npm run dev          # vite + node --watch, proxies /api and /term to the backend
 npm test             # vitest run (unit + integration)
@@ -51,6 +52,11 @@ defaults  →  config.json  →  .env file  →  shell env  →  overrides
   it or in tests. Tests pass explicit `{ env, cwd }`. Preserve this.
 - `set-password` writes the hash every run but only generates a cookie secret when one is absent,
   so password changes don't rotate the secret / log everyone out.
+- `TMUXIFIER_AUTH_MODE` is `password` (default) or `oauth`; modes are mutually exclusive.
+  `google` is still accepted as a legacy alias for OAuth mode.
+- In OAuth mode, `TMUXIFIER_BASE_EXTERNAL_URL` builds the OAuth callback URL. A scheme-less value is
+  normalized to HTTPS, and an `https://` value marks the session cookie `Secure` even when local
+  TLS is not configured. `TMUXIFIER_PUBLIC_URL` is accepted as a legacy alias.
 
 ## Architecture (`src/server/`)
 
@@ -58,10 +64,12 @@ Modules are factory functions (`createStore`, `createSessionManager`, `createSta
 dependencies injected as arguments — this is what makes them testable without mocks. Follow that
 pattern for new modules.
 
-- `index.js` — entrypoint: loads config, fails fast if password/secret missing, wires everything,
+- `index.js` — entrypoint: loads config, fails fast if mode-specific auth config is missing, wires everything,
   serves `dist/` and listens.
 - `config.js` / `envFile.js` — configuration + `.env` parsing/upsert.
 - `auth.js` — scrypt password hashing, signed-cookie options (`COOKIE_NAME`).
+- `googleAuth.js` — dependency-free Google OIDC helper: authorization-code flow, PKCE, id_token
+  payload decoding, and exact-email allowlist checks.
 - `server.js` — Fastify app: login rate-limiting, REST under `/api/*`, and the `/term` WebSocket.
 - `store.js` — `data/boxes.json` CRUD; normalizes/validates boxes; imports from `~/.ssh/config`.
 - `sshCommand.js` — builds `ssh` argv for attach/probe; **all box fields are validated by
@@ -87,9 +95,15 @@ Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `a
 ## Security notes
 
 - The login gate is the crown jewel (Tmuxifier can SSH into your whole fleet). Binds to
-  `127.0.0.1` by default; expose only behind TLS. The session cookie is marked `Secure` only when
-  TLS is configured (`tlsCert` + `tlsKey`), since a `Secure` cookie over plain HTTP is dropped.
-- Passwords are scrypt-hashed; the session cookie is signed, httpOnly, SameSite=lax.
+  `127.0.0.1` by default; expose only behind TLS.
+- Auth modes are mutually exclusive: password mode mounts `POST /api/login`; OAuth mode mounts
+  `/api/auth/google/*` and removes the password login path.
+- Google auth is hand-rolled OIDC in `googleAuth.js`: state cookie + PKCE, token exchange
+  server-to-server, then exact-email allowlist. The id_token payload is trusted because it is
+  fetched directly from Google's token endpoint over TLS in the authorization-code flow.
+- Passwords are scrypt-hashed; the session cookie is signed, httpOnly, SameSite=lax. It is marked
+  `Secure` when local TLS is configured (`tlsCert` + `tlsKey`) or `TMUXIFIER_BASE_EXTERNAL_URL`
+  starts with `https://`.
 - `.env` holds the password hash and cookie secret, so `upsertEnvFile` writes it `0o600`
   (owner-only). Keep that mode if you change the write path.
 - Box host/user/port/proxyJump are validated against allowlist regexes before reaching `ssh`;

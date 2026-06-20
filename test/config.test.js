@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
-import { loadConfig } from '../src/server/config.js';
+import { loadConfig, requiredConfigError } from '../src/server/config.js';
 
 test('applies defaults', () => {
   const c = loadConfig({}, { env: {}, cwd: '/app' });
@@ -87,4 +87,81 @@ test('config.json overrides defaults and sits below env', async () => {
   const envWins = loadConfig({}, { env: { TMUXIFIER_PORT: '6666' }, cwd: dir });
   expect(envWins.port).toBe(6666);                  // env beats file
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('auth mode defaults to password; oauth/google are selectable; unknown falls back', () => {
+  expect(loadConfig({}, { env: {}, cwd: '/app' }).authMode).toBe('password');
+  expect(loadConfig({}, { env: { TMUXIFIER_AUTH_MODE: 'oauth' }, cwd: '/app' }).authMode).toBe('google');
+  expect(loadConfig({}, { env: { TMUXIFIER_AUTH_MODE: 'google' }, cwd: '/app' }).authMode).toBe('google');
+  expect(loadConfig({}, { env: { TMUXIFIER_AUTH_MODE: 'banana' }, cwd: '/app' }).authMode).toBe('password');
+});
+
+test('allowed emails parse to a trimmed, lowercased array', () => {
+  const c = loadConfig({}, { env: { TMUXIFIER_ALLOWED_EMAILS: ' Alice@Example.com , bob@foo.com ,' }, cwd: '/app' });
+  expect(c.allowedEmails).toEqual(['alice@example.com', 'bob@foo.com']);
+  expect(loadConfig({}, { env: {}, cwd: '/app' }).allowedEmails).toEqual([]);
+});
+
+test('https public URL marks the cookie Secure even without local TLS', () => {
+  const c = loadConfig({}, { env: { TMUXIFIER_BASE_EXTERNAL_URL: 'https://tmuxifier.example.com' }, cwd: '/app' });
+  expect(c.publicUrl).toBe('https://tmuxifier.example.com');
+  expect(c.secureCookie).toBe(true);
+  const http = loadConfig({}, { env: { TMUXIFIER_PUBLIC_URL: 'http://insecure.example' }, cwd: '/app' });
+  expect(http.secureCookie).toBe(false);
+});
+
+test('public URL without a scheme defaults to https', () => {
+  const c = loadConfig({}, { env: { TMUXIFIER_BASE_EXTERNAL_URL: 'tmuxifier.example.com/' }, cwd: '/app' });
+  expect(c.publicUrl).toBe('https://tmuxifier.example.com');
+  expect(c.secureCookie).toBe(true);
+});
+
+test('legacy google oauth env names are still accepted', () => {
+  const c = loadConfig({}, {
+    env: {
+      TMUXIFIER_PUBLIC_URL: 'legacy.example.com',
+      TMUXIFIER_GOOGLE_CLIENT_ID: 'gid',
+      TMUXIFIER_GOOGLE_CLIENT_SECRET: 'gsecret',
+    },
+    cwd: '/app',
+  });
+  expect(c.publicUrl).toBe('https://legacy.example.com');
+  expect(c.googleClientId).toBe('gid');
+  expect(c.googleClientSecret).toBe('gsecret');
+});
+
+test('generic oauth env names win over legacy google names', () => {
+  const c = loadConfig({}, {
+    env: {
+      TMUXIFIER_BASE_EXTERNAL_URL: 'tmuxifier.example.com',
+      TMUXIFIER_PUBLIC_URL: 'legacy.example.com',
+      TMUXIFIER_OAUTH_CLIENT_ID: 'oid',
+      TMUXIFIER_GOOGLE_CLIENT_ID: 'gid',
+      TMUXIFIER_OAUTH_CLIENT_SECRET: 'osecret',
+      TMUXIFIER_GOOGLE_CLIENT_SECRET: 'gsecret',
+    },
+    cwd: '/app',
+  });
+  expect(c.publicUrl).toBe('https://tmuxifier.example.com');
+  expect(c.googleClientId).toBe('oid');
+  expect(c.googleClientSecret).toBe('osecret');
+});
+
+test('requiredConfigError: password mode needs a hash', () => {
+  expect(requiredConfigError({ authMode: 'password', cookieSecret: 's', passwordHash: 'h' })).toBeNull();
+  expect(requiredConfigError({ authMode: 'password', cookieSecret: 's', passwordHash: '' }))
+    .toMatch(/set-password/);
+  expect(requiredConfigError({ authMode: 'password', cookieSecret: '' })).toMatch(/COOKIE_SECRET/);
+});
+
+test('requiredConfigError: oauth mode lists every missing field', () => {
+  const msg = requiredConfigError({ authMode: 'google', cookieSecret: 's', allowedEmails: [] });
+  expect(msg).toMatch(/TMUXIFIER_OAUTH_CLIENT_ID/);
+  expect(msg).toMatch(/TMUXIFIER_OAUTH_CLIENT_SECRET/);
+  expect(msg).toMatch(/TMUXIFIER_BASE_EXTERNAL_URL/);
+  expect(msg).toMatch(/TMUXIFIER_ALLOWED_EMAILS/);
+  expect(requiredConfigError({
+    authMode: 'google', cookieSecret: 's',
+    googleClientId: 'a', googleClientSecret: 'b', publicUrl: 'https://x', allowedEmails: ['a@b.com'],
+  })).toBeNull();
 });

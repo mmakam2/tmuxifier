@@ -10,6 +10,7 @@ async function j<T>(res: Response): Promise<T> {
 }
 export const api = {
   async me() { return (await fetch('/api/me')).ok; },
+  async authInfo() { return j<{ mode: 'password' | 'google' }>(await fetch('/api/auth/info')); },
   async login(password: string) { return j<{ ok: boolean }>(await fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })); },
   async logout() { await fetch('/api/logout', { method: 'POST' }); },
   async boxes() { return j<Box[]>(await fetch('/api/boxes')); },

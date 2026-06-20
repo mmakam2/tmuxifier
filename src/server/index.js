@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
-import { loadConfig } from './config.js';
+import { loadConfig, requiredConfigError } from './config.js';
 import { createStore } from './store.js';
 import { createStatusChecker } from './status.js';
 import { createSessionManager } from './sessions.js';
@@ -14,8 +14,9 @@ process.on('unhandledRejection', (err) => { console.error('unhandledRejection:',
 process.on('uncaughtException', (err) => { console.error('uncaughtException:', err); });
 
 const config = loadConfig();
-if (!config.passwordHash || !config.cookieSecret) {
-  console.error('Tmuxifier is not configured. Run: npm run set-password');
+const cfgError = requiredConfigError(config);
+if (cfgError) {
+  console.error(cfgError);
   process.exit(1);
 }
 
@@ -45,7 +46,7 @@ app.setNotFoundHandler((req, reply) => {
   return reply.sendFile('index.html');
 });
 
-const scheme = config.secureCookie ? 'https' : 'http';
+const scheme = config.tlsCert && config.tlsKey ? 'https' : 'http';
 app.listen({ host: config.bindAddress, port: config.port })
   .then(() => {
     console.log(`Tmuxifier listening on ${scheme}://${config.bindAddress}:${config.port}`);

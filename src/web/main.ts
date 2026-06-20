@@ -6,15 +6,36 @@ const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerm
 
 async function start() {
   if (await api.me()) renderDashboard();
-  else renderLogin();
+  else await renderLogin();
 }
 
-function renderLogin() {
+function readLoginError(): string {
+  const code = new URLSearchParams(location.search).get('error');
+  if (!code) return '';
+  history.replaceState(null, '', location.pathname);
+  return code === 'forbidden' ? 'This Google account is not allowed.'
+    : code === 'google' ? 'Google sign-in failed. Please try again.'
+    : code === 'state' ? 'Login session expired. Please try again.'
+    : 'Sign-in failed. Please try again.';
+}
+
+async function renderLogin() {
+  let mode: 'password' | 'google' = 'password';
+  try { mode = (await api.authInfo()).mode; } catch {}
+  const err = readLoginError();
+  if (mode === 'google') {
+    app.innerHTML = `<div class="login">
+        <h1>Tmuxifier</h1>
+        <a id="gsignin" class="gbtn" href="/api/auth/google/login">Sign in with Google</a>
+        <p id="err" class="err">${err}</p>
+      </div>`;
+    return;
+  }
   app.innerHTML = `<form id="login" class="login">
       <h1>Tmuxifier</h1>
       <input id="pw" type="password" placeholder="Password" autofocus />
       <button>Unlock</button>
-      <p id="err" class="err"></p>
+      <p id="err" class="err">${err}</p>
     </form>`;
   app.querySelector('#login')!.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -63,7 +84,7 @@ async function renderDashboard() {
     </div>`;
   app.querySelector('#logout')!.addEventListener('click', async () => { 
     if (pollInterval) clearInterval(pollInterval);
-    await api.logout(); renderLogin(); 
+    await api.logout(); await renderLogin();
   });
   app.querySelector('#import')!.addEventListener('click', async () => { await api.importSsh(); await refresh(); });
   app.querySelector('#add')!.addEventListener('click', () => openAddDialog());
