@@ -45,8 +45,6 @@ export default async function globalSetup() {
   }
   if (!ready) throw new Error('Helm server did not become ready within 10 seconds');
 
-  globalThis.__helm = { lb, dataDir, server };
-
   return async () => {
     server.kill();
     await lb.cleanup();

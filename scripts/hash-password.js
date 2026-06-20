@@ -12,5 +12,5 @@ if (!password) {
 const hash = await hashPassword(password);
 const secret = randomBytes(32).toString('hex');
 console.log('\nAdd these to config.json or your environment:\n');
-console.log(`  HELM_PASSWORD_HASH=${hash}`);
-console.log(`  HELM_COOKIE_SECRET=${secret}`);
+console.log(`HELM_PASSWORD_HASH=${hash}`);
+console.log(`HELM_COOKIE_SECRET=${secret}`);

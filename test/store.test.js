@@ -55,3 +55,9 @@ test('addBox rejects an unsafe host (ssh flag injection guard)', async () => {
   const store = createStore({ dataDir: dir, sshConfigPath });
   await expect(store.addBox({ host: '-oProxyCommand=x' })).rejects.toThrow(/unsafe/);
 });
+
+test('updateBox rejects an unsafe host (ssh flag injection guard)', async () => {
+  const store = createStore({ dataDir: dir, sshConfigPath });
+  const box = await store.addBox({ host: 'safebox' });
+  await expect(store.updateBox(box.id, { host: '-oProxyCommand=x' })).rejects.toThrow(/unsafe/);
+});

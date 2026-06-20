@@ -21,7 +21,11 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       env: spawnEnv,
     });
     const entry = { key, pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false };
-    pty.onData((d) => { for (const fn of entry.listeners) fn(d); });
+    pty.onData((d) => {
+      for (const fn of entry.listeners) {
+        try { fn(d); } catch { /* listener error must not break the fan-out */ }
+      }
+    });
     pty.onExit(() => {
       entry.exited = true;
       entries.delete(key);
@@ -48,6 +52,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     }, graceSeconds * 1000);
   }
   function close(entry) {
+    entry.exited = true;
     if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
     try { entry.pty.kill(); } catch {}
     entries.delete(entry.key);

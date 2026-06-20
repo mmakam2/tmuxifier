@@ -8,6 +8,9 @@ import { createSessionManager } from './sessions.js';
 import { sshRun } from './sshRun.js';
 import { buildServer } from './server.js';
 
+process.on('unhandledRejection', (err) => { console.error('unhandledRejection:', err); });
+process.on('uncaughtException', (err) => { console.error('uncaughtException:', err); });
+
 const config = loadConfig();
 if (!config.passwordHash || !config.cookieSecret) {
   console.error('Helm is not configured. Run: npm run set-password');

@@ -17,6 +17,7 @@ npm run build
 npm run set-password           # prints HELM_PASSWORD_HASH and HELM_COOKIE_SECRET
 ```
 Put the two printed values in `config.json` or the environment, then:
+> In `config.json`, use camelCase keys: `passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`, `dataDir`, `sshConfigFile`.
 ```bash
 HELM_PASSWORD_HASH=... HELM_COOKIE_SECRET=... npm start
 ```

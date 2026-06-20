@@ -44,6 +44,7 @@ export function buildServer({ config, store, sessions, statusChecker }) {
     const rec = attempts.get(ip) || { count: 0, ts: Date.now() };
     if (Date.now() - rec.ts > 60000) { rec.count = 0; rec.ts = Date.now(); }
     if (rec.count >= 10) return reply.code(429).send({ error: 'too many attempts' });
+    if (attempts.size > 1000) attempts.clear();
     const ok = await verifyPassword(req.body?.password || '', config.passwordHash);
     if (!ok) { rec.count += 1; attempts.set(ip, rec); return reply.code(401).send({ error: 'invalid' }); }
     attempts.delete(ip);
@@ -97,7 +98,9 @@ export function buildServer({ config, store, sessions, statusChecker }) {
         return;
       }
 
-      const off = sessions.attach(entry, (d) => { if (socket.readyState === 1) socket.send(d); });
+      const off = sessions.attach(entry, (d) => {
+        try { if (socket.readyState === 1) socket.send(d); } catch { /* socket closing */ }
+      });
       const offExit = sessions.onExit(entry, () => { try { socket.close(1000); } catch {} });
       socket.on('message', (raw) => {
         let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
