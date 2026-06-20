@@ -1,0 +1,23 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: #0b0e14; color: #c9d1d9; }
+.login { max-width: 320px; margin: 18vh auto; display: flex; flex-direction: column; gap: 12px; }
+.login h1 { text-align: center; letter-spacing: 2px; }
+.login input, .login button, .actions button, .add { padding: 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: inherit; }
+.login button, .actions button { cursor: pointer; }
+.err { color: #f85149; min-height: 1em; text-align: center; }
+.layout { display: grid; grid-template-columns: 260px 1fr; height: 100vh; }
+.sidebar { border-right: 1px solid #232a36; display: flex; flex-direction: column; padding: 12px; gap: 10px; }
+.brand { display: flex; justify-content: space-between; font-weight: 700; letter-spacing: 2px; }
+.brand button { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 16px; }
+.actions { display: flex; flex-direction: column; gap: 6px; }
+.boxes { list-style: none; margin: 0; padding: 0; overflow: auto; }
+.box { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; }
+.box:hover { background: #131722; }
+.box .name { flex: 1; }
+.box .rm { background: none; border: none; color: #6e7681; cursor: pointer; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: #6e7681; }
+.dot.green { background: #2ea043; } .dot.amber { background: #d29922; } .dot.red { background: #f85149; } .dot.gray { background: #6e7681; }
+.stage { position: relative; }
+.empty { color: #6e7681; padding: 24px; }
+.term { position: absolute; inset: 0; padding: 6px; }

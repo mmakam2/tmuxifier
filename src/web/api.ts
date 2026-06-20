@@ -1,0 +1,20 @@
+export interface Box {
+  id: string; label: string; host: string; user?: string; port?: number;
+  proxyJump?: string; sessionName: string; startupCommand?: string; tags: string[]; source: string;
+}
+export interface Status { reachable: boolean; tmux?: boolean; sessions?: { name: string; windows: number }[]; error?: string; }
+
+async function j<T>(res: Response): Promise<T> {
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  return res.json();
+}
+export const api = {
+  async me() { return (await fetch('/api/me')).ok; },
+  async login(password: string) { return j<{ ok: boolean }>(await fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })); },
+  async logout() { await fetch('/api/logout', { method: 'POST' }); },
+  async boxes() { return j<Box[]>(await fetch('/api/boxes')); },
+  async addBox(spec: Partial<Box>) { return j<Box>(await fetch('/api/boxes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(spec) })); },
+  async removeBox(id: string) { return j(await fetch(`/api/boxes/${id}`, { method: 'DELETE' })); },
+  async importSsh() { return j<Box[]>(await fetch('/api/import', { method: 'POST' })); },
+  async status() { return j<Record<string, Status>>(await fetch('/api/status')); },
+};
