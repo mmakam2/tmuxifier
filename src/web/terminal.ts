@@ -79,6 +79,8 @@ export function openProvisionTerminal(
 
   let done = false;
 
+  term.onData((d) => { if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'i', d })); });
+
   ws.onmessage = (e) => {
     const raw = typeof e.data === 'string' ? e.data : '';
     try {

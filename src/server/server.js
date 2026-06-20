@@ -277,6 +277,10 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
           }
           try { socket.close(1000); } catch {}
         });
+        socket.on('message', (raw) => {
+          let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
+          if (msg.t === 'i') sessions.write(entry, msg.d);
+        });
         socket.on('close', () => {
           if (typeof off === 'function') off();
           if (typeof offExit === 'function') offExit();
