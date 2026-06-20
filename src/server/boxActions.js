@@ -59,6 +59,29 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     '  fi',
     'fi',
   ] : [];
+  const ohMyBash = options.installOhMyBash ? [
+    'BASH_BIN="$(command -v bash || true)"',
+    'if [ ! -d .oh-my-bash ]; then',
+    '  if command -v curl >/dev/null 2>&1; then',
+    '    OMB="$(curl -fsSL https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh)" || { echo "Failed to download Oh My Bash" >&2; exit 1; }',
+    '    sh -c "$OMB" </dev/null',
+    '  elif command -v wget >/dev/null 2>&1; then',
+    '    OMB="$(wget -O- https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh)" || { echo "Failed to download Oh My Bash" >&2; exit 1; }',
+    '    sh -c "$OMB" </dev/null',
+    '  else',
+    "    echo 'Oh My Bash install requires curl or wget' >&2",
+    '    exit 127',
+    '  fi',
+    'fi',
+    'BASH_BIN="$(command -v bash || true)"',
+    'if [ -n "$BASH_BIN" ]; then',
+    "  if [ \"$(id -u)\" = '0' ]; then",
+    '    chsh -s "$BASH_BIN" root || true',
+    '  else',
+    '    sudo -n chsh -s "$BASH_BIN" "$(whoami)" 2>/dev/null || chsh -s "$BASH_BIN" "$(whoami)" || true',
+    '  fi',
+    'fi',
+  ] : [];
   return [
     'set -eu',
     // Ensure git is available before oh-my-tmux / oh-my-zsh
@@ -117,8 +140,10 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     '[ -n "$TMUX_BIN" ]',
     ...ohMyTmux,
     ...ohMyZsh,
+    ...ohMyBash,
     `"$TMUX_BIN" has-session -t ${sess} 2>/dev/null || "$TMUX_BIN" new-session -d -s ${sess}${startup}`,
     `[ -n "\${ZSH_BIN-}" ] && { "$TMUX_BIN" set-option -g default-shell "$ZSH_BIN" 2>/dev/null || true; W=\$("$TMUX_BIN" list-windows -t ${sess} -F '#{window_index}' 2>/dev/null | head -1); [ -n "\$W" ] && "$TMUX_BIN" respawn-window -t ${sess}:\$W -k "$ZSH_BIN" 2>/dev/null || true; } || true`,
+    `[ -n "\${BASH_BIN-}" ] && { "$TMUX_BIN" set-option -g default-shell "$BASH_BIN" 2>/dev/null || true; W=\$("$TMUX_BIN" list-windows -t ${sess} -F '#{window_index}' 2>/dev/null | head -1); [ -n "\$W" ] && "$TMUX_BIN" respawn-window -t ${sess}:\$W -k "$BASH_BIN" 2>/dev/null || true; } || true`,
   ].join('\n');
 }
 

@@ -95,6 +95,51 @@ ${buildEnsureTmuxRemote('web', undefined, { installOhMyZsh: true })}`, {
   await expect(fs.stat(curlLog)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
+test('buildEnsureTmuxRemote includes Oh My Bash install steps when requested', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, { installOhMyBash: true });
+
+  // Detects bash binary
+  expect(remote).toContain('command -v bash');
+
+  // Fetches upstream Oh My Bash install script
+  expect(remote).toContain('https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh');
+  expect(remote).toContain('OMB="$(curl');
+  expect(remote).toContain('</dev/null');
+
+  // Runs chsh to set default shell to bash (mirrors OMZ pattern)
+  expect(remote).toContain('chsh -s "$BASH_BIN"');
+
+  // Sets tmux default-shell to bash and respawns
+  expect(remote).toContain('default-shell');
+  expect(remote).toContain('BASH_BIN');
+});
+
+test('buildEnsureTmuxRemote omits Oh My Bash steps when not requested', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, {});
+  expect(remote).not.toContain('command -v bash');
+  expect(remote).not.toContain('https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh');
+  // BASH_BIN appears in the unconditional default-shell line (same pattern as ZSH_BIN), so we don't assert its absence
+});
+
+test('buildEnsureTmuxRemote skips Oh My Bash clone when .oh-my-bash exists', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-oh-my-bash-'));
+  await fs.mkdir(path.join(dir, '.oh-my-bash'));
+  await fs.writeFile(path.join(dir, 'bash'), '#!/bin/sh\necho "$*" >> "$TMUXIFIER_BASH_LOG"\nexit 0\n', { mode: 0o755 });
+  await fs.writeFile(path.join(dir, 'tmux'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  await fs.writeFile(path.join(dir, 'git'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  await fs.writeFile(path.join(dir, 'curl'), '#!/bin/sh\necho curled >> "$TMUXIFIER_CURL_LOG"\nexit 0\n', { mode: 0o755 });
+  const curlLog = path.join(dir, 'curl.log');
+
+  const res = await runShell(`cd ${JSON.stringify(dir)}
+${buildEnsureTmuxRemote('web', undefined, { installOhMyBash: true })}`, {
+    PATH: dir,
+    TMUXIFIER_CURL_LOG: curlLog,
+  });
+
+  expect(res.code).toBe(0);
+  await expect(fs.stat(curlLog)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
 test('buildEnsureTmuxRemote skips Oh My Tmux clone when config exists', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-oh-my-tmux-'));
   await fs.mkdir(path.join(dir, '.tmux'));
