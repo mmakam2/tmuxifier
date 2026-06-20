@@ -64,3 +64,17 @@ test('status endpoint returns a map keyed by box id', async () => {
   const res = await app.inject({ method: 'GET', url: '/api/status', headers });
   expect(res.json()[id]).toMatchObject({ reachable: true });
 });
+
+test('rejects a forged unsigned helm_session cookie', async () => {
+  const res = await app.inject({ method: 'GET', url: '/api/boxes', headers: { cookie: 'helm_session=ok' } });
+  expect(res.statusCode).toBe(401);
+});
+
+test('rejects a tampered signed helm_session cookie', async () => {
+  const res = await app.inject({
+    method: 'GET',
+    url: '/api/boxes',
+    headers: { cookie: 'helm_session=s%3Aok.deadbeefbadsignature0000000000000000000000' },
+  });
+  expect(res.statusCode).toBe(401);
+});

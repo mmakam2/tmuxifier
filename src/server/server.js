@@ -104,7 +104,11 @@ export function buildServer({ config, store, sessions, statusChecker }) {
         if (msg.t === 'i') sessions.write(entry, msg.d);
         else if (msg.t === 'r') sessions.resize(entry, { cols: msg.c, rows: msg.r });
       });
-      socket.on('close', () => { off(); offExit(); sessions.detach(entry); });
+      socket.on('close', () => {
+        if (typeof off === 'function') off();
+        if (typeof offExit === 'function') offExit();
+        sessions.detach(entry);
+      });
     });
   });
 

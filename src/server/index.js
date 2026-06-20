@@ -30,6 +30,11 @@ app.setNotFoundHandler((req, reply) => {
   return reply.sendFile('index.html');
 });
 
-app.listen({ host: config.bindAddress, port: config.port }).then(() => {
-  console.log(`Helm listening on http://${config.bindAddress}:${config.port}`);
-});
+app.listen({ host: config.bindAddress, port: config.port })
+  .then(() => {
+    console.log(`Helm listening on http://${config.bindAddress}:${config.port}`);
+  })
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
