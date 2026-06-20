@@ -1,0 +1,112 @@
+import Fastify from 'fastify';
+import cookie from '@fastify/cookie';
+import websocket from '@fastify/websocket';
+import { verifyPassword, COOKIE_NAME, cookieOptions } from './auth.js';
+
+export function buildServer({ config, store, sessions, statusChecker }) {
+  const app = Fastify({ logger: false });
+  app.register(cookie, { secret: config.cookieSecret });
+  app.register(websocket);
+
+  const attempts = new Map(); // ip -> { count, ts } simple rate-limit
+
+  function isAuthed(req) {
+    // Primary: use req.cookies if populated (normal case)
+    const raw = req.cookies?.[COOKIE_NAME];
+    if (raw) {
+      const r = app.unsignCookie(raw);
+      return r.valid && r.value === 'ok';
+    }
+    // Fallback: parse cookie header manually (needed for WS with @fastify/websocket v10)
+    const cookieHeader = req.headers?.cookie;
+    if (!cookieHeader) return false;
+    const parts = cookieHeader.split(';');
+    for (const part of parts) {
+      const trimmed = part.trim();
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx === -1) continue;
+      const name = trimmed.slice(0, eqIdx).trim();
+      if (name === COOKIE_NAME) {
+        const value = decodeURIComponent(trimmed.slice(eqIdx + 1).trim());
+        const r = app.unsignCookie(value);
+        return r.valid && r.value === 'ok';
+      }
+    }
+    return false;
+  }
+  function requireAuth(req, reply, done) {
+    if (!isAuthed(req)) { reply.code(401).send({ error: 'unauthorized' }); return; }
+    done();
+  }
+
+  app.post('/api/login', async (req, reply) => {
+    const ip = req.ip;
+    const rec = attempts.get(ip) || { count: 0, ts: Date.now() };
+    if (Date.now() - rec.ts > 60000) { rec.count = 0; rec.ts = Date.now(); }
+    if (rec.count >= 10) return reply.code(429).send({ error: 'too many attempts' });
+    const ok = await verifyPassword(req.body?.password || '', config.passwordHash);
+    if (!ok) { rec.count += 1; attempts.set(ip, rec); return reply.code(401).send({ error: 'invalid' }); }
+    attempts.delete(ip);
+    reply.setCookie(COOKIE_NAME, 'ok', cookieOptions(config.bindAddress !== '127.0.0.1'));
+    return { ok: true };
+  });
+
+  app.post('/api/logout', async (req, reply) => {
+    reply.clearCookie(COOKIE_NAME, { path: '/' });
+    return { ok: true };
+  });
+
+  app.get('/api/me', { preHandler: requireAuth }, async () => ({ ok: true }));
+
+  app.get('/api/boxes', { preHandler: requireAuth }, async () => store.listBoxes());
+  app.post('/api/boxes', { preHandler: requireAuth }, async (req, reply) => {
+    try { return await store.addBox(req.body || {}); }
+    catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+  app.patch('/api/boxes/:id', { preHandler: requireAuth }, async (req, reply) => {
+    try { return await store.updateBox(req.params.id, req.body || {}); }
+    catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+  app.delete('/api/boxes/:id', { preHandler: requireAuth }, async (req) => {
+    await store.removeBox(req.params.id); return { ok: true };
+  });
+  app.post('/api/import', { preHandler: requireAuth }, async () => store.importFromSshConfig());
+
+  app.get('/api/status', { preHandler: requireAuth }, async () => {
+    const boxes = await store.listBoxes();
+    const out = {};
+    await Promise.all(boxes.map(async (b) => { out[b.id] = await statusChecker.checkBox(b); }));
+    return out;
+  });
+
+  app.register(async (scope) => {
+    scope.get('/term', { websocket: true }, async (socket, req) => {
+      if (!isAuthed(req)) { socket.close(1008, 'unauthorized'); return; }
+      const { box: boxId, cid, cols, rows } = req.query;
+      const box = await store.getBox(boxId);
+      if (!box) { socket.close(1008, 'unknown box'); return; }
+      const size = { cols: Number(cols) || 80, rows: Number(rows) || 24 };
+
+      let entry;
+      try {
+        entry = sessions.open({ key: `${boxId}:${cid}`, box, session: box.sessionName, size });
+      } catch (err) {
+        const msg = err?.message || 'session error';
+        try { socket.send(msg); } catch {}
+        socket.close(1011);
+        return;
+      }
+
+      const off = sessions.attach(entry, (d) => { if (socket.readyState === 1) socket.send(d); });
+      const offExit = sessions.onExit(entry, () => { try { socket.close(1000); } catch {} });
+      socket.on('message', (raw) => {
+        let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
+        if (msg.t === 'i') sessions.write(entry, msg.d);
+        else if (msg.t === 'r') sessions.resize(entry, { cols: msg.c, rows: msg.r });
+      });
+      socket.on('close', () => { off(); offExit(); sessions.detach(entry); });
+    });
+  });
+
+  return app;
+}
