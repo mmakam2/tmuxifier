@@ -6,3 +6,10 @@ data/
 config.json
 *.local
 .DS_Store
+
+# Playwright E2E output
+test-results/
+playwright-report/
+
+# Subagent-driven-development scratch (briefs, reports, diffs, ledger)
+.superpowers/
