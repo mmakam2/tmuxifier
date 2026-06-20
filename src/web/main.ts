@@ -105,7 +105,7 @@ async function renderDashboard() {
     await api.logout(); await renderLogin();
   });
   app.querySelector('#import')!.addEventListener('click', async () => { await api.importSsh(); await refresh(); });
-  app.querySelector('#add')!.addEventListener('click', () => openAddDialog());
+  app.querySelector('#add')!.addEventListener('click', () => openBoxDialog());
   await refresh();
   pollInterval = setInterval(pollStatus, POLL_MS);
 }
@@ -151,6 +151,15 @@ function paint(boxes: Box[], status: Record<string, Status>) {
       if (wasActive) openBox(b);
     });
 
+    const edit = document.createElement('button');
+    edit.className = 'edit';
+    edit.title = 'Edit';
+    edit.textContent = '✎';
+    edit.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openBoxDialog(b);
+    });
+
     const rm = document.createElement('button');
     rm.className = 'rm';
     rm.title = 'Remove';
@@ -162,7 +171,7 @@ function paint(boxes: Box[], status: Record<string, Status>) {
       await refresh();
     });
 
-    li.append(dotEl, nameEl, refresh, rm);
+    li.append(dotEl, nameEl, refresh, edit, rm);
     list.appendChild(li);
   }
 }
@@ -234,7 +243,8 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
   }, { once: true });
 }
 
-function openAddDialog() {
+function openBoxDialog(box?: Box) {
+  const isEdit = !!box;
   const fields: Record<string, HTMLInputElement> = {};
   function field(name: string, label: string, opts: { placeholder?: string; value?: string; type?: string } = {}) {
     const wrap = document.createElement('label');
@@ -273,7 +283,7 @@ function openAddDialog() {
   const form = document.createElement('form');
   form.className = 'modal';
   const title = document.createElement('h2');
-  title.textContent = 'Add box';
+  title.textContent = isEdit ? 'Edit box' : 'Add box';
 
   const err = document.createElement('p');
   err.className = 'err';
@@ -284,12 +294,20 @@ function openAddDialog() {
   cancel.textContent = 'Cancel';
   const submit = document.createElement('button');
   submit.type = 'submit';
-  submit.textContent = 'Add';
+  submit.textContent = isEdit ? 'Save' : 'Add';
   actions.append(cancel, submit);
+
+  const hostWrap = field('host', 'Host or alias', { placeholder: 'e.g. 192.168.3.245' });
+  if (isEdit) {
+    const hInput = hostWrap.querySelector('input')!;
+    hInput.value = box!.host;
+    hInput.disabled = true;
+    hInput.style.opacity = '0.6';
+  }
 
   form.append(
     title,
-    field('host', 'Host or alias', { placeholder: 'e.g. 192.168.3.245' }),
+    hostWrap,
     field('label', 'Label (optional)', { placeholder: 'defaults to host' }),
     field('user', 'User', { value: 'root' }),
     field('port', 'Port (optional)', { placeholder: '22', type: 'number' }),
@@ -299,6 +317,21 @@ function openAddDialog() {
     err,
     actions,
   );
+
+  // Pre-populate fields in edit mode
+  if (isEdit) {
+    fields.label.value = box!.label !== box!.host ? box!.label : '';
+    if (box!.user) fields.user.value = box!.user;
+    if (box!.port) fields.port.value = String(box!.port);
+    if (box!.proxyJump) fields.proxyJump.value = box!.proxyJump;
+  }
+
+  // Default checkboxes to unchecked in edit mode
+  if (isEdit) {
+    installOhMyTmuxInput.checked = false;
+    installOhMyZshInput.checked = false;
+  }
+
   backdrop.appendChild(form);
   app.appendChild(backdrop);
   fields.host.focus();
@@ -311,28 +344,52 @@ function openAddDialog() {
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const host = fields.host.value.trim();
-    if (!host) { err.textContent = 'Host is required'; return; }
-    const spec: AddBoxSpec = { host, installOhMyTmux: installOhMyTmuxInput.checked, installOhMyZsh: installOhMyZshInput.checked };
-    const label = fields.label.value.trim(); if (label) spec.label = label;
-    const user = fields.user.value.trim(); if (user) spec.user = user;
-    const jump = fields.proxyJump.value.trim(); if (jump) spec.proxyJump = jump;
-    const portRaw = fields.port.value.trim();
-    if (portRaw) {
-      const port = Number(portRaw);
-      if (!Number.isInteger(port) || port < 1 || port > 65535) { err.textContent = 'Port must be 1–65535'; return; }
-      spec.port = port;
-    }
     submit.disabled = true;
     try {
-      const box = await api.addBox(spec);
-      close();
-      openProvisionPanel(box, {
-        ohMyTmux: installOhMyTmuxInput.checked,
-        ohMyZsh: installOhMyZshInput.checked,
-      });
+      if (isEdit) {
+        const patch: any = {};
+        const label = fields.label.value.trim(); if (label) patch.label = label;
+        const user = fields.user.value.trim(); patch.user = user || null;
+        const jump = fields.proxyJump.value.trim(); patch.proxyJump = jump || null;
+        const portRaw = fields.port.value.trim();
+        if (portRaw) {
+          const port = Number(portRaw);
+          if (!Number.isInteger(port) || port < 1 || port > 65535) { err.textContent = 'Port must be 1–65535'; submit.disabled = false; return; }
+          patch.port = port;
+        } else {
+          patch.port = null;
+        }
+        const updatedBox = await api.updateBox(box!.id, patch);
+        close();
+        await refresh();
+        if (installOhMyTmuxInput.checked || installOhMyZshInput.checked) {
+          openProvisionPanel(updatedBox, {
+            ohMyTmux: installOhMyTmuxInput.checked,
+            ohMyZsh: installOhMyZshInput.checked,
+          });
+        }
+      } else {
+        const host = fields.host.value.trim();
+        if (!host) { err.textContent = 'Host is required'; submit.disabled = false; return; }
+        const spec: AddBoxSpec = { host, installOhMyTmux: installOhMyTmuxInput.checked, installOhMyZsh: installOhMyZshInput.checked };
+        const label = fields.label.value.trim(); if (label) spec.label = label;
+        const user = fields.user.value.trim(); if (user) spec.user = user;
+        const jump = fields.proxyJump.value.trim(); if (jump) spec.proxyJump = jump;
+        const portRaw = fields.port.value.trim();
+        if (portRaw) {
+          const port = Number(portRaw);
+          if (!Number.isInteger(port) || port < 1 || port > 65535) { err.textContent = 'Port must be 1–65535'; submit.disabled = false; return; }
+          spec.port = port;
+        }
+        const newBox = await api.addBox(spec);
+        close();
+        openProvisionPanel(newBox, {
+          ohMyTmux: installOhMyTmuxInput.checked,
+          ohMyZsh: installOhMyZshInput.checked,
+        });
+      }
     } catch (e: any) {
-      err.textContent = e?.message || 'Could not add box';
+      err.textContent = e?.message || `Could not ${isEdit ? 'save' : 'add'} box`;
       submit.disabled = false;
     }
   });
