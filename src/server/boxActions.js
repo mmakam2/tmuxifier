@@ -58,6 +58,7 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     '    sudo -n chsh -s "$ZSH_BIN" "$(whoami)" 2>/dev/null || chsh -s "$ZSH_BIN" "$(whoami)" || true',
     '  fi',
     'fi',
+    'if ! grep -q "set-option -g default-shell" .tmux.conf 2>/dev/null; then echo "set-option -g default-shell \\"$ZSH_BIN\\"" >> .tmux.conf; fi',
   ] : [];
   const ohMyBash = options.installOhMyBash ? [
     'BASH_BIN="$(command -v bash || true)"',
@@ -81,6 +82,7 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     '    sudo -n chsh -s "$BASH_BIN" "$(whoami)" 2>/dev/null || chsh -s "$BASH_BIN" "$(whoami)" || true',
     '  fi',
     'fi',
+    'if ! grep -q "set-option -g default-shell" .tmux.conf 2>/dev/null; then echo "set-option -g default-shell \\"$BASH_BIN\\"" >> .tmux.conf; fi',
   ] : [];
   return [
     'set -eu',
