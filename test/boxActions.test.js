@@ -65,6 +65,7 @@ test('buildEnsureTmuxRemote includes zsh and Oh My Zsh install steps when reques
   expect(remote).toContain('OHMYZSH="$(curl');
   expect(remote).toContain('RUNZSH=no');
   expect(remote).toContain('</dev/null');
+  expect(remote).toContain('ZSH_THEME="blinks"');
   expect(remote).toContain('chsh -s "$ZSH_BIN"');
   expect(remote).toContain('default-shell');
 });

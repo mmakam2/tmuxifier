@@ -50,6 +50,7 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     '    exit 127',
     '  fi',
     'fi',
+    'sed -i \'s/^ZSH_THEME=.*/ZSH_THEME="blinks"/\' .zshrc 2>/dev/null || true',
     'ZSH_BIN="$(command -v zsh || true)"',
     'if [ -n "$ZSH_BIN" ]; then',
     "  if [ \"$(id -u)\" = '0' ]; then",
