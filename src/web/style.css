@@ -46,6 +46,7 @@ body {
 .google-mark { width: 18px; height: 18px; flex: 0 0 auto; }
 .gbtn:hover { background: #f7f8f8; }
 .err { color: #f85149; min-height: 1em; text-align: center; }
+.login-footer { text-align: center; font-size: 11px; color: #4a5568; margin-top: 4px; }
 .layout { display: grid; grid-template-columns: 280px 1fr; height: 100vh; }
 .sidebar { border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 12px; gap: 10px; background: #090d13; overflow: hidden; }
 .brand { display: flex; align-items: center; justify-content: space-between; font-weight: 700; letter-spacing: 1px; }

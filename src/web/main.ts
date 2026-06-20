@@ -57,6 +57,7 @@ async function renderLogin() {
           <span>Sign in with Google</span>
         </a>
         <p id="err" class="err">${err}</p>
+        <footer class="login-footer">Babendums Engineering &amp; Fabrication, Llc.</footer>
       </div>`;
     return;
   }
@@ -69,6 +70,7 @@ async function renderLogin() {
       <input id="pw" type="password" placeholder="Password" autofocus />
       <button>Unlock</button>
       <p id="err" class="err">${err}</p>
+      <footer class="login-footer">Babendums Engineering &amp; Fabrication, Llc.</footer>
     </form>`;
   app.querySelector('#login')!.addEventListener('submit', async (e) => {
     e.preventDefault();
