@@ -143,7 +143,7 @@ test('provision WS streams script output and sends exit frame on success', async
   const c = login.cookies.find((x) => x.name === COOKIE_NAME);
 
   const ws = new WebSocket(
-    `ws://127.0.0.1:${port}/term?box=${saved.id}&mode=provision&cols=120&rows=40&ohMyTmux=0&ohMyZsh=0`,
+    `ws://127.0.0.1:${port}/term?box=${saved.id}&mode=provision&cols=120&rows=40&ohMyTmux=0&ohMyZsh=0&ohMyBash=0`,
     { headers: { cookie: `${c.name}=${c.value}` } },
   );
   const chunks = [];
@@ -222,7 +222,7 @@ test('provision WS rolls back box on non-zero exit', async () => {
   const c = login.cookies.find((x) => x.name === COOKIE_NAME);
 
   const ws = new WebSocket(
-    `ws://127.0.0.1:${port}/term?box=${saved.id}&mode=provision&cols=80&rows=24&ohMyTmux=0&ohMyZsh=0`,
+    `ws://127.0.0.1:${port}/term?box=${saved.id}&mode=provision&cols=80&rows=24&ohMyTmux=0&ohMyZsh=0&ohMyBash=0`,
     { headers: { cookie: `${c.name}=${c.value}` } },
   );
   let exitFrame = null;
