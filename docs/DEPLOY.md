@@ -122,6 +122,25 @@ sudo systemctl restart tmuxifier
 
 `.env`, `tls/`, and `data/` are gitignored, so `git pull` never touches your secrets or state.
 
+## Shipping changes (for developers)
+
+When making changes to push back to the repo:
+
+```bash
+npm run build                        # rebuild the web bundle
+sudo systemctl restart tmuxifier     # restart to pick up the new bundle
+systemctl status tmuxifier           # confirm the service is healthy
+curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1:7437/  # 200
+```
+
+If everything checks out, commit and push:
+
+```bash
+git add -A
+git commit -m "feat(…): description" # conventional-commit style
+git push origin main
+```
+
 ## Changing the password later
 
 ```bash

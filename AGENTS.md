@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-Guidance for working in this repo. Keep it current when architecture or conventions change.
+Guidance for coding agents working in this repo. Keep it current when architecture or conventions change.
 
 ## What this is
 
@@ -12,8 +12,8 @@ your keys/agent/`~/.ssh/config`.
 
 ## Self-contained principle
 
-This project is meant to run from the repo folder with nothing required in the surrounding
-shell. Configuration, secrets, and runtime state all live **inside the repo**:
+This project runs from the repo folder with nothing required in the surrounding shell.
+Configuration, secrets, and runtime state all live **inside the repo**:
 
 - `.env` (gitignored) — all `TMUXIFIER_*` config, written by `npm run set-password`. See
   `.env.example`.
@@ -102,7 +102,7 @@ git commit -m "feat(…): description" # conventional-commit style
 git push origin main
 ```
 
-Verify the service is healthy before pushing:
+Verify the service came back clean before pushing:
 ```bash
 systemctl status tmuxifier
 curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1:7437/
@@ -114,7 +114,7 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1:7437/
   `127.0.0.1` by default; expose only behind TLS.
 - Auth modes are mutually exclusive: password mode mounts `POST /api/login`; OAuth mode mounts
   `/api/auth/google/*` and removes the password login path.
-- Google auth is hand-rolled OIDC in `googleAuth.js`: state cookie + PKCE, token exchange
+- OAuth is hand-rolled OIDC in `googleAuth.js`: state cookie + PKCE, token exchange
   server-to-server, then exact-email allowlist. The id_token payload is trusted because it is
   fetched directly from Google's token endpoint over TLS in the authorization-code flow.
 - Passwords are scrypt-hashed; the session cookie is signed, httpOnly, SameSite=lax. It is marked
@@ -131,7 +131,7 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1:7437/
 ## Docs
 
 - `README.md` — user-facing setup/config/security.
-- `AGENTS.md` — this file, adapted for general coding agents (kept in sync with CLAUDE.md).
+- `CLAUDE.md` — canonical project instructions (this file is kept in sync with it).
 - `docs/DEPLOY.md` + `deploy/tmuxifier.service` — running it as a systemd service (self-contained
   layout, no secrets in the unit; `HOME` set in the unit so ssh children find `~/.ssh`).
 - `docs/superpowers/specs/` and `docs/superpowers/plans/` — point-in-time design/plan records;
