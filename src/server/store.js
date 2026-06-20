@@ -55,6 +55,10 @@ export function createStore({ dataDir, sshConfigPath }) {
       const i = boxes.findIndex((b) => b.id === id);
       if (i === -1) throw new Error('box not found');
       boxes[i] = normalize({ ...boxes[i], ...patch, host: patch.host ?? boxes[i].host }, boxes[i]);
+      // null means "clear this field" — ?? cannot express that, so handle explicitly
+      for (const key of ['user', 'port', 'proxyJump']) {
+        if (key in patch && patch[key] === null) boxes[i][key] = undefined;
+      }
       assertBoxSafe(boxes[i]);
       await writeAll(boxes);
       return boxes[i];

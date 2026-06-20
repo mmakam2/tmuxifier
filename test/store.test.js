@@ -56,6 +56,27 @@ test('addBox rejects an unsafe host (ssh flag injection guard)', async () => {
   await expect(store.addBox({ host: '-oProxyCommand=x' })).rejects.toThrow(/unsafe/);
 });
 
+test('updateBox clears user when sent null', async () => {
+  const store = createStore({ dataDir: dir, sshConfigPath });
+  const box = await store.addBox({ host: 'example.com', label: 'ex', user: 'root', port: 2222, proxyJump: 'jump.example.com' });
+  const updated = await store.updateBox(box.id, { user: null });
+  expect(updated.user).toBe(undefined);
+});
+
+test('updateBox clears port when sent null', async () => {
+  const store = createStore({ dataDir: dir, sshConfigPath });
+  const box = await store.addBox({ host: 'example.com', label: 'ex', port: 2222 });
+  const updated = await store.updateBox(box.id, { port: null });
+  expect(updated.port).toBe(undefined);
+});
+
+test('updateBox clears proxyJump when sent null', async () => {
+  const store = createStore({ dataDir: dir, sshConfigPath });
+  const box = await store.addBox({ host: 'example.com', label: 'ex', proxyJump: 'jump.example.com' });
+  const updated = await store.updateBox(box.id, { proxyJump: null });
+  expect(updated.proxyJump).toBe(undefined);
+});
+
 test('updateBox rejects an unsafe host (ssh flag injection guard)', async () => {
   const store = createStore({ dataDir: dir, sshConfigPath });
   const box = await store.addBox({ host: 'safebox' });
