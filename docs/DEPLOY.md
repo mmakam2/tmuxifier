@@ -58,6 +58,37 @@ TLS keys makes Tmuxifier serve HTTPS directly and marks the session cookie `Secu
 TLS, keep `TMUXIFIER_BIND` on `127.0.0.1` — serving the login over plain HTTP on a routable
 address sends the password in cleartext.
 
+### Google OAuth behind a Cloudflare tunnel
+
+For a Cloudflare tunnel such as `https://tmuxifier.babendums.com`, TLS terminates at
+Cloudflare and the local Tmuxifier process can still speak plain HTTP. Set the public URL so
+OAuth redirect URIs are correct and the browser receives a `Secure` session cookie:
+
+```ini
+TMUXIFIER_AUTH_MODE=oauth
+TMUXIFIER_BASE_EXTERNAL_URL=tmuxifier.babendums.com
+TMUXIFIER_OAUTH_CLIENT_ID=...
+TMUXIFIER_OAUTH_CLIENT_SECRET=...
+TMUXIFIER_ALLOWED_EMAILS=you@example.com
+```
+
+Generate the cookie secret without creating a password login:
+
+```bash
+npm run gen-secret
+```
+
+In Google Cloud Console, go to **APIs & Services → Credentials**, create an **OAuth client
+ID** with application type **Web application**, and add this authorized redirect URI:
+
+```text
+https://tmuxifier.babendums.com/api/auth/google/callback
+```
+
+Copy the client id and secret into `.env`, restart the service, and the login page will show
+Google sign-in instead of the password form. `TMUXIFIER_ALLOWED_EMAILS` is a comma-separated
+exact-email allowlist, matched case-insensitively.
+
 ## Install the service
 
 ```bash

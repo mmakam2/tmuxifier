@@ -34,6 +34,12 @@ test('rejects unauthenticated box listing', async () => {
   expect(res.statusCode).toBe(401);
 });
 
+test('/api/auth/info reports password mode', async () => {
+  const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ mode: 'password' });
+});
+
 test('login then CRUD a box', async () => {
   const cookie = await login();
   expect(cookie).toBeTruthy();

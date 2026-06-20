@@ -16,6 +16,17 @@ function clean(obj) {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
 }
 
+function parseEmails(value) {
+  const arr = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
+  return arr.map((s) => String(s).trim().toLowerCase()).filter(Boolean);
+}
+
+function normalizePublicUrl(value) {
+  const s = String(value || '').trim().replace(/\/+$/, '');
+  if (!s) return undefined;
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s}`;
+}
+
 function readJsonIfExists(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -35,6 +46,11 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     port: e.TMUXIFIER_PORT ? Number(e.TMUXIFIER_PORT) : undefined,
     graceSeconds: e.TMUXIFIER_GRACE ? Number(e.TMUXIFIER_GRACE) : undefined,
     hostKeyPolicy: e.TMUXIFIER_HOSTKEY_POLICY,
+    authMode: e.TMUXIFIER_AUTH_MODE,
+    publicUrl: e.TMUXIFIER_BASE_EXTERNAL_URL ?? e.TMUXIFIER_PUBLIC_URL,
+    googleClientId: e.TMUXIFIER_OAUTH_CLIENT_ID ?? e.TMUXIFIER_GOOGLE_CLIENT_ID,
+    googleClientSecret: e.TMUXIFIER_OAUTH_CLIENT_SECRET ?? e.TMUXIFIER_GOOGLE_CLIENT_SECRET,
+    allowedEmails: e.TMUXIFIER_ALLOWED_EMAILS,
     passwordHash: e.TMUXIFIER_PASSWORD_HASH,
     cookieSecret: e.TMUXIFIER_COOKIE_SECRET,
     dataDir: e.TMUXIFIER_DATA_DIR,
@@ -50,9 +66,28 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   // hammering each box's sshd (and tripping MaxStartups / ban tools).
   merged.controlDir = merged.controlDir ?? path.join(merged.dataDir, 'cm');
   merged.sshConfigPath = merged.sshConfigPath ?? path.join(os.homedir(), '.ssh', 'config');
-  // Serve over HTTPS (and mark the session cookie Secure) only when a TLS
-  // cert+key are configured. Decoupled from bindAddress so a non-loopback
-  // HTTP bind still works (a Secure cookie over plain HTTP is dropped by browsers).
-  merged.secureCookie = !!(merged.tlsCert && merged.tlsKey);
+  // Auth mode: password (default) or oauth. "google" is accepted as a legacy alias.
+  merged.authMode = ['oauth', 'google'].includes(merged.authMode) ? 'google' : 'password';
+  merged.publicUrl = normalizePublicUrl(merged.publicUrl);
+  merged.allowedEmails = parseEmails(merged.allowedEmails);
+  // Mark the session cookie Secure when we serve HTTPS locally OR sit behind an
+  // HTTPS public URL, for example a TLS-terminating Cloudflare tunnel.
+  merged.secureCookie = !!(merged.tlsCert && merged.tlsKey) || /^https:/i.test(String(merged.publicUrl || ''));
   return merged;
+}
+
+export function requiredConfigError(config) {
+  if (!config.cookieSecret) {
+    return 'Missing TMUXIFIER_COOKIE_SECRET. Run: npm run set-password (password mode) or npm run gen-secret (oauth mode).';
+  }
+  if (config.authMode === 'google') {
+    const missing = [];
+    if (!config.googleClientId) missing.push('TMUXIFIER_OAUTH_CLIENT_ID');
+    if (!config.googleClientSecret) missing.push('TMUXIFIER_OAUTH_CLIENT_SECRET');
+    if (!config.publicUrl) missing.push('TMUXIFIER_BASE_EXTERNAL_URL');
+    if (!config.allowedEmails || config.allowedEmails.length === 0) missing.push('TMUXIFIER_ALLOWED_EMAILS');
+    return missing.length ? `Google auth mode requires: ${missing.join(', ')}` : null;
+  }
+  if (!config.passwordHash) return 'Tmuxifier is not configured. Run: npm run set-password';
+  return null;
 }

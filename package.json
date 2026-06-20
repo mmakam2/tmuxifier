@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "set-password": "node scripts/hash-password.js"
+    "set-password": "node scripts/hash-password.js",
+    "gen-secret": "node scripts/gen-secret.js"
   },
   "dependencies": {
     "@fastify/cookie": "^9.3.1",
