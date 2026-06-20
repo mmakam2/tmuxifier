@@ -36,18 +36,20 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
   }
 
   function attach(entry, onData) {
+    if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
     entry.listeners.add(onData);
+    if (!entry.exited) { 
+      try { 
+        entry.pty.resize(entry.pty.cols === 1 ? 2 : entry.pty.cols - 1, entry.pty.rows); 
+        entry.pty.resize(entry.pty.cols, entry.pty.rows); 
+      } catch {} 
+    }
     return () => entry.listeners.delete(onData);
   }
   function onExit(entry, cb) { entry.exitCbs.add(cb); return () => entry.exitCbs.delete(cb); }
   function write(entry, data) { if (!entry.exited) entry.pty.write(data); }
   function resize(entry, { cols, rows }) {
-    if (!entry.exited) { 
-      try { 
-        entry.pty.resize(cols, rows === 1 ? 2 : rows - 1); 
-        entry.pty.resize(cols, rows); 
-      } catch {} 
-    }
+    if (!entry.exited) { try { entry.pty.resize(cols, rows); } catch {} }
   }
   function detach(entry) {
     if (entry.exited || entry.graceTimer || entry.listeners.size > 0) return;
