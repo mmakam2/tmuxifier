@@ -2,7 +2,7 @@ export interface Box {
   id: string; label: string; host: string; user?: string; port?: number;
   proxyJump?: string; sessionName: string; startupCommand?: string; tags: string[]; source: string;
 }
-export type AddBoxSpec = Partial<Box> & { installOhMyTmux?: boolean; installOhMyZsh?: boolean };
+export type AddBoxSpec = Partial<Box> & { installOhMyTmux?: boolean; installOhMyZsh?: boolean; installOhMyBash?: boolean };
 export interface Status { reachable: boolean; tmux?: boolean; sessions?: { name: string; windows: number }[]; error?: string; }
 
 async function j<T>(res: Response): Promise<T> {
@@ -17,7 +17,7 @@ export const api = {
   async boxes() { return j<Box[]>(await fetch('/api/boxes')); },
   async addBox(spec: AddBoxSpec) { return j<Box>(await fetch('/api/boxes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(spec) })); },
   async removeBox(id: string) { return j(await fetch(`/api/boxes/${id}`, { method: 'DELETE' })); },
-  async updateBox(id: string, patch: Partial<Box> & { installOhMyTmux?: boolean; installOhMyZsh?: boolean }) {
+  async updateBox(id: string, patch: Partial<Box> & { installOhMyTmux?: boolean; installOhMyZsh?: boolean; installOhMyBash?: boolean }) {
     return j<Box>(await fetch(`/api/boxes/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }));
   },
   async reconnectBox(id: string) { return j<{ ok: boolean }>(await fetch(`/api/boxes/${id}/reconnect`, { method: 'POST' })); },

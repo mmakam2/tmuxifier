@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css';
 export interface ProvisionOptions {
   ohMyTmux: boolean;
   ohMyZsh: boolean;
+  ohMyBash: boolean;
 }
 
 export function openTerminal(parent: HTMLElement, boxId: string) {
@@ -72,6 +73,7 @@ export function openProvisionTerminal(
     `rows=${term.rows}`,
     `ohMyTmux=${options.ohMyTmux ? '1' : '0'}`,
     `ohMyZsh=${options.ohMyZsh ? '1' : '0'}`,
+    `ohMyBash=${options.ohMyBash ? '1' : '0'}`,
   ].join('&');
   const ws = new WebSocket(`${proto}://${location.host}/term?${qs}`);
 
