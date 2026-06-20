@@ -1,4 +1,4 @@
-# Tmuxifier
+# <img src="src/web/assets/tmuxifier-logo.png" alt="" width="36" height="36" style="vertical-align:middle" /> Tmuxifier
 
 A single-user web dashboard for managing headless boxes over SSH. Each box opens a
 browser terminal backed by a tmux session that lives **on the box**, so closing the tab,
@@ -124,6 +124,19 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
 For running Tmuxifier as a long-lived service, see [docs/DEPLOY.md](docs/DEPLOY.md). It covers
 a self-contained layout (config in `.env`, certs in `tls/`, state in `data/` — all inside the
 repo) and ships a sample systemd unit at [deploy/tmuxifier.service](deploy/tmuxifier.service).
+
+## Attributions
+
+Tmuxifier can optionally install and configure these excellent projects on your boxes during
+provisioning:
+
+| Project | Repository | What it does |
+| --- | --- | --- |
+| **Oh My Zsh** | [ohmyzsh/ohmyzsh](https://github.com/ohmyzsh/ohmyzsh) | Zsh framework with plugins, themes, and helpers |
+| **Oh My Bash** | [ohmybash/oh-my-bash](https://github.com/ohmybash/oh-my-bash) | Bash framework with themes and completions |
+| **Oh My Tmux** | [gpakosz/.tmux](https://github.com/gpakosz/.tmux) | Tmux configuration by Gregory Pakosz |
+
+Each installs via its upstream bootstrap script and is skipped if already present on the box.
 
 ## Development
 ```bash
