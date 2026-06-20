@@ -4,6 +4,7 @@ import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import { verifyPassword, COOKIE_NAME, cookieOptions } from './auth.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
+import { buildEnsureTmuxRemote } from './boxActions.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': [
@@ -181,15 +182,11 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
 
   app.get('/api/boxes', { preHandler: requireAuth }, async () => store.listBoxes());
   app.post('/api/boxes', { preHandler: requireAuth }, async (req, reply) => {
-    let box;
     try {
       const { installOhMyTmux = false, installOhMyZsh = false, ...boxSpec } = req.body || {};
-      box = await store.addBox(boxSpec);
-      if (boxActions?.ensureReady) await boxActions.ensureReady(box, { installOhMyTmux: installOhMyTmux === true, installOhMyZsh: installOhMyZsh === true });
-      return box;
-    }
-    catch (e) {
-      if (box) await store.removeBox(box.id).catch(() => {});
+      const box = await store.addBox(boxSpec);
+      return reply.code(201).send(box);
+    } catch (e) {
       return reply.code(400).send({ error: e.message });
     }
   });
@@ -220,9 +217,56 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
     scope.get('/term', { websocket: true }, async (socket, req) => {
       if (!hasTrustedOrigin(req)) { socket.close(1008, 'forbidden origin'); return; }
       if (!isAuthed(req)) { socket.close(1008, 'unauthorized'); return; }
-      const { box: boxId, cid, cols, rows } = req.query;
+      const { box: boxId, cid, cols, rows, mode } = req.query;
       const box = await store.getBox(boxId);
       if (!box) { socket.close(1008, 'unknown box'); return; }
+
+      // --- Provision mode ---
+      if (mode === 'provision') {
+        const { ohMyTmux, ohMyZsh } = req.query;
+        const script = buildEnsureTmuxRemote(box.sessionName, box.startupCommand, {
+          installOhMyTmux: ohMyTmux === '1',
+          installOhMyZsh: ohMyZsh === '1',
+        });
+
+        if (!sessions?.provision) {
+          try { socket.send(JSON.stringify({ t: 'x', code: 1 })); } catch {}
+          socket.close(1011);
+          return;
+        }
+
+        let entry;
+        try {
+          entry = sessions.provision({ key: `provision:${boxId}`, box, script });
+        } catch (err) {
+          const msg = err?.message || 'provision error';
+          try { socket.send(msg); } catch {}
+          socket.close(1011);
+          return;
+        }
+
+        const off = sessions.attach(entry, (d) => {
+          try { if (socket.readyState === 1) socket.send(d); } catch {}
+        });
+        const offExit = sessions.onExit(entry, () => {
+          const code = entry.exitCode != null ? entry.exitCode : 1;
+          try {
+            if (socket.readyState === 1) socket.send(JSON.stringify({ t: 'x', code }));
+          } catch {}
+          if (code !== 0) {
+            store.removeBox(boxId).catch(() => {});
+          }
+          try { socket.close(1000); } catch {}
+        });
+        socket.on('close', () => {
+          if (typeof off === 'function') off();
+          if (typeof offExit === 'function') offExit();
+          sessions.close(entry);
+        });
+        return;
+      }
+
+      // --- Interactive mode (existing) ---
       const size = { cols: Number(cols) || 80, rows: Number(rows) || 24 };
 
       let entry;
