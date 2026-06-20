@@ -31,7 +31,7 @@ If "Oh My Bash" is selected, the server will:
 
 The install is idempotent. If `~/.oh-my-bash` already exists, Tmuxifier treats Oh My Bash as installed and skips the install steps. If installation is requested and fails, the provision flow removes the newly persisted box (existing rollback behavior).
 
-Unlike OMZ, there is no need to install bash itself (it is present on virtually all systems) and no need for `chsh` (bash is already the default shell on most systems).
+Unlike OMZ, there is no need to install bash itself (it is present on virtually all systems). The `chsh` step is still included for consistency — it ensures the user's default shell is explicitly set to bash, matching the OMZ behavior.
 
 ## Architecture
 
@@ -84,11 +84,21 @@ if [ ! -d .oh-my-bash ]; then
   fi
 fi
 
+# Re-detect bash and set as default shell (mirrors OMZ chsh pattern)
+BASH_BIN="$(command -v bash || true)"
+if [ -n "$BASH_BIN" ]; then
+  if [ "$(id -u)" = '0' ]; then
+    chsh -s "$BASH_BIN" root || true
+  else
+    sudo -n chsh -s "$BASH_BIN" "$(whoami)" 2>/dev/null || chsh -s "$BASH_BIN" "$(whoami)" || true
+  fi
+fi
+
 # Set tmux default-shell to bash and respawn
 [ -n "${BASH_BIN-}" ] && { "$TMUX_BIN" set-option -g default-shell "$BASH_BIN" 2>/dev/null || true; W=$("$TMUX_BIN" list-windows -t <session> -F '#{window_index}' 2>/dev/null | head -1); [ -n "$W" ] && "$TMUX_BIN" respawn-window -t <session>:<window> -k "$BASH_BIN" 2>/dev/null || true; } || true
 ```
 
-Key differences from OMZ: no package-manager install step (bash is ubiquitous), no `chsh` (bash is already default), no `RUNZSH=no` equivalent (OMB installer does not launch an interactive shell).
+Key differences from OMZ: no package-manager install step (bash is ubiquitous). The `chsh` call and tmux default-shell/respawn are included for consistency with the OMZ pattern.
 
 ## Error Handling
 

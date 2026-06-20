@@ -47,6 +47,9 @@ test('buildEnsureTmuxRemote includes Oh My Bash install steps when requested', (
   expect(remote).toContain('OMB="$(curl');
   expect(remote).toContain('</dev/null');
 
+  // Runs chsh to set default shell to bash (mirrors OMZ pattern)
+  expect(remote).toContain('chsh -s "$BASH_BIN"');
+
   // Sets tmux default-shell to bash and respawns
   expect(remote).toContain('default-shell');
   expect(remote).toContain('BASH_BIN');
@@ -101,6 +104,14 @@ const ohMyBash = options.installOhMyBash ? [
   '  else',
   "    echo 'Oh My Bash install requires curl or wget' >&2",
   '    exit 127',
+  '  fi',
+  'fi',
+  'BASH_BIN="$(command -v bash || true)"',
+  'if [ -n "$BASH_BIN" ]; then',
+  "  if [ \"$(id -u)\" = '0' ]; then",
+  '    chsh -s "$BASH_BIN" root || true',
+  '  else',
+  '    sudo -n chsh -s "$BASH_BIN" "$(whoami)" 2>/dev/null || chsh -s "$BASH_BIN" "$(whoami)" || true',
   '  fi',
   'fi',
 ] : [];
