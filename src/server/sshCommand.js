@@ -89,3 +89,19 @@ export function buildProbeArgv(box, remoteCmd, opts = {}) {
   if (opts.sshConfigFile) argv.unshift('-F', opts.sshConfigFile);
   return argv;
 }
+
+export function buildProvisionArgv(box, script, opts = {}) {
+  assertBoxSafe(box);
+  const policy = opts.hostKeyPolicy || 'accept-new';
+  const argv = [
+    '-tt',
+    '-o', `StrictHostKeyChecking=${policy}`,
+    '-o', 'ConnectTimeout=6',
+    ...controlArgs(opts),
+  ];
+  if (box.proxyJump) argv.push('-J', box.proxyJump);
+  if (box.port) argv.push('-p', String(box.port));
+  argv.push(target(box), script);
+  if (opts.sshConfigFile) argv.unshift('-F', opts.sshConfigFile);
+  return argv;
+}
