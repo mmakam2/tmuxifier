@@ -58,7 +58,7 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     '    sudo -n chsh -s "$ZSH_BIN" "$(whoami)" 2>/dev/null || chsh -s "$ZSH_BIN" "$(whoami)" || true',
     '  fi',
     'fi',
-    'if ! grep -q "set-option -g default-shell" .tmux.conf.local 2>/dev/null; then echo "set-option -g default-shell \\"$ZSH_BIN\\"" >> .tmux.conf.local; fi',
+    'sed -i \'#^set-option -g default-shell#d\' .tmux.conf.local 2>/dev/null || true; echo "set-option -g default-shell \"$ZSH_BIN\"" >> .tmux.conf.local',
   ] : [];
   const ohMyBash = options.installOhMyBash ? [
     'BASH_BIN="$(command -v bash || true)"',
@@ -82,7 +82,7 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     '    sudo -n chsh -s "$BASH_BIN" "$(whoami)" 2>/dev/null || chsh -s "$BASH_BIN" "$(whoami)" || true',
     '  fi',
     'fi',
-    'if ! grep -q "set-option -g default-shell" .tmux.conf.local 2>/dev/null; then echo "set-option -g default-shell \\"$BASH_BIN\\"" >> .tmux.conf.local; fi',
+    'sed -i \'#^set-option -g default-shell#d\' .tmux.conf.local 2>/dev/null || true; echo "set-option -g default-shell \"$BASH_BIN\"" >> .tmux.conf.local',
   ] : [];
   return [
     'set -eu',
