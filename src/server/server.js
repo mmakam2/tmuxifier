@@ -1,10 +1,15 @@
+import fs from 'node:fs';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import { verifyPassword, COOKIE_NAME, cookieOptions } from './auth.js';
 
 export function buildServer({ config, store, sessions, statusChecker }) {
-  const app = Fastify({ logger: false });
+  const httpsOpts =
+    config.tlsCert && config.tlsKey
+      ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
+      : {};
+  const app = Fastify({ logger: false, ...httpsOpts });
   app.register(cookie, { secret: config.cookieSecret });
   app.register(websocket);
 
@@ -48,7 +53,7 @@ export function buildServer({ config, store, sessions, statusChecker }) {
     const ok = await verifyPassword(req.body?.password || '', config.passwordHash);
     if (!ok) { rec.count += 1; attempts.set(ip, rec); return reply.code(401).send({ error: 'invalid' }); }
     attempts.delete(ip);
-    reply.setCookie(COOKIE_NAME, 'ok', cookieOptions(config.bindAddress !== '127.0.0.1'));
+    reply.setCookie(COOKIE_NAME, 'ok', cookieOptions(config.secureCookie));
     return { ok: true };
   });
 

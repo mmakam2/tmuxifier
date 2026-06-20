@@ -34,9 +34,10 @@ app.setNotFoundHandler((req, reply) => {
   return reply.sendFile('index.html');
 });
 
+const scheme = config.secureCookie ? 'https' : 'http';
 app.listen({ host: config.bindAddress, port: config.port })
   .then(() => {
-    console.log(`Helm listening on http://${config.bindAddress}:${config.port}`);
+    console.log(`Helm listening on ${scheme}://${config.bindAddress}:${config.port}`);
   })
   .catch((err) => {
     console.error(err);
