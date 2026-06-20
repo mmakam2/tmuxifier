@@ -22,11 +22,12 @@ test('process started in tmux survives a killed local PTY and is visible on reat
 
   const e1 = mgr.open({ key: 'k1', box, session, size });
   const buf1 = [];
-  mgr.attach(e1, (d) => buf1.push(d));
+  const off1 = mgr.attach(e1, (d) => buf1.push(d));
   await waitFor(() => buf1.join('').length > 0);          // tmux drew something
   mgr.write(e1, `sleep 987 &\n`);                          // background marker process
   await delay(1500);
 
+  off1();
   mgr.detach(e1);                                          // simulate WS close
   await delay(1800);                                       // grace (1s) expires -> local PTY killed
   expect(mgr._count()).toBe(0);

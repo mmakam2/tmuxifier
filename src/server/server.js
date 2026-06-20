@@ -95,7 +95,7 @@ export function buildServer({ config, store, sessions, statusChecker }) {
 
       let entry;
       try {
-        entry = sessions.open({ key: `${boxId}:${cid}`, box, session: box.sessionName, size });
+        entry = sessions.open({ key: boxId, box, session: box.sessionName, size });
       } catch (err) {
         const msg = err?.message || 'session error';
         try { socket.send(msg); } catch {}
