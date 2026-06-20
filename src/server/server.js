@@ -254,6 +254,9 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
             if (socket.readyState === 1) socket.send(JSON.stringify({ t: 'x', code }));
           } catch {}
           if (code !== 0) {
+            // Best-effort rollback: the exit frame already told the client
+            // about the failure. If removeBox fails the box will linger in the
+            // list but is unreachable — the user can remove it manually.
             store.removeBox(boxId).catch(() => {});
           }
           try { socket.close(1000); } catch {}
