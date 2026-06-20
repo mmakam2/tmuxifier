@@ -7,6 +7,7 @@ import { createStore } from './store.js';
 import { createStatusChecker } from './status.js';
 import { createSessionManager } from './sessions.js';
 import { sshRun } from './sshRun.js';
+import { createBoxActions } from './boxActions.js';
 import { buildServer } from './server.js';
 
 process.on('unhandledRejection', (err) => { console.error('unhandledRejection:', err); });
@@ -28,8 +29,14 @@ const statusChecker = createStatusChecker({
   sshConfigFile: config.sshConfigFile,
   controlDir: config.controlDir,
 });
+const boxActions = createBoxActions({
+  run: (argv, opts) => sshRun(argv, opts),
+  hostKeyPolicy: config.hostKeyPolicy,
+  sshConfigFile: config.sshConfigFile,
+  controlDir: config.controlDir,
+});
 
-const app = buildServer({ config, store, sessions, statusChecker });
+const app = buildServer({ config, store, sessions, statusChecker, boxActions });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });

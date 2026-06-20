@@ -22,7 +22,7 @@ export function sanitizeSession(name) {
   return cleaned.length ? cleaned : 'web';
 }
 
-function shSingleQuote(s) {
+export function shSingleQuote(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
 

@@ -64,6 +64,10 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     try { entry.pty.kill(); } catch {}
     entries.delete(entry.key);
   }
+  function closeKey(key) {
+    const entry = entries.get(key);
+    if (entry) close(entry);
+  }
 
-  return { open, attach, onExit, write, resize, detach, close, _count: () => entries.size };
+  return { open, attach, onExit, write, resize, detach, close, closeKey, _count: () => entries.size };
 }
