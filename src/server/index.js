@@ -13,7 +13,7 @@ process.on('uncaughtException', (err) => { console.error('uncaughtException:', e
 
 const config = loadConfig();
 if (!config.passwordHash || !config.cookieSecret) {
-  console.error('Helm is not configured. Run: npm run set-password');
+  console.error('Tmuxifier is not configured. Run: npm run set-password');
   process.exit(1);
 }
 
@@ -37,7 +37,7 @@ app.setNotFoundHandler((req, reply) => {
 const scheme = config.secureCookie ? 'https' : 'http';
 app.listen({ host: config.bindAddress, port: config.port })
   .then(() => {
-    console.log(`Helm listening on ${scheme}://${config.bindAddress}:${config.port}`);
+    console.log(`Tmuxifier listening on ${scheme}://${config.bindAddress}:${config.port}`);
   })
   .catch((err) => {
     console.error(err);

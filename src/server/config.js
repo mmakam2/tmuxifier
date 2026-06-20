@@ -26,16 +26,16 @@ function readJsonIfExists(file) {
 export function loadConfig(overrides = {}, { env = process.env, cwd = process.cwd() } = {}) {
   const fileCfg = readJsonIfExists(path.join(cwd, 'config.json'));
   const envCfg = clean({
-    bindAddress: env.HELM_BIND,
-    port: env.HELM_PORT ? Number(env.HELM_PORT) : undefined,
-    graceSeconds: env.HELM_GRACE ? Number(env.HELM_GRACE) : undefined,
-    hostKeyPolicy: env.HELM_HOSTKEY_POLICY,
-    passwordHash: env.HELM_PASSWORD_HASH,
-    cookieSecret: env.HELM_COOKIE_SECRET,
-    dataDir: env.HELM_DATA_DIR,
-    sshConfigFile: env.HELM_SSH_CONFIG,
-    tlsCert: env.HELM_TLS_CERT,
-    tlsKey: env.HELM_TLS_KEY,
+    bindAddress: env.TMUXIFIER_BIND,
+    port: env.TMUXIFIER_PORT ? Number(env.TMUXIFIER_PORT) : undefined,
+    graceSeconds: env.TMUXIFIER_GRACE ? Number(env.TMUXIFIER_GRACE) : undefined,
+    hostKeyPolicy: env.TMUXIFIER_HOSTKEY_POLICY,
+    passwordHash: env.TMUXIFIER_PASSWORD_HASH,
+    cookieSecret: env.TMUXIFIER_COOKIE_SECRET,
+    dataDir: env.TMUXIFIER_DATA_DIR,
+    sshConfigFile: env.TMUXIFIER_SSH_CONFIG,
+    tlsCert: env.TMUXIFIER_TLS_CERT,
+    tlsKey: env.TMUXIFIER_TLS_KEY,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
   merged.dataDir = merged.dataDir ?? path.join(cwd, 'data');

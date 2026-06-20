@@ -10,7 +10,7 @@ let app;
 let dir;
 
 async function makeApp() {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'helm-srv-'));
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-srv-'));
   const config = {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
     passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir,
@@ -26,7 +26,7 @@ beforeEach(async () => { app = await makeApp(); });
 
 async function login() {
   const res = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
-  return res.cookies.find((c) => c.name === 'helm_session');
+  return res.cookies.find((c) => c.name === 'tmuxifier_session');
 }
 
 test('rejects unauthenticated box listing', async () => {
@@ -65,16 +65,16 @@ test('status endpoint returns a map keyed by box id', async () => {
   expect(res.json()[id]).toMatchObject({ reachable: true });
 });
 
-test('rejects a forged unsigned helm_session cookie', async () => {
-  const res = await app.inject({ method: 'GET', url: '/api/boxes', headers: { cookie: 'helm_session=ok' } });
+test('rejects a forged unsigned tmuxifier_session cookie', async () => {
+  const res = await app.inject({ method: 'GET', url: '/api/boxes', headers: { cookie: 'tmuxifier_session=ok' } });
   expect(res.statusCode).toBe(401);
 });
 
-test('rejects a tampered signed helm_session cookie', async () => {
+test('rejects a tampered signed tmuxifier_session cookie', async () => {
   const res = await app.inject({
     method: 'GET',
     url: '/api/boxes',
-    headers: { cookie: 'helm_session=s%3Aok.deadbeefbadsignature0000000000000000000000' },
+    headers: { cookie: 'tmuxifier_session=s%3Aok.deadbeefbadsignature0000000000000000000000' },
   });
   expect(res.statusCode).toBe(401);
 });

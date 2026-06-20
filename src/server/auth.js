@@ -2,7 +2,7 @@ import { scrypt, randomBytes, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const scryptAsync = promisify(scrypt);
-export const COOKIE_NAME = 'helm_session';
+export const COOKIE_NAME = 'tmuxifier_session';
 
 export async function hashPassword(password) {
   const salt = randomBytes(16);

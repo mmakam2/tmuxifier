@@ -1,4 +1,4 @@
-# Helm Implementation Plan
+# Tmuxifier Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -18,7 +18,7 @@
 - **Host-key policy default:** `accept-new` (configurable to `yes`). **Grace timer default:** `45` seconds.
 - **Bind default:** `127.0.0.1`; **port default:** `7437`.
 - **Inventory:** single JSON file `data/boxes.json` (gitignored).
-- **Auth:** one password, hashed with `scrypt` (format `scrypt$<saltHex>$<hashHex>`); signed httpOnly + SameSite=Lax cookie named `helm_session`; login rate-limited.
+- **Auth:** one password, hashed with `scrypt` (format `scrypt$<saltHex>$<hashHex>`); signed httpOnly + SameSite=Lax cookie named `tmuxifier_session`; login rate-limited.
 - **WS protocol:** client→server text frames JSON `{"t":"i","d":string}` (input) or `{"t":"r","c":number,"r":number}` (resize); server→client text frames = raw terminal output; server closes the socket when the PTY exits.
 
 ---
@@ -53,7 +53,7 @@ tmuxifier/
   test/
     helpers/localBox.js             # loopback ssh key -> localhost as a test box
     *.test.js                       # Vitest unit + integration
-    e2e/helm.spec.ts                # Playwright
+    e2e/tmuxifier.spec.ts                # Playwright
   data/boxes.json                   # runtime, gitignored
   README.md
 ```
@@ -73,7 +73,7 @@ tmuxifier/
 
 ```json
 {
-  "name": "helm",
+  "name": "tmuxifier",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -165,7 +165,7 @@ Expected: PASS — 1 test passed.
 
 ```bash
 git add package.json package-lock.json vitest.config.js tsconfig.json test/smoke.test.js
-git commit -m "chore: scaffold Helm project + test harness"
+git commit -m "chore: scaffold Tmuxifier project + test harness"
 ```
 
 ---
@@ -198,7 +198,7 @@ test('applies defaults', () => {
 });
 
 test('env overrides defaults; overrides arg wins over env', () => {
-  const env = { HELM_PORT: '9000', HELM_HOSTKEY_POLICY: 'yes' };
+  const env = { TMUXIFIER_PORT: '9000', TMUXIFIER_HOSTKEY_POLICY: 'yes' };
   const c = loadConfig({ port: 1234 }, { env, cwd: '/app' });
   expect(c.port).toBe(1234);          // explicit override wins
   expect(c.hostKeyPolicy).toBe('yes'); // from env
@@ -241,12 +241,12 @@ function readJsonIfExists(file) {
 export function loadConfig(overrides = {}, { env = process.env, cwd = process.cwd() } = {}) {
   const fileCfg = readJsonIfExists(path.join(cwd, 'config.json'));
   const envCfg = clean({
-    bindAddress: env.HELM_BIND,
-    port: env.HELM_PORT ? Number(env.HELM_PORT) : undefined,
-    graceSeconds: env.HELM_GRACE ? Number(env.HELM_GRACE) : undefined,
-    hostKeyPolicy: env.HELM_HOSTKEY_POLICY,
-    passwordHash: env.HELM_PASSWORD_HASH,
-    cookieSecret: env.HELM_COOKIE_SECRET,
+    bindAddress: env.TMUXIFIER_BIND,
+    port: env.TMUXIFIER_PORT ? Number(env.TMUXIFIER_PORT) : undefined,
+    graceSeconds: env.TMUXIFIER_GRACE ? Number(env.TMUXIFIER_GRACE) : undefined,
+    hostKeyPolicy: env.TMUXIFIER_HOSTKEY_POLICY,
+    passwordHash: env.TMUXIFIER_PASSWORD_HASH,
+    cookieSecret: env.TMUXIFIER_COOKIE_SECRET,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
   merged.dataDir = merged.dataDir || path.join(cwd, 'data');
@@ -530,7 +530,7 @@ let dir;
 let sshConfigPath;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'helm-store-'));
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-store-'));
   sshConfigPath = path.join(dir, 'ssh_config');
   await fs.writeFile(sshConfigPath, 'Host prod\n  HostName 10.0.0.5\n  User deploy\n');
 });
@@ -808,7 +808,7 @@ git commit -m "feat(status): tmux-ls parser + injectable per-box status checker"
 - Produces:
   - `hashPassword(password) -> Promise<string>` (`scrypt$<saltHex>$<hashHex>`).
   - `verifyPassword(password, stored) -> Promise<boolean>` (timing-safe).
-  - `COOKIE_NAME = 'helm_session'`, `cookieOptions(secure) -> object`.
+  - `COOKIE_NAME = 'tmuxifier_session'`, `cookieOptions(secure) -> object`.
 
 - [ ] **Step 1: Write the failing test `test/auth.test.js`**
 
@@ -829,7 +829,7 @@ test('wrong password fails', async () => {
 
 test('malformed stored value fails safely', async () => {
   expect(await verifyPassword('x', 'garbage')).toBe(false);
-  expect(COOKIE_NAME).toBe('helm_session');
+  expect(COOKIE_NAME).toBe('tmuxifier_session');
 });
 ```
 
@@ -845,7 +845,7 @@ import { scrypt, randomBytes, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const scryptAsync = promisify(scrypt);
-export const COOKIE_NAME = 'helm_session';
+export const COOKIE_NAME = 'tmuxifier_session';
 
 export async function hashPassword(password) {
   const salt = randomBytes(16);
@@ -882,14 +882,14 @@ const arg = process.argv[2];
 let password = arg;
 if (!password) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  password = await rl.question('New Helm password: ');
+  password = await rl.question('New Tmuxifier password: ');
   rl.close();
 }
 const hash = await hashPassword(password);
 const secret = randomBytes(32).toString('hex');
 console.log('\nAdd these to config.json or your environment:\n');
-console.log(`  HELM_PASSWORD_HASH=${hash}`);
-console.log(`  HELM_COOKIE_SECRET=${secret}`);
+console.log(`  TMUXIFIER_PASSWORD_HASH=${hash}`);
+console.log(`  TMUXIFIER_COOKIE_SECRET=${secret}`);
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
@@ -900,7 +900,7 @@ Expected: PASS — 3 tests.
 - [ ] **Step 6: Verify the script works**
 
 Run: `node scripts/hash-password.js hunter2`
-Expected: prints `HELM_PASSWORD_HASH=scrypt$...` and `HELM_COOKIE_SECRET=<64 hex>`.
+Expected: prints `TMUXIFIER_PASSWORD_HASH=scrypt$...` and `TMUXIFIER_COOKIE_SECRET=<64 hex>`.
 
 - [ ] **Step 7: Commit**
 
@@ -940,7 +940,7 @@ import { sshRun } from '../../src/server/sshRun.js';
 import { buildProbeArgv } from '../../src/server/sshCommand.js';
 
 export async function setupLocalBox() {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'helm-box-'));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-box-'));
   const sshDir = path.join(tmp, '.ssh');
   await fs.mkdir(sshDir, { recursive: true, mode: 0o700 });
   const keyPath = path.join(sshDir, 'id_loop');
@@ -953,14 +953,14 @@ export async function setupLocalBox() {
   const user = os.userInfo().username;
   await fs.writeFile(
     path.join(sshDir, 'config'),
-    `Host helmlocal\n  HostName 127.0.0.1\n  User ${user}\n  IdentityFile ${keyPath}\n` +
+    `Host tmuxifierlocal\n  HostName 127.0.0.1\n  User ${user}\n  IdentityFile ${keyPath}\n` +
       `  IdentitiesOnly yes\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n`,
     { mode: 0o600 },
   );
 
   const env = { ...process.env, HOME: tmp };
-  const box = { host: 'helmlocal' };
-  const session = `helmtest-${randomUUID().slice(0, 8)}`;
+  const box = { host: 'tmuxifierlocal' };
+  const session = `tmuxifiertest-${randomUUID().slice(0, 8)}`;
 
   async function cleanup() {
     try { await sshRun(buildProbeArgv(box, `tmux kill-session -t ${session}`), { env }); } catch {}
@@ -1145,7 +1145,7 @@ let app;
 let dir;
 
 async function makeApp() {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'helm-srv-'));
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-srv-'));
   const config = {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
     passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir,
@@ -1161,7 +1161,7 @@ beforeEach(async () => { app = await makeApp(); });
 
 async function login() {
   const res = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
-  return res.cookies.find((c) => c.name === 'helm_session');
+  return res.cookies.find((c) => c.name === 'tmuxifier_session');
 }
 
 test('rejects unauthenticated box listing', async () => {
@@ -1315,7 +1315,7 @@ import { buildServer } from './server.js';
 
 const config = loadConfig();
 if (!config.passwordHash || !config.cookieSecret) {
-  console.error('Helm is not configured. Run: npm run set-password');
+  console.error('Tmuxifier is not configured. Run: npm run set-password');
   process.exit(1);
 }
 
@@ -1336,7 +1336,7 @@ app.setNotFoundHandler((req, reply) => {
 });
 
 app.listen({ host: config.bindAddress, port: config.port }).then(() => {
-  console.log(`Helm listening on http://${config.bindAddress}:${config.port}`);
+  console.log(`Tmuxifier listening on http://${config.bindAddress}:${config.port}`);
 });
 ```
 
@@ -1360,7 +1360,7 @@ afterEach(async () => { if (teardown) await teardown(); teardown = null; });
 
 test('WS pipes input to the box and streams output back', async () => {
   const { box, session, env, cleanup } = await setupLocalBox();
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'helm-ws-'));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-ws-'));
   const config = {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
     passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
@@ -1386,9 +1386,9 @@ test('WS pipes input to the box and streams output back', async () => {
   ws.on('message', (d) => chunks.push(d.toString()));
   await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
   await delay(1200);
-  ws.send(JSON.stringify({ t: 'i', d: 'echo HELM_OK_123\n' }));
+  ws.send(JSON.stringify({ t: 'i', d: 'echo TMUXIFIER_OK_123\n' }));
   await delay(1500);
-  expect(chunks.join('')).toContain('HELM_OK_123');
+  expect(chunks.join('')).toContain('TMUXIFIER_OK_123');
   ws.close();
 });
 ```
@@ -1396,7 +1396,7 @@ test('WS pipes input to the box and streams output back', async () => {
 - [ ] **Step 7: Run the WS integration test**
 
 Run: `npx vitest run test/server.ws.integration.test.js`
-Expected: PASS — 1 test (output contains `HELM_OK_123`).
+Expected: PASS — 1 test (output contains `TMUXIFIER_OK_123`).
 
 - [ ] **Step 8: Commit**
 
@@ -1442,7 +1442,7 @@ export default defineConfig({
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Helm</title>
+    <title>Tmuxifier</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
@@ -1542,7 +1542,7 @@ async function start() {
 
 function renderLogin() {
   app.innerHTML = `<form id="login" class="login">
-      <h1>Helm</h1>
+      <h1>Tmuxifier</h1>
       <input id="pw" type="password" placeholder="Password" autofocus />
       <button>Unlock</button>
       <p id="err" class="err"></p>
@@ -1557,7 +1557,7 @@ function renderLogin() {
 async function renderDashboard() {
   app.innerHTML = `<div class="layout">
       <aside class="sidebar">
-        <div class="brand">Helm <button id="logout" title="Log out">⎋</button></div>
+        <div class="brand">Tmuxifier <button id="logout" title="Log out">⎋</button></div>
         <div class="actions"><button id="import">Import ~/.ssh/config</button><button id="add">+ Add box</button></div>
         <ul id="boxes" class="boxes"></ul>
       </aside>
@@ -1655,10 +1655,10 @@ Expected: `dist/index.html` and hashed JS/CSS assets emitted; no TypeScript erro
 
 Run (in two shells):
 ```bash
-HELM_PASSWORD_HASH=$(node scripts/hash-password.js dev | grep HASH | cut -d= -f2-) \
-HELM_COOKIE_SECRET=devsecret npm start
+TMUXIFIER_PASSWORD_HASH=$(node scripts/hash-password.js dev | grep HASH | cut -d= -f2-) \
+TMUXIFIER_COOKIE_SECRET=devsecret npm start
 ```
-Then open `http://127.0.0.1:7437`, log in with `dev`, click **Add box**, enter `helmlocal` (after running the Task 8 helper) or any reachable alias, and confirm a terminal opens. (This is a sanity check; the automated gate is Task 11.)
+Then open `http://127.0.0.1:7437`, log in with `dev`, click **Add box**, enter `tmuxifierlocal` (after running the Task 8 helper) or any reachable alias, and confirm a terminal opens. (This is a sanity check; the automated gate is Task 11.)
 
 - [ ] **Step 9: Commit**
 
@@ -1672,7 +1672,7 @@ git commit -m "feat(web): login, box dashboard, and reconnecting xterm terminal"
 ### Task 11: End-to-end test (Playwright)
 
 **Files:**
-- Create: `playwright.config.ts`, `test/e2e/helm.spec.ts`, `test/e2e/global-setup.js`
+- Create: `playwright.config.ts`, `test/e2e/tmuxifier.spec.ts`, `test/e2e/global-setup.js`
 
 **Interfaces:**
 - Consumes: the built SPA (Task 10) + server (Task 9) + localBox helper (Task 8).
@@ -1697,17 +1697,17 @@ import { hashPassword } from '../../src/server/auth.js';
 
 export default async function globalSetup() {
   const box = await setupLocalBox();
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'helm-e2e-'));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-e2e-'));
   const hash = await hashPassword('e2e');
   const server = spawn('node', ['src/server/index.js'], {
-    env: { ...box.env, HELM_PASSWORD_HASH: hash, HELM_COOKIE_SECRET: 'e2e-secret', HELM_PORT: '7438' },
+    env: { ...box.env, TMUXIFIER_PASSWORD_HASH: hash, TMUXIFIER_COOKIE_SECRET: 'e2e-secret', TMUXIFIER_PORT: '7438' },
     stdio: 'inherit',
   });
   // seed the box into the inventory the server reads (dataDir defaults to <cwd>/data)
   await new Promise((r) => setTimeout(r, 1500));
-  globalThis.__helm = { box, dir, server };
-  process.env.HELM_E2E_BOX = box.box.host;
-  process.env.HELM_E2E_SESSION = box.session;
+  globalThis.__tmuxifier = { box, dir, server };
+  process.env.TMUXIFIER_E2E_BOX = box.box.host;
+  process.env.TMUXIFIER_E2E_SESSION = box.session;
   return async () => {
     server.kill();
     await box.cleanup();
@@ -1729,7 +1729,7 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 4: Write `test/e2e/helm.spec.ts`**
+- [ ] **Step 4: Write `test/e2e/tmuxifier.spec.ts`**
 
 ```ts
 import { test, expect } from '@playwright/test';
@@ -1740,19 +1740,19 @@ test('login, open a box terminal, reload, and reattach to the same session', asy
   await page.click('button:has-text("Unlock")');
 
   await page.click('button:has-text("+ Add box")');
-  page.once('dialog', (d) => d.accept(process.env.HELM_E2E_BOX!));
+  page.once('dialog', (d) => d.accept(process.env.TMUXIFIER_E2E_BOX!));
   // open it
   await page.click('.box .name');
   // type a marker into the shell
   const term = page.locator('.term');
   await expect(term).toBeVisible();
-  await page.keyboard.type('echo HELM_E2E_MARKER\n');
-  await expect(page.locator('.xterm-rows')).toContainText('HELM_E2E_MARKER', { timeout: 10000 });
+  await page.keyboard.type('echo TMUXIFIER_E2E_MARKER\n');
+  await expect(page.locator('.xterm-rows')).toContainText('TMUXIFIER_E2E_MARKER', { timeout: 10000 });
 
   // reload — tmux state must survive and redraw
   await page.reload();
   await page.click('.box .name');
-  await expect(page.locator('.xterm-rows')).toContainText('HELM_E2E_MARKER', { timeout: 10000 });
+  await expect(page.locator('.xterm-rows')).toContainText('TMUXIFIER_E2E_MARKER', { timeout: 10000 });
 });
 ```
 
@@ -1783,11 +1783,11 @@ git commit -m "test(e2e): browser flow proving persistent reattach"
 - [ ] **Step 1: Write `README.md`**
 
 ````markdown
-# Helm
+# Tmuxifier
 
 A single-user web dashboard for managing headless boxes over SSH. Each box opens a
 browser terminal backed by a tmux session that lives **on the box**, so closing the tab,
-losing the network, or restarting Helm leaves your work running — reconnecting drops you
+losing the network, or restarting Tmuxifier leaves your work running — reconnecting drops you
 back into the same state.
 
 ## Requirements
@@ -1799,23 +1799,23 @@ back into the same state.
 ```bash
 npm install
 npm run build
-npm run set-password           # prints HELM_PASSWORD_HASH and HELM_COOKIE_SECRET
+npm run set-password           # prints TMUXIFIER_PASSWORD_HASH and TMUXIFIER_COOKIE_SECRET
 ```
 Put the two printed values in `config.json` or the environment, then:
 ```bash
-HELM_PASSWORD_HASH=... HELM_COOKIE_SECRET=... npm start
+TMUXIFIER_PASSWORD_HASH=... TMUXIFIER_COOKIE_SECRET=... npm start
 ```
 Open http://127.0.0.1:7437.
 
 ## Configuration
 | Key | Env | Default |
 | --- | --- | --- |
-| bind address | `HELM_BIND` | `127.0.0.1` |
-| port | `HELM_PORT` | `7437` |
-| grace seconds | `HELM_GRACE` | `45` |
-| host-key policy | `HELM_HOSTKEY_POLICY` | `accept-new` |
-| password hash | `HELM_PASSWORD_HASH` | — (required) |
-| cookie secret | `HELM_COOKIE_SECRET` | — (required) |
+| bind address | `TMUXIFIER_BIND` | `127.0.0.1` |
+| port | `TMUXIFIER_PORT` | `7437` |
+| grace seconds | `TMUXIFIER_GRACE` | `45` |
+| host-key policy | `TMUXIFIER_HOSTKEY_POLICY` | `accept-new` |
+| password hash | `TMUXIFIER_PASSWORD_HASH` | — (required) |
+| cookie secret | `TMUXIFIER_COOKIE_SECRET` | — (required) |
 
 ## How persistence works
 Each terminal runs `ssh -tt <box> "tmux new-session -A -s web"`. Because tmux runs on the
@@ -1824,10 +1824,10 @@ brief reconnects seamless; after that the local ssh process is dropped while the
 session keeps running.
 
 ## Security
-Helm can SSH into your whole fleet, so the login gate is the crown jewel. It binds to
-`127.0.0.1` by default. **Only expose it behind a TLS reverse proxy** (and set `HELM_BIND`
+Tmuxifier can SSH into your whole fleet, so the login gate is the crown jewel. It binds to
+`127.0.0.1` by default. **Only expose it behind a TLS reverse proxy** (and set `TMUXIFIER_BIND`
 accordingly). Passwords are scrypt-hashed; the session cookie is signed, httpOnly, and
-SameSite. Helm stores no SSH secrets — your keys and agent stay in the OS.
+SameSite. Tmuxifier stores no SSH secrets — your keys and agent stay in the OS.
 
 ## Development
 ```bash

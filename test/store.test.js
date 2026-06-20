@@ -8,7 +8,7 @@ let dir;
 let sshConfigPath;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'helm-store-'));
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-store-'));
   sshConfigPath = path.join(dir, 'ssh_config');
   await fs.writeFile(sshConfigPath, 'Host prod\n  HostName 10.0.0.5\n  User deploy\n');
 });
