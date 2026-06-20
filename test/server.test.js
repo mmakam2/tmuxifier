@@ -45,6 +45,7 @@ test('/api/auth/info reports password mode', async () => {
 test('public responses include browser hardening headers', async () => {
   const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
   expect(res.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+  expect(res.headers['content-security-policy']).toContain("style-src 'self' 'unsafe-inline'");
   expect(res.headers['x-content-type-options']).toBe('nosniff');
   expect(res.headers['x-frame-options']).toBe('DENY');
   expect(res.headers['referrer-policy']).toBe('no-referrer');
