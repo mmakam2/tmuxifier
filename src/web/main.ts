@@ -139,6 +139,18 @@ function paint(boxes: Box[], status: Record<string, Status>) {
     nameEl.textContent = b.label;
     nameEl.addEventListener('click', () => openBox(b));
 
+    const refresh = document.createElement('button');
+    refresh.className = 'refresh';
+    refresh.title = 'Reconnect';
+    refresh.textContent = '↻';
+    refresh.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await api.reconnectBox(b.id);
+      const wasActive = activeBoxId === b.id;
+      closeTab(b.id);
+      if (wasActive) openBox(b);
+    });
+
     const rm = document.createElement('button');
     rm.className = 'rm';
     rm.title = 'Remove';
@@ -150,7 +162,7 @@ function paint(boxes: Box[], status: Record<string, Status>) {
       await refresh();
     });
 
-    li.append(dotEl, nameEl, rm);
+    li.append(dotEl, nameEl, refresh, rm);
     list.appendChild(li);
   }
 }

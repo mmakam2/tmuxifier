@@ -204,6 +204,18 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
     }
     await store.removeBox(req.params.id); return { ok: true };
   });
+  app.post('/api/boxes/:id/reconnect', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'box not found' });
+    if (sessions?.closeKey) {
+      sessions.closeKey(box.id);
+      sessions.closeKey(`provision:${box.id}`);
+    }
+    if (boxActions?.killSession) {
+      try { void Promise.resolve(boxActions.killSession(box)).catch(() => {}); } catch {}
+    }
+    return { ok: true };
+  });
   app.post('/api/import', { preHandler: requireAuth }, async () => store.importFromSshConfig());
 
   app.get('/api/status', { preHandler: requireAuth }, async () => {
