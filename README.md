@@ -5,6 +5,16 @@ browser terminal backed by a tmux session that lives **on the box**, so closing 
 losing the network, or restarting Tmuxifier leaves your work running — reconnecting drops you
 back into the same state.
 
+## Screenshots
+
+| Login | Dashboard |
+|:---:|:---:|
+| [![Login screen](docs/screenshots/login.png)](docs/screenshots/login.png) | [![Dashboard with terminal](docs/screenshots/dashboard.png)](docs/screenshots/dashboard.png) |
+
+| Add Box |
+|:---:|
+| [![Add box dialog](docs/screenshots/add-box.png)](docs/screenshots/add-box.png) |
+
 ## Requirements
 - Node 20+
 - The OpenSSH client, with your keys/agent/`~/.ssh/config` already working from the shell
