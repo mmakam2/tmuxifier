@@ -98,6 +98,7 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     ...ohMyTmux,
     ...ohMyZsh,
     `"$TMUX_BIN" has-session -t ${sess} 2>/dev/null || "$TMUX_BIN" new-session -d -s ${sess}${startup}`,
+    `[ -n "\${ZSH_BIN-}" ] && "$TMUX_BIN" set-option -g default-shell "$ZSH_BIN" 2>/dev/null || true`,
   ].join('\n');
 }
 
