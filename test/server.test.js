@@ -102,6 +102,33 @@ test('removing a box closes local terminal and best-effort kills remote session 
   expect(list.json()).toHaveLength(0);
 });
 
+test('removing a box does not wait for remote session cleanup', async () => {
+  let killCalled = false;
+  const boxActions = {
+    killSession() {
+      killCalled = true;
+      return new Promise(() => {});
+    },
+  };
+  app = await makeApp({ boxActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/boxes',
+    headers,
+    payload: { host: 'h1', sessionName: 'work' },
+  });
+  const box = created.json();
+
+  const del = await app.inject({ method: 'DELETE', url: `/api/boxes/${box.id}`, headers });
+
+  expect(del.statusCode).toBe(200);
+  expect(killCalled).toBe(true);
+  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
+  expect(list.json()).toHaveLength(0);
+});
+
 test('wrong password is rejected', async () => {
   const res = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'bad' } });
   expect(res.statusCode).toBe(401);
