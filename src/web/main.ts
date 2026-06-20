@@ -1,5 +1,5 @@
 import { api, type AddBoxSpec, type Box, type Status } from './api';
-import { openTerminal } from './terminal';
+import { openTerminal, openProvisionTerminal } from './terminal';
 import logoUrl from './assets/tmuxifier-logo.png';
 
 const app = document.getElementById('app')!;
@@ -173,6 +173,44 @@ function closeTab(id: string) {
   if (t) { t.term.dispose(); t.el.remove(); tabs.delete(id); }
 }
 
+function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boolean }) {
+  const panel = document.getElementById('provision-panel')!;
+  const title = panel.querySelector('.provision-title')!;
+  const status = panel.querySelector('.provision-status')!;
+  const container = panel.querySelector('.provision-term') as HTMLElement;
+  const closeBtn = panel.querySelector('.provision-close') as HTMLElement;
+
+  // Reset state
+  title.textContent = `Provisioning ${box.label}`;
+  status.textContent = '';
+  status.className = 'provision-status';
+  closeBtn.style.display = 'none';
+  container.innerHTML = '';
+
+  panel.classList.add('open');
+
+  const term = openProvisionTerminal(container, box.id, options, (code) => {
+    if (code === 0) {
+      status.textContent = '✓ Complete';
+      status.className = 'provision-status success';
+      refresh();
+      setTimeout(() => {
+        panel.classList.remove('open');
+        term.dispose();
+      }, 2000);
+    } else {
+      status.textContent = `✗ Failed (exit ${code})`;
+      status.className = 'provision-status error';
+      closeBtn.style.display = '';
+    }
+  });
+
+  closeBtn.addEventListener('click', () => {
+    panel.classList.remove('open');
+    term.dispose();
+  }, { once: true });
+}
+
 function openAddDialog() {
   const fields: Record<string, HTMLInputElement> = {};
   function field(name: string, label: string, opts: { placeholder?: string; value?: string; type?: string } = {}) {
@@ -264,9 +302,12 @@ function openAddDialog() {
     }
     submit.disabled = true;
     try {
-      await api.addBox(spec);
+      const box = await api.addBox(spec);
       close();
-      await refresh();
+      openProvisionPanel(box, {
+        ohMyTmux: installOhMyTmuxInput.checked,
+        ohMyZsh: installOhMyZshInput.checked,
+      });
     } catch (e: any) {
       err.textContent = e?.message || 'Could not add box';
       submit.disabled = false;
