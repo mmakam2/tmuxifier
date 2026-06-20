@@ -23,7 +23,27 @@ function renderLogin() {
   });
 }
 
+let pollInterval: any;
+
+async function pollStatus() {
+  try {
+    const status = await api.status();
+    const list = app.querySelectorAll('.box');
+    const DOTS = new Set(['gray', 'green', 'amber', 'red']);
+    list.forEach(li => {
+      const id = (li as HTMLElement).dataset.id;
+      if (!id) return;
+      const st = status[id];
+      const dotClass = !st ? 'gray' : st.reachable ? (st.tmux === false ? 'amber' : 'green') : 'red';
+      const dot = DOTS.has(dotClass) ? dotClass : 'gray';
+      const dotEl = li.querySelector('.dot');
+      if (dotEl) dotEl.className = `dot ${dot}`;
+    });
+  } catch {}
+}
+
 async function renderDashboard() {
+  if (pollInterval) clearInterval(pollInterval);
   app.innerHTML = `<div class="layout">
       <aside class="sidebar">
         <div class="brand">Tmuxifier <button id="logout" title="Log out">⎋</button></div>
@@ -32,13 +52,17 @@ async function renderDashboard() {
       </aside>
       <main id="stage" class="stage"><div class="empty">Select a box to open a terminal.</div></main>
     </div>`;
-  app.querySelector('#logout')!.addEventListener('click', async () => { await api.logout(); renderLogin(); });
+  app.querySelector('#logout')!.addEventListener('click', async () => { 
+    if (pollInterval) clearInterval(pollInterval);
+    await api.logout(); renderLogin(); 
+  });
   app.querySelector('#import')!.addEventListener('click', async () => { await api.importSsh(); await refresh(); });
   app.querySelector('#add')!.addEventListener('click', async () => {
     const host = prompt('SSH host or alias:'); if (!host) return;
     await api.addBox({ host }); await refresh();
   });
   await refresh();
+  pollInterval = setInterval(pollStatus, 15000);
 }
 
 async function refresh() {
@@ -60,6 +84,7 @@ function paint(boxes: Box[], status: Record<string, Status>) {
 
     const li = document.createElement('li');
     li.className = 'box';
+    li.dataset.id = b.id;
 
     const dotEl = document.createElement('span');
     dotEl.className = `dot ${dot}`;
