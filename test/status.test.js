@@ -33,6 +33,14 @@ test('checkBox: reports sessions', async () => {
   expect(status.sessions[0].name).toBe('web');
 });
 
+test('checkBox: passes controlDir through to the probe argv (multiplexing)', async () => {
+  let seen;
+  const run = async (argv) => { seen = argv; return { code: 0, stdout: '', stderr: '' }; };
+  await createStatusChecker({ run, controlDir: '/run/cm' }).checkBox({ host: 'h' });
+  expect(seen).toContain('ControlMaster=auto');
+  expect(seen).toContain('ControlPath=/run/cm/%C');
+});
+
 test('checkBox: returns unreachable instead of throwing for an unsafe box', async () => {
   const run = async () => ({ code: 0, stdout: '', stderr: '' });
   const status = await createStatusChecker({ run }).checkBox({ host: '-oProxyCommand=x' });

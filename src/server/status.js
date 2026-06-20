@@ -15,12 +15,12 @@ export function parseTmuxSessions(stdout) {
     });
 }
 
-export function createStatusChecker({ run, hostKeyPolicy = 'accept-new', sshConfigFile }) {
+export function createStatusChecker({ run, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir }) {
   const remote = PROBE_REMOTE;
   return {
     async checkBox(box) {
       try {
-        const argv = buildProbeArgv(box, remote, { hostKeyPolicy, sshConfigFile });
+        const argv = buildProbeArgv(box, remote, { hostKeyPolicy, sshConfigFile, controlDir });
         const res = await run(argv);
         if (res.code !== 0 && !String(res.stdout).trim()) {
           return { reachable: false, error: String(res.stderr || '').trim() || 'unreachable' };

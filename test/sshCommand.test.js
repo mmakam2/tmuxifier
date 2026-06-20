@@ -76,3 +76,25 @@ test('buildProbeArgv: sshConfigFile prepends -F', () => {
   const argv = buildProbeArgv({ host: 'h' }, 'tmux ls', { sshConfigFile: '/tmp/cfg' });
   expect(argv.slice(0, 2)).toEqual(['-F', '/tmp/cfg']);
 });
+
+test('buildProbeArgv: controlDir enables connection multiplexing', () => {
+  const argv = buildProbeArgv({ host: 'h' }, 'tmux ls', { controlDir: '/run/cm' });
+  expect(argv).toContain('ControlMaster=auto');
+  expect(argv).toContain('ControlPath=/run/cm/%C');
+  expect(argv.some((a) => a.startsWith('ControlPersist='))).toBe(true);
+});
+
+test('buildAttachArgv: controlDir multiplexing shares the probe ControlPath', () => {
+  const probe = buildProbeArgv({ host: 'h', user: 'me', port: 22 }, 'tmux ls', { controlDir: '/run/cm' });
+  const attach = buildAttachArgv({ host: 'h', user: 'me', port: 22 }, 'web', { cols: 80, rows: 24 }, { controlDir: '/run/cm' });
+  // %C is a hash of the connection params, so an identical token in both means
+  // the probe reuses the master connection the live terminal already opened.
+  expect(attach).toContain('ControlPath=/run/cm/%C');
+  expect(probe).toContain('ControlPath=/run/cm/%C');
+  expect(attach).toContain('ControlMaster=auto');
+});
+
+test('no control options without controlDir (backward compatible)', () => {
+  expect(buildProbeArgv({ host: 'h' }, 'tmux ls').join(' ')).not.toContain('ControlMaster');
+  expect(buildAttachArgv({ host: 'h' }, 'web', { cols: 80, rows: 24 }).join(' ')).not.toContain('ControlMaster');
+});

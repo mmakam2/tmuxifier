@@ -33,12 +33,17 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     passwordHash: env.TMUXIFIER_PASSWORD_HASH,
     cookieSecret: env.TMUXIFIER_COOKIE_SECRET,
     dataDir: env.TMUXIFIER_DATA_DIR,
+    controlDir: env.TMUXIFIER_CONTROL_DIR,
     sshConfigFile: env.TMUXIFIER_SSH_CONFIG,
     tlsCert: env.TMUXIFIER_TLS_CERT,
     tlsKey: env.TMUXIFIER_TLS_KEY,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
   merged.dataDir = merged.dataDir ?? path.join(cwd, 'data');
+  // Directory for SSH ControlMaster sockets. Multiplexing every probe and
+  // terminal for a box over one persistent connection keeps Tmuxifier from
+  // hammering each box's sshd (and tripping MaxStartups / ban tools).
+  merged.controlDir = merged.controlDir ?? path.join(merged.dataDir, 'cm');
   merged.sshConfigPath = merged.sshConfigPath ?? path.join(os.homedir(), '.ssh', 'config');
   // Serve over HTTPS (and mark the session cookie Secure) only when a TLS
   // cert+key are configured. Decoupled from bindAddress so a non-loopback

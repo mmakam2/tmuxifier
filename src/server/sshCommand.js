@@ -1,3 +1,22 @@
+import path from 'node:path';
+
+// SSH connection multiplexing. When a control directory is configured, every
+// probe and terminal for a given box shares one persistent master connection
+// instead of opening a fresh TCP+auth handshake each time. ControlPath uses the
+// %C token (a hash of user/host/port) so the probe and the live terminal land
+// on the same socket, and the master is authenticated once — so repeated probes
+// no longer count against the box's sshd MaxStartups limit.
+function controlArgs(opts = {}) {
+  if (!opts.controlPath && !opts.controlDir) return [];
+  const controlPath = opts.controlPath || path.join(opts.controlDir, '%C');
+  const persist = opts.controlPersist != null ? String(opts.controlPersist) : '60';
+  return [
+    '-o', 'ControlMaster=auto',
+    '-o', `ControlPath=${controlPath}`,
+    '-o', `ControlPersist=${persist}`,
+  ];
+}
+
 export function sanitizeSession(name) {
   const cleaned = String(name || '').replace(/[^A-Za-z0-9_-]/g, '-');
   return cleaned.length ? cleaned : 'web';
@@ -42,6 +61,7 @@ export function buildAttachArgv(box, session, size, opts = {}) {
     '-o', `StrictHostKeyChecking=${policy}`,
     '-o', 'ServerAliveInterval=15',
     '-o', 'ServerAliveCountMax=3',
+    ...controlArgs(opts),
   ];
   if (box.proxyJump) argv.push('-J', box.proxyJump);
   if (box.port) argv.push('-p', String(box.port));
@@ -61,6 +81,7 @@ export function buildProbeArgv(box, remoteCmd, opts = {}) {
     '-o', 'BatchMode=yes',
     '-o', `StrictHostKeyChecking=${policy}`,
     '-o', 'ConnectTimeout=6',
+    ...controlArgs(opts),
   ];
   if (box.proxyJump) argv.push('-J', box.proxyJump);
   if (box.port) argv.push('-p', String(box.port));
