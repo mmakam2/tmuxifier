@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
@@ -17,12 +18,15 @@ if (!config.passwordHash || !config.cookieSecret) {
   process.exit(1);
 }
 
+fs.mkdirSync(config.controlDir, { recursive: true });
+
 const store = createStore({ dataDir: config.dataDir, sshConfigPath: config.sshConfigPath });
-const sessions = createSessionManager({ hostKeyPolicy: config.hostKeyPolicy, graceSeconds: config.graceSeconds, sshConfigFile: config.sshConfigFile });
+const sessions = createSessionManager({ hostKeyPolicy: config.hostKeyPolicy, graceSeconds: config.graceSeconds, sshConfigFile: config.sshConfigFile, controlDir: config.controlDir });
 const statusChecker = createStatusChecker({
   run: (argv) => sshRun(argv),
   hostKeyPolicy: config.hostKeyPolicy,
   sshConfigFile: config.sshConfigFile,
+  controlDir: config.controlDir,
 });
 
 const app = buildServer({ config, store, sessions, statusChecker });

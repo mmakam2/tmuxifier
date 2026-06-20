@@ -11,6 +11,14 @@ test('applies defaults', () => {
   expect(c.hostKeyPolicy).toBe('accept-new');
   expect(c.dataDir).toBe(path.join('/app', 'data'));
   expect(c.sshConfigPath).toBe(path.join(os.homedir(), '.ssh', 'config'));
+  expect(c.controlDir).toBe(path.join('/app', 'data', 'cm'));
+});
+
+test('controlDir follows dataDir and is overridable via env', () => {
+  const c = loadConfig({}, { env: { TMUXIFIER_DATA_DIR: '/tmp/d' }, cwd: '/app' });
+  expect(c.controlDir).toBe(path.join('/tmp/d', 'cm'));
+  const o = loadConfig({}, { env: { TMUXIFIER_CONTROL_DIR: '/tmp/sockets' }, cwd: '/app' });
+  expect(o.controlDir).toBe('/tmp/sockets');
 });
 
 test('env overrides defaults; overrides arg wins over env', () => {

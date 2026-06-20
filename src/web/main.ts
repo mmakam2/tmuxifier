@@ -23,6 +23,10 @@ function renderLogin() {
   });
 }
 
+// Probes are multiplexed over each box's persistent SSH master, so polling is
+// cheap — but there's no need to hammer. A relaxed interval keeps the dots
+// fresh without churning connections.
+const POLL_MS = 30000;
 let pollInterval: any;
 let polling = false;
 
@@ -62,12 +66,9 @@ async function renderDashboard() {
     await api.logout(); renderLogin(); 
   });
   app.querySelector('#import')!.addEventListener('click', async () => { await api.importSsh(); await refresh(); });
-  app.querySelector('#add')!.addEventListener('click', async () => {
-    const host = prompt('SSH host or alias:'); if (!host) return;
-    await api.addBox({ host }); await refresh();
-  });
+  app.querySelector('#add')!.addEventListener('click', () => openAddDialog());
   await refresh();
-  pollInterval = setInterval(pollStatus, 3000);
+  pollInterval = setInterval(pollStatus, POLL_MS);
 }
 
 async function refresh() {
@@ -132,6 +133,87 @@ function openBox(b: Box) {
 function closeTab(id: string) {
   const t = tabs.get(id);
   if (t) { t.term.dispose(); t.el.remove(); tabs.delete(id); }
+}
+
+function openAddDialog() {
+  const fields: Record<string, HTMLInputElement> = {};
+  function field(name: string, label: string, opts: { placeholder?: string; value?: string; type?: string } = {}) {
+    const wrap = document.createElement('label');
+    wrap.className = 'field';
+    const span = document.createElement('span');
+    span.textContent = label;
+    const input = document.createElement('input');
+    input.type = opts.type || 'text';
+    if (opts.placeholder) input.placeholder = opts.placeholder;
+    if (opts.value) input.value = opts.value;
+    wrap.append(span, input);
+    fields[name] = input;
+    return wrap;
+  }
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const form = document.createElement('form');
+  form.className = 'modal';
+  const title = document.createElement('h2');
+  title.textContent = 'Add box';
+
+  const err = document.createElement('p');
+  err.className = 'err';
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.textContent = 'Add';
+  actions.append(cancel, submit);
+
+  form.append(
+    title,
+    field('host', 'Host or alias', { placeholder: 'e.g. 192.168.3.245' }),
+    field('label', 'Label (optional)', { placeholder: 'defaults to host' }),
+    field('user', 'User', { value: 'root' }),
+    field('port', 'Port (optional)', { placeholder: '22', type: 'number' }),
+    field('proxyJump', 'ProxyJump (optional)', { placeholder: 'jump host this server can reach' }),
+    err,
+    actions,
+  );
+  backdrop.appendChild(form);
+  app.appendChild(backdrop);
+  fields.host.focus();
+
+  function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
+  function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); }
+  document.addEventListener('keydown', onKey);
+  cancel.addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const host = fields.host.value.trim();
+    if (!host) { err.textContent = 'Host is required'; return; }
+    const spec: Partial<Box> = { host };
+    const label = fields.label.value.trim(); if (label) spec.label = label;
+    const user = fields.user.value.trim(); if (user) spec.user = user;
+    const jump = fields.proxyJump.value.trim(); if (jump) spec.proxyJump = jump;
+    const portRaw = fields.port.value.trim();
+    if (portRaw) {
+      const port = Number(portRaw);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) { err.textContent = 'Port must be 1–65535'; return; }
+      spec.port = port;
+    }
+    submit.disabled = true;
+    try {
+      await api.addBox(spec);
+      close();
+      await refresh();
+    } catch (e: any) {
+      err.textContent = e?.message || 'Could not add box';
+      submit.disabled = false;
+    }
+  });
 }
 
 start();
