@@ -8,7 +8,7 @@ import { createStore } from '../../src/server/store.js';
 
 export default async function globalSetup() {
   const lb = await setupLocalBox();
-  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'helm-e2e-'));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-e2e-'));
 
   // Seed the box into a temp inventory so no UI prompt is needed
   const store = createStore({ dataDir, sshConfigPath: '/nonexistent' });
@@ -19,11 +19,11 @@ export default async function globalSetup() {
   const server = spawn('node', ['src/server/index.js'], {
     env: {
       ...process.env,
-      HELM_PASSWORD_HASH: hash,
-      HELM_COOKIE_SECRET: 'e2e-secret',
-      HELM_PORT: '7438',
-      HELM_DATA_DIR: dataDir,
-      HELM_SSH_CONFIG: lb.sshConfigFile,
+      TMUXIFIER_PASSWORD_HASH: hash,
+      TMUXIFIER_COOKIE_SECRET: 'e2e-secret',
+      TMUXIFIER_PORT: '7438',
+      TMUXIFIER_DATA_DIR: dataDir,
+      TMUXIFIER_SSH_CONFIG: lb.sshConfigFile,
     },
     stdio: 'inherit',
   });
@@ -43,7 +43,7 @@ export default async function globalSetup() {
     }
     await new Promise((r) => setTimeout(r, 200));
   }
-  if (!ready) throw new Error('Helm server did not become ready within 10 seconds');
+  if (!ready) throw new Error('Tmuxifier server did not become ready within 10 seconds');
 
   return async () => {
     server.kill();

@@ -14,5 +14,5 @@ test('wrong password fails', async () => {
 
 test('malformed stored value fails safely', async () => {
   expect(await verifyPassword('x', 'garbage')).toBe(false);
-  expect(COOKIE_NAME).toBe('helm_session');
+  expect(COOKIE_NAME).toBe('tmuxifier_session');
 });

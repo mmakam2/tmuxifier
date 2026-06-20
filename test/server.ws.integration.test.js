@@ -15,7 +15,7 @@ afterEach(async () => { if (teardown) await teardown(); teardown = null; });
 
 test('WS pipes input to the box and streams output back', async () => {
   const { box, session, env, sshConfigFile, cleanup } = await setupLocalBox();
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'helm-ws-'));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-ws-'));
   const config = {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
     passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
@@ -41,8 +41,8 @@ test('WS pipes input to the box and streams output back', async () => {
   ws.on('message', (d) => chunks.push(d.toString()));
   await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
   await delay(1200);
-  ws.send(JSON.stringify({ t: 'i', d: 'echo HELM_OK_123\n' }));
+  ws.send(JSON.stringify({ t: 'i', d: 'echo TMUXIFIER_OK_123\n' }));
   await delay(1500);
-  expect(chunks.join('')).toContain('HELM_OK_123');
+  expect(chunks.join('')).toContain('TMUXIFIER_OK_123');
   ws.close();
 }, 20000);

@@ -7,7 +7,7 @@ import { sshRun } from '../../src/server/sshRun.js';
 import { buildProbeArgv } from '../../src/server/sshCommand.js';
 
 export async function setupLocalBox() {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'helm-box-'));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-box-'));
   const sshDir = path.join(tmp, '.ssh');
   await fs.mkdir(sshDir, { recursive: true, mode: 0o700 });
   const keyPath = path.join(sshDir, 'id_loop');
@@ -21,14 +21,14 @@ export async function setupLocalBox() {
   const sshConfigFile = path.join(tmp, 'ssh_config');
   await fs.writeFile(
     sshConfigFile,
-    `Host helmlocal\n  HostName 127.0.0.1\n  User ${user}\n  IdentityFile ${keyPath}\n` +
+    `Host tmuxifierlocal\n  HostName 127.0.0.1\n  User ${user}\n  IdentityFile ${keyPath}\n` +
       `  IdentitiesOnly yes\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n`,
     { mode: 0o600 },
   );
 
   const env = { ...process.env };
-  const box = { host: 'helmlocal' };
-  const session = `helmtest-${randomUUID().slice(0, 8)}`;
+  const box = { host: 'tmuxifierlocal' };
+  const session = `tmuxifiertest-${randomUUID().slice(0, 8)}`;
 
   async function cleanup() {
     try { await sshRun(buildProbeArgv(box, `tmux kill-session -t ${session}`, { sshConfigFile }), { env }); } catch {}

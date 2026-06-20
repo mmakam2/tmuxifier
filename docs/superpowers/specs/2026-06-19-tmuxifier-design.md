@@ -1,15 +1,15 @@
-# Helm — Design Spec
+# Tmuxifier — Design Spec
 
 - **Date:** 2026-06-19
 - **Status:** Design approved; pending implementation plan
-- **Working name:** Helm (on-disk folder: `tmuxifier/`; trivially renamable)
+- **Working name:** Tmuxifier (on-disk folder: `tmuxifier/`; trivially renamable)
 
 ## 1. Summary
 
-Helm is a **single-user web app** that turns a browser into a dashboard for a fleet of
+Tmuxifier is a **single-user web app** that turns a browser into a dashboard for a fleet of
 headless boxes. Each box is reached over SSH; opening a box gives a full interactive
 terminal backed by a tmux session that lives **on the box**. Because the session is
-server-side on the box, closing the tab, losing the network, or restarting the Helm
+server-side on the box, closing the tab, losing the network, or restarting the Tmuxifier
 server leaves the work running — reconnecting drops you back into the exact same state.
 
 ## 2. Goals / non-goals

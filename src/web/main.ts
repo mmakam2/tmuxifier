@@ -11,7 +11,7 @@ async function start() {
 
 function renderLogin() {
   app.innerHTML = `<form id="login" class="login">
-      <h1>Helm</h1>
+      <h1>Tmuxifier</h1>
       <input id="pw" type="password" placeholder="Password" autofocus />
       <button>Unlock</button>
       <p id="err" class="err"></p>
@@ -26,7 +26,7 @@ function renderLogin() {
 async function renderDashboard() {
   app.innerHTML = `<div class="layout">
       <aside class="sidebar">
-        <div class="brand">Helm <button id="logout" title="Log out">⎋</button></div>
+        <div class="brand">Tmuxifier <button id="logout" title="Log out">⎋</button></div>
         <div class="actions"><button id="import">Import ~/.ssh/config</button><button id="add">+ Add box</button></div>
         <ul id="boxes" class="boxes"></ul>
       </aside>

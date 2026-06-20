@@ -1,5 +1,5 @@
 {
-  "name": "helm",
+  "name": "tmuxifier",
   "version": "0.1.0",
   "private": true,
   "type": "module",

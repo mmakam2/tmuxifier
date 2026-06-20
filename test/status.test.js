@@ -49,21 +49,21 @@ function runProbe(pathDir) {
 }
 
 test('PROBE_REMOTE: tmux present with sessions prints the format lines', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'helm-tmux-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-tmux-'));
   writeFakeTmux(dir, `echo 'web:2:1:123'`);
   expect(runProbe(dir)).toBe('web:2:1:123');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('PROBE_REMOTE: tmux present with no sessions prints nothing (not __NO_TMUX__)', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'helm-tmux-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-tmux-'));
   writeFakeTmux(dir, `exit 1`);
   expect(runProbe(dir)).toBe('');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('PROBE_REMOTE: tmux absent prints __NO_TMUX__', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'helm-empty-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-empty-'));
   expect(runProbe(dir)).toBe('__NO_TMUX__');
   fs.rmSync(dir, { recursive: true, force: true });
 });
