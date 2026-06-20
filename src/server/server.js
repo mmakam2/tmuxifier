@@ -133,7 +133,9 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
     const box = await store.getBox(req.params.id);
     if (box) {
       if (sessions?.closeKey) sessions.closeKey(box.id);
-      if (boxActions?.killSession) await boxActions.killSession(box);
+      if (boxActions?.killSession) {
+        try { void Promise.resolve(boxActions.killSession(box)).catch(() => {}); } catch {}
+      }
     }
     await store.removeBox(req.params.id); return { ok: true };
   });

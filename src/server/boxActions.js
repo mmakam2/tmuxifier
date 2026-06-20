@@ -5,7 +5,11 @@ export function buildEnsureTmuxRemote(session, startupCommand) {
   const startup = startupCommand ? ` ${shSingleQuote(startupCommand)}` : '';
   return [
     'set -eu',
-    'if ! command -v tmux >/dev/null 2>&1; then',
+    'TMUX_BIN="$(command -v tmux || true)"',
+    'if [ -z "$TMUX_BIN" ]; then',
+    '  for p in /usr/bin/tmux /usr/local/bin/tmux /bin/tmux; do if [ -x "$p" ]; then TMUX_BIN="$p"; break; fi; done',
+    'fi',
+    'if [ -z "$TMUX_BIN" ]; then',
     "  SUDO=''",
     "  if [ \"$(id -u)\" != '0' ]; then SUDO='sudo -n'; fi",
     '  if command -v apt-get >/dev/null 2>&1; then',
@@ -28,8 +32,12 @@ export function buildEnsureTmuxRemote(session, startupCommand) {
     '    exit 127',
     '  fi',
     'fi',
-    'command -v tmux >/dev/null 2>&1',
-    `tmux has-session -t ${sess} 2>/dev/null || tmux new-session -d -s ${sess}${startup}`,
+    'TMUX_BIN="$(command -v tmux || true)"',
+    'if [ -z "$TMUX_BIN" ]; then',
+    '  for p in /usr/bin/tmux /usr/local/bin/tmux /bin/tmux; do if [ -x "$p" ]; then TMUX_BIN="$p"; break; fi; done',
+    'fi',
+    '[ -n "$TMUX_BIN" ]',
+    `"$TMUX_BIN" has-session -t ${sess} 2>/dev/null || "$TMUX_BIN" new-session -d -s ${sess}${startup}`,
   ].join('\n');
 }
 
