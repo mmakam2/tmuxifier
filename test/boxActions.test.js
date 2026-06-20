@@ -63,6 +63,7 @@ test('buildEnsureTmuxRemote includes zsh and Oh My Zsh install steps when reques
   expect(remote).toContain('OHMYZSH="$(curl');
   expect(remote).toContain('RUNZSH=no');
   expect(remote).toContain('CHSH=yes');
+  expect(remote).toContain('chsh -s "$ZSH_BIN"');
 });
 
 test('buildEnsureTmuxRemote omits Oh My Zsh steps when not requested', () => {
