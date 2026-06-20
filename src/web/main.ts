@@ -4,6 +4,7 @@ import logoUrl from './assets/tmuxifier-logo.png';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
+let activeBoxId: string | null = null;
 
 async function start() {
   if (await api.me()) renderDashboard();
@@ -127,7 +128,7 @@ function paint(boxes: Box[], status: Record<string, Status>) {
     const dot = DOTS.has(dotClass) ? dotClass : 'gray';
 
     const li = document.createElement('li');
-    li.className = 'box';
+    li.className = b.id === activeBoxId ? 'box active' : 'box';
     li.dataset.id = b.id;
 
     const dotEl = document.createElement('span');
@@ -155,6 +156,11 @@ function paint(boxes: Box[], status: Record<string, Status>) {
 }
 
 function openBox(b: Box) {
+  activeBoxId = b.id;
+  app.querySelectorAll('.box').forEach(el => {
+    const boxEl = el as HTMLElement;
+    boxEl.classList.toggle('active', boxEl.dataset.id === b.id);
+  });
   const stage = app.querySelector('#stage') as HTMLElement;
   for (const t of tabs.values()) t.el.style.display = 'none';
   const existing = tabs.get(b.id);
@@ -171,6 +177,11 @@ function openBox(b: Box) {
 function closeTab(id: string) {
   const t = tabs.get(id);
   if (t) { t.term.dispose(); t.el.remove(); tabs.delete(id); }
+  if (activeBoxId === id) {
+    activeBoxId = null;
+    const activeEl = app.querySelector('.box.active');
+    if (activeEl) activeEl.classList.remove('active');
+  }
 }
 
 function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boolean }) {
