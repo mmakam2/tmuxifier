@@ -9,7 +9,7 @@ import { hashPassword } from '../src/server/auth.js';
 let app;
 let dir;
 
-async function makeApp() {
+async function makeApp(overrides = {}) {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-srv-'));
   const config = {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
@@ -19,7 +19,7 @@ async function makeApp() {
   const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
   const statusChecker = { checkBox: async () => ({ reachable: true, tmux: true, sessions: [] }) };
   const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
-  return buildServer({ config, store, sessions, statusChecker });
+  return buildServer({ config, store, sessions, statusChecker, ...overrides });
 }
 
 beforeEach(async () => { app = await makeApp(); });
@@ -49,6 +49,51 @@ test('login then CRUD a box', async () => {
 
   const del = await app.inject({ method: 'DELETE', url: `/api/boxes/${box.id}`, headers });
   expect(del.statusCode).toBe(200);
+});
+
+test('adding a box provisions tmux and rolls back if provisioning fails', async () => {
+  const boxActions = { ensureReady: async () => { throw new Error('install failed'); } };
+  app = await makeApp({ boxActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const created = await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1' } });
+  expect(created.statusCode).toBe(400);
+  expect(created.json().error).toBe('install failed');
+
+  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
+  expect(list.json()).toHaveLength(0);
+});
+
+test('removing a box closes local terminal and best-effort kills remote session before deletion', async () => {
+  const calls = [];
+  const sessions = {
+    open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {},
+    closeKey(id) { calls.push(['closeKey', id]); },
+  };
+  const boxActions = {
+    async killSession(box) { calls.push(['killSession', box.host, box.sessionName]); },
+  };
+  app = await makeApp({ sessions, boxActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/boxes',
+    headers,
+    payload: { host: 'h1', sessionName: 'work' },
+  });
+  const box = created.json();
+
+  const del = await app.inject({ method: 'DELETE', url: `/api/boxes/${box.id}`, headers });
+
+  expect(del.statusCode).toBe(200);
+  expect(calls).toEqual([
+    ['closeKey', box.id],
+    ['killSession', 'h1', 'work'],
+  ]);
+  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
+  expect(list.json()).toHaveLength(0);
 });
 
 test('wrong password is rejected', async () => {

@@ -8,7 +8,8 @@ back into the same state.
 ## Requirements
 - Node 20+
 - The OpenSSH client, with your keys/agent/`~/.ssh/config` already working from the shell
-- Each managed box needs `tmux` installed
+- Tmuxifier installs `tmux` when a box is added if the remote user is root or has passwordless
+  `sudo` for the system package manager
 
 ## Setup
 ```bash
@@ -57,6 +58,11 @@ client so a stale connection can't freeze the layout). Because tmux runs on the
 box, the session and its processes survive disconnects. A 45s server-side grace window makes
 brief reconnects seamless; after that the local ssh process is dropped while the on-box
 session keeps running.
+
+When a box is added, Tmuxifier first checks for `tmux`, installs it through a known package
+manager when possible (`apt-get`, `dnf`, `yum`, `pacman`, `apk`, or `zypper`), and creates
+the configured tmux session. Removing a box closes any local terminal process for that box
+and best-effort kills the configured remote tmux session before deleting the box from the list.
 
 ## Security
 Tmuxifier can SSH into your whole fleet, so the login gate is the crown jewel. It binds to
