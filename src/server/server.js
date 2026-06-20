@@ -183,7 +183,7 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
   app.get('/api/boxes', { preHandler: requireAuth }, async () => store.listBoxes());
   app.post('/api/boxes', { preHandler: requireAuth }, async (req, reply) => {
     try {
-      const { installOhMyTmux = false, installOhMyZsh = false, ...boxSpec } = req.body || {};
+      const { installOhMyTmux = false, installOhMyZsh = false, installOhMyBash = false, ...boxSpec } = req.body || {};
       const box = await store.addBox(boxSpec);
       return reply.code(201).send(box);
     } catch (e) {
@@ -191,7 +191,10 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
     }
   });
   app.patch('/api/boxes/:id', { preHandler: requireAuth }, async (req, reply) => {
-    try { return await store.updateBox(req.params.id, req.body || {}); }
+    try {
+      const { installOhMyTmux, installOhMyZsh, installOhMyBash, ...patch } = req.body || {};
+      return await store.updateBox(req.params.id, patch);
+    }
     catch (e) { return reply.code(400).send({ error: e.message }); }
   });
   app.delete('/api/boxes/:id', { preHandler: requireAuth }, async (req) => {
@@ -235,10 +238,11 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
 
       // --- Provision mode ---
       if (mode === 'provision') {
-        const { ohMyTmux, ohMyZsh } = req.query;
+        const { ohMyTmux, ohMyZsh, ohMyBash } = req.query;
         const script = buildEnsureTmuxRemote(box.sessionName, box.startupCommand, {
           installOhMyTmux: ohMyTmux === '1',
           installOhMyZsh: ohMyZsh === '1',
+          installOhMyBash: ohMyBash === '1',
         });
 
         if (!sessions?.provision) {
