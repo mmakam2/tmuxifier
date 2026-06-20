@@ -14,7 +14,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     }
     const argv = buildAttachArgv(box, session, size, { hostKeyPolicy, sshConfigFile });
     const pty = spawn('ssh', argv, {
-      name: 'xterm-color',
+      name: 'xterm-256color',
       cols: size.cols,
       rows: size.rows,
       cwd: process.cwd(),
