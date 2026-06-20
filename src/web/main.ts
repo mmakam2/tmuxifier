@@ -52,15 +52,35 @@ async function refresh() {
 function paint(boxes: Box[], status: Record<string, Status>) {
   const list = app.querySelector('#boxes')!;
   list.innerHTML = '';
+  const DOTS = new Set(['gray', 'green', 'amber', 'red']);
   for (const b of boxes) {
     const st = status[b.id];
-    const dot = !st ? 'gray' : st.reachable ? (st.tmux === false ? 'amber' : 'green') : 'red';
+    const dotClass = !st ? 'gray' : st.reachable ? (st.tmux === false ? 'amber' : 'green') : 'red';
+    const dot = DOTS.has(dotClass) ? dotClass : 'gray';
+
     const li = document.createElement('li');
     li.className = 'box';
-    li.innerHTML = `<span class="dot ${dot}"></span><span class="name">${b.label}</span>
-      <button class="rm" title="Remove">✕</button>`;
-    li.querySelector('.name')!.addEventListener('click', () => openBox(b));
-    li.querySelector('.rm')!.addEventListener('click', async (e) => { e.stopPropagation(); await api.removeBox(b.id); closeTab(b.id); await refresh(); });
+
+    const dotEl = document.createElement('span');
+    dotEl.className = `dot ${dot}`;
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'name';
+    nameEl.textContent = b.label;
+    nameEl.addEventListener('click', () => openBox(b));
+
+    const rm = document.createElement('button');
+    rm.className = 'rm';
+    rm.title = 'Remove';
+    rm.textContent = '✕';
+    rm.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await api.removeBox(b.id);
+      closeTab(b.id);
+      await refresh();
+    });
+
+    li.append(dotEl, nameEl, rm);
     list.appendChild(li);
   }
 }
