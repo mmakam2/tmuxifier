@@ -34,6 +34,11 @@ Open http://127.0.0.1:7437.
 | cookie secret | `HELM_COOKIE_SECRET` | — (required) |
 | data dir | `HELM_DATA_DIR` | `<cwd>/data` |
 | extra ssh config | `HELM_SSH_CONFIG` | (none) |
+| TLS cert (PEM) | `HELM_TLS_CERT` | (none → serves HTTP) |
+| TLS key (PEM) | `HELM_TLS_KEY` | (none → serves HTTP) |
+
+Set **both** `HELM_TLS_CERT` and `HELM_TLS_KEY` to serve HTTPS directly; when TLS is active
+the session cookie is automatically marked `Secure`.
 
 ## How persistence works
 Each terminal runs `ssh -tt <box> "tmux new-session -A -s web"`. Because tmux runs on the
@@ -43,9 +48,20 @@ session keeps running.
 
 ## Security
 Helm can SSH into your whole fleet, so the login gate is the crown jewel. It binds to
-`127.0.0.1` by default. **Only expose it behind a TLS reverse proxy** (and set `HELM_BIND`
-accordingly). Passwords are scrypt-hashed; the session cookie is signed, httpOnly, and
-SameSite. Helm stores no SSH secrets — your keys and agent stay in the OS.
+`127.0.0.1` by default. To expose it on a network, **always use TLS** — either set
+`HELM_TLS_CERT`/`HELM_TLS_KEY` to serve HTTPS directly (a self-signed cert works; browsers
+show a one-time warning), or front it with a TLS reverse proxy — and set `HELM_BIND`
+accordingly. Serving the login over plain HTTP on a non-loopback address sends your password
+in cleartext, so the `Secure` cookie is only enabled when TLS is configured. Passwords are
+scrypt-hashed; the session cookie is signed, httpOnly, and SameSite. Helm stores no SSH
+secrets — your keys and agent stay in the OS.
+
+Generate a self-signed cert (valid for an IP) with:
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
+  -keyout key.pem -out cert.pem -subj "/CN=helm" \
+  -addext "subjectAltName=IP:192.168.1.10,IP:127.0.0.1,DNS:localhost"
+```
 
 ## Development
 ```bash

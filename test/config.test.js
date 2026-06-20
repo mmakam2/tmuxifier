@@ -26,6 +26,18 @@ test('maps HELM_DATA_DIR and HELM_SSH_CONFIG from env', () => {
   expect(c.sshConfigFile).toBe('/tmp/sshcfg');
 });
 
+test('TLS cert+key enable https and a Secure cookie', () => {
+  const c = loadConfig({}, { env: { HELM_TLS_CERT: '/c/cert.pem', HELM_TLS_KEY: '/c/key.pem' }, cwd: '/app' });
+  expect(c.tlsCert).toBe('/c/cert.pem');
+  expect(c.tlsKey).toBe('/c/key.pem');
+  expect(c.secureCookie).toBe(true);
+});
+
+test('no TLS configured -> secureCookie is false', () => {
+  const c = loadConfig({}, { env: {}, cwd: '/app' });
+  expect(c.secureCookie).toBe(false);
+});
+
 test('config.json overrides defaults and sits below env', async () => {
   const fs = await import('node:fs');
   const osMod = await import('node:os');

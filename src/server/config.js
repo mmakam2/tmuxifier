@@ -34,9 +34,15 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     cookieSecret: env.HELM_COOKIE_SECRET,
     dataDir: env.HELM_DATA_DIR,
     sshConfigFile: env.HELM_SSH_CONFIG,
+    tlsCert: env.HELM_TLS_CERT,
+    tlsKey: env.HELM_TLS_KEY,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
   merged.dataDir = merged.dataDir ?? path.join(cwd, 'data');
   merged.sshConfigPath = merged.sshConfigPath ?? path.join(os.homedir(), '.ssh', 'config');
+  // Serve over HTTPS (and mark the session cookie Secure) only when a TLS
+  // cert+key are configured. Decoupled from bindAddress so a non-loopback
+  // HTTP bind still works (a Secure cookie over plain HTTP is dropped by browsers).
+  merged.secureCookie = !!(merged.tlsCert && merged.tlsKey);
   return merged;
 }
