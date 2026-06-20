@@ -3,9 +3,13 @@ dist/
 data/
 *.log
 .env
+.env.bak
 config.json
 *.local
 .DS_Store
+
+# Local TLS material (private key must never be committed)
+tls/
 
 # Playwright E2E output
 test-results/
