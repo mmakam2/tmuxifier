@@ -205,7 +205,7 @@ function closeTab(id: string) {
   }
 }
 
-function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boolean }) {
+function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean }) {
   const panel = document.getElementById('provision-panel')!;
   const title = panel.querySelector('.provision-title')!;
   const status = panel.querySelector('.provision-status')!;
@@ -269,14 +269,32 @@ function openBoxDialog(box?: Box) {
   installOhMyTmuxText.textContent = 'Install Oh My Tmux if missing';
   installOhMyTmux.append(installOhMyTmuxInput, installOhMyTmuxText);
 
-  const installOhMyZsh = document.createElement('label');
-  installOhMyZsh.className = 'check-field';
-  const installOhMyZshInput = document.createElement('input');
-  installOhMyZshInput.type = 'checkbox';
-  installOhMyZshInput.checked = true;
-  const installOhMyZshText = document.createElement('span');
-  installOhMyZshText.textContent = 'Install Oh My Zsh if missing';
-  installOhMyZsh.append(installOhMyZshInput, installOhMyZshText);
+  // Shell framework radio group
+  const shellGroup = document.createElement('fieldset');
+  shellGroup.className = 'radio-group';
+  const shellLegend = document.createElement('legend');
+  shellLegend.textContent = 'Shell framework';
+  shellGroup.append(shellLegend);
+
+  function makeRadio(name: string, value: string, label: string, defaultChecked: boolean) {
+    const wrap = document.createElement('label');
+    wrap.className = 'check-field';
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = name;
+    input.value = value;
+    input.checked = defaultChecked;
+    const span = document.createElement('span');
+    span.textContent = label;
+    wrap.append(input, span);
+    return { wrap, input };
+  }
+
+  const shellNone = makeRadio('shellFramework', 'none', 'None', true);
+  const shellZsh = makeRadio('shellFramework', 'omz', 'Install Oh My Zsh if missing', false);
+  const shellBash = makeRadio('shellFramework', 'omb', 'Install Oh My Bash if missing', false);
+
+  shellGroup.append(shellNone.wrap, shellZsh.wrap, shellBash.wrap);
 
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
@@ -313,7 +331,7 @@ function openBoxDialog(box?: Box) {
     field('port', 'Port (optional)', { placeholder: '22', type: 'number' }),
     field('proxyJump', 'ProxyJump (optional)', { placeholder: 'jump host this server can reach' }),
     installOhMyTmux,
-    installOhMyZsh,
+    shellGroup,
     err,
     actions,
   );
@@ -326,10 +344,10 @@ function openBoxDialog(box?: Box) {
     if (box!.proxyJump) fields.proxyJump.value = box!.proxyJump;
   }
 
-  // Default checkboxes to unchecked in edit mode
+  // Default checkboxes/radios to unchecked/None in edit mode
   if (isEdit) {
     installOhMyTmuxInput.checked = false;
-    installOhMyZshInput.checked = false;
+    shellNone.input.checked = true;
   }
 
   backdrop.appendChild(form);
@@ -362,16 +380,21 @@ function openBoxDialog(box?: Box) {
         const updatedBox = await api.updateBox(box!.id, patch);
         close();
         await refresh();
-        if (installOhMyTmuxInput.checked || installOhMyZshInput.checked) {
+        const installOhMyZsh = shellZsh.input.checked;
+        const installOhMyBash = shellBash.input.checked;
+        if (installOhMyTmuxInput.checked || installOhMyZsh || installOhMyBash) {
           openProvisionPanel(updatedBox, {
             ohMyTmux: installOhMyTmuxInput.checked,
-            ohMyZsh: installOhMyZshInput.checked,
+            ohMyZsh: installOhMyZsh,
+            ohMyBash: installOhMyBash,
           });
         }
       } else {
         const host = fields.host.value.trim();
         if (!host) { err.textContent = 'Host is required'; submit.disabled = false; return; }
-        const spec: AddBoxSpec = { host, installOhMyTmux: installOhMyTmuxInput.checked, installOhMyZsh: installOhMyZshInput.checked };
+        const installOhMyZsh = shellZsh.input.checked;
+        const installOhMyBash = shellBash.input.checked;
+        const spec: AddBoxSpec = { host, installOhMyTmux: installOhMyTmuxInput.checked, installOhMyZsh, installOhMyBash };
         const label = fields.label.value.trim(); if (label) spec.label = label;
         const user = fields.user.value.trim(); if (user) spec.user = user;
         const jump = fields.proxyJump.value.trim(); if (jump) spec.proxyJump = jump;
@@ -385,7 +408,8 @@ function openBoxDialog(box?: Box) {
         close();
         openProvisionPanel(newBox, {
           ohMyTmux: installOhMyTmuxInput.checked,
-          ohMyZsh: installOhMyZshInput.checked,
+          ohMyZsh: installOhMyZsh,
+          ohMyBash: installOhMyBash,
         });
       }
     } catch (e: any) {
