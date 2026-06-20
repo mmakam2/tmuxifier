@@ -58,7 +58,8 @@ body {
 .box:hover { background: var(--panel-2); }
 .box.active { background: rgba(36, 211, 232, 0.12); box-shadow: inset 3px 0 0 var(--cyan); }
 .box .name { flex: 1; }
-.box .rm { background: none; border: none; color: #6e7681; cursor: pointer; }
+.box .rm, .box .refresh { background: none; border: none; color: #6e7681; cursor: pointer; }
+.box .refresh { font-size: 14px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: #6e7681; }
 .dot.green { background: #2ea043; } .dot.amber { background: #d29922; } .dot.red { background: #f85149; } .dot.gray { background: #6e7681; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 10; }

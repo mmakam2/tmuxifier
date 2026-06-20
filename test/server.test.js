@@ -269,3 +269,69 @@ test('rejects a tampered signed tmuxifier_session cookie', async () => {
   });
   expect(res.statusCode).toBe(401);
 });
+
+test('reconnect closes local sessions and best-effort kills remote session', async () => {
+  const calls = [];
+  const sessions = {
+    open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {},
+    closeKey(id) { calls.push(['closeKey', id]); },
+  };
+  const boxActions = {
+    async killSession(box) { calls.push(['killSession', box.host, box.sessionName]); },
+  };
+  app = await makeApp({ sessions, boxActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/boxes',
+    headers,
+    payload: { host: 'h1', sessionName: 'work' },
+  });
+  const box = created.json();
+
+  const res = await app.inject({ method: 'POST', url: `/api/boxes/${box.id}/reconnect`, headers });
+
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true });
+  expect(calls).toEqual([
+    ['closeKey', box.id],
+    ['closeKey', `provision:${box.id}`],
+    ['killSession', 'h1', 'work'],
+  ]);
+  // Box should still exist (not removed)
+  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
+  expect(list.json()).toHaveLength(1);
+});
+
+test('reconnect returns 404 for unknown box', async () => {
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'POST', url: '/api/boxes/nonexistent/reconnect', headers });
+  expect(res.statusCode).toBe(404);
+});
+
+test('reconnect does not wait for remote session cleanup', async () => {
+  let killCalled = false;
+  const boxActions = {
+    killSession() {
+      killCalled = true;
+      return new Promise(() => {});
+    },
+  };
+  app = await makeApp({ boxActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/boxes',
+    headers,
+    payload: { host: 'h1', sessionName: 'work' },
+  });
+  const box = created.json();
+
+  const res = await app.inject({ method: 'POST', url: `/api/boxes/${box.id}/reconnect`, headers });
+
+  expect(res.statusCode).toBe(200);
+  expect(killCalled).toBe(true);
+});
