@@ -16,5 +16,5 @@ export const api = {
   async addBox(spec: Partial<Box>) { return j<Box>(await fetch('/api/boxes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(spec) })); },
   async removeBox(id: string) { return j(await fetch(`/api/boxes/${id}`, { method: 'DELETE' })); },
   async importSsh() { return j<Box[]>(await fetch('/api/import', { method: 'POST' })); },
-  async status() { return j<Record<string, Status>>(await fetch('/api/status')); },
+  async status() { return j<Record<string, Status>>(await fetch(`/api/status?t=${Date.now()}`)); },
 };

@@ -24,8 +24,11 @@ function renderLogin() {
 }
 
 let pollInterval: any;
+let polling = false;
 
 async function pollStatus() {
+  if (polling) return;
+  polling = true;
   try {
     const status = await api.status();
     const list = app.querySelectorAll('.box');
@@ -39,7 +42,9 @@ async function pollStatus() {
       const dotEl = li.querySelector('.dot');
       if (dotEl) dotEl.className = `dot ${dot}`;
     });
-  } catch {}
+  } catch {} finally {
+    polling = false;
+  }
 }
 
 async function renderDashboard() {
@@ -62,7 +67,7 @@ async function renderDashboard() {
     await api.addBox({ host }); await refresh();
   });
   await refresh();
-  pollInterval = setInterval(pollStatus, 15000);
+  pollInterval = setInterval(pollStatus, 3000);
 }
 
 async function refresh() {
