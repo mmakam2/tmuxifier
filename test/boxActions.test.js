@@ -50,6 +50,45 @@ test('buildEnsureTmuxRemote skips package managers when tmux is already installe
   await expect(fs.stat(aptLog)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
+test('buildEnsureTmuxRemote includes zsh and Oh My Zsh install steps when requested', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, { installOhMyZsh: true });
+
+  // Installs zsh via package manager detection
+  expect(remote).toContain('command -v zsh');
+  expect(remote).toContain('apt-get install -y zsh');
+  expect(remote).toContain('dnf install -y zsh');
+
+  // Fetches upstream Oh My Zsh install script
+  expect(remote).toContain('https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh');
+  expect(remote).toContain('RUNZSH=no');
+  expect(remote).toContain('CHSH=yes');
+});
+
+test('buildEnsureTmuxRemote omits Oh My Zsh steps when not requested', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, {});
+  expect(remote).not.toContain('command -v zsh');
+  expect(remote).not.toContain('https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh');
+  expect(remote).not.toContain('RUNZSH=no');
+});
+
+test('buildEnsureTmuxRemote skips Oh My Zsh clone when .oh-my-zsh exists', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-oh-my-zsh-'));
+  await fs.mkdir(path.join(dir, '.oh-my-zsh'));
+  await fs.writeFile(path.join(dir, 'zsh'), '#!/bin/sh\necho "$*" >> "$TMUXIFIER_ZSH_LOG"\nexit 0\n', { mode: 0o755 });
+  await fs.writeFile(path.join(dir, 'tmux'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  await fs.writeFile(path.join(dir, 'curl'), '#!/bin/sh\necho curled >> "$TMUXIFIER_CURL_LOG"\nexit 0\n', { mode: 0o755 });
+  const curlLog = path.join(dir, 'curl.log');
+
+  const res = await runShell(`cd ${JSON.stringify(dir)}
+${buildEnsureTmuxRemote('web', undefined, { installOhMyZsh: true })}`, {
+    PATH: dir,
+    TMUXIFIER_CURL_LOG: curlLog,
+  });
+
+  expect(res.code).toBe(0);
+  await expect(fs.stat(curlLog)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
 test('buildEnsureTmuxRemote skips Oh My Tmux clone when config exists', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-oh-my-tmux-'));
   await fs.mkdir(path.join(dir, '.tmux'));
