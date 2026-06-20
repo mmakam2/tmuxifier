@@ -57,7 +57,7 @@ body {
 .box { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; }
 .box:hover { background: var(--panel-2); }
 .box.active { background: rgba(36, 211, 232, 0.12); box-shadow: inset 3px 0 0 var(--cyan); }
-.box .name { flex: 1; }
+.box .name { flex: 1; font-size: 13px; }
 .box .rm, .box .refresh { background: none; border: none; color: #6e7681; cursor: pointer; }
 .box .refresh { font-size: 14px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: #6e7681; }
