@@ -1,5 +1,6 @@
 import { api, type Box, type Status } from './api';
 import { openTerminal } from './terminal';
+import logoUrl from './assets/tmuxifier-logo.png';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
@@ -25,14 +26,30 @@ async function renderLogin() {
   const err = readLoginError();
   if (mode === 'google') {
     app.innerHTML = `<div class="login">
-        <h1>Tmuxifier</h1>
-        <a id="gsignin" class="gbtn" href="/api/auth/google/login">Sign in with Google</a>
+        <div class="login-brand">
+          <img class="login-logo" src="${logoUrl}" alt="" />
+          <h1>tmuxifier</h1>
+          <p>persistent remote terminals for your boxes</p>
+        </div>
+        <a id="gsignin" class="gbtn" href="/api/auth/google/login">
+          <svg class="google-mark" viewBox="0 0 18 18" aria-hidden="true">
+            <path fill="#4285f4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.91c1.7-1.57 2.69-3.88 2.69-6.62z"/>
+            <path fill="#34a853" d="M9 18c2.43 0 4.47-.81 5.96-2.18l-2.91-2.26c-.8.54-1.84.86-3.05.86-2.34 0-4.33-1.58-5.04-3.71H.96v2.33A9 9 0 0 0 9 18z"/>
+            <path fill="#fbbc05" d="M3.96 10.71a5.41 5.41 0 0 1 0-3.42V4.96H.96a9 9 0 0 0 0 8.08l3-2.33z"/>
+            <path fill="#ea4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58A8.65 8.65 0 0 0 9 0 9 9 0 0 0 .96 4.96l3 2.33C4.67 5.16 6.66 3.58 9 3.58z"/>
+          </svg>
+          <span>Sign in with Google</span>
+        </a>
         <p id="err" class="err">${err}</p>
       </div>`;
     return;
   }
   app.innerHTML = `<form id="login" class="login">
-      <h1>Tmuxifier</h1>
+      <div class="login-brand">
+        <img class="login-logo" src="${logoUrl}" alt="" />
+        <h1>tmuxifier</h1>
+        <p>persistent remote terminals for your boxes</p>
+      </div>
       <input id="pw" type="password" placeholder="Password" autofocus />
       <button>Unlock</button>
       <p id="err" class="err">${err}</p>
@@ -76,7 +93,7 @@ async function renderDashboard() {
   if (pollInterval) clearInterval(pollInterval);
   app.innerHTML = `<div class="layout">
       <aside class="sidebar">
-        <div class="brand">Tmuxifier <button id="logout" title="Log out">⎋</button></div>
+        <div class="brand"><span><img src="${logoUrl}" alt="" />tmuxifier</span><button id="logout" title="Log out">⎋</button></div>
         <div class="actions"><button id="import">Import ~/.ssh/config</button><button id="add">+ Add box</button></div>
         <ul id="boxes" class="boxes"></ul>
       </aside>
