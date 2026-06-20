@@ -2,7 +2,7 @@ export interface Box {
   id: string; label: string; host: string; user?: string; port?: number;
   proxyJump?: string; sessionName: string; startupCommand?: string; tags: string[]; source: string;
 }
-export type AddBoxSpec = Partial<Box> & { installOhMyTmux?: boolean };
+export type AddBoxSpec = Partial<Box> & { installOhMyTmux?: boolean; installOhMyZsh?: boolean };
 export interface Status { reachable: boolean; tmux?: boolean; sessions?: { name: string; windows: number }[]; error?: string; }
 
 async function j<T>(res: Response): Promise<T> {
