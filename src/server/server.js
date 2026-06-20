@@ -5,6 +5,39 @@ import websocket from '@fastify/websocket';
 import { verifyPassword, COOKIE_NAME, cookieOptions } from './auth.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
 
+const SECURITY_HEADERS = {
+  'content-security-policy': [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self' ws: wss:",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+  ].join('; '),
+  'cross-origin-opener-policy': 'same-origin',
+  'referrer-policy': 'no-referrer',
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'permissions-policy': 'camera=(), microphone=(), geolocation=()',
+};
+
+function originOf(value) {
+  try { return new URL(value).origin; } catch { return null; }
+}
+
+function firstHeaderValue(value) {
+  return Array.isArray(value) ? value[0] : String(value || '').split(',')[0].trim();
+}
+
+function requestHostOrigins(req) {
+  const host = firstHeaderValue(req.headers?.host);
+  if (!host) return [];
+  return [`http://${host}`, `https://${host}`];
+}
+
 export function buildServer({ config, store, sessions, statusChecker, boxActions, googleAuth }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
@@ -26,6 +59,40 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
   }
 
   const attempts = new Map(); // ip -> { count, ts } simple rate-limit
+
+  function allowedOrigins(req) {
+    const origins = new Set(requestHostOrigins(req));
+    const publicOrigin = originOf(config.publicUrl);
+    if (publicOrigin) origins.add(publicOrigin);
+    return origins;
+  }
+
+  function hasTrustedOrigin(req) {
+    const origin = firstHeaderValue(req.headers?.origin);
+    if (!origin) return true;
+    const normalized = originOf(origin);
+    return !!normalized && allowedOrigins(req).has(normalized);
+  }
+
+  function requireTrustedOrigin(req, reply, done) {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || hasTrustedOrigin(req)) {
+      done();
+      return;
+    }
+    reply.code(403).send({ error: 'forbidden origin' });
+  }
+
+  app.addHook('onRequest', requireTrustedOrigin);
+  app.addHook('onSend', async (req, reply, payload) => {
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+      if (!reply.hasHeader(name)) reply.header(name, value);
+    }
+    if (String(config.publicUrl || '').toLowerCase().startsWith('https://')) {
+      reply.header('strict-transport-security', 'max-age=31536000; includeSubDomains');
+    }
+    if (req.raw.url?.startsWith('/api/')) reply.header('cache-control', 'no-store');
+    return payload;
+  });
 
   function isAuthed(req) {
     // Primary: use req.cookies if populated (normal case)
@@ -150,6 +217,7 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
 
   app.register(async (scope) => {
     scope.get('/term', { websocket: true }, async (socket, req) => {
+      if (!hasTrustedOrigin(req)) { socket.close(1008, 'forbidden origin'); return; }
       if (!isAuthed(req)) { socket.close(1008, 'unauthorized'); return; }
       const { box: boxId, cid, cols, rows } = req.query;
       const box = await store.getBox(boxId);
