@@ -64,6 +64,7 @@ test('buildEnsureTmuxRemote includes zsh and Oh My Zsh install steps when reques
   expect(remote).toContain('RUNZSH=no');
   expect(remote).toContain('CHSH=yes');
   expect(remote).toContain('chsh -s "$ZSH_BIN"');
+  expect(remote).toContain('default-shell');
 });
 
 test('buildEnsureTmuxRemote omits Oh My Zsh steps when not requested', () => {
