@@ -39,6 +39,8 @@ test('buildEnsureTmuxRemote skips package managers when tmux is already installe
   await fs.writeFile(path.join(dir, 'tmux'), '#!/bin/sh\necho "$*" >> "$TMUXIFIER_TMUX_LOG"\nexit 0\n', { mode: 0o755 });
   await fs.writeFile(path.join(dir, 'apt-get'), '#!/bin/sh\necho "$*" >> "$TMUXIFIER_APT_LOG"\nexit 88\n', { mode: 0o755 });
 
+  await fs.writeFile(path.join(dir, 'git'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+
   const res = await runShell(buildEnsureTmuxRemote('web'), {
     PATH: dir,
     TMUXIFIER_TMUX_LOG: tmuxLog,
@@ -79,6 +81,7 @@ test('buildEnsureTmuxRemote skips Oh My Zsh clone when .oh-my-zsh exists', async
   await fs.mkdir(path.join(dir, '.oh-my-zsh'));
   await fs.writeFile(path.join(dir, 'zsh'), '#!/bin/sh\necho "$*" >> "$TMUXIFIER_ZSH_LOG"\nexit 0\n', { mode: 0o755 });
   await fs.writeFile(path.join(dir, 'tmux'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  await fs.writeFile(path.join(dir, 'git'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   await fs.writeFile(path.join(dir, 'curl'), '#!/bin/sh\necho curled >> "$TMUXIFIER_CURL_LOG"\nexit 0\n', { mode: 0o755 });
   const curlLog = path.join(dir, 'curl.log');
 
