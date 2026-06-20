@@ -11,15 +11,17 @@ let dir;
 
 async function makeApp(overrides = {}) {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-srv-'));
+  const { config: configOverrides, ...serverOverrides } = overrides;
   const config = {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
     passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir,
     sshConfigPath: path.join(dir, 'nope'),
+    ...configOverrides,
   };
   const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
   const statusChecker = { checkBox: async () => ({ reachable: true, tmux: true, sessions: [] }) };
   const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
-  return buildServer({ config, store, sessions, statusChecker, ...overrides });
+  return buildServer({ config, store, sessions, statusChecker, ...serverOverrides });
 }
 
 beforeEach(async () => { app = await makeApp(); });
@@ -38,6 +40,15 @@ test('/api/auth/info reports password mode', async () => {
   const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
   expect(res.statusCode).toBe(200);
   expect(res.json()).toEqual({ mode: 'password' });
+});
+
+test('public responses include browser hardening headers', async () => {
+  const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
+  expect(res.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+  expect(res.headers['x-content-type-options']).toBe('nosniff');
+  expect(res.headers['x-frame-options']).toBe('DENY');
+  expect(res.headers['referrer-policy']).toBe('no-referrer');
+  expect(res.headers['cache-control']).toBe('no-store');
 });
 
 test('login then CRUD a box', async () => {
@@ -69,6 +80,36 @@ test('adding a box provisions tmux and rolls back if provisioning fails', async 
 
   const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
   expect(list.json()).toHaveLength(0);
+});
+
+test('rejects cross-origin state-changing requests', async () => {
+  app = await makeApp({ config: { publicUrl: 'https://tmux.example.com' } });
+  const cookie = await login();
+  const headers = {
+    cookie: `${cookie.name}=${cookie.value}`,
+    origin: 'https://evil.example',
+  };
+
+  const created = await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1' } });
+
+  expect(created.statusCode).toBe(403);
+  expect(created.json()).toEqual({ error: 'forbidden origin' });
+  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers: { cookie: headers.cookie } });
+  expect(list.json()).toHaveLength(0);
+});
+
+test('allows same-origin state-changing requests', async () => {
+  app = await makeApp({ config: { publicUrl: 'https://tmux.example.com' } });
+  const cookie = await login();
+  const headers = {
+    cookie: `${cookie.name}=${cookie.value}`,
+    origin: 'https://tmux.example.com',
+  };
+
+  const created = await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1' } });
+
+  expect(created.statusCode).toBe(200);
+  expect(created.json().host).toBe('h1');
 });
 
 test('removing a box closes local terminal and best-effort kills remote session before deletion', async () => {
