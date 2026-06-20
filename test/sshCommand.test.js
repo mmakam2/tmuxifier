@@ -14,7 +14,7 @@ test('buildAttachArgv: alias-only box', () => {
     '-o', 'ServerAliveInterval=15',
     '-o', 'ServerAliveCountMax=3',
     'prod',
-    'tmux new-session -A -s web',
+    'tmux new-session -A -D -s web',
   ]);
 });
 
@@ -35,7 +35,7 @@ test('buildAttachArgv: user/port/proxyJump and policy override', () => {
 
 test('buildAttachArgv: startupCommand is single-quoted for the remote shell', () => {
   const argv = buildAttachArgv({ host: 'h', startupCommand: "echo 'hi'" }, 'web', { cols: 80, rows: 24 });
-  expect(argv[argv.length - 1]).toBe("tmux new-session -A -s web 'echo '\\''hi'\\'''");
+  expect(argv[argv.length - 1]).toBe("tmux new-session -A -D -s web 'echo '\\''hi'\\'''");
 });
 
 test('buildProbeArgv: batch mode, no PTY, carries remote cmd', () => {

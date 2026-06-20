@@ -47,7 +47,7 @@ export function buildAttachArgv(box, session, size, opts = {}) {
   if (box.port) argv.push('-p', String(box.port));
   argv.push(target(box));
   const sess = sanitizeSession(session);
-  let remote = `tmux new-session -A -s ${sess}`;
+  let remote = `tmux new-session -A -D -s ${sess}`;
   if (box.startupCommand) remote += ` ${shSingleQuote(box.startupCommand)}`;
   argv.push(remote);
   if (opts.sshConfigFile) argv.unshift('-F', opts.sshConfigFile);
