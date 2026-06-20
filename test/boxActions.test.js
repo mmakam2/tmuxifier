@@ -60,6 +60,7 @@ test('buildEnsureTmuxRemote includes zsh and Oh My Zsh install steps when reques
 
   // Fetches upstream Oh My Zsh install script
   expect(remote).toContain('https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh');
+  expect(remote).toContain('OHMYZSH="$(curl');
   expect(remote).toContain('RUNZSH=no');
   expect(remote).toContain('CHSH=yes');
 });
