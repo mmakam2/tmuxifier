@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { buildAttachArgv, buildProbeArgv, sanitizeSession } from '../src/server/sshCommand.js';
+import { buildAttachArgv, buildProbeArgv, buildProvisionArgv, sanitizeSession } from '../src/server/sshCommand.js';
 
 test('sanitizeSession strips unsafe chars', () => {
   expect(sanitizeSession('we b;rm -rf/')).toBe('we-b-rm--rf-');
@@ -97,4 +97,34 @@ test('buildAttachArgv: controlDir multiplexing shares the probe ControlPath', ()
 test('no control options without controlDir (backward compatible)', () => {
   expect(buildProbeArgv({ host: 'h' }, 'tmux ls').join(' ')).not.toContain('ControlMaster');
   expect(buildAttachArgv({ host: 'h' }, 'web', { cols: 80, rows: 24 }).join(' ')).not.toContain('ControlMaster');
+});
+
+test('buildProvisionArgv constructs ssh -tt with the script', () => {
+  const argv = buildProvisionArgv(
+    { host: 'h1', user: 'deploy', port: 2222, proxyJump: 'gw' },
+    'echo hi',
+    { hostKeyPolicy: 'accept-new', sshConfigFile: '/tmp/cfg', controlDir: '/tmp/cm' },
+  );
+  expect(argv).toContain('-tt');
+  expect(argv).toContain('-o');
+  expect(argv).toContain('StrictHostKeyChecking=accept-new');
+  expect(argv).toContain('-o');
+  expect(argv).toContain('ConnectTimeout=6');
+  expect(argv).toContain('-J');
+  expect(argv).toContain('gw');
+  expect(argv).toContain('-p');
+  expect(argv).toContain('2222');
+  expect(argv).toContain('deploy@h1');
+  expect(argv[argv.length - 1]).toBe('echo hi');
+  expect(argv[0]).toBe('-F'); // sshConfigFile goes first
+  expect(argv[1]).toBe('/tmp/cfg');
+});
+
+test('buildProvisionArgv minimal box', () => {
+  const argv = buildProvisionArgv({ host: 'h1' }, 'id');
+  expect(argv).toContain('-tt');
+  expect(argv).not.toContain('-J');
+  expect(argv).not.toContain('-p');
+  expect(argv[argv.length - 2]).toBe('h1');
+  expect(argv[argv.length - 1]).toBe('id');
 });
