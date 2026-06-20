@@ -4,7 +4,7 @@ import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import { verifyPassword, COOKIE_NAME, cookieOptions } from './auth.js';
 
-export function buildServer({ config, store, sessions, statusChecker }) {
+export function buildServer({ config, store, sessions, statusChecker, boxActions }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -66,14 +66,27 @@ export function buildServer({ config, store, sessions, statusChecker }) {
 
   app.get('/api/boxes', { preHandler: requireAuth }, async () => store.listBoxes());
   app.post('/api/boxes', { preHandler: requireAuth }, async (req, reply) => {
-    try { return await store.addBox(req.body || {}); }
-    catch (e) { return reply.code(400).send({ error: e.message }); }
+    let box;
+    try {
+      box = await store.addBox(req.body || {});
+      if (boxActions?.ensureReady) await boxActions.ensureReady(box);
+      return box;
+    }
+    catch (e) {
+      if (box) await store.removeBox(box.id).catch(() => {});
+      return reply.code(400).send({ error: e.message });
+    }
   });
   app.patch('/api/boxes/:id', { preHandler: requireAuth }, async (req, reply) => {
     try { return await store.updateBox(req.params.id, req.body || {}); }
     catch (e) { return reply.code(400).send({ error: e.message }); }
   });
   app.delete('/api/boxes/:id', { preHandler: requireAuth }, async (req) => {
+    const box = await store.getBox(req.params.id);
+    if (box) {
+      if (sessions?.closeKey) sessions.closeKey(box.id);
+      if (boxActions?.killSession) await boxActions.killSession(box);
+    }
     await store.removeBox(req.params.id); return { ok: true };
   });
   app.post('/api/import', { preHandler: requireAuth }, async () => store.importFromSshConfig());
