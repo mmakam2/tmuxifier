@@ -16,7 +16,7 @@ function runShell(script, env) {
 test('buildEnsureTmuxRemote installs tmux when missing and creates the session', () => {
   const remote = buildEnsureTmuxRemote('web', "echo 'hi'");
   expect(remote).toContain('command -v tmux');
-  expect(remote).toContain('apt-get install -y tmux');
+  expect(remote).toContain('apt-get install -y --no-install-recommends tmux');
   expect(remote).toContain('apt-get update || true');
   expect(remote).toContain('dnf install -y tmux');
   expect(remote).toContain("\"$TMUX_BIN\" has-session -t 'web'");
@@ -55,7 +55,7 @@ test('buildEnsureTmuxRemote includes zsh and Oh My Zsh install steps when reques
 
   // Installs zsh via package manager detection
   expect(remote).toContain('command -v zsh');
-  expect(remote).toContain('apt-get install -y zsh');
+  expect(remote).toContain('apt-get install -y --no-install-recommends zsh');
   expect(remote).toContain('dnf install -y zsh');
 
   // Fetches upstream Oh My Zsh install script
