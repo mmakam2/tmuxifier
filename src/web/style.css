@@ -47,13 +47,13 @@ body {
 .gbtn:hover { background: #f7f8f8; }
 .err { color: #f85149; min-height: 1em; text-align: center; }
 .layout { display: grid; grid-template-columns: 260px 1fr; height: 100vh; }
-.sidebar { border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 12px; gap: 10px; background: #090d13; }
+.sidebar { border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 12px; gap: 10px; background: #090d13; overflow: hidden; }
 .brand { display: flex; align-items: center; justify-content: space-between; font-weight: 700; letter-spacing: 1px; }
 .brand span { display: inline-flex; align-items: center; gap: 8px; }
 .brand img { width: 28px; height: 28px; border-radius: 7px; }
 .brand button { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 16px; }
 .actions { display: flex; flex-direction: column; gap: 6px; }
-.boxes { list-style: none; margin: 0; padding: 0; overflow: auto; }
+.boxes { list-style: none; margin: 0; padding: 0; flex: 1; overflow-y: auto; }
 .box { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; }
 .box:hover { background: var(--panel-2); }
 .box.active { background: rgba(36, 211, 232, 0.12); box-shadow: inset 3px 0 0 var(--cyan); }
@@ -73,7 +73,7 @@ body {
 .modal-actions button { padding: 8px 16px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: inherit; cursor: pointer; }
 .modal-actions button[type=submit] { background: #1f6feb; border-color: #1f6feb; color: #fff; }
 .modal-actions button:disabled { opacity: 0.5; cursor: default; }
-.stage { position: relative; }
+.stage { position: relative; overflow: hidden; }
 .empty { color: #6e7681; padding: 24px; }
 .term { position: absolute; inset: 0; padding: 6px; }
 .provision-panel {
