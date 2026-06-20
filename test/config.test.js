@@ -46,6 +46,36 @@ test('no TLS configured -> secureCookie is false', () => {
   expect(c.secureCookie).toBe(false);
 });
 
+test('.env file in cwd configures the app and sits below shell env', async () => {
+  const fs = await import('node:fs');
+  const osMod = await import('node:os');
+  const pathMod = await import('node:path');
+  const dir = fs.mkdtempSync(pathMod.join(osMod.tmpdir(), 'tmuxifier-dotenv-'));
+  fs.writeFileSync(pathMod.join(dir, '.env'), 'TMUXIFIER_PORT=8123\nTMUXIFIER_PASSWORD_HASH=fromdotenv\n');
+
+  const fromFile = loadConfig({}, { env: {}, cwd: dir });
+  expect(fromFile.port).toBe(8123);               // .env used with no shell env
+  expect(fromFile.passwordHash).toBe('fromdotenv');
+
+  const envWins = loadConfig({}, { env: { TMUXIFIER_PORT: '9999' }, cwd: dir });
+  expect(envWins.port).toBe(9999);                // shell env beats .env
+  expect(envWins.passwordHash).toBe('fromdotenv'); // unset shell key falls back to .env
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('.env overrides config.json (file precedence: config.json < .env < shell env)', async () => {
+  const fs = await import('node:fs');
+  const osMod = await import('node:os');
+  const pathMod = await import('node:path');
+  const dir = fs.mkdtempSync(pathMod.join(osMod.tmpdir(), 'tmuxifier-both-'));
+  fs.writeFileSync(pathMod.join(dir, 'config.json'), JSON.stringify({ port: 5555 }));
+  fs.writeFileSync(pathMod.join(dir, '.env'), 'TMUXIFIER_PORT=7777\n');
+  const c = loadConfig({}, { env: {}, cwd: dir });
+  expect(c.port).toBe(7777);                       // .env beat config.json
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('config.json overrides defaults and sits below env', async () => {
   const fs = await import('node:fs');
   const osMod = await import('node:os');

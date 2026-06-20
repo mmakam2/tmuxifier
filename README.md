@@ -14,17 +14,23 @@ back into the same state.
 ```bash
 npm install
 npm run build
-npm run set-password           # prints TMUXIFIER_PASSWORD_HASH and TMUXIFIER_COOKIE_SECRET
-```
-Put the two printed values in `config.json` or the environment, then:
-> In `config.json`, use camelCase keys: `passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`, `dataDir`, `sshConfigFile`.
-```bash
-TMUXIFIER_PASSWORD_HASH=... TMUXIFIER_COOKIE_SECRET=... npm start
+npm run set-password   # writes the password hash + cookie secret into ./.env
+npm start
 ```
 Open http://127.0.0.1:7437.
 
+Configuration lives in a gitignored **`.env` file in the repo root**, so Tmuxifier is
+self-contained — nothing needs to be set in your shell. `npm run set-password` creates (or
+updates) `.env` with `TMUXIFIER_PASSWORD_HASH` and `TMUXIFIER_COOKIE_SECRET`; re-running it
+changes the password while keeping the existing cookie secret (so you stay logged in). Copy
+`.env.example` to `.env` first if you want to set other options up front.
+
 ## Configuration
-| Key | Env | Default |
+All options are read from `.env` in the repo root (see `.env.example`). Each key can also be
+set as a real shell environment variable, which **overrides** the file. Precedence, low to
+high: built-in defaults → `config.json` → `.env` → shell environment.
+
+| Key | Env / `.env` key | Default |
 | --- | --- | --- |
 | bind address | `TMUXIFIER_BIND` | `127.0.0.1` |
 | port | `TMUXIFIER_PORT` | `7437` |
@@ -32,7 +38,8 @@ Open http://127.0.0.1:7437.
 | host-key policy | `TMUXIFIER_HOSTKEY_POLICY` | `accept-new` |
 | password hash | `TMUXIFIER_PASSWORD_HASH` | — (required) |
 | cookie secret | `TMUXIFIER_COOKIE_SECRET` | — (required) |
-| data dir | `TMUXIFIER_DATA_DIR` | `<cwd>/data` |
+| data dir | `TMUXIFIER_DATA_DIR` | `<repo>/data` |
+| control-socket dir | `TMUXIFIER_CONTROL_DIR` | `<dataDir>/cm` |
 | extra ssh config | `TMUXIFIER_SSH_CONFIG` | (none) |
 | TLS cert (PEM) | `TMUXIFIER_TLS_CERT` | (none → serves HTTP) |
 | TLS key (PEM) | `TMUXIFIER_TLS_KEY` | (none → serves HTTP) |
@@ -40,8 +47,13 @@ Open http://127.0.0.1:7437.
 Set **both** `TMUXIFIER_TLS_CERT` and `TMUXIFIER_TLS_KEY` to serve HTTPS directly; when TLS is active
 the session cookie is automatically marked `Secure`.
 
+As an alternative to `.env`, a `config.json` in the repo root works too, using camelCase keys
+(`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`,
+`dataDir`, `controlDir`, `sshConfigFile`, `tlsCert`, `tlsKey`).
+
 ## How persistence works
-Each terminal runs `ssh -tt <box> "tmux new-session -A -s web"`. Because tmux runs on the
+Each terminal runs `ssh -tt <box> "tmux new-session -A -D -s web"` (the `-D` detaches any other
+client so a stale connection can't freeze the layout). Because tmux runs on the
 box, the session and its processes survive disconnects. A 45s server-side grace window makes
 brief reconnects seamless; after that the local ssh process is dropped while the on-box
 session keeps running.
