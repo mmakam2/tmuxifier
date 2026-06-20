@@ -42,7 +42,7 @@ body {
   background: linear-gradient(135deg, rgba(36, 211, 232, 0.22), rgba(88, 229, 140, 0.16));
   font-weight: 700;
 }
-.gbtn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; padding: 11px 16px; border-radius: 8px; background: #fff; color: #1f1f1f; font-weight: 700; text-align: center; text-decoration: none; border: 1px solid #dadce0; }
+.gbtn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; padding: 11px 16px; border-radius: 8px; background: #fff; color: #1f1f1f; font-weight: 700; font-size: 14px; text-align: center; text-decoration: none; border: 1px solid #dadce0; }
 .google-mark { width: 18px; height: 18px; flex: 0 0 auto; }
 .gbtn:hover { background: #f7f8f8; }
 .err { color: #f85149; min-height: 1em; text-align: center; }
