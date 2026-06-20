@@ -42,6 +42,47 @@ test('process started in tmux survives a killed local PTY and is visible on reat
   mgr.close(e2);
 });
 
+test('provision runs a script on the box and streams output', async () => {
+  const { box, env, sshConfigFile, cleanup } = await setupLocalBox();
+  active = cleanup;
+  const mgr = createSessionManager({ sshConfigFile, spawnEnv: env, graceSeconds: 1 });
+
+  const entry = mgr.provision({ key: 'prov-test-1', box, script: 'echo HELLO_PROVISION; echo ERR_TEST >&2; exit 0' });
+  const buf = [];
+  let exitCode = null;
+  const off = mgr.attach(entry, (d) => buf.push(d));
+  const offExit = mgr.onExit(entry, () => { exitCode = entry.exitCode; });
+
+  // Wait for PTY to exit
+  await new Promise((resolve) => {
+    const check = () => { if (entry.exited) resolve(undefined); else setTimeout(check, 100); };
+    check();
+  });
+
+  expect(exitCode).toBe(0);
+  const text = buf.join('');
+  expect(text).toContain('HELLO_PROVISION');
+  expect(text).toContain('ERR_TEST');
+  off();
+  offExit();
+});
+
+test('provision keyed separately from interactive sessions', async () => {
+  const { box, session, env, sshConfigFile, cleanup } = await setupLocalBox();
+  active = cleanup;
+  const mgr = createSessionManager({ sshConfigFile, spawnEnv: env, graceSeconds: 1 });
+  const size = { cols: 80, rows: 24 };
+
+  const inter = mgr.open({ key: 'box-1', box, session, size });
+  const prov = mgr.provision({ key: 'provision:box-1', box, script: 'echo ok' });
+
+  expect(inter).not.toBe(prov);
+  expect(mgr._count()).toBe(2);
+
+  mgr.close(inter);
+  mgr.close(prov);
+});
+
 test('reconnect within grace reuses the same PTY entry', async () => {
   const { box, session, env, sshConfigFile, cleanup } = await setupLocalBox();
   active = cleanup;
