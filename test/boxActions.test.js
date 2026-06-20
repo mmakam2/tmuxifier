@@ -23,6 +23,15 @@ test('buildEnsureTmuxRemote installs tmux when missing and creates the session',
   expect(remote).toContain("\"$TMUX_BIN\" new-session -d -s 'web' 'echo '\\''hi'\\'''");
 });
 
+test('buildEnsureTmuxRemote includes Oh My Tmux manual install steps when requested', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, { installOhMyTmux: true });
+
+  expect(remote).toContain('https://github.com/gpakosz/.tmux.git');
+  expect(remote).toContain('git clone --single-branch https://github.com/gpakosz/.tmux.git .tmux');
+  expect(remote).toContain('ln -s -f .tmux/.tmux.conf .tmux.conf');
+  expect(remote).toContain('cp .tmux/.tmux.conf.local .tmux.conf.local');
+});
+
 test('buildEnsureTmuxRemote skips package managers when tmux is already installed', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-actions-'));
   const tmuxLog = path.join(dir, 'tmux.log');
@@ -39,6 +48,24 @@ test('buildEnsureTmuxRemote skips package managers when tmux is already installe
   expect(res.code).toBe(0);
   await expect(fs.readFile(tmuxLog, 'utf8')).resolves.toContain('has-session -t web');
   await expect(fs.stat(aptLog)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('buildEnsureTmuxRemote skips Oh My Tmux clone when config exists', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-oh-my-tmux-'));
+  await fs.mkdir(path.join(dir, '.tmux'));
+  await fs.writeFile(path.join(dir, '.tmux', '.tmux.conf'), '# existing\n');
+  await fs.writeFile(path.join(dir, 'tmux'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  await fs.writeFile(path.join(dir, 'git'), '#!/bin/sh\necho cloned > "$TMUXIFIER_GIT_LOG"\nexit 0\n', { mode: 0o755 });
+  const gitLog = path.join(dir, 'git.log');
+
+  const res = await runShell(`cd ${JSON.stringify(dir)}
+${buildEnsureTmuxRemote('web', undefined, { installOhMyTmux: true })}`, {
+    PATH: dir,
+    TMUXIFIER_GIT_LOG: gitLog,
+  });
+
+  expect(res.code).toBe(0);
+  await expect(fs.stat(gitLog)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 test('buildKillTmuxRemote ignores absent tmux sessions', () => {

@@ -1,8 +1,17 @@
 import { buildProbeArgv, sanitizeSession, shSingleQuote } from './sshCommand.js';
 
-export function buildEnsureTmuxRemote(session, startupCommand) {
+export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
   const sess = shSingleQuote(sanitizeSession(session));
   const startup = startupCommand ? ` ${shSingleQuote(startupCommand)}` : '';
+  const ohMyTmux = options.installOhMyTmux ? [
+    'cd',
+    'if [ ! -f .tmux/.tmux.conf ]; then',
+    '  rm -rf .tmux',
+    '  git clone --single-branch https://github.com/gpakosz/.tmux.git .tmux',
+    '  ln -s -f .tmux/.tmux.conf .tmux.conf',
+    '  cp .tmux/.tmux.conf.local .tmux.conf.local',
+    'fi',
+  ] : [];
   return [
     'set -eu',
     'TMUX_BIN="$(command -v tmux || true)"',
@@ -37,6 +46,7 @@ export function buildEnsureTmuxRemote(session, startupCommand) {
     '  for p in /usr/bin/tmux /usr/local/bin/tmux /bin/tmux; do if [ -x "$p" ]; then TMUX_BIN="$p"; break; fi; done',
     'fi',
     '[ -n "$TMUX_BIN" ]',
+    ...ohMyTmux,
     `"$TMUX_BIN" has-session -t ${sess} 2>/dev/null || "$TMUX_BIN" new-session -d -s ${sess}${startup}`,
   ].join('\n');
 }
@@ -53,8 +63,8 @@ export function createBoxActions({ run, hostKeyPolicy = 'accept-new', sshConfigF
   }
 
   return {
-    async ensureReady(box) {
-      const res = await runRemote(box, buildEnsureTmuxRemote(box.sessionName, box.startupCommand), 120000);
+    async ensureReady(box, options = {}) {
+      const res = await runRemote(box, buildEnsureTmuxRemote(box.sessionName, box.startupCommand, options), 120000);
       if (res.code !== 0) {
         const msg = String(res.stderr || res.stdout || '').trim() || 'could not install tmux or create session';
         throw new Error(msg);

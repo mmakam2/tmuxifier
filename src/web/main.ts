@@ -1,4 +1,4 @@
-import { api, type Box, type Status } from './api';
+import { api, type AddBoxSpec, type Box, type Status } from './api';
 import { openTerminal } from './terminal';
 import logoUrl from './assets/tmuxifier-logo.png';
 
@@ -189,6 +189,15 @@ function openAddDialog() {
     return wrap;
   }
 
+  const installOhMyTmux = document.createElement('label');
+  installOhMyTmux.className = 'check-field';
+  const installOhMyTmuxInput = document.createElement('input');
+  installOhMyTmuxInput.type = 'checkbox';
+  installOhMyTmuxInput.checked = true;
+  const installOhMyTmuxText = document.createElement('span');
+  installOhMyTmuxText.textContent = 'Install Oh My Tmux if missing';
+  installOhMyTmux.append(installOhMyTmuxInput, installOhMyTmuxText);
+
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   const form = document.createElement('form');
@@ -215,6 +224,7 @@ function openAddDialog() {
     field('user', 'User', { value: 'root' }),
     field('port', 'Port (optional)', { placeholder: '22', type: 'number' }),
     field('proxyJump', 'ProxyJump (optional)', { placeholder: 'jump host this server can reach' }),
+    installOhMyTmux,
     err,
     actions,
   );
@@ -232,7 +242,7 @@ function openAddDialog() {
     e.preventDefault();
     const host = fields.host.value.trim();
     if (!host) { err.textContent = 'Host is required'; return; }
-    const spec: Partial<Box> = { host };
+    const spec: AddBoxSpec = { host, installOhMyTmux: installOhMyTmuxInput.checked };
     const label = fields.label.value.trim(); if (label) spec.label = label;
     const user = fields.user.value.trim(); if (user) spec.user = user;
     const jump = fields.proxyJump.value.trim(); if (jump) spec.proxyJump = jump;

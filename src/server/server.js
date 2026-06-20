@@ -183,8 +183,9 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
   app.post('/api/boxes', { preHandler: requireAuth }, async (req, reply) => {
     let box;
     try {
-      box = await store.addBox(req.body || {});
-      if (boxActions?.ensureReady) await boxActions.ensureReady(box);
+      const { installOhMyTmux = false, ...boxSpec } = req.body || {};
+      box = await store.addBox(boxSpec);
+      if (boxActions?.ensureReady) await boxActions.ensureReady(box, { installOhMyTmux: installOhMyTmux === true });
       return box;
     }
     catch (e) {

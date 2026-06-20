@@ -83,6 +83,32 @@ test('adding a box provisions tmux and rolls back if provisioning fails', async 
   expect(list.json()).toHaveLength(0);
 });
 
+test('adding a box passes transient Oh My Tmux install option without persisting it', async () => {
+  const calls = [];
+  const boxActions = {
+    async ensureReady(box, options) { calls.push({ box, options }); },
+  };
+  app = await makeApp({ boxActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/boxes',
+    headers,
+    payload: { host: 'h1', installOhMyTmux: true },
+  });
+
+  expect(created.statusCode).toBe(200);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].options).toEqual({ installOhMyTmux: true });
+  expect(calls[0].box).not.toHaveProperty('installOhMyTmux');
+  expect(created.json()).not.toHaveProperty('installOhMyTmux');
+
+  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
+  expect(list.json()[0]).not.toHaveProperty('installOhMyTmux');
+});
+
 test('rejects cross-origin state-changing requests', async () => {
   app = await makeApp({ config: { publicUrl: 'https://tmux.example.com' } });
   const cookie = await login();

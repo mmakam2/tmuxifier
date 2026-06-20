@@ -65,6 +65,8 @@ body {
 .modal h2 { margin: 0 0 4px; font-size: 16px; letter-spacing: 1px; }
 .modal .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #8b949e; }
 .modal .field input { padding: 9px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; font-size: 14px; }
+.modal .check-field { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #c9d1d9; }
+.modal .check-field input { width: 16px; height: 16px; accent-color: #1f6feb; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .modal-actions button { padding: 8px 16px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: inherit; cursor: pointer; }
 .modal-actions button[type=submit] { background: #1f6feb; border-color: #1f6feb; color: #fff; }
