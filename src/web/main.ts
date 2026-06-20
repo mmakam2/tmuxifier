@@ -198,6 +198,15 @@ function openAddDialog() {
   installOhMyTmuxText.textContent = 'Install Oh My Tmux if missing';
   installOhMyTmux.append(installOhMyTmuxInput, installOhMyTmuxText);
 
+  const installOhMyZsh = document.createElement('label');
+  installOhMyZsh.className = 'check-field';
+  const installOhMyZshInput = document.createElement('input');
+  installOhMyZshInput.type = 'checkbox';
+  installOhMyZshInput.checked = true;
+  const installOhMyZshText = document.createElement('span');
+  installOhMyZshText.textContent = 'Install Oh My Zsh if missing';
+  installOhMyZsh.append(installOhMyZshInput, installOhMyZshText);
+
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   const form = document.createElement('form');
@@ -225,6 +234,7 @@ function openAddDialog() {
     field('port', 'Port (optional)', { placeholder: '22', type: 'number' }),
     field('proxyJump', 'ProxyJump (optional)', { placeholder: 'jump host this server can reach' }),
     installOhMyTmux,
+    installOhMyZsh,
     err,
     actions,
   );
@@ -242,7 +252,7 @@ function openAddDialog() {
     e.preventDefault();
     const host = fields.host.value.trim();
     if (!host) { err.textContent = 'Host is required'; return; }
-    const spec: AddBoxSpec = { host, installOhMyTmux: installOhMyTmuxInput.checked };
+    const spec: AddBoxSpec = { host, installOhMyTmux: installOhMyTmuxInput.checked, installOhMyZsh: installOhMyZshInput.checked };
     const label = fields.label.value.trim(); if (label) spec.label = label;
     const user = fields.user.value.trim(); if (user) spec.user = user;
     const jump = fields.proxyJump.value.trim(); if (jump) spec.proxyJump = jump;
