@@ -9,7 +9,7 @@ const SECURITY_HEADERS = {
   'content-security-policy': [
     "default-src 'self'",
     "script-src 'self'",
-    "style-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "font-src 'self'",
     "connect-src 'self' ws: wss:",
