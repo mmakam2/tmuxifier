@@ -51,6 +51,14 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     "    echo 'Oh My Zsh install requires curl or wget' >&2",
     '    exit 127',
     '  fi',
+    '  ZSH_BIN="$(command -v zsh || true)"',
+    '  if [ -n "$ZSH_BIN" ]; then',
+    "    if [ \"$(id -u)\" = '0' ]; then",
+    '      chsh -s "$ZSH_BIN" root || true',
+    '    else',
+    '      sudo -n chsh -s "$ZSH_BIN" "$(whoami)" 2>/dev/null || chsh -s "$ZSH_BIN" "$(whoami)" || true',
+    '    fi',
+    '  fi',
     'fi',
   ] : [];
   return [
