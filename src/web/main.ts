@@ -5,6 +5,21 @@ import logoUrl from './assets/tmuxifier-logo.png';
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
 let activeBoxId: string | null = null;
+let allBoxes: Box[] = [];
+let latestStatus: Record<string, Status> = {};
+
+function getSearchTerm(): string {
+  const input = app.querySelector('#search') as HTMLInputElement;
+  return input ? input.value.trim().toLowerCase() : '';
+}
+
+function filterAndPaint() {
+  const term = getSearchTerm();
+  const filtered = term
+    ? allBoxes.filter(b => b.label.toLowerCase().includes(term) || b.host.toLowerCase().includes(term))
+    : allBoxes;
+  paint(filtered, latestStatus);
+}
 
 async function start() {
   if (await api.me()) renderDashboard();
@@ -96,6 +111,7 @@ async function renderDashboard() {
       <aside class="sidebar">
         <div class="brand"><span><img src="${logoUrl}" alt="" />tmuxifier</span><button id="logout" title="Log out">⎋</button></div>
         <div class="actions"><button id="import">Import ~/.ssh/config</button><button id="add">+ Add box</button></div>
+        <input id="search" class="search" type="text" placeholder="Search…" autocomplete="off" />
         <ul id="boxes" class="boxes"></ul>
       </aside>
       <main id="stage" class="stage"><div class="empty">Select a box to open a terminal.</div></main>
@@ -106,16 +122,17 @@ async function renderDashboard() {
   });
   app.querySelector('#import')!.addEventListener('click', async () => { await api.importSsh(); await refresh(); });
   app.querySelector('#add')!.addEventListener('click', () => openBoxDialog());
+  app.querySelector('#search')!.addEventListener('input', () => filterAndPaint());
   await refresh();
   pollInterval = setInterval(pollStatus, POLL_MS);
 }
 
 async function refresh() {
   const list = app.querySelector('#boxes'); if (!list) return;
-  const boxes = await api.boxes();
-  let status: Record<string, Status> = {};
-  api.status().then((s) => { status = s; paint(boxes, status); }).catch(() => {});
-  paint(boxes, status);
+  allBoxes = await api.boxes();
+  latestStatus = {};
+  api.status().then((s) => { latestStatus = s; filterAndPaint(); }).catch(() => {});
+  filterAndPaint();
 }
 
 function paint(boxes: Box[], status: Record<string, Status>) {

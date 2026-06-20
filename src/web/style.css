@@ -53,6 +53,18 @@ body {
 .brand img { width: 28px; height: 28px; border-radius: 7px; }
 .brand button { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 16px; }
 .actions { display: flex; flex-direction: column; gap: 6px; }
+.search {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+}
+.search::placeholder { color: #4a5568; }
+.search:focus { border-color: rgba(36, 211, 232, 0.45); box-shadow: 0 0 0 2px rgba(36, 211, 232, 0.12); }
 .boxes { list-style: none; margin: 0; padding: 0; flex: 1; overflow-y: auto; }
 .box { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; }
 .box:hover { background: var(--panel-2); }
