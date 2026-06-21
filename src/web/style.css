@@ -108,7 +108,7 @@ body {
 .group-chevron { color: #6e7681; font-size: 14px; line-height: 1; text-align: center; }
 .group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
 .group-count { min-width: 22px; text-align: right; color: #6e7681; font-variant-numeric: tabular-nums; }
-.group-body { list-style: none; margin: 2px 0 8px; padding: 0; }
+.group-body { list-style: none; margin: 2px 0 8px; padding: 0 0 0 16px; }
 .group-body[hidden] { display: none; }
 .box { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; }
 .box:hover { background: var(--panel-2); }
