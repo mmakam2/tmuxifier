@@ -19,6 +19,30 @@ test('readConfigFile parses existing JSON', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('readConfigFile throws on corrupt JSON (trailing comma, unquoted key, etc.)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-cfgfile-'));
+  const file = path.join(dir, 'config.json');
+  fs.writeFileSync(file, '{ "port": 5555, }'); // trailing comma
+  expect(() => readConfigFile(file)).toThrow('Invalid JSON');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('readConfigFile returns {} for non-object JSON (null, string, array)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-cfgfile-'));
+  const file = path.join(dir, 'config.json');
+
+  fs.writeFileSync(file, 'null');
+  expect(readConfigFile(file)).toEqual({});
+
+  fs.writeFileSync(file, '"hello"');
+  expect(readConfigFile(file)).toEqual({});
+
+  fs.writeFileSync(file, '[1, 2, 3]');
+  expect(readConfigFile(file)).toEqual({});
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('upsertConfigFile creates file and merges keys', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-cfgfile-'));
   const file = path.join(dir, 'config.json');

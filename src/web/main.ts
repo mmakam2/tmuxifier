@@ -139,8 +139,9 @@ async function renderDashboard() {
   app.querySelector('.local-refresh')!.addEventListener('click', async (e) => {
     e.stopPropagation();
     await api.reconnectLocalShell();
+    const wasActive = activeBoxId === '__local__';
     closeTab('__local__');
-    openLocalShell();
+    if (wasActive) openLocalShell();
   });
 
   // Local shell — edit
@@ -307,7 +308,8 @@ async function openLocalShellEditModal() {
     input.type = 'radio';
     input.name = 'localShellFramework';
     input.value = value;
-    input.checked = currentShell === value;
+    input.checked = currentShell === value
+      || (value === 'none' && !['none', 'omz', 'omb'].includes(currentShell));
     const span = document.createElement('span');
     span.textContent = label;
     wrap.append(input, span);

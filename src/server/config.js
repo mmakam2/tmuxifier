@@ -67,6 +67,9 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   // Mark the session cookie Secure when we serve HTTPS locally OR sit behind an
   // HTTPS public URL, for example a TLS-terminating Cloudflare tunnel.
   merged.secureCookie = !!(merged.tlsCert && merged.tlsKey) || /^https:/i.test(String(merged.publicUrl || ''));
+  // Normalize localShell so invalid env/file values are coerced to 'none'
+  // rather than being passed through unvalidated to the WebSocket handler.
+  merged.localShell = ['none', 'omz', 'omb'].includes(merged.localShell) ? merged.localShell : 'none';
   return merged;
 }
 

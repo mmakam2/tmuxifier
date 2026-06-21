@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
@@ -249,6 +250,9 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
 
   app.post('/api/local-shell/reconnect', { preHandler: requireAuth }, async () => {
     if (sessions?.closeKey) sessions.closeKey('__local__');
+    // Kill the underlying tmux session so the next openLocal() creates a fresh
+    // session with the current shell framework, not reattach to the old one.
+    try { execFileSync('tmux', ['kill-session', '-t', 'local'], { timeout: 5000 }); } catch {}
     return { ok: true };
   });
 
