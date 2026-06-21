@@ -49,6 +49,8 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | port | `TMUXIFIER_PORT` | `7437` |
 | grace seconds | `TMUXIFIER_GRACE` | `45` |
 | host-key policy | `TMUXIFIER_HOSTKEY_POLICY` | `accept-new` |
+| status probe concurrency | `TMUXIFIER_STATUS_CONCURRENCY` | `4` |
+| SSH ControlPersist seconds | `TMUXIFIER_CONTROL_PERSIST` | `600` |
 | auth mode | `TMUXIFIER_AUTH_MODE` | `password` |
 | password hash | `TMUXIFIER_PASSWORD_HASH` | — (required) |
 | cookie secret | `TMUXIFIER_COOKIE_SECRET` | — (required) |
@@ -58,7 +60,7 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | allowed Google emails | `TMUXIFIER_ALLOWED_EMAILS` | (none) |
 | data dir | `TMUXIFIER_DATA_DIR` | `<repo>/data` |
 | control-socket dir | `TMUXIFIER_CONTROL_DIR` | `<dataDir>/cm` |
-| extra ssh config | `TMUXIFIER_SSH_CONFIG` | (none) |
+| ssh config for Tmuxifier SSH calls | `TMUXIFIER_SSH_CONFIG` | (none) |
 | TLS cert (PEM) | `TMUXIFIER_TLS_CERT` | (none → serves HTTP) |
 | TLS key (PEM) | `TMUXIFIER_TLS_KEY` | (none → serves HTTP) |
 
@@ -68,8 +70,12 @@ also marks it `Secure` for deployments behind a TLS-terminating proxy or tunnel.
 
 As an alternative to `.env`, a `config.json` in the repo root works too, using camelCase keys
 (`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`,
-`authMode`, `publicUrl`, `googleClientId`, `googleClientSecret`, `allowedEmails`,
-`dataDir`, `controlDir`, `sshConfigFile`, `tlsCert`, `tlsKey`).
+`statusConcurrency`, `controlPersist`, `authMode`, `publicUrl`, `googleClientId`,
+`googleClientSecret`, `allowedEmails`, `dataDir`, `controlDir`, `sshConfigFile`, `tlsCert`,
+`tlsKey`). The UI also persists `localShell` in `config.json`; it does not have an env key.
+`TMUXIFIER_SSH_CONFIG`/`sshConfigFile` is passed to `ssh` as `-F`, so it is an alternate config
+file for Tmuxifier's SSH commands, not an extra file merged with `~/.ssh/config`. The import button
+still reads the service user's `~/.ssh/config`.
 
 ## Authentication
 `TMUXIFIER_AUTH_MODE` selects one login method. The default is `password`; set it to

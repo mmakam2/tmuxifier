@@ -163,20 +163,26 @@ test('requiredConfigError: password mode needs a hash', () => {
   expect(requiredConfigError({ authMode: 'password', cookieSecret: '' })).toMatch(/COOKIE_SECRET/);
 });
 
-test('localShell defaults to none and is overridable via env', () => {
+test('localShell defaults to none and is configurable via config.json or overrides, not env', async () => {
   const c = loadConfig({}, { env: {}, cwd: '/app' });
   expect(c.localShell).toBe('none');
-  const omz = loadConfig({}, { env: { TMUXIFIER_LOCAL_SHELL: 'omz' }, cwd: '/app' });
-  expect(omz.localShell).toBe('omz');
-  const omb = loadConfig({}, { env: { TMUXIFIER_LOCAL_SHELL: 'omb' }, cwd: '/app' });
-  expect(omb.localShell).toBe('omb');
+  expect(loadConfig({}, { env: { TMUXIFIER_LOCAL_SHELL: 'omz' }, cwd: '/app' }).localShell).toBe('none');
+
+  const fs = await import('node:fs');
+  const osMod = await import('node:os');
+  const pathMod = await import('node:path');
+  const dir = fs.mkdtempSync(pathMod.join(osMod.tmpdir(), 'tmuxifier-local-shell-'));
+  fs.writeFileSync(pathMod.join(dir, 'config.json'), JSON.stringify({ localShell: 'omz' }));
+  expect(loadConfig({}, { env: {}, cwd: dir }).localShell).toBe('omz');
+  expect(loadConfig({ localShell: 'omb' }, { env: {}, cwd: dir }).localShell).toBe('omb');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('localShell invalid values are normalized to none', () => {
-  expect(loadConfig({}, { env: { TMUXIFIER_LOCAL_SHELL: 'zsh' }, cwd: '/app' }).localShell).toBe('none');
-  expect(loadConfig({}, { env: { TMUXIFIER_LOCAL_SHELL: 'bash' }, cwd: '/app' }).localShell).toBe('none');
-  expect(loadConfig({}, { env: { TMUXIFIER_LOCAL_SHELL: '' }, cwd: '/app' }).localShell).toBe('none');
-  expect(loadConfig({}, { env: { TMUXIFIER_LOCAL_SHELL: 'OMZ' }, cwd: '/app' }).localShell).toBe('none');
+  expect(loadConfig({ localShell: 'zsh' }, { env: {}, cwd: '/app' }).localShell).toBe('none');
+  expect(loadConfig({ localShell: 'bash' }, { env: {}, cwd: '/app' }).localShell).toBe('none');
+  expect(loadConfig({ localShell: '' }, { env: {}, cwd: '/app' }).localShell).toBe('none');
+  expect(loadConfig({ localShell: 'OMZ' }, { env: {}, cwd: '/app' }).localShell).toBe('none');
   // overrides arg should also be normalized
   expect(loadConfig({ localShell: 'invalid' }, { env: {}, cwd: '/app' }).localShell).toBe('none');
 });
