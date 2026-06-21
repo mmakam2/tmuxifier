@@ -6,9 +6,88 @@ import logoUrl from './assets/tmuxifier-logo.png';
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
 const SIDEBAR_COLLAPSED_KEY = 'tmuxifier.sidebarCollapsed';
+const GROUP_COLLAPSED_KEY = 'tmuxifier.collapsedTagGroups';
+const UNTAGGED_LABEL = 'Untagged';
+const UNTAGGED_KEY = '__untagged__';
 let activeBoxId: string | null = null;
 let allBoxes: Box[] = [];
 let latestStatus: Record<string, Status> = {};
+
+interface BoxGroup {
+  key: string;
+  label: string;
+  boxes: Box[];
+  untagged: boolean;
+}
+
+function normalizeTagInput(value: unknown): string {
+  return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+}
+
+function primaryTag(box: Box): string {
+  return normalizeTagInput(box.tags?.[0]);
+}
+
+function keyForTag(tag: string): string {
+  const normalized = normalizeTagInput(tag);
+  return normalized ? normalized.toLowerCase() : UNTAGGED_KEY;
+}
+
+function labelForTag(tag: string): string {
+  return normalizeTagInput(tag) || UNTAGGED_LABEL;
+}
+
+function boxMatchesSearch(box: Box, term: string): boolean {
+  if (!term) return true;
+  const tag = primaryTag(box).toLowerCase();
+  return box.label.toLowerCase().includes(term)
+    || box.host.toLowerCase().includes(term)
+    || tag.includes(term);
+}
+
+function groupBoxes(boxes: Box[]): BoxGroup[] {
+  const groups = new Map<string, BoxGroup>();
+  for (const box of boxes) {
+    const tag = primaryTag(box);
+    const key = keyForTag(tag);
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, label: labelForTag(tag), boxes: [], untagged: key === UNTAGGED_KEY };
+      groups.set(key, group);
+    }
+    group.boxes.push(box);
+  }
+  return [...groups.values()].sort((a, b) => {
+    if (a.untagged && !b.untagged) return 1;
+    if (!a.untagged && b.untagged) return -1;
+    return a.label.localeCompare(b.label, undefined, { sensitivity: 'base' });
+  });
+}
+
+function readCollapsedGroups(): Set<string> {
+  try {
+    const raw = localStorage.getItem(GROUP_COLLAPSED_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeCollapsedGroups(keys: Set<string>) {
+  localStorage.setItem(GROUP_COLLAPSED_KEY, JSON.stringify([...keys].sort()));
+}
+
+function isGroupCollapsed(key: string): boolean {
+  return readCollapsedGroups().has(key);
+}
+
+function setGroupCollapsed(key: string, collapsed: boolean) {
+  const keys = readCollapsedGroups();
+  if (collapsed) keys.add(key);
+  else keys.delete(key);
+  writeCollapsedGroups(keys);
+}
 
 function getSearchTerm(): string {
   const input = app.querySelector('#search') as HTMLInputElement;
@@ -17,10 +96,8 @@ function getSearchTerm(): string {
 
 function filterAndPaint() {
   const term = getSearchTerm();
-  const filtered = term
-    ? allBoxes.filter(b => b.label.toLowerCase().includes(term) || b.host.toLowerCase().includes(term))
-    : allBoxes;
-  paint(filtered, latestStatus);
+  const filtered = allBoxes.filter(b => boxMatchesSearch(b, term));
+  paint(filtered, latestStatus, term);
 }
 
 function refitActiveTerminals() {
@@ -185,59 +262,103 @@ async function refresh() {
   filterAndPaint();
 }
 
-function paint(boxes: Box[], status: Record<string, Status>) {
+function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
+  const st = status[b.id];
+
+  const li = document.createElement('li');
+  li.className = b.id === activeBoxId ? 'box active' : 'box';
+  li.dataset.id = b.id;
+
+  const dotEl = document.createElement('span');
+  dotEl.className = `dot ${dotClassFor(st)}`;
+  dotEl.title = dotTitleFor(st);
+
+  const nameEl = document.createElement('span');
+  nameEl.className = 'name';
+  nameEl.textContent = b.label;
+  nameEl.addEventListener('click', () => openBox(b));
+
+  const refreshBtn = document.createElement('button');
+  refreshBtn.className = 'refresh';
+  refreshBtn.title = 'Reconnect';
+  refreshBtn.textContent = '↻';
+  refreshBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await api.reconnectBox(b.id);
+    const wasActive = activeBoxId === b.id;
+    closeTab(b.id);
+    if (wasActive) openBox(b);
+  });
+
+  const edit = document.createElement('button');
+  edit.className = 'edit';
+  edit.title = 'Edit';
+  edit.textContent = '✎';
+  edit.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openBoxDialog(b);
+  });
+
+  const rm = document.createElement('button');
+  rm.className = 'rm';
+  rm.title = 'Remove';
+  rm.textContent = '✕';
+  rm.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await api.removeBox(b.id);
+    closeTab(b.id);
+    await refresh();
+  });
+
+  li.append(dotEl, nameEl, refreshBtn, edit, rm);
+  return li;
+}
+
+function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSearchTerm()) {
   const list = app.querySelector('#boxes')!;
   list.innerHTML = '';
-  for (const b of boxes) {
-    const st = status[b.id];
+  const searching = !!searchTerm;
 
-    const li = document.createElement('li');
-    li.className = b.id === activeBoxId ? 'box active' : 'box';
-    li.dataset.id = b.id;
+  for (const group of groupBoxes(boxes)) {
+    const collapsed = !searching && isGroupCollapsed(group.key);
+    const containsActive = !!activeBoxId && group.boxes.some(b => b.id === activeBoxId);
 
-    const dotEl = document.createElement('span');
-    dotEl.className = `dot ${dotClassFor(st)}`;
-    dotEl.title = dotTitleFor(st);
+    const groupItem = document.createElement('li');
+    groupItem.className = `box-group${collapsed ? ' collapsed' : ''}${containsActive ? ' active-child' : ''}`;
+    groupItem.dataset.tagKey = group.key;
 
-    const nameEl = document.createElement('span');
-    nameEl.className = 'name';
-    nameEl.textContent = b.label;
-    nameEl.addEventListener('click', () => openBox(b));
+    const header = document.createElement('button');
+    header.type = 'button';
+    header.className = 'group-header';
+    header.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    header.title = searching ? 'Clear search to collapse groups' : `${collapsed ? 'Expand' : 'Collapse'} ${group.label}`;
 
-    const reconnectBtn = document.createElement('button');
-    reconnectBtn.className = 'refresh';
-    reconnectBtn.title = 'Reconnect';
-    reconnectBtn.textContent = '↻';
-    reconnectBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await api.reconnectBox(b.id);
-      const wasActive = activeBoxId === b.id;
-      closeTab(b.id);
-      if (wasActive) openBox(b);
+    const chevron = document.createElement('span');
+    chevron.className = 'group-chevron';
+    chevron.textContent = collapsed ? '›' : '⌄';
+
+    const name = document.createElement('span');
+    name.className = 'group-name';
+    name.textContent = group.label;
+
+    const count = document.createElement('span');
+    count.className = 'group-count';
+    count.textContent = String(group.boxes.length);
+
+    header.append(chevron, name, count);
+    header.addEventListener('click', () => {
+      if (searching) return;
+      setGroupCollapsed(group.key, !collapsed);
+      filterAndPaint();
     });
 
-    const edit = document.createElement('button');
-    edit.className = 'edit';
-    edit.title = 'Edit';
-    edit.textContent = '✎';
-    edit.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openBoxDialog(b);
-    });
+    const body = document.createElement('ul');
+    body.className = 'group-body';
+    body.hidden = collapsed;
+    for (const box of group.boxes) body.appendChild(createBoxRow(box, status));
 
-    const rm = document.createElement('button');
-    rm.className = 'rm';
-    rm.title = 'Remove';
-    rm.textContent = '✕';
-    rm.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await api.removeBox(b.id);
-      closeTab(b.id);
-      await refresh();
-    });
-
-    li.append(dotEl, nameEl, reconnectBtn, edit, rm);
-    list.appendChild(li);
+    groupItem.append(header, body);
+    list.appendChild(groupItem);
   }
 }
 
@@ -273,6 +394,10 @@ function openBox(b: Box) {
   app.querySelectorAll('.box').forEach(el => {
     const boxEl = el as HTMLElement;
     boxEl.classList.toggle('active', boxEl.dataset.id === b.id);
+  });
+  app.querySelectorAll('.box-group').forEach(el => {
+    const groupEl = el as HTMLElement;
+    groupEl.classList.toggle('active-child', !!groupEl.querySelector(`.box[data-id="${CSS.escape(b.id)}"]`));
   });
   // De-highlight local shell bar when switching to a box
   const ls = app.querySelector('.local-shell');

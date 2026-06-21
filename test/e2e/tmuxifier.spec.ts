@@ -53,3 +53,32 @@ test('sidebar can collapse and remembers state after reload', async ({ page }) =
   await page.getByRole('button', { name: 'Expand sidebar' }).click();
   await expect(page.locator('.layout')).not.toHaveClass(/sidebar-collapsed/);
 });
+
+test('sidebar groups boxes by tag and remembers collapsed groups during search', async ({ page }) => {
+  await page.goto('/');
+  await page.fill('#pw', 'e2e');
+  await page.click('button:has-text("Unlock")');
+
+  const prodGroup = page.locator('.box-group[data-tag-key="prod"]');
+  const untaggedGroup = page.locator('.box-group[data-tag-key="__untagged__"]');
+
+  await expect(page.getByRole('button', { name: /Prod\s+2/ })).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole('button', { name: /Untagged\s+1/ })).toBeVisible();
+  await expect(prodGroup.locator('.box .name')).toHaveText(['localhost', 'db-primary']);
+  await expect(untaggedGroup.locator('.box .name')).toHaveText(['untagged-worker']);
+
+  await page.getByRole('button', { name: /Prod\s+2/ }).click();
+  await expect(prodGroup.locator('.group-body')).toBeHidden();
+
+  await page.reload();
+  await expect(page.locator('.layout')).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole('button', { name: /Prod\s+2/ })).toBeVisible();
+  await expect(prodGroup.locator('.group-body')).toBeHidden();
+
+  await page.fill('#search', 'prod');
+  await expect(prodGroup.locator('.group-body')).toBeVisible();
+  await expect(prodGroup.locator('.box .name')).toHaveText(['localhost', 'db-primary']);
+
+  await page.fill('#search', '');
+  await expect(prodGroup.locator('.group-body')).toBeHidden();
+});

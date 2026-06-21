@@ -12,7 +12,9 @@ export default async function globalSetup() {
 
   // Seed the box into a temp inventory so no UI prompt is needed
   const store = createStore({ dataDir, sshConfigPath: '/nonexistent' });
-  await store.addBox({ host: lb.box.host, label: 'localhost', sessionName: lb.session });
+  await store.addBox({ host: lb.box.host, label: 'localhost', sessionName: lb.session, tags: ['Prod'] });
+  await store.addBox({ host: lb.box.host, label: 'db-primary', sessionName: lb.session, tags: ['Prod'] });
+  await store.addBox({ host: lb.box.host, label: 'untagged-worker', sessionName: lb.session });
 
   const hash = await hashPassword('e2e');
 
