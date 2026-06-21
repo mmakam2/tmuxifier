@@ -8,6 +8,7 @@ import { createStatusChecker } from './status.js';
 import { createSessionManager } from './sessions.js';
 import { sshRun } from './sshRun.js';
 import { createBoxActions } from './boxActions.js';
+import { createLocalShellActions } from './localShellActions.js';
 import { buildServer } from './server.js';
 
 process.on('unhandledRejection', (err) => { console.error('unhandledRejection:', err); });
@@ -37,8 +38,9 @@ const boxActions = createBoxActions({
   sshConfigFile: config.sshConfigFile,
   controlDir: config.controlDir,
 });
+const localShellActions = createLocalShellActions();
 
-const app = buildServer({ config, store, sessions, statusChecker, boxActions });
+const app = buildServer({ config, store, sessions, statusChecker, boxActions, localShellActions });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });

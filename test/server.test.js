@@ -440,6 +440,44 @@ test('PATCH /api/local-shell updates shell and persists to config.json', async (
   expect(get.json()).toEqual({ shell: 'omz' });
 });
 
+test('PATCH /api/local-shell runs local setup before persisting shell framework', async () => {
+  const calls = [];
+  const localShellActions = {
+    async ensureReady(shell) {
+      calls.push(shell);
+    },
+  };
+  app = await makeApp({ localShellActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const patch = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: 'omb' } });
+
+  expect(patch.statusCode).toBe(200);
+  expect(calls).toEqual(['omb']);
+  await expect(fs.readFile(path.join(dir, 'config.json'), 'utf8')).resolves.toContain('"localShell": "omb"');
+});
+
+test('PATCH /api/local-shell does not persist shell framework when local setup fails', async () => {
+  const localShellActions = {
+    async ensureReady() {
+      throw new Error('Oh My Bash install requires curl or wget');
+    },
+  };
+  app = await makeApp({ localShellActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const patch = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: 'omb' } });
+
+  expect(patch.statusCode).toBe(400);
+  expect(patch.json()).toEqual({ error: 'Oh My Bash install requires curl or wget' });
+
+  const get = await app.inject({ method: 'GET', url: '/api/local-shell', headers });
+  expect(get.json()).toEqual({ shell: 'none' });
+  await expect(fs.stat(path.join(dir, 'config.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
 test('PATCH /api/local-shell rejects invalid shell values', async () => {
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };

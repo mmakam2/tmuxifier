@@ -41,7 +41,7 @@ function requestHostOrigins(req) {
   return [`http://${host}`, `https://${host}`];
 }
 
-export function buildServer({ config, store, sessions, statusChecker, boxActions, googleAuth }) {
+export function buildServer({ config, store, sessions, statusChecker, boxActions, localShellActions, googleAuth }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -238,6 +238,12 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
     const { shell } = req.body || {};
     if (!shell || !['none', 'omz', 'omb'].includes(shell)) {
       return reply.code(400).send({ error: 'invalid shell' });
+    }
+    try {
+      if (localShellActions?.ensureReady) await localShellActions.ensureReady(shell);
+    } catch (e) {
+      const msg = e?.message || 'could not install local shell framework';
+      return reply.code(400).send({ error: msg });
     }
     try {
       upsertConfigFile(config.configPath, { localShell: shell });
