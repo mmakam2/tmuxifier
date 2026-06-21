@@ -24,6 +24,12 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
 When adding a new config knob or persisted file, keep it under the repo folder by default.
 Don't introduce dependencies on `$HOME`-level state other than the user's existing SSH setup.
 
+Any file that must hold real secrets or PII to run locally is **gitignored and ships with a
+placeholder counterpart**, so contributors get the shape without the data: `.env` → `.env.example`;
+`config.json` → the same keys in `.env.example` (camelCase); `tls/` → generation steps in
+`docs/DEPLOY.md`; `data/boxes.json` → created at runtime (boxes are added via the UI or imported
+from `~/.ssh/config`). Add the placeholder/instructions in the same change that introduces the file.
+
 ## Commands
 
 ```bash
@@ -94,10 +100,16 @@ Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `a
 
 ## Shipping (contributing changes back)
 
+The GitHub repo is **public** — never commit real PII (your domains, public/LAN IPs, hostnames,
+emails, box/fleet names). Real values live only in the gitignored files above; committed docs,
+examples, and tests use placeholders (`example.com`, RFC1918 IPs like `192.168.1.10`,
+`you@example.com`).
+
 ```bash
 npm run build                        # rebuild the web bundle
 sudo systemctl restart tmuxifier     # restart the service to serve the new bundle
 git add -A
+git diff --cached                    # PII scrub: review staged diff — no real domains/IPs/emails/hostnames
 git commit -m "feat(…): description" # conventional-commit style
 git push origin main
 ```
