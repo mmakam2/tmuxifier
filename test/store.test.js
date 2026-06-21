@@ -82,3 +82,35 @@ test('updateBox rejects an unsafe host (ssh flag injection guard)', async () => 
   const box = await store.addBox({ host: 'safebox' });
   await expect(store.updateBox(box.id, { host: '-oProxyCommand=x' })).rejects.toThrow(/unsafe/);
 });
+
+test('addBox normalizes missing and blank tags to an empty list', async () => {
+  const store = createStore({ dataDir: dir, sshConfigPath });
+
+  const missing = await store.addBox({ host: 'missing-tags' });
+  const blank = await store.addBox({ host: 'blank-tags', tags: [' ', '\t', ''] });
+
+  expect(missing.tags).toEqual([]);
+  expect(blank.tags).toEqual([]);
+});
+
+test('addBox trims, collapses whitespace, and stores only the first non-empty tag', async () => {
+  const store = createStore({ dataDir: dir, sshConfigPath });
+
+  const box = await store.addBox({
+    host: 'tagged-box',
+    tags: ['  Prod   Web  ', 'Staging'],
+  });
+
+  expect(box.tags).toEqual(['Prod Web']);
+});
+
+test('updateBox can clear and replace the primary tag', async () => {
+  const store = createStore({ dataDir: dir, sshConfigPath });
+  const box = await store.addBox({ host: 'retagged-box', tags: ['Prod'] });
+
+  const cleared = await store.updateBox(box.id, { tags: [] });
+  expect(cleared.tags).toEqual([]);
+
+  const replaced = await store.updateBox(box.id, { tags: ['  Staging   East '] });
+  expect(replaced.tags).toEqual(['Staging East']);
+});

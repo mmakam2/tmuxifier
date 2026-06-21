@@ -4,6 +4,16 @@ import { randomUUID } from 'node:crypto';
 import { parseSshConfig } from './sshConfig.js';
 import { sanitizeSession, assertBoxSafe } from './sshCommand.js';
 
+function normalizeTags(value) {
+  if (!Array.isArray(value)) return [];
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const tag = item.trim().replace(/\s+/g, ' ');
+    if (tag) return [tag];
+  }
+  return [];
+}
+
 export function createStore({ dataDir, sshConfigPath }) {
   const file = path.join(dataDir, 'boxes.json');
 
@@ -29,7 +39,7 @@ export function createStore({ dataDir, sshConfigPath }) {
       proxyJump: spec.proxyJump ?? base.proxyJump,
       sessionName: sanitizeSession(spec.sessionName || base.sessionName || 'web'),
       startupCommand: spec.startupCommand ?? base.startupCommand,
-      tags: spec.tags || base.tags || [],
+      tags: normalizeTags(spec.tags),
       source: spec.source || base.source || 'manual',
       createdAt: base.createdAt || new Date().toISOString(),
     };
