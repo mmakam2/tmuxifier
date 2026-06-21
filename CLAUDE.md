@@ -106,18 +106,22 @@ examples, and tests use placeholders (`example.com`, RFC1918 IPs like `192.168.1
 `you@example.com`).
 
 ```bash
-npm run build                        # rebuild the web bundle
-sudo systemctl restart tmuxifier     # restart the service to serve the new bundle
-git add -A
-git diff --cached                    # PII scrub: review staged diff — no real domains/IPs/emails/hostnames
-git commit -m "feat(…): description" # conventional-commit style
-git push origin main
-```
-
-Verify the service is healthy before pushing:
-```bash
+npm version patch --no-git-tag-version # bump package.json + package-lock.json by 0.0.1
+npm run build                          # rebuild the web bundle with the new version
+sudo systemctl restart tmuxifier       # restart the service to serve the new bundle
 systemctl status tmuxifier
-curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1:7437/
+curl -sk -o /dev/null -w '%{http_code}\n' https://<configured-host>:7437/
+VERSION="v$(node -p "require('./package.json').version")"
+test "$(node -p "require('./package-lock.json').version")" = "${VERSION#v}"
+test "$(node -p "require('./package-lock.json').packages[''].version")" = "${VERSION#v}"
+git add -A
+git diff --cached                      # PII scrub: review staged diff — no real domains/IPs/emails/hostnames
+git commit -m "feat(…): description"   # conventional-commit style
+git tag -a "$VERSION" -m "$VERSION"    # tag must match the package/lockfile version
+git push origin main "$VERSION"
+gh release create "$VERSION" --title "$VERSION" --notes "See commit history for changes."
+test -n "$(git ls-remote --tags origin "$VERSION")"
+test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 ```
 
 ## Security notes

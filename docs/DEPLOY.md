@@ -174,18 +174,26 @@ sudo systemctl restart tmuxifier
 When making changes to push back to the repo:
 
 ```bash
+npm version patch --no-git-tag-version # bump package.json + package-lock.json by 0.0.1
 npm run build                        # rebuild the web bundle
 sudo systemctl restart tmuxifier     # restart to pick up the new bundle
 systemctl status tmuxifier           # confirm the service is healthy
-curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1:7437/  # 200
+curl -sk -o /dev/null -w '%{http_code}\n' https://<configured-host>:7437/  # 200
 ```
 
 If everything checks out, commit and push:
 
 ```bash
 git add -A
+VERSION="v$(node -p "require('./package.json').version")"
+test "$(node -p "require('./package-lock.json').version")" = "${VERSION#v}"
+test "$(node -p "require('./package-lock.json').packages[''].version")" = "${VERSION#v}"
 git commit -m "feat(…): description" # conventional-commit style
-git push origin main
+git tag -a "$VERSION" -m "$VERSION"  # tag must match the package/lockfile version
+git push origin main "$VERSION"
+gh release create "$VERSION" --title "$VERSION" --notes "See commit history for changes."
+test -n "$(git ls-remote --tags origin "$VERSION")"
+test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 ```
 
 ## Changing the password later
