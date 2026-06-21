@@ -10,6 +10,7 @@ const DEFAULTS = {
   hostKeyPolicy: 'accept-new',
   passwordHash: '',
   cookieSecret: '',
+  localShell: 'none',
 };
 
 function clean(obj) {
@@ -58,6 +59,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     sshConfigFile: e.TMUXIFIER_SSH_CONFIG,
     tlsCert: e.TMUXIFIER_TLS_CERT,
     tlsKey: e.TMUXIFIER_TLS_KEY,
+    localShell: e.TMUXIFIER_LOCAL_SHELL,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
   merged.dataDir = merged.dataDir ?? path.join(cwd, 'data');
