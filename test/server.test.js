@@ -333,6 +333,30 @@ test('status endpoint returns a map keyed by box id', async () => {
   expect(res.json()[id]).toMatchObject({ reachable: true });
 });
 
+test('status endpoint probes boxes with bounded concurrency (no fleet-wide SSH burst)', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const statusChecker = {
+    checkBox: async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return { reachable: true };
+    },
+  };
+  app = await makeApp({ statusChecker, config: { statusConcurrency: 2 } });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  for (let i = 0; i < 6; i++) {
+    await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: `h${i}` } });
+  }
+  const res = await app.inject({ method: 'GET', url: '/api/status', headers });
+  expect(Object.keys(res.json())).toHaveLength(6); // every box still probed
+  expect(peak).toBeGreaterThan(0);
+  expect(peak).toBeLessThanOrEqual(2);             // never more than the limit at once
+});
+
 test('rejects a forged unsigned tmuxifier_session cookie', async () => {
   const res = await app.inject({ method: 'GET', url: '/api/boxes', headers: { cookie: 'tmuxifier_session=ok' } });
   expect(res.statusCode).toBe(401);

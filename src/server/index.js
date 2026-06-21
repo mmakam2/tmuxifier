@@ -25,18 +25,20 @@ if (cfgError) {
 fs.mkdirSync(config.controlDir, { recursive: true, mode: 0o700 });
 
 const store = createStore({ dataDir: config.dataDir, sshConfigPath: config.sshConfigPath });
-const sessions = createSessionManager({ hostKeyPolicy: config.hostKeyPolicy, graceSeconds: config.graceSeconds, sshConfigFile: config.sshConfigFile, controlDir: config.controlDir });
+const sessions = createSessionManager({ hostKeyPolicy: config.hostKeyPolicy, graceSeconds: config.graceSeconds, sshConfigFile: config.sshConfigFile, controlDir: config.controlDir, controlPersist: config.controlPersist });
 const boxActions = createBoxActions({
   run: (argv, opts) => sshRun(argv, opts),
   hostKeyPolicy: config.hostKeyPolicy,
   sshConfigFile: config.sshConfigFile,
   controlDir: config.controlDir,
+  controlPersist: config.controlPersist,
 });
 const statusChecker = createStatusChecker({
   run: (argv) => sshRun(argv),
   hostKeyPolicy: config.hostKeyPolicy,
   sshConfigFile: config.sshConfigFile,
   controlDir: config.controlDir,
+  controlPersist: config.controlPersist,
   // Let a status probe clean up a stale ControlMaster socket it detects, so a
   // box that lost multiplexing recovers without a manual remove/re-add.
   reapStaleMaster: (box) => boxActions.reapStaleMaster(box),

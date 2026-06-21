@@ -28,12 +28,12 @@ export function parseTmuxSessions(stdout) {
     });
 }
 
-export function createStatusChecker({ run, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, reapStaleMaster }) {
+export function createStatusChecker({ run, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist, reapStaleMaster }) {
   const remote = PROBE_REMOTE;
   return {
     async checkBox(box) {
       try {
-        const argv = buildProbeArgv(box, remote, { hostKeyPolicy, sshConfigFile, controlDir });
+        const argv = buildProbeArgv(box, remote, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
         const res = await run(argv);
         // A leftover socket disables multiplexing; reap it so the next connect
         // re-establishes a clean master (regardless of this probe's outcome).

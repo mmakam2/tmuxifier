@@ -163,9 +163,9 @@ export function buildKillTmuxRemote(session) {
   return `if command -v tmux >/dev/null 2>&1; then tmux kill-session -t ${sess} 2>/dev/null || true; fi`;
 }
 
-export function createBoxActions({ run, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir }) {
+export function createBoxActions({ run, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist }) {
   async function runRemote(box, remote, timeout) {
-    const argv = buildProbeArgv(box, remote, { hostKeyPolicy, sshConfigFile, controlDir });
+    const argv = buildProbeArgv(box, remote, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
     return run(argv, { timeout });
   }
 

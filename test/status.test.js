@@ -55,6 +55,13 @@ test('checkBox: passes controlDir through to the probe argv (multiplexing)', asy
   expect(seen).toContain('ControlPath=/run/cm/%C');
 });
 
+test('checkBox: threads controlPersist into the probe argv so probe-established masters stay warm', async () => {
+  let seen;
+  const run = async (argv) => { seen = argv; return { code: 0, stdout: '', stderr: '' }; };
+  await createStatusChecker({ run, controlDir: '/run/cm', controlPersist: 600 }).checkBox({ host: 'h' });
+  expect(seen).toContain('ControlPersist=600');
+});
+
 test('checkBox: reaps the stale socket when ssh reports disabling multiplexing (password box stuck red)', async () => {
   const reaped = [];
   const run = async () => ({

@@ -11,6 +11,14 @@ const DEFAULTS = {
   passwordHash: '',
   cookieSecret: '',
   localShell: 'none',
+  // Probe at most this many boxes at once on /api/status. A small batch keeps
+  // Tmuxifier from opening the whole fleet's SSH connections simultaneously,
+  // which rate-limiters/IPS on the path read as a brute-force burst.
+  statusConcurrency: 4,
+  // ssh ControlPersist (seconds): how long a multiplexed master lingers after
+  // its last use. Longer means cold-connect bursts (which trigger the blocks
+  // above) happen far less often.
+  controlPersist: 600,
 };
 
 function clean(obj) {
@@ -38,6 +46,8 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     bindAddress: e.TMUXIFIER_BIND,
     port: e.TMUXIFIER_PORT ? Number(e.TMUXIFIER_PORT) : undefined,
     graceSeconds: e.TMUXIFIER_GRACE ? Number(e.TMUXIFIER_GRACE) : undefined,
+    statusConcurrency: e.TMUXIFIER_STATUS_CONCURRENCY ? Number(e.TMUXIFIER_STATUS_CONCURRENCY) : undefined,
+    controlPersist: e.TMUXIFIER_CONTROL_PERSIST ? Number(e.TMUXIFIER_CONTROL_PERSIST) : undefined,
     hostKeyPolicy: e.TMUXIFIER_HOSTKEY_POLICY,
     authMode: e.TMUXIFIER_AUTH_MODE,
     publicUrl: e.TMUXIFIER_BASE_EXTERNAL_URL ?? e.TMUXIFIER_PUBLIC_URL,

@@ -3,7 +3,7 @@ import { buildAttachArgv, buildProvisionArgv } from './sshCommand.js';
 
 const { spawn } = nodePty;
 
-export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSeconds = 45, spawnEnv = process.env, sshConfigFile, controlDir } = {}) {
+export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSeconds = 45, spawnEnv = process.env, sshConfigFile, controlDir, controlPersist } = {}) {
   const entries = new Map(); // key -> entry
 
   function open({ key, box, session, size }) {
@@ -12,7 +12,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       if (existing.graceTimer) { clearTimeout(existing.graceTimer); existing.graceTimer = null; }
       return existing;
     }
-    const argv = buildAttachArgv(box, session, size, { hostKeyPolicy, sshConfigFile, controlDir });
+    const argv = buildAttachArgv(box, session, size, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
     const pty = spawn('ssh', argv, {
       name: 'xterm-256color',
       cols: size.cols,
@@ -72,7 +72,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       if (existing.graceTimer) { clearTimeout(existing.graceTimer); existing.graceTimer = null; }
       return existing;
     }
-    const argv = buildProvisionArgv(box, script, { hostKeyPolicy, sshConfigFile, controlDir, ...opts });
+    const argv = buildProvisionArgv(box, script, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist, ...opts });
     const pty = spawn('ssh', argv, {
       name: 'xterm-256color',
       cols: 120,

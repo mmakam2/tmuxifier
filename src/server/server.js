@@ -7,6 +7,7 @@ import { verifyPassword, COOKIE_NAME, cookieOptions } from './auth.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
 import { buildEnsureTmuxRemote } from './boxActions.js';
 import { upsertConfigFile } from './configFile.js';
+import { mapWithConcurrency } from './concurrency.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': [
@@ -233,7 +234,12 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
   app.get('/api/status', { preHandler: requireAuth }, async () => {
     const boxes = await store.listBoxes();
     const out = {};
-    await Promise.all(boxes.map(async (b) => { out[b.id] = await statusChecker.checkBox(b); }));
+    // Probe in small batches, not all at once: a fleet-wide burst of simultaneous
+    // SSH handshakes trips connection-rate/IPS blocks on the path and makes boxes
+    // flicker red. See src/server/concurrency.js.
+    await mapWithConcurrency(boxes, config.statusConcurrency || 4, async (b) => {
+      out[b.id] = await statusChecker.checkBox(b);
+    });
     return out;
   });
 

@@ -14,6 +14,15 @@ test('applies defaults', () => {
   expect(c.controlDir).toBe(path.join('/app', 'data', 'cm'));
 });
 
+test('status concurrency and controlPersist have defaults and are overridable via env', () => {
+  const d = loadConfig({}, { env: {}, cwd: '/app' });
+  expect(d.statusConcurrency).toBe(4);   // probe a few boxes at a time, never the whole fleet at once
+  expect(d.controlPersist).toBe(600);    // keep SSH masters warm so cold-connect bursts are rare
+  const e = loadConfig({}, { env: { TMUXIFIER_STATUS_CONCURRENCY: '8', TMUXIFIER_CONTROL_PERSIST: '120' }, cwd: '/app' });
+  expect(e.statusConcurrency).toBe(8);
+  expect(e.controlPersist).toBe(120);
+});
+
 test('controlDir follows dataDir and is overridable via env', () => {
   const c = loadConfig({}, { env: { TMUXIFIER_DATA_DIR: '/tmp/d' }, cwd: '/app' });
   expect(c.controlDir).toBe(path.join('/tmp/d', 'cm'));
