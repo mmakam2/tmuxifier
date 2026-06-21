@@ -57,6 +57,9 @@ function groupBoxes(boxes: Box[]): BoxGroup[] {
     }
     group.boxes.push(box);
   }
+  for (const group of groups.values()) {
+    group.boxes.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+  }
   return [...groups.values()].sort((a, b) => {
     if (a.untagged && !b.untagged) return 1;
     if (!a.untagged && b.untagged) return -1;

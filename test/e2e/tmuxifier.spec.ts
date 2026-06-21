@@ -66,7 +66,7 @@ test('sidebar groups boxes by tag and remembers collapsed groups during search',
 
   await expect(page.getByRole('button', { name: /Prod\s+2/ })).toBeVisible({ timeout: 10000 });
   await expect(page.getByRole('button', { name: /Untagged\s+1/ })).toBeVisible();
-  await expect(prodGroup.locator('.box .name')).toHaveText(['localhost', 'db-primary']);
+  await expect(prodGroup.locator('.box .name')).toHaveText(['db-primary', 'localhost']);
   await expect(untaggedGroup.locator('.box .name')).toHaveText(['untagged-worker']);
 
   await page.getByRole('button', { name: /Prod\s+2/ }).click();
@@ -79,7 +79,7 @@ test('sidebar groups boxes by tag and remembers collapsed groups during search',
 
   await page.fill('#search', 'prod');
   await expect(prodGroup.locator('.group-body')).toBeVisible();
-  await expect(prodGroup.locator('.box .name')).toHaveText(['localhost', 'db-primary']);
+  await expect(prodGroup.locator('.box .name')).toHaveText(['db-primary', 'localhost']);
 
   await page.fill('#search', '');
   await expect(prodGroup.locator('.group-body')).toBeHidden();
@@ -115,9 +115,9 @@ test('edit box tag joins an existing group and can be cleared', async ({ page })
   await page.getByRole('button', { name: 'Save' }).click();
 
   await expect(page.getByRole('button', { name: /Prod\s+3/ })).toBeVisible();
-  await expect(page.locator('.box-group[data-tag-key="prod"] .box .name')).toContainText([
-    'localhost',
+  await expect(page.locator('.box-group[data-tag-key="prod"] .box .name')).toHaveText([
     'db-primary',
+    'localhost',
     'untagged-worker',
   ]);
 
