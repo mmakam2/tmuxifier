@@ -131,9 +131,52 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
 ```
 
 ## Deployment
-For running Tmuxifier as a long-lived service, see [docs/DEPLOY.md](docs/DEPLOY.md). It covers
-a self-contained layout (config in `.env`, certs in `tls/`, state in `data/` — all inside the
-repo) and ships a sample systemd unit at [deploy/tmuxifier.service](deploy/tmuxifier.service).
+Run Tmuxifier as a long-lived **systemd** service. A deployment is just a checkout of the repo
+plus a small unit that runs `node src/server/index.js` from it — config (`.env`), certs
+(`tls/`), and state (`data/`) all stay inside the repo folder.
+
+The repo ships a ready-to-use unit at [deploy/tmuxifier.service](deploy/tmuxifier.service),
+which assumes the repo is at `/root/tmuxifier` running as `root`:
+
+```ini
+[Unit]
+Description=Tmuxifier - web dashboard for managing SSH/tmux boxes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/tmuxifier
+# HOME must be set so the ssh children find ~/.ssh (keys, config, known_hosts)
+Environment=HOME=/root
+ExecStart=/usr/bin/node /root/tmuxifier/src/server/index.js
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Install and start it (after `npm install && npm run build && npm run set-password`):
+
+```bash
+sudo cp deploy/tmuxifier.service /etc/systemd/system/tmuxifier.service
+# Not running from /root/tmuxifier as root? Edit User=, WorkingDirectory=,
+# Environment=HOME=, and the node path in ExecStart= to match your install.
+sudo systemctl daemon-reload
+sudo systemctl enable --now tmuxifier   # start now + on boot
+systemctl status tmuxifier              # confirm it is active
+```
+
+Two things to know: the app reads `.env` itself, so secrets are deliberately **not** placed in
+the unit (it holds no credentials); and `HOME` is set in the unit — not `.env` — so the `ssh`
+child processes can find `~/.ssh`. To update a running deployment: `git pull`, `npm install`
+(only if dependencies changed), `npm run build`, then `sudo systemctl restart tmuxifier`.
+
+See [docs/DEPLOY.md](docs/DEPLOY.md) for the full guide — TLS certs, Google OAuth behind a
+Cloudflare tunnel, the file-layout table, and password rotation.
 
 ## Attributions
 
