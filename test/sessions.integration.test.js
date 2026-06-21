@@ -95,3 +95,81 @@ test('reconnect within grace reuses the same PTY entry', async () => {
   expect(e2).toBe(e1);
   mgr.close(e2);
 });
+
+test('openLocal spawns a local tmux session and streams data', async () => {
+  const mgr = createSessionManager({ graceSeconds: 1 });
+  const size = { cols: 80, rows: 24 };
+  const key = 'local-test-' + Date.now();
+
+  const entry = mgr.openLocal({ key, shell: 'none', size });
+  const buf = [];
+  const off = mgr.attach(entry, (d) => buf.push(d));
+  await waitFor(() => buf.join('').length > 0);
+
+  mgr.write(entry, 'echo LOCAL_SHELL_TEST\n');
+  await waitFor(() => buf.join('').includes('LOCAL_SHELL_TEST'));
+
+  // Clean up: wait for the tmux session to fully exit before closing,
+  // otherwise the session named "local" survives and interferes with
+  // subsequent openLocal tests (the -A flag attaches instead of creating).
+  mgr.write(entry, 'exit\n');
+  await waitFor(() => entry.exited);
+  off();
+  mgr.close(entry);
+});
+
+test('openLocal shells: omz passes exec zsh startup command', async () => {
+  const mgr = createSessionManager({ graceSeconds: 1 });
+  const size = { cols: 80, rows: 24 };
+  const key = 'local-omz-' + Date.now();
+
+  // openLocal with omz should start with zsh
+  const entry = mgr.openLocal({ key, shell: 'omz', size });
+  const buf = [];
+  const off = mgr.attach(entry, (d) => buf.push(d));
+  await waitFor(() => buf.join('').length > 0);
+
+  // Check the running shell
+  mgr.write(entry, 'echo $0\n');
+  await waitFor(() => buf.join('').includes('zsh'));
+
+  mgr.write(entry, 'exit\n');
+  await waitFor(() => entry.exited);
+  off();
+  mgr.close(entry);
+});
+
+test('openLocal shells: omb passes exec bash startup command', async () => {
+  const mgr = createSessionManager({ graceSeconds: 1 });
+  const size = { cols: 80, rows: 24 };
+  const key = 'local-omb-' + Date.now();
+
+  const entry = mgr.openLocal({ key, shell: 'omb', size });
+  const buf = [];
+  const off = mgr.attach(entry, (d) => buf.push(d));
+  await waitFor(() => buf.join('').length > 0);
+
+  mgr.write(entry, 'echo $0\n');
+  await waitFor(() => buf.join('').includes('bash'));
+
+  mgr.write(entry, 'exit\n');
+  await waitFor(() => entry.exited);
+  off();
+  mgr.close(entry);
+});
+
+test('openLocal reuses existing entry within grace period', async () => {
+  const mgr = createSessionManager({ graceSeconds: 30 });
+  const size = { cols: 80, rows: 24 };
+  const key = 'local-reuse-' + Date.now();
+
+  const e1 = mgr.openLocal({ key, shell: 'none', size });
+  await waitFor(() => true);
+  mgr.detach(e1);
+  const e2 = mgr.openLocal({ key, shell: 'none', size }); // same key within grace
+  expect(e2).toBe(e1);
+
+  mgr.write(e1, 'exit\n');
+  await waitFor(() => e1.exited);
+  mgr.close(e2);
+});

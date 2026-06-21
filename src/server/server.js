@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
@@ -5,6 +6,7 @@ import websocket from '@fastify/websocket';
 import { verifyPassword, COOKIE_NAME, cookieOptions } from './auth.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
 import { buildEnsureTmuxRemote } from './boxActions.js';
+import { upsertConfigFile } from './configFile.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': [
@@ -228,11 +230,73 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
     return out;
   });
 
+  app.get('/api/local-shell', { preHandler: requireAuth }, async () => {
+    return { shell: config.localShell || 'none' };
+  });
+
+  app.patch('/api/local-shell', { preHandler: requireAuth }, async (req, reply) => {
+    const { shell } = req.body || {};
+    if (!shell || !['none', 'omz', 'omb'].includes(shell)) {
+      return reply.code(400).send({ error: 'invalid shell' });
+    }
+    try {
+      upsertConfigFile(config.configPath, { localShell: shell });
+      config.localShell = shell;
+    } catch (e) {
+      return reply.code(500).send({ error: 'could not save config' });
+    }
+    return { ok: true };
+  });
+
+  app.post('/api/local-shell/reconnect', { preHandler: requireAuth }, async () => {
+    if (sessions?.closeKey) sessions.closeKey('__local__');
+    // Kill the underlying tmux session so the next openLocal() creates a fresh
+    // session with the current shell framework, not reattach to the old one.
+    try { execFileSync('tmux', ['kill-session', '-t', 'local'], { timeout: 5000 }); } catch {}
+    return { ok: true };
+  });
+
   app.register(async (scope) => {
     scope.get('/term', { websocket: true }, async (socket, req) => {
       if (!hasTrustedOrigin(req)) { socket.close(1008, 'forbidden origin'); return; }
       if (!isAuthed(req)) { socket.close(1008, 'unauthorized'); return; }
       const { box: boxId, cid, cols, rows, mode } = req.query;
+
+      // --- Local shell ---
+      if (boxId === '__local__') {
+        if (mode === 'provision') {
+          socket.close(1008, 'provision not supported for local shell');
+          return;
+        }
+        const size = { cols: Number(cols) || 80, rows: Number(rows) || 24 };
+
+        let entry;
+        try {
+          entry = sessions.openLocal({ key: '__local__', shell: config.localShell, size });
+        } catch (err) {
+          const msg = err?.message || 'session error';
+          try { socket.send(msg); } catch {}
+          socket.close(1011);
+          return;
+        }
+
+        const off = sessions.attach(entry, (d) => {
+          try { if (socket.readyState === 1) socket.send(d); } catch {}
+        });
+        const offExit = sessions.onExit(entry, () => { try { socket.close(1000); } catch {} });
+        socket.on('message', (raw) => {
+          let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
+          if (msg.t === 'i') sessions.write(entry, msg.d);
+          else if (msg.t === 'r') sessions.resize(entry, { cols: msg.c, rows: msg.r });
+        });
+        socket.on('close', () => {
+          if (typeof off === 'function') off();
+          if (typeof offExit === 'function') offExit();
+          sessions.detach(entry);
+        });
+        return;
+      }
+
       const box = await store.getBox(boxId);
       if (!box) { socket.close(1008, 'unknown box'); return; }
 

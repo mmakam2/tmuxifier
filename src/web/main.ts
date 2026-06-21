@@ -115,6 +115,12 @@ async function renderDashboard() {
         <div class="actions"><button id="import">Import ~/.ssh/config</button><button id="add">+ Add box</button></div>
         <input id="search" class="search" type="text" placeholder="Search…" autocomplete="off" />
         <ul id="boxes" class="boxes"></ul>
+        <div class="local-shell">
+          <span class="local-dot"></span>
+          <span class="local-name">local</span>
+          <button class="local-refresh" title="Reconnect">↻</button>
+          <button class="local-edit" title="Configure shell">✎</button>
+        </div>
       </aside>
       <main id="stage" class="stage"><div class="empty">Select a box to open a terminal.</div></main>
     </div>`;
@@ -125,6 +131,25 @@ async function renderDashboard() {
   app.querySelector('#import')!.addEventListener('click', async () => { await api.importSsh(); await refresh(); });
   app.querySelector('#add')!.addEventListener('click', () => openBoxDialog());
   app.querySelector('#search')!.addEventListener('input', () => filterAndPaint());
+
+  // Local shell — name click opens terminal
+  app.querySelector('.local-name')!.addEventListener('click', () => openLocalShell());
+
+  // Local shell — refresh
+  app.querySelector('.local-refresh')!.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await api.reconnectLocalShell();
+    const wasActive = activeBoxId === '__local__';
+    closeTab('__local__');
+    if (wasActive) openLocalShell();
+  });
+
+  // Local shell — edit
+  app.querySelector('.local-edit')!.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openLocalShellEditModal();
+  });
+
   await refresh();
   pollInterval = setInterval(pollStatus, POLL_MS);
 }
@@ -195,12 +220,42 @@ function paint(boxes: Box[], status: Record<string, Status>) {
   }
 }
 
+function openLocalShell() {
+  activeBoxId = '__local__';
+  // De-highlight all box items
+  app.querySelectorAll('.box').forEach(el => el.classList.remove('active'));
+  // Highlight local shell bar
+  const ls = app.querySelector('.local-shell');
+  if (ls) ls.classList.add('active');
+  const stage = app.querySelector('#stage') as HTMLElement;
+  for (const t of tabs.values()) t.el.style.display = 'none';
+  const existing = tabs.get('__local__');
+  if (existing) { existing.el.style.display = 'block'; existing.term.refit(); existing.term.focus(); updateLocalDot(); return; }
+  stage.querySelector('.empty')?.remove();
+  const el = document.createElement('div');
+  el.className = 'term';
+  stage.appendChild(el);
+  const term = openTerminal(el, '__local__');
+  tabs.set('__local__', { el, term });
+  term.focus();
+  // Update dot after tab creation so it turns green on first open
+  updateLocalDot();
+}
+
+function updateLocalDot() {
+  const dot = app.querySelector('.local-dot');
+  if (dot) dot.classList.toggle('green', tabs.has('__local__'));
+}
+
 function openBox(b: Box) {
   activeBoxId = b.id;
   app.querySelectorAll('.box').forEach(el => {
     const boxEl = el as HTMLElement;
     boxEl.classList.toggle('active', boxEl.dataset.id === b.id);
   });
+  // De-highlight local shell bar when switching to a box
+  const ls = app.querySelector('.local-shell');
+  if (ls) ls.classList.remove('active');
   const stage = app.querySelector('#stage') as HTMLElement;
   for (const t of tabs.values()) t.el.style.display = 'none';
   const existing = tabs.get(b.id);
@@ -221,7 +276,86 @@ function closeTab(id: string) {
     activeBoxId = null;
     const activeEl = app.querySelector('.box.active');
     if (activeEl) activeEl.classList.remove('active');
+    const ls = app.querySelector('.local-shell');
+    if (ls) ls.classList.remove('active');
   }
+  if (id === '__local__') updateLocalDot();
+}
+
+async function openLocalShellEditModal() {
+  let currentShell = 'none';
+  try { currentShell = (await api.getLocalShell()).shell; } catch {}
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const form = document.createElement('form');
+  form.className = 'modal';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Local shell';
+
+  // Radio group for shell framework
+  const shellGroup = document.createElement('fieldset');
+  shellGroup.className = 'radio-group';
+  const shellLegend = document.createElement('legend');
+  shellLegend.textContent = 'Shell framework';
+  shellGroup.append(shellLegend);
+
+  function makeRadio(value: string, label: string) {
+    const wrap = document.createElement('label');
+    wrap.className = 'check-field';
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'localShellFramework';
+    input.value = value;
+    input.checked = currentShell === value
+      || (value === 'none' && !['none', 'omz', 'omb'].includes(currentShell));
+    const span = document.createElement('span');
+    span.textContent = label;
+    wrap.append(input, span);
+    return { wrap, input };
+  }
+
+  const shellNone = makeRadio('none', 'None');
+  const shellZsh = makeRadio('omz', 'Oh My Zsh');
+  const shellBash = makeRadio('omb', 'Oh My Bash');
+  shellGroup.append(shellNone.wrap, shellZsh.wrap, shellBash.wrap);
+
+  const err = document.createElement('p');
+  err.className = 'err';
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.textContent = 'Save';
+  actions.append(cancel, submit);
+
+  form.append(title, shellGroup, err, actions);
+  backdrop.appendChild(form);
+  app.appendChild(backdrop);
+
+  function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
+  function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); }
+  document.addEventListener('keydown', onKey);
+  cancel.addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    submit.disabled = true;
+    const selected = (form.querySelector('input[name="localShellFramework"]:checked') as HTMLInputElement)?.value;
+    if (!selected) { submit.disabled = false; return; }
+    try {
+      await api.updateLocalShell(selected);
+      close();
+    } catch (ex: any) {
+      err.textContent = ex?.message || 'Could not save shell setting';
+      submit.disabled = false;
+    }
+  });
 }
 
 function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean }) {

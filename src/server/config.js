@@ -1,7 +1,7 @@
-import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readEnvFile } from './envFile.js';
+import { readConfigFile } from './configFile.js';
 
 const DEFAULTS = {
   bindAddress: '127.0.0.1',
@@ -10,6 +10,7 @@ const DEFAULTS = {
   hostKeyPolicy: 'accept-new',
   passwordHash: '',
   cookieSecret: '',
+  localShell: 'none',
 };
 
 function clean(obj) {
@@ -27,16 +28,8 @@ function normalizePublicUrl(value) {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s}`;
 }
 
-function readJsonIfExists(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
 export function loadConfig(overrides = {}, { env = process.env, cwd = process.cwd() } = {}) {
-  const fileCfg = readJsonIfExists(path.join(cwd, 'config.json'));
+  const fileCfg = readConfigFile(path.join(cwd, 'config.json'));
   // Keep Tmuxifier self-contained: a repo-local .env supplies TMUXIFIER_* values
   // so nothing needs to live in the shell. Real shell env still wins, so an
   // explicitly exported variable overrides the file (12-factor friendly).
@@ -58,6 +51,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     sshConfigFile: e.TMUXIFIER_SSH_CONFIG,
     tlsCert: e.TMUXIFIER_TLS_CERT,
     tlsKey: e.TMUXIFIER_TLS_KEY,
+    localShell: e.TMUXIFIER_LOCAL_SHELL,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
   merged.dataDir = merged.dataDir ?? path.join(cwd, 'data');
@@ -73,6 +67,9 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   // Mark the session cookie Secure when we serve HTTPS locally OR sit behind an
   // HTTPS public URL, for example a TLS-terminating Cloudflare tunnel.
   merged.secureCookie = !!(merged.tlsCert && merged.tlsKey) || /^https:/i.test(String(merged.publicUrl || ''));
+  // Normalize localShell so invalid env/file values are coerced to 'none'
+  // rather than being passed through unvalidated to the WebSocket handler.
+  merged.localShell = ['none', 'omz', 'omb'].includes(merged.localShell) ? merged.localShell : 'none';
   return merged;
 }
 

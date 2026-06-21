@@ -154,6 +154,24 @@ test('requiredConfigError: password mode needs a hash', () => {
   expect(requiredConfigError({ authMode: 'password', cookieSecret: '' })).toMatch(/COOKIE_SECRET/);
 });
 
+test('localShell defaults to none and is overridable via env', () => {
+  const c = loadConfig({}, { env: {}, cwd: '/app' });
+  expect(c.localShell).toBe('none');
+  const omz = loadConfig({}, { env: { TMUXIFIER_LOCAL_SHELL: 'omz' }, cwd: '/app' });
+  expect(omz.localShell).toBe('omz');
+  const omb = loadConfig({}, { env: { TMUXIFIER_LOCAL_SHELL: 'omb' }, cwd: '/app' });
+  expect(omb.localShell).toBe('omb');
+});
+
+test('localShell invalid values are normalized to none', () => {
+  expect(loadConfig({}, { env: { TMUXIFIER_LOCAL_SHELL: 'zsh' }, cwd: '/app' }).localShell).toBe('none');
+  expect(loadConfig({}, { env: { TMUXIFIER_LOCAL_SHELL: 'bash' }, cwd: '/app' }).localShell).toBe('none');
+  expect(loadConfig({}, { env: { TMUXIFIER_LOCAL_SHELL: '' }, cwd: '/app' }).localShell).toBe('none');
+  expect(loadConfig({}, { env: { TMUXIFIER_LOCAL_SHELL: 'OMZ' }, cwd: '/app' }).localShell).toBe('none');
+  // overrides arg should also be normalized
+  expect(loadConfig({ localShell: 'invalid' }, { env: {}, cwd: '/app' }).localShell).toBe('none');
+});
+
 test('requiredConfigError: oauth mode lists every missing field', () => {
   const msg = requiredConfigError({ authMode: 'google', cookieSecret: 's', allowedEmails: [] });
   expect(msg).toMatch(/TMUXIFIER_OAUTH_CLIENT_ID/);
