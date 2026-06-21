@@ -381,6 +381,33 @@ test('reconnect closes local sessions and best-effort kills remote session', asy
   expect(list.json()).toHaveLength(1);
 });
 
+test('reconnect shuts the ssh ControlMaster down before killing the PTY', async () => {
+  const calls = [];
+  const sessions = {
+    open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {},
+    closeKey(id) { calls.push(['closeKey', id]); },
+  };
+  const boxActions = {
+    async exitMaster(box) { calls.push(['exitMaster', box.host]); },
+    async killSession(box) { calls.push(['killSession', box.host]); },
+  };
+  app = await makeApp({ sessions, boxActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await app.inject({
+    method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1', sessionName: 'work' },
+  });
+  const box = created.json();
+
+  const res = await app.inject({ method: 'POST', url: `/api/boxes/${box.id}/reconnect`, headers });
+
+  expect(res.statusCode).toBe(200);
+  // exitMaster must run first: -O exit can only remove the socket while the
+  // master is still alive. Killing the PTY first would leave a stale socket.
+  expect(calls[0]).toEqual(['exitMaster', 'h1']);
+  expect(calls).toContainEqual(['closeKey', box.id]);
+});
+
 test('reconnect returns 404 for unknown box', async () => {
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };

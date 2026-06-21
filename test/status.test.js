@@ -19,6 +19,20 @@ test('checkBox: unreachable when ssh fails with no stdout', async () => {
   expect(status).toEqual({ reachable: false, error: 'timeout' });
 });
 
+test('checkBox: auth failure is reported as needsAuth (so the UI can prompt a re-login)', async () => {
+  const run = async () => ({ code: 255, stdout: '', stderr: 'me@h: Permission denied (publickey,password).' });
+  const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
+  expect(status.reachable).toBe(false);
+  expect(status.needsAuth).toBe(true);
+});
+
+test('checkBox: connection failure stays plain unreachable (not needsAuth)', async () => {
+  const run = async () => ({ code: 255, stdout: '', stderr: 'ssh: connect to host h port 22: Connection refused' });
+  const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
+  expect(status.reachable).toBe(false);
+  expect(status.needsAuth).toBeFalsy();
+});
+
 test('checkBox: tmux missing', async () => {
   const run = async () => ({ code: 0, stdout: '__NO_TMUX__\n', stderr: '' });
   const status = await createStatusChecker({ run }).checkBox({ host: 'h' });

@@ -1,4 +1,4 @@
-import { buildProbeArgv, sanitizeSession, shSingleQuote } from './sshCommand.js';
+import { buildProbeArgv, buildControlExitArgv, sanitizeSession, shSingleQuote } from './sshCommand.js';
 
 export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
   const sess = shSingleQuote(sanitizeSession(session));
@@ -175,6 +175,16 @@ export function createBoxActions({ run, hostKeyPolicy = 'accept-new', sshConfigF
         await runRemote(box, buildKillTmuxRemote(box.sessionName), 12000);
       } catch {
         // Best effort: removing a box should not be blocked by a stale or unreachable host.
+      }
+      return { ok: true };
+    },
+    async exitMaster(box) {
+      try {
+        const argv = buildControlExitArgv(box, { sshConfigFile, controlDir });
+        if (!argv) return { ok: true }; // multiplexing disabled — nothing to tear down
+        await run(argv, { timeout: 6000 });
+      } catch {
+        // Best effort: a missing or already-dead master must not block reconnect.
       }
       return { ok: true };
     },

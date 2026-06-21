@@ -180,3 +180,31 @@ test('killSession is best effort', async () => {
 
   await expect(actions.killSession({ host: 'h', sessionName: 'web' })).resolves.toEqual({ ok: true });
 });
+
+test('exitMaster runs ssh -O exit over the box control path', async () => {
+  let seen;
+  const actions = createBoxActions({
+    run: async (argv) => { seen = argv; return { code: 0, stdout: 'Exit request sent.', stderr: '' }; },
+    controlDir: '/run/cm',
+  });
+  await actions.exitMaster({ host: 'h', user: 'me' });
+  expect(seen).toContain('-O');
+  expect(seen).toContain('exit');
+  expect(seen).toContain('ControlPath=/run/cm/%C');
+});
+
+test('exitMaster is a no-op when multiplexing is disabled', async () => {
+  let called = false;
+  const actions = createBoxActions({ run: async () => { called = true; return { code: 0 }; } });
+  const res = await actions.exitMaster({ host: 'h' });
+  expect(called).toBe(false);
+  expect(res).toEqual({ ok: true });
+});
+
+test('exitMaster is best effort (swallows ssh errors)', async () => {
+  const actions = createBoxActions({
+    run: async () => { throw new Error('no master'); },
+    controlDir: '/run/cm',
+  });
+  await expect(actions.exitMaster({ host: 'h' })).resolves.toEqual({ ok: true });
+});

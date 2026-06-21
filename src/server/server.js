@@ -212,6 +212,13 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
   app.post('/api/boxes/:id/reconnect', { preHandler: requireAuth }, async (req, reply) => {
     const box = await store.getBox(req.params.id);
     if (!box) return reply.code(404).send({ error: 'box not found' });
+    // Shut the SSH ControlMaster down first (while it's still alive, `-O exit`
+    // can remove its socket). Killing the PTY first would SIGKILL the master and
+    // leave a stale socket, which disables multiplexing on the next connect — so
+    // a password box would re-login fine in the terminal yet stay red forever.
+    if (boxActions?.exitMaster) {
+      try { await boxActions.exitMaster(box); } catch {}
+    }
     if (sessions?.closeKey) {
       sessions.closeKey(box.id);
       sessions.closeKey(`provision:${box.id}`);

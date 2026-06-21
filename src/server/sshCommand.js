@@ -90,6 +90,24 @@ export function buildProbeArgv(box, remoteCmd, opts = {}) {
   return argv;
 }
 
+// Cleanly shut down the persistent ControlMaster for a box. This talks to the
+// local control socket only (no network auth, no PTY), and tells the master to
+// exit — which also removes its socket file. Doing this on reconnect is what
+// lets a password-auth box re-establish a fresh master on the next interactive
+// login: a leftover socket would otherwise make ssh print "disabling
+// multiplexing" and never share a master, leaving the box stuck red.
+export function buildControlExitArgv(box, opts = {}) {
+  assertBoxSafe(box);
+  if (!opts.controlPath && !opts.controlDir) return null;
+  const controlPath = opts.controlPath || path.join(opts.controlDir, '%C');
+  const argv = ['-o', `ControlPath=${controlPath}`];
+  if (box.proxyJump) argv.push('-J', box.proxyJump);
+  if (box.port) argv.push('-p', String(box.port));
+  argv.push('-O', 'exit', target(box));
+  if (opts.sshConfigFile) argv.unshift('-F', opts.sshConfigFile);
+  return argv;
+}
+
 export function buildProvisionArgv(box, script, opts = {}) {
   assertBoxSafe(box);
   const policy = opts.hostKeyPolicy || 'accept-new';

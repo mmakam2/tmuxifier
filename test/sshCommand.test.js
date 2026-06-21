@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { buildAttachArgv, buildProbeArgv, buildProvisionArgv, sanitizeSession } from '../src/server/sshCommand.js';
+import { buildAttachArgv, buildProbeArgv, buildProvisionArgv, buildControlExitArgv, sanitizeSession } from '../src/server/sshCommand.js';
 
 test('sanitizeSession strips unsafe chars', () => {
   expect(sanitizeSession('we b;rm -rf/')).toBe('we-b-rm--rf-');
@@ -127,4 +127,32 @@ test('buildProvisionArgv minimal box', () => {
   expect(argv).not.toContain('-p');
   expect(argv[argv.length - 2]).toBe('h1');
   expect(argv[argv.length - 1]).toBe('id');
+});
+
+test('buildControlExitArgv: targets the box master socket with -O exit', () => {
+  const argv = buildControlExitArgv({ host: 'h', user: 'me', port: 2222 }, { controlDir: '/run/cm' });
+  // Same ControlPath token the attach/probe use, so %C hashes to the same socket.
+  expect(argv).toContain('ControlPath=/run/cm/%C');
+  expect(argv).toContain('-O');
+  expect(argv[argv.indexOf('-O') + 1]).toBe('exit');
+  expect(argv).toContain('me@h');
+  expect(argv).toContain('-p');
+  expect(argv[argv.indexOf('-p') + 1]).toBe('2222');
+  // It must not authenticate (it only talks to the local control socket).
+  expect(argv).not.toContain('BatchMode=yes');
+  expect(argv).not.toContain('-tt');
+});
+
+test('buildControlExitArgv: returns null when multiplexing is off', () => {
+  expect(buildControlExitArgv({ host: 'h' }, {})).toBeNull();
+});
+
+test('buildControlExitArgv: sshConfigFile prepends -F', () => {
+  const argv = buildControlExitArgv({ host: 'h' }, { controlDir: '/run/cm', sshConfigFile: '/tmp/cfg' });
+  expect(argv.slice(0, 2)).toEqual(['-F', '/tmp/cfg']);
+});
+
+test('buildControlExitArgv: rejects flag-smuggling host', () => {
+  expect(() => buildControlExitArgv({ host: '-oProxyCommand=x' }, { controlDir: '/run/cm' }))
+    .toThrow(/unsafe ssh host/);
 });

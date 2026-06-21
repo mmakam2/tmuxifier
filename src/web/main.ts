@@ -1,5 +1,6 @@
 import { api, type AddBoxSpec, type Box, type Status } from './api';
 import { openTerminal, openProvisionTerminal } from './terminal';
+import { dotClassFor, dotTitleFor } from './statusDot';
 import logoUrl from './assets/tmuxifier-logo.png';
 
 const app = document.getElementById('app')!;
@@ -96,16 +97,14 @@ async function pollStatus() {
   polling = true;
   try {
     const status = await api.status();
+    latestStatus = status;
     const list = app.querySelectorAll('.box');
-    const DOTS = new Set(['gray', 'green', 'amber', 'red']);
     list.forEach(li => {
       const id = (li as HTMLElement).dataset.id;
       if (!id) return;
       const st = status[id];
-      const dotClass = !st ? 'gray' : st.reachable ? (st.tmux === false ? 'amber' : 'green') : 'red';
-      const dot = DOTS.has(dotClass) ? dotClass : 'gray';
-      const dotEl = li.querySelector('.dot');
-      if (dotEl) dotEl.className = `dot ${dot}`;
+      const dotEl = li.querySelector('.dot') as HTMLElement | null;
+      if (dotEl) { dotEl.className = `dot ${dotClassFor(st)}`; dotEl.title = dotTitleFor(st); }
     });
   } catch {} finally {
     polling = false;
@@ -189,18 +188,16 @@ async function refresh() {
 function paint(boxes: Box[], status: Record<string, Status>) {
   const list = app.querySelector('#boxes')!;
   list.innerHTML = '';
-  const DOTS = new Set(['gray', 'green', 'amber', 'red']);
   for (const b of boxes) {
     const st = status[b.id];
-    const dotClass = !st ? 'gray' : st.reachable ? (st.tmux === false ? 'amber' : 'green') : 'red';
-    const dot = DOTS.has(dotClass) ? dotClass : 'gray';
 
     const li = document.createElement('li');
     li.className = b.id === activeBoxId ? 'box active' : 'box';
     li.dataset.id = b.id;
 
     const dotEl = document.createElement('span');
-    dotEl.className = `dot ${dot}`;
+    dotEl.className = `dot ${dotClassFor(st)}`;
+    dotEl.title = dotTitleFor(st);
 
     const nameEl = document.createElement('span');
     nameEl.className = 'name';
