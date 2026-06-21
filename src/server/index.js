@@ -14,6 +14,7 @@ process.on('unhandledRejection', (err) => { console.error('unhandledRejection:',
 process.on('uncaughtException', (err) => { console.error('uncaughtException:', err); });
 
 const config = loadConfig();
+config.configPath = path.resolve('config.json');
 const cfgError = requiredConfigError(config);
 if (cfgError) {
   console.error(cfgError);

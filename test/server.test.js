@@ -16,6 +16,8 @@ async function makeApp(overrides = {}) {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
     passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir,
     sshConfigPath: path.join(dir, 'nope'),
+    localShell: 'none',
+    configPath: path.join(dir, 'config.json'),
     ...configOverrides,
   };
   const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
@@ -409,4 +411,67 @@ test('reconnect does not wait for remote session cleanup', async () => {
 
   expect(res.statusCode).toBe(200);
   expect(killCalled).toBe(true);
+});
+
+test('GET /api/local-shell returns default shell', async () => {
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'GET', url: '/api/local-shell', headers });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ shell: 'none' });
+});
+
+test('GET /api/local-shell requires auth', async () => {
+  const res = await app.inject({ method: 'GET', url: '/api/local-shell' });
+  expect(res.statusCode).toBe(401);
+});
+
+test('PATCH /api/local-shell updates shell and persists to config.json', async () => {
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  // Update to omz
+  const patch = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: 'omz' } });
+  expect(patch.statusCode).toBe(200);
+  expect(patch.json()).toEqual({ ok: true });
+
+  // Verify GET reflects change
+  const get = await app.inject({ method: 'GET', url: '/api/local-shell', headers });
+  expect(get.json()).toEqual({ shell: 'omz' });
+});
+
+test('PATCH /api/local-shell rejects invalid shell values', async () => {
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const res = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: 'zsh' } });
+  expect(res.statusCode).toBe(400);
+  expect(res.json()).toEqual({ error: 'invalid shell' });
+
+  const res2 = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: {} });
+  expect(res2.statusCode).toBe(400);
+
+  const res3 = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: '' } });
+  expect(res3.statusCode).toBe(400);
+});
+
+test('POST /api/local-shell/reconnect kills local PTY', async () => {
+  const calls = [];
+  const sessions = {
+    openLocal() {}, open() {}, provision() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {},
+    closeKey(id) { calls.push(['closeKey', id]); },
+  };
+  app = await makeApp({ sessions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const res = await app.inject({ method: 'POST', url: '/api/local-shell/reconnect', headers });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true });
+  expect(calls).toEqual([['closeKey', '__local__']]);
+});
+
+test('POST /api/local-shell/reconnect requires auth', async () => {
+  const res = await app.inject({ method: 'POST', url: '/api/local-shell/reconnect' });
+  expect(res.statusCode).toBe(401);
 });
