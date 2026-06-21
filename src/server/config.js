@@ -1,7 +1,7 @@
-import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readEnvFile } from './envFile.js';
+import { readConfigFile } from './configFile.js';
 
 const DEFAULTS = {
   bindAddress: '127.0.0.1',
@@ -28,16 +28,8 @@ function normalizePublicUrl(value) {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s}`;
 }
 
-function readJsonIfExists(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
 export function loadConfig(overrides = {}, { env = process.env, cwd = process.cwd() } = {}) {
-  const fileCfg = readJsonIfExists(path.join(cwd, 'config.json'));
+  const fileCfg = readConfigFile(path.join(cwd, 'config.json'));
   // Keep Tmuxifier self-contained: a repo-local .env supplies TMUXIFIER_* values
   // so nothing needs to live in the shell. Real shell env still wins, so an
   // explicitly exported variable overrides the file (12-factor friendly).
