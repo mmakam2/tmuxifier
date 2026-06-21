@@ -4,6 +4,7 @@ import logoUrl from './assets/tmuxifier-logo.png';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
+const SIDEBAR_COLLAPSED_KEY = 'tmuxifier.sidebarCollapsed';
 let activeBoxId: string | null = null;
 let allBoxes: Box[] = [];
 let latestStatus: Record<string, Status> = {};
@@ -19,6 +20,10 @@ function filterAndPaint() {
     ? allBoxes.filter(b => b.label.toLowerCase().includes(term) || b.host.toLowerCase().includes(term))
     : allBoxes;
   paint(filtered, latestStatus);
+}
+
+function refitActiveTerminals() {
+  for (const t of tabs.values()) t.term.refit();
 }
 
 async function start() {
@@ -109,9 +114,16 @@ async function pollStatus() {
 
 async function renderDashboard() {
   if (pollInterval) clearInterval(pollInterval);
-  app.innerHTML = `<div class="layout">
+  const sidebarCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+  app.innerHTML = `<div class="layout${sidebarCollapsed ? ' sidebar-collapsed' : ''}">
       <aside class="sidebar">
-        <div class="brand"><span><img src="${logoUrl}" alt="" />tmuxifier</span><button id="logout" title="Log out">⎋</button></div>
+        <div class="brand">
+          <span><img src="${logoUrl}" alt="" /><span class="brand-name">tmuxifier</span></span>
+          <div class="brand-actions">
+            <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-label="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-expanded="${sidebarCollapsed ? 'false' : 'true'}">${sidebarCollapsed ? '›' : '‹'}</button>
+            <button id="logout" title="Log out">⎋</button>
+          </div>
+        </div>
         <div class="actions"><button id="import">Import ~/.ssh/config</button><button id="add">+ Add box</button></div>
         <input id="search" class="search" type="text" placeholder="Search…" autocomplete="off" />
         <ul id="boxes" class="boxes"></ul>
@@ -127,6 +139,18 @@ async function renderDashboard() {
   app.querySelector('#logout')!.addEventListener('click', async () => { 
     if (pollInterval) clearInterval(pollInterval);
     await api.logout(); await renderLogin();
+  });
+  app.querySelector('#sidebar-toggle')!.addEventListener('click', () => {
+    const layout = app.querySelector('.layout') as HTMLElement;
+    const button = app.querySelector('#sidebar-toggle') as HTMLButtonElement;
+    const collapsed = !layout.classList.contains('sidebar-collapsed');
+    layout.classList.toggle('sidebar-collapsed', collapsed);
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0');
+    button.textContent = collapsed ? '›' : '‹';
+    button.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    button.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+    button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    window.setTimeout(refitActiveTerminals, 260);
   });
   app.querySelector('#import')!.addEventListener('click', async () => { await api.importSsh(); await refresh(); });
   app.querySelector('#add')!.addEventListener('click', () => openBoxDialog());

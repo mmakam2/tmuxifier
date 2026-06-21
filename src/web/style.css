@@ -47,12 +47,27 @@ body {
 .gbtn:hover { background: #f7f8f8; }
 .err { color: #f85149; min-height: 1em; text-align: center; }
 .login-footer { text-align: center; font-size: 11px; color: #4a5568; margin-top: 4px; }
-.layout { display: grid; grid-template-columns: 280px 1fr; height: 100vh; }
-.sidebar { border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 12px; gap: 10px; background: #090d13; overflow: hidden; }
-.brand { display: flex; align-items: center; justify-content: space-between; font-weight: 700; letter-spacing: 1px; }
-.brand span { display: inline-flex; align-items: center; gap: 8px; }
-.brand img { width: 28px; height: 28px; border-radius: 7px; }
-.brand button { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 16px; }
+.layout { display: grid; grid-template-columns: 320px 1fr; height: 100vh; transition: grid-template-columns 0.25s ease; }
+.layout.sidebar-collapsed { grid-template-columns: 56px 1fr; }
+.sidebar { border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 12px; gap: 10px; background: #090d13; overflow: hidden; min-width: 0; }
+.brand { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 700; letter-spacing: 1px; min-width: 0; }
+.brand span { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.brand-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brand img { width: 28px; height: 28px; border-radius: 7px; flex: 0 0 auto; }
+.brand-actions { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.brand button { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 16px; width: 24px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; }
+.brand button:hover { background: var(--panel-2); color: var(--text); }
+.sidebar-toggle { font-size: 18px; }
+.layout.sidebar-collapsed .sidebar { padding: 12px 8px; align-items: center; }
+.layout.sidebar-collapsed .brand { width: 100%; justify-content: center; flex-direction: column; }
+.layout.sidebar-collapsed .brand > span { justify-content: center; }
+.layout.sidebar-collapsed .brand-name { display: none; }
+.layout.sidebar-collapsed .brand-actions { flex-direction: column; }
+.layout.sidebar-collapsed #logout,
+.layout.sidebar-collapsed .actions,
+.layout.sidebar-collapsed .search,
+.layout.sidebar-collapsed .boxes,
+.layout.sidebar-collapsed .local-shell { display: none; }
 .actions { display: flex; flex-direction: column; gap: 6px; }
 .search {
   padding: 8px 10px;
