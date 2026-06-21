@@ -64,6 +64,27 @@ function groupBoxes(boxes: Box[]): BoxGroup[] {
   });
 }
 
+function existingTagMap(): Map<string, string> {
+  const tags = new Map<string, string>();
+  for (const box of allBoxes) {
+    const tag = primaryTag(box);
+    if (!tag) continue;
+    const key = tag.toLowerCase();
+    if (!tags.has(key)) tags.set(key, tag);
+  }
+  return tags;
+}
+
+function existingTagOptions(): string[] {
+  return [...existingTagMap().values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+}
+
+function canonicalTagForInput(value: string): string {
+  const normalized = normalizeTagInput(value);
+  if (!normalized) return '';
+  return existingTagMap().get(normalized.toLowerCase()) || normalized;
+}
+
 function readCollapsedGroups(): Set<string> {
   try {
     const raw = localStorage.getItem(GROUP_COLLAPSED_KEY);
@@ -546,7 +567,7 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
 function openBoxDialog(box?: Box) {
   const isEdit = !!box;
   const fields: Record<string, HTMLInputElement> = {};
-  function field(name: string, label: string, opts: { placeholder?: string; value?: string; type?: string } = {}) {
+  function field(name: string, label: string, opts: { placeholder?: string; value?: string; type?: string; list?: string } = {}) {
     const wrap = document.createElement('label');
     wrap.className = 'field';
     const span = document.createElement('span');
@@ -554,6 +575,7 @@ function openBoxDialog(box?: Box) {
     const input = document.createElement('input');
     input.type = opts.type || 'text';
     if (opts.placeholder) input.placeholder = opts.placeholder;
+    if (opts.list) input.setAttribute('list', opts.list);
     if (opts.value) input.value = opts.value;
     wrap.append(span, input);
     fields[name] = input;
@@ -602,6 +624,14 @@ function openBoxDialog(box?: Box) {
   form.className = 'modal';
   const title = document.createElement('h2');
   title.textContent = isEdit ? 'Edit box' : 'Add box';
+  const tagListId = 'tag-options';
+  const tagDatalist = document.createElement('datalist');
+  tagDatalist.id = tagListId;
+  for (const tag of existingTagOptions()) {
+    const option = document.createElement('option');
+    option.value = tag;
+    tagDatalist.appendChild(option);
+  }
 
   const err = document.createElement('p');
   err.className = 'err';
@@ -627,6 +657,8 @@ function openBoxDialog(box?: Box) {
     title,
     hostWrap,
     field('label', 'Label (optional)', { placeholder: 'defaults to host' }),
+    field('tag', 'Tag', { placeholder: 'prod, staging, db', list: tagListId }),
+    tagDatalist,
     field('user', 'User', { value: 'root' }),
     field('port', 'Port (optional)', { placeholder: '22', type: 'number' }),
     field('proxyJump', 'ProxyJump (optional)', { placeholder: 'jump host this server can reach' }),
@@ -639,6 +671,7 @@ function openBoxDialog(box?: Box) {
   // Pre-populate fields in edit mode
   if (isEdit) {
     fields.label.value = box!.label !== box!.host ? box!.label : '';
+    fields.tag.value = primaryTag(box!);
     if (box!.user) fields.user.value = box!.user;
     if (box!.port) fields.port.value = String(box!.port);
     if (box!.proxyJump) fields.proxyJump.value = box!.proxyJump;
@@ -669,6 +702,8 @@ function openBoxDialog(box?: Box) {
         const label = fields.label.value.trim(); if (label) patch.label = label;
         const user = fields.user.value.trim(); patch.user = user || null;
         const jump = fields.proxyJump.value.trim(); patch.proxyJump = jump || null;
+        const tag = canonicalTagForInput(fields.tag.value);
+        patch.tags = tag ? [tag] : [];
         const portRaw = fields.port.value.trim();
         if (portRaw) {
           const port = Number(portRaw);
@@ -696,6 +731,7 @@ function openBoxDialog(box?: Box) {
         const installOhMyBash = shellBash.input.checked;
         const spec: AddBoxSpec = { host, installOhMyTmux: installOhMyTmuxInput.checked, installOhMyZsh, installOhMyBash };
         const label = fields.label.value.trim(); if (label) spec.label = label;
+        const tag = canonicalTagForInput(fields.tag.value); if (tag) spec.tags = [tag];
         const user = fields.user.value.trim(); if (user) spec.user = user;
         const jump = fields.proxyJump.value.trim(); if (jump) spec.proxyJump = jump;
         const portRaw = fields.port.value.trim();

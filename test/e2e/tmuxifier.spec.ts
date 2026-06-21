@@ -100,3 +100,33 @@ test('host shell clears active tag group after opening a grouped box', async ({ 
   await expect(prodGroup).not.toHaveClass(/active-child/);
   await expect(page.locator('.local-shell')).toHaveClass(/active/);
 });
+
+test('edit box tag joins an existing group and can be cleared', async ({ page }) => {
+  await page.goto('/');
+  await page.fill('#pw', 'e2e');
+  await page.click('button:has-text("Unlock")');
+
+  await expect(page.getByRole('button', { name: /Prod\s+2/ })).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole('button', { name: /Untagged\s+1/ })).toBeVisible();
+
+  await page.locator('.box', { hasText: 'untagged-worker' }).locator('.edit').click();
+  await expect(page.getByRole('heading', { name: 'Edit box' })).toBeVisible();
+  await page.getByLabel('Tag').fill('prod');
+  await page.getByRole('button', { name: 'Save' }).click();
+
+  await expect(page.getByRole('button', { name: /Prod\s+3/ })).toBeVisible();
+  await expect(page.locator('.box-group[data-tag-key="prod"] .box .name')).toContainText([
+    'localhost',
+    'db-primary',
+    'untagged-worker',
+  ]);
+
+  await page.locator('.box', { hasText: 'untagged-worker' }).locator('.edit').click();
+  await expect(page.getByRole('heading', { name: 'Edit box' })).toBeVisible();
+  await page.getByLabel('Tag').fill('');
+  await page.getByRole('button', { name: 'Save' }).click();
+
+  await expect(page.getByRole('button', { name: /Prod\s+2/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Untagged\s+1/ })).toBeVisible();
+  await expect(page.locator('.box-group[data-tag-key="__untagged__"] .box .name')).toHaveText(['untagged-worker']);
+});
