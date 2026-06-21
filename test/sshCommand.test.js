@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { buildAttachArgv, buildProbeArgv, buildProvisionArgv, buildControlExitArgv, sanitizeSession } from '../src/server/sshCommand.js';
+import { buildAttachArgv, buildProbeArgv, buildProvisionArgv, buildControlExitArgv, buildControlCheckArgv, buildControlPathArgv, sanitizeSession } from '../src/server/sshCommand.js';
 
 test('sanitizeSession strips unsafe chars', () => {
   expect(sanitizeSession('we b;rm -rf/')).toBe('we-b-rm--rf-');
@@ -155,4 +155,59 @@ test('buildControlExitArgv: sshConfigFile prepends -F', () => {
 test('buildControlExitArgv: rejects flag-smuggling host', () => {
   expect(() => buildControlExitArgv({ host: '-oProxyCommand=x' }, { controlDir: '/run/cm' }))
     .toThrow(/unsafe ssh host/);
+});
+
+test('buildControlCheckArgv: targets the box master socket with -O check', () => {
+  const argv = buildControlCheckArgv({ host: 'h', user: 'me', port: 2222 }, { controlDir: '/run/cm' });
+  expect(argv).toContain('ControlPath=/run/cm/%C');
+  expect(argv).toContain('-O');
+  expect(argv[argv.indexOf('-O') + 1]).toBe('check');
+  expect(argv).toContain('me@h');
+  expect(argv).toContain('-p');
+  expect(argv[argv.indexOf('-p') + 1]).toBe('2222');
+  // It must not authenticate (it only talks to the local control socket).
+  expect(argv).not.toContain('BatchMode=yes');
+  expect(argv).not.toContain('-tt');
+});
+
+test('buildControlCheckArgv: returns null when multiplexing is off', () => {
+  expect(buildControlCheckArgv({ host: 'h' }, {})).toBeNull();
+});
+
+test('buildControlCheckArgv: rejects flag-smuggling host', () => {
+  expect(() => buildControlCheckArgv({ host: '-oProxyCommand=x' }, { controlDir: '/run/cm' }))
+    .toThrow(/unsafe ssh host/);
+});
+
+test('buildControlPathArgv: runs ssh -G to resolve the concrete %C socket path', () => {
+  const argv = buildControlPathArgv({ host: 'h', user: 'me', port: 2222, proxyJump: 'gw' }, { controlDir: '/run/cm' });
+  expect(argv).toContain('-G');
+  // The same ControlPath token attach/probe use, so -G resolves %C to the same socket.
+  expect(argv).toContain('ControlPath=/run/cm/%C');
+  expect(argv).toContain('me@h');
+  // proxyJump and port must be present so %C (which hashes %j and %p) matches.
+  expect(argv).toContain('-J');
+  expect(argv[argv.indexOf('-J') + 1]).toBe('gw');
+  expect(argv).toContain('-p');
+  expect(argv[argv.indexOf('-p') + 1]).toBe('2222');
+});
+
+test('buildControlPathArgv: returns null when multiplexing is off', () => {
+  expect(buildControlPathArgv({ host: 'h' }, {})).toBeNull();
+});
+
+test('buildControlPathArgv: sshConfigFile prepends -F', () => {
+  const argv = buildControlPathArgv({ host: 'h' }, { controlDir: '/run/cm', sshConfigFile: '/tmp/cfg' });
+  expect(argv.slice(0, 2)).toEqual(['-F', '/tmp/cfg']);
+});
+
+test('buildControlPathArgv: rejects flag-smuggling host', () => {
+  expect(() => buildControlPathArgv({ host: '-oProxyCommand=x' }, { controlDir: '/run/cm' }))
+    .toThrow(/unsafe ssh host/);
+});
+
+test('buildProbeArgv: includes ServerAlive keepalive so a probe-established master cannot wedge forever', () => {
+  const argv = buildProbeArgv({ host: 'h' }, 'tmux ls');
+  expect(argv).toContain('ServerAliveInterval=15');
+  expect(argv).toContain('ServerAliveCountMax=3');
 });

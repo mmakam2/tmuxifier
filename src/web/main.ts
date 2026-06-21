@@ -204,11 +204,11 @@ function paint(boxes: Box[], status: Record<string, Status>) {
     nameEl.textContent = b.label;
     nameEl.addEventListener('click', () => openBox(b));
 
-    const refresh = document.createElement('button');
-    refresh.className = 'refresh';
-    refresh.title = 'Reconnect';
-    refresh.textContent = '↻';
-    refresh.addEventListener('click', async (e) => {
+    const reconnectBtn = document.createElement('button');
+    reconnectBtn.className = 'refresh';
+    reconnectBtn.title = 'Reconnect';
+    reconnectBtn.textContent = '↻';
+    reconnectBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       await api.reconnectBox(b.id);
       const wasActive = activeBoxId === b.id;
@@ -236,7 +236,7 @@ function paint(boxes: Box[], status: Record<string, Status>) {
       await refresh();
     });
 
-    li.append(dotEl, nameEl, refresh, edit, rm);
+    li.append(dotEl, nameEl, reconnectBtn, edit, rm);
     list.appendChild(li);
   }
 }

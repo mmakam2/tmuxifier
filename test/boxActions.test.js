@@ -182,15 +182,75 @@ test('killSession is best effort', async () => {
 });
 
 test('exitMaster runs ssh -O exit over the box control path', async () => {
-  let seen;
+  const calls = [];
   const actions = createBoxActions({
-    run: async (argv) => { seen = argv; return { code: 0, stdout: 'Exit request sent.', stderr: '' }; },
+    run: async (argv) => { calls.push(argv); return { code: 0, stdout: 'Exit request sent.', stderr: '' }; },
     controlDir: '/run/cm',
   });
   await actions.exitMaster({ host: 'h', user: 'me' });
-  expect(seen).toContain('-O');
-  expect(seen).toContain('exit');
-  expect(seen).toContain('ControlPath=/run/cm/%C');
+  const exitCall = calls.find((a) => a.includes('-O') && a.includes('exit'));
+  expect(exitCall).toBeTruthy();
+  expect(exitCall).toContain('ControlPath=/run/cm/%C');
+});
+
+test('exitMaster force-removes the orphan socket a dead master left behind', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-cm-'));
+  const socket = path.join(dir, 'deadbeef');
+  await fs.writeFile(socket, ''); // stand-in for the orphaned master socket
+  const actions = createBoxActions({
+    run: async (argv) => {
+      if (argv.includes('-G')) return { code: 0, stdout: `controlpath ${socket}\n`, stderr: '' };
+      // `ssh -O exit` against a dead master fails and leaves the socket behind.
+      return { code: 255, stdout: '', stderr: 'Control socket connect: No such file or directory' };
+    },
+    controlDir: dir,
+  });
+  await actions.exitMaster({ host: 'h', user: 'me' });
+  await expect(fs.stat(socket)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('reapStaleMaster removes an orphaned socket when no live master is running', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-cm-'));
+  const socket = path.join(dir, 'orphan');
+  await fs.writeFile(socket, '');
+  const actions = createBoxActions({
+    run: async (argv) => {
+      if (argv.includes('check')) return { code: 255, stdout: '', stderr: 'Control socket connect: Connection refused' };
+      if (argv.includes('-G')) return { code: 0, stdout: `controlpath ${socket}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    },
+    controlDir: dir,
+  });
+  const res = await actions.reapStaleMaster({ host: 'h', user: 'me' });
+  expect(res.reaped).toBe(true);
+  await expect(fs.stat(socket)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('reapStaleMaster leaves a healthy live master untouched', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-cm-'));
+  const socket = path.join(dir, 'live');
+  await fs.writeFile(socket, '');
+  let resolvedPath = false;
+  const actions = createBoxActions({
+    run: async (argv) => {
+      if (argv.includes('check')) return { code: 0, stdout: 'Master running (pid=123)', stderr: '' };
+      if (argv.includes('-G')) { resolvedPath = true; return { code: 0, stdout: `controlpath ${socket}\n` }; }
+      return { code: 0, stdout: '', stderr: '' };
+    },
+    controlDir: dir,
+  });
+  const res = await actions.reapStaleMaster({ host: 'h', user: 'me' });
+  expect(res.reaped).toBe(false);
+  expect(resolvedPath).toBe(false); // never even resolves/unlinks a live master
+  await expect(fs.stat(socket)).resolves.toBeTruthy();
+});
+
+test('reapStaleMaster is a no-op when multiplexing is disabled', async () => {
+  let called = false;
+  const actions = createBoxActions({ run: async () => { called = true; return { code: 0 }; } });
+  const res = await actions.reapStaleMaster({ host: 'h' });
+  expect(called).toBe(false);
+  expect(res).toEqual({ ok: true, reaped: false });
 });
 
 test('exitMaster is a no-op when multiplexing is disabled', async () => {

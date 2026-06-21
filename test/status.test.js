@@ -55,6 +55,41 @@ test('checkBox: passes controlDir through to the probe argv (multiplexing)', asy
   expect(seen).toContain('ControlPath=/run/cm/%C');
 });
 
+test('checkBox: reaps the stale socket when ssh reports disabling multiplexing (password box stuck red)', async () => {
+  const reaped = [];
+  const run = async () => ({
+    code: 255,
+    stdout: '',
+    stderr: 'ControlSocket /run/cm/abc already exists, disabling multiplexing\nme@h: Permission denied (publickey,password).',
+  });
+  const reapStaleMaster = async (box) => { reaped.push(box); return { ok: true, reaped: true }; };
+  const status = await createStatusChecker({ run, controlDir: '/run/cm', reapStaleMaster }).checkBox({ host: 'h', user: 'me' });
+  expect(reaped).toHaveLength(1);
+  expect(reaped[0]).toMatchObject({ host: 'h' });
+  expect(status.needsAuth).toBe(true); // still surfaced as needs-login until the user re-auths
+});
+
+test('checkBox: reaps the stale socket even when the probe still succeeds (key box that silently lost multiplexing)', async () => {
+  const reaped = [];
+  const run = async () => ({
+    code: 0,
+    stdout: 'web:1:0:1718000000\n',
+    stderr: 'ControlSocket /run/cm/abc already exists, disabling multiplexing',
+  });
+  const reapStaleMaster = async (box) => { reaped.push(box); return { ok: true, reaped: true }; };
+  const status = await createStatusChecker({ run, controlDir: '/run/cm', reapStaleMaster }).checkBox({ host: 'h' });
+  expect(reaped).toHaveLength(1);
+  expect(status.reachable).toBe(true); // box works; we just restore mux for next time
+});
+
+test('checkBox: does not reap when multiplexing is healthy', async () => {
+  const reaped = [];
+  const run = async () => ({ code: 0, stdout: 'web:1:0:1718000000\n', stderr: '' });
+  const reapStaleMaster = async (box) => { reaped.push(box); return { ok: true, reaped: true }; };
+  await createStatusChecker({ run, controlDir: '/run/cm', reapStaleMaster }).checkBox({ host: 'h' });
+  expect(reaped).toHaveLength(0);
+});
+
 test('checkBox: returns unreachable instead of throwing for an unsafe box', async () => {
   const run = async () => ({ code: 0, stdout: '', stderr: '' });
   const status = await createStatusChecker({ run }).checkBox({ host: '-oProxyCommand=x' });

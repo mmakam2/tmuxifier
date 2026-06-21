@@ -1,4 +1,12 @@
-import { buildProbeArgv, buildControlExitArgv, sanitizeSession, shSingleQuote } from './sshCommand.js';
+import { unlink } from 'node:fs/promises';
+import {
+  buildProbeArgv,
+  buildControlExitArgv,
+  buildControlCheckArgv,
+  buildControlPathArgv,
+  sanitizeSession,
+  shSingleQuote,
+} from './sshCommand.js';
 
 export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
   const sess = shSingleQuote(sanitizeSession(session));
@@ -161,6 +169,29 @@ export function createBoxActions({ run, hostKeyPolicy = 'accept-new', sshConfigF
     return run(argv, { timeout });
   }
 
+  // Ask ssh to expand %C for us (`ssh -G` resolves config without connecting),
+  // yielding the concrete control-socket path for the box.
+  async function resolveControlPath(box) {
+    const argv = buildControlPathArgv(box, { sshConfigFile, controlDir });
+    if (!argv) return null;
+    const res = await run(argv, { timeout: 6000 });
+    const line = String((res && res.stdout) || '')
+      .split(/\r?\n/)
+      .find((l) => /^controlpath\s/i.test(l));
+    if (!line) return null;
+    const p = line.replace(/^controlpath\s+/i, '').trim();
+    return p && p.toLowerCase() !== 'none' ? p : null;
+  }
+
+  // Delete the box's control socket file. Returns true only when a file was
+  // actually removed (ENOENT/perms => false, nothing to recover).
+  async function removeStaleSocket(box) {
+    let p;
+    try { p = await resolveControlPath(box); } catch { return false; }
+    if (!p) return false;
+    try { await unlink(p); return true; } catch { return false; }
+  }
+
   return {
     async ensureReady(box, options = {}) {
       const res = await runRemote(box, buildEnsureTmuxRemote(box.sessionName, box.startupCommand, options), 120000);
@@ -186,7 +217,35 @@ export function createBoxActions({ run, hostKeyPolicy = 'accept-new', sshConfigF
       } catch {
         // Best effort: a missing or already-dead master must not block reconnect.
       }
+      // `-O exit` only reaches a *live* master. If it had died uncleanly its
+      // orphan socket lingers and disables multiplexing on the next connect,
+      // leaving the box stuck red. Force-remove the resolved socket so a fresh
+      // interactive login re-establishes a clean master.
+      await removeStaleSocket(box);
       return { ok: true };
+    },
+    // Reap an orphaned control socket without disturbing a healthy master.
+    // Used by the periodic status check: when a probe shows multiplexing was
+    // disabled by a leftover socket, this confirms no master is listening and
+    // removes the stale file so the box self-heals on the next connect.
+    async reapStaleMaster(box) {
+      let checkArgv;
+      try {
+        checkArgv = buildControlCheckArgv(box, { sshConfigFile, controlDir });
+      } catch {
+        return { ok: true, reaped: false }; // unsafe box — never happens for stored boxes
+      }
+      if (!checkArgv) return { ok: true, reaped: false }; // multiplexing disabled
+      try {
+        const res = await run(checkArgv, { timeout: 6000 });
+        // Exit 0 => a live master is listening. Leave it alone: tearing down a
+        // healthy master would force a needless re-auth on the next probe.
+        if (res && res.code === 0) return { ok: true, reaped: false };
+      } catch {
+        // `-O check` itself failed — treat as "no live master" and clean up.
+      }
+      const reaped = await removeStaleSocket(box);
+      return { ok: true, reaped };
     },
   };
 }

@@ -26,17 +26,20 @@ fs.mkdirSync(config.controlDir, { recursive: true });
 
 const store = createStore({ dataDir: config.dataDir, sshConfigPath: config.sshConfigPath });
 const sessions = createSessionManager({ hostKeyPolicy: config.hostKeyPolicy, graceSeconds: config.graceSeconds, sshConfigFile: config.sshConfigFile, controlDir: config.controlDir });
-const statusChecker = createStatusChecker({
-  run: (argv) => sshRun(argv),
-  hostKeyPolicy: config.hostKeyPolicy,
-  sshConfigFile: config.sshConfigFile,
-  controlDir: config.controlDir,
-});
 const boxActions = createBoxActions({
   run: (argv, opts) => sshRun(argv, opts),
   hostKeyPolicy: config.hostKeyPolicy,
   sshConfigFile: config.sshConfigFile,
   controlDir: config.controlDir,
+});
+const statusChecker = createStatusChecker({
+  run: (argv) => sshRun(argv),
+  hostKeyPolicy: config.hostKeyPolicy,
+  sshConfigFile: config.sshConfigFile,
+  controlDir: config.controlDir,
+  // Let a status probe clean up a stale ControlMaster socket it detects, so a
+  // box that lost multiplexing recovers without a manual remove/re-add.
+  reapStaleMaster: (box) => boxActions.reapStaleMaster(box),
 });
 const localShellActions = createLocalShellActions();
 

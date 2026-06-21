@@ -12,6 +12,12 @@ export const PROBE_REMOTE =
 // showing a dead "unreachable" dot.
 const AUTH_FAIL_RE = /permission denied|authentication failed|too many authentication failures|no more authentication methods/i;
 
+// ssh prints this to stderr when it finds a leftover control socket it can't use
+// as a master and falls back to a direct connection. The orphan file then keeps
+// disabling multiplexing on every connect — for a password box that means the
+// dot is stuck red forever. Seeing this is our cue to reap the stale socket.
+const MUX_STALE_RE = /disabling multiplexing|ControlSocket .* already exists/i;
+
 export function parseTmuxSessions(stdout) {
   return String(stdout)
     .split(/\r?\n/)
@@ -22,13 +28,18 @@ export function parseTmuxSessions(stdout) {
     });
 }
 
-export function createStatusChecker({ run, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir }) {
+export function createStatusChecker({ run, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, reapStaleMaster }) {
   const remote = PROBE_REMOTE;
   return {
     async checkBox(box) {
       try {
         const argv = buildProbeArgv(box, remote, { hostKeyPolicy, sshConfigFile, controlDir });
         const res = await run(argv);
+        // A leftover socket disables multiplexing; reap it so the next connect
+        // re-establishes a clean master (regardless of this probe's outcome).
+        if (reapStaleMaster && MUX_STALE_RE.test(String(res.stderr || ''))) {
+          try { await reapStaleMaster(box); } catch {}
+        }
         if (res.code !== 0 && !String(res.stdout).trim()) {
           const err = String(res.stderr || '').trim();
           if (AUTH_FAIL_RE.test(err)) {
