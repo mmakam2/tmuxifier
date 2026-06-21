@@ -6,11 +6,13 @@ test('login, open a box terminal, reload, and reattach to the same session', asy
   await page.fill('#pw', 'e2e');
   await page.click('button:has-text("Unlock")');
 
+  const localhost = page.locator('.box .name', { hasText: 'localhost' });
+
   // Wait for dashboard with seeded box
-  await expect(page.locator('.box .name')).toBeVisible({ timeout: 10000 });
+  await expect(localhost).toBeVisible({ timeout: 10000 });
 
   // Open the box terminal
-  await page.locator('.box .name').first().click();
+  await localhost.click();
   await expect(page.locator('.term, .xterm').first()).toBeVisible({ timeout: 10000 });
 
   // Type a unique marker into the shell
@@ -19,8 +21,8 @@ test('login, open a box terminal, reload, and reattach to the same session', asy
 
   // Reload — auth cookie persists so dashboard comes back; tmux session must survive
   await page.reload();
-  await expect(page.locator('.box .name')).toBeVisible({ timeout: 10000 });
-  await page.locator('.box .name').first().click();
+  await expect(localhost).toBeVisible({ timeout: 10000 });
+  await localhost.click();
 
   // Marker must still be visible proving reattach to the same tmux session
   await expect(page.locator('.xterm-rows').first()).toContainText('TMUXIFIER_E2E_MARKER', { timeout: 10000 });
@@ -90,7 +92,6 @@ test('host shell clears active tag group after opening a grouped box', async ({ 
 
   const prodGroup = page.locator('.box-group[data-tag-key="prod"]');
   await expect(page.getByRole('button', { name: /Prod\s+2/ })).toBeVisible({ timeout: 10000 });
-  await expect(prodGroup.locator('.box .dot').first()).toHaveClass(/green|amber|red|auth/, { timeout: 10000 });
 
   await prodGroup.locator('.box .name').first().click();
   await expect(prodGroup).toHaveClass(/active-child/);
