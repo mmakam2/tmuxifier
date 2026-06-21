@@ -35,6 +35,37 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     return entry;
   }
 
+  function openLocal({ key, shell, size }) {
+    const existing = entries.get(key);
+    if (existing && !existing.exited) {
+      if (existing.graceTimer) { clearTimeout(existing.graceTimer); existing.graceTimer = null; }
+      return existing;
+    }
+    const args = ['new-session', '-A', '-D', '-s', 'local'];
+    if (shell === 'omz') args.push('exec zsh');
+    else if (shell === 'omb') args.push('exec bash');
+    const pty = spawn('tmux', args, {
+      name: 'xterm-256color',
+      cols: size.cols,
+      rows: size.rows,
+      cwd: process.cwd(),
+      env: spawnEnv,
+    });
+    const entry = { key, pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false };
+    pty.onData((d) => {
+      for (const fn of entry.listeners) {
+        try { fn(d); } catch { /* listener error must not break the fan-out */ }
+      }
+    });
+    pty.onExit(() => {
+      entry.exited = true;
+      entries.delete(key);
+      for (const cb of entry.exitCbs) cb();
+    });
+    entries.set(key, entry);
+    return entry;
+  }
+
   function provision({ key, box, script, opts = {} }) {
     const existing = entries.get(key);
     if (existing && !existing.exited) {
@@ -99,5 +130,5 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     if (entry) close(entry);
   }
 
-  return { open, provision, attach, onExit, write, resize, detach, close, closeKey, _count: () => entries.size };
+  return { open, openLocal, provision, attach, onExit, write, resize, detach, close, closeKey, _count: () => entries.size };
 }
