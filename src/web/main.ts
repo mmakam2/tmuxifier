@@ -366,6 +366,7 @@ function openLocalShell() {
   activeBoxId = '__local__';
   // De-highlight all box items
   app.querySelectorAll('.box').forEach(el => el.classList.remove('active'));
+  app.querySelectorAll('.box-group').forEach(el => el.classList.remove('active-child'));
   // Highlight local shell bar
   const ls = app.querySelector('.local-shell');
   if (ls) ls.classList.add('active');

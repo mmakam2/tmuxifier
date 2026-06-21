@@ -82,3 +82,20 @@ test('sidebar groups boxes by tag and remembers collapsed groups during search',
   await page.fill('#search', '');
   await expect(prodGroup.locator('.group-body')).toBeHidden();
 });
+
+test('host shell clears active tag group after opening a grouped box', async ({ page }) => {
+  await page.goto('/');
+  await page.fill('#pw', 'e2e');
+  await page.click('button:has-text("Unlock")');
+
+  const prodGroup = page.locator('.box-group[data-tag-key="prod"]');
+  await expect(page.getByRole('button', { name: /Prod\s+2/ })).toBeVisible({ timeout: 10000 });
+  await expect(prodGroup.locator('.box .dot').first()).toHaveClass(/green|amber|red|auth/, { timeout: 10000 });
+
+  await prodGroup.locator('.box .name').first().click();
+  await expect(prodGroup).toHaveClass(/active-child/);
+
+  await page.locator('.local-name').click();
+  await expect(prodGroup).not.toHaveClass(/active-child/);
+  await expect(page.locator('.local-shell')).toHaveClass(/active/);
+});
