@@ -89,6 +89,53 @@ Copy the client id and secret into `.env`, restart the service, and the login pa
 Google sign-in instead of the password form. `TMUXIFIER_ALLOWED_EMAILS` is a comma-separated
 exact-email allowlist, matched case-insensitively.
 
+## SSH access to your boxes (passwordless)
+
+Tmuxifier stores no SSH keys — it runs the system `ssh` client as the **service user** (`root`
+in the sample unit, with `HOME=/root`) and uses that account's `~/.ssh`. For connections to stay
+passwordless, that account needs a private key the boxes trust. Use a **dedicated management key
+with no passphrase** so the unattended service can authenticate without an agent — this key can
+reach every box in your fleet, so treat it as a high-value secret.
+
+**1. Put the key in the service user's `~/.ssh` on the Tmuxifier host.** Either generate a fresh
+dedicated key on the host, or upload an existing one from your workstation:
+
+```bash
+install -d -m 700 ~/.ssh
+
+# Option A — generate a fresh dedicated key on the host (no passphrase):
+ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -C tmuxifier
+
+# Option B — upload an existing management key from your workstation instead:
+#   scp ~/.ssh/id_ed25519 root@<tmuxifier-host>:~/.ssh/id_ed25519
+chmod 600 ~/.ssh/id_ed25519
+```
+
+If you uploaded only the private key, recreate its public half:
+`ssh-keygen -y -f ~/.ssh/id_ed25519 > ~/.ssh/id_ed25519.pub`.
+
+**2. Authorize the public key on each box** (repeat per box):
+
+```bash
+ssh-copy-id -i ~/.ssh/id_ed25519.pub user@box
+```
+
+**3. Confirm a passwordless connection** from the service user's shell — Tmuxifier runs the exact
+same `ssh`, so if this works, adding the box in the UI will too:
+
+```bash
+ssh user@box 'tmux -V'   # connects with no password prompt
+```
+
+Optional but handy: define hosts in `~/.ssh/config` (per-host `User`, `IdentityFile`,
+`ProxyJump`). Tmuxifier reads `~/.ssh/config` and can import those hosts, so you can add a box by
+its short `Host` alias.
+
+> **Passphrases & agents:** a systemd service can't type a passphrase interactively. Prefer the
+> passphrase-free key above, or run an `ssh-agent` the service can reach (set `SSH_AUTH_SOCK` in
+> the unit and load the key on boot). Harden the key on the boxes where you can (`from=`
+> restrictions, a dedicated account) and keep `~/.ssh` at `700`, the private key at `600`.
+
 ## Install the service
 
 ```bash

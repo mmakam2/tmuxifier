@@ -177,8 +177,8 @@ the unit (it holds no credentials); and `HOME` is set in the unit — not `.env`
 child processes can find `~/.ssh`. To update a running deployment: `git pull`, `npm install`
 (only if dependencies changed), `npm run build`, then `sudo systemctl restart tmuxifier`.
 
-See [docs/DEPLOY.md](docs/DEPLOY.md) for the full guide — TLS certs, Google OAuth behind a
-Cloudflare tunnel, the file-layout table, and password rotation.
+See [docs/DEPLOY.md](docs/DEPLOY.md) for the full guide — passwordless SSH key setup, TLS certs,
+Google OAuth behind a Cloudflare tunnel, the file-layout table, and password rotation.
 
 ## Attributions
 
