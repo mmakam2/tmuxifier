@@ -56,6 +56,30 @@ test('addBox rejects an unsafe host (ssh flag injection guard)', async () => {
   await expect(store.addBox({ host: '-oProxyCommand=x' })).rejects.toThrow(/unsafe/);
 });
 
+test('addBox rejects duplicate host ignoring case', async () => {
+  const store = createStore({ dataDir: dir, sshConfigPath });
+  await store.addBox({ host: 'Prod-DB' });
+
+  await expect(store.addBox({ host: 'prod-db' })).rejects.toThrow(/host already exists/);
+});
+
+test('addBox rejects duplicate label ignoring case', async () => {
+  const store = createStore({ dataDir: dir, sshConfigPath });
+  await store.addBox({ host: 'prod-db-1', label: 'Primary DB' });
+
+  await expect(store.addBox({ host: 'prod-db-2', label: 'primary db' })).rejects.toThrow(/label already exists/);
+});
+
+test('updateBox rejects duplicate host and label from another box', async () => {
+  const store = createStore({ dataDir: dir, sshConfigPath });
+  const first = await store.addBox({ host: 'prod-db-1', label: 'Primary DB' });
+  const second = await store.addBox({ host: 'prod-db-2', label: 'Replica DB' });
+
+  await expect(store.updateBox(second.id, { host: 'PROD-DB-1' })).rejects.toThrow(/host already exists/);
+  await expect(store.updateBox(second.id, { label: 'primary db' })).rejects.toThrow(/label already exists/);
+  await expect(store.updateBox(first.id, { label: 'PRIMARY DB' })).resolves.toMatchObject({ label: 'PRIMARY DB' });
+});
+
 test('updateBox clears user when sent null', async () => {
   const store = createStore({ dataDir: dir, sshConfigPath });
   const box = await store.addBox({ host: 'example.com', label: 'ex', user: 'root', port: 2222, proxyJump: 'jump.example.com' });

@@ -14,6 +14,20 @@ function normalizeTags(value) {
   return [];
 }
 
+function canonicalUniqueValue(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function assertUniqueBox(boxes, candidate, ignoreId) {
+  const host = canonicalUniqueValue(candidate.host);
+  const label = canonicalUniqueValue(candidate.label);
+  for (const box of boxes) {
+    if (ignoreId && box.id === ignoreId) continue;
+    if (host && canonicalUniqueValue(box.host) === host) throw new Error('box host already exists');
+    if (label && canonicalUniqueValue(box.label) === label) throw new Error('box label already exists');
+  }
+}
+
 export function createStore({ dataDir, sshConfigPath }) {
   const file = path.join(dataDir, 'boxes.json');
 
@@ -56,6 +70,7 @@ export function createStore({ dataDir, sshConfigPath }) {
       const boxes = await readAll();
       const box = normalize(spec);
       assertBoxSafe(box);
+      assertUniqueBox(boxes, box);
       boxes.push(box);
       await writeAll(boxes);
       return box;
@@ -70,6 +85,7 @@ export function createStore({ dataDir, sshConfigPath }) {
         if (key in patch && patch[key] === null) boxes[i][key] = undefined;
       }
       assertBoxSafe(boxes[i]);
+      assertUniqueBox(boxes, boxes[i], id);
       await writeAll(boxes);
       return boxes[i];
     },
