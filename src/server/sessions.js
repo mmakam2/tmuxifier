@@ -110,7 +110,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
   function onExit(entry, cb) { entry.exitCbs.add(cb); return () => entry.exitCbs.delete(cb); }
   function write(entry, data) { if (!entry.exited) entry.pty.write(data); }
   function resize(entry, { cols, rows }) {
-    if (!entry.exited) { try { entry.pty.resize(cols, rows); } catch {} }
+    if (!entry.exited) { try { entry.pty.resize(Math.min(cols, 1000), Math.min(rows, 1000)); } catch {} }
   }
   function detach(entry) {
     if (entry.exited || entry.graceTimer || entry.listeners.size > 0) return;

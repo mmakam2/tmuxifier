@@ -22,7 +22,7 @@ if (cfgError) {
   process.exit(1);
 }
 
-fs.mkdirSync(config.controlDir, { recursive: true });
+fs.mkdirSync(config.controlDir, { recursive: true, mode: 0o700 });
 
 const store = createStore({ dataDir: config.dataDir, sshConfigPath: config.sshConfigPath });
 const sessions = createSessionManager({ hostKeyPolicy: config.hostKeyPolicy, graceSeconds: config.graceSeconds, sshConfigFile: config.sshConfigFile, controlDir: config.controlDir });
