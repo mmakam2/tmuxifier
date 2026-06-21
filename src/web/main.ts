@@ -226,13 +226,10 @@ function openLocalShell() {
   // Highlight local shell bar
   const ls = app.querySelector('.local-shell');
   if (ls) ls.classList.add('active');
-  // Update dot
-  updateLocalDot();
-
   const stage = app.querySelector('#stage') as HTMLElement;
   for (const t of tabs.values()) t.el.style.display = 'none';
   const existing = tabs.get('__local__');
-  if (existing) { existing.el.style.display = 'block'; existing.term.refit(); existing.term.focus(); return; }
+  if (existing) { existing.el.style.display = 'block'; existing.term.refit(); existing.term.focus(); updateLocalDot(); return; }
   stage.querySelector('.empty')?.remove();
   const el = document.createElement('div');
   el.className = 'term';
@@ -240,6 +237,8 @@ function openLocalShell() {
   const term = openTerminal(el, '__local__');
   tabs.set('__local__', { el, term });
   term.focus();
+  // Update dot after tab creation so it turns green on first open
+  updateLocalDot();
 }
 
 function updateLocalDot() {
