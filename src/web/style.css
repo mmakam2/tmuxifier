@@ -84,9 +84,10 @@ body {
   border-top: 1px solid var(--border);
   border-radius: 8px;
   cursor: pointer;
+  background: rgba(36, 211, 232, 0.04);
 }
-.local-shell:hover { background: var(--panel-2); }
-.local-shell.active { background: rgba(36, 211, 232, 0.12); box-shadow: inset 3px 0 0 var(--cyan); }
+.local-shell:hover { background: rgba(36, 211, 232, 0.09); }
+.local-shell.active { background: rgba(36, 211, 232, 0.14); box-shadow: inset 3px 0 0 var(--cyan); }
 .local-shell .local-name { flex: 1; font-size: 13px; }
 .local-shell .local-refresh,
 .local-shell .local-edit { background: none; border: none; color: #6e7681; cursor: pointer; }

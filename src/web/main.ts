@@ -117,7 +117,7 @@ async function renderDashboard() {
         <ul id="boxes" class="boxes"></ul>
         <div class="local-shell">
           <span class="local-dot"></span>
-          <span class="local-name">local</span>
+          <span class="local-name">Host Shell</span>
           <button class="local-refresh" title="Reconnect">↻</button>
           <button class="local-edit" title="Configure shell">✎</button>
         </div>
