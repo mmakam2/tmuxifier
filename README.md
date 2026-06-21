@@ -1,5 +1,7 @@
 # <img src="src/web/assets/tmuxifier-logo.png" alt="" width="36" height="36" style="vertical-align:middle" /> Tmuxifier
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A single-user web dashboard for managing headless boxes over SSH. Each box opens a
 browser terminal backed by a tmux session that lives **on the box**, so closing the tab,
 losing the network, or restarting Tmuxifier leaves your work running — reconnecting drops you
