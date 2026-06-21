@@ -30,6 +30,7 @@ test('buildEnsureTmuxRemote includes Oh My Tmux manual install steps when reques
   expect(remote).toContain('git clone --single-branch https://github.com/gpakosz/.tmux.git .tmux');
   expect(remote).toContain('ln -s -f .tmux/.tmux.conf .tmux.conf');
   expect(remote).toContain('cp .tmux/.tmux.conf.local .tmux.conf.local');
+  expect(remote).toContain("sed -i 's/^set -g mouse on/set -g mouse off/' .tmux.conf.local");
 });
 
 test('buildEnsureTmuxRemote skips package managers when tmux is already installed', async () => {
@@ -151,6 +152,7 @@ test('buildEnsureTmuxRemote skips Oh My Tmux clone when config exists', async ()
 
   const res = await runShell(`cd ${JSON.stringify(dir)}
 ${buildEnsureTmuxRemote('web', undefined, { installOhMyTmux: true })}`, {
+    HOME: dir,
     PATH: dir,
     TMUXIFIER_GIT_LOG: gitLog,
   });

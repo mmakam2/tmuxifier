@@ -19,6 +19,10 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     '  ln -s -f .tmux/.tmux.conf .tmux.conf',
     '  cp .tmux/.tmux.conf.local .tmux.conf.local',
     'fi',
+    // Always clamp mouse to off — the last setting in .tmux.conf.local wins.
+    'if [ -f .tmux.conf.local ]; then',
+    "  sed -i 's/^set -g mouse on/set -g mouse off/' .tmux.conf.local",
+    'fi',
   ] : [];
   const ohMyZsh = options.installOhMyZsh ? [
     'ZSH_BIN="$(command -v zsh || true)"',
