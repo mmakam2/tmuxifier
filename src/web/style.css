@@ -76,6 +76,24 @@ body {
 .box .edit { background: none; border: none; color: #6e7681; cursor: pointer; font-size: 13px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: #6e7681; }
 .dot.green { background: #2ea043; } .dot.amber { background: #d29922; } .dot.red { background: #f85149; } .dot.gray { background: #6e7681; }
+.local-shell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.local-shell:hover { background: var(--panel-2); }
+.local-shell.active { background: rgba(36, 211, 232, 0.12); box-shadow: inset 3px 0 0 var(--cyan); }
+.local-shell .local-name { flex: 1; font-size: 13px; }
+.local-shell .local-refresh,
+.local-shell .local-edit { background: none; border: none; color: #6e7681; cursor: pointer; }
+.local-shell .local-refresh { font-size: 14px; }
+.local-shell .local-edit { font-size: 13px; }
+.local-dot { width: 9px; height: 9px; border-radius: 50%; background: #6e7681; }
+.local-dot.green { background: #2ea043; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 10; }
 .modal { width: 340px; max-width: 92vw; display: flex; flex-direction: column; gap: 10px; padding: 18px; border-radius: 12px; border: 1px solid #232a36; background: #0f131c; }
 .modal h2 { margin: 0 0 4px; font-size: 16px; letter-spacing: 1px; }
