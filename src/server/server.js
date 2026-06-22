@@ -229,6 +229,7 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
     if (boxActions?.killSession) {
       try { void Promise.resolve(boxActions.killSession(box)).catch(() => {}); } catch {}
     }
+    if (statusChecker?.resetBackoff) statusChecker.resetBackoff(box.id);
     return { ok: true };
   });
   app.post('/api/import', { preHandler: requireAuth }, async () => store.importFromSshConfig());
@@ -386,6 +387,10 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
         socket.close(1011);
         return;
       }
+
+      // Opening a box is explicit engagement — clear any probe backoff so the
+      // dot re-checks promptly instead of waiting out the 5m floor.
+      if (statusChecker?.resetBackoff) statusChecker.resetBackoff(boxId);
 
       const off = sessions.attach(entry, (d) => {
         try { if (socket.readyState === 1) socket.send(d); } catch { /* socket closing */ }

@@ -448,3 +448,19 @@ test('POST /api/local-shell/reconnect requires auth', async () => {
   const res = await app.inject({ method: 'POST', url: '/api/local-shell/reconnect' });
   expect(res.statusCode).toBe(401);
 });
+
+test('reconnect clears the box backoff so it will be re-probed at full cadence', async () => {
+  const reset = [];
+  const statusChecker = {
+    checkBox: async () => ({ reachable: true }),
+    resetBackoff: (id) => reset.push(id),
+  };
+  app = await makeApp({ statusChecker });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1' } });
+  const id = created.json().id;
+  const res = await app.inject({ method: 'POST', url: `/api/boxes/${id}/reconnect`, headers });
+  expect(res.statusCode).toBe(200);
+  expect(reset).toContain(id);
+});
