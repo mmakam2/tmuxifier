@@ -5,6 +5,7 @@ import fastifyStatic from '@fastify/static';
 import { loadConfig, requiredConfigError } from './config.js';
 import { createStore } from './store.js';
 import { createStatusChecker } from './status.js';
+import { createStatusPoller } from './statusPoller.js';
 import { createSessionManager } from './sessions.js';
 import { sshRun } from './sshRun.js';
 import { createBoxActions } from './boxActions.js';
@@ -49,8 +50,16 @@ const statusChecker = createStatusChecker({
   masterAlive: (box) => boxActions.isMasterAlive(box),
 });
 const localShellActions = createLocalShellActions();
+// One server-side poll loop drives all status probing; the /api/status handler
+// just serves its snapshot, so SSH volume no longer scales with open tab count.
+const statusPoller = createStatusPoller({
+  store,
+  statusChecker,
+  intervalMs: config.statusPollMs,
+  concurrency: config.statusConcurrency,
+});
 
-const app = buildServer({ config, store, sessions, statusChecker, boxActions, localShellActions });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
@@ -62,6 +71,7 @@ app.setNotFoundHandler((req, reply) => {
 const scheme = config.tlsCert && config.tlsKey ? 'https' : 'http';
 app.listen({ host: config.bindAddress, port: config.port })
   .then(() => {
+    statusPoller.start().catch((err) => console.error('status poll failed to start:', err));
     console.log(`Tmuxifier listening on ${scheme}://${config.bindAddress}:${config.port}`);
   })
   .catch((err) => {

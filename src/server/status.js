@@ -35,6 +35,7 @@ export function createStatusChecker({
   const remote = PROBE_REMOTE;
   const capCount = Math.ceil(capSec / stepSec);
   const backoff = new Map(); // key -> { fails, nextProbeAt, paused, last }
+  const inflight = new Map(); // key -> Promise<status> for a probe already running
   const keyFor = (box) => box.id || box.host;
 
   // One real SSH probe (the former checkBox body). Always resolves to a status
@@ -89,19 +90,31 @@ export function createStatusChecker({
       if (s && t < s.nextProbeAt) {
         return s.paused ? { ...s.last, paused: true, nextProbeAt: s.nextProbeAt } : { ...s.last };
       }
-      const result = await probe(box);
-      if (result.reachable) {
-        backoff.delete(key); // recovered: back to the normal poll cadence
-        return result;
+      // Coalesce concurrent probes of the same box into one ssh call. Each
+      // dashboard tab polls /api/status independently, so without this every open
+      // tab would open its own ssh handshake to the same box at the same instant —
+      // a burst from one IP that rate-limiters/IPS read as an attack (and that the
+      // per-box backoff can't throttle, since it's only set after a probe returns).
+      let pending = inflight.get(key);
+      if (!pending) {
+        pending = (async () => {
+          const result = await probe(box);
+          if (result.reachable) {
+            backoff.delete(key); // recovered: back to the normal poll cadence
+            return result;
+          }
+          // Failure. A needs-login box can never succeed under BatchMode and fast
+          // probing only feeds host-side fail2ban, so jump straight to the 5m floor.
+          const fails = result.needsAuth ? capCount : ((s?.fails ?? 0) + 1);
+          const intervalSec = Math.min(stepSec * fails, capSec);
+          const paused = intervalSec >= capSec;
+          const nextProbeAt = t + intervalSec * 1000;
+          backoff.set(key, { fails, nextProbeAt, paused, last: result });
+          return paused ? { ...result, paused: true, nextProbeAt } : result;
+        })().finally(() => inflight.delete(key));
+        inflight.set(key, pending);
       }
-      // Failure. A needs-login box can never succeed under BatchMode and fast
-      // probing only feeds host-side fail2ban, so jump straight to the 5m floor.
-      const fails = result.needsAuth ? capCount : ((s?.fails ?? 0) + 1);
-      const intervalSec = Math.min(stepSec * fails, capSec);
-      const paused = intervalSec >= capSec;
-      const nextProbeAt = t + intervalSec * 1000;
-      backoff.set(key, { fails, nextProbeAt, paused, last: result });
-      return paused ? { ...result, paused: true, nextProbeAt } : result;
+      return pending;
     },
     resetBackoff(box) {
       backoff.delete(typeof box === 'string' ? box : keyFor(box));

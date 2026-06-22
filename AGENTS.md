@@ -85,7 +85,11 @@ pattern for new modules.
 - `sessions.js` — PTY lifecycle: PTYs keyed by `boxId`, listeners refcounted, a `graceSeconds`
   window keeps a dropped PTY alive for seamless reconnects, then it's killed while the on-box tmux
   session keeps running.
-- `status.js` — per-box reachability/status probes.
+- `status.js` — per-box reachability/status probes; coalesces concurrent probes of the same box
+  (in-flight de-dup) so multiple pollers don't fan out duplicate SSH connections.
+- `statusPoller.js` — single server-side poll loop: probes every box on an interval
+  (`statusPollMs`) and caches the snapshot `/api/status` serves, so status SSH volume is
+  independent of how many dashboard tabs are open.
 
 Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `api.ts`,
 `terminal.ts`, `index.html`, `style.css`.

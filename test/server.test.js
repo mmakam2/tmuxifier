@@ -237,6 +237,22 @@ test('status endpoint probes boxes with bounded concurrency (no fleet-wide SSH b
   expect(peak).toBeLessThanOrEqual(2);             // never more than the limit at once
 });
 
+test('status endpoint serves the poller snapshot without probing on each GET (no per-tab SSH amplification)', async () => {
+  let snapshotReads = 0;
+  const statusPoller = { getSnapshot: () => { snapshotReads++; return { box1: { reachable: true } }; } };
+  // checkBox must never run on a GET when a poller is wired — that is the whole point.
+  const statusChecker = { checkBox: async () => { throw new Error('GET /api/status must not probe'); } };
+  app = await makeApp({ statusPoller, statusChecker });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  for (let i = 0; i < 7; i++) {                       // seven dashboard tabs fetching
+    const res = await app.inject({ method: 'GET', url: '/api/status', headers });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ box1: { reachable: true } });
+  }
+  expect(snapshotReads).toBe(7);                      // all served from the shared cache
+});
+
 test('rejects a forged unsigned tmuxifier_session cookie', async () => {
   const res = await app.inject({ method: 'GET', url: '/api/boxes', headers: { cookie: 'tmuxifier_session=ok' } });
   expect(res.statusCode).toBe(401);

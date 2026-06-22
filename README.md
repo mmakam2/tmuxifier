@@ -50,6 +50,7 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | grace seconds | `TMUXIFIER_GRACE` | `45` |
 | host-key policy | `TMUXIFIER_HOSTKEY_POLICY` | `accept-new` |
 | status probe concurrency | `TMUXIFIER_STATUS_CONCURRENCY` | `4` |
+| status poll interval (ms) | `TMUXIFIER_STATUS_POLL_MS` | `30000` |
 | SSH ControlPersist seconds | `TMUXIFIER_CONTROL_PERSIST` | `600` |
 | auth mode | `TMUXIFIER_AUTH_MODE` | `password` |
 | password hash | `TMUXIFIER_PASSWORD_HASH` | — (required) |
@@ -70,7 +71,7 @@ also marks it `Secure` for deployments behind a TLS-terminating proxy or tunnel.
 
 As an alternative to `.env`, a `config.json` in the repo root works too, using camelCase keys
 (`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`,
-`statusConcurrency`, `controlPersist`, `authMode`, `publicUrl`, `googleClientId`,
+`statusConcurrency`, `statusPollMs`, `controlPersist`, `authMode`, `publicUrl`, `googleClientId`,
 `googleClientSecret`, `allowedEmails`, `dataDir`, `controlDir`, `sshConfigFile`, `tlsCert`,
 `tlsKey`). The UI also persists `localShell` in `config.json`; it does not have an env key.
 `TMUXIFIER_SSH_CONFIG`/`sshConfigFile` is passed to `ssh` as `-F`, so it is an alternate config
@@ -131,6 +132,12 @@ trips a box's brute-force protection — `fail2ban`, `sshguard`, or a connection
 rule — and gets the Tmuxifier host's IP **banned**, which then makes the box look dead. Several
 mechanisms keep the connection rate low and reuse one warm connection:
 
+- **One shared poll, not one per tab.** Status is probed by a single **server-side** loop (every
+  `TMUXIFIER_STATUS_POLL_MS`, default 30s); every open dashboard tab reads the same cached snapshot
+  instead of driving its own probe cycle, so the SSH connection rate does **not** multiply with the
+  number of tabs you leave open. Concurrent probes of the same box are also coalesced into one
+  connection. (Before this, several open tabs could fan out enough simultaneous handshakes to arm a
+  box's rate limiter.)
 - **Connection multiplexing (keep one warm).** Every probe and terminal for a box shares a
   single persistent SSH **ControlMaster** socket under `data/cm/`, authenticated once and kept
   alive for `TMUXIFIER_CONTROL_PERSIST` seconds (default 600) after its last use. Repeated

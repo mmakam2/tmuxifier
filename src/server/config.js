@@ -15,6 +15,10 @@ const DEFAULTS = {
   // Tmuxifier from opening the whole fleet's SSH connections simultaneously,
   // which rate-limiters/IPS on the path read as a brute-force burst.
   statusConcurrency: 4,
+  // How often (ms) the single server-side loop re-probes every box. Status is
+  // polled here once per interval regardless of how many dashboard tabs are open,
+  // so the SSH connection rate no longer scales with tab count. See statusPoller.js.
+  statusPollMs: 30000,
   // ssh ControlPersist (seconds): how long a multiplexed master lingers after
   // its last use. Longer means cold-connect bursts (which trigger the blocks
   // above) happen far less often.
@@ -47,6 +51,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     port: e.TMUXIFIER_PORT ? Number(e.TMUXIFIER_PORT) : undefined,
     graceSeconds: e.TMUXIFIER_GRACE ? Number(e.TMUXIFIER_GRACE) : undefined,
     statusConcurrency: e.TMUXIFIER_STATUS_CONCURRENCY ? Number(e.TMUXIFIER_STATUS_CONCURRENCY) : undefined,
+    statusPollMs: e.TMUXIFIER_STATUS_POLL_MS ? Number(e.TMUXIFIER_STATUS_POLL_MS) : undefined,
     controlPersist: e.TMUXIFIER_CONTROL_PERSIST ? Number(e.TMUXIFIER_CONTROL_PERSIST) : undefined,
     hostKeyPolicy: e.TMUXIFIER_HOSTKEY_POLICY,
     authMode: e.TMUXIFIER_AUTH_MODE,

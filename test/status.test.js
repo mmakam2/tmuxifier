@@ -236,6 +236,37 @@ test('resetBackoff: clears a box so the next checkBox probes immediately despite
   sc.resetBackoff('h');                        // string-id form is also accepted (no throw)
 });
 
+test('checkBox: coalesces concurrent probes of the same box into one ssh call (no per-tab amplification)', async () => {
+  let calls = 0;
+  const run = async () => {
+    calls++;
+    await new Promise((r) => setTimeout(r, 20)); // probe is in-flight while a 2nd poll arrives
+    return { code: 0, stdout: 'web:1:0:1', stderr: '' };
+  };
+  const sc = createStatusChecker({ run });
+  // Five dashboard tabs each poll /api/status at the same instant -> one box.
+  const results = await Promise.all(Array.from({ length: 5 }, () => sc.checkBox({ host: 'h' })));
+  expect(calls).toBe(1);                       // a single shared ssh probe, not five
+  for (const st of results) expect(st.reachable).toBe(true); // every caller still gets the answer
+});
+
+test('checkBox: concurrent probes of different boxes are not coalesced (each box probed once)', async () => {
+  let calls = 0;
+  const run = async () => { calls++; await new Promise((r) => setTimeout(r, 20)); return { code: 0, stdout: '', stderr: '' }; };
+  const sc = createStatusChecker({ run });
+  await Promise.all([sc.checkBox({ host: 'h1' }), sc.checkBox({ host: 'h2' })]);
+  expect(calls).toBe(2);                       // de-dup is per-box, not global
+});
+
+test('checkBox: a fresh probe runs after the in-flight one settles (de-dup does not pin a stale result)', async () => {
+  let calls = 0;
+  const run = async () => { calls++; return { code: 0, stdout: 'web:1:0:1', stderr: '' }; };
+  const sc = createStatusChecker({ run });
+  await sc.checkBox({ host: 'h' });            // 1st probe settles, in-flight cleared
+  await sc.checkBox({ host: 'h' });            // backoff cleared on success -> probes again
+  expect(calls).toBe(2);
+});
+
 test('checkBox: live session with a live master reports connected (green), overrides stale state, no probe', async () => {
   let calls = 0;
   let clock = 0;

@@ -23,6 +23,11 @@ test('status concurrency and controlPersist have defaults and are overridable vi
   expect(e.controlPersist).toBe(120);
 });
 
+test('statusPollMs has a default and is overridable via env (server-side poll cadence)', () => {
+  expect(loadConfig({}, { env: {}, cwd: '/app' }).statusPollMs).toBe(30000);
+  expect(loadConfig({}, { env: { TMUXIFIER_STATUS_POLL_MS: '15000' }, cwd: '/app' }).statusPollMs).toBe(15000);
+});
+
 test('controlDir follows dataDir and is overridable via env', () => {
   const c = loadConfig({}, { env: { TMUXIFIER_DATA_DIR: '/tmp/d' }, cwd: '/app' });
   expect(c.controlDir).toBe(path.join('/tmp/d', 'cm'));

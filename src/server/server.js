@@ -46,7 +46,7 @@ function killTmuxSession(sessionName) {
   execFileSync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, boxActions, localShellActions, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -235,6 +235,12 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
   app.post('/api/import', { preHandler: requireAuth }, async () => store.importFromSshConfig());
 
   app.get('/api/status', { preHandler: requireAuth }, async () => {
+    // Serve the shared, server-side poll snapshot when a poller is wired: every
+    // open tab reads the same cache instead of driving its own SSH probe cycle,
+    // so connection volume is independent of how many tabs are watching. See
+    // src/server/statusPoller.js. Falls back to on-demand probing when no poller
+    // is provided (e.g. unit tests).
+    if (statusPoller) return statusPoller.getSnapshot();
     const boxes = await store.listBoxes();
     const out = {};
     // Probe in small batches, not all at once: a fleet-wide burst of simultaneous
