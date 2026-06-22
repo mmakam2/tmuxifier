@@ -1,6 +1,16 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { reconnectDelay } from './reconnect';
+
+// A connection that survives this long counts as a real session, so we reset the
+// reconnect backoff. The WebSocket to the server always opens, so onopen itself
+// can't be the success signal — it must stay up past the box's ConnectTimeout (10s).
+const STABLE_MS = 15000;
+
+function humanDelay(ms: number): string {
+  return ms >= 60000 ? `${Math.round(ms / 60000)}m` : `${Math.round(ms / 1000)}s`;
+}
 
 interface ProvisionOptions {
   ohMyTmux: boolean;
@@ -21,7 +31,8 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
 
   let ws: WebSocket;
   let closedByUser = false;
-  let backoff = 500;
+  let failures = 0;
+  let stableTimer: ReturnType<typeof setTimeout> | undefined;
 
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -30,13 +41,23 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
     // user knows it's connecting (and that a password prompt may be coming).
     term.write(`\x1b[2m[connecting to ${name}…]\x1b[0m\r\n`);
     ws = new WebSocket(`${proto}://${location.host}/term?box=${boxId}&cols=${cols}&rows=${rows}`);
-    ws.onopen = () => { backoff = 500; sendResize(); };
+    ws.onopen = () => {
+      sendResize();
+      // Only treat the connection as a real session once it survives a while; the
+      // box's ssh fails ~10s in, before this fires, so a dead box keeps escalating.
+      clearTimeout(stableTimer);
+      stableTimer = setTimeout(() => { failures = 0; }, STABLE_MS);
+    };
     ws.onmessage = (e) => term.write(typeof e.data === 'string' ? e.data : '');
     ws.onclose = () => {
+      clearTimeout(stableTimer);
       if (closedByUser) return;
-      term.write('\r\n\x1b[33m[disconnected — reconnecting…]\x1b[0m\r\n');
-      setTimeout(connect, backoff);
-      backoff = Math.min(backoff * 2, 5000);
+      failures += 1;
+      const delay = reconnectDelay(failures);
+      // Escalating backoff to a 5-minute floor (never gives up): a down box settles
+      // to a gentle ~1 attempt/5min and auto-reconnects when it comes back.
+      term.write(`\r\n\x1b[33m[disconnected — retrying in ${humanDelay(delay)}…]\x1b[0m\r\n`);
+      setTimeout(connect, delay);
     };
   }
   function sendResize() {
@@ -50,7 +71,7 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
 
   return {
     focus: () => term.focus(),
-    dispose: () => { closedByUser = true; window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
+    dispose: () => { closedByUser = true; clearTimeout(stableTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
     refit: onResize,
   };
 }
