@@ -18,3 +18,7 @@ playwright-report/
 
 # Subagent-driven-development scratch (briefs, reports, diffs, ledger)
 .superpowers/
+
+# Claude Code local settings/worktrees (holds machine-specific paths, LAN IPs,
+# and approved-command patterns — never commit to the public repo)
+.claude/
