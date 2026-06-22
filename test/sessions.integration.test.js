@@ -1,4 +1,5 @@
 import { test, expect, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { setupLocalBox } from './helpers/localBox.js';
 import { createSessionManager } from '../src/server/sessions.js';
 import { sshRun } from '../src/server/sshRun.js';
@@ -12,7 +13,31 @@ async function waitFor(fn, ms = 8000) {
 }
 
 let active;
-afterEach(async () => { if (active) await active(); active = null; });
+let localSessionCounter = 0;
+let localSessionsTouched = new Set();
+
+function killTmuxSession(sessionName) {
+  try {
+    execFileSync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000, stdio: 'ignore' });
+  } catch {}
+}
+
+function createLocalTestManager({ graceSeconds = 1 } = {}) {
+  const localSession = `local-test-${Date.now()}-${++localSessionCounter}`;
+  localSessionsTouched.add(localSession);
+  killTmuxSession(localSession);
+  return {
+    localSession,
+    mgr: createSessionManager({ graceSeconds, localSession }),
+  };
+}
+
+afterEach(async () => {
+  for (const sessionName of localSessionsTouched) killTmuxSession(sessionName);
+  localSessionsTouched = new Set();
+  if (active) await active();
+  active = null;
+});
 
 test('process started in tmux survives a killed local PTY and is visible on reattach', async () => {
   const { box, session, env, sshConfigFile, cleanup } = await setupLocalBox();
@@ -97,7 +122,7 @@ test('reconnect within grace reuses the same PTY entry', async () => {
 });
 
 test('openLocal spawns a local tmux session and streams data', async () => {
-  const mgr = createSessionManager({ graceSeconds: 1 });
+  const { mgr, localSession } = createLocalTestManager();
   const size = { cols: 80, rows: 24 };
   const key = 'local-test-' + Date.now();
 
@@ -105,13 +130,11 @@ test('openLocal spawns a local tmux session and streams data', async () => {
   const buf = [];
   const off = mgr.attach(entry, (d) => buf.push(d));
   await waitFor(() => buf.join('').length > 0);
+  expect(() => execFileSync('tmux', ['has-session', '-t', localSession], { timeout: 5000, stdio: 'ignore' })).not.toThrow();
 
   mgr.write(entry, 'echo LOCAL_SHELL_TEST\n');
   await waitFor(() => buf.join('').includes('LOCAL_SHELL_TEST'));
 
-  // Clean up: wait for the tmux session to fully exit before closing,
-  // otherwise the session named "local" survives and interferes with
-  // subsequent openLocal tests (the -A flag attaches instead of creating).
   mgr.write(entry, 'exit\n');
   await waitFor(() => entry.exited);
   off();
@@ -119,7 +142,7 @@ test('openLocal spawns a local tmux session and streams data', async () => {
 });
 
 test('openLocal shells: omz passes exec zsh startup command', async () => {
-  const mgr = createSessionManager({ graceSeconds: 1 });
+  const { mgr } = createLocalTestManager();
   const size = { cols: 80, rows: 24 };
   const key = 'local-omz-' + Date.now();
 
@@ -140,7 +163,7 @@ test('openLocal shells: omz passes exec zsh startup command', async () => {
 });
 
 test('openLocal shells: omb passes exec bash startup command', async () => {
-  const mgr = createSessionManager({ graceSeconds: 1 });
+  const { mgr } = createLocalTestManager();
   const size = { cols: 80, rows: 24 };
   const key = 'local-omb-' + Date.now();
 
@@ -159,7 +182,7 @@ test('openLocal shells: omb passes exec bash startup command', async () => {
 });
 
 test('openLocal reuses existing entry within grace period', async () => {
-  const mgr = createSessionManager({ graceSeconds: 30 });
+  const { mgr } = createLocalTestManager({ graceSeconds: 30 });
   const size = { cols: 80, rows: 24 };
   const key = 'local-reuse-' + Date.now();
 

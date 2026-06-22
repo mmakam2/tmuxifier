@@ -9,12 +9,21 @@ import { createStore } from '../../src/server/store.js';
 export default async function globalSetup() {
   const lb = await setupLocalBox();
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-e2e-'));
+  const sshConfigText = await fs.readFile(lb.sshConfigFile, 'utf8');
+  const aliasOptions = sshConfigText
+    .split('\n')
+    .filter((line) => line.trim() && !line.startsWith('Host '))
+    .join('\n');
+  await fs.appendFile(
+    lb.sshConfigFile,
+    `\nHost tmuxifierlocal-db\n${aliasOptions}\n\nHost tmuxifierlocal-worker\n${aliasOptions}\n`,
+  );
 
   // Seed the box into a temp inventory so no UI prompt is needed
   const store = createStore({ dataDir, sshConfigPath: '/nonexistent' });
   await store.addBox({ host: lb.box.host, label: 'localhost', sessionName: lb.session, tags: ['Prod'] });
-  await store.addBox({ host: lb.box.host, label: 'db-primary', sessionName: lb.session, tags: ['Prod'] });
-  await store.addBox({ host: lb.box.host, label: 'untagged-worker', sessionName: lb.session });
+  await store.addBox({ host: 'tmuxifierlocal-db', label: 'db-primary', sessionName: lb.session, tags: ['Prod'] });
+  await store.addBox({ host: 'tmuxifierlocal-worker', label: 'untagged-worker', sessionName: lb.session });
 
   const hash = await hashPassword('e2e');
 

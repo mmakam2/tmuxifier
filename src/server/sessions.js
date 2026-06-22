@@ -3,7 +3,7 @@ import { buildAttachArgv, buildProvisionArgv } from './sshCommand.js';
 
 const { spawn } = nodePty;
 
-export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSeconds = 45, spawnEnv = process.env, sshConfigFile, controlDir, controlPersist } = {}) {
+export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSeconds = 45, spawnEnv = process.env, sshConfigFile, controlDir, controlPersist, localSession = 'local' } = {}) {
   const entries = new Map(); // key -> entry
 
   function open({ key, box, session, size }) {
@@ -41,7 +41,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       if (existing.graceTimer) { clearTimeout(existing.graceTimer); existing.graceTimer = null; }
       return existing;
     }
-    const args = ['new-session', '-A', '-D', '-s', 'local'];
+    const args = ['new-session', '-A', '-D', '-s', localSession];
     if (shell === 'omz') args.push('exec zsh');
     else if (shell === 'omb') args.push('exec bash');
     const pty = spawn('tmux', args, {
