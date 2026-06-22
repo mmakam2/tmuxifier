@@ -14,7 +14,9 @@ export function dotClassFor(st: Status | undefined): DotClass {
 
 export function dotTitleFor(st: Status | undefined): string {
   if (!st) return 'Status unknown';
-  if (st.needsAuth) return 'Needs login — click ↻ to reconnect, then enter your password';
-  if (!st.reachable) return 'Unreachable';
+  if (st.needsAuth) return 'Needs login — click the box (or ↻) to reconnect and enter your password';
+  if (!st.reachable) return st.paused
+    ? 'Unreachable — retrying every 5m; click the box or ↻ to retry now'
+    : 'Unreachable';
   return st.tmux === false ? 'Reachable (tmux not running)' : 'Connected';
 }

@@ -24,3 +24,13 @@ test('dotClassFor: needsAuth wins over reachable=false (distinct from a dead box
 test('dotTitleFor: needsAuth explains how to recover', () => {
   expect(dotTitleFor({ reachable: false, needsAuth: true })).toMatch(/reconnect/i);
 });
+
+test('dotTitleFor: paused unreachable explains the 5m retry and how to force one', () => {
+  const title = dotTitleFor({ reachable: false, paused: true });
+  expect(title).toMatch(/5m/);
+  expect(title).toMatch(/retry/i);
+});
+
+test('dotTitleFor: plain (non-paused) unreachable stays terse', () => {
+  expect(dotTitleFor({ reachable: false })).toBe('Unreachable');
+});

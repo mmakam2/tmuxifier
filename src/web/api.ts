@@ -3,7 +3,7 @@ export interface Box {
   proxyJump?: string; sessionName: string; startupCommand?: string; tags: string[]; source: string;
 }
 export type AddBoxSpec = Partial<Box>;
-export interface Status { reachable: boolean; tmux?: boolean; needsAuth?: boolean; sessions?: { name: string; windows: number }[]; error?: string; }
+export interface Status { reachable: boolean; tmux?: boolean; needsAuth?: boolean; paused?: boolean; nextProbeAt?: number; sessions?: { name: string; windows: number }[]; error?: string; }
 
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);

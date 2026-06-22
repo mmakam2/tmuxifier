@@ -312,6 +312,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
     const wasActive = activeBoxId === b.id;
     closeTab(b.id);
     if (wasActive) openBox(b);
+    void pollStatus();
   });
 
   const edit = document.createElement('button');
@@ -438,6 +439,7 @@ function openBox(b: Box) {
   const term = openTerminal(el, b.id);
   tabs.set(b.id, { el, term });
   term.focus();
+  void pollStatus();
 }
 
 function closeTab(id: string) {
