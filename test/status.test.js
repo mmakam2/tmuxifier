@@ -235,3 +235,28 @@ test('resetBackoff: clears a box so the next checkBox probes immediately despite
   expect(calls).toBe(2);                       // probed immediately
   sc.resetBackoff('h');                        // string-id form is also accepted (no throw)
 });
+
+test('checkBox: skips the probe while the box has a live interactive session (no collision with the login)', async () => {
+  let calls = 0;
+  let clock = 0;
+  const run = async () => { calls++; return { code: 255, stdout: '', stderr: 'me@h: Permission denied (publickey,password).' }; };
+  let live = false;
+  const sc = createStatusChecker({ run, now: () => clock, hasLiveSession: () => live });
+  const before = await sc.checkBox({ host: 'h' });   // no session yet -> a real probe runs
+  expect(calls).toBe(1);
+  expect(before.needsAuth).toBe(true);
+  live = true;                                        // user opens a terminal to the box
+  clock = 10 * 60 * 1000;                             // jump past any backoff window (10m)
+  const during = await sc.checkBox({ host: 'h' });
+  expect(calls).toBe(1);                              // NO probe despite the window expiring: session-skip
+  expect(during.needsAuth).toBe(true);                // reports last-known status instead
+});
+
+test('checkBox: a box with a live session and no prior failure reports reachable without probing', async () => {
+  let calls = 0;
+  const run = async () => { calls++; return { code: 0, stdout: '', stderr: '' }; };
+  const sc = createStatusChecker({ run, hasLiveSession: () => true });
+  const st = await sc.checkBox({ host: 'h' });
+  expect(calls).toBe(0);                              // never probed
+  expect(st.reachable).toBe(true);
+});

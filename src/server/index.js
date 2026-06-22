@@ -42,6 +42,9 @@ const statusChecker = createStatusChecker({
   // Let a status probe clean up a stale ControlMaster socket it detects, so a
   // box that lost multiplexing recovers without a manual remove/re-add.
   reapStaleMaster: (box) => boxActions.reapStaleMaster(box),
+  // Don't probe a box that has a live interactive session — the probe would
+  // collide with the login on the shared ControlMaster socket.
+  hasLiveSession: (box) => sessions.hasLiveSession(box.id),
 });
 const localShellActions = createLocalShellActions();
 

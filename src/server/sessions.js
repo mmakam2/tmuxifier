@@ -129,6 +129,13 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     const entry = entries.get(key);
     if (entry) close(entry);
   }
+  // True while a box's ssh/PTY is alive (connecting, attached, or in its grace
+  // window). The status checker uses this to avoid probing a box that has an
+  // active interactive session on the shared ControlMaster socket.
+  function hasLiveSession(key) {
+    const entry = entries.get(key);
+    return !!(entry && !entry.exited);
+  }
 
-  return { open, openLocal, provision, attach, onExit, write, resize, detach, close, closeKey, _count: () => entries.size };
+  return { open, openLocal, provision, attach, onExit, write, resize, detach, close, closeKey, hasLiveSession, _count: () => entries.size };
 }

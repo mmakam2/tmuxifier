@@ -30,7 +30,7 @@ export function parseTmuxSessions(stdout) {
 
 export function createStatusChecker({
   run, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist, reapStaleMaster,
-  now = () => Date.now(), stepSec = 30, capSec = 300,
+  hasLiveSession, now = () => Date.now(), stepSec = 30, capSec = 300,
 }) {
   const remote = PROBE_REMOTE;
   const capCount = Math.ceil(capSec / stepSec);
@@ -67,6 +67,15 @@ export function createStatusChecker({
   return {
     async checkBox(box) {
       const key = keyFor(box);
+      // A box with a live interactive session is in use right now. Probing it
+      // opens a second ssh on the *same* ControlMaster socket and collides with
+      // the interactive login (mux "disabling multiplexing", socket reaping,
+      // garbled password prompt). Skip the probe and report last-known status
+      // (or reachable if it has never failed) until the session ends.
+      if (hasLiveSession && hasLiveSession(box)) {
+        const prev = backoff.get(key);
+        return prev ? { ...prev.last } : { reachable: true, tmux: true, sessions: [] };
+      }
       const s = backoff.get(key);
       const t = now();
       // Inside the current backoff window: return the last-known status without
