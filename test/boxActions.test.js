@@ -247,6 +247,29 @@ test('reapStaleMaster is a no-op when multiplexing is disabled', async () => {
   expect(res).toEqual({ ok: true, reaped: false });
 });
 
+test('isMasterAlive is true when -O check reports a running master', async () => {
+  const actions = createBoxActions({
+    run: async (argv) => (argv.includes('check') ? { code: 0, stdout: 'Master running', stderr: '' } : { code: 0 }),
+    controlDir: '/run/cm',
+  });
+  expect(await actions.isMasterAlive({ host: 'h', user: 'me' })).toBe(true);
+});
+
+test('isMasterAlive is false when no master is listening', async () => {
+  const actions = createBoxActions({
+    run: async (argv) => (argv.includes('check') ? { code: 255, stdout: '', stderr: 'Control socket connect: No such file' } : { code: 0 }),
+    controlDir: '/run/cm',
+  });
+  expect(await actions.isMasterAlive({ host: 'h', user: 'me' })).toBe(false);
+});
+
+test('isMasterAlive is false when multiplexing is disabled (no control dir)', async () => {
+  let called = false;
+  const actions = createBoxActions({ run: async () => { called = true; return { code: 0 }; } });
+  expect(await actions.isMasterAlive({ host: 'h' })).toBe(false);
+  expect(called).toBe(false);
+});
+
 test('exitMaster is a no-op when multiplexing is disabled', async () => {
   let called = false;
   const actions = createBoxActions({ run: async () => { called = true; return { code: 0 }; } });

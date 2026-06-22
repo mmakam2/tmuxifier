@@ -402,7 +402,7 @@ function openLocalShell() {
   const el = document.createElement('div');
   el.className = 'term';
   stage.appendChild(el);
-  const term = openTerminal(el, '__local__');
+  const term = openTerminal(el, '__local__', 'local shell');
   tabs.set('__local__', { el, term });
   term.focus();
   // Update dot after tab creation so it turns green on first open
@@ -435,7 +435,7 @@ function openBox(b: Box) {
   const el = document.createElement('div');
   el.className = 'term';
   stage.appendChild(el);
-  const term = openTerminal(el, b.id);
+  const term = openTerminal(el, b.id, b.label);
   tabs.set(b.id, { el, term });
   term.focus();
 }

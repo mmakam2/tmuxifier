@@ -43,8 +43,10 @@ const statusChecker = createStatusChecker({
   // box that lost multiplexing recovers without a manual remove/re-add.
   reapStaleMaster: (box) => boxActions.reapStaleMaster(box),
   // Don't probe a box that has a live interactive session — the probe would
-  // collide with the login on the shared ControlMaster socket.
+  // collide with the login on the shared ControlMaster socket. Instead report
+  // its real state from the ControlMaster: alive = connected, absent = needs auth.
   hasLiveSession: (box) => sessions.hasLiveSession(box.id),
+  masterAlive: (box) => boxActions.isMasterAlive(box),
 });
 const localShellActions = createLocalShellActions();
 

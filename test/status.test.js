@@ -236,27 +236,27 @@ test('resetBackoff: clears a box so the next checkBox probes immediately despite
   sc.resetBackoff('h');                        // string-id form is also accepted (no throw)
 });
 
-test('checkBox: skips the probe while the box has a live interactive session (no collision with the login)', async () => {
+test('checkBox: live session with a live master reports connected (green), overrides stale state, no probe', async () => {
   let calls = 0;
   let clock = 0;
   const run = async () => { calls++; return { code: 255, stdout: '', stderr: 'me@h: Permission denied (publickey,password).' }; };
   let live = false;
-  const sc = createStatusChecker({ run, now: () => clock, hasLiveSession: () => live });
-  const before = await sc.checkBox({ host: 'h' });   // no session yet -> a real probe runs
+  const sc = createStatusChecker({ run, now: () => clock, hasLiveSession: () => live, masterAlive: async () => true });
+  await sc.checkBox({ host: 'h' });                   // no session -> probe records a needsAuth failure
   expect(calls).toBe(1);
-  expect(before.needsAuth).toBe(true);
-  live = true;                                        // user opens a terminal to the box
-  clock = 10 * 60 * 1000;                             // jump past any backoff window (10m)
-  const during = await sc.checkBox({ host: 'h' });
-  expect(calls).toBe(1);                              // NO probe despite the window expiring: session-skip
-  expect(during.needsAuth).toBe(true);                // reports last-known status instead
+  live = true;                                        // user opens a terminal; master is up (authed)
+  clock = 10 * 60 * 1000;                             // even past any backoff window
+  const st = await sc.checkBox({ host: 'h' });
+  expect(calls).toBe(1);                              // NO BatchMode probe (no collision with the login)
+  expect(st).toEqual({ reachable: true, tmux: true, sessions: [] }); // live master -> green
 });
 
-test('checkBox: a box with a live session and no prior failure reports reachable without probing', async () => {
+test('checkBox: live session WITHOUT a live master reports needs-auth (purple), not a fake green', async () => {
   let calls = 0;
-  const run = async () => { calls++; return { code: 0, stdout: '', stderr: '' }; };
-  const sc = createStatusChecker({ run, hasLiveSession: () => true });
+  const run = async () => { calls++; return { code: 0, stdout: 'web:1:0:1', stderr: '' }; };
+  const sc = createStatusChecker({ run, hasLiveSession: () => true, masterAlive: async () => false });
   const st = await sc.checkBox({ host: 'h' });
-  expect(calls).toBe(0);                              // never probed
-  expect(st.reachable).toBe(true);
+  expect(calls).toBe(0);                              // still no BatchMode probe
+  expect(st.reachable).toBe(false);
+  expect(st.needsAuth).toBe(true);                    // session exists but not authed -> purple
 });

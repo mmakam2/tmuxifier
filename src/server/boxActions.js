@@ -243,5 +243,24 @@ export function createBoxActions({ run, hostKeyPolicy = 'accept-new', sshConfigF
       const reaped = await removeStaleSocket(box);
       return { ok: true, reaped };
     },
+    // Is a live ControlMaster listening for this box? A socket-only `-O check`
+    // (no network, no auth, no PTY) — so it's safe to call while an interactive
+    // session is connecting. A live master means the box is authenticated and
+    // connected; no master means it still needs a login.
+    async isMasterAlive(box) {
+      let checkArgv;
+      try {
+        checkArgv = buildControlCheckArgv(box, { sshConfigFile, controlDir });
+      } catch {
+        return false; // unsafe box
+      }
+      if (!checkArgv) return false; // multiplexing disabled
+      try {
+        const res = await run(checkArgv, { timeout: 6000 });
+        return !!(res && res.code === 0);
+      } catch {
+        return false;
+      }
+    },
   };
 }

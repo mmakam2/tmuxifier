@@ -8,12 +8,16 @@ interface ProvisionOptions {
   ohMyBash: boolean;
 }
 
-export function openTerminal(parent: HTMLElement, boxId: string) {
+export function openTerminal(parent: HTMLElement, boxId: string, label?: string) {
   const term = new Terminal({ cursorBlink: true, fontSize: 13, theme: { background: '#0b0e14' } });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(parent);
   fit.fit();
+
+  // Strip control chars so a box label can't inject escape sequences into the
+  // terminal feedback line.
+  const name = (label || boxId).replace(/[^A-Za-z0-9 ._-]/g, '') || boxId;
 
   let ws: WebSocket;
   let closedByUser = false;
@@ -22,6 +26,9 @@ export function openTerminal(parent: HTMLElement, boxId: string) {
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const { cols, rows } = term;
+    // Immediate feedback so opening a box is never a mystery blank cursor — the
+    // user knows it's connecting (and that a password prompt may be coming).
+    term.write(`\x1b[2m[connecting to ${name}…]\x1b[0m\r\n`);
     ws = new WebSocket(`${proto}://${location.host}/term?box=${boxId}&cols=${cols}&rows=${rows}`);
     ws.onopen = () => { backoff = 500; sendResize(); };
     ws.onmessage = (e) => term.write(typeof e.data === 'string' ? e.data : '');

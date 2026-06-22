@@ -30,7 +30,7 @@ export function parseTmuxSessions(stdout) {
 
 export function createStatusChecker({
   run, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist, reapStaleMaster,
-  hasLiveSession, now = () => Date.now(), stepSec = 30, capSec = 300,
+  hasLiveSession, masterAlive, now = () => Date.now(), stepSec = 30, capSec = 300,
 }) {
   const remote = PROBE_REMOTE;
   const capCount = Math.ceil(capSec / stepSec);
@@ -67,14 +67,20 @@ export function createStatusChecker({
   return {
     async checkBox(box) {
       const key = keyFor(box);
-      // A box with a live interactive session is in use right now. Probing it
-      // opens a second ssh on the *same* ControlMaster socket and collides with
-      // the interactive login (mux "disabling multiplexing", socket reaping,
-      // garbled password prompt). Skip the probe and report last-known status
-      // (or reachable if it has never failed) until the session ends.
+      // A box with a live interactive session is in use right now. A full
+      // BatchMode probe would open a second ssh on the *same* ControlMaster
+      // socket and collide with the interactive login (mux "disabling
+      // multiplexing", socket reaping, garbled prompt). Instead reflect the real
+      // connection state via a socket-only liveness check (no network auth, so
+      // it can't collide): a live master means the box is authenticated and
+      // connected (green); no master means it still needs a login (purple) —
+      // never fake a green for a session that is only sitting at the password
+      // prompt.
       if (hasLiveSession && hasLiveSession(box)) {
-        const prev = backoff.get(key);
-        return prev ? { ...prev.last } : { reachable: true, tmux: true, sessions: [] };
+        const alive = masterAlive ? await masterAlive(box) : true;
+        return alive
+          ? { reachable: true, tmux: true, sessions: [] }
+          : { reachable: false, needsAuth: true };
       }
       const s = backoff.get(key);
       const t = now();
