@@ -4,6 +4,10 @@ A point-in-time review of Tmuxifier with three high-value feature candidates. Ca
 ideas/roadmap input, not yet specs or plans. When one is picked up, run it through
 brainstorming and write a dated spec/plan under `docs/superpowers/`.
 
+> Status note, 2026-06-22: tag editing, tag search, and grouped/collapsible sidebar
+> navigation from suggestion #2 have since been implemented. The remaining suggestions are
+> fleet command execution and richer health details.
+
 ## Where the product is today
 
 Solid single-user core: per-box persistent tmux over SSH, OAuth/password auth, import from

@@ -4,6 +4,10 @@
 **Scope:** All source files under `src/server/`, `src/web/`, and supporting modules
 **Result:** No HIGH or MEDIUM confidence exploitable vulnerabilities found
 
+**Status note, 2026-06-22:** the resize bound and ControlMaster directory permission
+defense-in-depth observations below have since been addressed in source (`sessions.js`
+clamps PTY resize dimensions and `index.js` creates the control directory with `0o700`).
+
 ---
 
 ## Executive Summary

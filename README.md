@@ -116,10 +116,12 @@ box, the session and its processes survive disconnects. A 45s server-side grace 
 brief reconnects seamless; after that the local ssh process is dropped while the on-box
 session keeps running.
 
-When a box is added, Tmuxifier first checks for `tmux`, installs it through a known package
-manager when possible (`apt-get`, `dnf`, `yum`, `pacman`, `apk`, or `zypper`), and creates
-the configured tmux session. Removing a box closes any local terminal process for that box
-and best-effort kills the configured remote tmux session before deleting the box from the list.
+When a box is added, Tmuxifier persists the box immediately and opens a live provisioning
+panel. That provisioning flow checks for `tmux`, installs it through a known package manager
+when possible (`apt-get`, `dnf`, `yum`, `pacman`, `apk`, or `zypper`), applies any selected
+shell/theme options, and creates the configured tmux session. If provisioning exits non-zero,
+the new box is rolled back from the list. Removing a box closes any local terminal process for
+that box and best-effort kills the configured remote tmux session before deleting the box.
 
 ## Security
 Tmuxifier can SSH into your whole fleet, so the login gate is the crown jewel. It binds to
