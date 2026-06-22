@@ -1,10 +1,20 @@
 import nodePty from 'node-pty';
 import { buildAttachArgv, buildProvisionArgv } from './sshCommand.js';
 
-const { spawn } = nodePty;
-
-export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSeconds = 45, spawnEnv = process.env, sshConfigFile, controlDir, controlPersist, localSession = 'local' } = {}) {
+export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSeconds = 45, spawnEnv = process.env, sshConfigFile, controlDir, controlPersist, localSession = 'local', spawn = nodePty.spawn } = {}) {
   const entries = new Map(); // key -> entry
+
+  // Bytes of recent PTY output kept per session so a reattaching client gets the
+  // current screen (e.g. a password prompt) replayed instead of a blank terminal.
+  const REPLAY_MAX = 64 * 1024;
+  function pipeOutput(entry) {
+    entry.pty.onData((d) => {
+      entry.buffer = (entry.buffer + d).slice(-REPLAY_MAX);
+      for (const fn of entry.listeners) {
+        try { fn(d); } catch { /* listener error must not break the fan-out */ }
+      }
+    });
+  }
 
   function open({ key, box, session, size }) {
     const existing = entries.get(key);
@@ -20,12 +30,8 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       cwd: process.cwd(),
       env: spawnEnv,
     });
-    const entry = { key, pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false };
-    pty.onData((d) => {
-      for (const fn of entry.listeners) {
-        try { fn(d); } catch { /* listener error must not break the fan-out */ }
-      }
-    });
+    const entry = { key, pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false, buffer: '' };
+    pipeOutput(entry);
     pty.onExit(() => {
       entry.exited = true;
       entries.delete(key);
@@ -51,12 +57,8 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       cwd: process.cwd(),
       env: spawnEnv,
     });
-    const entry = { key, pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false };
-    pty.onData((d) => {
-      for (const fn of entry.listeners) {
-        try { fn(d); } catch { /* listener error must not break the fan-out */ }
-      }
-    });
+    const entry = { key, pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false, buffer: '' };
+    pipeOutput(entry);
     pty.onExit(() => {
       entry.exited = true;
       entries.delete(key);
@@ -80,12 +82,8 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       cwd: process.cwd(),
       env: spawnEnv,
     });
-    const entry = { key, pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false, exitCode: null };
-    pty.onData((d) => {
-      for (const fn of entry.listeners) {
-        try { fn(d); } catch { /* listener error must not break the fan-out */ }
-      }
-    });
+    const entry = { key, pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false, exitCode: null, buffer: '' };
+    pipeOutput(entry);
     pty.onExit(({ exitCode }) => {
       entry.exited = true;
       entry.exitCode = exitCode;
@@ -98,8 +96,12 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
 
   function attach(entry, onData) {
     if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
+    // Replay recent output so a (re)attaching client sees the current screen —
+    // e.g. a password prompt from a session opened before this client connected —
+    // instead of a blank terminal until the next keystroke.
+    if (entry.buffer) { try { onData(entry.buffer); } catch { /* ignore */ } }
     entry.listeners.add(onData);
-    if (!entry.exited) { 
+    if (!entry.exited) {
       try { 
         entry.pty.resize(entry.pty.cols === 1 ? 2 : entry.pty.cols - 1, entry.pty.rows); 
         entry.pty.resize(entry.pty.cols, entry.pty.rows); 
