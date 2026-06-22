@@ -28,32 +28,68 @@ export function parseTmuxSessions(stdout) {
     });
 }
 
-export function createStatusChecker({ run, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist, reapStaleMaster }) {
+export function createStatusChecker({
+  run, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist, reapStaleMaster,
+  now = () => Date.now(), stepSec = 30, capSec = 300,
+}) {
   const remote = PROBE_REMOTE;
+  const capCount = Math.ceil(capSec / stepSec);
+  const backoff = new Map(); // key -> { fails, nextProbeAt, paused, last }
+  const keyFor = (box) => box.id || box.host;
+
+  // One real SSH probe (the former checkBox body). Always resolves to a status
+  // object and never throws — an unsafe box or thrown error becomes unreachable.
+  async function probe(box) {
+    try {
+      const argv = buildProbeArgv(box, remote, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
+      const res = await run(argv);
+      // A leftover socket disables multiplexing; reap it so the next connect
+      // re-establishes a clean master (regardless of this probe's outcome).
+      if (reapStaleMaster && MUX_STALE_RE.test(String(res.stderr || ''))) {
+        try { await reapStaleMaster(box); } catch {}
+      }
+      if (res.code !== 0 && !String(res.stdout).trim()) {
+        const err = String(res.stderr || '').trim();
+        if (AUTH_FAIL_RE.test(err)) {
+          return { reachable: false, needsAuth: true, error: err || 'authentication required' };
+        }
+        return { reachable: false, error: err || 'unreachable' };
+      }
+      if (String(res.stdout).includes('__NO_TMUX__')) {
+        return { reachable: true, tmux: false, sessions: [] };
+      }
+      return { reachable: true, tmux: true, sessions: parseTmuxSessions(res.stdout) };
+    } catch (e) {
+      return { reachable: false, error: String((e && e.message) || e) };
+    }
+  }
+
   return {
     async checkBox(box) {
-      try {
-        const argv = buildProbeArgv(box, remote, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
-        const res = await run(argv);
-        // A leftover socket disables multiplexing; reap it so the next connect
-        // re-establishes a clean master (regardless of this probe's outcome).
-        if (reapStaleMaster && MUX_STALE_RE.test(String(res.stderr || ''))) {
-          try { await reapStaleMaster(box); } catch {}
-        }
-        if (res.code !== 0 && !String(res.stdout).trim()) {
-          const err = String(res.stderr || '').trim();
-          if (AUTH_FAIL_RE.test(err)) {
-            return { reachable: false, needsAuth: true, error: err || 'authentication required' };
-          }
-          return { reachable: false, error: err || 'unreachable' };
-        }
-        if (String(res.stdout).includes('__NO_TMUX__')) {
-          return { reachable: true, tmux: false, sessions: [] };
-        }
-        return { reachable: true, tmux: true, sessions: parseTmuxSessions(res.stdout) };
-      } catch (e) {
-        return { reachable: false, error: String((e && e.message) || e) };
+      const key = keyFor(box);
+      const s = backoff.get(key);
+      const t = now();
+      // Inside the current backoff window: return the last-known status without
+      // touching SSH, so a failing box is not re-probed on every poll.
+      if (s && t < s.nextProbeAt) {
+        return s.paused ? { ...s.last, paused: true, nextProbeAt: s.nextProbeAt } : { ...s.last };
       }
+      const result = await probe(box);
+      if (result.reachable) {
+        backoff.delete(key); // recovered: back to the normal poll cadence
+        return result;
+      }
+      // Failure. A needs-login box can never succeed under BatchMode and fast
+      // probing only feeds host-side fail2ban, so jump straight to the 5m floor.
+      const fails = result.needsAuth ? capCount : ((s?.fails ?? 0) + 1);
+      const intervalSec = Math.min(stepSec * fails, capSec);
+      const paused = intervalSec >= capSec;
+      const nextProbeAt = t + intervalSec * 1000;
+      backoff.set(key, { fails, nextProbeAt, paused, last: result });
+      return paused ? { ...result, paused: true, nextProbeAt } : result;
+    },
+    resetBackoff(box) {
+      backoff.delete(typeof box === 'string' ? box : keyFor(box));
     },
   };
 }

@@ -137,3 +137,101 @@ test('checkBox: tmux installed with zero sessions reports reachable + tmux:true 
   const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
   expect(status).toEqual({ reachable: true, tmux: true, sessions: [] });
 });
+
+test('checkBox: skips the SSH probe while inside the backoff window (failing box not re-probed every poll)', async () => {
+  let calls = 0;
+  let clock = 0;
+  const run = async () => { calls++; return { code: 255, stdout: '', stderr: 'timeout' }; };
+  const sc = createStatusChecker({ run, now: () => clock });
+  await sc.checkBox({ host: 'h' });           // 1st probe: fail #1 -> next allowed in 30s
+  expect(calls).toBe(1);
+  clock = 10_000;                             // 10s later, still inside the 30s window
+  await sc.checkBox({ host: 'h' });
+  expect(calls).toBe(1);                      // skipped, returned last-known
+  clock = 31_000;                            // past the window
+  await sc.checkBox({ host: 'h' });
+  expect(calls).toBe(2);                      // probed again
+});
+
+test('checkBox: the second failure waits 60s, not 30s (interval escalates by 30s)', async () => {
+  let calls = 0;
+  let clock = 0;
+  const run = async () => { calls++; return { code: 255, stdout: '', stderr: 'timeout' }; };
+  const sc = createStatusChecker({ run, now: () => clock });
+  await sc.checkBox({ host: 'h' });           // fail #1 -> due at 30s
+  clock = 31_000; await sc.checkBox({ host: 'h' }); // fail #2 -> due at 31s + 60s = 91s
+  expect(calls).toBe(2);
+  clock = 61_000; await sc.checkBox({ host: 'h' }); // 30s after #2: still inside the 60s window
+  expect(calls).toBe(2);                      // skipped -> interval really grew to 60s
+  clock = 92_000; await sc.checkBox({ host: 'h' });
+  expect(calls).toBe(3);
+});
+
+test('checkBox: interval caps at the 5m floor and marks the box paused, never fully stopping', async () => {
+  let clock = 0;
+  const run = async () => ({ code: 255, stdout: '', stderr: 'timeout' });
+  const sc = createStatusChecker({ run, now: () => clock });
+  let due = 0;
+  let last;
+  for (let n = 1; n <= 10; n++) {             // 30*10 = 300 reaches the cap
+    clock = due;
+    last = await sc.checkBox({ host: 'h' });
+    due = clock + Math.min(30 * n, 300) * 1000;
+  }
+  expect(last.paused).toBe(true);             // at the 5m floor
+  expect(last.nextProbeAt).toBe(clock + 300_000);
+  clock = due;                                // one more window later
+  const next = await sc.checkBox({ host: 'h' });
+  expect(next.paused).toBe(true);             // stays at the floor, still probing
+});
+
+test('checkBox: needsAuth jumps straight to the 5m floor (paused immediately, no escalation)', async () => {
+  let calls = 0;
+  let clock = 0;
+  const run = async () => { calls++; return { code: 255, stdout: '', stderr: 'me@h: Permission denied (publickey,password).' }; };
+  const sc = createStatusChecker({ run, now: () => clock });
+  const st = await sc.checkBox({ host: 'h' });
+  expect(st.needsAuth).toBe(true);
+  expect(st.paused).toBe(true);               // paused on the very first needsAuth
+  clock = 299_000; await sc.checkBox({ host: 'h' }); // just under 5m
+  expect(calls).toBe(1);                       // not re-probed inside the 5m window
+  clock = 301_000; await sc.checkBox({ host: 'h' });
+  expect(calls).toBe(2);                       // re-probed at the 5m cadence
+});
+
+test('checkBox: a successful probe clears backoff (next probe happens immediately)', async () => {
+  let clock = 0;
+  let mode = 'fail';
+  let calls = 0;
+  const run = async () => {
+    calls++;
+    return mode === 'fail'
+      ? { code: 255, stdout: '', stderr: 'timeout' }
+      : { code: 0, stdout: 'web:1:0:1', stderr: '' };
+  };
+  const sc = createStatusChecker({ run, now: () => clock });
+  await sc.checkBox({ host: 'h' });           // fail #1 -> 30s window
+  mode = 'ok';
+  clock = 31_000;
+  const ok = await sc.checkBox({ host: 'h' });
+  expect(ok.reachable).toBe(true);
+  expect(ok.paused).toBeUndefined();          // success returns the plain result
+  mode = 'fail';
+  clock = 31_500;                            // immediately after, no leftover window
+  await sc.checkBox({ host: 'h' });
+  expect(calls).toBe(3);                       // probed every call: backoff was cleared by success
+});
+
+test('resetBackoff: clears a box so the next checkBox probes immediately despite an open window', async () => {
+  let calls = 0;
+  let clock = 0;
+  const run = async () => { calls++; return { code: 255, stdout: '', stderr: 'timeout' }; };
+  const sc = createStatusChecker({ run, now: () => clock });
+  await sc.checkBox({ host: 'h' });           // fail -> 30s window
+  clock = 5_000; await sc.checkBox({ host: 'h' });
+  expect(calls).toBe(1);                       // throttled
+  sc.resetBackoff({ host: 'h' });             // user engaged the box
+  await sc.checkBox({ host: 'h' });
+  expect(calls).toBe(2);                       // probed immediately
+  sc.resetBackoff('h');                        // string-id form is also accepted (no throw)
+});
