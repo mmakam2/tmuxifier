@@ -424,20 +424,24 @@ test('PATCH /api/local-shell rejects invalid shell values', async () => {
   expect(res3.statusCode).toBe(400);
 });
 
-test('POST /api/local-shell/reconnect kills local PTY', async () => {
+test('POST /api/local-shell/reconnect closes local PTY and kills configured tmux session', async () => {
   const calls = [];
   const sessions = {
     openLocal() {}, open() {}, provision() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {},
     closeKey(id) { calls.push(['closeKey', id]); },
   };
-  app = await makeApp({ sessions });
+  app = await makeApp({
+    sessions,
+    localSession: 'local-test-reconnect',
+    killLocalSession(sessionName) { calls.push(['killLocalSession', sessionName]); },
+  });
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
 
   const res = await app.inject({ method: 'POST', url: '/api/local-shell/reconnect', headers });
   expect(res.statusCode).toBe(200);
   expect(res.json()).toEqual({ ok: true });
-  expect(calls).toEqual([['closeKey', '__local__']]);
+  expect(calls).toEqual([['closeKey', '__local__'], ['killLocalSession', 'local-test-reconnect']]);
 });
 
 test('POST /api/local-shell/reconnect requires auth', async () => {

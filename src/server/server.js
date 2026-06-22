@@ -42,7 +42,11 @@ function requestHostOrigins(req) {
   return [`http://${host}`, `https://${host}`];
 }
 
-export function buildServer({ config, store, sessions, statusChecker, boxActions, localShellActions, googleAuth }) {
+function killTmuxSession(sessionName) {
+  execFileSync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
+}
+
+export function buildServer({ config, store, sessions, statusChecker, boxActions, localShellActions, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -269,7 +273,7 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
     if (sessions?.closeKey) sessions.closeKey('__local__');
     // Kill the underlying tmux session so the next openLocal() creates a fresh
     // session with the current shell framework, not reattach to the old one.
-    try { execFileSync('tmux', ['kill-session', '-t', 'local'], { timeout: 5000 }); } catch {}
+    try { killLocalSession(localSession); } catch {}
     return { ok: true };
   });
 
