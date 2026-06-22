@@ -7,6 +7,12 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
   // Bytes of recent PTY output kept per session so a reattaching client gets the
   // current screen (e.g. a password prompt) replayed instead of a blank terminal.
   const REPLAY_MAX = 64 * 1024;
+  // Strip terminal *queries* — Device Attributes (CSI … c) and Device Status
+  // Report (CSI … n) — from REPLAYED output only. The program that issued the
+  // query is long gone, so replaying it just makes the client's emulator answer
+  // (e.g. "\x1b[>0;276;0c") and that answer gets injected as keystrokes into the
+  // shell. Live output keeps its queries so the asking program still gets a reply.
+  const QUERY_RE = /\x1b\[[?>=]?[0-9;]*[cn]/g;
   function pipeOutput(entry) {
     entry.pty.onData((d) => {
       entry.buffer = (entry.buffer + d).slice(-REPLAY_MAX);
@@ -99,7 +105,10 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     // Replay recent output so a (re)attaching client sees the current screen —
     // e.g. a password prompt from a session opened before this client connected —
     // instead of a blank terminal until the next keystroke.
-    if (entry.buffer) { try { onData(entry.buffer); } catch { /* ignore */ } }
+    if (entry.buffer) {
+      const replay = entry.buffer.replace(QUERY_RE, '');
+      if (replay) { try { onData(replay); } catch { /* ignore */ } }
+    }
     entry.listeners.add(onData);
     if (!entry.exited) {
       try { 
