@@ -197,14 +197,6 @@ export function createBoxActions({ run, hostKeyPolicy = 'accept-new', sshConfigF
   }
 
   return {
-    async ensureReady(box, options = {}) {
-      const res = await runRemote(box, buildEnsureTmuxRemote(box.sessionName, box.startupCommand, options), 120000);
-      if (res.code !== 0) {
-        const msg = String(res.stderr || res.stdout || '').trim() || 'could not install tmux or create session';
-        throw new Error(msg);
-      }
-      return { ok: true };
-    },
     async killSession(box) {
       try {
         await runRemote(box, buildKillTmuxRemote(box.sessionName), 12000);

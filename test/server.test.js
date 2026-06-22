@@ -82,20 +82,6 @@ test('POST /api/boxes rejects duplicate host with a 400 error', async () => {
   expect(duplicate.json()).toEqual({ error: 'box host already exists' });
 });
 
-test('POST /api/boxes returns immediately without provisioning, even if boxActions would fail', async () => {
-  const boxActions = { ensureReady: async () => { throw new Error('install failed'); } };
-  app = await makeApp({ boxActions });
-  const cookie = await login();
-  const headers = { cookie: `${cookie.name}=${cookie.value}` };
-
-  const created = await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1' } });
-  expect(created.statusCode).toBe(201);
-  expect(created.json().host).toBe('h1');
-
-  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
-  expect(list.json()).toHaveLength(1);
-});
-
 test('POST /api/boxes persists only box fields from request bodies', async () => {
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };

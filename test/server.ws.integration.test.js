@@ -130,7 +130,6 @@ test('provision WS streams script output and sends exit frame on success', async
     config, store, sessions,
     statusChecker: { checkBox: async () => ({ reachable: true }) },
     boxActions: {
-      ensureReady: async () => ({ ok: true }),
       killSession: async () => ({ ok: true }),
     },
   });
@@ -211,7 +210,7 @@ test('provision WS rolls back box on non-zero exit', async () => {
   const app = buildServer({
     config, store, sessions,
     statusChecker: { checkBox: async () => ({ reachable: true }) },
-    boxActions: { ensureReady: async () => ({ ok: true }), killSession: async () => ({ ok: true }) },
+    boxActions: { killSession: async () => ({ ok: true }) },
   });
   await app.listen({ host: '127.0.0.1', port: 0 });
   const { port } = app.server.address();

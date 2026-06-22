@@ -167,14 +167,6 @@ test('buildKillTmuxRemote ignores absent tmux sessions', () => {
   );
 });
 
-test('ensureReady throws useful remote output on failure', async () => {
-  const actions = createBoxActions({
-    run: async () => ({ code: 1, stdout: '', stderr: 'sudo password required' }),
-  });
-
-  await expect(actions.ensureReady({ host: 'h', sessionName: 'web' })).rejects.toThrow(/sudo password required/);
-});
-
 test('killSession is best effort', async () => {
   const actions = createBoxActions({
     run: async () => { throw new Error('offline'); },
