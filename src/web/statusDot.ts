@@ -1,6 +1,6 @@
 import type { Status } from './api';
 
-export type DotClass = 'gray' | 'green' | 'amber' | 'red' | 'auth';
+type DotClass = 'gray' | 'green' | 'amber' | 'red' | 'auth';
 
 // Single source of truth for the box status dot. `needsAuth` wins over a plain
 // unreachable result: a password-auth box whose SSH master expired is not dead,
