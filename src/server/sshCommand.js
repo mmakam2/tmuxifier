@@ -59,6 +59,10 @@ export function buildAttachArgv(box, session, opts = {}) {
   const argv = [
     '-tt',
     '-o', `StrictHostKeyChecking=${policy}`,
+    // Fail fast when the box is unreachable instead of hanging on the OS default
+    // TCP connect (~2min) behind a silent terminal. Only affects establishing a
+    // new connection — an attach over a live ControlMaster is local and unaffected.
+    '-o', 'ConnectTimeout=10',
     '-o', 'ServerAliveInterval=15',
     '-o', 'ServerAliveCountMax=3',
     ...controlArgs(opts),

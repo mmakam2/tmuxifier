@@ -15,11 +15,17 @@ test('buildAttachArgv: alias-only box', () => {
   expect(argv).toEqual([
     '-tt',
     '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', 'ConnectTimeout=10',
     '-o', 'ServerAliveInterval=15',
     '-o', 'ServerAliveCountMax=3',
     'prod',
     'tmux new-session -A -D -s web',
   ]);
+});
+
+test('buildAttachArgv: includes a ConnectTimeout so opening a down box fails fast (not a ~2min hang)', () => {
+  const argv = buildAttachArgv({ host: 'prod' }, 'web');
+  expect(argv).toContain('ConnectTimeout=10');
 });
 
 test('buildAttachArgv: user/port/proxyJump and policy override', () => {
