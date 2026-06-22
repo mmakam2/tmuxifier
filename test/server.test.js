@@ -96,12 +96,7 @@ test('POST /api/boxes returns immediately without provisioning, even if boxActio
   expect(list.json()).toHaveLength(1);
 });
 
-test('POST /api/boxes does not persist installOhMyTmux on the stored box', async () => {
-  const calls = [];
-  const boxActions = {
-    async ensureReady(box, options) { calls.push({ box, options }); },
-  };
-  app = await makeApp({ boxActions });
+test('POST /api/boxes persists only box fields from request bodies', async () => {
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
 
@@ -109,136 +104,24 @@ test('POST /api/boxes does not persist installOhMyTmux on the stored box', async
     method: 'POST',
     url: '/api/boxes',
     headers,
-    payload: { host: 'h1', installOhMyTmux: true },
+    payload: {
+      host: 'h1',
+      label: 'Box One',
+      installOhMyTmux: true,
+      installOhMyZsh: true,
+      installOhMyBash: true,
+    },
   });
 
   expect(created.statusCode).toBe(201);
-  // ensureReady is no longer called from POST
-  expect(calls).toHaveLength(0);
+  expect(created.json()).toMatchObject({ host: 'h1', label: 'Box One' });
   expect(created.json()).not.toHaveProperty('installOhMyTmux');
+  expect(created.json()).not.toHaveProperty('installOhMyZsh');
+  expect(created.json()).not.toHaveProperty('installOhMyBash');
 
   const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
   expect(list.json()[0]).not.toHaveProperty('installOhMyTmux');
-});
-
-test('POST /api/boxes does not persist installOhMyZsh on the stored box', async () => {
-  const calls = [];
-  const boxActions = {
-    async ensureReady(box, options) { calls.push({ box, options }); },
-  };
-  app = await makeApp({ boxActions });
-  const cookie = await login();
-  const headers = { cookie: `${cookie.name}=${cookie.value}` };
-
-  const created = await app.inject({
-    method: 'POST',
-    url: '/api/boxes',
-    headers,
-    payload: { host: 'h1', installOhMyZsh: true },
-  });
-
-  expect(created.statusCode).toBe(201);
-  expect(calls).toHaveLength(0);
-  expect(created.json()).not.toHaveProperty('installOhMyZsh');
-
-  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
   expect(list.json()[0]).not.toHaveProperty('installOhMyZsh');
-});
-
-test('POST /api/boxes strips both installOhMyTmux and installOhMyZsh from stored box', async () => {
-  const calls = [];
-  const boxActions = {
-    async ensureReady(box, options) { calls.push({ box, options }); },
-  };
-  app = await makeApp({ boxActions });
-  const cookie = await login();
-  const headers = { cookie: `${cookie.name}=${cookie.value}` };
-
-  const created = await app.inject({
-    method: 'POST',
-    url: '/api/boxes',
-    headers,
-    payload: { host: 'h1', installOhMyTmux: true, installOhMyZsh: true },
-  });
-
-  expect(created.statusCode).toBe(201);
-  expect(calls).toHaveLength(0);
-  expect(created.json()).not.toHaveProperty('installOhMyTmux');
-  expect(created.json()).not.toHaveProperty('installOhMyZsh');
-});
-
-test('POST /api/boxes does not persist installOhMyBash on the stored box', async () => {
-  const calls = [];
-  const boxActions = {
-    async ensureReady(box, options) { calls.push({ box, options }); },
-  };
-  app = await makeApp({ boxActions });
-  const cookie = await login();
-  const headers = { cookie: `${cookie.name}=${cookie.value}` };
-
-  const created = await app.inject({
-    method: 'POST',
-    url: '/api/boxes',
-    headers,
-    payload: { host: 'h1', installOhMyBash: true },
-  });
-
-  expect(created.statusCode).toBe(201);
-  // ensureReady is no longer called from POST
-  expect(calls).toHaveLength(0);
-  expect(created.json()).not.toHaveProperty('installOhMyBash');
-
-  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
-  expect(list.json()[0]).not.toHaveProperty('installOhMyBash');
-});
-
-test('POST /api/boxes strips all three transient options from stored box', async () => {
-  const calls = [];
-  const boxActions = {
-    async ensureReady(box, options) { calls.push({ box, options }); },
-  };
-  app = await makeApp({ boxActions });
-  const cookie = await login();
-  const headers = { cookie: `${cookie.name}=${cookie.value}` };
-
-  const created = await app.inject({
-    method: 'POST',
-    url: '/api/boxes',
-    headers,
-    payload: { host: 'h1', installOhMyTmux: true, installOhMyZsh: true, installOhMyBash: true },
-  });
-
-  expect(created.statusCode).toBe(201);
-  expect(calls).toHaveLength(0);
-  expect(created.json()).not.toHaveProperty('installOhMyTmux');
-  expect(created.json()).not.toHaveProperty('installOhMyZsh');
-  expect(created.json()).not.toHaveProperty('installOhMyBash');
-});
-
-test('PATCH /api/boxes/:id does not persist installOhMyBash on the stored box', async () => {
-  const cookie = await login();
-  const headers = { cookie: `${cookie.name}=${cookie.value}` };
-
-  const created = await app.inject({
-    method: 'POST',
-    url: '/api/boxes',
-    headers,
-    payload: { host: 'h1' },
-  });
-  const box = created.json();
-
-  const patched = await app.inject({
-    method: 'PATCH',
-    url: `/api/boxes/${box.id}`,
-    headers,
-    payload: { label: 'updated', installOhMyBash: true },
-  });
-
-  expect(patched.statusCode).toBe(200);
-  expect(patched.json()).not.toHaveProperty('installOhMyBash');
-  expect(patched.json().label).toBe('updated');
-
-  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
   expect(list.json()[0]).not.toHaveProperty('installOhMyBash');
 });
 

@@ -103,7 +103,7 @@ test('POST /api/boxes returns immediately without provisioning', async () => {
   const res = await app.inject({
     method: 'POST', url: '/api/boxes',
     headers: { cookie: `${c.name}=${c.value}` },
-    payload: { host: 'example.com', installOhMyTmux: true, installOhMyZsh: true },
+    payload: { host: 'example.com' },
   });
   expect(res.statusCode).toBe(201);
   const body = JSON.parse(res.body);

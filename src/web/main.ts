@@ -732,7 +732,7 @@ function openBoxDialog(box?: Box) {
         if (!host) { err.textContent = 'Host is required'; submit.disabled = false; return; }
         const installOhMyZsh = shellZsh.input.checked;
         const installOhMyBash = shellBash.input.checked;
-        const spec: AddBoxSpec = { host, installOhMyTmux: installOhMyTmuxInput.checked, installOhMyZsh, installOhMyBash };
+        const spec: AddBoxSpec = { host };
         const label = fields.label.value.trim(); if (label) spec.label = label;
         const tag = canonicalTagForInput(fields.tag.value); if (tag) spec.tags = [tag];
         const user = fields.user.value.trim(); if (user) spec.user = user;

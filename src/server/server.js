@@ -186,8 +186,7 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
   app.get('/api/boxes', { preHandler: requireAuth }, async () => store.listBoxes());
   app.post('/api/boxes', { preHandler: requireAuth }, async (req, reply) => {
     try {
-      const { installOhMyTmux = false, installOhMyZsh = false, installOhMyBash = false, ...boxSpec } = req.body || {};
-      const box = await store.addBox(boxSpec);
+      const box = await store.addBox(req.body || {});
       return reply.code(201).send(box);
     } catch (e) {
       return reply.code(400).send({ error: e.message });
@@ -195,8 +194,7 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
   });
   app.patch('/api/boxes/:id', { preHandler: requireAuth }, async (req, reply) => {
     try {
-      const { installOhMyTmux, installOhMyZsh, installOhMyBash, ...patch } = req.body || {};
-      return await store.updateBox(req.params.id, patch);
+      return await store.updateBox(req.params.id, req.body || {});
     }
     catch (e) { return reply.code(400).send({ error: e.message }); }
   });
