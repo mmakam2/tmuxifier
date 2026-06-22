@@ -123,6 +123,44 @@ shell/theme options, and creates the configured tmux session. If provisioning ex
 the new box is rolled back from the list. Removing a box closes any local terminal process for
 that box and best-effort kills the configured remote tmux session before deleting the box.
 
+## Status, multiplexing & rate-limit safety
+Tmuxifier talks to each box over SSH continuously — a background **status probe** keeps the
+sidebar dots current, and each open terminal is another SSH connection. Left naive, that churn
+(a fresh handshake, plus a failed auth on password boxes, every few seconds) is exactly what
+trips a box's brute-force protection — `fail2ban`, `sshguard`, or a connection-rate firewall
+rule — and gets the Tmuxifier host's IP **banned**, which then makes the box look dead. Several
+mechanisms keep the connection rate low and reuse one warm connection:
+
+- **Connection multiplexing (keep one warm).** Every probe and terminal for a box shares a
+  single persistent SSH **ControlMaster** socket under `data/cm/`, authenticated once and kept
+  alive for `TMUXIFIER_CONTROL_PERSIST` seconds (default 600) after its last use. Repeated
+  status checks and reconnects ride that one connection instead of re-authenticating — no
+  per-probe handshake, no per-probe auth attempt.
+- **Adaptive status backoff.** Probing starts at the ~30s poll cadence, but each consecutive
+  failure *escalates* the interval (30s → 60s → … up to a **5-minute floor**), and a box that
+  needs a password jumps straight to the 5-minute floor — fast probing there can never succeed
+  and only feeds `fail2ban`. It never fully stops, so a box that recovers turns green on its own
+  within ≤5 minutes. A successful check, or opening/reconnecting the box, resets it to the fast
+  cadence.
+- **Don't probe a box you're using.** While a terminal session is open for a box, the status
+  probe is skipped entirely — the dot is read from the live ControlMaster instead (master up ⇒
+  connected; absent ⇒ needs auth) — so a probe can't collide with your interactive login on the
+  shared socket.
+- **Fail fast, then back off.** Both probes and interactive connects set an SSH `ConnectTimeout`
+  (≈6s / 10s) so an unreachable box fails quickly instead of hanging. The browser terminal then
+  reconnects on its own escalating backoff to a **5-minute floor** — a box left open while it's
+  down settles to roughly one attempt every five minutes (gentle enough not to arm a limiter)
+  and auto-reconnects within ≤5 minutes of coming back. A connection that proves stable resets
+  the backoff to fast.
+- **Bounded fan-out.** A full status sweep probes boxes in small batches
+  (`TMUXIFIER_STATUS_CONCURRENCY`, default 4), so the dashboard never opens a fleet-wide burst of
+  simultaneous handshakes.
+
+If a box still bans the Tmuxifier host (a red dot that pings but times out on port 22), the bans
+are time-limited — the low, backed-off connection rate lets them expire instead of continually
+re-arming them. To clear one immediately, unban the Tmuxifier host's IP on that box
+(e.g. `fail2ban-client unbanip <ip>`) and consider allowlisting it (`ignoreip`).
+
 ## Security
 Tmuxifier can SSH into your whole fleet, so the login gate is the crown jewel. It binds to
 `127.0.0.1` by default. To expose it on a network, **always use TLS** — either set
