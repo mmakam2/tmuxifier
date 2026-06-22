@@ -15,7 +15,6 @@ export function openTerminal(parent: HTMLElement, boxId: string) {
   term.open(parent);
   fit.fit();
 
-  const cid = crypto.randomUUID();
   let ws: WebSocket;
   let closedByUser = false;
   let backoff = 500;
@@ -23,7 +22,7 @@ export function openTerminal(parent: HTMLElement, boxId: string) {
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const { cols, rows } = term;
-    ws = new WebSocket(`${proto}://${location.host}/term?box=${boxId}&cid=${cid}&cols=${cols}&rows=${rows}`);
+    ws = new WebSocket(`${proto}://${location.host}/term?box=${boxId}&cols=${cols}&rows=${rows}`);
     ws.onopen = () => { backoff = 500; sendResize(); };
     ws.onmessage = (e) => term.write(typeof e.data === 'string' ? e.data : '');
     ws.onclose = () => {

@@ -1,13 +1,17 @@
 import { test, expect } from 'vitest';
 import { buildAttachArgv, buildProbeArgv, buildProvisionArgv, buildControlExitArgv, buildControlCheckArgv, buildControlPathArgv, sanitizeSession } from '../src/server/sshCommand.js';
 
+test('buildAttachArgv does not expose an unused size parameter', () => {
+  expect(buildAttachArgv).toHaveLength(2);
+});
+
 test('sanitizeSession strips unsafe chars', () => {
   expect(sanitizeSession('we b;rm -rf/')).toBe('we-b-rm--rf-');
   expect(sanitizeSession('')).toBe('web');
 });
 
 test('buildAttachArgv: alias-only box', () => {
-  const argv = buildAttachArgv({ host: 'prod' }, 'web', { cols: 80, rows: 24 });
+  const argv = buildAttachArgv({ host: 'prod' }, 'web');
   expect(argv).toEqual([
     '-tt',
     '-o', 'StrictHostKeyChecking=accept-new',
@@ -22,7 +26,6 @@ test('buildAttachArgv: user/port/proxyJump and policy override', () => {
   const argv = buildAttachArgv(
     { host: 'h', user: 'me', port: 2222, proxyJump: 'bastion' },
     'web',
-    { cols: 80, rows: 24 },
     { hostKeyPolicy: 'yes' },
   );
   expect(argv).toContain('-J');
@@ -34,7 +37,7 @@ test('buildAttachArgv: user/port/proxyJump and policy override', () => {
 });
 
 test('buildAttachArgv: startupCommand is single-quoted for the remote shell', () => {
-  const argv = buildAttachArgv({ host: 'h', startupCommand: "echo 'hi'" }, 'web', { cols: 80, rows: 24 });
+  const argv = buildAttachArgv({ host: 'h', startupCommand: "echo 'hi'" }, 'web');
   expect(argv[argv.length - 1]).toBe("tmux new-session -A -D -s web 'echo '\\''hi'\\'''");
 });
 
@@ -48,19 +51,19 @@ test('buildProbeArgv: batch mode, no PTY, carries remote cmd', () => {
 });
 
 test('buildAttachArgv rejects flag-smuggling host', () => {
-  expect(() => buildAttachArgv({ host: '-oProxyCommand=touch /tmp/pwn' }, 'web', { cols: 80, rows: 24 }))
+  expect(() => buildAttachArgv({ host: '-oProxyCommand=touch /tmp/pwn' }, 'web'))
     .toThrow(/unsafe ssh host/);
 });
 test('buildAttachArgv rejects unsafe user', () => {
-  expect(() => buildAttachArgv({ host: 'h', user: '-x' }, 'web', { cols: 80, rows: 24 }))
+  expect(() => buildAttachArgv({ host: 'h', user: '-x' }, 'web'))
     .toThrow(/unsafe ssh user/);
 });
 test('buildAttachArgv rejects unsafe proxyJump', () => {
-  expect(() => buildAttachArgv({ host: 'h', proxyJump: '-x' }, 'web', { cols: 80, rows: 24 }))
+  expect(() => buildAttachArgv({ host: 'h', proxyJump: '-x' }, 'web'))
     .toThrow(/unsafe ssh proxyJump/);
 });
 test('buildAttachArgv rejects out-of-range port', () => {
-  expect(() => buildAttachArgv({ host: 'h', port: 99999 }, 'web', { cols: 80, rows: 24 }))
+  expect(() => buildAttachArgv({ host: 'h', port: 99999 }, 'web'))
     .toThrow(/unsafe ssh port/);
 });
 test('buildProbeArgv rejects flag-smuggling host', () => {
@@ -68,7 +71,7 @@ test('buildProbeArgv rejects flag-smuggling host', () => {
     .toThrow(/unsafe ssh host/);
 });
 test('buildAttachArgv: sshConfigFile prepends -F', () => {
-  const argv = buildAttachArgv({ host: 'h' }, 'web', { cols: 80, rows: 24 }, { sshConfigFile: '/tmp/cfg' });
+  const argv = buildAttachArgv({ host: 'h' }, 'web', { sshConfigFile: '/tmp/cfg' });
   expect(argv.slice(0, 2)).toEqual(['-F', '/tmp/cfg']);
   expect(argv).toContain('-tt');
 });
@@ -86,7 +89,7 @@ test('buildProbeArgv: controlDir enables connection multiplexing', () => {
 
 test('buildAttachArgv: controlDir multiplexing shares the probe ControlPath', () => {
   const probe = buildProbeArgv({ host: 'h', user: 'me', port: 22 }, 'tmux ls', { controlDir: '/run/cm' });
-  const attach = buildAttachArgv({ host: 'h', user: 'me', port: 22 }, 'web', { cols: 80, rows: 24 }, { controlDir: '/run/cm' });
+  const attach = buildAttachArgv({ host: 'h', user: 'me', port: 22 }, 'web', { controlDir: '/run/cm' });
   // %C is a hash of the connection params, so an identical token in both means
   // the probe reuses the master connection the live terminal already opened.
   expect(attach).toContain('ControlPath=/run/cm/%C');
@@ -96,7 +99,7 @@ test('buildAttachArgv: controlDir multiplexing shares the probe ControlPath', ()
 
 test('no control options without controlDir (backward compatible)', () => {
   expect(buildProbeArgv({ host: 'h' }, 'tmux ls').join(' ')).not.toContain('ControlMaster');
-  expect(buildAttachArgv({ host: 'h' }, 'web', { cols: 80, rows: 24 }).join(' ')).not.toContain('ControlMaster');
+  expect(buildAttachArgv({ host: 'h' }, 'web').join(' ')).not.toContain('ControlMaster');
 });
 
 test('buildProvisionArgv constructs ssh -tt with the script', () => {

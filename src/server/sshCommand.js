@@ -53,7 +53,7 @@ export function assertBoxSafe(box) {
   }
 }
 
-export function buildAttachArgv(box, session, size, opts = {}) {
+export function buildAttachArgv(box, session, opts = {}) {
   assertBoxSafe(box);
   const policy = opts.hostKeyPolicy || 'accept-new';
   const argv = [

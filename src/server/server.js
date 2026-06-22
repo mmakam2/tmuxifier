@@ -277,7 +277,7 @@ export function buildServer({ config, store, sessions, statusChecker, boxActions
     scope.get('/term', { websocket: true }, async (socket, req) => {
       if (!hasTrustedOrigin(req)) { socket.close(1008, 'forbidden origin'); return; }
       if (!isAuthed(req)) { socket.close(1008, 'unauthorized'); return; }
-      const { box: boxId, cid, cols, rows, mode } = req.query;
+      const { box: boxId, cols, rows, mode } = req.query;
 
       // --- Local shell ---
       if (boxId === '__local__') {

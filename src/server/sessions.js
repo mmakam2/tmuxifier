@@ -12,7 +12,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       if (existing.graceTimer) { clearTimeout(existing.graceTimer); existing.graceTimer = null; }
       return existing;
     }
-    const argv = buildAttachArgv(box, session, size, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
+    const argv = buildAttachArgv(box, session, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
     const pty = spawn('ssh', argv, {
       name: 'xterm-256color',
       cols: size.cols,

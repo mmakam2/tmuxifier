@@ -34,7 +34,7 @@ test('WS pipes input to the box and streams output back', async () => {
   const c = login.cookies.find((x) => x.name === COOKIE_NAME);
 
   const ws = new WebSocket(
-    `ws://127.0.0.1:${port}/term?box=${saved.id}&cid=t1&cols=80&rows=24`,
+    `ws://127.0.0.1:${port}/term?box=${saved.id}&cols=80&rows=24`,
     { headers: { cookie: `${c.name}=${c.value}` } },
   );
   const chunks = [];
@@ -71,7 +71,7 @@ test('WS rejects authenticated cross-origin connections before opening a session
   const c = login.cookies.find((x) => x.name === COOKIE_NAME);
 
   const ws = new WebSocket(
-    `ws://127.0.0.1:${port}/term?box=${saved.id}&cid=t1&cols=80&rows=24`,
+    `ws://127.0.0.1:${port}/term?box=${saved.id}&cols=80&rows=24`,
     { headers: { cookie: `${c.name}=${c.value}`, origin: 'https://evil.example' } },
   );
   const code = await new Promise((resolve, reject) => {
