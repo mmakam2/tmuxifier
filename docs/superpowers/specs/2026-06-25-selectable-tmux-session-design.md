@@ -1,0 +1,141 @@
+# Selectable tmux Session Name Design
+
+## Summary
+
+Tmuxifier attaches each box's browser terminal to a tmux session named by the box's
+`sessionName` field, which defaults to `web`. That field already exists end-to-end —
+`store.js` normalizes and `sanitizeSession`-cleans it on both add and update, `buildAttachArgv`
+uses it for `tmux new-session -A -D -s <name>`, and provisioning (`buildEnsureTmuxRemote`) ensures
+that named session exists — but it is **not surfaced anywhere in the UI**. The only way to point a
+box at a different session today is to hand-edit `data/boxes.json`.
+
+Users sometimes keep their own tmux sessions on a host (not Tmuxifier's `web`). This change exposes
+`sessionName` in the Add/Edit box dialog as a **type-or-pick** field: a free-text input backed by a
+datalist of available session names, defaulting to `web`. The dropdown pre-fills for free from the
+sessions the status poller already caches, and a **⟳** button does an on-demand live probe when the
+user wants a fresh list.
+
+Because the store and attach/provision paths already honor `sessionName`, this is almost entirely a
+UI surfacing change plus one new read-only probe endpoint.
+
+## Rate-ban safety (why the probe is shaped this way)
+
+This repo has a documented history of host-side port-22 rate bans triggered by SSH-connection
+amplification (multi-tab status probes; fail2ban on at least one box). The live fetch is therefore
+constrained to add **no surprise** SSH volume:
+
+- The dropdown pre-fills from the **already-cached** `/api/status` snapshot — opening the dialog
+  costs **0 new SSH connections**.
+- A live re-probe fires **only** on an explicit ⟳ click (never on dialog open, never on keystroke).
+- The probe reuses the box's shared **ControlMaster** socket (keyed by the `%C` hash of
+  user/host/port, not box id) and the status checker's **in-flight de-dup**, so a fetch rides the
+  open master instead of opening a fresh TCP+auth handshake.
+- If the box has a **live interactive session**, the probe is **skipped entirely** (it would collide
+  with the login on the shared socket — the documented garbled-prompt bug); the client keeps its
+  cached pre-fill instead.
+
+## Behavior
+
+### Server
+
+**`status.js` — new `listSessions(box)`** (sibling to the existing `probe()`, reusing `run`,
+`PROBE_REMOTE`, `parseTmuxSessions`, the `controlDir`/`controlPersist` args, and in-flight de-dup):
+
+- If `hasLiveSession(box.id)` is true → **do not probe**. Return
+  `{ reachable: true, tmux: true, inUse: true, sessions: [] }`.
+- Otherwise run `buildProbeArgv(box, PROBE_REMOTE, { hostKeyPolicy, sshConfigFile, controlDir,
+  controlPersist })` through `run` and return, mirroring `probe()`:
+  - reachable + tmux running → `{ reachable: true, tmux: true, sessions: [...] }`
+  - `__NO_TMUX__` → `{ reachable: true, tmux: false, sessions: [] }`
+  - auth failure (`AUTH_FAIL_RE`) → `{ reachable: false, needsAuth: true, error }`
+  - otherwise unreachable → `{ reachable: false, error }`
+- Never throws — a thrown/invalid box becomes `{ reachable: false, error }`.
+- Coalesce concurrent calls for the same box key via an in-flight map (a double-click must not
+  double-probe).
+
+**`server.js` — new `POST /api/boxes/probe-sessions`** (auth-gated like every other `/api/*` route):
+
+- Body: `{ id?, host, user, port, proxyJump }`. `id` is optional and used only for the
+  `hasLiveSession` guard (present in edit mode, absent in add mode).
+- Calls `statusChecker.listSessions(spec)` and returns its result as JSON.
+- `assertBoxSafe` (already called inside `buildProbeArgv`) rejects unsafe host/user/port/proxyJump
+  → respond `400`. No new privilege surface: an authenticated user can already open an SSH session
+  to any host via add/edit; `BatchMode=yes` prevents password prompts and `ConnectTimeout` bounds a
+  hang.
+
+**`store.js`** — unchanged. `normalize()` already threads `spec.sessionName` through
+`sanitizeSession` for both `addBox` and `updateBox`, so the field round-trips already.
+
+### Web client
+
+**`api.ts`** — new `probeSessions(spec)` → `POST /api/boxes/probe-sessions`, returning
+`{ reachable, tmux, sessions, needsAuth?, inUse?, error? }`.
+
+**`main.ts` `openBoxDialog`** — add a `sessionName` field **between the ProxyJump field and the
+provisioning toggles** (it governs which session the terminal/provisioner targets, not a
+provisioning extra):
+
+- A datalist-backed `<input list=…>` (type-or-pick) with a **⟳** button beside it.
+- Placeholder `web`. In edit mode, prefilled with `box.sessionName`.
+- **Pre-fill (free):** datalist options = `web` (default) merged with the names from
+  `status[box.id]?.sessions` in the already-fetched status map. Edit-mode opens with the live list
+  and zero new SSH.
+- **⟳ click:** reads the dialog's current host/user/port/proxyJump (plus `id` in edit mode — so it
+  works before save in add mode and reflects edited connection fields) and calls `probeSessions`.
+  An inline status line beside the field reflects the outcome:
+  - probing… (disabled spinner state)
+  - success → repopulate datalist (`web` + returned names)
+  - `tmux === false` → "tmux not running"
+  - `inUse` → "in use — showing cached" (keeps existing options)
+  - `needsAuth` → "needs login — open the terminal"
+  - unreachable / error → "couldn't reach host" (keeps existing options)
+- **Submit:** `sessionName = input.value.trim() || 'web'`, **always** included in the spec (add) and
+  patch (edit). Always sending it removes the add-vs-edit asymmetry in `store.normalize`
+  (`spec.sessionName || base.sessionName || 'web'`): clearing the field in edit mode predictably
+  reverts the box to `web` rather than silently keeping the old value. Server `sanitizeSession` is
+  the source of truth; no client-side validation is required (the input may legally contain
+  characters the server will fold to `-`).
+
+## Components & data flow
+
+```
+Add/Edit dialog (main.ts)
+  ├─ open: read status[box.id].sessions (cached)  ──►  datalist options (0 SSH)
+  ├─ ⟳ click: api.probeSessions({id?,host,user,port,proxyJump})
+  │      └─ POST /api/boxes/probe-sessions (server.js, auth-gated)
+  │             └─ statusChecker.listSessions(spec) (status.js)
+  │                    ├─ hasLiveSession(id) ─► inUse, no SSH
+  │                    └─ buildProbeArgv + run over shared ControlMaster ─► sessions
+  └─ submit: spec.sessionName / patch.sessionName ─► store.normalize ─► sanitizeSession
+                                                          └─► buildAttachArgv / buildEnsureTmuxRemote
+```
+
+## Error handling
+
+- Probe never throws; all failure modes resolve to a typed result the client renders inline.
+- A failed/unreachable/in-use probe is non-destructive: the dialog keeps its cached options and the
+  user can still type any name and save.
+- Unsafe connection fields are rejected at the endpoint (`400`) before any `ssh` runs.
+
+## Testing (TDD; real code with an injected `run`, per repo convention)
+
+- **Unit — `status.listSessions`:**
+  - reachable + tmux → parsed sessions
+  - `__NO_TMUX__` → `{ tmux: false, sessions: [] }`
+  - unreachable → `{ reachable: false, error }`
+  - auth failure → `{ reachable: false, needsAuth: true }`
+  - live-session guard → `{ inUse: true }` **and asserts the injected `run` was never called**
+- **Integration — `POST /api/boxes/probe-sessions`:**
+  - returns sessions for a stubbed `run`
+  - `401` without the auth cookie
+  - unsafe host → `400`
+- **Store:** assert `sessionName` round-trips through `addBox` and `updateBox` (add coverage if not
+  already present).
+- **e2e:** out of scope for this change; optional follow-up against the sshd-backed test box.
+
+## Out of scope / YAGNI
+
+- No automatic probe on dialog open or on field focus (rate-ban safety; user-triggered only).
+- No strict `<select>` that forbids typing a new name — the field must accept user-entered names.
+- No per-session metadata in the dropdown beyond the name (window counts etc. are nice-to-have, not
+  required); keep the option list to plain names plus the `web` default marker.
