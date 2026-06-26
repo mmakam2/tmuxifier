@@ -20,6 +20,23 @@ export function createFleetManager({
 }) {
   const loaded = load();
   const jobs = Array.isArray(loaded) ? loaded : []; // oldest first; newest pushed to the end
+  // A job persisted as 'running' means a previous process died mid-run; its ssh
+  // children are gone, so mark it (and its unfinished targets) interrupted.
+  let reconciled = false;
+  for (const job of jobs) {
+    if (job.status !== 'running') continue;
+    reconciled = true;
+    for (const t of job.targets) {
+      if (t.status === 'pending' || t.status === 'running') {
+        t.status = 'interrupted';
+        t.error = t.error || 'interrupted by restart';
+        t.finishedAt = now();
+      }
+    }
+    job.status = 'interrupted';
+    job.finishedAt = now();
+  }
+  if (reconciled) save(jobs);
   const runs = new Map();                            // jobId -> in-flight run promise (test affordance)
   const cancelled = new Set(); // jobIds with a pending cancel request (in-memory only)
 

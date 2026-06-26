@@ -136,3 +136,27 @@ test('cancelJob returns undefined for an unknown id and is a no-op on a finished
   await mgr._settled(job.id);
   expect(mgr.cancelJob(job.id).status).toBe('done'); // already finished — unchanged
 });
+
+test('reconciles jobs left running by a previous process into interrupted on startup', async () => {
+  const persisted = [{
+    id: 'j1', command: 'x', status: 'running',
+    createdAt: 't', startedAt: 't', finishedAt: null, concurrency: 4, timeoutMs: 1,
+    targets: [
+      { boxId: 'b1', label: 'n1', host: 'h1', status: 'running', code: null, stdout: '', stderr: '', truncated: false, error: null, startedAt: 't', finishedAt: null },
+      { boxId: 'b2', label: 'n2', host: 'h2', status: 'ok', code: 0, stdout: 'done', stderr: '', truncated: false, error: null, startedAt: 't', finishedAt: 't' },
+    ],
+  }];
+  let saved = 0;
+  const mgr = createFleetManager({
+    store: makeStore(BOXES),
+    execCommand: async () => ({ code: 0 }),
+    load: () => persisted,
+    save: () => { saved++; },
+  });
+  const job = mgr.getJob('j1');
+  expect(job.status).toBe('interrupted');
+  expect(job.targets[0].status).toBe('interrupted'); // was running
+  expect(job.targets[0].finishedAt).toBeTruthy();
+  expect(job.targets[1].status).toBe('ok');          // already finished — untouched
+  expect(saved).toBeGreaterThan(0);                   // reconciliation was persisted
+});
