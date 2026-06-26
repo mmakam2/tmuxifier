@@ -19,7 +19,8 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   `.env.example`.
 - `config.json` (gitignored, optional) — camelCase alternative to `.env`.
 - `tls/` (gitignored) — `cert.pem`/`key.pem` for HTTPS; the private key never enters git.
-- `data/` (gitignored) — `boxes.json` and SSH ControlMaster sockets under `data/cm/`.
+- `data/` (gitignored) — `boxes.json`, `fleet-jobs.json` (Fleet Command history), and SSH
+  ControlMaster sockets under `data/cm/`.
 
 When adding a new config knob or persisted file, keep it under the repo folder by default.
 Don't introduce dependencies on `$HOME`-level state other than the user's existing SSH setup.
