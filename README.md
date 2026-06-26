@@ -172,6 +172,19 @@ are time-limited — the low, backed-off connection rate lets them expire instea
 re-arming them. To clear one immediately, unban the Tmuxifier host's IP on that box
 (e.g. `fail2ban-client unbanip <ip>`) and consider allowlisting it (`ignoreip`).
 
+### Fleet Command
+
+Click **Fleet** in the sidebar to enter selection mode, tick any number of boxes (or whole tag
+groups), type a command, and **Run**. The command runs once on each selected box over the same
+non-interactive SSH path used for status probes, and each box's exit code and output are captured
+centrally. Each run is a **job** held on the server: close the tab and the run keeps going —
+reopen the dashboard and the **Jobs** button lists recent jobs with their per-box results. Jobs
+are persisted to `data/fleet-jobs.json` (last `TMUXIFIER_FLEET_MAX_JOBS`, default 50). The fan-out
+is capped at `TMUXIFIER_FLEET_CONCURRENCY` (default 4) so a fleet-wide run never bursts SSH
+connections. Password-only boxes with no live connection come back as a per-box error (the
+non-interactive path can't answer a password prompt) — open that box's terminal once to establish
+the connection, then re-run.
+
 ## Security
 Tmuxifier can SSH into your whole fleet, so the login gate is the crown jewel. It binds to
 `127.0.0.1` by default. To expose it on a network, **always use TLS** — either set
