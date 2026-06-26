@@ -18,7 +18,8 @@ export interface ProvisionSummary { id: string; presetName: string; hostname: st
 export interface ProvisionJob extends ProvisionSummary { log: string; error: string | null; }
 export interface StorageGroups { rootdir: { storage: string }[]; vztmpl: { storage: string }[]; }
 
-async function jr<T>(res: Response): Promise<T> {
+async function jr<T>(p: Promise<Response>): Promise<T> {
+  const res = await p;
   if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || res.statusText);
   return res.json() as Promise<T>;
 }
