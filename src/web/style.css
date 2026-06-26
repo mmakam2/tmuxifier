@@ -279,6 +279,8 @@ body {
 .fleet-expand:hover { border-color: rgba(36, 211, 232, 0.45); color: var(--cyan); }
 /* Bash-script editor modal — wider than the default modal to give real room. */
 .fleet-script-modal { width: 620px; }
+/* Lift the script-editor backdrop above the Fleet jobs sidebar (z-index: 50). */
+.modal-backdrop:has(> .fleet-script-modal) { z-index: 60; }
 .fleet-script-hint { margin: 0; color: var(--muted); font-size: 12px; }
 .fleet-script {
   width: 100%; box-sizing: border-box; min-height: 220px; max-height: 60vh; resize: vertical;
