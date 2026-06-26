@@ -9,10 +9,17 @@ function fakeRequest(script) {
   fn.calls = calls;
   return fn;
 }
+// Fake token-less TLS pre-flight: returns a peer cert whose fingerprint matches HOST by default.
+function fakeConnect(fingerprint256 = 'ab:cd:ef') {
+  const calls = [];
+  const fn = async (opts) => { calls.push(opts); return { fingerprint256, raw: Buffer.from('genuine-cert-der'), authorized: false, subject: { CN: 'pve' }, issuer: { CN: 'pve' }, valid_to: 'Jan 1 2030' }; };
+  fn.calls = calls;
+  return fn;
+}
 
-test('GET sends the token auth header to the right URL', async () => {
+test('GET sends the token auth header to the right URL (pin pre-flight matches)', async () => {
   const request = fakeRequest(() => ({ status: 200, json: { data: [{ node: 'pve' }] } }));
-  const client = createProxmoxClient({ host: HOST, request });
+  const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
   const nodes = await client.nodes();
   expect(nodes).toEqual([{ node: 'pve' }]);
   expect(request.calls[0].url).toBe('https://pve.example.com:8006/api2/json/nodes');
@@ -21,7 +28,7 @@ test('GET sends the token auth header to the right URL', async () => {
 
 test('createLxc form-encodes params and POSTs', async () => {
   const request = fakeRequest(() => ({ status: 200, json: { data: 'UPID:pve:001' } }));
-  const client = createProxmoxClient({ host: HOST, request });
+  const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
   const upid = await client.createLxc('pve', { vmid: 123, hostname: 'dev-01', cores: 2, net0: 'name=eth0,bridge=vmbr0,ip=dhcp' });
   expect(upid).toBe('UPID:pve:001');
   const call = request.calls[0];
@@ -34,39 +41,41 @@ test('createLxc form-encodes params and POSTs', async () => {
 });
 
 test('maps 401 and 403 to clear errors', async () => {
-  const c401 = createProxmoxClient({ host: HOST, request: fakeRequest(() => ({ status: 401, json: null })) });
+  const c401 = createProxmoxClient({ host: HOST, request: fakeRequest(() => ({ status: 401, json: null })), connect: fakeConnect() });
   await expect(c401.version()).rejects.toThrow(/rejected|401/);
-  const c403 = createProxmoxClient({ host: HOST, request: fakeRequest(() => ({ status: 403, json: null })) });
+  const c403 = createProxmoxClient({ host: HOST, request: fakeRequest(() => ({ status: 403, json: null })), connect: fakeConnect() });
   await expect(c403.version()).rejects.toThrow(/permission|403/);
 });
 
-test('pin mode rejects a fingerprint mismatch and accepts a match', async () => {
-  const request = fakeRequest(() => ({ status: 200, json: { data: {} } }));
-  const client = createProxmoxClient({ host: HOST, request });
-  await client.version();
-  const check = request.calls[0].tls.checkServerIdentity;
-  expect(request.calls[0].tls.rejectUnauthorized).toBe(false);
-  expect(check('h', { fingerprint256: 'ab:cd:ef' })).toBeUndefined();          // case-insensitive match
-  expect(check('h', { fingerprint256: '00:11' })).toBeInstanceOf(Error);
+test('pin mode: a fingerprint mismatch rejects BEFORE the token-bearing request is sent', async () => {
+  // match -> the real request is made with the pinned cert as CA and rejectUnauthorized true
+  const reqOk = fakeRequest(() => ({ status: 200, json: { data: {} } }));
+  await createProxmoxClient({ host: HOST, request: reqOk, connect: fakeConnect('AB:CD:EF') }).version();
+  expect(reqOk.calls[0].tls.rejectUnauthorized).toBe(true);
+  expect(Array.isArray(reqOk.calls[0].tls.ca)).toBe(true);
+  // mismatch -> throws, and the token-bearing request is NEVER made (no token leak)
+  const reqBad = fakeRequest(() => ({ status: 200, json: { data: {} } }));
+  await expect(createProxmoxClient({ host: HOST, request: reqBad, connect: fakeConnect('00:11:22') }).version()).rejects.toThrow(/fingerprint/);
+  expect(reqBad.calls).toHaveLength(0);
 });
 
-test('ca mode verifies normally; insecure disables verification', async () => {
+test('ca mode verifies normally (no checkServerIdentity, no ca pin) and does not pre-flight; insecure disables verification', async () => {
   const reqCa = fakeRequest(() => ({ status: 200, json: { data: {} } }));
-  await createProxmoxClient({ host: { ...HOST, verifyMode: 'ca' }, request: reqCa }).version();
+  const caConnect = fakeConnect();
+  await createProxmoxClient({ host: { ...HOST, verifyMode: 'ca' }, request: reqCa, connect: caConnect }).version();
   expect(reqCa.calls[0].tls.rejectUnauthorized).toBe(true);
+  expect(reqCa.calls[0].tls.checkServerIdentity).toBeUndefined();
+  expect(reqCa.calls[0].tls.ca).toBeUndefined();
+  expect(caConnect.calls).toHaveLength(0);
   const reqIns = fakeRequest(() => ({ status: 200, json: { data: {} } }));
-  await createProxmoxClient({ host: { ...HOST, verifyMode: 'insecure' }, request: reqIns }).version();
+  await createProxmoxClient({ host: { ...HOST, verifyMode: 'insecure' }, request: reqIns, connect: fakeConnect() }).version();
   expect(reqIns.calls[0].tls.rejectUnauthorized).toBe(false);
-  expect(reqIns.calls[0].tls.checkServerIdentity).toBeUndefined();
 });
 
 test('inspectEndpoint returns the cert fingerprint and caValid; unreachable on throw', async () => {
-  const ok = await inspectEndpoint('pve.example.com:8006', { request: fakeRequest(() => ({
-    status: 200, json: { data: {} }, authorized: false,
-    cert: { fingerprint256: 'AB:CD', subject: { CN: 'pve' }, issuer: { CN: 'pve' }, valid_to: 'Jan 1 2030' },
-  })) });
+  const ok = await inspectEndpoint('pve.example.com:8006', { connect: async () => ({ fingerprint256: 'AB:CD', raw: Buffer.from('x'), authorized: false, subject: { CN: 'pve' }, issuer: { CN: 'pve' }, valid_to: 'Jan 1 2030' }) });
   expect(ok).toMatchObject({ reachable: true, fingerprint256: 'AB:CD', subject: 'pve', caValid: false });
-  const bad = await inspectEndpoint('down.example.com', { request: async () => { throw new Error('ECONNREFUSED'); } });
+  const bad = await inspectEndpoint('down.example.com', { connect: async () => { throw new Error('ECONNREFUSED'); } });
   expect(bad.reachable).toBe(false);
   expect(bad.error).toMatch(/ECONNREFUSED/);
 });
