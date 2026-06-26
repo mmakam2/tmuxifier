@@ -21,7 +21,10 @@ async function makeApp(overrides = {}) {
     ...configOverrides,
   };
   const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
-  const statusChecker = { checkBox: async () => ({ reachable: true, tmux: true, sessions: [] }) };
+  const statusChecker = {
+    checkBox: async () => ({ reachable: true, tmux: true, sessions: [] }),
+    listSessions: async () => ({ reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1 }] }),
+  };
   const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
   return buildServer({ config, store, sessions, statusChecker, ...serverOverrides });
 }
@@ -479,4 +482,37 @@ test('reconnect clears the box backoff so it will be re-probed at full cadence',
   const res = await app.inject({ method: 'POST', url: `/api/boxes/${id}/reconnect`, headers });
   expect(res.statusCode).toBe(200);
   expect(reset).toContain(id);
+});
+
+test('probe-sessions requires auth', async () => {
+  const res = await app.inject({ method: 'POST', url: '/api/boxes/probe-sessions', payload: { host: 'h' } });
+  expect(res.statusCode).toBe(401);
+});
+
+test('probe-sessions returns the live session list for an authed request', async () => {
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'POST', url: '/api/boxes/probe-sessions', headers, payload: { host: 'h' } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json().sessions).toEqual([{ name: 'web', windows: 1 }]);
+});
+
+test('probe-sessions rejects an unsafe host with 400', async () => {
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'POST', url: '/api/boxes/probe-sessions', headers, payload: { host: '-bad' } });
+  expect(res.statusCode).toBe(400);
+});
+
+test('editing sessionName persists through PATCH', async () => {
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h2' } });
+  const box = created.json();
+  expect(box.sessionName).toBe('web');
+  const patched = await app.inject({ method: 'PATCH', url: `/api/boxes/${box.id}`, headers, payload: { sessionName: 'mine' } });
+  expect(patched.statusCode).toBe(200);
+  expect(patched.json().sessionName).toBe('mine');
+  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
+  expect(list.json().find((b) => b.id === box.id).sessionName).toBe('mine');
 });

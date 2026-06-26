@@ -6,6 +6,7 @@ import websocket from '@fastify/websocket';
 import { verifyPassword, COOKIE_NAME, cookieOptions } from './auth.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
 import { buildEnsureTmuxRemote } from './boxActions.js';
+import { assertBoxSafe } from './sshCommand.js';
 import { upsertConfigFile } from './configFile.js';
 import { mapWithConcurrency } from './concurrency.js';
 
@@ -211,6 +212,21 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       }
     }
     await store.removeBox(req.params.id); return { ok: true };
+  });
+  // Read-only: list a box's live tmux sessions to populate the Add/Edit session
+  // dropdown. Accepts an unsaved spec (add mode) or a saved box's fields + id
+  // (edit mode — id lets listSessions apply the live-session guard). assertBoxSafe
+  // rejects unsafe connection fields up front; the probe itself is BatchMode +
+  // ConnectTimeout bounded and rides the shared ControlMaster.
+  app.post('/api/boxes/probe-sessions', { preHandler: requireAuth }, async (req, reply) => {
+    const { id, host, user, port, proxyJump } = req.body || {};
+    const spec = { id, host, user, port, proxyJump };
+    try {
+      assertBoxSafe(spec);
+    } catch (e) {
+      return reply.code(400).send({ error: e.message });
+    }
+    return statusChecker.listSessions(spec);
   });
   app.post('/api/boxes/:id/reconnect', { preHandler: requireAuth }, async (req, reply) => {
     const box = await store.getBox(req.params.id);
