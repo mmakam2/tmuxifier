@@ -626,12 +626,22 @@ test('POST /api/fleet/jobs/:id/cancel cancels or 404s', async () => {
   expect(missing.statusCode).toBe(404);
 });
 
-test('POST /api/fleet/jobs rejects a command exceeding 4096 bytes with 400', async () => {
+test('POST /api/fleet/jobs rejects a command exceeding 65536 bytes with 400', async () => {
   app = await makeApp({ fleetManager: fleetStub() });
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
-  const res = await app.inject({ method: 'POST', url: '/api/fleet/jobs', headers, payload: { boxIds: ['b1'], command: 'x'.repeat(4097) } });
+  const res = await app.inject({ method: 'POST', url: '/api/fleet/jobs', headers, payload: { boxIds: ['b1'], command: 'x'.repeat(65537) } });
   expect(res.statusCode).toBe(400);
+});
+
+test('POST /api/fleet/jobs accepts a multi-line script up to 65536 bytes', async () => {
+  app = await makeApp({ fleetManager: fleetStub() });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const script = '#!/usr/bin/env bash\nset -euo pipefail\n' + 'echo hi\n'.repeat(100);
+  const res = await app.inject({ method: 'POST', url: '/api/fleet/jobs', headers, payload: { boxIds: ['b1'], command: script } });
+  expect(res.statusCode).toBe(201);
+  expect(res.json().command).toBe(script);
 });
 
 test('POST /api/fleet/jobs/:id/cancel rejects a cross-origin request with 403', async () => {

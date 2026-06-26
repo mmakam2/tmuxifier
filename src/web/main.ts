@@ -16,6 +16,7 @@ let allBoxes: Box[] = [];
 let latestStatus: Record<string, Status> = {};
 let fleetMode = false;
 let fleetSelected = new Set<string>();
+let fleetScriptDraft = ''; // in-progress bash-script editor content; survives reopen, cleared on run/exit
 
 const FLEET_RECENT_KEY = 'tmuxifier.fleetRecent';
 function readFleetRecent(): string[] { return parseRecent(localStorage.getItem(FLEET_RECENT_KEY)); }
@@ -270,7 +271,7 @@ async function renderDashboard() {
   app.querySelector('#search')!.addEventListener('input', () => filterAndPaint());
   app.querySelector('#fleet-toggle')!.addEventListener('click', () => {
     fleetMode = !fleetMode;
-    if (!fleetMode) fleetSelected = new Set();
+    if (!fleetMode) { fleetSelected = new Set(); fleetScriptDraft = ''; }
     const layout = app.querySelector('.layout');
     if (layout) layout.classList.toggle('fleet-mode', fleetMode);
     (app.querySelector('#fleet-toggle') as HTMLElement).classList.toggle('active', fleetMode);
@@ -962,6 +963,19 @@ function renderFleetBar() {
   input.setAttribute('list', listId);
   input.autocomplete = 'off';
 
+  // Expand the one-liner into a full bash-script editor (modal). Newlines flow
+  // through to the remote shell verbatim, so a script runs just like a command.
+  const expand = document.createElement('button');
+  expand.type = 'button';
+  expand.className = 'fleet-expand';
+  expand.title = 'Edit as a bash script';
+  expand.setAttribute('aria-label', 'Edit as a bash script');
+  expand.textContent = '⤢';
+
+  const inputRow = document.createElement('div');
+  inputRow.className = 'fleet-input-row';
+  inputRow.append(input, expand);
+
   const run = document.createElement('button');
   run.type = 'button';
   run.id = 'fleet-run';
@@ -976,8 +990,9 @@ function renderFleetBar() {
   }
   run.addEventListener('click', submit);
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  expand.addEventListener('click', () => openFleetScriptEditor(input.value, selectedTargetLabels()));
 
-  bar.append(datalist, input, run);
+  bar.append(datalist, inputRow, run);
   syncFleetUI();
 }
 
@@ -1060,6 +1075,89 @@ function openFleetConfirm(command: string, targets: { id: string; label: string 
     } catch (ex: any) {
       err.textContent = ex?.message || 'Could not start fleet job';
       confirm.disabled = false;
+    }
+  });
+}
+
+// Full bash-script editor for a fleet run. The script text is sent verbatim and
+// executed by each box's login shell, so newlines run exactly like a local
+// script. Doubles as the confirm step — its Run button creates the job directly.
+function openFleetScriptEditor(initial: string, targets: { id: string; label: string }[]) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const form = document.createElement('form');
+  form.className = 'modal fleet-script-modal';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Fleet script';
+
+  const hint = document.createElement('p');
+  hint.className = 'fleet-script-hint';
+  hint.textContent = 'Runs on each selected box via its login shell. Newlines are honored — write a full bash script. ⌘/Ctrl+Enter to run.';
+
+  const editor = document.createElement('textarea');
+  editor.className = 'fleet-script';
+  editor.spellcheck = false;
+  editor.autocapitalize = 'off';
+  editor.setAttribute('autocorrect', 'off');
+  editor.placeholder = '#!/usr/bin/env bash\nset -euo pipefail\n…';
+  editor.value = fleetScriptDraft || initial || '';
+
+  const targetList = document.createElement('div');
+  targetList.className = 'fleet-confirm-targets';
+  targetList.textContent = targets.length
+    ? targets.map((t) => t.label).join('  •  ')
+    : 'No boxes selected — select boxes before running.';
+
+  const err = document.createElement('p');
+  err.className = 'err';
+
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  const runBtn = document.createElement('button');
+  runBtn.type = 'submit';
+  runBtn.className = 'fleet-script-run';
+  runBtn.textContent = `Run on ${targets.length} box${targets.length === 1 ? '' : 'es'}`;
+  runBtn.disabled = targets.length === 0;
+  actions.append(cancel, runBtn);
+
+  form.append(title, hint, editor, targetList, err, actions);
+  backdrop.appendChild(form);
+  app.appendChild(backdrop);
+  editor.focus();
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') close();
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); form.requestSubmit(); }
+  }
+  function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); }
+  document.addEventListener('keydown', onKey);
+  // Keep the in-progress script so reopening restores it; cleared only on a successful run or on leaving fleet mode.
+  editor.addEventListener('input', () => { fleetScriptDraft = editor.value; });
+  cancel.addEventListener('click', close);
+  let pressedOnBackdrop = false;
+  backdrop.addEventListener('mousedown', (e) => { pressedOnBackdrop = e.target === backdrop; });
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop && pressedOnBackdrop) close(); });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const command = editor.value.trim();
+    if (!command) { err.textContent = 'Script is empty'; return; }
+    if (targets.length === 0) { err.textContent = 'Select at least one box'; return; }
+    runBtn.disabled = true;
+    try {
+      const job = await api.createFleetJob(targets.map((t) => t.id), command);
+      // Only single-line commands belong in the one-liner autocomplete/datalist.
+      if (!command.includes('\n')) pushFleetRecent(command);
+      fleetScriptDraft = '';
+      close();
+      openFleetJobsPanel(job.id);
+    } catch (ex: any) {
+      err.textContent = ex?.message || 'Could not start fleet job';
+      runBtn.disabled = false;
     }
   });
 }
