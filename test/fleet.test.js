@@ -104,3 +104,35 @@ test('listJobs returns newest-first summaries with counts; prunes to maxJobs', a
   const summaryA = list.find((s) => s.command === 'b');
   expect(summaryA).toMatchObject({ targetCount: 1, okCount: 1, errorCount: 0 });
 });
+
+test('cancelJob stops queued targets; in-flight finishes; job ends cancelled', async () => {
+  let release0;
+  const block0 = new Promise((r) => { release0 = r; });
+  let calls = 0;
+  const mgr = createFleetManager({
+    store: makeStore([
+      { id: 'b1', label: 'n1', host: 'h1' },
+      { id: 'b2', label: 'n2', host: 'h2' },
+      { id: 'b3', label: 'n3', host: 'h3' },
+    ]),
+    concurrency: 1, // strictly sequential so b2/b3 are still queued when we cancel
+    execCommand: async () => { calls++; if (calls === 1) await block0; return { code: 0, stdout: '', stderr: '' }; },
+  });
+  const job = await mgr.createJob({ boxIds: ['b1', 'b2', 'b3'], command: 'x' }); // b1 in-flight, blocked
+  mgr.cancelJob(job.id);  // request cancel while b1 is still running
+  release0();             // let b1 complete; b2/b3 see the flag and are skipped
+  await mgr._settled(job.id);
+  expect(job.status).toBe('cancelled');
+  expect(job.targets[0].status).toBe('ok');
+  expect(job.targets[1].status).toBe('cancelled');
+  expect(job.targets[2].status).toBe('cancelled');
+  expect(calls).toBe(1); // b2/b3 never invoked execCommand
+});
+
+test('cancelJob returns undefined for an unknown id and is a no-op on a finished job', async () => {
+  const mgr = createFleetManager({ store: makeStore(BOXES), execCommand: async () => ({ code: 0, stdout: '', stderr: '' }) });
+  expect(mgr.cancelJob('nope')).toBeUndefined();
+  const job = await mgr.createJob({ boxIds: ['b1'], command: 'x' });
+  await mgr._settled(job.id);
+  expect(mgr.cancelJob(job.id).status).toBe('done'); // already finished — unchanged
+});

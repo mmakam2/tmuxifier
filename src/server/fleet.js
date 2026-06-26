@@ -21,6 +21,7 @@ export function createFleetManager({
   const loaded = load();
   const jobs = Array.isArray(loaded) ? loaded : []; // oldest first; newest pushed to the end
   const runs = new Map();                            // jobId -> in-flight run promise (test affordance)
+  const cancelled = new Set(); // jobIds with a pending cancel request (in-memory only)
 
   function prune() {
     while (jobs.length > maxJobs) jobs.shift();
@@ -47,7 +48,7 @@ export function createFleetManager({
         t.finishedAt = now();
       }
     }
-    job.status = 'done';
+    job.status = cancelled.has(job.id) ? 'cancelled' : 'done';
     job.finishedAt = now();
     save(jobs);
   }
@@ -59,6 +60,7 @@ export function createFleetManager({
     await new Promise((r) => setTimeout(r, 0));
     try {
       await mapWithConcurrency(job.targets, concurrency, async (t) => {
+        if (t.status === 'cancelled') return; // already cancelled by a completed sibling
         t.status = 'running';
         t.startedAt = now();
         save(jobs);
@@ -79,6 +81,15 @@ export function createFleetManager({
         }
         t.finishedAt = now();
         save(jobs);
+        if (cancelled.has(job.id)) {
+          for (const pending of job.targets) {
+            if (pending.status === 'pending') {
+              pending.status = 'cancelled';
+              pending.finishedAt = now();
+            }
+          }
+          save(jobs);
+        }
       });
     } catch {
       // Unexpected runner failure — finalize below so a job never dangles 'running'.
@@ -124,6 +135,12 @@ export function createFleetManager({
     },
     getJob(id) {
       return jobs.find((j) => j.id === id);
+    },
+    cancelJob(id) {
+      const job = jobs.find((j) => j.id === id);
+      if (!job) return undefined;
+      if (job.status === 'running') cancelled.add(id);
+      return job;
     },
     listJobs() {
       return [...jobs].reverse().map(summarize);
