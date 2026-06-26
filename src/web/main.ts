@@ -379,7 +379,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   const nameEl = document.createElement('span');
   nameEl.className = 'name';
   nameEl.textContent = b.label;
-  nameEl.addEventListener('click', () => openBox(b));
+  li.addEventListener('click', () => openBox(b));
 
   const refreshBtn = document.createElement('button');
   refreshBtn.className = 'refresh';
