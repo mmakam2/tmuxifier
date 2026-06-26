@@ -324,7 +324,32 @@ test('listSessions: auth failure reports needsAuth', async () => {
   expect(result.needsAuth).toBe(true);
 });
 
-test('listSessions: skips the probe when a live session owns the socket', async () => {
+test('listSessions: skips the probe mid-login (live session, master not up yet)', async () => {
+  let called = false;
+  const run = async () => { called = true; return { code: 0, stdout: '', stderr: '' }; };
+  const result = await createStatusChecker({ run, hasLiveSession: () => true, masterAlive: () => false })
+    .listSessions({ id: 'b1', host: 'h' });
+  expect(result).toEqual({ reachable: true, tmux: true, inUse: true, sessions: [] });
+  expect(called).toBe(false);
+});
+
+test('listSessions: probes over the live master when a session is live but the master is alive', async () => {
+  let called = false;
+  const run = async () => { called = true; return { code: 0, stdout: 'web:1:1:1718000000\nmine:2:0:1718000100\n', stderr: '' }; };
+  const result = await createStatusChecker({ run, hasLiveSession: () => true, masterAlive: () => true })
+    .listSessions({ id: 'b1', host: 'h' });
+  expect(called).toBe(true);
+  expect(result).toEqual({
+    reachable: true,
+    tmux: true,
+    sessions: [
+      { name: 'web', windows: 1, attached: true, activity: 1718000000 },
+      { name: 'mine', windows: 2, attached: false, activity: 1718000100 },
+    ],
+  });
+});
+
+test('listSessions: skips the probe when a session is live and masterAlive is not wired (conservative default)', async () => {
   let called = false;
   const run = async () => { called = true; return { code: 0, stdout: '', stderr: '' }; };
   const result = await createStatusChecker({ run, hasLiveSession: () => true })

@@ -646,7 +646,7 @@ function openBoxDialog(box?: Box) {
       const portRaw = fields.port.value.trim(); if (portRaw) spec.port = Number(portRaw);
       const res = await api.probeSessions(spec);
       if (res.inUse) {
-        sessionHint.textContent = 'in use — showing cached';
+        sessionHint.textContent = 'terminal still connecting — retry shortly';
       } else if (res.needsAuth) {
         sessionHint.textContent = 'needs login — open the terminal';
         sessionHint.className = 'session-hint err';

@@ -118,13 +118,19 @@ export function createStatusChecker({
       return pending;
     },
     // On-demand fetch of a box's live tmux sessions for the Add/Edit dialog. User
-    // triggered (the ⟳ button), so it ignores the poll backoff — but it still rides
-    // the shared ControlMaster and coalesces concurrent fetches, and it is skipped
-    // entirely when a live interactive session owns the socket (a BatchMode probe
-    // would collide with that login). The dialog keeps its cached pre-fill instead.
+    // triggered (the ⟳ button), so it ignores the poll backoff, rides the shared
+    // ControlMaster, and coalesces concurrent fetches. When a terminal is open we
+    // still refresh: once that session's ControlMaster is established, `tmux ls`
+    // multiplexes over it as a separate channel without disturbing the terminal.
+    // We skip the probe only in the narrow mid-login window — session open but the
+    // master not up yet — where a BatchMode probe would race the login; then we
+    // report inUse and the dialog keeps its cached pre-fill. A socket-only
+    // `masterAlive` check (no network/auth) tells the two apart; if it isn't wired
+    // we can't confirm the master is up, so we skip conservatively.
     async listSessions(box) {
       if (hasLiveSession && hasLiveSession(box)) {
-        return { reachable: true, tmux: true, inUse: true, sessions: [] };
+        const alive = masterAlive ? await masterAlive(box) : false;
+        if (!alive) return { reachable: true, tmux: true, inUse: true, sessions: [] };
       }
       const key = keyFor(box);
       let pending = sessInflight.get(key);

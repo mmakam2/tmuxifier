@@ -30,9 +30,18 @@ constrained to add **no surprise** SSH volume:
 - The probe reuses the box's shared **ControlMaster** socket (keyed by the `%C` hash of
   user/host/port, not box id) and the status checker's **in-flight de-dup**, so a fetch rides the
   open master instead of opening a fresh TCP+auth handshake.
-- If the box has a **live interactive session**, the probe is **skipped entirely** (it would collide
-  with the login on the shared socket — the documented garbled-prompt bug); the client keeps its
-  cached pre-fill instead.
+- If the box has a **live interactive session**, the probe still runs **as long as that session's
+  ControlMaster is established** — `tmux ls` then multiplexes over the live master as a separate
+  channel without disturbing the terminal. The probe is skipped **only in the narrow mid-login
+  window** (session open but the master not up yet), where it would race the login (the documented
+  garbled-prompt bug); then the client keeps its cached pre-fill. A socket-only `masterAlive`
+  (`ssh -O check`, no network/auth) tells the two apart.
+
+> **Amendment (2026-06-26, from testing feedback):** the original design skipped the probe whenever
+> any interactive session was open, which made ⟳ useless precisely on the boxes a user is actively
+> working on (the dropdown showed only `web`). Refined to the `masterAlive`-gated behavior above:
+> refresh works on a live box; only the brief mid-login window is deferred. Updated `listSessions`,
+> its tests, and the `inUse` hint copy ("terminal still connecting — retry shortly").
 
 ## Behavior
 
@@ -41,8 +50,10 @@ constrained to add **no surprise** SSH volume:
 **`status.js` — new `listSessions(box)`** (sibling to the existing `probe()`, reusing `run`,
 `PROBE_REMOTE`, `parseTmuxSessions`, the `controlDir`/`controlPersist` args, and in-flight de-dup):
 
-- If `hasLiveSession(box.id)` is true → **do not probe**. Return
-  `{ reachable: true, tmux: true, inUse: true, sessions: [] }`.
+- If `hasLiveSession(box.id)` is true, check `masterAlive(box)` (socket-only `ssh -O check`):
+  - master **not** alive (mid-login, or `masterAlive` not wired) → **do not probe**. Return
+    `{ reachable: true, tmux: true, inUse: true, sessions: [] }`.
+  - master **alive** → fall through and probe over the shared master (multiplexed, safe).
 - Otherwise run `buildProbeArgv(box, PROBE_REMOTE, { hostKeyPolicy, sshConfigFile, controlDir,
   controlPersist })` through `run` and return, mirroring `probe()`:
   - reachable + tmux running → `{ reachable: true, tmux: true, sessions: [...] }`
@@ -86,7 +97,7 @@ provisioning extra):
   - probing… (disabled spinner state)
   - success → repopulate datalist (`web` + returned names)
   - `tmux === false` → "tmux not running"
-  - `inUse` → "in use — showing cached" (keeps existing options)
+  - `inUse` → "terminal still connecting — retry shortly" (keeps existing options)
   - `needsAuth` → "needs login — open the terminal"
   - unreachable / error → "couldn't reach host" (keeps existing options)
 - **Submit:** `sessionName = input.value.trim() || 'web'`, **always** included in the spec (add) and
@@ -104,8 +115,8 @@ Add/Edit dialog (main.ts)
   ├─ ⟳ click: api.probeSessions({id?,host,user,port,proxyJump})
   │      └─ POST /api/boxes/probe-sessions (server.js, auth-gated)
   │             └─ statusChecker.listSessions(spec) (status.js)
-  │                    ├─ hasLiveSession(id) ─► inUse, no SSH
-  │                    └─ buildProbeArgv + run over shared ControlMaster ─► sessions
+  │                    ├─ hasLiveSession(id) && !masterAlive ─► inUse, no SSH (mid-login)
+  │                    └─ else: buildProbeArgv + run over shared ControlMaster ─► sessions
   └─ submit: spec.sessionName / patch.sessionName ─► store.normalize ─► sanitizeSession
                                                           └─► buildAttachArgv / buildEnsureTmuxRemote
 ```
@@ -124,7 +135,8 @@ Add/Edit dialog (main.ts)
   - `__NO_TMUX__` → `{ tmux: false, sessions: [] }`
   - unreachable → `{ reachable: false, error }`
   - auth failure → `{ reachable: false, needsAuth: true }`
-  - live-session guard → `{ inUse: true }` **and asserts the injected `run` was never called**
+  - live session + master **not** alive (mid-login) → `{ inUse: true }` **and asserts the injected
+    `run` was never called**; live session + master alive → **probes** and returns parsed sessions
 - **Integration — `POST /api/boxes/probe-sessions`:**
   - returns sessions for a stubbed `run`
   - `401` without the auth cookie
