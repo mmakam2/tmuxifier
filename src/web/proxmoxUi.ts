@@ -32,7 +32,13 @@ export function openProxmoxHub(opts: HubOpts) {
   const tabStrip = el('div', { class: 'pve-tabs' });
   const content = el('div', { class: 'pve-content' });
   const close = () => { stopPoll(); backdrop.remove(); };
-  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+  // Only close on a genuine backdrop click. A text selection that starts inside the modal
+  // and ends on the backdrop produces a click whose target is the backdrop (the common
+  // ancestor), which would otherwise close the modal — so require the press to have
+  // started on the backdrop too (matches the box/fleet modals in main.ts).
+  let pressedOnBackdrop = false;
+  backdrop.addEventListener('mousedown', (e) => { pressedOnBackdrop = e.target === backdrop; });
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop && pressedOnBackdrop) close(); });
 
   let active: Tab = 'Hosts';
   const renderers: Record<Tab, () => Promise<void> | void> = {
