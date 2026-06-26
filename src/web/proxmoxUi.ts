@@ -142,6 +142,7 @@ export function openProxmoxHub(opts: HubOpts) {
     const hostSel = el('select', {}, hosts.map((h) => el('option', { value: h.id }, [h.name])));
     const nodeSel = el('select', {});
     const tmplSel = el('select', {});
+    const tmplStoreSel = el('select', {});
     const storeSel = el('select', {});
     const bridgeSel = el('select', {});
     const disk = input('8', { type: 'number', min: '1' });
@@ -170,12 +171,20 @@ export function openProxmoxHub(opts: HubOpts) {
       const [sg, br] = await Promise.all([pve.storage(id, node).catch(() => ({ rootdir: [], vztmpl: [] })), pve.bridges(id, node).catch(() => [])]);
       storeSel.replaceChildren(...sg.rootdir.map((s) => el('option', { value: s.storage }, [s.storage])));
       bridgeSel.replaceChildren(...br.map((b) => el('option', { value: b.iface }, [b.iface])));
-      const tmplStorage = sg.vztmpl[0]?.storage;
-      const tmpls = tmplStorage ? await pve.templates(id, node, tmplStorage).catch(() => []) : [];
+      // Template storage drives the template list: list the storages that can hold templates
+      // (content includes vztmpl), then load whatever templates exist on the selected one.
+      tmplStoreSel.replaceChildren(...sg.vztmpl.map((s) => el('option', { value: s.storage }, [s.storage])));
+      await loadTemplates();
+    }
+    async function loadTemplates() {
+      const id = hostSel.value, node = nodeSel.value, storage = (tmplStoreSel as HTMLSelectElement).value;
+      if (!node || !storage) { tmplSel.replaceChildren(); return; }
+      const tmpls = await pve.templates(id, node, storage).catch(() => []);
       tmplSel.replaceChildren(...tmpls.map((t) => el('option', { value: t.volid }, [t.volid.split('/').pop() || t.volid])));
     }
     hostSel.addEventListener('change', () => void loadNodes());
     nodeSel.addEventListener('change', () => void loadNodeScoped());
+    tmplStoreSel.addEventListener('change', () => void loadTemplates());
 
     const save = el('button', { type: 'submit', onclick: async (e) => {
       e.preventDefault(); box.querySelector('.pve-err')?.remove();
@@ -194,7 +203,7 @@ export function openProxmoxHub(opts: HubOpts) {
 
     box.append(
       el('h3', {}, ['Add a container preset']),
-      field('Name', name), field('Host', hostSel), field('Node', nodeSel), field('Template', tmplSel), field('Storage (rootfs)', storeSel),
+      field('Name', name), field('Host', hostSel), field('Node', nodeSel), field('Template storage', tmplStoreSel), field('Template', tmplSel), field('Storage (rootfs)', storeSel),
       el('div', { class: 'pve-grid' }, [field('Disk GiB', disk), field('Cores', cores), field('Memory MiB', mem), field('Swap MiB', swap)]),
       el('label', { class: 'check-field' }, [unpriv, el('span', {}, ['Unprivileged'])]),
       el('label', { class: 'check-field' }, [nesting, el('span', {}, ['Nesting'])]),
