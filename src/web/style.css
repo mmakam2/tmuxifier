@@ -73,6 +73,18 @@ body {
 .layout.sidebar-collapsed .boxes,
 .layout.sidebar-collapsed .local-shell { display: none; }
 .actions { display: flex; flex-direction: column; gap: 6px; }
+/* "+ Add box" joins the fleet-button HUD family: panel-2 at rest, cyan border +
+   cyan text + a faint cyan glow on hover. */
+.actions button {
+  font-weight: 600;
+  transition: color 0.2s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+.actions button:hover {
+  border-color: rgba(36, 211, 232, 0.45);
+  color: var(--cyan);
+  box-shadow: 0 0 10px rgba(36, 211, 232, 0.12), inset 0 0 8px rgba(36, 211, 232, 0.05);
+}
+@media (prefers-reduced-motion: reduce) { .actions button { transition: none; } }
 .search {
   padding: 8px 10px;
   border-radius: 8px;
