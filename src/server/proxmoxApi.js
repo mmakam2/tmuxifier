@@ -25,7 +25,7 @@ function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 150
       rejectUnauthorized: tlsOpts.rejectUnauthorized !== false,
       ...(tlsOpts.ca ? { ca: tlsOpts.ca } : {}),
       ...(typeof tlsOpts.checkServerIdentity === 'function' ? { checkServerIdentity: tlsOpts.checkServerIdentity } : {}),
-    }, (res) => { let data = ''; res.on('data', (c) => { data += c; }); res.on('end', () => { let json = null; try { json = data ? JSON.parse(data) : null; } catch {} resolve({ status: res.statusCode, json, text: data }); }); });
+    }, (res) => { let data = ''; res.on('data', (c) => { data += c; }); res.on('end', () => { let json = null; try { json = data ? JSON.parse(data) : null; } catch {} resolve({ status: res.statusCode, statusMessage: res.statusMessage, json, text: data }); }); });
     req.on('timeout', () => req.destroy(new Error('Proxmox request timed out')));
     req.on('error', reject);
     if (body) req.write(body);
@@ -57,9 +57,17 @@ export function createProxmoxClient({ host, request = httpsRequest, connect = tl
     const opts = { url: `${base}${p}`, method, headers: { Authorization: `PVEAPIToken=${host.tokenId}=${host.tokenSecret}` }, timeoutMs, tls: tlsOpts };
     if (params) { opts.body = new URLSearchParams(cleanParams(params)).toString(); opts.headers['Content-Type'] = 'application/x-www-form-urlencoded'; }
     const res = await request(opts);
-    if (res.status === 401) throw new Error('Proxmox token rejected (401)');
-    if (res.status === 403) throw new Error('Proxmox token lacks permission (403)');
-    if (res.status >= 400) throw new Error(`Proxmox API error ${res.status}`);
+    if (res.status >= 400) {
+      // PVE puts the real reason in the HTTP status message (and sometimes the body);
+      // surface it so errors like 501 aren't opaque ("Proxmox API error 501" alone is useless).
+      const detail = res.statusMessage
+        || (res.json && (res.json.message || (res.json.errors && JSON.stringify(res.json.errors))))
+        || (res.text || '').trim().slice(0, 300);
+      const base = res.status === 401 ? 'Proxmox token rejected (401)'
+        : res.status === 403 ? 'Proxmox token lacks permission (403)'
+        : `Proxmox API error ${res.status}`;
+      throw new Error(detail ? `${base}: ${detail}` : base);
+    }
     return res.json ? res.json.data : null;
   }
   const enc = encodeURIComponent;

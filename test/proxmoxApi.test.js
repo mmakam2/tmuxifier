@@ -47,6 +47,13 @@ test('maps 401 and 403 to clear errors', async () => {
   await expect(c403.version()).rejects.toThrow(/permission|403/);
 });
 
+test('surfaces the PVE status message (and body) so errors like 501 are not opaque', async () => {
+  const c = createProxmoxClient({ host: HOST, connect: fakeConnect(), request: fakeRequest(() => ({ status: 501, statusMessage: "Method 'POST /nodes/x/lxc' not implemented", json: null })) });
+  await expect(c.version()).rejects.toThrow(/501.*not implemented/i);
+  const cb = createProxmoxClient({ host: HOST, connect: fakeConnect(), request: fakeRequest(() => ({ status: 500, json: { errors: { vmid: 'already exists' } } })) });
+  await expect(cb.version()).rejects.toThrow(/already exists/);
+});
+
 test('pin mode: a fingerprint mismatch rejects BEFORE the token-bearing request is sent', async () => {
   // match -> the real request is made with the pinned cert as CA and rejectUnauthorized true
   const reqOk = fakeRequest(() => ({ status: 200, json: { data: {} } }));
