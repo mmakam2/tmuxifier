@@ -235,7 +235,7 @@ body {
   cursor: pointer;
 }
 .fleet-actions button:hover { border-color: rgba(36, 211, 232, 0.45); }
-.fleet-toggle.active {
+.fleet-toggle.active, .fleet-jobs-btn.active {
   border-color: rgba(36, 211, 232, 0.5);
   background: rgba(36, 211, 232, 0.14);
   color: var(--cyan);

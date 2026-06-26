@@ -283,7 +283,7 @@ async function renderDashboard() {
   });
   app.querySelector('#fleet-jobs')!.addEventListener('click', () => {
     const panel = document.getElementById('fleet-panel')!;
-    if (panel.classList.contains('open')) { stopFleetPoll(); panel.classList.remove('open'); }
+    if (panel.classList.contains('open')) closeFleetJobsPanel();
     else openFleetJobsPanel();
   });
 
@@ -1172,11 +1172,18 @@ let fleetPollJobId: string | null = null;
 
 function stopFleetPoll() { if (fleetPollTimer) { clearTimeout(fleetPollTimer); fleetPollTimer = null; } fleetPollJobId = null; }
 
+function closeFleetJobsPanel() {
+  stopFleetPoll();
+  document.getElementById('fleet-panel')!.classList.remove('open');
+  document.getElementById('fleet-jobs')?.classList.remove('active');
+}
+
 function openFleetJobsPanel(jobId?: string) {
   const panel = document.getElementById('fleet-panel')!;
   panel.classList.add('open');
+  document.getElementById('fleet-jobs')?.classList.add('active');
   const closeBtn = panel.querySelector('.fleet-panel-close') as HTMLElement;
-  closeBtn.onclick = () => { stopFleetPoll(); panel.classList.remove('open'); };
+  closeBtn.onclick = () => closeFleetJobsPanel();
   renderFleetHistory();
   if (jobId) showFleetJob(jobId);
   else (panel.querySelector('.fleet-detail') as HTMLElement).innerHTML = '<p class="fleet-empty">Select a job to see results.</p>';
