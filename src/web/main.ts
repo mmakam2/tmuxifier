@@ -4,6 +4,7 @@ import { dotClassFor, dotTitleFor } from './statusDot';
 import { toggleBox, setBoxes, groupState } from './fleetSelection';
 import { addRecent, parseRecent } from './fleetHistory';
 import logoUrl from './assets/tmuxifier-logo.png';
+import { openProxmoxHub } from './proxmoxUi';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
@@ -249,7 +250,7 @@ async function renderDashboard() {
           <input id="import-file" type="file" accept="application/json,.json" hidden />
         </div>
         <div class="actions"><button id="add">+ Add box</button></div>
-        <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button></div>
+        <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button><button id="proxmox" type="button" class="proxmox-btn" title="Provision Proxmox LXC containers">Proxmox</button></div>
         <div id="fleet-bar" class="fleet-bar" hidden></div>
         <input id="search" class="search" type="text" placeholder="Search…" autocomplete="off" />
         <ul id="boxes" class="boxes"></ul>
@@ -323,6 +324,10 @@ async function renderDashboard() {
     if (panel.classList.contains('open')) closeFleetJobsPanel();
     else openFleetJobsPanel();
   });
+  app.querySelector('#proxmox')!.addEventListener('click', () => openProxmoxHub({
+    openBox: (b) => openBox(b),
+    onBoxLinked: () => { void refresh(); },
+  }));
 
   // Local shell — name click opens terminal
   app.querySelector('.local-name')!.addEventListener('click', () => openLocalShell());

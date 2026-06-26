@@ -389,3 +389,32 @@ body {
 .toast { position: fixed; bottom: 22px; left: 50%; translate: -50% 16px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 10px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s ease, translate .2s ease; z-index: 1000; pointer-events: none; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45); }
 .toast.show { opacity: 1; translate: -50% 0; }
 .toast-error { border-color: rgba(248, 81, 73, 0.5); color: #ffb4ad; }
+
+/* Proxmox hub */
+.modal.pve-hub { width: 560px; max-height: 86vh; }
+.pve-head { display: flex; justify-content: space-between; align-items: center; }
+.pve-close { background: none; border: 0; color: #8b949e; cursor: pointer; font-size: 16px; }
+.pve-tabs { display: flex; gap: 4px; border-bottom: 1px solid #232a36; }
+.pve-tab { padding: 7px 12px; background: none; border: 0; border-bottom: 2px solid transparent; color: #8b949e; cursor: pointer; font-size: 13px; }
+.pve-tab.active { color: #c9d1d9; border-bottom-color: #1f6feb; }
+.pve-content { overflow: auto; padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.pve-list { display: flex; flex-direction: column; gap: 6px; }
+.pve-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #232a36; border-radius: 8px; background: #131722; }
+.pve-row-btn { width: 100%; text-align: left; color: inherit; cursor: pointer; }
+.pve-row-actions { display: flex; gap: 6px; }
+.pve-row-actions button, .pve-row button { padding: 4px 10px; border-radius: 6px; border: 1px solid #232a36; background: #0f131c; color: #c9d1d9; cursor: pointer; font-size: 12px; }
+.pve-row button.danger { color: #f85149; }
+.pve-sub { color: #6e7681; font-size: 12px; }
+.pve-hr { border: 0; border-top: 1px solid #232a36; width: 100%; margin: 4px 0; }
+.pve-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pve-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pve-textarea { padding: 9px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; font: inherit; resize: vertical; }
+.pve-hub select { padding: 9px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; font-size: 14px; }
+.pve-err { color: #f85149; font-size: 12px; }
+.pve-phase { font-size: 13px; color: #c9d1d9; }
+.pve-log { max-height: 320px; overflow: auto; background: #0a0d14; border: 1px solid #232a36; border-radius: 8px; padding: 10px; font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; }
+.pve-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid #232a36; }
+.pve-badge.done { color: #3fb950; } .pve-badge.error { color: #f85149; } .pve-badge.running { color: #d29922; }
+.pve-primary { padding: 8px 16px; border-radius: 8px; border: 1px solid #1f6feb; background: #1f6feb; color: #fff; cursor: pointer; }
+.proxmox-btn { padding: 6px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; cursor: pointer; font-size: 13px; }
+.proxmox-btn:hover { border-color: #2f6feb; }
