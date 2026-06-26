@@ -8,6 +8,8 @@ output/
 config.json
 *.local
 .DS_Store
+# Local npm config (machine-specific prefix path; never commit to the public repo)
+.npmrc
 
 # Local TLS material (private key must never be committed)
 tls/
