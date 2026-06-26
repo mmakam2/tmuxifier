@@ -222,3 +222,22 @@ test('fleet command knobs have defaults and are overridable via env', () => {
   expect(e.fleetMaxJobs).toBe(10);
   expect(e.fleetMaxOutputBytes).toBe(1024);
 });
+
+test('proxmox knobs have defaults and are overridable via env', () => {
+  const d = loadConfig({}, { env: {}, cwd: '/app' });
+  expect(d.pvePollMs).toBe(1500);
+  expect(d.pveTimeoutMs).toBe(15000);
+  expect(d.pveProvisionTimeoutMs).toBe(600000);
+  expect(d.pveLeaseTimeoutMs).toBe(60000);
+  expect(d.pveMaxJobs).toBe(50);
+  const e = loadConfig({}, { env: {
+    TMUXIFIER_PVE_POLL_MS: '500', TMUXIFIER_PVE_TIMEOUT_MS: '9000',
+    TMUXIFIER_PVE_PROVISION_TIMEOUT_MS: '120000', TMUXIFIER_PVE_LEASE_TIMEOUT_MS: '30000',
+    TMUXIFIER_PVE_MAX_JOBS: '10',
+  }, cwd: '/app' });
+  expect(e.pvePollMs).toBe(500);
+  expect(e.pveTimeoutMs).toBe(9000);
+  expect(e.pveProvisionTimeoutMs).toBe(120000);
+  expect(e.pveLeaseTimeoutMs).toBe(30000);
+  expect(e.pveMaxJobs).toBe(10);
+});

@@ -29,6 +29,13 @@ const DEFAULTS = {
   fleetTimeoutMs: 15000,       // per-box ssh exec timeout (ms)
   fleetMaxJobs: 50,            // retained job history; older jobs are pruned
   fleetMaxOutputBytes: 65536,  // per-stream capture cap per box (64 KiB)
+  // Proxmox LXC provisioning (Phase 1). Poll cadence for PVE task progress, per-request
+  // and overall-provision timeouts, DHCP-lease discovery window, and retained job history.
+  pvePollMs: 1500,
+  pveTimeoutMs: 15000,
+  pveProvisionTimeoutMs: 600000,
+  pveLeaseTimeoutMs: 60000,
+  pveMaxJobs: 50,
 };
 
 function clean(obj) {
@@ -63,6 +70,11 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     fleetTimeoutMs: e.TMUXIFIER_FLEET_TIMEOUT_MS ? Number(e.TMUXIFIER_FLEET_TIMEOUT_MS) : undefined,
     fleetMaxJobs: e.TMUXIFIER_FLEET_MAX_JOBS ? Number(e.TMUXIFIER_FLEET_MAX_JOBS) : undefined,
     fleetMaxOutputBytes: e.TMUXIFIER_FLEET_MAX_OUTPUT_BYTES ? Number(e.TMUXIFIER_FLEET_MAX_OUTPUT_BYTES) : undefined,
+    pvePollMs: e.TMUXIFIER_PVE_POLL_MS ? Number(e.TMUXIFIER_PVE_POLL_MS) : undefined,
+    pveTimeoutMs: e.TMUXIFIER_PVE_TIMEOUT_MS ? Number(e.TMUXIFIER_PVE_TIMEOUT_MS) : undefined,
+    pveProvisionTimeoutMs: e.TMUXIFIER_PVE_PROVISION_TIMEOUT_MS ? Number(e.TMUXIFIER_PVE_PROVISION_TIMEOUT_MS) : undefined,
+    pveLeaseTimeoutMs: e.TMUXIFIER_PVE_LEASE_TIMEOUT_MS ? Number(e.TMUXIFIER_PVE_LEASE_TIMEOUT_MS) : undefined,
+    pveMaxJobs: e.TMUXIFIER_PVE_MAX_JOBS ? Number(e.TMUXIFIER_PVE_MAX_JOBS) : undefined,
     hostKeyPolicy: e.TMUXIFIER_HOSTKEY_POLICY,
     authMode: e.TMUXIFIER_AUTH_MODE,
     publicUrl: e.TMUXIFIER_BASE_EXTERNAL_URL ?? e.TMUXIFIER_PUBLIC_URL,
