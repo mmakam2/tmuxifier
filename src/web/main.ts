@@ -597,9 +597,6 @@ function openBoxDialog(box?: Box) {
   // tmux session: a type-or-pick field. The datalist pre-fills from the status
   // snapshot we already cache (0 new SSH); the ⟳ button does a user-triggered
   // live probe. Empty submits as 'web' (the store default).
-  const sessionListId = `session-options-${Math.random().toString(36).slice(2)}`;
-  const sessionDatalist = document.createElement('datalist');
-  sessionDatalist.id = sessionListId;
   const sessionWrap = document.createElement('label');
   sessionWrap.className = 'field';
   const sessionSpan = document.createElement('span');
@@ -609,29 +606,20 @@ function openBoxDialog(box?: Box) {
   const sessionInput = document.createElement('input');
   sessionInput.type = 'text';
   sessionInput.placeholder = 'web';
-  sessionInput.setAttribute('list', sessionListId);
   if (isEdit && box!.sessionName) sessionInput.value = box!.sessionName;
   const sessionRefresh = document.createElement('button');
   sessionRefresh.type = 'button';
   sessionRefresh.className = 'session-refresh';
   sessionRefresh.title = 'Fetch live tmux sessions from the host';
   sessionRefresh.textContent = '⟳';
-  // Visible picker. The native datalist popup filters its options by the text
-  // already in the field, so a pre-filled session name hides every other option.
-  // These chips always show every known session and fill the field on click; the
-  // datalist stays for type-ahead.
+  // Known sessions show as clickable chips that fill the field on click; the
+  // field itself stays free-text so you can also type a brand-new session name.
   const sessionPicker = document.createElement('div');
   sessionPicker.className = 'session-picker';
   const sessionHint = document.createElement('span');
   sessionHint.className = 'session-hint';
   function applySessions(names: string[]) {
     const all = Array.from(new Set(['web', ...names.filter(Boolean)]));
-    sessionDatalist.replaceChildren(...all.map((n) => {
-      const o = document.createElement('option');
-      o.value = n;
-      if (n === 'web') o.label = 'web (default)';
-      return o;
-    }));
     sessionPicker.replaceChildren(...all.map((n) => {
       const chip = document.createElement('button');
       chip.type = 'button';
@@ -647,7 +635,7 @@ function openBoxDialog(box?: Box) {
     }));
   }
   sessionRow.append(sessionInput, sessionRefresh);
-  sessionWrap.append(sessionSpan, sessionRow, sessionPicker, sessionDatalist, sessionHint);
+  sessionWrap.append(sessionSpan, sessionRow, sessionPicker, sessionHint);
   // Pre-fill from cached status (edit mode only — an unsaved box has no snapshot).
   applySessions(isEdit ? (latestStatus[box!.id]?.sessions ?? []).map((s) => s.name) : []);
 

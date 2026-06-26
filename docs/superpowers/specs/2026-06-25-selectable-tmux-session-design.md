@@ -10,10 +10,10 @@ that named session exists — but it is **not surfaced anywhere in the UI**. The
 box at a different session today is to hand-edit `data/boxes.json`.
 
 Users sometimes keep their own tmux sessions on a host (not Tmuxifier's `web`). This change exposes
-`sessionName` in the Add/Edit box dialog as a **type-or-pick** field: a free-text input backed by a
-datalist of available session names, defaulting to `web`. The dropdown pre-fills for free from the
-sessions the status poller already caches, and a **⟳** button does an on-demand live probe when the
-user wants a fresh list.
+`sessionName` in the Add/Edit box dialog as a **type-or-pick** field: a free-text input (so a
+brand-new session name can be typed) accompanied by clickable **chips** of the available session
+names, defaulting to `web`. The chips pre-fill for free from the sessions the status poller already
+caches, and a **⟳** button does an on-demand live probe when the user wants a fresh list.
 
 Because the store and attach/provision paths already honor `sessionName`, this is almost entirely a
 UI surfacing change plus one new read-only probe endpoint.
@@ -86,20 +86,22 @@ constrained to add **no surprise** SSH volume:
 provisioning toggles** (it governs which session the terminal/provisioner targets, not a
 provisioning extra):
 
-- A datalist-backed `<input list=…>` (type-or-pick) with a **⟳** button beside it.
-- Placeholder `web`. In edit mode, prefilled with `box.sessionName`.
-- **Pre-fill (free):** datalist options = `web` (default) merged with the names from
-  `status[box.id]?.sessions` in the already-fetched status map. Edit-mode opens with the live list
-  and zero new SSH.
+- A free-text `<input>` with a **⟳** button beside it, and a row of clickable session **chips**
+  below. (A native `<datalist>` was tried first but its popup filters options by the text already in
+  the field, so a pre-filled session name hid every other option — chips always show the full set.)
+- Placeholder `web`. In edit mode, prefilled with `box.sessionName`. Clicking a chip fills the input
+  and marks that chip selected; the input stays editable for typing a brand-new name.
+- **Pre-fill (free):** chips = `web` (default) merged with the names from `status[box.id]?.sessions`
+  in the already-fetched status map. Edit-mode opens with the live list and zero new SSH.
 - **⟳ click:** reads the dialog's current host/user/port/proxyJump (plus `id` in edit mode — so it
   works before save in add mode and reflects edited connection fields) and calls `probeSessions`.
   An inline status line beside the field reflects the outcome:
   - probing… (disabled spinner state)
-  - success → repopulate datalist (`web` + returned names)
+  - success → rebuild chips (`web` + returned names)
   - `tmux === false` → "tmux not running"
-  - `inUse` → "terminal still connecting — retry shortly" (keeps existing options)
+  - `inUse` → "terminal still connecting — retry shortly" (keeps existing chips)
   - `needsAuth` → "needs login — open the terminal"
-  - unreachable / error → "couldn't reach host" (keeps existing options)
+  - unreachable / error → "couldn't reach host" (keeps existing chips)
 - **Submit:** `sessionName = input.value.trim() || 'web'`, **always** included in the spec (add) and
   patch (edit). Always sending it removes the add-vs-edit asymmetry in `store.normalize`
   (`spec.sessionName || base.sessionName || 'web'`): clearing the field in edit mode predictably
@@ -111,7 +113,7 @@ provisioning extra):
 
 ```
 Add/Edit dialog (main.ts)
-  ├─ open: read status[box.id].sessions (cached)  ──►  datalist options (0 SSH)
+  ├─ open: read status[box.id].sessions (cached)  ──►  session chips (0 SSH)
   ├─ ⟳ click: api.probeSessions({id?,host,user,port,proxyJump})
   │      └─ POST /api/boxes/probe-sessions (server.js, auth-gated)
   │             └─ statusChecker.listSessions(spec) (status.js)
