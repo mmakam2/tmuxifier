@@ -223,9 +223,12 @@ body {
 }
 /* --- Fleet Command --- */
 /* Buttons match their .actions neighbour (+ Add box); accents use the
-   app's cyan identity, never a foreign blue. */
+   app's cyan identity, never a foreign blue. The fleet pair reads as a
+   HUD console: uppercase, tracked-out caps over a faint cyan field. */
 .fleet-actions { display: flex; gap: 6px; }
 .fleet-actions button {
+  position: relative;
+  overflow: hidden;
   flex: 1;
   padding: 10px;
   border-radius: 8px;
@@ -233,13 +236,62 @@ body {
   background: var(--panel-2);
   color: inherit;
   cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  transition: color 0.2s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
 }
-.fleet-actions button:hover { border-color: rgba(36, 211, 232, 0.45); }
+.fleet-actions button:hover { border-color: rgba(36, 211, 232, 0.45); color: var(--cyan); }
 .fleet-toggle.active, .fleet-jobs-btn.active {
   border-color: rgba(36, 211, 232, 0.5);
   background: rgba(36, 211, 232, 0.14);
   color: var(--cyan);
   font-weight: 650;
+}
+
+/* Fleet Command — the hero action gets full command-console flair:
+   a faint cyan field at rest, a diagonal sheen that sweeps on hover, and a
+   pulsing aura while engaged. */
+.fleet-toggle {
+  background:
+    linear-gradient(180deg, rgba(36, 211, 232, 0.07), rgba(36, 211, 232, 0) 65%),
+    var(--panel-2);
+  border-color: rgba(36, 211, 232, 0.3);
+  color: #c2eaf1;
+}
+.fleet-toggle::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 25%, rgba(36, 211, 232, 0.22) 50%, transparent 75%);
+  transform: translateX(-130%);
+  transition: transform 0.6s ease;
+  pointer-events: none;
+}
+.fleet-toggle:hover {
+  border-color: rgba(36, 211, 232, 0.6);
+  box-shadow: 0 0 12px rgba(36, 211, 232, 0.18), inset 0 0 10px rgba(36, 211, 232, 0.06);
+}
+.fleet-toggle:hover::before { transform: translateX(130%); }
+.fleet-toggle.active {
+  border-color: rgba(36, 211, 232, 0.7);
+  background:
+    linear-gradient(180deg, rgba(36, 211, 232, 0.22), rgba(36, 211, 232, 0.05)),
+    var(--panel-2);
+  color: var(--cyan);
+  text-shadow: 0 0 8px rgba(36, 211, 232, 0.5);
+  box-shadow: 0 0 14px rgba(36, 211, 232, 0.26), inset 0 0 10px rgba(36, 211, 232, 0.12);
+  animation: fleet-cmd-pulse 2.4s ease-in-out infinite;
+}
+@keyframes fleet-cmd-pulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(36, 211, 232, 0.20), inset 0 0 8px rgba(36, 211, 232, 0.10); }
+  50%      { box-shadow: 0 0 20px rgba(36, 211, 232, 0.42), inset 0 0 13px rgba(36, 211, 232, 0.20); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fleet-actions button { transition: none; }
+  .fleet-toggle::before { transition: none; }
+  .fleet-toggle.active { animation: none; }
 }
 .box-check, .group-check { display: none; flex: 0 0 auto; cursor: pointer; accent-color: var(--cyan); }
 .layout.fleet-mode .box-check, .layout.fleet-mode .group-check { display: inline-block; }
