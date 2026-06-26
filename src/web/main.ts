@@ -594,6 +594,81 @@ function openBoxDialog(box?: Box) {
   installOhMyTmuxText.textContent = 'Install Oh My Tmux if missing';
   installOhMyTmux.append(installOhMyTmuxInput, installOhMyTmuxText);
 
+  // tmux session: a type-or-pick field. The datalist pre-fills from the status
+  // snapshot we already cache (0 new SSH); the ⟳ button does a user-triggered
+  // live probe. Empty submits as 'web' (the store default).
+  const sessionListId = `session-options-${Math.random().toString(36).slice(2)}`;
+  const sessionDatalist = document.createElement('datalist');
+  sessionDatalist.id = sessionListId;
+  function setSessionOptions(names: string[]) {
+    const unique = Array.from(new Set(['web', ...names]));
+    sessionDatalist.replaceChildren(...unique.map((n) => {
+      const o = document.createElement('option');
+      o.value = n;
+      if (n === 'web') o.label = 'web (default)';
+      return o;
+    }));
+  }
+  const sessionWrap = document.createElement('label');
+  sessionWrap.className = 'field';
+  const sessionSpan = document.createElement('span');
+  sessionSpan.textContent = 'tmux session';
+  const sessionRow = document.createElement('div');
+  sessionRow.className = 'session-row';
+  const sessionInput = document.createElement('input');
+  sessionInput.type = 'text';
+  sessionInput.placeholder = 'web';
+  sessionInput.setAttribute('list', sessionListId);
+  if (isEdit && box!.sessionName) sessionInput.value = box!.sessionName;
+  const sessionRefresh = document.createElement('button');
+  sessionRefresh.type = 'button';
+  sessionRefresh.className = 'session-refresh';
+  sessionRefresh.title = 'Fetch live tmux sessions from the host';
+  sessionRefresh.textContent = '⟳';
+  const sessionHint = document.createElement('span');
+  sessionHint.className = 'session-hint';
+  sessionRow.append(sessionInput, sessionRefresh);
+  sessionWrap.append(sessionSpan, sessionRow, sessionDatalist, sessionHint);
+  // Pre-fill from cached status (edit mode only — an unsaved box has no snapshot).
+  setSessionOptions(isEdit ? (latestStatus[box!.id]?.sessions ?? []).map((s) => s.name) : []);
+
+  sessionRefresh.addEventListener('click', async () => {
+    const host = fields.host.value.trim();
+    if (!host) { sessionHint.textContent = 'enter a host first'; sessionHint.className = 'session-hint err'; return; }
+    sessionRefresh.disabled = true;
+    sessionHint.className = 'session-hint';
+    sessionHint.textContent = 'fetching…';
+    try {
+      const spec: { id?: string; host: string; user?: string; port?: number; proxyJump?: string } = { host };
+      if (isEdit) spec.id = box!.id;
+      const user = fields.user.value.trim(); if (user) spec.user = user;
+      const jump = fields.proxyJump.value.trim(); if (jump) spec.proxyJump = jump;
+      const portRaw = fields.port.value.trim(); if (portRaw) spec.port = Number(portRaw);
+      const res = await api.probeSessions(spec);
+      if (res.inUse) {
+        sessionHint.textContent = 'in use — showing cached';
+      } else if (res.needsAuth) {
+        sessionHint.textContent = 'needs login — open the terminal';
+        sessionHint.className = 'session-hint err';
+      } else if (!res.reachable) {
+        sessionHint.textContent = "couldn't reach host";
+        sessionHint.className = 'session-hint err';
+      } else if (res.tmux === false) {
+        setSessionOptions([]);
+        sessionHint.textContent = 'tmux not running';
+      } else {
+        const names = (res.sessions ?? []).map((s) => s.name);
+        setSessionOptions(names);
+        sessionHint.textContent = names.length ? `${names.length} session${names.length === 1 ? '' : 's'}` : 'no sessions yet';
+      }
+    } catch (e: any) {
+      sessionHint.textContent = e?.message || 'fetch failed';
+      sessionHint.className = 'session-hint err';
+    } finally {
+      sessionRefresh.disabled = false;
+    }
+  });
+
   // Shell framework radio group
   const shellGroup = document.createElement('fieldset');
   shellGroup.className = 'radio-group';
@@ -665,6 +740,7 @@ function openBoxDialog(box?: Box) {
     field('user', 'User', { value: 'root' }),
     field('port', 'Port (optional)', { placeholder: '22', type: 'number' }),
     field('proxyJump', 'ProxyJump (optional)', { placeholder: 'jump host this server can reach' }),
+    sessionWrap,
     installOhMyTmux,
     shellGroup,
     err,
@@ -707,6 +783,7 @@ function openBoxDialog(box?: Box) {
         const jump = fields.proxyJump.value.trim(); patch.proxyJump = jump || null;
         const tag = canonicalTagForInput(fields.tag.value);
         patch.tags = tag ? [tag] : [];
+        patch.sessionName = sessionInput.value.trim() || 'web';
         const portRaw = fields.port.value.trim();
         if (portRaw) {
           const port = Number(portRaw);
@@ -735,6 +812,7 @@ function openBoxDialog(box?: Box) {
         const spec: AddBoxSpec = { host };
         const label = fields.label.value.trim(); if (label) spec.label = label;
         const tag = canonicalTagForInput(fields.tag.value); if (tag) spec.tags = [tag];
+        spec.sessionName = sessionInput.value.trim() || 'web';
         const user = fields.user.value.trim(); if (user) spec.user = user;
         const jump = fields.proxyJump.value.trim(); if (jump) spec.proxyJump = jump;
         const portRaw = fields.port.value.trim();

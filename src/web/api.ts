@@ -3,7 +3,7 @@ export interface Box {
   proxyJump?: string; sessionName: string; startupCommand?: string; tags: string[]; source: string;
 }
 export type AddBoxSpec = Partial<Box>;
-export interface Status { reachable: boolean; tmux?: boolean; needsAuth?: boolean; paused?: boolean; nextProbeAt?: number; sessions?: { name: string; windows: number }[]; error?: string; }
+export interface Status { reachable: boolean; tmux?: boolean; needsAuth?: boolean; inUse?: boolean; paused?: boolean; nextProbeAt?: number; sessions?: { name: string; windows: number }[]; error?: string; }
 
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
@@ -21,6 +21,9 @@ export const api = {
     return j<Box>(await fetch(`/api/boxes/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }));
   },
   async reconnectBox(id: string) { return j<{ ok: boolean }>(await fetch(`/api/boxes/${id}/reconnect`, { method: 'POST' })); },
+  async probeSessions(spec: { id?: string; host: string; user?: string; port?: number; proxyJump?: string }) {
+    return j<Status>(await fetch('/api/boxes/probe-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(spec) }));
+  },
   async importSsh() { return j<Box[]>(await fetch('/api/import', { method: 'POST' })); },
   async status() { return j<Record<string, Status>>(await fetch(`/api/status?t=${Date.now()}`)); },
   async getLocalShell() { return j<{ shell: string }>(await fetch('/api/local-shell')); },
