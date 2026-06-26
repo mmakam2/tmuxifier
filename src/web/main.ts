@@ -281,7 +281,11 @@ async function renderDashboard() {
     renderFleetBar();
     filterAndPaint();
   });
-  app.querySelector('#fleet-jobs')!.addEventListener('click', () => openFleetJobsPanel());
+  app.querySelector('#fleet-jobs')!.addEventListener('click', () => {
+    const panel = document.getElementById('fleet-panel')!;
+    if (panel.classList.contains('open')) { stopFleetPoll(); panel.classList.remove('open'); }
+    else openFleetJobsPanel();
+  });
 
   // Local shell — name click opens terminal
   app.querySelector('.local-name')!.addEventListener('click', () => openLocalShell());
