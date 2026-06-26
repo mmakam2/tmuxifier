@@ -291,3 +291,44 @@ test('checkBox: live session WITHOUT a live master reports needs-auth (purple), 
   expect(st.reachable).toBe(false);
   expect(st.needsAuth).toBe(true);                    // session exists but not authed -> purple
 });
+
+test('listSessions: returns parsed sessions when tmux is running', async () => {
+  const run = async () => ({ code: 0, stdout: 'web:3:1:1718000000\nmain:1:0:1718000100\n', stderr: '' });
+  const result = await createStatusChecker({ run }).listSessions({ host: 'h' });
+  expect(result).toEqual({
+    reachable: true,
+    tmux: true,
+    sessions: [
+      { name: 'web', windows: 3, attached: true, activity: 1718000000 },
+      { name: 'main', windows: 1, attached: false, activity: 1718000100 },
+    ],
+  });
+});
+
+test('listSessions: tmux not running yields an empty list', async () => {
+  const run = async () => ({ code: 0, stdout: '__NO_TMUX__\n', stderr: '' });
+  const result = await createStatusChecker({ run }).listSessions({ host: 'h' });
+  expect(result).toEqual({ reachable: true, tmux: false, sessions: [] });
+});
+
+test('listSessions: unreachable surfaces the error', async () => {
+  const run = async () => ({ code: 255, stdout: '', stderr: 'timeout' });
+  const result = await createStatusChecker({ run }).listSessions({ host: 'h' });
+  expect(result).toEqual({ reachable: false, error: 'timeout' });
+});
+
+test('listSessions: auth failure reports needsAuth', async () => {
+  const run = async () => ({ code: 255, stdout: '', stderr: 'me@h: Permission denied (publickey,password).' });
+  const result = await createStatusChecker({ run }).listSessions({ host: 'h' });
+  expect(result.reachable).toBe(false);
+  expect(result.needsAuth).toBe(true);
+});
+
+test('listSessions: skips the probe when a live session owns the socket', async () => {
+  let called = false;
+  const run = async () => { called = true; return { code: 0, stdout: '', stderr: '' }; };
+  const result = await createStatusChecker({ run, hasLiveSession: () => true })
+    .listSessions({ id: 'b1', host: 'h' });
+  expect(result).toEqual({ reachable: true, tmux: true, inUse: true, sessions: [] });
+  expect(called).toBe(false);
+});

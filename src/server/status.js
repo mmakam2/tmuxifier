@@ -36,6 +36,7 @@ export function createStatusChecker({
   const capCount = Math.ceil(capSec / stepSec);
   const backoff = new Map(); // key -> { fails, nextProbeAt, paused, last }
   const inflight = new Map(); // key -> Promise<status> for a probe already running
+  const sessInflight = new Map(); // key -> Promise for an in-flight listSessions() fetch
   const keyFor = (box) => box.id || box.host;
 
   // One real SSH probe (the former checkBox body). Always resolves to a status
@@ -113,6 +114,23 @@ export function createStatusChecker({
           return paused ? { ...result, paused: true, nextProbeAt } : result;
         })().finally(() => inflight.delete(key));
         inflight.set(key, pending);
+      }
+      return pending;
+    },
+    // On-demand fetch of a box's live tmux sessions for the Add/Edit dialog. User
+    // triggered (the ⟳ button), so it ignores the poll backoff — but it still rides
+    // the shared ControlMaster and coalesces concurrent fetches, and it is skipped
+    // entirely when a live interactive session owns the socket (a BatchMode probe
+    // would collide with that login). The dialog keeps its cached pre-fill instead.
+    async listSessions(box) {
+      if (hasLiveSession && hasLiveSession(box)) {
+        return { reachable: true, tmux: true, inUse: true, sessions: [] };
+      }
+      const key = keyFor(box);
+      let pending = sessInflight.get(key);
+      if (!pending) {
+        pending = probe(box).finally(() => sessInflight.delete(key));
+        sessInflight.set(key, pending);
       }
       return pending;
     },
