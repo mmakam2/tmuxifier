@@ -199,7 +199,16 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
   app.patch('/api/boxes/:id', { preHandler: requireAuth }, async (req, reply) => {
     try {
-      return await store.updateBox(req.params.id, req.body || {});
+      const before = await store.getBox(req.params.id);
+      const updated = await store.updateBox(req.params.id, req.body || {});
+      // If the target tmux session changed, drop the live PTY (if any) so the
+      // browser terminal reconnects and reattaches to the NEW session instead of
+      // the one it opened with. The ControlMaster (keyed by host/user/port) is
+      // left alone, so the reattach multiplexes over it with no re-auth.
+      if (before && updated.sessionName !== before.sessionName && sessions?.closeKey) {
+        sessions.closeKey(req.params.id);
+      }
+      return updated;
     }
     catch (e) { return reply.code(400).send({ error: e.message }); }
   });

@@ -516,3 +516,22 @@ test('editing sessionName persists through PATCH', async () => {
   const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
   expect(list.json().find((b) => b.id === box.id).sessionName).toBe('mine');
 });
+
+test('changing sessionName drops the live PTY so the terminal reattaches to the new session', async () => {
+  const closed = [];
+  const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {}, closeKey: (k) => closed.push(k) };
+  const localApp = await makeApp({ sessions });
+  const loginRes = await localApp.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const cookie = loginRes.cookies.find((c) => c.name === 'tmuxifier_session');
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await localApp.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h9', sessionName: 'web' } });
+  const box = created.json();
+
+  // A real session change drops the PTY (once) so the next attach uses the new name.
+  await localApp.inject({ method: 'PATCH', url: `/api/boxes/${box.id}`, headers, payload: { sessionName: 'mine' } });
+  expect(closed).toEqual([box.id]);
+
+  // A patch that does not change the session (here: only the label) does NOT drop it again.
+  await localApp.inject({ method: 'PATCH', url: `/api/boxes/${box.id}`, headers, payload: { sessionName: 'mine', label: 'renamed' } });
+  expect(closed).toEqual([box.id]);
+});

@@ -74,6 +74,15 @@ constrained to add **no surprise** SSH volume:
   to any host via add/edit; `BatchMode=yes` prevents password prompts and `ConnectTimeout` bounds a
   hang.
 
+**`server.js` — `PATCH /api/boxes/:id`** gains a session-switch hook: it reads the box before the
+update and, if `updated.sessionName !== before.sessionName`, calls `sessions.closeKey(id)`. The live
+PTY was opened against the *old* session and `sessions.open()` reuses a live key, so without this a
+save would persist the new name but the terminal would stay on the old session until a manual
+reconnect. Dropping the PTY makes the browser terminal auto-reconnect (~1s) and the `/term` handler
+re-reads the box, attaching to the new session. The ControlMaster (keyed by host/user/port) is left
+untouched — the reattach multiplexes over it, so no re-auth (rate-ban safe). A no-op session change
+does not drop the PTY.
+
 **`store.js`** — unchanged. `normalize()` already threads `spec.sessionName` through
 `sanitizeSession` for both `addBox` and `updateBox`, so the field round-trips already.
 
