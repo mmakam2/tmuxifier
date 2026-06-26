@@ -6,6 +6,19 @@ import { buildServer } from '../src/server/server.js';
 import { createStore } from '../src/server/store.js';
 import { hashPassword } from '../src/server/auth.js';
 
+function fleetStub(calls = []) {
+  return {
+    createJob: async ({ boxIds, command }) => {
+      calls.push(['createJob', boxIds, command]);
+      if (boxIds.includes('bad')) throw new Error('unknown box: bad');
+      return { id: 'job1', command, status: 'running', createdAt: 't', startedAt: 't', finishedAt: null, concurrency: 4, timeoutMs: 15000, targets: boxIds.map((id) => ({ boxId: id, label: id, host: id, status: 'pending', code: null, stdout: '', stderr: '', truncated: false, error: null, startedAt: null, finishedAt: null })) };
+    },
+    listJobs: () => { calls.push(['listJobs']); return [{ id: 'job1', command: 'uptime', status: 'done', createdAt: 't', startedAt: 't', finishedAt: 't', targetCount: 1, okCount: 1, errorCount: 0 }]; },
+    getJob: (id) => { calls.push(['getJob', id]); return id === 'job1' ? { id: 'job1', command: 'uptime', status: 'done', targets: [] } : undefined; },
+    cancelJob: (id) => { calls.push(['cancelJob', id]); return id === 'job1' ? { id: 'job1', status: 'cancelled', targets: [] } : undefined; },
+  };
+}
+
 let app;
 let dir;
 
@@ -534,4 +547,81 @@ test('changing sessionName drops the live PTY so the terminal reattaches to the 
   // A patch that does not change the session (here: only the label) does NOT drop it again.
   await localApp.inject({ method: 'PATCH', url: `/api/boxes/${box.id}`, headers, payload: { sessionName: 'mine', label: 'renamed' } });
   expect(closed).toEqual([box.id]);
+});
+
+test('POST /api/fleet/jobs requires auth', async () => {
+  app = await makeApp({ fleetManager: fleetStub() });
+  const res = await app.inject({ method: 'POST', url: '/api/fleet/jobs', payload: { boxIds: ['b1'], command: 'x' } });
+  expect(res.statusCode).toBe(401);
+});
+
+test('POST /api/fleet/jobs rejects a cross-origin request', async () => {
+  app = await makeApp({ fleetManager: fleetStub(), config: { publicUrl: 'https://tmux.example.com' } });
+  const cookie = await login();
+  const res = await app.inject({
+    method: 'POST', url: '/api/fleet/jobs',
+    headers: { cookie: `${cookie.name}=${cookie.value}`, origin: 'https://evil.example' },
+    payload: { boxIds: ['b1'], command: 'x' },
+  });
+  expect(res.statusCode).toBe(403);
+});
+
+test('POST /api/fleet/jobs validates command and boxIds with 400', async () => {
+  app = await makeApp({ fleetManager: fleetStub() });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const empty = await app.inject({ method: 'POST', url: '/api/fleet/jobs', headers, payload: { boxIds: ['b1'], command: '   ' } });
+  expect(empty.statusCode).toBe(400);
+  const noBoxes = await app.inject({ method: 'POST', url: '/api/fleet/jobs', headers, payload: { boxIds: [], command: 'x' } });
+  expect(noBoxes.statusCode).toBe(400);
+});
+
+test('POST /api/fleet/jobs maps a createJob error to 400', async () => {
+  app = await makeApp({ fleetManager: fleetStub() });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'POST', url: '/api/fleet/jobs', headers, payload: { boxIds: ['bad'], command: 'x' } });
+  expect(res.statusCode).toBe(400);
+  expect(res.json()).toEqual({ error: 'unknown box: bad' });
+});
+
+test('POST /api/fleet/jobs creates a job and forwards boxIds + command', async () => {
+  const calls = [];
+  app = await makeApp({ fleetManager: fleetStub(calls) });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'POST', url: '/api/fleet/jobs', headers, payload: { boxIds: ['b1', 'b2'], command: 'uptime' } });
+  expect(res.statusCode).toBe(201);
+  expect(res.json().id).toBe('job1');
+  expect(calls).toContainEqual(['createJob', ['b1', 'b2'], 'uptime']);
+});
+
+test('GET /api/fleet/jobs lists job summaries', async () => {
+  app = await makeApp({ fleetManager: fleetStub() });
+  const cookie = await login();
+  const res = await app.inject({ method: 'GET', url: '/api/fleet/jobs', headers: { cookie: `${cookie.name}=${cookie.value}` } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()[0]).toMatchObject({ id: 'job1', okCount: 1 });
+});
+
+test('GET /api/fleet/jobs/:id returns the job or 404', async () => {
+  app = await makeApp({ fleetManager: fleetStub() });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const ok = await app.inject({ method: 'GET', url: '/api/fleet/jobs/job1', headers });
+  expect(ok.statusCode).toBe(200);
+  expect(ok.json().id).toBe('job1');
+  const missing = await app.inject({ method: 'GET', url: '/api/fleet/jobs/nope', headers });
+  expect(missing.statusCode).toBe(404);
+});
+
+test('POST /api/fleet/jobs/:id/cancel cancels or 404s', async () => {
+  app = await makeApp({ fleetManager: fleetStub() });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const ok = await app.inject({ method: 'POST', url: '/api/fleet/jobs/job1/cancel', headers });
+  expect(ok.statusCode).toBe(200);
+  expect(ok.json().status).toBe('cancelled');
+  const missing = await app.inject({ method: 'POST', url: '/api/fleet/jobs/nope/cancel', headers });
+  expect(missing.statusCode).toBe(404);
 });

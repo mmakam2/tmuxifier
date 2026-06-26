@@ -47,7 +47,7 @@ function killTmuxSession(sessionName) {
   execFileSync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions, fleetManager, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -258,6 +258,30 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return { ok: true };
   });
   app.post('/api/import', { preHandler: requireAuth }, async () => store.importFromSshConfig());
+
+  app.post('/api/fleet/jobs', { preHandler: requireAuth }, async (req, reply) => {
+    const { boxIds, command } = req.body || {};
+    if (typeof command !== 'string' || !command.trim()) return reply.code(400).send({ error: 'command is required' });
+    if (command.length > 4096) return reply.code(400).send({ error: 'command too long' });
+    if (!Array.isArray(boxIds) || boxIds.length === 0) return reply.code(400).send({ error: 'select at least one box' });
+    try {
+      const job = await fleetManager.createJob({ boxIds, command });
+      return reply.code(201).send(job);
+    } catch (e) {
+      return reply.code(400).send({ error: e.message });
+    }
+  });
+  app.get('/api/fleet/jobs', { preHandler: requireAuth }, async () => fleetManager.listJobs());
+  app.get('/api/fleet/jobs/:id', { preHandler: requireAuth }, async (req, reply) => {
+    const job = fleetManager.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: 'job not found' });
+    return job;
+  });
+  app.post('/api/fleet/jobs/:id/cancel', { preHandler: requireAuth }, async (req, reply) => {
+    const job = fleetManager.cancelJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: 'job not found' });
+    return job;
+  });
 
   app.get('/api/status', { preHandler: requireAuth }, async () => {
     // Serve the shared, server-side poll snapshot when a poller is wired: every
