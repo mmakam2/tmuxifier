@@ -4,6 +4,23 @@ export interface Box {
 }
 export type AddBoxSpec = Partial<Box>;
 export interface Status { reachable: boolean; tmux?: boolean; needsAuth?: boolean; inUse?: boolean; paused?: boolean; nextProbeAt?: number; sessions?: { name: string; windows: number }[]; error?: string; }
+export type FleetTargetStatus = 'pending' | 'running' | 'ok' | 'error' | 'cancelled' | 'interrupted';
+export type FleetJobStatus = 'running' | 'done' | 'cancelled' | 'interrupted';
+export interface FleetTarget {
+  boxId: string; label: string; host: string; status: FleetTargetStatus;
+  code: number | null; stdout: string; stderr: string; truncated: boolean;
+  error: string | null; startedAt: string | null; finishedAt: string | null;
+}
+export interface FleetJob {
+  id: string; command: string; status: FleetJobStatus;
+  createdAt: string; startedAt: string; finishedAt: string | null;
+  concurrency: number; timeoutMs: number; targets: FleetTarget[];
+}
+export interface FleetJobSummary {
+  id: string; command: string; status: FleetJobStatus;
+  createdAt: string; startedAt: string; finishedAt: string | null;
+  targetCount: number; okCount: number; errorCount: number;
+}
 
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
@@ -29,4 +46,10 @@ export const api = {
   async getLocalShell() { return j<{ shell: string }>(await fetch('/api/local-shell')); },
   async updateLocalShell(shell: string) { return j<{ ok: boolean }>(await fetch('/api/local-shell', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shell }) })); },
   async reconnectLocalShell() { return j<{ ok: boolean }>(await fetch('/api/local-shell/reconnect', { method: 'POST' })); },
+  async createFleetJob(boxIds: string[], command: string) {
+    return j<FleetJob>(await fetch('/api/fleet/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ boxIds, command }) }));
+  },
+  async listFleetJobs() { return j<FleetJobSummary[]>(await fetch('/api/fleet/jobs')); },
+  async getFleetJob(id: string) { return j<FleetJob>(await fetch(`/api/fleet/jobs/${id}?t=${Date.now()}`)); },
+  async cancelFleetJob(id: string) { return j<FleetJob>(await fetch(`/api/fleet/jobs/${id}/cancel`, { method: 'POST' })); },
 };
