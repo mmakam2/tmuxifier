@@ -64,6 +64,7 @@ body {
 .layout.sidebar-collapsed .brand-name { display: none; }
 .layout.sidebar-collapsed .brand-actions { flex-direction: column; }
 .layout.sidebar-collapsed #logout,
+.layout.sidebar-collapsed #import,
 .layout.sidebar-collapsed .actions,
 .layout.sidebar-collapsed .fleet-actions,
 .layout.sidebar-collapsed .fleet-bar,
@@ -221,7 +222,7 @@ body {
   overflow: hidden;
 }
 /* --- Fleet Command --- */
-/* Buttons match their .actions neighbours (Import / + Add box); accents use the
+/* Buttons match their .actions neighbour (+ Add box); accents use the
    app's cyan identity, never a foreign blue. */
 .fleet-actions { display: flex; gap: 6px; }
 .fleet-actions button {

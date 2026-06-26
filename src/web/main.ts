@@ -232,10 +232,11 @@ async function renderDashboard() {
           <span><img src="${logoUrl}" alt="" /><span class="brand-name">tmuxifier</span></span>
           <div class="brand-actions">
             <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-label="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-expanded="${sidebarCollapsed ? 'false' : 'true'}">${sidebarCollapsed ? '›' : '‹'}</button>
+            <button id="import" type="button" title="Import boxes from ~/.ssh/config" aria-label="Import boxes from ~/.ssh/config">⤓</button>
             <button id="logout" title="Log out">⎋</button>
           </div>
         </div>
-        <div class="actions"><button id="import">Import ~/.ssh/config</button><button id="add">+ Add box</button></div>
+        <div class="actions"><button id="add">+ Add box</button></div>
         <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Jobs</button></div>
         <div id="fleet-bar" class="fleet-bar" hidden></div>
         <input id="search" class="search" type="text" placeholder="Search…" autocomplete="off" />
