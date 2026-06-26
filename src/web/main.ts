@@ -512,7 +512,13 @@ async function openLocalShellEditModal() {
   function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); }
   document.addEventListener('keydown', onKey);
   cancel.addEventListener('click', close);
-  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+  // Only close on a genuine backdrop click. A text selection that starts inside
+  // an input and ends on the backdrop produces a click whose target is the
+  // backdrop (the common ancestor), which would otherwise close the modal — so
+  // require the press to have started on the backdrop too.
+  let pressedOnBackdrop = false;
+  backdrop.addEventListener('mousedown', (e) => { pressedOnBackdrop = e.target === backdrop; });
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop && pressedOnBackdrop) close(); });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -777,7 +783,13 @@ function openBoxDialog(box?: Box) {
   function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); }
   document.addEventListener('keydown', onKey);
   cancel.addEventListener('click', close);
-  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+  // Only close on a genuine backdrop click. A text selection that starts inside
+  // an input and ends on the backdrop produces a click whose target is the
+  // backdrop (the common ancestor), which would otherwise close the modal — so
+  // require the press to have started on the backdrop too.
+  let pressedOnBackdrop = false;
+  backdrop.addEventListener('mousedown', (e) => { pressedOnBackdrop = e.target === backdrop; });
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop && pressedOnBackdrop) close(); });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
