@@ -203,3 +203,24 @@ test('requiredConfigError: oauth mode lists every missing field', () => {
     googleClientId: 'a', googleClientSecret: 'b', publicUrl: 'https://x', allowedEmails: ['a@b.com'],
   })).toBeNull();
 });
+
+test('fleet command knobs have defaults and are overridable via env', () => {
+  const d = loadConfig({}, { env: {}, cwd: '/app' });
+  expect(d.fleetConcurrency).toBe(4);
+  expect(d.fleetTimeoutMs).toBe(15000);
+  expect(d.fleetMaxJobs).toBe(50);
+  expect(d.fleetMaxOutputBytes).toBe(65536);
+  const e = loadConfig({}, {
+    env: {
+      TMUXIFIER_FLEET_CONCURRENCY: '8',
+      TMUXIFIER_FLEET_TIMEOUT_MS: '30000',
+      TMUXIFIER_FLEET_MAX_JOBS: '10',
+      TMUXIFIER_FLEET_MAX_OUTPUT_BYTES: '1024',
+    },
+    cwd: '/app',
+  });
+  expect(e.fleetConcurrency).toBe(8);
+  expect(e.fleetTimeoutMs).toBe(30000);
+  expect(e.fleetMaxJobs).toBe(10);
+  expect(e.fleetMaxOutputBytes).toBe(1024);
+});

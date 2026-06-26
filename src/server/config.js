@@ -23,6 +23,13 @@ const DEFAULTS = {
   // its last use. Longer means cold-connect bursts (which trigger the blocks
   // above) happen far less often.
   controlPersist: 600,
+  // Fleet Command: run one command across many boxes as a single pollable job.
+  // Concurrency shares the status rationale — never open the whole fleet's SSH
+  // connections at once.
+  fleetConcurrency: 4,
+  fleetTimeoutMs: 15000,       // per-box ssh exec timeout (ms)
+  fleetMaxJobs: 50,            // retained job history; older jobs are pruned
+  fleetMaxOutputBytes: 65536,  // per-stream capture cap per box (64 KiB)
 };
 
 function clean(obj) {
@@ -53,6 +60,10 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     statusConcurrency: e.TMUXIFIER_STATUS_CONCURRENCY ? Number(e.TMUXIFIER_STATUS_CONCURRENCY) : undefined,
     statusPollMs: e.TMUXIFIER_STATUS_POLL_MS ? Number(e.TMUXIFIER_STATUS_POLL_MS) : undefined,
     controlPersist: e.TMUXIFIER_CONTROL_PERSIST ? Number(e.TMUXIFIER_CONTROL_PERSIST) : undefined,
+    fleetConcurrency: e.TMUXIFIER_FLEET_CONCURRENCY ? Number(e.TMUXIFIER_FLEET_CONCURRENCY) : undefined,
+    fleetTimeoutMs: e.TMUXIFIER_FLEET_TIMEOUT_MS ? Number(e.TMUXIFIER_FLEET_TIMEOUT_MS) : undefined,
+    fleetMaxJobs: e.TMUXIFIER_FLEET_MAX_JOBS ? Number(e.TMUXIFIER_FLEET_MAX_JOBS) : undefined,
+    fleetMaxOutputBytes: e.TMUXIFIER_FLEET_MAX_OUTPUT_BYTES ? Number(e.TMUXIFIER_FLEET_MAX_OUTPUT_BYTES) : undefined,
     hostKeyPolicy: e.TMUXIFIER_HOSTKEY_POLICY,
     authMode: e.TMUXIFIER_AUTH_MODE,
     publicUrl: e.TMUXIFIER_BASE_EXTERNAL_URL ?? e.TMUXIFIER_PUBLIC_URL,

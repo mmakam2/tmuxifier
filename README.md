@@ -52,6 +52,10 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | status probe concurrency | `TMUXIFIER_STATUS_CONCURRENCY` | `4` |
 | status poll interval (ms) | `TMUXIFIER_STATUS_POLL_MS` | `30000` |
 | SSH ControlPersist seconds | `TMUXIFIER_CONTROL_PERSIST` | `600` |
+| fleet command concurrency | `TMUXIFIER_FLEET_CONCURRENCY` | `4` |
+| fleet per-box timeout (ms) | `TMUXIFIER_FLEET_TIMEOUT_MS` | `15000` |
+| fleet job history kept | `TMUXIFIER_FLEET_MAX_JOBS` | `50` |
+| fleet per-box output cap (bytes) | `TMUXIFIER_FLEET_MAX_OUTPUT_BYTES` | `65536` |
 | auth mode | `TMUXIFIER_AUTH_MODE` | `password` |
 | password hash | `TMUXIFIER_PASSWORD_HASH` | — (required) |
 | cookie secret | `TMUXIFIER_COOKIE_SECRET` | — (required) |
