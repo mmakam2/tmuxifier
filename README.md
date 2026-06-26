@@ -218,6 +218,7 @@ log; on success an **Open terminal** button drops you into the new container.
 **Security.** The API token is **encrypted at rest** (AES-256-GCM; the key is derived from your
 cookie secret) in the gitignored `data/proxmox.json` (`0600`), and is never sent to the browser.
 TLS is pinned for self-signed certs and CA-verified when the host presents a valid certificate.
+If you rotate `TMUXIFIER_COOKIE_SECRET`, previously-saved tokens become undecryptable — re-add each Proxmox host afterward.
 
 ## Security
 Tmuxifier can SSH into your whole fleet, so the login gate is the crown jewel. It binds to

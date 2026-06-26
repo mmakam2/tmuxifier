@@ -24,7 +24,8 @@ type Tab = typeof TABS[number];
 
 export function openProxmoxHub(opts: HubOpts) {
   let pollTimer: number | null = null;
-  const stopPoll = () => { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } };
+  let pollGen = 0;
+  const stopPoll = () => { pollGen++; if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } };
 
   const backdrop = el('div', { class: 'modal-backdrop' });
   const modal = el('div', { class: 'modal pve-hub' });
@@ -247,6 +248,7 @@ export function openProxmoxHub(opts: HubOpts) {
   // --- Job panel (shared) ---
   function showJob(id: string) {
     stopPoll();
+    const myGen = pollGen;
     let linked = false;
     const phase = el('div', { class: 'pve-phase' });
     const log = el('pre', { class: 'pve-log' });
@@ -256,7 +258,8 @@ export function openProxmoxHub(opts: HubOpts) {
     const RUNNING: ProvisionStatus[] = ['running'];
     async function tick() {
       let job;
-      try { job = await pve.provision(id); } catch { pollTimer = window.setTimeout(tick, 1500); return; }
+      try { job = await pve.provision(id); } catch { if (myGen !== pollGen) return; pollTimer = window.setTimeout(tick, 1500); return; }
+      if (myGen !== pollGen) return;
       phase.textContent = `${job.status.toUpperCase()} · ${job.phase}${job.vmid ? ` · vmid ${job.vmid}` : ''}${job.error ? ` · ${job.error}` : ''}`;
       log.textContent = job.log || '';
       log.scrollTop = log.scrollHeight;

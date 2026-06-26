@@ -299,7 +299,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
   // --- Proxmox LXC provisioning ---
   async function callHost(reply, id, fn) {
-    const host = await proxmoxStore.getHost(id, { withSecret: true });
+    let host;
+    try {
+      host = await proxmoxStore.getHost(id, { withSecret: true });
+    } catch {
+      return reply.code(502).send({ error: 'could not decrypt host token — re-add the host (was TMUXIFIER_COOKIE_SECRET rotated?)' });
+    }
     if (!host) return reply.code(404).send({ error: 'host not found' });
     try { return await fn(makeProxmoxClient(host)); }
     catch (e) { return reply.code(502).send({ error: e.message }); }

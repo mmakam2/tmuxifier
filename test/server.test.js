@@ -783,3 +783,15 @@ test('provisions: validation, create, poll, cancel, 404', async () => {
   expect((await app.inject({ method: 'GET', url: '/api/proxmox/provisions/NOPE', headers })).statusCode).toBe(404);
   expect((await app.inject({ method: 'POST', url: '/api/proxmox/provisions/J1/cancel', headers })).json().status).toBe('cancelled');
 });
+
+test('add-host: token verify failure returns 400 and never persists the host', async () => {
+  const calls = [];
+  const stubs = proxmoxStubs(calls);
+  const failClient = () => ({ ...stubs.makeProxmoxClient(), version: async () => { throw new Error('token rejected'); } });
+  app = await makeApp({ ...stubs, makeProxmoxClient: failClient });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'POST', url: '/api/proxmox/hosts', headers, payload: { name: 'lab', endpoint: 'pve.example.com:8006', tokenId: 'user@pam!t', tokenSecret: 'sek', verifyMode: 'pin', fingerprint256: 'AB' } });
+  expect(res.statusCode).toBe(400);
+  expect(calls.some(([op]) => op === 'addHost')).toBe(false);
+});

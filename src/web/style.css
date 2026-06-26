@@ -415,6 +415,7 @@ body {
 .pve-log { max-height: 320px; overflow: auto; background: #0a0d14; border: 1px solid #232a36; border-radius: 8px; padding: 10px; font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; }
 .pve-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid #232a36; }
 .pve-badge.done { color: #3fb950; } .pve-badge.error { color: #f85149; } .pve-badge.running { color: #d29922; }
+.pve-badge.cancelled { color: #8b949e; } .pve-badge.interrupted { color: #d29922; }
 .pve-primary { padding: 8px 16px; border-radius: 8px; border: 1px solid #1f6feb; background: #1f6feb; color: #fff; cursor: pointer; }
 .proxmox-btn { padding: 6px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; cursor: pointer; font-size: 13px; }
 .proxmox-btn:hover { border-color: #2f6feb; }
