@@ -2,6 +2,80 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { reconnectDelay } from './reconnect';
+import { clipboardActionForKey, writeClipboard, readClipboard, type ClipboardDeps } from './clipboard';
+
+// Synchronous execCommand('copy') used when the async Clipboard API is missing
+// (insecure context) or rejects (document not focused). A hidden textarea is the
+// only portable way to drive execCommand.
+function execCommandCopy(text: string): boolean {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.left = '0';
+    ta.style.opacity = '0';
+    ta.style.pointerEvents = 'none';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function isMacPlatform(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const p = (navigator as unknown as { userAgentData?: { platform?: string } }).userAgentData?.platform
+    || navigator.platform || navigator.userAgent || '';
+  return /mac|iphone|ipad|ipod/i.test(p);
+}
+
+// Connect an xterm Terminal to the system clipboard: copy-on-select plus
+// Cmd/Ctrl+Shift+C to copy and Ctrl+Shift+V to paste. Decisions about which
+// key combos count live in the pure ./clipboard module; this only supplies the
+// browser objects and forwards the result. See the diagnosis in clipboard.ts.
+function wireClipboard(term: Terminal): void {
+  const deps: ClipboardDeps = {
+    clipboard: typeof navigator !== 'undefined' ? navigator.clipboard : undefined,
+    fallbackCopy: execCommandCopy,
+  };
+  const env = { mac: isMacPlatform() };
+
+  // Copy-on-select: mirror any new selection to the clipboard immediately.
+  // Async Clipboard API only — never the execCommand fallback here, whose hidden
+  // textarea would steal focus and fight the in-progress drag on every
+  // onSelectionChange tick (this path matters only on insecure-context
+  // deployments, where the explicit copy shortcut still works).
+  term.onSelectionChange(() => {
+    if (!deps.clipboard?.writeText) return;
+    const sel = term.getSelection();
+    if (sel) void writeClipboard(sel, deps);
+  });
+
+  term.attachCustomKeyEventHandler((ev) => {
+    const action = clipboardActionForKey(ev, env);
+    if (action === 'copy') {
+      const sel = term.getSelection();
+      if (sel) {
+        ev.preventDefault();
+        // Refocus the terminal after a possible execCommand fallback grabbed focus.
+        void writeClipboard(sel, deps).then(() => term.focus());
+      }
+      return false; // handled — don't let xterm send the combo to the PTY
+    }
+    if (action === 'paste') {
+      ev.preventDefault();
+      // Route through term.paste so bracketed-paste mode is honored.
+      void readClipboard(deps).then((t) => { if (t) term.paste(t); });
+      return false;
+    }
+    return true; // everything else (incl. bare Ctrl+C/Ctrl+V) reaches the PTY
+  });
+}
 
 // A connection that survives this long counts as a real session, so we reset the
 // reconnect backoff. The WebSocket to the server always opens, so onopen itself
@@ -24,6 +98,7 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
   term.loadAddon(fit);
   term.open(parent);
   fit.fit();
+  wireClipboard(term);
 
   // Strip control chars so a box label can't inject escape sequences into the
   // terminal feedback line.
