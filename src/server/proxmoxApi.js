@@ -21,7 +21,11 @@ function normFp(s) { return String(s || '').toUpperCase().replace(/[^0-9A-F]/g, 
 function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 15000, tls: tlsOpts = {} }) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
-    const req = https.request({ hostname: u.hostname, port: u.port || 8006, path: u.pathname + u.search, method, headers, timeout: timeoutMs,
+    // Send a fixed Content-Length. Without it, req.write() makes Node use chunked
+    // transfer-encoding, which PVE's pveproxy rejects with "501 chunked transfer encoding
+    // not supported" — so every POST with a body (e.g. createLxc) would fail.
+    const reqHeaders = body == null ? headers : { ...headers, 'Content-Length': Buffer.byteLength(body) };
+    const req = https.request({ hostname: u.hostname, port: u.port || 8006, path: u.pathname + u.search, method, headers: reqHeaders, timeout: timeoutMs,
       rejectUnauthorized: tlsOpts.rejectUnauthorized !== false,
       ...(tlsOpts.ca ? { ca: tlsOpts.ca } : {}),
       ...(typeof tlsOpts.checkServerIdentity === 'function' ? { checkServerIdentity: tlsOpts.checkServerIdentity } : {}),

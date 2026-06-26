@@ -11,7 +11,7 @@ let opensslOk = true;
 try { execFileSync('openssl', ['version'], { stdio: 'ignore' }); } catch { opensslOk = false; }
 
 describe.runIf(opensslOk)('proxmoxApi TLS pinning (real node:https transport)', () => {
-  let server, port, dir, gotAuth;
+  let server, port, dir, gotAuth, gotHeaders;
 
   beforeAll(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pve-tls-'));
@@ -20,6 +20,7 @@ describe.runIf(opensslOk)('proxmoxApi TLS pinning (real node:https transport)', 
     execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-keyout', keyFile, '-out', certFile, '-days', '1', '-nodes', '-subj', '/CN=pve-test'], { stdio: 'ignore' });
     server = https.createServer({ cert: fs.readFileSync(certFile), key: fs.readFileSync(keyFile) }, (req, res) => {
       gotAuth = req.headers.authorization || null;
+      gotHeaders = req.headers;
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ data: { version: '8.2' } }));
     });
@@ -49,5 +50,13 @@ describe.runIf(opensslOk)('proxmoxApi TLS pinning (real node:https transport)', 
     expect(err).toBeTruthy();
     expect(String(err.code || err.message)).not.toContain('ERR_INTERNAL_ASSERTION');
     expect(String(err.code || err.message)).toMatch(/SELF_SIGNED|DEPTH_ZERO|certificate/i);
+  });
+
+  test('POST sends a Content-Length, not chunked transfer-encoding (PVE rejects chunked bodies)', async () => {
+    const insp = await inspectEndpoint(`127.0.0.1:${port}`);
+    const client = createProxmoxClient({ host: { endpoint: `127.0.0.1:${port}`, tokenId: 'user@pam!t', tokenSecret: 'sek', verifyMode: 'pin', fingerprint256: insp.fingerprint256 } });
+    await client.createLxc('pve', { vmid: 123, hostname: 'dev-01', net0: 'name=eth0,bridge=vmbr0,ip=dhcp' });
+    expect(gotHeaders['content-length']).toBeDefined();
+    expect(gotHeaders['transfer-encoding']).toBeUndefined();
   });
 });
