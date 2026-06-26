@@ -166,7 +166,6 @@ export function openProxmoxHub(opts: HubOpts) {
     const swap = input('512', { type: 'number', min: '0' });
     const unpriv = el('input', { type: 'checkbox' }); (unpriv as HTMLInputElement).checked = true;
     const nesting = el('input', { type: 'checkbox' }); (nesting as HTMLInputElement).checked = true;
-    const startAfter = el('input', { type: 'checkbox' }); (startAfter as HTMLInputElement).checked = true;
     const ipMode = el('select', {}, [el('option', { value: 'dhcp' }, ['dhcp']), el('option', { value: 'static' }, ['static'])]);
     const cidr = input('', { placeholder: '192.168.1.50/24' });
     const gateway = input('', { placeholder: '192.168.1.1' });
@@ -209,7 +208,7 @@ export function openProxmoxHub(opts: HubOpts) {
         unprivileged: (unpriv as HTMLInputElement).checked, features: { nesting: (nesting as HTMLInputElement).checked },
         net: { bridge: bridgeSel.value, vlan: vlan.value ? Number(vlan.value) : null, ipMode: ipMode.value, cidr: cidr.value.trim() || null, gateway: gateway.value.trim() || null },
         keyIds: keys.map((k) => k.id), // the single management key is injected automatically
-        onboot: false, startAfterCreate: (startAfter as HTMLInputElement).checked,
+        onboot: false, startAfterCreate: true,
       };
       try { await pve.addPreset(spec); void renderPresets(); }
       catch (er) { box.append(err((er as Error).message)); }
@@ -223,7 +222,6 @@ export function openProxmoxHub(opts: HubOpts) {
       el('label', { class: 'check-field' }, [nesting, el('span', {}, ['Nesting'])]),
       field('Bridge', bridgeSel), field('IP mode', ipMode),
       el('div', { class: 'pve-grid' }, [field('CIDR (static)', cidr), field('Gateway (static)', gateway), field('VLAN', vlan)]),
-      el('label', { class: 'check-field' }, [startAfter, el('span', {}, ['Start after create'])]),
       el('div', { class: 'modal-actions' }, [save]),
     );
     setContent(list, el('hr', { class: 'pve-hr' }), box);
