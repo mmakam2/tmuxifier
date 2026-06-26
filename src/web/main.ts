@@ -1,6 +1,7 @@
 import { api, type AddBoxSpec, type Box, type Status } from './api';
 import { openTerminal, openProvisionTerminal } from './terminal';
 import { dotClassFor, dotTitleFor } from './statusDot';
+import { toggleBox, setBoxes, groupState } from './fleetSelection';
 import logoUrl from './assets/tmuxifier-logo.png';
 
 const app = document.getElementById('app')!;
@@ -12,6 +13,8 @@ const UNTAGGED_KEY = '__untagged__';
 let activeBoxId: string | null = null;
 let allBoxes: Box[] = [];
 let latestStatus: Record<string, Status> = {};
+let fleetMode = false;
+let fleetSelected = new Set<string>();
 
 interface BoxGroup {
   key: string;
@@ -225,6 +228,8 @@ async function renderDashboard() {
           </div>
         </div>
         <div class="actions"><button id="import">Import ~/.ssh/config</button><button id="add">+ Add box</button></div>
+        <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Jobs</button></div>
+        <div id="fleet-bar" class="fleet-bar" hidden></div>
         <input id="search" class="search" type="text" placeholder="Search…" autocomplete="off" />
         <ul id="boxes" class="boxes"></ul>
         <div class="local-shell">
@@ -255,6 +260,18 @@ async function renderDashboard() {
   app.querySelector('#import')!.addEventListener('click', async () => { await api.importSsh(); await refresh(); });
   app.querySelector('#add')!.addEventListener('click', () => openBoxDialog());
   app.querySelector('#search')!.addEventListener('input', () => filterAndPaint());
+  app.querySelector('#fleet-toggle')!.addEventListener('click', () => {
+    fleetMode = !fleetMode;
+    if (!fleetMode) fleetSelected = new Set();
+    const layout = app.querySelector('.layout');
+    if (layout) layout.classList.toggle('fleet-mode', fleetMode);
+    (app.querySelector('#fleet-toggle') as HTMLElement).classList.toggle('active', fleetMode);
+    const bar = app.querySelector('#fleet-bar') as HTMLElement;
+    if (bar) bar.hidden = !fleetMode;
+    renderFleetBar();
+    filterAndPaint();
+  });
+  app.querySelector('#fleet-jobs')!.addEventListener('click', () => openFleetJobsPanel());
 
   // Local shell — name click opens terminal
   app.querySelector('.local-name')!.addEventListener('click', () => openLocalShell());
@@ -292,6 +309,17 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   const li = document.createElement('li');
   li.className = b.id === activeBoxId ? 'box active' : 'box';
   li.dataset.id = b.id;
+
+  const check = document.createElement('input');
+  check.type = 'checkbox';
+  check.className = 'box-check';
+  check.dataset.id = b.id;
+  check.checked = fleetSelected.has(b.id);
+  check.addEventListener('click', (e) => e.stopPropagation());
+  check.addEventListener('change', () => {
+    fleetSelected = toggleBox(fleetSelected, b.id);
+    syncFleetUI();
+  });
 
   const dotEl = document.createElement('span');
   dotEl.className = `dot ${dotClassFor(st)}`;
@@ -334,7 +362,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
     await refresh();
   });
 
-  li.append(dotEl, nameEl, refreshBtn, edit, rm);
+  li.append(check, dotEl, nameEl, refreshBtn, edit, rm);
   return li;
 }
 
@@ -361,6 +389,19 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
     chevron.className = 'group-chevron';
     chevron.textContent = collapsed ? '›' : '⌄';
 
+    const groupCheck = document.createElement('input');
+    groupCheck.type = 'checkbox';
+    groupCheck.className = 'group-check';
+    const groupIds = group.boxes.map((b) => b.id);
+    const gState = groupState(fleetSelected, groupIds);
+    groupCheck.checked = gState === 'all';
+    groupCheck.indeterminate = gState === 'some';
+    groupCheck.addEventListener('click', (e) => e.stopPropagation());
+    groupCheck.addEventListener('change', () => {
+      fleetSelected = setBoxes(fleetSelected, groupIds, groupCheck.checked);
+      syncFleetUI();
+    });
+
     const name = document.createElement('span');
     name.className = 'group-name';
     name.textContent = group.label;
@@ -369,7 +410,7 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
     count.className = 'group-count';
     count.textContent = String(group.boxes.length);
 
-    header.append(chevron, name, count);
+    header.append(chevron, groupCheck, name, count);
     header.addEventListener('click', () => {
       if (searching) return;
       setGroupCollapsed(group.key, !collapsed);
@@ -384,6 +425,7 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
     groupItem.append(header, body);
     list.appendChild(groupItem);
   }
+  if (fleetMode) syncFleetUI();
 }
 
 function openLocalShell() {
@@ -854,5 +896,41 @@ function openBoxDialog(box?: Box) {
     }
   });
 }
+
+function selectedTargetLabels(): { id: string; label: string }[] {
+  return allBoxes.filter((b) => fleetSelected.has(b.id)).map((b) => ({ id: b.id, label: b.label }));
+}
+
+function renderFleetBar() {
+  const bar = app.querySelector('#fleet-bar') as HTMLElement | null;
+  if (!bar) return;
+  if (!fleetMode) { bar.hidden = true; bar.innerHTML = ''; return; }
+  bar.hidden = false;
+  // Replaced with the full command bar in Task 14. For now just the run button.
+  bar.innerHTML = `<button id="fleet-run" type="button" class="fleet-run" disabled>Run on 0</button>`;
+  syncFleetUI();
+}
+
+function syncFleetUI() {
+  const count = fleetSelected.size;
+  const run = app.querySelector('#fleet-run') as HTMLButtonElement | null;
+  if (run) {
+    run.textContent = `Run on ${count}`;
+    run.disabled = count === 0;
+  }
+  // Reflect per-box + per-group checkbox state without a full repaint.
+  app.querySelectorAll('input.box-check').forEach((el) => {
+    const cb = el as HTMLInputElement;
+    cb.checked = fleetSelected.has(cb.dataset.id || '');
+  });
+  app.querySelectorAll('.box-group').forEach((groupEl) => {
+    const ids = Array.from(groupEl.querySelectorAll('input.box-check')).map((el) => (el as HTMLInputElement).dataset.id || '');
+    const state = groupState(fleetSelected, ids);
+    const gc = groupEl.querySelector('input.group-check') as HTMLInputElement | null;
+    if (gc) { gc.checked = state === 'all'; gc.indeterminate = state === 'some'; }
+  });
+}
+
+function openFleetJobsPanel() { /* implemented in Task 15 */ }
 
 start();

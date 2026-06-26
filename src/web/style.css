@@ -218,3 +218,12 @@ body {
   padding: 6px;
   overflow: hidden;
 }
+/* --- Fleet Command --- */
+.fleet-actions { display: flex; gap: 6px; padding: 0 12px 8px; }
+.fleet-actions button { flex: 1; }
+.fleet-toggle.active { background: #2b6cb0; color: #fff; }
+.box-check, .group-check { display: none; margin-right: 6px; flex: 0 0 auto; cursor: pointer; }
+.layout.fleet-mode .box-check, .layout.fleet-mode .group-check { display: inline-block; }
+.fleet-bar { padding: 8px 12px; border-top: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 6px; }
+.fleet-run { width: 100%; padding: 8px; background: #2b6cb0; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+.fleet-run:disabled { opacity: 0.5; cursor: default; }
