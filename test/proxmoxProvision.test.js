@@ -52,6 +52,18 @@ test('static preset: create -> start -> link box from the static IP', async () =
   expect(done.boxId).toBe('box-1');
 });
 
+test('provision tags are applied to the linked box; absent tags fall back to preset boxDefaults', async () => {
+  const tagged = fakeBoxStore();
+  const m1 = createProvisionManager(base({ proxmoxStore: makeStore(PRESET_STATIC), boxStore: tagged, makeClient: () => okClient() }));
+  await m1._settled((await m1.createProvision({ presetId: 'p2', hostname: 'dev-01', tags: ['prod'] })).id);
+  expect(tagged.added[0].tags).toEqual(['prod']);
+
+  const untagged = fakeBoxStore();
+  const m2 = createProvisionManager(base({ proxmoxStore: makeStore(PRESET_STATIC), boxStore: untagged, makeClient: () => okClient() }));
+  await m2._settled((await m2.createProvision({ presetId: 'p2', hostname: 'dev-02' })).id);
+  expect(untagged.added[0].tags).toEqual([]); // PRESET_STATIC boxDefaults.tags is []
+});
+
 test('dhcp preset: discovers the leased IP then links the box', async () => {
   const boxStore = fakeBoxStore();
   const mgr = createProvisionManager(base({ proxmoxStore: makeStore(PRESET_DHCP), boxStore, makeClient: () => okClient() }));

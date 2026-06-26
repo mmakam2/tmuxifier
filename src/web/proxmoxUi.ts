@@ -1,5 +1,8 @@
 import { api, type Box } from './api';
 import { pve, type PvePreset, type ProvisionStatus } from './proxmox';
+import { openProvisionTerminal } from './terminal';
+
+type SetupOptions = { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean };
 
 type HubOpts = { openBox: (b: Box) => void; onBoxLinked: () => void };
 type Attrs = Record<string, string | number | boolean | ((e: Event) => void)>;
@@ -25,7 +28,8 @@ type Tab = typeof TABS[number];
 export function openProxmoxHub(opts: HubOpts) {
   let pollTimer: number | null = null;
   let pollGen = 0;
-  const stopPoll = () => { pollGen++; if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } };
+  let setupTerm: { dispose: () => void } | null = null;
+  const stopPoll = () => { pollGen++; if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } if (setupTerm) { setupTerm.dispose(); setupTerm = null; } };
 
   const backdrop = el('div', { class: 'modal-backdrop' });
   const modal = el('div', { class: 'modal pve-hub' });
@@ -119,6 +123,11 @@ export function openProxmoxHub(opts: HubOpts) {
       el('div', {}, [el('strong', {}, [k.name]), el('span', { class: 'pve-sub' }, [` ${k.publicKey.slice(0, 40)}…`])]),
       el('button', { type: 'button', class: 'danger', onclick: async () => { if (confirm(`Remove key ${k.name}?`)) { await pve.removeKey(k.id); void renderKeys(); } } }, ['Remove']),
     ])));
+    // One management key is used for all provisioning; once it exists, hide the add form.
+    if (keys.length) {
+      setContent(list, el('div', { class: 'pve-sub' }, ['This key is injected into every provisioned container. Remove it to replace it with another.']));
+      return;
+    }
     const name = input('', { placeholder: 'mgmt' });
     const pk = el('textarea', { class: 'pve-textarea', placeholder: 'ssh-ed25519 AAAA… you@example.com', rows: 3 });
     const box = el('div', {});
@@ -162,7 +171,6 @@ export function openProxmoxHub(opts: HubOpts) {
     const cidr = input('', { placeholder: '192.168.1.50/24' });
     const gateway = input('', { placeholder: '192.168.1.1' });
     const vlan = input('', { placeholder: 'vlan (optional)', type: 'number' });
-    const keyBoxes = keys.map((k) => { const c = el('input', { type: 'checkbox', value: k.id }); return { k, c }; });
     const box = el('div', {});
 
     async function loadNodes() {
@@ -200,7 +208,7 @@ export function openProxmoxHub(opts: HubOpts) {
         cores: Number(cores.value), memoryMiB: Number(mem.value), swapMiB: Number(swap.value),
         unprivileged: (unpriv as HTMLInputElement).checked, features: { nesting: (nesting as HTMLInputElement).checked },
         net: { bridge: bridgeSel.value, vlan: vlan.value ? Number(vlan.value) : null, ipMode: ipMode.value, cidr: cidr.value.trim() || null, gateway: gateway.value.trim() || null },
-        keyIds: keyBoxes.filter((x) => (x.c as HTMLInputElement).checked).map((x) => x.k.id),
+        keyIds: keys.map((k) => k.id), // the single management key is injected automatically
         onboot: false, startAfterCreate: (startAfter as HTMLInputElement).checked,
       };
       try { await pve.addPreset(spec); void renderPresets(); }
@@ -215,7 +223,6 @@ export function openProxmoxHub(opts: HubOpts) {
       el('label', { class: 'check-field' }, [nesting, el('span', {}, ['Nesting'])]),
       field('Bridge', bridgeSel), field('IP mode', ipMode),
       el('div', { class: 'pve-grid' }, [field('CIDR (static)', cidr), field('Gateway (static)', gateway), field('VLAN', vlan)]),
-      el('div', { class: 'field' }, [el('span', {}, ['Inject keys']), ...keyBoxes.map((x) => el('label', { class: 'check-field' }, [x.c, el('span', {}, [x.k.name])]))]),
       el('label', { class: 'check-field' }, [startAfter, el('span', {}, ['Start after create'])]),
       el('div', { class: 'modal-actions' }, [save]),
     );
@@ -225,13 +232,26 @@ export function openProxmoxHub(opts: HubOpts) {
 
   // --- Provision ---
   async function renderProvision() {
-    const presets = await pve.presets().catch(() => []);
+    const [presets, boxes] = await Promise.all([pve.presets().catch(() => []), api.boxes().catch(() => [] as Box[])]);
     if (!presets.length) { setContent(el('div', { class: 'pve-sub' }, ['Create a preset first.'])); return; }
     const sel = el('select', {}, presets.map((p) => el('option', { value: p.id }, [p.name]))) as HTMLSelectElement;
     const hostname = input('', { placeholder: 'dev-01' });
     const vmid = input('', { placeholder: 'auto (next free)', type: 'number' });
     const ip = input('', { placeholder: 'override IP/CIDR (static only)' });
     const ipField = field('IP/CIDR', ip);
+
+    // Tag input with a datalist of existing box tags (same single-tag pattern as the box modal).
+    const tagListId = 'pve-tag-options';
+    const tagOptions = [...new Set(boxes.flatMap((b) => b.tags || []))].sort();
+    const tagDatalist = el('datalist', { id: tagListId }, tagOptions.map((t) => el('option', { value: t })));
+    const tag = input('', { placeholder: 'prod, staging (optional)', list: tagListId });
+
+    // Post-create setup (mirrors the box modal). Base tmux is always installed by the setup
+    // script; these toggle the optional frameworks.
+    const omt = el('input', { type: 'checkbox' }); (omt as HTMLInputElement).checked = true;
+    const radio = (value: string, checked: boolean) => { const r = el('input', { type: 'radio', name: 'pve-shell', value }); (r as HTMLInputElement).checked = checked; return r; };
+    const shNone = radio('none', true), shZsh = radio('omz', false), shBash = radio('omb', false);
+
     const box = el('div', {});
     const curPreset = (): PvePreset | undefined => presets.find((p) => p.id === sel.value);
     const syncStatic = () => { ipField.style.display = curPreset()?.net.ipMode === 'static' ? '' : 'none'; };
@@ -239,13 +259,25 @@ export function openProxmoxHub(opts: HubOpts) {
 
     const go = el('button', { type: 'submit', onclick: async (e) => {
       e.preventDefault(); box.querySelector('.pve-err')?.remove();
+      const t = tag.value.trim();
       try {
-        const job = await pve.createProvision({ presetId: sel.value, hostname: hostname.value.trim(), vmid: vmid.value ? Number(vmid.value) : undefined, ip: ip.value.trim() || undefined });
-        showJob(job.id);
+        const job = await pve.createProvision({ presetId: sel.value, hostname: hostname.value.trim(), vmid: vmid.value ? Number(vmid.value) : undefined, ip: ip.value.trim() || undefined, tags: t ? [t] : [] });
+        showJob(job.id, { ohMyTmux: (omt as HTMLInputElement).checked, ohMyZsh: (shZsh as HTMLInputElement).checked, ohMyBash: (shBash as HTMLInputElement).checked });
       } catch (er) { box.append(err((er as Error).message)); }
     } }, ['Provision']);
 
-    box.append(el('h3', {}, ['Provision a container']), field('Preset', sel), field('Hostname', hostname), field('VMID', vmid), ipField, el('div', { class: 'modal-actions' }, [go]));
+    box.append(
+      el('h3', {}, ['Provision a container']),
+      field('Preset', sel), field('Hostname', hostname), field('VMID', vmid), ipField,
+      field('Tag', tag), tagDatalist,
+      el('label', { class: 'check-field' }, [omt, el('span', {}, ['Install Oh My Tmux'])]),
+      el('div', { class: 'field' }, [el('span', {}, ['Shell framework']),
+        el('label', { class: 'check-field' }, [shNone, el('span', {}, ['None'])]),
+        el('label', { class: 'check-field' }, [shZsh, el('span', {}, ['Oh My Zsh'])]),
+        el('label', { class: 'check-field' }, [shBash, el('span', {}, ['Oh My Bash'])]),
+      ]),
+      el('div', { class: 'modal-actions' }, [go]),
+    );
     setContent(box);
     syncStatic();
   }
@@ -261,14 +293,47 @@ export function openProxmoxHub(opts: HubOpts) {
   }
 
   // --- Job panel (shared) ---
-  function showJob(id: string) {
+  // `setup` is provided only for a fresh provision (not a History view): when the box links,
+  // run the same tmux + oh-my-* install add-box uses, after a brief SSH-readiness wait.
+  function showJob(id: string, setup?: SetupOptions) {
     stopPoll();
     const myGen = pollGen;
     let linked = false;
+    let setupStarted = false;
     const phase = el('div', { class: 'pve-phase' });
     const log = el('pre', { class: 'pve-log' });
+    const setupArea = el('div', {});
     const footer = el('div', { class: 'modal-actions' });
-    setContent(el('h3', {}, ['Provision job']), phase, log, footer);
+    setContent(el('h3', {}, ['Provision job']), phase, log, setupArea, footer);
+
+    function openTerminalBtn(boxId: string) {
+      return el('button', { type: 'button', class: 'pve-primary', onclick: async () => {
+        const b = (await api.boxes()).find((x) => x.id === boxId);
+        if (b) { close(); opts.openBox(b); }
+      } }, ['Open terminal']);
+    }
+
+    async function runSetup(boxId: string, vmid: number | null, opt: SetupOptions) {
+      const box = (await api.boxes().catch(() => [] as Box[])).find((b) => b.id === boxId);
+      if (!box) { footer.replaceChildren(openTerminalBtn(boxId)); return; }
+      // Freshly-started container: wait briefly for sshd to accept the injected mgmt key.
+      phase.textContent = `Container ${vmid ?? ''} up — waiting for SSH…`;
+      let ready = false;
+      for (let i = 0; i < 10 && !ready; i++) {
+        if (myGen !== pollGen) return;
+        try { ready = !!(await api.probeSessions({ id: box.id, host: box.host, user: box.user, port: box.port, proxyJump: box.proxyJump })).reachable; } catch { /* keep waiting */ }
+        if (!ready) await new Promise((r) => setTimeout(r, 3000));
+      }
+      if (myGen !== pollGen) return;
+      phase.textContent = `Container ${vmid ?? ''} — running setup (tmux${opt.ohMyTmux ? ' + oh-my-tmux' : ''}${opt.ohMyZsh ? ' + oh-my-zsh' : ''}${opt.ohMyBash ? ' + oh-my-bash' : ''})…`;
+      setupArea.style.height = '320px'; setupArea.style.marginTop = '8px';
+      setupTerm = openProvisionTerminal(setupArea, boxId, opt, (code) => {
+        if (myGen !== pollGen) return;
+        phase.textContent = code === 0 ? `Setup complete ✓ · vmid ${vmid ?? ''}` : `Setup exited ${code} — open a terminal to investigate`;
+        opts.onBoxLinked();
+        footer.replaceChildren(openTerminalBtn(boxId));
+      });
+    }
 
     const RUNNING: ProvisionStatus[] = ['running'];
     async function tick() {
@@ -279,14 +344,12 @@ export function openProxmoxHub(opts: HubOpts) {
       log.textContent = job.log || '';
       log.scrollTop = log.scrollHeight;
       if (RUNNING.includes(job.status)) { pollTimer = window.setTimeout(tick, 1500); return; }
-      // terminal
+      // terminal status
       footer.replaceChildren();
       if (job.boxId && !linked) { linked = true; opts.onBoxLinked(); }
       if (job.boxId) {
-        footer.append(el('button', { type: 'button', class: 'pve-primary', onclick: async () => {
-          const boxes = await api.boxes(); const b = boxes.find((x) => x.id === job!.boxId);
-          if (b) { close(); opts.openBox(b); }
-        } }, ['Open terminal']));
+        if (setup && !setupStarted) { setupStarted = true; void runSetup(job.boxId, job.vmid, setup); return; }
+        footer.replaceChildren(openTerminalBtn(job.boxId));
       } else if (job.needsHost) {
         footer.append(el('span', { class: 'pve-sub' }, [`Container ${job.vmid} is up but no IP was discovered — add a box manually.`]));
       }

@@ -512,10 +512,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
           try {
             if (socket.readyState === 1) socket.send(JSON.stringify({ t: 'x', code }));
           } catch {}
-          if (code !== 0) {
+          if (code !== 0 && box.source !== 'proxmox') {
             // Best-effort rollback: the exit frame already told the client
             // about the failure. If removeBox fails the box will linger in the
             // list but is unreachable — the user can remove it manually.
+            // Proxmox-provisioned boxes are kept: the LXC really exists, so the
+            // box is how the user reaches it to retry the setup.
             store.removeBox(boxId).catch(() => {});
           }
           try { socket.close(1000); } catch {}

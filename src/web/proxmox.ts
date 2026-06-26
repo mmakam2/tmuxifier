@@ -45,7 +45,7 @@ export const pve = {
   addPreset(spec: unknown) { return jr<PvePreset>(fetch('/api/proxmox/presets', post(spec))); },
   updatePreset(id: string, spec: unknown) { return jr<PvePreset>(fetch(`/api/proxmox/presets/${id}`, patch(spec))); },
   removePreset(id: string) { return jr(fetch(`/api/proxmox/presets/${id}`, { method: 'DELETE' })); },
-  createProvision(spec: { presetId: string; hostname: string; vmid?: number; ip?: string }) { return jr<ProvisionSummary>(fetch('/api/proxmox/provisions', post(spec))); },
+  createProvision(spec: { presetId: string; hostname: string; vmid?: number; ip?: string; tags?: string[] }) { return jr<ProvisionSummary>(fetch('/api/proxmox/provisions', post(spec))); },
   provisions() { return jr<ProvisionSummary[]>(fetch('/api/proxmox/provisions')); },
   provision(id: string) { return jr<ProvisionJob>(fetch(`/api/proxmox/provisions/${id}?t=${Date.now()}`)); },
   cancelProvision(id: string) { return jr<ProvisionSummary>(fetch(`/api/proxmox/provisions/${id}/cancel`, { method: 'POST' })); },

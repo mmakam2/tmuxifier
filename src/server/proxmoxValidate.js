@@ -77,4 +77,5 @@ export function assertProvisionInput(spec) {
   if (!DNS_LABEL.test(String(spec.hostname || ''))) throw new Error('hostname must be a DNS label');
   if (spec.vmid != null && !intInRange(Number(spec.vmid), 100, 999999999)) throw new Error('vmid must be 100..999999999');
   if (spec.ip != null && spec.ip !== '' && !isCidr(spec.ip)) throw new Error('ip must be a CIDR like 192.168.1.50/24');
+  if (spec.tags != null && (!Array.isArray(spec.tags) || spec.tags.some((t) => typeof t !== 'string'))) throw new Error('tags must be an array of strings');
 }

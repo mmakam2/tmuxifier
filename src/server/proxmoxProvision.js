@@ -88,7 +88,7 @@ export function createProvisionManager({
         const bd = preset.boxDefaults || {};
         const box = await boxStore.addBox({
           label: j.hostname, host: boxHost, user: bd.user || 'root',
-          sessionName: bd.sessionName || 'web', tags: bd.tags || [], source: 'proxmox',
+          sessionName: bd.sessionName || 'web', tags: (j.tags && j.tags.length) ? j.tags : (bd.tags || []), source: 'proxmox',
           proxmox: { hostId: host.id, node: j.node, vmid: j.vmid, endpoint: host.endpoint },
         });
         j.boxId = box.id;
@@ -105,8 +105,8 @@ export function createProvisionManager({
   }
 
   return {
-    async createProvision({ presetId, hostname, vmid, ip }) {
-      assertProvisionInput({ hostname, vmid, ip });
+    async createProvision({ presetId, hostname, vmid, ip, tags }) {
+      assertProvisionInput({ hostname, vmid, ip, tags });
       const preset = await proxmoxStore.getPreset(presetId);
       if (!preset) throw new Error('preset not found');
       const host = await proxmoxStore.getHost(preset.hostId, { withSecret: true });
@@ -119,6 +119,7 @@ export function createProvisionManager({
       const j = {
         id: makeId(), presetId, presetName: preset.name, hostId: host.id, node,
         hostname, vmid: vmid ? Number(vmid) : null,
+        tags: Array.isArray(tags) ? tags : null,
         ip: ip || (preset.net.ipMode === 'static' ? preset.net.cidr : null),
         status: 'running', phase: 'allocate', log: '', boxId: null, needsHost: false, error: null,
         createdAt: now(), startedAt: now(), finishedAt: null,

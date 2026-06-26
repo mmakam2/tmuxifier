@@ -66,4 +66,7 @@ test('assertProvisionInput validates hostname, vmid, and ip', () => {
   expect(() => assertProvisionInput({ hostname: 'ok', vmid: 50 })).toThrow(/vmid/);
   expect(() => assertProvisionInput({ hostname: 'ok', vmid: 150 })).not.toThrow();
   expect(() => assertProvisionInput({ hostname: 'ok', ip: 'bad' })).toThrow(/ip/);
+  expect(() => assertProvisionInput({ hostname: 'ok', tags: ['prod'] })).not.toThrow();
+  expect(() => assertProvisionInput({ hostname: 'ok', tags: 'prod' })).toThrow(/tags/);
+  expect(() => assertProvisionInput({ hostname: 'ok', tags: [1] })).toThrow(/tags/);
 });
