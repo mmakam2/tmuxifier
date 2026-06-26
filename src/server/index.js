@@ -13,6 +13,11 @@ import { createFleetStore } from './fleetStore.js';
 import { createFleetManager } from './fleet.js';
 import { createLocalShellActions } from './localShellActions.js';
 import { buildServer } from './server.js';
+import { createSecretBox } from './secretBox.js';
+import { createProxmoxStore } from './proxmoxStore.js';
+import { createProvisionStore } from './provisionStore.js';
+import { createProvisionManager } from './proxmoxProvision.js';
+import { createProxmoxClient, inspectEndpoint } from './proxmoxApi.js';
 
 process.on('unhandledRejection', (err) => { console.error('unhandledRejection:', err); });
 process.on('uncaughtException', (err) => { console.error('uncaughtException:', err); });
@@ -63,6 +68,21 @@ const fleetManager = createFleetManager({
   maxJobs: config.fleetMaxJobs,
   maxOutputBytes: config.fleetMaxOutputBytes,
 });
+const secretBox = createSecretBox(config.cookieSecret);
+const proxmoxStore = createProxmoxStore({ dataDir: config.dataDir, secretBox });
+const provisionStore = createProvisionStore({ dataDir: config.dataDir });
+const makeProxmoxClient = (host) => createProxmoxClient({ host, timeoutMs: config.pveTimeoutMs });
+const provisionManager = createProvisionManager({
+  proxmoxStore,
+  boxStore: store,
+  makeClient: makeProxmoxClient,
+  load: () => provisionStore.load(),
+  save: (jobs) => provisionStore.save(jobs),
+  pollMs: config.pvePollMs,
+  taskTimeoutMs: config.pveProvisionTimeoutMs,
+  leaseTimeoutMs: config.pveLeaseTimeoutMs,
+  maxJobs: config.pveMaxJobs,
+});
 // One server-side poll loop drives all status probing; the /api/status handler
 // just serves its snapshot, so SSH volume no longer scales with open tab count.
 const statusPoller = createStatusPoller({
@@ -72,7 +92,7 @@ const statusPoller = createStatusPoller({
   concurrency: config.statusConcurrency,
 });
 
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions, fleetManager });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
