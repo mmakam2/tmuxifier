@@ -9,6 +9,7 @@ import { buildEnsureTmuxRemote } from './boxActions.js';
 import { assertBoxSafe } from './sshCommand.js';
 import { upsertConfigFile } from './configFile.js';
 import { mapWithConcurrency } from './concurrency.js';
+import { parseEndpoint } from './proxmoxValidate.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': [
@@ -47,7 +48,7 @@ function killTmuxSession(sessionName) {
   execFileSync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions, fleetManager, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -293,6 +294,89 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   app.post('/api/fleet/jobs/:id/cancel', { preHandler: requireAuth }, async (req, reply) => {
     const job = fleetManager.cancelJob(req.params.id);
     if (!job) return reply.code(404).send({ error: 'job not found' });
+    return job;
+  });
+
+  // --- Proxmox LXC provisioning ---
+  async function callHost(reply, id, fn) {
+    const host = await proxmoxStore.getHost(id, { withSecret: true });
+    if (!host) return reply.code(404).send({ error: 'host not found' });
+    try { return await fn(makeProxmoxClient(host)); }
+    catch (e) { return reply.code(502).send({ error: e.message }); }
+  }
+
+  app.post('/api/proxmox/inspect', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      const { host, port } = parseEndpoint((req.body || {}).endpoint);
+      return await inspectEndpoint(`${host}:${port}`, { timeoutMs: config.pveTimeoutMs });
+    } catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+
+  app.get('/api/proxmox/hosts', { preHandler: requireAuth }, async () => proxmoxStore.listHosts());
+  app.post('/api/proxmox/hosts', { preHandler: requireAuth }, async (req, reply) => {
+    const spec = req.body || {};
+    try {
+      // Verify the token reaches Proxmox before persisting an unusable profile.
+      const { host, port } = parseEndpoint(spec.endpoint);
+      const transient = { endpoint: `${host}:${port}`, tokenId: spec.tokenId, tokenSecret: spec.tokenSecret, verifyMode: spec.verifyMode || 'pin', fingerprint256: spec.fingerprint256 };
+      await makeProxmoxClient(transient).version();
+    } catch (e) { return reply.code(400).send({ error: `could not reach Proxmox: ${e.message}` }); }
+    try { return reply.code(201).send(await proxmoxStore.addHost(spec)); }
+    catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+  app.patch('/api/proxmox/hosts/:id', { preHandler: requireAuth }, async (req, reply) => {
+    try { return await proxmoxStore.updateHost(req.params.id, req.body || {}); }
+    catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+  app.delete('/api/proxmox/hosts/:id', { preHandler: requireAuth }, async (req) => { await proxmoxStore.removeHost(req.params.id); return { ok: true }; });
+  app.post('/api/proxmox/hosts/:id/test', { preHandler: requireAuth }, async (req, reply) =>
+    callHost(reply, req.params.id, async (c) => ({ ok: true, version: await c.version() })));
+  app.get('/api/proxmox/hosts/:id/nodes', { preHandler: requireAuth }, async (req, reply) =>
+    callHost(reply, req.params.id, (c) => c.nodes()));
+  app.get('/api/proxmox/hosts/:id/nodes/:node/storage', { preHandler: requireAuth }, async (req, reply) =>
+    callHost(reply, req.params.id, async (c) => {
+      const list = await c.storages(req.params.node);
+      const group = (kind) => list.filter((s) => String(s.content || '').split(',').includes(kind));
+      return { rootdir: group('rootdir'), vztmpl: group('vztmpl') };
+    }));
+  app.get('/api/proxmox/hosts/:id/nodes/:node/templates', { preHandler: requireAuth }, async (req, reply) =>
+    callHost(reply, req.params.id, (c) => c.templates(req.params.node, req.query.storage)));
+  app.get('/api/proxmox/hosts/:id/nodes/:node/bridges', { preHandler: requireAuth }, async (req, reply) =>
+    callHost(reply, req.params.id, (c) => c.bridges(req.params.node)));
+  app.get('/api/proxmox/hosts/:id/nextid', { preHandler: requireAuth }, async (req, reply) =>
+    callHost(reply, req.params.id, async (c) => ({ vmid: await c.nextId() })));
+
+  app.get('/api/proxmox/keys', { preHandler: requireAuth }, async () => proxmoxStore.listKeys());
+  app.post('/api/proxmox/keys', { preHandler: requireAuth }, async (req, reply) => {
+    try { return reply.code(201).send(await proxmoxStore.addKey(req.body || {})); }
+    catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+  app.delete('/api/proxmox/keys/:id', { preHandler: requireAuth }, async (req) => { await proxmoxStore.removeKey(req.params.id); return { ok: true }; });
+
+  app.get('/api/proxmox/presets', { preHandler: requireAuth }, async () => proxmoxStore.listPresets());
+  app.post('/api/proxmox/presets', { preHandler: requireAuth }, async (req, reply) => {
+    try { return reply.code(201).send(await proxmoxStore.addPreset(req.body || {})); }
+    catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+  app.patch('/api/proxmox/presets/:id', { preHandler: requireAuth }, async (req, reply) => {
+    try { return await proxmoxStore.updatePreset(req.params.id, req.body || {}); }
+    catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+  app.delete('/api/proxmox/presets/:id', { preHandler: requireAuth }, async (req) => { await proxmoxStore.removePreset(req.params.id); return { ok: true }; });
+
+  app.post('/api/proxmox/provisions', { preHandler: requireAuth }, async (req, reply) => {
+    try { return reply.code(201).send(await provisionManager.createProvision(req.body || {})); }
+    catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+  app.get('/api/proxmox/provisions', { preHandler: requireAuth }, async () => provisionManager.listProvisions());
+  app.get('/api/proxmox/provisions/:id', { preHandler: requireAuth }, async (req, reply) => {
+    const job = provisionManager.getProvision(req.params.id);
+    if (!job) return reply.code(404).send({ error: 'provision not found' });
+    return job;
+  });
+  app.post('/api/proxmox/provisions/:id/cancel', { preHandler: requireAuth }, async (req, reply) => {
+    const job = provisionManager.cancelProvision(req.params.id);
+    if (!job) return reply.code(404).send({ error: 'provision not found' });
     return job;
   });
 
