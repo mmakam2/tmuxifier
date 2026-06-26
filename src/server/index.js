@@ -9,6 +9,8 @@ import { createStatusPoller } from './statusPoller.js';
 import { createSessionManager } from './sessions.js';
 import { sshRun } from './sshRun.js';
 import { createBoxActions } from './boxActions.js';
+import { createFleetStore } from './fleetStore.js';
+import { createFleetManager } from './fleet.js';
 import { createLocalShellActions } from './localShellActions.js';
 import { buildServer } from './server.js';
 
@@ -50,6 +52,17 @@ const statusChecker = createStatusChecker({
   masterAlive: (box) => boxActions.isMasterAlive(box),
 });
 const localShellActions = createLocalShellActions();
+const fleetStore = createFleetStore({ dataDir: config.dataDir });
+const fleetManager = createFleetManager({
+  store,
+  execCommand: (box, command, opts) => boxActions.execCommand(box, command, opts),
+  load: () => fleetStore.load(),
+  save: (jobs) => fleetStore.save(jobs),
+  concurrency: config.fleetConcurrency,
+  timeoutMs: config.fleetTimeoutMs,
+  maxJobs: config.fleetMaxJobs,
+  maxOutputBytes: config.fleetMaxOutputBytes,
+});
 // One server-side poll loop drives all status probing; the /api/status handler
 // just serves its snapshot, so SSH volume no longer scales with open tab count.
 const statusPoller = createStatusPoller({
@@ -59,7 +72,7 @@ const statusPoller = createStatusPoller({
   concurrency: config.statusConcurrency,
 });
 
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions, fleetManager });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
