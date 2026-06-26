@@ -235,7 +235,7 @@ async function renderDashboard() {
           </div>
         </div>
         <div class="actions"><button id="import">Import ~/.ssh/config</button><button id="add">+ Add box</button></div>
-        <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Jobs</button></div>
+        <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Jobs</button></div>
         <div id="fleet-bar" class="fleet-bar" hidden></div>
         <input id="search" class="search" type="text" placeholder="Search…" autocomplete="off" />
         <ul id="boxes" class="boxes"></ul>
