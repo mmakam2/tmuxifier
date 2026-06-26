@@ -19,8 +19,9 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   `.env.example`.
 - `config.json` (gitignored, optional) — camelCase alternative to `.env`.
 - `tls/` (gitignored) — `cert.pem`/`key.pem` for HTTPS; the private key never enters git.
-- `data/` (gitignored) — `boxes.json`, `fleet-jobs.json` (Fleet Command history), and SSH
-  ControlMaster sockets under `data/cm/`.
+- `data/` (gitignored) — `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json`
+  (Proxmox host profiles with **encrypted** API tokens, plus container presets and SSH mgmt public
+  keys), `provision-jobs.json` (provision history), and SSH ControlMaster sockets under `data/cm/`.
 
 When adding a new config knob or persisted file, keep it under the repo folder by default.
 Don't introduce dependencies on `$HOME`-level state other than the user's existing SSH setup.
@@ -93,6 +94,16 @@ pattern for new modules.
 - `statusPoller.js` — single server-side poll loop: probes every box on an interval
   (`statusPollMs`) and caches the snapshot `/api/status` serves, so status SSH volume is
   independent of how many dashboard tabs are open.
+- `secretBox.js` — AES-256-GCM seal/open for secrets at rest; key derived from `cookieSecret` via
+  HKDF. Used to encrypt the Proxmox API token.
+- `proxmoxValidate.js` — pure validators/parsers for Proxmox host/key/preset/provision input.
+- `proxmoxStore.js` — `data/proxmox.json` CRUD; seals the token on write, redacts it on read
+  (`getHost(id,{withSecret})` is the only path that decrypts).
+- `proxmoxApi.js` — PVE HTTP client over `node:https` with TLS fingerprint pinning, plus
+  `inspectEndpoint`. The token never leaves the server.
+- `proxmoxParams.js` — pure preset → `pct`/LXC create-param mapping (`net0`, `ssh-public-keys`, …).
+- `provisionStore.js` / `proxmoxProvision.js` — debounced `data/provision-jobs.json` persistence and
+  the create→poll→start→discover→auto-link-box job manager (the Fleet job pattern).
 
 Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `api.ts`,
 `terminal.ts`, `index.html`, `style.css`.
@@ -154,6 +165,11 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   same validation path.
 - WebSocket auth re-parses the cookie header manually (`@fastify/websocket` v10 doesn't populate
   `req.cookies` for the upgrade) — see `isAuthed` in `server.js`.
+- The Proxmox API token is the only persisted credential. It is AES-256-GCM encrypted at rest in
+  `data/proxmox.json` (key from `cookieSecret`), written `0o600`, and never returned to the browser
+  (host views are redacted to `hasToken`). PVE TLS is pinned by fingerprint for self-signed certs
+  (TOFU, like `ssh accept-new`) or CA-verified; an explicit per-host `insecure` mode is off by
+  default. All provision input is validated (`proxmoxValidate.js`) before reaching the API.
 
 ## Docs
 

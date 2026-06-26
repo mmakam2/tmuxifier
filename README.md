@@ -191,6 +191,34 @@ connections. Password-only boxes with no live connection come back as a per-box 
 non-interactive path can't answer a password prompt) — open that box's terminal once to establish
 the connection, then re-run.
 
+## Proxmox LXC provisioning
+
+Tmuxifier can provision a "canned" LXC container on a Proxmox VE host over the PVE HTTP API and
+auto-add a box pointed at it, so a freshly created container opens straight into a browser terminal.
+
+**1. Create an API token in Proxmox.** In the PVE UI: *Datacenter → Permissions → API Tokens →
+Add*. Pick a user/realm (e.g. `user@pam`), a token id (e.g. `tmuxifier`), and copy the secret
+(shown once). Grant the token a role with at least container-create privileges — in a lab the
+built-in `PVEVMAdmin` role on `/` plus `Datastore.AllocateSpace` + `Datastore.Audit` on the target
+storage is sufficient (use a privilege-separated token, not full `Administrator`).
+
+**2. Add the host.** Dashboard → **Proxmox → Hosts → Add**: enter the endpoint (`host:8006`), the
+token id (`user@pam!tmuxifier`) and the secret. Click **Inspect** to fetch and **pin** the host's
+TLS certificate (Proxmox ships a self-signed cert; pinning is trust-on-first-use, like
+`ssh accept-new`). Save — Tmuxifier verifies the token before storing it.
+
+**3. Add a management key.** **SSH Keys → Add**: paste a *public* key. It is injected into new
+containers' `root` authorized_keys so Tmuxifier can SSH in. The private half stays in your own SSH
+setup — Tmuxifier never stores private keys.
+
+**4. Define a preset and provision.** **Presets → Add** a blueprint (template, CPU/mem/disk,
+storage, network, keys). Then **Provision → pick a preset → enter a hostname**. Watch the live task
+log; on success an **Open terminal** button drops you into the new container.
+
+**Security.** The API token is **encrypted at rest** (AES-256-GCM; the key is derived from your
+cookie secret) in the gitignored `data/proxmox.json` (`0600`), and is never sent to the browser.
+TLS is pinned for self-signed certs and CA-verified when the host presents a valid certificate.
+
 ## Security
 Tmuxifier can SSH into your whole fleet, so the login gate is the crown jewel. It binds to
 `127.0.0.1` by default. To expose it on a network, **always use TLS** — either set
