@@ -75,7 +75,8 @@ also marks it `Secure` for deployments behind a TLS-terminating proxy or tunnel.
 
 As an alternative to `.env`, a `config.json` in the repo root works too, using camelCase keys
 (`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`,
-`statusConcurrency`, `statusPollMs`, `controlPersist`, `authMode`, `publicUrl`, `googleClientId`,
+`statusConcurrency`, `statusPollMs`, `controlPersist`, `fleetConcurrency`, `fleetTimeoutMs`,
+`fleetMaxJobs`, `fleetMaxOutputBytes`, `authMode`, `publicUrl`, `googleClientId`,
 `googleClientSecret`, `allowedEmails`, `dataDir`, `controlDir`, `sshConfigFile`, `tlsCert`,
 `tlsKey`). The UI also persists `localShell` in `config.json`; it does not have an env key.
 `TMUXIFIER_SSH_CONFIG`/`sshConfigFile` is passed to `ssh` as `-F`, so it is an alternate config
@@ -119,11 +120,12 @@ not supported. The older `TMUXIFIER_PUBLIC_URL`, `TMUXIFIER_GOOGLE_CLIENT_ID`,
 `TMUXIFIER_GOOGLE_CLIENT_SECRET`, and `TMUXIFIER_AUTH_MODE=google` names are still accepted.
 
 ## How persistence works
-Each terminal runs `ssh -tt <box> "tmux new-session -A -D -s web"` (the `-D` detaches any other
-client so a stale connection can't freeze the layout). Because tmux runs on the
-box, the session and its processes survive disconnects. A 45s server-side grace window makes
-brief reconnects seamless; after that the local ssh process is dropped while the on-box
-session keeps running.
+Each terminal runs `ssh -tt <box> "tmux new-session -A -D -s <session>"` (the `-D` detaches any
+other client so a stale connection can't freeze the layout). `<session>` is the box's tmux session
+name — set per box in the Add/Edit dialog (a type-or-pick field whose ⟳ button fetches the host's
+live sessions), defaulting to `web`. Because tmux runs on the box, the session and its processes
+survive disconnects. A 45s server-side grace window makes brief reconnects seamless; after that
+the local ssh process is dropped while the on-box session keeps running.
 
 When a box is added, Tmuxifier persists the box immediately and opens a live provisioning
 panel. That provisioning flow checks for `tmux`, installs it through a known package manager

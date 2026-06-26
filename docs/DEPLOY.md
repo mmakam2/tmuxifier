@@ -13,7 +13,7 @@ unit); adjust paths if you install elsewhere.
 | --- | --- | --- |
 | `.env` | no (gitignored) | All `TMUXIFIER_*` config, incl. password hash + cookie secret (mode `0600`) |
 | `tls/` | no (gitignored) | `cert.pem` / `key.pem` for HTTPS (private key stays out of git) |
-| `data/` | no (gitignored) | `boxes.json` and SSH ControlMaster sockets (`data/cm/`) |
+| `data/` | no (gitignored) | `boxes.json`, `fleet-jobs.json` (Fleet Command history), and SSH ControlMaster sockets (`data/cm/`) |
 | `deploy/tmuxifier.service` | yes | Sample systemd unit (no secrets) |
 | `.env.example` | yes | Template for `.env` |
 
