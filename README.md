@@ -79,8 +79,12 @@ As an alternative to `.env`, a `config.json` in the repo root works too, using c
 `googleClientSecret`, `allowedEmails`, `dataDir`, `controlDir`, `sshConfigFile`, `tlsCert`,
 `tlsKey`). The UI also persists `localShell` in `config.json`; it does not have an env key.
 `TMUXIFIER_SSH_CONFIG`/`sshConfigFile` is passed to `ssh` as `-F`, so it is an alternate config
-file for Tmuxifier's SSH commands, not an extra file merged with `~/.ssh/config`. The import button
-still reads the service user's `~/.ssh/config`.
+file for Tmuxifier's SSH commands, not an extra file merged with `~/.ssh/config`.
+
+The sidebar's **export** (⤓) and **import** (⤒) buttons download and upload the full box list as a
+JSON file — a portable backup you can move between Tmuxifier instances. Import adds boxes from the
+file, re-minting each id and skipping any whose host/label already exists (so re-importing is safe).
+It carries no SSH secrets; boxes still rely on your keys/agent/`~/.ssh/config` at connect time.
 
 ## Authentication
 `TMUXIFIER_AUTH_MODE` selects one login method. The default is `password`; set it to

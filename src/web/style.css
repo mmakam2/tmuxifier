@@ -64,6 +64,7 @@ body {
 .layout.sidebar-collapsed .brand-name { display: none; }
 .layout.sidebar-collapsed .brand-actions { flex-direction: column; }
 .layout.sidebar-collapsed #logout,
+.layout.sidebar-collapsed #export,
 .layout.sidebar-collapsed #import,
 .layout.sidebar-collapsed .actions,
 .layout.sidebar-collapsed .fleet-actions,
@@ -372,3 +373,7 @@ body {
 .fleet-result.error .fr-badge { background: rgba(248, 81, 73, 0.13); border-color: rgba(248, 81, 73, 0.4); color: #f85149; }
 .fr-output { margin: 6px 0 0; max-height: 240px; overflow: auto; background: var(--panel-2); border-radius: 6px; padding: 8px; white-space: pre-wrap; word-break: break-all; }
 .fleet-empty, .fleet-detail .err { color: var(--muted); }
+
+.toast { position: fixed; bottom: 22px; left: 50%; translate: -50% 16px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 10px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s ease, translate .2s ease; z-index: 1000; pointer-events: none; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45); }
+.toast.show { opacity: 1; translate: -50% 0; }
+.toast-error { border-color: rgba(248, 81, 73, 0.5); color: #ffb4ad; }

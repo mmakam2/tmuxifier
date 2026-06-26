@@ -18,6 +18,16 @@ let fleetMode = false;
 let fleetSelected = new Set<string>();
 let fleetScriptDraft = ''; // in-progress bash-script editor content; survives reopen, cleared on run/exit
 
+// Transient bottom-center notice; auto-dismisses. Used for import results/errors.
+function showToast(message: string, kind: 'info' | 'error' = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast toast-${kind}`;
+  el.textContent = message;
+  document.body.appendChild(el);
+  window.setTimeout(() => el.classList.add('show'), 10);
+  window.setTimeout(() => { el.classList.remove('show'); window.setTimeout(() => el.remove(), 300); }, 3500);
+}
+
 const FLEET_RECENT_KEY = 'tmuxifier.fleetRecent';
 function readFleetRecent(): string[] { return parseRecent(localStorage.getItem(FLEET_RECENT_KEY)); }
 function pushFleetRecent(cmd: string) {
@@ -232,9 +242,11 @@ async function renderDashboard() {
           <span><img src="${logoUrl}" alt="" /><span class="brand-name">tmuxifier</span></span>
           <div class="brand-actions">
             <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-label="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-expanded="${sidebarCollapsed ? 'false' : 'true'}">${sidebarCollapsed ? '›' : '‹'}</button>
-            <button id="import" type="button" title="Import boxes from ~/.ssh/config" aria-label="Import boxes from ~/.ssh/config">⤓</button>
+            <button id="export" type="button" title="Export boxes to a file" aria-label="Export boxes to a file">⤓</button>
+            <button id="import" type="button" title="Import boxes from a file" aria-label="Import boxes from a file">⤒</button>
             <button id="logout" title="Log out">⎋</button>
           </div>
+          <input id="import-file" type="file" accept="application/json,.json" hidden />
         </div>
         <div class="actions"><button id="add">+ Add box</button></div>
         <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button></div>
@@ -267,7 +279,32 @@ async function renderDashboard() {
     button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     window.setTimeout(refitActiveTerminals, 260);
   });
-  app.querySelector('#import')!.addEventListener('click', async () => { await api.importSsh(); await refresh(); });
+  app.querySelector('#export')!.addEventListener('click', () => {
+    // Same-origin GET navigation; the session cookie rides along and the server
+    // sets Content-Disposition, so the browser saves the file with its name.
+    const a = document.createElement('a');
+    a.href = '/api/export';
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+  const importFile = app.querySelector('#import-file') as HTMLInputElement;
+  app.querySelector('#import')!.addEventListener('click', () => importFile.click());
+  importFile.addEventListener('change', async () => {
+    const file = importFile.files?.[0];
+    importFile.value = ''; // reset so re-selecting the same file fires change again
+    if (!file) return;
+    try {
+      const payload = JSON.parse(await file.text());
+      const { added, skipped } = await api.importBoxes(payload);
+      await refresh();
+      const msg = `Imported ${added.length} box${added.length === 1 ? '' : 'es'}${skipped ? `, ${skipped} skipped` : ''}`;
+      showToast(msg);
+    } catch (e) {
+      showToast(`Import failed: ${(e as Error).message}`, 'error');
+    }
+  });
   app.querySelector('#add')!.addEventListener('click', () => openBoxDialog());
   app.querySelector('#search')!.addEventListener('input', () => filterAndPaint());
   app.querySelector('#fleet-toggle')!.addEventListener('click', () => {

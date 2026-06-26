@@ -257,7 +257,20 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (statusChecker?.resetBackoff) statusChecker.resetBackoff(box.id);
     return { ok: true };
   });
-  app.post('/api/import', { preHandler: requireAuth }, async () => store.importFromSshConfig());
+  app.get('/api/export', { preHandler: requireAuth }, async (req, reply) => {
+    const payload = await store.exportBoxes();
+    const stamp = payload.exportedAt.slice(0, 10);
+    reply.header('content-disposition', `attachment; filename="tmuxifier-boxes-${stamp}.json"`);
+    reply.type('application/json');
+    return JSON.stringify(payload, null, 2);
+  });
+  app.post('/api/import', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      return await store.importBoxes(req.body);
+    } catch (e) {
+      return reply.code(400).send({ error: e.message });
+    }
+  });
 
   app.post('/api/fleet/jobs', { preHandler: requireAuth }, async (req, reply) => {
     const { boxIds, command } = req.body || {};

@@ -20,7 +20,7 @@ export default async function globalSetup() {
   );
 
   // Seed the box into a temp inventory so no UI prompt is needed
-  const store = createStore({ dataDir, sshConfigPath: '/nonexistent' });
+  const store = createStore({ dataDir });
   await store.addBox({ host: lb.box.host, label: 'localhost', sessionName: lb.session, tags: ['Prod'] });
   await store.addBox({ host: 'tmuxifierlocal-db', label: 'db-primary', sessionName: lb.session, tags: ['Prod'] });
   await store.addBox({ host: 'tmuxifierlocal-worker', label: 'untagged-worker', sessionName: lb.session });

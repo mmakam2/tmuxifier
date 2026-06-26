@@ -27,7 +27,7 @@ if (cfgError) {
 
 fs.mkdirSync(config.controlDir, { recursive: true, mode: 0o700 });
 
-const store = createStore({ dataDir: config.dataDir, sshConfigPath: config.sshConfigPath });
+const store = createStore({ dataDir: config.dataDir });
 const sessions = createSessionManager({ hostKeyPolicy: config.hostKeyPolicy, graceSeconds: config.graceSeconds, sshConfigFile: config.sshConfigFile, controlDir: config.controlDir, controlPersist: config.controlPersist });
 const boxActions = createBoxActions({
   run: (argv, opts) => sshRun(argv, opts),

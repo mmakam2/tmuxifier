@@ -28,8 +28,9 @@ Don't introduce dependencies on `$HOME`-level state other than the user's existi
 Any file that must hold real secrets or PII to run locally is **gitignored and ships with a
 placeholder counterpart**, so contributors get the shape without the data: `.env` → `.env.example`;
 `config.json` → the same keys in `.env.example` (camelCase); `tls/` → generation steps in
-`docs/DEPLOY.md`; `data/boxes.json` → created at runtime (boxes are added via the UI or imported
-from `~/.ssh/config`). Add the placeholder/instructions in the same change that introduces the file.
+`docs/DEPLOY.md`; `data/boxes.json` → created at runtime (boxes are added via the UI, or imported
+from a JSON file previously produced by the export button). Add the placeholder/instructions in the
+same change that introduces the file.
 
 ## Commands
 
@@ -78,11 +79,12 @@ pattern for new modules.
 - `googleAuth.js` — dependency-free Google OIDC helper: authorization-code flow, PKCE, id_token
   payload decoding, and exact-email allowlist checks.
 - `server.js` — Fastify app: login rate-limiting, REST under `/api/*`, and the `/term` WebSocket.
-- `store.js` — `data/boxes.json` CRUD; normalizes/validates boxes; imports from `~/.ssh/config`.
+- `store.js` — `data/boxes.json` CRUD; normalizes/validates boxes; exports/imports the box list as
+  a versioned JSON file (`exportBoxes`/`importBoxes`; import re-mints ids and skips dup/unsafe entries).
 - `sshCommand.js` — builds `ssh` argv for attach/probe; **all box fields are validated by
   `assertBoxSafe` and never shell-interpolated unquoted**. Touch this carefully (command-injection
   surface). Includes ControlMaster multiplexing args.
-- `sshConfig.js` / `sshRun.js` — parse `~/.ssh/config`; run one-shot ssh probes.
+- `sshRun.js` — run one-shot ssh probes.
 - `sessions.js` — PTY lifecycle: PTYs keyed by `boxId`, listeners refcounted, a `graceSeconds`
   window keeps a dropped PTY alive for seamless reconnects, then it's killed while the on-box tmux
   session keeps running.

@@ -1,8 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { parseSshConfig } from './sshConfig.js';
 import { sanitizeSession, assertBoxSafe } from './sshCommand.js';
+
+// Bump when the on-disk export shape changes; importBoxes stays lenient about it.
+const EXPORT_VERSION = 1;
+const EXPORT_TYPE = 'tmuxifier-boxes';
 
 function normalizeTags(value) {
   if (!Array.isArray(value)) return [];
@@ -28,7 +31,7 @@ function assertUniqueBox(boxes, candidate, ignoreId) {
   }
 }
 
-export function createStore({ dataDir, sshConfigPath }) {
+export function createStore({ dataDir }) {
   const file = path.join(dataDir, 'boxes.json');
 
   async function readAll() {
@@ -93,25 +96,37 @@ export function createStore({ dataDir, sshConfigPath }) {
       const boxes = await readAll();
       await writeAll(boxes.filter((b) => b.id !== id));
     },
-    async importFromSshConfig() {
-      let text = '';
-      try {
-        text = await fs.readFile(sshConfigPath, 'utf8');
-      } catch {
-        return [];
-      }
-      const existing = new Set((await readAll()).map((b) => b.host));
+    // Snapshot every box for download. The wrapper carries a type/version so
+    // importBoxes can recognise its own files and reject unrelated JSON.
+    async exportBoxes() {
+      return {
+        type: EXPORT_TYPE,
+        version: EXPORT_VERSION,
+        exportedAt: new Date().toISOString(),
+        boxes: await readAll(),
+      };
+    },
+    // Restore boxes from a previously exported file. Accepts either the wrapped
+    // payload or a bare array of boxes. Each box is re-added through addBox, so
+    // it gets a fresh id/createdAt and is re-validated; duplicates (same
+    // host/label) and unsafe/invalid entries are skipped, not fatal.
+    async importBoxes(payload) {
+      const incoming = Array.isArray(payload)
+        ? payload
+        : payload && Array.isArray(payload.boxes)
+          ? payload.boxes
+          : null;
+      if (!incoming) throw new Error('invalid box export: expected a boxes array');
       const added = [];
-      for (const cand of parseSshConfig(text)) {
-        if (existing.has(cand.host)) continue;
+      let skipped = 0;
+      for (const spec of incoming) {
         try {
-          added.push(await this.addBox(cand));
-          existing.add(cand.host);
+          added.push(await this.addBox(spec));
         } catch {
-          // skip unsafe/invalid ssh-config entries
+          skipped += 1; // duplicate host/label or unsafe/invalid entry
         }
       }
-      return added;
+      return { added, skipped };
     },
   };
 }

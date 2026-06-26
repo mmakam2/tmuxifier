@@ -1,4 +1,3 @@
-import os from 'node:os';
 import path from 'node:path';
 import { readEnvFile } from './envFile.js';
 import { readConfigFile } from './configFile.js';
@@ -84,7 +83,6 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   // terminal for a box over one persistent connection keeps Tmuxifier from
   // hammering each box's sshd (and tripping MaxStartups / ban tools).
   merged.controlDir = merged.controlDir ?? path.join(merged.dataDir, 'cm');
-  merged.sshConfigPath = merged.sshConfigPath ?? path.join(os.homedir(), '.ssh', 'config');
   // Auth mode: password (default) or oauth. "google" is accepted as a legacy alias.
   merged.authMode = ['oauth', 'google'].includes(merged.authMode) ? 'google' : 'password';
   merged.publicUrl = normalizePublicUrl(merged.publicUrl);

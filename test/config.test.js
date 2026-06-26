@@ -1,6 +1,5 @@
 import { test, expect } from 'vitest';
 import path from 'node:path';
-import os from 'node:os';
 import { loadConfig, requiredConfigError } from '../src/server/config.js';
 
 test('applies defaults', () => {
@@ -10,7 +9,6 @@ test('applies defaults', () => {
   expect(c.graceSeconds).toBe(45);
   expect(c.hostKeyPolicy).toBe('accept-new');
   expect(c.dataDir).toBe(path.join('/app', 'data'));
-  expect(c.sshConfigPath).toBe(path.join(os.homedir(), '.ssh', 'config'));
   expect(c.controlDir).toBe(path.join('/app', 'data', 'cm'));
 });
 

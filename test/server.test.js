@@ -28,12 +28,11 @@ async function makeApp(overrides = {}) {
   const config = {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
     passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir,
-    sshConfigPath: path.join(dir, 'nope'),
     localShell: 'none',
     configPath: path.join(dir, 'config.json'),
     ...configOverrides,
   };
-  const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
+  const store = createStore({ dataDir: dir });
   const statusChecker = {
     checkBox: async () => ({ reachable: true, tmux: true, sessions: [] }),
     listSessions: async () => ({ reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1 }] }),
@@ -85,6 +84,42 @@ test('login then CRUD a box', async () => {
 
   const del = await app.inject({ method: 'DELETE', url: `/api/boxes/${box.id}`, headers });
   expect(del.statusCode).toBe(200);
+});
+
+test('GET /api/export downloads a box snapshot, POST /api/import restores it', async () => {
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1', user: 'deploy' } });
+
+  const exported = await app.inject({ method: 'GET', url: '/api/export', headers });
+  expect(exported.statusCode).toBe(200);
+  expect(exported.headers['content-disposition']).toMatch(/attachment; filename="tmuxifier-boxes-.*\.json"/);
+  const payload = exported.json();
+  expect(payload.type).toBe('tmuxifier-boxes');
+  expect(payload.boxes.map((b) => b.host)).toEqual(['h1']);
+
+  // re-importing the same payload skips the existing host, adds the new one
+  payload.boxes.push({ host: 'h2' });
+  const imported = await app.inject({ method: 'POST', url: '/api/import', headers, payload });
+  expect(imported.statusCode).toBe(200);
+  expect(imported.json()).toEqual({ added: expect.any(Array), skipped: 1 });
+  expect(imported.json().added.map((b) => b.host)).toEqual(['h2']);
+
+  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
+  expect(list.json().map((b) => b.host).sort()).toEqual(['h1', 'h2']);
+});
+
+test('POST /api/import rejects a payload without boxes with a 400 error', async () => {
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'POST', url: '/api/import', headers, payload: { nope: true } });
+  expect(res.statusCode).toBe(400);
+  expect(res.json().error).toMatch(/boxes array/);
+});
+
+test('rejects unauthenticated export', async () => {
+  const res = await app.inject({ method: 'GET', url: '/api/export' });
+  expect(res.statusCode).toBe(401);
 });
 
 test('POST /api/boxes rejects duplicate host with a 400 error', async () => {
