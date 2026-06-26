@@ -216,7 +216,7 @@ export function openProxmoxHub(opts: HubOpts) {
 
     box.append(
       el('h3', {}, ['Add a container preset']),
-      field('Name', name), field('Host', hostSel), field('Node', nodeSel), field('Template storage', tmplStoreSel), field('Template', tmplSel), field('Storage (rootfs)', storeSel),
+      field('Preset Name', name), field('Host', hostSel), field('Node', nodeSel), field('Template storage', tmplStoreSel), field('Template', tmplSel), field('Storage (rootfs)', storeSel),
       el('div', { class: 'pve-grid' }, [field('Disk GiB', disk), field('Cores', cores), field('Memory MiB', mem), field('Swap MiB', swap)]),
       el('label', { class: 'check-field' }, [unpriv, el('span', {}, ['Unprivileged'])]),
       el('label', { class: 'check-field' }, [nesting, el('span', {}, ['Nesting'])]),
