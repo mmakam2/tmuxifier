@@ -28,6 +28,30 @@ test('fleet command runs on a selected box and shows captured output', async ({ 
   await expect(detail.locator('.fleet-result.ok .fr-badge')).toHaveText('exit 0');
 });
 
+test('the master "Select all" checkbox selects and clears every shown box', async ({ page }) => {
+  await loginAndWait(page);
+  await page.getByRole('button', { name: 'Fleet', exact: true }).click();
+
+  // Three boxes are seeded (localhost + db-primary under Prod, untagged-worker).
+  await expect(page.locator('.fleet-select-all')).toContainText('Select all (3)');
+  const selectAll = page.locator('.fleet-select-all .select-all-check');
+
+  await selectAll.check();
+  await expect(page.locator('input.box-check:checked')).toHaveCount(3);
+  await expect(page.locator('#fleet-run')).toHaveText('Run on 3');
+
+  await selectAll.uncheck();
+  await expect(page.locator('input.box-check:checked')).toHaveCount(0);
+  await expect(page.locator('#fleet-run')).toBeDisabled();
+
+  // Partial selection (one tag group) must NOT mark the master — it's binary,
+  // "on" only when every shown box is selected (no indeterminate highlight).
+  await page.locator('.box-group[data-tag-key="prod"] .group-check').check();
+  await expect(page.locator('input.box-check:checked')).toHaveCount(2);
+  await expect(selectAll).not.toBeChecked();
+  expect(await selectAll.evaluate((el) => (el as HTMLInputElement).indeterminate)).toBe(false);
+});
+
 test('a finished fleet job is findable from the Jobs button after a reload', async ({ page }) => {
   await loginAndWait(page);
   await page.getByRole('button', { name: 'Fleet', exact: true }).click();

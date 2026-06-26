@@ -379,6 +379,35 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
   list.innerHTML = '';
   const searching = !!searchTerm;
 
+  // Fleet mode: a tri-state master checkbox that selects/clears every box
+  // currently shown (respects the active search filter, like the group checks).
+  if (fleetMode && boxes.length) {
+    const allShownIds = boxes.map((b) => b.id);
+    const row = document.createElement('li');
+    row.className = 'fleet-select-all';
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.className = 'select-all-check';
+    // Binary: only "on" when every shown box is selected (no partial/indeterminate
+    // highlight — partial state is conveyed by the per-group/per-box checkboxes).
+    check.checked = groupState(fleetSelected, allShownIds) === 'all';
+    check.addEventListener('change', () => {
+      fleetSelected = setBoxes(fleetSelected, allShownIds, check.checked);
+      syncFleetUI();
+    });
+    const label = document.createElement('span');
+    label.className = 'select-all-label';
+    label.textContent = `Select all (${allShownIds.length})`;
+    // Clicking anywhere on the row (not just the box) toggles the checkbox.
+    row.addEventListener('click', (e) => {
+      if (e.target === check) return;
+      check.checked = !check.checked;
+      check.dispatchEvent(new Event('change'));
+    });
+    row.append(check, label);
+    list.appendChild(row);
+  }
+
   for (const group of groupBoxes(boxes)) {
     const collapsed = !searching && isGroupCollapsed(group.key);
     const containsActive = !!activeBoxId && group.boxes.some(b => b.id === activeBoxId);
@@ -418,7 +447,7 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
     count.className = 'group-count';
     count.textContent = String(group.boxes.length);
 
-    header.append(chevron, groupCheck, name, count);
+    header.append(groupCheck, chevron, name, count);
     header.addEventListener('click', () => {
       if (searching) return;
       setGroupCollapsed(group.key, !collapsed);
@@ -970,6 +999,13 @@ function syncFleetUI() {
     const gc = groupEl.querySelector('input.group-check') as HTMLInputElement | null;
     if (gc) { gc.checked = state === 'all'; gc.indeterminate = state === 'some'; }
   });
+  // Master "select all" reflects every currently-shown box.
+  const selectAll = app.querySelector('.fleet-select-all .select-all-check') as HTMLInputElement | null;
+  if (selectAll) {
+    const shownIds = Array.from(app.querySelectorAll('input.box-check')).map((el) => (el as HTMLInputElement).dataset.id || '');
+    selectAll.checked = groupState(fleetSelected, shownIds) === 'all';
+    selectAll.indeterminate = false;
+  }
 }
 
 function openFleetConfirm(command: string, targets: { id: string; label: string }[]) {
