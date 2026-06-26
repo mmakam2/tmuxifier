@@ -234,7 +234,6 @@ export function openProxmoxHub(opts: HubOpts) {
     if (!presets.length) { setContent(el('div', { class: 'pve-sub' }, ['Create a preset first.'])); return; }
     const sel = el('select', {}, presets.map((p) => el('option', { value: p.id }, [p.name]))) as HTMLSelectElement;
     const hostname = input('', { placeholder: 'dev-01' });
-    const vmid = input('', { placeholder: 'auto (next free)', type: 'number' });
     const ip = input('', { placeholder: 'override IP/CIDR (static only)' });
     const ipField = field('IP/CIDR', ip);
 
@@ -259,14 +258,14 @@ export function openProxmoxHub(opts: HubOpts) {
       e.preventDefault(); box.querySelector('.pve-err')?.remove();
       const t = tag.value.trim();
       try {
-        const job = await pve.createProvision({ presetId: sel.value, hostname: hostname.value.trim(), vmid: vmid.value ? Number(vmid.value) : undefined, ip: ip.value.trim() || undefined, tags: t ? [t] : [] });
+        const job = await pve.createProvision({ presetId: sel.value, hostname: hostname.value.trim(), ip: ip.value.trim() || undefined, tags: t ? [t] : [] });
         showJob(job.id, { ohMyTmux: (omt as HTMLInputElement).checked, ohMyZsh: (shZsh as HTMLInputElement).checked, ohMyBash: (shBash as HTMLInputElement).checked });
       } catch (er) { box.append(err((er as Error).message)); }
     } }, ['Provision']);
 
     box.append(
       el('h3', {}, ['Provision a container']),
-      field('Preset', sel), field('Hostname', hostname), field('VMID', vmid), ipField,
+      field('Preset', sel), field('Hostname', hostname), ipField,
       field('Tag', tag), tagDatalist,
       el('label', { class: 'check-field' }, [omt, el('span', {}, ['Install Oh My Tmux'])]),
       el('div', { class: 'field' }, [el('span', {}, ['Shell framework']),
