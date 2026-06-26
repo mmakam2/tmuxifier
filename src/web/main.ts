@@ -248,8 +248,9 @@ async function renderDashboard() {
       </aside>
       <main id="stage" class="stage"><div class="empty">Select a box to open a terminal.</div></main>
     </div>`;
-  app.querySelector('#logout')!.addEventListener('click', async () => { 
+  app.querySelector('#logout')!.addEventListener('click', async () => {
     if (pollInterval) clearInterval(pollInterval);
+    stopFleetPoll();
     await api.logout(); await renderLogin();
   });
   app.querySelector('#sidebar-toggle')!.addEventListener('click', () => {
@@ -1027,6 +1028,104 @@ function openFleetConfirm(command: string, targets: { id: string; label: string 
   });
 }
 
-function openFleetJobsPanel(_jobId?: string) { /* implemented in Task 15 */ }
+let fleetPollTimer: any = null;
+
+function stopFleetPoll() { if (fleetPollTimer) { clearTimeout(fleetPollTimer); fleetPollTimer = null; } }
+
+function openFleetJobsPanel(jobId?: string) {
+  const panel = document.getElementById('fleet-panel')!;
+  panel.classList.add('open');
+  const closeBtn = panel.querySelector('.fleet-panel-close') as HTMLElement;
+  closeBtn.onclick = () => { stopFleetPoll(); panel.classList.remove('open'); };
+  renderFleetHistory();
+  if (jobId) showFleetJob(jobId);
+  else (panel.querySelector('.fleet-detail') as HTMLElement).innerHTML = '<p class="fleet-empty">Select a job to see results.</p>';
+}
+
+async function renderFleetHistory() {
+  const list = document.querySelector('#fleet-panel .fleet-history') as HTMLElement | null;
+  if (!list) return;
+  let jobs: import('./api').FleetJobSummary[] = [];
+  try { jobs = await api.listFleetJobs(); } catch {}
+  list.innerHTML = '';
+  for (const s of jobs) {
+    const li = document.createElement('li');
+    li.className = 'fleet-history-item';
+    li.dataset.id = s.id;
+    li.innerHTML = `<span class="fh-cmd"></span><span class="fh-meta">${s.okCount}/${s.targetCount} ok · ${s.status}</span>`;
+    (li.querySelector('.fh-cmd') as HTMLElement).textContent = s.command;
+    li.addEventListener('click', () => showFleetJob(s.id));
+    list.appendChild(li);
+  }
+}
+
+async function showFleetJob(id: string) {
+  stopFleetPoll();
+  const detail = document.querySelector('#fleet-panel .fleet-detail') as HTMLElement | null;
+  if (!detail) return;
+  let job: import('./api').FleetJob;
+  try { job = await api.getFleetJob(id); } catch { detail.innerHTML = '<p class="err">Could not load job.</p>'; return; }
+  renderFleetJob(detail, job);
+  if (job.status === 'running') fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500);
+}
+
+async function pollFleetJob(id: string) {
+  const detail = document.querySelector('#fleet-panel .fleet-detail') as HTMLElement | null;
+  if (!detail) { stopFleetPoll(); return; }
+  let job: import('./api').FleetJob;
+  try { job = await api.getFleetJob(id); } catch { fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500); return; }
+  renderFleetJob(detail, job);
+  if (job.status === 'running') fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500);
+  else { stopFleetPoll(); renderFleetHistory(); }
+}
+
+function renderFleetJob(detail: HTMLElement, job: import('./api').FleetJob) {
+  detail.innerHTML = '';
+
+  const head = document.createElement('div');
+  head.className = 'fleet-detail-head';
+  const cmd = document.createElement('pre');
+  cmd.className = 'fleet-confirm-cmd';
+  cmd.textContent = `$ ${job.command}`;
+  const status = document.createElement('span');
+  status.className = `fleet-job-status ${job.status}`;
+  status.textContent = job.status;
+  head.append(cmd, status);
+  detail.appendChild(head);
+
+  if (job.status === 'running') {
+    const cancel = document.createElement('button');
+    cancel.className = 'fleet-cancel';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', async () => { cancel.disabled = true; try { await api.cancelFleetJob(job.id); } catch {} });
+    detail.appendChild(cancel);
+  }
+
+  for (const t of job.targets) {
+    const row = document.createElement('div');
+    row.className = `fleet-result ${t.status}`;
+    const top = document.createElement('div');
+    top.className = 'fleet-result-top';
+    const name = document.createElement('span');
+    name.className = 'fr-label';
+    name.textContent = t.label;
+    const badge = document.createElement('span');
+    badge.className = 'fr-badge';
+    badge.textContent = t.status === 'ok' ? 'exit 0'
+      : t.status === 'error' ? (t.code != null ? `exit ${t.code}` : (t.error || 'error'))
+      : t.status; // running | pending | cancelled | interrupted
+    top.append(name, badge);
+    row.appendChild(top);
+
+    const body = (t.stdout || '') + (t.stderr ? `\n${t.stderr}` : '');
+    if (body.trim()) {
+      const out = document.createElement('pre');
+      out.className = 'fr-output';
+      out.textContent = body + (t.truncated ? '\n… (truncated)' : '');
+      row.appendChild(out);
+    }
+    detail.appendChild(row);
+  }
+}
 
 start();
