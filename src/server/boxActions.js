@@ -205,6 +205,14 @@ export function createBoxActions({ run, hostKeyPolicy = 'accept-new', sshConfigF
       }
       return { ok: true };
     },
+    // Run a one-shot, non-interactive command on the box over the existing
+    // BatchMode ssh path and capture {code, stdout, stderr}. `command` is the
+    // remote shell command and is passed verbatim (runRemote -> buildProbeArgv
+    // appends it as the final argv element). assertBoxSafe (inside buildProbeArgv)
+    // still validates the connection fields.
+    async execCommand(box, command, { timeoutMs = 15000 } = {}) {
+      return runRemote(box, command, timeoutMs);
+    },
     async exitMaster(box) {
       try {
         const argv = buildControlExitArgv(box, { sshConfigFile, controlDir });

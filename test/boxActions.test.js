@@ -285,3 +285,23 @@ test('exitMaster is best effort (swallows ssh errors)', async () => {
   });
   await expect(actions.exitMaster({ host: 'h' })).resolves.toEqual({ ok: true });
 });
+
+test('execCommand runs the command verbatim as the final ssh arg, capturing output', async () => {
+  let argv;
+  const actions = createBoxActions({
+    run: async (a) => { argv = a; return { code: 0, stdout: 'hi\n', stderr: '' }; },
+    controlDir: '/run/cm',
+  });
+  const res = await actions.execCommand({ host: 'h', user: 'me' }, 'df -h /', { timeoutMs: 1000 });
+  expect(res).toEqual({ code: 0, stdout: 'hi\n', stderr: '' });
+  expect(argv[argv.length - 1]).toBe('df -h /'); // command is the last argv element, verbatim (NOT quoted)
+  expect(argv).toContain('me@h');
+  expect(argv).toContain('BatchMode=yes');
+});
+
+test('execCommand rejects an unsafe box before running ssh', async () => {
+  let called = false;
+  const actions = createBoxActions({ run: async () => { called = true; return { code: 0 }; } });
+  await expect(actions.execCommand({ host: '-bad' }, 'echo hi', {})).rejects.toThrow(/unsafe/);
+  expect(called).toBe(false);
+});
