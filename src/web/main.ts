@@ -2,6 +2,7 @@ import { api, type AddBoxSpec, type Box, type Status } from './api';
 import { openTerminal, openProvisionTerminal } from './terminal';
 import { dotClassFor, dotTitleFor } from './statusDot';
 import { toggleBox, setBoxes, groupState } from './fleetSelection';
+import { addRecent, parseRecent } from './fleetHistory';
 import logoUrl from './assets/tmuxifier-logo.png';
 
 const app = document.getElementById('app')!;
@@ -15,6 +16,12 @@ let allBoxes: Box[] = [];
 let latestStatus: Record<string, Status> = {};
 let fleetMode = false;
 let fleetSelected = new Set<string>();
+
+const FLEET_RECENT_KEY = 'tmuxifier.fleetRecent';
+function readFleetRecent(): string[] { return parseRecent(localStorage.getItem(FLEET_RECENT_KEY)); }
+function pushFleetRecent(cmd: string) {
+  localStorage.setItem(FLEET_RECENT_KEY, JSON.stringify(addRecent(readFleetRecent(), cmd)));
+}
 
 interface BoxGroup {
   key: string;
@@ -906,8 +913,41 @@ function renderFleetBar() {
   if (!bar) return;
   if (!fleetMode) { bar.hidden = true; bar.innerHTML = ''; return; }
   bar.hidden = false;
-  // Replaced with the full command bar in Task 14. For now just the run button.
-  bar.innerHTML = `<button id="fleet-run" type="button" class="fleet-run" disabled>Run on 0</button>`;
+  bar.innerHTML = '';
+
+  const recent = readFleetRecent();
+  const listId = 'fleet-recent';
+  const datalist = document.createElement('datalist');
+  datalist.id = listId;
+  for (const cmd of recent) {
+    const opt = document.createElement('option');
+    opt.value = cmd;
+    datalist.appendChild(opt);
+  }
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'fleet-input';
+  input.placeholder = 'command to run on selected boxes…';
+  input.setAttribute('list', listId);
+  input.autocomplete = 'off';
+
+  const run = document.createElement('button');
+  run.type = 'button';
+  run.id = 'fleet-run';
+  run.className = 'fleet-run';
+  run.textContent = `Run on ${fleetSelected.size}`;
+  run.disabled = fleetSelected.size === 0;
+
+  function submit() {
+    const command = input.value.trim();
+    if (!command || fleetSelected.size === 0) return;
+    openFleetConfirm(command, selectedTargetLabels());
+  }
+  run.addEventListener('click', submit);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+
+  bar.append(datalist, input, run);
   syncFleetUI();
 }
 
@@ -931,6 +971,62 @@ function syncFleetUI() {
   });
 }
 
-function openFleetJobsPanel() { /* implemented in Task 15 */ }
+function openFleetConfirm(command: string, targets: { id: string; label: string }[]) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const form = document.createElement('form');
+  form.className = 'modal fleet-confirm';
+
+  const title = document.createElement('h2');
+  title.textContent = `Run on ${targets.length} box${targets.length === 1 ? '' : 'es'}?`;
+
+  const cmd = document.createElement('pre');
+  cmd.className = 'fleet-confirm-cmd';
+  cmd.textContent = `$ ${command}`;
+
+  const targetList = document.createElement('div');
+  targetList.className = 'fleet-confirm-targets';
+  targetList.textContent = targets.map((t) => t.label).join('  •  ');
+
+  const err = document.createElement('p');
+  err.className = 'err';
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  const confirm = document.createElement('button');
+  confirm.type = 'submit';
+  confirm.textContent = `Run on ${targets.length} box${targets.length === 1 ? '' : 'es'}`;
+  actions.append(cancel, confirm);
+
+  form.append(title, cmd, targetList, err, actions);
+  backdrop.appendChild(form);
+  app.appendChild(backdrop);
+
+  function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
+  function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); }
+  document.addEventListener('keydown', onKey);
+  cancel.addEventListener('click', close);
+  let pressedOnBackdrop = false;
+  backdrop.addEventListener('mousedown', (e) => { pressedOnBackdrop = e.target === backdrop; });
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop && pressedOnBackdrop) close(); });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    confirm.disabled = true;
+    try {
+      const job = await api.createFleetJob(targets.map((t) => t.id), command);
+      pushFleetRecent(command);
+      close();
+      openFleetJobsPanel(job.id); // jumps straight to the live job (Task 15)
+    } catch (ex: any) {
+      err.textContent = ex?.message || 'Could not start fleet job';
+      confirm.disabled = false;
+    }
+  });
+}
+
+function openFleetJobsPanel(_jobId?: string) { /* implemented in Task 15 */ }
 
 start();

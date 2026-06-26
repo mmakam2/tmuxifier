@@ -227,3 +227,6 @@ body {
 .fleet-bar { padding: 8px 12px; border-top: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 6px; }
 .fleet-run { width: 100%; padding: 8px; background: #2b6cb0; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
 .fleet-run:disabled { opacity: 0.5; cursor: default; }
+.fleet-input { width: 100%; padding: 7px 9px; border-radius: 6px; border: 1px solid #2a2f3a; background: #11151c; color: inherit; }
+.fleet-confirm-cmd { background: #11151c; border: 1px solid #2a2f3a; border-radius: 6px; padding: 10px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+.fleet-confirm-targets { color: #9aa4b2; font-size: 0.9em; margin: 8px 0; }
