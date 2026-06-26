@@ -11,7 +11,7 @@ export function isIp(s) {
   return !!m && m.slice(1).every((o) => Number(o) >= 0 && Number(o) <= 255);
 }
 export function isCidr(s) {
-  const m = /^(.+)\/(\d{1,2})$/.exec(String(s));
+  const m = /^([^/]+)\/(\d{1,2})$/.exec(String(s));
   return !!m && isIp(m[1]) && Number(m[2]) >= 0 && Number(m[2]) <= 32;
 }
 

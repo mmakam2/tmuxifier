@@ -56,6 +56,7 @@ test('assertPresetInput validates ranges, refs, and static-network completeness'
   const staticNet = { ...PRESET, net: { bridge: 'vmbr0', vlan: 5, ipMode: 'static', cidr: '192.168.1.50/24', gateway: '192.168.1.1' } };
   expect(() => assertPresetInput(staticNet, ctx)).not.toThrow();
   expect(() => assertPresetInput({ ...staticNet, net: { ...staticNet.net, cidr: 'bad' } }, ctx)).toThrow(/cidr/);
+  expect(() => assertPresetInput({ ...staticNet, net: { ...staticNet.net, gateway: 'nope' } }, ctx)).toThrow(/gateway/);
   expect(() => assertPresetInput({ ...PRESET, net: { ...PRESET.net, bridge: 'no spaces!' } }, ctx)).toThrow(/bridge/);
 });
 
