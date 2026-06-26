@@ -1029,8 +1029,9 @@ function openFleetConfirm(command: string, targets: { id: string; label: string 
 }
 
 let fleetPollTimer: any = null;
+let fleetPollJobId: string | null = null;
 
-function stopFleetPoll() { if (fleetPollTimer) { clearTimeout(fleetPollTimer); fleetPollTimer = null; } }
+function stopFleetPoll() { if (fleetPollTimer) { clearTimeout(fleetPollTimer); fleetPollTimer = null; } fleetPollJobId = null; }
 
 function openFleetJobsPanel(jobId?: string) {
   const panel = document.getElementById('fleet-panel')!;
@@ -1052,8 +1053,14 @@ async function renderFleetHistory() {
     const li = document.createElement('li');
     li.className = 'fleet-history-item';
     li.dataset.id = s.id;
-    li.innerHTML = `<span class="fh-cmd"></span><span class="fh-meta">${s.okCount}/${s.targetCount} ok · ${s.status}</span>`;
-    (li.querySelector('.fh-cmd') as HTMLElement).textContent = s.command;
+    const cmdSpan = document.createElement('span');
+    cmdSpan.className = 'fh-cmd';
+    cmdSpan.textContent = s.command;
+    const metaSpan = document.createElement('span');
+    metaSpan.className = 'fh-meta';
+    metaSpan.textContent = `${s.okCount}/${s.targetCount} ok · ${s.status}`;
+    li.appendChild(cmdSpan);
+    li.appendChild(metaSpan);
     li.addEventListener('click', () => showFleetJob(s.id));
     list.appendChild(li);
   }
@@ -1066,16 +1073,16 @@ async function showFleetJob(id: string) {
   let job: import('./api').FleetJob;
   try { job = await api.getFleetJob(id); } catch { detail.innerHTML = '<p class="err">Could not load job.</p>'; return; }
   renderFleetJob(detail, job);
-  if (job.status === 'running') fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500);
+  if (job.status === 'running') { fleetPollJobId = id; fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500); }
 }
 
 async function pollFleetJob(id: string) {
   const detail = document.querySelector('#fleet-panel .fleet-detail') as HTMLElement | null;
   if (!detail) { stopFleetPoll(); return; }
   let job: import('./api').FleetJob;
-  try { job = await api.getFleetJob(id); } catch { fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500); return; }
+  try { job = await api.getFleetJob(id); } catch { if (fleetPollJobId === id) fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500); return; }
   renderFleetJob(detail, job);
-  if (job.status === 'running') fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500);
+  if (job.status === 'running') { if (fleetPollJobId === id) fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500); }
   else { stopFleetPoll(); renderFleetHistory(); }
 }
 
