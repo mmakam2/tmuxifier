@@ -41,7 +41,11 @@ export function createFleetManager({
   const cancelled = new Set(); // jobIds with a pending cancel request (in-memory only)
 
   function prune() {
-    while (jobs.length > maxJobs) jobs.shift();
+    while (jobs.length > maxJobs) {
+      const shifted = jobs.shift();
+      runs.delete(shifted.id);
+      cancelled.delete(shifted.id);
+    }
   }
 
   function summarize(job) {
@@ -80,7 +84,6 @@ export function createFleetManager({
         if (t.status === 'cancelled') return; // already cancelled by a completed sibling
         t.status = 'running';
         t.startedAt = now();
-        save(jobs);
         try {
           const res = await execCommand(boxById.get(t.boxId), job.command, { timeoutMs });
           const out = clip(res && res.stdout, maxOutputBytes);

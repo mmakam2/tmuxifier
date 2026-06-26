@@ -16,6 +16,7 @@ test('save then load round-trips the jobs array and creates the data dir', async
   const store = createFleetStore({ dataDir: dir });
   const jobs = [{ id: 'j1', command: 'uptime', status: 'done', targets: [] }];
   store.save(jobs);
+  await store.whenIdle();
   expect(store.load()).toEqual(jobs);
   await expect(fs.stat(path.join(dir, 'fleet-jobs.json'))).resolves.toBeTruthy();
 });

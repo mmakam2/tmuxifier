@@ -625,3 +625,29 @@ test('POST /api/fleet/jobs/:id/cancel cancels or 404s', async () => {
   const missing = await app.inject({ method: 'POST', url: '/api/fleet/jobs/nope/cancel', headers });
   expect(missing.statusCode).toBe(404);
 });
+
+test('POST /api/fleet/jobs rejects a command exceeding 4096 bytes with 400', async () => {
+  app = await makeApp({ fleetManager: fleetStub() });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'POST', url: '/api/fleet/jobs', headers, payload: { boxIds: ['b1'], command: 'x'.repeat(4097) } });
+  expect(res.statusCode).toBe(400);
+});
+
+test('POST /api/fleet/jobs/:id/cancel rejects a cross-origin request with 403', async () => {
+  app = await makeApp({ fleetManager: fleetStub(), config: { publicUrl: 'https://tmux.example.com' } });
+  const cookie = await login();
+  const res = await app.inject({
+    method: 'POST', url: '/api/fleet/jobs/job1/cancel',
+    headers: { cookie: `${cookie.name}=${cookie.value}`, origin: 'https://evil.example' },
+  });
+  expect(res.statusCode).toBe(403);
+});
+
+test('GET /api/fleet/jobs and GET /api/fleet/jobs/:id require auth', async () => {
+  app = await makeApp({ fleetManager: fleetStub() });
+  const list = await app.inject({ method: 'GET', url: '/api/fleet/jobs' });
+  expect(list.statusCode).toBe(401);
+  const detail = await app.inject({ method: 'GET', url: '/api/fleet/jobs/job1' });
+  expect(detail.statusCode).toBe(401);
+});

@@ -1,28 +1,40 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// Persist fleet jobs to data/fleet-jobs.json. Synchronous on purpose: the fleet
-// runner calls save() fire-and-forget at each checkpoint without awaiting, and
-// the file is small (capped to fleetMaxJobs). The whole data/ dir is already
-// gitignored, so this file needs no .gitignore entry.
 export function createFleetStore({ dataDir }) {
   const file = path.join(dataDir, 'fleet-jobs.json');
+  let pending = null;        // latest serialized payload awaiting write, or null
+  let flushing = false;
+  let idleResolvers = [];
+  async function flush() {
+    if (flushing) return;
+    flushing = true;
+    try {
+      await fs.promises.mkdir(dataDir, { recursive: true });
+      while (pending !== null) {
+        const data = pending; pending = null;
+        await fs.promises.writeFile(file, data);
+      }
+    } catch {
+      // best effort: persistence must never crash a fleet run
+    } finally {
+      flushing = false;
+      const resolvers = idleResolvers; idleResolvers = [];
+      for (const r of resolvers) r();
+    }
+  }
   return {
     load() {
-      try {
-        const v = JSON.parse(fs.readFileSync(file, 'utf8'));
-        return Array.isArray(v) ? v : [];
-      } catch {
-        return [];
-      }
+      try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(v) ? v : []; }
+      catch { return []; }
     },
     save(jobs) {
-      try {
-        fs.mkdirSync(dataDir, { recursive: true });
-        fs.writeFileSync(file, JSON.stringify(jobs, null, 2));
-      } catch {
-        // Best effort: persistence must never crash a fleet run.
-      }
+      try { pending = JSON.stringify(jobs, null, 2); } catch { return; }
+      void flush();
+    },
+    whenIdle() {
+      if (!flushing && pending === null) return Promise.resolve();
+      return new Promise((resolve) => idleResolvers.push(resolve));
     },
   };
 }

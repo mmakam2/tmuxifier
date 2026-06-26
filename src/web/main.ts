@@ -1081,7 +1081,7 @@ async function pollFleetJob(id: string) {
   if (!detail) { stopFleetPoll(); return; }
   let job: import('./api').FleetJob;
   try { job = await api.getFleetJob(id); } catch { if (fleetPollJobId === id) fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500); return; }
-  renderFleetJob(detail, job);
+  if (fleetPollJobId === id) renderFleetJob(detail, job);
   if (job.status === 'running') { if (fleetPollJobId === id) fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500); }
   else { stopFleetPoll(); renderFleetHistory(); }
 }
