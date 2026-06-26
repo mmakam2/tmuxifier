@@ -152,6 +152,11 @@ body {
 .modal .session-refresh:disabled { opacity: 0.5; cursor: default; }
 .modal .session-hint { font-size: 11px; color: #6e7681; min-height: 1em; }
 .modal .session-hint.err { color: #f85149; }
+.modal .session-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.modal .session-picker:empty { display: none; }
+.modal .session-chip { padding: 3px 9px; border-radius: 999px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; cursor: pointer; font-size: 12px; line-height: 1.4; }
+.modal .session-chip:hover { border-color: #2f6feb; }
+.modal .session-chip.selected { border-color: #24d3e8; color: #24d3e8; }
 .modal .check-field { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #c9d1d9; }
 .modal .check-field input { width: 16px; height: 16px; accent-color: #1f6feb; }
 .modal .radio-group { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px; }

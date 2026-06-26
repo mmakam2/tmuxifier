@@ -600,15 +600,6 @@ function openBoxDialog(box?: Box) {
   const sessionListId = `session-options-${Math.random().toString(36).slice(2)}`;
   const sessionDatalist = document.createElement('datalist');
   sessionDatalist.id = sessionListId;
-  function setSessionOptions(names: string[]) {
-    const unique = Array.from(new Set(['web', ...names]));
-    sessionDatalist.replaceChildren(...unique.map((n) => {
-      const o = document.createElement('option');
-      o.value = n;
-      if (n === 'web') o.label = 'web (default)';
-      return o;
-    }));
-  }
   const sessionWrap = document.createElement('label');
   sessionWrap.className = 'field';
   const sessionSpan = document.createElement('span');
@@ -625,12 +616,40 @@ function openBoxDialog(box?: Box) {
   sessionRefresh.className = 'session-refresh';
   sessionRefresh.title = 'Fetch live tmux sessions from the host';
   sessionRefresh.textContent = '⟳';
+  // Visible picker. The native datalist popup filters its options by the text
+  // already in the field, so a pre-filled session name hides every other option.
+  // These chips always show every known session and fill the field on click; the
+  // datalist stays for type-ahead.
+  const sessionPicker = document.createElement('div');
+  sessionPicker.className = 'session-picker';
   const sessionHint = document.createElement('span');
   sessionHint.className = 'session-hint';
+  function applySessions(names: string[]) {
+    const all = Array.from(new Set(['web', ...names.filter(Boolean)]));
+    sessionDatalist.replaceChildren(...all.map((n) => {
+      const o = document.createElement('option');
+      o.value = n;
+      if (n === 'web') o.label = 'web (default)';
+      return o;
+    }));
+    sessionPicker.replaceChildren(...all.map((n) => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'session-chip';
+      chip.textContent = n === 'web' ? 'web (default)' : n;
+      if (sessionInput.value.trim() === n) chip.classList.add('selected');
+      chip.addEventListener('click', () => {
+        sessionInput.value = n;
+        for (const c of sessionPicker.children) c.classList.toggle('selected', c === chip);
+        sessionInput.focus();
+      });
+      return chip;
+    }));
+  }
   sessionRow.append(sessionInput, sessionRefresh);
-  sessionWrap.append(sessionSpan, sessionRow, sessionDatalist, sessionHint);
+  sessionWrap.append(sessionSpan, sessionRow, sessionPicker, sessionDatalist, sessionHint);
   // Pre-fill from cached status (edit mode only — an unsaved box has no snapshot).
-  setSessionOptions(isEdit ? (latestStatus[box!.id]?.sessions ?? []).map((s) => s.name) : []);
+  applySessions(isEdit ? (latestStatus[box!.id]?.sessions ?? []).map((s) => s.name) : []);
 
   sessionRefresh.addEventListener('click', async () => {
     const host = fields.host.value.trim();
@@ -654,11 +673,11 @@ function openBoxDialog(box?: Box) {
         sessionHint.textContent = "couldn't reach host";
         sessionHint.className = 'session-hint err';
       } else if (res.tmux === false) {
-        setSessionOptions([]);
+        applySessions([]);
         sessionHint.textContent = 'tmux not running';
       } else {
         const names = (res.sessions ?? []).map((s) => s.name);
-        setSessionOptions(names);
+        applySessions(names);
         sessionHint.textContent = names.length ? `${names.length} session${names.length === 1 ? '' : 's'}` : 'no sessions yet';
       }
     } catch (e: any) {
