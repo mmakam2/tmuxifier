@@ -183,3 +183,13 @@ test('updateBox can clear and replace the primary tag', async () => {
   const replaced = await store.updateBox(box.id, { tags: ['  Staging   East '] });
   expect(replaced.tags).toEqual(['Staging East']);
 });
+
+test('addBox carries source and a proxmox metadata block through normalize', async () => {
+  const store = createStore({ dataDir: dir });
+  const box = await store.addBox({ host: 'h', source: 'proxmox', proxmox: { hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' } });
+  expect(box.source).toBe('proxmox');
+  expect(box.proxmox).toEqual({ hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' });
+  // persists across a reload
+  const again = createStore({ dataDir: dir });
+  expect((await again.getBox(box.id)).proxmox.vmid).toBe(131);
+});

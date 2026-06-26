@@ -58,6 +58,7 @@ export function createStore({ dataDir }) {
       startupCommand: spec.startupCommand ?? base.startupCommand,
       tags: normalizeTags(spec.tags),
       source: spec.source || base.source || 'manual',
+      proxmox: spec.proxmox ?? base.proxmox,
       createdAt: base.createdAt || new Date().toISOString(),
     };
   }
