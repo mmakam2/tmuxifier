@@ -150,11 +150,15 @@ systemctl status tmuxifier
 The app reads `.env` itself; secrets are deliberately **not** placed in the process
 environment, so they are not inherited by the `ssh`/`tmux` children.
 
-Verify it is up:
+Verify it is up. Derive the URL the server actually binds to from your own
+config (scheme from TLS, host/port from `.env`) so the check always hits the
+deployed bind address — not loopback, which won't answer when `TMUXIFIER_BIND`
+is a routable address:
 
 ```bash
-curl -sk -o /dev/null -w '%{http_code}\n' https://192.168.1.10:7437/        # 200
-curl -sk -o /dev/null -w '%{http_code}\n' https://192.168.1.10:7437/api/me  # 401 until you log in
+BASE="$(node -e "import('./src/server/config.js').then(({loadConfig})=>{const c=loadConfig();process.stdout.write(((c.tlsCert&&c.tlsKey)?'https':'http')+'://'+c.bindAddress+':'+c.port)})")"
+curl -sk -o /dev/null -w '%{http_code}\n' "$BASE/"        # 200
+curl -sk -o /dev/null -w '%{http_code}\n' "$BASE/api/me"  # 401 until you log in
 ```
 
 ## Updating an existing deployment
@@ -178,7 +182,9 @@ npm version patch --no-git-tag-version # bump package.json + package-lock.json b
 npm run build                        # rebuild the web bundle
 sudo systemctl restart tmuxifier     # restart to pick up the new bundle
 systemctl status tmuxifier           # confirm the service is healthy
-curl -sk -o /dev/null -w '%{http_code}\n' https://<configured-host>:7437/  # 200
+# Health check against the deployed bind address (derived from your config):
+BASE="$(node -e "import('./src/server/config.js').then(({loadConfig})=>{const c=loadConfig();process.stdout.write(((c.tlsCert&&c.tlsKey)?'https':'http')+'://'+c.bindAddress+':'+c.port)})")"
+curl -sk -o /dev/null -w '%{http_code}\n' "$BASE/"  # 200
 ```
 
 If everything checks out, commit and push:

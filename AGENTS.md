@@ -115,7 +115,11 @@ npm version patch --no-git-tag-version # bump package.json + package-lock.json b
 npm run build                          # rebuild the web bundle with the new version
 sudo systemctl restart tmuxifier       # restart the service to serve the new bundle
 systemctl status tmuxifier
-curl -sk -o /dev/null -w '%{http_code}\n' https://<configured-host>:7437/
+# Health check the deployed bind address — derive scheme/host/port from config so
+# this never hardcodes your real bind address (the service may bind a routable
+# address, not 127.0.0.1, in which case a loopback curl returns 000):
+BASE="$(node -e "import('./src/server/config.js').then(({loadConfig})=>{const c=loadConfig();process.stdout.write(((c.tlsCert&&c.tlsKey)?'https':'http')+'://'+c.bindAddress+':'+c.port)})")"
+curl -sk -o /dev/null -w '%{http_code}\n' "$BASE/"  # 200
 VERSION="v$(node -p "require('./package.json').version")"
 test "$(node -p "require('./package-lock.json').version")" = "${VERSION#v}"
 test "$(node -p "require('./package-lock.json').packages[''].version")" = "${VERSION#v}"
