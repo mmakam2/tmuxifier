@@ -31,7 +31,6 @@ function openAddDiskModal(opts: { id: string; storages: string[]; onAdd: (m: Pve
   let pressed = false;
   backdrop.addEventListener('mousedown', (e) => { pressed = e.target === backdrop; });
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop && pressed) close(); });
-  const idField = input(opts.id); (idField as HTMLInputElement).readOnly = true;
   const storageSel = el('select', {}, opts.storages.map((s) => el('option', { value: s }, [s]))) as HTMLSelectElement;
   const size = input('8', { type: 'number', min: '1' });
   const path = input('', { placeholder: '/data' });
@@ -48,7 +47,7 @@ function openAddDiskModal(opts: { id: string; storages: string[]; onAdd: (m: Pve
   const cancel = el('button', { type: 'button', class: 'pve-btn', onclick: close }, ['Cancel']);
   box.append(
     el('h3', {}, ['Add disk']),
-    field('Mount Point ID', idField), field('Storage', storageSel), field('Disk size (GiB)', size), field('Path', path),
+    field('Storage', storageSel), field('Disk size (GiB)', size), field('Path', path),
     el('label', { class: 'check-field' }, [backup, el('span', {}, ['Include in backups'])]),
     el('div', { class: 'modal-actions' }, [cancel, add]),
   );
