@@ -418,15 +418,10 @@ body {
 .modal-backdrop:has(> .fleet-script-modal) { z-index: 60; }
 .modal-backdrop:has(> .pve-disk-modal) { z-index: 60; }
 .fleet-script-hint { margin: 0; color: var(--muted); font-size: 12px; }
-.fleet-script {
-  width: 100%; box-sizing: border-box; min-height: 220px; max-height: 60vh; resize: vertical;
-  padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border);
-  background: var(--panel-2); color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.5;
-  tab-size: 2; white-space: pre; overflow: auto; outline: none;
-}
-.fleet-script::placeholder { color: #4a5568; }
-.fleet-script:focus { border-color: rgba(36, 211, 232, 0.45); box-shadow: 0 0 0 2px rgba(36, 211, 232, 0.12); }
+/* Host for the CodeMirror editor; the .cm-editor inside carries its own border,
+   background and focus ring (see createFleetScriptEditor's THEME). */
+.fleet-script { width: 100%; }
+.fleet-script .cm-editor { width: 100%; }
 /* Cyan run button (matches the fleet theme rather than the default blue submit). */
 .modal-actions .fleet-script-run {
   border-color: rgba(36, 211, 232, 0.38);

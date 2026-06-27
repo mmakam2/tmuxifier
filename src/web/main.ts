@@ -3,6 +3,7 @@ import { openTerminal, openProvisionTerminal, setTerminalFont } from './terminal
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
 import { toggleBox, setBoxes, groupState } from './fleetSelection';
 import { addRecent, parseRecent } from './fleetHistory';
+import { createFleetScriptEditor } from './fleetEditor';
 import logoUrl from './assets/tmuxifier-logo.png';
 import { openProxmoxHub } from './proxmoxUi';
 
@@ -1181,13 +1182,8 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
   hint.className = 'fleet-script-hint';
   hint.textContent = 'Runs on each selected box via its login shell. Newlines are honored — write a full bash script. ⌘/Ctrl+Enter to run.';
 
-  const editor = document.createElement('textarea');
-  editor.className = 'fleet-script';
-  editor.spellcheck = false;
-  editor.autocapitalize = 'off';
-  editor.setAttribute('autocorrect', 'off');
-  editor.placeholder = '#!/usr/bin/env bash\nset -euo pipefail\n…';
-  editor.value = fleetScriptDraft || initial || '';
+  const editorHost = document.createElement('div');
+  editorHost.className = 'fleet-script';
 
   const targetList = document.createElement('div');
   targetList.className = 'fleet-confirm-targets';
@@ -1210,19 +1206,34 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
   runBtn.disabled = targets.length === 0;
   actions.append(cancel, runBtn);
 
-  form.append(title, hint, editor, targetList, err, actions);
+  form.append(title, hint, editorHost, targetList, err, actions);
   backdrop.appendChild(form);
   app.appendChild(backdrop);
-  editor.focus();
 
+  // CodeMirror handles its own Mod-Enter (run) / Escape (close) while focused;
+  // onChange persists the in-progress script so reopening restores it (cleared
+  // only on a successful run or on leaving fleet mode).
+  const cm = createFleetScriptEditor({
+    initial: fleetScriptDraft || initial || '',
+    recent: readFleetRecent(),
+    placeholder: '#!/usr/bin/env bash\nset -euo pipefail\n…',
+    onChange: (v) => { fleetScriptDraft = v; },
+    onRun: () => form.requestSubmit(),
+    onEscape: () => close(),
+  });
+  editorHost.appendChild(cm.dom);
+  cm.focus();
+
+  // Fallback for keys pressed while focus is on a button (the editor's own keymap
+  // owns these while it is focused — defer to it so an open completion popup's
+  // Escape doesn't also tear down the modal).
   function onKey(e: KeyboardEvent) {
+    if (cm.dom.contains(document.activeElement)) return;
     if (e.key === 'Escape') close();
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); form.requestSubmit(); }
+    else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); form.requestSubmit(); }
   }
-  function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); }
+  function close() { document.removeEventListener('keydown', onKey); cm.destroy(); backdrop.remove(); }
   document.addEventListener('keydown', onKey);
-  // Keep the in-progress script so reopening restores it; cleared only on a successful run or on leaving fleet mode.
-  editor.addEventListener('input', () => { fleetScriptDraft = editor.value; });
   cancel.addEventListener('click', close);
   let pressedOnBackdrop = false;
   backdrop.addEventListener('mousedown', (e) => { pressedOnBackdrop = e.target === backdrop; });
@@ -1230,7 +1241,7 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const command = editor.value.trim();
+    const command = cm.getValue().trim();
     if (!command) { err.textContent = 'Script is empty'; return; }
     if (targets.length === 0) { err.textContent = 'Select at least one box'; return; }
     runBtn.disabled = true;
