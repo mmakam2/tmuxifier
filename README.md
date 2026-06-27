@@ -196,29 +196,37 @@ the connection, then re-run.
 Tmuxifier can provision a "canned" LXC container on a Proxmox VE host over the PVE HTTP API and
 auto-add a box pointed at it, so a freshly created container opens straight into a browser terminal.
 
-**1. Create an API token in Proxmox.** In the PVE UI: *Datacenter → Permissions → API Tokens →
-Add*. Pick a user/realm (e.g. `user@pam`), a token id (e.g. `tmuxifier`), and copy the secret
-(shown once). Grant the token a role with at least container-create privileges — in a lab the
-built-in `PVEVMAdmin` role on `/` plus `Datastore.AllocateSpace` + `Datastore.Audit` on the target
-storage is sufficient (use a privilege-separated token, not full `Administrator`).
+**1. Create an API token in Proxmox.** *Datacenter → Permissions → API Tokens → Add*. Pick a
+user/realm (e.g. `user@pam`), a token id (e.g. `tmuxifier`), and copy the secret (shown once).
+**Grant the token its own permissions** — tokens default to "Privilege Separation", so the token has
+no rights even when the user does. In a lab, add the token (*Datacenter → Permissions → Add → API
+Token Permission*, path `/`, propagate) the built-in **`PVEVMAdmin`** role (container create/start
+plus `Datastore.AllocateSpace`/`Datastore.Audit`) **and `PVEAuditor`** (the `Sys.Audit` that lets
+the node/storage/bridge dropdowns populate). Use a privilege-separated token, not full
+`Administrator`.
 
 **2. Add the host.** Dashboard → **Proxmox → Hosts → Add**: enter the endpoint (`host:8006`), the
 token id (`user@pam!tmuxifier`) and the secret. Click **Inspect** to fetch and **pin** the host's
 TLS certificate (Proxmox ships a self-signed cert; pinning is trust-on-first-use, like
 `ssh accept-new`). Save — Tmuxifier verifies the token before storing it.
 
-**3. Add a management key.** **SSH Keys → Add**: paste a *public* key. It is injected into new
-containers' `root` authorized_keys so Tmuxifier can SSH in. The private half stays in your own SSH
+**3. Review LXC Secrets.** **Proxmox → LXC Secrets**. Tmuxifier's own host key is auto-detected and
+shown as the **default management key** — injected into every container so Tmuxifier can SSH in (set
+`TMUXIFIER_PVE_DEFAULT_PUBKEY` if your key isn't at `~/.ssh/id_*`). Optionally add more **public
+keys** (e.g. your laptop's) and/or an **optional root password**. Added keys and the password are
+encrypted at rest and shown masked after saving; the private half of any key stays in your own SSH
 setup — Tmuxifier never stores private keys.
 
 **4. Define a preset and provision.** **Presets → Add** a blueprint (template, CPU/mem/disk,
-storage, network, keys). Then **Provision → pick a preset → enter a hostname**. Watch the live task
-log; on success an **Open terminal** button drops you into the new container.
+storage, network). Then **Provision → pick a preset → enter a hostname** (optionally a tag and
+oh-my-tmux/zsh/bash). Watch the live task log; once the container is up Tmuxifier installs tmux (and
+any selected frameworks) over SSH, then an **Open terminal** button drops you into it.
 
-**Security.** The API token is **encrypted at rest** (AES-256-GCM; the key is derived from your
-cookie secret) in the gitignored `data/proxmox.json` (`0600`), and is never sent to the browser.
-TLS is pinned for self-signed certs and CA-verified when the host presents a valid certificate.
-If you rotate `TMUXIFIER_COOKIE_SECRET`, previously-saved tokens become undecryptable — re-add each Proxmox host afterward.
+**Security.** The API token, any added SSH keys, and the optional root password are **encrypted at
+rest** (AES-256-GCM; key derived from your cookie secret) in the gitignored `data/proxmox.json`
+(`0600`), and are never sent to the browser. TLS is pinned for self-signed certs and CA-verified
+when the host presents a valid certificate. If you rotate `TMUXIFIER_COOKIE_SECRET`, previously-saved
+secrets become undecryptable — re-add each Proxmox host (and re-enter keys/password) afterward.
 
 ## Security
 Tmuxifier can SSH into your whole fleet, so the login gate is the crown jewel. It binds to

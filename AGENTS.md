@@ -20,8 +20,9 @@ Configuration, secrets, and runtime state all live **inside the repo**:
 - `config.json` (gitignored, optional) — camelCase alternative to `.env`.
 - `tls/` (gitignored) — `cert.pem`/`key.pem` for HTTPS; the private key never enters git.
 - `data/` (gitignored) — `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json`
-  (Proxmox host profiles with **encrypted** API tokens, plus container presets and SSH mgmt public
-  keys), `provision-jobs.json` (provision history), and SSH ControlMaster sockets under `data/cm/`.
+  (Proxmox host profiles with **encrypted** API tokens, SSH management keys, and an optional root
+  password — all AES-256-GCM sealed — plus container presets), `provision-jobs.json` (provision
+  history), and SSH ControlMaster sockets under `data/cm/`.
 
 When adding a new config knob or persisted file, keep it under the repo folder by default.
 Don't introduce dependencies on `$HOME`-level state other than the user's existing SSH setup.
