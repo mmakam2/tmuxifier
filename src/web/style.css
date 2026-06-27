@@ -413,7 +413,7 @@ body {
 .pve-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
 .pve-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pve-textarea { padding: 9px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; font: inherit; resize: vertical; }
-.pve-hub select { padding: 9px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; font-size: 14px; }
+.pve-hub select, .pve-disk-modal select { padding: 9px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; font-size: 14px; }
 .pve-err { color: #f85149; font-size: 12px; }
 .pve-phase { font-size: 13px; color: #c9d1d9; }
 .pve-log { max-height: 320px; overflow: auto; background: #0a0d14; border: 1px solid #232a36; border-radius: 8px; padding: 10px; font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; }
