@@ -3,7 +3,14 @@ export interface Box {
   proxyJump?: string; sessionName: string; startupCommand?: string; tags: string[]; source: string;
 }
 export type AddBoxSpec = Partial<Box>;
-export interface Status { reachable: boolean; tmux?: boolean; needsAuth?: boolean; inUse?: boolean; paused?: boolean; nextProbeAt?: number; sessions?: { name: string; windows: number }[]; error?: string; }
+export interface BoxMetrics {
+  load1?: number; load5?: number; load15?: number; cpus?: number;
+  cpuPct?: number;        // true cgroup CPU utilization % (server-derived); preferred over load
+  cpuUsageUsec?: number;  // cumulative cgroup CPU counter; presence = a cgroup host (still warming up if no cpuPct)
+  memTotalKb?: number; memAvailKb?: number;
+  diskTotalKb?: number; diskUsedKb?: number; diskPct?: number; uptimeSec?: number;
+}
+export interface Status { reachable: boolean; tmux?: boolean; needsAuth?: boolean; inUse?: boolean; paused?: boolean; nextProbeAt?: number; sessions?: { name: string; windows: number; attached?: boolean; activity?: number }[]; metrics?: BoxMetrics; error?: string; }
 export type FleetTargetStatus = 'pending' | 'running' | 'ok' | 'error' | 'cancelled' | 'interrupted';
 export type FleetJobStatus = 'running' | 'done' | 'cancelled' | 'interrupted';
 export interface FleetTarget {

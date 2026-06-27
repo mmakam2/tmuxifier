@@ -2,8 +2,61 @@ import { buildProbeArgv } from './sshCommand.js';
 
 const STATUS_FMT = '#{session_name}:#{session_windows}:#{session_attached}:#{session_activity}';
 
+// A compact host-health line emitted *before* the tmux output on the SSH probe
+// we already run every poll, so load/mem/disk cost no extra connection. Format is
+// space-separated `KEY=VALUE` (not fixed columns) so a source that is unavailable
+// drops one field instead of shifting the rest; every source is best-effort
+// (`2>/dev/null`, guarded) so a non-Linux or locked-down box still returns normal
+// reachability/tmux status with metrics simply absent. Linux /proc + POSIX
+// `df -P` keep it portable. This stays a static, non-interpolated string — no box
+// field reaches it — so it adds no command-injection surface over the old probe.
+// The whole block is wrapped in `{ ...; } 2>/dev/null` so no metric command's
+// stderr (a missing `nproc`/`awk`/`df`, an unreadable /proc file) can ever leak
+// into the probe's stderr, which the reachability classifier inspects.
+const META_PROBE =
+  `{ printf '__META__'; ` +
+  `{ read a b c rest </proc/loadavg && printf ' load1=%s load5=%s load15=%s' "$a" "$b" "$c"; }; ` +
+  `n=$(nproc) && printf ' cpus=%s' "$n"; ` +
+  // Cumulative CPU time of *this* cgroup (the container's own scope under lxcfs,
+  // or the whole system on a bare host) in microseconds. The server diffs it
+  // across polls to get true utilization — unlike /proc/loadavg, which inside an
+  // LXC container leaks the Proxmox host's load. cgroup v2 first, then v1.
+  `if [ -r /sys/fs/cgroup/cpu.stat ]; then awk '/^usage_usec/{printf " cpuUsageUsec=%s",$2}' /sys/fs/cgroup/cpu.stat; ` +
+  `elif [ -r /sys/fs/cgroup/cpuacct/cpuacct.usage ]; then printf ' cpuUsageUsec=%s' "$(( $(cat /sys/fs/cgroup/cpuacct/cpuacct.usage) / 1000 ))"; ` +
+  `elif [ -r /sys/fs/cgroup/cpu,cpuacct/cpuacct.usage ]; then printf ' cpuUsageUsec=%s' "$(( $(cat /sys/fs/cgroup/cpu,cpuacct/cpuacct.usage) / 1000 ))"; fi; ` +
+  `awk '/^MemTotal:/{printf " memTotalKb=%s",$2} /^MemAvailable:/{printf " memAvailKb=%s",$2}' /proc/meminfo; ` +
+  `df -P / | awk 'NR==2{sub(/%/,"",$5); printf " diskTotalKb=%s diskUsedKb=%s diskPct=%s",$2,$3,$5}'; ` +
+  `u=$(awk '{printf "%d",$1}' /proc/uptime) && printf ' uptimeSec=%s' "$u"; ` +
+  `echo; } 2>/dev/null;`;
+
 export const PROBE_REMOTE =
-  `if command -v tmux >/dev/null 2>&1; then tmux ls -F '${STATUS_FMT}' 2>/dev/null || true; else echo __NO_TMUX__; fi`;
+  `${META_PROBE} if command -v tmux >/dev/null 2>&1; then tmux ls -F '${STATUS_FMT}' 2>/dev/null || true; else echo __NO_TMUX__; fi`;
+
+const META_KEYS = new Set([
+  'load1', 'load5', 'load15', 'cpus', 'cpuUsageUsec',
+  'memTotalKb', 'memAvailKb', 'diskTotalKb', 'diskUsedKb', 'diskPct', 'uptimeSec',
+]);
+
+// Pull the `__META__` health line out of probe stdout into a numbers-only object.
+// Positional parsing is avoided on purpose: a missing source omits its token
+// rather than shifting columns. Empty (`cpus=`) and non-numeric (`load1=NaN`)
+// values are dropped — note Number('') === 0, which is why the empty guard
+// matters. Returns null when the line is absent or yields no numeric fields.
+export function parseMeta(stdout) {
+  const line = String(stdout).split(/\r?\n/).find((l) => l.startsWith('__META__'));
+  if (!line) return null;
+  const out = {};
+  for (const tok of line.slice('__META__'.length).trim().split(/\s+/)) {
+    const eq = tok.indexOf('=');
+    if (eq <= 0) continue;
+    const key = tok.slice(0, eq);
+    const raw = tok.slice(eq + 1);
+    if (raw === '' || !META_KEYS.has(key)) continue;
+    const val = Number(raw);
+    if (Number.isFinite(val)) out[key] = val;
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 // A probe runs with BatchMode=yes, so it can never type a password. When a
 // password-auth box's ControlMaster has expired the probe fails with an auth
@@ -21,7 +74,7 @@ const MUX_STALE_RE = /disabling multiplexing|ControlSocket .* already exists/i;
 export function parseTmuxSessions(stdout) {
   return String(stdout)
     .split(/\r?\n/)
-    .filter((l) => l.trim() && !l.includes('__NO_TMUX__'))
+    .filter((l) => l.trim() && !l.includes('__NO_TMUX__') && !l.startsWith('__META__'))
     .map((line) => {
       const [name, windows, attached, activity] = line.split(':');
       return { name, windows: Number(windows), attached: attached === '1', activity: Number(activity) };
@@ -37,7 +90,27 @@ export function createStatusChecker({
   const backoff = new Map(); // key -> { fails, nextProbeAt, paused, last }
   const inflight = new Map(); // key -> Promise<status> for a probe already running
   const sessInflight = new Map(); // key -> Promise for an in-flight listSessions() fetch
+  const cpuPrev = new Map(); // key -> { usageUsec, atMs } last cgroup CPU sample
   const keyFor = (box) => box.id || box.host;
+
+  // Turn the cumulative cgroup CPU counter into a true utilization percent by
+  // diffing it against the previous poll's sample: Δcpu-time ÷ Δwall-time ÷ cores.
+  // This is what Proxmox shows per container; raw load average is not (in an LXC
+  // it reflects the whole host). First sample yields nothing (no rate yet); a
+  // counter that went backwards (container restart) is skipped. Mutates `metrics`.
+  function deriveCpuPct(box, metrics) {
+    if (!metrics || metrics.cpuUsageUsec == null) return;
+    const key = keyFor(box);
+    const nowMs = now();
+    const prev = cpuPrev.get(key);
+    cpuPrev.set(key, { usageUsec: metrics.cpuUsageUsec, atMs: nowMs });
+    if (!prev) return;
+    const dUsageUsec = metrics.cpuUsageUsec - prev.usageUsec;
+    const dWallMs = nowMs - prev.atMs;
+    if (dUsageUsec < 0 || dWallMs <= 0 || !metrics.cpus) return;
+    // dUsageUsec/1000 = ms of CPU time; / dWallMs = fraction of one core; / cpus = of allocation.
+    metrics.cpuPct = Math.max(0, Math.round((dUsageUsec / 1000 / dWallMs) * 100 / metrics.cpus));
+  }
 
   // One real SSH probe (the former checkBox body). Always resolves to a status
   // object and never throws — an unsafe box or thrown error becomes unreachable.
@@ -57,10 +130,12 @@ export function createStatusChecker({
         }
         return { reachable: false, error: err || 'unreachable' };
       }
-      if (String(res.stdout).includes('__NO_TMUX__')) {
-        return { reachable: true, tmux: false, sessions: [] };
-      }
-      return { reachable: true, tmux: true, sessions: parseTmuxSessions(res.stdout) };
+      const metrics = parseMeta(res.stdout);
+      deriveCpuPct(box, metrics);
+      const base = String(res.stdout).includes('__NO_TMUX__')
+        ? { reachable: true, tmux: false, sessions: [] }
+        : { reachable: true, tmux: true, sessions: parseTmuxSessions(res.stdout) };
+      return metrics ? { ...base, metrics } : base;
     } catch (e) {
       return { reachable: false, error: String((e && e.message) || e) };
     }

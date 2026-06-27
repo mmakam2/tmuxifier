@@ -186,8 +186,23 @@ body {
 .box { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; }
 .box:hover { background: var(--panel-2); }
 .box.active { background: rgba(36, 211, 232, 0.12); box-shadow: inset 3px 0 0 var(--cyan); }
-.box .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.box-main { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; overflow: hidden; }
+.box .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.box-meta { font-size: 11px; line-height: 1.2; color: #6e7681; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.box-meta:empty { display: none; }
+.box-meta .lvl-ok { color: #2ea043; }
+.box-meta .lvl-warn { color: #d29922; }
+.box-meta .lvl-crit { color: #f85149; }
+/* Nerd Font icon (e.g. the CPU chip glyph). Neutral color of its own so the
+   severity color stays on the number alone, not doubled up on the icon. */
+.box-meta .nf { font-family: 'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', monospace; font-style: normal; color: var(--muted); }
+.box-activity { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 2px rgba(36, 211, 232, 0.25); }
+.box-activity.hidden { display: none; }
+.box-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 3px; }
 .box .rm, .box .refresh { background: none; border: none; color: #6e7681; cursor: pointer; }
+.box-actions > button { padding: 1px 3px; border-radius: 4px; transition: background 0.12s, color 0.12s; }
+.box-actions > button:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.box .rm:hover { color: #f85149; }
 .box .refresh { font-size: 14px; }
 .box .edit { background: none; border: none; color: #6e7681; cursor: pointer; font-size: 13px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: #6e7681; }

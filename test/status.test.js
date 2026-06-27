@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseTmuxSessions, createStatusChecker, PROBE_REMOTE } from '../src/server/status.js';
+import { parseTmuxSessions, parseMeta, createStatusChecker, PROBE_REMOTE } from '../src/server/status.js';
 
 test('parseTmuxSessions maps fields', () => {
   const out = 'web:3:1:1718000000\nbuild:1:0:1718000100\n';
@@ -11,6 +11,38 @@ test('parseTmuxSessions maps fields', () => {
     { name: 'web', windows: 3, attached: true, activity: 1718000000 },
     { name: 'build', windows: 1, attached: false, activity: 1718000100 },
   ]);
+});
+
+test('parseTmuxSessions ignores the __META__ health line and still parses sessions after it', () => {
+  const out = '__META__ load1=0.42 cpus=4 diskPct=61\nweb:2:1:1718000000\n';
+  expect(parseTmuxSessions(out)).toEqual([
+    { name: 'web', windows: 2, attached: true, activity: 1718000000 },
+  ]);
+});
+
+test('parseMeta extracts a full KEY=VALUE health line into numbers', () => {
+  const out = '__META__ load1=0.42 load5=0.31 load15=0.20 cpus=4 memTotalKb=8160000 memAvailKb=3120000 diskTotalKb=51474912 diskUsedKb=31200000 diskPct=61 uptimeSec=183942\nweb:1:0:1\n';
+  expect(parseMeta(out)).toEqual({
+    load1: 0.42, load5: 0.31, load15: 0.20, cpus: 4,
+    memTotalKb: 8160000, memAvailKb: 3120000,
+    diskTotalKb: 51474912, diskUsedKb: 31200000, diskPct: 61, uptimeSec: 183942,
+  });
+});
+
+test('parseMeta tolerates a partial line (missing sources just drop their field)', () => {
+  expect(parseMeta('__META__ load1=0.5 diskPct=10\nweb:1:0:1\n')).toEqual({ load1: 0.5, diskPct: 10 });
+});
+
+test('parseMeta returns null when the line is absent', () => {
+  expect(parseMeta('web:1:0:1\n')).toBeNull();
+});
+
+test('parseMeta captures the cgroup cpu counter (cpuUsageUsec)', () => {
+  expect(parseMeta('__META__ cpus=2 cpuUsageUsec=123456789\nweb:1:0:1\n')).toEqual({ cpus: 2, cpuUsageUsec: 123456789 });
+});
+
+test('parseMeta returns null when the line carries no numeric fields and ignores junk tokens', () => {
+  expect(parseMeta('__META__ load1=NaN cpus= junk notakey=5\n')).toBeNull();
 });
 
 test('checkBox: unreachable when ssh fails with no stdout', async () => {
@@ -108,8 +140,11 @@ function writeFakeTmux(dir, body) {
   fs.writeFileSync(p, `#!/bin/sh\n${body}\n`);
   fs.chmodSync(p, 0o755);
 }
+// The probe now also emits a leading `__META__` health line; these tests assert
+// the tmux/session portion, so strip it (parseMeta is covered separately above).
 function runProbe(pathDir) {
-  return execFileSync('/bin/sh', ['-c', PROBE_REMOTE], { env: { PATH: pathDir }, encoding: 'utf8' }).trim();
+  return execFileSync('/bin/sh', ['-c', PROBE_REMOTE], { env: { PATH: pathDir }, encoding: 'utf8' })
+    .split(/\r?\n/).filter((l) => !l.startsWith('__META__')).join('\n').trim();
 }
 
 test('PROBE_REMOTE: tmux present with sessions prints the format lines', () => {
@@ -130,6 +165,72 @@ test('PROBE_REMOTE: tmux absent prints __NO_TMUX__', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-empty-'));
   expect(runProbe(dir)).toBe('__NO_TMUX__');
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('PROBE_REMOTE: emits a leading __META__ health line (best-effort, never blocks status)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-meta-'));
+  writeFakeTmux(dir, `echo 'web:1:0:1'`);
+  const raw = execFileSync('/bin/sh', ['-c', PROBE_REMOTE], { env: { PATH: dir }, encoding: 'utf8' });
+  const meta = raw.split(/\r?\n/).find((l) => l.startsWith('__META__'));
+  expect(meta).toBeDefined();
+  // On Linux /proc/loadavg is readable even with a bare PATH, so at least load1 is present.
+  expect(parseMeta(raw)).toMatchObject({ load1: expect.any(Number) });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('checkBox: surfaces host metrics from the __META__ line when present', async () => {
+  const run = async () => ({ code: 0, stdout: '__META__ load1=0.7 memTotalKb=1000 memAvailKb=400 diskPct=55\nweb:1:0:1718000000\n', stderr: '' });
+  const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
+  expect(status.reachable).toBe(true);
+  expect(status.tmux).toBe(true);
+  expect(status.sessions).toEqual([{ name: 'web', windows: 1, attached: false, activity: 1718000000 }]);
+  expect(status.metrics).toEqual({ load1: 0.7, memTotalKb: 1000, memAvailKb: 400, diskPct: 55 });
+});
+
+test('checkBox: metrics attach even when tmux is not installed (reachable box, __NO_TMUX__)', async () => {
+  const run = async () => ({ code: 0, stdout: '__META__ load1=0.1\n__NO_TMUX__\n', stderr: '' });
+  const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
+  expect(status).toEqual({ reachable: true, tmux: false, sessions: [], metrics: { load1: 0.1 } });
+});
+
+test('checkBox: omits metrics when the probe carries no __META__ line', async () => {
+  const run = async () => ({ code: 0, stdout: 'web:1:0:1718000000\n', stderr: '' });
+  const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
+  expect(status.metrics).toBeUndefined();
+});
+
+test('checkBox: derives true CPU% from the cgroup counter delta across two polls (no first-sample value)', async () => {
+  let clock = 0;
+  let usage = 1_000_000; // µs of CPU time so far
+  const run = async () => ({ code: 0, stdout: `__META__ cpus=1 cpuUsageUsec=${usage}\n__NO_TMUX__\n`, stderr: '' });
+  const sc = createStatusChecker({ run, now: () => clock });
+  const first = await sc.checkBox({ host: 'h' });
+  expect(first.metrics.cpuPct).toBeUndefined();          // one sample isn't a rate
+  clock = 30_000; usage = 1_000_000 + 15_000_000;        // +15s CPU over a 30s wall window on 1 core
+  const second = await sc.checkBox({ host: 'h' });
+  expect(second.metrics.cpuPct).toBe(50);                // 15s / 30s / 1 core = 50%
+});
+
+test('checkBox: normalizes CPU% by the core count (matches Proxmox per-container %)', async () => {
+  let clock = 0;
+  let usage = 0;
+  const run = async () => ({ code: 0, stdout: `__META__ cpus=4 cpuUsageUsec=${usage}\n__NO_TMUX__\n`, stderr: '' });
+  const sc = createStatusChecker({ run, now: () => clock });
+  await sc.checkBox({ host: 'h' });
+  clock = 30_000; usage = 30_000_000;                    // a full core busy for 30s, but 4 cores allocated
+  const second = await sc.checkBox({ host: 'h' });
+  expect(second.metrics.cpuPct).toBe(25);                // 1 of 4 cores = 25%
+});
+
+test('checkBox: a counter reset (container restart) does not produce a bogus CPU%', async () => {
+  let clock = 0;
+  let usage = 50_000_000;
+  const run = async () => ({ code: 0, stdout: `__META__ cpus=1 cpuUsageUsec=${usage}\n__NO_TMUX__\n`, stderr: '' });
+  const sc = createStatusChecker({ run, now: () => clock });
+  await sc.checkBox({ host: 'h' });
+  clock = 30_000; usage = 2_000_000;                     // counter went backwards
+  const second = await sc.checkBox({ host: 'h' });
+  expect(second.metrics.cpuPct).toBeUndefined();
 });
 
 test('checkBox: tmux installed with zero sessions reports reachable + tmux:true + empty sessions', async () => {

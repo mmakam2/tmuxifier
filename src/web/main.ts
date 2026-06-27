@@ -1,6 +1,6 @@
 import { api, type AddBoxSpec, type Box, type Status } from './api';
 import { openTerminal, openProvisionTerminal, setTerminalFont } from './terminal';
-import { dotClassFor, dotTitleFor } from './statusDot';
+import { dotClassFor, dotTitleFor, metaSegmentsFor, latestActivity, hasUnseenActivity } from './statusDot';
 import { toggleBox, setBoxes, groupState } from './fleetSelection';
 import { addRecent, parseRecent } from './fleetHistory';
 import logoUrl from './assets/tmuxifier-logo.png';
@@ -18,6 +18,61 @@ let latestStatus: Record<string, Status> = {};
 let fleetMode = false;
 let fleetSelected = new Set<string>();
 let fleetScriptDraft = ''; // in-progress bash-script editor content; survives reopen, cleared on run/exit
+
+// Per-box last-seen tmux activity, so a background session doing new work since
+// you last opened the box shows an activity badge. Seeded silently on first sight
+// (no badge storm on load); cleared when you open the box. Persisted so it
+// survives reloads.
+const LAST_SEEN_ACTIVITY_KEY = 'tmuxifier.lastSeenActivity';
+function readLastSeenActivity(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(LAST_SEEN_ACTIVITY_KEY) || '{}') || {}; } catch { return {}; }
+}
+let lastSeenActivity: Record<string, number> = readLastSeenActivity();
+function persistLastSeenActivity() {
+  try { localStorage.setItem(LAST_SEEN_ACTIVITY_KEY, JSON.stringify(lastSeenActivity)); } catch {}
+}
+
+// Paint a box row's status affordances (dot, health meta line, activity badge)
+// from a status snapshot. Shared by initial render and the poll so they never
+// drift. Also maintains the activity baseline: the box you're viewing never
+// badges itself, and a box seen for the first time is seeded without a badge.
+function applyRowStatus(li: HTMLElement, id: string, st: Status | undefined) {
+  const dotEl = li.querySelector('.dot') as HTMLElement | null;
+  if (dotEl) { dotEl.className = `dot ${dotClassFor(st)}`; dotEl.title = dotTitleFor(st); }
+  const metaEl = li.querySelector('.box-meta') as HTMLElement | null;
+  if (metaEl) {
+    const nodes: Node[] = [];
+    metaSegmentsFor(st).forEach((s, i) => {
+      if (i) nodes.push(document.createTextNode(' · '));
+      const span = document.createElement('span');
+      if (s.level) span.className = `lvl-${s.level}`;
+      if (s.title) span.title = s.title;
+      span.append(s.text);
+      if (s.icon) {
+        span.append(' ');
+        const ic = document.createElement('span');
+        ic.textContent = s.icon;
+        if (s.iconClass) ic.className = s.iconClass;
+        span.append(ic);
+      }
+      nodes.push(span);
+    });
+    metaEl.replaceChildren(...nodes);
+  }
+  const badgeEl = li.querySelector('.box-activity') as HTMLElement | null;
+  if (badgeEl) {
+    const act = latestActivity(st);
+    let show = false;
+    if (id === activeBoxId) {
+      if (act) lastSeenActivity[id] = act;      // viewing it: keep baseline current, never badge
+    } else if (!(id in lastSeenActivity)) {
+      lastSeenActivity[id] = act;               // first sighting: seed silently
+    } else {
+      show = hasUnseenActivity(st, lastSeenActivity[id]);
+    }
+    badgeEl.classList.toggle('hidden', !show);
+  }
+}
 
 // Transient bottom-center notice; auto-dismisses. Used for import results/errors.
 function showToast(message: string, kind: 'info' | 'error' = 'info') {
@@ -229,10 +284,9 @@ async function pollStatus() {
     list.forEach(li => {
       const id = (li as HTMLElement).dataset.id;
       if (!id) return;
-      const st = status[id];
-      const dotEl = li.querySelector('.dot') as HTMLElement | null;
-      if (dotEl) { dotEl.className = `dot ${dotClassFor(st)}`; dotEl.title = dotTitleFor(st); }
+      applyRowStatus(li as HTMLElement, id, status[id]);
     });
+    persistLastSeenActivity();
   } catch {} finally {
     polling = false;
   }
@@ -359,7 +413,7 @@ async function refresh() {
   const list = app.querySelector('#boxes'); if (!list) return;
   allBoxes = await api.boxes();
   latestStatus = {};
-  api.status().then((s) => { latestStatus = s; filterAndPaint(); }).catch(() => {});
+  api.status().then((s) => { latestStatus = s; filterAndPaint(); persistLastSeenActivity(); }).catch(() => {});
   filterAndPaint();
 }
 
@@ -382,12 +436,22 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   });
 
   const dotEl = document.createElement('span');
-  dotEl.className = `dot ${dotClassFor(st)}`;
-  dotEl.title = dotTitleFor(st);
+  dotEl.className = 'dot';
 
+  const mainEl = document.createElement('span');
+  mainEl.className = 'box-main';
   const nameEl = document.createElement('span');
   nameEl.className = 'name';
   nameEl.textContent = b.label;
+  const metaEl = document.createElement('span');
+  metaEl.className = 'box-meta';
+  mainEl.append(nameEl, metaEl);
+
+  // Unseen-activity badge (a background session did something since you opened it).
+  const activityEl = document.createElement('span');
+  activityEl.className = 'box-activity hidden';
+  activityEl.title = 'Background session has new activity';
+
   li.addEventListener('click', () => openBox(b));
 
   const refreshBtn = document.createElement('button');
@@ -422,7 +486,12 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
     await refresh();
   });
 
-  li.append(check, dotEl, nameEl, refreshBtn, edit, rm);
+  const actions = document.createElement('span');
+  actions.className = 'box-actions';
+  actions.append(refreshBtn, edit, rm);
+
+  li.append(check, dotEl, mainEl, activityEl, actions);
+  applyRowStatus(li, b.id, st);
   return li;
 }
 
@@ -547,10 +616,15 @@ function updateLocalDot() {
 
 function openBox(b: Box) {
   activeBoxId = b.id;
+  // Opening a box marks its current activity as seen and clears its badge.
+  const act = latestActivity(latestStatus[b.id]);
+  if (act) lastSeenActivity[b.id] = act;
+  persistLastSeenActivity();
   app.querySelectorAll('.box').forEach(el => {
     const boxEl = el as HTMLElement;
     boxEl.classList.toggle('active', boxEl.dataset.id === b.id);
   });
+  app.querySelector(`.box[data-id="${CSS.escape(b.id)}"] .box-activity`)?.classList.add('hidden');
   app.querySelectorAll('.box-group').forEach(el => {
     const groupEl = el as HTMLElement;
     groupEl.classList.toggle('active-child', !!groupEl.querySelector(`.box[data-id="${CSS.escape(b.id)}"]`));
