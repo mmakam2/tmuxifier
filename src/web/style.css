@@ -399,12 +399,13 @@ body {
 .pve-tab.active { color: #c9d1d9; border-bottom-color: #1f6feb; }
 .pve-content { overflow: auto; padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
 .pve-list { display: flex; flex-direction: column; gap: 6px; }
-.pve-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #232a36; border-radius: 8px; background: #131722; }
+.pve-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); font-size: 13px; }
+.pve-row strong { font-weight: 600; color: var(--text); }
 .pve-row-btn { width: 100%; text-align: left; color: inherit; cursor: pointer; }
 .pve-row-actions { display: flex; gap: 6px; }
 .pve-row-actions button, .pve-row button { padding: 4px 10px; border-radius: 6px; border: 1px solid #232a36; background: #0f131c; color: #c9d1d9; cursor: pointer; font-size: 12px; }
 .pve-row button.danger { color: #f85149; }
-.pve-sub { color: #6e7681; font-size: 12px; }
+.pve-sub { color: var(--muted); font-size: 11px; }
 .pve-hr { border: 0; border-top: 1px solid #232a36; width: 100%; margin: 4px 0; }
 .pve-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .pve-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -417,5 +418,12 @@ body {
 .pve-badge.done { color: #3fb950; } .pve-badge.error { color: #f85149; } .pve-badge.running { color: #d29922; }
 .pve-badge.cancelled { color: #8b949e; } .pve-badge.interrupted { color: #d29922; }
 .pve-primary { padding: 8px 16px; border-radius: 8px; border: 1px solid #1f6feb; background: #1f6feb; color: #fff; cursor: pointer; }
+/* Secondary button (Inspect, etc.) — matches the app's bordered dark buttons. */
+.pve-btn { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 13px; }
+.pve-btn:hover { border-color: #2f6feb; background: var(--panel); }
+/* Logical config sections in the preset editor, separated by a hairline + eyebrow label. */
+.pve-group { display: flex; flex-direction: column; gap: 9px; }
+.pve-group + .pve-group { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.pve-eyebrow { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted); font-weight: 600; }
 .proxmox-btn { padding: 6px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; cursor: pointer; font-size: 13px; }
 .proxmox-btn:hover { border-color: #2f6feb; }

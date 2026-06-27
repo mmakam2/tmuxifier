@@ -21,6 +21,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = {}, ch
 function input(value = '', attrs: Attrs = {}) { const i = el('input', attrs); i.value = value; return i; }
 function field(label: string, control: HTMLElement) { return el('label', { class: 'field' }, [el('span', {}, [label]), control]); }
 function err(msg: string) { return el('div', { class: 'pve-err' }, [msg]); }
+function group(label: string, ...children: (Node | string)[]) { return el('div', { class: 'pve-group' }, [el('div', { class: 'pve-eyebrow' }, [label]), ...children]); }
 
 const TABS = ['Hosts', 'LXC Secrets', 'Presets', 'Provision', 'History'] as const;
 type Tab = typeof TABS[number];
@@ -86,7 +87,7 @@ export function openProxmoxHub(opts: HubOpts) {
     let fingerprint256: string | null = null;
     const box = el('div', {});
 
-    const inspectBtn = el('button', { type: 'button', onclick: async () => {
+    const inspectBtn = el('button', { type: 'button', class: 'pve-btn', onclick: async () => {
       try {
         const r = await pve.inspect(endpoint.value.trim());
         if (!r.reachable) { fpLine.replaceChildren(err(r.error || 'unreachable')); return; }
@@ -193,8 +194,6 @@ export function openProxmoxHub(opts: HubOpts) {
     const cores = input('2', { type: 'number', min: '1' });
     const mem = input('2048', { type: 'number', min: '16' });
     const swap = input('512', { type: 'number', min: '0' });
-    const unpriv = el('input', { type: 'checkbox' }); (unpriv as HTMLInputElement).checked = true;
-    const nesting = el('input', { type: 'checkbox' }); (nesting as HTMLInputElement).checked = true;
     const ipMode = el('select', {}, [el('option', { value: 'dhcp' }, ['dhcp']), el('option', { value: 'static' }, ['static'])]);
     const cidr = input('', { placeholder: '192.168.1.50/24' });
     const gateway = input('', { placeholder: '192.168.1.1' });
@@ -234,7 +233,7 @@ export function openProxmoxHub(opts: HubOpts) {
         name: name.value.trim(), hostId: hostSel.value, node: nodeSel.value,
         template: tmplSel.value, storage: storeSel.value, diskGiB: Number(disk.value),
         cores: Number(cores.value), memoryMiB: Number(mem.value), swapMiB: Number(swap.value),
-        unprivileged: (unpriv as HTMLInputElement).checked, features: { nesting: (nesting as HTMLInputElement).checked },
+        unprivileged: true, features: { nesting: true }, // sensible defaults; not exposed in the UI
         net: { bridge: bridgeSel.value, vlan: vlan.value ? Number(vlan.value) : null, ipMode: ipMode.value, cidr: cidr.value.trim() || null, gateway: gateway.value.trim() || null },
         onboot: false, startAfterCreate: true,
       };
@@ -244,12 +243,10 @@ export function openProxmoxHub(opts: HubOpts) {
 
     box.append(
       el('h3', {}, ['Add a container preset']),
-      field('Preset Name', name), field('Host', hostSel), field('Node', nodeSel), field('Template storage', tmplStoreSel), field('Template', tmplSel), field('Storage (rootfs)', storeSel),
-      el('div', { class: 'pve-grid' }, [field('Disk GiB', disk), field('Cores', cores), field('Memory MiB', mem), field('Swap MiB', swap)]),
-      el('label', { class: 'check-field' }, [unpriv, el('span', {}, ['Unprivileged'])]),
-      el('label', { class: 'check-field' }, [nesting, el('span', {}, ['Nesting'])]),
-      field('Bridge', bridgeSel), field('IP mode', ipMode),
-      el('div', { class: 'pve-grid' }, [field('CIDR (static)', cidr), field('Gateway (static)', gateway), field('VLAN', vlan)]),
+      group('Identity', field('Preset Name', name), field('Host', hostSel), field('Node', nodeSel)),
+      group('Template', field('Template storage', tmplStoreSel), field('Template', tmplSel)),
+      group('Disk', field('Storage (rootfs)', storeSel), el('div', { class: 'pve-grid' }, [field('Disk GiB', disk), field('Cores', cores), field('Memory MiB', mem), field('Swap MiB', swap)])),
+      group('Network', field('Bridge', bridgeSel), field('IP mode', ipMode), el('div', { class: 'pve-grid' }, [field('CIDR (static)', cidr), field('Gateway (static)', gateway), field('VLAN', vlan)])),
       el('div', { class: 'modal-actions' }, [save]),
     );
     setContent(list, el('hr', { class: 'pve-hr' }), box);
