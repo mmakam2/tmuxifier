@@ -102,13 +102,26 @@ export function openProxmoxHub(opts: HubOpts) {
   // --- Hosts ---
   async function renderHosts() {
     const hosts = await pve.hosts().catch(() => []);
-    const list = el('div', { class: 'pve-list' }, hosts.map((h) => el('div', { class: 'pve-row' }, [
-      el('div', {}, [el('strong', {}, [h.name]), el('span', { class: 'pve-sub' }, [` ${h.endpoint} · ${h.verifyMode}`])]),
-      el('div', { class: 'pve-row-actions' }, [
-        el('button', { type: 'button', onclick: async () => { try { await pve.testHost(h.id); alert('Reachable ✓'); } catch (e) { alert(`Test failed: ${(e as Error).message}`); } } }, ['Test']),
-        el('button', { type: 'button', class: 'danger', onclick: async () => { if (confirm(`Remove host ${h.name}?`)) { await pve.removeHost(h.id); void renderHosts(); } } }, ['Remove']),
-      ]),
-    ])));
+    const list = el('div', { class: 'pve-list' }, hosts.map((h) => {
+      const status = el('span', { class: 'pve-test-status', 'aria-live': 'polite' });
+      const testBtn = el('button', { type: 'button', onclick: async () => {
+        status.className = 'pve-test-status pending'; status.textContent = '…'; status.title = 'Testing…';
+        try {
+          await pve.testHost(h.id);
+          status.className = 'pve-test-status ok'; status.textContent = '✓'; status.title = 'Reachable';
+        } catch (e) {
+          status.className = 'pve-test-status err'; status.textContent = '✗'; status.title = `Test failed: ${(e as Error).message}`;
+        }
+      } }, ['Test']);
+      return el('div', { class: 'pve-row' }, [
+        el('div', {}, [el('strong', {}, [h.name]), el('span', { class: 'pve-sub' }, [` ${h.endpoint} · ${h.verifyMode}`])]),
+        el('div', { class: 'pve-row-actions' }, [
+          status,
+          testBtn,
+          el('button', { type: 'button', class: 'danger', onclick: async () => { if (confirm(`Remove host ${h.name}?`)) { await pve.removeHost(h.id); void renderHosts(); } } }, ['Remove']),
+        ]),
+      ]);
+    }));
 
     const name = input('', { placeholder: 'lab-pve' });
     const endpoint = input('', { placeholder: 'pve.example.com:8006' });
