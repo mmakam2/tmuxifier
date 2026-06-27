@@ -1,3 +1,43 @@
+/* Bundled terminal fonts. Two faces ship with the app so glyph rendering is
+   identical on every device that connects, not at the mercy of the viewer's
+   installed monospace fonts.
+
+   1. JetBrainsMono Nerd Font (single-cell "Mono" variant) — the primary face:
+      Latin text, box-drawing, powerline, and the Nerd-Font icon range
+      (oh-my-zsh/oh-my-tmux, eza/lsd, starship/p10k segment glyphs).
+   2. JuliaMono (symbol subset) — fallback for every symbol-area code point JBM
+      lacks across U+2000–2BFF (arrows, math operators, misc-technical ⎿/⏺,
+      geometric, misc-symbols incl. ballot-box/checkbox, dingbats incl. Claude
+      Code's pulsing-sparkle spinner ∗✢✱✷, Braille, …). xterm's DOM renderer does
+      per-glyph CSS fallback, so normal text stays JBM and only these symbols come
+      from JuliaMono. The face is unicode-range-scoped to that whole symbol area,
+      so it is only fetched when such a glyph actually appears.
+
+   font-display: block avoids a flash of fallback glyphs at the wrong cell width;
+   terminal.ts also re-fits once the fonts resolve so xterm's metrics are correct. */
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/JetBrainsMonoNerdFontMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('./assets/fonts/JetBrainsMonoNerdFontMono-Bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JuliaMono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/JuliaMonoSymbols.woff2') format('woff2');
+  unicode-range: U+2000-2BFF;
+}
+
 :root {
   color-scheme: dark;
   --bg: #070a0f;

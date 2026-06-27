@@ -82,6 +82,52 @@ function wireClipboard(term: Terminal): void {
 // can't be the success signal — it must stay up past the box's ConnectTimeout (10s).
 const STABLE_MS = 15000;
 
+// Bundled fonts first (see @font-face in style.css): JetBrainsMono Nerd Font for
+// text/powerline/icons, then JuliaMono as a per-glyph fallback for every symbol-
+// area glyph JBM lacks across U+2000-2BFF (Claude Code's sparkle spinner ∗✢✱✷,
+// ballot-box todos, ⎿/⏺, Braille, arrows, math). Per-OS monospace fallbacks cover
+// the brief moment before they load / if they ever fail to.
+const TERM_FONT_SIZE = 13;
+const TERM_FONT_FAMILY =
+  "'JetBrainsMono Nerd Font', 'JuliaMono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace";
+
+// xterm measures the glyph cell size ONCE, when it first renders. On a reattach
+// the server replays the running screen immediately, so if our webfonts are still
+// loading at that point xterm locks in the fallback font's cell metrics and paints
+// the replay with them. fit.fit() alone only recomputes rows/cols from those stale
+// metrics — it never re-measures the cell — so box-drawing art (Claude Code's
+// animated figure) keeps tiling at the wrong width and breaks into disconnected
+// "lines", and later frames only partially repaint.
+//
+// So once the fonts actually resolve we force xterm to re-measure: toggling
+// term.options.fontFamily fires its onSpecificOptionChange(['fontFamily']) →
+// CharSizeService.measure() path, which remeasures with the now-loaded font and,
+// if the cell size changed, triggers a full re-render at the correct metrics.
+// (Setting the same value is a no-op, hence the toggle through 'monospace'.) Then
+// re-fit and refresh every row so the replayed screen repaints cleanly. Pre-loading
+// the faces first — JuliaMono only carries symbols, so '⣿' forces its fetch past
+// the unicode-range gate — means this usually settles within a frame.
+function refitWhenFontReady(term: Terminal, fit: FitAddon): void {
+  const fonts = (document as unknown as { fonts?: FontFaceSet }).fonts;
+  if (!fonts?.load) { try { fit.fit(); } catch {} return; }
+  Promise.all([
+    fonts.load(`${TERM_FONT_SIZE}px 'JetBrainsMono Nerd Font'`),
+    fonts.load(`bold ${TERM_FONT_SIZE}px 'JetBrainsMono Nerd Font'`),
+    fonts.load(`${TERM_FONT_SIZE}px 'JuliaMono'`, '⣿'),
+  ])
+    .then(() => fonts.ready)
+    .then(() => {
+      try { (term as unknown as { clearTextureAtlas?: () => void }).clearTextureAtlas?.(); } catch {}
+      try {
+        term.options.fontFamily = 'monospace';
+        term.options.fontFamily = TERM_FONT_FAMILY;
+      } catch {}
+      try { fit.fit(); } catch {}
+      try { term.refresh(0, term.rows - 1); } catch {}
+    })
+    .catch(() => {});
+}
+
 function humanDelay(ms: number): string {
   return ms >= 60000 ? `${Math.round(ms / 60000)}m` : `${Math.round(ms / 1000)}s`;
 }
@@ -93,11 +139,17 @@ interface ProvisionOptions {
 }
 
 export function openTerminal(parent: HTMLElement, boxId: string, label?: string) {
-  const term = new Terminal({ cursorBlink: true, fontSize: 13, theme: { background: '#0b0e14' } });
+  const term = new Terminal({
+    cursorBlink: true,
+    fontSize: TERM_FONT_SIZE,
+    fontFamily: TERM_FONT_FAMILY,
+    theme: { background: '#0b0e14' },
+  });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(parent);
   fit.fit();
+  refitWhenFontReady(term, fit);
   wireClipboard(term);
 
   // Strip control chars so a box label can't inject escape sequences into the
@@ -159,13 +211,15 @@ export function openProvisionTerminal(
 ) {
   const term = new Terminal({
     cursorBlink: true,
-    fontSize: 13,
+    fontSize: TERM_FONT_SIZE,
+    fontFamily: TERM_FONT_FAMILY,
     theme: { background: '#0b0e14' },
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(parent);
   fit.fit();
+  refitWhenFontReady(term, fit);
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const qs = [
