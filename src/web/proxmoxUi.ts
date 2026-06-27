@@ -231,6 +231,9 @@ export function openProxmoxHub(opts: HubOpts) {
     const cidr = input('', { placeholder: '192.168.1.50/24' });
     const gateway = input('', { placeholder: '192.168.1.1' });
     const vlan = input('', { placeholder: 'vlan (optional)', type: 'number' });
+    const cidrGwRow = el('div', { class: 'pve-grid' }, [field('CIDR', cidr), field('Gateway', gateway)]);
+    const syncNet = () => { cidrGwRow.style.display = (ipMode as HTMLSelectElement).value === 'static' ? '' : 'none'; };
+    ipMode.addEventListener('change', syncNet);
     const box = el('div', {});
     const mounts: PveMount[] = [];
     let rootdirStorages: string[] = [];
@@ -296,10 +299,11 @@ export function openProxmoxHub(opts: HubOpts) {
       group('Disk', el('div', { class: 'pve-grid' }, [field('Storage (rootfs)', storeSel), field('Disk GiB', disk)])),
       group('Additional disks', mountsList, addDiskBtn),
       group('Resources', el('div', { class: 'pve-grid-3' }, [field('Cores', cores), field('Memory MiB', mem), field('Swap MiB', swap)])),
-      group('Network', field('Bridge', bridgeSel), field('IP mode', ipMode), el('div', { class: 'pve-grid' }, [field('CIDR (static)', cidr), field('Gateway (static)', gateway), field('VLAN', vlan)])),
+      group('Network', field('Bridge', bridgeSel), field('IP mode', ipMode), cidrGwRow, field('VLAN', vlan)),
       el('div', { class: 'modal-actions' }, [save]),
     );
     setContent(list, el('hr', { class: 'pve-hr' }), box);
+    syncNet();
     await loadNodes();
   }
 
