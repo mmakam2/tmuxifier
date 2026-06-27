@@ -245,7 +245,8 @@ export function openProxmoxHub(opts: HubOpts) {
       el('h3', {}, ['Add a container preset']),
       group('Identity', field('Preset Name', name), field('Host', hostSel), field('Node', nodeSel)),
       group('Template', field('Template storage', tmplStoreSel), field('Template', tmplSel)),
-      group('Disk', field('Storage (rootfs)', storeSel), el('div', { class: 'pve-grid' }, [field('Disk GiB', disk), field('Cores', cores), field('Memory MiB', mem), field('Swap MiB', swap)])),
+      group('Disk', el('div', { class: 'pve-grid' }, [field('Storage (rootfs)', storeSel), field('Disk GiB', disk)])),
+      group('Resources', el('div', { class: 'pve-grid-3' }, [field('Cores', cores), field('Memory MiB', mem), field('Swap MiB', swap)])),
       group('Network', field('Bridge', bridgeSel), field('IP mode', ipMode), el('div', { class: 'pve-grid' }, [field('CIDR (static)', cidr), field('Gateway (static)', gateway), field('VLAN', vlan)])),
       el('div', { class: 'modal-actions' }, [save]),
     );
