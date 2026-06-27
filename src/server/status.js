@@ -144,20 +144,20 @@ export function createStatusChecker({
   return {
     async checkBox(box) {
       const key = keyFor(box);
-      // A box with a live interactive session is in use right now. A full
-      // BatchMode probe would open a second ssh on the *same* ControlMaster
-      // socket and collide with the interactive login (mux "disabling
-      // multiplexing", socket reaping, garbled prompt). Instead reflect the real
-      // connection state via a socket-only liveness check (no network auth, so
-      // it can't collide): a live master means the box is authenticated and
-      // connected (green); no master means it still needs a login (purple) —
-      // never fake a green for a session that is only sitting at the password
-      // prompt.
+      // A box with a live interactive session is in use right now. The shared %C
+      // master is only established after auth completes, so a socket-only liveness
+      // check (no network auth, can't collide) distinguishes "authenticated &
+      // connected" from "still sitting at the password prompt".
       if (hasLiveSession && hasLiveSession(box)) {
         const alive = masterAlive ? await masterAlive(box) : true;
-        return alive
-          ? { reachable: true, tmux: true, sessions: [] }
-          : { reachable: false, needsAuth: true };
+        // No live master: mid-login or needs-auth. Don't probe — a BatchMode probe
+        // racing the login is what garbles the password prompt — just report
+        // needs-login (purple), never a fake green.
+        if (!alive) return { reachable: false, needsAuth: true };
+        // Master is up: a probe multiplexes over it as a separate channel without
+        // disturbing the terminal (same as listSessions), so the box you're working
+        // in still gets live metrics. Bypasses backoff — an in-use box is reachable.
+        return probe(box);
       }
       const s = backoff.get(key);
       const t = now();

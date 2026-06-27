@@ -109,15 +109,3 @@ export function metaSegmentsFor(st: Status | undefined): MetaSegment[] {
 export function metaLineFor(st: Status | undefined): string {
   return metaSegmentsFor(st).map((s) => (s.icon ? `${s.text} ${s.icon}` : s.text)).join(' · ');
 }
-
-// The newest tmux session-activity timestamp the probe saw for a box (0 when none).
-export function latestActivity(st: Status | undefined): number {
-  if (!st || !st.sessions) return 0;
-  return st.sessions.reduce((max, s) => (s.activity && s.activity > max ? s.activity : max), 0);
-}
-
-// A box has unseen activity when a background session has done something since the
-// user last opened it. `seen` is the per-box last-seen activity (undefined = never).
-export function hasUnseenActivity(st: Status | undefined, seen: number | undefined): boolean {
-  return latestActivity(st) > (seen ?? 0);
-}

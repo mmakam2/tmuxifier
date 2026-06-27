@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import {
   dotClassFor, dotTitleFor, classifyError, metaLineFor, metaSegmentsFor, CPU_ICON,
-  cpuLoadPct, cpuLevel, latestActivity, hasUnseenActivity,
+  cpuLoadPct, cpuLevel,
 } from '../src/web/statusDot.ts';
 
 test('dotClassFor: unknown status is gray', () => {
@@ -147,16 +147,5 @@ test('metaLineFor: unreachable shows the classified reason; needsAuth says needs
   expect(metaLineFor({ reachable: false, needsAuth: true })).toMatch(/login/i);
 });
 
-test('latestActivity: max activity across sessions; 0 when none', () => {
-  expect(latestActivity({ reachable: true, sessions: [{ name: 'a', windows: 1, activity: 5 }, { name: 'b', windows: 1, activity: 9 }] })).toBe(9);
-  expect(latestActivity({ reachable: true, sessions: [] })).toBe(0);
-  expect(latestActivity(undefined)).toBe(0);
-});
-
-test('hasUnseenActivity: true only when newer than last seen', () => {
-  const st = { reachable: true, sessions: [{ name: 'a', windows: 1, activity: 100 }] };
-  expect(hasUnseenActivity(st, 50)).toBe(true);
-  expect(hasUnseenActivity(st, 100)).toBe(false);
-  expect(hasUnseenActivity(st, undefined)).toBe(true);
-  expect(hasUnseenActivity({ reachable: true, sessions: [] }, undefined)).toBe(false);
-});
+// (activity badge removed — session_activity bumps on any output, so the "unseen"
+// signal was on for essentially every busy box; the helpers were deleted.)

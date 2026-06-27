@@ -368,19 +368,22 @@ test('checkBox: a fresh probe runs after the in-flight one settles (de-dup does 
   expect(calls).toBe(2);
 });
 
-test('checkBox: live session with a live master reports connected (green), overrides stale state, no probe', async () => {
-  let calls = 0;
+test('checkBox: live session with a live master probes over the multiplexed socket for live metrics (ignoring backoff)', async () => {
   let clock = 0;
-  const run = async () => { calls++; return { code: 255, stdout: '', stderr: 'me@h: Permission denied (publickey,password).' }; };
+  let mode = 'down';
+  const run = async () => (mode === 'down'
+    ? { code: 255, stdout: '', stderr: 'timeout' }
+    : { code: 0, stdout: '__META__ load1=0.5 cpus=4\nweb:1:1:1718000000\n', stderr: '' });
   let live = false;
   const sc = createStatusChecker({ run, now: () => clock, hasLiveSession: () => live, masterAlive: async () => true });
-  await sc.checkBox({ host: 'h' });                   // no session -> probe records a needsAuth failure
-  expect(calls).toBe(1);
-  live = true;                                        // user opens a terminal; master is up (authed)
-  clock = 10 * 60 * 1000;                             // even past any backoff window
+  await sc.checkBox({ host: 'h' });                   // no session, unreachable -> backoff engaged
+  live = true; mode = 'up';                           // user opens a terminal; master up; box now answers
+  clock = 10 * 60 * 1000;                             // even though the backoff window is still open
   const st = await sc.checkBox({ host: 'h' });
-  expect(calls).toBe(1);                              // NO BatchMode probe (no collision with the login)
-  expect(st).toEqual({ reachable: true, tmux: true, sessions: [] }); // live master -> green
+  expect(st.reachable).toBe(true);                    // probes over the live master, ignoring backoff
+  expect(st.tmux).toBe(true);
+  expect(st.sessions[0].name).toBe('web');
+  expect(st.metrics).toEqual({ load1: 0.5, cpus: 4 }); // the box you're working in now gets metrics
 });
 
 test('checkBox: live session WITHOUT a live master reports needs-auth (purple), not a fake green', async () => {

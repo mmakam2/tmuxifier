@@ -196,8 +196,6 @@ body {
 /* Nerd Font icon (e.g. the CPU chip glyph). Neutral color of its own so the
    severity color stays on the number alone, not doubled up on the icon. */
 .box-meta .nf { font-family: 'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', monospace; font-style: normal; color: var(--muted); }
-.box-activity { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 2px rgba(36, 211, 232, 0.25); }
-.box-activity.hidden { display: none; }
 .box-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 3px; }
 .box .rm, .box .refresh { background: none; border: none; color: #6e7681; cursor: pointer; }
 .box-actions > button { padding: 1px 3px; border-radius: 4px; transition: background 0.12s, color 0.12s; }
