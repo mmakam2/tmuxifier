@@ -76,7 +76,10 @@ pattern for new modules.
 
 - `index.js` — entrypoint: loads config, fails fast if mode-specific auth config is missing, wires everything,
   serves `dist/` and listens.
-- `config.js` / `envFile.js` — configuration + `.env` parsing/upsert.
+- `config.js` / `envFile.js` / `configFile.js` — configuration: the low→high precedence merge,
+  `.env` parsing/upsert (`envFile.js`), and `config.json` (camelCase) parsing (`configFile.js`).
+- `concurrency.js` — `mapWithConcurrency`, the bounded-parallelism helper status sweeps and Fleet
+  runs use so a sweep never opens the whole fleet's SSH connections at once.
 - `auth.js` — scrypt password hashing, signed-cookie options (`COOKIE_NAME`).
 - `googleAuth.js` — dependency-free Google OIDC helper: authorization-code flow, PKCE, id_token
   payload decoding, and exact-email allowlist checks.
@@ -87,6 +90,11 @@ pattern for new modules.
   `assertBoxSafe` and never shell-interpolated unquoted**. Touch this carefully (command-injection
   surface). Includes ControlMaster multiplexing args.
 - `sshRun.js` — run one-shot ssh probes.
+- `boxActions.js` — `createBoxActions`: per-box SSH operations over the shared ControlMaster —
+  ensure/install tmux and selected shell frameworks, the non-interactive `execCommand` that Fleet
+  Command runs, and ControlMaster liveness/stale-socket reaping (`isMasterAlive`/`reapStaleMaster`).
+- `localShellActions.js` — `createLocalShellActions`: provisions the optional local shell
+  (`localShell` = `none`/`omz`/`omb`) that backs a terminal on the Tmuxifier host itself.
 - `sessions.js` — PTY lifecycle: PTYs keyed by `boxId`, listeners refcounted, a `graceSeconds`
   window keeps a dropped PTY alive for seamless reconnects, then it's killed while the on-box tmux
   session keeps running.
@@ -95,19 +103,28 @@ pattern for new modules.
 - `statusPoller.js` — single server-side poll loop: probes every box on an interval
   (`statusPollMs`) and caches the snapshot `/api/status` serves, so status SSH volume is
   independent of how many dashboard tabs are open.
+- `fleet.js` / `fleetStore.js` — `createFleetManager` runs one command across many boxes as a single
+  persisted, pollable job (Fleet Command), fanning out at `fleetConcurrency`; `createFleetStore` is
+  the debounced `data/fleet-jobs.json` persistence.
 - `secretBox.js` — AES-256-GCM seal/open for secrets at rest; key derived from `cookieSecret` via
-  HKDF. Used to encrypt the Proxmox API token.
+  HKDF. Encrypts the persisted Proxmox secrets: the API token, any added SSH management keys, and
+  the optional root password.
 - `proxmoxValidate.js` — pure validators/parsers for Proxmox host/key/preset/provision input.
-- `proxmoxStore.js` — `data/proxmox.json` CRUD; seals the token on write, redacts it on read
-  (`getHost(id,{withSecret})` is the only path that decrypts).
+- `proxmoxStore.js` — `data/proxmox.json` CRUD for hosts, SSH keys, presets, and the optional root
+  password; seals secrets on write and redacts them on read (`getHost(id,{withSecret})` is the only
+  path that decrypts the token).
 - `proxmoxApi.js` — PVE HTTP client over `node:https` with TLS fingerprint pinning, plus
   `inspectEndpoint`. The token never leaves the server.
 - `proxmoxParams.js` — pure preset → `pct`/LXC create-param mapping (`net0`, `ssh-public-keys`, …).
+- `defaultKey.js` — reads the Tmuxifier host's own SSH public key to inject as the default Proxmox
+  management key so provisioned containers trust Tmuxifier (override with `TMUXIFIER_PVE_DEFAULT_PUBKEY`).
 - `provisionStore.js` / `proxmoxProvision.js` — debounced `data/provision-jobs.json` persistence and
   the create→poll→start→discover→auto-link-box job manager (the Fleet job pattern).
 
 Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `api.ts`,
-`terminal.ts`, `index.html`, `style.css`.
+`terminal.ts`, `index.html`, `style.css`, plus feature modules — `reconnect.ts` (escalating
+backoff), `statusDot.ts`, `fleetSelection.ts`/`fleetHistory.ts` (Fleet Command),
+`proxmox.ts`/`proxmoxUi.ts`, and `clipboard.ts`.
 
 ## Conventions
 
@@ -166,9 +183,10 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   same validation path.
 - WebSocket auth re-parses the cookie header manually (`@fastify/websocket` v10 doesn't populate
   `req.cookies` for the upgrade) — see `isAuthed` in `server.js`.
-- The Proxmox API token is the only persisted credential. It is AES-256-GCM encrypted at rest in
-  `data/proxmox.json` (key from `cookieSecret`), written `0o600`, and never returned to the browser
-  (host views are redacted to `hasToken`). PVE TLS is pinned by fingerprint for self-signed certs
+- The persisted Proxmox secrets — the API token, any added SSH management keys, and the optional
+  root password — are the only credentials Tmuxifier stores. They are AES-256-GCM encrypted at rest
+  in `data/proxmox.json` (key from `cookieSecret`), written `0o600`, and never returned to the
+  browser (host views are redacted to `hasToken`). PVE TLS is pinned by fingerprint for self-signed certs
   (TOFU, like `ssh accept-new`) or CA-verified; an explicit per-host `insecure` mode is off by
   default. All provision input is validated (`proxmoxValidate.js`) before reaching the API.
 

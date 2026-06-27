@@ -56,6 +56,12 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | fleet per-box timeout (ms) | `TMUXIFIER_FLEET_TIMEOUT_MS` | `15000` |
 | fleet job history kept | `TMUXIFIER_FLEET_MAX_JOBS` | `50` |
 | fleet per-box output cap (bytes) | `TMUXIFIER_FLEET_MAX_OUTPUT_BYTES` | `65536` |
+| Proxmox task poll interval (ms) | `TMUXIFIER_PVE_POLL_MS` | `1500` |
+| Proxmox per-request timeout (ms) | `TMUXIFIER_PVE_TIMEOUT_MS` | `15000` |
+| Proxmox provision timeout (ms) | `TMUXIFIER_PVE_PROVISION_TIMEOUT_MS` | `600000` |
+| Proxmox DHCP-lease wait (ms) | `TMUXIFIER_PVE_LEASE_TIMEOUT_MS` | `60000` |
+| Proxmox provision job history kept | `TMUXIFIER_PVE_MAX_JOBS` | `50` |
+| Proxmox default management pubkey | `TMUXIFIER_PVE_DEFAULT_PUBKEY` | auto-detect `~/.ssh/*.pub` |
 | auth mode | `TMUXIFIER_AUTH_MODE` | `password` |
 | password hash | `TMUXIFIER_PASSWORD_HASH` | — (required) |
 | cookie secret | `TMUXIFIER_COOKIE_SECRET` | — (required) |
@@ -76,7 +82,8 @@ also marks it `Secure` for deployments behind a TLS-terminating proxy or tunnel.
 As an alternative to `.env`, a `config.json` in the repo root works too, using camelCase keys
 (`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`,
 `statusConcurrency`, `statusPollMs`, `controlPersist`, `fleetConcurrency`, `fleetTimeoutMs`,
-`fleetMaxJobs`, `fleetMaxOutputBytes`, `authMode`, `publicUrl`, `googleClientId`,
+`fleetMaxJobs`, `fleetMaxOutputBytes`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
+`pveLeaseTimeoutMs`, `pveMaxJobs`, `pveDefaultPubKeyPath`, `authMode`, `publicUrl`, `googleClientId`,
 `googleClientSecret`, `allowedEmails`, `dataDir`, `controlDir`, `sshConfigFile`, `tlsCert`,
 `tlsKey`). The UI also persists `localShell` in `config.json`; it does not have an env key.
 `TMUXIFIER_SSH_CONFIG`/`sshConfigFile` is passed to `ssh` as `-F`, so it is an alternate config
