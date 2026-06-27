@@ -2,6 +2,8 @@ const SAFE_HOST = /^[A-Za-z0-9_.-]+$/;
 const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
 const TOKEN_ID = /^[A-Za-z0-9_.+-]+@[A-Za-z0-9_.-]+![A-Za-z0-9_.-]+$/; // user@realm!name
 const SAFE_ID = /^[A-Za-z0-9_.:/+-]+$/;                                // storage / bridge / template volid
+const MOUNT_ID = /^mp\d+$/;                                            // additional disk mount point id (mp0, mp1, …)
+const ABS_PATH = /^\/[A-Za-z0-9._/-]+$/;                               // absolute container mount path
 const FINGERPRINT = /^[0-9A-Fa-f:]+$/;
 const PUBKEY = /^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-[A-Za-z0-9-]+|sk-(ssh-ed25519|ecdsa-sha2-[A-Za-z0-9-]+)@openssh\.com)\s+[A-Za-z0-9+/=]+(\s+\S+)?$/;
 const VERIFY_MODES = ['pin', 'ca', 'insecure'];
@@ -70,6 +72,18 @@ export function assertPresetInput(spec, { keyIds = [], hostIds = [] } = {}) {
     if (!isIp(net.gateway)) throw new Error('static network requires a gateway ip');
   }
   // Keys are no longer preset-scoped: provisioning injects the host default key + all stored keys.
+  if (spec.mounts != null) {
+    if (!Array.isArray(spec.mounts)) throw new Error('mounts must be an array');
+    const seen = new Set();
+    for (const m of spec.mounts) {
+      if (!MOUNT_ID.test(String(m.id || ''))) throw new Error('mount id must be mpN (e.g. mp0)');
+      if (seen.has(m.id)) throw new Error(`duplicate mount id: ${m.id}`);
+      seen.add(m.id);
+      if (!SAFE_ID.test(String(m.storage || ''))) throw new Error('invalid mount storage');
+      if (!intInRange(m.sizeGiB, 1, 8192)) throw new Error('mount disk size must be 1..8192 GiB');
+      if (!ABS_PATH.test(String(m.path || ''))) throw new Error('mount path must be an absolute path like /data');
+    }
+  }
 }
 
 export function assertRootPassword(pw) {

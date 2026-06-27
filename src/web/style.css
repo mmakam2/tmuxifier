@@ -346,6 +346,7 @@ body {
 .fleet-script-modal { width: 620px; }
 /* Lift the script-editor backdrop above the Fleet jobs sidebar (z-index: 50). */
 .modal-backdrop:has(> .fleet-script-modal) { z-index: 60; }
+.modal-backdrop:has(> .pve-disk-modal) { z-index: 60; }
 .fleet-script-hint { margin: 0; color: var(--muted); font-size: 12px; }
 .fleet-script {
   width: 100%; box-sizing: border-box; min-height: 220px; max-height: 60vh; resize: vertical;
@@ -392,6 +393,7 @@ body {
 
 /* Proxmox hub */
 .modal.pve-hub { width: 560px; max-height: 86vh; }
+.modal.pve-disk-modal { width: 380px; }
 .pve-head { display: flex; justify-content: space-between; align-items: center; }
 .pve-close { background: none; border: 0; color: #8b949e; cursor: pointer; font-size: 16px; }
 .pve-tabs { display: flex; gap: 4px; border-bottom: 1px solid #232a36; }

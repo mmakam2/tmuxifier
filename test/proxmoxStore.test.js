@@ -96,10 +96,12 @@ test('presets validate against the existing host and persist normalized (keys ar
     storage: 'local-lvm', diskGiB: 8, cores: 2, memoryMiB: 2048, swapMiB: 512,
     unprivileged: true, features: { nesting: true },
     net: { bridge: 'vmbr0', ipMode: 'dhcp' }, startAfterCreate: true,
+    mounts: [{ id: 'mp0', storage: 'local-lvm', sizeGiB: 8, path: '/data', backup: true }],
   });
   expect(preset.id).toBeTruthy();
   expect(preset.net.ipMode).toBe('dhcp');
   expect(preset.keyIds).toBeUndefined();            // keyIds dropped from the preset model
+  expect(preset.mounts).toEqual([{ id: 'mp0', storage: 'local-lvm', sizeGiB: 8, path: '/data', backup: true }]);
   expect((await store.getPreset(preset.id)).name).toBe('dev');
   await expect(store.addPreset({ ...preset, name: 'dev2', hostId: 'ghost' })).rejects.toThrow(/host/);
 });

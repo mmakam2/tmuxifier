@@ -59,6 +59,16 @@ test('assertPresetInput validates ranges, refs, and static-network completeness'
   expect(() => assertPresetInput({ ...PRESET, net: { ...PRESET.net, bridge: 'no spaces!' } }, ctx)).toThrow(/bridge/);
 });
 
+test('assertPresetInput validates additional disk mounts', () => {
+  const ctx = { hostIds: ['h1'] };
+  const ok = { ...PRESET, mounts: [{ id: 'mp0', storage: 'local-lvm', sizeGiB: 8, path: '/data', backup: true }] };
+  expect(() => assertPresetInput(ok, ctx)).not.toThrow();
+  expect(() => assertPresetInput({ ...ok, mounts: [{ id: 'bad', storage: 'local-lvm', sizeGiB: 8, path: '/data' }] }, ctx)).toThrow(/mount id/);
+  expect(() => assertPresetInput({ ...ok, mounts: [{ id: 'mp0', storage: 'local-lvm', sizeGiB: 8, path: 'relative' }] }, ctx)).toThrow(/path/);
+  expect(() => assertPresetInput({ ...ok, mounts: [{ id: 'mp0', storage: 'local-lvm', sizeGiB: 0, path: '/data' }] }, ctx)).toThrow(/size/);
+  expect(() => assertPresetInput({ ...ok, mounts: [{ id: 'mp0', storage: 'x', sizeGiB: 8, path: '/a' }, { id: 'mp0', storage: 'x', sizeGiB: 8, path: '/b' }] }, ctx)).toThrow(/duplicate/);
+});
+
 test('assertProvisionInput validates hostname, vmid, and ip', () => {
   expect(() => assertProvisionInput({ hostname: 'dev-01' })).not.toThrow();
   expect(() => assertProvisionInput({ hostname: 'Bad_Host' })).toThrow(/hostname/);

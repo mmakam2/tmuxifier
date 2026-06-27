@@ -4,11 +4,12 @@ export interface PveHost {
 }
 export interface PveKey { id: string; name: string; hasKey: boolean; createdAt: string; }
 export interface PvePresetNet { bridge: string; vlan: number | null; ipMode: 'dhcp' | 'static'; cidr: string | null; gateway: string | null; }
+export interface PveMount { id: string; storage: string; sizeGiB: number; path: string; backup: boolean; }
 export interface PvePreset {
   id: string; name: string; hostId: string; node: string | null; template: string; storage: string;
   diskGiB: number; cores: number; memoryMiB: number; swapMiB: number; unprivileged: boolean;
   features: Record<string, boolean>; net: PvePresetNet; dns: { nameserver: string | null; searchdomain: string | null };
-  keyIds: string[]; onboot: boolean; startAfterCreate: boolean;
+  mounts: PveMount[]; onboot: boolean; startAfterCreate: boolean;
   boxDefaults: { user: string; sessionName: string; tags: string[] }; createdAt: string;
 }
 export interface InspectResult { reachable: boolean; fingerprint256: string | null; subject: string; issuer: string; validTo: string | null; caValid: boolean; error?: string; }

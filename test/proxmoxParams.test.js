@@ -33,3 +33,11 @@ test('buildCreateParams sets password only when provided', () => {
   expect(buildCreateParams(PRESET, { vmid: 1, hostname: 'h', publicKeys: [], password: 'sekret' }).password).toBe('sekret');
   expect(buildCreateParams(PRESET, { vmid: 1, hostname: 'h', publicKeys: [] }).password).toBeUndefined();
 });
+
+test('buildCreateParams emits mpN params for additional disk mounts', () => {
+  const withMounts = { ...PRESET, mounts: [{ id: 'mp0', storage: 'local-lvm', sizeGiB: 8, path: '/data', backup: true }, { id: 'mp1', storage: 'local', sizeGiB: 4, path: '/extra', backup: false }] };
+  const p = buildCreateParams(withMounts, { vmid: 1, hostname: 'h', publicKeys: [] });
+  expect(p.mp0).toBe('local-lvm:8,mp=/data,backup=1');
+  expect(p.mp1).toBe('local:4,mp=/extra');
+  expect(buildCreateParams(PRESET, { vmid: 1, hostname: 'h', publicKeys: [] }).mp0).toBeUndefined();
+});

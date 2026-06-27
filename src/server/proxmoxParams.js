@@ -31,5 +31,9 @@ export function buildCreateParams(preset, { vmid, hostname, ip, publicKeys, pass
   if (preset.dns?.searchdomain) params.searchdomain = preset.dns.searchdomain;
   if (publicKeys && publicKeys.length) params['ssh-public-keys'] = publicKeys.join('\n') + '\n';
   if (password) params.password = password;
+  // Additional disks → Proxmox mount points: mpN=<storage>:<sizeGiB>,mp=<path>[,backup=1]
+  for (const m of preset.mounts || []) {
+    params[m.id] = `${m.storage}:${m.sizeGiB},mp=${m.path}${m.backup ? ',backup=1' : ''}`;
+  }
   return params;
 }

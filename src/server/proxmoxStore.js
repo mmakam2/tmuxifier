@@ -16,6 +16,7 @@ function normalizePreset(spec, id, createdAt) {
     net: { bridge: net.bridge, vlan: net.vlan ?? null, ipMode: net.ipMode, cidr: net.cidr ?? null, gateway: net.gateway ?? null },
     dns: { nameserver: spec.dns?.nameserver ?? null, searchdomain: spec.dns?.searchdomain ?? null },
     onboot: !!spec.onboot, startAfterCreate: spec.startAfterCreate !== false,
+    mounts: Array.isArray(spec.mounts) ? spec.mounts.map((m) => ({ id: m.id, storage: m.storage, sizeGiB: m.sizeGiB, path: m.path, backup: !!m.backup })) : [],
     boxDefaults: { user: spec.boxDefaults?.user || 'root', sessionName: spec.boxDefaults?.sessionName || 'web', tags: spec.boxDefaults?.tags || [] },
     createdAt,
   };

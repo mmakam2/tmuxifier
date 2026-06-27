@@ -1,5 +1,5 @@
 import { api, type Box } from './api';
-import { pve, type PvePreset, type ProvisionStatus } from './proxmox';
+import { pve, type PvePreset, type PveMount, type ProvisionStatus } from './proxmox';
 import { openProvisionTerminal } from './terminal';
 
 type SetupOptions = { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean };
@@ -22,6 +22,40 @@ function input(value = '', attrs: Attrs = {}) { const i = el('input', attrs); i.
 function field(label: string, control: HTMLElement) { return el('label', { class: 'field' }, [el('span', {}, [label]), control]); }
 function err(msg: string) { return el('div', { class: 'pve-err' }, [msg]); }
 function group(label: string, ...children: (Node | string)[]) { return el('div', { class: 'pve-group' }, [el('div', { class: 'pve-eyebrow' }, [label]), ...children]); }
+
+// Small modal (on top of the hub) to add a container mount point, Proxmox-style.
+function openAddDiskModal(opts: { id: string; storages: string[]; onAdd: (m: PveMount) => void }) {
+  const backdrop = el('div', { class: 'modal-backdrop' });
+  const modal = el('div', { class: 'modal pve-disk-modal' });
+  const close = () => backdrop.remove();
+  let pressed = false;
+  backdrop.addEventListener('mousedown', (e) => { pressed = e.target === backdrop; });
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop && pressed) close(); });
+  const idField = input(opts.id); (idField as HTMLInputElement).readOnly = true;
+  const storageSel = el('select', {}, opts.storages.map((s) => el('option', { value: s }, [s]))) as HTMLSelectElement;
+  const size = input('8', { type: 'number', min: '1' });
+  const path = input('', { placeholder: '/data' });
+  const backup = el('input', { type: 'checkbox' });
+  const box = el('div', {});
+  const add = el('button', { type: 'submit', class: 'pve-primary', onclick: (e: Event) => {
+    e.preventDefault(); box.querySelector('.pve-err')?.remove();
+    const p = path.value.trim();
+    if (!storageSel.value) { box.append(err('Pick a storage for the disk.')); return; }
+    if (!p.startsWith('/')) { box.append(err('Path must be absolute, e.g. /data.')); return; }
+    opts.onAdd({ id: opts.id, storage: storageSel.value, sizeGiB: Number(size.value) || 1, path: p, backup: (backup as HTMLInputElement).checked });
+    close();
+  } }, ['Add disk']);
+  const cancel = el('button', { type: 'button', class: 'pve-btn', onclick: close }, ['Cancel']);
+  box.append(
+    el('h3', {}, ['Add disk']),
+    field('Mount Point ID', idField), field('Storage', storageSel), field('Disk size (GiB)', size), field('Path', path),
+    el('label', { class: 'check-field' }, [backup, el('span', {}, ['Include in backups'])]),
+    el('div', { class: 'modal-actions' }, [cancel, add]),
+  );
+  modal.append(box);
+  backdrop.append(modal);
+  document.body.append(backdrop);
+}
 
 const TABS = ['Hosts', 'LXC Secrets', 'Presets', 'Provision', 'History'] as const;
 type Tab = typeof TABS[number];
@@ -199,6 +233,20 @@ export function openProxmoxHub(opts: HubOpts) {
     const gateway = input('', { placeholder: '192.168.1.1' });
     const vlan = input('', { placeholder: 'vlan (optional)', type: 'number' });
     const box = el('div', {});
+    const mounts: PveMount[] = [];
+    let rootdirStorages: string[] = [];
+    const mountsList = el('div', { class: 'pve-list' });
+    function renderMounts() {
+      mountsList.replaceChildren(...mounts.map((m, i) => el('div', { class: 'pve-row' }, [
+        el('div', {}, [el('strong', {}, [m.id]), el('span', { class: 'pve-sub' }, [` ${m.storage}:${m.sizeGiB} → ${m.path}${m.backup ? ' · backup' : ''}`])]),
+        el('button', { type: 'button', class: 'danger', onclick: () => { mounts.splice(i, 1); renderMounts(); } }, ['Remove']),
+      ])));
+    }
+    const addDiskBtn = el('button', { type: 'button', class: 'pve-btn', onclick: () => {
+      const used = new Set(mounts.map((m) => m.id));
+      let n = 0; while (used.has(`mp${n}`)) n += 1;
+      openAddDiskModal({ id: `mp${n}`, storages: rootdirStorages, onAdd: (m) => { mounts.push(m); renderMounts(); } });
+    } }, ['+ Add disk']);
 
     async function loadNodes() {
       nodeSel.replaceChildren(el('option', {}, ['…']));
@@ -211,6 +259,7 @@ export function openProxmoxHub(opts: HubOpts) {
       if (!node) return;
       const [sg, br] = await Promise.all([pve.storage(id, node).catch(() => ({ rootdir: [], vztmpl: [] })), pve.bridges(id, node).catch(() => [])]);
       storeSel.replaceChildren(...sg.rootdir.map((s) => el('option', { value: s.storage }, [s.storage])));
+      rootdirStorages = sg.rootdir.map((s) => s.storage);
       bridgeSel.replaceChildren(...br.map((b) => el('option', { value: b.iface }, [b.iface])));
       // Template storage drives the template list: list the storages that can hold templates
       // (content includes vztmpl), then load whatever templates exist on the selected one.
@@ -235,7 +284,7 @@ export function openProxmoxHub(opts: HubOpts) {
         cores: Number(cores.value), memoryMiB: Number(mem.value), swapMiB: Number(swap.value),
         unprivileged: true, features: { nesting: true }, // sensible defaults; not exposed in the UI
         net: { bridge: bridgeSel.value, vlan: vlan.value ? Number(vlan.value) : null, ipMode: ipMode.value, cidr: cidr.value.trim() || null, gateway: gateway.value.trim() || null },
-        onboot: false, startAfterCreate: true,
+        onboot: false, startAfterCreate: true, mounts,
       };
       try { await pve.addPreset(spec); void renderPresets(); }
       catch (er) { box.append(err((er as Error).message)); }
@@ -246,6 +295,7 @@ export function openProxmoxHub(opts: HubOpts) {
       group('Identity', field('Preset Name', name), field('Host', hostSel), field('Node', nodeSel)),
       group('Template', field('Template storage', tmplStoreSel), field('Template', tmplSel)),
       group('Disk', el('div', { class: 'pve-grid' }, [field('Storage (rootfs)', storeSel), field('Disk GiB', disk)])),
+      group('Additional disks', mountsList, addDiskBtn),
       group('Resources', el('div', { class: 'pve-grid-3' }, [field('Cores', cores), field('Memory MiB', mem), field('Swap MiB', swap)])),
       group('Network', field('Bridge', bridgeSel), field('IP mode', ipMode), el('div', { class: 'pve-grid' }, [field('CIDR (static)', cidr), field('Gateway (static)', gateway), field('VLAN', vlan)])),
       el('div', { class: 'modal-actions' }, [save]),
