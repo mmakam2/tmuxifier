@@ -71,7 +71,13 @@ export function buildAttachArgv(box, session, opts = {}) {
   if (box.port) argv.push('-p', String(box.port));
   argv.push(target(box));
   const sess = sanitizeSession(session);
-  let remote = `tmux new-session -A -D -s ${sess}`;
+  // `-u` forces the tmux client to UTF-8 output. Without it, on a box whose login
+  // locale is C/POSIX (SSH does not forward locale), tmux down-converts every
+  // non-ASCII glyph to `_` when writing to this client — so Claude Code's spinner
+  // and todo checkboxes arrive in the browser as underscores no matter what font
+  // the terminal uses. tmux stores the pane as UTF-8 either way, so `-u` on attach
+  // fixes already-running sessions on the next reconnect (no box-side cleanup).
+  let remote = `tmux -u new-session -A -D -s ${sess}`;
   if (box.startupCommand) remote += ` ${shSingleQuote(box.startupCommand)}`;
   argv.push(remote);
   if (opts.sshConfigFile) argv.unshift('-F', opts.sshConfigFile);

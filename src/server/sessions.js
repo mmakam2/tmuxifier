@@ -53,7 +53,9 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       if (existing.graceTimer) { clearTimeout(existing.graceTimer); existing.graceTimer = null; }
       return existing;
     }
-    const args = ['new-session', '-A', '-D', '-s', localSession];
+    // `-u` forces UTF-8 client output so glyphs survive a C/POSIX locale (see the
+    // same flag and rationale in buildAttachArgv).
+    const args = ['-u', 'new-session', '-A', '-D', '-s', localSession];
     if (shell === 'omz') args.push('exec zsh');
     else if (shell === 'omb') args.push('exec bash');
     const pty = spawn('tmux', args, {

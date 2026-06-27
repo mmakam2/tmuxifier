@@ -19,8 +19,16 @@ test('buildAttachArgv: alias-only box', () => {
     '-o', 'ServerAliveInterval=15',
     '-o', 'ServerAliveCountMax=3',
     'prod',
-    'tmux new-session -A -D -s web',
+    'tmux -u new-session -A -D -s web',
   ]);
+});
+
+test('buildAttachArgv: tmux is launched with -u so glyphs survive a C/POSIX box locale', () => {
+  // Without -u, tmux down-converts non-ASCII (Claude Code spinner/checkboxes) to
+  // `_` when writing to a client whose locale is not UTF-8 (SSH does not forward
+  // locale). The flag must precede the tmux subcommand.
+  const argv = buildAttachArgv({ host: 'prod' }, 'web');
+  expect(argv[argv.length - 1]).toMatch(/^tmux -u new-session\b/);
 });
 
 test('buildAttachArgv: includes a ConnectTimeout so opening a down box fails fast (not a ~2min hang)', () => {
@@ -44,7 +52,7 @@ test('buildAttachArgv: user/port/proxyJump and policy override', () => {
 
 test('buildAttachArgv: startupCommand is single-quoted for the remote shell', () => {
   const argv = buildAttachArgv({ host: 'h', startupCommand: "echo 'hi'" }, 'web');
-  expect(argv[argv.length - 1]).toBe("tmux new-session -A -D -s web 'echo '\\''hi'\\'''");
+  expect(argv[argv.length - 1]).toBe("tmux -u new-session -A -D -s web 'echo '\\''hi'\\'''");
 });
 
 test('buildProbeArgv: batch mode, no PTY, carries remote cmd', () => {
