@@ -82,14 +82,13 @@ function wireClipboard(term: Terminal): void {
 // can't be the success signal — it must stay up past the box's ConnectTimeout (10s).
 const STABLE_MS = 15000;
 
-// Bundled fonts first (see @font-face in style.css): JetBrainsMono Nerd Font for
-// text/powerline/icons, then JuliaMono as a per-glyph fallback for every symbol-
-// area glyph JBM lacks across U+2000-2BFF (Claude Code's sparkle spinner ∗✢✱✷,
-// ballot-box todos, ⎿/⏺, Braille, arrows, math). Per-OS monospace fallbacks cover
-// the brief moment before they load / if they ever fail to.
-const TERM_FONT_SIZE = 13;
+// Bundled fonts first (see @font-face in style.css): MesloLGSDZ Nerd Font for
+// text/powerline/icons/ballot/sparkle, then JuliaMono as a per-glyph fallback for
+// the symbol-area glyphs Meslo lacks across U+2000-2BFF (Braille, ⎿/⏺). Per-OS
+// monospace fallbacks cover the brief moment before they load / if they fail to.
+const TERM_FONT_SIZE = 10;
 const TERM_FONT_FAMILY =
-  "'JetBrainsMono Nerd Font', 'JuliaMono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace";
+  "'MesloLGSDZ Nerd Font', 'JuliaMono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace";
 
 // xterm measures the glyph cell size ONCE, when it first renders. On a reattach
 // the server replays the running screen immediately, so if our webfonts are still
@@ -111,8 +110,8 @@ function refitWhenFontReady(term: Terminal, fit: FitAddon): void {
   const fonts = (document as unknown as { fonts?: FontFaceSet }).fonts;
   if (!fonts?.load) { try { fit.fit(); } catch {} return; }
   Promise.all([
-    fonts.load(`${TERM_FONT_SIZE}px 'JetBrainsMono Nerd Font'`),
-    fonts.load(`bold ${TERM_FONT_SIZE}px 'JetBrainsMono Nerd Font'`),
+    fonts.load(`${TERM_FONT_SIZE}px 'MesloLGSDZ Nerd Font'`),
+    fonts.load(`bold ${TERM_FONT_SIZE}px 'MesloLGSDZ Nerd Font'`),
     fonts.load(`${TERM_FONT_SIZE}px 'JuliaMono'`, '⣿'),
   ])
     .then(() => fonts.ready)
