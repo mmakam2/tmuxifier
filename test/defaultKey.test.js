@@ -19,7 +19,13 @@ test('auto-detects ~/.ssh in id_ed25519 > id_rsa > id_ecdsa order', () => {
   expect(readDefaultPublicKey({ home: '/h', ...fakeFs({ '/h/.ssh/id_rsa.pub': 'ssh-rsa RSA a' }) })).toBe('ssh-rsa RSA a');
 });
 
+test('derives the public key from a private key when no .pub exists', () => {
+  const fs = { existsSync: (p) => p === '/h/.ssh/id_ed25519', readFileSync: () => { throw new Error('ENOENT'); } };
+  const derivePub = (p) => (p === '/h/.ssh/id_ed25519' ? 'ssh-ed25519 DERIVED host\n' : null);
+  expect(readDefaultPublicKey({ home: '/h', ...fs, derivePub })).toBe('ssh-ed25519 DERIVED host');
+});
+
 test('returns null when no key is found', () => {
-  expect(readDefaultPublicKey({ home: '/h', ...fakeFs({}) })).toBeNull();
+  expect(readDefaultPublicKey({ home: '/h', ...fakeFs({}), derivePub: () => null })).toBeNull();
   expect(readDefaultPublicKey({})).toBeNull();
 });
