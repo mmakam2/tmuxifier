@@ -1,11 +1,15 @@
-/* Bundled terminal fonts. Two faces ship with the app so glyph rendering is
+/* Bundled terminal fonts. These faces ship with the app so glyph rendering is
    identical on every device that connects, not at the mercy of the viewer's
    installed monospace fonts.
 
-   1. MesloLGSDZ Nerd Font — the primary face: Latin text, box-drawing, powerline,
-      ballot-box/checkbox, Claude Code's sparkle spinner, and the Nerd-Font icon
-      range (oh-my-zsh/oh-my-tmux, eza/lsd, starship/p10k segment glyphs).
-   2. JuliaMono (symbol subset) — fallback for the few symbol-area code points
+   1. MesloLGMDZ Nerd Font — the primary face (Line Gap Medium, dotted zero): Latin
+      text, box-drawing, powerline, ballot-box/checkbox, Claude Code's sparkle
+      spinner, and the Nerd-Font icon range (oh-my-zsh/oh-my-tmux, eza/lsd,
+      starship/p10k segment glyphs). The Medium line-gap variant gives a touch more
+      vertical breathing room between rows than LGS.
+   2. MesloLGSDZ Nerd Font — kept as the next fallback (Line Gap Small, same glyph
+      coverage as LGM); used only if the primary face fails to load.
+   3. JuliaMono (symbol subset) — fallback for the few symbol-area code points
       Meslo lacks across U+2000–2BFF (notably Braille and the misc-technical
       glyphs ⎿/⏺). xterm's DOM renderer does per-glyph CSS fallback, so normal
       text stays Meslo and only these symbols come from JuliaMono. The face is
@@ -14,6 +18,20 @@
 
    font-display: block avoids a flash of fallback glyphs at the wrong cell width;
    terminal.ts also re-fits once the fonts resolve so xterm's metrics are correct. */
+@font-face {
+  font-family: 'MesloLGMDZ Nerd Font';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/MesloLGMDZNerdFont-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MesloLGMDZ Nerd Font';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('./assets/fonts/MesloLGMDZNerdFont-Bold.woff2') format('woff2');
+}
 @font-face {
   font-family: 'MesloLGSDZ Nerd Font';
   font-style: normal;

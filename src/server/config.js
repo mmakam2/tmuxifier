@@ -10,6 +10,11 @@ const DEFAULTS = {
   passwordHash: '',
   cookieSecret: '',
   localShell: 'none',
+  // Terminal (xterm) font. termFont is undefined by default → the browser uses
+  // the bundled font stack; a configured name is prepended to it client-side.
+  // Validated/normalized below so an unsafe or out-of-range value falls back.
+  termFont: undefined,
+  termFontSize: 10,
   // Probe at most this many boxes at once on /api/status. A small batch keeps
   // Tmuxifier from opening the whole fleet's SSH connections simultaneously,
   // which rate-limiters/IPS on the path read as a brute-force burst.
@@ -89,6 +94,8 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     sshConfigFile: e.TMUXIFIER_SSH_CONFIG,
     tlsCert: e.TMUXIFIER_TLS_CERT,
     tlsKey: e.TMUXIFIER_TLS_KEY,
+    termFont: e.TMUXIFIER_TERM_FONT,
+    termFontSize: e.TMUXIFIER_TERM_FONT_SIZE ? Number(e.TMUXIFIER_TERM_FONT_SIZE) : undefined,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
   merged.dataDir = merged.dataDir ?? path.join(cwd, 'data');
@@ -106,6 +113,13 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   // Normalize localShell so invalid env/file values are coerced to 'none'
   // rather than being passed through unvalidated to the WebSocket handler.
   merged.localShell = ['none', 'omz', 'omb'].includes(merged.localShell) ? merged.localShell : 'none';
+  // Terminal font: a single family name on a CSS-injection-safe allowlist (no
+  // quotes/commas/semicolons/braces). Anything else → undefined so the browser
+  // keeps the bundled font. Size is clamped to a sane px range, default 10.
+  const fontName = String(merged.termFont ?? '').trim();
+  merged.termFont = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$/.test(fontName) ? fontName : undefined;
+  const fontSize = Number(merged.termFontSize);
+  merged.termFontSize = Number.isFinite(fontSize) && fontSize >= 6 && fontSize <= 32 ? fontSize : 10;
   return merged;
 }
 

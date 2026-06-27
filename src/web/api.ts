@@ -45,6 +45,7 @@ export const api = {
     return j<{ added: Box[]; skipped: number }>(await fetch('/api/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }));
   },
   async status() { return j<Record<string, Status>>(await fetch(`/api/status?t=${Date.now()}`)); },
+  async uiConfig() { return j<{ termFont: string | null; termFontSize: number }>(await fetch('/api/ui-config')); },
   async getLocalShell() { return j<{ shell: string }>(await fetch('/api/local-shell')); },
   async updateLocalShell(shell: string) { return j<{ ok: boolean }>(await fetch('/api/local-shell', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shell }) })); },
   async reconnectLocalShell() { return j<{ ok: boolean }>(await fetch('/api/local-shell/reconnect', { method: 'POST' })); },

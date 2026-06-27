@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { reconnectDelay } from './reconnect';
 import { clipboardActionForKey, writeClipboard, readClipboard, type ClipboardDeps } from './clipboard';
+import { buildFontFamily, clampFontSize, DEFAULT_TERM_FONT_SIZE } from './termFont';
 
 // Synchronous execCommand('copy') used when the async Clipboard API is missing
 // (insecure context) or rejects (document not focused). A hidden textarea is the
@@ -82,13 +83,20 @@ function wireClipboard(term: Terminal): void {
 // can't be the success signal — it must stay up past the box's ConnectTimeout (10s).
 const STABLE_MS = 15000;
 
-// Bundled fonts first (see @font-face in style.css): MesloLGSDZ Nerd Font for
-// text/powerline/icons/ballot/sparkle, then JuliaMono as a per-glyph fallback for
-// the symbol-area glyphs Meslo lacks across U+2000-2BFF (Braille, ⎿/⏺). Per-OS
-// monospace fallbacks cover the brief moment before they load / if they fail to.
-const TERM_FONT_SIZE = 10;
-const TERM_FONT_FAMILY =
-  "'MesloLGSDZ Nerd Font', 'JuliaMono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace";
+// Terminal font. The family is the bundled stack (MesloLGMDZ Nerd Font for
+// text/powerline/icons/ballot/sparkle, then MesloLGSDZ and JuliaMono as fallbacks
+// for the U+2000-2BFF symbols Meslo lacks — Braille, ⎿/⏺ — then per-OS monospace),
+// optionally with a TMUXIFIER_TERM_FONT family PREPENDED. The pure builders and
+// the prepend-not-replace rationale live in ./termFont. setTerminalFont() is
+// called once at boot (main.ts) with /api/ui-config before any terminal opens.
+let termFontSize = DEFAULT_TERM_FONT_SIZE;
+let userFont: string | null = null;
+function termFontFamily(): string { return buildFontFamily(userFont); }
+
+export function setTerminalFont(o: { termFont: string | null; termFontSize: number }): void {
+  userFont = o?.termFont ?? null;
+  termFontSize = clampFontSize(o?.termFontSize);
+}
 
 // xterm measures the glyph cell size ONCE, when it first renders. On a reattach
 // the server replays the running screen immediately, so if our webfonts are still
@@ -109,17 +117,22 @@ const TERM_FONT_FAMILY =
 function refitWhenFontReady(term: Terminal, fit: FitAddon): void {
   const fonts = (document as unknown as { fonts?: FontFaceSet }).fonts;
   if (!fonts?.load) { try { fit.fit(); } catch {} return; }
-  Promise.all([
-    fonts.load(`${TERM_FONT_SIZE}px 'MesloLGSDZ Nerd Font'`),
-    fonts.load(`bold ${TERM_FONT_SIZE}px 'MesloLGSDZ Nerd Font'`),
-    fonts.load(`${TERM_FONT_SIZE}px 'JuliaMono'`, '⣿'),
-  ])
+  // Also preload the configured custom family (if any) so xterm re-measures the
+  // cell with it once resolved; for a locally-installed font fonts.load settles
+  // immediately, and an absent one rejects harmlessly (caught below).
+  const loads = [
+    fonts.load(`${termFontSize}px 'MesloLGMDZ Nerd Font'`),
+    fonts.load(`bold ${termFontSize}px 'MesloLGMDZ Nerd Font'`),
+    fonts.load(`${termFontSize}px 'JuliaMono'`, '⣿'),
+  ];
+  if (userFont) loads.push(fonts.load(`${termFontSize}px '${userFont}'`).catch(() => []));
+  Promise.all(loads)
     .then(() => fonts.ready)
     .then(() => {
       try { (term as unknown as { clearTextureAtlas?: () => void }).clearTextureAtlas?.(); } catch {}
       try {
         term.options.fontFamily = 'monospace';
-        term.options.fontFamily = TERM_FONT_FAMILY;
+        term.options.fontFamily = termFontFamily();
       } catch {}
       try { fit.fit(); } catch {}
       try { term.refresh(0, term.rows - 1); } catch {}
@@ -140,8 +153,8 @@ interface ProvisionOptions {
 export function openTerminal(parent: HTMLElement, boxId: string, label?: string) {
   const term = new Terminal({
     cursorBlink: true,
-    fontSize: TERM_FONT_SIZE,
-    fontFamily: TERM_FONT_FAMILY,
+    fontSize: termFontSize,
+    fontFamily: termFontFamily(),
     theme: { background: '#0b0e14' },
   });
   const fit = new FitAddon();
@@ -210,8 +223,8 @@ export function openProvisionTerminal(
 ) {
   const term = new Terminal({
     cursorBlink: true,
-    fontSize: TERM_FONT_SIZE,
-    fontFamily: TERM_FONT_FAMILY,
+    fontSize: termFontSize,
+    fontFamily: termFontFamily(),
     theme: { background: '#0b0e14' },
   });
   const fit = new FitAddon();

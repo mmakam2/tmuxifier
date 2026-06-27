@@ -1,5 +1,5 @@
 import { api, type AddBoxSpec, type Box, type Status } from './api';
-import { openTerminal, openProvisionTerminal } from './terminal';
+import { openTerminal, openProvisionTerminal, setTerminalFont } from './terminal';
 import { dotClassFor, dotTitleFor } from './statusDot';
 import { toggleBox, setBoxes, groupState } from './fleetSelection';
 import { addRecent, parseRecent } from './fleetHistory';
@@ -151,8 +151,12 @@ function refitActiveTerminals() {
 }
 
 async function start() {
-  if (await api.me()) renderDashboard();
-  else await renderLogin();
+  if (await api.me()) {
+    // Apply the configured terminal font before any box opens. Best-effort: on
+    // failure the bundled font stack stays in effect.
+    try { setTerminalFont(await api.uiConfig()); } catch {}
+    renderDashboard();
+  } else await renderLogin();
 }
 
 function readLoginError(): string {

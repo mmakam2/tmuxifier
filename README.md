@@ -52,6 +52,8 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | status probe concurrency | `TMUXIFIER_STATUS_CONCURRENCY` | `4` |
 | status poll interval (ms) | `TMUXIFIER_STATUS_POLL_MS` | `30000` |
 | SSH ControlPersist seconds | `TMUXIFIER_CONTROL_PERSIST` | `600` |
+| terminal font family | `TMUXIFIER_TERM_FONT` | (bundled font) |
+| terminal font size (px) | `TMUXIFIER_TERM_FONT_SIZE` | `10` |
 | fleet command concurrency | `TMUXIFIER_FLEET_CONCURRENCY` | `4` |
 | fleet per-box timeout (ms) | `TMUXIFIER_FLEET_TIMEOUT_MS` | `15000` |
 | fleet job history kept | `TMUXIFIER_FLEET_MAX_JOBS` | `50` |
@@ -81,13 +83,20 @@ also marks it `Secure` for deployments behind a TLS-terminating proxy or tunnel.
 
 As an alternative to `.env`, a `config.json` in the repo root works too, using camelCase keys
 (`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`,
-`statusConcurrency`, `statusPollMs`, `controlPersist`, `fleetConcurrency`, `fleetTimeoutMs`,
+`statusConcurrency`, `statusPollMs`, `controlPersist`, `termFont`, `termFontSize`, `fleetConcurrency`, `fleetTimeoutMs`,
 `fleetMaxJobs`, `fleetMaxOutputBytes`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
 `pveLeaseTimeoutMs`, `pveMaxJobs`, `pveDefaultPubKeyPath`, `authMode`, `publicUrl`, `googleClientId`,
 `googleClientSecret`, `allowedEmails`, `dataDir`, `controlDir`, `sshConfigFile`, `tlsCert`,
 `tlsKey`). The UI also persists `localShell` in `config.json`; it does not have an env key.
 `TMUXIFIER_SSH_CONFIG`/`sshConfigFile` is passed to `ssh` as `-F`, so it is an alternate config
 file for Tmuxifier's SSH commands, not an extra file merged with `~/.ssh/config`.
+
+`TMUXIFIER_TERM_FONT` sets the font for the browser **terminal sessions** (not the dashboard
+chrome). It is a single family name, prepended to the bundled font stack, so it must be installed
+on the device viewing the dashboard — otherwise that device transparently falls back to the bundled
+**MesloLGMDZ Nerd Font** (Line Gap Medium, dotted zero, the default terminal font). An unsafe or
+empty value is ignored. The bundled fonts (MesloLGMDZ, then MesloLGSDZ and JuliaMono) always remain
+as the fallback, so symbol glyphs (e.g. Claude Code's UI) keep rendering regardless of the choice.
 
 The sidebar's **export** (⤓) and **import** (⤒) buttons download and upload the full box list as a
 JSON file — a portable backup you can move between Tmuxifier instances. Import adds boxes from the

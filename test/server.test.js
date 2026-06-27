@@ -109,6 +109,25 @@ test('public responses include browser hardening headers', async () => {
   expect(res.headers['cache-control']).toBe('no-store');
 });
 
+test('/api/ui-config requires auth and returns terminal font defaults', async () => {
+  const unauth = await app.inject({ method: 'GET', url: '/api/ui-config' });
+  expect(unauth.statusCode).toBe(401);
+
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'GET', url: '/api/ui-config', headers });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ termFont: null, termFontSize: 10 });
+});
+
+test('/api/ui-config reflects the configured terminal font', async () => {
+  app = await makeApp({ config: { termFont: 'Fira Code', termFontSize: 13 } });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'GET', url: '/api/ui-config', headers });
+  expect(res.json()).toEqual({ termFont: 'Fira Code', termFontSize: 13 });
+});
+
 test('login then CRUD a box', async () => {
   const cookie = await login();
   expect(cookie).toBeTruthy();

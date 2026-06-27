@@ -124,7 +124,11 @@ pattern for new modules.
 Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `api.ts`,
 `terminal.ts`, `index.html`, `style.css`, plus feature modules — `reconnect.ts` (escalating
 backoff), `statusDot.ts`, `fleetSelection.ts`/`fleetHistory.ts` (Fleet Command),
-`proxmox.ts`/`proxmoxUi.ts`, and `clipboard.ts`.
+`proxmox.ts`/`proxmoxUi.ts`, `clipboard.ts`, and `termFont.ts` (pure builder for the xterm
+font stack — prepends `TMUXIFIER_TERM_FONT` onto the bundled stack (MesloLGMDZ Nerd Font default,
+then MesloLGSDZ + JuliaMono fallback); the server
+validates the name in `config.js` and serves it via `GET /api/ui-config`, which `main.ts` applies
+at boot before any terminal opens).
 
 ## Conventions
 

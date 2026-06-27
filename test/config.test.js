@@ -223,6 +223,34 @@ test('fleet command knobs have defaults and are overridable via env', () => {
   expect(e.fleetMaxOutputBytes).toBe(1024);
 });
 
+test('terminal font knobs: default size 10 and no custom family; env sets both', () => {
+  const d = loadConfig({}, { env: {}, cwd: '/app' });
+  expect(d.termFont).toBeUndefined();
+  expect(d.termFontSize).toBe(10);
+  const e = loadConfig({}, { env: { TMUXIFIER_TERM_FONT: 'JetBrains Mono', TMUXIFIER_TERM_FONT_SIZE: '14' }, cwd: '/app' });
+  expect(e.termFont).toBe('JetBrains Mono');
+  expect(e.termFontSize).toBe(14);
+});
+
+test('terminal font family rejects unsafe/empty values (falls back to bundled default)', () => {
+  const font = (v) => loadConfig({}, { env: { TMUXIFIER_TERM_FONT: v }, cwd: '/app' }).termFont;
+  expect(font("Foo'; }")).toBeUndefined();      // CSS-injection chars
+  expect(font('Foo, Bar')).toBeUndefined();      // comma = multiple families
+  expect(font('Foo"<script>')).toBeUndefined();
+  expect(font('   ')).toBeUndefined();           // whitespace only
+  expect(font('')).toBeUndefined();
+  expect(font('  Fira Code  ')).toBe('Fira Code'); // trims a valid name
+});
+
+test('terminal font size out-of-range or non-numeric falls back to 10', () => {
+  const sz = (v) => loadConfig({}, { env: { TMUXIFIER_TERM_FONT_SIZE: v }, cwd: '/app' }).termFontSize;
+  expect(sz('4')).toBe(10);    // below min
+  expect(sz('99')).toBe(10);   // above max
+  expect(sz('abc')).toBe(10);  // non-numeric
+  expect(sz('6')).toBe(6);     // min ok
+  expect(sz('32')).toBe(32);   // max ok
+});
+
 test('proxmox knobs have defaults and are overridable via env', () => {
   const d = loadConfig({}, { env: {}, cwd: '/app' });
   expect(d.pvePollMs).toBe(1500);
