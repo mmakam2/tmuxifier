@@ -26,4 +26,10 @@ test('buildCreateParams maps a preset to PVE fields', () => {
     features: 'nesting=1', nameserver: '1.1.1.1',
   });
   expect(p['ssh-public-keys']).toBe('ssh-ed25519 AAA a\nssh-ed25519 BBB b\n');
+  expect(p.password).toBeUndefined();
+});
+
+test('buildCreateParams sets password only when provided', () => {
+  expect(buildCreateParams(PRESET, { vmid: 1, hostname: 'h', publicKeys: [], password: 'sekret' }).password).toBe('sekret');
+  expect(buildCreateParams(PRESET, { vmid: 1, hostname: 'h', publicKeys: [] }).password).toBeUndefined();
 });

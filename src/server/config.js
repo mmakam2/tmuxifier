@@ -75,6 +75,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     pveProvisionTimeoutMs: e.TMUXIFIER_PVE_PROVISION_TIMEOUT_MS ? Number(e.TMUXIFIER_PVE_PROVISION_TIMEOUT_MS) : undefined,
     pveLeaseTimeoutMs: e.TMUXIFIER_PVE_LEASE_TIMEOUT_MS ? Number(e.TMUXIFIER_PVE_LEASE_TIMEOUT_MS) : undefined,
     pveMaxJobs: e.TMUXIFIER_PVE_MAX_JOBS ? Number(e.TMUXIFIER_PVE_MAX_JOBS) : undefined,
+    pveDefaultPubKeyPath: e.TMUXIFIER_PVE_DEFAULT_PUBKEY, // undefined → auto-detect ~/.ssh/*.pub
     hostKeyPolicy: e.TMUXIFIER_HOSTKEY_POLICY,
     authMode: e.TMUXIFIER_AUTH_MODE,
     publicUrl: e.TMUXIFIER_BASE_EXTERNAL_URL ?? e.TMUXIFIER_PUBLIC_URL,

@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import {
   parseEndpoint, isCidr, isIp,
-  assertHostInput, assertKeyInput, assertPresetInput, assertProvisionInput,
+  assertHostInput, assertKeyInput, assertPresetInput, assertProvisionInput, assertRootPassword,
 } from '../src/server/proxmoxValidate.js';
 
 test('parseEndpoint accepts host and host:port, strips scheme, defaults 8006', () => {
@@ -50,8 +50,7 @@ test('assertPresetInput validates ranges, refs, and static-network completeness'
   expect(() => assertPresetInput(PRESET, ctx)).not.toThrow();
   expect(() => assertPresetInput({ ...PRESET, cores: 0 }, ctx)).toThrow(/cores/);
   expect(() => assertPresetInput({ ...PRESET, diskGiB: 0 }, ctx)).toThrow(/disk/);
-  expect(() => assertPresetInput({ ...PRESET, keyIds: [] }, ctx)).toThrow(/at least one/);
-  expect(() => assertPresetInput({ ...PRESET, keyIds: ['nope'] }, ctx)).toThrow(/key/);
+  expect(() => assertPresetInput({ ...PRESET, keyIds: [] }, ctx)).not.toThrow(); // keys are no longer preset-scoped
   expect(() => assertPresetInput({ ...PRESET, hostId: 'nope' }, ctx)).toThrow(/host/);
   const staticNet = { ...PRESET, net: { bridge: 'vmbr0', vlan: 5, ipMode: 'static', cidr: '192.168.1.50/24', gateway: '192.168.1.1' } };
   expect(() => assertPresetInput(staticNet, ctx)).not.toThrow();
@@ -69,4 +68,11 @@ test('assertProvisionInput validates hostname, vmid, and ip', () => {
   expect(() => assertProvisionInput({ hostname: 'ok', tags: ['prod'] })).not.toThrow();
   expect(() => assertProvisionInput({ hostname: 'ok', tags: 'prod' })).toThrow(/tags/);
   expect(() => assertProvisionInput({ hostname: 'ok', tags: [1] })).toThrow(/tags/);
+});
+
+test('assertRootPassword requires at least 5 characters', () => {
+  expect(() => assertRootPassword('hunter2')).not.toThrow();
+  expect(() => assertRootPassword('1234')).toThrow(/5 characters/);
+  expect(() => assertRootPassword('')).toThrow(/5 characters/);
+  expect(() => assertRootPassword(undefined)).toThrow(/5 characters/);
 });

@@ -12,7 +12,7 @@ export function buildNet0(net, ipOverride) {
   return parts.join(',');
 }
 
-export function buildCreateParams(preset, { vmid, hostname, ip, publicKeys }) {
+export function buildCreateParams(preset, { vmid, hostname, ip, publicKeys, password }) {
   const params = {
     vmid,
     hostname,
@@ -30,5 +30,6 @@ export function buildCreateParams(preset, { vmid, hostname, ip, publicKeys }) {
   if (preset.dns?.nameserver) params.nameserver = preset.dns.nameserver;
   if (preset.dns?.searchdomain) params.searchdomain = preset.dns.searchdomain;
   if (publicKeys && publicKeys.length) params['ssh-public-keys'] = publicKeys.join('\n') + '\n';
+  if (password) params.password = password;
   return params;
 }

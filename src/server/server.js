@@ -48,7 +48,7 @@ function killTmuxSession(sessionName) {
   execFileSync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -357,6 +357,14 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     catch (e) { return reply.code(400).send({ error: e.message }); }
   });
   app.delete('/api/proxmox/keys/:id', { preHandler: requireAuth }, async (req) => { await proxmoxStore.removeKey(req.params.id); return { ok: true }; });
+
+  app.get('/api/proxmox/default-key', { preHandler: requireAuth }, async () => ({ publicKey: defaultPublicKey() }));
+  app.get('/api/proxmox/root-password', { preHandler: requireAuth }, async () => ({ set: await proxmoxStore.hasRootPassword() }));
+  app.put('/api/proxmox/root-password', { preHandler: requireAuth }, async (req, reply) => {
+    try { await proxmoxStore.setRootPassword((req.body || {}).password); return { set: true }; }
+    catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+  app.delete('/api/proxmox/root-password', { preHandler: requireAuth }, async () => { await proxmoxStore.clearRootPassword(); return { set: false }; });
 
   app.get('/api/proxmox/presets', { preHandler: requireAuth }, async () => proxmoxStore.listPresets());
   app.post('/api/proxmox/presets', { preHandler: requireAuth }, async (req, reply) => {

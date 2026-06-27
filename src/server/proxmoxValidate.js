@@ -69,8 +69,11 @@ export function assertPresetInput(spec, { keyIds = [], hostIds = [] } = {}) {
     if (!isCidr(net.cidr)) throw new Error('static network requires a cidr like 192.168.1.50/24');
     if (!isIp(net.gateway)) throw new Error('static network requires a gateway ip');
   }
-  if (!Array.isArray(spec.keyIds) || spec.keyIds.length === 0) throw new Error('select at least one mgmt key');
-  for (const id of spec.keyIds) if (!keyIds.includes(id)) throw new Error(`unknown mgmt key: ${id}`);
+  // Keys are no longer preset-scoped: provisioning injects the host default key + all stored keys.
+}
+
+export function assertRootPassword(pw) {
+  if (typeof pw !== 'string' || pw.length < 5) throw new Error('root password must be at least 5 characters');
 }
 
 export function assertProvisionInput(spec) {

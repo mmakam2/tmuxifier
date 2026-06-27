@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { assertHostInput, assertKeyInput, assertPresetInput, parseEndpoint } from './proxmoxValidate.js';
+import { assertHostInput, assertKeyInput, assertPresetInput, assertRootPassword, parseEndpoint } from './proxmoxValidate.js';
 
 const VERSION = 1;
 
@@ -15,7 +15,6 @@ function normalizePreset(spec, id, createdAt) {
     features: spec.features && typeof spec.features === 'object' ? spec.features : {},
     net: { bridge: net.bridge, vlan: net.vlan ?? null, ipMode: net.ipMode, cidr: net.cidr ?? null, gateway: net.gateway ?? null },
     dns: { nameserver: spec.dns?.nameserver ?? null, searchdomain: spec.dns?.searchdomain ?? null },
-    keyIds: [...spec.keyIds],
     onboot: !!spec.onboot, startAfterCreate: spec.startAfterCreate !== false,
     boxDefaults: { user: spec.boxDefaults?.user || 'root', sessionName: spec.boxDefaults?.sessionName || 'web', tags: spec.boxDefaults?.tags || [] },
     createdAt,
@@ -41,6 +40,12 @@ export function createProxmoxStore({ dataDir, secretBox, makeId = randomUUID, no
     const { tokenSecret, ...rest } = h;
     return { ...rest, hasToken: !!tokenSecret };
   }
+  function redactKey(k) {
+    const { publicKey, ...rest } = k;
+    return { ...rest, hasKey: !!publicKey };
+  }
+  // Legacy keys were stored as cleartext; new ones are sealed. Accept both on read.
+  function openKey(v) { return secretBox.isSealed(v) ? secretBox.open(v) : v; }
   function assertUniqueName(list, name, ignoreId) {
     const n = String(name || '').trim().toLowerCase();
     for (const it of list) {
@@ -89,21 +94,32 @@ export function createProxmoxStore({ dataDir, secretBox, makeId = randomUUID, no
       data.hosts = data.hosts.filter((x) => x.id !== id);
       await writeAll(data);
     },
-    async listKeys() { return (await readAll()).keys; },
+    async listKeys({ withSecret = false } = {}) {
+      const keys = (await readAll()).keys;
+      return withSecret ? keys.map((k) => ({ ...k, publicKey: openKey(k.publicKey) })) : keys.map(redactKey);
+    },
     async addKey(spec) {
       assertKeyInput(spec);
       const data = await readAll();
       assertUniqueName(data.keys, spec.name);
-      const k = { id: makeId(), name: spec.name.trim(), publicKey: spec.publicKey.trim(), createdAt: now() };
+      const k = { id: makeId(), name: spec.name.trim(), publicKey: secretBox.seal(spec.publicKey.trim()), createdAt: now() };
       data.keys.push(k);
       await writeAll(data);
-      return k;
+      return redactKey(k);
     },
     async removeKey(id) {
       const data = await readAll();
       data.keys = data.keys.filter((x) => x.id !== id);
       await writeAll(data);
     },
+    async hasRootPassword() { return !!(await readAll()).rootPassword; },
+    async getRootPassword({ withSecret = false } = {}) {
+      const sealed = (await readAll()).rootPassword;
+      if (!withSecret || !sealed) return null;
+      return secretBox.isSealed(sealed) ? secretBox.open(sealed) : sealed;
+    },
+    async setRootPassword(pw) { assertRootPassword(pw); const data = await readAll(); data.rootPassword = secretBox.seal(pw); await writeAll(data); },
+    async clearRootPassword() { const data = await readAll(); delete data.rootPassword; await writeAll(data); },
     async listPresets() { return (await readAll()).presets; },
     async getPreset(id) { return (await readAll()).presets.find((x) => x.id === id); },
     async addPreset(spec) {

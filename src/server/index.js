@@ -18,6 +18,8 @@ import { createProxmoxStore } from './proxmoxStore.js';
 import { createProvisionStore } from './provisionStore.js';
 import { createProvisionManager } from './proxmoxProvision.js';
 import { createProxmoxClient, inspectEndpoint } from './proxmoxApi.js';
+import { readDefaultPublicKey } from './defaultKey.js';
+import os from 'node:os';
 
 process.on('unhandledRejection', (err) => { console.error('unhandledRejection:', err); });
 process.on('uncaughtException', (err) => { console.error('uncaughtException:', err); });
@@ -72,10 +74,12 @@ const secretBox = createSecretBox(config.cookieSecret);
 const proxmoxStore = createProxmoxStore({ dataDir: config.dataDir, secretBox });
 const provisionStore = createProvisionStore({ dataDir: config.dataDir });
 const makeProxmoxClient = (host) => createProxmoxClient({ host, timeoutMs: config.pveTimeoutMs });
+const defaultPublicKey = () => readDefaultPublicKey({ configuredPath: config.pveDefaultPubKeyPath, home: os.homedir() });
 const provisionManager = createProvisionManager({
   proxmoxStore,
   boxStore: store,
   makeClient: makeProxmoxClient,
+  defaultPublicKey,
   load: () => provisionStore.load(),
   save: (jobs) => provisionStore.save(jobs),
   pollMs: config.pvePollMs,
@@ -92,7 +96,7 @@ const statusPoller = createStatusPoller({
   concurrency: config.statusConcurrency,
 });
 
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, defaultPublicKey });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });

@@ -2,7 +2,7 @@ export interface PveHost {
   id: string; name: string; endpoint: string; tokenId: string; hasToken: boolean;
   verifyMode: 'pin' | 'ca' | 'insecure'; fingerprint256: string | null; defaultNode: string | null; createdAt: string;
 }
-export interface PveKey { id: string; name: string; publicKey: string; createdAt: string; }
+export interface PveKey { id: string; name: string; hasKey: boolean; createdAt: string; }
 export interface PvePresetNet { bridge: string; vlan: number | null; ipMode: 'dhcp' | 'static'; cidr: string | null; gateway: string | null; }
 export interface PvePreset {
   id: string; name: string; hostId: string; node: string | null; template: string; storage: string;
@@ -41,6 +41,10 @@ export const pve = {
   keys() { return jr<PveKey[]>(fetch('/api/proxmox/keys')); },
   addKey(spec: { name: string; publicKey: string }) { return jr<PveKey>(fetch('/api/proxmox/keys', post(spec))); },
   removeKey(id: string) { return jr(fetch(`/api/proxmox/keys/${id}`, { method: 'DELETE' })); },
+  defaultKey() { return jr<{ publicKey: string | null }>(fetch('/api/proxmox/default-key')); },
+  rootPasswordStatus() { return jr<{ set: boolean }>(fetch('/api/proxmox/root-password')); },
+  setRootPassword(password: string) { return jr<{ set: boolean }>(fetch('/api/proxmox/root-password', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })); },
+  clearRootPassword() { return jr<{ set: boolean }>(fetch('/api/proxmox/root-password', { method: 'DELETE' })); },
   presets() { return jr<PvePreset[]>(fetch('/api/proxmox/presets')); },
   addPreset(spec: unknown) { return jr<PvePreset>(fetch('/api/proxmox/presets', post(spec))); },
   updatePreset(id: string, spec: unknown) { return jr<PvePreset>(fetch(`/api/proxmox/presets/${id}`, patch(spec))); },

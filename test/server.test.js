@@ -21,6 +21,7 @@ function fleetStub(calls = []) {
 
 function proxmoxStubs(calls = []) {
   const host = { id: 'H1', name: 'lab', endpoint: 'pve.example.com:8006', tokenId: 'user@pam!t', hasToken: true, verifyMode: 'pin', fingerprint256: 'AB' };
+  let rootPw = null;
   const proxmoxStore = {
     listHosts: async () => [host],
     getHost: async (id, opts) => (id === 'H1' ? (opts?.withSecret ? { ...host, tokenSecret: 'sek' } : host) : undefined),
@@ -35,6 +36,9 @@ function proxmoxStubs(calls = []) {
     addPreset: async (spec) => ({ id: 'P2', ...spec }),
     updatePreset: async (id, patch) => ({ id, ...patch }),
     removePreset: async () => {},
+    hasRootPassword: async () => !!rootPw,
+    setRootPassword: async (pw) => { if (!pw || pw.length < 5) throw new Error('root password must be at least 5 characters'); rootPw = pw; },
+    clearRootPassword: async () => { rootPw = null; },
   };
   const provisionManager = {
     createProvision: async (body) => { calls.push(['createProvision', body.hostname]); if (!body.hostname) throw new Error('hostname required'); return { id: 'J1', status: 'running', hostname: body.hostname }; },
@@ -51,7 +55,8 @@ function proxmoxStubs(calls = []) {
     nextId: async () => '131',
   });
   const inspectEndpoint = async () => ({ reachable: true, fingerprint256: 'AB:CD', subject: 'pve', issuer: 'pve', validTo: 'x', caValid: false });
-  return { proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint };
+  const defaultPublicKey = () => 'ssh-ed25519 HOSTKEY tmuxifier@host';
+  return { proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, defaultPublicKey };
 }
 
 let app;
@@ -767,6 +772,20 @@ test('keys reject an invalid public key (400)', async () => {
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
   expect((await app.inject({ method: 'POST', url: '/api/proxmox/keys', headers, payload: { name: 'k', publicKey: 'nope' } })).statusCode).toBe(400);
   expect((await app.inject({ method: 'POST', url: '/api/proxmox/keys', headers, payload: { name: 'k', publicKey: 'ssh-ed25519 AAA you@example.com' } })).statusCode).toBe(201);
+});
+
+test('default-key route and root-password set/status/clear (with 400 on a short password)', async () => {
+  app = await makeApp(proxmoxStubs());
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/default-key' })).statusCode).toBe(401); // auth-gated
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/default-key', headers })).json().publicKey).toBe('ssh-ed25519 HOSTKEY tmuxifier@host');
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/root-password', headers })).json().set).toBe(false);
+  expect((await app.inject({ method: 'PUT', url: '/api/proxmox/root-password', headers, payload: { password: '1234' } })).statusCode).toBe(400);
+  expect((await app.inject({ method: 'PUT', url: '/api/proxmox/root-password', headers, payload: { password: 'hunter2!' } })).statusCode).toBe(200);
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/root-password', headers })).json().set).toBe(true);
+  expect((await app.inject({ method: 'DELETE', url: '/api/proxmox/root-password', headers })).statusCode).toBe(200);
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/root-password', headers })).json().set).toBe(false);
 });
 
 test('provisions: validation, create, poll, cancel, 404', async () => {

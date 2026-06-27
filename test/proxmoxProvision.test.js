@@ -15,6 +15,7 @@ function makeStore(preset) {
     getPreset: async (id) => (id === preset.id ? preset : undefined),
     getHost: async () => HOST,
     listKeys: async () => [{ id: 'k1', publicKey: 'ssh-ed25519 AAA you@example.com' }],
+    getRootPassword: async () => null,
   };
 }
 function fakeBoxStore() {
@@ -36,6 +37,21 @@ const base = (over = {}) => ({
   boxStore: fakeBoxStore(), load: () => [], save: () => {},
   now: () => '2026-06-26T00:00:00Z', makeId: (() => { let n = 0; return () => `job-${++n}`; })(),
   sleep: async () => {}, pollMs: 0, leaseTimeoutMs: 1000, ...over,
+});
+
+test('injects the default host key + all stored keys + the root password into createLxc', async () => {
+  let captured;
+  const client = { ...okClient(), createLxc: async (_node, params) => { captured = params; return 'UPID:create'; } };
+  const store = {
+    getPreset: async () => PRESET_STATIC,
+    getHost: async () => HOST,
+    listKeys: async () => [{ id: 'k1', publicKey: 'ssh-ed25519 ADDED you@example.com' }],
+    getRootPassword: async () => 'sekret12',
+  };
+  const mgr = createProvisionManager(base({ proxmoxStore: store, makeClient: () => client, defaultPublicKey: () => 'ssh-ed25519 HOSTKEY tmuxifier@host' }));
+  await mgr._settled((await mgr.createProvision({ presetId: 'p2', hostname: 'dev-01' })).id);
+  expect(captured['ssh-public-keys']).toBe('ssh-ed25519 HOSTKEY tmuxifier@host\nssh-ed25519 ADDED you@example.com\n');
+  expect(captured.password).toBe('sekret12');
 });
 
 test('static preset: create -> start -> link box from the static IP', async () => {

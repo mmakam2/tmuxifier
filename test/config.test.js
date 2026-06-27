@@ -233,8 +233,9 @@ test('proxmox knobs have defaults and are overridable via env', () => {
   const e = loadConfig({}, { env: {
     TMUXIFIER_PVE_POLL_MS: '500', TMUXIFIER_PVE_TIMEOUT_MS: '9000',
     TMUXIFIER_PVE_PROVISION_TIMEOUT_MS: '120000', TMUXIFIER_PVE_LEASE_TIMEOUT_MS: '30000',
-    TMUXIFIER_PVE_MAX_JOBS: '10',
+    TMUXIFIER_PVE_MAX_JOBS: '10', TMUXIFIER_PVE_DEFAULT_PUBKEY: '/keys/host.pub',
   }, cwd: '/app' });
+  expect(e.pveDefaultPubKeyPath).toBe('/keys/host.pub');
   expect(e.pvePollMs).toBe(500);
   expect(e.pveTimeoutMs).toBe(9000);
   expect(e.pveProvisionTimeoutMs).toBe(120000);

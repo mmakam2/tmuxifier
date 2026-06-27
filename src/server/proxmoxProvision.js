@@ -5,7 +5,7 @@ import { assertProvisionInput } from './proxmoxValidate.js';
 const TERMINAL = new Set(['done', 'error', 'cancelled', 'interrupted']);
 
 export function createProvisionManager({
-  proxmoxStore, boxStore, makeClient, load, save,
+  proxmoxStore, boxStore, makeClient, load, save, defaultPublicKey = () => null,
   now = () => new Date().toISOString(), makeId = randomUUID, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   pollMs = 1500, taskTimeoutMs = 600000, leaseTimeoutMs = 60000, maxJobs = 50, maxLogBytes = 65536,
 }) {
@@ -60,13 +60,13 @@ export function createProvisionManager({
     }
   }
 
-  async function run(j, { client, preset, host, publicKeys }) {
+  async function run(j, { client, preset, host, publicKeys, password }) {
     try {
       j.phase = 'allocate'; persist();
       if (!j.vmid) j.vmid = Number(await client.nextId());
 
       j.phase = 'create'; persist();
-      const params = buildCreateParams(preset, { vmid: j.vmid, hostname: j.hostname, ip: j.ip, publicKeys });
+      const params = buildCreateParams(preset, { vmid: j.vmid, hostname: j.hostname, ip: j.ip, publicKeys, password });
       const upid = await client.createLxc(j.node, params);
       appendLog(j, `# create ${upid}\n`); persist();
       await pollTask(client, j.node, upid, j);
@@ -113,8 +113,10 @@ export function createProvisionManager({
       if (!host) throw new Error('host not found');
       const node = preset.node || host.defaultNode;
       if (!node) throw new Error('preset has no node and host has no defaultNode');
-      const keys = await proxmoxStore.listKeys();
-      const publicKeys = preset.keyIds.map((id) => (keys.find((k) => k.id === id) || {}).publicKey).filter(Boolean);
+      // Inject the host's default key plus every stored key (no longer preset-scoped).
+      const additional = (await proxmoxStore.listKeys({ withSecret: true })).map((k) => k.publicKey);
+      const publicKeys = [defaultPublicKey(), ...additional].filter(Boolean);
+      const password = await proxmoxStore.getRootPassword({ withSecret: true });
       const client = makeClient(host);
       const j = {
         id: makeId(), presetId, presetName: preset.name, hostId: host.id, node,
@@ -126,7 +128,7 @@ export function createProvisionManager({
       };
       jobs.set(j.id, j);
       persist();
-      const p = run(j, { client, preset, host, publicKeys }).finally(() => {});
+      const p = run(j, { client, preset, host, publicKeys, password }).finally(() => {});
       settles.set(j.id, p);
       return summary(j);
     },

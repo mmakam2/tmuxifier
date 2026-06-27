@@ -48,27 +48,58 @@ test('host/key/preset names are unique', async () => {
   await expect(store.addHost(HOST)).rejects.toThrow(/name/);
 });
 
-test('keys CRUD with validation', async () => {
+test('keys are sealed on disk, redacted on read, revealed via withSecret', async () => {
   const store = make();
   const k = await store.addKey({ name: 'mgmt', publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1 you@example.com' });
-  expect((await store.listKeys())[0].id).toBe(k.id);
+  expect(k.publicKey).toBeUndefined();              // redacted return
+  expect(k.hasKey).toBe(true);
+  const list = await store.listKeys();
+  expect(list[0].id).toBe(k.id);
+  expect(list[0].publicKey).toBeUndefined();        // redacted list
+  expect((await store.listKeys({ withSecret: true }))[0].publicKey).toBe('ssh-ed25519 AAAAC3NzaC1lZDI1 you@example.com');
+  const raw = await fs.readFile(path.join(dir, 'proxmox.json'), 'utf8');
+  expect(raw).toContain('pvebox.v1:');              // ciphertext on disk
+  expect(raw).not.toContain('AAAAC3NzaC1lZDI1');    // not the cleartext key
   await expect(store.addKey({ name: 'bad', publicKey: 'nope' })).rejects.toThrow(/public key/);
   await store.removeKey(k.id);
   expect(await store.listKeys()).toHaveLength(0);
 });
 
-test('presets validate against existing hosts and keys and persist normalized', async () => {
+test('a legacy cleartext key still reads via withSecret', async () => {
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, 'proxmox.json'), JSON.stringify({ version: 1, hosts: [], keys: [{ id: 'k0', name: 'legacy', publicKey: 'ssh-ed25519 LEGACY you@example.com', createdAt: 'x' }], presets: [] }));
+  const store = make();
+  expect((await store.listKeys({ withSecret: true }))[0].publicKey).toBe('ssh-ed25519 LEGACY you@example.com');
+  expect((await store.listKeys())[0].publicKey).toBeUndefined();
+});
+
+test('root password is sealed, status is boolean, withSecret reveals, clear removes', async () => {
+  const store = make();
+  expect(await store.hasRootPassword()).toBe(false);
+  expect(await store.getRootPassword({ withSecret: true })).toBeNull();
+  await store.setRootPassword('hunter2!');
+  expect(await store.hasRootPassword()).toBe(true);
+  expect(await store.getRootPassword({ withSecret: true })).toBe('hunter2!');
+  expect(await store.getRootPassword()).toBeNull(); // not revealed without withSecret
+  const raw = await fs.readFile(path.join(dir, 'proxmox.json'), 'utf8');
+  expect(raw).not.toContain('hunter2!');
+  await expect(store.setRootPassword('1234')).rejects.toThrow(/5 characters/);
+  await store.clearRootPassword();
+  expect(await store.hasRootPassword()).toBe(false);
+});
+
+test('presets validate against the existing host and persist normalized (keys are not preset-scoped)', async () => {
   const store = make();
   const h = await store.addHost(HOST);
-  const k = await store.addKey({ name: 'mgmt', publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1 you@example.com' });
   const preset = await store.addPreset({
     name: 'dev', hostId: h.id, template: 'local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst',
     storage: 'local-lvm', diskGiB: 8, cores: 2, memoryMiB: 2048, swapMiB: 512,
     unprivileged: true, features: { nesting: true },
-    net: { bridge: 'vmbr0', ipMode: 'dhcp' }, keyIds: [k.id], startAfterCreate: true,
+    net: { bridge: 'vmbr0', ipMode: 'dhcp' }, startAfterCreate: true,
   });
   expect(preset.id).toBeTruthy();
   expect(preset.net.ipMode).toBe('dhcp');
+  expect(preset.keyIds).toBeUndefined();            // keyIds dropped from the preset model
   expect((await store.getPreset(preset.id)).name).toBe('dev');
-  await expect(store.addPreset({ ...preset, name: 'dev2', keyIds: ['ghost'] })).rejects.toThrow(/key/);
+  await expect(store.addPreset({ ...preset, name: 'dev2', hostId: 'ghost' })).rejects.toThrow(/host/);
 });
