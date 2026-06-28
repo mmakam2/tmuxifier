@@ -14,7 +14,7 @@ const DEFAULTS = {
   // the bundled font stack; a configured name is prepended to it client-side.
   // Validated/normalized below so an unsafe or out-of-range value falls back.
   termFont: undefined,
-  termFontSize: 10,
+  termFontSize: 12,
   // Probe at most this many boxes at once on /api/status. A small batch keeps
   // Tmuxifier from opening the whole fleet's SSH connections simultaneously,
   // which rate-limiters/IPS on the path read as a brute-force burst.
@@ -115,11 +115,11 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   merged.localShell = ['none', 'omz', 'omb'].includes(merged.localShell) ? merged.localShell : 'none';
   // Terminal font: a single family name on a CSS-injection-safe allowlist (no
   // quotes/commas/semicolons/braces). Anything else → undefined so the browser
-  // keeps the bundled font. Size is clamped to a sane px range, default 10.
+  // keeps the bundled font. Size is clamped to a sane px range, default 12.
   const fontName = String(merged.termFont ?? '').trim();
   merged.termFont = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$/.test(fontName) ? fontName : undefined;
   const fontSize = Number(merged.termFontSize);
-  merged.termFontSize = Number.isFinite(fontSize) && fontSize >= 6 && fontSize <= 32 ? fontSize : 10;
+  merged.termFontSize = Number.isFinite(fontSize) && fontSize >= 6 && fontSize <= 32 ? fontSize : 12;
   return merged;
 }
 

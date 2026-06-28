@@ -223,10 +223,10 @@ test('fleet command knobs have defaults and are overridable via env', () => {
   expect(e.fleetMaxOutputBytes).toBe(1024);
 });
 
-test('terminal font knobs: default size 10 and no custom family; env sets both', () => {
+test('terminal font knobs: default size 12 and no custom family; env sets both', () => {
   const d = loadConfig({}, { env: {}, cwd: '/app' });
   expect(d.termFont).toBeUndefined();
-  expect(d.termFontSize).toBe(10);
+  expect(d.termFontSize).toBe(12);
   const e = loadConfig({}, { env: { TMUXIFIER_TERM_FONT: 'JetBrains Mono', TMUXIFIER_TERM_FONT_SIZE: '14' }, cwd: '/app' });
   expect(e.termFont).toBe('JetBrains Mono');
   expect(e.termFontSize).toBe(14);
@@ -242,11 +242,11 @@ test('terminal font family rejects unsafe/empty values (falls back to bundled de
   expect(font('  Fira Code  ')).toBe('Fira Code'); // trims a valid name
 });
 
-test('terminal font size out-of-range or non-numeric falls back to 10', () => {
+test('terminal font size out-of-range or non-numeric falls back to 12', () => {
   const sz = (v) => loadConfig({}, { env: { TMUXIFIER_TERM_FONT_SIZE: v }, cwd: '/app' }).termFontSize;
-  expect(sz('4')).toBe(10);    // below min
-  expect(sz('99')).toBe(10);   // above max
-  expect(sz('abc')).toBe(10);  // non-numeric
+  expect(sz('4')).toBe(12);    // below min
+  expect(sz('99')).toBe(12);   // above max
+  expect(sz('abc')).toBe(12);  // non-numeric
   expect(sz('6')).toBe(6);     // min ok
   expect(sz('32')).toBe(32);   // max ok
 });

@@ -117,7 +117,7 @@ test('/api/ui-config requires auth and returns terminal font defaults', async ()
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
   const res = await app.inject({ method: 'GET', url: '/api/ui-config', headers });
   expect(res.statusCode).toBe(200);
-  expect(res.json()).toEqual({ termFont: null, termFontSize: 10 });
+  expect(res.json()).toEqual({ termFont: null, termFontSize: 12 });
 });
 
 test('/api/ui-config reflects the configured terminal font', async () => {

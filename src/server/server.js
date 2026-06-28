@@ -414,7 +414,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   // Client UI settings the browser needs at boot. Currently just the terminal
   // font, validated/normalized server-side (config.js); the name is not secret.
   app.get('/api/ui-config', { preHandler: requireAuth }, async () => {
-    return { termFont: config.termFont ?? null, termFontSize: config.termFontSize ?? 10 };
+    return { termFont: config.termFont ?? null, termFontSize: config.termFontSize ?? 12 };
   });
 
   app.get('/api/local-shell', { preHandler: requireAuth }, async () => {

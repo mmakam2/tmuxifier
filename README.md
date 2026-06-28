@@ -53,7 +53,7 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | status poll interval (ms) | `TMUXIFIER_STATUS_POLL_MS` | `30000` |
 | SSH ControlPersist seconds | `TMUXIFIER_CONTROL_PERSIST` | `600` |
 | terminal font family | `TMUXIFIER_TERM_FONT` | (bundled font) |
-| terminal font size (px) | `TMUXIFIER_TERM_FONT_SIZE` | `10` |
+| terminal font size (px) | `TMUXIFIER_TERM_FONT_SIZE` | `12` |
 | fleet command concurrency | `TMUXIFIER_FLEET_CONCURRENCY` | `4` |
 | fleet per-box timeout (ms) | `TMUXIFIER_FLEET_TIMEOUT_MS` | `15000` |
 | fleet job history kept | `TMUXIFIER_FLEET_MAX_JOBS` | `50` |

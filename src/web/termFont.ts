@@ -13,7 +13,7 @@
 export const BUNDLED_FONT_STACK =
   "'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', 'JuliaMono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace";
 
-export const DEFAULT_TERM_FONT_SIZE = 10;
+export const DEFAULT_TERM_FONT_SIZE = 12;
 
 // Single family name only: a letter/digit start then letters/digits/space/_/-.
 // This is intentionally the same shape the server validates with — the client
