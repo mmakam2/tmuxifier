@@ -52,7 +52,10 @@ export function cpuLoadPct(m: BoxMetrics | undefined): number | undefined {
   return Math.round((m.load1 / m.cpus) * 100);
 }
 
-export type Level = 'ok' | 'warn' | 'crit';
+// Color tier for a meta segment. 'auth' is not a severity — it's the dedicated
+// needs-login tier that matches the purple `auth` dot, so re-login reads as an
+// action to take, not an error like a down box (crit/red).
+export type Level = 'ok' | 'warn' | 'crit' | 'auth';
 
 // Severity for the normalized CPU figure: relaxed < 70%, busy 70–100%, queuing > 100%.
 export function cpuLevel(pct: number): Level {
@@ -71,11 +74,12 @@ export interface MetaSegment { text: string; icon?: string; iconClass?: string; 
 // The always-visible second line under a box label, as styled segments. Reachable
 // → `[cpu, mem, disk]` from the metrics piggybacked on the status probe; only the
 // cpu segment is colored (by load severity). Empty when no metrics were collected
-// (a box you have a terminal open to, or a non-Linux host). Unreachable / needsAuth
-// → a single crit segment carrying the classified reason / "Needs login".
+// (a box you have a terminal open to, or a non-Linux host). Unreachable → a single
+// crit (red) segment with the classified reason; needsAuth → a single auth (purple,
+// matching the dot) "Needs login" segment, so it reads as an action, not an error.
 export function metaSegmentsFor(st: Status | undefined): MetaSegment[] {
   if (!st) return [];
-  if (st.needsAuth) return [{ text: 'Needs login', level: 'crit' }];
+  if (st.needsAuth) return [{ text: 'Needs login', level: 'auth' }];
   if (!st.reachable) return [{ text: classifyError(st.error), level: 'crit' }];
   const m = st.metrics;
   if (!m) return [];

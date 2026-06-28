@@ -193,6 +193,7 @@ body {
 .box-meta .lvl-ok { color: #2ea043; }
 .box-meta .lvl-warn { color: #d29922; }
 .box-meta .lvl-crit { color: #f85149; }
+.box-meta .lvl-auth { color: #a371f7; }
 /* Nerd Font icon (e.g. the CPU chip glyph). Neutral color of its own so the
    severity color stays on the number alone, not doubled up on the icon. */
 .box-meta .nf { font-family: 'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', monospace; font-style: normal; color: var(--muted); }
