@@ -22,7 +22,8 @@ Configuration, secrets, and runtime state all live **inside the repo**:
 - `data/` (gitignored) — `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json`
   (Proxmox host profiles with **encrypted** API tokens, SSH management keys, and an optional root
   password — all AES-256-GCM sealed — plus container presets), `provision-jobs.json` (provision
-  history), and SSH ControlMaster sockets under `data/cm/`.
+  history), `health-events.json` (in-app health event log), and SSH ControlMaster sockets under
+  `data/cm/`.
 
 When adding a new config knob or persisted file, keep it under the repo folder by default.
 Don't introduce dependencies on `$HOME`-level state other than the user's existing SSH setup.
