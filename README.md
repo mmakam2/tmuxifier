@@ -58,6 +58,10 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | fleet per-box timeout (ms) | `TMUXIFIER_FLEET_TIMEOUT_MS` | `15000` |
 | fleet job history kept | `TMUXIFIER_FLEET_MAX_JOBS` | `50` |
 | fleet per-box output cap (bytes) | `TMUXIFIER_FLEET_MAX_OUTPUT_BYTES` | `65536` |
+| health history samples/box | `TMUXIFIER_HEALTH_HISTORY_MAX` | `120` |
+| health events retained | `TMUXIFIER_HEALTH_EVENTS_MAX` | `200` |
+| health cpu/mem/disk warn % | `TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT` | `90` |
+| health threshold hysteresis % | `TMUXIFIER_HEALTH_HYSTERESIS_PCT` | `5` |
 | Proxmox task poll interval (ms) | `TMUXIFIER_PVE_POLL_MS` | `1500` |
 | Proxmox per-request timeout (ms) | `TMUXIFIER_PVE_TIMEOUT_MS` | `15000` |
 | Proxmox provision timeout (ms) | `TMUXIFIER_PVE_PROVISION_TIMEOUT_MS` | `600000` |
@@ -84,7 +88,8 @@ also marks it `Secure` for deployments behind a TLS-terminating proxy or tunnel.
 As an alternative to `.env`, a `config.json` in the repo root works too, using camelCase keys
 (`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`,
 `statusConcurrency`, `statusPollMs`, `controlPersist`, `termFont`, `termFontSize`, `fleetConcurrency`, `fleetTimeoutMs`,
-`fleetMaxJobs`, `fleetMaxOutputBytes`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
+`fleetMaxJobs`, `fleetMaxOutputBytes`, `healthHistoryMax`, `healthEventsMax`, `healthCpuWarnPct`,
+`healthMemWarnPct`, `healthDiskWarnPct`, `healthThresholdHysteresisPct`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
 `pveLeaseTimeoutMs`, `pveMaxJobs`, `pveDefaultPubKeyPath`, `authMode`, `publicUrl`, `googleClientId`,
 `googleClientSecret`, `allowedEmails`, `dataDir`, `controlDir`, `sshConfigFile`, `tlsCert`,
 `tlsKey`). The UI also persists `localShell` in `config.json`; it does not have an env key.

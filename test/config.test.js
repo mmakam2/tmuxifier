@@ -251,6 +251,37 @@ test('terminal font size out-of-range or non-numeric falls back to 12', () => {
   expect(sz('32')).toBe(32);   // max ok
 });
 
+test('health history knobs have defaults, override via env, and clamp', () => {
+  const d = loadConfig({}, { env: {}, cwd: '/app' });
+  expect(d.healthHistoryMax).toBe(120);
+  expect(d.healthEventsMax).toBe(200);
+  expect(d.healthCpuWarnPct).toBe(90);
+  expect(d.healthMemWarnPct).toBe(90);
+  expect(d.healthDiskWarnPct).toBe(90);
+  expect(d.healthThresholdHysteresisPct).toBe(5);
+  const e = loadConfig({}, {
+    env: {
+      TMUXIFIER_HEALTH_HISTORY_MAX: '60',
+      TMUXIFIER_HEALTH_EVENTS_MAX: '50',
+      TMUXIFIER_HEALTH_CPU_WARN_PCT: '80',
+      TMUXIFIER_HEALTH_MEM_WARN_PCT: '85',
+      TMUXIFIER_HEALTH_DISK_WARN_PCT: '95',
+      TMUXIFIER_HEALTH_HYSTERESIS_PCT: '3',
+    },
+    cwd: '/app',
+  });
+  expect(e.healthHistoryMax).toBe(60);
+  expect(e.healthEventsMax).toBe(50);
+  expect(e.healthCpuWarnPct).toBe(80);
+  expect(e.healthMemWarnPct).toBe(85);
+  expect(e.healthDiskWarnPct).toBe(95);
+  expect(e.healthThresholdHysteresisPct).toBe(3);
+  // out-of-range values fall back to the default (clamped), not passed through
+  const c = loadConfig({}, { env: { TMUXIFIER_HEALTH_HISTORY_MAX: '5', TMUXIFIER_HEALTH_CPU_WARN_PCT: '999' }, cwd: '/app' });
+  expect(c.healthHistoryMax).toBe(120); // below the sane floor → default
+  expect(c.healthCpuWarnPct).toBe(90);  // above 100 → default
+});
+
 test('proxmox knobs have defaults and are overridable via env', () => {
   const d = loadConfig({}, { env: {}, cwd: '/app' });
   expect(d.pvePollMs).toBe(1500);

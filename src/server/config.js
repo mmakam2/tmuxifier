@@ -34,6 +34,16 @@ const DEFAULTS = {
   fleetTimeoutMs: 15000,       // per-box ssh exec timeout (ms)
   fleetMaxJobs: 50,            // retained job history; older jobs are pruned
   fleetMaxOutputBytes: 65536,  // per-stream capture cap per box (64 KiB)
+  // Box health history + in-app events. The status poll already collects
+  // CPU/mem/disk every statusPollMs; keep a rolling per-box series (maxSamples)
+  // and an edge-triggered events log (maxEvents, persisted). Thresholds drive
+  // the "metric crossed a limit" events with a hysteresis clear margin.
+  healthHistoryMax: 120,   // samples retained per box (~1h at 30s)
+  healthEventsMax: 200,    // events retained in data/health-events.json
+  healthCpuWarnPct: 90,
+  healthMemWarnPct: 90,
+  healthDiskWarnPct: 90,
+  healthThresholdHysteresisPct: 5,
   // Proxmox LXC provisioning (Phase 1). Poll cadence for PVE task progress, per-request
   // and overall-provision timeouts, DHCP-lease discovery window, and retained job history.
   pvePollMs: 1500,
@@ -75,6 +85,12 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     fleetTimeoutMs: e.TMUXIFIER_FLEET_TIMEOUT_MS ? Number(e.TMUXIFIER_FLEET_TIMEOUT_MS) : undefined,
     fleetMaxJobs: e.TMUXIFIER_FLEET_MAX_JOBS ? Number(e.TMUXIFIER_FLEET_MAX_JOBS) : undefined,
     fleetMaxOutputBytes: e.TMUXIFIER_FLEET_MAX_OUTPUT_BYTES ? Number(e.TMUXIFIER_FLEET_MAX_OUTPUT_BYTES) : undefined,
+    healthHistoryMax: e.TMUXIFIER_HEALTH_HISTORY_MAX ? Number(e.TMUXIFIER_HEALTH_HISTORY_MAX) : undefined,
+    healthEventsMax: e.TMUXIFIER_HEALTH_EVENTS_MAX ? Number(e.TMUXIFIER_HEALTH_EVENTS_MAX) : undefined,
+    healthCpuWarnPct: e.TMUXIFIER_HEALTH_CPU_WARN_PCT ? Number(e.TMUXIFIER_HEALTH_CPU_WARN_PCT) : undefined,
+    healthMemWarnPct: e.TMUXIFIER_HEALTH_MEM_WARN_PCT ? Number(e.TMUXIFIER_HEALTH_MEM_WARN_PCT) : undefined,
+    healthDiskWarnPct: e.TMUXIFIER_HEALTH_DISK_WARN_PCT ? Number(e.TMUXIFIER_HEALTH_DISK_WARN_PCT) : undefined,
+    healthThresholdHysteresisPct: e.TMUXIFIER_HEALTH_HYSTERESIS_PCT ? Number(e.TMUXIFIER_HEALTH_HYSTERESIS_PCT) : undefined,
     pvePollMs: e.TMUXIFIER_PVE_POLL_MS ? Number(e.TMUXIFIER_PVE_POLL_MS) : undefined,
     pveTimeoutMs: e.TMUXIFIER_PVE_TIMEOUT_MS ? Number(e.TMUXIFIER_PVE_TIMEOUT_MS) : undefined,
     pveProvisionTimeoutMs: e.TMUXIFIER_PVE_PROVISION_TIMEOUT_MS ? Number(e.TMUXIFIER_PVE_PROVISION_TIMEOUT_MS) : undefined,
@@ -120,6 +136,18 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   merged.termFont = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$/.test(fontName) ? fontName : undefined;
   const fontSize = Number(merged.termFontSize);
   merged.termFontSize = Number.isFinite(fontSize) && fontSize >= 6 && fontSize <= 32 ? fontSize : 12;
+  // Health knobs: clamp to sane ranges; an out-of-range or non-numeric value
+  // falls back to the default rather than passing through.
+  const clampInt = (v, lo, hi, dflt) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= lo && n <= hi ? Math.round(n) : dflt;
+  };
+  merged.healthHistoryMax = clampInt(merged.healthHistoryMax, 10, 5000, 120);
+  merged.healthEventsMax = clampInt(merged.healthEventsMax, 10, 5000, 200);
+  merged.healthCpuWarnPct = clampInt(merged.healthCpuWarnPct, 1, 100, 90);
+  merged.healthMemWarnPct = clampInt(merged.healthMemWarnPct, 1, 100, 90);
+  merged.healthDiskWarnPct = clampInt(merged.healthDiskWarnPct, 1, 100, 90);
+  merged.healthThresholdHysteresisPct = clampInt(merged.healthThresholdHysteresisPct, 0, 50, 5);
   return merged;
 }
 
