@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { sampleOf, classifyTransitions, initThresholdState } from '../src/server/healthHistory.js';
+import { sampleOf, classifyTransitions, initThresholdState, createHealthHistory } from '../src/server/healthHistory.js';
 
 const TH = { cpu: 90, mem: 90, disk: 90, hysteresis: 5 };
 
@@ -52,4 +52,66 @@ test('classifyTransitions: cpu requires two consecutive over-samples', () => {
   st = r.state;
   r = classifyTransitions({ up: true, cpuPct: 95 }, { up: true, cpuPct: 96 }, TH, st);
   expect(r.events).toEqual([{ kind: 'threshold', metric: 'cpu', value: 96 }]); // sustained → fire
+});
+
+const BOXES = [{ id: 'b1', label: 'web-01', host: 'h1' }, { id: 'b2', label: 'db-01', host: 'h2' }];
+
+test('record builds per-box series capped at maxSamples', () => {
+  const h = createHealthHistory({ maxSamples: 2, now: (() => { let t = 0; return () => (t += 10); })() });
+  for (let i = 0; i < 3; i++) h.record({ b1: { reachable: true, metrics: { cpuPct: i } } }, [BOXES[0]]);
+  const s = h.getSeries('b1');
+  expect(s).toHaveLength(2);                 // oldest dropped
+  expect(s.map((x) => x.cpuPct)).toEqual([1, 2]);
+});
+
+test('record emits a down event on transition, persists it, and stamps increasing seq', () => {
+  const saved = [];
+  const h = createHealthHistory({ save: (evs) => saved.push(evs.length), now: (() => { let t = 0; return () => (t += 1); })() });
+  h.record({ b1: { reachable: true } }, [BOXES[0]]);                       // seed — no event
+  h.record({ b1: { reachable: false, error: 'kex_exchange_identification' } }, [BOXES[0]]); // down
+  const { events, latestSeq } = h.getEvents({});
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({ seq: 1, boxId: 'b1', label: 'web-01', host: 'h1', kind: 'down', reason: 'kex_exchange_identification' });
+  expect(latestSeq).toBe(1);
+  expect(saved[saved.length - 1]).toBe(1); // persisted on the edge
+});
+
+test('record fires no event when the status is unchanged (backoff replay)', () => {
+  const h = createHealthHistory({});
+  h.record({ b1: { reachable: false, error: 'x' } }, [BOXES[0]]); // seed
+  h.record({ b1: { reachable: false, error: 'x' } }, [BOXES[0]]); // identical → no edge
+  expect(h.getEvents({}).events).toHaveLength(0);
+});
+
+test('getEvents newest-first and filters by since', () => {
+  const h = createHealthHistory({});
+  h.record({ b1: { reachable: true } }, [BOXES[0]]);           // seed
+  h.record({ b1: { reachable: false } }, [BOXES[0]]);          // seq 1 down
+  h.record({ b1: { reachable: true } }, [BOXES[0]]);           // seq 2 up
+  const all = h.getEvents({});
+  expect(all.events.map((e) => e.kind)).toEqual(['up', 'down']); // newest-first
+  expect(h.getEvents({ since: 1 }).events.map((e) => e.seq)).toEqual([2]);
+});
+
+test('record prunes series + state for removed boxes', () => {
+  const h = createHealthHistory({});
+  h.record({ b1: { reachable: true }, b2: { reachable: true } }, BOXES);
+  expect(Object.keys(h.getSeries())).toEqual(['b1', 'b2']);
+  h.record({ b1: { reachable: true } }, [BOXES[0]]); // b2 gone
+  expect(Object.keys(h.getSeries())).toEqual(['b1']);
+});
+
+test('seq is restored from the persisted log', () => {
+  const h = createHealthHistory({ load: () => [{ seq: 41, boxId: 'b1', label: 'web-01', host: 'h1', t: 1, kind: 'down' }] });
+  h.record({ b1: { reachable: true } }, [BOXES[0]]);  // seed
+  h.record({ b1: { reachable: false } }, [BOXES[0]]); // next event
+  expect(h.getEvents({}).events[0].seq).toBe(42);
+});
+
+test('onEvent listeners receive each emitted event (Phase-2 delivery seam)', () => {
+  const got = [];
+  const h = createHealthHistory({ onEvent: (e) => got.push(e.kind) });
+  h.record({ b1: { reachable: true } }, [BOXES[0]]);
+  h.record({ b1: { reachable: false } }, [BOXES[0]]);
+  expect(got).toEqual(['down']);
 });

@@ -82,3 +82,79 @@ export function classifyTransitions(prev, next, thresholds, state) {
 
   return { events, state: st };
 }
+
+// Owns the rolling per-box sample series (in-memory ring buffers) and the
+// edge-triggered events log (persisted via the injected load/save — see
+// healthEventsStore.js). Fed by the status poller after each snapshot swap;
+// read by GET /api/health/*. onEvent is the Phase-2 delivery seam — nothing
+// subscribes in Phase 1 (in-app display only, no notifications).
+export function createHealthHistory({
+  maxSamples = 120,
+  maxEvents = 200,
+  thresholds = { cpu: 90, mem: 90, disk: 90, hysteresis: 5 },
+  load = () => [],
+  save = () => {},
+  now = () => Date.now(),
+  onEvent = null,
+} = {}) {
+  const series = new Map();      // boxId -> Sample[]
+  const lastSample = new Map();  // boxId -> Sample
+  const threshState = new Map(); // boxId -> threshold state
+  const loaded = load();
+  const events = Array.isArray(loaded) ? loaded.slice(-maxEvents) : []; // oldest first
+  let seq = events.reduce((m, e) => Math.max(m, e.seq || 0), 0);
+  const listeners = new Set();
+  if (typeof onEvent === 'function') listeners.add(onEvent);
+
+  function emit(e) {
+    e.seq = ++seq;
+    events.push(e);
+    while (events.length > maxEvents) events.shift();
+    save(events);
+    // Phase-2 delivery seam: browser/webhook/email would subscribe here. A
+    // listener error must never break the poll.
+    for (const fn of listeners) { try { fn(e); } catch { /* ignore */ } }
+  }
+
+  return {
+    record(snapshot, boxes) {
+      const at = now();
+      const present = new Set();
+      for (const box of boxes) {
+        present.add(box.id);
+        const status = snapshot[box.id];
+        if (!status) continue;
+        const sample = sampleOf(status, at);
+        const ring = series.get(box.id) || [];
+        ring.push(sample);
+        while (ring.length > maxSamples) ring.shift();
+        series.set(box.id, ring);
+
+        const prev = lastSample.get(box.id);
+        const { events: evs, state } = classifyTransitions(prev, sample, thresholds, threshState.get(box.id));
+        threshState.set(box.id, state);
+        lastSample.set(box.id, sample);
+        for (const ev of evs) {
+          const out = { boxId: box.id, label: box.label || box.host, host: box.host, t: at, kind: ev.kind };
+          if (ev.metric) { out.metric = ev.metric; out.value = ev.value; }
+          if (ev.kind === 'down' && status.error) out.reason = status.error;
+          emit(out);
+        }
+      }
+      for (const id of [...series.keys()]) {
+        if (!present.has(id)) { series.delete(id); lastSample.delete(id); threshState.delete(id); }
+      }
+    },
+    getSeries(boxId) {
+      if (boxId) return series.get(boxId) || [];
+      const out = {};
+      for (const [id, ring] of series) out[id] = ring;
+      return out;
+    },
+    getEvents({ since = 0 } = {}) {
+      const filtered = since ? events.filter((e) => e.seq > since) : events.slice();
+      return { events: filtered.reverse(), latestSeq: seq };
+    },
+    onEvent(cb) { listeners.add(cb); return () => listeners.delete(cb); },
+  };
+}
