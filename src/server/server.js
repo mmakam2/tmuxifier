@@ -48,7 +48,7 @@ function killTmuxSession(sessionName) {
   execFileSync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -409,6 +409,18 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       out[b.id] = await statusChecker.checkBox(b);
     });
     return out;
+  });
+
+  // Rolling per-box health series (for row sparklines) and the in-app events
+  // timeline. Served from the in-memory history the poller feeds — no new SSH,
+  // no change to /api/status. `?box=` narrows the series to one box.
+  app.get('/api/health/series', { preHandler: requireAuth }, async (req) => {
+    const box = req.query?.box;
+    return box ? { [box]: history.getSeries(box) } : history.getSeries();
+  });
+  app.get('/api/health/events', { preHandler: requireAuth }, async (req) => {
+    const since = Number(req.query?.since) || 0;
+    return history.getEvents({ since });
   });
 
   // Client UI settings the browser needs at boot. Currently just the terminal

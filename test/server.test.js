@@ -19,6 +19,15 @@ function fleetStub(calls = []) {
   };
 }
 
+function historyStub() {
+  return {
+    // Same shapes as createHealthHistory: one box -> Sample[], no arg -> full map.
+    getSeries: (boxId) => (boxId ? [{ t: 1, up: true, cpuPct: 10 }]
+      : { b1: [{ t: 1, up: true, cpuPct: 10 }], b2: [{ t: 1, up: false }] }),
+    getEvents: ({ since = 0 } = {}) => ({ events: [{ seq: 2, boxId: 'b1', label: 'web-01', host: 'h1', t: 9, kind: 'down' }].filter((e) => e.seq > since), latestSeq: 2 }),
+  };
+}
+
 function proxmoxStubs(calls = []) {
   const host = { id: 'H1', name: 'lab', endpoint: 'pve.example.com:8006', tokenId: 'user@pam!t', hasToken: true, verifyMode: 'pin', fingerprint256: 'AB' };
   let rootPw = null;
@@ -361,6 +370,33 @@ test('status endpoint serves the poller snapshot without probing on each GET (no
     expect(res.json()).toEqual({ box1: { reachable: true } });
   }
   expect(snapshotReads).toBe(7);                      // all served from the shared cache
+});
+
+test('GET /api/health/series requires auth', async () => {
+  app = await makeApp({ history: historyStub() });
+  expect((await app.inject({ method: 'GET', url: '/api/health/series' })).statusCode).toBe(401);
+});
+
+test('GET /api/health/series returns the full map or one box', async () => {
+  app = await makeApp({ history: historyStub() });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const all = await app.inject({ method: 'GET', url: '/api/health/series', headers });
+  expect(all.statusCode).toBe(200);
+  expect(Object.keys(all.json())).toEqual(['b1', 'b2']);
+  const one = await app.inject({ method: 'GET', url: '/api/health/series?box=b1', headers });
+  expect(one.json()).toEqual({ b1: [{ t: 1, up: true, cpuPct: 10 }] });
+});
+
+test('GET /api/health/events returns events + latestSeq, filtered by since', async () => {
+  app = await makeApp({ history: historyStub() });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const all = await app.inject({ method: 'GET', url: '/api/health/events', headers });
+  expect(all.json()).toMatchObject({ latestSeq: 2 });
+  expect(all.json().events).toHaveLength(1);
+  const since = await app.inject({ method: 'GET', url: '/api/health/events?since=2', headers });
+  expect(since.json().events).toHaveLength(0);
 });
 
 test('rejects a forged unsigned tmuxifier_session cookie', async () => {
