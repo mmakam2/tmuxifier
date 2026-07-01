@@ -37,6 +37,9 @@ export default async function globalSetup() {
       TMUXIFIER_PORT: '7438',
       TMUXIFIER_DATA_DIR: dataDir,
       TMUXIFIER_SSH_CONFIG: lb.sshConfigFile,
+      // Fast server-side poll so health samples/events accrue within e2e
+      // timeouts (the health spec needs two samples for a sparkline).
+      TMUXIFIER_STATUS_POLL_MS: '2000',
       TMUXIFIER_TLS_CERT: '',
       TMUXIFIER_TLS_KEY: '',
       TMUXIFIER_BASE_EXTERNAL_URL: '',
