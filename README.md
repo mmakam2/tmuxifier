@@ -199,6 +199,19 @@ are time-limited — the low, backed-off connection rate lets them expire instea
 re-arming them. To clear one immediately, unban the Tmuxifier host's IP on that box
 (e.g. `fail2ban-client unbanip <ip>`) and consider allowlisting it (`ignoreip`).
 
+### Box health history & events
+
+The dashboard keeps a rolling per-box health trend from the samples the 30-second status poll
+already collects — **no extra SSH**. Each box row shows a small sparkline of the last ~hour
+(click it to cycle CPU → memory → disk), and the sidebar's **Events** button opens an in-app
+timeline of transitions: box went down / recovered / needs login, plus CPU/mem/disk crossing a
+warn threshold (default 90%, with hysteresis so a hovering value doesn't flap). Unseen events
+show as a count badge on the button and are marked seen when the panel is opened. Events survive
+restarts in `data/health-events.json`; the sample series is in-memory only. Everything is
+**display-only** — Tmuxifier sends no browser, email, or webhook notifications (a possible future
+phase). Tune with `TMUXIFIER_HEALTH_HISTORY_MAX`, `TMUXIFIER_HEALTH_EVENTS_MAX`,
+`TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT`, and `TMUXIFIER_HEALTH_HYSTERESIS_PCT`.
+
 ### Fleet Command
 
 Click **Fleet** in the sidebar to enter selection mode, tick any number of boxes (or whole tag

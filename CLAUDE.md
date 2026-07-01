@@ -107,6 +107,12 @@ pattern for new modules.
 - `fleet.js` / `fleetStore.js` — `createFleetManager` runs one command across many boxes as a single
   persisted, pollable job (Fleet Command), fanning out at `fleetConcurrency`; `createFleetStore` is
   the debounced `data/fleet-jobs.json` persistence.
+- `healthHistory.js` / `healthEventsStore.js` — `createHealthHistory` keeps a rolling in-memory
+  sample series per box (fed by the status poller after each snapshot swap) and derives an
+  edge-triggered events log (down/up/needs-auth/threshold, persisted to `data/health-events.json`
+  by `createHealthEventsStore`); served by `GET /api/health/series|events`. `onEvent(cb)` is the
+  deferred Phase-2 delivery seam — nothing subscribes in Phase 1 (in-app display only, no
+  notifications).
 - `secretBox.js` — AES-256-GCM seal/open for secrets at rest; key derived from `cookieSecret` via
   HKDF. Encrypts the persisted Proxmox secrets: the API token, any added SSH management keys, and
   the optional root password.
@@ -124,7 +130,8 @@ pattern for new modules.
 
 Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `api.ts`,
 `terminal.ts`, `index.html`, `style.css`, plus feature modules — `reconnect.ts` (escalating
-backoff), `statusDot.ts`, `fleetSelection.ts`/`fleetHistory.ts` (Fleet Command),
+backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health history: pure SVG-path builder
+and event-line formatters), `fleetSelection.ts`/`fleetHistory.ts` (Fleet Command),
 `proxmox.ts`/`proxmoxUi.ts`, `clipboard.ts`, and `termFont.ts` (pure builder for the xterm
 font stack — prepends `TMUXIFIER_TERM_FONT` onto the bundled stack (MesloLGMDZ Nerd Font default,
 then MesloLGSDZ + JuliaMono fallback); the server
