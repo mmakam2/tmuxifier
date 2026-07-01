@@ -9,6 +9,7 @@ import { mapWithConcurrency } from './concurrency.js';
 export function createStatusPoller({
   store, statusChecker, intervalMs = 30000, concurrency = 4,
   setIntervalFn = setInterval, clearIntervalFn = clearInterval,
+  history = null,
 }) {
   let snapshot = {};
   let timer = null;
@@ -23,6 +24,11 @@ export function createStatusPoller({
       next[b.id] = await statusChecker.checkBox(b);
     });
     snapshot = next;
+    if (history) {
+      // History must never affect status availability: the snapshot is already
+      // swapped, so a bug here can't blank /api/status.
+      try { history.record(next, boxes); } catch { /* swallowed on purpose */ }
+    }
     return snapshot;
   }
 

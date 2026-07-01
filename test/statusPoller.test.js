@@ -52,6 +52,30 @@ test('a wholesale snapshot swap drops boxes that no longer exist', async () => {
   expect(Object.keys(poller.getSnapshot())).toEqual(['a']);
 });
 
+test('pollOnce feeds the snapshot and the boxes to history.record', async () => {
+  const calls = [];
+  const boxes = [{ id: 'a', host: 'ha', label: 'web-01' }];
+  const poller = createStatusPoller({
+    store: fakeStore(boxes),
+    statusChecker: { checkBox: async () => ({ reachable: true }) },
+    history: { record: (snap, bx) => calls.push([snap, bx]) },
+  });
+  await poller.pollOnce();
+  expect(calls).toHaveLength(1);
+  expect(calls[0][0]).toEqual({ a: { reachable: true } });
+  expect(calls[0][1]).toBe(boxes);
+});
+
+test('a throwing history.record never prevents the snapshot swap', async () => {
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'a', host: 'ha' }]),
+    statusChecker: { checkBox: async () => ({ reachable: true }) },
+    history: { record: () => { throw new Error('boom'); } },
+  });
+  await expect(poller.pollOnce()).resolves.toBeTruthy();
+  expect(poller.getSnapshot()).toEqual({ a: { reachable: true } });
+});
+
 test('start runs an immediate poll then schedules the recurring poll', async () => {
   let calls = 0;
   const store = fakeStore([{ id: 'a', host: 'ha' }]);
