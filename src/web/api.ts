@@ -11,6 +11,14 @@ export interface BoxMetrics {
   diskTotalKb?: number; diskUsedKb?: number; diskPct?: number; uptimeSec?: number;
 }
 export interface Status { reachable: boolean; tmux?: boolean; needsAuth?: boolean; inUse?: boolean; paused?: boolean; nextProbeAt?: number; sessions?: { name: string; windows: number; attached?: boolean; activity?: number }[]; metrics?: BoxMetrics; error?: string; }
+// One point of a box's rolling health series (a status poll projected server-side
+// in healthHistory.js). A missing metric is omitted — the sparkline draws a gap.
+export interface Sample { t: number; up: boolean; tmux?: boolean; needsAuth?: boolean; cpuPct?: number; memPct?: number; diskPct?: number; }
+export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'threshold' | 'threshold-clear';
+export interface HealthEvent {
+  seq: number; boxId: string; label: string; host: string; t: number;
+  kind: HealthEventKind; reason?: string; metric?: 'cpu' | 'mem' | 'disk'; value?: number;
+}
 export type FleetTargetStatus = 'pending' | 'running' | 'ok' | 'error' | 'cancelled' | 'interrupted';
 export type FleetJobStatus = 'running' | 'done' | 'cancelled' | 'interrupted';
 export interface FleetTarget {
@@ -52,6 +60,8 @@ export const api = {
     return j<{ added: Box[]; skipped: number }>(await fetch('/api/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }));
   },
   async status() { return j<Record<string, Status>>(await fetch(`/api/status?t=${Date.now()}`)); },
+  async healthSeries() { return j<Record<string, Sample[]>>(await fetch(`/api/health/series?t=${Date.now()}`)); },
+  async healthEvents(since = 0) { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?since=${since}&t=${Date.now()}`)); },
   async uiConfig() { return j<{ termFont: string | null; termFontSize: number }>(await fetch('/api/ui-config')); },
   async getLocalShell() { return j<{ shell: string }>(await fetch('/api/local-shell')); },
   async updateLocalShell(shell: string) { return j<{ ok: boolean }>(await fetch('/api/local-shell', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shell }) })); },
