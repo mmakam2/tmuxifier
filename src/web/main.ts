@@ -1,6 +1,8 @@
-import { api, type AddBoxSpec, type Box, type Status } from './api';
+import { api, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent } from './api';
 import { openTerminal, openProvisionTerminal, setTerminalFont } from './terminal';
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
+import { sparkline } from './sparkline';
+import { formatEvent, relTime, unseenCount } from './healthEvents';
 import { toggleBox, setBoxes, groupState } from './fleetSelection';
 import { addRecent, parseRecent } from './fleetHistory';
 import { createFleetScriptEditor } from './fleetEditor';
@@ -19,6 +21,70 @@ let latestStatus: Record<string, Status> = {};
 let fleetMode = false;
 let fleetSelected = new Set<string>();
 let fleetScriptDraft = ''; // in-progress bash-script editor content; survives reopen, cleared on run/exit
+
+// Box health history (rolling series + in-app events). Both ride the status
+// poll tick; the caches let repaints (search, fleet mode) redraw without a fetch.
+const SPARK_METRIC_KEY = 'tmuxifier.sparkMetric';
+const EVENTS_SEEN_KEY = 'tmuxifier.eventsSeen';
+type SparkMetric = 'cpuPct' | 'memPct' | 'diskPct';
+const SPARK_METRICS: SparkMetric[] = ['cpuPct', 'memPct', 'diskPct'];
+const SPARK_LABEL: Record<SparkMetric, string> = { cpuPct: 'CPU', memPct: 'memory', diskPct: 'disk' };
+let latestSeries: Record<string, Sample[]> = {};
+let latestEvents: HealthEvent[] = [];
+let latestEventSeq = 0;
+
+function sparkMetric(): SparkMetric {
+  const v = localStorage.getItem(SPARK_METRIC_KEY) as SparkMetric | null;
+  return v && SPARK_METRICS.includes(v) ? v : 'cpuPct';
+}
+
+// One shared preference: clicking any row's sparkline cycles every row through
+// cpu → mem → disk, so the sidebar always compares like with like.
+function cycleSparkMetric() {
+  const next = SPARK_METRICS[(SPARK_METRICS.indexOf(sparkMetric()) + 1) % SPARK_METRICS.length];
+  localStorage.setItem(SPARK_METRIC_KEY, next);
+  repaintSparklines();
+}
+
+function repaintSparklines() {
+  app.querySelectorAll('.box').forEach((li) => {
+    const id = (li as HTMLElement).dataset.id;
+    if (id) applySparkline(li as HTMLElement, id);
+  });
+}
+
+// Paint a box row's metric sparkline from the cached series. Same in-place
+// pattern as applyRowStatus so the poll never rebuilds whole rows. An empty
+// path (too few points, metric absent) empties the span; CSS :empty hides it.
+function applySparkline(li: HTMLElement, id: string) {
+  const el = li.querySelector('.spark') as HTMLElement | null;
+  if (!el) return;
+  const metric = sparkMetric();
+  const d = sparkline(latestSeries[id] || [], metric);
+  if (!d) { el.replaceChildren(); el.removeAttribute('title'); return; }
+  el.title = `${SPARK_LABEL[metric]} trend — click to switch metric`;
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('class', 'spark-svg');
+  svg.setAttribute('viewBox', '0 0 64 16');
+  const path = document.createElementNS(SVG_NS, 'path');
+  path.setAttribute('d', d);
+  svg.appendChild(path);
+  el.replaceChildren(svg);
+}
+
+function readLastSeenSeq(): number { return Number(localStorage.getItem(EVENTS_SEEN_KEY)) || 0; }
+function writeLastSeenSeq(seq: number) { localStorage.setItem(EVENTS_SEEN_KEY, String(seq)); }
+
+// The badge is a passive in-app count of not-yet-viewed events — never a
+// browser notification (Phase 2, deliberately deferred).
+function updateEventsBadge() {
+  const badge = document.getElementById('events-badge');
+  if (!badge) return;
+  const n = unseenCount(latestEvents, readLastSeenSeq());
+  badge.hidden = n === 0;
+  badge.textContent = n > 99 ? '99+' : String(n);
+}
 
 // Paint a box row's status affordances (dot + health meta line) from a status
 // snapshot. Shared by initial render and the poll so they never drift.
@@ -251,17 +317,37 @@ async function pollStatus() {
   if (polling) return;
   polling = true;
   try {
-    const status = await api.status();
-    latestStatus = status;
-    const list = app.querySelectorAll('.box');
-    list.forEach(li => {
-      const id = (li as HTMLElement).dataset.id;
-      if (!id) return;
-      applyRowStatus(li as HTMLElement, id, status[id]);
-    });
-  } catch {} finally {
+    try {
+      const status = await api.status();
+      latestStatus = status;
+      const list = app.querySelectorAll('.box');
+      list.forEach(li => {
+        const id = (li as HTMLElement).dataset.id;
+        if (!id) return;
+        applyRowStatus(li as HTMLElement, id, status[id]);
+      });
+    } catch {}
+    // Health extras (sparkline series + events) ride the same tick but fail
+    // independently — a hiccup on either side must not stop the dots.
+    await pollHealth();
+  } finally {
     polling = false;
   }
+}
+
+async function pollHealth() {
+  try {
+    latestSeries = await api.healthSeries();
+    repaintSparklines();
+  } catch {}
+  try {
+    const { events, latestSeq } = await api.healthEvents();
+    latestEvents = events;
+    latestEventSeq = latestSeq;
+    updateEventsBadge();
+    // Keep an open panel live; rendering also marks the new events seen.
+    if (document.getElementById('events-panel')?.classList.contains('open')) renderEventsPanel();
+  } catch {}
 }
 
 async function renderDashboard() {
@@ -280,7 +366,7 @@ async function renderDashboard() {
           <input id="import-file" type="file" accept="application/json,.json" hidden />
         </div>
         <div class="actions"><button id="add">+ Add box</button></div>
-        <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button><button id="proxmox" type="button" class="proxmox-btn" title="Provision Proxmox LXC containers">Proxmox</button></div>
+        <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button><button id="proxmox" type="button" class="proxmox-btn" title="Provision Proxmox LXC containers">Proxmox</button><button id="events" type="button" class="events-btn" title="Box health events (down/up/needs login/thresholds)">Events<span id="events-badge" class="events-badge" hidden></span></button></div>
         <div id="fleet-bar" class="fleet-bar" hidden></div>
         <input id="search" class="search" type="text" placeholder="Search…" autocomplete="off" />
         <ul id="boxes" class="boxes"></ul>
@@ -354,6 +440,11 @@ async function renderDashboard() {
     if (panel.classList.contains('open')) closeFleetJobsPanel();
     else openFleetJobsPanel();
   });
+  app.querySelector('#events')!.addEventListener('click', () => {
+    const panel = document.getElementById('events-panel')!;
+    if (panel.classList.contains('open')) closeEventsPanel();
+    else openEventsPanel();
+  });
   app.querySelector('#proxmox')!.addEventListener('click', () => openProxmoxHub({
     openBox: (b) => openBox(b),
     onBoxLinked: () => { void refresh(); },
@@ -379,6 +470,7 @@ async function renderDashboard() {
 
   await refresh();
   pollInterval = setInterval(pollStatus, POLL_MS);
+  void pollHealth(); // seed sparklines + events badge without waiting a tick
 }
 
 async function refresh() {
@@ -417,7 +509,10 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   nameEl.textContent = b.label;
   const metaEl = document.createElement('span');
   metaEl.className = 'box-meta';
-  mainEl.append(nameEl, metaEl);
+  const sparkEl = document.createElement('span');
+  sparkEl.className = 'spark';
+  sparkEl.addEventListener('click', (e) => { e.stopPropagation(); cycleSparkMetric(); });
+  mainEl.append(nameEl, metaEl, sparkEl);
 
   li.addEventListener('click', () => openBox(b));
 
@@ -459,6 +554,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
 
   li.append(check, dotEl, mainEl, actions);
   applyRowStatus(li, b.id, st);
+  applySparkline(li, b.id);
   return li;
 }
 
@@ -1257,6 +1353,63 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
       runBtn.disabled = false;
     }
   });
+}
+
+// --- Events panel (in-app health timeline) ---------------------------------
+// Mirrors the Fleet Jobs drawer. No polling loop of its own: pollHealth (on the
+// status tick) refreshes the cache and re-renders when the panel is open.
+
+function openEventsPanel() {
+  const panel = document.getElementById('events-panel')!;
+  panel.classList.add('open');
+  document.getElementById('events')?.classList.add('active');
+  (panel.querySelector('.fleet-panel-close') as HTMLElement).onclick = () => closeEventsPanel();
+  renderEventsPanel();
+  // Refresh so the list is current even mid-tick; re-render only if still open.
+  api.healthEvents().then(({ events, latestSeq }) => {
+    latestEvents = events;
+    latestEventSeq = latestSeq;
+    if (panel.classList.contains('open')) renderEventsPanel();
+  }).catch(() => {});
+}
+
+function closeEventsPanel() {
+  document.getElementById('events-panel')!.classList.remove('open');
+  document.getElementById('events')?.classList.remove('active');
+}
+
+function renderEventsPanel() {
+  const list = document.querySelector('#events-panel .events-list') as HTMLElement | null;
+  if (!list) return;
+  list.innerHTML = '';
+  if (!latestEvents.length) {
+    const li = document.createElement('li');
+    li.className = 'events-empty';
+    li.textContent = 'No events yet. Box transitions (down / up / needs login / metric thresholds) will appear here.';
+    list.appendChild(li);
+  }
+  const now = Date.now();
+  for (const e of latestEvents) { // already newest-first from the server
+    const line = formatEvent(e);
+    const li = document.createElement('li');
+    li.className = `event-row ${line.level}`;
+    const icon = document.createElement('span');
+    icon.className = 'event-icon';
+    icon.textContent = line.icon;
+    const text = document.createElement('span');
+    text.className = 'event-text';
+    text.textContent = line.text;
+    const time = document.createElement('span');
+    time.className = 'event-time';
+    time.textContent = relTime(e.t, now);
+    time.title = new Date(e.t).toLocaleString();
+    li.append(icon, text, time);
+    list.appendChild(li);
+  }
+  // Viewing the panel marks everything seen. The badge stays a passive in-app
+  // indicator — no Notification API, no outbound request.
+  writeLastSeenSeq(latestEventSeq);
+  updateEventsBadge();
 }
 
 let fleetPollTimer: any = null;

@@ -27,6 +27,17 @@
         <div class="fleet-detail"></div>
       </div>
     </div>
+    <!-- In-app health events timeline (down/up/needs-login/threshold). Reuses the
+         fleet-panel drawer layout; display only — no notifications are sent. -->
+    <div id="events-panel" class="fleet-panel events-panel">
+      <div class="fleet-panel-header">
+        <span class="fleet-panel-title">Events</span>
+        <button class="fleet-panel-close" title="Close">&#x2715;</button>
+      </div>
+      <div class="fleet-panel-body">
+        <ul class="events-list"></ul>
+      </div>
+    </div>
     <script type="module" src="/main.ts"></script>
   </body>
 </html>

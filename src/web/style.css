@@ -309,11 +309,14 @@ body {
 /* Buttons match their .actions neighbour (+ Add box); accents use the
    app's cyan identity, never a foreign blue. The fleet pair reads as a
    HUD console: uppercase, tracked-out caps over a faint cyan field. */
-.fleet-actions { display: flex; gap: 6px; }
+/* Four buttons now (…, Events): wrap into a 2×2 HUD grid instead of clipping
+   the tracked-out uppercase labels in one cramped row. */
+.fleet-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .fleet-actions button {
   position: relative;
   overflow: hidden;
-  flex: 1;
+  flex: 1 1 45%;
+  min-width: 0;
   padding: 10px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -452,6 +455,42 @@ body {
 .fleet-result.error .fr-badge { background: rgba(248, 81, 73, 0.13); border-color: rgba(248, 81, 73, 0.4); color: #f85149; }
 .fr-output { margin: 6px 0 0; max-height: 240px; overflow: auto; background: var(--panel-2); border-radius: 6px; padding: 8px; white-space: pre-wrap; word-break: break-all; }
 .fleet-empty, .fleet-detail .err { color: var(--muted); }
+
+/* --- Box health history (sparklines + events panel) --- */
+/* Per-row metric trend under the meta line. Hidden entirely when the series
+   can't plot (span left empty), so rows without metrics don't grow. */
+.spark { display: block; margin-top: 1px; line-height: 0; cursor: pointer; }
+.spark:empty { display: none; }
+.spark-svg { width: 64px; height: 16px; display: block; opacity: 0.75; }
+.spark:hover .spark-svg { opacity: 1; }
+.spark-svg path { fill: none; stroke: var(--cyan); stroke-width: 1; }
+/* Unseen-count pill inside the Events button — passive, in-app only. */
+.events-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(210, 153, 34, 0.55);
+  background: rgba(210, 153, 34, 0.16);
+  color: #d29922;
+  font-size: 10px;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+.events-badge[hidden] { display: none; }
+/* Event rows reuse the drawer chrome (.fleet-panel) and the meta-line severity
+   colours; 'auth' is the purple needs-login tier, an action rather than an error. */
+.events-list { list-style: none; margin: 0; padding: 0; }
+.events-empty { color: var(--muted); padding: 8px; font-size: 13px; }
+.event-row { display: flex; align-items: baseline; gap: 8px; padding: 7px 9px; border-radius: 8px; font-size: 13px; }
+.event-row:hover { background: var(--panel-2); }
+.event-icon { flex: 0 0 auto; font-size: 11px; }
+.event-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-time { flex: 0 0 auto; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.event-row.crit .event-text { color: #f85149; }
+.event-row.warn .event-text { color: #d29922; }
+.event-row.auth .event-text { color: #a371f7; }
+.event-row.ok .event-text { color: #2ea043; }
 
 .toast { position: fixed; bottom: 22px; left: 50%; translate: -50% 16px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 10px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s ease, translate .2s ease; z-index: 1000; pointer-events: none; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45); }
 .toast.show { opacity: 1; translate: -50% 0; }
