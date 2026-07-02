@@ -54,7 +54,29 @@ test('classifyTransitions: cpu requires two consecutive over-samples', () => {
   expect(r.events).toEqual([{ kind: 'threshold', metric: 'cpu', value: 96 }]); // sustained → fire
 });
 
+test('classifyTransitions: needs-auth then truly down emits a down event', () => {
+  const r = classifyTransitions({ up: false, needsAuth: true }, { up: false }, TH, initThresholdState());
+  expect(r.events).toEqual([{ kind: 'down' }]);
+});
+
+test('classifyTransitions: cpu absent at seed (cgroup warming) adopts the first observed value silently', () => {
+  let r = classifyTransitions(undefined, { up: true }, TH, undefined); // restart seed: no cpuPct yet
+  r = classifyTransitions({ up: true }, { up: true, cpuPct: 95 }, TH, r.state);
+  expect(r.events).toEqual([]); // first observation is the baseline, not a crossing
+  r = classifyTransitions({ up: true, cpuPct: 95 }, { up: true, cpuPct: 96 }, TH, r.state);
+  expect(r.events).toEqual([]); // still hot, still no restart replay
+  r = classifyTransitions({ up: true, cpuPct: 96 }, { up: true, cpuPct: 80 }, TH, r.state);
+  expect(r.events).toEqual([{ kind: 'threshold-clear', metric: 'cpu', value: 80 }]);
+});
+
 const BOXES = [{ id: 'b1', label: 'web-01', host: 'h1' }, { id: 'b2', label: 'db-01', host: 'h2' }];
+
+test('record caps a down reason so raw ssh stderr never bloats the events log', () => {
+  const h = createHealthHistory({});
+  h.record({ b1: { reachable: true } }, [BOXES[0]]);
+  h.record({ b1: { reachable: false, error: 'x'.repeat(5000) } }, [BOXES[0]]);
+  expect(h.getEvents({}).events[0].reason).toHaveLength(300);
+});
 
 test('record builds per-box series capped at maxSamples', () => {
   const h = createHealthHistory({ maxSamples: 2, now: (() => { let t = 0; return () => (t += 10); })() });

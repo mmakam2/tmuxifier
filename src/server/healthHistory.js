@@ -32,7 +32,11 @@ export function sampleOf(status, at) {
 }
 
 export function initThresholdState() {
-  return { cpu: false, cpuStreak: 0, mem: false, disk: false };
+  // cpuSeeded: cpu% is delta-derived on cgroup hosts, so the sample right after
+  // a restart carries no cpuPct. Seeding defers to the first sample that
+  // actually observes one — otherwise a persistently-hot box would look like a
+  // fresh crossing and replay a threshold event on every restart.
+  return { cpu: false, cpuStreak: 0, cpuSeeded: true, mem: false, disk: false };
 }
 
 // Pure edge detector. Reachability/auth edges compare prev↔next (stateless).
@@ -52,6 +56,7 @@ export function classifyTransitions(prev, next, thresholds, state) {
     st.disk = !!(next.up && next.diskPct != null && next.diskPct >= warn.disk);
     st.cpu = !!(next.up && next.cpuPct != null && next.cpuPct >= warn.cpu);
     st.cpuStreak = st.cpu ? 2 : 0;
+    st.cpuSeeded = !!(next.up && next.cpuPct != null);
     return { events, state: st };
   }
 
@@ -59,6 +64,7 @@ export function classifyTransitions(prev, next, thresholds, state) {
   if (prev.up && !next.up) events.push(next.needsAuth ? { kind: 'needs-auth' } : { kind: 'down' });
   else if (!prev.up && next.up) events.push({ kind: 'up' });
   else if (!prev.up && !next.up && !prev.needsAuth && next.needsAuth) events.push({ kind: 'needs-auth' });
+  else if (!prev.up && !next.up && prev.needsAuth && !next.needsAuth) events.push({ kind: 'down' });
 
   // mem / disk: immediate crossing with hysteresis clear
   for (const metric of ['mem', 'disk']) {
@@ -72,6 +78,12 @@ export function classifyTransitions(prev, next, thresholds, state) {
   const cpu = next.cpuPct;
   if (cpu == null || !next.up) {
     st.cpuStreak = 0;
+  } else if (!st.cpuSeeded) {
+    // First observed cpu value (the counter was still warming at seed): adopt
+    // it as the baseline without firing — same rule as the seed sample.
+    st.cpuSeeded = true;
+    st.cpu = cpu >= warn.cpu;
+    st.cpuStreak = st.cpu ? 2 : 0;
   } else if (cpu >= warn.cpu) {
     st.cpuStreak = Math.min(2, st.cpuStreak + 1);
     if (!st.cpu && st.cpuStreak >= 2) { st.cpu = true; events.push({ kind: 'threshold', metric: 'cpu', value: cpu }); }
@@ -137,7 +149,9 @@ export function createHealthHistory({
         for (const ev of evs) {
           const out = { boxId: box.id, label: box.label || box.host, host: box.host, t: at, kind: ev.kind };
           if (ev.metric) { out.metric = ev.metric; out.value = ev.value; }
-          if (ev.kind === 'down' && status.error) out.reason = status.error;
+          // Cap the reason: it is raw ssh stderr, which can be huge — the log
+          // is persisted and re-served whole on every events poll.
+          if (ev.kind === 'down' && status.error) out.reason = String(status.error).slice(0, 300);
           emit(out);
         }
       }
