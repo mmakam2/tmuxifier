@@ -23,3 +23,10 @@ test('clamps values into the box', () => {
   const d = sparkline([S(-20), S(200)], 'cpuPct', { w: 10, h: 10, max: 100 });
   expect(d).not.toMatch(/-/);        // no negative coordinates
 });
+
+test('isolated points between gaps render as short ticks, not invisible move-only subpaths', () => {
+  const d = sparkline([S(10), { t: 0, up: false }, S(20)], 'cpuPct', { w: 10, h: 10 });
+  expect((d.match(/M/g) || []).length).toBe(2); // two subpaths…
+  expect((d.match(/L/g) || []).length).toBe(2); // …each with a stroked segment
+  expect(d).not.toMatch(/-/);                   // tick at i=0 stays clamped in the box
+});

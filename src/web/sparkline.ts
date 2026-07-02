@@ -19,6 +19,13 @@ export function sparkline(
   let d = ''; let pen = false;
   vals.forEach((v, i) => {
     if (v == null) { pen = false; return; }
+    if (!pen && (i + 1 >= n || vals[i + 1] == null)) {
+      // Isolated point between gaps: a move-only subpath strokes nothing (butt
+      // caps), so draw a short clamped tick to keep the sample visible.
+      const cy = y(v).toFixed(1);
+      d += `M${Math.max(0, x(i) - 0.6).toFixed(1)},${cy} L${Math.min(w, x(i) + 0.6).toFixed(1)},${cy} `;
+      return;
+    }
     d += `${pen ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)} `;
     pen = true;
   });

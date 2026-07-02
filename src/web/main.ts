@@ -344,6 +344,9 @@ async function pollHealth() {
     const { events, latestSeq } = await api.healthEvents();
     latestEvents = events;
     latestEventSeq = latestSeq;
+    // Self-heal a stale high-water mark: if the server's events log was reset,
+    // seq restarts below the stored cursor and the badge would never fire again.
+    if (readLastSeenSeq() > latestSeq) writeLastSeenSeq(latestSeq);
     updateEventsBadge();
     // Keep an open panel live; rendering also marks the new events seen.
     if (document.getElementById('events-panel')?.classList.contains('open')) renderEventsPanel();
@@ -1360,6 +1363,7 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
 // status tick) refreshes the cache and re-renders when the panel is open.
 
 function openEventsPanel() {
+  closeFleetJobsPanel(); // the drawers share the same edge; stacking hides one
   const panel = document.getElementById('events-panel')!;
   panel.classList.add('open');
   document.getElementById('events')?.classList.add('active');
@@ -1406,9 +1410,11 @@ function renderEventsPanel() {
     li.append(icon, text, time);
     list.appendChild(li);
   }
-  // Viewing the panel marks everything seen. The badge stays a passive in-app
-  // indicator — no Notification API, no outbound request.
-  writeLastSeenSeq(latestEventSeq);
+  // Viewing the panel marks everything seen — but only once real data has
+  // loaded (an open before the first fetch must not regress the cursor to 0).
+  // The badge stays a passive in-app indicator — no Notification API, no
+  // outbound request.
+  if (latestEventSeq) writeLastSeenSeq(latestEventSeq);
   updateEventsBadge();
 }
 
@@ -1424,6 +1430,7 @@ function closeFleetJobsPanel() {
 }
 
 function openFleetJobsPanel(jobId?: string) {
+  closeEventsPanel(); // the drawers share the same edge; stacking hides one
   const panel = document.getElementById('fleet-panel')!;
   panel.classList.add('open');
   document.getElementById('fleet-jobs')?.classList.add('active');
