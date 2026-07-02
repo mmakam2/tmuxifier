@@ -43,7 +43,18 @@ function sparkMetric(): SparkMetric {
 function cycleSparkMetric() {
   const next = SPARK_METRICS[(SPARK_METRICS.indexOf(sparkMetric()) + 1) % SPARK_METRICS.length];
   localStorage.setItem(SPARK_METRIC_KEY, next);
+  syncSparkMetricClass();
   repaintSparklines();
+}
+
+// The sparkline itself is anonymous — name what it graphs by highlighting the
+// matching meta-line figure. One class on the list (spark-cpu|mem|disk) lets
+// CSS pair it with the tagged .metric-* segments across every row.
+function syncSparkMetricClass() {
+  const list = app.querySelector('#boxes');
+  if (!list) return;
+  list.classList.remove('spark-cpu', 'spark-mem', 'spark-disk');
+  list.classList.add(`spark-${sparkMetric().replace('Pct', '')}`);
 }
 
 function repaintSparklines() {
@@ -97,7 +108,10 @@ function applyRowStatus(li: HTMLElement, _id: string, st: Status | undefined) {
     metaSegmentsFor(st).forEach((s, i) => {
       if (i) nodes.push(document.createTextNode(' · '));
       const span = document.createElement('span');
-      if (s.level) span.className = `lvl-${s.level}`;
+      if (s.level) span.classList.add(`lvl-${s.level}`);
+      // Tag metric segments so the active sparkline metric can highlight its
+      // source figure (see syncSparkMetricClass + the .spark-* CSS pairing).
+      if (s.metric) span.classList.add(`metric-${s.metric}`);
       if (s.title) span.title = s.title;
       span.append(s.text);
       if (s.icon) {
@@ -471,6 +485,7 @@ async function renderDashboard() {
     openLocalShellEditModal();
   });
 
+  syncSparkMetricClass();
   await refresh();
   pollInterval = setInterval(pollStatus, POLL_MS);
   void pollHealth(); // seed sparklines + events badge without waiting a tick

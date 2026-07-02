@@ -147,5 +147,16 @@ test('metaLineFor: unreachable shows the classified reason; needsAuth says needs
   expect(metaLineFor({ reachable: false, needsAuth: true })).toMatch(/login/i);
 });
 
+test('metaSegmentsFor: tags each metric segment so the sparkline can highlight its source', () => {
+  const st = { reachable: true, tmux: true, metrics: { cpuPct: 12, memTotalKb: 1000, memAvailKb: 920, diskPct: 58 } };
+  expect(metaSegmentsFor(st).map((s) => s.metric)).toEqual(['cpu', 'mem', 'disk']);
+  // every cpu branch carries the tag: load-normalized fallback and raw load too
+  expect(metaSegmentsFor({ reachable: true, metrics: { load1: 4.25, cpus: 4 } })[0].metric).toBe('cpu');
+  expect(metaSegmentsFor({ reachable: true, metrics: { load1: 4.25 } })[0].metric).toBe('cpu');
+  // non-metric segments (down reason, needs login) carry none
+  expect(metaSegmentsFor({ reachable: false, error: 'Connection refused' })[0].metric).toBeUndefined();
+  expect(metaSegmentsFor({ reachable: false, needsAuth: true })[0].metric).toBeUndefined();
+});
+
 // (activity badge removed — session_activity bumps on any output, so the "unseen"
 // signal was on for essentially every busy box; the helpers were deleted.)

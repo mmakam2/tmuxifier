@@ -464,6 +464,19 @@ body {
 .spark-svg { width: 64px; height: 16px; display: block; opacity: 0.75; }
 .spark:hover .spark-svg { opacity: 1; }
 .spark-svg path { fill: none; stroke: var(--cyan); stroke-width: 1; }
+/* Name the anonymous line: tint the meta figure the sparkline is currently
+   graphing in the stroke's cyan (severity colors stay on the text itself).
+   The list carries spark-cpu|mem|disk (syncSparkMetricClass); segments carry
+   metric-cpu|mem|disk (applyRowStatus). */
+.boxes.spark-cpu .box-meta .metric-cpu,
+.boxes.spark-mem .box-meta .metric-mem,
+.boxes.spark-disk .box-meta .metric-disk {
+  background: rgba(36, 211, 232, 0.13);
+  box-shadow: inset 0 -1px 0 rgba(36, 211, 232, 0.55);
+  border-radius: 4px;
+  padding: 0 3px;
+  margin: 0 -3px;
+}
 /* Unseen-count pill inside the Events button — passive, in-app only. */
 .events-badge {
   display: inline-block;

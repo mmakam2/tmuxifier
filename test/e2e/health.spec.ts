@@ -18,6 +18,16 @@ test('rows grow a sparkline; a down transition lands in the Events panel and cle
     await expect(page.locator('.spark .spark-svg path').first()).toHaveAttribute('d', /M/, { timeout: 4000 });
   }).toPass({ timeout: 45000 });
 
+  // Clicking the sparkline cycles the metric and highlights the meta figure it
+  // graphs (cpu -> mem), without opening the box terminal.
+  await expect(page.locator('#boxes')).toHaveClass(/spark-cpu/);
+  await page.locator('.spark .spark-svg').first().click();
+  await expect(page.locator('#boxes')).toHaveClass(/spark-mem/);
+  await expect(page.locator('.box-meta .metric-mem').first()).toBeVisible();
+  await expect(page.locator('.term')).toHaveCount(0);
+  await page.locator('.spark .spark-svg').first().click(); // -> disk
+  await page.locator('.spark .spark-svg').first().click(); // -> back to cpu
+
   // Force a reachability edge: point the box at a dead port via the API (the
   // page's session cookie rides along), then reload so the client refetches.
   const id = await page.locator('.box', { hasText: 'localhost' }).first().getAttribute('data-id');

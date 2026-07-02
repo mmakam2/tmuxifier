@@ -69,7 +69,9 @@ export function cpuLevel(pct: number): Level {
 // color stays on the percentage alone.
 export const CPU_ICON = '\uF2DB';
 
-export interface MetaSegment { text: string; icon?: string; iconClass?: string; level?: Level; title?: string; }
+// `metric` names the underlying figure so the row's sparkline can highlight the
+// segment it is currently graphing (the line itself is otherwise anonymous).
+export interface MetaSegment { text: string; icon?: string; iconClass?: string; level?: Level; title?: string; metric?: 'cpu' | 'mem' | 'disk'; }
 
 // The always-visible second line under a box label, as styled segments. Reachable
 // → `[cpu, mem, disk]` from the metrics piggybacked on the status probe; only the
@@ -90,22 +92,22 @@ export function metaSegmentsFor(st: Status | undefined): MetaSegment[] {
   // container load average reflects the whole Proxmox host, so we never show it
   // when a (more accurate) cgroup figure is available or merely warming up.
   if (m.cpuPct != null) {
-    segs.push({ text: `${m.cpuPct}%`, ...cpuIcon, level: cpuLevel(m.cpuPct), title: `CPU ${m.cpuPct}% utilization (cgroup — matches Proxmox)` });
+    segs.push({ text: `${m.cpuPct}%`, ...cpuIcon, level: cpuLevel(m.cpuPct), title: `CPU ${m.cpuPct}% utilization (cgroup — matches Proxmox)`, metric: 'cpu' });
   } else if (m.cpuUsageUsec == null) {
     const pct = cpuLoadPct(m);
     if (pct != null) {
-      segs.push({ text: `${pct}%`, ...cpuIcon, level: cpuLevel(pct), title: `load ${m.load1} ÷ ${m.cpus} cores (${pct}%) — load-based fallback, no cgroup; counts IO-waiting processes` });
+      segs.push({ text: `${pct}%`, ...cpuIcon, level: cpuLevel(pct), title: `load ${m.load1} ÷ ${m.cpus} cores (${pct}%) — load-based fallback, no cgroup; counts IO-waiting processes`, metric: 'cpu' });
     } else if (m.load1 != null) {
-      segs.push({ text: m.load1.toFixed(2), ...cpuIcon, title: 'CPU load average (core count unknown)' });
+      segs.push({ text: m.load1.toFixed(2), ...cpuIcon, title: 'CPU load average (core count unknown)', metric: 'cpu' });
     }
   } // else: cgroup host warming up (one sample) — omit the cpu segment this cycle
   if (m.memTotalKb && m.memAvailKb != null) {
-    segs.push({ text: `${Math.round((1 - m.memAvailKb / m.memTotalKb) * 100)}%`, icon: '🧠', title: 'RAM used' });
+    segs.push({ text: `${Math.round((1 - m.memAvailKb / m.memTotalKb) * 100)}%`, icon: '🧠', title: 'RAM used', metric: 'mem' });
   }
   const diskPct = m.diskPct != null
     ? m.diskPct
     : (m.diskTotalKb && m.diskUsedKb != null ? Math.round((m.diskUsedKb / m.diskTotalKb) * 100) : undefined);
-  if (diskPct != null) segs.push({ text: `${diskPct}%`, icon: '💾', title: 'Disk used (root filesystem /)' });
+  if (diskPct != null) segs.push({ text: `${diskPct}%`, icon: '💾', title: 'Disk used (root filesystem /)', metric: 'disk' });
   return segs;
 }
 
