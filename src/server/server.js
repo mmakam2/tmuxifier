@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
-import { verifyPassword, COOKIE_NAME, cookieOptions } from './auth.js';
+import { verifyPassword, COOKIE_NAME, cookieOptions, sessionValue, sessionValueValid } from './auth.js';
+import { createLoginRateLimiter } from './rateLimit.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
 import { buildEnsureTmuxRemote } from './boxActions.js';
 import { assertBoxSafe } from './sshCommand.js';
@@ -53,7 +54,16 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
       : {};
-  const app = Fastify({ logger: false, ...httpsOpts });
+  // trustProxy makes req.ip the X-Forwarded-For client behind the reverse
+  // proxy/tunnel deployment the docs recommend. Without it every client shares
+  // the proxy's address, so per-IP login rate limiting buckets everyone
+  // together — any remote client could lock the real user out. Off by default:
+  // trusting forwarded headers from a non-proxy would let clients spoof their ip.
+  const app = Fastify({
+    logger: false,
+    ...(config.trustProxy !== undefined ? { trustProxy: config.trustProxy } : {}),
+    ...httpsOpts,
+  });
   app.register(cookie, { secret: config.cookieSecret });
   app.register(websocket);
 
@@ -68,7 +78,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     });
   }
 
-  const attempts = new Map(); // ip -> { count, ts } simple rate-limit
+  const loginLimiter = createLoginRateLimiter(); // per-ip lockout for POST /api/login
 
   function allowedOrigins(req) {
     const origins = new Set(requestHostOrigins(req));
@@ -109,7 +119,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const raw = req.cookies?.[COOKIE_NAME];
     if (raw) {
       const r = app.unsignCookie(raw);
-      return r.valid && r.value === 'ok';
+      return r.valid && sessionValueValid(r.value);
     }
     // Fallback: parse cookie header manually (needed for WS with @fastify/websocket v10)
     const cookieHeader = req.headers?.cookie;
@@ -123,7 +133,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       if (name === COOKIE_NAME) {
         const value = decodeURIComponent(trimmed.slice(eqIdx + 1).trim());
         const r = app.unsignCookie(value);
-        return r.valid && r.value === 'ok';
+        return r.valid && sessionValueValid(r.value);
       }
     }
     return false;
@@ -138,14 +148,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   if (config.authMode !== 'google') {
     app.post('/api/login', async (req, reply) => {
       const ip = req.ip;
-      const rec = attempts.get(ip) || { count: 0, ts: Date.now() };
-      if (Date.now() - rec.ts > 60000) { rec.count = 0; rec.ts = Date.now(); }
-      if (rec.count >= 10) return reply.code(429).send({ error: 'too many attempts' });
-      if (attempts.size > 1000) attempts.clear();
+      if (loginLimiter.limited(ip)) return reply.code(429).send({ error: 'too many attempts' });
       const ok = await verifyPassword(req.body?.password || '', config.passwordHash);
-      if (!ok) { rec.count += 1; attempts.set(ip, rec); return reply.code(401).send({ error: 'invalid' }); }
-      attempts.delete(ip);
-      reply.setCookie(COOKIE_NAME, 'ok', cookieOptions(config.secureCookie));
+      if (!ok) { loginLimiter.fail(ip); return reply.code(401).send({ error: 'invalid' }); }
+      loginLimiter.succeed(ip);
+      reply.setCookie(COOKIE_NAME, sessionValue(), cookieOptions(config.secureCookie));
       return { ok: true };
     });
   }
@@ -177,7 +184,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         return reply.redirect('/?error=google');
       }
       if (!result.emailVerified || !google.isAllowed(result.email)) return reply.redirect('/?error=forbidden');
-      reply.setCookie(COOKIE_NAME, 'ok', cookieOptions(config.secureCookie));
+      reply.setCookie(COOKIE_NAME, sessionValue(), cookieOptions(config.secureCookie));
       return reply.redirect('/');
     });
   }
@@ -202,11 +209,15 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     try {
       const before = await store.getBox(req.params.id);
       const updated = await store.updateBox(req.params.id, req.body || {});
-      // If the target tmux session changed, drop the live PTY (if any) so the
-      // browser terminal reconnects and reattaches to the NEW session instead of
-      // the one it opened with. The ControlMaster (keyed by host/user/port) is
-      // left alone, so the reattach multiplexes over it with no re-auth.
-      if (before && updated.sessionName !== before.sessionName && sessions?.closeKey) {
+      // If anything the ssh argv is built from changed — the target tmux session
+      // or any connection field — drop the live PTY (if any) so the browser
+      // terminal reconnects with the NEW values instead of silently staying on
+      // the ones it opened with (terminal on the old host, dot probing the new).
+      // For a session-only change the ControlMaster (keyed by host/user/port) is
+      // left alone, so the reattach multiplexes over it with no re-auth; a
+      // connection-field change makes the old master irrelevant anyway.
+      const connectionFields = ['sessionName', 'host', 'user', 'port', 'proxyJump'];
+      if (before && sessions?.closeKey && connectionFields.some((f) => updated[f] !== before[f])) {
         sessions.closeKey(req.params.id);
       }
       return updated;
@@ -555,7 +566,10 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         socket.on('close', () => {
           if (typeof off === 'function') off();
           if (typeof offExit === 'function') offExit();
-          sessions.close(entry);
+          // Kill the PTY only if this was the last socket watching the entry —
+          // a replacement socket (same provision:<boxId> key) may be attached.
+          if (sessions.closeIfUnwatched) sessions.closeIfUnwatched(entry);
+          else sessions.close(entry);
         });
         return;
       }

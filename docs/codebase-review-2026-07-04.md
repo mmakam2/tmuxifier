@@ -21,11 +21,26 @@ timer is cancelled on dispose. Two pre-existing e2e failures were repaired in pa
 specs still targeted the old "Fleet"/"Jobs" button names from before the 9c851cb rename, and
 terminal specs typed before the WebSocket opened). MEDIUM and LOW findings remain open.
 
+**Status note, 2026-07-04 (later the same day):** all eleven MEDIUM findings (M1–M11) have
+since been fixed, test-first, in v1.4.20: the fleet manager now honors the mid-login
+ControlMaster guard (`skipped: box in use` targets); the session cookie embeds its issue time
+and expires server-side after 7 days (legacy constant-`ok` cookies are rejected — everyone
+re-logs-in once); the login rate limiter lives in `rateLimit.js` with evict-oldest overflow
+(no more global reset) and a new `TMUXIFIER_TRUST_PROXY` knob passes through to Fastify;
+PATCHing any connection field (host/user/port/proxyJump) now drops the live PTY like a
+session change; `updateHost` whitelists patchable fields; provision polling tolerates up to 5
+consecutive `taskStatus` failures; `statusPoller` coalesces overlapping cycles; the web client
+has a central 401 handler (dashboard tears down to the login screen with a "session
+expired" toast); the provision panel is always dismissible with no timer/listener leaks (and
+is closed on logout/expiry); box removal asks `confirm()`; and a replaced provision socket's
+close no longer kills the shared PTY its replacement is watching
+(`sessions.closeIfUnwatched`). LOW findings remain open.
+
 ---
 
 ## Findings at a glance
 
-Status reflects `main` as of v1.4.18. Effort is a rough fix-size guess for open items:
+Status reflects `main` as of v1.4.20. Effort is a rough fix-size guess for open items:
 **S** = under an hour, **M** = a few hours (design decisions or a protocol/major-version change).
 
 | ID | Area | Finding | Severity | Status | Effort |
@@ -36,17 +51,17 @@ Status reflects `main` as of v1.4.18. Effort is a rough fix-size guess for open 
 | H4 | sessions | Stale grace timer / `close()` evicts successor session by key | High | ✅ Fixed v1.4.18 | — |
 | H5 | web | Stale `tabs` map across logout→login makes boxes unopenable | High | ✅ Fixed v1.4.18 | — |
 | H6 | web | Reconnect timer survives `dispose()` — leaked WS + duplicate PTY listener | High | ✅ Fixed v1.4.18 | — |
-| M1 | fleet | Fleet exec / `killSession` bypass the mid-login ControlMaster guard | Medium | Open | S |
-| M2 | auth | Session cookie is a constant, non-expiring bearer token | Medium | Open | S |
-| M3 | server | Rate limiter: global `clear()` reset + no `trustProxy` behind a proxy | Medium | Open | S |
-| M4 | sessions | Editing a box's connection fields leaves the terminal on the old host | Medium | Open | S |
-| M5 | proxmox | `updateHost` merges arbitrary patch fields, including `id` | Medium | Open | S |
-| M6 | proxmox | One transient poll error kills a provision job (orphaned LXC) | Medium | Open | S |
-| M7 | status | `statusPoller` has no re-entrancy guard (duplicate/stale snapshots) | Medium | Open | S |
-| M8 | web | No 401/session-expiry handling — dashboard silently freezes | Medium | Open | M |
-| M9 | web | Provision panel can get stuck open with no dismiss/cancel | Medium | Open | M |
-| M10 | web | Box removal is a single unconfirmed click | Medium | Open | S |
-| M11 | sessions | Provision WS close kills a shared entry another socket uses | Medium | Open | M |
+| M1 | fleet | Fleet exec / `killSession` bypass the mid-login ControlMaster guard | Medium | ✅ Fixed v1.4.20 | — |
+| M2 | auth | Session cookie is a constant, non-expiring bearer token | Medium | ✅ Fixed v1.4.20 | — |
+| M3 | server | Rate limiter: global `clear()` reset + no `trustProxy` behind a proxy | Medium | ✅ Fixed v1.4.20 | — |
+| M4 | sessions | Editing a box's connection fields leaves the terminal on the old host | Medium | ✅ Fixed v1.4.20 | — |
+| M5 | proxmox | `updateHost` merges arbitrary patch fields, including `id` | Medium | ✅ Fixed v1.4.20 | — |
+| M6 | proxmox | One transient poll error kills a provision job (orphaned LXC) | Medium | ✅ Fixed v1.4.20 | — |
+| M7 | status | `statusPoller` has no re-entrancy guard (duplicate/stale snapshots) | Medium | ✅ Fixed v1.4.20 | — |
+| M8 | web | No 401/session-expiry handling — dashboard silently freezes | Medium | ✅ Fixed v1.4.20 | — |
+| M9 | web | Provision panel can get stuck open with no dismiss/cancel | Medium | ✅ Fixed v1.4.20 | — |
+| M10 | web | Box removal is a single unconfirmed click | Medium | ✅ Fixed v1.4.20 | — |
+| M11 | sessions | Provision WS close kills a shared entry another socket uses | Medium | ✅ Fixed v1.4.20 | — |
 | L1 | boxActions | `default-shell` dedup `sed` is a no-op (`#`-led script is a comment) | Low | Open | S |
 | L2 | fleet | ssh timeout reported as `exited 1` | Low | Open | S |
 | L3 | fleet | `prune()` can evict a still-running job | Low | Open | S |
@@ -72,7 +87,7 @@ Status reflects `main` as of v1.4.18. Effort is a rough fix-size guess for open 
 | L23 | scripts | `set-password` leaks the password via argv / echoed prompt | Low | Open | S |
 | — | dead code | 4 unreachable Proxmox routes + assorted unused exports/params | Info | Open | S |
 | — | docs | DEPLOY.md ssh-config "import" claim, local-shell undocumented, `.env.example` gap | Info | Open | S |
-| — | tests | Coverage gaps (rate limiting, logout, WS auth, fleet edges; HIGH-related gaps closed in v1.4.18) | Info | Partially closed | M |
+| — | tests | Coverage gaps (logout, WS auth, fleet edges; HIGH gaps closed v1.4.18, rate-limit/session-expiry/fleet-guard gaps closed v1.4.20) | Info | Partially closed | M |
 | — | deps | fastify 4 HIGH advisories; vitest/vite critical (dev-only); xterm 6 major | Info | Open | M |
 
 ---

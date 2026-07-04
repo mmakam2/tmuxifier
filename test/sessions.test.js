@@ -118,3 +118,45 @@ test('live output still fans out to an attached client after the replay', () => 
   pty.emit('live-after-attach');
   expect(got).toContain('live-after-attach');
 });
+
+// Provision mode kills its PTY when the socket closes — but provision() hands
+// the SAME entry to a second socket with the same key (e.g. a reconnect after
+// a network blip). The old socket's straggling close must not abort the
+// provisioning script the replacement is still watching (a nonzero exit rolls
+// the box back as if the user cancelled).
+test('a replaced provision socket closing does not kill the entry the replacement watches', () => {
+  const pty = fakePty();
+  let killed = false;
+  pty.kill = () => { killed = true; };
+  const mgr = createSessionManager({ spawn: () => pty });
+
+  const e1 = mgr.provision({ key: 'provision:b1', box: { host: 'h' }, script: 'echo hi' });
+  const off1 = mgr.attach(e1, () => {});
+  const e2 = mgr.provision({ key: 'provision:b1', box: { host: 'h' }, script: 'echo hi' });
+  expect(e2).toBe(e1); // second socket shares the live entry
+  const off2 = mgr.attach(e2, () => {});
+
+  // First socket closes (its listener detaches first, as in the WS handler).
+  off1();
+  expect(mgr.closeIfUnwatched(e1)).toBe(false);
+  expect(killed).toBe(false);
+  expect(mgr.hasLiveSession('provision:b1')).toBe(true);
+
+  // Last socket closes — now the PTY really dies.
+  off2();
+  expect(mgr.closeIfUnwatched(e2)).toBe(true);
+  expect(killed).toBe(true);
+  expect(mgr.hasLiveSession('provision:b1')).toBe(false);
+});
+
+test('closeIfUnwatched on a sole-socket provision closes immediately (original behavior)', () => {
+  const pty = fakePty();
+  let killed = false;
+  pty.kill = () => { killed = true; };
+  const mgr = createSessionManager({ spawn: () => pty });
+  const entry = mgr.provision({ key: 'provision:b2', box: { host: 'h' }, script: 'echo hi' });
+  const off = mgr.attach(entry, () => {});
+  off();
+  expect(mgr.closeIfUnwatched(entry)).toBe(true);
+  expect(killed).toBe(true);
+});

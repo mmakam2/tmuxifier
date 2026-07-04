@@ -13,23 +13,34 @@ export function createStatusPoller({
 }) {
   let snapshot = {};
   let timer = null;
+  let inFlight = null;
 
-  async function pollOnce() {
-    const boxes = await store.listBoxes();
-    // Probe in small batches (same reason as the old handler) and swap the
-    // snapshot in wholesale so readers never see a half-built map and a removed
-    // box drops out.
-    const next = {};
-    await mapWithConcurrency(boxes, concurrency, async (b) => {
-      next[b.id] = await statusChecker.checkBox(b);
-    });
-    snapshot = next;
-    if (history) {
-      // History must never affect status availability: the snapshot is already
-      // swapped, so a bug here can't blank /api/status.
-      try { history.record(next, boxes); } catch { /* swallowed on purpose */ }
-    }
-    return snapshot;
+  function pollOnce() {
+    // Coalesce overlapping polls: the interval fires on a fixed cadence whether
+    // or not the previous cycle finished, so a slow cycle (several down boxes
+    // at full probe timeout) would otherwise overlap the next — doubling
+    // history.record per interval (defeating the two-consecutive-samples cpu
+    // debounce) and letting an older poll finish later and overwrite a newer
+    // snapshot with stale data (spurious down/up events).
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      const boxes = await store.listBoxes();
+      // Probe in small batches (same reason as the old handler) and swap the
+      // snapshot in wholesale so readers never see a half-built map and a removed
+      // box drops out.
+      const next = {};
+      await mapWithConcurrency(boxes, concurrency, async (b) => {
+        next[b.id] = await statusChecker.checkBox(b);
+      });
+      snapshot = next;
+      if (history) {
+        // History must never affect status availability: the snapshot is already
+        // swapped, so a bug here can't blank /api/status.
+        try { history.record(next, boxes); } catch { /* swallowed on purpose */ }
+      }
+      return snapshot;
+    })().finally(() => { inFlight = null; });
+    return inFlight;
   }
 
   return {

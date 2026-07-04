@@ -1,4 +1,4 @@
-import { api, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent } from './api';
+import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent } from './api';
 import { openTerminal, openProvisionTerminal, setTerminalFont } from './terminal';
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
 import { sparkline } from './sparkline';
@@ -405,6 +405,7 @@ async function renderDashboard() {
     for (const id of [...tabs.keys()]) closeTab(id);
     closeFleetJobsPanel();
     closeEventsPanel();
+    closeProvisionPanel();
     await api.logout(); await renderLogin();
   });
   app.querySelector('#sidebar-toggle')!.addEventListener('click', () => {
@@ -567,6 +568,11 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   rm.textContent = '✕';
   rm.addEventListener('click', async (e) => {
     e.stopPropagation();
+    // The ✕ sits in a tight icon cluster next to ✎ — one misclick used to
+    // destroy the box config with no way back. Same confirm() pattern as every
+    // remove in the Proxmox hub. (Only the Tmuxifier entry is removed; the tmux
+    // session on the box keeps running.)
+    if (!confirm(`Remove box ${b.label}?`)) return;
     await api.removeBox(b.id);
     closeTab(b.id);
     await refresh();
@@ -822,6 +828,24 @@ async function openLocalShellEditModal() {
   });
 }
 
+// One provision run owns the shared static panel at a time. Module-level state
+// so a re-open can cancel the previous run's pending auto-close and dispose its
+// terminal (whose WebSocket would otherwise keep streaming into a detached
+// element), and so logout/session-expiry can tear the panel down too.
+let activeProvisionTerm: ReturnType<typeof openProvisionTerminal> | null = null;
+let provisionAutoClose: number | undefined;
+
+function closeProvisionPanel() {
+  const panel = document.getElementById('provision-panel')!;
+  if (provisionAutoClose) { clearTimeout(provisionAutoClose); provisionAutoClose = undefined; }
+  panel.classList.remove('open');
+  // Null the module ref before dispose: dispose() fires onComplete(-1) on a
+  // still-running provision, and the stale-run guard in onComplete keys off it.
+  const term = activeProvisionTerm;
+  activeProvisionTerm = null;
+  term?.dispose();
+}
+
 function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean }) {
   const panel = document.getElementById('provision-panel')!;
   const title = panel.querySelector('.provision-title')!;
@@ -829,35 +853,39 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
   const container = panel.querySelector('.provision-term') as HTMLElement;
   const closeBtn = panel.querySelector('.provision-close') as HTMLElement;
 
-  // Reset state
+  // Tear down any previous run first (pending auto-close, live WebSocket).
+  closeProvisionPanel();
+
   title.textContent = `Provisioning ${box.label}`;
   status.textContent = '';
   status.className = 'provision-status';
-  closeBtn.style.display = 'none';
   container.innerHTML = '';
 
   panel.classList.add('open');
 
   const term = openProvisionTerminal(container, box.id, options, (code) => {
+    // A replaced or user-closed run must not repaint the panel (dispose()
+    // reports exit -1 on a still-running provision).
+    if (term !== activeProvisionTerm) return;
     if (code === 0) {
       status.textContent = '✓ Complete';
       status.className = 'provision-status success';
       refresh();
-      setTimeout(() => {
-        panel.classList.remove('open');
-        term.dispose();
-      }, 2000);
+      provisionAutoClose = window.setTimeout(() => closeProvisionPanel(), 2000);
     } else {
       status.textContent = `✗ Failed (exit ${code})`;
       status.className = 'provision-status error';
-      closeBtn.style.display = '';
     }
   });
+  activeProvisionTerm = term;
 
-  closeBtn.addEventListener('click', () => {
-    panel.classList.remove('open');
-    term.dispose();
-  }, { once: true });
+  // Always dismissible — a hung remote (WebSocket open, no exit frame) used to
+  // leave the panel covering the screen with no way out short of a reload.
+  // Closing mid-run cancels: disposing the WS makes the server kill the remote
+  // script. onclick assignment (not addEventListener) so re-opens never stack
+  // stale handlers that would close the panel over a newer run.
+  closeBtn.style.display = '';
+  (closeBtn as HTMLButtonElement).onclick = () => closeProvisionPanel();
 }
 
 function openBoxDialog(box?: Box) {
@@ -1539,6 +1567,7 @@ function renderFleetJob(detail: HTMLElement, job: import('./api').FleetJob) {
     badge.className = 'fr-badge';
     badge.textContent = t.status === 'ok' ? 'exit 0'
       : t.status === 'error' ? (t.code != null ? `exit ${t.code}` : (t.error || 'error'))
+      : t.status === 'skipped' ? (t.error || 'skipped')
       : t.status; // running | pending | cancelled | interrupted
     top.append(name, badge);
     row.appendChild(top);
@@ -1553,5 +1582,22 @@ function renderFleetJob(detail: HTMLElement, job: import('./api').FleetJob) {
     detail.appendChild(row);
   }
 }
+
+// Session expiry (or a server restart with a new cookie secret) surfaces as
+// 401s on the polls and actions. Tear the dashboard down exactly like logout —
+// surviving tabs would keep detached terminal elements and live reconnect
+// loops — and land on the login screen with a notice. No-op when the login
+// screen is already up (e.g. the 401 from a wrong password on /api/login).
+onUnauthorized(() => {
+  if (!app.querySelector('.layout')) return;
+  if (pollInterval) clearInterval(pollInterval);
+  stopFleetPoll();
+  for (const id of [...tabs.keys()]) closeTab(id);
+  closeFleetJobsPanel();
+  closeEventsPanel();
+  closeProvisionPanel();
+  void renderLogin();
+  showToast('Session expired — please log in again.', 'error');
+});
 
 start();

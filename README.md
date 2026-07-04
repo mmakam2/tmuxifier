@@ -68,6 +68,7 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | Proxmox DHCP-lease wait (ms) | `TMUXIFIER_PVE_LEASE_TIMEOUT_MS` | `60000` |
 | Proxmox provision job history kept | `TMUXIFIER_PVE_MAX_JOBS` | `50` |
 | Proxmox default management pubkey | `TMUXIFIER_PVE_DEFAULT_PUBKEY` | auto-detect `~/.ssh/*.pub` |
+| trust reverse-proxy X-Forwarded-For | `TMUXIFIER_TRUST_PROXY` | off |
 | auth mode | `TMUXIFIER_AUTH_MODE` | `password` |
 | password hash | `TMUXIFIER_PASSWORD_HASH` | — (required) |
 | cookie secret | `TMUXIFIER_COOKIE_SECRET` | — (required) |
@@ -85,8 +86,14 @@ Set **both** `TMUXIFIER_TLS_CERT` and `TMUXIFIER_TLS_KEY` to serve HTTPS directl
 the session cookie is automatically marked `Secure`. An `https://` `TMUXIFIER_BASE_EXTERNAL_URL`
 also marks it `Secure` for deployments behind a TLS-terminating proxy or tunnel.
 
+When Tmuxifier sits behind a reverse proxy or tunnel, also set `TMUXIFIER_TRUST_PROXY` (`true`, a
+hop count, or a comma-separated address/CIDR list) so login rate limiting sees each client's real
+IP from `X-Forwarded-For` instead of bucketing everyone under the proxy's address. Leave it unset
+when clients connect directly — trusting forwarded headers from a non-proxy lets clients spoof
+their IP.
+
 As an alternative to `.env`, a `config.json` in the repo root works too, using camelCase keys
-(`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`,
+(`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`, `trustProxy`,
 `statusConcurrency`, `statusPollMs`, `controlPersist`, `termFont`, `termFontSize`, `fleetConcurrency`, `fleetTimeoutMs`,
 `fleetMaxJobs`, `fleetMaxOutputBytes`, `healthHistoryMax`, `healthEventsMax`, `healthCpuWarnPct`,
 `healthMemWarnPct`, `healthDiskWarnPct`, `healthThresholdHysteresisPct`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
@@ -268,9 +275,11 @@ Tmuxifier can SSH into your whole fleet, so the login gate is the crown jewel. I
 `TMUXIFIER_TLS_CERT`/`TMUXIFIER_TLS_KEY` to serve HTTPS directly (a self-signed cert works; browsers
 show a one-time warning), or front it with a TLS reverse proxy — and set `TMUXIFIER_BIND`
 accordingly. Serving the login over plain HTTP on a non-loopback address sends credentials
-in cleartext. Passwords are scrypt-hashed; OAuth mode uses an exact-email allowlist; the
-session cookie is signed, httpOnly, SameSite=lax, and marked `Secure` for local TLS or an
-`https://` base external URL. Tmuxifier stores no SSH secrets — your keys and agent stay in the OS.
+in cleartext. Passwords are scrypt-hashed and login attempts are rate-limited per IP (set
+`TMUXIFIER_TRUST_PROXY` behind a proxy so the limiter sees real client IPs); OAuth mode uses an
+exact-email allowlist; the session cookie is signed, httpOnly, SameSite=lax, expires after 7 days
+(server-enforced), and is marked `Secure` for local TLS or an `https://` base external URL.
+Tmuxifier stores no SSH secrets — your keys and agent stay in the OS.
 
 Generate a self-signed cert (valid for an IP) with:
 ```bash

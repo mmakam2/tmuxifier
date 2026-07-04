@@ -31,6 +31,29 @@ export async function verifyPassword(password, stored) {
   }
 }
 
+// Session lifetime, shared by the cookie's browser-side maxAge and the
+// server-side issued-at check below. The signed value used to be the constant
+// 'ok' — identical for every login, forever — so a cookie captured once (HAR
+// file, backup, shoulder-surfed devtools) authenticated until the cookie
+// secret was manually rotated. Embedding the issue time makes a captured
+// cookie expire server-side even if the client ignores maxAge.
+export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
+
+// Allow a small backwards clock step (e.g. an NTP correction right after a
+// login) without bouncing a just-minted session back to the login screen.
+const CLOCK_SKEW_SECONDS = 300;
+
+export function sessionValue(now = Date.now()) {
+  return `ok.${Math.floor(now / 1000)}`;
+}
+
+export function sessionValueValid(value, now = Date.now()) {
+  const m = /^ok\.(\d{1,12})$/.exec(String(value ?? ''));
+  if (!m) return false; // includes the legacy constant 'ok' — re-login once
+  const ageSeconds = Math.floor(now / 1000) - Number(m[1]);
+  return ageSeconds >= -CLOCK_SKEW_SECONDS && ageSeconds <= SESSION_TTL_SECONDS;
+}
+
 export function cookieOptions(secure) {
-  return { httpOnly: true, sameSite: 'lax', secure: !!secure, path: '/', signed: true, maxAge: 60 * 60 * 24 * 7 };
+  return { httpOnly: true, sameSite: 'lax', secure: !!secure, path: '/', signed: true, maxAge: SESSION_TTL_SECONDS };
 }

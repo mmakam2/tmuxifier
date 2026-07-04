@@ -301,3 +301,19 @@ test('proxmox knobs have defaults and are overridable via env', () => {
   expect(e.pveLeaseTimeoutMs).toBe(30000);
   expect(e.pveMaxJobs).toBe(10);
 });
+
+// trustProxy: off unless explicitly configured (trusting X-Forwarded-For from a
+// non-proxy would let clients spoof the ip that login rate limiting buckets by).
+test('trustProxy defaults off and normalizes env values', () => {
+  expect(loadConfig({}, { env: {}, cwd: '/app' }).trustProxy).toBeUndefined();
+  expect(loadConfig({}, { env: { TMUXIFIER_TRUST_PROXY: 'true' }, cwd: '/app' }).trustProxy).toBe(true);
+  expect(loadConfig({}, { env: { TMUXIFIER_TRUST_PROXY: 'false' }, cwd: '/app' }).trustProxy).toBeUndefined();
+  expect(loadConfig({}, { env: { TMUXIFIER_TRUST_PROXY: '' }, cwd: '/app' }).trustProxy).toBeUndefined();
+  expect(loadConfig({}, { env: { TMUXIFIER_TRUST_PROXY: '1' }, cwd: '/app' }).trustProxy).toBe(1); // hop count
+  expect(loadConfig({}, { env: { TMUXIFIER_TRUST_PROXY: '127.0.0.1,10.0.0.0/8' }, cwd: '/app' }).trustProxy).toBe('127.0.0.1,10.0.0.0/8');
+});
+
+test('trustProxy accepts a boolean from config.json / overrides', () => {
+  expect(loadConfig({ trustProxy: true }, { env: {}, cwd: '/app' }).trustProxy).toBe(true);
+  expect(loadConfig({ trustProxy: false }, { env: {}, cwd: '/app' }).trustProxy).toBeUndefined();
+});

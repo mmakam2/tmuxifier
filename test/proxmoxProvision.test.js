@@ -142,3 +142,58 @@ test('startup reconciliation flips a persisted running job to interrupted', () =
   expect(mgr.getProvision('old').status).toBe('interrupted');
   expect(saved[0][0].status).toBe('interrupted');
 });
+
+// One network blip or pveproxy restart during the minutes-long create/start
+// poll used to throw straight out of pollTask — the job was marked error while
+// the LXC kept creating on PVE (orphaned container, misleading outcome). Only
+// N consecutive taskStatus failures count as a real outage.
+test('transient taskStatus failures during the poll do not fail the job', async () => {
+  let calls = 0;
+  const client = {
+    ...okClient(),
+    taskStatus: async () => {
+      calls += 1;
+      if (calls === 2 || calls === 3) throw new Error('pveproxy restarting');
+      return { status: 'stopped', exitstatus: 'OK' };
+    },
+  };
+  const boxStore = fakeBoxStore();
+  const mgr = createProvisionManager(base({ proxmoxStore: makeStore(PRESET_STATIC), boxStore, makeClient: () => client }));
+  const job = await mgr.createProvision({ presetId: 'p2', hostname: 'dev-07' });
+  await mgr._settled(job.id);
+  expect(mgr.getProvision(job.id).status).toBe('done');
+  expect(boxStore.added).toHaveLength(1); // the box still got linked
+});
+
+test('persistent taskStatus failures fail the job once the tolerance is exhausted', async () => {
+  let calls = 0;
+  const client = { ...okClient(), taskStatus: async () => { calls += 1; throw new Error('connect ECONNREFUSED'); } };
+  const mgr = createProvisionManager(base({ proxmoxStore: makeStore(PRESET_STATIC), makeClient: () => client, maxPollFailures: 3 }));
+  const job = await mgr.createProvision({ presetId: 'p2', hostname: 'dev-08' });
+  await mgr._settled(job.id);
+  const done = mgr.getProvision(job.id);
+  expect(done.status).toBe('error');
+  expect(done.error).toMatch(/ECONNREFUSED/);
+  expect(calls).toBe(3); // gave up after exactly the tolerance, not the task timeout
+});
+
+test('a success between failures resets the consecutive-failure count', async () => {
+  let calls = 0;
+  const client = {
+    ...okClient(),
+    // fail, fail, ok(running), fail, fail, ok(stopped): never 3 consecutive
+    taskStatus: async () => {
+      calls += 1;
+      if ([1, 2, 4, 5].includes(calls)) throw new Error('blip');
+      if (calls === 3) return { status: 'running' };
+      return { status: 'stopped', exitstatus: 'OK' };
+    },
+  };
+  const mgr = createProvisionManager(base({
+    proxmoxStore: makeStore({ ...PRESET_STATIC, startAfterCreate: false }),
+    makeClient: () => client, maxPollFailures: 3,
+  }));
+  const job = await mgr.createProvision({ presetId: 'p2', hostname: 'dev-09' });
+  await mgr._settled(job.id);
+  expect(mgr.getProvision(job.id).status).toBe('done');
+});

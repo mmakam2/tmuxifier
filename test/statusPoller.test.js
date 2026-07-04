@@ -104,3 +104,37 @@ test('stop clears the scheduled interval', async () => {
   poller.stop();
   expect(cleared).toBe(99);
 });
+
+// The interval fires on a fixed cadence whether or not the previous cycle
+// finished. Overlapping cycles used to double history.record per interval
+// (defeating the two-consecutive-samples cpu debounce) and let an older poll
+// finish later and overwrite a newer snapshot with stale data.
+test('overlapping pollOnce calls coalesce into a single probe cycle', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let probes = 0;
+  const records = [];
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'a', host: 'ha' }]),
+    statusChecker: { checkBox: async () => { probes++; await gate; return { reachable: true }; } },
+    history: { record: (snap) => records.push(snap) },
+  });
+  const p1 = poller.pollOnce();
+  const p2 = poller.pollOnce(); // the next interval tick fires mid-cycle
+  release();
+  const [s1, s2] = await Promise.all([p1, p2]);
+  expect(probes).toBe(1);            // one probe cycle, not two
+  expect(records).toHaveLength(1);   // one history sample per cycle
+  expect(s1).toBe(s2);               // both callers see the same snapshot
+});
+
+test('a new poll starts normally once the previous cycle has settled', async () => {
+  let probes = 0;
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'a', host: 'ha' }]),
+    statusChecker: { checkBox: async () => { probes++; return { reachable: true }; } },
+  });
+  await poller.pollOnce();
+  await poller.pollOnce();
+  expect(probes).toBe(2);
+});

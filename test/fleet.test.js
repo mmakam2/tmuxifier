@@ -160,3 +160,67 @@ test('reconciles jobs left running by a previous process into interrupted on sta
   expect(job.targets[1].status).toBe('ok');          // already finished — untouched
   expect(saved).toBeGreaterThan(0);                   // reconciliation was persisted
 });
+
+// Fleet exec used to bypass the mid-login ControlMaster guard the status
+// checker already honors: a BatchMode ssh over the shared %C socket while the
+// user sits at an interactive password prompt garbles the login (worst case,
+// the password lands in a shell). Same rule as status.js: live session + no
+// live master = mid-login, skip; live master = auth done, exec multiplexes
+// over it safely.
+test('a mid-login box (live session, no live master) is skipped, not executed', async () => {
+  const executed = [];
+  const mgr = createFleetManager({
+    store: makeStore(BOXES),
+    execCommand: async (box) => { executed.push(box.id); return { code: 0, stdout: '', stderr: '' }; },
+    hasLiveSession: (box) => box.id === 'b1',
+    masterAlive: async () => false,
+  });
+  const job = await mgr.createJob({ boxIds: ['b1', 'b2'], command: 'uptime' });
+  await mgr._settled(job.id);
+  expect(executed).toEqual(['b2']);
+  expect(job.targets[0]).toMatchObject({ boxId: 'b1', status: 'skipped' });
+  expect(job.targets[0].error).toMatch(/in use/i);
+  expect(job.targets[0].finishedAt).toBeTruthy();
+  expect(job.targets[1].status).toBe('ok');
+  expect(job.status).toBe('done'); // a skipped target never leaves the job dangling
+});
+
+test('a box with a live session AND a live master is executed (multiplexes over the master)', async () => {
+  const executed = [];
+  const mgr = createFleetManager({
+    store: makeStore(BOXES),
+    execCommand: async (box) => { executed.push(box.id); return { code: 0, stdout: '', stderr: '' }; },
+    hasLiveSession: () => true,
+    masterAlive: async () => true,
+  });
+  const job = await mgr.createJob({ boxIds: ['b1'], command: 'uptime' });
+  await mgr._settled(job.id);
+  expect(executed).toEqual(['b1']);
+  expect(job.targets[0].status).toBe('ok');
+});
+
+test('without a masterAlive check, a live-session box is skipped conservatively', async () => {
+  const executed = [];
+  const mgr = createFleetManager({
+    store: makeStore(BOXES),
+    execCommand: async (box) => { executed.push(box.id); return { code: 0, stdout: '', stderr: '' }; },
+    hasLiveSession: () => true, // masterAlive not wired — can't prove auth finished
+  });
+  const job = await mgr.createJob({ boxIds: ['b1'], command: 'uptime' });
+  await mgr._settled(job.id);
+  expect(executed).toEqual([]);
+  expect(job.targets[0].status).toBe('skipped');
+});
+
+test('skipped targets count as neither ok nor error in the job summary', async () => {
+  const mgr = createFleetManager({
+    store: makeStore(BOXES),
+    execCommand: async () => ({ code: 0, stdout: '', stderr: '' }),
+    hasLiveSession: (box) => box.id === 'b1',
+    masterAlive: async () => false,
+  });
+  const job = await mgr.createJob({ boxIds: ['b1', 'b2'], command: 'x' });
+  await mgr._settled(job.id);
+  const summary = mgr.listJobs().find((s) => s.id === job.id);
+  expect(summary).toMatchObject({ targetCount: 2, okCount: 1, errorCount: 0 });
+});

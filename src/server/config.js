@@ -98,6 +98,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     pveMaxJobs: e.TMUXIFIER_PVE_MAX_JOBS ? Number(e.TMUXIFIER_PVE_MAX_JOBS) : undefined,
     pveDefaultPubKeyPath: e.TMUXIFIER_PVE_DEFAULT_PUBKEY, // undefined → auto-detect ~/.ssh/*.pub
     hostKeyPolicy: e.TMUXIFIER_HOSTKEY_POLICY,
+    trustProxy: e.TMUXIFIER_TRUST_PROXY,
     authMode: e.TMUXIFIER_AUTH_MODE,
     publicUrl: e.TMUXIFIER_BASE_EXTERNAL_URL ?? e.TMUXIFIER_PUBLIC_URL,
     googleClientId: e.TMUXIFIER_OAUTH_CLIENT_ID ?? e.TMUXIFIER_GOOGLE_CLIENT_ID,
@@ -119,6 +120,23 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   // terminal for a box over one persistent connection keeps Tmuxifier from
   // hammering each box's sshd (and tripping MaxStartups / ban tools).
   merged.controlDir = merged.controlDir ?? path.join(merged.dataDir, 'cm');
+  // Reverse-proxy support (Fastify trustProxy). Behind the TLS proxy/tunnel the
+  // docs recommend, req.ip is the proxy's address for EVERY client unless the
+  // X-Forwarded-For chain is trusted — per-IP login rate limiting would bucket
+  // everyone together and any remote client could lock the real user out.
+  // Accepts true, a hop count, or a comma-separated address/CIDR list; off by
+  // default because trusting forwarded headers without a proxy lets clients
+  // spoof their ip. undefined = disabled (Fastify default).
+  merged.trustProxy = (() => {
+    const v = merged.trustProxy;
+    if (v === undefined || v === null || v === false) return undefined;
+    if (v === true || typeof v === 'number') return v;
+    const s = String(v).trim();
+    if (!s || /^(false|no|off)$/i.test(s)) return undefined;
+    if (/^(true|yes|on)$/i.test(s)) return true;
+    if (/^\d+$/.test(s)) return Number(s);
+    return s; // address/CIDR list, passed through to Fastify
+  })();
   // Auth mode: password (default) or oauth. "google" is accepted as a legacy alias.
   merged.authMode = ['oauth', 'google'].includes(merged.authMode) ? 'google' : 'password';
   merged.publicUrl = normalizePublicUrl(merged.publicUrl);

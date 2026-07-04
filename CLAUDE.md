@@ -81,7 +81,11 @@ pattern for new modules.
   `.env` parsing/upsert (`envFile.js`), and `config.json` (camelCase) parsing (`configFile.js`).
 - `concurrency.js` — `mapWithConcurrency`, the bounded-parallelism helper status sweeps and Fleet
   runs use so a sweep never opens the whole fleet's SSH connections at once.
-- `auth.js` — scrypt password hashing, signed-cookie options (`COOKIE_NAME`).
+- `auth.js` — scrypt password hashing, signed-cookie options (`COOKIE_NAME`), and the session
+  value helpers (`sessionValue`/`sessionValueValid`): the cookie embeds its issue time and is
+  rejected server-side after `SESSION_TTL_SECONDS`, so a captured cookie can't authenticate forever.
+- `rateLimit.js` — `createLoginRateLimiter`: per-IP login lockout with a bounded map (overflow
+  evicts the oldest window, never clears everyone).
 - `googleAuth.js` — dependency-free Google OIDC helper: authorization-code flow, PKCE, id_token
   payload decoding, and exact-email allowlist checks.
 - `server.js` — Fastify app: login rate-limiting, REST under `/api/*`, and the `/term` WebSocket.
@@ -185,7 +189,11 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 - Google auth is hand-rolled OIDC in `googleAuth.js`: state cookie + PKCE, token exchange
   server-to-server, then exact-email allowlist. The id_token payload is trusted because it is
   fetched directly from Google's token endpoint over TLS in the authorization-code flow.
-- Passwords are scrypt-hashed; the session cookie is signed, httpOnly, SameSite=lax. It is marked
+- Passwords are scrypt-hashed; login attempts are rate-limited per IP (`rateLimit.js` — set
+  `TMUXIFIER_TRUST_PROXY` behind a reverse proxy so the limiter sees real client IPs, and only
+  then, since trusting forwarded headers from direct clients lets them spoof their IP). The
+  session cookie is signed, httpOnly, SameSite=lax, and expires server-side after 7 days (the
+  signed value embeds its issue time — see `auth.js`). It is marked
   `Secure` when local TLS is configured (`tlsCert` + `tlsKey`) or `TMUXIFIER_BASE_EXTERNAL_URL`
   starts with `https://`.
 - `.env` holds the password hash and cookie secret, so `upsertEnvFile` writes it `0o600`

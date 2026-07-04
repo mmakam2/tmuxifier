@@ -19,7 +19,7 @@ export interface HealthEvent {
   seq: number; boxId: string; label: string; host: string; t: number;
   kind: HealthEventKind; reason?: string; metric?: 'cpu' | 'mem' | 'disk'; value?: number;
 }
-export type FleetTargetStatus = 'pending' | 'running' | 'ok' | 'error' | 'cancelled' | 'interrupted';
+export type FleetTargetStatus = 'pending' | 'running' | 'ok' | 'error' | 'skipped' | 'cancelled' | 'interrupted';
 export type FleetJobStatus = 'running' | 'done' | 'cancelled' | 'interrupted';
 export interface FleetTarget {
   boxId: string; label: string; host: string; status: FleetTargetStatus;
@@ -37,8 +37,20 @@ export interface FleetJobSummary {
   targetCount: number; okCount: number; errorCount: number;
 }
 
+// Central 401 seam. When the session cookie expires (or the server restarts
+// with a new secret) every poller and action starts failing with 401s; without
+// one place to notice, the dashboard silently freezes at its last-painted
+// state. main.ts registers a handler that tears the dashboard down and routes
+// back to the login screen. The handler must tolerate firing for /api/login's
+// own wrong-password 401 (main.ts no-ops when the login screen is already up).
+let unauthorizedHandler: (() => void) | null = null;
+export function onUnauthorized(fn: (() => void) | null) { unauthorizedHandler = fn; }
+
 async function j<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  if (!res.ok) {
+    if (res.status === 401) unauthorizedHandler?.();
+    throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  }
   return res.json();
 }
 export const api = {

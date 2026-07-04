@@ -463,6 +463,7 @@ body {
 .fr-badge { flex: 0 0 auto; font-size: 0.8em; padding: 1px 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); }
 .fleet-result.ok .fr-badge { background: rgba(46, 160, 67, 0.15); border-color: rgba(46, 160, 67, 0.4); color: var(--green); }
 .fleet-result.error .fr-badge { background: rgba(248, 81, 73, 0.13); border-color: rgba(248, 81, 73, 0.4); color: #f85149; }
+.fleet-result.skipped .fr-badge { background: rgba(210, 153, 34, 0.12); border-color: rgba(210, 153, 34, 0.4); color: #d29922; }
 .fr-output { margin: 6px 0 0; max-height: 240px; overflow: auto; background: var(--panel-2); border-radius: 6px; padding: 8px; white-space: pre-wrap; word-break: break-all; }
 .fleet-empty, .fleet-detail .err { color: var(--muted); }
 

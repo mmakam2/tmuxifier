@@ -869,3 +869,102 @@ test('add-host: token verify failure returns 400 and never persists the host', a
   expect(res.statusCode).toBe(400);
   expect(calls.some(([op]) => op === 'addHost')).toBe(false);
 });
+
+// --- Session expiry (the cookie is no longer a forever-valid constant) -------
+
+test('an expired session cookie is rejected with 401', async () => {
+  await app.ready();
+  const staleEpoch = Math.floor(Date.now() / 1000) - (60 * 60 * 24 * 7) - 3600; // TTL + 1h ago
+  const signed = app.signCookie(`ok.${staleEpoch}`);
+  const res = await app.inject({
+    method: 'GET', url: '/api/boxes',
+    headers: { cookie: `tmuxifier_session=${encodeURIComponent(signed)}` },
+  });
+  expect(res.statusCode).toBe(401);
+});
+
+test('a legacy constant "ok" session cookie (no issue time) is rejected with 401', async () => {
+  await app.ready();
+  const signed = app.signCookie('ok');
+  const res = await app.inject({
+    method: 'GET', url: '/api/boxes',
+    headers: { cookie: `tmuxifier_session=${encodeURIComponent(signed)}` },
+  });
+  expect(res.statusCode).toBe(401);
+});
+
+test('a freshly signed ok.<now> cookie is accepted (sanity check for the two rejections above)', async () => {
+  await app.ready();
+  const signed = app.signCookie(`ok.${Math.floor(Date.now() / 1000)}`);
+  const res = await app.inject({
+    method: 'GET', url: '/api/boxes',
+    headers: { cookie: `tmuxifier_session=${encodeURIComponent(signed)}` },
+  });
+  expect(res.statusCode).toBe(200);
+});
+
+// --- Login rate limiting ------------------------------------------------------
+
+test('login locks an ip out after 10 failures — even the right password gets 429 until the window passes', async () => {
+  for (let i = 0; i < 10; i++) {
+    const r = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'bad' } });
+    expect(r.statusCode).toBe(401);
+  }
+  const locked = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  expect(locked.statusCode).toBe(429);
+  expect(locked.json().error).toMatch(/too many/i);
+});
+
+test('a successful login clears the ip failure count', async () => {
+  for (let i = 0; i < 9; i++) {
+    await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'bad' } });
+  }
+  const ok = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  expect(ok.statusCode).toBe(200);
+  // The counter restarted: one more failure is nowhere near the lockout.
+  const after = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'bad' } });
+  expect(after.statusCode).toBe(401);
+  const again = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  expect(again.statusCode).toBe(200);
+});
+
+test('behind a trusted proxy, rate limiting buckets by the forwarded client ip, not the proxy', async () => {
+  app = await makeApp({ config: { trustProxy: true } });
+  const attacker = { 'x-forwarded-for': '203.0.113.7' };
+  for (let i = 0; i < 10; i++) {
+    await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'bad' }, headers: attacker });
+  }
+  const locked = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' }, headers: attacker });
+  expect(locked.statusCode).toBe(429);
+  // A different client through the same proxy is NOT locked out.
+  const victim = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' }, headers: { 'x-forwarded-for': '203.0.113.99' } });
+  expect(victim.statusCode).toBe(200);
+});
+
+// --- PATCH connection-field changes drop the live PTY --------------------------
+
+test('changing a connection field (user/port/proxyJump) drops the live PTY like a session change', async () => {
+  const closed = [];
+  const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {}, closeKey: (k) => closed.push(k) };
+  const localApp = await makeApp({ sessions });
+  const loginRes = await localApp.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const cookie = loginRes.cookies.find((c) => c.name === 'tmuxifier_session');
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await localApp.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h9', user: 'root', sessionName: 'web' } });
+  const box = created.json();
+
+  // The terminal would otherwise silently stay attached to the OLD host/user
+  // while the status dot probes the NEW one.
+  await localApp.inject({ method: 'PATCH', url: `/api/boxes/${box.id}`, headers, payload: { user: 'deploy' } });
+  expect(closed).toEqual([box.id]);
+
+  await localApp.inject({ method: 'PATCH', url: `/api/boxes/${box.id}`, headers, payload: { port: 2222 } });
+  expect(closed).toEqual([box.id, box.id]);
+
+  await localApp.inject({ method: 'PATCH', url: `/api/boxes/${box.id}`, headers, payload: { proxyJump: 'jump1' } });
+  expect(closed).toEqual([box.id, box.id, box.id]);
+
+  // A cosmetic change (label/tags) must NOT churn the PTY.
+  await localApp.inject({ method: 'PATCH', url: `/api/boxes/${box.id}`, headers, payload: { label: 'renamed', tags: ['prod'] } });
+  expect(closed).toHaveLength(3);
+});

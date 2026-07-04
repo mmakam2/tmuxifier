@@ -17,6 +17,12 @@ export function createFleetManager({
   timeoutMs = 15000,
   maxJobs = 50,
   maxOutputBytes = 65536,
+  // Mid-login guard, same pair the status checker is injected (see status.js):
+  // a box with a live interactive session whose ControlMaster is not up yet is
+  // sitting at a login prompt — a BatchMode exec over the shared %C socket
+  // would collide with it (worst case, the user's password lands in a shell).
+  hasLiveSession = null,
+  masterAlive = null,
 }) {
   const loaded = load();
   const jobs = Array.isArray(loaded) ? loaded : []; // oldest first; newest pushed to the end
@@ -82,10 +88,24 @@ export function createFleetManager({
     try {
       await mapWithConcurrency(job.targets, concurrency, async (t) => {
         if (t.status === 'cancelled') return; // already cancelled by a completed sibling
+        const box = boxById.get(t.boxId);
+        // Skip a mid-login box (live session, master not established) instead of
+        // racing the interactive prompt. Once auth completes the master is up
+        // and an exec multiplexes over it without disturbing the terminal.
+        if (hasLiveSession && hasLiveSession(box)) {
+          const alive = masterAlive ? await masterAlive(box) : false;
+          if (!alive) {
+            t.status = 'skipped';
+            t.error = 'skipped: box in use (interactive login in progress)';
+            t.finishedAt = now();
+            save(jobs);
+            return;
+          }
+        }
         t.status = 'running';
         t.startedAt = now();
         try {
-          const res = await execCommand(boxById.get(t.boxId), job.command, { timeoutMs });
+          const res = await execCommand(box, job.command, { timeoutMs });
           const out = clip(res && res.stdout, maxOutputBytes);
           const err = clip(res && res.stderr, maxOutputBytes);
           t.stdout = out.text;

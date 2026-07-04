@@ -81,9 +81,16 @@ export function createProxmoxStore({ dataDir, secretBox, makeId = randomUUID, no
       const data = await readAll();
       const i = data.hosts.findIndex((x) => x.id === id);
       if (i === -1) throw new Error('host not found');
-      const merged = { ...data.hosts[i], ...patch };
-      merged.tokenSecret = patch.tokenSecret ? secretBox.seal(patch.tokenSecret) : data.hosts[i].tokenSecret;
-      if (patch.endpoint) { const { host, port } = parseEndpoint(patch.endpoint); merged.endpoint = `${host}:${port}`; }
+      // Whitelist the patchable fields: merging the raw body would let a PATCH
+      // silently re-identify the host (breaking presets' hostId and boxes'
+      // proxmox.hostId provenance) or persist redacted-view junk like hasToken
+      // replayed from a GET.
+      const patchable = ['name', 'endpoint', 'tokenId', 'tokenSecret', 'fingerprint256', 'verifyMode', 'defaultNode'];
+      const clean = {};
+      for (const k of patchable) if (patch[k] !== undefined) clean[k] = patch[k];
+      const merged = { ...data.hosts[i], ...clean };
+      merged.tokenSecret = clean.tokenSecret ? secretBox.seal(clean.tokenSecret) : data.hosts[i].tokenSecret;
+      if (clean.endpoint) { const { host, port } = parseEndpoint(clean.endpoint); merged.endpoint = `${host}:${port}`; }
       assertHostInput({ ...merged, tokenSecret: 'present' }, { requireSecret: false });
       assertUniqueName(data.hosts, merged.name, id);
       data.hosts[i] = merged;

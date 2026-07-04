@@ -71,6 +71,10 @@ const fleetManager = createFleetManager({
   timeoutMs: config.fleetTimeoutMs,
   maxJobs: config.fleetMaxJobs,
   maxOutputBytes: config.fleetMaxOutputBytes,
+  // Same mid-login guard as the status checker: don't fire a BatchMode exec
+  // over a box's shared ControlMaster while its interactive login is live.
+  hasLiveSession: (box) => sessions.hasLiveSession(box.id),
+  masterAlive: (box) => boxActions.isMasterAlive(box),
 });
 const secretBox = createSecretBox(config.cookieSecret);
 const proxmoxStore = createProxmoxStore({ dataDir: config.dataDir, secretBox });

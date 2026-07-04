@@ -146,6 +146,16 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     try { entry.pty.kill(); } catch {}
     if (entries.get(entry.key) === entry) entries.delete(entry.key);
   }
+  // Close the PTY only when no listener remains attached. Provision sockets use
+  // this instead of close(): provision() hands the SAME entry to a second
+  // socket with the same key, so a replaced socket's straggling close must not
+  // abort the script its replacement is still watching (the nonzero exit would
+  // roll the box back as if the user cancelled).
+  function closeIfUnwatched(entry) {
+    if (!entry.exited && entry.listeners.size > 0) return false;
+    close(entry);
+    return true;
+  }
   function closeKey(key) {
     const entry = entries.get(key);
     if (entry) close(entry);
@@ -158,5 +168,5 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     return !!(entry && !entry.exited);
   }
 
-  return { open, openLocal, provision, attach, onExit, write, resize, detach, close, closeKey, hasLiveSession, _count: () => entries.size };
+  return { open, openLocal, provision, attach, onExit, write, resize, detach, close, closeIfUnwatched, closeKey, hasLiveSession, _count: () => entries.size };
 }

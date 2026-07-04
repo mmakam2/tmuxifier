@@ -8,6 +8,7 @@ export function createProvisionManager({
   proxmoxStore, boxStore, makeClient, load, save, defaultPublicKey = () => null,
   now = () => new Date().toISOString(), makeId = randomUUID, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   pollMs = 1500, taskTimeoutMs = 600000, leaseTimeoutMs = 60000, maxJobs = 50, maxLogBytes = 65536,
+  maxPollFailures = 5, // consecutive taskStatus errors tolerated before the job fails
 }) {
   const jobs = new Map();
   const settles = new Map();
@@ -30,6 +31,7 @@ export function createProvisionManager({
   async function pollTask(client, node, upid, j) {
     const deadline = Date.now() + taskTimeoutMs;
     let logStart = 0;
+    let statusFailures = 0;
     for (;;) {
       if (j._cancelled) throw new Error('cancelled');
       const lines = await client.taskLog(node, upid, logStart).catch(() => []);
@@ -38,7 +40,17 @@ export function createProvisionManager({
         appendLog(j, lines.map((l) => l.t).join('\n') + '\n');
         persist();
       }
-      const st = await client.taskStatus(node, upid);
+      // One transient hiccup (network blip, pveproxy restart) during a
+      // minutes-long create/start poll must not fail the whole job and orphan
+      // the container on PVE — only consecutive failures count as an outage.
+      let st = null;
+      try {
+        st = await client.taskStatus(node, upid);
+        statusFailures = 0;
+      } catch (e) {
+        statusFailures += 1;
+        if (statusFailures >= maxPollFailures) throw e;
+      }
       if (st && st.status === 'stopped') {
         if (st.exitstatus && st.exitstatus !== 'OK') throw new Error(`task failed: ${st.exitstatus}`);
         return;
