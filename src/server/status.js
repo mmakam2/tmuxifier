@@ -210,7 +210,15 @@ export function createStatusChecker({
       const key = keyFor(box);
       let pending = sessInflight.get(key);
       if (!pending) {
-        pending = probe(box).finally(() => sessInflight.delete(key));
+        pending = probe(box)
+          .then((result) => {
+            // A user-triggered probe that reaches the box proves it is back up:
+            // clear the poll backoff so the dot recovers on the next tick
+            // instead of waiting out the (up to 5m) pause.
+            if (result && result.reachable) backoff.delete(key);
+            return result;
+          })
+          .finally(() => sessInflight.delete(key));
         sessInflight.set(key, pending);
       }
       return pending;

@@ -24,11 +24,19 @@ export function createFleetManager({
   hasLiveSession = null,
   masterAlive = null,
 }) {
+  // Drop malformed persisted entries (hand-edited file, interrupted legacy
+  // write) instead of letting reconciliation/summarize throw — one bad history
+  // row must never keep the server from booting. Dropped rows are excised from
+  // the file by the save below.
+  const validJob = (j) => j && typeof j === 'object'
+    && typeof j.id === 'string' && typeof j.command === 'string'
+    && Array.isArray(j.targets) && j.targets.every((t) => t && typeof t === 'object');
   const loaded = load();
-  const jobs = Array.isArray(loaded) ? loaded : []; // oldest first; newest pushed to the end
+  const rawJobs = Array.isArray(loaded) ? loaded : [];
+  const jobs = rawJobs.filter(validJob); // oldest first; newest pushed to the end
+  let reconciled = jobs.length !== rawJobs.length;
   // A job persisted as 'running' means a previous process died mid-run; its ssh
   // children are gone, so mark it (and its unfinished targets) interrupted.
-  let reconciled = false;
   for (const job of jobs) {
     if (job.status !== 'running') continue;
     reconciled = true;

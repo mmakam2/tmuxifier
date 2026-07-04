@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import fs from 'node:fs';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
@@ -45,8 +46,12 @@ function requestHostOrigins(req) {
   return [`http://${host}`, `https://${host}`];
 }
 
-function killTmuxSession(sessionName) {
-  execFileSync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
+const execFileAsync = promisify(execFile);
+
+// Async on purpose: a synchronous child process here (up to its 5s timeout)
+// would stall the event loop and freeze every open terminal's keystrokes.
+async function killTmuxSession(sessionName) {
+  await execFileAsync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
 }
 
 export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
@@ -131,7 +136,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       if (eqIdx === -1) continue;
       const name = trimmed.slice(0, eqIdx).trim();
       if (name === COOKIE_NAME) {
-        const value = decodeURIComponent(trimmed.slice(eqIdx + 1).trim());
+        // Malformed percent-encoding (e.g. %zz) makes decodeURIComponent throw
+        // URIError — this pre-auth path must fail closed with a clean
+        // unauthorized, not crash the upgrade into a connection reset.
+        let value;
+        try { value = decodeURIComponent(trimmed.slice(eqIdx + 1).trim()); } catch { return false; }
         const r = app.unsignCookie(value);
         return r.valid && sessionValueValid(r.value);
       }
@@ -369,7 +378,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
   app.delete('/api/proxmox/keys/:id', { preHandler: requireAuth }, async (req) => { await proxmoxStore.removeKey(req.params.id); return { ok: true }; });
 
-  app.get('/api/proxmox/default-key', { preHandler: requireAuth }, async () => ({ publicKey: defaultPublicKey() }));
+  app.get('/api/proxmox/default-key', { preHandler: requireAuth }, async () => ({ publicKey: await defaultPublicKey() }));
   app.get('/api/proxmox/root-password', { preHandler: requireAuth }, async () => ({ set: await proxmoxStore.hasRootPassword() }));
   app.put('/api/proxmox/root-password', { preHandler: requireAuth }, async (req, reply) => {
     try { await proxmoxStore.setRootPassword((req.body || {}).password); return { set: true }; }
@@ -468,7 +477,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (sessions?.closeKey) sessions.closeKey('__local__');
     // Kill the underlying tmux session so the next openLocal() creates a fresh
     // session with the current shell framework, not reattach to the old one.
-    try { killLocalSession(localSession); } catch {}
+    try { await killLocalSession(localSession); } catch {}
     return { ok: true };
   });
 
@@ -502,8 +511,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         const offExit = sessions.onExit(entry, () => { try { socket.close(1000); } catch {} });
         socket.on('message', (raw) => {
           let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
-          if (msg.t === 'i') sessions.write(entry, msg.d);
-          else if (msg.t === 'r') sessions.resize(entry, { cols: msg.c, rows: msg.r });
+          // Drop malformed frames: pty.write throws on non-strings, and that
+          // throw would escape to the process-level handler (L9). Same for
+          // non-numeric resize values.
+          if (msg.t === 'i' && typeof msg.d === 'string') sessions.write(entry, msg.d);
+          else if (msg.t === 'r' && Number.isFinite(msg.c) && Number.isFinite(msg.r)) sessions.resize(entry, { cols: msg.c, rows: msg.r });
         });
         socket.on('close', () => {
           if (typeof off === 'function') off();
@@ -561,7 +573,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         });
         socket.on('message', (raw) => {
           let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
-          if (msg.t === 'i') sessions.write(entry, msg.d);
+          if (msg.t === 'i' && typeof msg.d === 'string') sessions.write(entry, msg.d);
         });
         socket.on('close', () => {
           if (typeof off === 'function') off();
@@ -597,8 +609,8 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       const offExit = sessions.onExit(entry, () => { try { socket.close(1000); } catch {} });
       socket.on('message', (raw) => {
         let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
-        if (msg.t === 'i') sessions.write(entry, msg.d);
-        else if (msg.t === 'r') sessions.resize(entry, { cols: msg.c, rows: msg.r });
+        if (msg.t === 'i' && typeof msg.d === 'string') sessions.write(entry, msg.d);
+        else if (msg.t === 'r' && Number.isFinite(msg.c) && Number.isFinite(msg.r)) sessions.resize(entry, { cols: msg.c, rows: msg.r });
       });
       socket.on('close', () => {
         if (typeof off === 'function') off();

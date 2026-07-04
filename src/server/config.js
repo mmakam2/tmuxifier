@@ -115,6 +115,29 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     termFontSize: e.TMUXIFIER_TERM_FONT_SIZE ? Number(e.TMUXIFIER_TERM_FONT_SIZE) : undefined,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
+  // Every numeric knob is clamped to a sane range; a non-numeric or
+  // out-of-range value falls back to the default rather than passing through
+  // (TMUXIFIER_PORT=7437x would listen on NaN; TMUXIFIER_STATUS_POLL_MS=0
+  // would hot-loop SSH probes against the whole fleet). Ranges are generous —
+  // the goal is catching typos and pathological zeros, not policing tuning.
+  const clampInt = (v, lo, hi, dflt) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= lo && n <= hi ? Math.round(n) : dflt;
+  };
+  merged.port = clampInt(merged.port, 1, 65535, DEFAULTS.port);
+  merged.graceSeconds = clampInt(merged.graceSeconds, 0, 86400, DEFAULTS.graceSeconds);
+  merged.statusConcurrency = clampInt(merged.statusConcurrency, 1, 100, DEFAULTS.statusConcurrency);
+  merged.statusPollMs = clampInt(merged.statusPollMs, 1000, 86400000, DEFAULTS.statusPollMs);
+  merged.controlPersist = clampInt(merged.controlPersist, 0, 604800, DEFAULTS.controlPersist); // 0 = ssh "keep forever"
+  merged.fleetConcurrency = clampInt(merged.fleetConcurrency, 1, 100, DEFAULTS.fleetConcurrency);
+  merged.fleetTimeoutMs = clampInt(merged.fleetTimeoutMs, 100, 86400000, DEFAULTS.fleetTimeoutMs);
+  merged.fleetMaxJobs = clampInt(merged.fleetMaxJobs, 1, 10000, DEFAULTS.fleetMaxJobs);
+  merged.fleetMaxOutputBytes = clampInt(merged.fleetMaxOutputBytes, 256, 134217728, DEFAULTS.fleetMaxOutputBytes);
+  merged.pvePollMs = clampInt(merged.pvePollMs, 100, 600000, DEFAULTS.pvePollMs);
+  merged.pveTimeoutMs = clampInt(merged.pveTimeoutMs, 500, 600000, DEFAULTS.pveTimeoutMs);
+  merged.pveProvisionTimeoutMs = clampInt(merged.pveProvisionTimeoutMs, 1000, 86400000, DEFAULTS.pveProvisionTimeoutMs);
+  merged.pveLeaseTimeoutMs = clampInt(merged.pveLeaseTimeoutMs, 0, 3600000, DEFAULTS.pveLeaseTimeoutMs); // 0 = don't wait for DHCP
+  merged.pveMaxJobs = clampInt(merged.pveMaxJobs, 1, 10000, DEFAULTS.pveMaxJobs);
   merged.dataDir = merged.dataDir ?? path.join(cwd, 'data');
   // Directory for SSH ControlMaster sockets. Multiplexing every probe and
   // terminal for a box over one persistent connection keeps Tmuxifier from
@@ -154,12 +177,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   merged.termFont = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$/.test(fontName) ? fontName : undefined;
   const fontSize = Number(merged.termFontSize);
   merged.termFontSize = Number.isFinite(fontSize) && fontSize >= 6 && fontSize <= 32 ? fontSize : 12;
-  // Health knobs: clamp to sane ranges; an out-of-range or non-numeric value
-  // falls back to the default rather than passing through.
-  const clampInt = (v, lo, hi, dflt) => {
-    const n = Number(v);
-    return Number.isFinite(n) && n >= lo && n <= hi ? Math.round(n) : dflt;
-  };
+  // Health knobs share the clampInt fallback-to-default behavior above.
   merged.healthHistoryMax = clampInt(merged.healthHistoryMax, 10, 5000, 120);
   merged.healthEventsMax = clampInt(merged.healthEventsMax, 10, 5000, 200);
   merged.healthCpuWarnPct = clampInt(merged.healthCpuWarnPct, 1, 100, 90);

@@ -71,7 +71,12 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     '    sudo -n chsh -s "$ZSH_BIN" "$(whoami)" 2>/dev/null || chsh -s "$ZSH_BIN" "$(whoami)" || true',
     '  fi',
     'fi',
-    'sed -i \'#^set-option -g default-shell#d\' .tmux.conf.local 2>/dev/null || true; echo "set-option -g default-shell \"$ZSH_BIN\"" >> .tmux.conf.local',
+    // Persist the shell into oh-my-tmux's local conf, but only when that conf
+    // exists — without oh-my-tmux nothing sources it, so appending would just
+    // litter a stray file. Delete-then-append keeps exactly one line (a
+    // '#…#d' sed script is a COMMENT: the old form deleted nothing, so every
+    // ensure run appended another line).
+    'if [ -f .tmux.conf.local ]; then sed -i \'/^set-option -g default-shell/d\' .tmux.conf.local 2>/dev/null || true; echo "set-option -g default-shell \"$ZSH_BIN\"" >> .tmux.conf.local; fi',
   ] : [];
   const ohMyBash = options.installOhMyBash ? [
     'BASH_BIN="$(command -v bash || true)"',
@@ -95,7 +100,8 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     '    sudo -n chsh -s "$BASH_BIN" "$(whoami)" 2>/dev/null || chsh -s "$BASH_BIN" "$(whoami)" || true',
     '  fi',
     'fi',
-    'sed -i \'#^set-option -g default-shell#d\' .tmux.conf.local 2>/dev/null || true; echo "set-option -g default-shell \"$BASH_BIN\"" >> .tmux.conf.local',
+    // Same guarded delete-then-append as the omz branch above.
+    'if [ -f .tmux.conf.local ]; then sed -i \'/^set-option -g default-shell/d\' .tmux.conf.local 2>/dev/null || true; echo "set-option -g default-shell \"$BASH_BIN\"" >> .tmux.conf.local; fi',
   ] : [];
   return [
     'set -eu',

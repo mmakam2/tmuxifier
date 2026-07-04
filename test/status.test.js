@@ -461,3 +461,39 @@ test('listSessions: skips the probe when a session is live and masterAlive is no
   expect(result).toEqual({ reachable: true, tmux: true, inUse: true, sessions: [] });
   expect(called).toBe(false);
 });
+
+// A user-triggered listSessions that reaches the box proves it is back up, but
+// it never cleared the poll backoff — a user-confirmed-up box stayed red until
+// the (up to 5m) pause expired on its own.
+test('listSessions: a reachable probe clears the poll backoff (confirmed-up box goes green now)', async () => {
+  let clock = 0;
+  let mode = 'fail';
+  let calls = 0;
+  const run = async () => {
+    calls++;
+    return mode === 'fail'
+      ? { code: 255, stdout: '', stderr: 'timeout' }
+      : { code: 0, stdout: 'web:1:0:1', stderr: '' };
+  };
+  const sc = createStatusChecker({ run, now: () => clock });
+  await sc.checkBox({ host: 'h' });            // fail -> 30s backoff window opens
+  mode = 'ok';
+  clock = 5_000;                               // still inside the window
+  const res = await sc.listSessions({ host: 'h' }); // user hits the ⟳ button
+  expect(res.reachable).toBe(true);
+  const st = await sc.checkBox({ host: 'h' }); // next poll tick, window still open
+  expect(st.reachable).toBe(true);             // probed fresh — backoff was cleared
+  expect(calls).toBe(3);
+});
+
+test('listSessions: a failed probe leaves the backoff window alone', async () => {
+  let clock = 0;
+  let calls = 0;
+  const run = async () => { calls++; return { code: 255, stdout: '', stderr: 'timeout' }; };
+  const sc = createStatusChecker({ run, now: () => clock });
+  await sc.checkBox({ host: 'h' });            // fail -> 30s window
+  clock = 5_000;
+  await sc.listSessions({ host: 'h' });        // user probe also fails
+  await sc.checkBox({ host: 'h' });            // still inside the window
+  expect(calls).toBe(2);                       // poll stayed throttled
+});

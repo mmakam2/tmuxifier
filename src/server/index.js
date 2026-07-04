@@ -80,7 +80,14 @@ const secretBox = createSecretBox(config.cookieSecret);
 const proxmoxStore = createProxmoxStore({ dataDir: config.dataDir, secretBox });
 const provisionStore = createProvisionStore({ dataDir: config.dataDir });
 const makeProxmoxClient = (host) => createProxmoxClient({ host, timeoutMs: config.pveTimeoutMs });
-const defaultPublicKey = () => readDefaultPublicKey({ configuredPath: config.pveDefaultPubKeyPath, home: os.homedir() });
+// Cache the first successful read: deriving the key shells out to ssh-keygen
+// and the host key doesn't change while the server runs. A null result is NOT
+// cached, so adding a key later still gets picked up without a restart.
+let cachedDefaultKey = null;
+const defaultPublicKey = async () => {
+  if (!cachedDefaultKey) cachedDefaultKey = await readDefaultPublicKey({ configuredPath: config.pveDefaultPubKeyPath, home: os.homedir() });
+  return cachedDefaultKey;
+};
 const provisionManager = createProvisionManager({
   proxmoxStore,
   boxStore: store,

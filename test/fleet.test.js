@@ -224,3 +224,38 @@ test('skipped targets count as neither ok nor error in the job summary', async (
   const summary = mgr.listJobs().find((s) => s.id === job.id);
   expect(summary).toMatchObject({ targetCount: 2, okCount: 1, errorCount: 0 });
 });
+
+// A malformed persisted job (hand-edited file, interrupted legacy write) used
+// to throw inside createFleetManager's startup reconciliation — the whole
+// server failed to boot over one bad history entry. Malformed entries are now
+// dropped on load (and excised from the file on the next save).
+test('malformed persisted jobs are dropped on load instead of crashing startup', async () => {
+  const good = {
+    id: 'good', command: 'x', status: 'done',
+    createdAt: 't', startedAt: 't', finishedAt: 't', concurrency: 4, timeoutMs: 1,
+    targets: [{ boxId: 'b1', label: 'n1', host: 'h1', status: 'ok', code: 0, stdout: '', stderr: '', truncated: false, error: null, startedAt: 't', finishedAt: 't' }],
+  };
+  const stillRunning = { ...good, id: 'reconcile-me', status: 'running', finishedAt: null };
+  const saved = [];
+  const mgr = createFleetManager({
+    store: makeStore(BOXES),
+    execCommand: async () => ({ code: 0 }),
+    load: () => [
+      good,
+      null,                                  // corrupted entry
+      'garbage',                             // wrong type entirely
+      { id: 'no-targets', command: 'x', status: 'running' }, // targets missing
+      { id: 'bad-targets', command: 'x', status: 'done', targets: 'nope' },
+      { id: 'bad-target-item', command: 'x', status: 'done', targets: [null] },
+      stillRunning,
+    ],
+    save: (jobs) => saved.push(jobs.map((j) => j.id)),
+  });
+  expect(mgr.getJob('good').status).toBe('done');
+  expect(mgr.getJob('reconcile-me').status).toBe('interrupted'); // reconciliation still ran
+  expect(mgr.getJob('no-targets')).toBeUndefined();
+  expect(mgr.getJob('bad-targets')).toBeUndefined();
+  expect(mgr.listJobs().map((s) => s.id)).toEqual(['reconcile-me', 'good']);
+  // The cleaned list was persisted, so the bad entries are gone from the file.
+  expect(saved[0]).toEqual(['good', 'reconcile-me']);
+});

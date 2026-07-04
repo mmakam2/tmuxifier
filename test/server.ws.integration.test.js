@@ -241,3 +241,89 @@ test('provision WS rolls back box on non-zero exit', async () => {
   const boxes = await store.listBoxes();
   expect(boxes.find((b) => b.id === saved.id)).toBeFalsy();
 }, 10000);
+
+// L8: the manual cookie-header parse in isAuthed (needed for WS upgrades,
+// where @fastify/websocket v10 leaves req.cookies empty) used to call
+// decodeURIComponent unguarded — a malformed percent-encoding like %zz threw
+// URIError, so the client got a connection reset (and an error log) instead of
+// a clean unauthorized close.
+test('WS with a malformed percent-encoded cookie gets a clean 1008, not a crash/reset', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-ws-badcookie-'));
+  const config = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
+    passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
+    sshConfigPath: path.join(dir, 'nope'),
+  };
+  const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
+  const saved = await store.addBox({ host: 'h1', sessionName: 'web' });
+  let opened = false;
+  const sessions = {
+    open() { opened = true; throw new Error('should not open'); },
+    attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {},
+  };
+  const app = buildServer({ config, store, sessions, statusChecker: { checkBox: async () => ({ reachable: true }) } });
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const { port } = app.server.address();
+  teardown = async () => { await app.close(); await fs.rm(dir, { recursive: true, force: true }); };
+
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${port}/term?box=${saved.id}&cols=80&rows=24`,
+    { headers: { cookie: `${COOKIE_NAME}=%zz-not-valid-encoding` } },
+  );
+  const code = await new Promise((resolve, reject) => {
+    ws.on('close', resolve);
+    ws.on('error', reject); // a reset would land here and fail the test
+  });
+  expect(code).toBe(1008);
+  expect(opened).toBe(false);
+}, 10000);
+
+// L9: a non-string input frame ({t:'i',d:123}) used to reach pty.write(123)
+// and throw all the way to the global uncaughtException handler — a bare
+// buildServer embed would have crashed. Bad frames are dropped; the session
+// keeps working.
+test('WS drops non-string input frames instead of throwing; session keeps working', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-ws-badframe-'));
+  const config = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
+    passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
+    sshConfigPath: path.join(dir, 'nope'),
+  };
+  const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
+  const saved = await store.addBox({ host: 'h1', sessionName: 'web' });
+  const writes = [];
+  const entryStub = { key: saved.id, listeners: new Set(), exited: false };
+  const sessions = {
+    open: () => entryStub,
+    attach: () => () => {},
+    onExit: () => () => {},
+    write: (entry, d) => {
+      // The real pty.write throws on non-strings — mirror that so a leaked bad
+      // frame fails this test the way it would crash production.
+      if (typeof d !== 'string') throw new TypeError('pty.write: not a string');
+      writes.push(d);
+    },
+    resize() {}, detach() {}, close() {},
+  };
+  const app = buildServer({ config, store, sessions, statusChecker: { checkBox: async () => ({ reachable: true }) } });
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const { port } = app.server.address();
+  teardown = async () => { await app.close(); await fs.rm(dir, { recursive: true, force: true }); };
+
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === COOKIE_NAME);
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${port}/term?box=${saved.id}&cols=80&rows=24`,
+    { headers: { cookie: `${c.name}=${c.value}` } },
+  );
+  await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+  await delay(300); // let the async route handler attach its message listener
+  ws.send(JSON.stringify({ t: 'i', d: 123 }));            // number payload
+  ws.send(JSON.stringify({ t: 'i', d: { nested: true } })); // object payload
+  ws.send(JSON.stringify({ t: 'r', c: 'wide', r: null })); // junk resize
+  ws.send(JSON.stringify({ t: 'i', d: 'still alive\n' })); // then a real frame
+  await delay(300);
+  expect(ws.readyState).toBe(WebSocket.OPEN); // the socket survived the junk
+  expect(writes).toEqual(['still alive\n']);
+  ws.close();
+}, 10000);

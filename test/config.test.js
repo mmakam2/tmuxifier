@@ -317,3 +317,54 @@ test('trustProxy accepts a boolean from config.json / overrides', () => {
   expect(loadConfig({ trustProxy: true }, { env: {}, cwd: '/app' }).trustProxy).toBe(true);
   expect(loadConfig({ trustProxy: false }, { env: {}, cwd: '/app' }).trustProxy).toBeUndefined();
 });
+
+// Every numeric knob is clamped: a typo'd value (TMUXIFIER_PORT=7437x -> NaN)
+// or a pathological zero (TMUXIFIER_STATUS_POLL_MS=0 -> hot probe loop) falls
+// back to the default instead of passing through.
+test('invalid numeric env values fall back to defaults (no NaN port, no 0ms hot loop)', () => {
+  const c = loadConfig({}, {
+    env: {
+      TMUXIFIER_PORT: '7437x',
+      TMUXIFIER_STATUS_POLL_MS: '0',
+      TMUXIFIER_GRACE: 'soon',
+      TMUXIFIER_STATUS_CONCURRENCY: '-3',
+      TMUXIFIER_FLEET_TIMEOUT_MS: 'NaN',
+      TMUXIFIER_PVE_POLL_MS: '0',
+    },
+    cwd: '/app',
+  });
+  expect(c.port).toBe(7437);
+  expect(c.statusPollMs).toBe(30000);
+  expect(c.graceSeconds).toBe(45);
+  expect(c.statusConcurrency).toBe(4);
+  expect(c.fleetTimeoutMs).toBe(15000);
+  expect(c.pvePollMs).toBe(1500);
+});
+
+test('out-of-range numeric env values fall back to defaults', () => {
+  const c = loadConfig({}, {
+    env: { TMUXIFIER_PORT: '99999', TMUXIFIER_FLEET_CONCURRENCY: '0', TMUXIFIER_FLEET_MAX_JOBS: '-1' },
+    cwd: '/app',
+  });
+  expect(c.port).toBe(7437);
+  expect(c.fleetConcurrency).toBe(4);
+  expect(c.fleetMaxJobs).toBe(50);
+});
+
+test('valid numeric env values still pass through the clamps', () => {
+  const c = loadConfig({}, {
+    env: {
+      TMUXIFIER_PORT: '7438',
+      TMUXIFIER_STATUS_POLL_MS: '2000',   // the e2e suite runs at this cadence
+      TMUXIFIER_GRACE: '0',               // 0 grace is a legitimate choice
+      TMUXIFIER_CONTROL_PERSIST: '0',     // ssh ControlPersist=0 is valid (keep forever)
+      TMUXIFIER_FLEET_MAX_OUTPUT_BYTES: '4096',
+    },
+    cwd: '/app',
+  });
+  expect(c.port).toBe(7438);
+  expect(c.statusPollMs).toBe(2000);
+  expect(c.graceSeconds).toBe(0);
+  expect(c.controlPersist).toBe(0);
+  expect(c.fleetMaxOutputBytes).toBe(4096);
+});

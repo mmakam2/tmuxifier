@@ -305,3 +305,56 @@ test('execCommand rejects an unsafe box before running ssh', async () => {
   await expect(actions.execCommand({ host: '-bad' }, 'echo hi', {})).rejects.toThrow(/unsafe/);
   expect(called).toBe(false);
 });
+
+// L1: the default-shell dedup used `sed -i '#^set-option…#d'` — a '#'-led sed
+// script is a COMMENT, so nothing was ever deleted and every omz/omb ensure
+// run appended another `set-option -g default-shell` line to .tmux.conf.local
+// (and appended it even when oh-my-tmux — the only thing that sources that
+// file — was never installed).
+test('default-shell dedup sed uses a real address, not a #-comment, and is guarded by file existence', () => {
+  const z = buildEnsureTmuxRemote('web', undefined, { installOhMyZsh: true });
+  expect(z).toContain("sed -i '/^set-option -g default-shell/d'");
+  expect(z).not.toContain("sed -i '#^set-option");
+  expect(z).toContain('if [ -f .tmux.conf.local ]');
+  const b = buildEnsureTmuxRemote('web', undefined, { installOhMyBash: true });
+  expect(b).toContain("sed -i '/^set-option -g default-shell/d'");
+  expect(b).not.toContain("sed -i '#^set-option");
+});
+
+test('omz ensure replaces prior default-shell lines instead of appending another (verified with real sed)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-dedup-'));
+  for (const bin of ['zsh', 'tmux', 'git', 'curl']) {
+    await fs.writeFile(path.join(dir, bin), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  }
+  await fs.mkdir(path.join(dir, '.oh-my-zsh')); // installer skipped
+  // Real sed via a wrapper so the dedup actually executes under the fake PATH.
+  const realSed = await fs.stat('/usr/bin/sed').then(() => '/usr/bin/sed').catch(() => '/bin/sed');
+  await fs.writeFile(path.join(dir, 'sed'), `#!/bin/sh\nexec ${realSed} "$@"\n`, { mode: 0o755 });
+  // Two stale lines from previous ensure runs, plus an unrelated keeper.
+  await fs.writeFile(path.join(dir, '.tmux.conf.local'),
+    'set -g history-limit 5000\nset-option -g default-shell "/usr/bin/oldzsh"\nset-option -g default-shell "/usr/bin/olderzsh"\n');
+
+  const res = await runShell(`cd ${JSON.stringify(dir)}
+${buildEnsureTmuxRemote('web', undefined, { installOhMyZsh: true })}`, { PATH: dir });
+
+  expect(res.code).toBe(0);
+  const conf = await fs.readFile(path.join(dir, '.tmux.conf.local'), 'utf8');
+  const shellLines = conf.split('\n').filter((l) => l.startsWith('set-option -g default-shell'));
+  expect(shellLines).toHaveLength(1);                          // deduped, not appended
+  expect(shellLines[0]).toContain(path.join(dir, 'zsh'));      // points at the detected zsh
+  expect(conf).toContain('set -g history-limit 5000');         // unrelated config untouched
+});
+
+test('omz ensure without oh-my-tmux does not create a stray .tmux.conf.local', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-nostray-'));
+  for (const bin of ['zsh', 'tmux', 'git', 'curl']) {
+    await fs.writeFile(path.join(dir, bin), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  }
+  await fs.mkdir(path.join(dir, '.oh-my-zsh'));
+
+  const res = await runShell(`cd ${JSON.stringify(dir)}
+${buildEnsureTmuxRemote('web', undefined, { installOhMyZsh: true })}`, { PATH: dir });
+
+  expect(res.code).toBe(0);
+  await expect(fs.stat(path.join(dir, '.tmux.conf.local'))).rejects.toMatchObject({ code: 'ENOENT' });
+});

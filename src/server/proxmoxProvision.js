@@ -127,7 +127,7 @@ export function createProvisionManager({
       if (!node) throw new Error('preset has no node and host has no defaultNode');
       // Inject the host's default key plus every stored key (no longer preset-scoped).
       const additional = (await proxmoxStore.listKeys({ withSecret: true })).map((k) => k.publicKey);
-      const publicKeys = [defaultPublicKey(), ...additional].filter(Boolean);
+      const publicKeys = [await defaultPublicKey(), ...additional].filter(Boolean);
       const password = await proxmoxStore.getRootPassword({ withSecret: true });
       const client = makeClient(host);
       const j = {

@@ -36,11 +36,22 @@ is closed on logout/expiry); box removal asks `confirm()`; and a replaced provis
 close no longer kills the shared PTY its replacement is watching
 (`sessions.closeIfUnwatched`). LOW findings remain open.
 
+**Status note, 2026-07-04 (Tier-1 LOW pass):** seven LOW findings shipped in v1.4.21 —
+the crash/robustness and chronic-annoyance subset: L5 (malformed persisted fleet jobs are dropped
+on load, never a boot failure), L8/L9 (WS upgrade survives malformed cookie percent-encoding with
+a clean 1008; non-string input frames and junk resize values are dropped at the boundary), L7
+(a reachable user-triggered `listSessions` clears the poll backoff, so a confirmed-up box goes
+green on the next tick), L10 (every numeric config knob is clamped — no NaN port, no 0 ms probe
+hot-loop), L22 (`killTmuxSession` and `readDefaultPublicKey` are async, with the default key
+cached after first read — no more event-loop stalls freezing terminals), and L1 (the default-shell
+dedup sed is a real `/…/d` address and only touches `.tmux.conf.local` when it exists). The
+remaining LOWs stay open.
+
 ---
 
 ## Findings at a glance
 
-Status reflects `main` as of v1.4.20. Effort is a rough fix-size guess for open items:
+Status reflects `main` as of v1.4.21. Effort is a rough fix-size guess for open items:
 **S** = under an hour, **M** = a few hours (design decisions or a protocol/major-version change).
 
 | ID | Area | Finding | Severity | Status | Effort |
@@ -62,16 +73,16 @@ Status reflects `main` as of v1.4.20. Effort is a rough fix-size guess for open 
 | M9 | web | Provision panel can get stuck open with no dismiss/cancel | Medium | ✅ Fixed v1.4.20 | — |
 | M10 | web | Box removal is a single unconfirmed click | Medium | ✅ Fixed v1.4.20 | — |
 | M11 | sessions | Provision WS close kills a shared entry another socket uses | Medium | ✅ Fixed v1.4.20 | — |
-| L1 | boxActions | `default-shell` dedup `sed` is a no-op (`#`-led script is a comment) | Low | Open | S |
+| L1 | boxActions | `default-shell` dedup `sed` is a no-op (`#`-led script is a comment) | Low | ✅ Fixed v1.4.21 | — |
 | L2 | fleet | ssh timeout reported as `exited 1` | Low | Open | S |
 | L3 | fleet | `prune()` can evict a still-running job | Low | Open | S |
 | L4 | fleet | Duplicate `boxIds` run a command twice on one box | Low | Open | S |
-| L5 | fleet | Malformed persisted job crashes startup | Low | Open | S |
+| L5 | fleet | Malformed persisted job crashes startup | Low | ✅ Fixed v1.4.21 | — |
 | L6 | health | cpu threshold never fires for a box down at seed time | Low | Open | S |
-| L7 | status | Successful `listSessions` doesn't clear backoff (stays red) | Low | Open | S |
-| L8 | server | WS auth crashes on malformed cookie percent-encoding | Low | Open | S |
-| L9 | server | Non-string WS input frames throw to the global handler | Low | Open | S |
-| L10 | config | Numeric env values unvalidated (`PORT=7437x` → NaN) | Low | Open | S |
+| L7 | status | Successful `listSessions` doesn't clear backoff (stays red) | Low | ✅ Fixed v1.4.21 | — |
+| L8 | server | WS auth crashes on malformed cookie percent-encoding | Low | ✅ Fixed v1.4.21 | — |
+| L9 | server | Non-string WS input frames throw to the global handler | Low | ✅ Fixed v1.4.21 | — |
+| L10 | config | Numeric env values unvalidated (`PORT=7437x` → NaN) | Low | ✅ Fixed v1.4.21 | — |
 | L11 | store | `updateBox` can't clear `label` | Low | Open | S |
 | L12 | auth | Google token exchange has no timeout | Low | Open | S |
 | L13 | secrets | `secretBox.open` accepts truncated GCM auth tags | Low | Open | S |
@@ -83,7 +94,7 @@ Status reflects `main` as of v1.4.20. Effort is a rough fix-size guess for open 
 | L19 | web | Terminal WS URL not `encodeURIComponent`'d (inconsistent) | Low | Open | S |
 | L20 | web | Provision exit-sniffing can false-match terminal output | Low | Open | M |
 | L21 | store | `boxes.json` not written owner-only 0600 | Low | ✅ Fixed v1.4.18 | — |
-| L22 | server | Blocking `execFileSync` calls stall the event loop | Low | Open | S |
+| L22 | server | Blocking `execFileSync` calls stall the event loop | Low | ✅ Fixed v1.4.21 | — |
 | L23 | scripts | `set-password` leaks the password via argv / echoed prompt | Low | Open | S |
 | — | dead code | 4 unreachable Proxmox routes + assorted unused exports/params | Info | Open | S |
 | — | docs | DEPLOY.md ssh-config "import" claim, local-shell undocumented, `.env.example` gap | Info | Open | S |
