@@ -203,8 +203,9 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 - Box host/user/port/proxyJump are validated against allowlist regexes before reaching `ssh`;
   the remote tmux command single-quotes any `startupCommand`. Keep new ssh-facing fields on the
   same validation path.
-- WebSocket auth re-parses the cookie header manually (`@fastify/websocket` v10 doesn't populate
-  `req.cookies` for the upgrade) — see `isAuthed` in `server.js`.
+- WebSocket auth: `@fastify/websocket` v11 populates `req.cookies` on the upgrade, so WS auth
+  rides the normal cookie path; `isAuthed` in `server.js` keeps a manual cookie-header parse as a
+  defensive backstop (it was the required WS path under v10).
 - The persisted Proxmox secrets — the API token, any added SSH management keys, and the optional
   root password — are the only credentials Tmuxifier stores. They are AES-256-GCM encrypted at rest
   in `data/proxmox.json` (key from `cookieSecret`), written `0o600`, and never returned to the

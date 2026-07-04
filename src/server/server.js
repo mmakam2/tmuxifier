@@ -126,7 +126,10 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       const r = app.unsignCookie(raw);
       return r.valid && sessionValueValid(r.value);
     }
-    // Fallback: parse cookie header manually (needed for WS with @fastify/websocket v10)
+    // Fallback: parse the cookie header manually. Under @fastify/websocket v10
+    // this WAS the WebSocket-upgrade path (req.cookies stayed empty there);
+    // v11 populates req.cookies for upgrades too, so this is now a defensive
+    // backstop for any request the cookie plugin didn't decorate.
     const cookieHeader = req.headers?.cookie;
     if (!cookieHeader) return false;
     const parts = cookieHeader.split(';');

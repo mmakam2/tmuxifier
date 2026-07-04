@@ -64,11 +64,22 @@ command, CLAUDE.md/AGENTS.md list `fleetEditor.ts` and the typecheck command, th
 security review was renamed to `security-review-2026-06-21.md`, and the vite dev proxy now derives
 its target from `loadConfig()` instead of a hardcoded port.
 
+**Status note, 2026-07-04 (fastify 5):** the production dependency chain was upgraded in
+v1.4.23 — fastify 4.29 → 5.9, `@fastify/cookie` 9 → 11, `@fastify/static` 7 → 9,
+`@fastify/websocket` 10 → 11 — closing all four production advisories (sendWebStream DoS,
+content-type bypass, X-Forwarded spoofing, fast-uri traversal). Zero code changes were needed:
+the suite and e2e passed as-is. Both flagged seams verified: v9-signed session cookies still
+validate under v11 (no forced logout), and `@fastify/websocket` v11 now populates `req.cookies`
+on the upgrade, so WS auth rides the normal cookie path (the manual header parse in `isAuthed`
+remains as a defensive backstop; comments/docs updated). Remaining dependency debt: the dev-only
+vitest/vite chain (5 advisories, none shipped) and the xterm 6 / concurrently 10 / typescript 6
+majors.
+
 ---
 
 ## Findings at a glance
 
-Status reflects `main` as of v1.4.22. Effort is a rough fix-size guess for open items:
+Status reflects `main` as of v1.4.23. Effort is a rough fix-size guess for open items:
 **S** = under an hour, **M** = a few hours (design decisions or a protocol/major-version change).
 
 | ID | Area | Finding | Severity | Status | Effort |
@@ -116,7 +127,7 @@ Status reflects `main` as of v1.4.22. Effort is a rough fix-size guess for open 
 | — | dead code | 4 unreachable Proxmox routes + assorted unused exports/params | Info | ✅ Fixed v1.4.22 | — |
 | — | docs | DEPLOY.md ssh-config "import" claim, local-shell undocumented, `.env.example` gap | Info | ✅ Fixed v1.4.22 | — |
 | — | tests | Coverage gaps (logout, WS auth, fleet edges; HIGH gaps closed v1.4.18, rate-limit/session-expiry/fleet-guard gaps closed v1.4.20) | Info | Partially closed | M |
-| — | deps | fastify 4 HIGH advisories; vitest/vite critical (dev-only); xterm 6 major | Info | Open | M |
+| — | deps | fastify 4 HIGH advisories; vitest/vite critical (dev-only); xterm 6 major | Info | Partially closed (fastify 5 ✅ v1.4.23) | M |
 
 ---
 
