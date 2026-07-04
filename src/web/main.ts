@@ -399,6 +399,12 @@ async function renderDashboard() {
   app.querySelector('#logout')!.addEventListener('click', async () => {
     if (pollInterval) clearInterval(pollInterval);
     stopFleetPoll();
+    // Dispose every terminal before the login screen replaces the dashboard:
+    // the tabs map is module-level, so surviving entries would keep detached
+    // elements (unopenable boxes after re-login) and live reconnect loops.
+    for (const id of [...tabs.keys()]) closeTab(id);
+    closeFleetJobsPanel();
+    closeEventsPanel();
     await api.logout(); await renderLogin();
   });
   app.querySelector('#sidebar-toggle')!.addEventListener('click', () => {

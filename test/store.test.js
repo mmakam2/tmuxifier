@@ -193,3 +193,19 @@ test('addBox carries source and a proxmox metadata block through normalize', asy
   const again = createStore({ dataDir: dir });
   expect((await again.getBox(box.id)).proxmox.vmid).toBe(131);
 });
+
+test('a corrupt boxes.json is quarantined — the next write cannot destroy it', async () => {
+  await fs.writeFile(path.join(dir, 'boxes.json'), '[{"id": "b1", "host": "important-host"'); // truncated mid-write
+  const store = createStore({ dataDir: dir });
+  expect(await store.listBoxes()).toEqual([]); // unreadable, so no boxes — but…
+  const q = (await fs.readdir(dir)).filter((n) => n.startsWith('boxes.json.corrupt-'));
+  expect(q).toHaveLength(1); // …the original bytes were moved aside, not left to be overwritten
+  await store.addBox({ host: 'new-box' });
+  expect(await fs.readFile(path.join(dir, q[0]), 'utf8')).toContain('important-host');
+});
+
+test('a boxes.json that is not an array is treated as corrupt, not crashed on', async () => {
+  await fs.writeFile(path.join(dir, 'boxes.json'), '{}');
+  const store = createStore({ dataDir: dir });
+  expect(await store.getBox('x')).toBeUndefined(); // used to throw TypeError (.find on {})
+});

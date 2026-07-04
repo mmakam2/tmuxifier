@@ -1,7 +1,7 @@
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sanitizeSession, assertBoxSafe } from './sshCommand.js';
+import { readJson, writeJson } from './jsonFile.js';
 
 // Bump when the on-disk export shape changes; importBoxes stays lenient about it.
 const EXPORT_VERSION = 1;
@@ -35,15 +35,10 @@ export function createStore({ dataDir }) {
   const file = path.join(dataDir, 'boxes.json');
 
   async function readAll() {
-    try {
-      return JSON.parse(await fs.readFile(file, 'utf8'));
-    } catch {
-      return [];
-    }
+    return readJson(file, { fallback: [], validate: Array.isArray });
   }
   async function writeAll(boxes) {
-    await fs.mkdir(dataDir, { recursive: true });
-    await fs.writeFile(file, JSON.stringify(boxes, null, 2));
+    await writeJson(file, boxes);
   }
   function normalize(spec, base = {}) {
     if (!spec.host || typeof spec.host !== 'string') throw new Error('box requires a host');

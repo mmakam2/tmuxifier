@@ -105,3 +105,17 @@ test('presets validate against the existing host and persist normalized (keys ar
   expect((await store.getPreset(preset.id)).name).toBe('dev');
   await expect(store.addPreset({ ...preset, name: 'dev2', hostId: 'ghost' })).rejects.toThrow(/host/);
 });
+
+test('a corrupt proxmox.json is quarantined so stored secrets are never overwritten', async () => {
+  const store = make();
+  await store.addHost(HOST);
+  const file = path.join(dir, 'proxmox.json');
+  const original = await fs.readFile(file, 'utf8');
+  await fs.writeFile(file, original.slice(0, 40)); // truncated mid-write
+  const after = make();
+  expect(await after.listHosts()).toEqual([]); // unreadable, so empty — but…
+  await after.addHost(HOST); // …a new write must not destroy the sealed secrets
+  const q = (await fs.readdir(dir)).filter((n) => n.startsWith('proxmox.json.corrupt-'));
+  expect(q).toHaveLength(1);
+  expect(await fs.readFile(path.join(dir, q[0]), 'utf8')).toBe(original.slice(0, 40));
+});

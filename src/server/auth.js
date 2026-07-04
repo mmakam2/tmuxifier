@@ -10,12 +10,20 @@ export async function hashPassword(password) {
   return `scrypt$${salt.toString('hex')}$${dk.toString('hex')}`;
 }
 
+// Strict full-string hex: Buffer.from(hex) silently stops at the first invalid
+// character, so without this a corrupted digest decoded to a ZERO-LENGTH buffer
+// — scrypt then derived a zero-length key and timingSafeEqual(empty, empty)
+// accepted any password. A corrupt hash must fail closed, never open.
+const HEX_RE = /^(?:[0-9a-f]{2})+$/i;
+
 export async function verifyPassword(password, stored) {
   try {
     const [scheme, saltHex, hashHex] = String(stored).split('$');
     if (scheme !== 'scrypt' || !saltHex || !hashHex) return false;
-    const salt = Buffer.from(saltHex, 'hex');
+    if (!HEX_RE.test(saltHex) || !HEX_RE.test(hashHex)) return false;
     const expected = Buffer.from(hashHex, 'hex');
+    if (expected.length < 32) return false; // hashPassword always writes 32 bytes
+    const salt = Buffer.from(saltHex, 'hex');
     const dk = await scryptAsync(String(password), salt, expected.length);
     return dk.length === expected.length && timingSafeEqual(dk, expected);
   } catch {

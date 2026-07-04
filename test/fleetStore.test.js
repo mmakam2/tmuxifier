@@ -21,9 +21,14 @@ test('save then load round-trips the jobs array and creates the data dir', async
   await expect(fs.stat(path.join(dir, 'fleet-jobs.json'))).resolves.toBeTruthy();
 });
 
-test('load returns [] on a corrupt file instead of throwing', async () => {
+test('load returns [] on a corrupt file instead of throwing — and quarantines it', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-fleetstore-'));
   await fs.writeFile(path.join(dir, 'fleet-jobs.json'), 'not json');
   const store = createFleetStore({ dataDir: dir });
   expect(store.load()).toEqual([]);
+  store.save([{ id: 'j9', targets: [] }]); // a later save must not destroy the original bytes
+  await store.whenIdle();
+  const q = (await fs.readdir(dir)).filter((n) => n.startsWith('fleet-jobs.json.corrupt-'));
+  expect(q).toHaveLength(1);
+  expect(await fs.readFile(path.join(dir, q[0]), 'utf8')).toBe('not json');
 });

@@ -40,7 +40,8 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     pipeOutput(entry);
     pty.onExit(() => {
       entry.exited = true;
-      entries.delete(key);
+      if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
+      if (entries.get(key) === entry) entries.delete(key);
       for (const cb of entry.exitCbs) cb();
     });
     entries.set(key, entry);
@@ -69,7 +70,8 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     pipeOutput(entry);
     pty.onExit(() => {
       entry.exited = true;
-      entries.delete(key);
+      if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
+      if (entries.get(key) === entry) entries.delete(key);
       for (const cb of entry.exitCbs) cb();
     });
     entries.set(key, entry);
@@ -95,7 +97,8 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     pty.onExit(({ exitCode }) => {
       entry.exited = true;
       entry.exitCode = exitCode;
-      entries.delete(key);
+      if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
+      if (entries.get(key) === entry) entries.delete(key);
       for (const cb of entry.exitCbs) cb();
     });
     entries.set(key, entry);
@@ -125,18 +128,23 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
   function resize(entry, { cols, rows }) {
     if (!entry.exited) { try { entry.pty.resize(Math.min(cols, 1000), Math.min(rows, 1000)); } catch {} }
   }
+  // Deletions below check identity, not just the key: a grace timer (or a
+  // straggling close()) can outlive its entry when the PTY exits on its own and
+  // the client reopens the box — deleting blindly by key would evict the NEW
+  // session, flip hasLiveSession() to false while an interactive login is live
+  // (probe/terminal collision), and let the next open spawn a duplicate ssh.
   function detach(entry) {
     if (entry.exited || entry.graceTimer || entry.listeners.size > 0) return;
     entry.graceTimer = setTimeout(() => {
       try { entry.pty.kill(); } catch {}
-      entries.delete(entry.key);
+      if (entries.get(entry.key) === entry) entries.delete(entry.key);
     }, graceSeconds * 1000);
   }
   function close(entry) {
     entry.exited = true;
     if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
     try { entry.pty.kill(); } catch {}
-    entries.delete(entry.key);
+    if (entries.get(entry.key) === entry) entries.delete(entry.key);
   }
   function closeKey(key) {
     const entry = entries.get(key);

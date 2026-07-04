@@ -10,7 +10,7 @@ async function loginAndWait(page) {
 test('fleet command runs on a selected box and shows captured output', async ({ page }) => {
   await loginAndWait(page);
 
-  await page.getByRole('button', { name: 'Fleet', exact: true }).click();
+  await page.getByRole('button', { name: 'Fleet Command', exact: true }).click();
 
   // Select the localhost box (key-auth works for one-shot exec)
   await page.locator('.box', { hasText: 'localhost' }).locator('input.box-check').check();
@@ -30,7 +30,7 @@ test('fleet command runs on a selected box and shows captured output', async ({ 
 
 test('the master "Select all" checkbox selects and clears every shown box', async ({ page }) => {
   await loginAndWait(page);
-  await page.getByRole('button', { name: 'Fleet', exact: true }).click();
+  await page.getByRole('button', { name: 'Fleet Command', exact: true }).click();
 
   // Three boxes are seeded (localhost + db-primary under Prod, untagged-worker).
   await expect(page.locator('.fleet-select-all')).toContainText('Select all (3)');
@@ -54,7 +54,7 @@ test('the master "Select all" checkbox selects and clears every shown box', asyn
 
 test('a finished fleet job is findable from the Jobs button after a reload', async ({ page }) => {
   await loginAndWait(page);
-  await page.getByRole('button', { name: 'Fleet', exact: true }).click();
+  await page.getByRole('button', { name: 'Fleet Command', exact: true }).click();
   await page.locator('.box', { hasText: 'localhost' }).locator('input.box-check').check();
   await page.locator('.fleet-input').fill('echo SECOND_RUN_MARKER');
   await page.locator('#fleet-run').click();
@@ -64,7 +64,7 @@ test('a finished fleet job is findable from the Jobs button after a reload', asy
   // Reload — the server kept the job; the Jobs button must list it
   await page.reload();
   await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
-  await page.getByRole('button', { name: 'Jobs', exact: true }).click();
+  await page.getByRole('button', { name: 'Fleet Jobs', exact: true }).click();
   const history = page.locator('#fleet-panel .fleet-history');
   await expect(history).toContainText('echo SECOND_RUN_MARKER', { timeout: 10000 });
   await history.locator('.fleet-history-item', { hasText: 'SECOND_RUN_MARKER' }).first().click();

@@ -172,8 +172,13 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
   let closedByUser = false;
   let failures = 0;
   let stableTimer: ReturnType<typeof setTimeout> | undefined;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
   function connect() {
+    // A backoff retry can fire after dispose() (its timer belongs to the old
+    // tab); without this guard it would write to a disposed Terminal and open a
+    // second WebSocket — a duplicate server-side PTY listener — for the box.
+    if (closedByUser) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const { cols, rows } = term;
     // Immediate feedback so opening a box is never a mystery blank cursor — the
@@ -196,7 +201,7 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
       // Escalating backoff to a 5-minute floor (never gives up): a down box settles
       // to a gentle ~1 attempt/5min and auto-reconnects when it comes back.
       term.write(`\r\n\x1b[33m[disconnected — retrying in ${humanDelay(delay)}…]\x1b[0m\r\n`);
-      setTimeout(connect, delay);
+      retryTimer = setTimeout(connect, delay);
     };
   }
   function sendResize() {
@@ -210,7 +215,7 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
 
   return {
     focus: () => term.focus(),
-    dispose: () => { closedByUser = true; clearTimeout(stableTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
+    dispose: () => { closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
     refit: onResize,
   };
 }

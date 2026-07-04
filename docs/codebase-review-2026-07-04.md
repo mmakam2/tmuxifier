@@ -11,6 +11,16 @@ web client, docs/dead-code) plus first-hand verification of every HIGH finding. 
 > changes. Nothing here has been fixed yet. When an item is picked up, run it through the normal
 > flow and land a focused change. Line numbers reference the reviewed commit and will drift.
 
+**Status note, 2026-07-04 (same day):** all six HIGH findings (H1–H6) have since been fixed,
+test-first: strict-hex fail-closed `verifyPassword`; a shared `jsonFile.js`
+(atomic temp+rename writes, corrupt files quarantined to `<file>.corrupt-<ts>`) adopted by all
+five stores — which also makes every data file owner-only 0600, closing L21; full-chain trust
+anchoring in pin mode; identity-guarded session eviction with grace timers cleared on exit;
+logout now disposes all terminal tabs (and closes the drawers, L18); and the terminal reconnect
+timer is cancelled on dispose. Two pre-existing e2e failures were repaired in passing (the fleet
+specs still targeted the old "Fleet"/"Jobs" button names from before the 9c851cb rename, and
+terminal specs typed before the WebSocket opened). MEDIUM and LOW findings remain open.
+
 ---
 
 ## Executive summary

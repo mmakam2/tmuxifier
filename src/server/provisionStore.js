@@ -1,5 +1,5 @@
-import fs from 'node:fs';
 import path from 'node:path';
+import { readJsonSync, writeFileAtomic } from './jsonFile.js';
 
 export function createProvisionStore({ dataDir }) {
   const file = path.join(dataDir, 'provision-jobs.json');
@@ -10,10 +10,9 @@ export function createProvisionStore({ dataDir }) {
     if (flushing) return;
     flushing = true;
     try {
-      await fs.promises.mkdir(dataDir, { recursive: true });
       while (pending !== null) {
         const data = pending; pending = null;
-        await fs.promises.writeFile(file, data);
+        await writeFileAtomic(file, data);
       }
     } catch {
       // best effort: persistence must never crash a provision run
@@ -25,8 +24,7 @@ export function createProvisionStore({ dataDir }) {
   }
   return {
     load() {
-      try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(v) ? v : []; }
-      catch { return []; }
+      return readJsonSync(file, { fallback: [], validate: Array.isArray });
     },
     save(jobs) {
       try { pending = JSON.stringify(jobs, null, 2); } catch { return; }

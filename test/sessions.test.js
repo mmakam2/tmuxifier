@@ -1,4 +1,4 @@
-import { test, expect } from 'vitest';
+import { test, expect, vi } from 'vitest';
 import { createSessionManager } from '../src/server/sessions.js';
 
 // Minimal fake PTY so we can drive output without a real ssh/tmux process.
@@ -68,6 +68,44 @@ test('attach replay strips terminal query sequences so xterm does not answer the
   expect(got).not.toContain('\x1b[6n');
   expect(got).toContain('prompt$ ');     // text preserved
   expect(got).toContain('\x1b[31mred\x1b[0m'); // colors preserved
+});
+
+// The grace timer and close() must evict by identity, not by key: if the PTY
+// dies on its own during the grace window and the client reopens the box, the
+// stale timer used to delete the NEW entry — hasLiveSession went false (letting
+// the status poller probe over a live interactive login) and the next open
+// spawned a duplicate ssh that kicked the first client's tmux attach.
+test('a stale grace timer cannot evict a successor session under the same key', () => {
+  vi.useFakeTimers();
+  try {
+    const pty1 = fakePty();
+    const pty2 = fakePty();
+    const ptys = [pty1, pty2];
+    const mgr = createSessionManager({ spawn: () => ptys.shift(), graceSeconds: 1 });
+    const e1 = mgr.open({ key: 'box1', box: { host: 'h' }, session: 'web', size: { cols: 80, rows: 24 } });
+    mgr.detach(e1);   // no listeners → arms the grace timer
+    pty1.fireExit();  // ssh dies on its own mid-grace (network drop)
+    const e2 = mgr.open({ key: 'box1', box: { host: 'h' }, session: 'web', size: { cols: 80, rows: 24 } });
+    expect(e2).not.toBe(e1);
+    vi.advanceTimersByTime(60_000); // stale timer for e1 fires (if still armed)
+    expect(mgr.hasLiveSession('box1')).toBe(true);
+    expect(mgr._count()).toBe(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('closing a replaced entry does not evict its successor', () => {
+  const pty1 = fakePty();
+  const pty2 = fakePty();
+  const ptys = [pty1, pty2];
+  const mgr = createSessionManager({ spawn: () => ptys.shift() });
+  const e1 = mgr.open({ key: 'k', box: { host: 'h' }, session: 'web', size: { cols: 80, rows: 24 } });
+  pty1.fireExit(); // e1's PTY is gone; the map no longer holds it
+  const e2 = mgr.open({ key: 'k', box: { host: 'h' }, session: 'web', size: { cols: 80, rows: 24 } });
+  mgr.close(e1);   // straggling cleanup still holding the old entry
+  expect(mgr.hasLiveSession('k')).toBe(true);
+  expect(e2.exited).toBe(false);
 });
 
 test('live output still fans out to an attached client after the replay', () => {

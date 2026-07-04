@@ -1,7 +1,7 @@
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { assertHostInput, assertKeyInput, assertPresetInput, assertRootPassword, parseEndpoint } from './proxmoxValidate.js';
+import { readJson, writeJson } from './jsonFile.js';
 
 const VERSION = 1;
 
@@ -25,17 +25,17 @@ function normalizePreset(spec, id, createdAt) {
 export function createProxmoxStore({ dataDir, secretBox, makeId = randomUUID, now = () => new Date().toISOString() }) {
   const file = path.join(dataDir, 'proxmox.json');
 
+  // The shape check treats a well-formed-but-wrong file (e.g. a top-level array,
+  // or hosts: null) as corrupt too, so it is quarantined instead of crashing the
+  // list/find calls below.
+  const validShape = (v) => v && typeof v === 'object' && !Array.isArray(v)
+    && ['hosts', 'keys', 'presets'].every((k) => !(k in v) || Array.isArray(v[k]));
   async function readAll() {
-    try {
-      const v = JSON.parse(await fs.readFile(file, 'utf8'));
-      return { version: VERSION, hosts: [], keys: [], presets: [], ...v };
-    } catch {
-      return { version: VERSION, hosts: [], keys: [], presets: [] };
-    }
+    const v = await readJson(file, { fallback: {}, validate: validShape });
+    return { version: VERSION, hosts: [], keys: [], presets: [], ...v };
   }
   async function writeAll(data) {
-    await fs.mkdir(dataDir, { recursive: true });
-    await fs.writeFile(file, JSON.stringify(data, null, 2), { mode: 0o600 });
+    await writeJson(file, data, { mode: 0o600 });
   }
   function redactHost(h) {
     const { tokenSecret, ...rest } = h;

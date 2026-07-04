@@ -19,8 +19,13 @@ test('save then load round-trips and creates the data dir', async () => {
   await expect(fs.stat(path.join(dir, 'health-events.json'))).resolves.toBeTruthy();
 });
 
-test('load returns [] on a corrupt file instead of throwing', async () => {
+test('load returns [] on a corrupt file instead of throwing — and quarantines it', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-health-'));
   await fs.writeFile(path.join(dir, 'health-events.json'), 'not json');
-  expect(createHealthEventsStore({ dataDir: dir }).load()).toEqual([]);
+  const store = createHealthEventsStore({ dataDir: dir });
+  expect(store.load()).toEqual([]);
+  store.save([{ seq: 1 }]); // a later save must not destroy the original bytes
+  const q = (await fs.readdir(dir)).filter((n) => n.startsWith('health-events.json.corrupt-'));
+  expect(q).toHaveLength(1);
+  expect(await fs.readFile(path.join(dir, q[0]), 'utf8')).toBe('not json');
 });

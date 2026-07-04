@@ -10,7 +10,18 @@ function tlsProbe({ host, port = 8006, timeoutMs = 15000 }) {
       const authorized = socket.authorized === true;
       socket.end();
       if (!cert || !cert.raw) { reject(new Error('no peer certificate presented')); return; }
-      resolve({ fingerprint256: cert.fingerprint256 || null, raw: cert.raw, authorized, subject: cert.subject, issuer: cert.issuer, valid_to: cert.valid_to });
+      // Collect the whole presented chain, not just the leaf: a default PVE cert
+      // (pve-ssl.pem) is signed by the node's cluster CA, and OpenSSL only anchors
+      // trust at a self-signed cert — pinning the leaf alone can never verify the
+      // stock Proxmox cert shape. issuerCertificate is self-referential on a
+      // self-signed cert, so guard against the cycle.
+      const chain = [];
+      const seen = new Set();
+      for (let c = cert; c && c.raw && !seen.has(c.fingerprint256); c = c.issuerCertificate) {
+        seen.add(c.fingerprint256);
+        chain.push(c.raw);
+      }
+      resolve({ fingerprint256: cert.fingerprint256 || null, raw: cert.raw, chain, authorized, subject: cert.subject, issuer: cert.issuer, valid_to: cert.valid_to });
     });
     socket.on('timeout', () => socket.destroy(new Error('TLS connection timed out')));
     socket.on('error', reject);
@@ -52,7 +63,8 @@ export function createProxmoxClient({ host, request = httpsRequest, connect = tl
       const want = normFp(host.fingerprint256);
       const probe = await connect({ host: hostName, port, timeoutMs });
       if (!want || normFp(probe.fingerprint256) !== want) throw new Error('TLS fingerprint mismatch — the Proxmox host certificate changed; re-add the host to accept the new certificate');
-      return { ca: [derToPem(probe.raw)], rejectUnauthorized: true, checkServerIdentity: () => undefined };
+      const trust = probe.chain && probe.chain.length ? probe.chain : [probe.raw];
+      return { ca: trust.map(derToPem), rejectUnauthorized: true, checkServerIdentity: () => undefined };
     })().catch((e) => { tlsPromise = null; throw e; });
     return tlsPromise;
   }
