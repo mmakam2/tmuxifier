@@ -67,12 +67,22 @@
   --green: #58e58c;
 }
 * { box-sizing: border-box; }
+/* The body carries the page gradient, so it must span the full viewport even
+   when its content is short (the login card): with an auto-height body the
+   gradient's positioning area hugs the content and the canvas tiles it — a
+   visible seam where the background "restarts". flow-root keeps the login
+   card's top margin from collapsing through and overshooting 100%. */
+html { height: 100%; }
 body {
   margin: 0;
+  min-height: 100%;
+  display: flow-root;
   font-family: ui-sans-serif, system-ui, sans-serif;
   background:
     radial-gradient(circle at 50% 12%, rgba(36, 211, 232, 0.12), transparent 34%),
     linear-gradient(180deg, #0a1018 0%, var(--bg) 56%, #05070b 100%);
+  background-repeat: no-repeat;
+  background-color: #05070b; /* continues the gradient's end color past any overflow */
   color: var(--text);
 }
 .login {
