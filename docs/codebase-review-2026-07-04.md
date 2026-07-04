@@ -23,6 +23,60 @@ terminal specs typed before the WebSocket opened). MEDIUM and LOW findings remai
 
 ---
 
+## Findings at a glance
+
+Status reflects `main` as of v1.4.18. Effort is a rough fix-size guess for open items:
+**S** = under an hour, **M** = a few hours (design decisions or a protocol/major-version change).
+
+| ID | Area | Finding | Severity | Status | Effort |
+|----|------|---------|----------|--------|--------|
+| H1 | auth | `verifyPassword` fails open on corrupt stored hash | High | ✅ Fixed v1.4.18 | — |
+| H2 | stores | Non-atomic, error-swallowing persistence in all five JSON stores | High | ✅ Fixed v1.4.18 | — |
+| H3 | proxmox | TLS pin mode can't connect to cluster-CA-signed (stock) PVE certs | High | ✅ Fixed v1.4.18 | — |
+| H4 | sessions | Stale grace timer / `close()` evicts successor session by key | High | ✅ Fixed v1.4.18 | — |
+| H5 | web | Stale `tabs` map across logout→login makes boxes unopenable | High | ✅ Fixed v1.4.18 | — |
+| H6 | web | Reconnect timer survives `dispose()` — leaked WS + duplicate PTY listener | High | ✅ Fixed v1.4.18 | — |
+| M1 | fleet | Fleet exec / `killSession` bypass the mid-login ControlMaster guard | Medium | Open | S |
+| M2 | auth | Session cookie is a constant, non-expiring bearer token | Medium | Open | S |
+| M3 | server | Rate limiter: global `clear()` reset + no `trustProxy` behind a proxy | Medium | Open | S |
+| M4 | sessions | Editing a box's connection fields leaves the terminal on the old host | Medium | Open | S |
+| M5 | proxmox | `updateHost` merges arbitrary patch fields, including `id` | Medium | Open | S |
+| M6 | proxmox | One transient poll error kills a provision job (orphaned LXC) | Medium | Open | S |
+| M7 | status | `statusPoller` has no re-entrancy guard (duplicate/stale snapshots) | Medium | Open | S |
+| M8 | web | No 401/session-expiry handling — dashboard silently freezes | Medium | Open | M |
+| M9 | web | Provision panel can get stuck open with no dismiss/cancel | Medium | Open | M |
+| M10 | web | Box removal is a single unconfirmed click | Medium | Open | S |
+| M11 | sessions | Provision WS close kills a shared entry another socket uses | Medium | Open | M |
+| L1 | boxActions | `default-shell` dedup `sed` is a no-op (`#`-led script is a comment) | Low | Open | S |
+| L2 | fleet | ssh timeout reported as `exited 1` | Low | Open | S |
+| L3 | fleet | `prune()` can evict a still-running job | Low | Open | S |
+| L4 | fleet | Duplicate `boxIds` run a command twice on one box | Low | Open | S |
+| L5 | fleet | Malformed persisted job crashes startup | Low | Open | S |
+| L6 | health | cpu threshold never fires for a box down at seed time | Low | Open | S |
+| L7 | status | Successful `listSessions` doesn't clear backoff (stays red) | Low | Open | S |
+| L8 | server | WS auth crashes on malformed cookie percent-encoding | Low | Open | S |
+| L9 | server | Non-string WS input frames throw to the global handler | Low | Open | S |
+| L10 | config | Numeric env values unvalidated (`PORT=7437x` → NaN) | Low | Open | S |
+| L11 | store | `updateBox` can't clear `label` | Low | Open | S |
+| L12 | auth | Google token exchange has no timeout | Low | Open | S |
+| L13 | secrets | `secretBox.open` accepts truncated GCM auth tags | Low | Open | S |
+| L14 | proxmox | Templates route without `?storage` → 502 instead of 400 | Low | Open | S |
+| L15 | web | `formatEvent` has no default case — one unknown event bricks the panel | Low | Open | S |
+| L16 | web | Fleet job-detail render/poll races between quick clicks | Low | Open | S |
+| L17 | web | `refresh()` flashes every status dot gray | Low | Open | S |
+| L18 | web | Logout leaves drawers overlaying the login screen | Low | ✅ Fixed v1.4.18 | — |
+| L19 | web | Terminal WS URL not `encodeURIComponent`'d (inconsistent) | Low | Open | S |
+| L20 | web | Provision exit-sniffing can false-match terminal output | Low | Open | M |
+| L21 | store | `boxes.json` not written owner-only 0600 | Low | ✅ Fixed v1.4.18 | — |
+| L22 | server | Blocking `execFileSync` calls stall the event loop | Low | Open | S |
+| L23 | scripts | `set-password` leaks the password via argv / echoed prompt | Low | Open | S |
+| — | dead code | 4 unreachable Proxmox routes + assorted unused exports/params | Info | Open | S |
+| — | docs | DEPLOY.md ssh-config "import" claim, local-shell undocumented, `.env.example` gap | Info | Open | S |
+| — | tests | Coverage gaps (rate limiting, logout, WS auth, fleet edges; HIGH-related gaps closed in v1.4.18) | Info | Partially closed | M |
+| — | deps | fastify 4 HIGH advisories; vitest/vite critical (dev-only); xterm 6 major | Info | Open | M |
+
+---
+
 ## Executive summary
 
 Tmuxifier remains a well-engineered, disciplined codebase: injectable factory modules, real-code
