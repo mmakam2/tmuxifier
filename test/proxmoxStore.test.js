@@ -33,15 +33,6 @@ test('getHost withSecret returns the decrypted token; default is redacted', asyn
   expect((await store.getHost(h.id, { withSecret: true })).tokenSecret).toBe('super-secret');
 });
 
-test('updateHost without a new secret keeps the stored token', async () => {
-  const store = make();
-  const h = await store.addHost(HOST);
-  await store.updateHost(h.id, { defaultNode: 'pve' });
-  expect((await store.getHost(h.id, { withSecret: true })).tokenSecret).toBe('super-secret');
-  await store.updateHost(h.id, { tokenSecret: 'rotated' });
-  expect((await store.getHost(h.id, { withSecret: true })).tokenSecret).toBe('rotated');
-});
-
 test('host/key/preset names are unique', async () => {
   const store = make();
   await store.addHost(HOST);
@@ -120,32 +111,5 @@ test('a corrupt proxmox.json is quarantined so stored secrets are never overwrit
   expect(await fs.readFile(path.join(dir, q[0]), 'utf8')).toBe(original.slice(0, 40));
 });
 
-// updateHost used to merge the raw request body — a PATCH could silently
-// re-identify the host ({"id": ...} orphans presets' hostId and boxes'
-// proxmox.hostId provenance) or persist redacted-view junk like hasToken
-// replayed from a GET. Only real host fields may be patched.
-test('updateHost ignores non-whitelisted patch fields (id, createdAt, hasToken, junk)', async () => {
-  const store = make();
-  const h = await store.addHost(HOST);
-  const updated = await store.updateHost(h.id, {
-    id: 'evil', createdAt: 'not-then', hasToken: false, junk: 1, defaultNode: 'pve',
-  });
-  expect(updated.id).toBe(h.id);                 // identity is not patchable
-  expect(updated.defaultNode).toBe('pve');       // whitelisted field applied
-  const fetched = await store.getHost(h.id);
-  expect(fetched).toBeTruthy();                  // still findable under the old id
-  expect(fetched.createdAt).toBe(h.createdAt);
-  expect(fetched.hasToken).toBe(true);           // derived from the real secret, not the replayed view
-  expect(fetched).not.toHaveProperty('junk');
-  expect(await store.getHost('evil')).toBeUndefined();
-});
-
-test('replaying a redacted GET view into updateHost keeps the stored token usable', async () => {
-  const store = make();
-  const h = await store.addHost(HOST);
-  const view = await store.getHost(h.id);        // redacted: hasToken, no tokenSecret
-  await store.updateHost(h.id, { ...view, name: 'lab-renamed' });
-  const secret = await store.getHost(h.id, { withSecret: true });
-  expect(secret.name).toBe('lab-renamed');
-  expect(secret.tokenSecret).toBe('super-secret'); // token survived the round-trip
-});
+// Note: updateHost/updatePreset were removed entirely (2026-07-04 review, dead
+// code: no UI ever reached their routes). Host/preset changes are remove+re-add.

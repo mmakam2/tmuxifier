@@ -83,10 +83,14 @@ export function parseTmuxSessions(stdout) {
 
 export function createStatusChecker({
   run, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist, reapStaleMaster,
-  hasLiveSession, masterAlive, now = () => Date.now(), stepSec = 30, capSec = 300,
+  hasLiveSession, masterAlive, now = () => Date.now(),
 }) {
   const remote = PROBE_REMOTE;
-  const capCount = Math.ceil(capSec / stepSec);
+  // Failure backoff shape: each consecutive failure adds STEP_SEC to the probe
+  // interval, up to the CAP_SEC pause floor.
+  const STEP_SEC = 30;
+  const CAP_SEC = 300;
+  const capCount = Math.ceil(CAP_SEC / STEP_SEC);
   const backoff = new Map(); // key -> { fails, nextProbeAt, paused, last }
   const inflight = new Map(); // key -> Promise<status> for a probe already running
   const sessInflight = new Map(); // key -> Promise for an in-flight listSessions() fetch
@@ -182,8 +186,8 @@ export function createStatusChecker({
           // Failure. A needs-login box can never succeed under BatchMode and fast
           // probing only feeds host-side fail2ban, so jump straight to the 5m floor.
           const fails = result.needsAuth ? capCount : ((s?.fails ?? 0) + 1);
-          const intervalSec = Math.min(stepSec * fails, capSec);
-          const paused = intervalSec >= capSec;
+          const intervalSec = Math.min(STEP_SEC * fails, CAP_SEC);
+          const paused = intervalSec >= CAP_SEC;
           const nextProbeAt = t + intervalSec * 1000;
           backoff.set(key, { fails, nextProbeAt, paused, last: result });
           return paused ? { ...result, paused: true, nextProbeAt } : result;

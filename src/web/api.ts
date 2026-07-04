@@ -73,7 +73,7 @@ export const api = {
   },
   async status() { return j<Record<string, Status>>(await fetch(`/api/status?t=${Date.now()}`)); },
   async healthSeries() { return j<Record<string, Sample[]>>(await fetch(`/api/health/series?t=${Date.now()}`)); },
-  async healthEvents(since = 0) { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?since=${since}&t=${Date.now()}`)); },
+  async healthEvents() { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?t=${Date.now()}`)); },
   async uiConfig() { return j<{ termFont: string | null; termFontSize: number }>(await fetch('/api/ui-config')); },
   async getLocalShell() { return j<{ shell: string }>(await fetch('/api/local-shell')); },
   async updateLocalShell(shell: string) { return j<{ ok: boolean }>(await fetch('/api/local-shell', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shell }) })); },

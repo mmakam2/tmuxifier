@@ -78,13 +78,13 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     return entry;
   }
 
-  function provision({ key, box, script, opts = {} }) {
+  function provision({ key, box, script }) {
     const existing = entries.get(key);
     if (existing && !existing.exited) {
       if (existing.graceTimer) { clearTimeout(existing.graceTimer); existing.graceTimer = null; }
       return existing;
     }
-    const argv = buildProvisionArgv(box, script, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist, ...opts });
+    const argv = buildProvisionArgv(box, script, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
     const pty = spawn('ssh', argv, {
       name: 'xterm-256color',
       cols: 120,

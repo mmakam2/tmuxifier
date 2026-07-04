@@ -46,7 +46,7 @@ const PRESET = {
 };
 
 test('assertPresetInput validates ranges, refs, and static-network completeness', () => {
-  const ctx = { keyIds: ['k1'], hostIds: ['h1'] };
+  const ctx = { hostIds: ['h1'] }; // keyIds ctx removed with the dead param
   expect(() => assertPresetInput(PRESET, ctx)).not.toThrow();
   expect(() => assertPresetInput({ ...PRESET, cores: 0 }, ctx)).toThrow(/cores/);
   expect(() => assertPresetInput({ ...PRESET, diskGiB: 0 }, ctx)).toThrow(/disk/);

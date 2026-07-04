@@ -7,8 +7,8 @@ import path from 'node:path';
 // on the same socket, and the master is authenticated once — so repeated probes
 // no longer count against the box's sshd MaxStartups limit.
 function controlArgs(opts = {}) {
-  if (!opts.controlPath && !opts.controlDir) return [];
-  const controlPath = opts.controlPath || path.join(opts.controlDir, '%C');
+  if (!opts.controlDir) return [];
+  const controlPath = path.join(opts.controlDir, '%C');
   const persist = opts.controlPersist != null ? String(opts.controlPersist) : '60';
   return [
     '-o', 'ControlMaster=auto',
@@ -111,9 +111,8 @@ export function buildProbeArgv(box, remoteCmd, opts = {}) {
 // no PTY — so it is safe to run regardless of the box's auth method.
 function buildControlCmdArgv(box, cmd, opts = {}) {
   assertBoxSafe(box);
-  if (!opts.controlPath && !opts.controlDir) return null;
-  const controlPath = opts.controlPath || path.join(opts.controlDir, '%C');
-  const argv = ['-o', `ControlPath=${controlPath}`];
+  if (!opts.controlDir) return null;
+  const argv = ['-o', `ControlPath=${path.join(opts.controlDir, '%C')}`];
   if (box.proxyJump) argv.push('-J', box.proxyJump);
   if (box.port) argv.push('-p', String(box.port));
   argv.push('-O', cmd, target(box));
@@ -145,7 +144,7 @@ export function buildControlCheckArgv(box, opts = {}) {
 // which we then unlink to clear an orphaned master that `-O exit` can't reach.
 export function buildControlPathArgv(box, opts = {}) {
   assertBoxSafe(box);
-  if (!opts.controlPath && !opts.controlDir) return null;
+  if (!opts.controlDir) return null;
   const argv = ['-G', ...controlArgs(opts)];
   if (box.proxyJump) argv.push('-J', box.proxyJump);
   if (box.port) argv.push('-p', String(box.port));

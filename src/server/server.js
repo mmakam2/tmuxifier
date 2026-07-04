@@ -349,10 +349,6 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     try { return reply.code(201).send(await proxmoxStore.addHost(spec)); }
     catch (e) { return reply.code(400).send({ error: e.message }); }
   });
-  app.patch('/api/proxmox/hosts/:id', { preHandler: requireAuth }, async (req, reply) => {
-    try { return await proxmoxStore.updateHost(req.params.id, req.body || {}); }
-    catch (e) { return reply.code(400).send({ error: e.message }); }
-  });
   app.delete('/api/proxmox/hosts/:id', { preHandler: requireAuth }, async (req) => { await proxmoxStore.removeHost(req.params.id); return { ok: true }; });
   app.post('/api/proxmox/hosts/:id/test', { preHandler: requireAuth }, async (req, reply) =>
     callHost(reply, req.params.id, async (c) => ({ ok: true, version: await c.version() })));
@@ -368,8 +364,6 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     callHost(reply, req.params.id, (c) => c.templates(req.params.node, req.query.storage)));
   app.get('/api/proxmox/hosts/:id/nodes/:node/bridges', { preHandler: requireAuth }, async (req, reply) =>
     callHost(reply, req.params.id, (c) => c.bridges(req.params.node)));
-  app.get('/api/proxmox/hosts/:id/nextid', { preHandler: requireAuth }, async (req, reply) =>
-    callHost(reply, req.params.id, async (c) => ({ vmid: await c.nextId() })));
 
   app.get('/api/proxmox/keys', { preHandler: requireAuth }, async () => proxmoxStore.listKeys());
   app.post('/api/proxmox/keys', { preHandler: requireAuth }, async (req, reply) => {
@@ -391,10 +385,6 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     try { return reply.code(201).send(await proxmoxStore.addPreset(req.body || {})); }
     catch (e) { return reply.code(400).send({ error: e.message }); }
   });
-  app.patch('/api/proxmox/presets/:id', { preHandler: requireAuth }, async (req, reply) => {
-    try { return await proxmoxStore.updatePreset(req.params.id, req.body || {}); }
-    catch (e) { return reply.code(400).send({ error: e.message }); }
-  });
   app.delete('/api/proxmox/presets/:id', { preHandler: requireAuth }, async (req) => { await proxmoxStore.removePreset(req.params.id); return { ok: true }; });
 
   app.post('/api/proxmox/provisions', { preHandler: requireAuth }, async (req, reply) => {
@@ -407,12 +397,6 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (!job) return reply.code(404).send({ error: 'provision not found' });
     return job;
   });
-  app.post('/api/proxmox/provisions/:id/cancel', { preHandler: requireAuth }, async (req, reply) => {
-    const job = provisionManager.cancelProvision(req.params.id);
-    if (!job) return reply.code(404).send({ error: 'provision not found' });
-    return job;
-  });
-
   app.get('/api/status', { preHandler: requireAuth }, async () => {
     // Serve the shared, server-side poll snapshot when a poller is wired: every
     // open tab reads the same cache instead of driving its own SSH probe cycle,

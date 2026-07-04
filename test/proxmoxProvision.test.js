@@ -112,24 +112,20 @@ test('a failed create task marks the job error', async () => {
   expect(done.error).toMatch(/volume create failed/);
 });
 
-test('cancel before the create task finishes ends the job cancelled', async () => {
-  let release;
-  const gate = new Promise((r) => { release = r; });
-  const client = { ...okClient(), createLxc: async () => { await gate; return 'UPID:create'; } };
-  const mgr = createProvisionManager(base({ proxmoxStore: makeStore(PRESET_DHCP), makeClient: () => client }));
-  const job = await mgr.createProvision({ presetId: 'p1', hostname: 'dev-05' });
-  mgr.cancelProvision(job.id);
-  release();
-  await mgr._settled(job.id);
-  expect(mgr.getProvision(job.id).status).toBe('cancelled');
-});
-
 test('task log is capped at maxLogBytes', async () => {
   const client = { ...okClient(), taskLog: async () => [{ n: 1, t: 'x'.repeat(100) }] };
   const mgr = createProvisionManager(base({ proxmoxStore: makeStore(PRESET_STATIC), makeClient: () => client, maxLogBytes: 10 }));
   const job = await mgr.createProvision({ presetId: 'p2', hostname: 'dev-06' });
   await mgr._settled(job.id);
   expect(mgr.getProvision(job.id).log.length).toBeLessThanOrEqual(10);
+});
+
+test('a legacy persisted cancelled job stays terminal at reconciliation (cancel API removed)', () => {
+  const mgr = createProvisionManager(base({
+    proxmoxStore: makeStore(PRESET_DHCP),
+    load: () => [{ id: 'legacy', status: 'cancelled', phase: 'create', createdAt: '2026-06-25T00:00:00Z' }],
+  }));
+  expect(mgr.getProvision('legacy').status).toBe('cancelled'); // not flipped to interrupted
 });
 
 test('startup reconciliation flips a persisted running job to interrupted', () => {

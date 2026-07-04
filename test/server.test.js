@@ -35,7 +35,6 @@ function proxmoxStubs(calls = []) {
     listHosts: async () => [host],
     getHost: async (id, opts) => (id === 'H1' ? (opts?.withSecret ? { ...host, tokenSecret: 'sek' } : host) : undefined),
     addHost: async (spec) => { calls.push(['addHost', spec.name]); return { ...host, name: spec.name }; },
-    updateHost: async (id, patch) => ({ ...host, ...patch, hasToken: true }),
     removeHost: async () => {},
     listKeys: async () => [{ id: 'K1', name: 'mgmt', publicKey: 'ssh-ed25519 AAA you@example.com' }],
     addKey: async (spec) => { if (!String(spec.publicKey).startsWith('ssh-')) throw new Error('not a valid public key'); return { id: 'K2', ...spec }; },
@@ -43,7 +42,6 @@ function proxmoxStubs(calls = []) {
     listPresets: async () => [{ id: 'P1', name: 'dev' }],
     getPreset: async (id) => (id === 'P1' ? { id: 'P1', name: 'dev' } : undefined),
     addPreset: async (spec) => ({ id: 'P2', ...spec }),
-    updatePreset: async (id, patch) => ({ id, ...patch }),
     removePreset: async () => {},
     hasRootPassword: async () => !!rootPw,
     setRootPassword: async (pw) => { if (!pw || pw.length < 5) throw new Error('root password must be at least 5 characters'); rootPw = pw; },
@@ -53,7 +51,6 @@ function proxmoxStubs(calls = []) {
     createProvision: async (body) => { calls.push(['createProvision', body.hostname]); if (!body.hostname) throw new Error('hostname required'); return { id: 'J1', status: 'running', hostname: body.hostname }; },
     listProvisions: () => [{ id: 'J1', status: 'done' }],
     getProvision: (id) => (id === 'J1' ? { id: 'J1', status: 'done', log: '' } : undefined),
-    cancelProvision: (id) => (id === 'J1' ? { id: 'J1', status: 'cancelled' } : undefined),
   };
   const makeProxmoxClient = () => ({
     version: async () => ({ version: '8.2' }),
@@ -817,7 +814,6 @@ test('hosts: list is redacted, add verifies the token, browse works, token never
 
   const storage = await app.inject({ method: 'GET', url: '/api/proxmox/hosts/H1/nodes/pve/storage', headers });
   expect(storage.json()).toEqual({ rootdir: [{ storage: 'local-lvm', content: 'rootdir,images' }], vztmpl: [{ storage: 'local', content: 'vztmpl,iso' }] });
-  expect((await app.inject({ method: 'GET', url: '/api/proxmox/hosts/H1/nextid', headers })).json()).toEqual({ vmid: '131' });
   expect((await app.inject({ method: 'GET', url: '/api/proxmox/hosts/NOPE/nodes', headers })).statusCode).toBe(404);
 });
 
@@ -843,7 +839,7 @@ test('default-key route and root-password set/status/clear (with 400 on a short 
   expect((await app.inject({ method: 'GET', url: '/api/proxmox/root-password', headers })).json().set).toBe(false);
 });
 
-test('provisions: validation, create, poll, cancel, 404', async () => {
+test('provisions: validation, create, poll, 404', async () => {
   const calls = [];
   app = await makeApp(proxmoxStubs(calls));
   const cookie = await login();
@@ -855,7 +851,6 @@ test('provisions: validation, create, poll, cancel, 404', async () => {
   expect((await app.inject({ method: 'GET', url: '/api/proxmox/provisions', headers })).json()).toHaveLength(1);
   expect((await app.inject({ method: 'GET', url: '/api/proxmox/provisions/J1', headers })).json().status).toBe('done');
   expect((await app.inject({ method: 'GET', url: '/api/proxmox/provisions/NOPE', headers })).statusCode).toBe(404);
-  expect((await app.inject({ method: 'POST', url: '/api/proxmox/provisions/J1/cancel', headers })).json().status).toBe('cancelled');
 });
 
 test('add-host: token verify failure returns 400 and never persists the host', async () => {

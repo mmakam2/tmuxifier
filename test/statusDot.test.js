@@ -1,8 +1,13 @@
 import { test, expect } from 'vitest';
 import {
-  dotClassFor, dotTitleFor, classifyError, metaLineFor, metaSegmentsFor, CPU_ICON,
+  dotClassFor, dotTitleFor, classifyError, metaSegmentsFor, CPU_ICON,
   cpuLoadPct, cpuLevel,
 } from '../src/web/statusDot.ts';
+
+// Local plain-text join of the segments (value + icon, ' · ' separated) — the
+// production metaLineFor export was dead code and removed; the formatting
+// assertions below still cover metaSegmentsFor through the same join.
+const metaLine = (st) => metaSegmentsFor(st).map((s) => (s.icon ? `${s.text} ${s.icon}` : s.text)).join(' · ');
 
 test('dotClassFor: unknown status is gray', () => {
   expect(dotClassFor(undefined)).toBe('gray');
@@ -67,9 +72,9 @@ test('classifyError: an unrecognized error passes through trimmed; empty is gene
   expect(classifyError(undefined)).toBe('Unreachable');
 });
 
-test('metaLineFor: formats present metrics as load · mem% · disk% (raw load when cpus unknown)', () => {
+test('meta line: formats present metrics as load · mem% · disk% (raw load when cpus unknown)', () => {
   const st = { reachable: true, tmux: true, metrics: { load1: 0.42, memTotalKb: 1000, memAvailKb: 620, diskPct: 61 } };
-  expect(metaLineFor(st)).toBe(`0.42 ${CPU_ICON} · 38% 🧠 · 61% 💾`);
+  expect(metaLine(st)).toBe(`0.42 ${CPU_ICON} · 38% 🧠 · 61% 💾`);
 });
 
 test('cpuLoadPct: normalizes load by core count to a percent', () => {
@@ -88,9 +93,9 @@ test('cpuLevel: <70 ok, 70..100 warn, >100 crit', () => {
   expect(cpuLevel(106)).toBe('crit');
 });
 
-test('metaLineFor: shows "% cpu" (load ÷ cores) when the core count is known', () => {
+test('meta line: shows "% cpu" (load ÷ cores) when the core count is known', () => {
   const st = { reachable: true, tmux: true, metrics: { load1: 4.25, cpus: 4, memTotalKb: 1000, memAvailKb: 920, diskPct: 58 } };
-  expect(metaLineFor(st)).toBe(`106% ${CPU_ICON} · 8% 🧠 · 58% 💾`);
+  expect(metaLine(st)).toBe(`106% ${CPU_ICON} · 8% 🧠 · 58% 💾`);
 });
 
 test('metaSegmentsFor: colors only the cpu segment by severity, leaves mem/disk plain', () => {
@@ -134,17 +139,17 @@ test('metaSegmentsFor: a down box is a single crit segment with the reason', () 
   expect(segs[0].text).toMatch(/sshd|port/i);
 });
 
-test('metaLineFor: omits segments whose metric is missing', () => {
-  expect(metaLineFor({ reachable: true, tmux: true, metrics: { diskPct: 9 } })).toBe('9% 💾');
+test('meta line: omits segments whose metric is missing', () => {
+  expect(metaLine({ reachable: true, tmux: true, metrics: { diskPct: 9 } })).toBe('9% 💾');
 });
 
-test('metaLineFor: reachable with no metrics is empty (row shows just the name)', () => {
-  expect(metaLineFor({ reachable: true, tmux: true })).toBe('');
+test('meta line: reachable with no metrics is empty (row shows just the name)', () => {
+  expect(metaLine({ reachable: true, tmux: true })).toBe('');
 });
 
-test('metaLineFor: unreachable shows the classified reason; needsAuth says needs login', () => {
-  expect(metaLineFor({ reachable: false, error: 'Connection refused' })).toMatch(/sshd|port/i);
-  expect(metaLineFor({ reachable: false, needsAuth: true })).toMatch(/login/i);
+test('meta line: unreachable shows the classified reason; needsAuth says needs login', () => {
+  expect(metaLine({ reachable: false, error: 'Connection refused' })).toMatch(/sshd|port/i);
+  expect(metaLine({ reachable: false, needsAuth: true })).toMatch(/login/i);
 });
 
 test('metaSegmentsFor: tags each metric segment so the sparkline can highlight its source', () => {

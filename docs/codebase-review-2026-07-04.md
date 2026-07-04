@@ -47,11 +47,28 @@ cached after first read — no more event-loop stalls freezing terminals), and L
 dedup sed is a real `/…/d` address and only touches `.tmux.conf.local` when it exists). The
 remaining LOWs stay open.
 
+**Status note, 2026-07-04 (dead-code + docs pass):** shipped in v1.4.22. All dead code removed:
+the four never-wired Proxmox operations were **dropped end-to-end** (routes, web-client methods,
+and the backing `updateHost`/`updatePreset`/`cancelProvision` implementations — host/preset edits
+are remove+re-add; 'cancelled' stays a terminal status for legacy persisted jobs), plus
+`metaLineFor` (its formatting tests now drive `metaSegmentsFor` directly), `opts.controlPath`,
+`sessions.provision({opts})`, the `stepSec`/`capSec` injection points, `api.healthEvents(since)`,
+`assertPresetInput`'s `keyIds`, provision-job `startedAt`, the `runLocalShellScript` export, and
+the redundant `.dot.gray` rule. The `typescript` devDep is now real: `npm run typecheck`
+(`tsc --noEmit`) runs as part of `npm test`, and the six `@codemirror/*` packages moved to
+devDependencies. Every documentation gap closed: `.env.example` gained `TMUXIFIER_PVE_DEFAULT_PUBKEY`,
+DEPLOY.md's ssh-config "import" claim was reworded (ssh resolves aliases; Tmuxifier imports
+nothing) and its "what lives where" table gained `config.json` + `health-events.json` rows,
+README documents the Host Shell and per-box Reconnect and shows the real `tmux -u` attach
+command, CLAUDE.md/AGENTS.md list `fleetEditor.ts` and the typecheck command, the 2025-misdated
+security review was renamed to `security-review-2026-06-21.md`, and the vite dev proxy now derives
+its target from `loadConfig()` instead of a hardcoded port.
+
 ---
 
 ## Findings at a glance
 
-Status reflects `main` as of v1.4.21. Effort is a rough fix-size guess for open items:
+Status reflects `main` as of v1.4.22. Effort is a rough fix-size guess for open items:
 **S** = under an hour, **M** = a few hours (design decisions or a protocol/major-version change).
 
 | ID | Area | Finding | Severity | Status | Effort |
@@ -96,8 +113,8 @@ Status reflects `main` as of v1.4.21. Effort is a rough fix-size guess for open 
 | L21 | store | `boxes.json` not written owner-only 0600 | Low | ✅ Fixed v1.4.18 | — |
 | L22 | server | Blocking `execFileSync` calls stall the event loop | Low | ✅ Fixed v1.4.21 | — |
 | L23 | scripts | `set-password` leaks the password via argv / echoed prompt | Low | Open | S |
-| — | dead code | 4 unreachable Proxmox routes + assorted unused exports/params | Info | Open | S |
-| — | docs | DEPLOY.md ssh-config "import" claim, local-shell undocumented, `.env.example` gap | Info | Open | S |
+| — | dead code | 4 unreachable Proxmox routes + assorted unused exports/params | Info | ✅ Fixed v1.4.22 | — |
+| — | docs | DEPLOY.md ssh-config "import" claim, local-shell undocumented, `.env.example` gap | Info | ✅ Fixed v1.4.22 | — |
 | — | tests | Coverage gaps (logout, WS auth, fleet edges; HIGH gaps closed v1.4.18, rate-limit/session-expiry/fleet-guard gaps closed v1.4.20) | Info | Partially closed | M |
 | — | deps | fastify 4 HIGH advisories; vitest/vite critical (dev-only); xterm 6 major | Info | Open | M |
 

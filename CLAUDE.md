@@ -44,7 +44,8 @@ npm run set-password # writes TMUXIFIER_PASSWORD_HASH + TMUXIFIER_COOKIE_SECRET 
 npm run gen-secret   # writes only TMUXIFIER_COOKIE_SECRET for OAuth mode
 npm start            # node src/server/index.js
 npm run dev          # vite + node --watch, proxies /api and /term to the backend
-npm test             # vitest run (unit + integration)
+npm run typecheck    # tsc --noEmit over src/web (the TS client; vite/vitest strip types unchecked)
+npm test             # typecheck + vitest run (unit + integration)
 npm run test:e2e     # playwright (spins up a local sshd-backed box; see test/helpers)
 ```
 
@@ -135,7 +136,8 @@ pattern for new modules.
 Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `api.ts`,
 `terminal.ts`, `index.html`, `style.css`, plus feature modules — `reconnect.ts` (escalating
 backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health history: pure SVG-path builder
-and event-line formatters), `fleetSelection.ts`/`fleetHistory.ts` (Fleet Command),
+and event-line formatters), `fleetSelection.ts`/`fleetHistory.ts`/`fleetEditor.ts` (Fleet
+Command selection, recent-command history, and the CodeMirror bash-script editor),
 `proxmox.ts`/`proxmoxUi.ts`, `clipboard.ts`, and `termFont.ts` (pure builder for the xterm
 font stack — prepends `TMUXIFIER_TERM_FONT` onto the bundled stack (MesloLGMDZ Nerd Font default,
 then MesloLGSDZ + JuliaMono fallback); the server

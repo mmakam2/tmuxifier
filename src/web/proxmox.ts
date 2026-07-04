@@ -25,20 +25,17 @@ async function jr<T>(p: Promise<Response>): Promise<T> {
   return res.json() as Promise<T>;
 }
 const post = (v: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(v) });
-const patch = (v: unknown) => ({ method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(v) });
 
 export const pve = {
   hosts() { return jr<PveHost[]>(fetch('/api/proxmox/hosts')); },
   inspect(endpoint: string) { return jr<InspectResult>(fetch('/api/proxmox/inspect', post({ endpoint }))); },
   addHost(spec: Partial<PveHost> & { tokenSecret: string }) { return jr<PveHost>(fetch('/api/proxmox/hosts', post(spec))); },
-  updateHost(id: string, p: Partial<PveHost> & { tokenSecret?: string }) { return jr<PveHost>(fetch(`/api/proxmox/hosts/${id}`, patch(p))); },
   removeHost(id: string) { return jr(fetch(`/api/proxmox/hosts/${id}`, { method: 'DELETE' })); },
   testHost(id: string) { return jr<{ ok: boolean; version?: unknown }>(fetch(`/api/proxmox/hosts/${id}/test`, { method: 'POST' })); },
   nodes(id: string) { return jr<{ node: string }[]>(fetch(`/api/proxmox/hosts/${id}/nodes`)); },
   storage(id: string, node: string) { return jr<StorageGroups>(fetch(`/api/proxmox/hosts/${id}/nodes/${node}/storage`)); },
   templates(id: string, node: string, storage: string) { return jr<{ volid: string }[]>(fetch(`/api/proxmox/hosts/${id}/nodes/${node}/templates?storage=${encodeURIComponent(storage)}`)); },
   bridges(id: string, node: string) { return jr<{ iface: string }[]>(fetch(`/api/proxmox/hosts/${id}/nodes/${node}/bridges`)); },
-  nextId(id: string) { return jr<{ vmid: string }>(fetch(`/api/proxmox/hosts/${id}/nextid`)); },
   keys() { return jr<PveKey[]>(fetch('/api/proxmox/keys')); },
   addKey(spec: { name: string; publicKey: string }) { return jr<PveKey>(fetch('/api/proxmox/keys', post(spec))); },
   removeKey(id: string) { return jr(fetch(`/api/proxmox/keys/${id}`, { method: 'DELETE' })); },
@@ -48,10 +45,8 @@ export const pve = {
   clearRootPassword() { return jr<{ set: boolean }>(fetch('/api/proxmox/root-password', { method: 'DELETE' })); },
   presets() { return jr<PvePreset[]>(fetch('/api/proxmox/presets')); },
   addPreset(spec: unknown) { return jr<PvePreset>(fetch('/api/proxmox/presets', post(spec))); },
-  updatePreset(id: string, spec: unknown) { return jr<PvePreset>(fetch(`/api/proxmox/presets/${id}`, patch(spec))); },
   removePreset(id: string) { return jr(fetch(`/api/proxmox/presets/${id}`, { method: 'DELETE' })); },
   createProvision(spec: { presetId: string; hostname: string; vmid?: number; ip?: string; tags?: string[] }) { return jr<ProvisionSummary>(fetch('/api/proxmox/provisions', post(spec))); },
   provisions() { return jr<ProvisionSummary[]>(fetch('/api/proxmox/provisions')); },
   provision(id: string) { return jr<ProvisionJob>(fetch(`/api/proxmox/provisions/${id}?t=${Date.now()}`)); },
-  cancelProvision(id: string) { return jr<ProvisionSummary>(fetch(`/api/proxmox/provisions/${id}/cancel`, { method: 'POST' })); },
 };

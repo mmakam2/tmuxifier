@@ -1,6 +1,6 @@
 {
   "name": "tmuxifier",
-  "version": "1.4.21",
+  "version": "1.4.22",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,19 +12,14 @@
     "dev:server": "node --watch src/server/index.js",
     "build": "vite build",
     "start": "node src/server/index.js",
-    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "set-password": "node scripts/hash-password.js",
     "gen-secret": "node scripts/gen-secret.js"
   },
   "dependencies": {
-    "@codemirror/autocomplete": "^6.20.3",
-    "@codemirror/commands": "^6.10.4",
-    "@codemirror/language": "^6.12.4",
-    "@codemirror/legacy-modes": "^6.5.3",
-    "@codemirror/state": "^6.7.0",
-    "@codemirror/view": "^6.43.4",
     "@fastify/cookie": "^9.3.1",
     "@fastify/static": "^7.0.4",
     "@fastify/websocket": "^10.0.1",
@@ -32,6 +27,12 @@
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/legacy-modes": "^6.5.3",
+    "@codemirror/state": "^6.7.0",
+    "@codemirror/view": "^6.43.4",
     "@playwright/test": "^1.45.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",

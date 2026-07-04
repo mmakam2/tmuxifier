@@ -215,7 +215,8 @@ body {
 .box .refresh { font-size: 14px; }
 .box .edit { background: none; border: none; color: #6e7681; cursor: pointer; font-size: 13px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: #6e7681; }
-.dot.green { background: #2ea043; } .dot.amber { background: #d29922; } .dot.red { background: #f85149; } .dot.gray { background: #6e7681; }
+/* .dot.gray needs no rule — gray is the base .dot color above. */
+.dot.green { background: #2ea043; } .dot.amber { background: #d29922; } .dot.red { background: #f85149; }
 /* "auth" = reachable but the SSH master expired and a password is needed; a
    distinct colour signals "actionable", not "dead". */
 .dot.auth { background: #a371f7; box-shadow: 0 0 0 2px rgba(163, 113, 247, 0.25); }

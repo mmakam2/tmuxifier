@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { buildCreateParams } from './proxmoxParams.js';
 import { assertProvisionInput } from './proxmoxValidate.js';
 
+// 'cancelled' has no producer anymore (the never-wired cancel API was removed)
+// but stays terminal so legacy persisted jobs reconcile correctly on load.
 const TERMINAL = new Set(['done', 'error', 'cancelled', 'interrupted']);
 
 export function createProvisionManager({
@@ -25,7 +27,6 @@ export function createProvisionManager({
   function summary(j) {
     return { id: j.id, presetName: j.presetName, hostname: j.hostname, vmid: j.vmid, status: j.status, phase: j.phase, createdAt: j.createdAt, finishedAt: j.finishedAt, boxId: j.boxId, needsHost: j.needsHost };
   }
-  function publicJob(j) { if (!j) return j; const { _cancelled, ...rest } = j; return rest; }
   function appendLog(j, text) { if (text) j.log = (j.log + text).slice(-maxLogBytes); }
 
   async function pollTask(client, node, upid, j) {
@@ -33,7 +34,6 @@ export function createProvisionManager({
     let logStart = 0;
     let statusFailures = 0;
     for (;;) {
-      if (j._cancelled) throw new Error('cancelled');
       const lines = await client.taskLog(node, upid, logStart).catch(() => []);
       if (Array.isArray(lines) && lines.length) {
         logStart += lines.length;
@@ -60,10 +60,9 @@ export function createProvisionManager({
     }
   }
 
-  async function discoverIp(client, node, vmid, j) {
+  async function discoverIp(client, node, vmid) {
     const deadline = Date.now() + leaseTimeoutMs;
     for (;;) {
-      if (j._cancelled) throw new Error('cancelled');
       const ifaces = await client.lxcInterfaces(node, vmid).catch(() => []);
       const eth = (ifaces || []).find((i) => i.name === 'eth0' && i.inet);
       if (eth) return String(eth.inet).split('/')[0];
@@ -93,7 +92,7 @@ export function createProvisionManager({
       j.phase = 'discover'; persist();
       let boxHost = null;
       if (preset.net.ipMode === 'static') boxHost = String(j.ip || preset.net.cidr).split('/')[0];
-      else if (preset.startAfterCreate) boxHost = await discoverIp(client, j.node, j.vmid, j);
+      else if (preset.startAfterCreate) boxHost = await discoverIp(client, j.node, j.vmid);
 
       if (boxHost) {
         j.phase = 'link'; persist();
@@ -109,7 +108,7 @@ export function createProvisionManager({
       }
       j.phase = 'done'; j.status = 'done'; j.finishedAt = now(); persist();
     } catch (e) {
-      j.status = j._cancelled ? 'cancelled' : 'error';
+      j.status = 'error';
       j.error = e.message;
       j.finishedAt = now();
       persist();
@@ -136,7 +135,7 @@ export function createProvisionManager({
         tags: Array.isArray(tags) ? tags : null,
         ip: ip || (preset.net.ipMode === 'static' ? preset.net.cidr : null),
         status: 'running', phase: 'allocate', log: '', boxId: null, needsHost: false, error: null,
-        createdAt: now(), startedAt: now(), finishedAt: null,
+        createdAt: now(), finishedAt: null,
       };
       jobs.set(j.id, j);
       persist();
@@ -144,14 +143,8 @@ export function createProvisionManager({
       settles.set(j.id, p);
       return summary(j);
     },
-    getProvision(id) { return publicJob(jobs.get(id)); },
+    getProvision(id) { return jobs.get(id); },
     listProvisions() { return ordered().map(summary); },
-    cancelProvision(id) {
-      const j = jobs.get(id);
-      if (!j) return undefined;
-      if (!TERMINAL.has(j.status)) j._cancelled = true;
-      return summary(j);
-    },
     _settled(id) { return settles.get(id) || Promise.resolve(); },
   };
 }

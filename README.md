@@ -148,7 +148,8 @@ not supported. The older `TMUXIFIER_PUBLIC_URL`, `TMUXIFIER_GOOGLE_CLIENT_ID`,
 `TMUXIFIER_GOOGLE_CLIENT_SECRET`, and `TMUXIFIER_AUTH_MODE=google` names are still accepted.
 
 ## How persistence works
-Each terminal runs `ssh -tt <box> "tmux new-session -A -D -s <session>"` (the `-D` detaches any
+Each terminal runs `ssh -tt <box> "tmux -u new-session -A -D -s <session>"` (`-u` forces UTF-8
+output so glyphs survive a C/POSIX locale; `-D` detaches any
 other client so a stale connection can't freeze the layout). `<session>` is the box's tmux session
 name — set per box in the Add/Edit dialog (a type-or-pick field whose ⟳ button fetches the host's
 live sessions), defaulting to `web`. Because tmux runs on the box, the session and its processes
@@ -161,6 +162,20 @@ when possible (`apt-get`, `dnf`, `yum`, `pacman`, `apk`, or `zypper`), applies a
 shell/theme options, and creates the configured tmux session. If provisioning exits non-zero,
 the new box is rolled back from the list. Removing a box closes any local terminal process for
 that box and best-effort kills the configured remote tmux session before deleting the box.
+
+## Host Shell & per-box Reconnect
+The **Host Shell** entry at the bottom of the sidebar opens a terminal on the Tmuxifier host
+itself, backed by a local tmux session (`local`) with the same reattach-on-reconnect behavior as
+a box. Its ✎ button picks an optional shell framework — None, Oh My Zsh, or Oh My Bash — which
+Tmuxifier installs locally when selected; the choice is persisted as `localShell` in
+`config.json` (set by the UI — there is no env key). Its ↻ button kills the local tmux session
+and starts a fresh one with the current framework.
+
+Every box row also has a ↻ **Reconnect** action. It tears down the box's SSH plumbing — shuts
+the ControlMaster down cleanly (removing its socket), drops the local PTY, best-effort kills the
+configured remote tmux session, and clears the status-probe backoff — then reopens the terminal.
+Use it when a box's connection state looks wedged (e.g. stuck red after a network change) or to
+force a fresh login; on-box work in *other* tmux sessions is untouched.
 
 ## Status, multiplexing & rate-limit safety
 Tmuxifier talks to each box over SSH continuously — a background **status probe** keeps the

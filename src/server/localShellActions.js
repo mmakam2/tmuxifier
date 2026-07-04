@@ -11,7 +11,7 @@ export function buildEnsureLocalShellScript(shell) {
   throw new Error('invalid shell');
 }
 
-export function runLocalShellScript(script, { cwd = os.homedir(), env = process.env, timeout = SETUP_TIMEOUT_MS } = {}) {
+function runLocalShellScript(script, { cwd = os.homedir(), env = process.env, timeout = SETUP_TIMEOUT_MS } = {}) {
   return new Promise((resolve) => {
     execFile('/bin/sh', ['-c', script], { cwd, env, timeout, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       resolve({ code: err && typeof err.code === 'number' ? err.code : err ? 1 : 0, stdout, stderr });

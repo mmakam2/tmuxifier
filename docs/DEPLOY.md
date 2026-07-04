@@ -12,8 +12,9 @@ unit); adjust paths if you install elsewhere.
 | Path | Tracked in git? | Contents |
 | --- | --- | --- |
 | `.env` | no (gitignored) | All `TMUXIFIER_*` config, incl. password hash + cookie secret (mode `0600`) |
+| `config.json` | no (gitignored) | Optional camelCase alternative to `.env`; also where the UI persists `localShell` |
 | `tls/` | no (gitignored) | `cert.pem` / `key.pem` for HTTPS (private key stays out of git) |
-| `data/` | no (gitignored) | `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json` (encrypted Proxmox host/key/preset profiles), `provision-jobs.json` (provision history), and SSH ControlMaster sockets (`data/cm/`) |
+| `data/` | no (gitignored) | `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json` (encrypted Proxmox host/key/preset profiles), `provision-jobs.json` (provision history), `health-events.json` (in-app health event log), and SSH ControlMaster sockets (`data/cm/`) |
 | `deploy/tmuxifier.service` | yes | Sample systemd unit (no secrets) |
 | `.env.example` | yes | Template for `.env` |
 
@@ -128,8 +129,9 @@ ssh user@box 'tmux -V'   # connects with no password prompt
 ```
 
 Optional but handy: define hosts in `~/.ssh/config` (per-host `User`, `IdentityFile`,
-`ProxyJump`). Tmuxifier reads `~/.ssh/config` and can import those hosts, so you can add a box by
-its short `Host` alias.
+`ProxyJump`). Tmuxifier itself never reads or imports that file — but the `ssh` binary it shells
+out to does, so you can add a box using its short `Host` alias as the hostname and ssh resolves
+the rest. (The only import Tmuxifier has is the box-list JSON produced by the export button.)
 
 > **Passphrases & agents:** a systemd service can't type a passphrase interactively. Prefer the
 > passphrase-free key above, or run an `ssh-agent` the service can reach (set `SSH_AUTH_SOCK` in

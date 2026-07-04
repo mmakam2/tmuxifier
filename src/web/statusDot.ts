@@ -111,7 +111,3 @@ export function metaSegmentsFor(st: Status | undefined): MetaSegment[] {
   return segs;
 }
 
-// Plain-text form of the meta line (segments joined, value + icon). Kept for tests/tooltips.
-export function metaLineFor(st: Status | undefined): string {
-  return metaSegmentsFor(st).map((s) => (s.icon ? `${s.text} ${s.icon}` : s.text)).join(' · ');
-}

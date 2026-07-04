@@ -77,26 +77,6 @@ export function createProxmoxStore({ dataDir, secretBox, makeId = randomUUID, no
       await writeAll(data);
       return redactHost(h);
     },
-    async updateHost(id, patch) {
-      const data = await readAll();
-      const i = data.hosts.findIndex((x) => x.id === id);
-      if (i === -1) throw new Error('host not found');
-      // Whitelist the patchable fields: merging the raw body would let a PATCH
-      // silently re-identify the host (breaking presets' hostId and boxes'
-      // proxmox.hostId provenance) or persist redacted-view junk like hasToken
-      // replayed from a GET.
-      const patchable = ['name', 'endpoint', 'tokenId', 'tokenSecret', 'fingerprint256', 'verifyMode', 'defaultNode'];
-      const clean = {};
-      for (const k of patchable) if (patch[k] !== undefined) clean[k] = patch[k];
-      const merged = { ...data.hosts[i], ...clean };
-      merged.tokenSecret = clean.tokenSecret ? secretBox.seal(clean.tokenSecret) : data.hosts[i].tokenSecret;
-      if (clean.endpoint) { const { host, port } = parseEndpoint(clean.endpoint); merged.endpoint = `${host}:${port}`; }
-      assertHostInput({ ...merged, tokenSecret: 'present' }, { requireSecret: false });
-      assertUniqueName(data.hosts, merged.name, id);
-      data.hosts[i] = merged;
-      await writeAll(data);
-      return redactHost(merged);
-    },
     async removeHost(id) {
       const data = await readAll();
       data.hosts = data.hosts.filter((x) => x.id !== id);
@@ -132,23 +112,12 @@ export function createProxmoxStore({ dataDir, secretBox, makeId = randomUUID, no
     async getPreset(id) { return (await readAll()).presets.find((x) => x.id === id); },
     async addPreset(spec) {
       const data = await readAll();
-      assertPresetInput(spec, { keyIds: data.keys.map((k) => k.id), hostIds: data.hosts.map((h) => h.id) });
+      assertPresetInput(spec, { hostIds: data.hosts.map((h) => h.id) });
       assertUniqueName(data.presets, spec.name);
       const p = normalizePreset(spec, makeId(), now());
       data.presets.push(p);
       await writeAll(data);
       return p;
-    },
-    async updatePreset(id, patch) {
-      const data = await readAll();
-      const i = data.presets.findIndex((x) => x.id === id);
-      if (i === -1) throw new Error('preset not found');
-      const merged = { ...data.presets[i], ...patch };
-      assertPresetInput(merged, { keyIds: data.keys.map((k) => k.id), hostIds: data.hosts.map((h) => h.id) });
-      assertUniqueName(data.presets, merged.name, id);
-      data.presets[i] = normalizePreset(merged, id, data.presets[i].createdAt);
-      await writeAll(data);
-      return data.presets[i];
     },
     async removePreset(id) {
       const data = await readAll();

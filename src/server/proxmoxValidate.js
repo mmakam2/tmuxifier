@@ -54,7 +54,7 @@ export function assertKeyInput(spec) {
   if (!PUBKEY.test(pk)) throw new Error('not a valid public key');
 }
 
-export function assertPresetInput(spec, { keyIds = [], hostIds = [] } = {}) {
+export function assertPresetInput(spec, { hostIds = [] } = {}) {
   if (!nonEmpty(spec.name)) throw new Error('preset name is required');
   if (!hostIds.includes(spec.hostId)) throw new Error('preset host is unknown');
   if (!SAFE_ID.test(String(spec.template || ''))) throw new Error('invalid template');
