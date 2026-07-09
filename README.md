@@ -9,13 +9,15 @@ back into the same state.
 
 ## Screenshots
 
-| Login | Dashboard |
+| Persistent remote terminals | Fleet Command |
 |:---:|:---:|
-| [![Login screen](docs/screenshots/login.png)](docs/screenshots/login.png) | [![Dashboard with terminal](docs/screenshots/dashboard.png)](docs/screenshots/dashboard.png) |
+| [![Tmuxifier dashboard with a persistent remote tmux terminal and grouped box health](docs/screenshots/dashboard.png)](docs/screenshots/dashboard.png) | [![Fleet Command running across three selected boxes with per-box results](docs/screenshots/fleet-command.png)](docs/screenshots/fleet-command.png) |
+| Reattach to on-box tmux sessions and monitor grouped boxes, resource metrics, and health at a glance. | Select boxes by group, run a command or bash script with bounded concurrency, and inspect each result. |
 
-| Add Box |
+| Proxmox LXC provisioning |
 |:---:|
-| [![Add box dialog](docs/screenshots/add-box.png)](docs/screenshots/add-box.png) |
+| [![Tmuxifier Proxmox LXC provisioning workflow](docs/screenshots/proxmox-provision.png)](docs/screenshots/proxmox-provision.png) |
+| Provision from reusable presets, inject management keys, discover the container, and link it back as a Tmuxifier box. |
 
 ## Requirements
 - Node 20+
