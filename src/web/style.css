@@ -552,7 +552,7 @@ body {
 .pve-tabs { display: flex; gap: 4px; border-bottom: 1px solid #232a36; }
 .pve-tab { padding: 7px 12px; background: none; border: 0; border-bottom: 2px solid transparent; color: #8b949e; cursor: pointer; font-size: 13px; }
 .pve-tab.active { color: #c9d1d9; border-bottom-color: #1f6feb; }
-.pve-content { overflow: auto; padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.pve-content { overflow: auto; padding-top: 12px; padding-right: 14px; margin-right: -14px; display: flex; flex-direction: column; gap: 10px; }
 .pve-list { display: flex; flex-direction: column; gap: 6px; }
 .pve-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); font-size: 13px; }
 .pve-row strong { font-weight: 600; color: var(--text); }
