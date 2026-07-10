@@ -532,8 +532,21 @@ body {
 .toast-error { border-color: rgba(248, 81, 73, 0.5); color: #ffb4ad; }
 
 /* Proxmox hub */
-.modal.pve-hub { width: 560px; max-height: 86vh; }
+.modal.pve-hub { width: 760px; max-height: 86vh; }
 .modal.pve-disk-modal { width: 380px; }
+.pve-presets-layout { display: grid; grid-template-columns: minmax(150px, 190px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.pve-preset-master { min-width: 0; display: flex; flex-direction: column; gap: 8px; padding-right: 16px; border-right: 1px solid var(--border); }
+.pve-preset-master-list { display: flex; flex-direction: column; gap: 4px; }
+.pve-preset-master-row { width: 100%; min-width: 0; padding: 8px 10px; overflow: hidden; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text); cursor: pointer; font: inherit; font-size: 13px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.pve-preset-master-row:hover { background: var(--panel-2); }
+.pve-preset-master-row.active { border-color: #2f6feb; background: var(--panel-2); }
+.pve-preset-new { width: 100%; text-align: left; }
+.pve-preset-new.active { border-color: #2f6feb; }
+.pve-preset-detail { min-width: 0; }
+.pve-preset-detail > .pve-sub + div { margin-top: 10px; }
+.pve-preset-form { min-width: 0; }
+.pve-preset-form h3 { margin: 0 0 12px; font-size: 14px; }
+.pve-preset-actions .danger { margin-right: auto; color: #f85149; }
 .pve-head { display: flex; justify-content: space-between; align-items: center; }
 .pve-close { background: none; border: 0; color: #8b949e; cursor: pointer; font-size: 16px; }
 .pve-tabs { display: flex; gap: 4px; border-bottom: 1px solid #232a36; }
@@ -572,5 +585,12 @@ body {
 .pve-group { display: flex; flex-direction: column; gap: 9px; }
 .pve-group + .pve-group { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .pve-eyebrow { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted); font-weight: 600; }
+@media (max-width: 720px) {
+  .modal.pve-hub { width: 92vw; }
+  .pve-presets-layout { grid-template-columns: minmax(0, 1fr); }
+  .pve-preset-master { padding: 0 0 12px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .pve-preset-master-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+  .pve-grid, .pve-grid-3 { grid-template-columns: minmax(0, 1fr); }
+}
 .proxmox-btn { padding: 6px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; cursor: pointer; font-size: 13px; }
 .proxmox-btn:hover { border-color: #2f6feb; }
