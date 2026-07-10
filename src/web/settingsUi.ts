@@ -2,13 +2,15 @@
 // a self-contained section module rendering into the content area.
 import { el } from './dom';
 import { renderNetboxSection } from './settingsNetbox';
+import { renderProxmoxSection } from './settingsProxmox';
 
-export type SettingsTab = 'netbox';
+export type SettingsTab = 'netbox' | 'proxmox';
 
 type Section = { label: string; render: (content: HTMLElement, close: () => void) => void | Promise<void> };
 
 const SECTIONS: Record<SettingsTab, Section> = {
   netbox: { label: 'NetBox', render: renderNetboxSection },
+  proxmox: { label: 'Proxmox', render: (content) => renderProxmoxSection(content) },
 };
 
 export function openSettingsModal(tab: SettingsTab = 'netbox'): void {
