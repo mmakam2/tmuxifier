@@ -1,27 +1,11 @@
 import { api, type Box } from './api';
 import { pve, type PvePreset, type PveMount, type ProvisionStatus } from './proxmox';
 import { openProvisionTerminal } from './terminal';
+import { el, input, field, err, group } from './dom';
 
 type SetupOptions = { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean };
 
 type HubOpts = { openBox: (b: Box) => void; onBoxLinked: () => void };
-type Attrs = Record<string, string | number | boolean | ((e: Event) => void)>;
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = {}, children: (Node | string)[] = []): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2).toLowerCase(), v as EventListener);
-    else if (k === 'class') node.className = String(v);
-    else if (typeof v === 'boolean') { if (v) node.setAttribute(k, ''); }
-    else node.setAttribute(k, String(v));
-  }
-  for (const c of children) node.append(c);
-  return node;
-}
-function input(value = '', attrs: Attrs = {}) { const i = el('input', attrs); i.value = value; return i; }
-function field(label: string, control: HTMLElement) { return el('label', { class: 'field' }, [el('span', {}, [label]), control]); }
-function err(msg: string) { return el('div', { class: 'pve-err' }, [msg]); }
-function group(label: string, ...children: (Node | string)[]) { return el('div', { class: 'pve-group' }, [el('div', { class: 'pve-eyebrow' }, [label]), ...children]); }
 
 // Small modal (on top of the hub) to add a container mount point, Proxmox-style.
 function openAddDiskModal(opts: { id: string; storages: string[]; onAdd: (m: PveMount) => void }) {
