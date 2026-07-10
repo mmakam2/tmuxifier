@@ -427,7 +427,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
           token,
           tlsMode: body.tlsMode ?? (stored && stored.tlsMode) ?? undefined,
           fingerprint256: body.fingerprint256 ?? (stored && stored.fingerprint256),
-        }),
+        }, { requirePinFingerprint: false }),
         token,
       };
     } catch (e) { return reply.code(400).send({ error: e.message }); }

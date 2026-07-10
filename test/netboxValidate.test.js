@@ -34,6 +34,17 @@ test('assertSettingsInput: pin mode requires a fingerprint', () => {
     .toEqual({ url: 'https://x.example.com', tlsMode: 'pin', fingerprint256: 'AB:CD:12' });
 });
 
+test('assertSettingsInput: pin mode with requirePinFingerprint:false lets a blank fingerprint through', () => {
+  expect(assertSettingsInput({ url: 'https://x.example.com', token: 't', tlsMode: 'pin' }, { requirePinFingerprint: false }))
+    .toEqual({ url: 'https://x.example.com', tlsMode: 'pin', fingerprint256: null });
+  // still throws by default (strict PUT/save path unaffected)
+  expect(() => assertSettingsInput({ url: 'https://x.example.com', token: 't', tlsMode: 'pin' }))
+    .toThrow(/fingerprint/);
+  // a present, valid fingerprint is still returned as-is even with the flag off
+  expect(assertSettingsInput({ url: 'https://x.example.com', token: 't', tlsMode: 'pin', fingerprint256: 'AB:CD:12' }, { requirePinFingerprint: false }))
+    .toEqual({ url: 'https://x.example.com', tlsMode: 'pin', fingerprint256: 'AB:CD:12' });
+});
+
 test('assertSettingsInput: token rules', () => {
   expect(() => assertSettingsInput({ url: 'https://x.example.com' })).toThrow(/token/);
   expect(() => assertSettingsInput({ url: 'https://x.example.com', token: '  ' })).toThrow(/token/);

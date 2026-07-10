@@ -51,7 +51,10 @@ export async function testNetbox(settings, { request = jsonRequest, connect = tl
     let probe;
     try { probe = await connect({ host: u.hostname, port, timeoutMs }); }
     catch (e) { return { ok: false, kind: 'unreachable', error: e.message }; }
-    if (!normFp(settings.fingerprint256) || normFp(probe.fingerprint256) !== normFp(settings.fingerprint256)) {
+    if (!normFp(settings.fingerprint256)) {
+      return { ok: false, kind: 'tls', fingerprint256: probe.fingerprint256 || null, error: 'no fingerprint pinned yet — pin the certificate below to trust this server' };
+    }
+    if (normFp(probe.fingerprint256) !== normFp(settings.fingerprint256)) {
       return { ok: false, kind: 'tls', fingerprint256: probe.fingerprint256 || null, error: 'TLS fingerprint mismatch — the NetBox certificate changed; re-pin to accept the new one' };
     }
     const trust = probe.chain && probe.chain.length ? probe.chain : [probe.raw];

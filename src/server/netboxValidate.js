@@ -20,7 +20,7 @@ export function parseNetboxUrl(value) {
 
 function nonEmpty(v) { return typeof v === 'string' && v.trim().length > 0; }
 
-export function assertSettingsInput(spec, { requireToken = true } = {}) {
+export function assertSettingsInput(spec, { requireToken = true, requirePinFingerprint = true } = {}) {
   const url = parseNetboxUrl(spec.url);
   if (requireToken && !nonEmpty(spec.token)) throw new Error('an API token is required');
   if (nonEmpty(spec.token) && !TOKEN.test(spec.token.trim())) throw new Error('API token contains invalid characters');
@@ -28,7 +28,12 @@ export function assertSettingsInput(spec, { requireToken = true } = {}) {
   if (!https) return { url, tlsMode: null, fingerprint256: null };
   const tlsMode = spec.tlsMode || 'ca';
   if (!TLS_MODES.includes(tlsMode)) throw new Error(`invalid tlsMode: ${JSON.stringify(tlsMode)}`);
-  if (tlsMode === 'pin' && !FINGERPRINT.test(String(spec.fingerprint256 || ''))) {
+  const hasValidFingerprint = FINGERPRINT.test(String(spec.fingerprint256 || ''));
+  if (tlsMode === 'pin' && !hasValidFingerprint) {
+    // Test Connection needs to reach the probe with no fingerprint yet pinned (that's
+    // how a fingerprint gets discovered in the first place); the PUT/save path stays
+    // strict via the default.
+    if (!requirePinFingerprint) return { url, tlsMode, fingerprint256: null };
     throw new Error('pin mode requires a certificate fingerprint');
   }
   return { url, tlsMode, fingerprint256: tlsMode === 'pin' ? spec.fingerprint256 : null };

@@ -95,6 +95,16 @@ test('POST test with no token anywhere is a 400', async () => {
   expect(res.json().error).toMatch(/token/);
 });
 
+test('POST test in pin mode with no fingerprint anywhere reaches the probe instead of 400ing', async () => {
+  const h = await headers();
+  const res = await app.inject({
+    method: 'POST', url: '/api/netbox/test', headers: h,
+    payload: { url: 'https://netbox.example.com', token: 't0k', tlsMode: 'pin' },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(testCalls[0]).toMatchObject({ tlsMode: 'pin', fingerprint256: null });
+});
+
 test('POST test with a body token needs no stored settings', async () => {
   const h = await headers();
   const res = await app.inject({ method: 'POST', url: '/api/netbox/test', headers: h, payload: { url: 'http://192.168.1.10:8000', token: 'fresh-tok' } });

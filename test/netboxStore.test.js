@@ -64,3 +64,10 @@ test('clearSettings removes the stored settings', async () => {
   await store.clearSettings();
   expect(await store.getSettings()).toBeNull();
 });
+
+test('after clearSettings, a blank token on the next save is rejected (no stale hasToken to fall back on)', async () => {
+  const store = make();
+  await store.setSettings(SPEC);
+  await store.clearSettings();
+  await expect(store.setSettings({ url: 'https://netbox.example.com', token: '' })).rejects.toThrow(/token/);
+});

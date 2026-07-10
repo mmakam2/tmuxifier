@@ -38,6 +38,18 @@ test('pin mode: fingerprint mismatch reports tls with the observed fingerprint a
   expect(calls).toHaveLength(0);
 });
 
+test('pin mode: no fingerprint pinned yet reports tls with the observed fingerprint and never sends the token', async () => {
+  const calls = [];
+  const res = await testNetbox(
+    { ...CA, tlsMode: 'pin', fingerprint256: null },
+    { connect: async () => ({ fingerprint256: 'CC:DD', raw: Buffer.from('x'), chain: [Buffer.from('x')] }),
+      request: async (o) => { calls.push(o); return ok; } },
+  );
+  expect(res).toEqual({ ok: false, kind: 'tls', fingerprint256: 'CC:DD', error: expect.stringMatching(/no fingerprint pinned yet/i) });
+  expect(res.error).not.toMatch(/mismatch/i);
+  expect(calls).toHaveLength(0);
+});
+
 test('pin mode: matching fingerprint (case/sep-insensitive) pins the probed chain as CA trust', async () => {
   const calls = [];
   const res = await testNetbox(
