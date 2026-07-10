@@ -279,7 +279,8 @@ container so Tmuxifier can SSH in (set `TMUXIFIER_PVE_DEFAULT_PUBKEY` if your ke
 password**. Added keys and the password are encrypted at rest and shown masked after saving; the
 private half of any key stays in your own SSH setup — Tmuxifier never stores private keys.
 
-**4. Define a preset and provision.** Back in the dashboard's **Proxmox** hub: **Presets → Add** a
+**4. Define a preset and provision.** Back in the dashboard's **Proxmox** hub (the sidebar
+button appears once at least one host is configured in Settings): **Presets → Add** a
 blueprint (template, CPU/mem/disk, storage, network). Then **Provision → pick a preset → enter a
 hostname** (optionally a tag and oh-my-tmux/zsh/bash). Watch the live task log; once the container
 is up Tmuxifier installs tmux (and any selected frameworks) over SSH, then an **Open terminal**

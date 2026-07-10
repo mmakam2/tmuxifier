@@ -8,6 +8,7 @@ import { addRecent, parseRecent } from './fleetHistory';
 import { createFleetScriptEditor } from './fleetEditor';
 import logoUrl from './assets/tmuxifier-logo.png';
 import { openProxmoxHub } from './proxmoxUi';
+import { pve } from './proxmox';
 import { openSettingsModal } from './settingsUi';
 
 const app = document.getElementById('app')!;
@@ -368,6 +369,15 @@ async function pollHealth() {
   } catch {}
 }
 
+// The Proxmox hub is useless until a host profile exists (setup lives in
+// Settings → Proxmox), so the sidebar button only appears once one does.
+// A fetch error keeps it hidden — never show a dead button.
+async function syncProxmoxButton() {
+  const btn = app.querySelector<HTMLButtonElement>('#proxmox');
+  if (!btn) return;
+  try { btn.hidden = (await pve.hosts()).length === 0; } catch { btn.hidden = true; }
+}
+
 async function renderDashboard() {
   if (pollInterval) clearInterval(pollInterval);
   const sidebarCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
@@ -385,7 +395,7 @@ async function renderDashboard() {
           <input id="import-file" type="file" accept="application/json,.json" hidden />
         </div>
         <div class="actions"><button id="add">+ Add box</button></div>
-        <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button><button id="proxmox" type="button" class="proxmox-btn" title="Provision Proxmox LXC containers">Proxmox</button><button id="events" type="button" class="events-btn" title="Box health events (down/up/needs login/thresholds)">Events<span id="events-badge" class="events-badge" hidden></span></button></div>
+        <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button><button id="proxmox" type="button" class="proxmox-btn" title="Provision Proxmox LXC containers" hidden>Proxmox</button><button id="events" type="button" class="events-btn" title="Box health events (down/up/needs login/thresholds)">Events<span id="events-badge" class="events-badge" hidden></span></button></div>
         <div id="fleet-bar" class="fleet-bar" hidden></div>
         <input id="search" class="search" type="text" placeholder="Search…" autocomplete="off" />
         <ul id="boxes" class="boxes"></ul>
@@ -422,7 +432,7 @@ async function renderDashboard() {
     button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     window.setTimeout(refitActiveTerminals, 260);
   });
-  app.querySelector('#settings')!.addEventListener('click', () => { void openSettingsModal(); });
+  app.querySelector('#settings')!.addEventListener('click', () => { openSettingsModal('netbox', () => { void syncProxmoxButton(); }); });
   app.querySelector('#export')!.addEventListener('click', () => {
     // Same-origin GET navigation; the session cookie rides along and the server
     // sets Content-Disposition, so the browser saves the file with its name.
@@ -476,6 +486,7 @@ async function renderDashboard() {
     openBox: (b) => openBox(b),
     onBoxLinked: () => { void refresh(); },
   }));
+  void syncProxmoxButton();
 
   // Local shell — name click opens terminal
   app.querySelector('.local-name')!.addEventListener('click', () => openLocalShell());

@@ -13,14 +13,14 @@ const SECTIONS: Record<SettingsTab, Section> = {
   proxmox: { label: 'Proxmox', render: (content) => renderProxmoxSection(content) },
 };
 
-export function openSettingsModal(tab: SettingsTab = 'netbox'): void {
+export function openSettingsModal(tab: SettingsTab = 'netbox', onClose?: () => void): void {
   const backdrop = el('div', { class: 'modal-backdrop' });
   const modal = el('div', { class: 'modal settings-modal' });
   const tabStrip = el('div', { class: 'pve-tabs' });
   const content = el('div', { class: 'pve-content' });
 
   function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
-  function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); }
+  function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); onClose?.(); }
   document.addEventListener('keydown', onKey);
   // Only close on a genuine backdrop click (see the box modal for why mousedown
   // must also have started on the backdrop).
