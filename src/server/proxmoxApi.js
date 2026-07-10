@@ -1,34 +1,5 @@
 import https from 'node:https';
-import tls from 'node:tls';
-
-function tlsProbe({ host, port = 8006, timeoutMs = 15000 }) {
-  return new Promise((resolve, reject) => {
-    // SNI is only valid for hostnames, not IP literals (RFC 6066); omit it for IPs.
-    const servername = /[A-Za-z]/.test(host) && !host.includes(':') ? host : undefined;
-    const socket = tls.connect({ host, port, servername, rejectUnauthorized: false, timeout: timeoutMs }, () => {
-      const cert = socket.getPeerCertificate(true);
-      const authorized = socket.authorized === true;
-      socket.end();
-      if (!cert || !cert.raw) { reject(new Error('no peer certificate presented')); return; }
-      // Collect the whole presented chain, not just the leaf: a default PVE cert
-      // (pve-ssl.pem) is signed by the node's cluster CA, and OpenSSL only anchors
-      // trust at a self-signed cert — pinning the leaf alone can never verify the
-      // stock Proxmox cert shape. issuerCertificate is self-referential on a
-      // self-signed cert, so guard against the cycle.
-      const chain = [];
-      const seen = new Set();
-      for (let c = cert; c && c.raw && !seen.has(c.fingerprint256); c = c.issuerCertificate) {
-        seen.add(c.fingerprint256);
-        chain.push(c.raw);
-      }
-      resolve({ fingerprint256: cert.fingerprint256 || null, raw: cert.raw, chain, authorized, subject: cert.subject, issuer: cert.issuer, valid_to: cert.valid_to });
-    });
-    socket.on('timeout', () => socket.destroy(new Error('TLS connection timed out')));
-    socket.on('error', reject);
-  });
-}
-function derToPem(der) { const b64 = Buffer.from(der).toString('base64').match(/.{1,64}/g).join('\n'); return `-----BEGIN CERTIFICATE-----\n${b64}\n-----END CERTIFICATE-----\n`; }
-function normFp(s) { return String(s || '').toUpperCase().replace(/[^0-9A-F]/g, ''); }
+import { tlsProbe, derToPem, normFp } from './tlsPin.js';
 function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 15000, tls: tlsOpts = {} }) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
