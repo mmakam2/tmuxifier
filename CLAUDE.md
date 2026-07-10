@@ -144,9 +144,12 @@ Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `a
 backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health history: pure SVG-path builder
 and event-line formatters), `fleetSelection.ts`/`fleetHistory.ts`/`fleetEditor.ts` (Fleet
 Command selection, recent-command history, and the CodeMirror bash-script editor),
-`proxmox.ts`/`proxmoxUi.ts`, `settingsUi.ts` (the ⚙ settings modal; NetBox section) with
-`settingsForm.ts` (pure payload/result helpers) and `netbox.ts` (fetch layer), `clipboard.ts`,
-and `termFont.ts` (pure builder for the xterm
+`proxmox.ts`/`proxmoxUi.ts` (the Proxmox hub, now operations-only: Presets, Provision, and
+History tabs — host/secret setup lives in the settings modal), `settingsUi.ts` (the ⚙ settings
+modal's tabbed shell, with NetBox (`settingsNetbox.ts`) and Proxmox host/secret
+(`settingsProxmox.ts`) tabs) with `settingsForm.ts` (pure payload/result helpers), `netbox.ts`
+(fetch layer), and `dom.ts` (shared DOM builders used by both the settings modal and the hub),
+`clipboard.ts`, and `termFont.ts` (pure builder for the xterm
 font stack — prepends `TMUXIFIER_TERM_FONT` onto the bundled stack (MesloLGMDZ Nerd Font default,
 then MesloLGSDZ + JuliaMono fallback); the server
 validates the name in `config.js` and serves it via `GET /api/ui-config`, which `main.ts` applies

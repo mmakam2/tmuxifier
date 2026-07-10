@@ -117,8 +117,9 @@ JSON file — a portable backup you can move between Tmuxifier instances. Import
 file, re-minting each id and skipping any whose host/label already exists (so re-importing is safe).
 It carries no SSH secrets; boxes still rely on your keys/agent/`~/.ssh/config` at connect time.
 
-A ⚙ **settings** modal (top of the sidebar) configures the NetBox API integration (URL + token,
-TLS pinning for self-signed certs, connection test).
+A ⚙ **settings** modal (top of the sidebar) has two tabs: **NetBox** (URL + token, TLS pinning
+for self-signed certs, connection test) and **Proxmox** (host profiles and LXC secrets — see
+[Proxmox LXC provisioning](#proxmox-lxc-provisioning) below).
 
 ## Authentication
 `TMUXIFIER_AUTH_MODE` selects one login method. The default is `password`; set it to
@@ -266,22 +267,23 @@ plus `Datastore.AllocateSpace`/`Datastore.Audit`) **and `PVEAuditor`** (the `Sys
 the node/storage/bridge dropdowns populate). Use a privilege-separated token, not full
 `Administrator`.
 
-**2. Add the host.** Dashboard → **Proxmox → Hosts → Add**: enter the endpoint (`host:8006`), the
-token id (`user@pam!tmuxifier`) and the secret. Click **Inspect** to fetch and **pin** the host's
-TLS certificate (Proxmox ships a self-signed cert; pinning is trust-on-first-use, like
-`ssh accept-new`). Save — Tmuxifier verifies the token before storing it.
+**2. Add the host.** **Settings (⚙) → Proxmox → Add a Proxmox host**: enter the endpoint
+(`host:8006`), the token id (`user@pam!tmuxifier`) and the secret. Click **Inspect** to fetch and
+**pin** the host's TLS certificate (Proxmox ships a self-signed cert; pinning is
+trust-on-first-use, like `ssh accept-new`). Save — Tmuxifier verifies the token before storing it.
 
-**3. Review LXC Secrets.** **Proxmox → LXC Secrets**. Tmuxifier's own host key is auto-detected and
-shown as the **default management key** — injected into every container so Tmuxifier can SSH in (set
-`TMUXIFIER_PVE_DEFAULT_PUBKEY` if your key isn't at `~/.ssh/id_*`). Optionally add more **public
-keys** (e.g. your laptop's) and/or an **optional root password**. Added keys and the password are
-encrypted at rest and shown masked after saving; the private half of any key stays in your own SSH
-setup — Tmuxifier never stores private keys.
+**3. Review LXC secrets.** Same **Settings (⚙) → Proxmox** tab, below the host list. Tmuxifier's
+own host key is auto-detected and shown as the **default management key** — injected into every
+container so Tmuxifier can SSH in (set `TMUXIFIER_PVE_DEFAULT_PUBKEY` if your key isn't at
+`~/.ssh/id_*`). Optionally add more **public keys** (e.g. your laptop's) and/or an **optional root
+password**. Added keys and the password are encrypted at rest and shown masked after saving; the
+private half of any key stays in your own SSH setup — Tmuxifier never stores private keys.
 
-**4. Define a preset and provision.** **Presets → Add** a blueprint (template, CPU/mem/disk,
-storage, network). Then **Provision → pick a preset → enter a hostname** (optionally a tag and
-oh-my-tmux/zsh/bash). Watch the live task log; once the container is up Tmuxifier installs tmux (and
-any selected frameworks) over SSH, then an **Open terminal** button drops you into it.
+**4. Define a preset and provision.** Back in the dashboard's **Proxmox** hub: **Presets → Add** a
+blueprint (template, CPU/mem/disk, storage, network). Then **Provision → pick a preset → enter a
+hostname** (optionally a tag and oh-my-tmux/zsh/bash). Watch the live task log; once the container
+is up Tmuxifier installs tmux (and any selected frameworks) over SSH, then an **Open terminal**
+button drops you into it.
 
 **Security.** The API token, any added SSH keys, and the optional root password are **encrypted at
 rest** (AES-256-GCM; key derived from your cookie secret) in the gitignored `data/proxmox.json`
