@@ -12,6 +12,8 @@ import { assertBoxSafe } from './sshCommand.js';
 import { upsertConfigFile } from './configFile.js';
 import { mapWithConcurrency } from './concurrency.js';
 import { parseEndpoint } from './proxmoxValidate.js';
+import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js';
+import { testNetbox } from './netboxApi.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': [
@@ -54,7 +56,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -399,6 +401,37 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const job = provisionManager.getProvision(req.params.id);
     if (!job) return reply.code(404).send({ error: 'provision not found' });
     return job;
+  });
+  // --- NetBox integration settings ---
+  app.get('/api/netbox/settings', { preHandler: requireAuth }, async () => ({ settings: await netboxStore.getSettings() }));
+  app.put('/api/netbox/settings', { preHandler: requireAuth }, async (req, reply) => {
+    try { return { settings: await netboxStore.setSettings(req.body || {}) }; }
+    catch (e) { return reply.code(400).send({ error: e.message }); }
+  });
+  app.delete('/api/netbox/settings', { preHandler: requireAuth }, async () => { await netboxStore.clearSettings(); return { ok: true }; });
+  // Test may carry unsaved form values; a blank token falls back to the stored one
+  // so "test before saving" works without ever echoing the token to the browser.
+  app.post('/api/netbox/test', { preHandler: requireAuth }, async (req, reply) => {
+    const body = req.body || {};
+    const bodyToken = typeof body.token === 'string' && body.token.trim() ? body.token.trim() : null;
+    let stored = null;
+    try { stored = await netboxStore.getSettings({ withSecret: !bodyToken }); }
+    catch { return reply.code(502).send({ error: 'could not decrypt the stored NetBox token — re-enter it (was TMUXIFIER_COOKIE_SECRET rotated?)' }); }
+    const token = bodyToken || (stored && stored.token) || null;
+    if (!token) return reply.code(400).send({ error: 'an API token is required — enter one or save settings first' });
+    let candidate;
+    try {
+      candidate = {
+        ...assertNetboxSettings({
+          url: body.url ?? (stored && stored.url),
+          token,
+          tlsMode: body.tlsMode ?? (stored && stored.tlsMode) ?? undefined,
+          fingerprint256: body.fingerprint256 ?? (stored && stored.fingerprint256),
+        }),
+        token,
+      };
+    } catch (e) { return reply.code(400).send({ error: e.message }); }
+    return netboxTest(candidate);
   });
   app.get('/api/status', { preHandler: requireAuth }, async () => {
     // Serve the shared, server-side poll snapshot when a poller is wired: every
