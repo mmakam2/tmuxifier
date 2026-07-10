@@ -119,6 +119,18 @@ export function createProxmoxStore({ dataDir, secretBox, makeId = randomUUID, no
       await writeAll(data);
       return p;
     },
+    async updatePreset(id, spec) {
+      const data = await readAll();
+      const index = data.presets.findIndex((x) => x.id === id);
+      if (index === -1) return undefined;
+      assertPresetInput(spec, { hostIds: data.hosts.map((h) => h.id) });
+      assertUniqueName(data.presets, spec.name, id);
+      const current = data.presets[index];
+      const preset = normalizePreset(spec, current.id, current.createdAt);
+      data.presets[index] = preset;
+      await writeAll(data);
+      return preset;
+    },
     async removePreset(id) {
       const data = await readAll();
       data.presets = data.presets.filter((x) => x.id !== id);
