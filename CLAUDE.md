@@ -21,9 +21,9 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
 - `tls/` (gitignored) — `cert.pem`/`key.pem` for HTTPS; the private key never enters git.
 - `data/` (gitignored) — `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json`
   (Proxmox host profiles with **encrypted** API tokens, SSH management keys, and an optional root
-  password — all AES-256-GCM sealed — plus container presets), `provision-jobs.json` (provision
-  history), `health-events.json` (in-app health event log), and SSH ControlMaster sockets under
-  `data/cm/`.
+  password — all AES-256-GCM sealed — plus container presets), `netbox.json` (NetBox integration
+  settings with an **encrypted** API token), `provision-jobs.json` (provision history),
+  `health-events.json` (in-app health event log), and SSH ControlMaster sockets under `data/cm/`.
 
 When adding a new config knob or persisted file, keep it under the repo folder by default.
 Don't introduce dependencies on `$HOME`-level state other than the user's existing SSH setup.
@@ -132,13 +132,21 @@ pattern for new modules.
   management key so provisioned containers trust Tmuxifier (override with `TMUXIFIER_PVE_DEFAULT_PUBKEY`).
 - `provisionStore.js` / `proxmoxProvision.js` — debounced `data/provision-jobs.json` persistence and
   the create→poll→start→discover→auto-link-box job manager (the Fleet job pattern).
+- `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`derToPem`/`normFp`) used by
+  both the Proxmox and NetBox API clients.
+- `netboxValidate.js` / `netboxStore.js` / `netboxApi.js` — NetBox integration settings: pure
+  input validators, the sealed `data/netbox.json` store (token AES-256-GCM encrypted, redacted to
+  `hasToken` on read), and the `/api/status/` connection probe with ca/pin/insecure TLS modes.
+  Settings-only for now — IPAM checks during provisioning are the planned next phase.
 
 Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `api.ts`,
 `terminal.ts`, `index.html`, `style.css`, plus feature modules — `reconnect.ts` (escalating
 backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health history: pure SVG-path builder
 and event-line formatters), `fleetSelection.ts`/`fleetHistory.ts`/`fleetEditor.ts` (Fleet
 Command selection, recent-command history, and the CodeMirror bash-script editor),
-`proxmox.ts`/`proxmoxUi.ts`, `clipboard.ts`, and `termFont.ts` (pure builder for the xterm
+`proxmox.ts`/`proxmoxUi.ts`, `settingsUi.ts` (the ⚙ settings modal; NetBox section) with
+`settingsForm.ts` (pure payload/result helpers) and `netbox.ts` (fetch layer), `clipboard.ts`,
+and `termFont.ts` (pure builder for the xterm
 font stack — prepends `TMUXIFIER_TERM_FONT` onto the bundled stack (MesloLGMDZ Nerd Font default,
 then MesloLGSDZ + JuliaMono fallback); the server
 validates the name in `config.js` and serves it via `GET /api/ui-config`, which `main.ts` applies
@@ -212,6 +220,9 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   browser (host views are redacted to `hasToken`). PVE TLS is pinned by fingerprint for self-signed certs
   (TOFU, like `ssh accept-new`) or CA-verified; an explicit per-host `insecure` mode is off by
   default. All provision input is validated (`proxmoxValidate.js`) before reaching the API.
+- The NetBox API token is sealed the same way in `data/netbox.json` (`0o600`) and never returned
+  to the browser (`hasToken` only). NetBox TLS supports CA verification, TOFU fingerprint pinning
+  (shared `tlsPin.js` helpers), or an explicit insecure mode — off by default.
 
 ## Docs
 

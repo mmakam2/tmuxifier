@@ -117,6 +117,9 @@ JSON file — a portable backup you can move between Tmuxifier instances. Import
 file, re-minting each id and skipping any whose host/label already exists (so re-importing is safe).
 It carries no SSH secrets; boxes still rely on your keys/agent/`~/.ssh/config` at connect time.
 
+A ⚙ **settings** modal (top of the sidebar) configures the NetBox API integration (URL + token,
+TLS pinning for self-signed certs, connection test).
+
 ## Authentication
 `TMUXIFIER_AUTH_MODE` selects one login method. The default is `password`; set it to
 `oauth` to replace the password form with Google sign-in. The modes are exclusive.
@@ -296,7 +299,10 @@ in cleartext. Passwords are scrypt-hashed and login attempts are rate-limited pe
 `TMUXIFIER_TRUST_PROXY` behind a proxy so the limiter sees real client IPs); OAuth mode uses an
 exact-email allowlist; the session cookie is signed, httpOnly, SameSite=lax, expires after 7 days
 (server-enforced), and is marked `Secure` for local TLS or an `https://` base external URL.
-Tmuxifier stores no SSH secrets — your keys and agent stay in the OS.
+Tmuxifier stores no SSH secrets — your keys and agent stay in the OS. The Proxmox API token, any
+added SSH management keys, the optional Proxmox root password, and the NetBox API token are the
+only credentials Tmuxifier persists; all are AES-256-GCM encrypted at rest (`data/proxmox.json`,
+`data/netbox.json`, both `0600`) and never sent to the browser.
 
 Generate a self-signed cert (valid for an IP) with:
 ```bash
