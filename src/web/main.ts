@@ -8,6 +8,7 @@ import { addRecent, parseRecent } from './fleetHistory';
 import { createFleetScriptEditor } from './fleetEditor';
 import logoUrl from './assets/tmuxifier-logo.png';
 import { openProxmoxHub } from './proxmoxUi';
+import { openSettingsModal } from './settingsUi';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
@@ -376,6 +377,7 @@ async function renderDashboard() {
           <span><img src="${logoUrl}" alt="" /><span class="brand-name">tmuxifier</span></span>
           <div class="brand-actions">
             <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-label="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-expanded="${sidebarCollapsed ? 'false' : 'true'}">${sidebarCollapsed ? '›' : '‹'}</button>
+            <button id="settings" type="button" title="Settings" aria-label="Settings">⚙</button>
             <button id="export" type="button" title="Export boxes to a file" aria-label="Export boxes to a file">⤓</button>
             <button id="import" type="button" title="Import boxes from a file" aria-label="Import boxes from a file">⤒</button>
             <button id="logout" title="Log out">⎋</button>
@@ -420,6 +422,7 @@ async function renderDashboard() {
     button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     window.setTimeout(refitActiveTerminals, 260);
   });
+  app.querySelector('#settings')!.addEventListener('click', () => { void openSettingsModal(); });
   app.querySelector('#export')!.addEventListener('click', () => {
     // Same-origin GET navigation; the session cookie rides along and the server
     // sets Content-Disposition, so the browser saves the file with its name.

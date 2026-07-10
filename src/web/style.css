@@ -263,6 +263,15 @@ body {
 .modal-actions button { padding: 8px 16px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: inherit; cursor: pointer; }
 .modal-actions button[type=submit] { background: #1f6feb; border-color: #1f6feb; color: #fff; }
 .modal-actions button:disabled { opacity: 0.5; cursor: default; }
+.modal.settings-modal { width: 430px; }
+.modal.settings-modal h3 { margin: 4px 0 0; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: #8b949e; }
+.modal .settings-hint { margin: 0; font-size: 11px; color: #6e7681; min-height: 1em; }
+.modal .settings-hint.err { color: #f85149; }
+.modal .settings-hint.ok { color: #3fb950; }
+.modal .settings-fp { font-family: ui-monospace, monospace; word-break: break-all; }
+.modal .settings-test { display: flex; gap: 8px; align-items: center; }
+.modal .settings-test button { padding: 6px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; cursor: pointer; font-size: 12px; }
+.modal .settings-clear { margin-right: auto; color: #f85149; }
 .stage { position: relative; overflow: hidden; }
 .empty { color: #6e7681; padding: 24px; }
 .term { position: absolute; inset: 0; padding: 6px; }
