@@ -31,3 +31,16 @@ test('a non-ok response rejects with the server error message', async () => {
   stubFetch({ ok: false, status: 400, statusText: 'Bad Request', json: async () => ({ error: 'invalid endpoint' }) });
   await expect(pve.inspect('bad host')).rejects.toThrow(/invalid endpoint/);
 });
+
+test('pve.updatePreset sends the full spec as JSON with PUT', async () => {
+  const updated = { id: 'P1', name: 'production', cores: 4 };
+  const calls = stubFetch({ ok: true, status: 200, statusText: 'OK', json: async () => updated });
+  const spec = { name: 'production', cores: 4 };
+
+  expect(await pve.updatePreset('P1', spec)).toEqual(updated);
+  expect(calls[0].url).toBe('/api/proxmox/presets/P1');
+  expect(calls[0].opts).toMatchObject({
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+  });
+  expect(JSON.parse(calls[0].opts.body)).toEqual(spec);
+});

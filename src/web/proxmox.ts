@@ -24,7 +24,10 @@ async function jr<T>(p: Promise<Response>): Promise<T> {
   if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || res.statusText);
   return res.json() as Promise<T>;
 }
-const post = (v: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(v) });
+const json = (method: 'POST' | 'PUT', value: unknown) => ({
+  method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(value),
+});
+const post = (value: unknown) => json('POST', value);
 
 export const pve = {
   hosts() { return jr<PveHost[]>(fetch('/api/proxmox/hosts')); },
@@ -45,6 +48,7 @@ export const pve = {
   clearRootPassword() { return jr<{ set: boolean }>(fetch('/api/proxmox/root-password', { method: 'DELETE' })); },
   presets() { return jr<PvePreset[]>(fetch('/api/proxmox/presets')); },
   addPreset(spec: unknown) { return jr<PvePreset>(fetch('/api/proxmox/presets', post(spec))); },
+  updatePreset(id: string, spec: unknown) { return jr<PvePreset>(fetch(`/api/proxmox/presets/${id}`, json('PUT', spec))); },
   removePreset(id: string) { return jr(fetch(`/api/proxmox/presets/${id}`, { method: 'DELETE' })); },
   createProvision(spec: { presetId: string; hostname: string; vmid?: number; ip?: string; tags?: string[] }) { return jr<ProvisionSummary>(fetch('/api/proxmox/provisions', post(spec))); },
   provisions() { return jr<ProvisionSummary[]>(fetch('/api/proxmox/provisions')); },

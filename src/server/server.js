@@ -390,6 +390,15 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     try { return reply.code(201).send(await proxmoxStore.addPreset(req.body || {})); }
     catch (e) { return reply.code(400).send({ error: e.message }); }
   });
+  app.put('/api/proxmox/presets/:id', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      const preset = await proxmoxStore.updatePreset(req.params.id, req.body || {});
+      if (!preset) return reply.code(404).send({ error: 'preset not found' });
+      return preset;
+    } catch (e) {
+      return reply.code(400).send({ error: e.message });
+    }
+  });
   app.delete('/api/proxmox/presets/:id', { preHandler: requireAuth }, async (req) => { await proxmoxStore.removePreset(req.params.id); return { ok: true }; });
 
   app.post('/api/proxmox/provisions', { preHandler: requireAuth }, async (req, reply) => {

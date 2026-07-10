@@ -42,6 +42,12 @@ function proxmoxStubs(calls = []) {
     listPresets: async () => [{ id: 'P1', name: 'dev' }],
     getPreset: async (id) => (id === 'P1' ? { id: 'P1', name: 'dev' } : undefined),
     addPreset: async (spec) => ({ id: 'P2', ...spec }),
+    updatePreset: async (id, spec) => {
+      calls.push(['updatePreset', id, spec.name]);
+      if (id === 'NOPE') return undefined;
+      if (!spec.name) throw new Error('preset name is required');
+      return { id, ...spec, createdAt: 't' };
+    },
     removePreset: async () => {},
     hasRootPassword: async () => !!rootPw,
     setRootPassword: async (pw) => { if (!pw || pw.length < 5) throw new Error('root password must be at least 5 characters'); rootPw = pw; },
@@ -837,6 +843,44 @@ test('default-key route and root-password set/status/clear (with 400 on a short 
   expect((await app.inject({ method: 'GET', url: '/api/proxmox/root-password', headers })).json().set).toBe(true);
   expect((await app.inject({ method: 'DELETE', url: '/api/proxmox/root-password', headers })).statusCode).toBe(200);
   expect((await app.inject({ method: 'GET', url: '/api/proxmox/root-password', headers })).json().set).toBe(false);
+});
+
+test('PUT /api/proxmox/presets/:id requires auth, updates, validates, and 404s', async () => {
+  const calls = [];
+  app = await makeApp(proxmoxStubs(calls));
+  const payload = {
+    name: 'production', hostId: 'H1', node: 'pve', template: 'local:vztmpl/debian-12.tar.zst',
+    storage: 'local-lvm', diskGiB: 16, cores: 4, memoryMiB: 4096, swapMiB: 512,
+    unprivileged: true, features: { nesting: true },
+    net: { bridge: 'vmbr0', vlan: null, ipMode: 'dhcp', cidr: null, gateway: null },
+    dns: { nameserver: null, searchdomain: null }, mounts: [], onboot: false,
+    startAfterCreate: true, boxDefaults: { user: 'root', sessionName: 'web', tags: [] },
+  };
+
+  expect((await app.inject({
+    method: 'PUT', url: '/api/proxmox/presets/P1', payload,
+  })).statusCode).toBe(401);
+
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const ok = await app.inject({
+    method: 'PUT', url: '/api/proxmox/presets/P1', headers, payload,
+  });
+  expect(ok.statusCode).toBe(200);
+  expect(ok.json()).toMatchObject({ id: 'P1', name: 'production', cores: 4, createdAt: 't' });
+  expect(calls).toContainEqual(['updatePreset', 'P1', 'production']);
+
+  const invalid = await app.inject({
+    method: 'PUT', url: '/api/proxmox/presets/P1', headers, payload: { ...payload, name: '' },
+  });
+  expect(invalid.statusCode).toBe(400);
+  expect(invalid.json()).toEqual({ error: 'preset name is required' });
+
+  const missing = await app.inject({
+    method: 'PUT', url: '/api/proxmox/presets/NOPE', headers, payload,
+  });
+  expect(missing.statusCode).toBe(404);
+  expect(missing.json()).toEqual({ error: 'preset not found' });
 });
 
 test('provisions: validation, create, poll, 404', async () => {
