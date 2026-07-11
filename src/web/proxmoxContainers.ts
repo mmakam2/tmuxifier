@@ -8,6 +8,15 @@ export function actionsForState(state: PveContainerState): LifecycleAction[] {
   return [];
 }
 
+// Sidebar-style live filter: case-insensitive substring over the fields a row
+// displays, so "stopped" filters by state, a node name by node, a VMID by id.
+export function containerMatches(container: PveLinkedContainer, term: string): boolean {
+  const t = term.trim().toLowerCase();
+  if (!t) return true;
+  return [container.boxLabel, container.hostName ?? container.hostId, container.node, String(container.vmid), container.state]
+    .some((field) => field.toLowerCase().includes(t));
+}
+
 function openDeprovisionDialog(container: PveLinkedContainer, onConfirm: (name: string) => Promise<void>) {
   const backdrop = el('div', { class: 'modal-backdrop' });
   const modal = el('form', { class: 'modal pve-deprovision-modal' });
@@ -44,8 +53,12 @@ export async function renderContainersTab(content: HTMLElement, deps: {
   showLifecycleJob: (id: string) => void;
   openEditBox: (boxId: string) => void;
 }) {
+  // Refresh rebuilds the whole tab; carry the outgoing search term across so
+  // the filter survives (tab switches render fresh and reset it, as everywhere).
+  const previousTerm = content.querySelector<HTMLInputElement>('.pve-container-search')?.value ?? '';
   const refresh = el('button', { type: 'button', class: 'pve-btn', title: 'Refresh container state' }, ['Refresh']);
-  const toolbar = el('div', { class: 'pve-container-toolbar' }, [refresh]);
+  const search = input(previousTerm, { type: 'text', class: 'pve-container-search', placeholder: 'Search…', autocomplete: 'off' });
+  const toolbar = el('div', { class: 'pve-container-toolbar' }, [search, refresh]);
   refresh.addEventListener('click', () => {
     refresh.disabled = true;
     void renderContainersTab(content, deps).catch((error) => {
@@ -60,6 +73,20 @@ export async function renderContainersTab(content: HTMLElement, deps: {
     return;
   }
   const list = el('div', { class: 'pve-container-list' });
+  // Rows are built once; the filter only toggles `hidden`, so in-flight action
+  // buttons, inline errors, and the focused-row highlight survive typing.
+  const rowPairs: { row: HTMLElement; container: PveLinkedContainer }[] = [];
+  const noMatch = el('div', { class: 'pve-sub' }, ['No containers match.']);
+  const applyFilter = () => {
+    let visible = 0;
+    for (const pair of rowPairs) {
+      const show = containerMatches(pair.container, search.value);
+      pair.row.hidden = !show;
+      if (show) visible += 1;
+    }
+    noMatch.hidden = rowPairs.length === 0 || visible > 0;
+  };
+  search.addEventListener('input', applyFilter);
   for (const container of containers) {
     const actions = el('div', { class: 'pve-row-actions' });
     const row = el('div', { class: `pve-row pve-container-row${deps.focusBoxId === container.boxId ? ' focused' : ''}` }, [
@@ -99,7 +126,9 @@ export async function renderContainersTab(content: HTMLElement, deps: {
       actions.append(el('button', { type: 'button', onclick: () => deps.openEditBox(container.boxId) }, ['Edit link']));
     }
     list.append(row);
+    rowPairs.push({ row, container });
     if (deps.focusBoxId === container.boxId) requestAnimationFrame(() => row.scrollIntoView({ block: 'nearest' }));
   }
-  content.replaceChildren(toolbar, containers.length ? list : el('div', { class: 'pve-sub' }, ['No linked Proxmox containers.']));
+  content.replaceChildren(toolbar, containers.length ? list : el('div', { class: 'pve-sub' }, ['No linked Proxmox containers.']), noMatch);
+  applyFilter();
 }

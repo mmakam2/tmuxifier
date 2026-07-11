@@ -608,12 +608,17 @@ body {
 }
 .proxmox-btn { padding: 6px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; cursor: pointer; font-size: 13px; }
 .proxmox-btn:hover { border-color: #2f6feb; }
-.pve-container-toolbar { min-height: 32px; display: flex; justify-content: flex-end; align-items: center; }
+.pve-container-toolbar { min-height: 32px; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .pve-container-list { display: flex; flex-direction: column; gap: 6px; }
 .pve-container-row { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(240px, auto); align-items: center; }
 .pve-container-row.focused { border-color: #2f6feb; }
 .pve-container-row .pve-row-actions { justify-content: flex-end; flex-wrap: wrap; }
 .pve-container-row button.warn { color: #d29922; }
+.pve-container-search { flex: 1; max-width: 240px; min-width: 0; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: #131722; color: var(--text); font-size: 13px; }
+.pve-container-search::placeholder { color: #4a5568; }
+/* .pve-container-row sets display:grid, which beats the UA [hidden] rule —
+   without this, the search filter could never actually hide a row. */
+.pve-container-row[hidden] { display: none; }
 .pve-badge.stopped, .pve-badge.unknown { color: var(--muted); }
 .pve-badge.missing { color: #f85149; }
 .pve-deprovision-modal { width: 460px; }
