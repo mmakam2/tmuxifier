@@ -1113,7 +1113,7 @@ function openBoxDialog(box?: Box) {
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   const form = document.createElement('form');
-  form.className = 'modal';
+  form.className = 'modal box-modal';
   const title = document.createElement('h2');
   title.textContent = isEdit ? 'Edit box' : 'Add box';
   const tagListId = 'tag-options';
@@ -1147,22 +1147,35 @@ function openBoxDialog(box?: Box) {
 
   const proxmoxAssociation = isEdit ? createProxmoxAssociationEditor(box!) : null;
 
-  form.append(
-    title,
+  // Two-column body: compact fields pair up (Host|Label, Tag|User, Port|ProxyJump),
+  // the session picker and Proxmox section span full width, and err/actions sit
+  // outside the scroll region so they are always visible (pinned footer).
+  const fieldGrid = document.createElement('div');
+  fieldGrid.className = 'field-grid';
+  fieldGrid.append(
     hostWrap,
     field('label', 'Label (optional)', { placeholder: 'defaults to host' }),
     field('tag', 'Tag', { placeholder: 'prod, staging, db', list: tagListId }),
-    tagDatalist,
     field('user', 'User', { value: 'root' }),
     field('port', 'Port (optional)', { placeholder: '22', type: 'number' }),
     field('proxyJump', 'ProxyJump (optional)', { placeholder: 'jump host this server can reach' }),
-    sessionWrap,
-    installOhMyTmux,
-    shellGroup,
-    ...(proxmoxAssociation ? [proxmoxAssociation.element] : []),
-    err,
-    actions,
   );
+
+  const setupGrid = document.createElement('div');
+  setupGrid.className = 'field-grid';
+  setupGrid.append(shellGroup, installOhMyTmux);
+
+  const modalBody = document.createElement('div');
+  modalBody.className = 'modal-body';
+  modalBody.append(
+    fieldGrid,
+    tagDatalist,
+    sessionWrap,
+    setupGrid,
+    ...(proxmoxAssociation ? [proxmoxAssociation.element] : []),
+  );
+
+  form.append(title, modalBody, err, actions);
 
   // Pre-populate fields in edit mode
   if (isEdit) {

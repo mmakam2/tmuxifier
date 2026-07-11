@@ -266,6 +266,12 @@ body {
 .modal.settings-modal { width: 560px; max-height: 86vh; }
 .settings-modal .settings-section { display: flex; flex-direction: column; gap: 10px; }
 .modal.settings-modal h3 { margin: 4px 0 0; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: #8b949e; }
+.modal.box-modal { width: 560px; max-height: 92vh; }
+/* Scrollable field area with pinned title/err/actions. The padding/margin pair
+   clears an appearing scrollbar so it never overlaps inputs (same trick as .pve-content). */
+.modal.box-modal .modal-body { display: flex; flex-direction: column; gap: 10px; overflow: auto; padding-right: 14px; margin-right: -14px; }
+.modal .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
+@media (max-width: 620px) { .modal .field-grid { grid-template-columns: 1fr; } }
 .modal .settings-hint { margin: 0; font-size: 11px; color: #6e7681; min-height: 1em; }
 .modal .settings-hint.err { color: #f85149; }
 .modal .settings-hint.ok { color: #3fb950; }
