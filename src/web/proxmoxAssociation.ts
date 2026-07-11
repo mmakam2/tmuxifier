@@ -1,6 +1,6 @@
 import { api, type Box, type PveBoxLink } from './api';
 import { pve, type PveNodeContainer } from './proxmox';
-import { el, err, field } from './dom';
+import { el, field } from './dom';
 
 type Draft = { mode: 'unlinked' } | { mode: 'linked'; hostId: string; node: string; vmid: number };
 
@@ -11,9 +11,13 @@ export function associationMutation(current: PveBoxLink | undefined, draft: Draf
   return { kind: 'link' as const, link: { hostId: draft.hostId, node: draft.node, vmid: draft.vmid } };
 }
 
-export function createProxmoxAssociationEditor(box: Box) {
-  let draft: Draft = box.proxmox
-    ? { mode: 'linked', hostId: box.proxmox.hostId, node: box.proxmox.node, vmid: box.proxmox.vmid }
+// box is null in add mode: the box doesn't exist yet, so the caller passes the
+// freshly created id to commit() after api.addBox resolves. The link/unlink
+// calls themselves are unchanged — the server validates the target either way.
+export function createProxmoxAssociationEditor(box: Box | null) {
+  const current = box?.proxmox;
+  let draft: Draft = current
+    ? { mode: 'linked', hostId: current.hostId, node: current.node, vmid: current.vmid }
     : { mode: 'unlinked' };
   const section = el('section', { class: 'box-pve-association' });
   const message = el('div', { class: 'pve-err' });
@@ -41,8 +45,8 @@ export function createProxmoxAssociationEditor(box: Box) {
     const containers = await pve.nodeContainers(host.value, node.value);
     container.replaceChildren(...containers.map((item: PveNodeContainer) => el('option', {
       value: item.vmid,
-      disabled: !!item.linkedBoxId && item.linkedBoxId !== box.id,
-    }, [`${item.vmid} | ${item.name} | ${item.state}${item.linkedBoxId && item.linkedBoxId !== box.id ? ' | linked' : ''}`])));
+      disabled: !!item.linkedBoxId && item.linkedBoxId !== box?.id,
+    }, [`${item.vmid} | ${item.name} | ${item.state}${item.linkedBoxId && item.linkedBoxId !== box?.id ? ' | linked' : ''}`])));
     if (selected) container.value = String(selected);
     syncDraft();
   }
@@ -60,21 +64,20 @@ export function createProxmoxAssociationEditor(box: Box) {
   container.addEventListener('change', syncDraft);
 
   async function hydrateSummary(details: HTMLElement) {
-    const link = box.proxmox;
-    if (!link) return;
+    if (!current) return;
     const hosts = await pve.hosts();
-    const hostName = hosts.find((item) => item.id === link.hostId)?.name ?? link.hostId;
-    const containers = await pve.nodeContainers(link.hostId, link.node);
-    const target = containers.find((item) => item.vmid === link.vmid);
-    details.textContent = `${hostName} | ${link.node} | VMID ${link.vmid} | ${target?.name ?? 'missing'} | ${target?.state ?? 'missing'}`;
+    const hostName = hosts.find((item) => item.id === current.hostId)?.name ?? current.hostId;
+    const containers = await pve.nodeContainers(current.hostId, current.node);
+    const target = containers.find((item) => item.vmid === current.vmid);
+    details.textContent = `${hostName} | ${current.node} | VMID ${current.vmid} | ${target?.name ?? 'missing'} | ${target?.state ?? 'missing'}`;
   }
 
   function renderSummary() {
-    if (!box.proxmox) {
+    if (!current) {
       section.replaceChildren(el('div', { class: 'pve-eyebrow' }, ['Proxmox association']), el('div', { class: 'pve-sub' }, ['Not linked']), el('button', { type: 'button', class: 'pve-btn', onclick: () => void renderPicker() }, ['Link container']), message);
       return;
     }
-    const details = el('div', {}, [`${box.proxmox.hostId} | ${box.proxmox.node} | VMID ${box.proxmox.vmid}`]);
+    const details = el('div', {}, [`${current.hostId} | ${current.node} | VMID ${current.vmid}`]);
     section.replaceChildren(
       el('div', { class: 'pve-eyebrow' }, ['Proxmox association']),
       details,
@@ -91,19 +94,23 @@ export function createProxmoxAssociationEditor(box: Box) {
     void hydrateSummary(details).catch(showError);
   }
   async function renderPicker() {
-    draft = box.proxmox
-      ? { mode: 'linked', hostId: box.proxmox.hostId, node: box.proxmox.node, vmid: box.proxmox.vmid }
+    draft = current
+      ? { mode: 'linked', hostId: current.hostId, node: current.node, vmid: current.vmid }
       : { mode: 'linked', hostId: '', node: '', vmid: 0 };
-    section.replaceChildren(el('div', { class: 'pve-eyebrow' }, ['Proxmox association']), field('Host', host), field('Node', node), field('Container', container), message);
-    await loadHosts(box.proxmox?.hostId).catch(showError);
+    section.replaceChildren(
+      el('div', { class: 'pve-eyebrow' }, ['Proxmox association']),
+      el('div', { class: 'pve-picker-grid' }, [field('Host', host), field('Node', node), field('Container', container)]),
+      message,
+    );
+    await loadHosts(current?.hostId).catch(showError);
   }
   renderSummary();
   return {
     element: section,
-    async commit() {
-      const mutation = associationMutation(box.proxmox, draft);
-      if (mutation?.kind === 'link') await api.setProxmoxLink(box.id, mutation.link);
-      if (mutation?.kind === 'unlink') await api.clearProxmoxLink(box.id);
+    async commit(boxId: string) {
+      const mutation = associationMutation(current, draft);
+      if (mutation?.kind === 'link') await api.setProxmoxLink(boxId, mutation.link);
+      if (mutation?.kind === 'unlink') await api.clearProxmoxLink(boxId);
     },
   };
 }

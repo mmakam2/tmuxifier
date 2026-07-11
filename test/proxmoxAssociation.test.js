@@ -17,3 +17,8 @@ test('unlink mode produces unlink and incomplete selection throws', () => {
   expect(associationMutation(current, { mode: 'unlinked' })).toEqual({ kind: 'unlink' });
   expect(() => associationMutation(undefined, { mode: 'linked', hostId: 'H1', node: '', vmid: 0 })).toThrow(/select/);
 });
+
+test('add mode with an untouched picker produces no mutation', () => {
+  // current === undefined models add mode (no box yet); an unlinked draft must be a no-op.
+  expect(associationMutation(undefined, { mode: 'unlinked' })).toBeNull();
+});

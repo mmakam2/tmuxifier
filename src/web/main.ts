@@ -1145,7 +1145,7 @@ function openBoxDialog(box?: Box) {
     hInput.style.opacity = '0.6';
   }
 
-  const proxmoxAssociation = isEdit ? createProxmoxAssociationEditor(box!) : null;
+  const proxmoxAssociation = createProxmoxAssociationEditor(box ?? null);
 
   // Two-column body: compact fields pair up (Host|Label, Tag|User, Port|ProxyJump),
   // the session picker and Proxmox section span full width, and err/actions sit
@@ -1172,7 +1172,7 @@ function openBoxDialog(box?: Box) {
     tagDatalist,
     sessionWrap,
     setupGrid,
-    ...(proxmoxAssociation ? [proxmoxAssociation.element] : []),
+    proxmoxAssociation.element,
   );
 
   form.append(title, modalBody, err, actions);
@@ -1230,7 +1230,7 @@ function openBoxDialog(box?: Box) {
         }
         const updatedBox = await api.updateBox(box!.id, patch);
         try {
-          await proxmoxAssociation?.commit();
+          await proxmoxAssociation.commit(box!.id);
         } catch (error) {
           await refresh();
           throw error;
@@ -1264,6 +1264,16 @@ function openBoxDialog(box?: Box) {
           spec.port = port;
         }
         const newBox = await api.addBox(spec);
+        // The box now exists. A link failure must not fall through to the outer
+        // catch (which re-enables submit — a second click would re-add a
+        // duplicate host). Surface it here and leave submit disabled.
+        try {
+          await proxmoxAssociation.commit(newBox.id);
+        } catch (error: any) {
+          await refresh();
+          err.textContent = `Box added, but linking failed: ${error?.message || error} — retry from Edit box`;
+          return;
+        }
         close();
         openProvisionPanel(newBox, {
           ohMyTmux: installOhMyTmuxInput.checked,
