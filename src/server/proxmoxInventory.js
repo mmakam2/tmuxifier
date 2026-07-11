@@ -1,5 +1,9 @@
 const targetKey = (link) => `${link.hostId}\u0000${link.node}\u0000${Number(link.vmid)}`;
 const normalizeState = (status) => status === 'running' ? 'running' : status === 'stopped' ? 'stopped' : 'unknown';
+// Parity with proxmoxValidate.js's client-supplied node check (assertProxmoxLinkInput,
+// proxmoxValidate.js:97) — the cluster payload is untrusted input too, so a malformed/garbage
+// node from it must never reach the stored link or the display.
+const SAFE_NODE = /^[A-Za-z0-9_.-]+$/;
 
 export function mergeProxmoxStatus(snapshot, boxes, records) {
   const next = { ...snapshot };
@@ -57,20 +61,35 @@ export function createProxmoxInventory({
     return Promise.all(hostBoxes.map(async (box) => {
       const item = byVmid.get(Number(box.proxmox.vmid));
       if (!item) return record(box, { hostName: host.name, state: 'missing' });
-      // The cluster list carries the container's CURRENT node. When it differs
-      // from the stored link, follow the migration (trusted server-side write:
-      // node only, for the already-linked hostId+vmid) — unless a lifecycle
-      // job holds a snapshot of the old target; the next poll retries.
-      if (item.node !== box.proxmox.node && boxStore && !activeJobGuard(box.id)) {
+      // The cluster payload is untrusted: a malformed/missing node must never be written to
+      // the link nor shown in the display — fall back to the stored node for both.
+      const nodeValid = typeof item.node === 'string' && SAFE_NODE.test(item.node);
+      if (!nodeValid) {
+        log(`[tmuxifier] box ${box.label}: ignoring malformed node from cluster resources: ${item.node}`);
+      } else if (item.node !== box.proxmox.node && boxStore && !activeJobGuard(box.id)) {
+        // The cluster list carries the container's CURRENT node. When it differs
+        // from the stored link, follow the migration (trusted server-side write:
+        // node only, for the already-linked hostId+vmid) — unless a lifecycle
+        // job holds a snapshot of the old target; the next poll retries.
         try {
-          await boxStore.setProxmoxLink(box.id, { ...box.proxmox, node: item.node });
-          log(`[tmuxifier] box ${box.label}: container ${box.proxmox.vmid} migrated ${box.proxmox.node} -> ${item.node}`);
+          // CAS-style re-check: re-read the box immediately before writing so a link the
+          // user cleared/changed between this poll's snapshot and now is never resurrected.
+          const fresh = await boxStore.getBox(box.id);
+          const freshLink = fresh && fresh.proxmox;
+          const stillLinked = freshLink
+            && freshLink.hostId === box.proxmox.hostId
+            && freshLink.node === box.proxmox.node
+            && Number(freshLink.vmid) === Number(box.proxmox.vmid);
+          if (stillLinked) {
+            await boxStore.setProxmoxLink(box.id, { ...box.proxmox, node: item.node });
+            log(`[tmuxifier] box ${box.label}: container ${box.proxmox.vmid} migrated ${box.proxmox.node} -> ${item.node}`);
+          } // else: link changed underneath us — skip silently, that's a user action, not an error
         } catch (error) {
           log(`[tmuxifier] box ${box.label}: could not follow container migration to ${item.node}: ${error.message}`);
         }
       }
       return record(box, {
-        hostName: host.name, node: item.node,
+        hostName: host.name, node: nodeValid ? item.node : box.proxmox.node,
         containerName: item.name || null, state: normalizeState(item.status),
       });
     }));

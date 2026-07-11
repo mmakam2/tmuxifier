@@ -41,7 +41,10 @@ test('refreshLinked makes one cluster call per host and maps vmids across nodes'
 
 test('a migrated container stays healthy, reports its new node, and the link auto-follows', async () => {
   const writes = [];
-  const boxStore = { setProxmoxLink: async (id, link) => writes.push([id, link]) };
+  const boxStore = {
+    setProxmoxLink: async (id, link) => writes.push([id, link]),
+    getBox: async () => linked('b1', 'proxmox02', 165), // CAS re-check: fresh link still matches the observed one
+  };
   const { inventory } = setup({
     cluster: [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }],
     boxStore,
@@ -69,12 +72,78 @@ test('a failing drift write is best-effort: logged, record still healthy', async
   const inventory = createProxmoxInventory({
     proxmoxStore: { getHost: async () => HOST },
     makeClient: () => ({ clusterResources: async () => [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }] }),
-    boxStore: { setProxmoxLink: async () => { throw new Error('disk full'); } },
+    boxStore: {
+      setProxmoxLink: async () => { throw new Error('disk full'); },
+      getBox: async () => linked('b1', 'proxmox02', 165), // CAS re-check passes so the write is attempted (and fails)
+    },
     now: () => 1000, log: (...a) => logged.push(a.join(' ')),
   });
   const [record] = await inventory.refreshLinked([linked('b1', 'proxmox02', 165)]);
   expect(record.state).toBe('running');
   expect(logged.some((line) => line.includes('disk full'))).toBe(true);
+});
+
+test('a malformed node (empty string) from cluster resources is ignored: no write, stored node kept, logged', async () => {
+  const writes = [];
+  const logged = [];
+  const box = linked('b1', 'proxmox02', 165);
+  const inventory = createProxmoxInventory({
+    proxmoxStore: { getHost: async () => HOST },
+    makeClient: () => ({ clusterResources: async () => [{ vmid: 165, node: '', type: 'lxc', status: 'running', name: 'dev' }] }),
+    boxStore: { setProxmoxLink: async (id, link) => writes.push([id, link]), getBox: async () => box },
+    now: () => 1000, log: (...a) => logged.push(a.join(' ')),
+  });
+  const [record] = await inventory.refreshLinked([box]);
+  expect(record.state).toBe('running');
+  expect(record.node).toBe('proxmox02'); // stored node kept, not the malformed value
+  expect(writes).toEqual([]);
+  expect(logged.some((line) => line.includes('malformed'))).toBe(true);
+});
+
+test('a missing node field from cluster resources is ignored the same way', async () => {
+  const writes = [];
+  const logged = [];
+  const box = linked('b1', 'proxmox02', 165);
+  const inventory = createProxmoxInventory({
+    proxmoxStore: { getHost: async () => HOST },
+    makeClient: () => ({ clusterResources: async () => [{ vmid: 165, type: 'lxc', status: 'running', name: 'dev' }] }),
+    boxStore: { setProxmoxLink: async (id, link) => writes.push([id, link]), getBox: async () => box },
+    now: () => 1000, log: (...a) => logged.push(a.join(' ')),
+  });
+  const [record] = await inventory.refreshLinked([box]);
+  expect(record.node).toBe('proxmox02');
+  expect(writes).toEqual([]);
+  expect(logged.some((line) => line.includes('malformed'))).toBe(true);
+});
+
+test('the drift write is skipped if the link was cleared mid-poll (stale-link re-check)', async () => {
+  const writes = [];
+  const box = linked('b1', 'proxmox02', 165);
+  const { inventory } = setup({
+    cluster: [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }],
+    boxStore: {
+      setProxmoxLink: async (id, link) => writes.push([id, link]),
+      getBox: async () => ({ ...box, proxmox: null }), // user cleared the link between snapshot and write
+    },
+  });
+  const [record] = await inventory.refreshLinked([box]);
+  expect(record.node).toBe('proxmox03'); // display still follows the live cluster value
+  expect(writes).toEqual([]);
+});
+
+test('the drift write proceeds when the fresh link still matches the observed one (control)', async () => {
+  const writes = [];
+  const box = linked('b1', 'proxmox02', 165);
+  const { inventory } = setup({
+    cluster: [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }],
+    boxStore: {
+      setProxmoxLink: async (id, link) => writes.push([id, link]),
+      getBox: async () => linked('b1', 'proxmox02', 165), // different object, same field values
+    },
+  });
+  const [record] = await inventory.refreshLinked([box]);
+  expect(record.node).toBe('proxmox03');
+  expect(writes).toEqual([['b1', { hostId: 'H1', node: 'proxmox03', vmid: 165, endpoint: HOST.endpoint }]]);
 });
 
 test('missing means absent from the whole cluster; qemu entries never match', async () => {
