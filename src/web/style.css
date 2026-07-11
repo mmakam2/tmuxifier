@@ -275,6 +275,8 @@ body {
 .modal .settings-clear { margin-right: auto; color: #f85149; }
 .stage { position: relative; overflow: hidden; }
 .empty { color: #6e7681; padding: 24px; }
+.stopped-box-state { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--muted); }
+.stopped-box-state strong { color: var(--text); font-size: 15px; }
 .term { position: absolute; inset: 0; padding: 6px; }
 .provision-panel {
   position: fixed;

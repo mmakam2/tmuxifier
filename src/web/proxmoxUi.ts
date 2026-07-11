@@ -5,6 +5,7 @@ import { el, input, field, err } from './dom';
 import { openSettingsModal } from './settingsUi';
 import { renderPresetsTab } from './proxmoxPresets';
 import { renderContainersTab } from './proxmoxContainers';
+import { renderActivityTab } from './proxmoxActivity';
 
 type SetupOptions = { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean };
 
@@ -14,7 +15,7 @@ type HubOpts = {
   onBoxLinked: () => void;
 };
 type HubInitial = { tab?: Tab; focusBoxId?: string };
-const TABS = ['Containers', 'Presets', 'Provision', 'History'] as const;
+const TABS = ['Containers', 'Presets', 'Provision', 'Activity'] as const;
 type Tab = typeof TABS[number];
 
 export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
@@ -41,7 +42,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
     Containers: () => renderContainersTab(content, { focusBoxId: initial.focusBoxId, showLifecycleJob, openEditBox: opts.openEditBox }),
     Presets: () => renderPresetsTab(content, { openSettingsModal }),
     Provision: renderProvision,
-    History: renderHistory,
+    Activity: () => renderActivityTab(content, { showProvisionJob: showJob, showLifecycleJob }),
   };
   function selectTab(t: Tab) {
     active = t; stopPoll();
@@ -111,18 +112,8 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
     syncStatic();
   }
 
-  // --- History ---
-  async function renderHistory() {
-    const jobs = await pve.provisions().catch(() => []);
-    const list = el('div', { class: 'pve-list' }, jobs.map((j) => el('button', { type: 'button', class: 'pve-row pve-row-btn', onclick: () => showJob(j.id) }, [
-      el('div', {}, [el('strong', {}, [j.hostname]), el('span', { class: 'pve-sub' }, [` ${j.presetName} · vmid ${j.vmid ?? '—'}`])]),
-      el('span', { class: `pve-badge ${j.status}` }, [j.status]),
-    ])));
-    setContent(jobs.length ? list : el('div', { class: 'pve-sub' }, ['No provisions yet.']));
-  }
-
   // --- Job panel (shared) ---
-  // `setup` is provided only for a fresh provision (not a History view): when the box links,
+  // `setup` is provided only for a fresh provision (not an Activity view): when the box links,
   // run the same tmux + oh-my-* install add-box uses, after a brief SSH-readiness wait.
   function showJob(id: string, setup?: SetupOptions) {
     stopPoll();

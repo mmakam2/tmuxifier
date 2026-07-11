@@ -264,8 +264,12 @@ user/realm (e.g. `user@pam`), a token id (e.g. `tmuxifier`), and copy the secret
 no rights even when the user does. In a lab, add the token (*Datacenter → Permissions → Add → API
 Token Permission*, path `/`, propagate) the built-in **`PVEVMAdmin`** role (container create/start
 plus `Datastore.AllocateSpace`/`Datastore.Audit`) **and `PVEAuditor`** (the `Sys.Audit` that lets
-the node/storage/bridge dropdowns populate). Use a privilege-separated token, not full
-`Administrator`.
+the node/storage/bridge dropdowns populate). Together these two roles also cover container
+**lifecycle**: `VM.Audit`/`Sys.Audit` for the linked-container inventory and state, `VM.PowerMgmt`
+for Start/Shutdown/Stop/Reboot, and `VM.Allocate` for LXC deletion (deprovision) — all already
+included in `PVEVMAdmin` + `PVEAuditor`, alongside the provisioning datastore privileges above. For
+a production token, define a **custom role** granting only those privileges on only the paths it
+needs rather than the broad lab roles. Use a privilege-separated token, not full `Administrator`.
 
 **2. Add the host.** **Settings (⚙) → Proxmox → Add a Proxmox host**: enter the endpoint
 (`host:8006`), the token id (`user@pam!tmuxifier`) and the secret. Click **Inspect** to fetch and
@@ -291,6 +295,33 @@ rest** (AES-256-GCM; key derived from your cookie secret) in the gitignored `dat
 (`0600`), and are never sent to the browser. TLS is pinned for self-signed certs and CA-verified
 when the host presents a valid certificate. If you rotate `TMUXIFIER_COOKIE_SECRET`, previously-saved
 secrets become undecryptable — re-add each Proxmox host (and re-enter keys/password) afterward.
+
+## Proxmox container lifecycle
+
+Once a box is **linked** to a Proxmox LXC container, Tmuxifier can manage that container's power
+state and retire it. Lifecycle control applies **only to verified linked LXC containers** — a box
+with no confirmed Proxmox link stays an ordinary SSH box and exposes none of these actions.
+
+**Linking is explicit.** A provisioned container is linked automatically; any other box is linked by
+hand in **Edit box → Proxmox association** (pick host → node → container; already-linked targets are
+disabled). Unlinking there never stops or destroys the container — it only drops Tmuxifier's record.
+**Importing boxes never restores lifecycle authority:** an imported box starts unlinked and must be
+re-linked deliberately before any power or deprovision action is offered.
+
+**State comes from a live PVE confirmation.** A container PVE reports stopped shows a grey **Stopped**
+state with its node/VMID instead of a dead terminal; clicking it opens the Proxmox **Containers** tab
+focused on that box. A PVE lookup failure never hides an SSH outage — reachability still comes from
+SSH, so a genuinely down box still shows red.
+
+**Actions** live in the Proxmox hub's **Containers** tab, gated by state: a stopped container offers
+**Start** and **Deprovision**; a running one offers **Shutdown**, **Stop** (a forceful immediate
+stop), **Reboot**, and **Deprovision**; a container PVE can't find offers **Deprovision** as a
+local-only link cleanup. Each action runs as a pollable job.
+
+**Deprovision** is the destructive path and stays disabled until you type the box's exact label to
+confirm. It gracefully shuts the container down, destroys it **and its attached volumes**, **keeps**
+any independent backup archives, then removes the local box. The hub's **Activity** tab merges
+lifecycle and provision jobs newest-first (history persists to `data/proxmox-lifecycle-jobs.json`).
 
 ## Security
 Tmuxifier can SSH into your whole fleet, so the login gate is the crown jewel. It binds to

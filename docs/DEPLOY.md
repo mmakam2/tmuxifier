@@ -14,7 +14,7 @@ unit); adjust paths if you install elsewhere.
 | `.env` | no (gitignored) | All `TMUXIFIER_*` config, incl. password hash + cookie secret (mode `0600`) |
 | `config.json` | no (gitignored) | Optional camelCase alternative to `.env`; also where the UI persists `localShell` |
 | `tls/` | no (gitignored) | `cert.pem` / `key.pem` for HTTPS (private key stays out of git) |
-| `data/` | no (gitignored) | `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json` (encrypted Proxmox host/key/preset profiles), `provision-jobs.json` (provision history), `health-events.json` (in-app health event log), and SSH ControlMaster sockets (`data/cm/`) |
+| `data/` | no (gitignored) | `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json` (encrypted Proxmox host/key/preset profiles), `provision-jobs.json` (provision history), `proxmox-lifecycle-jobs.json` (LXC power/deprovision job history), `health-events.json` (in-app health event log), and SSH ControlMaster sockets (`data/cm/`) |
 | `deploy/tmuxifier.service` | yes | Sample systemd unit (no secrets) |
 | `.env.example` | yes | Template for `.env` |
 
@@ -137,6 +137,30 @@ the rest. (The only import Tmuxifier has is the box-list JSON produced by the ex
 > passphrase-free key above, or run an `ssh-agent` the service can reach (set `SSH_AUTH_SOCK` in
 > the unit and load the key on boot). Harden the key on the boxes where you can (`from=`
 > restrictions, a dedicated account) and keep `~/.ssh` at `700`, the private key at `600`.
+
+## Proxmox API token (optional)
+
+Tmuxifier can provision **and manage the lifecycle of** Proxmox LXC containers over the PVE HTTP API.
+Create a **privilege-separated** API token (full walkthrough in
+[../README.md](../README.md#proxmox-lxc-provisioning)) and grant it enough to cover both:
+
+- **Provisioning:** `Datastore.AllocateSpace` / `Datastore.Audit` (container create) plus `Sys.Audit`
+  so the node/storage/bridge pickers populate.
+- **Lifecycle:** `VM.Audit` / `Sys.Audit` for the linked-container inventory and state,
+  `VM.PowerMgmt` for Start / Shutdown / Stop / Reboot, and `VM.Allocate` for LXC deletion
+  (deprovision).
+
+In a lab the built-in **`PVEVMAdmin` + `PVEAuditor`** roles cover all of the above; for production,
+define a custom role granting only those privileges on only the paths the token needs. Lifecycle
+control applies **only to verified linked LXC containers** — provisioned boxes link automatically,
+any other box is linked by hand in **Edit box → Proxmox association**, and importing boxes never
+restores that link. A linked box's state comes from a **live PVE confirmation**: a container PVE
+reports stopped shows a grey **Stopped** panel instead of a dead terminal, while a PVE lookup failure
+never masks an SSH outage (reachability still comes from SSH). **Deprovision** gracefully shuts the
+container down, destroys it and its attached volumes, keeps independent backup archives, then removes
+the local box; lifecycle and provision jobs are recorded in the hub's **Activity** tab and in
+`data/proxmox-lifecycle-jobs.json`. The token, any SSH management keys, and the optional root password
+are encrypted at rest in `data/proxmox.json` and never sent to the browser.
 
 ## Install the service
 

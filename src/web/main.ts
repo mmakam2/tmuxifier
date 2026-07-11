@@ -343,6 +343,31 @@ async function pollStatus() {
         if (!id) return;
         applyRowStatus(li as HTMLElement, id, status[id]);
       });
+      // Reconcile Proxmox-stopped state with open terminals and the stopped panel:
+      // a box that stopped out from under a live terminal loses that terminal, the
+      // active stopped box shows its panel, and a panel whose container restarted
+      // is cleared back to the empty stage.
+      const selected = activeBoxId ? allBoxes.find((box) => box.id === activeBoxId) : undefined;
+      for (const [id] of tabs) {
+        if (id !== '__local__' && status[id]?.proxmoxState === 'stopped') closeTab(id);
+      }
+      if (selected && status[selected.id]?.proxmoxState === 'stopped') {
+        showStoppedBox(selected);
+      } else {
+        const stage = app.querySelector('#stage') as HTMLElement;
+        const stoppedPanel = stage.querySelector('.stopped-box-state');
+        if (stoppedPanel) {
+          stoppedPanel.remove();
+          activeBoxId = null;
+          highlightBox(null);
+          if (!stage.querySelector('.empty')) {
+            const empty = document.createElement('div');
+            empty.className = 'empty';
+            empty.textContent = 'Select a box to open a terminal.';
+            stage.append(empty);
+          }
+        }
+      }
     } catch {}
     // Health extras (sparkline series + events) ride the same tick but fail
     // independently — a hiccup on either side must not stop the dots.
@@ -705,6 +730,7 @@ function openLocalShell() {
   if (ls) ls.classList.add('active');
   const stage = app.querySelector('#stage') as HTMLElement;
   for (const t of tabs.values()) t.el.style.display = 'none';
+  stage.querySelector('.stopped-box-state')?.remove();
   const existing = tabs.get('__local__');
   if (existing) { existing.el.style.display = 'block'; existing.term.refit(); existing.term.focus(); updateLocalDot(); return; }
   stage.querySelector('.empty')?.remove();
@@ -723,20 +749,64 @@ function updateLocalDot() {
   if (dot) dot.classList.toggle('green', tabs.has('__local__'));
 }
 
+// Highlight one box row (and its containing tag group) as active, clearing the
+// rest. `null` de-highlights everything (local shell / empty stage). Shared by
+// openBox, showStoppedBox, and the poll reconcile so highlight state never drifts.
+function highlightBox(boxId: string | null) {
+  app.querySelectorAll('.box').forEach((element) => {
+    const row = element as HTMLElement;
+    row.classList.toggle('active', boxId !== null && row.dataset.id === boxId);
+  });
+  app.querySelectorAll('.box-group').forEach((element) => {
+    const group = element as HTMLElement;
+    group.classList.toggle('active-child', boxId !== null && !!group.querySelector(`.box[data-id="${CSS.escape(boxId)}"]`));
+  });
+}
+
+// A Proxmox-linked box confirmed stopped has no reachable tmux, so instead of a
+// dead terminal the stage shows a static panel with the container's identity and
+// a shortcut into the Proxmox Containers tab (Start / Deprovision live there).
+function showStoppedBox(box: Box) {
+  activeBoxId = box.id;
+  highlightBox(box.id);
+  app.querySelector('.local-shell')?.classList.remove('active');
+  for (const terminal of tabs.values()) terminal.el.style.display = 'none';
+  const stage = app.querySelector('#stage') as HTMLElement;
+  stage.querySelector('.empty')?.remove();
+  stage.querySelector('.stopped-box-state')?.remove();
+  const state = latestStatus[box.id];
+  const panel = document.createElement('div');
+  panel.className = 'stopped-box-state';
+  const title = document.createElement('strong');
+  title.textContent = `${box.label} is stopped`;
+  const detail = document.createElement('span');
+  detail.textContent = `${state?.proxmoxNode ?? 'Proxmox'} | VMID ${state?.proxmoxVmid ?? box.proxmox?.vmid ?? '-'}`;
+  const manage = document.createElement('button');
+  manage.type = 'button';
+  manage.className = 'pve-btn';
+  manage.textContent = 'Open Proxmox';
+  manage.addEventListener('click', () => openProxmoxHub({
+    openBox,
+    openEditBox: (id) => { const target = allBoxes.find((item) => item.id === id); if (target) openBoxDialog(target); },
+    onBoxLinked: () => { void refresh(); },
+  }, { tab: 'Containers', focusBoxId: box.id }));
+  panel.append(title, detail, manage);
+  stage.append(panel);
+}
+
 function openBox(b: Box) {
+  if (latestStatus[b.id]?.proxmoxState === 'stopped') {
+    closeTab(b.id);
+    showStoppedBox(b);
+    return;
+  }
   activeBoxId = b.id;
-  app.querySelectorAll('.box').forEach(el => {
-    const boxEl = el as HTMLElement;
-    boxEl.classList.toggle('active', boxEl.dataset.id === b.id);
-  });
-  app.querySelectorAll('.box-group').forEach(el => {
-    const groupEl = el as HTMLElement;
-    groupEl.classList.toggle('active-child', !!groupEl.querySelector(`.box[data-id="${CSS.escape(b.id)}"]`));
-  });
+  highlightBox(b.id);
   // De-highlight local shell bar when switching to a box
   const ls = app.querySelector('.local-shell');
   if (ls) ls.classList.remove('active');
   const stage = app.querySelector('#stage') as HTMLElement;
+  stage.querySelector('.stopped-box-state')?.remove();
   for (const t of tabs.values()) t.el.style.display = 'none';
   const existing = tabs.get(b.id);
   if (existing) { existing.el.style.display = 'block'; existing.term.refit(); existing.term.focus(); return; }

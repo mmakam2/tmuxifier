@@ -23,7 +23,8 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   (Proxmox host profiles with **encrypted** API tokens, SSH management keys, and an optional root
   password — all AES-256-GCM sealed — plus container presets), `netbox.json` (NetBox integration
   settings with an **encrypted** API token), `provision-jobs.json` (provision history),
-  `health-events.json` (in-app health event log), and SSH ControlMaster sockets under `data/cm/`.
+  `proxmox-lifecycle-jobs.json` (LXC power/deprovision job history), `health-events.json` (in-app
+  health event log), and SSH ControlMaster sockets under `data/cm/`.
 
 When adding a new config knob or persisted file, keep it under the repo folder by default.
 Don't introduce dependencies on `$HOME`-level state other than the user's existing SSH setup.
@@ -132,6 +133,10 @@ pattern for new modules.
   management key so provisioned containers trust Tmuxifier (override with `TMUXIFIER_PVE_DEFAULT_PUBKEY`).
 - `provisionStore.js` / `proxmoxProvision.js` — debounced `data/provision-jobs.json` persistence and
   the create→poll→start→discover→auto-link-box job manager (the Fleet job pattern).
+- `proxmoxInventory.js` — host/node-batched linked-LXC inventory and status authority.
+- `proxmoxLifecycle.js` / `proxmoxLifecycleStore.js` — persisted LXC power/deprovision jobs in
+  `data/proxmox-lifecycle-jobs.json`.
+- `boxRemoval.js` — shared session/tmux/store cleanup for ordinary removal and verified deprovision.
 - `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`derToPem`/`normFp`) used by
   both the Proxmox and NetBox API clients.
 - `netboxValidate.js` / `netboxStore.js` / `netboxApi.js` — NetBox integration settings: pure
@@ -144,10 +149,14 @@ Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `a
 backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health history: pure SVG-path builder
 and event-line formatters), `fleetSelection.ts`/`fleetHistory.ts`/`fleetEditor.ts` (Fleet
 Command selection, recent-command history, and the CodeMirror bash-script editor),
-`proxmox.ts`/`proxmoxUi.ts` (the Proxmox fetch layer and operations-only hub shell: Presets,
-Provision, and History tabs — host/secret setup lives in the settings modal),
+`proxmox.ts`/`proxmoxUi.ts` (the Proxmox fetch layer and operations-only hub shell: Containers,
+Presets, Provision, and Activity tabs — host/secret setup lives in the settings modal),
 `proxmoxPresets.ts` (the Presets tab's master-detail create/edit/delete form, dependent Proxmox
-loaders, stale saved-option fallbacks, and additional-disk modal), `settingsUi.ts` (the ⚙ settings
+loaders, stale saved-option fallbacks, and additional-disk modal),
+`proxmoxContainers.ts` (the Containers tab's linked-LXC list with state-gated lifecycle actions and
+the deprovision confirm dialog), `proxmoxActivity.ts` (the Activity tab merging provision and
+lifecycle jobs newest-first), `proxmoxAssociation.ts` (the Edit Box modal's manual Proxmox
+link/unlink picker), `settingsUi.ts` (the ⚙ settings
 modal's tabbed shell, with NetBox (`settingsNetbox.ts`) and Proxmox host/secret
 (`settingsProxmox.ts`) tabs) with `settingsForm.ts` (pure payload/result helpers), `netbox.ts`
 (fetch layer), and `dom.ts` (shared DOM builders used by both the settings modal and the hub),
