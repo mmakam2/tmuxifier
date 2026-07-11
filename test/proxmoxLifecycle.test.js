@@ -1,0 +1,143 @@
+import { test, expect } from 'vitest';
+import { createProxmoxLifecycleManager } from '../src/server/proxmoxLifecycle.js';
+
+const HOST = { id: 'H1', name: 'lab', endpoint: 'pve.example.com:8006', tokenSecret: 'sek' };
+const BOX = { id: 'B1', label: 'dev-01', host: '192.168.1.10', proxmox: { hostId: 'H1', node: 'pve', vmid: 131, endpoint: HOST.endpoint } };
+
+function fixture(initialState = 'stopped', overrides = {}) {
+  let state = initialState;
+  const calls = [];
+  const client = {
+    startLxc: async () => { calls.push('start'); state = 'running'; return 'UPID:start'; },
+    shutdownLxc: async () => { calls.push('shutdown'); state = 'stopped'; return 'UPID:shutdown'; },
+    stopLxc: async () => { calls.push('stop'); state = 'stopped'; return 'UPID:stop'; },
+    rebootLxc: async () => { calls.push('reboot'); state = 'running'; return 'UPID:reboot'; },
+    taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+    taskLog: async () => [{ n: 1, t: 'task output' }],
+  };
+  const manager = createProxmoxLifecycleManager({
+    boxStore: { getBox: async (id) => id === 'B1' ? BOX : undefined },
+    proxmoxStore: { getHost: async () => HOST },
+    inventory: { refreshBox: async () => ({ boxId: 'B1', state, node: 'pve', vmid: 131 }) },
+    makeClient: () => client,
+    load: () => [], save: () => {}, sleep: async () => {}, pollMs: 0,
+    now: () => '2026-07-11T00:00:00.000Z', makeId: () => 'J1',
+    ...overrides,
+  });
+  return { manager, calls, getState: () => state };
+}
+
+test.each([
+  ['start', 'stopped', 'running'],
+  ['shutdown', 'running', 'stopped'],
+  ['stop', 'running', 'stopped'],
+  ['reboot', 'running', 'running'],
+])('%s creates, polls, verifies, and persists a terminal job', async (action, initial, final) => {
+  const { manager, calls, getState } = fixture(initial);
+  const summary = await manager.createJob({ boxId: 'B1', action });
+  expect(summary).toMatchObject({ id: 'J1', action, status: 'running', boxId: 'B1', vmid: 131 });
+  await manager._settled(summary.id);
+  expect(manager.getJob(summary.id)).toMatchObject({ status: 'done', phase: 'done', error: null });
+  expect(calls).toContain(action);
+  expect(getState()).toBe(final);
+});
+
+test.each([
+  ['start', 'running'], ['shutdown', 'stopped'], ['stop', 'stopped'], ['reboot', 'stopped'],
+])('%s rejects invalid %s transition before creating a job', async (action, state) => {
+  const { manager } = fixture(state);
+  await expect(manager.createJob({ boxId: 'B1', action })).rejects.toMatchObject({ statusCode: 409 });
+  expect(manager.listJobs()).toEqual([]);
+});
+
+test('unknown PVE state is a preflight gateway failure and target coordinates are rejected', async () => {
+  const { manager } = fixture('unknown');
+  await expect(manager.createJob({ boxId: 'B1', action: 'start' })).rejects.toMatchObject({ statusCode: 502 });
+  await expect(manager.createJob({ boxId: 'B1', action: 'start', vmid: 999 })).rejects.toMatchObject({ statusCode: 400 });
+  expect(manager.listJobs()).toEqual([]);
+});
+
+test('one active target rejects a concurrent lifecycle job', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let state = 'stopped';
+  const { manager } = fixture('stopped', {
+    inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
+    makeClient: () => ({
+      startLxc: async () => { state = 'running'; return 'UPID:start'; },
+      taskStatus: async () => { await gate; return { status: 'stopped', exitstatus: 'OK' }; },
+      taskLog: async () => [],
+    }),
+  });
+  const first = await manager.createJob({ boxId: 'B1', action: 'start' });
+  await expect(manager.createJob({ boxId: 'B1', action: 'start' })).rejects.toMatchObject({ statusCode: 409 });
+  release();
+  await manager._settled(first.id);
+});
+
+test('task failure is terminal immediately and task logs stay bounded', async () => {
+  const { manager } = fixture('stopped', {
+    makeClient: () => ({
+      startLxc: async () => 'UPID:start',
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'permission denied' }),
+      taskLog: async () => [{ n: 1, t: '0123456789abcdef' }],
+    }),
+    maxLogBytes: 12,
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'start' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id)).toMatchObject({ status: 'error', error: 'task failed: permission denied' });
+  expect(manager.getJob(job.id).log.length).toBeLessThanOrEqual(12);
+});
+
+test('task polling tolerates a transient status failure', async () => {
+  let state = 'stopped';
+  let attempts = 0;
+  const { manager } = fixture('stopped', {
+    inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
+    makeClient: () => ({
+      startLxc: async () => { state = 'running'; return 'UPID:start'; },
+      taskStatus: async () => { if (++attempts === 1) throw new Error('pveproxy restart'); return { status: 'stopped', exitstatus: 'OK' }; },
+      taskLog: async () => [],
+    }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'start' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id).status).toBe('done');
+  expect(attempts).toBe(2);
+});
+
+test('routine action revalidates the stored target before mutating PVE', async () => {
+  let reads = 0;
+  const calls = [];
+  const { manager } = fixture('stopped', {
+    boxStore: { getBox: async () => ++reads === 1 ? BOX : { ...BOX, proxmox: { ...BOX.proxmox, vmid: 999 } } },
+    makeClient: () => ({ startLxc: async () => calls.push('start') }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'start' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id).status).toBe('error');
+  expect(calls).toEqual([]);
+});
+
+test('startup retention keeps only the newest bounded terminal history', () => {
+  const { manager } = fixture('running', {
+    maxJobs: 2,
+    load: () => [
+      { id: 'old', action: 'reboot', status: 'done', createdAt: '2026-07-09T00:00:00Z' },
+      { id: 'mid', action: 'reboot', status: 'done', createdAt: '2026-07-10T00:00:00Z' },
+      { id: 'new', action: 'reboot', status: 'done', createdAt: '2026-07-11T00:00:00Z' },
+    ],
+  });
+  expect(manager.listJobs().map((job) => job.id)).toEqual(['new', 'mid']);
+});
+
+test('startup reconciliation interrupts running jobs without replaying them', () => {
+  const saved = [];
+  const { manager } = fixture('running', {
+    load: () => [{ id: 'old', action: 'reboot', status: 'running', phase: 'request', createdAt: 'x' }],
+    save: (jobs) => saved.push(jobs),
+  });
+  expect(manager.getJob('old').status).toBe('interrupted');
+  expect(saved[0][0].status).toBe('interrupted');
+});
