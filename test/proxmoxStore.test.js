@@ -169,3 +169,16 @@ test('a corrupt proxmox.json is quarantined so stored secrets are never overwrit
   expect(q).toHaveLength(1);
   expect(await fs.readFile(path.join(dir, q[0]), 'utf8')).toBe(original.slice(0, 40));
 });
+
+test('an auto-static preset persists with cidr forced null', async () => {
+  const store = make();
+  const h = await store.addHost(HOST);
+  const p = await store.addPreset({
+    name: 'auto', hostId: h.id, template: 'local:vztmpl/x.tar.zst', storage: 'local-lvm',
+    diskGiB: 8, cores: 2, memoryMiB: 2048, swapMiB: 512,
+    net: { bridge: 'vmbr0', ipMode: 'auto-static', vlan: 30, gateway: '192.168.30.1', cidr: '192.168.30.9/24' },
+  });
+  expect(p.net.ipMode).toBe('auto-static');
+  expect(p.net.vlan).toBe(30);
+  expect(p.net.cidr).toBeNull(); // allocated at provision time; never stored
+});

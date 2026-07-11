@@ -103,3 +103,11 @@ test.each([
 ])('assertProxmoxLinkInput rejects unsafe linkage %#', (input, message) => {
   expect(() => assertProxmoxLinkInput(input, { hostIds: ['H1'] })).toThrow(message);
 });
+
+test('auto-static requires vlan and gateway; cidr is not required', () => {
+  const auto = (net) => ({ ...PRESET, net: { bridge: 'vmbr0', ipMode: 'auto-static', cidr: null, gateway: null, vlan: null, ...net } });
+  expect(() => assertPresetInput(auto({ vlan: 30, gateway: '192.168.30.1' }), { hostIds: ['h1'] })).not.toThrow();
+  expect(() => assertPresetInput(auto({ gateway: '192.168.30.1' }), { hostIds: ['h1'] })).toThrow(/vlan/);
+  expect(() => assertPresetInput(auto({ vlan: 30 }), { hostIds: ['h1'] })).toThrow(/gateway/);
+  expect(() => assertPresetInput({ ...PRESET, net: { bridge: 'vmbr0', ipMode: 'yolo' } }, { hostIds: ['h1'] })).toThrow(/ipMode must be dhcp, static, or auto-static/);
+});

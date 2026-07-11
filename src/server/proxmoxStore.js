@@ -13,7 +13,7 @@ function normalizePreset(spec, id, createdAt) {
     cores: spec.cores, memoryMiB: spec.memoryMiB, swapMiB: spec.swapMiB,
     unprivileged: spec.unprivileged !== false,
     features: spec.features && typeof spec.features === 'object' ? spec.features : {},
-    net: { bridge: net.bridge, vlan: net.vlan ?? null, ipMode: net.ipMode, cidr: net.cidr ?? null, gateway: net.gateway ?? null },
+    net: { bridge: net.bridge, vlan: net.vlan ?? null, ipMode: net.ipMode, cidr: net.ipMode === 'auto-static' ? null : (net.cidr ?? null), gateway: net.gateway ?? null },
     dns: { nameserver: spec.dns?.nameserver ?? null, searchdomain: spec.dns?.searchdomain ?? null },
     onboot: !!spec.onboot, startAfterCreate: spec.startAfterCreate !== false,
     mounts: Array.isArray(spec.mounts) ? spec.mounts.map((m) => ({ id: m.id, storage: m.storage, sizeGiB: m.sizeGiB, path: m.path, backup: !!m.backup })) : [],

@@ -66,10 +66,14 @@ export function assertPresetInput(spec, { hostIds = [] } = {}) {
   const net = spec.net || {};
   if (!SAFE_ID.test(String(net.bridge || ''))) throw new Error('invalid bridge');
   if (net.vlan != null && !intInRange(net.vlan, 1, 4094)) throw new Error('vlan must be 1..4094');
-  if (!['dhcp', 'static'].includes(net.ipMode)) throw new Error('ipMode must be dhcp or static');
+  if (!['dhcp', 'static', 'auto-static'].includes(net.ipMode)) throw new Error('ipMode must be dhcp, static, or auto-static');
   if (net.ipMode === 'static') {
     if (!isCidr(net.cidr)) throw new Error('static network requires a cidr like 192.168.1.50/24');
     if (!isIp(net.gateway)) throw new Error('static network requires a gateway ip');
+  }
+  if (net.ipMode === 'auto-static') {
+    if (!intInRange(net.vlan, 1, 4094)) throw new Error('auto-static requires a vlan (1..4094) to find the NetBox prefix');
+    if (!isIp(net.gateway)) throw new Error('auto-static requires a gateway ip');
   }
   // Keys are no longer preset-scoped: provisioning injects the host default key + all stored keys.
   if (spec.mounts != null) {
