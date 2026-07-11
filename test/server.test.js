@@ -68,7 +68,18 @@ function proxmoxStubs(calls = []) {
   });
   const inspectEndpoint = async () => ({ reachable: true, fingerprint256: 'AB:CD', subject: 'pve', issuer: 'pve', validTo: 'x', caValid: false });
   const defaultPublicKey = () => 'ssh-ed25519 HOSTKEY tmuxifier@host';
-  return { proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, defaultPublicKey };
+  const proxmoxInventory = {
+    getLinkedContainers: async () => [{ boxId: 'B1', boxLabel: 'dev-01', hostId: 'H1', hostName: 'lab', node: 'pve', vmid: 131, state: 'stopped' }],
+    listNodeContainers: async () => [{ hostId: 'H1', node: 'pve', vmid: 131, name: 'dev-01', state: 'stopped', linkedBoxId: null }],
+  };
+  const lifecycleManager = {
+    createJob: async (body) => { calls.push(['createLifecycleJob', body]); return { id: 'L1', ...body, status: 'running' }; },
+    listJobs: () => [{ id: 'L1', boxId: 'B1', action: 'start', status: 'running', phase: 'request' }],
+    getJob: (id) => id === 'L1' ? { id: 'L1', action: 'start', status: 'done', log: '' } : undefined,
+    hasActiveJob: () => false,
+    hasActiveTarget: () => false,
+  };
+  return { proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, defaultPublicKey, proxmoxInventory, lifecycleManager };
 }
 
 let app;
@@ -889,6 +900,93 @@ test('add-host: token verify failure returns 400 and never persists the host', a
   const res = await app.inject({ method: 'POST', url: '/api/proxmox/hosts', headers, payload: { name: 'lab', endpoint: 'pve.example.com:8006', tokenId: 'user@pam!t', tokenSecret: 'sek', verifyMode: 'pin', fingerprint256: 'AB' } });
   expect(res.statusCode).toBe(400);
   expect(calls.some(([op]) => op === 'addHost')).toBe(false);
+});
+
+test('linked-container browse and lifecycle routes are auth-gated and redacted', async () => {
+  const calls = [];
+  app = await makeApp(proxmoxStubs(calls));
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/containers' })).statusCode).toBe(401);
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const linked = await app.inject({ method: 'GET', url: '/api/proxmox/containers', headers });
+  expect(linked.statusCode).toBe(200);
+  expect(linked.payload).not.toContain('tokenSecret');
+  expect(linked.json()[0]).toMatchObject({ boxId: 'B1', vmid: 131, state: 'stopped', activeJob: { id: 'L1', action: 'start' } });
+  const browse = await app.inject({ method: 'GET', url: '/api/proxmox/hosts/H1/nodes/pve/containers', headers });
+  expect(browse.json()[0]).toMatchObject({ vmid: 131, linkedBoxId: null });
+  const created = await app.inject({ method: 'POST', url: '/api/proxmox/lifecycle-jobs', headers, payload: { boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' } });
+  expect(created.statusCode).toBe(201);
+  expect(calls).toContainEqual(['createLifecycleJob', { boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' }]);
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/lifecycle-jobs', headers })).json()).toHaveLength(1);
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/lifecycle-jobs/L1', headers })).json().id).toBe('L1');
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/lifecycle-jobs/NOPE', headers })).statusCode).toBe(404);
+});
+
+test('manual association verifies the live target, prevents duplicates, and unlinks without PVE mutation', async () => {
+  const stubs = proxmoxStubs();
+  const store = createStore({ dataDir: dir });
+  const box = await store.addBox({ host: '192.168.1.10', label: 'dev-01' });
+  app = await makeApp({ ...stubs, store });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const linked = await app.inject({ method: 'PUT', url: `/api/boxes/${box.id}/proxmox`, headers, payload: { hostId: 'H1', node: 'pve', vmid: 131 } });
+  expect(linked.statusCode).toBe(200);
+  expect(linked.json().proxmox).toEqual({ hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' });
+  const unlinked = await app.inject({ method: 'DELETE', url: `/api/boxes/${box.id}/proxmox`, headers });
+  expect(unlinked.statusCode).toBe(200);
+  expect(unlinked.json().proxmox).toBeUndefined();
+});
+
+test.each([400, 404, 409, 502])('lifecycle service statusCode %s is preserved', async (statusCode) => {
+  const stubs = proxmoxStubs();
+  app = await makeApp({ ...stubs, lifecycleManager: {
+    ...stubs.lifecycleManager,
+    createJob: async () => { throw Object.assign(new Error(`failure-${statusCode}`), { statusCode }); },
+  } });
+  const cookie = await login();
+  const response = await app.inject({
+    method: 'POST', url: '/api/proxmox/lifecycle-jobs',
+    headers: { cookie: `${cookie.name}=${cookie.value}` },
+    payload: { boxId: 'B1', action: 'start' },
+  });
+  expect(response.statusCode).toBe(statusCode);
+  expect(response.json()).toEqual({ error: `failure-${statusCode}` });
+});
+
+test('generic box PATCH cannot write lifecycle authority and active jobs block removal', async () => {
+  const stubs = proxmoxStubs();
+  stubs.lifecycleManager.hasActiveJob = () => true;
+  app = await makeApp(stubs);
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  expect((await app.inject({ method: 'PATCH', url: '/api/boxes/B1', headers, payload: { proxmox: { hostId: 'H1', node: 'pve', vmid: 131 } } })).statusCode).toBe(400);
+  expect((await app.inject({ method: 'DELETE', url: '/api/boxes/B1', headers })).statusCode).toBe(409);
+});
+
+test('lifecycle and association mutations reject an untrusted Origin', async () => {
+  app = await makeApp(proxmoxStubs());
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}`, origin: 'https://evil.example.com' };
+  expect((await app.inject({ method: 'POST', url: '/api/proxmox/lifecycle-jobs', headers, payload: { boxId: 'B1', action: 'start' } })).statusCode).toBe(403);
+  expect((await app.inject({ method: 'PUT', url: '/api/boxes/B1/proxmox', headers, payload: { hostId: 'H1', node: 'pve', vmid: 131 } })).statusCode).toBe(403);
+});
+
+test('target coordinates, browse failures, and malformed links map to safe errors', async () => {
+  const calls = [];
+  const stubs = proxmoxStubs(calls);
+  stubs.proxmoxInventory.listNodeContainers = async () => { throw new Error('PVE unavailable'); };
+  const store = createStore({ dataDir: dir });
+  const box = await store.addBox({ host: '192.168.1.10' });
+  app = await makeApp({ ...stubs, store });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const coordinates = await app.inject({ method: 'POST', url: '/api/proxmox/lifecycle-jobs', headers, payload: { boxId: box.id, action: 'start', vmid: 999 } });
+  expect(coordinates.statusCode).toBe(400);
+  expect(calls.some(([name]) => name === 'createLifecycleJob')).toBe(false);
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/hosts/NOPE/nodes/pve/containers', headers })).statusCode).toBe(404);
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/hosts/H1/nodes/pve/containers', headers })).statusCode).toBe(502);
+  expect((await app.inject({ method: 'PUT', url: `/api/boxes/${box.id}/proxmox`, headers, payload: { hostId: 'H1', node: '../pve', vmid: 99 } })).statusCode).toBe(400);
 });
 
 // --- Session expiry (the cookie is no longer a forever-valid constant) -------

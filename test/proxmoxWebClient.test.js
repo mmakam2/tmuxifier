@@ -44,3 +44,25 @@ test('pve.updatePreset sends the full spec as JSON with PUT', async () => {
   });
   expect(JSON.parse(calls[0].opts.body)).toEqual(spec);
 });
+
+test('lifecycle and container fetch methods use exact routes and bodies', async () => {
+  const calls = [];
+  globalThis.fetch = async (url, opts) => {
+    calls.push({ url, opts });
+    return { ok: true, status: 200, statusText: 'OK', json: async () => [] };
+  };
+  await pve.linkedContainers();
+  await pve.nodeContainers('H1', 'pve/a');
+  await pve.createLifecycleJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await pve.lifecycleJobs();
+  await pve.lifecycleJob('L1');
+  expect(calls.map((call) => call.url)).toEqual([
+    '/api/proxmox/containers',
+    '/api/proxmox/hosts/H1/nodes/pve%2Fa/containers',
+    '/api/proxmox/lifecycle-jobs',
+    '/api/proxmox/lifecycle-jobs',
+    expect.stringMatching(/^\/api\/proxmox\/lifecycle-jobs\/L1\?t=/),
+  ]);
+  expect(calls[2].opts.method).toBe('POST');
+  expect(JSON.parse(calls[2].opts.body)).toEqual({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+});

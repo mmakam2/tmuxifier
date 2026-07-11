@@ -19,6 +19,14 @@ export interface ProvisionSummary { id: string; presetName: string; hostname: st
 export interface ProvisionJob extends ProvisionSummary { log: string; error: string | null; }
 export interface StorageGroups { rootdir: { storage: string }[]; vztmpl: { storage: string }[]; }
 
+export type PveContainerState = 'running' | 'stopped' | 'missing' | 'unknown';
+export type LifecycleAction = 'start' | 'shutdown' | 'stop' | 'reboot' | 'deprovision';
+export type LifecycleStatus = 'running' | 'done' | 'error' | 'interrupted';
+export interface PveLinkedContainer { boxId: string; boxLabel: string; hostId: string; hostName: string | null; node: string; vmid: number; containerName: string | null; state: PveContainerState; fetchedAt: number; error: string | null; activeJob: LifecycleJobSummary | null; }
+export interface PveNodeContainer { hostId: string; node: string; vmid: number; name: string; state: PveContainerState; linkedBoxId: string | null; }
+export interface LifecycleJobSummary { id: string; action: LifecycleAction; boxId: string; boxLabel: string; hostId: string; hostName: string; node: string; vmid: number; status: LifecycleStatus; phase: string; error: string | null; createdAt: string; finishedAt: string | null; }
+export interface LifecycleJob extends LifecycleJobSummary { log: string; }
+
 async function jr<T>(p: Promise<Response>): Promise<T> {
   const res = await p;
   if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || res.statusText);
@@ -53,4 +61,9 @@ export const pve = {
   createProvision(spec: { presetId: string; hostname: string; vmid?: number; ip?: string; tags?: string[] }) { return jr<ProvisionSummary>(fetch('/api/proxmox/provisions', post(spec))); },
   provisions() { return jr<ProvisionSummary[]>(fetch('/api/proxmox/provisions')); },
   provision(id: string) { return jr<ProvisionJob>(fetch(`/api/proxmox/provisions/${id}?t=${Date.now()}`)); },
+  linkedContainers() { return jr<PveLinkedContainer[]>(fetch('/api/proxmox/containers')); },
+  nodeContainers(hostId: string, node: string) { return jr<PveNodeContainer[]>(fetch(`/api/proxmox/hosts/${hostId}/nodes/${encodeURIComponent(node)}/containers`)); },
+  createLifecycleJob(spec: { boxId: string; action: LifecycleAction; confirmName?: string }) { return jr<LifecycleJobSummary>(fetch('/api/proxmox/lifecycle-jobs', post(spec))); },
+  lifecycleJobs() { return jr<LifecycleJobSummary[]>(fetch('/api/proxmox/lifecycle-jobs')); },
+  lifecycleJob(id: string) { return jr<LifecycleJob>(fetch(`/api/proxmox/lifecycle-jobs/${id}?t=${Date.now()}`)); },
 };

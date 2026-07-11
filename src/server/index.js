@@ -22,6 +22,9 @@ import { createNetboxStore } from './netboxStore.js';
 import { createProvisionStore } from './provisionStore.js';
 import { createProvisionManager } from './proxmoxProvision.js';
 import { createProxmoxClient, inspectEndpoint } from './proxmoxApi.js';
+import { createProxmoxInventory, mergeProxmoxStatus } from './proxmoxInventory.js';
+import { createProxmoxLifecycleStore } from './proxmoxLifecycleStore.js';
+import { createProxmoxLifecycleManager } from './proxmoxLifecycle.js';
 import { readDefaultPublicKey } from './defaultKey.js';
 import os from 'node:os';
 
@@ -104,6 +107,25 @@ const provisionManager = createProvisionManager({
   leaseTimeoutMs: config.pveLeaseTimeoutMs,
   maxJobs: config.pveMaxJobs,
 });
+// Inventory batches PVE LXC lookups per host/node for both the status-poll
+// enricher below and the manual-association browse routes. The lifecycle
+// manager reuses the same removeBox instance wired above (Task 7) so a
+// deprovision job's final unlink runs the exact same cleanup as a manual
+// DELETE /api/boxes/:id — no second removal code path to keep in sync.
+const proxmoxInventory = createProxmoxInventory({
+  proxmoxStore, makeClient: makeProxmoxClient,
+  freshnessMs: config.statusPollMs * 2,
+});
+const lifecycleStore = createProxmoxLifecycleStore({ dataDir: config.dataDir });
+const lifecycleManager = createProxmoxLifecycleManager({
+  boxStore: store, proxmoxStore, inventory: proxmoxInventory,
+  makeClient: makeProxmoxClient, removeLinkedBox: removeBox,
+  load: () => lifecycleStore.load(), save: (jobs) => lifecycleStore.save(jobs),
+  pollMs: config.pvePollMs,
+  taskTimeoutMs: config.pveProvisionTimeoutMs,
+  shutdownTimeoutMs: config.pveProvisionTimeoutMs,
+  maxJobs: config.pveMaxJobs,
+});
 // Health history rides on the status poll: each snapshot is projected into a
 // rolling per-box series (in-memory) and an edge-triggered events log
 // (persisted). In-app display only — nothing subscribes to onEvent in Phase 1.
@@ -128,9 +150,16 @@ const statusPoller = createStatusPoller({
   intervalMs: config.statusPollMs,
   concurrency: config.statusConcurrency,
   history,
+  // Runs the PVE inventory refresh alongside each SSH probe cycle so linked
+  // boxes get grey "Stopped" status instead of a red connection failure. See
+  // mergeProxmoxStatus in proxmoxInventory.js for the merge truth table.
+  statusEnricher: {
+    collect: (boxes) => proxmoxInventory.refreshLinked(boxes),
+    merge: (snapshot, boxes, records) => mergeProxmoxStatus(snapshot, boxes, records),
+  },
 });
 
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });

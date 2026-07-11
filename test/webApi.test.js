@@ -42,3 +42,19 @@ test('a 401 with no registered handler still rejects cleanly', async () => {
   stubFetch({ ok: false, status: 401, statusText: 'Unauthorized', json: async () => ({ error: 'unauthorized' }) });
   await expect(api.boxes()).rejects.toThrow(/unauthorized/);
 });
+
+test('api.setProxmoxLink PUTs the link and api.clearProxmoxLink DELETEs it', async () => {
+  const calls = [];
+  const box = { id: 'B1', source: 'proxmox', proxmox: { hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' } };
+  globalThis.fetch = async (url, opts) => { calls.push({ url, opts }); return { ok: true, status: 200, statusText: 'OK', json: async () => box }; };
+
+  const link = { hostId: 'H1', node: 'pve', vmid: 131 };
+  expect(await api.setProxmoxLink('B1', link)).toEqual(box);
+  expect(calls[0].url).toBe('/api/boxes/B1/proxmox');
+  expect(calls[0].opts).toMatchObject({ method: 'PUT', headers: { 'content-type': 'application/json' } });
+  expect(JSON.parse(calls[0].opts.body)).toEqual(link);
+
+  expect(await api.clearProxmoxLink('B1')).toEqual(box);
+  expect(calls[1].url).toBe('/api/boxes/B1/proxmox');
+  expect(calls[1].opts).toMatchObject({ method: 'DELETE' });
+});

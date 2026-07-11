@@ -11,7 +11,7 @@ import { buildEnsureTmuxRemote } from './boxActions.js';
 import { assertBoxSafe } from './sshCommand.js';
 import { upsertConfigFile } from './configFile.js';
 import { mapWithConcurrency } from './concurrency.js';
-import { parseEndpoint } from './proxmoxValidate.js';
+import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
 import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js';
 import { testNetbox } from './netboxApi.js';
 
@@ -56,7 +56,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -221,8 +221,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
   app.patch('/api/boxes/:id', { preHandler: requireAuth }, async (req, reply) => {
     try {
+      const patch = req.body || {};
+      if ('source' in patch || 'proxmox' in patch) {
+        return reply.code(400).send({ error: 'proxmox linkage must use the dedicated link route' });
+      }
       const before = await store.getBox(req.params.id);
-      const updated = await store.updateBox(req.params.id, req.body || {});
+      const updated = await store.updateBox(req.params.id, patch);
       // If anything the ssh argv is built from changed — the target tmux session
       // or any connection field — drop the live PTY (if any) so the browser
       // terminal reconnects with the NEW values instead of silently staying on
@@ -238,7 +242,10 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     }
     catch (e) { return reply.code(400).send({ error: e.message }); }
   });
-  app.delete('/api/boxes/:id', { preHandler: requireAuth }, async (req) => {
+  app.delete('/api/boxes/:id', { preHandler: requireAuth }, async (req, reply) => {
+    if (lifecycleManager?.hasActiveJob(req.params.id)) {
+      return reply.code(409).send({ error: 'box has an active lifecycle job' });
+    }
     if (removeBox) return removeBox(req.params.id);
     await store.removeBox(req.params.id);
     return { ok: true };
@@ -406,6 +413,81 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (!job) return reply.code(404).send({ error: 'provision not found' });
     return job;
   });
+
+  // --- Proxmox linked-container inventory and lifecycle jobs ---
+  const serviceFailure = (reply, error, fallback = 400) => reply
+    .code(Number.isInteger(error?.statusCode) ? error.statusCode : fallback)
+    .send({ error: error?.message || 'request failed' });
+
+  app.get('/api/proxmox/containers', { preHandler: requireAuth }, async (_req, reply) => {
+    try {
+      const records = await proxmoxInventory.getLinkedContainers(await store.listBoxes());
+      const active = new Map(lifecycleManager.listJobs()
+        .filter((job) => job.status === 'running')
+        .map((job) => [job.boxId, job]));
+      return records.map((record) => ({ ...record, activeJob: active.get(record.boxId) || null }));
+    } catch (error) { return serviceFailure(reply, error, 502); }
+  });
+
+  app.get('/api/proxmox/hosts/:id/nodes/:node/containers', { preHandler: requireAuth }, async (req, reply) => {
+    const host = await proxmoxStore.getHost(req.params.id);
+    if (!host) return reply.code(404).send({ error: 'proxmox host not found' });
+    try {
+      assertProxmoxLinkInput(
+        { hostId: host.id, node: req.params.node, vmid: 100 },
+        { hostIds: [host.id] },
+      );
+    } catch (error) { return serviceFailure(reply, error, 400); }
+    try { return await proxmoxInventory.listNodeContainers(req.params.id, req.params.node, await store.listBoxes()); }
+    catch (error) { return serviceFailure(reply, error, 502); }
+  });
+
+  app.put('/api/boxes/:id/proxmox', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'box not found' });
+    if (box.proxmox && lifecycleManager.hasActiveTarget(box.proxmox)) return reply.code(409).send({ error: 'container has an active lifecycle job' });
+    if (!req.body || typeof req.body.hostId !== 'string' || !req.body.hostId.trim()) {
+      return reply.code(400).send({ error: 'proxmox host is required' });
+    }
+    const host = await proxmoxStore.getHost(req.body.hostId, { withSecret: true });
+    if (!host) return reply.code(404).send({ error: 'proxmox host not found' });
+    try { assertProxmoxLinkInput(req.body, { hostIds: [host.id] }); }
+    catch (error) { return serviceFailure(reply, error, 400); }
+    let containers;
+    try { containers = await proxmoxInventory.listNodeContainers(host.id, req.body.node, await store.listBoxes()); }
+    catch (error) { return serviceFailure(reply, error, 502); }
+    const target = containers.find((item) => item.vmid === Number(req.body.vmid));
+    if (!target) return reply.code(404).send({ error: 'proxmox container not found' });
+    if (target.linkedBoxId && target.linkedBoxId !== box.id) return reply.code(409).send({ error: 'proxmox container is already linked' });
+    try {
+      return await store.setProxmoxLink(box.id, { hostId: host.id, node: req.body.node, vmid: Number(req.body.vmid), endpoint: host.endpoint });
+    } catch (error) {
+      return serviceFailure(reply, error, /already linked/i.test(error?.message || '') ? 409 : 400);
+    }
+  });
+
+  app.delete('/api/boxes/:id/proxmox', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      const box = await store.getBox(req.params.id);
+      if (!box) return reply.code(404).send({ error: 'box not found' });
+      if (box.proxmox && lifecycleManager.hasActiveTarget(box.proxmox)) return reply.code(409).send({ error: 'container has an active lifecycle job' });
+      return await store.clearProxmoxLink(box.id);
+    } catch (error) { return serviceFailure(reply, error); }
+  });
+
+  app.post('/api/proxmox/lifecycle-jobs', { preHandler: requireAuth }, async (req, reply) => {
+    if (['hostId', 'node', 'vmid'].some((key) => key in (req.body || {}))) {
+      return reply.code(400).send({ error: 'lifecycle targets are resolved from the box link' });
+    }
+    try { return reply.code(201).send(await lifecycleManager.createJob(req.body || {})); }
+    catch (error) { return serviceFailure(reply, error); }
+  });
+  app.get('/api/proxmox/lifecycle-jobs', { preHandler: requireAuth }, async () => lifecycleManager.listJobs());
+  app.get('/api/proxmox/lifecycle-jobs/:id', { preHandler: requireAuth }, async (req, reply) => {
+    const job = lifecycleManager.getJob(req.params.id);
+    return job || reply.code(404).send({ error: 'lifecycle job not found' });
+  });
+
   // --- NetBox integration settings ---
   app.get('/api/netbox/settings', { preHandler: requireAuth }, async () => ({ settings: await netboxStore.getSettings() }));
   app.put('/api/netbox/settings', { preHandler: requireAuth }, async (req, reply) => {

@@ -1,6 +1,8 @@
+export interface PveBoxLink { hostId: string; node: string; vmid: number; endpoint: string; }
 export interface Box {
   id: string; label: string; host: string; user?: string; port?: number;
-  proxyJump?: string; sessionName: string; startupCommand?: string; tags: string[]; source: string;
+  proxyJump?: string; sessionName: string; startupCommand?: string; tags: string[];
+  source: string; proxmox?: PveBoxLink;
 }
 export type AddBoxSpec = Partial<Box>;
 export interface BoxMetrics {
@@ -72,6 +74,12 @@ export const api = {
   async removeBox(id: string) { return j(await fetch(`/api/boxes/${id}`, { method: 'DELETE' })); },
   async updateBox(id: string, patch: Partial<Box>) {
     return j<Box>(await fetch(`/api/boxes/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }));
+  },
+  async setProxmoxLink(boxId: string, link: Omit<PveBoxLink, 'endpoint'>) {
+    return j<Box>(await fetch(`/api/boxes/${boxId}/proxmox`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(link) }));
+  },
+  async clearProxmoxLink(boxId: string) {
+    return j<Box>(await fetch(`/api/boxes/${boxId}/proxmox`, { method: 'DELETE' }));
   },
   async reconnectBox(id: string) { return j<{ ok: boolean }>(await fetch(`/api/boxes/${id}/reconnect`, { method: 'POST' })); },
   async probeSessions(spec: { id?: string; host: string; user?: string; port?: number; proxyJump?: string }) {
