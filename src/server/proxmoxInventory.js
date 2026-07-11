@@ -1,5 +1,4 @@
 const targetKey = (link) => `${link.hostId}\u0000${link.node}\u0000${Number(link.vmid)}`;
-const groupKey = (link) => `${link.hostId}\u0000${link.node}`;
 const normalizeState = (status) => status === 'running' ? 'running' : status === 'stopped' ? 'stopped' : 'unknown';
 
 export function mergeProxmoxStatus(snapshot, boxes, records) {
@@ -22,48 +21,72 @@ export function mergeProxmoxStatus(snapshot, boxes, records) {
 export function createProxmoxInventory({
   proxmoxStore,
   makeClient,
+  boxStore = null,
   now = () => Date.now(),
   freshnessMs = 60_000,
+  log = (...args) => console.log(...args),
 }) {
   const cache = new Map();
   let inFlight = null;
+  // Late-bound by index.js once the lifecycle manager exists: a drift write
+  // must not rewrite a link that a running job snapshotted (resolveTarget
+  // would abort the job). Defaults open so tests without jobs need no wiring.
+  let activeJobGuard = () => false;
 
-  async function fetchGroup(hostId, node, groupBoxes) {
+  const record = (box, fields) => ({
+    boxId: box.id, boxLabel: box.label, hostId: box.proxmox.hostId, hostName: null,
+    node: box.proxmox.node, vmid: Number(box.proxmox.vmid), containerName: null,
+    state: 'unknown', fetchedAt: now(), error: null, ...fields,
+  });
+
+  async function fetchHost(hostId, hostBoxes) {
     let host;
     try {
       host = await proxmoxStore.getHost(hostId, { withSecret: true });
     } catch (error) {
-      return groupBoxes.map((box) => ({ boxId: box.id, boxLabel: box.label, hostId, hostName: null, node, vmid: Number(box.proxmox.vmid), containerName: null, state: 'unknown', fetchedAt: now(), error: error.message }));
+      return hostBoxes.map((box) => record(box, { error: error.message }));
     }
-    if (!host) return groupBoxes.map((box) => ({ boxId: box.id, boxLabel: box.label, hostId, hostName: null, node, vmid: box.proxmox.vmid, containerName: null, state: 'unknown', fetchedAt: now(), error: 'host profile missing' }));
+    if (!host) return hostBoxes.map((box) => record(box, { error: 'host profile missing' }));
+    let guests;
     try {
-      const list = await makeClient(host).listLxc(node);
-      const byVmid = new Map((list || []).map((item) => [Number(item.vmid), item]));
-      return groupBoxes.map((box) => {
-        const item = byVmid.get(Number(box.proxmox.vmid));
-        return {
-          boxId: box.id, boxLabel: box.label, hostId, hostName: host.name, node,
-          vmid: Number(box.proxmox.vmid), containerName: item?.name || null,
-          state: item ? normalizeState(item.status) : 'missing', fetchedAt: now(), error: null,
-        };
-      });
+      guests = await makeClient(host).clusterResources();
     } catch (error) {
-      return groupBoxes.map((box) => ({ boxId: box.id, boxLabel: box.label, hostId, hostName: host.name, node, vmid: Number(box.proxmox.vmid), containerName: null, state: 'unknown', fetchedAt: now(), error: error.message }));
+      return hostBoxes.map((box) => record(box, { hostName: host.name, error: error.message }));
     }
+    const byVmid = new Map((guests || []).filter((g) => g.type === 'lxc').map((g) => [Number(g.vmid), g]));
+    return Promise.all(hostBoxes.map(async (box) => {
+      const item = byVmid.get(Number(box.proxmox.vmid));
+      if (!item) return record(box, { hostName: host.name, state: 'missing' });
+      // The cluster list carries the container's CURRENT node. When it differs
+      // from the stored link, follow the migration (trusted server-side write:
+      // node only, for the already-linked hostId+vmid) — unless a lifecycle
+      // job holds a snapshot of the old target; the next poll retries.
+      if (item.node !== box.proxmox.node && boxStore && !activeJobGuard(box.id)) {
+        try {
+          await boxStore.setProxmoxLink(box.id, { ...box.proxmox, node: item.node });
+          log(`[tmuxifier] box ${box.label}: container ${box.proxmox.vmid} migrated ${box.proxmox.node} -> ${item.node}`);
+        } catch (error) {
+          log(`[tmuxifier] box ${box.label}: could not follow container migration to ${item.node}: ${error.message}`);
+        }
+      }
+      return record(box, {
+        hostName: host.name, node: item.node,
+        containerName: item.name || null, state: normalizeState(item.status),
+      });
+    }));
   }
 
   async function doRefresh(boxes) {
     const groups = new Map();
     for (const box of boxes.filter((item) => item.proxmox)) {
-      const key = groupKey(box.proxmox);
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(box);
+      const hostId = box.proxmox.hostId;
+      if (!groups.has(hostId)) groups.set(hostId, []);
+      groups.get(hostId).push(box);
     }
-    const records = (await Promise.all([...groups.entries()].map(([key, groupBoxes]) => {
-      const [hostId, node] = key.split('\u0000');
-      return fetchGroup(hostId, node, groupBoxes);
-    }))).flat();
-    for (const record of records) cache.set(record.boxId, record);
+    const records = (await Promise.all(
+      [...groups.entries()].map(([hostId, hostBoxes]) => fetchHost(hostId, hostBoxes)),
+    )).flat();
+    for (const item of records) cache.set(item.boxId, item);
     return records;
   }
 
@@ -75,6 +98,7 @@ export function createProxmoxInventory({
 
   return {
     refreshLinked,
+    setActiveJobGuard(fn) { activeJobGuard = fn; },
     async refreshBox(box) { return (await doRefresh([box]))[0]; },
     async getLinkedContainers(boxes) { return refreshLinked(boxes); },
     async listNodeContainers(hostId, node, boxes) {

@@ -107,13 +107,17 @@ const provisionManager = createProvisionManager({
   leaseTimeoutMs: config.pveLeaseTimeoutMs,
   maxJobs: config.pveMaxJobs,
 });
-// Inventory batches PVE LXC lookups per host/node for both the status-poll
-// enricher below and the manual-association browse routes. The lifecycle
-// manager reuses the same removeBox instance wired above (Task 7) so a
-// deprovision job's final unlink runs the exact same cleanup as a manual
-// DELETE /api/boxes/:id — no second removal code path to keep in sync.
+// Inventory batches PVE guest lookups per host (one cluster/resources call
+// covers every node) for both the status-poll enricher below and the
+// manual-association browse routes, and best-effort auto-follows a container
+// that migrated to a new node (guarded below once the lifecycle manager
+// exists, so a drift write never races a job's own snapshot of the link).
+// The lifecycle manager reuses the same removeBox instance wired above
+// (Task 7) so a deprovision job's final unlink runs the exact same cleanup
+// as a manual DELETE /api/boxes/:id — no second removal code path to keep
+// in sync.
 const proxmoxInventory = createProxmoxInventory({
-  proxmoxStore, makeClient: makeProxmoxClient,
+  proxmoxStore, makeClient: makeProxmoxClient, boxStore: store,
   freshnessMs: config.statusPollMs * 2,
 });
 const lifecycleStore = createProxmoxLifecycleStore({ dataDir: config.dataDir });
@@ -126,6 +130,11 @@ const lifecycleManager = createProxmoxLifecycleManager({
   shutdownTimeoutMs: config.pveProvisionTimeoutMs,
   maxJobs: config.pveMaxJobs,
 });
+// A drift write (auto-follow) must not race a lifecycle job's own snapshot of
+// the link it's operating on — the job would abort when resolveTarget sees a
+// target it didn't expect. Guard is late-bound here since it needs the
+// lifecycle manager instance constructed just above.
+proxmoxInventory.setActiveJobGuard((boxId) => lifecycleManager.hasActiveJob(boxId));
 // Health history rides on the status poll: each snapshot is projected into a
 // rolling per-box series (in-memory) and an edge-triggered events log
 // (persisted). In-app display only — nothing subscribes to onEvent in Phase 1.

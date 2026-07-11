@@ -246,3 +246,11 @@ test('a boxes.json that is not an array is treated as corrupt, not crashed on', 
   const store = createStore({ dataDir: dir });
   expect(await store.getBox('x')).toBeUndefined(); // used to throw TypeError (.find on {})
 });
+
+test('setProxmoxLink can move an existing link to a new node, preserving vmid/host/endpoint', async () => {
+  const store = createStore({ dataDir: dir });
+  const box = await store.addBox({ host: '192.168.1.40', proxmox: { hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' } }, { trustedProxmox: true });
+  await store.setProxmoxLink(box.id, { hostId: 'H1', node: 'pve2', vmid: 131, endpoint: 'pve.example.com:8006' });
+  const reloaded = (await createStore({ dataDir: dir }).getBox(box.id));
+  expect(reloaded.proxmox).toEqual({ hostId: 'H1', node: 'pve2', vmid: 131, endpoint: 'pve.example.com:8006' });
+});
