@@ -97,6 +97,7 @@ const defaultPublicKey = async () => {
 };
 const provisionManager = createProvisionManager({
   proxmoxStore,
+  netboxStore,
   boxStore: store,
   makeClient: makeProxmoxClient,
   defaultPublicKey,

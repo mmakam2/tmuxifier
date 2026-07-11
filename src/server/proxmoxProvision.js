@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { buildCreateParams } from './proxmoxParams.js';
 import { assertProvisionInput } from './proxmoxValidate.js';
+import { createNetboxClient } from './netboxApi.js';
 
 // 'cancelled' has no producer anymore (the never-wired cancel API was removed)
 // but stays terminal so legacy persisted jobs reconcile correctly on load.
@@ -8,6 +9,7 @@ const TERMINAL = new Set(['done', 'error', 'cancelled', 'interrupted']);
 
 export function createProvisionManager({
   proxmoxStore, boxStore, makeClient, load, save, defaultPublicKey = () => null,
+  netboxStore = null, makeNetboxClient = createNetboxClient,
   now = () => new Date().toISOString(), makeId = randomUUID, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   pollMs = 1500, taskTimeoutMs = 600000, leaseTimeoutMs = 60000, maxJobs = 50, maxLogBytes = 65536,
   maxPollFailures = 5, // consecutive taskStatus errors tolerated before the job fails
@@ -28,6 +30,13 @@ export function createProvisionManager({
     return { id: j.id, presetName: j.presetName, hostname: j.hostname, vmid: j.vmid, status: j.status, phase: j.phase, createdAt: j.createdAt, finishedAt: j.finishedAt, boxId: j.boxId, needsHost: j.needsHost };
   }
   function appendLog(j, text) { if (text) j.log = (j.log + text).slice(-maxLogBytes); }
+
+  async function requireNetboxSettings() {
+    let settings = null;
+    try { settings = netboxStore ? await netboxStore.getSettings({ withSecret: true }) : null; } catch { settings = null; }
+    if (!settings) throw new Error('auto-static requires the NetBox integration — configure it in Settings (⚙)');
+    return settings;
+  }
 
   async function pollTask(client, node, upid, j) {
     const deadline = Date.now() + taskTimeoutMs;
@@ -76,6 +85,16 @@ export function createProvisionManager({
       j.phase = 'allocate'; persist();
       if (!j.vmid) j.vmid = Number(await client.nextId());
 
+      if (preset.net.ipMode === 'auto-static') {
+        j.phase = 'allocate-ip'; persist();
+        const netbox = makeNetboxClient(await requireNetboxSettings());
+        const prefix = await netbox.findPrefixByVlan(preset.net.vlan);
+        const res = await netbox.allocateIp(prefix, { status: 'active', description: `tmuxifier: ${j.hostname}` });
+        j.ip = res.address; j.netboxIpId = res.id;
+        appendLog(j, `# allocated ${res.address} from ${prefix.prefix} (NetBox ip ${res.id})\n`);
+        persist();
+      }
+
       j.phase = 'create'; persist();
       const params = buildCreateParams(preset, { vmid: j.vmid, hostname: j.hostname, ip: j.ip, publicKeys, password });
       const upid = await client.createLxc(j.node, params);
@@ -91,7 +110,10 @@ export function createProvisionManager({
 
       j.phase = 'discover'; persist();
       let boxHost = null;
-      if (preset.net.ipMode === 'static') boxHost = String(j.ip || preset.net.cidr).split('/')[0];
+      // Any explicitly-known address (allocated, overridden, or preset-static)
+      // wins; only pure DHCP falls back to lease discovery.
+      if (j.ip) boxHost = String(j.ip).split('/')[0];
+      else if (preset.net.ipMode === 'static') boxHost = String(preset.net.cidr).split('/')[0];
       else if (preset.startAfterCreate) boxHost = await discoverIp(client, j.node, j.vmid);
 
       if (boxHost) {
@@ -101,7 +123,7 @@ export function createProvisionManager({
           label: j.hostname, host: boxHost, user: bd.user || 'root',
           sessionName: bd.sessionName || 'web', tags: (j.tags && j.tags.length) ? j.tags : (bd.tags || []),
           source: 'proxmox',
-          proxmox: { hostId: host.id, node: j.node, vmid: j.vmid, endpoint: host.endpoint },
+          proxmox: { hostId: host.id, node: j.node, vmid: j.vmid, endpoint: host.endpoint, ...(j.netboxIpId ? { netboxIpId: j.netboxIpId } : {}) },
         }, { trustedProxmox: true });
         j.boxId = box.id;
       } else {
@@ -109,6 +131,19 @@ export function createProvisionManager({
       }
       j.phase = 'done'; j.status = 'done'; j.finishedAt = now(); persist();
     } catch (e) {
+      if (j.netboxIpId) {
+        // Best-effort: the reservation must not leak when the container never
+        // materialized. (Documented trade-off: a create-then-start failure
+        // releases the address even though a half-built container may exist.)
+        try {
+          const netbox = makeNetboxClient(await requireNetboxSettings());
+          await netbox.releaseIp(j.netboxIpId);
+          appendLog(j, `# released NetBox ip ${j.netboxIpId}\n`);
+          j.netboxIpId = null;
+        } catch (releaseError) {
+          appendLog(j, `# could not release NetBox ip ${j.netboxIpId}: ${releaseError.message}\n`);
+        }
+      }
       j.status = 'error';
       j.error = e.message;
       j.finishedAt = now();
@@ -134,7 +169,8 @@ export function createProvisionManager({
         id: makeId(), presetId, presetName: preset.name, hostId: host.id, node,
         hostname, vmid: vmid ? Number(vmid) : null,
         tags: Array.isArray(tags) ? tags : null,
-        ip: ip || (preset.net.ipMode === 'static' ? preset.net.cidr : null),
+        ip: preset.net.ipMode === 'auto-static' ? null : (ip || (preset.net.ipMode === 'static' ? preset.net.cidr : null)),
+        netboxIpId: null,
         status: 'running', phase: 'allocate', log: '', boxId: null, needsHost: false, error: null,
         createdAt: now(), finishedAt: null,
       };

@@ -9,6 +9,14 @@ test('buildNet0 dhcp and static (with vlan + override)', () => {
     .toContain('ip=192.168.1.99/24');
 });
 
+// auto-static presets store no cidr (net.cidr is null); the provision flow
+// allocates an address from NetBox and passes it as ipOverride. buildNet0
+// must take the same ip/gw branch as static once that override is present.
+test('buildNet0 auto-static takes the static ip/gw branch via the allocated ipOverride', () => {
+  expect(buildNet0({ bridge: 'vmbr0', vlan: 30, ipMode: 'auto-static', cidr: null, gateway: '192.168.30.1' }, '192.168.30.50/24'))
+    .toBe('name=eth0,bridge=vmbr0,tag=30,ip=192.168.30.50/24,gw=192.168.30.1');
+});
+
 const PRESET = {
   template: 'local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst', storage: 'local-lvm',
   diskGiB: 8, cores: 2, memoryMiB: 2048, swapMiB: 512, unprivileged: true,

@@ -201,3 +201,102 @@ test('a success between failures resets the consecutive-failure count', async ()
   await mgr._settled(job.id);
   expect(mgr.getProvision(job.id).status).toBe('done');
 });
+
+// auto-static: allocate-ip phase reserves a NetBox address before create, and
+// rolls the reservation back if the container never materializes.
+const PRESET_AUTO = { ...PRESET_DHCP, id: 'p3', net: { bridge: 'vmbr0', ipMode: 'auto-static', cidr: null, gateway: '192.168.30.1', vlan: 30 } };
+
+function fakeNetbox({ full = false, failRelease = false } = {}) {
+  const calls = [];
+  const client = {
+    findPrefixByVlan: async (vid) => { calls.push(['find', vid]); return { id: 7, prefix: '192.168.30.0/24' }; },
+    allocateIp: async (prefix, fields) => {
+      calls.push(['allocate', prefix.id, fields]);
+      if (full) throw new Error(`prefix ${prefix.prefix} has no available IPs`);
+      return { id: 99, address: '192.168.30.50/24' };
+    },
+    releaseIp: async (id) => { calls.push(['release', id]); if (failRelease) throw new Error('netbox down'); },
+  };
+  return { calls, client };
+}
+const nbStore = { getSettings: async () => ({ url: 'https://netbox.example.com', tlsMode: 'ca', fingerprint256: null, token: 't' }) };
+
+test('auto-static allocates before create, provisions with the allocated CIDR, and stamps netboxIpId on the link', async () => {
+  const { calls, client: netbox } = fakeNetbox();
+  const boxStore = fakeBoxStore();
+  const createCalls = [];
+  const client = { ...okClient(), createLxc: async (node, params) => { createCalls.push(params); return 'UPID:create'; } };
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(PRESET_AUTO), boxStore, makeClient: () => client,
+    netboxStore: nbStore, makeNetboxClient: () => netbox,
+    load: () => [], save: () => {},
+  });
+  const j = await m.createProvision({ presetId: 'p3', hostname: 'dev-01' });
+  await m._settled(j.id);
+  const done = m.getProvision(j.id);
+  expect(done.status).toBe('done');
+  expect(done.netboxIpId).toBe(99);
+  expect(calls[0]).toEqual(['find', 30]);
+  expect(calls[1][2]).toEqual({ status: 'active', description: 'tmuxifier: dev-01' });
+  expect(createCalls[0].net0).toContain('ip=192.168.30.50/24');
+  expect(createCalls[0].net0).toContain('gw=192.168.30.1');
+  expect(boxStore.added[0].host).toBe('192.168.30.50');
+  expect(boxStore.added[0].proxmox.netboxIpId).toBe(99);
+  expect(calls.some((c) => c[0] === 'release')).toBe(false);
+});
+
+test('a create failure releases the reserved IP and the job errors', async () => {
+  const { calls, client: netbox } = fakeNetbox();
+  const client = { ...okClient(), createLxc: async () => { throw new Error('storage full'); } };
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(PRESET_AUTO), boxStore: fakeBoxStore(), makeClient: () => client,
+    netboxStore: nbStore, makeNetboxClient: () => netbox,
+    load: () => [], save: () => {},
+  });
+  const j = await m.createProvision({ presetId: 'p3', hostname: 'dev-01' });
+  await m._settled(j.id);
+  const done = m.getProvision(j.id);
+  expect(done.status).toBe('error');
+  expect(calls.at(-1)).toEqual(['release', 99]);
+  expect(done.log).toContain('released NetBox ip 99');
+});
+
+test('a prefix failure aborts before any container is created', async () => {
+  const netbox = { findPrefixByVlan: async () => { throw new Error('no NetBox prefix for VLAN 30'); } };
+  const createCalls = [];
+  const client = { ...okClient(), createLxc: async () => { createCalls.push(1); return 'UPID:create'; } };
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(PRESET_AUTO), boxStore: fakeBoxStore(), makeClient: () => client,
+    netboxStore: nbStore, makeNetboxClient: () => netbox,
+    load: () => [], save: () => {},
+  });
+  const j = await m.createProvision({ presetId: 'p3', hostname: 'dev-01' });
+  await m._settled(j.id);
+  expect(m.getProvision(j.id).status).toBe('error');
+  expect(m.getProvision(j.id).error).toContain('no NetBox prefix');
+  expect(createCalls).toHaveLength(0);
+});
+
+test('unconfigured NetBox fails fast with the settings-modal message', async () => {
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(PRESET_AUTO), boxStore: fakeBoxStore(), makeClient: okClient,
+    netboxStore: { getSettings: async () => null },
+    load: () => [], save: () => {},
+  });
+  const j = await m.createProvision({ presetId: 'p3', hostname: 'dev-01' });
+  await m._settled(j.id);
+  expect(m.getProvision(j.id).error).toContain('configure it in Settings');
+});
+
+test('dhcp and static presets never touch the NetBox client', async () => {
+  let touched = 0;
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(PRESET_STATIC), boxStore: fakeBoxStore(), makeClient: okClient,
+    netboxStore: nbStore, makeNetboxClient: () => { touched += 1; return {}; },
+    load: () => [], save: () => {},
+  });
+  const j = await m.createProvision({ presetId: 'p2', hostname: 'dev-01' });
+  await m._settled(j.id);
+  expect(m.getProvision(j.id).status).toBe('done');
+  expect(touched).toBe(0);
+});

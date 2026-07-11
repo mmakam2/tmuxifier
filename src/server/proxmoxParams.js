@@ -3,7 +3,10 @@
 export function buildNet0(net, ipOverride) {
   const parts = ['name=eth0', `bridge=${net.bridge}`];
   if (net.vlan) parts.push(`tag=${net.vlan}`);
-  if (net.ipMode === 'static') {
+  // auto-static stores no cidr (net.cidr is null) — the provision flow
+  // allocates an address from NetBox and passes it as ipOverride, so it
+  // takes the same ip/gw branch as static once that override is present.
+  if (net.ipMode === 'static' || net.ipMode === 'auto-static') {
     parts.push(`ip=${ipOverride || net.cidr}`);
     if (net.gateway) parts.push(`gw=${net.gateway}`);
   } else {
