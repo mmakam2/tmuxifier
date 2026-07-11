@@ -90,6 +90,14 @@ export function assertRootPassword(pw) {
   if (typeof pw !== 'string' || pw.length < 5) throw new Error('root password must be at least 5 characters');
 }
 
+export function assertProxmoxLinkInput(spec, { hostIds = [] } = {}) {
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) throw new Error('proxmox link is required');
+  if (!nonEmpty(spec.hostId)) throw new Error('proxmox host is required');
+  if (!hostIds.includes(spec.hostId)) throw new Error('proxmox host is unknown');
+  if (!/^[A-Za-z0-9_.-]+$/.test(String(spec.node || ''))) throw new Error('invalid proxmox node');
+  if (!intInRange(spec.vmid, 100, 999999999)) throw new Error('vmid must be 100..999999999');
+}
+
 export function assertProvisionInput(spec) {
   if (!DNS_LABEL.test(String(spec.hostname || ''))) throw new Error('hostname must be a DNS label');
   if (spec.vmid != null && !intInRange(Number(spec.vmid), 100, 999999999)) throw new Error('vmid must be 100..999999999');

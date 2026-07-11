@@ -40,8 +40,9 @@ export function createStore({ dataDir }) {
   async function writeAll(boxes) {
     await writeJson(file, boxes);
   }
-  function normalize(spec, base = {}) {
+  function normalize(spec, base = {}, { trustedProxmox = false } = {}) {
     if (!spec.host || typeof spec.host !== 'string') throw new Error('box requires a host');
+    const link = trustedProxmox ? spec.proxmox : base.proxmox;
     return {
       id: base.id || randomUUID(),
       label: spec.label || base.label || spec.host,
@@ -52,11 +53,15 @@ export function createStore({ dataDir }) {
       sessionName: sanitizeSession(spec.sessionName || base.sessionName || 'web'),
       startupCommand: spec.startupCommand ?? base.startupCommand,
       tags: normalizeTags(spec.tags),
-      source: spec.source || base.source || 'manual',
-      proxmox: spec.proxmox ?? base.proxmox,
+      source: link ? 'proxmox' : 'manual',
+      ...(link ? { proxmox: link } : {}),
       createdAt: base.createdAt || new Date().toISOString(),
     };
   }
+
+  // Canonical identity of a Proxmox target (host+node+vmid) so the same
+  // container can never be linked to two boxes at once.
+  const linkKey = (link) => `${link.hostId}\u0000${link.node}\u0000${link.vmid}`;
 
   return {
     async listBoxes() {
@@ -65,9 +70,9 @@ export function createStore({ dataDir }) {
     async getBox(id) {
       return (await readAll()).find((b) => b.id === id);
     },
-    async addBox(spec) {
+    async addBox(spec, { trustedProxmox = false } = {}) {
       const boxes = await readAll();
-      const box = normalize(spec);
+      const box = normalize(spec, {}, { trustedProxmox });
       assertBoxSafe(box);
       assertUniqueBox(boxes, box);
       boxes.push(box);
@@ -75,18 +80,48 @@ export function createStore({ dataDir }) {
       return box;
     },
     async updateBox(id, patch) {
+      if ('source' in patch || 'proxmox' in patch) throw new Error('proxmox linkage must use the dedicated link route');
       const boxes = await readAll();
-      const i = boxes.findIndex((b) => b.id === id);
-      if (i === -1) throw new Error('box not found');
-      boxes[i] = normalize({ ...boxes[i], ...patch, host: patch.host ?? boxes[i].host }, boxes[i]);
+      const index = boxes.findIndex((box) => box.id === id);
+      if (index === -1) throw new Error('box not found');
+      boxes[index] = normalize(
+        { ...boxes[index], ...patch, host: patch.host ?? boxes[index].host },
+        boxes[index],
+      );
       // null means "clear this field" — ?? cannot express that, so handle explicitly
       for (const key of ['user', 'port', 'proxyJump']) {
-        if (key in patch && patch[key] === null) boxes[i][key] = undefined;
+        if (key in patch && patch[key] === null) boxes[index][key] = undefined;
       }
-      assertBoxSafe(boxes[i]);
-      assertUniqueBox(boxes, boxes[i], id);
+      assertBoxSafe(boxes[index]);
+      assertUniqueBox(boxes, boxes[index], id);
       await writeAll(boxes);
-      return boxes[i];
+      return boxes[index];
+    },
+    async setProxmoxLink(id, link) {
+      const boxes = await readAll();
+      const index = boxes.findIndex((box) => box.id === id);
+      if (index === -1) throw new Error('box not found');
+      const key = linkKey(link);
+      if (boxes.some((box) => box.id !== id && box.proxmox && linkKey(box.proxmox) === key)) {
+        throw new Error('proxmox container is already linked');
+      }
+      boxes[index] = normalize(
+        { ...boxes[index], proxmox: link },
+        boxes[index],
+        { trustedProxmox: true },
+      );
+      assertBoxSafe(boxes[index]);
+      await writeAll(boxes);
+      return boxes[index];
+    },
+    async clearProxmoxLink(id) {
+      const boxes = await readAll();
+      const index = boxes.findIndex((box) => box.id === id);
+      if (index === -1) throw new Error('box not found');
+      const { proxmox: _link, ...base } = boxes[index];
+      boxes[index] = { ...base, source: 'manual' };
+      await writeAll(boxes);
+      return boxes[index];
     },
     async removeBox(id) {
       const boxes = await readAll();
@@ -117,7 +152,8 @@ export function createStore({ dataDir }) {
       let skipped = 0;
       for (const spec of incoming) {
         try {
-          added.push(await this.addBox(spec));
+          const { id: _id, createdAt: _createdAt, source: _source, proxmox: _proxmox, ...safeSpec } = spec || {};
+          added.push(await this.addBox(safeSpec));
         } catch {
           skipped += 1; // duplicate host/label or unsafe/invalid entry
         }

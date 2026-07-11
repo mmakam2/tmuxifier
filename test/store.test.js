@@ -184,14 +184,51 @@ test('updateBox can clear and replace the primary tag', async () => {
   expect(replaced.tags).toEqual(['Staging East']);
 });
 
-test('addBox carries source and a proxmox metadata block through normalize', async () => {
+const LINK = { hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' };
+
+test('ordinary addBox cannot create lifecycle authority', async () => {
   const store = createStore({ dataDir: dir });
-  const box = await store.addBox({ host: 'h', source: 'proxmox', proxmox: { hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' } });
-  expect(box.source).toBe('proxmox');
-  expect(box.proxmox).toEqual({ hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' });
-  // persists across a reload
-  const again = createStore({ dataDir: dir });
-  expect((await again.getBox(box.id)).proxmox.vmid).toBe(131);
+  const box = await store.addBox({ host: '192.168.1.10', source: 'proxmox', proxmox: LINK });
+  expect(box.source).toBe('manual');
+  expect(box.proxmox).toBeUndefined();
+});
+
+test('trusted provisioning addBox persists linkage', async () => {
+  const store = createStore({ dataDir: dir });
+  const box = await store.addBox(
+    { host: '192.168.1.10', source: 'proxmox', proxmox: LINK },
+    { trustedProxmox: true },
+  );
+  expect(box).toMatchObject({ source: 'proxmox', proxmox: LINK });
+});
+
+test('setProxmoxLink writes one unique verified target; clear removes authority', async () => {
+  const store = createStore({ dataDir: dir });
+  const first = await store.addBox({ host: '192.168.1.10', label: 'first' });
+  const second = await store.addBox({ host: '192.168.1.11', label: 'second' });
+  expect(await store.setProxmoxLink(first.id, LINK)).toMatchObject({ source: 'proxmox', proxmox: LINK });
+  await expect(store.setProxmoxLink(second.id, LINK)).rejects.toThrow(/already linked/);
+  const reassigned = await store.setProxmoxLink(first.id, { ...LINK, vmid: 132 });
+  expect(reassigned.proxmox.vmid).toBe(132);
+  const cleared = await store.clearProxmoxLink(first.id);
+  expect(cleared.source).toBe('manual');
+  expect(cleared.proxmox).toBeUndefined();
+});
+
+test('updateBox cannot mutate source or proxmox linkage', async () => {
+  const store = createStore({ dataDir: dir });
+  const box = await store.addBox({ host: '192.168.1.10' });
+  await expect(store.updateBox(box.id, { proxmox: LINK })).rejects.toThrow(/link route/);
+  await expect(store.updateBox(box.id, { source: 'proxmox' })).rejects.toThrow(/link route/);
+});
+
+test('import strips proxmox authority and source', async () => {
+  const store = createStore({ dataDir: dir });
+  const result = await store.importBoxes({ boxes: [
+    { host: '192.168.1.10', label: 'imported', source: 'proxmox', proxmox: LINK },
+  ] });
+  expect(result.added[0].source).toBe('manual');
+  expect(result.added[0].proxmox).toBeUndefined();
 });
 
 test('a corrupt boxes.json is quarantined — the next write cannot destroy it', async () => {

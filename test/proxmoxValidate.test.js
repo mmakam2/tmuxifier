@@ -2,6 +2,7 @@ import { test, expect } from 'vitest';
 import {
   parseEndpoint, isCidr, isIp,
   assertHostInput, assertKeyInput, assertPresetInput, assertProvisionInput, assertRootPassword,
+  assertProxmoxLinkInput,
 } from '../src/server/proxmoxValidate.js';
 
 test('parseEndpoint accepts host and host:port, strips scheme, defaults 8006', () => {
@@ -85,4 +86,20 @@ test('assertRootPassword requires at least 5 characters', () => {
   expect(() => assertRootPassword('1234')).toThrow(/5 characters/);
   expect(() => assertRootPassword('')).toThrow(/5 characters/);
   expect(() => assertRootPassword(undefined)).toThrow(/5 characters/);
+});
+
+test('assertProxmoxLinkInput accepts a configured host, safe node, and VMID', () => {
+  expect(() => assertProxmoxLinkInput(
+    { hostId: 'H1', node: 'pve-a', vmid: 131 },
+    { hostIds: ['H1'] },
+  )).not.toThrow();
+});
+
+test.each([
+  [{ hostId: 'NOPE', node: 'pve', vmid: 131 }, /host/],
+  [{ hostId: 'H1', node: '../pve', vmid: 131 }, /node/],
+  [{ hostId: 'H1', node: 'pve', vmid: 99 }, /vmid/],
+  [{ hostId: 'H1', node: 'pve', vmid: 1.5 }, /vmid/],
+])('assertProxmoxLinkInput rejects unsafe linkage %#', (input, message) => {
+  expect(() => assertProxmoxLinkInput(input, { hostIds: ['H1'] })).toThrow(message);
 });

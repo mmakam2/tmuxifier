@@ -99,9 +99,10 @@ export function createProvisionManager({
         const bd = preset.boxDefaults || {};
         const box = await boxStore.addBox({
           label: j.hostname, host: boxHost, user: bd.user || 'root',
-          sessionName: bd.sessionName || 'web', tags: (j.tags && j.tags.length) ? j.tags : (bd.tags || []), source: 'proxmox',
+          sessionName: bd.sessionName || 'web', tags: (j.tags && j.tags.length) ? j.tags : (bd.tags || []),
+          source: 'proxmox',
           proxmox: { hostId: host.id, node: j.node, vmid: j.vmid, endpoint: host.endpoint },
-        });
+        }, { trustedProxmox: true });
         j.boxId = box.id;
       } else {
         j.needsHost = true;

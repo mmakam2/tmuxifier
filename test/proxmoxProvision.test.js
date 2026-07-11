@@ -20,7 +20,14 @@ function makeStore(preset) {
 }
 function fakeBoxStore() {
   const added = [];
-  return { added, addBox: async (spec) => { const b = { id: `box-${added.length + 1}`, ...spec }; added.push(b); return b; } };
+  const addOptions = [];
+  return {
+    added, addOptions,
+    addBox: async (spec, options) => {
+      const box = { id: `box-${added.length + 1}`, ...spec };
+      added.push(box); addOptions.push(options); return box;
+    },
+  };
 }
 // A client whose task always succeeds immediately; interfaces configurable.
 function okClient({ ifaces = [{ name: 'eth0', inet: '192.168.1.77/24' }] } = {}) {
@@ -65,6 +72,7 @@ test('static preset: create -> start -> link box from the static IP', async () =
   expect(done.vmid).toBe(131);
   expect(boxStore.added[0]).toMatchObject({ host: '192.168.1.50', user: 'root', source: 'proxmox', label: 'dev-01' });
   expect(boxStore.added[0].proxmox).toMatchObject({ node: 'pve', vmid: 131, hostId: 'h1' });
+  expect(boxStore.addOptions[0]).toEqual({ trustedProxmox: true });
   expect(done.boxId).toBe('box-1');
 });
 
