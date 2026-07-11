@@ -311,7 +311,9 @@ re-linked deliberately before any power or deprovision action is offered.
 **State comes from a live PVE confirmation.** A container PVE reports stopped shows a grey **Stopped**
 state with its node/VMID instead of a dead terminal; clicking it opens the Proxmox **Containers** tab
 focused on that box. A PVE lookup failure never hides an SSH outage — reachability still comes from
-SSH, so a genuinely down box still shows red.
+SSH, so a genuinely down box still shows red. Containers migrated between nodes are followed
+automatically — Tmuxifier updates the stored node on its next status poll — and the same `PVEAuditor`
+grant also powers this cluster-wide inventory lookup.
 
 **Actions** live in the Proxmox hub's **Containers** tab, gated by state: a stopped container offers
 **Start** and **Deprovision**; a running one offers **Shutdown**, **Stop** (a forceful immediate

@@ -133,7 +133,9 @@ pattern for new modules.
   management key so provisioned containers trust Tmuxifier (override with `TMUXIFIER_PVE_DEFAULT_PUBKEY`).
 - `provisionStore.js` / `proxmoxProvision.js` — debounced `data/provision-jobs.json` persistence and
   the create→poll→start→discover→auto-link-box job manager (the Fleet job pattern).
-- `proxmoxInventory.js` — host/node-batched linked-LXC inventory and status authority.
+- `proxmoxInventory.js` — cluster-wide linked-LXC inventory and status authority (one
+  `/cluster/resources` call per host); auto-follows node migrations by updating the stored
+  link's node (guarded against active lifecycle jobs).
 - `proxmoxLifecycle.js` / `proxmoxLifecycleStore.js` — persisted LXC power/deprovision jobs in
   `data/proxmox-lifecycle-jobs.json`.
 - `boxRemoval.js` — shared session/tmux/store cleanup for ordinary removal and verified deprovision.
