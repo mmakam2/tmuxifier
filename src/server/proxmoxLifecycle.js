@@ -1,16 +1,16 @@
 import { randomUUID } from 'node:crypto';
 
-const ACTIONS = new Set(['start', 'shutdown', 'stop', 'reboot']);
+const ACTIONS = new Set(['start', 'shutdown', 'stop', 'reboot', 'deprovision']);
 const TERMINAL = new Set(['done', 'error', 'interrupted']);
 const REQUIRED = { start: 'stopped', shutdown: 'running', stop: 'running', reboot: 'running' };
 const targetKey = (link) => `${link.hostId}\u0000${link.node}\u0000${Number(link.vmid)}`;
 const serviceError = (statusCode, message) => Object.assign(new Error(message), { statusCode });
 
 export function createProxmoxLifecycleManager({
-  boxStore, proxmoxStore, inventory, makeClient,
+  boxStore, proxmoxStore, inventory, makeClient, removeLinkedBox,
   load = () => [], save = () => {}, now = () => new Date().toISOString(), makeId = randomUUID,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), pollMs = 1500,
-  taskTimeoutMs = 600_000, maxPollFailures = 5,
+  taskTimeoutMs = 600_000, shutdownTimeoutMs = taskTimeoutMs, maxPollFailures = 5,
   maxJobs = 50, maxLogBytes = 65_536,
 }) {
   const jobs = new Map();
@@ -98,9 +98,37 @@ export function createProxmoxLifecycleManager({
     await waitForState(job, expected);
   }
 
+  async function runDeprovision(job) {
+    const { box, client } = await resolveTarget(job);
+    let current = await inventory.refreshBox(box);
+    if (current.state === 'unknown') throw new Error(current.error || 'Proxmox state unavailable');
+    if (current.state === 'missing') {
+      job.phase = 'unlink'; persist();
+      await removeLinkedBox(job.boxId);
+      return;
+    }
+    if (current.state === 'running') {
+      job.phase = 'shutdown'; persist();
+      const shutdown = await client.shutdownLxc(job.node, job.vmid);
+      appendLog(job, `# shutdown ${shutdown}\n`); persist();
+      await pollTask(client, job, shutdown);
+      current = await waitForState(job, 'stopped', shutdownTimeoutMs);
+    }
+    if (current.state !== 'stopped') throw new Error(`deprovision requires stopped, got ${current.state}`);
+    job.phase = 'destroy'; persist();
+    const destroy = await client.destroyLxc(job.node, job.vmid);
+    appendLog(job, `# destroy ${destroy}\n`); persist();
+    await pollTask(client, job, destroy);
+    job.phase = 'verify'; persist();
+    await waitForState(job, 'missing', taskTimeoutMs);
+    job.phase = 'unlink'; persist();
+    await removeLinkedBox(job.boxId);
+  }
+
   async function run(job) {
     try {
-      await runRoutine(job);
+      if (job.action === 'deprovision') await runDeprovision(job);
+      else await runRoutine(job);
       job.phase = 'done'; job.status = 'done'; job.finishedAt = now(); persist();
     } catch (error) {
       job.status = 'error'; job.error = error instanceof Error ? error.message : 'lifecycle action failed'; job.finishedAt = now(); persist();
@@ -123,7 +151,12 @@ export function createProxmoxLifecycleManager({
     if (!host) throw serviceError(404, 'proxmox host not found');
     const current = await inventory.refreshBox(box).catch((error) => { throw serviceError(502, error.message); });
     if (current.state === 'unknown') throw serviceError(502, current.error || 'Proxmox state unavailable');
-    if (current.state !== REQUIRED[action]) throw serviceError(409, `${action} requires ${REQUIRED[action]}`);
+    if (action === 'deprovision') {
+      if (input.confirmName !== box.label) throw serviceError(409, 'confirmation name does not match');
+      if (!['running', 'stopped', 'missing'].includes(current.state)) throw serviceError(409, `deprovision cannot run from ${current.state}`);
+    } else if (current.state !== REQUIRED[action]) {
+      throw serviceError(409, `${action} requires ${REQUIRED[action]}`);
+    }
     const job = {
       id: makeId(), action, boxId: box.id, boxLabel: box.label,
       hostId: host.id, hostName: host.name, node: box.proxmox.node, vmid: Number(box.proxmox.vmid),

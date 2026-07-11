@@ -263,16 +263,10 @@ test('allows same-origin state-changing requests', async () => {
   expect(created.json().host).toBe('h1');
 });
 
-test('removing a box closes local terminal and best-effort kills remote session before deletion', async () => {
+test('DELETE /api/boxes/:id delegates cleanup to the injected removeBox and returns its result', async () => {
   const calls = [];
-  const sessions = {
-    open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {},
-    closeKey(id) { calls.push(['closeKey', id]); },
-  };
-  const boxActions = {
-    async killSession(box) { calls.push(['killSession', box.host, box.sessionName]); },
-  };
-  app = await makeApp({ sessions, boxActions });
+  const removeBox = async (id) => { calls.push(id); return { ok: true }; };
+  app = await makeApp({ removeBox });
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
   const created = await app.inject({
@@ -286,23 +280,11 @@ test('removing a box closes local terminal and best-effort kills remote session 
   const del = await app.inject({ method: 'DELETE', url: `/api/boxes/${box.id}`, headers });
 
   expect(del.statusCode).toBe(200);
-  expect(calls).toEqual([
-    ['closeKey', box.id],
-    ['killSession', 'h1', 'work'],
-  ]);
-  const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
-  expect(list.json()).toHaveLength(0);
+  expect(del.json()).toEqual({ ok: true });
+  expect(calls).toEqual([box.id]);
 });
 
-test('removing a box does not wait for remote session cleanup', async () => {
-  let killCalled = false;
-  const boxActions = {
-    killSession() {
-      killCalled = true;
-      return new Promise(() => {});
-    },
-  };
-  app = await makeApp({ boxActions });
+test('DELETE /api/boxes/:id falls back to store.removeBox when no removeBox is injected', async () => {
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
   const created = await app.inject({
@@ -316,7 +298,7 @@ test('removing a box does not wait for remote session cleanup', async () => {
   const del = await app.inject({ method: 'DELETE', url: `/api/boxes/${box.id}`, headers });
 
   expect(del.statusCode).toBe(200);
-  expect(killCalled).toBe(true);
+  expect(del.json()).toEqual({ ok: true });
   const list = await app.inject({ method: 'GET', url: '/api/boxes', headers });
   expect(list.json()).toHaveLength(0);
 });

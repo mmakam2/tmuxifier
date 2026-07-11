@@ -56,7 +56,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -239,14 +239,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     catch (e) { return reply.code(400).send({ error: e.message }); }
   });
   app.delete('/api/boxes/:id', { preHandler: requireAuth }, async (req) => {
-    const box = await store.getBox(req.params.id);
-    if (box) {
-      if (sessions?.closeKey) sessions.closeKey(box.id);
-      if (boxActions?.killSession) {
-        try { void Promise.resolve(boxActions.killSession(box)).catch(() => {}); } catch {}
-      }
-    }
-    await store.removeBox(req.params.id); return { ok: true };
+    if (removeBox) return removeBox(req.params.id);
+    await store.removeBox(req.params.id);
+    return { ok: true };
   });
   // Read-only: list a box's live tmux sessions to populate the Add/Edit session
   // dropdown. Accepts an unsaved spec (add mode) or a saved box's fields + id

@@ -22,6 +22,7 @@ function fixture(initialState = 'stopped', overrides = {}) {
     makeClient: () => client,
     load: () => [], save: () => {}, sleep: async () => {}, pollMs: 0,
     now: () => '2026-07-11T00:00:00.000Z', makeId: () => 'J1',
+    removeLinkedBox: async () => {}, shutdownTimeoutMs: 600_000,
     ...overrides,
   });
   return { manager, calls, getState: () => state };
@@ -166,4 +167,119 @@ test('startup reconciliation interrupts running jobs without replaying them', ()
   });
   expect(manager.getJob('old').status).toBe('interrupted');
   expect(saved[0][0].status).toBe('interrupted');
+});
+
+test('deprovision running container gracefully shuts down, destroys, verifies missing, then removes box', async () => {
+  let state = 'running';
+  const calls = [];
+  const { manager } = fixture('running', {
+    inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
+    makeClient: () => ({
+      shutdownLxc: async () => { calls.push('shutdown'); state = 'stopped'; return 'UPID:shutdown'; },
+      destroyLxc: async () => { calls.push('destroy'); state = 'missing'; return 'UPID:destroy'; },
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+      taskLog: async () => [],
+    }),
+    removeLinkedBox: async (id) => calls.push(`remove:${id}`),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(calls).toEqual(['shutdown', 'destroy', 'remove:B1']);
+  expect(manager.getJob(job.id)).toMatchObject({ status: 'done', phase: 'done' });
+});
+
+test('deprovision already-stopped skips shutdown', async () => {
+  let state = 'stopped';
+  const calls = [];
+  const { manager } = fixture('stopped', {
+    inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
+    makeClient: () => ({
+      destroyLxc: async () => { calls.push('destroy'); state = 'missing'; return 'UPID:destroy'; },
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+      taskLog: async () => [],
+    }),
+    removeLinkedBox: async (id) => calls.push(`remove:${id}`),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(calls).not.toContain('shutdown');
+  expect(calls).toEqual(['destroy', 'remove:B1']);
+});
+
+test('deprovision shutdown failure never escalates to stop or removes the box', async () => {
+  const calls = [];
+  const { manager } = fixture('running', {
+    makeClient: () => ({
+      shutdownLxc: async () => { calls.push('shutdown'); throw new Error('guest did not stop'); },
+      stopLxc: async () => calls.push('stop'), destroyLxc: async () => calls.push('destroy'),
+    }),
+    removeLinkedBox: async () => calls.push('remove'),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id).status).toBe('error');
+  expect(calls).toEqual(['shutdown']);
+});
+
+test('missing-container deprovision performs typed-confirmation local cleanup only', async () => {
+  const removed = [];
+  const { manager } = fixture('missing', { removeLinkedBox: async (id) => removed.push(id) });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(removed).toEqual(['B1']);
+  expect(manager.getJob(job.id).status).toBe('done');
+});
+
+test('confirmation mismatch creates no destructive job', async () => {
+  const { manager } = fixture('stopped');
+  await expect(manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'wrong' }))
+    .rejects.toMatchObject({ statusCode: 409 });
+  expect(manager.listJobs()).toEqual([]);
+});
+
+test('destroy failure preserves the linked box', async () => {
+  const calls = [];
+  const { manager } = fixture('stopped', {
+    makeClient: () => ({ destroyLxc: async () => { calls.push('destroy'); throw new Error('storage busy'); } }),
+    removeLinkedBox: async () => calls.push('remove'),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id)).toMatchObject({ status: 'error', error: 'storage busy' });
+  expect(calls).toEqual(['destroy']);
+});
+
+test('graceful task timeout never calls force stop, destroy, or local removal', async () => {
+  const calls = [];
+  const { manager } = fixture('running', {
+    makeClient: () => ({
+      shutdownLxc: async () => { calls.push('shutdown'); return 'UPID:shutdown'; },
+      taskStatus: async () => ({ status: 'running' }),
+      taskLog: async () => [],
+      stopLxc: async () => calls.push('stop'),
+      destroyLxc: async () => calls.push('destroy'),
+    }),
+    removeLinkedBox: async () => calls.push('remove'),
+    taskTimeoutMs: -1,
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id).status).toBe('error');
+  expect(calls).toEqual(['shutdown']);
+});
+
+test('failed local cleanup can be retried through the missing-container path', async () => {
+  let attempts = 0;
+  let sequence = 0;
+  const { manager } = fixture('missing', {
+    makeId: () => `J${++sequence}`,
+    removeLinkedBox: async () => { attempts += 1; if (attempts === 1) throw new Error('disk write failed'); },
+  });
+  const first = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(first.id);
+  expect(manager.getJob(first.id).status).toBe('error');
+  const retry = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(retry.id);
+  expect(manager.getJob(retry.id).status).toBe('done');
+  expect(attempts).toBe(2);
 });

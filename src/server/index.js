@@ -14,6 +14,7 @@ import { createFleetManager } from './fleet.js';
 import { createHealthEventsStore } from './healthEventsStore.js';
 import { createHealthHistory } from './healthHistory.js';
 import { createLocalShellActions } from './localShellActions.js';
+import { createBoxRemoval } from './boxRemoval.js';
 import { buildServer } from './server.js';
 import { createSecretBox } from './secretBox.js';
 import { createProxmoxStore } from './proxmoxStore.js';
@@ -46,6 +47,7 @@ const boxActions = createBoxActions({
   controlDir: config.controlDir,
   controlPersist: config.controlPersist,
 });
+const removeBox = createBoxRemoval({ store, sessions, boxActions });
 const statusChecker = createStatusChecker({
   run: (argv) => sshRun(argv),
   hostKeyPolicy: config.hostKeyPolicy,
@@ -128,7 +130,7 @@ const statusPoller = createStatusPoller({
   history,
 });
 
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
