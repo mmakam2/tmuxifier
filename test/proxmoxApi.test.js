@@ -86,3 +86,31 @@ test('inspectEndpoint returns the cert fingerprint and caValid; unreachable on t
   expect(bad.reachable).toBe(false);
   expect(bad.error).toMatch(/ECONNREFUSED/);
 });
+
+test('listLxc and lifecycle methods encode node/vmid into exact PVE paths', async () => {
+  const request = fakeRequest((opts, index) => ({
+    status: 200,
+    json: { data: index === 0 ? [{ vmid: 131, name: 'dev-01', status: 'running' }] : `UPID:${index}` },
+  }));
+  const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
+
+  expect(await client.listLxc('pve/a')).toEqual([{ vmid: 131, name: 'dev-01', status: 'running' }]);
+  await client.startLxc('pve/a', 131);
+  await client.shutdownLxc('pve/a', 131);
+  await client.stopLxc('pve/a', 131);
+  await client.rebootLxc('pve/a', 131);
+  await client.destroyLxc('pve/a', 131);
+
+  expect(request.calls.map((call) => [call.method, new URL(call.url).pathname])).toEqual([
+    ['GET', '/api2/json/nodes/pve%2Fa/lxc'],
+    ['POST', '/api2/json/nodes/pve%2Fa/lxc/131/status/start'],
+    ['POST', '/api2/json/nodes/pve%2Fa/lxc/131/status/shutdown'],
+    ['POST', '/api2/json/nodes/pve%2Fa/lxc/131/status/stop'],
+    ['POST', '/api2/json/nodes/pve%2Fa/lxc/131/status/reboot'],
+    ['DELETE', '/api2/json/nodes/pve%2Fa/lxc/131'],
+  ]);
+  expect(request.calls[5].body).toContain('purge=1');
+  expect(request.calls[5].body).toContain('destroy-unreferenced-disks=1');
+  expect(request.calls[2].body).toContain('forceStop=0');
+  expect(request.calls[5].body).not.toContain('force=1');
+});
