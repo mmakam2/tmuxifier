@@ -598,3 +598,17 @@ body {
 }
 .proxmox-btn { padding: 6px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; cursor: pointer; font-size: 13px; }
 .proxmox-btn:hover { border-color: #2f6feb; }
+.pve-container-toolbar { min-height: 32px; display: flex; justify-content: flex-end; align-items: center; }
+.pve-container-list { display: flex; flex-direction: column; gap: 6px; }
+.pve-container-row { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(240px, auto); align-items: center; }
+.pve-container-row.focused { border-color: #2f6feb; }
+.pve-container-row .pve-row-actions { justify-content: flex-end; flex-wrap: wrap; }
+.pve-container-row button.warn { color: #d29922; }
+.pve-badge.stopped, .pve-badge.unknown { color: var(--muted); }
+.pve-badge.missing { color: #f85149; }
+.pve-deprovision-modal { width: 460px; }
+.pve-warning { margin: 0; color: #ffb4ad; font-size: 12px; line-height: 1.45; }
+@media (max-width: 720px) {
+  .pve-container-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .pve-container-row .pve-row-actions { grid-column: 1 / -1; justify-content: flex-start; }
+}

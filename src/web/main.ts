@@ -485,6 +485,7 @@ async function renderDashboard() {
   });
   app.querySelector('#proxmox')!.addEventListener('click', () => openProxmoxHub({
     openBox: (b) => openBox(b),
+    openEditBox: (boxId) => { const b = allBoxes.find((x) => x.id === boxId); if (b) openBoxDialog(b); },
     onBoxLinked: () => { void refresh(); },
   }));
   void syncProxmoxButton();

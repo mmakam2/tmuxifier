@@ -4,15 +4,20 @@ import { openProvisionTerminal } from './terminal';
 import { el, input, field, err } from './dom';
 import { openSettingsModal } from './settingsUi';
 import { renderPresetsTab } from './proxmoxPresets';
+import { renderContainersTab } from './proxmoxContainers';
 
 type SetupOptions = { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean };
 
-type HubOpts = { openBox: (b: Box) => void; onBoxLinked: () => void };
-
-const TABS = ['Presets', 'Provision', 'History'] as const;
+type HubOpts = {
+  openBox: (box: Box) => void;
+  openEditBox: (boxId: string) => void;
+  onBoxLinked: () => void;
+};
+type HubInitial = { tab?: Tab; focusBoxId?: string };
+const TABS = ['Containers', 'Presets', 'Provision', 'History'] as const;
 type Tab = typeof TABS[number];
 
-export function openProxmoxHub(opts: HubOpts) {
+export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
   let pollTimer: number | null = null;
   let pollGen = 0;
   let setupTerm: { dispose: () => void } | null = null;
@@ -31,8 +36,9 @@ export function openProxmoxHub(opts: HubOpts) {
   backdrop.addEventListener('mousedown', (e) => { pressedOnBackdrop = e.target === backdrop; });
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop && pressedOnBackdrop) close(); });
 
-  let active: Tab = 'Presets';
+  let active: Tab = initial.tab ?? 'Containers';
   const renderers: Record<Tab, () => Promise<void> | void> = {
+    Containers: () => renderContainersTab(content, { focusBoxId: initial.focusBoxId, showLifecycleJob, openEditBox: opts.openEditBox }),
     Presets: () => renderPresetsTab(content, { openSettingsModal }),
     Provision: renderProvision,
     History: renderHistory,
@@ -50,7 +56,7 @@ export function openProxmoxHub(opts: HubOpts) {
   );
   backdrop.append(modal);
   document.body.append(backdrop);
-  selectTab('Presets');
+  selectTab(active);
 
   function setContent(...nodes: (Node | string)[]) { content.replaceChildren(...nodes); }
 
@@ -176,6 +182,29 @@ export function openProxmoxHub(opts: HubOpts) {
       } else if (job.needsHost) {
         footer.append(el('span', { class: 'pve-sub' }, [`Container ${job.vmid} is up but no IP was discovered — add a box manually.`]));
       }
+    }
+    void tick();
+  }
+
+  // --- Lifecycle job panel (Containers tab) ---
+  function showLifecycleJob(id: string) {
+    stopPoll();
+    const generation = pollGen;
+    const phase = el('div', { class: 'pve-phase' });
+    const log = el('pre', { class: 'pve-log' });
+    const footer = el('div', { class: 'modal-actions' });
+    setContent(el('h3', {}, ['Lifecycle job']), phase, log, footer);
+    async function tick() {
+      const job = await pve.lifecycleJob(id).catch(() => null);
+      if (generation !== pollGen) return;
+      if (!job) { pollTimer = window.setTimeout(tick, 1500); return; }
+      phase.textContent = `${job.action.toUpperCase()} | ${job.status.toUpperCase()} | ${job.phase}${job.error ? ` | ${job.error}` : ''}`;
+      log.textContent = job.log || '';
+      if (job.status === 'running') { pollTimer = window.setTimeout(tick, 1500); return; }
+      opts.onBoxLinked();
+      await pve.linkedContainers().catch(() => []);
+      if (generation !== pollGen) return;
+      footer.replaceChildren(el('button', { type: 'button', onclick: () => selectTab('Containers') }, ['Back to Containers']));
     }
     void tick();
   }
