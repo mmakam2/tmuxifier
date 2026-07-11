@@ -30,6 +30,7 @@ export function createProxmoxLifecycleManager({
   const persist = () => { prune(); save(ordered()); };
   const appendLog = (job, text) => { if (text) job.log = `${job.log}${text}`.slice(-maxLogBytes); };
   const summary = (job) => ({ id: job.id, action: job.action, boxId: job.boxId, boxLabel: job.boxLabel, hostId: job.hostId, hostName: job.hostName, node: job.node, vmid: job.vmid, status: job.status, phase: job.phase, error: job.error, createdAt: job.createdAt, finishedAt: job.finishedAt });
+  const assertTargetIdle = (key) => { if ([...jobs.values()].some((job) => job.status === 'running' && targetKey(job) === key)) throw serviceError(409, 'container already has an active lifecycle job'); };
   persist();
 
   async function pollTask(client, job, upid) {
@@ -117,7 +118,7 @@ export function createProxmoxLifecycleManager({
     if (!box) throw serviceError(404, 'box not found');
     if (!box.proxmox) throw serviceError(409, 'box is not linked to Proxmox');
     const key = targetKey(box.proxmox);
-    if ([...jobs.values()].some((job) => job.status === 'running' && targetKey(job) === key)) throw serviceError(409, 'container already has an active lifecycle job');
+    assertTargetIdle(key);
     const host = await proxmoxStore.getHost(box.proxmox.hostId, { withSecret: true });
     if (!host) throw serviceError(404, 'proxmox host not found');
     const current = await inventory.refreshBox(box).catch((error) => { throw serviceError(502, error.message); });
@@ -129,6 +130,7 @@ export function createProxmoxLifecycleManager({
       status: 'running', phase: 'resolve', log: '', error: null,
       createdAt: now(), finishedAt: null,
     };
+    assertTargetIdle(key);
     jobs.set(job.id, job); persist();
     const settled = run(job);
     settles.set(job.id, settled);

@@ -75,6 +75,32 @@ test('one active target rejects a concurrent lifecycle job', async () => {
   await manager._settled(first.id);
 });
 
+test('overlapping createJob calls admit only one job per target', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let state = 'stopped';
+  let nextId = 0;
+  const { manager } = fixture('stopped', {
+    inventory: { refreshBox: async () => { await gate; return { boxId: 'B1', state, node: 'pve', vmid: 131 }; } },
+    makeClient: () => ({
+      startLxc: async () => { state = 'running'; return 'UPID:start'; },
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+      taskLog: async () => [],
+    }),
+    makeId: () => `J${++nextId}`,
+  });
+  const attempts = [manager.createJob({ boxId: 'B1', action: 'start' }), manager.createJob({ boxId: 'B1', action: 'start' })];
+  release();
+  const results = await Promise.allSettled(attempts);
+  const fulfilled = results.filter((result) => result.status === 'fulfilled');
+  const rejected = results.filter((result) => result.status === 'rejected');
+  expect(fulfilled).toHaveLength(1);
+  expect(rejected).toHaveLength(1);
+  expect(rejected[0].reason).toMatchObject({ statusCode: 409 });
+  expect(manager.listJobs().filter((job) => job.status === 'running')).toHaveLength(1);
+  await manager._settled(fulfilled[0].value.id);
+});
+
 test('task failure is terminal immediately and task logs stay bounded', async () => {
   const { manager } = fixture('stopped', {
     makeClient: () => ({
