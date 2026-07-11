@@ -14,14 +14,18 @@ const TLS_ERROR_CODES = new Set([
 // dual-stack listener is the IPv4-mapped form — a plain a.b.c.d entry won't match.
 const AUTH_HINT = 'check the token and its allowed-IP list — requests can arrive from an IPv4-mapped IPv6 address like ::ffff:192.168.1.10';
 
-function jsonRequest({ url, headers = {}, timeoutMs = 10000, tls: tlsOpts = {} }) {
+function jsonRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 10000, tls: tlsOpts = {} }) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const secure = u.protocol === 'https:';
     const mod = secure ? https : http;
+    // Fixed Content-Length (never chunked) — same lesson as proxmoxApi.js: some
+    // reverse proxies in front of API servers reject chunked request bodies.
+    const payload = body == null ? null : JSON.stringify(body);
+    const reqHeaders = payload == null ? headers : { ...headers, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) };
     const req = mod.request({
       hostname: u.hostname, port: u.port || (secure ? 443 : 80), path: u.pathname + u.search,
-      method: 'GET', headers, timeout: timeoutMs,
+      method, headers: reqHeaders, timeout: timeoutMs,
       ...(secure ? {
         rejectUnauthorized: tlsOpts.rejectUnauthorized !== false,
         ...(tlsOpts.ca ? { ca: tlsOpts.ca } : {}),
@@ -34,32 +38,40 @@ function jsonRequest({ url, headers = {}, timeoutMs = 10000, tls: tlsOpts = {} }
     });
     req.on('timeout', () => req.destroy(new Error('NetBox request timed out')));
     req.on('error', reject);
+    if (payload != null) req.write(payload);
     req.end();
   });
+}
+
+// Resolve the stored TLS mode to request options. Pin mode does the token-less
+// probe first; a blank or mismatched pin comes back as `failure` (never a
+// throw) so testNetbox can render it and the client can throw it.
+async function resolveTlsOpts(settings, { connect, timeoutMs }) {
+  const u = new URL(settings.url);
+  const secure = u.protocol === 'https:';
+  const mode = secure ? (settings.tlsMode || 'ca') : null;
+  if (mode === 'insecure') return { mode, tlsOpts: { rejectUnauthorized: false } };
+  if (mode !== 'pin') return { mode, tlsOpts: {} };
+  let probe;
+  try { probe = await connect({ host: u.hostname, port: Number(u.port) || 443, timeoutMs }); }
+  catch (e) { return { mode, failure: { kind: 'unreachable', error: e.message } }; }
+  if (!normFp(settings.fingerprint256)) {
+    return { mode, failure: { kind: 'tls', fingerprint256: probe.fingerprint256 || null, error: 'no fingerprint pinned yet — pin the certificate below to trust this server' } };
+  }
+  if (normFp(probe.fingerprint256) !== normFp(settings.fingerprint256)) {
+    return { mode, failure: { kind: 'tls', fingerprint256: probe.fingerprint256 || null, error: 'TLS fingerprint mismatch — the NetBox certificate changed; re-pin to accept the new one' } };
+  }
+  const trust = probe.chain && probe.chain.length ? probe.chain : [probe.raw];
+  return { mode, tlsOpts: { ca: trust.map(derToPem), rejectUnauthorized: true, checkServerIdentity: () => undefined } };
 }
 
 // Probe {url}/api/status/ with the token. Resolves a result object instead of
 // throwing so the /api/netbox/test route (and the UI) get one shape to render.
 export async function testNetbox(settings, { request = jsonRequest, connect = tlsProbe, timeoutMs = 10000 } = {}) {
   const u = new URL(settings.url);
-  const secure = u.protocol === 'https:';
   const port = Number(u.port) || 443;
-  const mode = secure ? (settings.tlsMode || 'ca') : null;
-  let tlsOpts = {};
-  if (mode === 'insecure') tlsOpts = { rejectUnauthorized: false };
-  if (mode === 'pin') {
-    let probe;
-    try { probe = await connect({ host: u.hostname, port, timeoutMs }); }
-    catch (e) { return { ok: false, kind: 'unreachable', error: e.message }; }
-    if (!normFp(settings.fingerprint256)) {
-      return { ok: false, kind: 'tls', fingerprint256: probe.fingerprint256 || null, error: 'no fingerprint pinned yet — pin the certificate below to trust this server' };
-    }
-    if (normFp(probe.fingerprint256) !== normFp(settings.fingerprint256)) {
-      return { ok: false, kind: 'tls', fingerprint256: probe.fingerprint256 || null, error: 'TLS fingerprint mismatch — the NetBox certificate changed; re-pin to accept the new one' };
-    }
-    const trust = probe.chain && probe.chain.length ? probe.chain : [probe.raw];
-    tlsOpts = { ca: trust.map(derToPem), rejectUnauthorized: true, checkServerIdentity: () => undefined };
-  }
+  const { mode, failure, tlsOpts } = await resolveTlsOpts(settings, { connect, timeoutMs });
+  if (failure) return { ok: false, ...failure };
   let res;
   try {
     res = await request({ url: `${settings.url}/api/status/`, headers: { Authorization: `Token ${settings.token}`, Accept: 'application/json' }, timeoutMs, tls: tlsOpts });
@@ -79,4 +91,40 @@ export async function testNetbox(settings, { request = jsonRequest, connect = tl
     return { ok: false, kind: 'unexpected', error: `unexpected response from ${settings.url}/api/status/ (HTTP ${res.status}) — is this a NetBox URL?` };
   }
   return { ok: true, version: res.json['netbox-version'] };
+}
+
+// Throwing NetBox client for the provisioning/deprovisioning flows (testNetbox
+// stays result-shaped for the settings UI). Same auth header, same TLS modes;
+// pin mode verifies the fingerprint via resolveTlsOpts BEFORE any
+// authenticated request is sent.
+export function createNetboxClient(settings, { request = jsonRequest, connect = tlsProbe, timeoutMs = 10000 } = {}) {
+  async function call(method, path, body) {
+    const { failure, tlsOpts } = await resolveTlsOpts(settings, { connect, timeoutMs });
+    if (failure) throw new Error(failure.error);
+    const res = await request({
+      url: `${settings.url}/api${path}`, method, body, timeoutMs, tls: tlsOpts,
+      headers: { Authorization: `Token ${settings.token}`, Accept: 'application/json' },
+    });
+    if (res.status < 200 || res.status >= 300) {
+      const detail = res.json && res.json.detail ? `: ${res.json.detail}` : '';
+      throw new Error(`NetBox API error ${res.status}${detail}`);
+    }
+    return res.json;
+  }
+  return {
+    async findPrefixByVlan(vid) {
+      const data = await call('GET', `/ipam/prefixes/?vlan_vid=${encodeURIComponent(vid)}`);
+      const results = (data && data.results) || [];
+      if (results.length === 0) throw new Error(`no NetBox prefix for VLAN ${vid}`);
+      if (results.length > 1) throw new Error(`VLAN ${vid} maps to multiple NetBox prefixes; cannot auto-allocate`);
+      return { id: results[0].id, prefix: results[0].prefix };
+    },
+    async allocateIp(prefix, fields) {
+      const data = await call('POST', `/ipam/prefixes/${encodeURIComponent(prefix.id)}/available-ips/`, fields);
+      const item = Array.isArray(data) ? data[0] : data;
+      if (!item || !item.address) throw new Error(`prefix ${prefix.prefix} has no available IPs`);
+      return { id: item.id, address: item.address };
+    },
+    async releaseIp(id) { await call('DELETE', `/ipam/ip-addresses/${encodeURIComponent(id)}/`); },
+  };
 }

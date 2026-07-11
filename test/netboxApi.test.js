@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest';
 import http from 'node:http';
-import { testNetbox } from '../src/server/netboxApi.js';
+import { testNetbox, createNetboxClient } from '../src/server/netboxApi.js';
 
 const CA = { url: 'https://netbox.example.com', tlsMode: 'ca', fingerprint256: null, token: 'tok123' };
 const ok = { status: 200, json: { 'netbox-version': '4.3.2' }, text: '' };
@@ -106,5 +106,82 @@ test('plain http works end to end against a real local server (default request i
       .toEqual({ ok: true, version: '4.1.0' });
     const bad = await testNetbox({ url, tlsMode: null, fingerprint256: null, token: 'wrong' });
     expect(bad.kind).toBe('auth');
+  } finally { srv.close(); }
+});
+
+const NB = { url: 'https://netbox.example.com', tlsMode: 'ca', fingerprint256: null, token: 'tok123' };
+
+test('findPrefixByVlan resolves exactly-one and throws on 0/many', async () => {
+  const calls = [];
+  const mk = (results) => createNetboxClient(NB, { request: async (o) => { calls.push(o); return { status: 200, json: { results }, text: '' }; } });
+  await expect(mk([{ id: 7, prefix: '192.168.30.0/24' }]).findPrefixByVlan(30)).resolves.toEqual({ id: 7, prefix: '192.168.30.0/24' });
+  expect(calls[0].url).toBe('https://netbox.example.com/api/ipam/prefixes/?vlan_vid=30');
+  expect(calls[0].method).toBe('GET');
+  expect(calls[0].headers.Authorization).toBe('Token tok123');
+  await expect(mk([]).findPrefixByVlan(31)).rejects.toThrow('no NetBox prefix for VLAN 31');
+  await expect(mk([{ id: 1 }, { id: 2 }]).findPrefixByVlan(32)).rejects.toThrow(/multiple NetBox prefixes/);
+});
+
+test('allocateIp POSTs a JSON body and returns id+address; empty result means prefix full', async () => {
+  const calls = [];
+  const client = createNetboxClient(NB, { request: async (o) => { calls.push(o); return { status: 201, json: { id: 99, address: '192.168.30.50/24' }, text: '' }; } });
+  const res = await client.allocateIp({ id: 7, prefix: '192.168.30.0/24' }, { status: 'active', description: 'tmuxifier: dev-01' });
+  expect(res).toEqual({ id: 99, address: '192.168.30.50/24' });
+  expect(calls[0].url).toBe('https://netbox.example.com/api/ipam/prefixes/7/available-ips/');
+  expect(calls[0].method).toBe('POST');
+  expect(calls[0].body).toEqual({ status: 'active', description: 'tmuxifier: dev-01' });
+  const full = createNetboxClient(NB, { request: async () => ({ status: 200, json: [], text: '' }) });
+  await expect(full.allocateIp({ id: 7, prefix: '192.168.30.0/24' }, {})).rejects.toThrow('prefix 192.168.30.0/24 has no available IPs');
+});
+
+test('releaseIp DELETEs the ip-address record and tolerates an empty 204 body', async () => {
+  const calls = [];
+  const client = createNetboxClient(NB, { request: async (o) => { calls.push(o); return { status: 204, json: null, text: '' }; } });
+  await client.releaseIp(99);
+  expect(calls[0].url).toBe('https://netbox.example.com/api/ipam/ip-addresses/99/');
+  expect(calls[0].method).toBe('DELETE');
+});
+
+test('client surfaces NetBox detail on 4xx and never embeds the token', async () => {
+  const client = createNetboxClient(NB, { request: async () => ({ status: 403, json: { detail: 'Invalid token' }, text: '' }) });
+  const err = await client.findPrefixByVlan(30).catch((e) => e);
+  expect(err.message).toContain('403');
+  expect(err.message).toContain('Invalid token');
+  expect(err.message).not.toContain('tok123');
+});
+
+test('client pin mode withholds the authenticated request on fingerprint mismatch', async () => {
+  const calls = [];
+  const client = createNetboxClient(
+    { ...NB, tlsMode: 'pin', fingerprint256: 'AA:BB' },
+    { connect: async () => ({ fingerprint256: 'CC:DD', raw: Buffer.from('x'), chain: [Buffer.from('x')] }),
+      request: async (o) => { calls.push(o); return { status: 200, json: { results: [] }, text: '' }; } },
+  );
+  await expect(client.findPrefixByVlan(30)).rejects.toThrow(/fingerprint mismatch/);
+  expect(calls).toHaveLength(0);
+});
+
+test('jsonRequest POSTs JSON with fixed Content-Length against a real local server', async () => {
+  const http = await import('node:http');
+  let seen = null;
+  const srv = http.createServer((req, res) => {
+    let data = '';
+    req.on('data', (c) => { data += c; });
+    req.on('end', () => {
+      seen = { method: req.method, type: req.headers['content-type'], length: req.headers['content-length'], transfer: req.headers['transfer-encoding'] || null, data };
+      res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ id: 1, address: '192.168.30.50/24' }));
+    });
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    const client = createNetboxClient({ url, tlsMode: null, fingerprint256: null, token: 't' });
+    const res = await client.allocateIp({ id: 5, prefix: '192.168.30.0/24' }, { status: 'active' });
+    expect(res).toEqual({ id: 1, address: '192.168.30.50/24' });
+    expect(seen.method).toBe('POST');
+    expect(seen.type).toBe('application/json');
+    expect(seen.transfer).toBeNull();               // fixed Content-Length, not chunked
+    expect(Number(seen.length)).toBe(Buffer.byteLength(seen.data));
+    expect(JSON.parse(seen.data)).toEqual({ status: 'active' });
   } finally { srv.close(); }
 });
