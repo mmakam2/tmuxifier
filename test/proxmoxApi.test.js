@@ -114,3 +114,16 @@ test('listLxc and lifecycle methods encode node/vmid into exact PVE paths', asyn
   expect(request.calls[2].body).toContain('forceStop=0');
   expect(request.calls[5].body).not.toContain('force=1');
 });
+
+test('clusterResources lists cluster-wide guests with their current node', async () => {
+  const request = fakeRequest(() => ({ status: 200, json: { data: [
+    { vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'mcmcreativedev01' },
+    { vmid: 200, node: 'proxmox02', type: 'qemu', status: 'running', name: 'a-vm' },
+  ] } }));
+  const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
+  const list = await client.clusterResources();
+  expect(request.calls[0].url).toBe('https://pve.example.com:8006/api2/json/cluster/resources?type=vm');
+  expect(request.calls[0].method).toBe('GET');
+  expect(list).toHaveLength(2);
+  expect(list[0]).toMatchObject({ vmid: 165, node: 'proxmox03', type: 'lxc' });
+});

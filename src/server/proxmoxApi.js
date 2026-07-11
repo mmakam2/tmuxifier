@@ -66,6 +66,7 @@ export function createProxmoxClient({ host, request = httpsRequest, connect = tl
     templates: (node, storage) => call('GET', `/nodes/${enc(node)}/storage/${enc(storage)}/content?content=vztmpl`),
     bridges: (node) => call('GET', `/nodes/${enc(node)}/network?type=bridge`),
     nextId: () => call('GET', '/cluster/nextid'),
+    clusterResources: () => call('GET', '/cluster/resources?type=vm'),
     createLxc: (node, params) => call('POST', `/nodes/${enc(node)}/lxc`, params),
     startLxc: (node, vmid) => call('POST', `/nodes/${enc(node)}/lxc/${enc(vmid)}/status/start`, {}),
     listLxc: (node) => call('GET', `/nodes/${enc(node)}/lxc`),
