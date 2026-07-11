@@ -91,6 +91,24 @@ test('listNodeContainers annotates existing links', async () => {
   ]);
 });
 
+test('a throwing getHost yields unknown for that host only', async () => {
+  const b1 = linked('b1', 'pve', 131);
+  const b2 = { id: 'b2', label: 'b2', host: '192.168.1.40', proxmox: { hostId: 'H2', node: 'pve', vmid: 140 } };
+  const inventory = createProxmoxInventory({
+    proxmoxStore: { getHost: async (id) => { if (id === 'H2') throw new Error('seal open failed'); return HOST; } },
+    makeClient: () => ({ listLxc: async () => [{ vmid: 131, name: 'dev-01', status: 'running' }] }),
+    now: () => 1000,
+  });
+  const records = await inventory.refreshLinked([b1, b2]);
+  const byId = new Map(records.map((record) => [record.boxId, record]));
+  expect(records).toHaveLength(2);
+  expect(byId.get('b1')).toMatchObject({ state: 'running', containerName: 'dev-01', error: null });
+  expect(byId.get('b2')).toMatchObject({
+    state: 'unknown', hostId: 'H2', node: 'pve', vmid: 140,
+    containerName: null, hostName: null, error: 'seal open failed',
+  });
+});
+
 test('mergeProxmoxStatus adds state without hiding reachable missing links', () => {
   const boxes = [linked('b1', 'pve', 131), linked('b2', 'pve', 132)];
   const merged = mergeProxmoxStatus(
