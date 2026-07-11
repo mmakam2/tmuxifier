@@ -109,10 +109,14 @@ test('listLxc and lifecycle methods encode node/vmid into exact PVE paths', asyn
     ['POST', '/api2/json/nodes/pve%2Fa/lxc/131/status/reboot'],
     ['DELETE', '/api2/json/nodes/pve%2Fa/lxc/131'],
   ]);
-  expect(request.calls[5].body).toContain('purge=1');
-  expect(request.calls[5].body).toContain('destroy-unreferenced-disks=1');
+  // DELETE params ride the query string (pveproxy 501s a DELETE with a body);
+  // POST params stay in the form body.
+  const destroyQuery = new URL(request.calls[5].url).search;
+  expect(destroyQuery).toContain('purge=1');
+  expect(destroyQuery).toContain('destroy-unreferenced-disks=1');
+  expect(destroyQuery).not.toContain('force=1');
+  expect(request.calls[5].body).toBeUndefined();
   expect(request.calls[2].body).toContain('forceStop=0');
-  expect(request.calls[5].body).not.toContain('force=1');
 });
 
 test('clusterResources lists cluster-wide guests with their current node', async () => {
@@ -126,4 +130,16 @@ test('clusterResources lists cluster-wide guests with their current node', async
   expect(request.calls[0].method).toBe('GET');
   expect(list).toHaveLength(2);
   expect(list[0]).toMatchObject({ vmid: 165, node: 'proxmox03', type: 'lxc' });
+});
+
+test('destroyLxc puts purge params in the query string — pveproxy 501s any DELETE with a body', async () => {
+  const request = fakeRequest(() => ({ status: 200, json: { data: 'UPID:pve:002' } }));
+  const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
+  const upid = await client.destroyLxc('pve', 132);
+  expect(upid).toBe('UPID:pve:002');
+  const call = request.calls[0];
+  expect(call.method).toBe('DELETE');
+  expect(call.url).toBe('https://pve.example.com:8006/api2/json/nodes/pve/lxc/132?purge=1&destroy-unreferenced-disks=1');
+  expect(call.body).toBeUndefined();
+  expect(call.headers['Content-Type']).toBeUndefined();
 });

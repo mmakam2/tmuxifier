@@ -43,7 +43,19 @@ export function createProxmoxClient({ host, request = httpsRequest, connect = tl
   async function call(method, p, params) {
     const tlsOpts = await resolveTls();
     const opts = { url: `${base}${p}`, method, headers: { Authorization: `PVEAPIToken=${host.tokenId}=${host.tokenSecret}` }, timeoutMs, tls: tlsOpts };
-    if (params) { opts.body = new URLSearchParams(cleanParams(params)).toString(); opts.headers['Content-Type'] = 'application/x-www-form-urlencoded'; }
+    if (params) {
+      const encoded = new URLSearchParams(cleanParams(params)).toString();
+      // PVE takes GET/DELETE parameters in the query string; pveproxy rejects
+      // any DELETE that carries a body with 501 "Unexpected content for
+      // method 'DELETE'" (bit the destroy path in production). POST keeps the
+      // form-encoded body (with its fixed Content-Length — see httpsRequest).
+      if (method === 'GET' || method === 'DELETE') {
+        if (encoded) opts.url += (opts.url.includes('?') ? '&' : '?') + encoded;
+      } else {
+        opts.body = encoded;
+        opts.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      }
+    }
     const res = await request(opts);
     if (res.status >= 400) {
       // PVE puts the real reason in the HTTP status message (and sometimes the body);
