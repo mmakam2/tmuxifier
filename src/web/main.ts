@@ -10,6 +10,7 @@ import logoUrl from './assets/tmuxifier-logo.png';
 import { openProxmoxHub } from './proxmoxUi';
 import { pve } from './proxmox';
 import { openSettingsModal } from './settingsUi';
+import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
@@ -1073,6 +1074,8 @@ function openBoxDialog(box?: Box) {
     hInput.style.opacity = '0.6';
   }
 
+  const proxmoxAssociation = isEdit ? createProxmoxAssociationEditor(box!) : null;
+
   form.append(
     title,
     hostWrap,
@@ -1085,6 +1088,7 @@ function openBoxDialog(box?: Box) {
     sessionWrap,
     installOhMyTmux,
     shellGroup,
+    ...(proxmoxAssociation ? [proxmoxAssociation.element] : []),
     err,
     actions,
   );
@@ -1141,6 +1145,12 @@ function openBoxDialog(box?: Box) {
           patch.port = null;
         }
         const updatedBox = await api.updateBox(box!.id, patch);
+        try {
+          await proxmoxAssociation?.commit();
+        } catch (error) {
+          await refresh();
+          throw error;
+        }
         close();
         await refresh();
         const installOhMyZsh = shellZsh.input.checked;

@@ -585,6 +585,10 @@ body {
 .pve-group { display: flex; flex-direction: column; gap: 9px; }
 .pve-group + .pve-group { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .pve-eyebrow { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted); font-weight: 600; }
+/* Manual Proxmox association editor embedded in the Edit Box modal. */
+.box-pve-association { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+.box-pve-association .danger { color: #f85149; }
+.box-pve-association select { padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; background: #131722; color: var(--text); }
 @media (max-width: 720px) {
   .modal.pve-hub { width: 92vw; }
   .pve-presets-layout { grid-template-columns: minmax(0, 1fr); }
