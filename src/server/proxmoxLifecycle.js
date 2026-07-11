@@ -157,13 +157,21 @@ export function createProxmoxLifecycleManager({
     } else if (current.state !== REQUIRED[action]) {
       throw serviceError(409, `${action} requires ${REQUIRED[action]}`);
     }
+    // The refreshBox pre-check above may have just drift-followed a node
+    // migration in the store (this job doesn't exist yet, so nothing guards
+    // that write) — snapshot the node from the refreshed record or resolveTarget
+    // would abort the first action after a migration. Only the node may follow;
+    // hostId/vmid stay pinned to the link every check above validated.
     const job = {
       id: makeId(), action, boxId: box.id, boxLabel: box.label,
-      hostId: host.id, hostName: host.name, node: box.proxmox.node, vmid: Number(box.proxmox.vmid),
+      hostId: host.id, hostName: host.name, node: current.node, vmid: Number(box.proxmox.vmid),
       status: 'running', phase: 'resolve', log: '', error: null,
       createdAt: now(), finishedAt: null,
     };
-    assertTargetIdle(key);
+    // Re-check on the key the job actually occupies — after a drift-follow it
+    // differs from `key`, and overlapping createJob calls would otherwise both
+    // land on the new target.
+    assertTargetIdle(targetKey(job));
     jobs.set(job.id, job); persist();
     const settled = run(job);
     settles.set(job.id, settled);

@@ -268,6 +268,73 @@ test('graceful task timeout never calls force stop, destroy, or local removal', 
   expect(calls).toEqual(['shutdown']);
 });
 
+test('createJob after an unfollowed migration snapshots the drift-followed node and still runs', async () => {
+  // Stored link says pve (stale); the cluster-backed inventory reports pve2 and
+  // its pre-check drift write moves the store link — this job does not exist yet,
+  // so nothing guards that write. The job must snapshot pve2 or resolveTarget
+  // aborts the first lifecycle action after a migration with "link changed".
+  let storedBox = BOX; // proxmox.node: 'pve'
+  let state = 'stopped';
+  const nodesUsed = [];
+  const { manager } = fixture('stopped', {
+    boxStore: { getBox: async (id) => id === 'B1' ? storedBox : undefined },
+    inventory: {
+      refreshBox: async (box) => {
+        if (box.proxmox.node !== 'pve2') {
+          // mimic the inventory's drift write (unguarded: no job registered yet)
+          storedBox = { ...storedBox, proxmox: { ...storedBox.proxmox, node: 'pve2' } };
+        }
+        return { boxId: 'B1', state, node: 'pve2', vmid: 131 };
+      },
+    },
+    makeClient: () => ({
+      startLxc: async (node) => { nodesUsed.push(node); state = 'running'; return 'UPID:start'; },
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+      taskLog: async () => [],
+    }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'start' });
+  expect(job.node).toBe('pve2');
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id)).toMatchObject({ status: 'done', phase: 'done', error: null });
+  expect(nodesUsed).toEqual(['pve2']);
+});
+
+test('overlapping createJob calls after a migration still admit only one job per container', async () => {
+  // Both callers read the stale pve link, then the drift-followed jobs land on
+  // pve2 — the post-await idle re-check must assert on the key the job actually
+  // occupies, or both jobs would run against the same container.
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let storedBox = BOX; // proxmox.node: 'pve'
+  let state = 'stopped';
+  let nextId = 0;
+  const { manager } = fixture('stopped', {
+    boxStore: { getBox: async (id) => id === 'B1' ? storedBox : undefined },
+    inventory: { refreshBox: async () => {
+      await gate;
+      storedBox = { ...storedBox, proxmox: { ...storedBox.proxmox, node: 'pve2' } }; // the drift write
+      return { boxId: 'B1', state, node: 'pve2', vmid: 131 };
+    } },
+    makeClient: () => ({
+      startLxc: async () => { state = 'running'; return 'UPID:start'; },
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+      taskLog: async () => [],
+    }),
+    makeId: () => `J${++nextId}`,
+  });
+  const attempts = [manager.createJob({ boxId: 'B1', action: 'start' }), manager.createJob({ boxId: 'B1', action: 'start' })];
+  release();
+  const results = await Promise.allSettled(attempts);
+  const fulfilled = results.filter((result) => result.status === 'fulfilled');
+  const rejected = results.filter((result) => result.status === 'rejected');
+  expect(fulfilled).toHaveLength(1);
+  expect(rejected).toHaveLength(1);
+  expect(rejected[0].reason).toMatchObject({ statusCode: 409 });
+  expect(manager.listJobs().filter((job) => job.status === 'running')).toHaveLength(1);
+  await manager._settled(fulfilled[0].value.id);
+});
+
 test('failed local cleanup can be retried through the missing-container path', async () => {
   let attempts = 0;
   let sequence = 0;
