@@ -8,10 +8,16 @@ function cpuLoadPct(m) {
 
 // Project a status result (from the poll snapshot) into the compact numbers a
 // sparkline needs. A missing source is OMITTED (never 0) so the sparkline renders
-// a gap, not a false floor. `up` = reachable and not needs-login.
+// a gap, not a false floor. `up` = reachable and not needs-login — EXCEPT a
+// confirmed Proxmox `stopped` box, which is `up: true` (and carries `stopped:
+// true`) even though SSH can't reach it: an intentionally-stopped container is
+// not a failure, so classifyTransitions must not fire a false down/up pair
+// around the moment it stops or starts back up.
 export function sampleOf(status, at) {
   const s = status || {};
-  const sample = { t: at, up: !!s.reachable && !s.needsAuth };
+  const stopped = s.proxmoxState === 'stopped';
+  const sample = { t: at, up: stopped || (!!s.reachable && !s.needsAuth) };
+  if (stopped) sample.stopped = true;
   if (s.tmux != null) sample.tmux = !!s.tmux;
   if (s.needsAuth) sample.needsAuth = true;
   const m = s.metrics;

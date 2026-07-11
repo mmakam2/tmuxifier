@@ -2,11 +2,18 @@ import type { Status, BoxMetrics } from './api';
 
 type DotClass = 'gray' | 'green' | 'amber' | 'red' | 'auth';
 
-// Single source of truth for the box status dot. `needsAuth` wins over a plain
-// unreachable result: a password-auth box whose SSH master expired is not dead,
-// it just needs the user to re-open the terminal and enter the password.
+// Single source of truth for the box status dot. A confirmed Proxmox `stopped`
+// state wins over everything else — SSH is expected to fail against a container
+// you intentionally stopped, so that must render as the calm grey "Stopped", not
+// red. `unknown` PVE state is deliberately NOT handled here: it means the PVE
+// read failed or is stale, and must never grant display authority over a real
+// SSH result — an unreachable box with unknown PVE state still falls through to
+// red. Below that, `needsAuth` wins over a plain unreachable result: a
+// password-auth box whose SSH master expired is not dead, it just needs the user
+// to re-open the terminal and enter the password.
 export function dotClassFor(st: Status | undefined): DotClass {
   if (!st) return 'gray';
+  if (st.proxmoxState === 'stopped') return 'gray';
   if (st.needsAuth) return 'auth';
   if (!st.reachable) return 'red';
   return st.tmux === false ? 'amber' : 'green';
@@ -32,6 +39,8 @@ export function classifyError(error?: string): string {
 
 export function dotTitleFor(st: Status | undefined): string {
   if (!st) return 'Status unknown';
+  if (st.proxmoxState === 'stopped') return 'Stopped on Proxmox';
+  if (st.proxmoxState === 'missing' && !st.reachable) return 'Proxmox container missing';
   if (st.needsAuth) return 'Needs login — click the box (or ↻) to reconnect and enter your password';
   if (!st.reachable) {
     const reason = classifyError(st.error);
@@ -73,17 +82,12 @@ export const CPU_ICON = '\uF2DB';
 // segment it is currently graphing (the line itself is otherwise anonymous).
 export interface MetaSegment { text: string; icon?: string; iconClass?: string; level?: Level; title?: string; metric?: 'cpu' | 'mem' | 'disk'; }
 
-// The always-visible second line under a box label, as styled segments. Reachable
-// → `[cpu, mem, disk]` from the metrics piggybacked on the status probe; only the
-// cpu segment is colored (by load severity). Empty when no metrics were collected
-// (a box you have a terminal open to, or a non-Linux host). Unreachable → a single
-// crit (red) segment with the classified reason; needsAuth → a single auth (purple,
-// matching the dot) "Needs login" segment, so it reads as an action, not an error.
-export function metaSegmentsFor(st: Status | undefined): MetaSegment[] {
-  if (!st) return [];
-  if (st.needsAuth) return [{ text: 'Needs login', level: 'auth' }];
-  if (!st.reachable) return [{ text: classifyError(st.error), level: 'crit' }];
-  const m = st.metrics;
+// Metric-only segments: `[cpu, mem, disk]` from the metrics piggybacked on the
+// status probe; only the cpu segment is colored (by load severity). Empty when
+// no metrics were collected (a box you have a terminal open to, or a non-Linux
+// host). Extracted out of metaSegmentsFor so the Proxmox-aware precedence below
+// can reuse it verbatim for the states that still show live metrics.
+function metricSegments(m: BoxMetrics | undefined): MetaSegment[] {
   if (!m) return [];
   const segs: MetaSegment[] = [];
   const cpuIcon = { icon: CPU_ICON, iconClass: 'nf' };
@@ -109,5 +113,28 @@ export function metaSegmentsFor(st: Status | undefined): MetaSegment[] {
     : (m.diskTotalKb && m.diskUsedKb != null ? Math.round((m.diskUsedKb / m.diskTotalKb) * 100) : undefined);
   if (diskPct != null) segs.push({ text: `${diskPct}%`, icon: '💾', title: 'Disk used (root filesystem /)', metric: 'disk' });
   return segs;
+}
+
+// The always-visible second line under a box label, as styled segments.
+// Precedence mirrors dotClassFor/dotTitleFor: a confirmed Proxmox `stopped` box
+// reports its managed state instead of the (expected) SSH failure; `missing`
+// (linked but PVE can't find the container) is folded in mid-stack so it stays
+// a warning alongside live metrics while still reachable, and only escalates to
+// the crit "Container missing" once SSH also fails. `unknown` PVE state is not
+// checked here — it must never suppress the plain reachable/unreachable read
+// below. Reachable (no special PVE state) → `[cpu, mem, disk]` from the metrics
+// piggybacked on the status probe; only the cpu segment is colored (by load
+// severity). Empty when no metrics were collected (a box you have a terminal
+// open to, or a non-Linux host). Unreachable → a single crit (red) segment with
+// the classified reason; needsAuth → a single auth (purple, matching the dot)
+// "Needs login" segment, so it reads as an action, not an error.
+export function metaSegmentsFor(st: Status | undefined): MetaSegment[] {
+  if (!st) return [];
+  if (st.proxmoxState === 'stopped') return [{ text: `Stopped | ${st.proxmoxNode ?? 'PVE'} / ${st.proxmoxVmid ?? '?'}` }];
+  if (st.proxmoxState === 'missing' && !st.reachable) return [{ text: 'Container missing', level: 'crit' }];
+  if (st.needsAuth) return [{ text: 'Needs login', level: 'auth' }];
+  if (!st.reachable) return [{ text: classifyError(st.error), level: 'crit' }];
+  if (st.proxmoxState === 'missing') return [{ text: 'PVE link missing', level: 'warn' }, ...metricSegments(st.metrics)];
+  return metricSegments(st.metrics);
 }
 

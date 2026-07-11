@@ -10,10 +10,19 @@ export interface BoxMetrics {
   memTotalKb?: number; memAvailKb?: number;
   diskTotalKb?: number; diskUsedKb?: number; diskPct?: number; uptimeSec?: number;
 }
-export interface Status { reachable: boolean; tmux?: boolean; needsAuth?: boolean; inUse?: boolean; paused?: boolean; nextProbeAt?: number; sessions?: { name: string; windows: number; attached?: boolean; activity?: number }[]; metrics?: BoxMetrics; error?: string; }
+export type ProxmoxBoxState = 'running' | 'stopped' | 'missing' | 'unknown';
+export interface Status {
+  reachable: boolean; tmux?: boolean; needsAuth?: boolean; inUse?: boolean; paused?: boolean;
+  nextProbeAt?: number; sessions?: { name: string; windows: number; attached?: boolean; activity?: number }[];
+  metrics?: BoxMetrics; error?: string;
+  proxmoxState?: ProxmoxBoxState; proxmoxNode?: string; proxmoxVmid?: number;
+}
 // One point of a box's rolling health series (a status poll projected server-side
 // in healthHistory.js). A missing metric is omitted — the sparkline draws a gap.
-export interface Sample { t: number; up: boolean; tmux?: boolean; needsAuth?: boolean; cpuPct?: number; memPct?: number; diskPct?: number; }
+// `stopped` marks a confirmed-by-Proxmox stopped box: `up` is true for it (see
+// sampleOf), so this flag is how the sparkline/health UI tells "healthy stopped"
+// apart from a genuinely reachable box.
+export interface Sample { t: number; up: boolean; stopped?: boolean; tmux?: boolean; needsAuth?: boolean; cpuPct?: number; memPct?: number; diskPct?: number; }
 export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'threshold' | 'threshold-clear';
 export interface HealthEvent {
   seq: number; boxId: string; label: string; host: string; t: number;

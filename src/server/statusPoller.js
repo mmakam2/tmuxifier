@@ -9,7 +9,7 @@ import { mapWithConcurrency } from './concurrency.js';
 export function createStatusPoller({
   store, statusChecker, intervalMs = 30000, concurrency = 4,
   setIntervalFn = setInterval, clearIntervalFn = clearInterval,
-  history = null,
+  history = null, statusEnricher = null,
 }) {
   let snapshot = {};
   let timer = null;
@@ -25,6 +25,13 @@ export function createStatusPoller({
     if (inFlight) return inFlight;
     inFlight = (async () => {
       const boxes = await store.listBoxes();
+      // Kick PVE collection off alongside the SSH probe cycle, not after it, so
+      // enrichment adds no latency of its own to a poll. Best-effort: a
+      // throwing/rejecting collector degrades to `null` here rather than
+      // failing the cycle, so the plain SSH snapshot always ships.
+      const collected = statusEnricher
+        ? Promise.resolve().then(() => statusEnricher.collect(boxes)).catch(() => null)
+        : Promise.resolve(null);
       // Probe in small batches (same reason as the old handler) and swap the
       // snapshot in wholesale so readers never see a half-built map and a removed
       // box drops out.
@@ -32,11 +39,17 @@ export function createStatusPoller({
       await mapWithConcurrency(boxes, concurrency, async (b) => {
         next[b.id] = await statusChecker.checkBox(b);
       });
-      snapshot = next;
+      const pve = await collected;
+      // Only defer to the enricher's merge when it actually produced something —
+      // a null `pve` (no enricher, or one that threw) leaves the plain SSH
+      // snapshot as the wholesale swap, same single-assignment shape as before.
+      snapshot = pve && statusEnricher
+        ? statusEnricher.merge(next, boxes, pve)
+        : next;
       if (history) {
         // History must never affect status availability: the snapshot is already
         // swapped, so a bug here can't blank /api/status.
-        try { history.record(next, boxes); } catch { /* swallowed on purpose */ }
+        try { history.record(snapshot, boxes); } catch { /* swallowed on purpose */ }
       }
       return snapshot;
     })().finally(() => { inFlight = null; });

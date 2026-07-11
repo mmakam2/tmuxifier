@@ -137,3 +137,14 @@ test('onEvent listeners receive each emitted event (Phase-2 delivery seam)', () 
   h.record({ b1: { reachable: false } }, [BOXES[0]]);
   expect(got).toEqual(['down']);
 });
+
+test('confirmed Proxmox stopped is healthy-for-events and carries a stopped marker', () => {
+  expect(sampleOf({ reachable: false, proxmoxState: 'stopped' }, 5)).toEqual({ t: 5, up: true, stopped: true });
+});
+
+test('running to stopped does not emit a false down event', () => {
+  const history = createHealthHistory({});
+  history.record({ b1: { reachable: true, proxmoxState: 'running' } }, [BOXES[0]]);
+  history.record({ b1: { reachable: false, proxmoxState: 'stopped' } }, [BOXES[0]]);
+  expect(history.getEvents({}).events).toEqual([]);
+});

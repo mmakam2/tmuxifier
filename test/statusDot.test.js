@@ -165,3 +165,22 @@ test('metaSegmentsFor: tags each metric segment so the sparkline can highlight i
 
 // (activity badge removed — session_activity bumps on any output, so the "unseen"
 // signal was on for essentially every busy box; the helpers were deleted.)
+
+test('confirmed stopped is grey and names the managed state', () => {
+  const status = { reachable: false, error: 'timeout', proxmoxState: 'stopped', proxmoxNode: 'pve', proxmoxVmid: 131 };
+  expect(dotClassFor(status)).toBe('gray');
+  expect(dotTitleFor(status)).toBe('Stopped on Proxmox');
+  expect(metaLine(status)).toContain('Stopped');
+  expect(metaLine(status)).not.toContain('timeout');
+});
+
+test('unknown PVE state does not hide an SSH failure', () => {
+  expect(dotClassFor({ reachable: false, proxmoxState: 'unknown' })).toBe('red');
+});
+
+test('missing PVE target stays green when SSH works and is red when SSH fails', () => {
+  expect(dotClassFor({ reachable: true, tmux: true, proxmoxState: 'missing' })).toBe('green');
+  expect(metaLine({ reachable: true, tmux: true, proxmoxState: 'missing' })).toContain('PVE link missing');
+  expect(dotClassFor({ reachable: false, proxmoxState: 'missing' })).toBe('red');
+  expect(metaLine({ reachable: false, proxmoxState: 'missing' })).toContain('Container missing');
+});

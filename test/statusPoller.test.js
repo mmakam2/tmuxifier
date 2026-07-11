@@ -138,3 +138,31 @@ test('a new poll starts normally once the previous cycle has settled', async () 
   await poller.pollOnce();
   expect(probes).toBe(2);
 });
+
+test('pollOnce starts PVE collection in the same cycle and records the enriched snapshot', async () => {
+  const boxes = [{ id: 'b1', host: '192.168.1.10', proxmox: { hostId: 'H1', node: 'pve', vmid: 131 } }];
+  const order = [];
+  const records = [];
+  const poller = createStatusPoller({
+    store: fakeStore(boxes),
+    statusChecker: { checkBox: async () => { order.push('ssh'); return { reachable: false, error: 'timeout' }; } },
+    statusEnricher: {
+      collect: async () => { order.push('pve'); return [{ boxId: 'b1', state: 'stopped', node: 'pve', vmid: 131 }]; },
+      merge: (snapshot, bx, pve) => ({ b1: { ...snapshot.b1, proxmoxState: pve[0].state, proxmoxVmid: pve[0].vmid } }),
+    },
+    history: { record: (snapshot) => records.push(snapshot) },
+  });
+  const snapshot = await poller.pollOnce();
+  expect(order).toEqual(expect.arrayContaining(['pve', 'ssh']));
+  expect(snapshot.b1.proxmoxState).toBe('stopped');
+  expect(records[0]).toEqual(snapshot);
+});
+
+test('a throwing PVE collector preserves the SSH snapshot', async () => {
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'b1', host: '192.168.1.10' }]),
+    statusChecker: { checkBox: async () => ({ reachable: false, error: 'timeout' }) },
+    statusEnricher: { collect: async () => { throw new Error('PVE down'); }, merge: () => ({}) },
+  });
+  expect(await poller.pollOnce()).toEqual({ b1: { reachable: false, error: 'timeout' } });
+});
