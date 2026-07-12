@@ -205,7 +205,7 @@ In `style.css`, next to the other `.settings-*` rules:
 Run: `npm test`
 Expected: typecheck clean (the `NetboxFormState` change would break any missed consumer); all vitest files pass.
 
-- [ ] **Step 4: Commit (owner approval required — harness rule: commit only when asked)**
+- [x] **Step 4: Commit (owner approval required — harness rule: commit only when asked)**
 
 ```bash
 git add -A
