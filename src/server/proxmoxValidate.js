@@ -72,8 +72,9 @@ export function assertPresetInput(spec, { hostIds = [] } = {}) {
     if (!isIp(net.gateway)) throw new Error('static network requires a gateway ip');
   }
   if (net.ipMode === 'auto-static') {
+    // Gateway is inferred at provision time (the prefix's first usable IP) —
+    // a legacy stored gateway is tolerated on input and normalized away.
     if (!intInRange(net.vlan, 1, 4094)) throw new Error('auto-static requires a vlan (1..4094) to find the NetBox prefix');
-    if (!isIp(net.gateway)) throw new Error('auto-static requires a gateway ip');
   }
   // Keys are no longer preset-scoped: provisioning injects the host default key + all stored keys.
   if (spec.mounts != null) {

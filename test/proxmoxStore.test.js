@@ -180,5 +180,6 @@ test('an auto-static preset persists with cidr forced null', async () => {
   });
   expect(p.net.ipMode).toBe('auto-static');
   expect(p.net.vlan).toBe(30);
-  expect(p.net.cidr).toBeNull(); // allocated at provision time; never stored
+  expect(p.net.cidr).toBeNull();     // allocated at provision time; never stored
+  expect(p.net.gateway).toBeNull();  // inferred from the NetBox prefix; never stored
 });

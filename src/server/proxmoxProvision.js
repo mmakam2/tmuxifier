@@ -93,12 +93,13 @@ export function createProvisionManager({
         j.netboxIpId = res.id;
         if (!isCidr(res.address)) throw new Error('NetBox returned an unusable address: ' + res.address);
         j.ip = res.address;
-        appendLog(j, `# allocated ${res.address} from ${prefix.prefix} (NetBox ip ${res.id})\n`);
+        j.gateway = res.gateway;
+        appendLog(j, `# allocated ${res.address} from ${prefix.prefix} (gw ${res.gateway}, NetBox ip ${res.id})\n`);
         persist();
       }
 
       j.phase = 'create'; persist();
-      const params = buildCreateParams(preset, { vmid: j.vmid, hostname: j.hostname, ip: j.ip, publicKeys, password });
+      const params = buildCreateParams(preset, { vmid: j.vmid, hostname: j.hostname, ip: j.ip, gateway: j.gateway, publicKeys, password });
       const upid = await client.createLxc(j.node, params);
       appendLog(j, `# create ${upid}\n`); persist();
       await pollTask(client, j.node, upid, j);
@@ -175,6 +176,7 @@ export function createProvisionManager({
         tags: Array.isArray(tags) ? tags : null,
         ip: preset.net.ipMode === 'auto-static' ? null : (ip || (preset.net.ipMode === 'static' ? preset.net.cidr : null)),
         netboxIpId: null,
+        gateway: null,
         status: 'running', phase: 'allocate', log: '', boxId: null, needsHost: false, error: null,
         createdAt: now(), finishedAt: null,
       };

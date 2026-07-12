@@ -49,3 +49,12 @@ test('buildCreateParams emits mpN params for additional disk mounts', () => {
   expect(p.mp1).toBe('local:4,mp=/extra');
   expect(buildCreateParams(PRESET, { vmid: 1, hostname: 'h', publicKeys: [] }).mp0).toBeUndefined();
 });
+
+test('auto-static net0 takes both overrides; static keeps its stored gateway', () => {
+  const autoNet = { bridge: 'vmbr0', vlan: 3, ipMode: 'auto-static', cidr: null, gateway: null };
+  expect(buildNet0(autoNet, '192.168.3.5/24', '192.168.3.1'))
+    .toBe('name=eth0,bridge=vmbr0,tag=3,ip=192.168.3.5/24,gw=192.168.3.1');
+  const staticNet = { bridge: 'vmbr0', vlan: null, ipMode: 'static', cidr: '192.168.1.50/24', gateway: '192.168.1.1' };
+  expect(buildNet0(staticNet, undefined, undefined))
+    .toBe('name=eth0,bridge=vmbr0,ip=192.168.1.50/24,gw=192.168.1.1');
+});

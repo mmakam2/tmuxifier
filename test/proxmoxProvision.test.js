@@ -221,7 +221,7 @@ test('a success between failures resets the consecutive-failure count', async ()
 
 // auto-static: allocate-ip phase reserves a NetBox address before create, and
 // rolls the reservation back if the container never materializes.
-const PRESET_AUTO = { ...PRESET_DHCP, id: 'p3', net: { bridge: 'vmbr0', ipMode: 'auto-static', cidr: null, gateway: '192.168.30.1', vlan: 30 } };
+const PRESET_AUTO = { ...PRESET_DHCP, id: 'p3', net: { bridge: 'vmbr0', ipMode: 'auto-static', cidr: null, gateway: null, vlan: 30 } };
 
 function fakeNetbox({ full = false, failRelease = false } = {}) {
   const calls = [];
@@ -230,7 +230,7 @@ function fakeNetbox({ full = false, failRelease = false } = {}) {
     allocateIp: async (prefix, fields) => {
       calls.push(['allocate', prefix.id, fields]);
       if (full) throw new Error(`prefix ${prefix.prefix} has no available IPs`);
-      return { id: 99, address: '192.168.30.50/24' };
+      return { id: 99, address: '192.168.30.50/24', gateway: '192.168.30.1' };
     },
     releaseIp: async (id) => { calls.push(['release', id]); if (failRelease) throw new Error('netbox down'); },
   };
@@ -256,10 +256,29 @@ test('auto-static allocates before create, provisions with the allocated CIDR, a
   expect(calls[0]).toEqual(['find', 30]);
   expect(calls[1][2]).toEqual({ status: 'active', description: 'tmuxifier: dev-01' });
   expect(createCalls[0].net0).toContain('ip=192.168.30.50/24');
-  expect(createCalls[0].net0).toContain('gw=192.168.30.1');
+  expect(createCalls[0].net0).toContain('gw=192.168.30.1'); // inferred, not from the preset
+  expect(done.gateway).toBe('192.168.30.1');
+  expect(done.log).toContain('gw 192.168.30.1');
   expect(boxStore.added[0].host).toBe('192.168.30.50');
   expect(boxStore.added[0].proxmox.netboxIpId).toBe(99);
   expect(calls.some((c) => c[0] === 'release')).toBe(false);
+});
+
+test('a legacy auto-static preset with a stored gateway still uses the inferred one', async () => {
+  const { client: netbox } = fakeNetbox();
+  const createCalls = [];
+  const client = { ...okClient(), createLxc: async (node, params) => { createCalls.push(params); return 'UPID:create'; } };
+  const legacy = { ...PRESET_AUTO, net: { ...PRESET_AUTO.net, gateway: '192.168.30.254' } };
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(legacy), boxStore: fakeBoxStore(), makeClient: () => client,
+    netboxStore: nbStore, makeNetboxClient: () => netbox,
+    load: () => [], save: () => {},
+  });
+  const j = await m.createProvision({ presetId: 'p3', hostname: 'dev-01' });
+  await m._settled(j.id);
+  expect(m.getProvision(j.id).status).toBe('done');
+  expect(createCalls[0].net0).toContain('gw=192.168.30.1');       // inferred wins
+  expect(createCalls[0].net0).not.toContain('gw=192.168.30.254'); // stored legacy value ignored
 });
 
 test('a create failure releases the reserved IP and the job errors', async () => {
