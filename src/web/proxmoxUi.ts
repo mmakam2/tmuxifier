@@ -96,7 +96,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
       e.preventDefault(); box.querySelector('.pve-err')?.remove();
       const t = tag.value.trim();
       try {
-        const job = await pve.createProvision({ presetId: sel.value, hostname: hostname.value.trim(), ip: ip.value.trim() || undefined, tags: t ? [t] : [] });
+        const job = await pve.createProvision({ presetId: sel.value, hostname: hostname.value.trim(), ip: curPreset()?.net.ipMode === 'static' ? (ip.value.trim() || undefined) : undefined, tags: t ? [t] : [] });
         showJob(job.id, { ohMyTmux: (omt as HTMLInputElement).checked, ohMyZsh: (shZsh as HTMLInputElement).checked, ohMyBash: (shBash as HTMLInputElement).checked });
       } catch (er) { box.append(err((er as Error).message)); }
     } }, ['Provision']);

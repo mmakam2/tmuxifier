@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { buildCreateParams } from './proxmoxParams.js';
-import { assertProvisionInput } from './proxmoxValidate.js';
+import { assertProvisionInput, isCidr } from './proxmoxValidate.js';
 import { createNetboxClient } from './netboxApi.js';
 
 // 'cancelled' has no producer anymore (the never-wired cancel API was removed)
@@ -90,7 +90,9 @@ export function createProvisionManager({
         const netbox = makeNetboxClient(await requireNetboxSettings());
         const prefix = await netbox.findPrefixByVlan(preset.net.vlan);
         const res = await netbox.allocateIp(prefix, { status: 'active', description: `tmuxifier: ${j.hostname}` });
-        j.ip = res.address; j.netboxIpId = res.id;
+        j.netboxIpId = res.id;
+        if (!isCidr(res.address)) throw new Error('NetBox returned an unusable address: ' + res.address);
+        j.ip = res.address;
         appendLog(j, `# allocated ${res.address} from ${prefix.prefix} (NetBox ip ${res.id})\n`);
         persist();
       }
@@ -110,9 +112,11 @@ export function createProvisionManager({
 
       j.phase = 'discover'; persist();
       let boxHost = null;
-      // Any explicitly-known address (allocated, overridden, or preset-static)
-      // wins; only pure DHCP falls back to lease discovery.
-      if (j.ip) boxHost = String(j.ip).split('/')[0];
+      // An explicitly-known address (allocated or preset-static) wins. dhcp
+      // always lease-discovers: an ip override is never applied to net0 for
+      // dhcp presets (buildNet0 ignores it there), so the override could
+      // never actually be this container's address.
+      if (j.ip && preset.net.ipMode !== 'dhcp') boxHost = String(j.ip).split('/')[0];
       else if (preset.net.ipMode === 'static') boxHost = String(preset.net.cidr).split('/')[0];
       else if (preset.startAfterCreate) boxHost = await discoverIp(client, j.node, j.vmid);
 

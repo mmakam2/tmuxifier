@@ -110,6 +110,23 @@ test('dhcp lease timeout: job still succeeds but defers the box', async () => {
   expect(boxStore.added).toHaveLength(0);
 });
 
+// An ip override must never redirect a dhcp container's box link: buildNet0
+// ignores overrides for dhcp (net0 stays `ip=dhcp`), so an override address is
+// never actually the container's — only the DHCP-leased address is.
+test('dhcp + ip override: net0 stays dhcp and the box links from the leased address, not the override', async () => {
+  const boxStore = fakeBoxStore();
+  let captured;
+  const client = { ...okClient(), createLxc: async (_node, params) => { captured = params; return 'UPID:create'; } };
+  const mgr = createProvisionManager(base({ proxmoxStore: makeStore(PRESET_DHCP), boxStore, makeClient: () => client }));
+  const job = await mgr.createProvision({ presetId: 'p1', hostname: 'dev-10', ip: '192.168.1.99/24' });
+  await mgr._settled(job.id);
+  const done = mgr.getProvision(job.id);
+  expect(done.status).toBe('done');
+  expect(captured.net0).toContain('ip=dhcp');
+  expect(boxStore.added[0].host).toBe('192.168.1.77');
+  expect(boxStore.added[0].host).not.toBe('192.168.1.99');
+});
+
 test('a failed create task marks the job error', async () => {
   const client = { ...okClient(), taskStatus: async () => ({ status: 'stopped', exitstatus: 'volume create failed' }) };
   const mgr = createProvisionManager(base({ proxmoxStore: makeStore(PRESET_DHCP), makeClient: () => client }));
@@ -259,6 +276,29 @@ test('a create failure releases the reserved IP and the job errors', async () =>
   expect(done.status).toBe('error');
   expect(calls.at(-1)).toEqual(['release', 99]);
   expect(done.log).toContain('released NetBox ip 99');
+});
+
+test('an unusable NetBox address aborts before create and releases the reservation', async () => {
+  const calls = [];
+  const netbox = {
+    findPrefixByVlan: async (vid) => { calls.push(['find', vid]); return { id: 7, prefix: '192.168.30.0/24' }; },
+    allocateIp: async (prefix, fields) => { calls.push(['allocate', prefix.id, fields]); return { id: 99, address: 'not-a-cidr' }; },
+    releaseIp: async (id) => { calls.push(['release', id]); },
+  };
+  const createCalls = [];
+  const client = { ...okClient(), createLxc: async () => { createCalls.push(1); return 'UPID:create'; } };
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(PRESET_AUTO), boxStore: fakeBoxStore(), makeClient: () => client,
+    netboxStore: nbStore, makeNetboxClient: () => netbox,
+    load: () => [], save: () => {},
+  });
+  const j = await m.createProvision({ presetId: 'p3', hostname: 'dev-01' });
+  await m._settled(j.id);
+  const done = m.getProvision(j.id);
+  expect(done.status).toBe('error');
+  expect(done.error).toMatch(/unusable address/);
+  expect(createCalls).toHaveLength(0);
+  expect(calls.at(-1)).toEqual(['release', 99]);
 });
 
 test('a prefix failure aborts before any container is created', async () => {

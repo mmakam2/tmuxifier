@@ -108,7 +108,10 @@ export function createProxmoxLifecycleManager({
     if (!ipId || !netboxStore) return;
     let settings = null;
     try { settings = await netboxStore.getSettings({ withSecret: true }); } catch { settings = null; }
-    if (!settings) return;
+    if (!settings) {
+      appendLog(job, `# could not release NetBox ip ${ipId}: NetBox integration not configured\n`); persist();
+      return;
+    }
     try {
       await makeNetboxClient(settings).releaseIp(ipId);
       appendLog(job, `# released NetBox ip ${ipId}\n`); persist();

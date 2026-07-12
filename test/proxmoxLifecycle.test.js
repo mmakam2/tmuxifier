@@ -426,3 +426,18 @@ test('missing-container deprovision also releases the NetBox IP', async () => {
   expect(manager.getJob(job.id).status).toBe('done');
   expect(manager.getJob(job.id).log).toContain('released NetBox ip 99');
 });
+
+test('a link with a netboxIpId but no NetBox settings logs the skip instead of failing silently', async () => {
+  let touched = 0;
+  const { manager } = fixture('missing', {
+    boxStore: { getBox: async (id) => id === 'B1' ? BOX_WITH_IP : undefined },
+    netboxStore: { getSettings: async () => null },
+    makeNetboxClient: () => { touched += 1; return {}; },
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  const done = manager.getJob(job.id);
+  expect(done.status).toBe('done');
+  expect(done.log).toContain('could not release NetBox ip 99: NetBox integration not configured');
+  expect(touched).toBe(0);
+});
