@@ -200,7 +200,7 @@ test('jsonRequest POSTs JSON with fixed Content-Length against a real local serv
   try {
     const client = createNetboxClient({ url, tlsMode: null, fingerprint256: null, token: 't' });
     const res = await client.allocateIp({ id: 5, prefix: '192.168.30.0/24' }, { status: 'active' });
-    expect(res).toEqual({ id: 1, address: '192.168.30.50/24' });
+    expect(res).toEqual({ id: 1, address: '192.168.30.50/24', gateway: '192.168.30.1' });
     expect(seen.method).toBe('POST');
     expect(seen.type).toBe('application/json');
     expect(seen.transfer).toBeNull();               // fixed Content-Length, not chunked
