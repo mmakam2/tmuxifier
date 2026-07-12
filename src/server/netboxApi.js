@@ -93,6 +93,20 @@ export async function testNetbox(settings, { request = jsonRequest, connect = tl
   return { ok: true, version: res.json['netbox-version'] };
 }
 
+// First usable IPv4 host of a prefix (network address + 1): the conventional
+// gateway. auto-static infers its gateway from this and never allocates it.
+// Networks with a different gateway convention use the `static` preset mode.
+export function firstUsableIp(prefixCidr) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/.exec(String(prefixCidr));
+  if (!m) throw new Error(`unparseable prefix: ${prefixCidr}`);
+  const len = Number(m[5]);
+  if (len > 30) throw new Error(`prefix ${prefixCidr} is too small for auto-static`);
+  const value = ((Number(m[1]) << 24) | (Number(m[2]) << 16) | (Number(m[3]) << 8) | Number(m[4])) >>> 0;
+  const mask = len === 0 ? 0 : (~0 << (32 - len)) >>> 0;
+  const first = ((value & mask) >>> 0) + 1;
+  return [(first >>> 24) & 255, (first >>> 16) & 255, (first >>> 8) & 255, first & 255].join('.');
+}
+
 // Throwing NetBox client for the provisioning/deprovisioning flows (testNetbox
 // stays result-shaped for the settings UI). Same auth header, same TLS modes;
 // pin mode verifies the fingerprint via resolveTlsOpts BEFORE any
@@ -120,10 +134,19 @@ export function createNetboxClient(settings, { request = jsonRequest, connect = 
       return { id: results[0].id, prefix: results[0].prefix };
     },
     async allocateIp(prefix, fields) {
-      const data = await call('POST', `/ipam/prefixes/${encodeURIComponent(prefix.id)}/available-ips/`, fields);
-      const item = Array.isArray(data) ? data[0] : data;
-      if (!item || !item.address) throw new Error(`prefix ${prefix.prefix} has no available IPs`);
-      return { id: item.id, address: item.address };
+      const gateway = firstUsableIp(prefix.prefix);
+      // GET-then-POST instead of NetBox's atomic next-free POST: the atomic
+      // endpoint happily hands out an unregistered gateway address (bit us in
+      // production). A concurrent duplicate reservation makes NetBox reject
+      // the POST -> the job errors cleanly and a retry succeeds; acceptable
+      // for a single-user tool.
+      const avail = await call('GET', `/ipam/prefixes/${encodeURIComponent(prefix.id)}/available-ips/`);
+      const list = Array.isArray(avail) ? avail : [];
+      const pick = list.find((item) => item && item.address && String(item.address).split('/')[0] !== gateway);
+      if (!pick) throw new Error(`prefix ${prefix.prefix} has no available IPs`);
+      const created = await call('POST', '/ipam/ip-addresses/', { address: pick.address, ...fields });
+      if (!created || !created.address) throw new Error(`prefix ${prefix.prefix} has no available IPs`);
+      return { id: created.id, address: created.address, gateway };
     },
     async releaseIp(id) { await call('DELETE', `/ipam/ip-addresses/${encodeURIComponent(id)}/`); },
   };

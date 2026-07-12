@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest';
 import http from 'node:http';
-import { testNetbox, createNetboxClient } from '../src/server/netboxApi.js';
+import { testNetbox, createNetboxClient, firstUsableIp } from '../src/server/netboxApi.js';
 
 const CA = { url: 'https://netbox.example.com', tlsMode: 'ca', fingerprint256: null, token: 'tok123' };
 const ok = { status: 200, json: { 'netbox-version': '4.3.2' }, text: '' };
@@ -122,16 +122,37 @@ test('findPrefixByVlan resolves exactly-one and throws on 0/many', async () => {
   await expect(mk([{ id: 1 }, { id: 2 }]).findPrefixByVlan(32)).rejects.toThrow(/multiple NetBox prefixes/);
 });
 
-test('allocateIp POSTs a JSON body and returns id+address; empty result means prefix full', async () => {
+test('firstUsableIp: network + 1, and tiny prefixes are rejected', () => {
+  expect(firstUsableIp('192.168.3.0/24')).toBe('192.168.3.1');
+  expect(firstUsableIp('10.20.0.0/16')).toBe('10.20.0.1');
+  expect(firstUsableIp('192.168.3.128/30')).toBe('192.168.3.129');
+  expect(firstUsableIp('192.168.3.77/24')).toBe('192.168.3.1'); // non-canonical base normalizes
+  expect(() => firstUsableIp('192.168.3.0/31')).toThrow(/too small/);
+  expect(() => firstUsableIp('192.168.3.4/32')).toThrow(/too small/);
+  expect(() => firstUsableIp('not-a-prefix')).toThrow(/unparseable/);
+});
+
+test('allocateIp skips the gateway and reserves the first other available address', async () => {
   const calls = [];
-  const client = createNetboxClient(NB, { request: async (o) => { calls.push(o); return { status: 201, json: { id: 99, address: '192.168.30.50/24' }, text: '' }; } });
-  const res = await client.allocateIp({ id: 7, prefix: '192.168.30.0/24' }, { status: 'active', description: 'tmuxifier: dev-01' });
-  expect(res).toEqual({ id: 99, address: '192.168.30.50/24' });
+  const client = createNetboxClient(NB, { request: async (o) => {
+    calls.push(o);
+    if (o.method === 'GET') return { status: 200, json: [{ address: '192.168.3.1/24' }, { address: '192.168.3.5/24' }], text: '' };
+    return { status: 201, json: { id: 99, address: '192.168.3.5/24' }, text: '' };
+  } });
+  const res = await client.allocateIp({ id: 7, prefix: '192.168.3.0/24' }, { status: 'active', description: 'tmuxifier: dev-01' });
+  expect(res).toEqual({ id: 99, address: '192.168.3.5/24', gateway: '192.168.3.1' });
+  expect(calls[0].method).toBe('GET');
   expect(calls[0].url).toBe('https://netbox.example.com/api/ipam/prefixes/7/available-ips/');
-  expect(calls[0].method).toBe('POST');
-  expect(calls[0].body).toEqual({ status: 'active', description: 'tmuxifier: dev-01' });
-  const full = createNetboxClient(NB, { request: async () => ({ status: 200, json: [], text: '' }) });
-  await expect(full.allocateIp({ id: 7, prefix: '192.168.30.0/24' }, {})).rejects.toThrow('prefix 192.168.30.0/24 has no available IPs');
+  expect(calls[1].method).toBe('POST');
+  expect(calls[1].url).toBe('https://netbox.example.com/api/ipam/ip-addresses/');
+  expect(calls[1].body).toEqual({ address: '192.168.3.5/24', status: 'active', description: 'tmuxifier: dev-01' });
+});
+
+test('allocateIp: only the gateway left (or nothing) means prefix full', async () => {
+  const gwOnly = createNetboxClient(NB, { request: async () => ({ status: 200, json: [{ address: '192.168.3.1/24' }], text: '' }) });
+  await expect(gwOnly.allocateIp({ id: 7, prefix: '192.168.3.0/24' }, {})).rejects.toThrow('prefix 192.168.3.0/24 has no available IPs');
+  const empty = createNetboxClient(NB, { request: async () => ({ status: 200, json: [], text: '' }) });
+  await expect(empty.allocateIp({ id: 7, prefix: '192.168.3.0/24' }, {})).rejects.toThrow('has no available IPs');
 });
 
 test('releaseIp DELETEs the ip-address record and tolerates an empty 204 body', async () => {
@@ -168,8 +189,10 @@ test('jsonRequest POSTs JSON with fixed Content-Length against a real local serv
     let data = '';
     req.on('data', (c) => { data += c; });
     req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      if (req.method === 'GET') { res.end(JSON.stringify([{ address: '192.168.30.50/24' }])); return; }
       seen = { method: req.method, type: req.headers['content-type'], length: req.headers['content-length'], transfer: req.headers['transfer-encoding'] || null, data };
-      res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ id: 1, address: '192.168.30.50/24' }));
+      res.end(JSON.stringify({ id: 1, address: '192.168.30.50/24' }));
     });
   });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
@@ -182,6 +205,6 @@ test('jsonRequest POSTs JSON with fixed Content-Length against a real local serv
     expect(seen.type).toBe('application/json');
     expect(seen.transfer).toBeNull();               // fixed Content-Length, not chunked
     expect(Number(seen.length)).toBe(Buffer.byteLength(seen.data));
-    expect(JSON.parse(seen.data)).toEqual({ status: 'active' });
+    expect(JSON.parse(seen.data)).toEqual({ address: '192.168.30.50/24', status: 'active' });
   } finally { srv.close(); }
 });
