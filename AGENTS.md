@@ -136,7 +136,9 @@ pattern for new modules.
   first for `auto-static` presets; the Fleet job pattern).
 - `proxmoxInventory.js` — cluster-wide linked-LXC inventory and status authority (one
   `/cluster/resources` call per host); auto-follows node migrations by updating the stored
-  link's node (guarded against active lifecycle jobs).
+  link's node (guarded against active lifecycle jobs), and re-homes an orphaned link when a
+  removed host profile is re-added with the same endpoint (new id, exact `host:port` match,
+  vmid verified on that cluster, same CAS + job guards).
 - `proxmoxLifecycle.js` / `proxmoxLifecycleStore.js` — persisted LXC power/deprovision jobs in
   `data/proxmox-lifecycle-jobs.json`; deprovision releases the box's NetBox-allocated IP and
   deletes any remaining NetBox records matching the box's current IP, so manually created

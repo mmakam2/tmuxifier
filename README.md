@@ -277,6 +277,8 @@ needs rather than the broad lab roles. Use a privilege-separated token, not full
 (`host:8006`), the token id (`user@pam!tmuxifier`) and the secret. Click **Inspect** to fetch and
 **pin** the host's TLS certificate (Proxmox ships a self-signed cert; pinning is
 trust-on-first-use, like `ssh accept-new`). Save — Tmuxifier verifies the token before storing it.
+Removing a host profile and re-adding it later (any name) with the **same endpoint** re-homes any
+boxes still linked through the old profile automatically on the next status poll.
 
 **3. Review LXC secrets.** Same **Settings (⚙) → Proxmox** tab, below the host list. Tmuxifier's
 own host key is auto-detected and shown as the **default management key** — injected into every

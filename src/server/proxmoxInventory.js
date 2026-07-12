@@ -43,6 +43,60 @@ export function createProxmoxInventory({
     state: 'unknown', fetchedAt: now(), error: null, ...fields,
   });
 
+  // A removed-then-re-added host profile gets a new id, stranding links on the
+  // old one. Every link stamps the host endpoint, so an orphaned group can
+  // re-home to the unique current host with the same endpoint — verified
+  // against that cluster (the vmid must exist) and written with the same
+  // CAS + active-job guards as the node auto-follow. Ambiguity (zero or 2+
+  // endpoint matches) never guesses; every failure mode degrades to the
+  // plain "host profile missing" report.
+  async function healGroup(hostBoxes) {
+    const orphan = (box) => record(box, { error: 'host profile missing' });
+    if (!boxStore) return hostBoxes.map(orphan);
+    let hosts;
+    try { hosts = await proxmoxStore.listHosts(); } catch { hosts = []; }
+    const results = [];
+    const byCandidate = new Map();
+    for (const box of hostBoxes) {
+      const endpoint = box.proxmox.endpoint;
+      const matches = endpoint ? hosts.filter((h) => h.endpoint === endpoint) : [];
+      if (matches.length !== 1 || activeJobGuard(box.id)) { results.push(orphan(box)); continue; }
+      if (!byCandidate.has(matches[0].id)) byCandidate.set(matches[0].id, []);
+      byCandidate.get(matches[0].id).push(box);
+    }
+    for (const [candidateId, candidateBoxes] of byCandidate) {
+      let host = null;
+      let guests = null;
+      try {
+        host = await proxmoxStore.getHost(candidateId, { withSecret: true });
+        guests = host ? await makeClient(host).clusterResources() : null;
+      } catch { guests = null; }
+      if (!guests) { results.push(...candidateBoxes.map(orphan)); continue; }
+      const present = new Set(guests.filter((g) => g.type === 'lxc').map((g) => Number(g.vmid)));
+      const healed = [];
+      for (const box of candidateBoxes) {
+        if (!present.has(Number(box.proxmox.vmid))) { results.push(orphan(box)); continue; }
+        try {
+          const fresh = await boxStore.getBox(box.id);
+          const freshLink = fresh && fresh.proxmox;
+          const stillOrphaned = freshLink
+            && freshLink.hostId === box.proxmox.hostId
+            && Number(freshLink.vmid) === Number(box.proxmox.vmid);
+          if (!stillOrphaned) { results.push(orphan(box)); continue; }
+          const link = { ...freshLink, hostId: candidateId };
+          await boxStore.setProxmoxLink(box.id, link);
+          log(`[tmuxifier] box ${box.label}: host profile re-added as '${host.name}' — re-homed link by endpoint ${freshLink.endpoint}`);
+          healed.push({ ...box, proxmox: link });
+        } catch (error) {
+          log(`[tmuxifier] box ${box.label}: could not re-home link: ${error.message}`);
+          results.push(orphan(box));
+        }
+      }
+      if (healed.length) results.push(...await fetchHost(candidateId, healed));
+    }
+    return results;
+  }
+
   async function fetchHost(hostId, hostBoxes) {
     let host;
     try {
@@ -50,7 +104,7 @@ export function createProxmoxInventory({
     } catch (error) {
       return hostBoxes.map((box) => record(box, { error: error.message }));
     }
-    if (!host) return hostBoxes.map((box) => record(box, { error: 'host profile missing' }));
+    if (!host) return healGroup(hostBoxes);
     let guests;
     try {
       guests = await makeClient(host).clusterResources();

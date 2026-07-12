@@ -254,6 +254,84 @@ test('mergeProxmoxStatus adds state without hiding reachable missing links', () 
   expect(merged.b2).toMatchObject({ reachable: true, proxmoxState: 'missing' });
 });
 
+// --- relink-by-endpoint heal: a removed-then-re-added host gets a new id; the
+// sweep re-homes orphaned links whose stamped endpoint matches exactly one host.
+const READDED = { id: 'H9', name: 'lab-readded', endpoint: HOST.endpoint, tokenSecret: 'sek' };
+function healSetup({ hosts = [READDED], cluster = [{ vmid: 131, node: 'pve', type: 'lxc', status: 'running', name: 'dev-01' }], boxStore, guard } = {}) {
+  const writes = [];
+  const logged = [];
+  const inventory = createProxmoxInventory({
+    proxmoxStore: {
+      getHost: async (id) => hosts.find((h) => h.id === id), // the old H1 profile is gone
+      listHosts: async () => hosts,
+    },
+    makeClient: () => ({ clusterResources: async () => cluster }),
+    boxStore: boxStore === null ? null : { getBox: async () => null, setProxmoxLink: async (id, link) => writes.push([id, link]), ...boxStore },
+    now: () => 1000, log: (...a) => logged.push(a.join(' ')),
+  });
+  if (guard) inventory.setActiveJobGuard(guard);
+  return { inventory, writes, logged };
+}
+
+test('an orphaned link re-homes to the unique host with the same endpoint (netboxIpId preserved)', async () => {
+  const box = linked('b1', 'pve', 131);
+  box.proxmox.netboxIpId = 99;
+  const { inventory, writes, logged } = healSetup({ boxStore: { getBox: async () => box } });
+  const [record] = await inventory.refreshLinked([box]);
+  expect(writes).toEqual([['b1', { hostId: 'H9', node: 'pve', vmid: 131, endpoint: HOST.endpoint, netboxIpId: 99 }]]);
+  expect(record).toMatchObject({ state: 'running', hostId: 'H9', hostName: 'lab-readded', containerName: 'dev-01', error: null });
+  expect(logged.some((line) => line.includes('re-homed'))).toBe(true);
+});
+
+test('an ambiguous endpoint (two matching hosts) never guesses', async () => {
+  const box = linked('b1', 'pve', 131);
+  const { inventory, writes } = healSetup({ hosts: [READDED, { ...READDED, id: 'H8', name: 'twin' }], boxStore: { getBox: async () => box } });
+  const [record] = await inventory.refreshLinked([box]);
+  expect(writes).toEqual([]);
+  expect(record).toMatchObject({ state: 'unknown', hostId: 'H1', error: 'host profile missing' });
+});
+
+test('the heal requires the vmid to exist on the candidate cluster', async () => {
+  const box = linked('b1', 'pve', 131);
+  const { inventory, writes } = healSetup({ cluster: [], boxStore: { getBox: async () => box } });
+  const [record] = await inventory.refreshLinked([box]);
+  expect(writes).toEqual([]);
+  expect(record).toMatchObject({ error: 'host profile missing' });
+});
+
+test('the heal is skipped while a lifecycle job is active on the box', async () => {
+  const box = linked('b1', 'pve', 131);
+  const { inventory, writes } = healSetup({ boxStore: { getBox: async () => box }, guard: (boxId) => boxId === 'b1' });
+  const [record] = await inventory.refreshLinked([box]);
+  expect(writes).toEqual([]);
+  expect(record).toMatchObject({ error: 'host profile missing' });
+});
+
+test('the heal is skipped if the user re-linked the box mid-poll (CAS re-check)', async () => {
+  const box = linked('b1', 'pve', 131);
+  const { inventory, writes } = healSetup({
+    boxStore: { getBox: async () => ({ ...box, proxmox: { ...box.proxmox, hostId: 'H7' } }) },
+  });
+  const [record] = await inventory.refreshLinked([box]);
+  expect(writes).toEqual([]);
+  expect(record).toMatchObject({ error: 'host profile missing' });
+});
+
+test('a link without a stamped endpoint stays orphaned', async () => {
+  const box = linked('b1', 'pve', 131);
+  delete box.proxmox.endpoint;
+  const { inventory, writes } = healSetup({ boxStore: { getBox: async () => box } });
+  const [record] = await inventory.refreshLinked([box]);
+  expect(writes).toEqual([]);
+  expect(record).toMatchObject({ error: 'host profile missing' });
+});
+
+test('without a boxStore the orphan is only reported, never healed', async () => {
+  const { inventory } = healSetup({ boxStore: null });
+  const [record] = await inventory.refreshLinked([linked('b1', 'pve', 131)]);
+  expect(record).toMatchObject({ state: 'unknown', error: 'host profile missing' });
+});
+
 test('the drift write preserves netboxIpId on the link', async () => {
   const writes = [];
   const box = linked('b1', 'proxmox02', 165);
