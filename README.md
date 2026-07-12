@@ -81,8 +81,8 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | data dir | `TMUXIFIER_DATA_DIR` | `<repo>/data` |
 | control-socket dir | `TMUXIFIER_CONTROL_DIR` | `<dataDir>/cm` |
 | ssh config for Tmuxifier SSH calls | `TMUXIFIER_SSH_CONFIG` | (none) |
-| TLS cert (PEM) | `TMUXIFIER_TLS_CERT` | (none → serves HTTP) |
-| TLS key (PEM) | `TMUXIFIER_TLS_KEY` | (none → serves HTTP) |
+| path to TLS cert (PEM file) | `TMUXIFIER_TLS_CERT` | (none → serves HTTP) |
+| path to TLS key (PEM file) | `TMUXIFIER_TLS_KEY` | (none → serves HTTP) |
 
 Set **both** `TMUXIFIER_TLS_CERT` and `TMUXIFIER_TLS_KEY` to serve HTTPS directly; when TLS is active
 the session cookie is automatically marked `Secure`. An `https://` `TMUXIFIER_BASE_EXTERNAL_URL`
@@ -116,6 +116,8 @@ The sidebar's **export** (⤓) and **import** (⤒) buttons download and upload 
 JSON file — a portable backup you can move between Tmuxifier instances. Import adds boxes from the
 file, re-minting each id and skipping any whose host/label already exists (so re-importing is safe).
 It carries no SSH secrets; boxes still rely on your keys/agent/`~/.ssh/config` at connect time.
+The sidebar itself and each tag group can be collapsed (‹ next to the brand, click a group
+header); both states persist across reloads.
 
 A ⚙ **settings** modal (top of the sidebar) has two tabs: **NetBox** (an http/https selector +
 host and token — the TLS options, including fingerprint pinning for self-signed certs, appear
@@ -294,9 +296,9 @@ fixed CIDR + gateway), or `auto-static` — pick just a VLAN on the preset and T
 reserves the next free address from the NetBox prefix for that VLAN at provision time (the
 gateway is inferred as the prefix's first usable IP and is never handed out), stamps it into the
 container, and releases it if provisioning fails or when the container is deprovisioned
-(requires the NetBox integration in Settings (⚙) — the `auto-static` option only appears once
-NetBox is configured, and provisioning an existing `auto-static` preset without it is rejected
-immediately instead of starting a job). Deprovisioning also deletes any NetBox
+(requires the NetBox integration in Settings (⚙) — the `auto-static` option appears once
+NetBox is configured (and stays visible on a preset already set to it), and provisioning an
+existing `auto-static` preset without NetBox is rejected immediately instead of starting a job). Deprovisioning also deletes any NetBox
 IP record matching the box's current IP — including records created by hand — so manually
 linked containers don't leave stale IPAM entries behind. Then **Provision → pick a preset → enter a
 hostname** (optionally a tag and oh-my-tmux/zsh/bash). Watch the live task log; once the container

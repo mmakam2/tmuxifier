@@ -63,8 +63,8 @@ describe.runIf(opensslOk)('proxmoxApi TLS pinning (real node:https transport)', 
 
 // A default Proxmox install does NOT serve a self-signed leaf: pve-ssl.pem is
 // signed by the node's cluster CA (pve-root-ca.pem) and pveproxy presents the
-// chain. Pin mode must anchor trust at the presented chain's root, not the leaf,
-// or the stock PVE cert shape can never connect.
+// chain. Pin mode must connect on the pinned leaf fingerprint alone
+// (pinnedSocket), regardless of the served chain's shape.
 describe.runIf(opensslOk)('proxmoxApi TLS pinning with a CA-signed cert (default PVE shape)', () => {
   let server, port, dir;
 

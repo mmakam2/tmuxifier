@@ -83,6 +83,10 @@ pattern for new modules.
   `.env` parsing/upsert (`envFile.js`), and `config.json` (camelCase) parsing (`configFile.js`).
 - `concurrency.js` — `mapWithConcurrency`, the bounded-parallelism helper status sweeps and Fleet
   runs use so a sweep never opens the whole fleet's SSH connections at once.
+- `jsonFile.js` — shared atomic JSON persistence for `data/*` files: writes land in a temp file
+  and are rename()d into place (a crash never truncates), an unparseable/wrong-shape file is
+  quarantined to `<file>.corrupt-<timestamp>` instead of being silently read as empty, and files
+  are written `0o600`. The store modules build on it.
 - `auth.js` — scrypt password hashing, signed-cookie options (`COOKIE_NAME`), and the session
   value helpers (`sessionValue`/`sessionValueValid`): the cookie embeds its issue time and is
   rejected server-side after `SESSION_TTL_SECONDS`, so a captured cookie can't authenticate forever.
