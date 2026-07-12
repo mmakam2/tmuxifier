@@ -1,5 +1,6 @@
 import { pve, type PveHost, type PveMount, type PvePreset } from './proxmox';
 import { el, err, field, group, input } from './dom';
+import { nbx } from './netbox';
 
 export type PresetsDeps = { openSettingsModal: (tab: 'proxmox') => void };
 
@@ -130,6 +131,7 @@ export async function renderPresetsTab(content: HTMLElement, deps: PresetsDeps):
     const swap = input(String(editing?.swapMiB ?? 512), { type: 'number', min: '0' });
     const ipMode = el('select', {}, [
       el('option', { value: 'dhcp' }, ['dhcp']), el('option', { value: 'static' }, ['static']),
+      el('option', { value: 'auto-static' }, ['auto-static (NetBox)']),
     ]) as HTMLSelectElement;
     ipMode.value = editing?.net.ipMode ?? 'dhcp';
     const cidr = input(editing?.net.cidr ?? '', { placeholder: '192.168.1.50/24' });
@@ -137,13 +139,23 @@ export async function renderPresetsTab(content: HTMLElement, deps: PresetsDeps):
     const vlan = input(editing?.net.vlan == null ? '' : String(editing.net.vlan), {
       placeholder: 'vlan (optional)', type: 'number',
     });
-    const cidrGateway = el('div', { class: 'pve-grid' }, [
-      field('CIDR', cidr), field('Gateway', gateway),
-    ]);
+    const cidrField = field('CIDR', cidr);
+    const gatewayField = field('Gateway', gateway);
+    const cidrGateway = el('div', { class: 'pve-grid' }, [cidrField, gatewayField]);
+    const autoHint = el('div', { class: 'pve-sub' });
+    let netboxConfigured = true;
     const syncNetwork = () => {
-      cidrGateway.style.display = ipMode.value === 'static' ? '' : 'none';
+      const mode = ipMode.value;
+      cidrGateway.style.display = mode === 'static' || mode === 'auto-static' ? '' : 'none';
+      cidrField.style.display = mode === 'static' ? '' : 'none';
+      vlan.placeholder = mode === 'auto-static' ? 'vlan (required)' : 'vlan (optional)';
+      autoHint.textContent = mode === 'auto-static'
+        ? `IP auto-allocated from the NetBox prefix for VLAN ${vlan.value || 'N'}.${netboxConfigured ? '' : ' — configure NetBox in Settings first'}`
+        : '';
     };
     ipMode.addEventListener('change', syncNetwork);
+    vlan.addEventListener('input', syncNetwork);
+    void nbx.get().then(({ settings }) => { netboxConfigured = !!settings; syncNetwork(); }).catch(() => {});
 
     const box = el('div', { class: 'pve-preset-form' });
     const mounts = (editing?.mounts ?? []).map((mount) => ({ ...mount }));
@@ -312,7 +324,7 @@ export async function renderPresetsTab(content: HTMLElement, deps: PresetsDeps):
         field('Cores', cores), field('Memory MiB', memory), field('Swap MiB', swap),
       ])),
       group('Network', field('Bridge', bridge), field('IP mode', ipMode),
-        cidrGateway, field('VLAN', vlan)),
+        cidrGateway, autoHint, field('VLAN', vlan)),
       el('div', { class: 'modal-actions pve-preset-actions' }, actions),
     );
     detail.replaceChildren(box);

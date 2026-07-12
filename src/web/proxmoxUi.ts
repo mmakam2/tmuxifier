@@ -84,7 +84,12 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
 
     const box = el('div', {});
     const curPreset = (): PvePreset | undefined => presets.find((p) => p.id === sel.value);
-    const syncStatic = () => { ipField.style.display = curPreset()?.net.ipMode === 'static' ? '' : 'none'; };
+    const ipAutoNote = el('div', { class: 'pve-sub' }, ['IP: auto-allocated from NetBox']);
+    const syncStatic = () => {
+      const mode = curPreset()?.net.ipMode;
+      ipField.style.display = mode === 'static' ? '' : 'none';
+      ipAutoNote.style.display = mode === 'auto-static' ? '' : 'none';
+    };
     sel.addEventListener('change', syncStatic);
 
     const go = el('button', { type: 'submit', onclick: async (e) => {
@@ -98,7 +103,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
 
     box.append(
       el('h3', {}, ['Provision a container']),
-      field('Preset', sel), field('Hostname', hostname), ipField,
+      field('Preset', sel), field('Hostname', hostname), ipField, ipAutoNote,
       field('Tag', tag), tagDatalist,
       el('label', { class: 'check-field' }, [omt, el('span', {}, ['Install Oh My Tmux'])]),
       el('div', { class: 'field' }, [el('span', {}, ['Shell framework']),

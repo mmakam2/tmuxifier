@@ -3,7 +3,7 @@ export interface PveHost {
   verifyMode: 'pin' | 'ca' | 'insecure'; fingerprint256: string | null; defaultNode: string | null; createdAt: string;
 }
 export interface PveKey { id: string; name: string; hasKey: boolean; createdAt: string; }
-export interface PvePresetNet { bridge: string; vlan: number | null; ipMode: 'dhcp' | 'static'; cidr: string | null; gateway: string | null; }
+export interface PvePresetNet { bridge: string; vlan: number | null; ipMode: 'dhcp' | 'static' | 'auto-static'; cidr: string | null; gateway: string | null; }
 export interface PveMount { id: string; storage: string; sizeGiB: number; path: string; backup: boolean; }
 export interface PvePreset {
   id: string; name: string; hostId: string; node: string | null; template: string; storage: string;
@@ -14,7 +14,7 @@ export interface PvePreset {
 }
 export interface InspectResult { reachable: boolean; fingerprint256: string | null; subject: string; issuer: string; validTo: string | null; caValid: boolean; error?: string; }
 export type ProvisionStatus = 'running' | 'done' | 'error' | 'cancelled' | 'interrupted';
-export type ProvisionPhase = 'allocate' | 'create' | 'start' | 'discover' | 'link' | 'done';
+export type ProvisionPhase = 'allocate' | 'allocate-ip' | 'create' | 'start' | 'discover' | 'link' | 'done';
 export interface ProvisionSummary { id: string; presetName: string; hostname: string; vmid: number | null; status: ProvisionStatus; phase: ProvisionPhase; createdAt: string; finishedAt: string | null; boxId: string | null; needsHost: boolean; }
 export interface ProvisionJob extends ProvisionSummary { log: string; error: string | null; }
 export interface StorageGroups { rootdir: { storage: string }[]; vztmpl: { storage: string }[]; }
