@@ -132,19 +132,22 @@ pattern for new modules.
 - `defaultKey.js` — reads the Tmuxifier host's own SSH public key to inject as the default Proxmox
   management key so provisioned containers trust Tmuxifier (override with `TMUXIFIER_PVE_DEFAULT_PUBKEY`).
 - `provisionStore.js` / `proxmoxProvision.js` — debounced `data/provision-jobs.json` persistence and
-  the create→poll→start→discover→auto-link-box job manager (the Fleet job pattern).
+  the create→poll→start→discover→auto-link-box job manager (with an `allocate-ip` NetBox phase
+  first for `auto-static` presets; the Fleet job pattern).
 - `proxmoxInventory.js` — cluster-wide linked-LXC inventory and status authority (one
   `/cluster/resources` call per host); auto-follows node migrations by updating the stored
   link's node (guarded against active lifecycle jobs).
 - `proxmoxLifecycle.js` / `proxmoxLifecycleStore.js` — persisted LXC power/deprovision jobs in
-  `data/proxmox-lifecycle-jobs.json`.
+  `data/proxmox-lifecycle-jobs.json`; deprovision releases the box's NetBox-allocated IP
+  (best-effort).
 - `boxRemoval.js` — shared session/tmux/store cleanup for ordinary removal and verified deprovision.
 - `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`derToPem`/`normFp`) used by
   both the Proxmox and NetBox API clients.
 - `netboxValidate.js` / `netboxStore.js` / `netboxApi.js` — NetBox integration settings: pure
   input validators, the sealed `data/netbox.json` store (token AES-256-GCM encrypted, redacted to
   `hasToken` on read), and the `/api/status/` connection probe with ca/pin/insecure TLS modes.
-  Settings-only for now — IPAM checks during provisioning are the planned next phase.
+  `createNetboxClient` also serves provisioning: `auto-static` presets reserve the next free IP
+  from the VLAN's NetBox prefix (released again on failure or deprovision).
 
 Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `api.ts`,
 `terminal.ts`, `index.html`, `style.css`, plus feature modules — `reconnect.ts` (escalating

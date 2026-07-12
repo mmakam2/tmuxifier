@@ -118,8 +118,9 @@ file, re-minting each id and skipping any whose host/label already exists (so re
 It carries no SSH secrets; boxes still rely on your keys/agent/`~/.ssh/config` at connect time.
 
 A ⚙ **settings** modal (top of the sidebar) has two tabs: **NetBox** (URL + token, TLS pinning
-for self-signed certs, connection test) and **Proxmox** (host profiles and LXC secrets — see
-[Proxmox LXC provisioning](#proxmox-lxc-provisioning) below).
+for self-signed certs, connection test — also powers `auto-static` IP allocation during
+provisioning) and **Proxmox** (host profiles and LXC secrets); see
+[Proxmox LXC provisioning](#proxmox-lxc-provisioning) below for both.
 
 ## Authentication
 `TMUXIFIER_AUTH_MODE` selects one login method. The default is `password`; set it to
@@ -285,7 +286,11 @@ private half of any key stays in your own SSH setup — Tmuxifier never stores p
 
 **4. Define a preset and provision.** Back in the dashboard's **Proxmox** hub (the sidebar
 button appears once at least one host is configured in Settings): **Presets → Add** a
-blueprint (template, CPU/mem/disk, storage, network). Then **Provision → pick a preset → enter a
+blueprint (template, CPU/mem/disk, storage, network). Network IP mode is `dhcp`, `static` (a
+fixed CIDR + gateway), or `auto-static` — pick a VLAN + gateway on the preset and Tmuxifier
+reserves the next free address from the NetBox prefix for that VLAN at provision time, stamps it
+into the container, and releases it if creation fails or when the container is deprovisioned
+(requires the NetBox integration in Settings (⚙)). Then **Provision → pick a preset → enter a
 hostname** (optionally a tag and oh-my-tmux/zsh/bash). Watch the live task log; once the container
 is up Tmuxifier installs tmux (and any selected frameworks) over SSH, then an **Open terminal**
 button drops you into it.
