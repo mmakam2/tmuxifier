@@ -1,7 +1,7 @@
 // The NetBox tab of the settings modal: URL + write-only token + TLS mode +
 // Test Connection (with the TOFU pin offer) + Clear. Form semantics: explicit Save.
 import { nbx, type NetboxSettings } from './netbox';
-import { buildSavePayload, describeTestResult, isHttps, type NetboxFormState } from './settingsForm';
+import { buildSavePayload, describeTestResult, splitNetboxUrl, normalizeHostInput, type NetboxFormState } from './settingsForm';
 import { field } from './dom';
 
 export async function renderNetboxSection(content: HTMLElement, close: () => void): Promise<void> {
@@ -14,11 +14,24 @@ export async function renderNetboxSection(content: HTMLElement, close: () => voi
   const section = document.createElement('h3');
   section.textContent = 'NetBox API integration';
 
-  const url = document.createElement('input');
-  url.type = 'text';
-  url.placeholder = 'https://netbox.example.com';
-  url.value = current?.url ?? '';
-  url.autocomplete = 'off';
+  const stored = splitNetboxUrl(current?.url ?? '');
+  let scheme: 'http' | 'https' = stored.scheme;
+  const schemeSel = document.createElement('select');
+  for (const value of ['https', 'http'] as const) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = `${value}://`;
+    schemeSel.append(opt);
+  }
+  schemeSel.value = scheme;
+  const host = document.createElement('input');
+  host.type = 'text';
+  host.placeholder = 'netbox.example.com';
+  host.value = stored.host;
+  host.autocomplete = 'off';
+  const urlRow = document.createElement('div');
+  urlRow.className = 'settings-url-row';
+  urlRow.append(schemeSel, host);
 
   const token = document.createElement('input');
   token.type = 'password';
@@ -67,11 +80,19 @@ export async function renderNetboxSection(content: HTMLElement, close: () => voi
   renderFp();
 
   function syncSchemeUi() {
-    const https = isHttps(url.value);
-    tlsGroup.hidden = !https;
-    httpNote.hidden = https || !/^http:\/\//i.test(url.value.trim());
+    tlsGroup.hidden = scheme !== 'https';
+    httpNote.hidden = scheme !== 'http';
   }
-  url.addEventListener('input', syncSchemeUi);
+  schemeSel.addEventListener('change', () => { scheme = schemeSel.value as 'http' | 'https'; syncSchemeUi(); });
+  host.addEventListener('input', () => {
+    const norm = normalizeHostInput(scheme, host.value);
+    if (norm.scheme !== scheme || norm.host !== host.value) {
+      scheme = norm.scheme;
+      schemeSel.value = scheme;
+      host.value = norm.host;
+      syncSchemeUi();
+    }
+  });
 
   // Test Connection
   const testRow = document.createElement('div');
@@ -88,7 +109,7 @@ export async function renderNetboxSection(content: HTMLElement, close: () => voi
   testRow.append(testBtn, pinBtn);
 
   function formState(): NetboxFormState {
-    return { url: url.value, token: token.value, tlsMode, fingerprint256, hasToken: !!current?.hasToken };
+    return { scheme, host: host.value, token: token.value, tlsMode, fingerprint256, hasToken: !!current?.hasToken };
   }
 
   testBtn.addEventListener('click', async () => {
@@ -97,9 +118,9 @@ export async function renderNetboxSection(content: HTMLElement, close: () => voi
     testOut.className = 'settings-hint';
     testOut.textContent = 'Testing…';
     try {
-      const body: Record<string, unknown> = { url: url.value.trim() };
+      const body: Record<string, unknown> = { url: `${scheme}://${host.value.trim()}` };
       if (token.value.trim()) body.token = token.value.trim();
-      if (isHttps(url.value)) { body.tlsMode = tlsMode; if (fingerprint256) body.fingerprint256 = fingerprint256; }
+      if (scheme === 'https') { body.tlsMode = tlsMode; if (fingerprint256) body.fingerprint256 = fingerprint256; }
       const result = describeTestResult(await nbx.test(body));
       testOut.textContent = result.text;
       testOut.className = `settings-hint ${result.ok ? 'ok' : 'err'}`;
@@ -138,7 +159,7 @@ export async function renderNetboxSection(content: HTMLElement, close: () => voi
   submit.textContent = 'Save';
   actions.append(clearBtn, cancel, submit);
 
-  form.append(section, field('NetBox URL', url), httpNote, field('API token', token), tlsGroup, testRow, testOut, errLine, actions);
+  form.append(section, field('NetBox URL', urlRow), httpNote, field('API token', token), tlsGroup, testRow, testOut, errLine, actions);
   content.replaceChildren(form);
   syncSchemeUi();
 

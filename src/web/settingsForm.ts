@@ -3,21 +3,32 @@
 import type { NetboxSettingsInput, NetboxTestResult } from './netbox';
 
 export interface NetboxFormState {
-  url: string; token: string; tlsMode: 'ca' | 'pin' | 'insecure';
+  scheme: 'http' | 'https'; host: string; token: string; tlsMode: 'ca' | 'pin' | 'insecure';
   fingerprint256: string | null; hasToken: boolean;
 }
 
-export function isHttps(url: string): boolean { return /^https:\/\//i.test(url.trim()); }
+// Parse a stored canonical URL into the selector + host controls. Scheme-less
+// or empty input (fresh form) defaults to https.
+export function splitNetboxUrl(url: string): { scheme: 'http' | 'https'; host: string } {
+  const m = /^\s*(https?):\/\/(.*?)\s*$/i.exec(url ?? '');
+  if (m) return { scheme: m[1].toLowerCase() as 'http' | 'https', host: m[2] };
+  return { scheme: 'https', host: (url ?? '').trim() };
+}
+
+// Pasting a full URL into the host field is the common case (browser tab):
+// the pasted scheme wins and the prefix moves out of the host text.
+export function normalizeHostInput(scheme: 'http' | 'https', raw: string): { scheme: 'http' | 'https'; host: string } {
+  return /^\s*https?:\/\//i.test(raw) ? splitNetboxUrl(raw) : { scheme, host: raw };
+}
 
 export function buildSavePayload(s: NetboxFormState): { payload?: NetboxSettingsInput; error?: string } {
-  const url = s.url.trim();
-  if (!url) return { error: 'NetBox URL is required' };
-  if (!/^https?:\/\//i.test(url)) return { error: 'URL must start with http:// or https://' };
+  const host = s.host.trim();
+  if (!host) return { error: 'NetBox host is required' };
   const token = s.token.trim();
   if (!token && !s.hasToken) return { error: 'an API token is required' };
-  const payload: NetboxSettingsInput = { url };
+  const payload: NetboxSettingsInput = { url: `${s.scheme}://${host}` };
   if (token) payload.token = token;
-  if (isHttps(url)) {
+  if (s.scheme === 'https') {
     payload.tlsMode = s.tlsMode;
     if (s.tlsMode === 'pin') {
       if (!s.fingerprint256) return { error: 'pin mode needs a certificate fingerprint — run Test Connection to fetch it' };

@@ -1,12 +1,20 @@
 import { test, expect } from 'vitest';
-import { isHttps, buildSavePayload, describeTestResult } from '../src/web/settingsForm.ts';
+import { splitNetboxUrl, normalizeHostInput, buildSavePayload, describeTestResult } from '../src/web/settingsForm.ts';
 
-const state = (over = {}) => ({ url: 'https://netbox.example.com', token: 'tok', tlsMode: 'ca', fingerprint256: null, hasToken: false, ...over });
+const state = (over = {}) => ({ scheme: 'https', host: 'netbox.example.com', token: 'tok', tlsMode: 'ca', fingerprint256: null, hasToken: false, ...over });
 
-test('isHttps', () => {
-  expect(isHttps('https://x.example.com')).toBe(true);
-  expect(isHttps('  HTTPS://x')).toBe(true);
-  expect(isHttps('http://x.example.com')).toBe(false);
+test('splitNetboxUrl parses stored URLs and defaults scheme-less input to https', () => {
+  expect(splitNetboxUrl('https://netbox.example.com')).toEqual({ scheme: 'https', host: 'netbox.example.com' });
+  expect(splitNetboxUrl('http://192.168.1.20:8000/netbox')).toEqual({ scheme: 'http', host: '192.168.1.20:8000/netbox' });
+  expect(splitNetboxUrl('  HTTPS://x ')).toEqual({ scheme: 'https', host: 'x' });
+  expect(splitNetboxUrl('')).toEqual({ scheme: 'https', host: '' });
+  expect(splitNetboxUrl('netbox.example.com')).toEqual({ scheme: 'https', host: 'netbox.example.com' });
+});
+
+test('normalizeHostInput passes plain hosts through and adopts a pasted scheme', () => {
+  expect(normalizeHostInput('https', 'netbox.example.com')).toEqual({ scheme: 'https', host: 'netbox.example.com' });
+  expect(normalizeHostInput('https', 'http://192.168.1.20:8000')).toEqual({ scheme: 'http', host: '192.168.1.20:8000' });
+  expect(normalizeHostInput('http', 'HTTPS://netbox.example.com/netbox')).toEqual({ scheme: 'https', host: 'netbox.example.com/netbox' });
 });
 
 test('buildSavePayload: happy path https/ca', () => {
@@ -24,11 +32,10 @@ test('buildSavePayload: pin mode requires a fingerprint and includes it', () => 
     .toEqual({ url: 'https://netbox.example.com', token: 'tok', tlsMode: 'pin', fingerprint256: 'AB:CD' });
 });
 
-test('buildSavePayload: http URL omits tlsMode; junk URL errors', () => {
-  expect(buildSavePayload(state({ url: 'http://192.168.1.10:8000' })).payload)
+test('buildSavePayload: http omits tlsMode even if one is set; empty host errors', () => {
+  expect(buildSavePayload(state({ scheme: 'http', host: '192.168.1.10:8000', tlsMode: 'pin' })).payload)
     .toEqual({ url: 'http://192.168.1.10:8000', token: 'tok' });
-  expect(buildSavePayload(state({ url: '' })).error).toMatch(/URL/);
-  expect(buildSavePayload(state({ url: 'netbox.example.com' })).error).toMatch(/http/);
+  expect(buildSavePayload(state({ host: '  ' })).error).toMatch(/host/i);
 });
 
 test('describeTestResult: success, failure, and the pin offer', () => {

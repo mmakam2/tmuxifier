@@ -117,8 +117,9 @@ JSON file — a portable backup you can move between Tmuxifier instances. Import
 file, re-minting each id and skipping any whose host/label already exists (so re-importing is safe).
 It carries no SSH secrets; boxes still rely on your keys/agent/`~/.ssh/config` at connect time.
 
-A ⚙ **settings** modal (top of the sidebar) has two tabs: **NetBox** (URL + token, TLS pinning
-for self-signed certs, connection test — also powers `auto-static` IP allocation during
+A ⚙ **settings** modal (top of the sidebar) has two tabs: **NetBox** (an http/https selector +
+host and token — the TLS options, including fingerprint pinning for self-signed certs, appear
+only for https — plus a connection test; also powers `auto-static` IP allocation during
 provisioning) and **Proxmox** (host profiles and LXC secrets); see
 [Proxmox LXC provisioning](#proxmox-lxc-provisioning) below for both.
 

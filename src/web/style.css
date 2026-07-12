@@ -279,6 +279,9 @@ body {
 .modal .settings-test { display: flex; gap: 8px; align-items: center; }
 .modal .settings-test button { padding: 6px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; cursor: pointer; font-size: 12px; }
 .modal .settings-clear { margin-right: auto; color: #f85149; }
+.modal .settings-url-row { display: flex; gap: 6px; }
+.modal .settings-url-row input { flex: 1; min-width: 0; }
+.modal .settings-url-row select { padding: 9px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; font-size: 14px; }
 .stage { position: relative; overflow: hidden; }
 .empty { color: #6e7681; padding: 24px; }
 .stopped-box-state { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--muted); }
