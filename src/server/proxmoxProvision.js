@@ -161,6 +161,9 @@ export function createProvisionManager({
       assertProvisionInput({ hostname, vmid, ip, tags });
       const preset = await proxmoxStore.getPreset(presetId);
       if (!preset) throw new Error('preset not found');
+      // Fail fast: reject at request time (HTTP 400, no job record) instead of
+      // erroring later in the allocate-ip phase of a job that already exists.
+      if (preset.net.ipMode === 'auto-static') await requireNetboxSettings();
       const host = await proxmoxStore.getHost(preset.hostId, { withSecret: true });
       if (!host) throw new Error('host not found');
       const node = preset.node || host.defaultNode;

@@ -291,7 +291,9 @@ fixed CIDR + gateway), or `auto-static` — pick just a VLAN on the preset and T
 reserves the next free address from the NetBox prefix for that VLAN at provision time (the
 gateway is inferred as the prefix's first usable IP and is never handed out), stamps it into the
 container, and releases it if provisioning fails or when the container is deprovisioned
-(requires the NetBox integration in Settings (⚙)). Deprovisioning also deletes any NetBox
+(requires the NetBox integration in Settings (⚙) — the `auto-static` option only appears once
+NetBox is configured, and provisioning an existing `auto-static` preset without it is rejected
+immediately instead of starting a job). Deprovisioning also deletes any NetBox
 IP record matching the box's current IP — including records created by hand — so manually
 linked containers don't leave stale IPAM entries behind. Then **Provision → pick a preset → enter a
 hostname** (optionally a tag and oh-my-tmux/zsh/bash). Watch the live task log; once the container

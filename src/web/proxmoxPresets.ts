@@ -4,6 +4,13 @@ import { nbx } from './netbox';
 
 export type PresetsDeps = { openSettingsModal: (tab: 'proxmox') => void };
 
+// The auto-static option stays when NetBox is configured or when it is
+// already the current value (removing a selected option would silently
+// rewrite the preset's saved mode on the next save).
+export function allowAutoStatic(netboxConfigured: boolean, currentMode: string) {
+  return netboxConfigured || currentMode === 'auto-static';
+}
+
 type Option = { value: string; label?: string };
 
 function replaceSelectOptions(
@@ -156,7 +163,16 @@ export async function renderPresetsTab(content: HTMLElement, deps: PresetsDeps):
     };
     ipMode.addEventListener('change', syncNetwork);
     vlan.addEventListener('input', syncNetwork);
-    void nbx.get().then(({ settings }) => { netboxConfigured = !!settings; syncNetwork(); }).catch(() => {});
+    void nbx.get().then(({ settings }) => {
+      netboxConfigured = !!settings;
+      // Gate fails open on fetch errors (option kept): the server guard in
+      // createProvision is the real gate; hiding on a blip would mask a
+      // configured capability.
+      if (!allowAutoStatic(netboxConfigured, ipMode.value)) {
+        ipMode.querySelector('option[value="auto-static"]')?.remove();
+      }
+      syncNetwork();
+    }).catch(() => {});
 
     const box = el('div', { class: 'pve-preset-form' });
     const mounts = (editing?.mounts ?? []).map((mount) => ({ ...mount }));

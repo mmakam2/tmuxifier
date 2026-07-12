@@ -281,6 +281,21 @@ test('a legacy auto-static preset with a stored gateway still uses the inferred 
   expect(createCalls[0].net0).not.toContain('gw=192.168.30.254'); // stored legacy value ignored
 });
 
+// Fail fast: an auto-static preset is rejected at createProvision time when
+// NetBox is not configured — no job may be created or persisted. The
+// allocate-ip phase check stays as a backstop for settings cleared mid-job.
+test('auto-static without NetBox settings rejects before a job exists', async () => {
+  const saves = [];
+  const m = createProvisionManager(base({
+    proxmoxStore: makeStore(PRESET_AUTO), makeClient: () => okClient(),
+    save: (list) => saves.push(list),
+  }));
+  await expect(m.createProvision({ presetId: 'p3', hostname: 'dev-01' }))
+    .rejects.toThrow(/auto-static requires the NetBox integration/);
+  expect(m.listProvisions()).toEqual([]);
+  expect(saves.flat()).toEqual([]); // nothing persisted either
+});
+
 test('a create failure releases the reserved IP and the job errors', async () => {
   const { calls, client: netbox } = fakeNetbox();
   const client = { ...okClient(), createLxc: async () => { throw new Error('storage full'); } };
@@ -342,8 +357,24 @@ test('unconfigured NetBox fails fast with the settings-modal message', async () 
     netboxStore: { getSettings: async () => null },
     load: () => [], save: () => {},
   });
+  await expect(m.createProvision({ presetId: 'p3', hostname: 'dev-01' }))
+    .rejects.toThrow(/configure it in Settings/);
+  expect(m.listProvisions()).toEqual([]);
+});
+
+// The allocate-ip phase re-checks settings as a backstop: clearing NetBox
+// between the accepted request and the phase running errors the job.
+test('settings cleared after the request still error in the allocate-ip phase', async () => {
+  let calls = 0;
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(PRESET_AUTO), boxStore: fakeBoxStore(), makeClient: okClient,
+    netboxStore: { getSettings: async () => (++calls === 1 ? nbStore.getSettings() : null) },
+    makeNetboxClient: () => fakeNetbox().client,
+    load: () => [], save: () => {},
+  });
   const j = await m.createProvision({ presetId: 'p3', hostname: 'dev-01' });
   await m._settled(j.id);
+  expect(m.getProvision(j.id).status).toBe('error');
   expect(m.getProvision(j.id).error).toContain('configure it in Settings');
 });
 

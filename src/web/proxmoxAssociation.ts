@@ -11,6 +11,12 @@ export function associationMutation(current: PveBoxLink | undefined, draft: Draf
   return { kind: 'link' as const, link: { hostId: draft.hostId, node: draft.node, vmid: draft.vmid } };
 }
 
+// Linked boxes always show the section (a stale link must stay visible so it
+// can be unlinked); unlinked boxes only see it once a host profile exists.
+export function associationSectionVisible(hostCount: number, linked: boolean) {
+  return linked || hostCount > 0;
+}
+
 // box is null in add mode: the box doesn't exist yet, so the caller passes the
 // freshly created id to commit() after api.addBox resolves. The link/unlink
 // calls themselves are unchanged — the server validates the target either way.
@@ -105,6 +111,15 @@ export function createProxmoxAssociationEditor(box: Box | null) {
     await loadHosts(current?.hostId).catch(showError);
   }
   renderSummary();
+  // With no hosts and no link the picker could only error — hide the whole
+  // section. A fetch failure keeps it hidden (same "never show a dead
+  // button" rule as the sidebar Proxmox button in main.ts).
+  if (!current) {
+    section.hidden = true;
+    void pve.hosts()
+      .then((hosts) => { section.hidden = !associationSectionVisible(hosts.length, false); })
+      .catch(() => {});
+  }
   return {
     element: section,
     async commit(boxId: string) {

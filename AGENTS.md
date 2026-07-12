@@ -158,11 +158,13 @@ Command selection, recent-command history, and the CodeMirror bash-script editor
 `proxmox.ts`/`proxmoxUi.ts` (the Proxmox fetch layer and operations-only hub shell: Containers,
 Presets, Provision, and Activity tabs — host/secret setup lives in the settings modal),
 `proxmoxPresets.ts` (the Presets tab's master-detail create/edit/delete form, dependent Proxmox
-loaders, stale saved-option fallbacks, and additional-disk modal),
+loaders, stale saved-option fallbacks, and additional-disk modal; the `auto-static` IP mode is
+offered only once NetBox is configured),
 `proxmoxContainers.ts` (the Containers tab's linked-LXC list with state-gated lifecycle actions and
 the deprovision confirm dialog), `proxmoxActivity.ts` (the Activity tab merging provision and
-lifecycle jobs newest-first), `proxmoxAssociation.ts` (the Edit Box modal's manual Proxmox
-link/unlink picker), `settingsUi.ts` (the ⚙ settings
+lifecycle jobs newest-first), `proxmoxAssociation.ts` (the Add/Edit Box modals' manual Proxmox
+link/unlink picker — hidden until a Proxmox host profile exists, except for already-linked
+boxes), `settingsUi.ts` (the ⚙ settings
 modal's tabbed shell, with NetBox (`settingsNetbox.ts`) and Proxmox host/secret
 (`settingsProxmox.ts`) tabs) with `settingsForm.ts` (pure payload/result helpers), `netbox.ts`
 (fetch layer), and `dom.ts` (shared DOM builders used by both the settings modal and the hub),
