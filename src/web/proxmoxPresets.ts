@@ -146,11 +146,12 @@ export async function renderPresetsTab(content: HTMLElement, deps: PresetsDeps):
     let netboxConfigured = true;
     const syncNetwork = () => {
       const mode = ipMode.value;
-      cidrGateway.style.display = mode === 'static' || mode === 'auto-static' ? '' : 'none';
-      cidrField.style.display = mode === 'static' ? '' : 'none';
+      // auto-static needs neither field: the IP is allocated from NetBox and
+      // the gateway is inferred (the prefix's first usable IP).
+      cidrGateway.style.display = mode === 'static' ? '' : 'none';
       vlan.placeholder = mode === 'auto-static' ? 'vlan (required)' : 'vlan (optional)';
       autoHint.textContent = mode === 'auto-static'
-        ? `IP auto-allocated from the NetBox prefix for VLAN ${vlan.value || 'N'}.${netboxConfigured ? '' : ' — configure NetBox in Settings first'}`
+        ? `IP + gateway auto-derived from the NetBox prefix for VLAN ${vlan.value || 'N'}.${netboxConfigured ? '' : ' — configure NetBox in Settings first'}`
         : '';
     };
     ipMode.addEventListener('change', syncNetwork);

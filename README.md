@@ -287,9 +287,10 @@ private half of any key stays in your own SSH setup — Tmuxifier never stores p
 **4. Define a preset and provision.** Back in the dashboard's **Proxmox** hub (the sidebar
 button appears once at least one host is configured in Settings): **Presets → Add** a
 blueprint (template, CPU/mem/disk, storage, network). Network IP mode is `dhcp`, `static` (a
-fixed CIDR + gateway), or `auto-static` — pick a VLAN + gateway on the preset and Tmuxifier
-reserves the next free address from the NetBox prefix for that VLAN at provision time, stamps it
-into the container, and releases it if provisioning fails or when the container is deprovisioned
+fixed CIDR + gateway), or `auto-static` — pick just a VLAN on the preset and Tmuxifier
+reserves the next free address from the NetBox prefix for that VLAN at provision time (the
+gateway is inferred as the prefix's first usable IP and is never handed out), stamps it into the
+container, and releases it if provisioning fails or when the container is deprovisioned
 (requires the NetBox integration in Settings (⚙)). Then **Provision → pick a preset → enter a
 hostname** (optionally a tag and oh-my-tmux/zsh/bash). Watch the live task log; once the container
 is up Tmuxifier installs tmux (and any selected frameworks) over SSH, then an **Open terminal**
