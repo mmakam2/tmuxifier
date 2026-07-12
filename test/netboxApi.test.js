@@ -50,18 +50,18 @@ test('pin mode: no fingerprint pinned yet reports tls with the observed fingerpr
   expect(calls).toHaveLength(0);
 });
 
-test('pin mode: matching fingerprint (case/sep-insensitive) pins the probed chain as CA trust', async () => {
+test('pin mode: matching fingerprint (case/sep-insensitive) hands the pin to the transport', async () => {
   const calls = [];
   const res = await testNetbox(
     { ...CA, tlsMode: 'pin', fingerprint256: 'aabb' },
-    { connect: async () => ({ fingerprint256: 'AA:BB', raw: Buffer.from('x'), chain: [Buffer.from('x'), Buffer.from('y')] }),
+    { connect: async () => ({ fingerprint256: 'AA:BB', raw: Buffer.from('x') }),
       request: async (o) => { calls.push(o); return ok; } },
   );
   expect(res.ok).toBe(true);
-  expect(calls[0].tls.rejectUnauthorized).toBe(true);
-  expect(calls[0].tls.ca).toHaveLength(2);
-  expect(calls[0].tls.ca[0]).toContain('BEGIN CERTIFICATE');
-  expect(typeof calls[0].tls.checkServerIdentity).toBe('function');
+  // The transport (pinnedSocket) verifies this pin on the request's own
+  // connection — no rebuilt CA store, which can't verify chains that never
+  // reach a self-signed cert (e.g. Caddy's local CA).
+  expect(calls[0].tls).toEqual({ pin: 'aabb' });
 });
 
 test('ca mode: a certificate verification error probes and offers the observed fingerprint', async () => {

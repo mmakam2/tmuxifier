@@ -142,8 +142,11 @@ pattern for new modules.
   deletes any remaining NetBox records matching the box's current IP, so manually created
   records don't go stale (best-effort).
 - `boxRemoval.js` — shared session/tmux/store cleanup for ordinary removal and verified deprovision.
-- `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`derToPem`/`normFp`) used by
-  both the Proxmox and NetBox API clients.
+- `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`pinnedSocket`/`normFp`) used
+  by both the Proxmox and NetBox API clients. Pin mode verifies the pinned fingerprint on each
+  request's own connection (`pinnedSocket` via `createConnection`) instead of OpenSSL chain
+  verification — a served chain that never reaches a self-signed cert (e.g. Caddy's local CA
+  serving leaf+intermediate) can't satisfy a rebuilt CA store.
 - `netboxValidate.js` / `netboxStore.js` / `netboxApi.js` — NetBox integration settings: pure
   input validators, the sealed `data/netbox.json` store (token AES-256-GCM encrypted, redacted to
   `hasToken` on read), and the `/api/status/` connection probe with ca/pin/insecure TLS modes.

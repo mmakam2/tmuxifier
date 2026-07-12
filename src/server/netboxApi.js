@@ -1,6 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
-import { tlsProbe, derToPem, normFp } from './tlsPin.js';
+import { tlsProbe, pinnedSocket, normFp } from './tlsPin.js';
 
 // Certificate-verification failure codes OpenSSL/Node surface on the request
 // error. Seeing one in ca mode means "the cert exists but isn't CA-trusted" —
@@ -26,11 +26,16 @@ function jsonRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 1000
     const req = mod.request({
       hostname: u.hostname, port: u.port || (secure ? 443 : 80), path: u.pathname + u.search,
       method, headers: reqHeaders, timeout: timeoutMs,
-      ...(secure ? {
-        rejectUnauthorized: tlsOpts.rejectUnauthorized !== false,
-        ...(tlsOpts.ca ? { ca: tlsOpts.ca } : {}),
-        ...(typeof tlsOpts.checkServerIdentity === 'function' ? { checkServerIdentity: tlsOpts.checkServerIdentity } : {}),
-      } : {}),
+      ...(secure ? (tlsOpts.pin ? {
+        // Pin mode: the fingerprint is verified on this request's own
+        // connection before any header (the token) is written. No agent
+        // option here: http honors createConnection only when agent is
+        // left undefined (agent: false would mint a normal Agent instead).
+        createConnection: (_opts, oncreate) => {
+          pinnedSocket({ host: u.hostname, port: Number(u.port) || 443, fingerprint256: tlsOpts.pin, timeoutMs })
+            .then((socket) => oncreate(null, socket), (error) => oncreate(error));
+        },
+      } : { rejectUnauthorized: tlsOpts.rejectUnauthorized !== false }) : {}),
     }, (res) => {
       let data = '';
       res.on('data', (c) => { data += c; });
@@ -61,8 +66,11 @@ async function resolveTlsOpts(settings, { connect, timeoutMs }) {
   if (normFp(probe.fingerprint256) !== normFp(settings.fingerprint256)) {
     return { mode, failure: { kind: 'tls', fingerprint256: probe.fingerprint256 || null, error: 'TLS fingerprint mismatch — the NetBox certificate changed; re-pin to accept the new one' } };
   }
-  const trust = probe.chain && probe.chain.length ? probe.chain : [probe.raw];
-  return { mode, tlsOpts: { ca: trust.map(derToPem), rejectUnauthorized: true, checkServerIdentity: () => undefined } };
+  // The pin is the trust anchor: the transport re-verifies it on the actual
+  // request connection (pinnedSocket). Rebuilding a CA store from the probed
+  // chain can never verify a chain that doesn't end in a self-signed cert
+  // (e.g. Caddy's local CA serves leaf+intermediate, never the root).
+  return { mode, tlsOpts: { pin: settings.fingerprint256 } };
 }
 
 // Probe {url}/api/status/ with the token. Resolves a result object instead of

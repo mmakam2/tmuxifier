@@ -1,5 +1,5 @@
 import https from 'node:https';
-import { tlsProbe, derToPem, normFp } from './tlsPin.js';
+import { tlsProbe, pinnedSocket, normFp } from './tlsPin.js';
 
 function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 15000, tls: tlsOpts = {} }) {
   return new Promise((resolve, reject) => {
@@ -9,9 +9,16 @@ function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 150
     // not supported" — so every POST with a body (e.g. createLxc) would fail.
     const reqHeaders = body == null ? headers : { ...headers, 'Content-Length': Buffer.byteLength(body) };
     const req = https.request({ hostname: u.hostname, port: u.port || 8006, path: u.pathname + u.search, method, headers: reqHeaders, timeout: timeoutMs,
-      rejectUnauthorized: tlsOpts.rejectUnauthorized !== false,
-      ...(tlsOpts.ca ? { ca: tlsOpts.ca } : {}),
-      ...(typeof tlsOpts.checkServerIdentity === 'function' ? { checkServerIdentity: tlsOpts.checkServerIdentity } : {}),
+      ...(tlsOpts.pin ? {
+        // Pin mode: the fingerprint is verified on this request's own
+        // connection before any header (the token) is written. No agent
+        // option here: http honors createConnection only when agent is
+        // left undefined (agent: false would mint a normal Agent instead).
+        createConnection: (_opts, oncreate) => {
+          pinnedSocket({ host: u.hostname, port: Number(u.port) || 8006, fingerprint256: tlsOpts.pin, timeoutMs })
+            .then((socket) => oncreate(null, socket), (error) => oncreate(error));
+        },
+      } : { rejectUnauthorized: tlsOpts.rejectUnauthorized !== false }),
     }, (res) => { let data = ''; res.on('data', (c) => { data += c; }); res.on('end', () => { let json = null; try { json = data ? JSON.parse(data) : null; } catch {} resolve({ status: res.statusCode, statusMessage: res.statusMessage, json, text: data }); }); });
     req.on('timeout', () => req.destroy(new Error('Proxmox request timed out')));
     req.on('error', reject);
@@ -35,8 +42,11 @@ export function createProxmoxClient({ host, request = httpsRequest, connect = tl
       const want = normFp(host.fingerprint256);
       const probe = await connect({ host: hostName, port, timeoutMs });
       if (!want || normFp(probe.fingerprint256) !== want) throw new Error('TLS fingerprint mismatch — the Proxmox host certificate changed; re-add the host to accept the new certificate');
-      const trust = probe.chain && probe.chain.length ? probe.chain : [probe.raw];
-      return { ca: trust.map(derToPem), rejectUnauthorized: true, checkServerIdentity: () => undefined };
+      // The pin is the trust anchor: the transport re-verifies it on the
+      // actual request connection (pinnedSocket). Rebuilding a CA store from
+      // the probed chain can never verify a chain that doesn't end in a
+      // self-signed cert (e.g. an internal CA that serves leaf+intermediate).
+      return { pin: host.fingerprint256 };
     })().catch((e) => { tlsPromise = null; throw e; });
     return tlsPromise;
   }

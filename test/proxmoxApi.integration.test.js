@@ -103,3 +103,49 @@ describe.runIf(opensslOk)('proxmoxApi TLS pinning with a CA-signed cert (default
     await expect(client.version()).rejects.toThrow(/fingerprint/);
   });
 });
+
+// A reverse proxy with an internal CA (e.g. Caddy's local authority) serves
+// leaf + intermediate and — like every properly configured TLS server —
+// never the self-signed root. The presented chain therefore has no
+// self-signed anchor, so rebuilding a CA store from it can never verify:
+// OpenSSL fails with UNABLE_TO_GET_ISSUER_CERT. Pin mode must trust the
+// pinned fingerprint itself, not chain verification.
+describe.runIf(opensslOk)('proxmoxApi TLS pinning with an intermediate-signed cert (Caddy shape)', () => {
+  let server, port, dir, gotAuth;
+
+  beforeAll(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pve-tls-int-'));
+    const p = (name) => path.join(dir, name);
+    fs.writeFileSync(p('ca.ext'), 'basicConstraints=critical,CA:TRUE\n');
+    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-keyout', p('root-key.pem'), '-out', p('root-cert.pem'), '-days', '1', '-nodes', '-subj', '/CN=test-root-ca'], { stdio: 'ignore' });
+    execFileSync('openssl', ['req', '-newkey', 'rsa:2048', '-keyout', p('int-key.pem'), '-out', p('int.csr'), '-nodes', '-subj', '/CN=test-intermediate'], { stdio: 'ignore' });
+    execFileSync('openssl', ['x509', '-req', '-in', p('int.csr'), '-CA', p('root-cert.pem'), '-CAkey', p('root-key.pem'), '-CAcreateserial', '-days', '1', '-extfile', p('ca.ext'), '-out', p('int-cert.pem')], { stdio: 'ignore' });
+    execFileSync('openssl', ['req', '-newkey', 'rsa:2048', '-keyout', p('leaf-key.pem'), '-out', p('leaf.csr'), '-nodes', '-subj', '/CN=pve-node'], { stdio: 'ignore' });
+    execFileSync('openssl', ['x509', '-req', '-in', p('leaf.csr'), '-CA', p('int-cert.pem'), '-CAkey', p('int-key.pem'), '-CAcreateserial', '-days', '1', '-out', p('leaf-cert.pem')], { stdio: 'ignore' });
+    server = https.createServer({
+      cert: fs.readFileSync(p('leaf-cert.pem'), 'utf8') + fs.readFileSync(p('int-cert.pem'), 'utf8'), // root withheld
+      key: fs.readFileSync(p('leaf-key.pem')),
+    }, (req, res) => {
+      gotAuth = req.headers.authorization || null;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: { version: '8.4' } }));
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    port = server.address().port;
+  });
+  afterAll(() => { server?.close(); if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
+
+  test('pin mode connects when the served chain never reaches a self-signed cert', async () => {
+    const insp = await inspectEndpoint(`127.0.0.1:${port}`);
+    expect(insp.reachable).toBe(true);
+    const client = createProxmoxClient({ host: { endpoint: `127.0.0.1:${port}`, tokenId: 'user@pam!t', tokenSecret: 'sek', verifyMode: 'pin', fingerprint256: insp.fingerprint256 } });
+    expect(await client.version()).toEqual({ version: '8.4' });
+  });
+
+  test('pin mode rejects a wrong fingerprint on the intermediate-signed cert and never sends the token', async () => {
+    gotAuth = null;
+    const client = createProxmoxClient({ host: { endpoint: `127.0.0.1:${port}`, tokenId: 'user@pam!t', tokenSecret: 'SUPER-SECRET', verifyMode: 'pin', fingerprint256: 'DE:AD:BE:EF:00:11' } });
+    await expect(client.version()).rejects.toThrow(/fingerprint/);
+    expect(gotAuth).toBeNull();
+  });
+});

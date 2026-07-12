@@ -55,11 +55,11 @@ test('surfaces the PVE status message (and body) so errors like 501 are not opaq
 });
 
 test('pin mode: a fingerprint mismatch rejects BEFORE the token-bearing request is sent', async () => {
-  // match -> the real request is made with the pinned cert as CA and rejectUnauthorized true
+  // match -> the real request carries the pin for the transport to verify on
+  // its own connection (pinnedSocket)
   const reqOk = fakeRequest(() => ({ status: 200, json: { data: {} } }));
   await createProxmoxClient({ host: HOST, request: reqOk, connect: fakeConnect('AB:CD:EF') }).version();
-  expect(reqOk.calls[0].tls.rejectUnauthorized).toBe(true);
-  expect(Array.isArray(reqOk.calls[0].tls.ca)).toBe(true);
+  expect(reqOk.calls[0].tls).toEqual({ pin: HOST.fingerprint256 });
   // mismatch -> throws, and the token-bearing request is NEVER made (no token leak)
   const reqBad = fakeRequest(() => ({ status: 200, json: { data: {} } }));
   await expect(createProxmoxClient({ host: HOST, request: reqBad, connect: fakeConnect('00:11:22') }).version()).rejects.toThrow(/fingerprint/);
