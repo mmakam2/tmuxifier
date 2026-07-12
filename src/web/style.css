@@ -67,6 +67,10 @@
   --green: #58e58c;
 }
 * { box-sizing: border-box; }
+/* The hidden attribute must always win: a class display rule (flex/grid) otherwise
+   beats the UA [hidden] rule — this trap bit .pve-container-row, .radio-group,
+   .box-pve-association, and .fleet-bar before this global override. */
+[hidden] { display: none !important; }
 /* The body carries the page gradient, so it must span the full viewport even
    when its content is short (the login card): with an auto-height body the
    gradient's positioning area hugs the content and the canvas tiles it — a
@@ -192,7 +196,6 @@ body {
 .group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
 .group-count { min-width: 22px; text-align: right; color: #6e7681; font-variant-numeric: tabular-nums; }
 .group-body { list-style: none; margin: 2px 0 8px; padding: 0 0 0 16px; }
-.group-body[hidden] { display: none; }
 .box { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; }
 .box:hover { background: var(--panel-2); }
 .box.active { background: rgba(36, 211, 232, 0.12); box-shadow: inset 3px 0 0 var(--cyan); }
@@ -523,7 +526,6 @@ body {
   line-height: 1.5;
   letter-spacing: 0;
 }
-.events-badge[hidden] { display: none; }
 /* Event rows reuse the drawer chrome (.fleet-panel) and the meta-line severity
    colours; 'auth' is the purple needs-login tier, an action rather than an error. */
 .events-list { list-style: none; margin: 0; padding: 0; }
@@ -619,9 +621,6 @@ body {
 .pve-container-row button.warn { color: #d29922; }
 .pve-container-search { flex: 1; max-width: 240px; min-width: 0; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: #131722; color: var(--text); font-size: 13px; }
 .pve-container-search::placeholder { color: #4a5568; }
-/* .pve-container-row sets display:grid, which beats the UA [hidden] rule —
-   without this, the search filter could never actually hide a row. */
-.pve-container-row[hidden] { display: none; }
 .pve-badge.stopped, .pve-badge.unknown { color: var(--muted); }
 .pve-badge.missing { color: #f85149; }
 .pve-deprovision-modal { width: 460px; }
