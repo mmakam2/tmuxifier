@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isIP } from 'node:net';
 import { createNetboxClient } from './netboxApi.js';
 
 const ACTIONS = new Set(['start', 'shutdown', 'stop', 'reboot', 'deprovision']);
@@ -100,23 +101,49 @@ export function createProxmoxLifecycleManager({
     await waitForState(job, expected);
   }
 
-  // Best-effort IPAM cleanup: only auto-static provisions carry netboxIpId on
-  // the link, and a release failure must never fail a deprovision whose
-  // container is already destroyed — log it and let local cleanup finish.
+  // Best-effort IPAM cleanup: release the auto-static allocation by its
+  // stamped id, then delete every record matching the box's current IP so a
+  // manually created NetBox record doesn't outlive the container. A NetBox
+  // failure must never fail a deprovision whose container is already
+  // destroyed — log it and let local cleanup finish.
   async function releaseNetboxIp(job, box) {
     const ipId = box?.proxmox?.netboxIpId;
-    if (!ipId || !netboxStore) return;
+    const hostIp = isIP(String(box?.host || '')) ? box.host : null;
+    if ((!ipId && !hostIp) || !netboxStore) return;
     let settings = null;
     try { settings = await netboxStore.getSettings({ withSecret: true }); } catch { settings = null; }
     if (!settings) {
-      appendLog(job, `# could not release NetBox ip ${ipId}: NetBox integration not configured\n`); persist();
+      if (ipId) { appendLog(job, `# could not release NetBox ip ${ipId}: NetBox integration not configured\n`); persist(); }
       return;
     }
+    const client = makeNetboxClient(settings);
+    if (ipId) {
+      try {
+        await client.releaseIp(ipId);
+        appendLog(job, `# released NetBox ip ${ipId}\n`); persist();
+      } catch (error) {
+        appendLog(job, `# could not release NetBox ip ${ipId}: ${error.message}\n`); persist();
+      }
+    }
+    if (!hostIp) return;
+    let matches;
     try {
-      await makeNetboxClient(settings).releaseIp(ipId);
-      appendLog(job, `# released NetBox ip ${ipId}\n`); persist();
+      matches = await client.findIpsByAddress(hostIp);
     } catch (error) {
-      appendLog(job, `# could not release NetBox ip ${ipId}: ${error.message}\n`); persist();
+      appendLog(job, `# could not look up NetBox ip records for ${hostIp}: ${error.message}\n`); persist();
+      return;
+    }
+    if (!matches.length) {
+      if (!ipId) { appendLog(job, `# no NetBox ip record matches ${hostIp}\n`); persist(); }
+      return;
+    }
+    for (const rec of matches) {
+      try {
+        await client.releaseIp(rec.id);
+        appendLog(job, `# released NetBox ip ${rec.id} (${rec.address})\n`); persist();
+      } catch (error) {
+        appendLog(job, `# could not release NetBox ip ${rec.id} (${rec.address}): ${error.message}\n`); persist();
+      }
     }
   }
 

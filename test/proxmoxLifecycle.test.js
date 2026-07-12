@@ -367,7 +367,7 @@ test('deprovision releases the NetBox IP after destroy and logs it', async () =>
       taskLog: async () => [],
     }),
     netboxStore: { getSettings: async () => nbSettings },
-    makeNetboxClient: () => ({ releaseIp: async (id) => { released.push(id); } }),
+    makeNetboxClient: () => ({ findIpsByAddress: async () => [], releaseIp: async (id) => { released.push(id); } }),
   });
   const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
   await manager._settled(job.id);
@@ -402,7 +402,7 @@ test('a failing release never fails the deprovision job', async () => {
       taskLog: async () => [],
     }),
     netboxStore: { getSettings: async () => nbSettings },
-    makeNetboxClient: () => ({ releaseIp: async () => { throw new Error('netbox down'); } }),
+    makeNetboxClient: () => ({ findIpsByAddress: async () => [], releaseIp: async () => { throw new Error('netbox down'); } }),
   });
   const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
   await manager._settled(job.id);
@@ -417,7 +417,7 @@ test('missing-container deprovision also releases the NetBox IP', async () => {
     boxStore: { getBox: async (id) => id === 'B1' ? BOX_WITH_IP : undefined },
     removeLinkedBox: async (id) => removed.push(id),
     netboxStore: { getSettings: async () => nbSettings },
-    makeNetboxClient: () => ({ releaseIp: async (id) => { released.push(id); } }),
+    makeNetboxClient: () => ({ findIpsByAddress: async () => [], releaseIp: async (id) => { released.push(id); } }),
   });
   const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
   await manager._settled(job.id);
@@ -425,6 +425,121 @@ test('missing-container deprovision also releases the NetBox IP', async () => {
   expect(released).toEqual([99]);
   expect(manager.getJob(job.id).status).toBe('done');
   expect(manager.getJob(job.id).log).toContain('released NetBox ip 99');
+});
+
+test('deprovision of a manually linked box deletes the NetBox record matching its current IP', async () => {
+  const lookups = [];
+  const released = [];
+  const { manager } = fixture('missing', {
+    netboxStore: { getSettings: async () => nbSettings },
+    makeNetboxClient: () => ({
+      findIpsByAddress: async (ip) => { lookups.push(ip); return [{ id: 42, address: '192.168.1.10/24' }]; },
+      releaseIp: async (id) => { released.push(id); },
+    }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  const done = manager.getJob(job.id);
+  expect(done.status).toBe('done');
+  expect(lookups).toEqual(['192.168.1.10']);
+  expect(released).toEqual([42]);
+  expect(done.log).toContain('released NetBox ip 42 (192.168.1.10/24)');
+});
+
+test('every record matching the current IP is deleted; one failure does not stop the rest', async () => {
+  const released = [];
+  const { manager } = fixture('missing', {
+    netboxStore: { getSettings: async () => nbSettings },
+    makeNetboxClient: () => ({
+      findIpsByAddress: async () => [
+        { id: 42, address: '192.168.1.10/24' },
+        { id: 43, address: '192.168.1.10/32' },
+        { id: 44, address: '192.168.1.10/25' },
+      ],
+      releaseIp: async (id) => { if (id === 43) throw new Error('locked'); released.push(id); },
+    }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  const done = manager.getJob(job.id);
+  expect(done.status).toBe('done');
+  expect(released).toEqual([42, 44]);
+  expect(done.log).toContain('could not release NetBox ip 43 (192.168.1.10/32): locked');
+  expect(done.log).toContain('released NetBox ip 44 (192.168.1.10/25)');
+});
+
+test('a stamped allocation and a same-IP manual record are both released', async () => {
+  const released = [];
+  const { manager } = fixture('missing', {
+    boxStore: { getBox: async (id) => id === 'B1' ? BOX_WITH_IP : undefined },
+    netboxStore: { getSettings: async () => nbSettings },
+    makeNetboxClient: () => ({
+      findIpsByAddress: async () => [{ id: 42, address: '192.168.1.10/32' }],
+      releaseIp: async (id) => { released.push(id); },
+    }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(released).toEqual([99, 42]);
+  const log = manager.getJob(job.id).log;
+  expect(log).toContain('released NetBox ip 99');
+  expect(log).toContain('released NetBox ip 42 (192.168.1.10/32)');
+});
+
+test('no matching record on an unstamped box logs the miss', async () => {
+  const released = [];
+  const { manager } = fixture('missing', {
+    netboxStore: { getSettings: async () => nbSettings },
+    makeNetboxClient: () => ({
+      findIpsByAddress: async () => [],
+      releaseIp: async (id) => { released.push(id); },
+    }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(released).toEqual([]);
+  expect(manager.getJob(job.id).log).toContain('no NetBox ip record matches 192.168.1.10');
+});
+
+test('a stamped release followed by an empty sweep does not log a no-match line', async () => {
+  const { manager } = fixture('missing', {
+    boxStore: { getBox: async (id) => id === 'B1' ? BOX_WITH_IP : undefined },
+    netboxStore: { getSettings: async () => nbSettings },
+    makeNetboxClient: () => ({ findIpsByAddress: async () => [], releaseIp: async () => {} }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  const log = manager.getJob(job.id).log;
+  expect(log).toContain('released NetBox ip 99');
+  expect(log).not.toContain('no NetBox ip record matches');
+});
+
+test('a failing IP lookup never fails the deprovision job', async () => {
+  const { manager } = fixture('missing', {
+    netboxStore: { getSettings: async () => nbSettings },
+    makeNetboxClient: () => ({
+      findIpsByAddress: async () => { throw new Error('netbox down'); },
+      releaseIp: async () => { throw new Error('releaseIp must not run'); },
+    }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id).status).toBe('done');
+  expect(manager.getJob(job.id).log).toContain('could not look up NetBox ip records for 192.168.1.10: netbox down');
+});
+
+test('a hostname-hosted box without a stamp never touches NetBox', async () => {
+  let touched = 0;
+  const { manager } = fixture('missing', {
+    boxStore: { getBox: async (id) => id === 'B1' ? { ...BOX, host: 'dev-01.lan' } : undefined },
+    netboxStore: { getSettings: async () => nbSettings },
+    makeNetboxClient: () => { touched += 1; return {}; },
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id).status).toBe('done');
+  expect(touched).toBe(0);
+  expect(manager.getJob(job.id).log).not.toContain('NetBox');
 });
 
 test('a link with a netboxIpId but no NetBox settings logs the skip instead of failing silently', async () => {

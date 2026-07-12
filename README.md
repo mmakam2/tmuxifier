@@ -291,7 +291,9 @@ fixed CIDR + gateway), or `auto-static` — pick just a VLAN on the preset and T
 reserves the next free address from the NetBox prefix for that VLAN at provision time (the
 gateway is inferred as the prefix's first usable IP and is never handed out), stamps it into the
 container, and releases it if provisioning fails or when the container is deprovisioned
-(requires the NetBox integration in Settings (⚙)). Then **Provision → pick a preset → enter a
+(requires the NetBox integration in Settings (⚙)). Deprovisioning also deletes any NetBox
+IP record matching the box's current IP — including records created by hand — so manually
+linked containers don't leave stale IPAM entries behind. Then **Provision → pick a preset → enter a
 hostname** (optionally a tag and oh-my-tmux/zsh/bash). Watch the live task log; once the container
 is up Tmuxifier installs tmux (and any selected frameworks) over SSH, then an **Open terminal**
 button drops you into it.

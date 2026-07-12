@@ -138,8 +138,9 @@ pattern for new modules.
   `/cluster/resources` call per host); auto-follows node migrations by updating the stored
   link's node (guarded against active lifecycle jobs).
 - `proxmoxLifecycle.js` / `proxmoxLifecycleStore.js` — persisted LXC power/deprovision jobs in
-  `data/proxmox-lifecycle-jobs.json`; deprovision releases the box's NetBox-allocated IP
-  (best-effort).
+  `data/proxmox-lifecycle-jobs.json`; deprovision releases the box's NetBox-allocated IP and
+  deletes any remaining NetBox records matching the box's current IP, so manually created
+  records don't go stale (best-effort).
 - `boxRemoval.js` — shared session/tmux/store cleanup for ordinary removal and verified deprovision.
 - `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`derToPem`/`normFp`) used by
   both the Proxmox and NetBox API clients.

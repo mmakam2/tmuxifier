@@ -148,6 +148,12 @@ export function createNetboxClient(settings, { request = jsonRequest, connect = 
       if (!created || !created.address) throw new Error(`prefix ${prefix.prefix} has no available IPs`);
       return { id: created.id, address: created.address, gateway };
     },
+    // A mask-less ?address= filter matches on host address regardless of the
+    // record's prefix length, so one query catches /24 and /32 twins.
+    async findIpsByAddress(address) {
+      const data = await call('GET', `/ipam/ip-addresses/?address=${encodeURIComponent(address)}`);
+      return ((data && data.results) || []).map((rec) => ({ id: rec.id, address: rec.address }));
+    },
     async releaseIp(id) { await call('DELETE', `/ipam/ip-addresses/${encodeURIComponent(id)}/`); },
   };
 }
