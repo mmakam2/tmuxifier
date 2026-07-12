@@ -219,7 +219,7 @@ In `CLAUDE.md`/`AGENTS.md`, extend the module descriptions: `proxmoxPresets.ts` 
 Run: `npm test`
 Expected: typecheck clean; all vitest files pass (679+ tests).
 
-- [ ] **Step 3: Commit (owner approval required — harness rule: commit only when asked)**
+- [x] **Step 3: Commit (owner approval required — harness rule: commit only when asked)**
 
 ```bash
 git add -A
