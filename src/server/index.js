@@ -125,6 +125,7 @@ const lifecycleStore = createProxmoxLifecycleStore({ dataDir: config.dataDir });
 const lifecycleManager = createProxmoxLifecycleManager({
   boxStore: store, proxmoxStore, inventory: proxmoxInventory,
   makeClient: makeProxmoxClient, removeLinkedBox: removeBox,
+  netboxStore,
   load: () => lifecycleStore.load(), save: (jobs) => lifecycleStore.save(jobs),
   pollMs: config.pvePollMs,
   taskTimeoutMs: config.pveProvisionTimeoutMs,

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createNetboxClient } from './netboxApi.js';
 
 const ACTIONS = new Set(['start', 'shutdown', 'stop', 'reboot', 'deprovision']);
 const TERMINAL = new Set(['done', 'error', 'interrupted']);
@@ -8,6 +9,7 @@ const serviceError = (statusCode, message) => Object.assign(new Error(message), 
 
 export function createProxmoxLifecycleManager({
   boxStore, proxmoxStore, inventory, makeClient, removeLinkedBox,
+  netboxStore = null, makeNetboxClient = createNetboxClient,
   load = () => [], save = () => {}, now = () => new Date().toISOString(), makeId = randomUUID,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), pollMs = 1500,
   taskTimeoutMs = 600_000, shutdownTimeoutMs = taskTimeoutMs, maxPollFailures = 5,
@@ -98,12 +100,30 @@ export function createProxmoxLifecycleManager({
     await waitForState(job, expected);
   }
 
+  // Best-effort IPAM cleanup: only auto-static provisions carry netboxIpId on
+  // the link, and a release failure must never fail a deprovision whose
+  // container is already destroyed — log it and let local cleanup finish.
+  async function releaseNetboxIp(job, box) {
+    const ipId = box?.proxmox?.netboxIpId;
+    if (!ipId || !netboxStore) return;
+    let settings = null;
+    try { settings = await netboxStore.getSettings({ withSecret: true }); } catch { settings = null; }
+    if (!settings) return;
+    try {
+      await makeNetboxClient(settings).releaseIp(ipId);
+      appendLog(job, `# released NetBox ip ${ipId}\n`); persist();
+    } catch (error) {
+      appendLog(job, `# could not release NetBox ip ${ipId}: ${error.message}\n`); persist();
+    }
+  }
+
   async function runDeprovision(job) {
     const { box, client } = await resolveTarget(job);
     let current = await inventory.refreshBox(box);
     if (current.state === 'unknown') throw new Error(current.error || 'Proxmox state unavailable');
     if (current.state === 'missing') {
       job.phase = 'unlink'; persist();
+      await releaseNetboxIp(job, box);
       await removeLinkedBox(job.boxId);
       return;
     }
@@ -122,6 +142,7 @@ export function createProxmoxLifecycleManager({
     job.phase = 'verify'; persist();
     await waitForState(job, 'missing', taskTimeoutMs);
     job.phase = 'unlink'; persist();
+    await releaseNetboxIp(job, box);
     await removeLinkedBox(job.boxId);
   }
 

@@ -350,3 +350,79 @@ test('failed local cleanup can be retried through the missing-container path', a
   expect(manager.getJob(retry.id).status).toBe('done');
   expect(attempts).toBe(2);
 });
+
+const nbSettings = { url: 'https://netbox.example.com', tlsMode: 'ca', fingerprint256: null, token: 't' };
+const BOX_WITH_IP = { ...BOX, proxmox: { ...BOX.proxmox, netboxIpId: 99 } };
+
+test('deprovision releases the NetBox IP after destroy and logs it', async () => {
+  let state = 'running';
+  const released = [];
+  const { manager } = fixture('running', {
+    boxStore: { getBox: async (id) => id === 'B1' ? BOX_WITH_IP : undefined },
+    inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
+    makeClient: () => ({
+      shutdownLxc: async () => { state = 'stopped'; return 'UPID:shutdown'; },
+      destroyLxc: async () => { state = 'missing'; return 'UPID:destroy'; },
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+      taskLog: async () => [],
+    }),
+    netboxStore: { getSettings: async () => nbSettings },
+    makeNetboxClient: () => ({ releaseIp: async (id) => { released.push(id); } }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  const done = manager.getJob(job.id);
+  expect(done.status).toBe('done');
+  expect(released).toEqual([99]);
+  expect(done.log).toContain('released NetBox ip 99');
+});
+
+test('deprovision without a netboxIpId or without NetBox configured skips the release silently', async () => {
+  let touched = 0;
+  const { manager } = fixture('missing', {
+    netboxStore: { getSettings: async () => null },
+    makeNetboxClient: () => { touched += 1; return {}; },
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id).status).toBe('done');
+  expect(touched).toBe(0);
+  expect(manager.getJob(job.id).log).not.toContain('NetBox');
+});
+
+test('a failing release never fails the deprovision job', async () => {
+  let state = 'running';
+  const { manager } = fixture('running', {
+    boxStore: { getBox: async (id) => id === 'B1' ? BOX_WITH_IP : undefined },
+    inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
+    makeClient: () => ({
+      shutdownLxc: async () => { state = 'stopped'; return 'UPID:shutdown'; },
+      destroyLxc: async () => { state = 'missing'; return 'UPID:destroy'; },
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+      taskLog: async () => [],
+    }),
+    netboxStore: { getSettings: async () => nbSettings },
+    makeNetboxClient: () => ({ releaseIp: async () => { throw new Error('netbox down'); } }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id).status).toBe('done');
+  expect(manager.getJob(job.id).log).toContain('could not release NetBox ip 99: netbox down');
+});
+
+test('missing-container deprovision also releases the NetBox IP', async () => {
+  const removed = [];
+  const released = [];
+  const { manager } = fixture('missing', {
+    boxStore: { getBox: async (id) => id === 'B1' ? BOX_WITH_IP : undefined },
+    removeLinkedBox: async (id) => removed.push(id),
+    netboxStore: { getSettings: async () => nbSettings },
+    makeNetboxClient: () => ({ releaseIp: async (id) => { released.push(id); } }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(removed).toEqual(['B1']);
+  expect(released).toEqual([99]);
+  expect(manager.getJob(job.id).status).toBe('done');
+  expect(manager.getJob(job.id).log).toContain('released NetBox ip 99');
+});

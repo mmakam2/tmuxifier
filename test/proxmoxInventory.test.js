@@ -253,3 +253,15 @@ test('mergeProxmoxStatus adds state without hiding reachable missing links', () 
   expect(merged.b1).toMatchObject({ reachable: false, proxmoxState: 'stopped', proxmoxVmid: 131 });
   expect(merged.b2).toMatchObject({ reachable: true, proxmoxState: 'missing' });
 });
+
+test('the drift write preserves netboxIpId on the link', async () => {
+  const writes = [];
+  const box = linked('b1', 'proxmox02', 165);
+  box.proxmox.netboxIpId = 99;
+  const { inventory } = setup({
+    cluster: [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }],
+    boxStore: { getBox: async () => box, setProxmoxLink: async (id, link) => writes.push([id, link]) },
+  });
+  await inventory.refreshLinked([box]);
+  expect(writes[0][1].netboxIpId).toBe(99);
+});
