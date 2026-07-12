@@ -204,7 +204,7 @@ Extend the `proxmoxInventory.js` bullet in `CLAUDE.md`/`AGENTS.md` — after "au
 Run: `npm test`
 Expected: typecheck clean; all vitest files pass.
 
-- [ ] **Step 3: Commit (owner approval required — harness rule: commit only when asked)**
+- [x] **Step 3: Commit (owner approval required — harness rule: commit only when asked)**
 
 ```bash
 git add -A
