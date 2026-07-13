@@ -4,6 +4,8 @@ import '@xterm/xterm/css/xterm.css';
 import { reconnectDelay } from './reconnect';
 import { clipboardActionForKey, writeClipboard, readClipboard, type ClipboardDeps } from './clipboard';
 import { buildFontFamily, clampFontSize, DEFAULT_TERM_FONT_SIZE } from './termFont';
+import { api } from './api';
+import { filesFromDataTransfer, uploadName, pathInjection, sizeError, termSafe } from './upload';
 
 // Synchronous execCommand('copy') used when the async Clipboard API is missing
 // (insecure context) or rejects (document not focused). A hidden textarea is the
@@ -78,6 +80,55 @@ function wireClipboard(term: Terminal): void {
   });
 }
 
+// Pasting a file/image or dropping one onto the terminal uploads it to the
+// box's ~/.tmuxifier-uploads and types the quoted remote path into the PTY —
+// the path crosses the text-only ssh pipe, not the bytes. Text pastes take
+// the untouched native path (wireClipboard). Capture phase so the file case
+// wins before xterm's own paste handler sees the event.
+function wireUploads(parent: HTMLElement, term: Terminal, boxId: string): () => void {
+  async function uploadAll(files: File[]): Promise<void> {
+    const injections: string[] = [];
+    for (const f of files) {
+      const name = uploadName(f, Date.now());
+      const tooBig = sizeError(f.size, uploadMaxBytes);
+      if (tooBig) {
+        term.write(`\r\n\x1b[33m[upload failed: ${termSafe(`${name}: ${tooBig}`)}]\x1b[0m\r\n`);
+        continue;
+      }
+      term.write(`\r\n\x1b[2m[uploading ${termSafe(name)}…]\x1b[0m\r\n`);
+      try {
+        const res = await api.uploadFile(boxId, name, f);
+        injections.push(pathInjection(res.path));
+      } catch (e) {
+        term.write(`\r\n\x1b[33m[upload failed: ${termSafe((e as Error).message || 'error')}]\x1b[0m\r\n`);
+      }
+    }
+    if (injections.length) term.paste(injections.join(''));
+    term.focus();
+  }
+  const onPaste = (ev: ClipboardEvent) => {
+    const files = filesFromDataTransfer<File>(ev.clipboardData);
+    if (!files.length) return; // text paste — leave xterm's native handling alone
+    ev.preventDefault();
+    ev.stopPropagation();
+    void uploadAll(files);
+  };
+  const onDragOver = (ev: DragEvent) => { ev.preventDefault(); };
+  const onDrop = (ev: DragEvent) => {
+    ev.preventDefault();
+    const files = filesFromDataTransfer<File>(ev.dataTransfer);
+    if (files.length) void uploadAll(files);
+  };
+  parent.addEventListener('paste', onPaste, true);
+  parent.addEventListener('dragover', onDragOver);
+  parent.addEventListener('drop', onDrop);
+  return () => {
+    parent.removeEventListener('paste', onPaste, true);
+    parent.removeEventListener('dragover', onDragOver);
+    parent.removeEventListener('drop', onDrop);
+  };
+}
+
 // A connection that survives this long counts as a real session, so we reset the
 // reconnect backoff. The WebSocket to the server always opens, so onopen itself
 // can't be the success signal — it must stay up past the box's ConnectTimeout (10s).
@@ -96,6 +147,12 @@ function termFontFamily(): string { return buildFontFamily(userFont); }
 export function setTerminalFont(o: { termFont: string | null; termFontSize: number }): void {
   userFont = o?.termFont ?? null;
   termFontSize = clampFontSize(o?.termFontSize);
+}
+
+// Upload limit from /api/ui-config, applied at boot like the font settings.
+let uploadMaxBytes = 25 * 1024 * 1024;
+export function setTerminalUploads(o: { uploadMaxBytes?: number }): void {
+  if (Number.isFinite(o?.uploadMaxBytes) && (o.uploadMaxBytes as number) > 0) uploadMaxBytes = o.uploadMaxBytes as number;
 }
 
 // xterm measures the glyph cell size ONCE, when it first renders. On a reattach
@@ -163,6 +220,7 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
   fit.fit();
   refitWhenFontReady(term, fit);
   wireClipboard(term);
+  const offUploads = wireUploads(parent, term, boxId);
 
   // Strip control chars so a box label can't inject escape sequences into the
   // terminal feedback line.
@@ -215,7 +273,7 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
 
   return {
     focus: () => term.focus(),
-    dispose: () => { closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
+    dispose: () => { offUploads(); closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
     refit: onResize,
   };
 }

@@ -1,5 +1,5 @@
 import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent } from './api';
-import { openTerminal, openProvisionTerminal, setTerminalFont } from './terminal';
+import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
 import { sparkline } from './sparkline';
 import { formatEvent, relTime, unseenCount } from './healthEvents';
@@ -265,7 +265,11 @@ async function start() {
   if (await api.me()) {
     // Apply the configured terminal font before any box opens. Best-effort: on
     // failure the bundled font stack stays in effect.
-    try { setTerminalFont(await api.uiConfig()); } catch {}
+    try {
+      const uiCfg = await api.uiConfig();
+      setTerminalFont(uiCfg);
+      setTerminalUploads(uiCfg);
+    } catch {}
     renderDashboard();
   } else await renderLogin();
 }
