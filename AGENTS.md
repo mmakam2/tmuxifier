@@ -104,6 +104,11 @@ pattern for new modules.
 - `boxActions.js` — `createBoxActions`: per-box SSH operations over the shared ControlMaster —
   ensure/install tmux and selected shell frameworks, the non-interactive `execCommand` that Fleet
   Command runs, and ControlMaster liveness/stale-socket reaping (`isMasterAlive`/`reapStaleMaster`).
+- `uploads.js` — terminal file uploads (paste/drag-drop): filename allowlist,
+  stored-name uniquifier, the remote `cat > ~/.tmuxifier-uploads/…` script builder
+  (24h self-prune), and the local-shell file writer. `boxActions.uploadFile` pipes
+  the bytes over the ControlMaster via `sshRunStdin` (`sshRun.js`); the route is
+  `POST /api/upload` with `TMUXIFIER_UPLOAD_MAX_MB` as `bodyLimit`.
 - `localShellActions.js` — `createLocalShellActions`: provisions the optional local shell
   (`localShell` = `none`/`omz`/`omb`) that backs a terminal on the Tmuxifier host itself.
 - `sessions.js` — PTY lifecycle: PTYs keyed by `boxId`, listeners refcounted, a `graceSeconds`
@@ -177,7 +182,8 @@ boxes), `settingsUi.ts` (the ⚙ settings
 modal's tabbed shell, with NetBox (`settingsNetbox.ts`) and Proxmox host/secret
 (`settingsProxmox.ts`) tabs) with `settingsForm.ts` (pure payload/result helpers), `netbox.ts`
 (fetch layer), and `dom.ts` (shared DOM builders used by both the settings modal and the hub),
-`clipboard.ts`, and `termFont.ts` (pure builder for the xterm
+`clipboard.ts`, `upload.ts` (pure paste/drop upload helpers: DataTransfer extraction, pasted-image
+naming, size check, quoted-path injection), and `termFont.ts` (pure builder for the xterm
 font stack — prepends `TMUXIFIER_TERM_FONT` onto the bundled stack (MesloLGMDZ Nerd Font default,
 then MesloLGSDZ + JuliaMono fallback); the server
 validates the name in `config.js` and serves it via `GET /api/ui-config`, which `main.ts` applies

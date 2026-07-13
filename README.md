@@ -83,6 +83,7 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | ssh config for Tmuxifier SSH calls | `TMUXIFIER_SSH_CONFIG` | (none) |
 | path to TLS cert (PEM file) | `TMUXIFIER_TLS_CERT` | (none → serves HTTP) |
 | path to TLS key (PEM file) | `TMUXIFIER_TLS_KEY` | (none → serves HTTP) |
+| terminal upload size limit (MB) | `TMUXIFIER_UPLOAD_MAX_MB` | `25` |
 
 Set **both** `TMUXIFIER_TLS_CERT` and `TMUXIFIER_TLS_KEY` to serve HTTPS directly; when TLS is active
 the session cookie is automatically marked `Secure`. An `https://` `TMUXIFIER_BASE_EXTERNAL_URL`
@@ -172,6 +173,18 @@ when possible (`apt-get`, `dnf`, `yum`, `pacman`, `apk`, or `zypper`), applies a
 shell/theme options, and creates the configured tmux session. If provisioning exits non-zero,
 the new box is rolled back from the list. Removing a box closes any local terminal process for
 that box and best-effort kills the configured remote tmux session before deleting the box.
+
+## Pasting images & files
+
+Pasting an image (Ctrl/Cmd+V) or dropping any file onto a terminal uploads it to
+`~/.tmuxifier-uploads/` on that box (over the existing SSH connection — the local
+shell terminal writes to the Tmuxifier host instead) and types the quoted absolute
+path into the terminal. CLI tools that accept file paths — Claude Code, Codex —
+pick it up directly, so pasting a screenshot into a remote Claude session just works.
+Text paste is unchanged.
+
+Uploaded files older than 24 hours are cleaned up automatically on the next upload
+to that machine. The size limit is 25 MB by default (`TMUXIFIER_UPLOAD_MAX_MB`).
 
 ## Host Shell & per-box Reconnect
 The **Host Shell** entry at the bottom of the sidebar opens a terminal on the Tmuxifier host
