@@ -41,16 +41,18 @@ async function capture(s) {
 test('injects the quoted path into a real shell pane', async () => {
   const { box, boxActions } = await harness();
   const s = await newSession(); // default shell → prompt
-  // wait for the shell prompt to draw (poll up to ~6s)
-  let ready = false;
-  for (let i = 0; i < 30 && !ready; i++) {
-    await new Promise((r) => setTimeout(r, 200));
-    ready = /[$%#❯>] ?\s*$/.test((await capture(s)).trimEnd());
-  }
+  // command-based detection works even before the prompt draws; short settle
+  await new Promise((r) => setTimeout(r, 500));
   const res = await boxActions.injectUploadPath(box, s, '/tmp/tmuxinj-fake.png');
   expect(res.injected).toBe(true);
   expect(res.mode).toBe('shell');
-  expect(await capture(s)).toContain("'/tmp/tmuxinj-fake.png'");
+  // the typed path should appear on screen; poll up to ~3s for the pane to draw it
+  let seen = '';
+  for (let i = 0; i < 15 && !seen.includes("'/tmp/tmuxinj-fake.png'"); i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    seen = await capture(s);
+  }
+  expect(seen).toContain("'/tmp/tmuxinj-fake.png'");
 });
 
 test('does not type into a busy pane', async () => {

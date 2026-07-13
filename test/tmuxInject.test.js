@@ -1,7 +1,9 @@
 import { test, expect } from 'vitest';
 import {
   classifyPane,
-  buildCapturePaneRemote,
+  classifyPaneState,
+  parsePaneState,
+  buildPaneStateRemote,
   buildSendKeysRemote,
   buildDisplayMessageRemote,
   injectionText,
@@ -59,10 +61,31 @@ test('classifyPane returns busy for everything else', () => {
   expect(classifyPane('        < Ok >   < Cancel >')).toBe('busy'); // dialog buttons
 });
 
+test('classifyPaneState is command-first with screen fallback', () => {
+  expect(classifyPaneState({ command: 'claude', screen: '' })).toBe('claude');
+  // zsh RPROMPT pads text after the prompt char — the screen regex misses it,
+  // the command name does not (real case: oh-my-zsh "blinks" theme, RPROMPT='!%!')
+  expect(classifyPaneState({ command: 'zsh', screen: 'user@host ~ %          !42!' })).toBe('shell');
+  expect(classifyPaneState({ command: 'bash', screen: '' })).toBe('shell'); // fresh pane, prompt not drawn yet
+  expect(classifyPaneState({ command: 'node', screen: '│ > \n? for shortcuts' })).toBe('claude');
+  expect(classifyPaneState({ command: 'vim', screen: '~\n~\n-- INSERT --' })).toBe('busy');
+  expect(classifyPaneState({ command: 'cat', screen: '' })).toBe('busy');
+  expect(classifyPaneState({})).toBe('busy');
+});
+
+test('parsePaneState splits command line from screen', () => {
+  expect(parsePaneState('zsh\nline1\nline2')).toEqual({ command: 'zsh', screen: 'line1\nline2' });
+  expect(parsePaneState('zsh')).toEqual({ command: 'zsh', screen: '' });
+  expect(parsePaneState('')).toEqual({ command: '', screen: '' });
+});
+
 test('script builders sanitize the session and quote arguments', () => {
-  expect(buildCapturePaneRemote('web')).toBe("tmux capture-pane -p -t 'web' 2>/dev/null | tail -25");
+  expect(buildPaneStateRemote('web')).toBe(
+    "tmux display-message -p -t 'web' '#{pane_current_command}' 2>/dev/null || echo\n" +
+    "tmux capture-pane -p -t 'web' 2>/dev/null",
+  );
   // session goes through sanitizeSession: unsafe chars become '-'
-  expect(buildCapturePaneRemote('a;b')).toContain("'a-b'");
+  expect(buildPaneStateRemote('a;b')).toContain("'a-b'");
   expect(buildSendKeysRemote('web', "'/root/.tmuxifier-uploads/1-aa-x.png' "))
     .toBe("tmux send-keys -t 'web' -l -- ''\\''/root/.tmuxifier-uploads/1-aa-x.png'\\'' '");
   expect(buildDisplayMessageRemote('web', '[tmuxifier] image pasted: x.png'))
@@ -79,7 +102,9 @@ function fakeRunner(captureOut, { sendCode = 0, failCapture = false } = {}) {
   const calls = [];
   const run = async (script) => {
     calls.push(script);
-    if (script.startsWith('tmux capture-pane')) {
+    // The pane-state script is the only one carrying the format string;
+    // plain display-message status calls must not match this branch.
+    if (script.includes('#{pane_current_command}')) {
       return failCapture ? { code: 1, stdout: '', stderr: 'no session' } : { code: 0, stdout: captureOut, stderr: '' };
     }
     if (script.startsWith('tmux send-keys')) return { code: sendCode, stdout: '', stderr: sendCode ? 'boom' : '' };
@@ -89,27 +114,27 @@ function fakeRunner(captureOut, { sendCode = 0, failCapture = false } = {}) {
 }
 
 test('injectVia types the quoted path into a shell pane and reports mode', async () => {
-  const { run, calls } = fakeRunner('user@box:~$ ');
+  const { run, calls } = fakeRunner('zsh\nuser@box:~$ ');
   const res = await injectVia(run, 'web', '/root/.tmuxifier-uploads/1-aa-shot.png');
   expect(res).toEqual({ injected: true, mode: 'shell' });
   const send = calls.find((c) => c.startsWith('tmux send-keys'));
   expect(send).toContain('/root/.tmuxifier-uploads/1-aa-shot.png');
-  const msg = calls.find((c) => c.startsWith('tmux display-message'));
+  const msg = calls.find((c) => c.startsWith('tmux display-message') && !c.includes('#{pane_current_command}'));
   expect(msg).toContain('image pasted: 1-aa-shot.png');
 });
 
 test('injectVia detects claude mode', async () => {
-  const { run } = fakeRunner('│ > \n? for shortcuts');
+  const { run } = fakeRunner('node\n│ > \n? for shortcuts');
   const res = await injectVia(run, 'web', '/x/y.png');
   expect(res).toEqual({ injected: true, mode: 'claude' });
 });
 
 test('injectVia never types into a busy pane — message only', async () => {
-  const { run, calls } = fakeRunner('~\n~\n-- INSERT --');
+  const { run, calls } = fakeRunner('vim\n~\n~\n-- INSERT --');
   const res = await injectVia(run, 'web', '/x/y.png');
   expect(res).toEqual({ injected: false, mode: 'busy' });
   expect(calls.some((c) => c.startsWith('tmux send-keys'))).toBe(false);
-  const msg = calls.find((c) => c.startsWith('tmux display-message'));
+  const msg = calls.find((c) => c.startsWith('tmux display-message') && !c.includes('#{pane_current_command}'));
   expect(msg).toContain('pane busy');
   expect(msg).toContain('/x/y.png');
 });
@@ -121,11 +146,11 @@ test('injectVia treats a failed capture as busy', async () => {
 });
 
 test('injectVia reports error (and never throws) when send-keys fails', async () => {
-  const { run, calls } = fakeRunner('user@box:~$ ', { sendCode: 1 });
+  const { run, calls } = fakeRunner('zsh\nuser@box:~$ ', { sendCode: 1 });
   const res = await injectVia(run, 'web', '/x/y.png');
   expect(res).toEqual({ injected: false, mode: 'error' });
   // degradation: it still tried to surface the path via display-message
-  expect(calls.filter((c) => c.startsWith('tmux display-message')).length).toBe(1);
+  expect(calls.filter((c) => c.startsWith('tmux display-message') && !c.includes('#{pane_current_command}')).length).toBe(1);
 });
 
 test('injectVia survives a throwing runner', async () => {
@@ -134,7 +159,7 @@ test('injectVia survives a throwing runner', async () => {
 });
 
 test('injectLocalUploadPath runs the same flow through the injected runner', async () => {
-  const { run, calls } = fakeRunner('~/code ❯ ');
+  const { run, calls } = fakeRunner('zsh\n~/code ❯ ');
   const res = await injectLocalUploadPath('local', '/home/u/.tmuxifier-uploads/1-aa-x.png', { run });
   expect(res).toEqual({ injected: true, mode: 'shell' });
   expect(calls[0]).toContain("-t 'local'");

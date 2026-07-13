@@ -37,15 +37,51 @@ export function classifyPane(text) {
   return 'busy';
 }
 
+// Shells whose idle foreground process means "pane is at a prompt". A shell
+// running a command shows that command instead, so this is precise — and it
+// is immune to prompt themes (zsh RPROMPT right-pads text after the prompt
+// char, defeating the screen regex; the command name doesn't lie).
+const SHELL_COMMANDS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash', 'ash', 'ksh', 'tcsh', 'csh']);
+
+// Split buildPaneStateRemote's output back into { command, screen }.
+export function parsePaneState(raw) {
+  const s = String(raw || '');
+  const nl = s.indexOf('\n');
+  const command = (nl === -1 ? s : s.slice(0, nl)).trim();
+  const screen = nl === -1 ? '' : s.slice(nl + 1);
+  return { command, screen };
+}
+
+// Command-first classification with the screen heuristics as fallback:
+// 'claude' process → claude; Claude TUI markers → claude (covers a CLI
+// running under 'node'); idle shell process → shell (theme-proof); then the
+// screen's prompt heuristic; anything else busy.
+export function classifyPaneState({ command, screen } = {}) {
+  const cmd = String(command || '').trim().toLowerCase();
+  if (cmd === 'claude' || cmd.startsWith('claude-')) return 'claude';
+  const byScreen = classifyPane(screen);
+  if (byScreen === 'claude') return 'claude';
+  if (SHELL_COMMANDS.has(cmd)) return 'shell';
+  return byScreen;
+}
+
 function sess(session) {
   return shSingleQuote(sanitizeSession(session));
 }
 
-// Last 25 pane lines. tail's exit status makes this exit 0 even when the
-// session is missing (capture-pane's error goes to /dev/null), so a dead
-// session degrades to an empty capture → 'busy'.
-export function buildCapturePaneRemote(session) {
-  return `tmux capture-pane -p -t ${sess(session)} 2>/dev/null | tail -25`;
+// One round-trip pane state: line 1 is the pane's foreground command
+// (#{pane_current_command} — 'zsh' at a prompt, 'vim'/'make'/… while busy,
+// 'claude' inside Claude Code), the rest is the full visible screen. No
+// `tail`: capture keeps the whole pane, so a fresh pane's top-aligned prompt
+// isn't discarded with the blank bottom rows. Missing session: display's
+// `|| echo` keeps line 1 present and capture-pane's failure makes the script
+// exit non-zero, which the caller maps to 'busy'.
+export function buildPaneStateRemote(session) {
+  const q = sess(session);
+  return [
+    `tmux display-message -p -t ${q} '#{pane_current_command}' 2>/dev/null || echo`,
+    `tmux capture-pane -p -t ${q} 2>/dev/null`,
+  ].join('\n');
 }
 
 // -l = literal (no key-name lookup); -- guards a text starting with '-'.
@@ -72,8 +108,8 @@ export async function injectVia(runScript, session, remotePath) {
   const name = String(remotePath).split('/').pop() || String(remotePath);
   let mode = 'busy';
   try {
-    const cap = await runScript(buildCapturePaneRemote(session));
-    mode = cap && cap.code === 0 ? classifyPane(cap.stdout) : 'busy';
+    const cap = await runScript(buildPaneStateRemote(session));
+    mode = cap && cap.code === 0 ? classifyPaneState(parsePaneState(cap.stdout)) : 'busy';
     if (mode === 'claude' || mode === 'shell') {
       const sent = await runScript(buildSendKeysRemote(session, injectionText(remotePath)));
       if (!sent || sent.code !== 0) throw new Error('send-keys failed');
