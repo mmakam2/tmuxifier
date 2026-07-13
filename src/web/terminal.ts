@@ -86,9 +86,16 @@ function wireClipboard(term: Terminal): void {
 // the untouched native path (wireClipboard). Capture phase so the file case
 // wins before xterm's own paste handler sees the event.
 function wireUploads(parent: HTMLElement, term: Terminal, boxId: string): () => void {
+  // Batches are serialized on a promise chain so a second paste/drop while a
+  // prior batch is uploading can't interleave status lines or path injections.
+  let chain: Promise<void> = Promise.resolve();
+  // Set on dispose so an in-flight upload's continuation never touches the
+  // torn-down Terminal.
+  let disposed = false;
   async function uploadAll(files: File[]): Promise<void> {
     const injections: string[] = [];
     for (const f of files) {
+      if (disposed) return;
       const name = uploadName(f, Date.now());
       const tooBig = sizeError(f.size, uploadMaxBytes);
       if (tooBig) {
@@ -98,11 +105,14 @@ function wireUploads(parent: HTMLElement, term: Terminal, boxId: string): () => 
       term.write(`\r\n\x1b[2m[uploading ${termSafe(name)}…]\x1b[0m\r\n`);
       try {
         const res = await api.uploadFile(boxId, name, f);
+        if (disposed) return;
         injections.push(pathInjection(res.path));
       } catch (e) {
+        if (disposed) return;
         term.write(`\r\n\x1b[33m[upload failed: ${termSafe((e as Error).message || 'error')}]\x1b[0m\r\n`);
       }
     }
+    if (disposed) return;
     if (injections.length) term.paste(injections.join(''));
     term.focus();
   }
@@ -111,18 +121,19 @@ function wireUploads(parent: HTMLElement, term: Terminal, boxId: string): () => 
     if (!files.length) return; // text paste — leave xterm's native handling alone
     ev.preventDefault();
     ev.stopPropagation();
-    void uploadAll(files);
+    chain = chain.then(() => uploadAll(files));
   };
   const onDragOver = (ev: DragEvent) => { ev.preventDefault(); };
   const onDrop = (ev: DragEvent) => {
     ev.preventDefault();
     const files = filesFromDataTransfer<File>(ev.dataTransfer);
-    if (files.length) void uploadAll(files);
+    if (files.length) chain = chain.then(() => uploadAll(files));
   };
   parent.addEventListener('paste', onPaste, true);
   parent.addEventListener('dragover', onDragOver);
   parent.addEventListener('drop', onDrop);
   return () => {
+    disposed = true;
     parent.removeEventListener('paste', onPaste, true);
     parent.removeEventListener('dragover', onDragOver);
     parent.removeEventListener('drop', onDrop);
