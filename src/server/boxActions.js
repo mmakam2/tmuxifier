@@ -8,6 +8,7 @@ import {
   shSingleQuote,
 } from './sshCommand.js';
 import { storedUploadName, buildUploadRemote } from './uploads.js';
+import { injectVia } from './tmuxInject.js';
 
 export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
   const sess = shSingleQuote(sanitizeSession(session));
@@ -243,6 +244,14 @@ export function createBoxActions({ run, runStdin, hostKeyPolicy = 'accept-new', 
       const remotePath = (lines[lines.length - 1] || '').trim();
       if (!remotePath.startsWith('/')) return { ok: false, error: 'could not resolve upload path' };
       return { ok: true, path: remotePath };
+    },
+    // After an upload lands, type its quoted path into the box session's
+    // active pane — but only when the pane is a Claude Code or shell prompt
+    // (tmuxInject.js classifies a capture-pane snapshot; busy panes get a
+    // tmux status message instead). Rides the same validated probe path as
+    // uploadFile; never throws — the upload already succeeded.
+    async injectUploadPath(box, session, remotePath, { timeoutMs = 8000 } = {}) {
+      return injectVia((script) => runRemote(box, script, timeoutMs), session, remotePath);
     },
     async exitMaster(box) {
       try {
