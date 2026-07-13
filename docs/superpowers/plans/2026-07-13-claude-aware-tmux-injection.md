@@ -733,3 +733,30 @@ Expected: everything green
 git add README.md CLAUDE.md AGENTS.md
 git commit -m "docs: claude-aware tmux-side upload injection"
 ```
+
+---
+
+## Amendment A (2026-07-13, during Task 3): command-first classification
+
+Real-host integration testing exposed two defects in the original Task 1 design that the plan's
+code blocks above still show (kept as point-in-time record; the git history is authoritative):
+
+1. `buildCapturePaneRemote`'s `| tail -25` keeps the BOTTOM of the pane — a fresh pane's
+   top-aligned prompt (with blank rows below) was discarded entirely.
+2. zsh right-prompts (RPROMPT — e.g. the oh-my-zsh "blinks" theme Tmuxifier's own provisioning
+   installs, `RPROMPT='!%!'`) pad text after the prompt char, so the screen regex never matched.
+
+Resolution (commit a9aaa2b): the primary classification signal is now tmux's
+`#{pane_current_command}`; the screen heuristics remain as fallback.
+
+- `buildCapturePaneRemote` → **`buildPaneStateRemote(session)`**: a two-line script — line 1
+  `tmux display-message -p -t <sess> '#{pane_current_command}' 2>/dev/null || echo`, then
+  `tmux capture-pane -p -t <sess> 2>/dev/null` (whole visible pane, no tail).
+- New **`parsePaneState(raw)`** → `{ command, screen }` (first line vs rest).
+- New **`classifyPaneState({ command, screen })`**: command `claude`/`claude-*` → claude;
+  screen markers → claude; command ∈ {bash, zsh, sh, fish, dash, ash, ksh, tcsh, csh} → shell;
+  else the screen heuristic (`classifyPane`, unchanged); default busy.
+- `injectVia` classifies via `classifyPaneState(parsePaneState(cap.stdout))`.
+- Integration test no longer polls for a drawn prompt (command-based detection works before the
+  prompt draws); fake-runner fixtures carry the command first line; the state script is
+  distinguished from status display-message calls by `#{pane_current_command}`.
