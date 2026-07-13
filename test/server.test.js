@@ -140,7 +140,7 @@ test('/api/ui-config requires auth and returns terminal font defaults', async ()
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
   const res = await app.inject({ method: 'GET', url: '/api/ui-config', headers });
   expect(res.statusCode).toBe(200);
-  expect(res.json()).toEqual({ termFont: null, termFontSize: 12 });
+  expect(res.json()).toEqual({ termFont: null, termFontSize: 12, uploadMaxBytes: 25 * 1024 * 1024 });
 });
 
 test('/api/ui-config reflects the configured terminal font', async () => {
@@ -148,7 +148,7 @@ test('/api/ui-config reflects the configured terminal font', async () => {
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
   const res = await app.inject({ method: 'GET', url: '/api/ui-config', headers });
-  expect(res.json()).toEqual({ termFont: 'Fira Code', termFontSize: 13 });
+  expect(res.json()).toEqual({ termFont: 'Fira Code', termFontSize: 13, uploadMaxBytes: 25 * 1024 * 1024 });
 });
 
 test('login then CRUD a box', async () => {
@@ -1086,4 +1086,73 @@ test('changing a connection field (user/port/proxyJump) drops the live PTY like 
   // A cosmetic change (label/tags) must NOT churn the PTY.
   await localApp.inject({ method: 'PATCH', url: `/api/boxes/${box.id}`, headers, payload: { label: 'renamed', tags: ['prod'] } });
   expect(closed).toHaveLength(3);
+});
+
+// --- POST /api/upload --------------------------------------------------------
+
+test('POST /api/upload requires auth', async () => {
+  const res = await app.inject({
+    method: 'POST', url: '/api/upload?box=__local__&name=x.png',
+    headers: { 'content-type': 'application/octet-stream' }, payload: Buffer.from('x'),
+  });
+  expect(res.statusCode).toBe(401);
+});
+
+test('POST /api/upload saves a local-shell upload and returns its absolute path', async () => {
+  const saved = [];
+  app = await makeApp({
+    saveUploadLocally: async (stored, buf) => { saved.push([stored, buf]); return `/home/u/.tmuxifier-uploads/${stored}`; },
+  });
+  const cookie = await login();
+  const res = await app.inject({
+    method: 'POST', url: '/api/upload?box=__local__&name=shot.png',
+    headers: { cookie: `${cookie.name}=${cookie.value}`, 'content-type': 'application/octet-stream' },
+    payload: Buffer.from('img-bytes'),
+  });
+  expect(res.statusCode).toBe(200);
+  expect(res.json().path).toMatch(/^\/home\/u\/\.tmuxifier-uploads\/\d+-[0-9a-f]{8}-shot\.png$/);
+  expect(saved).toHaveLength(1);
+  expect(saved[0][1].toString()).toBe('img-bytes');
+});
+
+test('POST /api/upload routes a box upload through boxActions.uploadFile', async () => {
+  const calls = [];
+  app = await makeApp({
+    boxActions: {
+      uploadFile: async (box, name, buf) => { calls.push([box.id, name, buf.toString()]); return { ok: true, path: '/root/.tmuxifier-uploads/1-aa-shot.png' }; },
+    },
+  });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}`, 'content-type': 'application/octet-stream' };
+  const add = await app.inject({ method: 'POST', url: '/api/boxes', headers: { cookie: headers.cookie, 'content-type': 'application/json' }, payload: { label: 'b', host: 'h1' } });
+  const boxId = add.json().id;
+  const res = await app.inject({ method: 'POST', url: `/api/upload?box=${boxId}&name=shot.png`, headers, payload: Buffer.from('bytes') });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ path: '/root/.tmuxifier-uploads/1-aa-shot.png' });
+  expect(calls).toEqual([[boxId, 'shot.png', 'bytes']]);
+});
+
+test('POST /api/upload rejects bad filenames and unknown boxes', async () => {
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}`, 'content-type': 'application/octet-stream' };
+  const bad = await app.inject({ method: 'POST', url: `/api/upload?box=__local__&name=${encodeURIComponent('../etc/passwd')}`, headers, payload: Buffer.from('x') });
+  expect(bad.statusCode).toBe(400);
+  const nobox = await app.inject({ method: 'POST', url: '/api/upload?box=nope&name=x.png', headers, payload: Buffer.from('x') });
+  expect(nobox.statusCode).toBe(400);
+  expect(nobox.json().error).toContain('unknown box');
+});
+
+test('POST /api/upload returns 413 over the configured limit and 502 on ssh failure', async () => {
+  app = await makeApp({
+    config: { uploadMaxBytes: 16 },
+    boxActions: { uploadFile: async () => ({ ok: false, error: 'Connection closed' }) },
+  });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}`, 'content-type': 'application/octet-stream' };
+  const big = await app.inject({ method: 'POST', url: '/api/upload?box=__local__&name=x.png', headers, payload: Buffer.alloc(64, 0x41) });
+  expect(big.statusCode).toBe(413);
+  const add = await app.inject({ method: 'POST', url: '/api/boxes', headers: { cookie: headers.cookie, 'content-type': 'application/json' }, payload: { label: 'b', host: 'h1' } });
+  const res = await app.inject({ method: 'POST', url: `/api/upload?box=${add.json().id}&name=x.png`, headers, payload: Buffer.from('x') });
+  expect(res.statusCode).toBe(502);
+  expect(res.json().error).toContain('upload failed');
 });

@@ -14,6 +14,7 @@ import { mapWithConcurrency } from './concurrency.js';
 import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
 import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js';
 import { testNetbox } from './netboxApi.js';
+import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': [
@@ -56,7 +57,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -73,6 +74,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
   app.register(cookie, { secret: config.cookieSecret });
   app.register(websocket);
+
+  // Terminal uploads POST their raw bytes; keep them as a Buffer. Scoped to
+  // this content type only — JSON handling everywhere else is untouched.
+  app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (req, body, done) => done(null, body));
+  const uploadMaxBytes = Number(config.uploadMaxBytes) || 25 * 1024 * 1024;
 
   const OAUTH_COOKIE = 'tmuxifier_oauth';
   let google = googleAuth;
@@ -552,7 +558,32 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   // Client UI settings the browser needs at boot. Currently just the terminal
   // font, validated/normalized server-side (config.js); the name is not secret.
   app.get('/api/ui-config', { preHandler: requireAuth }, async () => {
-    return { termFont: config.termFont ?? null, termFontSize: config.termFontSize ?? 12 };
+    return { termFont: config.termFont ?? null, termFontSize: config.termFontSize ?? 12, uploadMaxBytes };
+  });
+
+  // Land a pasted/dropped file on a box (or the Tmuxifier host for the local
+  // shell) and return the absolute path the client will type into the PTY.
+  // Fastify enforces uploadMaxBytes via bodyLimit (413); filenames are
+  // allowlist-validated here and re-validated/quoted in uploads.js.
+  app.post('/api/upload', { preHandler: requireAuth, bodyLimit: uploadMaxBytes }, async (req, reply) => {
+    const name = String(req.query?.name || '');
+    if (!validUploadName(name)) return reply.code(400).send({ error: 'invalid filename' });
+    const body = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!body || body.length === 0) return reply.code(400).send({ error: 'missing file body' });
+    const boxId = String(req.query?.box || '');
+    if (boxId === '__local__') {
+      try {
+        return { path: await saveUploadLocally(storedUploadName(name), body) };
+      } catch (e) {
+        return reply.code(500).send({ error: e?.message || 'could not save upload' });
+      }
+    }
+    const box = await store.getBox(boxId);
+    if (!box) return reply.code(400).send({ error: 'unknown box' });
+    if (!boxActions?.uploadFile) return reply.code(500).send({ error: 'upload not supported' });
+    const res = await boxActions.uploadFile(box, name, body);
+    if (!res.ok) return reply.code(502).send({ error: `upload failed: ${res.error}` });
+    return { path: res.path };
   });
 
   app.get('/api/local-shell', { preHandler: requireAuth }, async () => {
