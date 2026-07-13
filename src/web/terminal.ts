@@ -121,13 +121,13 @@ function wireUploads(parent: HTMLElement, term: Terminal, boxId: string): () => 
     if (!files.length) return; // text paste — leave xterm's native handling alone
     ev.preventDefault();
     ev.stopPropagation();
-    chain = chain.then(() => uploadAll(files));
+    chain = chain.then(() => uploadAll(files)).catch(() => {});
   };
   const onDragOver = (ev: DragEvent) => { ev.preventDefault(); };
   const onDrop = (ev: DragEvent) => {
     ev.preventDefault();
     const files = filesFromDataTransfer<File>(ev.dataTransfer);
-    if (files.length) chain = chain.then(() => uploadAll(files));
+    if (files.length) chain = chain.then(() => uploadAll(files)).catch(() => {});
   };
   parent.addEventListener('paste', onPaste, true);
   parent.addEventListener('dragover', onDragOver);

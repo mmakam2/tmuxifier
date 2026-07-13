@@ -38,6 +38,23 @@ test('storedUploadName uniquifies and preserves the original name', () => {
   expect(() => storedUploadName('../x')).toThrow(/invalid/);
 });
 
+test('storedUploadName keeps long-but-valid names inside the 128-char budget', () => {
+  const name = 'a'.repeat(120) + '.png'; // 124 chars, passes NAME_RE
+  const s = storedUploadName(name, { now: 1760000000000, rand: () => 'abcd1234' });
+  expect(validUploadName(s)).toBe(true);
+  expect(s.length).toBeLessThanOrEqual(128);
+  expect(s.endsWith('.png')).toBe(true); // extension preserved
+  expect(s.startsWith('1760000000000-abcd1234-')).toBe(true);
+});
+
+test('a maximum-length valid name uploads end-to-end via saveLocalUpload', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-uplong-'));
+  const name = 'b'.repeat(124) + '.txt'; // 128 chars, the allowlist maximum
+  const p = await saveLocalUpload(storedUploadName(name), Buffer.from('x'), { home });
+  expect(await fs.readFile(p, 'utf8')).toBe('x');
+  await fs.rm(home, { recursive: true, force: true });
+});
+
 test('buildUploadRemote writes stdin to the upload dir, prunes old files, prints the path', async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-uphome-'));
   const dir = path.join(home, UPLOAD_DIR_NAME);

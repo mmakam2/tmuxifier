@@ -22,7 +22,19 @@ export function validUploadName(name) {
 
 export function storedUploadName(name, { now = Date.now(), rand = () => randomBytes(4).toString('hex') } = {}) {
   if (!validUploadName(name)) throw new Error('invalid upload filename');
-  return `${now}-${rand()}-${name}`;
+  const prefix = `${now}-${rand()}-`;
+  // The stored name (prefix + original) must itself fit NAME_RE's 128-char
+  // cap, so truncate the original to the remaining budget, preserving the
+  // extension, rather than letting a long-but-valid original overflow it.
+  const MAX_STORED = 128;
+  let base = name;
+  const budget = MAX_STORED - prefix.length;
+  if (base.length > budget) {
+    const dot = base.lastIndexOf('.');
+    const ext = dot > 0 && base.length - dot <= 10 ? base.slice(dot) : '';
+    base = (ext ? base.slice(0, dot) : base).slice(0, budget - ext.length) + ext;
+  }
+  return `${prefix}${base}`;
 }
 
 // sh script run on the box (stdin = file bytes): ensure the dir, prune, write,

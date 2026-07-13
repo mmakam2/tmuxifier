@@ -564,8 +564,10 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   // Land a pasted/dropped file on a box (or the Tmuxifier host for the local
   // shell) and return the absolute path the client will type into the PTY.
   // Fastify enforces uploadMaxBytes via bodyLimit (413); filenames are
-  // allowlist-validated here and re-validated/quoted in uploads.js.
-  app.post('/api/upload', { preHandler: requireAuth, bodyLimit: uploadMaxBytes }, async (req, reply) => {
+  // allowlist-validated here and re-validated/quoted in uploads.js. Auth runs
+  // at onRequest (before Fastify buffers the body) so an unauthenticated
+  // client can't make the server buffer up to uploadMaxBytes before the 401.
+  app.post('/api/upload', { onRequest: requireAuth, bodyLimit: uploadMaxBytes }, async (req, reply) => {
     const name = String(req.query?.name || '');
     if (!validUploadName(name)) return reply.code(400).send({ error: 'invalid filename' });
     const body = Buffer.isBuffer(req.body) ? req.body : null;
@@ -581,7 +583,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const box = await store.getBox(boxId);
     if (!box) return reply.code(400).send({ error: 'unknown box' });
     if (!boxActions?.uploadFile) return reply.code(500).send({ error: 'upload not supported' });
-    const res = await boxActions.uploadFile(box, name, body);
+    let res;
+    try {
+      res = await boxActions.uploadFile(box, name, body);
+    } catch (e) {
+      return reply.code(502).send({ error: `upload failed: ${e?.message || 'error'}` });
+    }
     if (!res.ok) return reply.code(502).send({ error: `upload failed: ${res.error}` });
     return { path: res.path };
   });
