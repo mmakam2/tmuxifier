@@ -51,6 +51,8 @@ const DEFAULTS = {
   pveProvisionTimeoutMs: 600000,
   pveLeaseTimeoutMs: 60000,
   pveMaxJobs: 50,
+  // Terminal file upload (paste/drag-drop): max accepted body size in MB.
+  uploadMaxMb: 25,
 };
 
 function clean(obj) {
@@ -113,6 +115,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     tlsKey: e.TMUXIFIER_TLS_KEY,
     termFont: e.TMUXIFIER_TERM_FONT,
     termFontSize: e.TMUXIFIER_TERM_FONT_SIZE ? Number(e.TMUXIFIER_TERM_FONT_SIZE) : undefined,
+    uploadMaxMb: e.TMUXIFIER_UPLOAD_MAX_MB ? Number(e.TMUXIFIER_UPLOAD_MAX_MB) : undefined,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
   // Every numeric knob is clamped to a sane range; a non-numeric or
@@ -138,6 +141,8 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   merged.pveProvisionTimeoutMs = clampInt(merged.pveProvisionTimeoutMs, 1000, 86400000, DEFAULTS.pveProvisionTimeoutMs);
   merged.pveLeaseTimeoutMs = clampInt(merged.pveLeaseTimeoutMs, 0, 3600000, DEFAULTS.pveLeaseTimeoutMs); // 0 = don't wait for DHCP
   merged.pveMaxJobs = clampInt(merged.pveMaxJobs, 1, 10000, DEFAULTS.pveMaxJobs);
+  merged.uploadMaxMb = clampInt(merged.uploadMaxMb, 1, 1024, DEFAULTS.uploadMaxMb);
+  merged.uploadMaxBytes = merged.uploadMaxMb * 1024 * 1024;
   merged.dataDir = merged.dataDir ?? path.join(cwd, 'data');
   // Directory for SSH ControlMaster sockets. Multiplexing every probe and
   // terminal for a box over one persistent connection keeps Tmuxifier from

@@ -368,3 +368,18 @@ test('valid numeric env values still pass through the clamps', () => {
   expect(c.controlPersist).toBe(0);
   expect(c.fleetMaxOutputBytes).toBe(4096);
 });
+
+test('uploadMaxMb defaults to 25 and derives uploadMaxBytes', () => {
+  const c = loadConfig({}, { env: {}, cwd: '/app' });
+  expect(c.uploadMaxMb).toBe(25);
+  expect(c.uploadMaxBytes).toBe(25 * 1024 * 1024);
+});
+
+test('TMUXIFIER_UPLOAD_MAX_MB overrides and clamps the upload limit', () => {
+  const mb = (v) => loadConfig({}, { env: { TMUXIFIER_UPLOAD_MAX_MB: v }, cwd: '/app' }).uploadMaxMb;
+  expect(mb('100')).toBe(100);
+  expect(loadConfig({}, { env: { TMUXIFIER_UPLOAD_MAX_MB: '100' }, cwd: '/app' }).uploadMaxBytes).toBe(100 * 1024 * 1024);
+  expect(mb('0')).toBe(25);      // pathological zero -> default
+  expect(mb('9999')).toBe(25);   // out of range -> default
+  expect(mb('abc')).toBe(25);    // non-numeric -> default
+});
