@@ -5,6 +5,8 @@ import {
   buildSendKeysRemote,
   buildDisplayMessageRemote,
   injectionText,
+  injectVia,
+  injectLocalUploadPath,
 } from '../src/server/tmuxInject.js';
 
 const CLAUDE_IDLE = [
@@ -71,4 +73,69 @@ test('injectionText single-quotes with sh escaping and trailing space', () => {
   expect(injectionText('/home/u/.tmuxifier-uploads/1-aa-shot.png'))
     .toBe("'/home/u/.tmuxifier-uploads/1-aa-shot.png' ");
   expect(injectionText("/a/it's.png")).toBe("'/a/it'\\''s.png' ");
+});
+
+function fakeRunner(captureOut, { sendCode = 0, failCapture = false } = {}) {
+  const calls = [];
+  const run = async (script) => {
+    calls.push(script);
+    if (script.startsWith('tmux capture-pane')) {
+      return failCapture ? { code: 1, stdout: '', stderr: 'no session' } : { code: 0, stdout: captureOut, stderr: '' };
+    }
+    if (script.startsWith('tmux send-keys')) return { code: sendCode, stdout: '', stderr: sendCode ? 'boom' : '' };
+    return { code: 0, stdout: '', stderr: '' }; // display-message
+  };
+  return { run, calls };
+}
+
+test('injectVia types the quoted path into a shell pane and reports mode', async () => {
+  const { run, calls } = fakeRunner('user@box:~$ ');
+  const res = await injectVia(run, 'web', '/root/.tmuxifier-uploads/1-aa-shot.png');
+  expect(res).toEqual({ injected: true, mode: 'shell' });
+  const send = calls.find((c) => c.startsWith('tmux send-keys'));
+  expect(send).toContain('/root/.tmuxifier-uploads/1-aa-shot.png');
+  const msg = calls.find((c) => c.startsWith('tmux display-message'));
+  expect(msg).toContain('image pasted: 1-aa-shot.png');
+});
+
+test('injectVia detects claude mode', async () => {
+  const { run } = fakeRunner('│ > \n? for shortcuts');
+  const res = await injectVia(run, 'web', '/x/y.png');
+  expect(res).toEqual({ injected: true, mode: 'claude' });
+});
+
+test('injectVia never types into a busy pane — message only', async () => {
+  const { run, calls } = fakeRunner('~\n~\n-- INSERT --');
+  const res = await injectVia(run, 'web', '/x/y.png');
+  expect(res).toEqual({ injected: false, mode: 'busy' });
+  expect(calls.some((c) => c.startsWith('tmux send-keys'))).toBe(false);
+  const msg = calls.find((c) => c.startsWith('tmux display-message'));
+  expect(msg).toContain('pane busy');
+  expect(msg).toContain('/x/y.png');
+});
+
+test('injectVia treats a failed capture as busy', async () => {
+  const { run } = fakeRunner('', { failCapture: true });
+  const res = await injectVia(run, 'web', '/x/y.png');
+  expect(res).toEqual({ injected: false, mode: 'busy' });
+});
+
+test('injectVia reports error (and never throws) when send-keys fails', async () => {
+  const { run, calls } = fakeRunner('user@box:~$ ', { sendCode: 1 });
+  const res = await injectVia(run, 'web', '/x/y.png');
+  expect(res).toEqual({ injected: false, mode: 'error' });
+  // degradation: it still tried to surface the path via display-message
+  expect(calls.filter((c) => c.startsWith('tmux display-message')).length).toBe(1);
+});
+
+test('injectVia survives a throwing runner', async () => {
+  const res = await injectVia(async () => { throw new Error('ssh died'); }, 'web', '/x/y.png');
+  expect(res).toEqual({ injected: false, mode: 'error' });
+});
+
+test('injectLocalUploadPath runs the same flow through the injected runner', async () => {
+  const { run, calls } = fakeRunner('~/code ❯ ');
+  const res = await injectLocalUploadPath('local', '/home/u/.tmuxifier-uploads/1-aa-x.png', { run });
+  expect(res).toEqual({ injected: true, mode: 'shell' });
+  expect(calls[0]).toContain("-t 'local'");
 });

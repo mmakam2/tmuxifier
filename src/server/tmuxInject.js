@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import { sanitizeSession, shSingleQuote } from './sshCommand.js';
 
 // Pane-aware injection of an uploaded file's path into a tmux session
@@ -60,4 +61,43 @@ export function buildDisplayMessageRemote(session, msg) {
 // sh-escaped) plus a trailing space — the drag-drop convention CLIs parse.
 export function injectionText(path) {
   return shSingleQuote(String(path)) + ' ';
+}
+
+// Orchestration: capture → classify → type or message. runScript executes one
+// sh command on the target (over ssh for a box, /bin/sh for __local__) and
+// resolves {code, stdout, stderr}. Never throws — the upload already
+// succeeded, so injection failures degrade to a status message and a mode
+// the client can surface.
+export async function injectVia(runScript, session, remotePath) {
+  const name = String(remotePath).split('/').pop() || String(remotePath);
+  let mode = 'busy';
+  try {
+    const cap = await runScript(buildCapturePaneRemote(session));
+    mode = cap && cap.code === 0 ? classifyPane(cap.stdout) : 'busy';
+    if (mode === 'claude' || mode === 'shell') {
+      const sent = await runScript(buildSendKeysRemote(session, injectionText(remotePath)));
+      if (!sent || sent.code !== 0) throw new Error('send-keys failed');
+      try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] image pasted: ${name}`)); } catch {}
+      return { injected: true, mode };
+    }
+    try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] image uploaded: ${remotePath} (pane busy — not typed)`)); } catch {}
+    return { injected: false, mode: 'busy' };
+  } catch {
+    try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] image uploaded: ${remotePath} (pane busy — not typed)`)); } catch {}
+    return { injected: false, mode: 'error' };
+  }
+}
+
+function runLocalScript(script, { timeout = 8000 } = {}) {
+  return new Promise((resolve) => {
+    execFile('/bin/sh', ['-c', script], { timeout, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve({ code: err && typeof err.code === 'number' ? err.code : err ? 1 : 0, stdout, stderr });
+    });
+  });
+}
+
+// The __local__ terminal runs inside a real local tmux session (sessions.openLocal),
+// so the same flow works with a /bin/sh runner on the Tmuxifier host.
+export function injectLocalUploadPath(session, path, { run = runLocalScript } = {}) {
+  return injectVia(run, session, path);
 }
