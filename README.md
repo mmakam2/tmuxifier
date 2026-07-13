@@ -177,14 +177,18 @@ that box and best-effort kills the configured remote tmux session before deletin
 ## Pasting images & files
 
 Pasting an image (Ctrl/Cmd+V) or dropping any file onto a terminal uploads it to
-`~/.tmuxifier-uploads/` on that box (over the existing SSH connection — the local
-shell terminal writes to the Tmuxifier host instead) and types the quoted absolute
-path into the terminal. CLI tools that accept file paths — Claude Code, Codex —
-pick it up directly, so pasting a screenshot into a remote Claude session just works.
-Text paste is unchanged.
+`~/.tmuxifier-uploads/` on that box over the existing SSH connection (the local
+shell terminal writes to the Tmuxifier host instead). Tmuxifier then checks what
+the pane is doing before typing anything: at a Claude Code or shell prompt it
+types the quoted path into the tmux pane itself — so the path appears in every
+attached tmux client, not just the browser tab — and shows a tmux status
+message. If the pane is busy (vim, a running build), nothing is typed; the path
+is shown in a tmux message and in the browser instead. Text paste is unchanged,
+and nothing needs to be installed on your own machine or the boxes.
 
-Uploaded files older than 24 hours are cleaned up automatically on the next upload
-to that machine. The size limit is 25 MB by default (`TMUXIFIER_UPLOAD_MAX_MB`).
+Uploaded files older than 24 hours are cleaned up automatically on the next
+upload to that machine. The size limit is 25 MB by default
+(`TMUXIFIER_UPLOAD_MAX_MB`).
 
 ## Host Shell & per-box Reconnect
 The **Host Shell** entry at the bottom of the sidebar opens a terminal on the Tmuxifier host

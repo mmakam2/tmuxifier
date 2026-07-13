@@ -109,6 +109,14 @@ pattern for new modules.
   (24h self-prune), and the local-shell file writer. `boxActions.uploadFile` pipes
   the bytes over the ControlMaster via `sshRunStdin` (`sshRun.js`); the route is
   `POST /api/upload` with `TMUXIFIER_UPLOAD_MAX_MB` as `bodyLimit`.
+- `tmuxInject.js` — pane-aware upload injection: the primary signal is tmux's
+  `#{pane_current_command}` — an idle shell process (`bash`/`zsh`/`sh`/`fish`/…) or a
+  `claude`/`claude-*` process — with screen-capture heuristics (Claude TUI markers, a
+  trailing prompt-char regex) as fallback when the command name doesn't resolve it. At
+  a Claude Code or shell prompt it types the quoted uploaded path via `tmux send-keys
+  -l` (busy panes get a `display-message` instead; never auto-Enter, no `/image` — it
+  doesn't exist). `boxActions.injectUploadPath` runs it over the ControlMaster;
+  `injectLocalUploadPath` covers the `__local__` terminal's local tmux session.
 - `localShellActions.js` — `createLocalShellActions`: provisions the optional local shell
   (`localShell` = `none`/`omz`/`omb`) that backs a terminal on the Tmuxifier host itself.
 - `sessions.js` — PTY lifecycle: PTYs keyed by `boxId`, listeners refcounted, a `graceSeconds`
@@ -183,7 +191,7 @@ modal's tabbed shell, with NetBox (`settingsNetbox.ts`) and Proxmox host/secret
 (`settingsProxmox.ts`) tabs) with `settingsForm.ts` (pure payload/result helpers), `netbox.ts`
 (fetch layer), and `dom.ts` (shared DOM builders used by both the settings modal and the hub),
 `clipboard.ts`, `upload.ts` (pure paste/drop upload helpers: DataTransfer extraction, pasted-image
-naming, size check, quoted-path injection), and `termFont.ts` (pure builder for the xterm
+naming, size check), and `termFont.ts` (pure builder for the xterm
 font stack — prepends `TMUXIFIER_TERM_FONT` onto the bundled stack (MesloLGMDZ Nerd Font default,
 then MesloLGSDZ + JuliaMono fallback); the server
 validates the name in `config.js` and serves it via `GET /api/ui-config`, which `main.ts` applies
