@@ -27,6 +27,7 @@ test('classifyPane detects Claude Code screens', () => {
   expect(classifyPane(CLAUDE_WORKING)).toBe('claude');
   expect(classifyPane('│ › Try "fix the bug"')).toBe('claude');
   expect(classifyPane('⏵⏵ accept edits on (shift+tab to cycle)')).toBe('claude');
+  expect(classifyPane('│  >  ')).toBe('claude');
 });
 
 test('classifyPane detects shell prompts', () => {
@@ -34,7 +35,9 @@ test('classifyPane detects shell prompts', () => {
   expect(classifyPane('build ok\nuser@box:~$')).toBe('shell');
   expect(classifyPane('~/code ❯ ')).toBe('shell');
   expect(classifyPane('root@lxc:/# ')).toBe('shell');
-  expect(classifyPane('zsh % ')).toBe('shell');
+  expect(classifyPane('tycho% ')).toBe('shell');
+  // tmux capture output can pad lines to the pane width
+  expect(classifyPane('user@box:~$' + ' '.repeat(60))).toBe('shell');
 });
 
 test('classifyPane is claude-first when both could match', () => {
@@ -49,6 +52,9 @@ test('classifyPane returns busy for everything else', () => {
   expect(classifyPane('~\n~\n-- INSERT --')).toBe('busy');          // vim
   expect(classifyPane('Compiling tmuxifier v1.6.0')).toBe('busy'); // running build
   expect(classifyPane('Downloading 45%')).toBe('busy');
+  expect(classifyPane('100%')).toBe('busy');
+  expect(classifyPane('>>> ')).toBe('busy');                        // Python REPL
+  expect(classifyPane('        < Ok >   < Cancel >')).toBe('busy'); // dialog buttons
 });
 
 test('script builders sanitize the session and quote arguments', () => {

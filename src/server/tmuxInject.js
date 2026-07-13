@@ -10,7 +10,7 @@ import { sanitizeSession, shSingleQuote } from './sshCommand.js';
 // Strong Claude Code TUI markers. Any one suffices; checked before the shell
 // rule because Claude's own input row would also match a trailing '>'.
 const CLAUDE_MARKERS = [
-  /^\s*│\s?[>›]/m,        // the bordered prompt-box input row
+  /^\s*│\s*[>›](?:\s|$)/m, // the bordered prompt-box input row
   /esc to interrupt/i,     // working/spinner footer
   /\? for shortcuts/i,     // idle footer hint
   /accept edits/i,         // permission-mode footer
@@ -18,18 +18,21 @@ const CLAUDE_MARKERS = [
   /plan mode/i,
 ];
 
-// A pane whose last non-empty line ends in a prompt character is a shell.
-// '%' (zsh) only counts with its trailing space — a bare trailing '%' is
-// far more often a progress line ("Downloading 45%") than a prompt, and a
-// missed prompt fails safe (status message) while a mis-typed busy pane
-// does not. Anything unrecognized is 'busy'.
+// A pane whose last non-empty line (trailing padding trimmed — tmux capture
+// output may pad lines to the pane width) ends in a prompt character is a
+// shell. '%' (zsh) counts only when preceded by a non-digit, so progress
+// lines ("Downloading 45%") stay busy. Bare '>' is NOT a prompt marker:
+// Python's '>>>', dialog button rows ('< Cancel >'), and Claude's own input
+// row all end in '>' — a missed prompt fails safe (status message), a
+// mis-typed busy pane does not. Anything unrecognized is 'busy'.
 export function classifyPane(text) {
   const t = String(text || '');
   if (!t.trim()) return 'busy';
   if (CLAUDE_MARKERS.some((re) => re.test(t))) return 'claude';
   const lines = t.split(/\r?\n/).filter((l) => l.trim() !== '');
-  const last = lines[lines.length - 1] || '';
-  if (/(?:[$#❯>] ?|% )$/.test(last)) return 'shell';
+  const last = (lines[lines.length - 1] || '').trimEnd();
+  if (/[$#❯]$/.test(last)) return 'shell';
+  if (/[^\d\s]%$/.test(last)) return 'shell';
   return 'busy';
 }
 
@@ -56,5 +59,5 @@ export function buildDisplayMessageRemote(session, msg) {
 // What gets typed: the absolute path, always single-quoted (embedded quotes
 // sh-escaped) plus a trailing space — the drag-drop convention CLIs parse.
 export function injectionText(path) {
-  return `'${String(path).replace(/'/g, `'\\''`)}' `;
+  return shSingleQuote(String(path)) + ' ';
 }
