@@ -15,6 +15,7 @@ import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
 import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js';
 import { testNetbox } from './netboxApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
+import { injectLocalUploadPath } from './tmuxInject.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': [
@@ -57,7 +58,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -562,11 +563,13 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
 
   // Land a pasted/dropped file on a box (or the Tmuxifier host for the local
-  // shell) and return the absolute path the client will type into the PTY.
-  // Fastify enforces uploadMaxBytes via bodyLimit (413); filenames are
-  // allowlist-validated here and re-validated/quoted in uploads.js. Auth runs
-  // at onRequest (before Fastify buffers the body) so an unauthenticated
-  // client can't make the server buffer up to uploadMaxBytes before the 401.
+  // shell), then type the absolute path into the tmux pane server-side when
+  // the pane is a Claude/shell prompt (see tmuxInject.js) — the client no
+  // longer types it. Fastify enforces uploadMaxBytes via bodyLimit (413);
+  // filenames are allowlist-validated here and re-validated/quoted in
+  // uploads.js. Auth runs at onRequest (before Fastify buffers the body) so
+  // an unauthenticated client can't make the server buffer up to
+  // uploadMaxBytes before the 401.
   app.post('/api/upload', { onRequest: requireAuth, bodyLimit: uploadMaxBytes }, async (req, reply) => {
     const name = String(req.query?.name || '');
     if (!validUploadName(name)) return reply.code(400).send({ error: 'invalid filename' });
@@ -575,7 +578,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const boxId = String(req.query?.box || '');
     if (boxId === '__local__') {
       try {
-        return { path: await saveUploadLocally(storedUploadName(name), body) };
+        const p = await saveUploadLocally(storedUploadName(name), body);
+        const inj = await injectLocalUpload(localSession, p).catch(() => ({ injected: false, mode: 'error' }));
+        return { path: p, ...inj };
       } catch (e) {
         return reply.code(500).send({ error: e?.message || 'could not save upload' });
       }
@@ -590,7 +595,10 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       return reply.code(502).send({ error: `upload failed: ${e?.message || 'error'}` });
     }
     if (!res.ok) return reply.code(502).send({ error: `upload failed: ${res.error}` });
-    return { path: res.path };
+    const inj = typeof boxActions.injectUploadPath === 'function'
+      ? await boxActions.injectUploadPath(box, box.sessionName, res.path).catch(() => ({ injected: false, mode: 'error' }))
+      : { injected: false, mode: 'error' };
+    return { path: res.path, ...inj };
   });
 
   app.get('/api/local-shell', { preHandler: requireAuth }, async () => {

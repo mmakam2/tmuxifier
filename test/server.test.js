@@ -1102,6 +1102,7 @@ test('POST /api/upload saves a local-shell upload and returns its absolute path'
   const saved = [];
   app = await makeApp({
     saveUploadLocally: async (stored, buf) => { saved.push([stored, buf]); return `/home/u/.tmuxifier-uploads/${stored}`; },
+    injectLocalUpload: async (session, p) => ({ injected: true, mode: 'shell' }),
   });
   const cookie = await login();
   const res = await app.inject({
@@ -1111,6 +1112,8 @@ test('POST /api/upload saves a local-shell upload and returns its absolute path'
   });
   expect(res.statusCode).toBe(200);
   expect(res.json().path).toMatch(/^\/home\/u\/\.tmuxifier-uploads\/\d+-[0-9a-f]{8}-shot\.png$/);
+  expect(res.json().injected).toBe(true);
+  expect(res.json().mode).toBe('shell');
   expect(saved).toHaveLength(1);
   expect(saved[0][1].toString()).toBe('img-bytes');
 });
@@ -1120,16 +1123,34 @@ test('POST /api/upload routes a box upload through boxActions.uploadFile', async
   app = await makeApp({
     boxActions: {
       uploadFile: async (box, name, buf) => { calls.push([box.id, name, buf.toString()]); return { ok: true, path: '/root/.tmuxifier-uploads/1-aa-shot.png' }; },
+      injectUploadPath: async (box, session, p) => { calls.push(['inject', session, p]); return { injected: true, mode: 'claude' }; },
     },
   });
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}`, 'content-type': 'application/octet-stream' };
   const add = await app.inject({ method: 'POST', url: '/api/boxes', headers: { cookie: headers.cookie, 'content-type': 'application/json' }, payload: { label: 'b', host: 'h1' } });
   const boxId = add.json().id;
+  const sessionName = add.json().sessionName;
   const res = await app.inject({ method: 'POST', url: `/api/upload?box=${boxId}&name=shot.png`, headers, payload: Buffer.from('bytes') });
   expect(res.statusCode).toBe(200);
-  expect(res.json()).toEqual({ path: '/root/.tmuxifier-uploads/1-aa-shot.png' });
-  expect(calls).toEqual([[boxId, 'shot.png', 'bytes']]);
+  expect(res.json()).toEqual({ path: '/root/.tmuxifier-uploads/1-aa-shot.png', injected: true, mode: 'claude' });
+  expect(calls).toContainEqual([boxId, 'shot.png', 'bytes']);
+  expect(calls).toContainEqual(['inject', sessionName, '/root/.tmuxifier-uploads/1-aa-shot.png']);
+});
+
+test('POST /api/upload succeeds even when injection is unavailable or fails', async () => {
+  app = await makeApp({
+    boxActions: {
+      uploadFile: async () => ({ ok: true, path: '/root/.tmuxifier-uploads/1-aa-x.png' }),
+      // no injectUploadPath at all — route must degrade, not 500
+    },
+  });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}`, 'content-type': 'application/octet-stream' };
+  const add = await app.inject({ method: 'POST', url: '/api/boxes', headers: { cookie: headers.cookie, 'content-type': 'application/json' }, payload: { label: 'b', host: 'h1' } });
+  const res = await app.inject({ method: 'POST', url: `/api/upload?box=${add.json().id}&name=x.png`, headers, payload: Buffer.from('x') });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ path: '/root/.tmuxifier-uploads/1-aa-x.png', injected: false, mode: 'error' });
 });
 
 test('POST /api/upload rejects bad filenames and unknown boxes', async () => {
