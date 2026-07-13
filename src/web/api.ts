@@ -93,7 +93,7 @@ export const api = {
   async healthEvents() { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?t=${Date.now()}`)); },
   async uiConfig() { return j<{ termFont: string | null; termFontSize: number; uploadMaxBytes: number }>(await fetch('/api/ui-config')); },
   async uploadFile(boxId: string, name: string, blob: Blob) {
-    return j<{ path: string }>(await fetch(`/api/upload?box=${encodeURIComponent(boxId)}&name=${encodeURIComponent(name)}`, {
+    return j<{ path: string; injected: boolean; mode: 'claude' | 'shell' | 'busy' | 'error' }>(await fetch(`/api/upload?box=${encodeURIComponent(boxId)}&name=${encodeURIComponent(name)}`, {
       method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: blob,
     }));
   },

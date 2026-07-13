@@ -3,7 +3,6 @@ import {
   sanitizeUploadName,
   uploadName,
   filesFromDataTransfer,
-  pathInjection,
   sizeError,
   termSafe,
 } from '../src/web/upload';
@@ -43,11 +42,6 @@ test('filesFromDataTransfer prefers items, falls back to files, tolerates null',
   expect(filesFromDataTransfer({ files: [f1] })).toEqual([f1]);
   expect(filesFromDataTransfer(null)).toEqual([]);
   expect(filesFromDataTransfer({ items: [{ kind: 'string', getAsFile: () => null }] })).toEqual([]);
-});
-
-test('pathInjection single-quotes and escapes embedded quotes, trailing space', () => {
-  expect(pathInjection('/home/u/.tmuxifier-uploads/1-aa-shot.png')).toBe("'/home/u/.tmuxifier-uploads/1-aa-shot.png' ");
-  expect(pathInjection("/a/it's.png")).toBe("'/a/it'\\''s.png' ");
 });
 
 test('sizeError reports MB over-limit, null when within', () => {

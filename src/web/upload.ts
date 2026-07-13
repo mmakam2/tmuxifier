@@ -53,13 +53,6 @@ export function filesFromDataTransfer<T>(
   return out;
 }
 
-// What gets typed into the PTY after an upload: the absolute path, always
-// single-quoted (embedded quotes escaped the sh way), plus a trailing space —
-// the same convention terminals use for drag-drop, which CLIs parse as a path.
-export function pathInjection(path: string): string {
-  return `'${path.replace(/'/g, `'\\''`)}' `;
-}
-
 export function sizeError(size: number, maxBytes: number): string | null {
   if (size <= maxBytes) return null;
   return `file too large (max ${Math.round(maxBytes / (1024 * 1024))} MB)`;

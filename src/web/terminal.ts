@@ -5,7 +5,7 @@ import { reconnectDelay } from './reconnect';
 import { clipboardActionForKey, writeClipboard, readClipboard, type ClipboardDeps } from './clipboard';
 import { buildFontFamily, clampFontSize, DEFAULT_TERM_FONT_SIZE } from './termFont';
 import { api } from './api';
-import { filesFromDataTransfer, uploadName, pathInjection, sizeError, termSafe } from './upload';
+import { filesFromDataTransfer, uploadName, sizeError, termSafe } from './upload';
 
 // Synchronous execCommand('copy') used when the async Clipboard API is missing
 // (insecure context) or rejects (document not focused). A hidden textarea is the
@@ -81,8 +81,9 @@ function wireClipboard(term: Terminal): void {
 }
 
 // Pasting a file/image or dropping one onto the terminal uploads it to the
-// box's ~/.tmuxifier-uploads and types the quoted remote path into the PTY —
-// the path crosses the text-only ssh pipe, not the bytes. Text pastes take
+// box's ~/.tmuxifier-uploads. The server types the quoted path into the tmux
+// pane itself when it's safe (Claude Code / shell prompt — see the spec); the
+// browser only reports uploads the server chose not to type. Text pastes take
 // the untouched native path (wireClipboard). Capture phase so the file case
 // wins before xterm's own paste handler sees the event.
 function wireUploads(parent: HTMLElement, term: Terminal, boxId: string): () => void {
@@ -93,7 +94,6 @@ function wireUploads(parent: HTMLElement, term: Terminal, boxId: string): () => 
   // torn-down Terminal.
   let disposed = false;
   async function uploadAll(files: File[]): Promise<void> {
-    const injections: string[] = [];
     for (const f of files) {
       if (disposed) return;
       const name = uploadName(f, Date.now());
@@ -106,14 +106,17 @@ function wireUploads(parent: HTMLElement, term: Terminal, boxId: string): () => 
       try {
         const res = await api.uploadFile(boxId, name, f);
         if (disposed) return;
-        injections.push(pathInjection(res.path));
+        // The server typed the path into the pane (it arrives through the
+        // normal attach stream) — only surface the cases where it didn't.
+        if (!res.injected) {
+          term.write(`\r\n\x1b[33m[uploaded: ${termSafe(res.path)} — pane busy, not typed]\x1b[0m\r\n`);
+        }
       } catch (e) {
         if (disposed) return;
         term.write(`\r\n\x1b[33m[upload failed: ${termSafe((e as Error).message || 'error')}]\x1b[0m\r\n`);
       }
     }
     if (disposed) return;
-    if (injections.length) term.paste(injections.join(''));
     term.focus();
   }
   const onPaste = (ev: ClipboardEvent) => {
