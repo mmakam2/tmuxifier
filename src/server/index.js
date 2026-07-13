@@ -7,7 +7,7 @@ import { createStore } from './store.js';
 import { createStatusChecker } from './status.js';
 import { createStatusPoller } from './statusPoller.js';
 import { createSessionManager } from './sessions.js';
-import { sshRun } from './sshRun.js';
+import { sshRun, sshRunStdin } from './sshRun.js';
 import { createBoxActions } from './boxActions.js';
 import { createFleetStore } from './fleetStore.js';
 import { createFleetManager } from './fleet.js';
@@ -45,6 +45,7 @@ const store = createStore({ dataDir: config.dataDir });
 const sessions = createSessionManager({ hostKeyPolicy: config.hostKeyPolicy, graceSeconds: config.graceSeconds, sshConfigFile: config.sshConfigFile, controlDir: config.controlDir, controlPersist: config.controlPersist });
 const boxActions = createBoxActions({
   run: (argv, opts) => sshRun(argv, opts),
+  runStdin: (argv, input, opts) => sshRunStdin(argv, input, opts),
   hostKeyPolicy: config.hostKeyPolicy,
   sshConfigFile: config.sshConfigFile,
   controlDir: config.controlDir,

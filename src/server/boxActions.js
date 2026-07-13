@@ -7,6 +7,7 @@ import {
   sanitizeSession,
   shSingleQuote,
 } from './sshCommand.js';
+import { storedUploadName, buildUploadRemote } from './uploads.js';
 
 export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
   const sess = shSingleQuote(sanitizeSession(session));
@@ -173,7 +174,7 @@ export function buildKillTmuxRemote(session) {
   return `if command -v tmux >/dev/null 2>&1; then tmux kill-session -t ${sess} 2>/dev/null || true; fi`;
 }
 
-export function createBoxActions({ run, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist }) {
+export function createBoxActions({ run, runStdin, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist }) {
   async function runRemote(box, remote, timeout) {
     const argv = buildProbeArgv(box, remote, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
     return run(argv, { timeout });
@@ -218,6 +219,30 @@ export function createBoxActions({ run, hostKeyPolicy = 'accept-new', sshConfigF
     // still validates the connection fields.
     async execCommand(box, command, { timeoutMs = 15000 } = {}) {
       return runRemote(box, command, timeoutMs);
+    },
+    // Land a pasted/dropped file on the box: pipe the bytes to a remote
+    // `cat > ~/.tmuxifier-uploads/<stored>` over the shared ControlMaster
+    // (no second auth) and return the absolute remote path the script echoes.
+    // Same validation path as every probe: assertBoxSafe inside buildProbeArgv,
+    // stored name allowlisted + single-quoted in buildUploadRemote.
+    async uploadFile(box, name, buffer, { timeoutMs = 60000 } = {}) {
+      if (typeof runStdin !== 'function') return { ok: false, error: 'upload not supported' };
+      let argv;
+      try {
+        const stored = storedUploadName(name);
+        argv = buildProbeArgv(box, buildUploadRemote(stored), { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
+      } catch (e) {
+        return { ok: false, error: e?.message || 'invalid upload' };
+      }
+      const res = await runStdin(argv, buffer, { timeout: timeoutMs });
+      if (!res || res.code !== 0) {
+        const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
+        return { ok: false, error: msg || `ssh exited ${res ? res.code : 'unknown'}` };
+      }
+      const lines = String(res.stdout || '').trim().split(/\r?\n/);
+      const remotePath = (lines[lines.length - 1] || '').trim();
+      if (!remotePath.startsWith('/')) return { ok: false, error: 'could not resolve upload path' };
+      return { ok: true, path: remotePath };
     },
     async exitMaster(box) {
       try {
