@@ -11,7 +11,7 @@ import { sanitizeSession, shSingleQuote } from './sshCommand.js';
 // Strong Claude Code TUI markers. Any one suffices; checked before the shell
 // rule because Claude's own input row would also match a trailing '>'.
 const CLAUDE_MARKERS = [
-  /^\s*│\s*[>›](?:\s|$)/m, // the bordered prompt-box input row
+  /^[^\S\n]*│[^\S\n]*[>›](?:\s|$)/m, // the bordered prompt-box input row (confined to one line)
   /esc to interrupt/i,     // working/spinner footer
   /\? for shortcuts/i,     // idle footer hint
   /accept edits/i,         // permission-mode footer
@@ -40,7 +40,10 @@ export function classifyPane(text) {
 // Shells whose idle foreground process means "pane is at a prompt". A shell
 // running a command shows that command instead, so this is precise — and it
 // is immune to prompt themes (zsh RPROMPT right-pads text after the prompt
-// char, defeating the screen regex; the command name doesn't lie).
+// char, defeating the screen regex; the command name doesn't lie). Note: a
+// running `#!/bin/bash` script also reports `bash` here — a long-running
+// script's stdin can then receive the typed path, bounded by the no-Enter
+// design (the path lands, nothing executes it).
 const SHELL_COMMANDS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash', 'ash', 'ksh', 'tcsh', 'csh']);
 
 // Split buildPaneStateRemote's output back into { command, screen }.
@@ -52,21 +55,33 @@ export function parsePaneState(raw) {
   return { command, screen };
 }
 
-// Command-first classification with the screen heuristics as fallback:
-// 'claude' process → claude; Claude TUI markers → claude (covers a CLI
-// running under 'node'); idle shell process → shell (theme-proof); then the
-// screen's prompt heuristic; anything else busy.
+// Commands that may host a Claude Code TUI: its process name is normally
+// 'claude', but wrappers and dev installs run under a JS runtime.
+const JS_RUNTIMES = new Set(['node', 'bun', 'deno']);
+
+// Command-first classification. The screen heuristics (classifyPane) apply
+// only when the command doesn't already identify the pane: any OTHER named
+// command (vim, less, make, …) is never typed into on the strength of
+// screen contents alone — a vim buffer displaying Claude-marker text must
+// classify busy, not claude.
 export function classifyPaneState({ command, screen } = {}) {
   const cmd = String(command || '').trim().toLowerCase();
   if (cmd === 'claude' || cmd.startsWith('claude-')) return 'claude';
-  const byScreen = classifyPane(screen);
-  if (byScreen === 'claude') return 'claude';
   if (SHELL_COMMANDS.has(cmd)) return 'shell';
-  return byScreen;
+  if (cmd === '' || JS_RUNTIMES.has(cmd)) return classifyPane(screen);
+  return 'busy';
 }
 
+// '=' forces exact session-name match — without it tmux -t prefix-matches,
+// so a vanished session could silently retarget a prefix-sibling. The
+// trailing ':' is required: tmux's exact-match rule applies per target
+// component, and a bare '=name' (no ':') is parsed as a pane/window token,
+// not a session, and never matches (verified on tmux 3.5a: `-t '=web'` fails
+// with "can't find pane: =web" even when session 'web' exists; `-t '=web:'`
+// finds it). The empty window/pane after ':' still resolves to the
+// session's current window/pane, same as an unqualified target.
 function sess(session) {
-  return shSingleQuote(sanitizeSession(session));
+  return shSingleQuote('=' + sanitizeSession(session) + ':');
 }
 
 // One round-trip pane state: line 1 is the pane's foreground command

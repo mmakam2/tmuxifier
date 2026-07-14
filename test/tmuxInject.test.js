@@ -59,6 +59,7 @@ test('classifyPane returns busy for everything else', () => {
   expect(classifyPane('100%')).toBe('busy');
   expect(classifyPane('>>> ')).toBe('busy');                        // Python REPL
   expect(classifyPane('        < Ok >   < Cancel >')).toBe('busy'); // dialog buttons
+  expect(classifyPane('│\n> x')).toBe('busy'); // marker must not match across lines
 });
 
 test('classifyPaneState is command-first with screen fallback', () => {
@@ -71,6 +72,10 @@ test('classifyPaneState is command-first with screen fallback', () => {
   expect(classifyPaneState({ command: 'vim', screen: '~\n~\n-- INSERT --' })).toBe('busy');
   expect(classifyPaneState({ command: 'cat', screen: '' })).toBe('busy');
   expect(classifyPaneState({})).toBe('busy');
+  // command-gated: a named non-shell command is never typed into on screen
+  // contents alone (vim showing Claude-marker text, a pager ending in '$')
+  expect(classifyPaneState({ command: 'vim', screen: 'esc to interrupt\n-- INSERT --' })).toBe('busy');
+  expect(classifyPaneState({ command: 'less', screen: 'some output $' })).toBe('busy');
 });
 
 test('parsePaneState splits command line from screen', () => {
@@ -81,15 +86,15 @@ test('parsePaneState splits command line from screen', () => {
 
 test('script builders sanitize the session and quote arguments', () => {
   expect(buildPaneStateRemote('web')).toBe(
-    "tmux display-message -p -t 'web' '#{pane_current_command}' 2>/dev/null || echo\n" +
-    "tmux capture-pane -p -t 'web' 2>/dev/null",
+    "tmux display-message -p -t '=web:' '#{pane_current_command}' 2>/dev/null || echo\n" +
+    "tmux capture-pane -p -t '=web:' 2>/dev/null",
   );
   // session goes through sanitizeSession: unsafe chars become '-'
-  expect(buildPaneStateRemote('a;b')).toContain("'a-b'");
+  expect(buildPaneStateRemote('a;b')).toContain("'=a-b:'");
   expect(buildSendKeysRemote('web', "'/root/.tmuxifier-uploads/1-aa-x.png' "))
-    .toBe("tmux send-keys -t 'web' -l -- ''\\''/root/.tmuxifier-uploads/1-aa-x.png'\\'' '");
+    .toBe("tmux send-keys -t '=web:' -l -- ''\\''/root/.tmuxifier-uploads/1-aa-x.png'\\'' '");
   expect(buildDisplayMessageRemote('web', '[tmuxifier] image pasted: x.png'))
-    .toBe("tmux display-message -t 'web' '[tmuxifier] image pasted: x.png'");
+    .toBe("tmux display-message -t '=web:' '[tmuxifier] image pasted: x.png'");
 });
 
 test('injectionText single-quotes with sh escaping and trailing space', () => {
@@ -162,5 +167,5 @@ test('injectLocalUploadPath runs the same flow through the injected runner', asy
   const { run, calls } = fakeRunner('zsh\n~/code ❯ ');
   const res = await injectLocalUploadPath('local', '/home/u/.tmuxifier-uploads/1-aa-x.png', { run });
   expect(res).toEqual({ injected: true, mode: 'shell' });
-  expect(calls[0]).toContain("-t 'local'");
+  expect(calls[0]).toContain("-t '=local:'");
 });
