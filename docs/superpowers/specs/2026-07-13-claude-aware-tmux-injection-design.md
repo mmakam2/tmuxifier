@@ -3,6 +3,12 @@
 Date: 2026-07-13
 Status: approved
 
+> **Erratum (Amendment A + B, see the plan):** classification shipped command-first — tmux's
+> `#{pane_current_command}` is the primary signal (whole-pane capture, no `tail -25`; bare `>`
+> dropped from the prompt chars; screen heuristics apply only when the command doesn't identify
+> the pane), and tmux targets use `=`-exact session matching. The sections below describe the
+> pre-amendment design.
+
 ## Problem
 
 v1.6.0's terminal file paste injects the uploaded path **client-side**: the browser calls

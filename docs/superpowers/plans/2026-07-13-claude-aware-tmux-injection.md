@@ -760,3 +760,19 @@ Resolution (commit a9aaa2b): the primary classification signal is now tmux's
 - Integration test no longer polls for a drawn prompt (command-based detection works before the
   prompt draws); fake-runner fixtures carry the command first line; the state script is
   distinguished from status display-message calls by `#{pane_current_command}`.
+
+## Amendment B (2026-07-14, final whole-branch review): command-gated heuristics + exact targets
+
+1. `classifyPaneState` now consults the screen heuristics ONLY for an empty/unknown command or a
+   JS runtime (node/bun/deno) — any other named command (vim, less, make, …) is busy. Closes the
+   demonstrated false-claude channel (vim buffer displaying Claude-marker text was typed into).
+   Shell command now wins before the marker scan.
+2. Claude input-row marker confined to one line (`[^\S\n]*` instead of `\s*`).
+3. `sess()` prefixes `=` so tmux `-t` matches the session name exactly (bare `-t web` would
+   prefix-match `webapp` when `web` is gone). Verified on tmux 3.5a that a bare `=name` (no
+   trailing `:`) does NOT work — tmux parses it as a pane/window token and reports "can't find
+   pane: =name" even when session `name` exists; the target must be `=name:` (empty
+   window/pane after the colon still resolves to the session's current window/pane). `sess()`
+   emits `'=' + sanitizeSession(session) + ':'`; the integration test
+   (`test/tmuxInject.integration.test.js`) caught the bare-`=` form failing against a live tmux
+   server before this was corrected.
