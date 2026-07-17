@@ -95,8 +95,15 @@ const TOOLS = {
     // Debian/Ubuntu archives don't carry gh — use GitHub's official apt repo.
     '  if command -v apt-get >/dev/null 2>&1; then',
     '    $SUDO mkdir -p -m 755 /etc/apt/keyrings',
-    '    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | $SUDO tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null',
-    '    $SUDO chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg',
+    // Fetch to a temp file FIRST: piping `curl … | tee` would write an EMPTY
+    // keyring on curl failure (tee exits 0) while the sources list still lands,
+    // poisoning every later apt-get update. A failed `curl -o` aborts under
+    // `set -e` before anything under /etc is mutated. `install -m 0644` sets the
+    // final mode, so no separate chmod is needed.
+    '    t="$(mktemp)"',
+    '    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o "$t"',
+    '    $SUDO install -D -m 0644 "$t" /etc/apt/keyrings/githubcli-archive-keyring.gpg',
+    '    rm -f "$t"',
     '    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | $SUDO tee /etc/apt/sources.list.d/github-cli.list >/dev/null',
     '    $SUDO apt-get update',
     '    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gh',
@@ -125,14 +132,25 @@ const TOOLS = {
     '  $SUDO npm install -g @openai/codex',
     'fi',
   ],
+  // Download-then-execute, NOT `curl | bash`: under `set -eu` without pipefail a
+  // curl network failure makes the pipeline exit 0 (bash on empty stdin exits 0),
+  // so provisioning would report success with the tool absent. pipefail can't be
+  // assumed (the remote may run dash). A separate `curl -o` is a plain command
+  // `set -e` catches, so a fetch failure aborts loudly.
   claude: () => [
     'if ! command -v claude >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/claude" ]; then',
-    '  curl -fsSL https://claude.ai/install.sh | bash',
+    '  t="$(mktemp)"',
+    '  curl -fsSL https://claude.ai/install.sh -o "$t"',
+    '  bash "$t"',
+    '  rm -f "$t"',
     'fi',
   ],
   agy: () => [
     'if ! command -v agy >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/agy" ]; then',
-    '  curl -fsSL https://antigravity.google/cli/install.sh | bash',
+    '  t="$(mktemp)"',
+    '  curl -fsSL https://antigravity.google/cli/install.sh -o "$t"',
+    '  bash "$t"',
+    '  rm -f "$t"',
     'fi',
   ],
 };

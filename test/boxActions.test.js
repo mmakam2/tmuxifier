@@ -13,6 +13,19 @@ function runShell(script, env) {
   });
 }
 
+// Syntax-check a script without executing it (`sh -n <file>`): catches quoting /
+// unbalanced-block regressions in the generated setup script.
+async function syntaxCheck(script) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-syntax-'));
+  const file = path.join(dir, 'setup.sh');
+  await fs.writeFile(file, script);
+  return new Promise((resolve) => {
+    execFile('/bin/sh', ['-n', file], { timeout: 5000 }, (err, stdout, stderr) => {
+      resolve({ code: err && typeof err.code === 'number' ? err.code : err ? 1 : 0, stdout, stderr });
+    });
+  });
+}
+
 test('buildEnsureTmuxRemote installs tmux when missing and creates the session', () => {
   const remote = buildEnsureTmuxRemote('web', "echo 'hi'");
   expect(remote).toContain('command -v tmux');
@@ -423,8 +436,12 @@ test('buildEnsureTmuxRemote installs codex via npm with node implied', () => {
 
 test('buildEnsureTmuxRemote installs claude and agy via their curl installers', () => {
   const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['claude', 'agy'] });
-  expect(remote).toContain('curl -fsSL https://claude.ai/install.sh | bash');
-  expect(remote).toContain('curl -fsSL https://antigravity.google/cli/install.sh | bash');
+  // Download-then-execute (not pipe-to-bash): a curl failure is a plain command
+  // that `set -e` catches, so a network error can't report success with the tool
+  // absent (pipefail can't be assumed — the remote may run dash).
+  expect(remote).toContain('curl -fsSL https://claude.ai/install.sh -o "$t"');
+  expect(remote).toContain('curl -fsSL https://antigravity.google/cli/install.sh -o "$t"');
+  expect(remote).not.toContain('install.sh | bash');
   expect(remote).toContain('$HOME/.local/bin:$PATH');
 });
 
@@ -461,4 +478,83 @@ test('local-bin PATH line is delete-then-append idempotent (real sed)', async ()
   const profile = await fs.readFile(path.join(dir, '.profile'), 'utf8');
   const count = profile.split('\n').filter((l) => l.includes('.local/bin')).length;
   expect(count).toBe(1);
+});
+
+// Important #1: the claude/agy installers must fail loudly. Piping `curl | bash`
+// under `set -eu` (no pipefail) reports success on a curl network failure —
+// bash on empty stdin exits 0, so the pipeline exits 0 and the tool is silently
+// absent. Download-then-execute makes the fetch a plain command `set -e` catches.
+test('claude installer fails loudly when the download fails (real shell, curl exit 7)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-claude-fail-'));
+  // PATH holds ONLY our stubs, so `command -v claude` deterministically misses
+  // (claude is often on the test host's PATH) and the install body runs.
+  await fs.writeFile(path.join(dir, 'curl'), '#!/bin/sh\nexit 7\n', { mode: 0o755 }); // simulate a network failure
+  // Passthrough real mktemp/bash/rm by restoring the original PATH first.
+  for (const name of ['mktemp', 'bash', 'rm']) {
+    await fs.writeFile(path.join(dir, name), `#!/bin/sh\nexport PATH="$ORIG_PATH"\nexec ${name} "$@"\n`, { mode: 0o755 });
+  }
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['claude'] });
+  const lines = remote.split('\n');
+  const start = lines.findIndex((l) => /command -v claude/.test(l));
+  const end = lines.findIndex((l, i) => i > start && l.trim() === 'fi');
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  const block = `set -eu\n${lines.slice(start, end + 1).join('\n')}`;
+  const res = await runShell(block, { PATH: dir, ORIG_PATH: process.env.PATH, HOME: dir });
+  // A curl failure must abort the block — not report success with claude absent.
+  expect(res.code).not.toBe(0);
+});
+
+// Important #2: the gh apt branch must fetch the keyring to a temp file BEFORE
+// any /etc mutation. The old `curl … | $SUDO tee /etc/apt/keyrings/…` wrote an
+// EMPTY keyring on curl failure (tee exits 0), and the sources list still
+// landed — poisoning every later `apt-get update` on the box.
+test('gh keyring fetch aborts before writing the keyring when curl fails (real shell)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-gh-fail-'));
+  const keyrings = path.join(dir, 'keyrings');
+  const sources = path.join(dir, 'sources');
+  await fs.mkdir(keyrings);
+  await fs.mkdir(sources);
+  await fs.writeFile(path.join(dir, 'curl'), '#!/bin/sh\nexit 7\n', { mode: 0o755 }); // simulate a network failure
+  await fs.writeFile(path.join(dir, 'apt-get'), '#!/bin/sh\nexit 0\n', { mode: 0o755 }); // present => apt branch taken
+  await fs.writeFile(path.join(dir, 'id'), '#!/bin/sh\necho 0\n', { mode: 0o755 }); // "root" => SUDO=''
+  // Passthrough the real tools that would actually touch the (redirected) dirs.
+  for (const name of ['mkdir', 'mktemp', 'install', 'tee', 'rm', 'chmod', 'dpkg']) {
+    await fs.writeFile(path.join(dir, name), `#!/bin/sh\nexport PATH="$ORIG_PATH"\nexec ${name} "$@"\n`, { mode: 0o755 });
+  }
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['gh'] });
+  const lines = remote.split('\n');
+  const start = lines.findIndex((l) => /command -v gh/.test(l));
+  // Find the matching OUTER `fi` (ignore self-balanced one-line `if …; fi`).
+  let depth = 0, end = -1;
+  for (let i = start; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (/^if\b.*;\s*fi$/.test(t)) continue;
+    if (/^if\b/.test(t)) depth++;
+    else if (t === 'fi') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  const block = `set -eu\n${lines.slice(start, end + 1).join('\n')}`
+    .replaceAll('/etc/apt/keyrings', keyrings)
+    .replaceAll('/etc/apt/sources.list.d', sources);
+  const res = await runShell(block, { PATH: dir, ORIG_PATH: process.env.PATH, HOME: dir });
+  // curl failed, so the keyring must never have been written — an empty/broken
+  // keyring would poison every later apt-get update on the box.
+  expect(res.code).not.toBe(0);
+  await expect(fs.readdir(keyrings)).resolves.toEqual([]);
+});
+
+// Suite-level lock: the full script (every tool + every framework) must parse
+// cleanly. Catches quoting / unbalanced-block regressions from future edits.
+test('generated setup script is syntactically valid with all tools and frameworks (sh -n)', async () => {
+  const remote = buildEnsureTmuxRemote('web', "echo 'hi'", {
+    tools: TOOL_IDS,
+    installOhMyTmux: true,
+    installOhMyZsh: true,
+    installOhMyBash: true,
+  });
+  const res = await syntaxCheck(remote);
+  expect(res.stderr).toBe('');
+  expect(res.code).toBe(0);
 });

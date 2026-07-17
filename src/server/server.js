@@ -685,9 +685,15 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         const { ohMyTmux, ohMyZsh, ohMyBash, tools } = req.query;
         // Reject unknown ids outright — catalog ids are the only strings that
         // may reach the generated script (see resolveTools in boxActions.js).
+        // A repeated `tools=` parses to an array: fail closed (like an unknown
+        // id) rather than silently coercing it to '' and provisioning no tools.
+        if (tools !== undefined && typeof tools !== 'string') {
+          socket.close(1008, 'invalid tools');
+          return;
+        }
         let toolIds;
         try {
-          toolIds = resolveTools(typeof tools === 'string' ? tools : '');
+          toolIds = resolveTools(tools ?? '');
         } catch {
           socket.close(1008, 'invalid tools');
           return;
