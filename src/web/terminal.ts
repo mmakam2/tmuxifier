@@ -219,6 +219,7 @@ interface ProvisionOptions {
   ohMyTmux: boolean;
   ohMyZsh: boolean;
   ohMyBash: boolean;
+  tools?: string[];
 }
 
 export function openTerminal(parent: HTMLElement, boxId: string, label?: string) {
@@ -319,6 +320,7 @@ export function openProvisionTerminal(
     `ohMyTmux=${options.ohMyTmux ? '1' : '0'}`,
     `ohMyZsh=${options.ohMyZsh ? '1' : '0'}`,
     `ohMyBash=${options.ohMyBash ? '1' : '0'}`,
+    ...(options.tools && options.tools.length ? [`tools=${encodeURIComponent(options.tools.join(','))}`] : []),
   ].join('&');
   const ws = new WebSocket(`${proto}://${location.host}/term?${qs}`);
 
