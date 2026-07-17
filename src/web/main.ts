@@ -11,6 +11,7 @@ import { openProxmoxHub } from './proxmoxUi';
 import { pve } from './proxmox';
 import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
+import { toolsCheckboxGroup } from './provisionTools';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
@@ -936,7 +937,7 @@ function closeProvisionPanel() {
   term?.dispose();
 }
 
-function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean }) {
+function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools?: string[] }) {
   const panel = document.getElementById('provision-panel')!;
   const title = panel.querySelector('.provision-title')!;
   const status = panel.querySelector('.provision-status')!;
@@ -1114,6 +1115,8 @@ function openBoxDialog(box?: Box) {
 
   shellGroup.append(shellNone.wrap, shellZsh.wrap, shellBash.wrap);
 
+  const toolsGroup = toolsCheckboxGroup();
+
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   const form = document.createElement('form');
@@ -1167,7 +1170,7 @@ function openBoxDialog(box?: Box) {
 
   const setupGrid = document.createElement('div');
   setupGrid.className = 'field-grid';
-  setupGrid.append(shellGroup, installOhMyTmux);
+  setupGrid.append(shellGroup, installOhMyTmux, toolsGroup.element);
 
   const modalBody = document.createElement('div');
   modalBody.className = 'modal-body';
@@ -1243,11 +1246,13 @@ function openBoxDialog(box?: Box) {
         await refresh();
         const installOhMyZsh = shellZsh.input.checked;
         const installOhMyBash = shellBash.input.checked;
-        if (installOhMyTmuxInput.checked || installOhMyZsh || installOhMyBash) {
+        const selectedTools = toolsGroup.selected();
+        if (installOhMyTmuxInput.checked || installOhMyZsh || installOhMyBash || selectedTools.length) {
           openProvisionPanel(updatedBox, {
             ohMyTmux: installOhMyTmuxInput.checked,
             ohMyZsh: installOhMyZsh,
             ohMyBash: installOhMyBash,
+            tools: selectedTools,
           });
         }
       } else {
@@ -1283,6 +1288,7 @@ function openBoxDialog(box?: Box) {
           ohMyTmux: installOhMyTmuxInput.checked,
           ohMyZsh: installOhMyZsh,
           ohMyBash: installOhMyBash,
+          tools: toolsGroup.selected(),
         });
       }
     } catch (e: any) {
