@@ -174,6 +174,12 @@ shell/theme options, and creates the configured tmux session. If provisioning ex
 the new box is rolled back from the list. Removing a box closes any local terminal process for
 that box and best-effort kills the configured remote tmux session before deleting the box.
 
+The Add/Edit Box modal (and the Proxmox Provision form below) also offer an **"Additional
+tools"** checklist that runs in the same provisioning step — a full system update/upgrade,
+curl, git, the GitHub CLI, Node.js + npm, Bubblewrap, and the Codex, Claude Code, and
+Antigravity CLIs — using the same idempotent multi-distro install script, so re-running
+provisioning skips anything already installed.
+
 ## Pasting images & files
 
 Pasting an image (Ctrl/Cmd+V) or dropping any file onto a terminal uploads it to
@@ -318,9 +324,9 @@ NetBox is configured (and stays visible on a preset already set to it), and prov
 existing `auto-static` preset without NetBox is rejected immediately instead of starting a job). Deprovisioning also deletes any NetBox
 IP record matching the box's current IP — including records created by hand — so manually
 linked containers don't leave stale IPAM entries behind. Then **Provision → pick a preset → enter a
-hostname** (optionally a tag and oh-my-tmux/zsh/bash). Watch the live task log; once the container
-is up Tmuxifier installs tmux (and any selected frameworks) over SSH, then an **Open terminal**
-button drops you into it.
+hostname** (optionally a tag, oh-my-tmux/zsh/bash, and the same "Additional tools" checklist as the
+Add/Edit Box modal). Watch the live task log; once the container is up Tmuxifier installs tmux
+(and any selected frameworks/tools) over SSH, then an **Open terminal** button drops you into it.
 
 **Security.** The API token, any added SSH keys, and the optional root password are **encrypted at
 rest** (AES-256-GCM; key derived from your cookie secret) in the gitignored `data/proxmox.json`

@@ -102,8 +102,11 @@ pattern for new modules.
   surface). Includes ControlMaster multiplexing args.
 - `sshRun.js` — run one-shot ssh probes.
 - `boxActions.js` — `createBoxActions`: per-box SSH operations over the shared ControlMaster —
-  ensure/install tmux and selected shell frameworks, the non-interactive `execCommand` that Fleet
-  Command runs, and ControlMaster liveness/stale-socket reaping (`isMasterAlive`/`reapStaleMaster`).
+  ensure/install tmux, selected shell frameworks, and the curated provision-time tool catalog
+  (`TOOL_IDS`/`resolveTools`: system upgrade, curl, git, gh, node/npm, bubblewrap, and the
+  Codex/Claude/Antigravity CLIs — ids validated server-side, nothing user-typed reaches the
+  script), the non-interactive `execCommand` that Fleet Command runs, and ControlMaster
+  liveness/stale-socket reaping (`isMasterAlive`/`reapStaleMaster`).
 - `uploads.js` — terminal file uploads (paste/drag-drop): filename allowlist,
   stored-name uniquifier, the remote `cat > ~/.tmuxifier-uploads/…` script builder
   (24h self-prune), and the local-shell file writer. `boxActions.uploadFile` pipes
