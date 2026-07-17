@@ -7,7 +7,7 @@ import websocket from '@fastify/websocket';
 import { verifyPassword, COOKIE_NAME, cookieOptions, sessionValue, sessionValueValid } from './auth.js';
 import { createLoginRateLimiter } from './rateLimit.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
-import { buildEnsureTmuxRemote } from './boxActions.js';
+import { buildEnsureTmuxRemote, resolveTools } from './boxActions.js';
 import { assertBoxSafe } from './sshCommand.js';
 import { upsertConfigFile } from './configFile.js';
 import { mapWithConcurrency } from './concurrency.js';
@@ -682,11 +682,21 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
       // --- Provision mode ---
       if (mode === 'provision') {
-        const { ohMyTmux, ohMyZsh, ohMyBash } = req.query;
+        const { ohMyTmux, ohMyZsh, ohMyBash, tools } = req.query;
+        // Reject unknown ids outright — catalog ids are the only strings that
+        // may reach the generated script (see resolveTools in boxActions.js).
+        let toolIds;
+        try {
+          toolIds = resolveTools(typeof tools === 'string' ? tools : '');
+        } catch {
+          socket.close(1008, 'invalid tools');
+          return;
+        }
         const script = buildEnsureTmuxRemote(box.sessionName, box.startupCommand, {
           installOhMyTmux: ohMyTmux === '1',
           installOhMyZsh: ohMyZsh === '1',
           installOhMyBash: ohMyBash === '1',
+          tools: toolIds,
         });
 
         if (!sessions?.provision) {
