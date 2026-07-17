@@ -386,3 +386,79 @@ test('resolveTools applies dependency implications', () => {
 test('TOOL_IDS lists every tool in install order', () => {
   expect(TOOL_IDS).toEqual(['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy']);
 });
+
+test('buildEnsureTmuxRemote includes system upgrade block when requested', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['upgrade'] });
+  expect(remote).toContain('apt-get -y upgrade');
+  expect(remote).toContain('dnf -y upgrade');
+  expect(remote).toContain('pacman -Syu --noconfirm');
+  expect(remote).toContain('apk upgrade --update-cache');
+  expect(remote).toContain('zypper --non-interactive update');
+});
+
+test('buildEnsureTmuxRemote installs distro packages with command guards', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['curl', 'bubblewrap'] });
+  expect(remote).toContain('if ! command -v curl >/dev/null 2>&1; then');
+  expect(remote).toContain('apt-get install -y --no-install-recommends curl');
+  expect(remote).toContain('if ! command -v bwrap >/dev/null 2>&1; then');
+  expect(remote).toContain('apt-get install -y --no-install-recommends bubblewrap');
+});
+
+test('buildEnsureTmuxRemote sets up the GitHub apt repo for gh', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['gh'] });
+  expect(remote).toContain('https://cli.github.com/packages/githubcli-archive-keyring.gpg');
+  expect(remote).toContain('/etc/apt/sources.list.d/github-cli.list');
+  expect(remote).toContain('apt-get install -y --no-install-recommends gh');
+  expect(remote).toContain('pacman -Sy --noconfirm github-cli');
+  // gh implies curl (fetches the keyring with it)
+  expect(remote).toContain('if ! command -v curl >/dev/null 2>&1; then');
+});
+
+test('buildEnsureTmuxRemote installs codex via npm with node implied', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['codex'] });
+  expect(remote).toContain('if ! command -v npm >/dev/null 2>&1; then');
+  expect(remote).toContain('apt-get install -y --no-install-recommends nodejs npm');
+  expect(remote).toContain('npm install -g @openai/codex');
+});
+
+test('buildEnsureTmuxRemote installs claude and agy via their curl installers', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['claude', 'agy'] });
+  expect(remote).toContain('curl -fsSL https://claude.ai/install.sh | bash');
+  expect(remote).toContain('curl -fsSL https://antigravity.google/cli/install.sh | bash');
+  expect(remote).toContain('$HOME/.local/bin:$PATH');
+});
+
+test('buildEnsureTmuxRemote runs tools before the git/tmux bootstrap', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['upgrade'] });
+  expect(remote.indexOf('apt-get -y upgrade')).toBeLessThan(remote.indexOf('command -v tmux'));
+});
+
+test('buildEnsureTmuxRemote omits tool blocks and PATH line when no tools selected', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, {});
+  expect(remote).not.toContain('@openai/codex');
+  expect(remote).not.toContain('cli.github.com');
+  expect(remote).not.toContain('.local/bin');
+  expect(remote).not.toContain('apt-get -y upgrade');
+});
+
+test('buildEnsureTmuxRemote rejects unknown tool ids', () => {
+  expect(() => buildEnsureTmuxRemote('web', undefined, { tools: ['evil'] })).toThrow(/unknown tool/);
+});
+
+test('local-bin PATH line is delete-then-append idempotent (real sed)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-path-'));
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['claude'] });
+  // Extract just the PATH-maintenance block (from the .profile guard through done).
+  const lines = remote.split('\n');
+  const start = lines.findIndex((l) => l.includes('$HOME/.profile'));
+  const end = lines.findIndex((l, i) => i > start && l === 'done');
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  const block = lines.slice(start, end + 1).join('\n');
+  const env = { HOME: dir };
+  await runShell(block, env);
+  await runShell(block, env);
+  const profile = await fs.readFile(path.join(dir, '.profile'), 'utf8');
+  const count = profile.split('\n').filter((l) => l.includes('.local/bin')).length;
+  expect(count).toBe(1);
+});

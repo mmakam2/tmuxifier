@@ -32,9 +32,130 @@ export function resolveTools(ids) {
   return TOOL_IDS.filter((id) => want.has(id));
 }
 
+// Multi-package-manager install, mirroring the git/tmux bootstrap blocks below.
+// guard: binary checked with `command -v`; pkgs: per-manager package name(s).
+function installPackagesBlock(guard, pkgs, label) {
+  return [
+    `if ! command -v ${guard} >/dev/null 2>&1; then`,
+    "  SUDO=''",
+    "  if [ \"$(id -u)\" != '0' ]; then SUDO='sudo'; fi",
+    '  if command -v apt-get >/dev/null 2>&1; then',
+    '    $SUDO apt-get update || true',
+    `    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${pkgs.apt}`,
+    '  elif command -v dnf >/dev/null 2>&1; then',
+    `    $SUDO dnf install -y ${pkgs.dnf}`,
+    '  elif command -v yum >/dev/null 2>&1; then',
+    `    $SUDO yum install -y ${pkgs.yum}`,
+    '  elif command -v pacman >/dev/null 2>&1; then',
+    `    $SUDO pacman -Sy --noconfirm ${pkgs.pacman}`,
+    '  elif command -v apk >/dev/null 2>&1; then',
+    `    $SUDO apk add ${pkgs.apk}`,
+    '  elif command -v zypper >/dev/null 2>&1; then',
+    `    $SUDO zypper --non-interactive install ${pkgs.zypper}`,
+    '  else',
+    `    echo '${label} is not installed and no supported package manager was found' >&2`,
+    '    exit 127',
+    '  fi',
+    'fi',
+  ];
+}
+
+function samePkg(name) {
+  return { apt: name, dnf: name, yum: name, pacman: name, apk: name, zypper: name };
+}
+
+const TOOLS = {
+  upgrade: () => [
+    "SUDO=''",
+    "if [ \"$(id -u)\" != '0' ]; then SUDO='sudo'; fi",
+    'if command -v apt-get >/dev/null 2>&1; then',
+    '  $SUDO apt-get update',
+    '  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get -y upgrade',
+    'elif command -v dnf >/dev/null 2>&1; then',
+    '  $SUDO dnf -y upgrade',
+    'elif command -v yum >/dev/null 2>&1; then',
+    '  $SUDO yum -y update',
+    'elif command -v pacman >/dev/null 2>&1; then',
+    '  $SUDO pacman -Syu --noconfirm',
+    'elif command -v apk >/dev/null 2>&1; then',
+    '  $SUDO apk upgrade --update-cache',
+    'elif command -v zypper >/dev/null 2>&1; then',
+    '  $SUDO zypper --non-interactive update',
+    'else',
+    "  echo 'no supported package manager was found for system upgrade' >&2",
+    '  exit 127',
+    'fi',
+  ],
+  curl: () => installPackagesBlock('curl', samePkg('curl'), 'curl'),
+  git: () => installPackagesBlock('git', samePkg('git'), 'git'),
+  gh: () => [
+    'if ! command -v gh >/dev/null 2>&1; then',
+    "  SUDO=''",
+    "  if [ \"$(id -u)\" != '0' ]; then SUDO='sudo'; fi",
+    // Debian/Ubuntu archives don't carry gh — use GitHub's official apt repo.
+    '  if command -v apt-get >/dev/null 2>&1; then',
+    '    $SUDO mkdir -p -m 755 /etc/apt/keyrings',
+    '    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | $SUDO tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null',
+    '    $SUDO chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg',
+    '    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | $SUDO tee /etc/apt/sources.list.d/github-cli.list >/dev/null',
+    '    $SUDO apt-get update',
+    '    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gh',
+    '  elif command -v dnf >/dev/null 2>&1; then',
+    '    $SUDO dnf install -y gh',
+    '  elif command -v yum >/dev/null 2>&1; then',
+    '    $SUDO yum install -y gh',
+    '  elif command -v pacman >/dev/null 2>&1; then',
+    '    $SUDO pacman -Sy --noconfirm github-cli',
+    '  elif command -v apk >/dev/null 2>&1; then',
+    '    $SUDO apk add github-cli',
+    '  elif command -v zypper >/dev/null 2>&1; then',
+    '    $SUDO zypper --non-interactive install gh',
+    '  else',
+    "    echo 'gh is not installed and no supported package manager was found' >&2",
+    '    exit 127',
+    '  fi',
+    'fi',
+  ],
+  node: () => installPackagesBlock('npm', samePkg('nodejs npm'), 'npm'),
+  bubblewrap: () => installPackagesBlock('bwrap', samePkg('bubblewrap'), 'bubblewrap'),
+  codex: () => [
+    'if ! command -v codex >/dev/null 2>&1; then',
+    "  SUDO=''",
+    "  if [ \"$(id -u)\" != '0' ]; then SUDO='sudo'; fi",
+    '  $SUDO npm install -g @openai/codex',
+    'fi',
+  ],
+  claude: () => [
+    'if ! command -v claude >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/claude" ]; then',
+    '  curl -fsSL https://claude.ai/install.sh | bash',
+    'fi',
+  ],
+  agy: () => [
+    'if ! command -v agy >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/agy" ]; then',
+    '  curl -fsSL https://antigravity.google/cli/install.sh | bash',
+    'fi',
+  ],
+};
+
+// claude/agy land in ~/.local/bin. Same delete-then-append pattern as the
+// default-shell line in .tmux.conf.local: exactly one PATH line per rc file,
+// no matter how many times setup re-runs.
+const LOCAL_BIN_PATH_BLOCK = [
+  'if [ ! -f "$HOME/.profile" ]; then touch "$HOME/.profile"; fi',
+  'for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do',
+  '  if [ -f "$rc" ]; then',
+  "    sed -i '/# tmuxifier-local-bin$/d' \"$rc\" 2>/dev/null || true",
+  '    echo \'export PATH="$HOME/.local/bin:$PATH" # tmuxifier-local-bin\' >> "$rc"',
+  '  fi',
+  'done',
+];
+
 export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
   const sess = shSingleQuote(sanitizeSession(session));
   const startup = startupCommand ? ` ${shSingleQuote(startupCommand)}` : '';
+  const tools = resolveTools(options.tools);
+  const toolBlocks = tools.flatMap((id) => TOOLS[id]());
+  const localBinPath = tools.includes('claude') || tools.includes('agy') ? LOCAL_BIN_PATH_BLOCK : [];
   const ohMyTmux = options.installOhMyTmux ? [
     'cd',
     'if [ ! -f .tmux/.tmux.conf ]; then',
@@ -129,6 +250,8 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
   ] : [];
   return [
     'set -eu',
+    ...toolBlocks,
+    ...localBinPath,
     // Ensure git is available before oh-my-tmux / oh-my-zsh
     'if ! command -v git >/dev/null 2>&1; then',
     "  SUDO=''",
