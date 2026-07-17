@@ -85,6 +85,15 @@ its stderr visible in the provision terminal and the exit code surfaced via the 
 frame. Network-dependent installers (`claude`, `agy`, npm, GitHub's apt repo) fail loudly, not
 silently.
 
+> **Erratum (2026-07-17, see plan Amendment A):** the "fail loudly" promise required a code
+> fix that superseded the `curl … | bash` recipes shown in the tool-catalog table above. Under
+> `set -eu` without `pipefail` (unavailable under dash), a `curl | bash` pipeline exits 0 when
+> curl fails, so those installers actually failed *silently*. `claude`/`agy` now download to a
+> temp file and execute it (`curl -fsSL <url> -o "$t"; bash "$t"`), and the gh keyring is
+> fetched to a temp file and `install`ed rather than piped through `tee` (which wrote an empty
+> keyring on curl failure). A non-string `tools=` query param (a repeated param → array) now
+> closes the WS `1008 invalid tools` instead of being coerced to no tools.
+
 ## Testing (TDD, real code, no mocks)
 
 - `test/boxActions.test.js`:

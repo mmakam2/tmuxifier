@@ -773,3 +773,35 @@ git commit -m "docs: document the provision-time additional-tools catalog
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
+
+---
+
+## Amendment A — 2026-07-17 (whole-branch review fixes)
+
+Post-implementation review of the generated setup script surfaced three failure-path
+defects. All fixed in `src/server/boxActions.js` / `src/server/server.js` with real-shell
+and WS tests; earlier text above is left as the point-in-time record.
+
+- **claude/agy installers now download-then-execute, not `curl … | bash`.** Under `set -eu`
+  without `pipefail`, a curl network failure makes the pipeline exit 0 (bash on empty stdin
+  exits 0), so provisioning reported success with the tool absent — contradicting the spec's
+  "fail loudly, not silently" promise. `pipefail` can't be assumed (the remote may run dash).
+  Each installer is now `t="$(mktemp)"; curl -fsSL <url> -o "$t"; bash "$t"; rm -f "$t"` — a
+  plain `curl` command `set -e` catches. The `command -v`/`~/.local/bin` idempotency guards
+  are unchanged.
+- **gh keyring is fetched to a temp file before any `/etc` mutation.** The old
+  `curl … | $SUDO tee /etc/apt/keyrings/…` wrote an EMPTY keyring on curl failure (tee exits
+  0) while the sources list still landed, poisoning every later `apt-get update` on the box.
+  Now `t="$(mktemp)"; curl -fsSL <keyring-url> -o "$t"; $SUDO install -D -m 0644 "$t" …` — the
+  fetch aborts under `set -e` before touching `/etc`. The separate `chmod go+r` line is gone
+  (`install -m 0644` sets the final mode).
+- **A non-string `tools=` param now closes 1008 `invalid tools`.** A repeated
+  `tools=curl&tools=git` parses to an array; the handler coerced non-strings to `''` and
+  silently provisioned with no tools. It now fails closed like an unknown id
+  (`socket.close(1008, 'invalid tools')`). Absent/`''` still resolve to `[]`.
+
+Tests: `test/boxActions.test.js` gains real-shell failure-path tests for the claude installer
+(stubbed `curl` exiting 7) and the gh keyring branch (curl failure must leave the keyring dir
+empty), the claude/agy string assertions were updated to the new shape, and a suite-level
+`sh -n` syntax lock covers the full script with all tools + frameworks. `test/server.ws.integration.test.js`
+gains the array-`tools=` → 1008 case.
