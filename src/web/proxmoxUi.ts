@@ -6,8 +6,9 @@ import { openSettingsModal } from './settingsUi';
 import { renderPresetsTab } from './proxmoxPresets';
 import { renderContainersTab } from './proxmoxContainers';
 import { renderActivityTab } from './proxmoxActivity';
+import { toolsCheckboxGroup } from './provisionTools';
 
-type SetupOptions = { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean };
+type SetupOptions = { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[] };
 
 type HubOpts = {
   openBox: (box: Box) => void;
@@ -81,6 +82,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
     const omt = el('input', { type: 'checkbox' }); (omt as HTMLInputElement).checked = true;
     const radio = (value: string, checked: boolean) => { const r = el('input', { type: 'radio', name: 'pve-shell', value }); (r as HTMLInputElement).checked = checked; return r; };
     const shNone = radio('none', true), shZsh = radio('omz', false), shBash = radio('omb', false);
+    const toolsGroup = toolsCheckboxGroup();
 
     const box = el('div', {});
     const curPreset = (): PvePreset | undefined => presets.find((p) => p.id === sel.value);
@@ -97,7 +99,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
       const t = tag.value.trim();
       try {
         const job = await pve.createProvision({ presetId: sel.value, hostname: hostname.value.trim(), ip: curPreset()?.net.ipMode === 'static' ? (ip.value.trim() || undefined) : undefined, tags: t ? [t] : [] });
-        showJob(job.id, { ohMyTmux: (omt as HTMLInputElement).checked, ohMyZsh: (shZsh as HTMLInputElement).checked, ohMyBash: (shBash as HTMLInputElement).checked });
+        showJob(job.id, { ohMyTmux: (omt as HTMLInputElement).checked, ohMyZsh: (shZsh as HTMLInputElement).checked, ohMyBash: (shBash as HTMLInputElement).checked, tools: toolsGroup.selected() });
       } catch (er) { box.append(err((er as Error).message)); }
     } }, ['Provision']);
 
@@ -111,6 +113,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
         el('label', { class: 'check-field' }, [shZsh, el('span', {}, ['Oh My Zsh'])]),
         el('label', { class: 'check-field' }, [shBash, el('span', {}, ['Oh My Bash'])]),
       ]),
+      toolsGroup.element,
       el('div', { class: 'modal-actions' }, [go]),
     );
     setContent(box);
@@ -150,7 +153,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
         if (!ready) await new Promise((r) => setTimeout(r, 3000));
       }
       if (myGen !== pollGen) return;
-      phase.textContent = `Container ${vmid ?? ''} — running setup (tmux${opt.ohMyTmux ? ' + oh-my-tmux' : ''}${opt.ohMyZsh ? ' + oh-my-zsh' : ''}${opt.ohMyBash ? ' + oh-my-bash' : ''})…`;
+      phase.textContent = `Container ${vmid ?? ''} — running setup (tmux${opt.ohMyTmux ? ' + oh-my-tmux' : ''}${opt.ohMyZsh ? ' + oh-my-zsh' : ''}${opt.ohMyBash ? ' + oh-my-bash' : ''}${opt.tools.length ? ` + ${opt.tools.join(', ')}` : ''})…`;
       setupArea.style.height = '320px'; setupArea.style.marginTop = '8px';
       setupTerm = openProvisionTerminal(setupArea, boxId, opt, (code) => {
         if (myGen !== pollGen) return;
