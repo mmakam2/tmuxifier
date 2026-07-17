@@ -46,8 +46,9 @@ Rules that apply to every block:
   six package managers in the same order (apt-get, dnf, yum, pacman, apk, zypper),
   `DEBIAN_FRONTEND=noninteractive` on apt, `exit 127` with a stderr message when no supported
   manager exists.
-- **Dependency implication is resolved server-side** before script generation: `codex` adds
-  `node`; `claude`/`agy` add `curl`. The client doesn't need to know.
+- **Dependency implication is resolved server-side** before script generation: `gh` adds
+  `curl` (it fetches GitHub's apt keyring); `codex` adds `node`; `claude`/`agy` add `curl`.
+  The client doesn't need to know.
 - **Install order**: `upgrade` → distro packages (curl, git, gh, node, bubblewrap) → npm
   globals (codex) → curl installers (claude, agy) → then the existing framework blocks.
 - **PATH**: when `claude` or `agy` is selected, idempotently ensure

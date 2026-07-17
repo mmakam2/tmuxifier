@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { buildEnsureTmuxRemote, buildKillTmuxRemote, createBoxActions } from '../src/server/boxActions.js';
+import { buildEnsureTmuxRemote, buildKillTmuxRemote, createBoxActions, resolveTools, TOOL_IDS } from '../src/server/boxActions.js';
 
 function runShell(script, env) {
   return new Promise((resolve) => {
@@ -357,4 +357,32 @@ ${buildEnsureTmuxRemote('web', undefined, { installOhMyZsh: true })}`, { PATH: d
 
   expect(res.code).toBe(0);
   await expect(fs.stat(path.join(dir, '.tmux.conf.local'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('resolveTools returns [] for empty input', () => {
+  expect(resolveTools(undefined)).toEqual([]);
+  expect(resolveTools(null)).toEqual([]);
+  expect(resolveTools('')).toEqual([]);
+  expect(resolveTools([])).toEqual([]);
+});
+
+test('resolveTools rejects unknown ids', () => {
+  expect(() => resolveTools(['curl', 'rm -rf /'])).toThrow(/unknown tool/);
+  expect(() => resolveTools('curl,$(reboot)')).toThrow(/unknown tool/);
+});
+
+test('resolveTools parses CSV, dedupes, and orders by TOOL_IDS', () => {
+  expect(resolveTools('git,curl,git')).toEqual(['curl', 'git']);
+  expect(resolveTools(['bubblewrap', 'upgrade'])).toEqual(['upgrade', 'bubblewrap']);
+});
+
+test('resolveTools applies dependency implications', () => {
+  expect(resolveTools(['codex'])).toEqual(['node', 'codex']);
+  expect(resolveTools(['claude'])).toEqual(['curl', 'claude']);
+  expect(resolveTools(['agy'])).toEqual(['curl', 'agy']);
+  expect(resolveTools(['gh'])).toEqual(['curl', 'gh']);
+});
+
+test('TOOL_IDS lists every tool in install order', () => {
+  expect(TOOL_IDS).toEqual(['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy']);
 });

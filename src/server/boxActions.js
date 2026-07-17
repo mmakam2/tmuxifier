@@ -10,6 +10,28 @@ import {
 import { storedUploadName, buildUploadRemote } from './uploads.js';
 import { injectVia } from './tmuxInject.js';
 
+// Curated provision-time tools. Ids are the ONLY strings that ever reach the
+// generated shell script — resolveTools throws on anything not in the catalog,
+// which is what keeps the tools= query param out of command-injection territory.
+export const TOOL_IDS = ['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy'];
+
+// gh fetches GitHub's apt keyring with curl; codex is an npm global;
+// claude/agy are curl installers.
+const TOOL_IMPLIES = { gh: ['curl'], codex: ['node'], claude: ['curl'], agy: ['curl'] };
+
+export function resolveTools(ids) {
+  if (ids == null || ids === '') return [];
+  const list = typeof ids === 'string' ? ids.split(',').filter(Boolean) : ids;
+  if (!Array.isArray(list)) throw new Error('tools must be an array or comma-separated string');
+  const want = new Set();
+  for (const id of list) {
+    if (!TOOL_IDS.includes(id)) throw new Error(`unknown tool: ${id}`);
+    want.add(id);
+    for (const dep of TOOL_IMPLIES[id] || []) want.add(dep);
+  }
+  return TOOL_IDS.filter((id) => want.has(id));
+}
+
 export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
   const sess = shSingleQuote(sanitizeSession(session));
   const startup = startupCommand ? ` ${shSingleQuote(startupCommand)}` : '';
