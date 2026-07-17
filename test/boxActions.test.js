@@ -480,6 +480,22 @@ test('local-bin PATH line is delete-then-append idempotent (real sed)', async ()
   expect(count).toBe(1);
 });
 
+// The Oh My Zsh / Oh My Bash installers REPLACE .zshrc / .bashrc, so the
+// ~/.local/bin PATH block must run after the framework blocks or the line the
+// claude/agy installers rely on is wiped (or never written — the loop skips rc
+// files that don't exist yet).
+test('local-bin PATH block runs after the shell-framework installs', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, {
+    tools: ['claude'],
+    installOhMyZsh: true,
+    installOhMyBash: true,
+  });
+  const pathAt = remote.indexOf('tmuxifier-local-bin');
+  expect(pathAt).toBeGreaterThan(-1);
+  expect(pathAt).toBeGreaterThan(remote.indexOf('.oh-my-zsh'));
+  expect(pathAt).toBeGreaterThan(remote.indexOf('.oh-my-bash'));
+});
+
 // Important #1: the claude/agy installers must fail loudly. Piping `curl | bash`
 // under `set -eu` (no pipefail) reports success on a curl network failure —
 // bash on empty stdin exits 0, so the pipeline exits 0 and the tool is silently

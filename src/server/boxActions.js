@@ -269,7 +269,6 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
   return [
     'set -eu',
     ...toolBlocks,
-    ...localBinPath,
     // Ensure git is available before oh-my-tmux / oh-my-zsh
     'if ! command -v git >/dev/null 2>&1; then',
     "  SUDO=''",
@@ -327,6 +326,10 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     ...ohMyTmux,
     ...ohMyZsh,
     ...ohMyBash,
+    // After the framework blocks: the omz/omb installers replace .zshrc/.bashrc,
+    // which would wipe (or predate) the ~/.local/bin line the claude/agy
+    // installers rely on.
+    ...localBinPath,
     `"$TMUX_BIN" has-session -t ${sess} 2>/dev/null || "$TMUX_BIN" new-session -d -s ${sess}${startup}`,
     `[ -n "\${ZSH_BIN-}" ] && { "$TMUX_BIN" set-option -g default-shell "$ZSH_BIN" 2>/dev/null || true; W=\$("$TMUX_BIN" list-windows -t ${sess} -F '#{window_index}' 2>/dev/null | head -1); [ -n "\$W" ] && "$TMUX_BIN" respawn-window -t ${sess}:\$W -k "$ZSH_BIN" 2>/dev/null || true; } || true`,
     `[ -n "\${BASH_BIN-}" ] && { "$TMUX_BIN" set-option -g default-shell "$BASH_BIN" 2>/dev/null || true; W=\$("$TMUX_BIN" list-windows -t ${sess} -F '#{window_index}' 2>/dev/null | head -1); [ -n "\$W" ] && "$TMUX_BIN" respawn-window -t ${sess}:\$W -k "$BASH_BIN" 2>/dev/null || true; } || true`,
