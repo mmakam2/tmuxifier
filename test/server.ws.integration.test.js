@@ -7,6 +7,7 @@ import { buildServer } from '../src/server/server.js';
 import { createStore } from '../src/server/store.js';
 import { createSessionManager } from '../src/server/sessions.js';
 import { hashPassword, COOKIE_NAME } from '../src/server/auth.js';
+import { resolveTools, buildEnsureTmuxRemote } from '../src/server/boxActions.js';
 import { setupLocalBox } from './helpers/localBox.js';
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -240,6 +241,121 @@ test('provision WS rolls back box on non-zero exit', async () => {
   // Box should have been rolled back
   const boxes = await store.listBoxes();
   expect(boxes.find((b) => b.id === saved.id)).toBeFalsy();
+}, 10000);
+
+// Task 3: the provision WS accepts a `tools=` CSV query param and validates it
+// against the curated catalog (resolveTools in boxActions.js) *before* ever
+// building a script or opening a session — an unknown id must never reach the
+// generated shell script.
+test('provision WS closes 1008 "invalid tools" for an unknown tool id, before touching sessions', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-prov-badtools-'));
+  const config = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
+    passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
+    sshConfigPath: path.join(dir, 'nope'),
+  };
+  const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
+  const saved = await store.addBox({ host: 'h1', sessionName: 'web' });
+
+  // If resolveTools ever let 'evil' through, this would blow up loudly instead
+  // of silently opening an SSH/provision session.
+  let provisionCalled = false;
+  const sessions = {
+    provision() { provisionCalled = true; throw new Error('sessions.provision must not be called for invalid tools'); },
+    attach() {}, onExit() {}, write() {}, resize() {}, detach() {}, close() {},
+  };
+
+  const app = buildServer({
+    config, store, sessions,
+    statusChecker: { checkBox: async () => ({ reachable: true }) },
+    boxActions: { killSession: async () => ({ ok: true }) },
+  });
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const { port } = app.server.address();
+
+  teardown = async () => { await app.close(); await fs.rm(dir, { recursive: true, force: true }); };
+
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === COOKIE_NAME);
+
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${port}/term?box=${saved.id}&mode=provision&cols=80&rows=24&ohMyTmux=0&ohMyZsh=0&ohMyBash=0&tools=evil`,
+    { headers: { cookie: `${c.name}=${c.value}` } },
+  );
+  let closeCode = null;
+  let closeReason = '';
+  await new Promise((resolve, reject) => {
+    ws.on('close', (code, reason) => { closeCode = code; closeReason = reason?.toString() ?? ''; resolve(undefined); });
+    ws.on('error', reject);
+  });
+
+  expect(closeCode).toBe(1008);
+  expect(closeReason).toBe('invalid tools');
+  expect(provisionCalled).toBe(false);
+
+  // Box should be untouched — validation failed before anything else ran.
+  const boxes = await store.listBoxes();
+  expect(boxes.find((b) => b.id === saved.id)).toBeTruthy();
+}, 10000);
+
+test('provision WS accepts tools=curl: passes validation and builds the script with it resolved', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-prov-goodtools-'));
+  const config = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
+    passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
+    sshConfigPath: path.join(dir, 'nope'),
+  };
+  const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
+  const saved = await store.addBox({ host: 'h1', sessionName: 'web' });
+
+  // A stub sessions.provision — like the rollback test's — so this never needs
+  // a live SSH box; it just needs to observe what the route hands it.
+  let provisionArgs = null;
+  const sessions = {
+    provision(args) {
+      provisionArgs = args;
+      return {
+        key: args.key, listeners: new Set(), exitCbs: new Set(), exited: false, exitCode: null,
+        pty: { onData() {}, onExit() {}, kill() {}, resize() {} },
+      };
+    },
+    attach(entry, fn) { entry.listeners.add(fn); return () => entry.listeners.delete(fn); },
+    onExit(entry, cb) { entry.exitCbs.add(cb); return () => entry.exitCbs.delete(cb); },
+    write() {}, resize() {}, detach() {}, close() {},
+  };
+
+  const app = buildServer({
+    config, store, sessions,
+    statusChecker: { checkBox: async () => ({ reachable: true }) },
+    boxActions: { killSession: async () => ({ ok: true }) },
+  });
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const { port } = app.server.address();
+
+  teardown = async () => { await app.close(); await fs.rm(dir, { recursive: true, force: true }); };
+
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === COOKIE_NAME);
+
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${port}/term?box=${saved.id}&mode=provision&cols=80&rows=24&ohMyTmux=0&ohMyZsh=0&ohMyBash=0&tools=curl`,
+    { headers: { cookie: `${c.name}=${c.value}` } },
+  );
+  let closeCode = null;
+  ws.on('close', (code) => { closeCode = code; });
+  await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+  await delay(300); // let the async route handler run past validation and call sessions.provision
+
+  expect(closeCode).not.toBe(1008); // did not hit the "invalid tools" close path
+  expect(provisionArgs).toBeTruthy(); // sessions.provision was reached — validation passed
+  expect(provisionArgs.script).toBe(
+    buildEnsureTmuxRemote(saved.sessionName, saved.startupCommand, {
+      installOhMyTmux: false, installOhMyZsh: false, installOhMyBash: false,
+      tools: resolveTools('curl'),
+    }),
+  );
+
+  ws.close();
 }, 10000);
 
 // L8: the manual cookie-header parse in isAuthed (needed for WS upgrades,
