@@ -1,4 +1,4 @@
-import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent, type SetupJob } from './api';
+import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent, type SetupJob, type SetupSummary } from './api';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
 import { setupStatusText, setupActions, setupBadge } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
@@ -23,6 +23,7 @@ const UNTAGGED_KEY = '__untagged__';
 let activeBoxId: string | null = null;
 let allBoxes: Box[] = [];
 let latestStatus: Record<string, Status> = {};
+let latestSetups: SetupSummary[] = [];
 let fleetMode = false;
 let fleetSelected = new Set<string>();
 let fleetScriptDraft = ''; // in-progress bash-script editor content; survives reopen, cleared on run/exit
@@ -551,29 +552,10 @@ async function refresh() {
   const list = app.querySelector('#boxes'); if (!list) return;
   allBoxes = await api.boxes();
   latestStatus = {};
+  latestSetups = [];
   api.status().then((s) => { latestStatus = s; filterAndPaint(); }).catch(() => {});
+  api.listSetups().then((s) => { latestSetups = s; filterAndPaint(); }).catch(() => {});
   filterAndPaint();
-  void annotateSetupBadges();
-}
-
-// Best-effort: overlay a badge on any box card with an active (non-terminal-done)
-// setup job. Runs after the list repaints, so it no-ops harmlessly if a card
-// isn't in the DOM (e.g. filtered out by search) — failures here must never
-// break the box list itself.
-async function annotateSetupBadges() {
-  try {
-    const setups = await api.listSetups();
-    for (const s of setups) {
-      const b = setupBadge(s.status);
-      if (!b) continue;
-      const holder = document.querySelector(`[data-box-id="${CSS.escape(s.boxId)}"] .box-badges`);
-      if (!holder) continue;
-      const span = document.createElement('span');
-      span.className = `badge ${b.cls}`;
-      span.textContent = b.text;
-      holder.append(span);
-    }
-  } catch { /* badges are best-effort */ }
 }
 
 function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
@@ -582,7 +564,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   const li = document.createElement('li');
   li.className = b.id === activeBoxId ? 'box active' : 'box';
   li.dataset.id = b.id;
-  li.dataset.boxId = b.id; // matches [data-box-id] queried by annotateSetupBadges
+  li.dataset.boxId = b.id; // matches [data-box-id] used by tests/tooling to locate a card
 
   const check = document.createElement('input');
   check.type = 'checkbox';
@@ -605,6 +587,18 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   nameEl.textContent = b.label;
   const badgesEl = document.createElement('span');
   badgesEl.className = 'box-badges';
+  // latestSetups is newest-first (the manager's ordered()), so the first match
+  // for this box is its current setup job. Rendered as part of every row build
+  // (both the sync and async-status repaints in refresh()) so a badge can never
+  // be wiped by a later repaint racing a post-hoc DOM patch.
+  const setup = latestSetups.find((s) => s.boxId === b.id);
+  const badge = setup ? setupBadge(setup.status) : null;
+  if (badge) {
+    const badgeEl = document.createElement('span');
+    badgeEl.className = `badge ${badge.cls}`;
+    badgeEl.textContent = badge.text;
+    badgesEl.append(badgeEl);
+  }
   const metaEl = document.createElement('span');
   metaEl.className = 'box-meta';
   const sparkEl = document.createElement('span');
@@ -966,11 +960,9 @@ async function openLocalShellEditModal() {
 // keep streaming into a detached element), and so logout/session-expiry can
 // tear the panel down too.
 let activeProvisionCleanup: (() => void) | null = null;
-let provisionAutoClose: number | undefined;
 
 function closeProvisionPanel() {
   const panel = document.getElementById('provision-panel')!;
-  if (provisionAutoClose) { clearTimeout(provisionAutoClose); provisionAutoClose = undefined; }
   panel.classList.remove('open');
   const cleanup = activeProvisionCleanup;
   activeProvisionCleanup = null;
