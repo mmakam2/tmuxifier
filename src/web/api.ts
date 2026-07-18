@@ -48,6 +48,14 @@ export interface FleetJobSummary {
   createdAt: string; startedAt: string; finishedAt: string | null;
   targetCount: number; okCount: number; errorCount: number;
 }
+export type SetupStatus = 'running' | 'done' | 'error' | 'needs-interactive' | 'interrupted';
+export interface SetupOptions { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; }
+export interface SetupSummary {
+  id: string; boxId: string; boxLabel: string; status: SetupStatus;
+  phase: 'waiting-ssh' | 'running' | null; options: SetupOptions; error: string | null;
+  createdAt: string; finishedAt: string | null;
+}
+export interface SetupJob extends SetupSummary { log: string; }
 
 // Central 401 seam. When the session cookie expires (or the server restarts
 // with a new secret) every poller and action starts failing with 401s; without
@@ -108,4 +116,15 @@ export const api = {
   async listFleetJobs() { return j<FleetJobSummary[]>(await fetch('/api/fleet/jobs')); },
   async getFleetJob(id: string) { return j<FleetJob>(await fetch(`/api/fleet/jobs/${id}?t=${Date.now()}`)); },
   async cancelFleetJob(id: string) { return j<FleetJob>(await fetch(`/api/fleet/jobs/${id}/cancel`, { method: 'POST' })); },
+  async startSetup(boxId: string, options: SetupOptions) {
+    return j<SetupSummary>(await fetch(`/api/boxes/${boxId}/setup`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(options) }));
+  },
+  async getSetup(id: string) { return j<SetupJob>(await fetch(`/api/setup/${id}?t=${Date.now()}`)); },
+  async getBoxSetup(boxId: string): Promise<SetupJob | null> {
+    const res = await fetch(`/api/boxes/${boxId}/setup?t=${Date.now()}`);
+    if (res.status === 204) return null;
+    if (!res.ok) throw new Error(`setup lookup failed (${res.status})`);
+    return res.json() as Promise<SetupJob>;
+  },
+  async listSetups() { return j<SetupSummary[]>(await fetch('/api/setup')); },
 };
