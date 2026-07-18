@@ -502,6 +502,32 @@ test('reconnect does not wait for remote session cleanup', async () => {
   expect(killCalled).toBe(true);
 });
 
+test('forget-hostkey removes the key, drops the master, and resets backoff', async () => {
+  const calls = [];
+  const boxActions = { async exitMaster(box) { calls.push(['exitMaster', box.host]); } };
+  const knownHosts = { async forget(host, port) { calls.push(['forget', host, port]); return []; } };
+  const statusChecker = { async checkBox() { return { reachable: false }; }, resetBackoff(id) { calls.push(['resetBackoff', id]); } };
+  app = await makeApp({ boxActions, knownHosts, statusChecker });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1', port: 2222, sessionName: 'work' } });
+  const box = created.json();
+  const res = await app.inject({ method: 'POST', url: `/api/boxes/${box.id}/forget-hostkey`, headers });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true });
+  expect(calls).toEqual([['forget', 'h1', 2222], ['exitMaster', 'h1'], ['resetBackoff', box.id]]);
+});
+
+test('forget-hostkey returns 404 for unknown box and requires auth', async () => {
+  app = await makeApp({ knownHosts: { forget: async () => [] } });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const missing = await app.inject({ method: 'POST', url: '/api/boxes/nonexistent/forget-hostkey', headers });
+  expect(missing.statusCode).toBe(404);
+  const unauthed = await app.inject({ method: 'POST', url: '/api/boxes/nonexistent/forget-hostkey' });
+  expect(unauthed.statusCode).toBe(401);
+});
+
 test('GET /api/local-shell returns default shell', async () => {
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };

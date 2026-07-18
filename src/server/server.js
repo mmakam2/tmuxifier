@@ -58,7 +58,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, knownHosts }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -288,6 +288,23 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     }
     if (boxActions?.killSession) {
       try { void Promise.resolve(boxActions.killSession(box)).catch(() => {}); } catch {}
+    }
+    if (statusChecker?.resetBackoff) statusChecker.resetBackoff(box.id);
+    return { ok: true };
+  });
+  // Explicit user consent replaces lifecycle proof: this is the only path that
+  // removes a known_hosts entry for a machine Tmuxifier didn't create or
+  // destroy. See docs/superpowers/specs/2026-07-18-stale-hostkey-handling-design.md.
+  app.post('/api/boxes/:id/forget-hostkey', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'box not found' });
+    if (knownHosts?.forget) {
+      try { await knownHosts.forget(box.host, box.port); } catch {}
+    }
+    // Drop the ControlMaster so the next connect performs a fresh key exchange,
+    // and clear probe backoff so the dot recovers promptly.
+    if (boxActions?.exitMaster) {
+      try { await boxActions.exitMaster(box); } catch {}
     }
     if (statusChecker?.resetBackoff) statusChecker.resetBackoff(box.id);
     return { ok: true };

@@ -174,7 +174,7 @@ const statusPoller = createStatusPoller({
   },
 });
 
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
