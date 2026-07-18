@@ -168,3 +168,15 @@ test('cancelForBox kills the running job handle', async () => {
   m.cancelForBox(BOX.id);
   expect(killed).toBe(true);
 });
+
+test('a malformed persisted row (null) is dropped on load, never a boot crash', () => {
+  const good = {
+    id: 'job-ok', boxId: 'b9', boxLabel: 'ok', status: 'done', phase: null,
+    options: { ohMyTmux: false, ohMyZsh: false, ohMyBash: false, tools: [] },
+    log: '', error: null, createdAt: '2026-07-18T00:00:00.000Z', finishedAt: '2026-07-18T00:00:01.000Z',
+  };
+  const m = make({ load: () => [null, 'junk', { noId: true }, good] });
+  const listed = m.listJobs();
+  expect(listed).toHaveLength(1);
+  expect(listed[0].id).toBe('job-ok');
+});

@@ -31,9 +31,7 @@ import { createProxmoxLifecycleManager } from './proxmoxLifecycle.js';
 import { createKnownHosts } from './knownHosts.js';
 import { readDefaultPublicKey } from './defaultKey.js';
 import os from 'node:os';
-
-process.on('unhandledRejection', (err) => { console.error('unhandledRejection:', err); });
-process.on('uncaughtException', (err) => { console.error('uncaughtException:', err); });
+import { registerShutdownFlush } from './shutdown.js';
 
 const config = loadConfig();
 config.configPath = path.resolve('config.json');
@@ -202,6 +200,18 @@ app.setNotFoundHandler((req, reply) => {
 const scheme = config.tlsCert && config.tlsKey ? 'https' : 'http';
 app.listen({ host: config.bindAddress, port: config.port })
   .then(() => {
+    // Only once the server is up do unexpected errors switch from fail-fast to
+    // log-and-continue: during boot a throw must exit nonzero (the systemd unit
+    // uses Restart=on-failure, which treats exit 0 as a deliberate stop), while
+    // at runtime a stray exception must not kill every live terminal.
+    process.on('unhandledRejection', (err) => { console.error('unhandledRejection:', err); });
+    process.on('uncaughtException', (err) => { console.error('uncaughtException:', err); });
+    // Flush pending debounced job-store writes on SIGTERM/SIGINT so a deploy
+    // restart cannot lose a just-finished job's final save (which would make it
+    // reload as 'interrupted').
+    registerShutdownFlush({
+      flush: [fleetStore, setupStore, provisionStore, lifecycleStore].map((s) => () => s.whenIdle()),
+    });
     statusPoller.start().catch((err) => console.error('status poll failed to start:', err));
     console.log(`Tmuxifier listening on ${scheme}://${config.bindAddress}:${config.port}`);
   })

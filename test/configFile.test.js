@@ -61,3 +61,23 @@ test('upsertConfigFile creates file and merges keys', () => {
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('upsertConfigFile replaces the file atomically (rename, not in-place write)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-cfgfile-'));
+  const file = path.join(dir, 'config.json');
+
+  upsertConfigFile(file, { localShell: 'omz' });
+  const inoBefore = fs.statSync(file).ino;
+  upsertConfigFile(file, { port: 5555 });
+  const after = fs.statSync(file);
+
+  // An atomic write lands in a temp file that is rename()d over the target, so
+  // the live file is a NEW inode — an in-place write (truncate + write, the
+  // torn-write hazard) reuses the old one.
+  expect(after.ino).not.toBe(inoBefore);
+  expect(after.mode & 0o777).toBe(0o600);
+  // No temp files left behind.
+  expect(fs.readdirSync(dir)).toEqual(['config.json']);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});

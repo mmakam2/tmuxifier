@@ -52,10 +52,17 @@ function requestHostOrigins(req) {
 
 const execFileAsync = promisify(execFile);
 
+// Exact-match target: tmux's -t falls back to PREFIX matching when no session
+// has the exact name, so a bare 'local' could kill an unrelated 'local-dev'
+// session on this host. The '=' prefix forces an exact match.
+export function killSessionArgs(sessionName) {
+  return ['kill-session', '-t', `=${sessionName}`];
+}
+
 // Async on purpose: a synchronous child process here (up to its 5s timeout)
 // would stall the event loop and freeze every open terminal's keystrokes.
 async function killTmuxSession(sessionName) {
-  await execFileAsync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
+  await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
 export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, knownHosts, setupManager }) {

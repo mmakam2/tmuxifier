@@ -34,6 +34,9 @@ export function createSetupManager({
   const settles = new Map();        // jobId -> run promise (test seam)
 
   for (const j of load() || []) {
+    // One bad history row must never keep the server from booting (the store
+    // only validates "is an array") — same guard as the fleet manager's load.
+    if (!j || typeof j !== 'object' || typeof j.id !== 'string') continue;
     if (j.status === 'running') { j.status = 'interrupted'; j.phase = null; j.finishedAt = j.finishedAt || now(); }
     jobs.set(j.id, j);
   }

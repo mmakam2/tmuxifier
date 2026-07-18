@@ -17,6 +17,18 @@ folded in below with their old IDs noted.
 > note under this header describing the batch — the same convention
 > `codebase-review-2026-07-04.md` uses.
 
+**Status note, 2026-07-18 (batch 1, v1.7.4):** the "silent-failure killers" batch shipped,
+test-first — B1 (boot failures now exit 1; the keep-alive exception handlers are registered
+only after `app.listen` succeeds), B2 (`config.json` is written atomically via
+`writeFileAtomicSync`), B3 (the attach resize jiggle captures and restores the original
+width), B5 (malformed `setup-jobs.json` rows are dropped on load instead of crashing boot),
+B8 (a new `shutdown.js` flushes all four debounced job stores on SIGTERM/SIGINT — which also
+closes D2, since `whenIdle()` now has a production caller), B18 (`tmux kill-session` uses the
+exact-match `=local` target), S1 (`knownHosts.forget` on a nonstandard-port box now removes
+only the bracketed `[host]:port` entry, never the bare-host entry), and S2 (`.agents/`,
+`graphify-out/`, and `skills-lock.json` are gitignored). Suite: 826/826 across 77 files
+(7 new tests).
+
 ---
 
 ## Findings and fix tracking
@@ -29,14 +41,14 @@ explanation in the sections that follow the tables.
 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
-| B1 | boot | A fatal error during startup makes the process exit with code 0, so systemd (`Restart=on-failure`) never restarts the service | Med | S | Exit 1 from the `uncaughtException` handler, or register the keep-alive handlers only after `app.listen` succeeds | Open |
-| B2 | config | `config.json` is written in place (not atomically), so a crash mid-write leaves invalid JSON that prevents every subsequent boot | Med | S | Use the existing `writeFileAtomicSync` from `jsonFile.js` | Open |
-| B3 | sessions | The attach-time "resize jiggle" never restores the original width, so provision/setup PTYs shrink by one column per reattach | Med | S | Save the original column count before the jiggle and restore that saved value | Open |
+| B1 | boot | A fatal error during startup makes the process exit with code 0, so systemd (`Restart=on-failure`) never restarts the service | Med | S | Exit 1 from the `uncaughtException` handler, or register the keep-alive handlers only after `app.listen` succeeds | ✅ v1.7.4 |
+| B2 | config | `config.json` is written in place (not atomically), so a crash mid-write leaves invalid JSON that prevents every subsequent boot | Med | S | Use the existing `writeFileAtomicSync` from `jsonFile.js` | ✅ v1.7.4 |
+| B3 | sessions | The attach-time "resize jiggle" never restores the original width, so provision/setup PTYs shrink by one column per reattach | Med | S | Save the original column count before the jiggle and restore that saved value | ✅ v1.7.4 |
 | B4 | store | All `boxes.json` mutations are unserialized read-modify-write cycles, so two concurrent changes silently lose one of them | Med | S | Serialize mutations through a per-store promise queue | Open |
-| B5 | setup | A malformed row (for example `null`) in `data/setup-jobs.json` crashes the server at boot | Med | S | Filter loaded rows through a shape check, as `fleet.js` already does | Open |
+| B5 | setup | A malformed row (for example `null`) in `data/setup-jobs.json` crashes the server at boot | Med | S | Filter loaded rows through a shape check, as `fleet.js` already does | ✅ v1.7.4 |
 | B6 | setup | Setup jobs stuck in `needs-interactive` are never superseded or pruned, so they accumulate forever (each carrying up to 64 KB of log) | Med | S | When a new setup job starts for a box, mark older non-running jobs for that box with a terminal `superseded` status | Open |
 | B7 | setup | Cancelling a setup job during its `waiting-ssh` phase does nothing, so the install script still runs against a box the user just deleted | Med | S | Add a per-job cancellation flag that the wait loop checks before each probe and before launching ssh | Open |
-| B8 | stores | Nothing flushes the debounced job stores on shutdown, so a deploy restart can lose the final save and completed jobs reload as `interrupted` | Med | S | Add a SIGTERM/SIGINT handler that awaits every store's `whenIdle()` before exiting | Open |
+| B8 | stores | Nothing flushes the debounced job stores on shutdown, so a deploy restart can lose the final save and completed jobs reload as `interrupted` | Med | S | Add a SIGTERM/SIGINT handler that awaits every store's `whenIdle()` before exiting | ✅ v1.7.4 |
 | B9 | web | A stale poll response for a finished fleet job can silently stop the polling of a newer job the user has switched to | Med | S | Guard the finished-job branch (and the initial render) with a check that the response still belongs to the selected job | Open |
 | B10 | web | The advertised ⌘/Ctrl+Enter "run" shortcut in the fleet script editor never fires — CodeMirror's default keymap intercepts it and inserts a blank line | Med | S | Register the run keybinding ahead of the default keymap (or wrap it in `Prec.high`) | Open |
 | B11 | web | Clicking "Finish interactively" more than once opens multiple concurrent setup terminals against the same box and leaks all but the last | Med | S | Disable the button after the first click, and dispose the previous terminal handle before creating a new one | Open |
@@ -46,7 +58,7 @@ explanation in the sections that follow the tables.
 | B15 | ssh | SSH output is decoded chunk-by-chunk, so a multi-byte UTF-8 character split across two chunks becomes a � in the setup log | Low | S | Decode each stream with a `string_decoder.StringDecoder` instead of per-chunk `toString` | Open |
 | B16 | web | A momentary Proxmox API failure (state `unknown`) is misread as "container restarted": the stopped-box panel closes and the selection is lost | Low | S | Only treat an affirmative `running` state as a restart; keep the panel open on `unknown` | Open |
 | B17 | netbox | Errors while reading or decrypting NetBox settings are reported as "NetBox is not configured", hiding the real problem | Low | S | Distinguish "no settings stored" from a read/decrypt error and surface the error message | Open |
-| B18 | server | `tmux kill-session -t local` uses tmux's prefix matching, so it can kill an unrelated session such as `local-dev` on the Tmuxifier host | Low | S | Use tmux's exact-match form: `-t =local` | Open |
+| B18 | server | `tmux kill-session -t local` uses tmux's prefix matching, so it can kill an unrelated session such as `local-dev` on the Tmuxifier host | Low | S | Use tmux's exact-match form: `-t =local` | ✅ v1.7.4 |
 | B19 | auth | The Google OAuth token exchange has no timeout, so a hung Google endpoint pins the login callback forever (old L12) | Low | S | Pass `signal: AbortSignal.timeout(10000)` and route the abort into the existing error path | Open |
 | B20 | config | An inline comment in `.env` (`TMUXIFIER_PORT=8080 # dashboard`) becomes part of the value, and numeric settings then silently fall back to defaults | Low | S | Strip unquoted ` #…` suffixes when parsing, matching dotenv behavior | Open |
 | B21 | fleet | An SSH timeout during a fleet run is reported as `exited 1`, indistinguishable from a real exit code 1 (old L2) | Low | S | Detect the killed/timeout case in `sshRun` and report it as `timed out` | Open |
@@ -59,8 +71,8 @@ explanation in the sections that follow the tables.
 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
-| S1 | known_hosts | Forgetting the host key of a box on a nonstandard port also deletes the bare-hostname entry — which belongs to whatever machine answers port 22 at that address | Med | S | When the port is nonstandard, remove only the `[host]:port` entry | Open |
-| S2 | repo | `.agents/`, `graphify-out/`, and `skills-lock.json` are untracked and not gitignored; the release checklist stages with `git add -A`, so the next release would commit them to the public repository | Med | S | Add all three to `.gitignore` | Open |
+| S1 | known_hosts | Forgetting the host key of a box on a nonstandard port also deletes the bare-hostname entry — which belongs to whatever machine answers port 22 at that address | Med | S | When the port is nonstandard, remove only the `[host]:port` entry | ✅ v1.7.4 |
+| S2 | repo | `.agents/`, `graphify-out/`, and `skills-lock.json` are untracked and not gitignored; the release checklist stages with `git add -A`, so the next release would commit them to the public repository | Med | S | Add all three to `.gitignore` | ✅ v1.7.4 |
 | S3 | auth | Logging out only clears the browser cookie — a captured session cookie remains valid for up to 7 days afterward | Low | S | Keep a server-side "sessions issued before X are invalid" watermark that logout advances, or document logout as client-side only | Open |
 | S4 | server | The HSTS header is only sent when an external HTTPS URL is configured, so the documented local-TLS deployment never gets it | Low | S | Send HSTS under the same condition that marks the cookie `Secure` (local TLS counts) | Open |
 | S5 | secrets | `secretBox.open` accepts truncated GCM authentication tags, weakening forgery resistance (old L13) | Low | S | Pass `{ authTagLength: 16 }` to `createDecipheriv`, or reject tags that are not 16 bytes | Open |
@@ -100,7 +112,7 @@ explanation in the sections that follow the tables.
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
 | D1 | server | The `/api/status` fallback branch for a missing status poller is unreachable in production — `index.js` always provides one | Low | S | Make the poller a required dependency, stub it in tests, and delete the branch | Open |
-| D2 | stores | `whenIdle()` exists in all four job stores but is only ever called by tests | Low | S | Wire it into the B8 shutdown flush rather than deleting it | Open |
+| D2 | stores | `whenIdle()` exists in all four job stores but is only ever called by tests | Low | S | Wire it into the B8 shutdown flush rather than deleting it | ✅ v1.7.4 |
 | D3 | jsonFile | The module's comment claims power-loss safety, but the write path never calls fsync, so that claim doesn't hold | Low | S | fsync the temp file (and optionally the directory) before renaming, or soften the comment to "process crash" | Open |
 
 ### Notes and housekeeping

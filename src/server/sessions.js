@@ -116,10 +116,14 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     }
     entry.listeners.add(onData);
     if (!entry.exited) {
-      try { 
-        entry.pty.resize(entry.pty.cols === 1 ? 2 : entry.pty.cols - 1, entry.pty.rows); 
-        entry.pty.resize(entry.pty.cols, entry.pty.rows); 
-      } catch {} 
+      // node-pty's resize() mutates the size its getters report, so capture the
+      // real width first — reading pty.cols again after the shrink would
+      // "restore" to the shrunken value and ratchet the PTY narrower forever.
+      try {
+        const { cols, rows } = entry.pty;
+        entry.pty.resize(cols === 1 ? 2 : cols - 1, rows);
+        entry.pty.resize(cols, rows);
+      } catch {}
     }
     return () => entry.listeners.delete(onData);
   }

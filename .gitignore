@@ -24,3 +24,9 @@ playwright-report/
 # Claude Code local settings/worktrees (holds machine-specific paths, LAN IPs,
 # and approved-command patterns — never commit to the public repo)
 .claude/
+
+# Local agent/knowledge-graph artifacts (machine-specific caches; the release
+# checklist stages with `git add -A`, so anything not listed here would ship)
+.agents/
+graphify-out/
+skills-lock.json

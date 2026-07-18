@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomicSync } from './jsonFile.js';
 
 export function readConfigFile(file) {
   let raw;
@@ -27,6 +28,8 @@ export function upsertConfigFile(file, patch) {
   const current = readConfigFile(file);
   const next = { ...current, ...patch };
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
-  fs.chmodSync(file, 0o600);
+  // Atomic replace: this file is written at runtime (PATCH /api/local-shell)
+  // and read unguarded at boot — a torn in-place write would prevent every
+  // subsequent start until repaired by hand.
+  writeFileAtomicSync(file, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
 }

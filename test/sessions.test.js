@@ -160,3 +160,21 @@ test('closeIfUnwatched on a sole-socket provision closes immediately (original b
   expect(mgr.closeIfUnwatched(entry)).toBe(true);
   expect(killed).toBe(true);
 });
+
+test('attach resize jiggle restores the original width (node-pty cols mutates on resize)', () => {
+  // Mimic node-pty: resize() mutates the stored size and the getters return it.
+  let dataCb;
+  const pty = {
+    cols: 120, rows: 30,
+    resizes: [],
+    resize(c, r) { this.resizes.push([c, r]); this.cols = c; this.rows = r; },
+    onData: (cb) => { dataCb = cb; },
+    onExit: () => {},
+    write: () => {}, kill: () => {},
+  };
+  const mgr = createSessionManager({ spawn: () => pty });
+  const entry = mgr.open({ key: 'box1', box: { host: 'h', user: 'me' }, session: 'web', size: { cols: 120, rows: 30 } });
+  mgr.attach(entry, () => {});
+  expect(pty.resizes).toEqual([[119, 30], [120, 30]]);
+  expect(pty.cols).toBe(120);
+});

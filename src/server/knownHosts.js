@@ -14,18 +14,20 @@ function runSshKeygen(args, { timeout = 10_000 } = {}) {
 
 export function createKnownHosts({ run = runSshKeygen } = {}) {
   return {
-    // Remove known_hosts entries for host (and its [host]:port form when a
-    // nonstandard port is used — known_hosts stores nonstandard-port entries
-    // bracketed). Best-effort by contract: a key may legitimately be removed
+    // Remove the known_hosts entry for this box's exact identity: the bare
+    // host for port 22, or ONLY the bracketed [host]:port form for a
+    // nonstandard port. The bare entry belongs to whatever answers port 22 at
+    // that address — behind NAT/port-forwards that can be a different machine,
+    // and its key must not be touched. Best-effort by contract: a key may
+    // legitimately be removed
     // only when Tmuxifier destroyed the machine, just created it at this
     // address, or the user explicitly asked — callers treat failure like the
     // entry not existing. Operates on the service user's default
     // ~/.ssh/known_hosts (ssh-keygen -R handles hashed entries); a custom
     // UserKnownHostsFile in TMUXIFIER_SSH_CONFIG is out of scope (see spec).
     async forget(host, port) {
-      const targets = [String(host)];
       const p = Number(port);
-      if (p && p !== 22) targets.push(`[${host}]:${p}`);
+      const targets = p && p !== 22 ? [`[${host}]:${p}`] : [String(host)];
       const results = [];
       for (const target of targets) {
         try {
