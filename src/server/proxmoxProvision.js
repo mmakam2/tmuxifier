@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isIP } from 'node:net';
 import { buildCreateParams } from './proxmoxParams.js';
 import { assertProvisionInput, isCidr } from './proxmoxValidate.js';
 import { createNetboxClient } from './netboxApi.js';
@@ -126,8 +127,14 @@ export function createProvisionManager({
         j.phase = 'link'; persist();
         // Tmuxifier just created this guest at boxHost — any known_hosts entry
         // for that address is by definition stale (NetBox-recycled IP).
-        // Best-effort; provisioned boxes use the default port 22.
-        if (knownHosts) { try { await knownHosts.forget(boxHost, 22); } catch {} }
+        // Best-effort; provisioned boxes use the default port 22. Only forget
+        // when boxHost is a real IP: the allocated/static sources are already
+        // validated (isCidr), but a dhcp-discovered address comes straight
+        // from the PVE lxcInterfaces API and isn't otherwise validated until
+        // addBox's assertBoxSafe runs below — a compromised/misbehaving PVE
+        // endpoint must not be able to pick an arbitrary known_hosts entry
+        // to remove.
+        if (knownHosts && isIP(boxHost)) { try { await knownHosts.forget(boxHost, 22); } catch {} }
         const bd = preset.boxDefaults || {};
         const box = await boxStore.addBox({
           label: j.hostname, host: boxHost, user: bd.user || 'root',

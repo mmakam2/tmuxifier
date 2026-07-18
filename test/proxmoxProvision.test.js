@@ -298,6 +298,26 @@ test('provision succeeds even when forgetting the host key rejects', async () =>
   expect(m.getProvision(j.id).status).toBe('done');
 });
 
+// The DHCP-leased address comes from the PVE API's lxcInterfaces response,
+// which isn't otherwise validated until addBox's assertBoxSafe runs. A
+// compromised/misbehaving PVE endpoint must not be able to make Tmuxifier
+// remove an attacker-chosen known_hosts entry.
+test('dhcp discover: a non-IP inet from the PVE API is never passed to known_hosts forget', async () => {
+  const boxStore = fakeBoxStore();
+  const events = [];
+  const client = okClient({ ifaces: [{ name: 'eth0', inet: 'evil.example.com/24' }] });
+  const mgr = createProvisionManager(base({
+    proxmoxStore: makeStore(PRESET_DHCP), boxStore, makeClient: () => client,
+    knownHosts: { forget: async (host, port) => { events.push(['forget', host, port]); return []; } },
+  }));
+  const job = await mgr.createProvision({ presetId: 'p1', hostname: 'dev-11' });
+  await mgr._settled(job.id);
+  const done = mgr.getProvision(job.id);
+  expect(done.status).toBe('done');
+  expect(events).toEqual([]); // never forget based on an unvalidated discovered hostname
+  expect(boxStore.added[0].host).toBe('evil.example.com'); // link phase still proceeds unaffected
+});
+
 test('a legacy auto-static preset with a stored gateway still uses the inferred one', async () => {
   const { client: netbox } = fakeNetbox();
   const createCalls = [];
