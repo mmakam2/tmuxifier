@@ -41,3 +41,28 @@ export function sshRunStdin(argv, input, { env = process.env, timeout = 60000, c
     child.stdin.end(input);
   });
 }
+
+// Streaming ssh: spawn a non-interactive ssh (or `cmd` in tests) and forward
+// stdout/stderr chunks to onData as they arrive, instead of buffering to
+// completion like sshRun. Used by the setup-job manager to stream a long
+// install script into a persisted log. stdin is closed (BatchMode never
+// prompts). Returns a handle: `done` resolves { code } on exit; a timeout
+// SIGKILLs and resolves 124 (shell timeout convention); `kill()` force-stops.
+export function sshStream(argv, { env = process.env, timeout = 600000, onData, cmd = 'ssh' } = {}) {
+  const child = spawn(cmd, argv, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let done = false;
+  let resolveDone;
+  const donePromise = new Promise((r) => { resolveDone = r; });
+  const finish = (code) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    resolveDone({ code });
+  };
+  const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} finish(124); }, timeout);
+  child.stdout.on('data', (d) => { if (onData) onData(d.toString(), 'stdout'); });
+  child.stderr.on('data', (d) => { if (onData) onData(d.toString(), 'stderr'); });
+  child.on('error', () => finish(1));
+  child.on('exit', (code) => finish(typeof code === 'number' ? code : 1));
+  return { done: donePromise, kill: () => { try { child.kill('SIGKILL'); } catch {} } };
+}
