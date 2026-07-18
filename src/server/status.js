@@ -65,6 +65,12 @@ export function parseMeta(stdout) {
 // showing a dead "unreachable" dot.
 const AUTH_FAIL_RE = /permission denied|authentication failed|too many authentication failures|no more authentication methods/i;
 
+// ssh under StrictHostKeyChecking=accept-new hard-rejects a CHANGED key (it
+// only auto-accepts unknown hosts). Typical after a NetBox-recycled IP lands
+// on a rebuilt container. Distinguished so the UI can offer an explicit
+// "Forget host key" action instead of a generic red dot.
+const HOSTKEY_CHANGE_RE = /remote host identification has changed|host key verification failed/i;
+
 // ssh prints this to stderr when it finds a leftover control socket it can't use
 // as a master and falls back to a direct connection. The orphan file then keeps
 // disabling multiplexing on every connect — for a password box that means the
@@ -129,6 +135,9 @@ export function createStatusChecker({
       }
       if (res.code !== 0 && !String(res.stdout).trim()) {
         const err = String(res.stderr || '').trim();
+        if (HOSTKEY_CHANGE_RE.test(err)) {
+          return { reachable: false, hostKeyChanged: true, error: err || 'host key changed' };
+        }
         if (AUTH_FAIL_RE.test(err)) {
           return { reachable: false, needsAuth: true, error: err || 'authentication required' };
         }

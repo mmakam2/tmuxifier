@@ -65,6 +65,22 @@ test('checkBox: connection failure stays plain unreachable (not needsAuth)', asy
   expect(status.needsAuth).toBeFalsy();
 });
 
+test('checkBox: changed host key is reported as hostKeyChanged', async () => {
+  const stderr = '@@@@@@@@@@@@\nWARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\n@@@@@@@@@@@@\nHost key verification failed.';
+  const run = async () => ({ code: 255, stdout: '', stderr });
+  const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
+  expect(status.reachable).toBe(false);
+  expect(status.hostKeyChanged).toBe(true);
+  expect(status.needsAuth).toBeFalsy();
+});
+
+test('checkBox: auth failure stays needsAuth, not hostKeyChanged', async () => {
+  const run = async () => ({ code: 255, stdout: '', stderr: 'me@h: Permission denied (publickey,password).' });
+  const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
+  expect(status.needsAuth).toBe(true);
+  expect(status.hostKeyChanged).toBeFalsy();
+});
+
 test('checkBox: tmux missing', async () => {
   const run = async () => ({ code: 0, stdout: '__NO_TMUX__\n', stderr: '' });
   const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
