@@ -15,6 +15,7 @@ export interface BoxMetrics {
 export type ProxmoxBoxState = 'running' | 'stopped' | 'missing' | 'unknown';
 export interface Status {
   reachable: boolean; tmux?: boolean; needsAuth?: boolean; inUse?: boolean; paused?: boolean;
+  hostKeyChanged?: boolean;
   nextProbeAt?: number; sessions?: { name: string; windows: number; attached?: boolean; activity?: number }[];
   metrics?: BoxMetrics; error?: string;
   proxmoxState?: ProxmoxBoxState; proxmoxNode?: string; proxmoxVmid?: number;
@@ -82,6 +83,7 @@ export const api = {
     return j<Box>(await fetch(`/api/boxes/${boxId}/proxmox`, { method: 'DELETE' }));
   },
   async reconnectBox(id: string) { return j<{ ok: boolean }>(await fetch(`/api/boxes/${id}/reconnect`, { method: 'POST' })); },
+  async forgetHostKey(id: string) { return j<{ ok: boolean }>(await fetch(`/api/boxes/${id}/forget-hostkey`, { method: 'POST' })); },
   async probeSessions(spec: { id?: string; host: string; user?: string; port?: number; proxyJump?: string }) {
     return j<Status>(await fetch('/api/boxes/probe-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(spec) }));
   },

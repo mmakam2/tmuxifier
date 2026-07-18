@@ -106,6 +106,8 @@ function updateEventsBadge() {
 function applyRowStatus(li: HTMLElement, _id: string, st: Status | undefined) {
   const dotEl = li.querySelector('.dot') as HTMLElement | null;
   if (dotEl) { dotEl.className = `dot ${dotClassFor(st)}`; dotEl.title = dotTitleFor(st); }
+  const forgetEl = li.querySelector('.forget-key') as HTMLElement | null;
+  if (forgetEl) forgetEl.style.display = st?.hostKeyChanged ? '' : 'none';
   const metaEl = li.querySelector('.box-meta') as HTMLElement | null;
   if (metaEl) {
     const nodes: Node[] = [];
@@ -599,6 +601,20 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
     if (wasActive) openBox(b);
   });
 
+  const forgetKeyBtn = document.createElement('button');
+  forgetKeyBtn.className = 'forget-key';
+  forgetKeyBtn.title = 'Forget old host key — only if this box was legitimately rebuilt (removes its known_hosts entry, then reconnects)';
+  forgetKeyBtn.textContent = '⚷';
+  forgetKeyBtn.style.display = 'none';
+  forgetKeyBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!confirm(`Forget the stored host key for ${b.label}? Only do this if the box was legitimately rebuilt.`)) return;
+    await api.forgetHostKey(b.id);
+    const wasActive = activeBoxId === b.id;
+    closeTab(b.id);
+    if (wasActive) openBox(b);
+  });
+
   const edit = document.createElement('button');
   edit.className = 'edit';
   edit.title = 'Edit';
@@ -626,7 +642,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
 
   const actions = document.createElement('span');
   actions.className = 'box-actions';
-  actions.append(refreshBtn, edit, rm);
+  actions.append(forgetKeyBtn, refreshBtn, edit, rm);
 
   li.append(check, dotEl, mainEl, actions);
   applyRowStatus(li, b.id, st);

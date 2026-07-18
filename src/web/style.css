@@ -217,6 +217,7 @@ body {
 .box .rm:hover { color: #f85149; }
 .box .refresh { font-size: 14px; }
 .box .edit { background: none; border: none; color: #6e7681; cursor: pointer; font-size: 13px; }
+.box .forget-key { background: none; border: none; color: #6e7681; cursor: pointer; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: #6e7681; }
 /* .dot.gray needs no rule — gray is the base .dot color above. */
 .dot.green { background: #2ea043; } .dot.amber { background: #d29922; } .dot.red { background: #f85149; }
