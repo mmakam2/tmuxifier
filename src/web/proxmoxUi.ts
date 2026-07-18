@@ -7,6 +7,7 @@ import { renderPresetsTab } from './proxmoxPresets';
 import { renderContainersTab } from './proxmoxContainers';
 import { renderActivityTab } from './proxmoxActivity';
 import { toolsCheckboxGroup } from './provisionTools';
+import { setupStatusText } from './setupStatus';
 
 type SetupOptions = { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[] };
 
@@ -141,26 +142,36 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
       } }, ['Open terminal']);
     }
 
-    async function runSetup(boxId: string, vmid: number | null, opt: SetupOptions) {
-      const box = (await api.boxes().catch(() => [] as Box[])).find((b) => b.id === boxId);
-      if (!box) { footer.replaceChildren(openTerminalBtn(boxId)); return; }
-      // Freshly-started container: wait briefly for sshd to accept the injected mgmt key.
-      phase.textContent = `Container ${vmid ?? ''} up — waiting for SSH…`;
-      let ready = false;
-      for (let i = 0; i < 10 && !ready; i++) {
+    async function runSetup(boxId: string, vmid: number | null, _opt: SetupOptions) {
+      // The provision manager auto-started a server-side setup job on link (Task 6): the
+      // SSH-readiness wait and the setup run itself now happen server-side. Discover that
+      // job and poll it; the WS terminal is opened only as the "Finish interactively"
+      // fallback below, never to run setup itself.
+      setupArea.style.marginTop = '8px';
+      const setupLog = el('pre', { class: 'pve-log' });
+      setupArea.replaceChildren(setupLog);
+
+      async function tickSetup() {
         if (myGen !== pollGen) return;
-        try { ready = !!(await api.probeSessions({ id: box.id, host: box.host, user: box.user, port: box.port, proxyJump: box.proxyJump })).reachable; } catch { /* keep waiting */ }
-        if (!ready) await new Promise((r) => setTimeout(r, 3000));
-      }
-      if (myGen !== pollGen) return;
-      phase.textContent = `Container ${vmid ?? ''} — running setup (tmux${opt.ohMyTmux ? ' + oh-my-tmux' : ''}${opt.ohMyZsh ? ' + oh-my-zsh' : ''}${opt.ohMyBash ? ' + oh-my-bash' : ''}${opt.tools.length ? ` + ${opt.tools.join(', ')}` : ''})…`;
-      setupArea.style.height = '320px'; setupArea.style.marginTop = '8px';
-      setupTerm = openProvisionTerminal(setupArea, boxId, opt, (code) => {
+        const job = await api.getBoxSetup(boxId).catch(() => null);
         if (myGen !== pollGen) return;
-        phase.textContent = code === 0 ? `Setup complete ✓ · vmid ${vmid ?? ''}` : `Setup exited ${code} — open a terminal to investigate`;
+        if (!job) { pollTimer = window.setTimeout(tickSetup, 1500); return; }
+        phase.textContent = `vmid ${vmid ?? ''} · ${setupStatusText(job)}`;
+        setupLog.textContent = job.log || '';
+        setupLog.scrollTop = setupLog.scrollHeight;
+        if (job.status === 'running') { pollTimer = window.setTimeout(tickSetup, 1500); return; }
         opts.onBoxLinked();
-        footer.replaceChildren(openTerminalBtn(boxId));
-      });
+        footer.replaceChildren();
+        if (job.status === 'needs-interactive') {
+          footer.append(el('button', { type: 'button', class: 'pve-primary', onclick: () => {
+            const term = el('div', {}); (term as HTMLElement).style.height = '320px'; setupArea.append(term);
+            setupTerm = openProvisionTerminal(term as HTMLElement, boxId, job.options, () => { void tickSetup(); });
+          } }, ['Finish interactively']), openTerminalBtn(boxId));
+        } else {
+          footer.append(openTerminalBtn(boxId));
+        }
+      }
+      void tickSetup();
     }
 
     const RUNNING: ProvisionStatus[] = ['running'];
