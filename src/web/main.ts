@@ -1,5 +1,6 @@
-import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent } from './api';
+import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent, type SetupJob } from './api';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
+import { setupStatusText, setupActions, setupBadge } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
 import { sparkline } from './sparkline';
 import { formatEvent, relTime, unseenCount } from './healthEvents';
@@ -552,6 +553,27 @@ async function refresh() {
   latestStatus = {};
   api.status().then((s) => { latestStatus = s; filterAndPaint(); }).catch(() => {});
   filterAndPaint();
+  void annotateSetupBadges();
+}
+
+// Best-effort: overlay a badge on any box card with an active (non-terminal-done)
+// setup job. Runs after the list repaints, so it no-ops harmlessly if a card
+// isn't in the DOM (e.g. filtered out by search) — failures here must never
+// break the box list itself.
+async function annotateSetupBadges() {
+  try {
+    const setups = await api.listSetups();
+    for (const s of setups) {
+      const b = setupBadge(s.status);
+      if (!b) continue;
+      const holder = document.querySelector(`[data-box-id="${CSS.escape(s.boxId)}"] .box-badges`);
+      if (!holder) continue;
+      const span = document.createElement('span');
+      span.className = `badge ${b.cls}`;
+      span.textContent = b.text;
+      holder.append(span);
+    }
+  } catch { /* badges are best-effort */ }
 }
 
 function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
@@ -560,6 +582,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   const li = document.createElement('li');
   li.className = b.id === activeBoxId ? 'box active' : 'box';
   li.dataset.id = b.id;
+  li.dataset.boxId = b.id; // matches [data-box-id] queried by annotateSetupBadges
 
   const check = document.createElement('input');
   check.type = 'checkbox';
@@ -580,12 +603,14 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   const nameEl = document.createElement('span');
   nameEl.className = 'name';
   nameEl.textContent = b.label;
+  const badgesEl = document.createElement('span');
+  badgesEl.className = 'box-badges';
   const metaEl = document.createElement('span');
   metaEl.className = 'box-meta';
   const sparkEl = document.createElement('span');
   sparkEl.className = 'spark';
   sparkEl.addEventListener('click', (e) => { e.stopPropagation(); cycleSparkMetric(); });
-  mainEl.append(nameEl, metaEl, sparkEl);
+  mainEl.append(nameEl, badgesEl, metaEl, sparkEl);
 
   li.addEventListener('click', () => openBox(b));
 
@@ -936,23 +961,29 @@ async function openLocalShellEditModal() {
 }
 
 // One provision run owns the shared static panel at a time. Module-level state
-// so a re-open can cancel the previous run's pending auto-close and dispose its
-// terminal (whose WebSocket would otherwise keep streaming into a detached
-// element), and so logout/session-expiry can tear the panel down too.
-let activeProvisionTerm: ReturnType<typeof openProvisionTerminal> | null = null;
+// so a re-open can cancel the previous run's pending poll timer / auto-close
+// and dispose any live interactive terminal (whose WebSocket would otherwise
+// keep streaming into a detached element), and so logout/session-expiry can
+// tear the panel down too.
+let activeProvisionCleanup: (() => void) | null = null;
 let provisionAutoClose: number | undefined;
 
 function closeProvisionPanel() {
   const panel = document.getElementById('provision-panel')!;
   if (provisionAutoClose) { clearTimeout(provisionAutoClose); provisionAutoClose = undefined; }
   panel.classList.remove('open');
-  // Null the module ref before dispose: dispose() fires onComplete(-1) on a
-  // still-running provision, and the stale-run guard in onComplete keys off it.
-  const term = activeProvisionTerm;
-  activeProvisionTerm = null;
-  term?.dispose();
+  const cleanup = activeProvisionCleanup;
+  activeProvisionCleanup = null;
+  cleanup?.();
 }
 
+// Poll-based setup viewer: POSTs a durable server-side setup job, then polls
+// it (GET /api/setup/:id) instead of streaming a live WebSocket terminal —
+// the job survives Tmuxifier restarts, so a reload/reconnect just resumes
+// polling. `needs-interactive` (sudo password required) falls back to the
+// existing WS PTY (openProvisionTerminal) so the user can type it in; the
+// server marks the job's outcome from that session (markInteractiveResult),
+// so polling simply keeps going until the status changes.
 function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools?: string[] }) {
   const panel = document.getElementById('provision-panel')!;
   const title = panel.querySelector('.provision-title')!;
@@ -960,39 +991,102 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
   const container = panel.querySelector('.provision-term') as HTMLElement;
   const closeBtn = panel.querySelector('.provision-close') as HTMLElement;
 
-  // Tear down any previous run first (pending auto-close, live WebSocket).
+  // Tear down any previous run first (pending poll timer / auto-close, live interactive WS).
   closeProvisionPanel();
 
-  title.textContent = `Provisioning ${box.label}`;
+  title.textContent = `Setup — ${box.label}`;
   status.textContent = '';
   status.className = 'provision-status';
   container.innerHTML = '';
-
   panel.classList.add('open');
 
-  const term = openProvisionTerminal(container, box.id, options, (code) => {
-    // A replaced or user-closed run must not repaint the panel (dispose()
-    // reports exit -1 on a still-running provision).
-    if (term !== activeProvisionTerm) return;
-    if (code === 0) {
-      status.textContent = '✓ Complete';
-      status.className = 'provision-status success';
-      refresh();
-      provisionAutoClose = window.setTimeout(() => closeProvisionPanel(), 2000);
-    } else {
-      status.textContent = `✗ Failed (exit ${code})`;
-      status.className = 'provision-status error';
-    }
-  });
-  activeProvisionTerm = term;
+  const opts = { ohMyTmux: options.ohMyTmux, ohMyZsh: options.ohMyZsh, ohMyBash: options.ohMyBash, tools: options.tools || [] };
+  const log = document.createElement('pre');
+  log.className = 'provision-log';
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  container.append(log, actions);
 
-  // Always dismissible — a hung remote (WebSocket open, no exit frame) used to
-  // leave the panel covering the screen with no way out short of a reload.
-  // Closing mid-run cancels: disposing the WS makes the server kill the remote
-  // script. onclick assignment (not addEventListener) so re-opens never stack
-  // stale handlers that would close the panel over a newer run.
+  let stopped = false;
+  let pollTimer: number | undefined;
+  let interactiveTerm: ReturnType<typeof openProvisionTerminal> | null = null;
+  const stop = () => {
+    stopped = true;
+    if (pollTimer) clearTimeout(pollTimer);
+    // dispose() is a no-op once the interactive session's own onComplete
+    // already ran; this only matters if the panel is closed mid-session.
+    interactiveTerm?.dispose();
+    interactiveTerm = null;
+  };
+
+  function btn(label: string, onclick: () => void, cls = '') {
+    const b = document.createElement('button'); b.type = 'button'; if (cls) b.className = cls; b.textContent = label; b.onclick = onclick; return b;
+  }
+
+  function renderActions(jobStatus: SetupJob['status']) {
+    actions.replaceChildren();
+    for (const a of setupActions(jobStatus)) {
+      if (a === 'close') actions.append(btn('Close', () => closeProvisionPanel()));
+      else if (a === 'retry') actions.append(btn('Retry', () => { void begin(); }, 'pve-primary'));
+      else if (a === 'remove') actions.append(btn('Remove box', async () => {
+        if (!confirm(`Remove box ${box.label}?`)) return;
+        await api.removeBox(box.id);
+        stop();
+        closeProvisionPanel();
+        refresh();
+      }, 'danger'));
+      else if (a === 'finish-interactive') actions.append(btn('Finish interactively', () => finishInteractive(), 'pve-primary'));
+    }
+  }
+
+  function finishInteractive() {
+    // The existing WS PTY runs the same idempotent script with the user present
+    // to type the sudo password. On exit, the server marks the job; the
+    // background poll (still running) picks up the new status.
+    log.style.display = 'none';
+    const term = document.createElement('div'); term.style.height = '320px'; container.insertBefore(term, actions);
+    interactiveTerm = openProvisionTerminal(term, box.id, opts, () => {
+      interactiveTerm = null;
+      log.style.display = '';
+      term.remove();
+    });
+  }
+
+  async function poll(id: string) {
+    if (stopped) return;
+    let job: SetupJob;
+    try { job = await api.getSetup(id); } catch { pollTimer = window.setTimeout(() => poll(id), 1500); return; }
+    if (stopped) return;
+    status.textContent = setupStatusText(job);
+    status.className = 'provision-status' + (job.status === 'done' ? ' success' : (job.status === 'error' || job.status === 'interrupted' || job.status === 'needs-interactive') ? ' error' : '');
+    log.textContent = job.log || '';
+    log.scrollTop = log.scrollHeight;
+    renderActions(job.status);
+    if (job.status === 'running') { pollTimer = window.setTimeout(() => poll(id), 1500); return; }
+    if (job.status === 'done') { refresh(); pollTimer = window.setTimeout(() => closeProvisionPanel(), 2000); }
+    else if (job.status === 'needs-interactive') { pollTimer = window.setTimeout(() => poll(id), 2500); }
+    // error / interrupted: terminal for this run — Retry/Remove/Close cover it, no further polling.
+  }
+
+  async function begin() {
+    try {
+      const s = await api.startSetup(box.id, opts);
+      void poll(s.id);
+    } catch (e) {
+      status.textContent = e instanceof Error ? e.message : 'Failed to start setup';
+      status.className = 'provision-status error';
+      renderActions('error');
+    }
+  }
+
+  activeProvisionCleanup = stop;
+  // Always dismissible — a hung/slow setup used to leave the panel covering
+  // the screen with no way out short of a reload. onclick assignment (not
+  // addEventListener) so re-opens never stack stale handlers that would
+  // close the panel over a newer run.
   closeBtn.style.display = '';
   (closeBtn as HTMLButtonElement).onclick = () => closeProvisionPanel();
+  void begin();
 }
 
 function openBoxDialog(box?: Box) {
