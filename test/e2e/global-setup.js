@@ -14,9 +14,14 @@ export default async function globalSetup() {
     .split('\n')
     .filter((line) => line.trim() && !line.startsWith('Host '))
     .join('\n');
+  // tmuxifierlocal-setupjob: a fourth alias to the same fixture, deliberately
+  // left unseeded below (no store.addBox call) — setup-server-side.spec.ts
+  // adds its own box against it through the UI, and box hosts must be unique
+  // (store.js rejects a duplicate host), so it needs a host string none of
+  // the three seeded boxes below are already using.
   await fs.appendFile(
     lb.sshConfigFile,
-    `\nHost tmuxifierlocal-db\n${aliasOptions}\n\nHost tmuxifierlocal-worker\n${aliasOptions}\n`,
+    `\nHost tmuxifierlocal-db\n${aliasOptions}\n\nHost tmuxifierlocal-worker\n${aliasOptions}\n\nHost tmuxifierlocal-setupjob\n${aliasOptions}\n`,
   );
 
   // Seed the box into a temp inventory so no UI prompt is needed
