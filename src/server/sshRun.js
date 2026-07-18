@@ -46,8 +46,13 @@ export function sshRunStdin(argv, input, { env = process.env, timeout = 60000, c
 // stdout/stderr chunks to onData as they arrive, instead of buffering to
 // completion like sshRun. Used by the setup-job manager to stream a long
 // install script into a persisted log. stdin is closed (BatchMode never
-// prompts). Returns a handle: `done` resolves { code } on exit; a timeout
-// SIGKILLs and resolves 124 (shell timeout convention); `kill()` force-stops.
+// prompts). Returns a handle: `done` resolves { code } on `close`, which
+// fires only after stdio streams are closed — i.e. after all `data` events
+// have been delivered to onData, and always after `exit` — so the persisted
+// log is never missing a trailing chunk. A timeout SIGKILLs and resolves 124
+// (shell timeout convention) directly, without waiting for `close`; `kill()`
+// force-stops and resolves 137 the same way, since an explicit abort (cancel
+// / box removed) doesn't need trailing-data completeness.
 export function sshStream(argv, { env = process.env, timeout = 600000, onData, cmd = 'ssh' } = {}) {
   const child = spawn(cmd, argv, { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let done = false;
@@ -63,6 +68,6 @@ export function sshStream(argv, { env = process.env, timeout = 600000, onData, c
   child.stdout.on('data', (d) => { if (onData) onData(d.toString(), 'stdout'); });
   child.stderr.on('data', (d) => { if (onData) onData(d.toString(), 'stderr'); });
   child.on('error', () => finish(1));
-  child.on('exit', (code) => finish(typeof code === 'number' ? code : 1));
-  return { done: donePromise, kill: () => { try { child.kill('SIGKILL'); } catch {} } };
+  child.on('close', (code) => finish(typeof code === 'number' ? code : 1));
+  return { done: donePromise, kill: () => { try { child.kill('SIGKILL'); } catch {} finish(137); } };
 }

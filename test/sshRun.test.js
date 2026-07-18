@@ -2,7 +2,7 @@ import { test, expect } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { sshRun, sshRunStdin, sshStream } from '../src/server/sshRun.js';
+import { sshRunStdin, sshStream } from '../src/server/sshRun.js';
 
 // cmd override lets these tests exercise the spawn/stdin/timeout mechanics with
 // /bin/sh instead of a real ssh connection (the ssh path is covered by
