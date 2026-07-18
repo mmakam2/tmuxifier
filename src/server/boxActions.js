@@ -107,9 +107,21 @@ const TOOLS = {
     '    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | $SUDO tee /etc/apt/sources.list.d/github-cli.list >/dev/null',
     '    $SUDO apt-get update',
     '    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gh',
+    // RHEL/CentOS carry no gh — add GitHub's rpm repo. Writing the .repo file
+    // directly (same temp-file-first shape as the apt keyring above) sidesteps
+    // the dnf4/dnf5 `config-manager` syntax divergence; dnf -y imports the
+    // repo's GPG key on install.
     '  elif command -v dnf >/dev/null 2>&1; then',
+    '    t="$(mktemp)"',
+    '    curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo -o "$t"',
+    '    $SUDO install -D -m 0644 "$t" /etc/yum.repos.d/gh-cli.repo',
+    '    rm -f "$t"',
     '    $SUDO dnf install -y gh',
     '  elif command -v yum >/dev/null 2>&1; then',
+    '    t="$(mktemp)"',
+    '    curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo -o "$t"',
+    '    $SUDO install -D -m 0644 "$t" /etc/yum.repos.d/gh-cli.repo',
+    '    rm -f "$t"',
     '    $SUDO yum install -y gh',
     '  elif command -v pacman >/dev/null 2>&1; then',
     '    $SUDO pacman -Sy --noconfirm github-cli',

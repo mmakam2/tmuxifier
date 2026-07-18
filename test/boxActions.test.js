@@ -427,6 +427,18 @@ test('buildEnsureTmuxRemote sets up the GitHub apt repo for gh', () => {
   expect(remote).toContain('if ! command -v curl >/dev/null 2>&1; then');
 });
 
+// RHEL/CentOS carry no gh package — GitHub's rpm repo must be added before
+// dnf/yum install, same temp-file-first shape as the apt keyring (a failed
+// curl aborts before anything under /etc is mutated).
+test('buildEnsureTmuxRemote sets up the GitHub rpm repo for gh on dnf/yum', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['gh'] });
+  expect(remote).toContain('https://cli.github.com/packages/rpm/gh-cli.repo');
+  expect(remote).toContain('/etc/yum.repos.d/gh-cli.repo');
+  const repoAt = remote.indexOf('/etc/yum.repos.d/gh-cli.repo');
+  expect(repoAt).toBeLessThan(remote.indexOf('dnf install -y gh'));
+  expect(repoAt).toBeLessThan(remote.indexOf('yum install -y gh'));
+});
+
 test('buildEnsureTmuxRemote installs codex via npm with node implied', () => {
   const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['codex'] });
   expect(remote).toContain('if ! command -v npm >/dev/null 2>&1; then');
