@@ -444,3 +444,30 @@ test('dhcp and static presets never touch the NetBox client', async () => {
   expect(m.getProvision(j.id).status).toBe('done');
   expect(touched).toBe(0);
 });
+
+test('startSetup is fired on link with the linked box and stored setupOptions', async () => {
+  const started = [];
+  const boxStore = fakeBoxStore();
+  const mgr = createProvisionManager(base({
+    proxmoxStore: makeStore(PRESET_STATIC),
+    boxStore,
+    makeClient: () => okClient(),
+    startSetup: (box, options, opts) => started.push({ box, options, opts }),
+  }));
+  const job = await mgr.createProvision({ presetId: 'p2', hostname: 'dev-01', setupOptions: { ohMyTmux: true, tools: ['git'] } });
+  await mgr._settled(job.id);
+  expect(started).toHaveLength(1);
+  expect(started[0].box).toBe(boxStore.added[0]);         // the just-linked box
+  expect(started[0].options).toEqual({ ohMyTmux: true, tools: ['git'] });
+  expect(started[0].opts).toEqual({ waitForSsh: true });
+});
+
+test('no setupOptions -> startSetup is not called', async () => {
+  const started = [];
+  const mgr = createProvisionManager(base({
+    proxmoxStore: makeStore(PRESET_STATIC), boxStore: fakeBoxStore(),
+    makeClient: () => okClient(), startSetup: () => started.push(1),
+  }));
+  await mgr._settled((await mgr.createProvision({ presetId: 'p2', hostname: 'dev-01' })).id);
+  expect(started).toHaveLength(0);
+});

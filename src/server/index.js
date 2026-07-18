@@ -7,8 +7,11 @@ import { createStore } from './store.js';
 import { createStatusChecker } from './status.js';
 import { createStatusPoller } from './statusPoller.js';
 import { createSessionManager } from './sessions.js';
-import { sshRun, sshRunStdin } from './sshRun.js';
+import { sshRun, sshRunStdin, sshStream } from './sshRun.js';
 import { createBoxActions } from './boxActions.js';
+import { buildSetupArgv } from './sshCommand.js';
+import { createSetupStore } from './setupStore.js';
+import { createSetupManager } from './setupManager.js';
 import { createFleetStore } from './fleetStore.js';
 import { createFleetManager } from './fleet.js';
 import { createHealthEventsStore } from './healthEventsStore.js';
@@ -47,6 +50,18 @@ const sessions = createSessionManager({ hostKeyPolicy: config.hostKeyPolicy, gra
 const boxActions = createBoxActions({
   run: (argv, opts) => sshRun(argv, opts),
   runStdin: (argv, input, opts) => sshRunStdin(argv, input, opts),
+  hostKeyPolicy: config.hostKeyPolicy,
+  sshConfigFile: config.sshConfigFile,
+  controlDir: config.controlDir,
+  controlPersist: config.controlPersist,
+});
+const setupStore = createSetupStore({ dataDir: config.dataDir });
+const setupManager = createSetupManager({
+  sshStream: (argv, opts) => sshStream(argv, opts),
+  buildSetupArgv,
+  probe: (box) => boxActions.execCommand(box, 'true', { timeoutMs: 6000 }).then((r) => r.code === 0).catch(() => false),
+  load: () => setupStore.load(),
+  save: (jobs) => setupStore.save(jobs),
   hostKeyPolicy: config.hostKeyPolicy,
   sshConfigFile: config.sshConfigFile,
   controlDir: config.controlDir,
@@ -105,6 +120,7 @@ const provisionManager = createProvisionManager({
   makeClient: makeProxmoxClient,
   defaultPublicKey,
   knownHosts,
+  startSetup: (box, options, opts) => setupManager.start(box, options, opts),
   load: () => provisionStore.load(),
   save: (jobs) => provisionStore.save(jobs),
   pollMs: config.pvePollMs,
@@ -174,7 +190,7 @@ const statusPoller = createStatusPoller({
   },
 });
 
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });

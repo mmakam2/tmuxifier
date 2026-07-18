@@ -12,6 +12,7 @@ export function createProvisionManager({
   proxmoxStore, boxStore, makeClient, load, save, defaultPublicKey = () => null,
   knownHosts = null,
   netboxStore = null, makeNetboxClient = createNetboxClient,
+  startSetup = null,
   now = () => new Date().toISOString(), makeId = randomUUID, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   pollMs = 1500, taskTimeoutMs = 600000, leaseTimeoutMs = 60000, maxJobs = 50, maxLogBytes = 65536,
   maxPollFailures = 5, // consecutive taskStatus errors tolerated before the job fails
@@ -143,6 +144,12 @@ export function createProvisionManager({
           proxmox: { hostId: host.id, node: j.node, vmid: j.vmid, endpoint: host.endpoint, ...(j.netboxIpId ? { netboxIpId: j.netboxIpId } : {}) },
         }, { trustedProxmox: true });
         j.boxId = box.id;
+        if (startSetup && j.setupOptions) {
+          // Server-side, durable setup: survives the browser closing during
+          // either phase. waitForSsh: the container was just started, so sshd
+          // may not accept the injected key yet.
+          try { startSetup(box, j.setupOptions, { waitForSsh: true }); } catch {}
+        }
       } else {
         j.needsHost = true;
       }
@@ -169,7 +176,7 @@ export function createProvisionManager({
   }
 
   return {
-    async createProvision({ presetId, hostname, vmid, ip, tags }) {
+    async createProvision({ presetId, hostname, vmid, ip, tags, setupOptions = null }) {
       assertProvisionInput({ hostname, vmid, ip, tags });
       const preset = await proxmoxStore.getPreset(presetId);
       if (!preset) throw new Error('preset not found');
@@ -193,6 +200,7 @@ export function createProvisionManager({
         netboxIpId: null,
         gateway: null,
         status: 'running', phase: 'allocate', log: '', boxId: null, needsHost: false, error: null,
+        setupOptions: setupOptions || null,
         createdAt: now(), finishedAt: null,
       };
       jobs.set(j.id, j);
