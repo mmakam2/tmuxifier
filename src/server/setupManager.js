@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { buildEnsureTmuxRemote } from './boxActions.js';
+import { newestFirst } from './jobOrder.js';
 
 // Statuses that will not resume on their own. `needs-interactive` is stable
 // across restarts (a paused, user-actionable state — no live process), so it is
@@ -8,8 +9,9 @@ import { buildEnsureTmuxRemote } from './boxActions.js';
 const SUDO_PW_RE = /a terminal is required to read the password|sudo:[^\n]*password is required|askpass/i;
 
 // Statuses that will never change again on their own — used by prune() to
-// decide what is safe to evict from the in-memory jobs map.
-const TERMINAL = new Set(['done', 'error', 'interrupted']);
+// decide what is safe to evict from the in-memory jobs map. 'superseded' is a
+// stale needs-interactive job replaced by a newer run for the same box.
+const TERMINAL = new Set(['done', 'error', 'interrupted', 'superseded']);
 
 export function createSetupManager({
   sshStream,
@@ -24,10 +26,12 @@ export function createSetupManager({
   load, save,
   hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist,
   now = () => new Date().toISOString(),
+  nowMs = () => Date.now(),
   makeId = randomUUID,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   maxJobs = 50, maxLogBytes = 65536, taskTimeoutMs = 600000,
   readyAttempts = 10, readyDelayMs = 3000,
+  logPersistMs = 250, logPersistBytes = 8192,
 }) {
   const jobs = new Map();
   const runningHandles = new Map(); // jobId -> ssh handle
@@ -42,7 +46,7 @@ export function createSetupManager({
   }
   persist();
 
-  function ordered() { return [...jobs.values()].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)); }
+  function ordered() { return [...jobs.values()].sort(newestFirst); }
   // Retention policy shared by prune() and persist() so the in-memory map and the
   // persisted file never diverge: every non-terminal job (running or
   // needs-interactive — still in flight or awaiting the user) is always kept, and
@@ -86,18 +90,28 @@ export function createSetupManager({
       if (waitForSsh) {
         j.phase = 'waiting-ssh'; persist();
         let ready = false;
-        for (let i = 0; i < readyAttempts && !ready; i++) {
+        for (let i = 0; i < readyAttempts && !ready && !j.cancelled; i++) {
           try { ready = await probe(box); } catch { ready = false; }
-          if (!ready) await sleep(readyDelayMs);
+          if (!ready && !j.cancelled) await sleep(readyDelayMs);
         }
         // Proceed regardless — the script run is the definitive attempt.
       }
+      // A cancel that arrived during the wait (e.g. the box was deleted) must
+      // stop here — before this phase the ssh handle doesn't exist yet, so the
+      // kill in cancelForBox had nothing to reach.
+      if (j.cancelled) { j.error = 'setup cancelled'; finish(j, 'error'); return; }
       j.phase = 'running'; persist();
 
       const script = buildScript(box, j.options);
       const argv = buildSetupArgv(box, script, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
       let sawSudoPw = false;
       let stderrTail = '';
+      // Coalesced log persistence: a chatty install emits thousands of chunks,
+      // and a full-history save per chunk is a multi-MB stringify each time.
+      // Status/phase transitions still persist immediately; finish() flushes
+      // the tail.
+      let lastLogPersist = nowMs();
+      let pendingLogBytes = 0;
       const handle = sshStream(argv, {
         timeout: taskTimeoutMs,
         onData: (chunk, stream) => {
@@ -108,7 +122,13 @@ export function createSetupManager({
             stderrTail = (stderrTail + chunk).slice(-4096);
             if (!sawSudoPw && SUDO_PW_RE.test(stderrTail)) sawSudoPw = true;
           }
-          persist();
+          pendingLogBytes += chunk.length;
+          const t = nowMs();
+          if (t - lastLogPersist >= logPersistMs || pendingLogBytes >= logPersistBytes) {
+            lastLogPersist = t;
+            pendingLogBytes = 0;
+            persist();
+          }
         },
       });
       runningHandles.set(j.id, handle);
@@ -129,6 +149,17 @@ export function createSetupManager({
   function start(box, options, { waitForSsh = false } = {}) {
     const existing = currentForBox(box.id);
     if (existing && existing.status === 'running') return summary(existing);
+    // A stale parked job (needs-interactive) is replaced by this run: flip it
+    // to terminal 'superseded' so it stops accumulating — retention keeps
+    // every non-terminal job forever, and markInteractiveResult only ever
+    // resolves the newest job per box, so a parked one would otherwise be
+    // unresolvable and retained unboundedly (64KB log each).
+    for (const old of jobs.values()) {
+      if (old.boxId === box.id && old.status !== 'running' && !TERMINAL.has(old.status)) {
+        old.status = 'superseded';
+        old.finishedAt = old.finishedAt || now();
+      }
+    }
     const j = {
       id: makeId(), boxId: box.id, boxLabel: box.label,
       status: 'running', phase: waitForSsh ? 'waiting-ssh' : 'running',
@@ -151,7 +182,11 @@ export function createSetupManager({
 
   function cancelForBox(boxId) {
     const j = currentForBox(boxId);
-    if (j && runningHandles.has(j.id)) { try { runningHandles.get(j.id).kill(); } catch {} }
+    if (!j) return;
+    // The flag covers the waiting-ssh window, where no ssh handle exists yet
+    // for the kill below to reach; run() checks it before spawning.
+    j.cancelled = true;
+    if (runningHandles.has(j.id)) { try { runningHandles.get(j.id).kill(); } catch {} }
   }
 
   return {

@@ -55,8 +55,13 @@ export function createFleetManager({
   const cancelled = new Set(); // jobIds with a pending cancel request (in-memory only)
 
   function prune() {
-    while (jobs.length > maxJobs) {
-      const shifted = jobs.shift();
+    // Cap history without ever dropping an active job: a running job that
+    // left the list would keep executing invisibly and become uncancellable
+    // (same retention rule as the setup manager).
+    let idx = 0;
+    while (jobs.length > maxJobs && idx < jobs.length) {
+      if (jobs[idx].status === 'running') { idx += 1; continue; }
+      const [shifted] = jobs.splice(idx, 1);
       runs.delete(shifted.id);
       cancelled.delete(shifted.id);
     }

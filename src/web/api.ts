@@ -48,7 +48,7 @@ export interface FleetJobSummary {
   createdAt: string; startedAt: string; finishedAt: string | null;
   targetCount: number; okCount: number; errorCount: number;
 }
-export type SetupStatus = 'running' | 'done' | 'error' | 'needs-interactive' | 'interrupted';
+export type SetupStatus = 'running' | 'done' | 'error' | 'needs-interactive' | 'interrupted' | 'superseded';
 export interface SetupOptions { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; }
 export interface SetupSummary {
   id: string; boxId: string; boxLabel: string; status: SetupStatus;

@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 import { buildCreateParams } from './proxmoxParams.js';
 import { assertProvisionInput, isCidr } from './proxmoxValidate.js';
 import { createNetboxClient } from './netboxApi.js';
+import { newestFirst } from './jobOrder.js';
 
 // 'cancelled' has no producer anymore (the never-wired cancel API was removed)
 // but stays terminal so legacy persisted jobs reconcile correctly on load.
@@ -27,8 +28,16 @@ export function createProvisionManager({
   }
   persist();
 
-  function ordered() { return [...jobs.values()].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)); }
-  function persist() { save(ordered().slice(0, maxJobs)); }
+  function ordered() { return [...jobs.values()].sort(newestFirst); }
+  // Terminal-only pruning (the lifecycle manager's rule): active jobs are
+  // never dropped — the old blind slice-to-maxJobs on disk could evict a
+  // still-running job's record — and the in-memory map no longer grows
+  // unboundedly (it used to retain every job ever run, log and all).
+  function prune() {
+    const terminal = ordered().filter((j) => TERMINAL.has(j.status));
+    for (const j of terminal.slice(maxJobs)) { jobs.delete(j.id); settles.delete(j.id); }
+  }
+  function persist() { prune(); save(ordered()); }
   function summary(j) {
     return { id: j.id, presetName: j.presetName, hostname: j.hostname, vmid: j.vmid, status: j.status, phase: j.phase, createdAt: j.createdAt, finishedAt: j.finishedAt, boxId: j.boxId, needsHost: j.needsHost };
   }

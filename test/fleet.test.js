@@ -259,3 +259,19 @@ test('malformed persisted jobs are dropped on load instead of crashing startup',
   // The cleaned list was persisted, so the bad entries are gone from the file.
   expect(saved[0]).toEqual(['good', 'reconcile-me']);
 });
+
+test('prune never evicts a still-running job (it would become invisible and uncancellable)', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const mgr = createFleetManager({
+    store: makeStore(BOXES),
+    execCommand: async () => { await gate; return { code: 0, stdout: '', stderr: '' }; },
+    maxJobs: 1,
+  });
+  const running = await mgr.createJob({ boxIds: ['b1'], command: 'slow' });
+  await mgr.createJob({ boxIds: ['b2'], command: 'also-slow' }); // exceeds maxJobs while #1 still runs
+  expect(mgr.getJob(running.id)).toBeTruthy();
+  release();
+  await mgr._settled(running.id);
+  expect(mgr.getJob(running.id).status).toBe('done');
+});

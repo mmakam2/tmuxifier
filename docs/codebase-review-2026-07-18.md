@@ -17,6 +17,18 @@ folded in below with their old IDs noted.
 > note under this header describing the batch — the same convention
 > `codebase-review-2026-07-04.md` uses.
 
+**Status note, 2026-07-18 (batch 3, v1.7.6):** the job-manager cluster shipped, test-first —
+B6 (starting a new setup for a box flips a stale `needs-interactive` job to a terminal
+`superseded` status, so parked jobs stop accumulating), B7 (a per-job cancellation flag makes
+`cancelForBox` effective during the `waiting-ssh` phase — the install script can no longer run
+against a just-deleted box), E1 (streaming setup output coalesces persistence on a 250 ms /
+8 KB threshold instead of one full-history save per chunk — was ~104 saves for 100 chunks,
+now ~4), B13 (fleet prune skips running jobs), E3 (the provision manager prunes terminal jobs
+from memory like the lifecycle manager, never dropping an active job's record; both managers
+also drop `settles` entries with the job), and C9 (a shared `jobOrder.js` `newestFirst`
+comparator with an id tie-break replaces the invalid-total-order inline sorts in all three
+managers). Suite: 846/846 (9 new tests); setup + fleet e2e green.
+
 **Status note, 2026-07-18 (batch 2, v1.7.5):** the web cluster shipped, test-first — B9
 (fleet job-detail polling moved into a generation-guarded `fleetPoll.ts`, so a stale response
 for a previously selected job can neither paint over nor stop the newer selection's polling),
@@ -58,14 +70,14 @@ explanation in the sections that follow the tables.
 | B3 | sessions | The attach-time "resize jiggle" never restores the original width, so provision/setup PTYs shrink by one column per reattach | Med | S | Save the original column count before the jiggle and restore that saved value | ✅ v1.7.4 |
 | B4 | store | All `boxes.json` mutations are unserialized read-modify-write cycles, so two concurrent changes silently lose one of them | Med | S | Serialize mutations through a per-store promise queue | Open |
 | B5 | setup | A malformed row (for example `null`) in `data/setup-jobs.json` crashes the server at boot | Med | S | Filter loaded rows through a shape check, as `fleet.js` already does | ✅ v1.7.4 |
-| B6 | setup | Setup jobs stuck in `needs-interactive` are never superseded or pruned, so they accumulate forever (each carrying up to 64 KB of log) | Med | S | When a new setup job starts for a box, mark older non-running jobs for that box with a terminal `superseded` status | Open |
-| B7 | setup | Cancelling a setup job during its `waiting-ssh` phase does nothing, so the install script still runs against a box the user just deleted | Med | S | Add a per-job cancellation flag that the wait loop checks before each probe and before launching ssh | Open |
+| B6 | setup | Setup jobs stuck in `needs-interactive` are never superseded or pruned, so they accumulate forever (each carrying up to 64 KB of log) | Med | S | When a new setup job starts for a box, mark older non-running jobs for that box with a terminal `superseded` status | ✅ v1.7.6 |
+| B7 | setup | Cancelling a setup job during its `waiting-ssh` phase does nothing, so the install script still runs against a box the user just deleted | Med | S | Add a per-job cancellation flag that the wait loop checks before each probe and before launching ssh | ✅ v1.7.6 |
 | B8 | stores | Nothing flushes the debounced job stores on shutdown, so a deploy restart can lose the final save and completed jobs reload as `interrupted` | Med | S | Add a SIGTERM/SIGINT handler that awaits every store's `whenIdle()` before exiting | ✅ v1.7.4 |
 | B9 | web | A stale poll response for a finished fleet job can silently stop the polling of a newer job the user has switched to | Med | S | Guard the finished-job branch (and the initial render) with a check that the response still belongs to the selected job | ✅ v1.7.5 |
 | B10 | web | The advertised ⌘/Ctrl+Enter "run" shortcut in the fleet script editor never fires — CodeMirror's default keymap intercepts it and inserts a blank line | Med | S | Register the run keybinding ahead of the default keymap (or wrap it in `Prec.high`) | ✅ v1.7.5 |
 | B11 | web | Clicking "Finish interactively" more than once opens multiple concurrent setup terminals against the same box and leaks all but the last | Med | S | Disable the button after the first click, and dispose the previous terminal handle before creating a new one | ✅ v1.7.5 |
 | B12 | web | Logout / session-expiry teardown misses modals mounted on `document.body`, so an open Proxmox hub stays on top of the login screen, polling forever | Med | S | Give body-mounted modals a registered close hook that the teardown path invokes | ✅ v1.7.5 |
-| B13 | fleet | Job history pruning can evict a fleet job that is still running, making it invisible and uncancellable (old L3) | Low | S | Skip `running` jobs when pruning, mirroring the setup manager's retention policy | Open |
+| B13 | fleet | Job history pruning can evict a fleet job that is still running, making it invisible and uncancellable (old L3) | Low | S | Skip `running` jobs when pruning, mirroring the setup manager's retention policy | ✅ v1.7.6 |
 | B14 | boxes | The background cleanup after removing a box can tear down the SSH ControlMaster of an identical box the user re-added moments later | Low | S | Before tearing down the master, re-check the store for a box with the same host/user/port and skip if one exists | Open |
 | B15 | ssh | SSH output is decoded chunk-by-chunk, so a multi-byte UTF-8 character split across two chunks becomes a � in the setup log | Low | S | Decode each stream with a `string_decoder.StringDecoder` instead of per-chunk `toString` | Open |
 | B16 | web | A momentary Proxmox API failure (state `unknown`) is misread as "container restarted": the stopped-box panel closes and the selection is lost | Low | S | Only treat an affirmative `running` state as a restart; keep the panel open on `unknown` | Open |
@@ -95,9 +107,9 @@ explanation in the sections that follow the tables.
 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
-| E1 | setup | The setup manager persists the entire job history to disk on every chunk of SSH output — a chatty install produces thousands of multi-megabyte serializations | Med | S | Coalesce log persistence on a timer or byte threshold; keep immediate persistence for status changes | Open |
+| E1 | setup | The setup manager persists the entire job history to disk on every chunk of SSH output — a chatty install produces thousands of multi-megabyte serializations | Med | S | Coalesce log persistence on a timer or byte threshold; keep immediate persistence for status changes | ✅ v1.7.6 |
 | E2 | netbox | In fingerprint-pinning mode, every NetBox API call performs an extra full TLS handshake just to re-probe the certificate | Med | S | Cache the resolved TLS options per client, as the Proxmox client already does | Open |
-| E3 | provision | The provision manager's in-memory job map is never pruned, and the on-disk cap can even drop a still-running job's record | Med | S | Adopt the lifecycle manager's terminal-only pruning, and clean up the companion `settles` map | Open |
+| E3 | provision | The provision manager's in-memory job map is never pruned, and the on-disk cap can even drop a still-running job's record | Med | S | Adopt the lifecycle manager's terminal-only pruning, and clean up the companion `settles` map | ✅ v1.7.6 |
 | E4 | health | Each health event is written to disk with its own synchronous full-file write — a 30-box outage performs 30 back-to-back writes in one poll pass | Low | S | Collect events during the pass and save once at the end | Open |
 | E5 | web | Every dashboard refresh wipes the cached status data before repainting, flashing every status dot gray and issuing duplicate status fetches (old L17) | Low | S | Keep the previous caches until the fresh responses arrive, then paint once | Open |
 | E6 | status | The status checker's backoff and CPU-tracking maps keep entries for removed boxes forever | Low | S | Add a `forgetBox(id)` cleanup call invoked from box removal | Open |
@@ -117,7 +129,7 @@ explanation in the sections that follow the tables.
 | C6 | proxmox | `proxmoxApi.js` re-implements endpoint host/port parsing twice instead of reusing the existing `parseEndpoint` | Low | S | Import and reuse `parseEndpoint` from `proxmoxValidate.js` | Open |
 | C7 | config | The six health-setting clamps hardcode fallback numbers that duplicate values already defined in `DEFAULTS` | Low | S | Reference `DEFAULTS.*` instead of repeating the literals | Open |
 | C8 | local | The local-shell setup script hardcodes the tmux session name `local` while a configurable `localSession` parameter exists elsewhere — the two can silently disagree | Low | S | Thread the session name through, or remove the parameter and commit to the constant | Open |
-| C9 | setup | The job-ordering comparator returns −1 for equal timestamps (not a valid total order); the provision manager has the same flaw | Low | S | Use a shared comparator that tie-breaks by job id | Open |
+| C9 | setup | The job-ordering comparator returns −1 for equal timestamps (not a valid total order); the provision manager has the same flaw | Low | S | Use a shared comparator that tie-breaks by job id | ✅ v1.7.6 |
 
 ### Dead code
 

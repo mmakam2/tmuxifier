@@ -144,7 +144,8 @@ pattern for new modules.
 - `setupManager.js` / `setupStore.js` — `createSetupManager` runs the on-box setup script (tmux +
   shell frameworks + tool catalog from `buildEnsureTmuxRemote`) as a persisted, pollable, resumable
   server-side job over the shared ControlMaster, streaming into a rolling capped log; statuses
-  `running`/`done`/`error`/`needs-interactive`/`interrupted` — a sudo-password stderr signature
+  `running`/`done`/`error`/`needs-interactive`/`interrupted`/`superseded` (a stale
+  needs-interactive job replaced by a newer run for the same box) — a sudo-password stderr signature
   flips a job to `needs-interactive` for an on-demand interactive finish, and `running` jobs
   reconcile to `interrupted` on restart. Never removes a box on failure (keep-box + retry).
   `createSetupStore` is the debounced `data/setup-jobs.json` persistence (mirrors `provisionStore.js`).

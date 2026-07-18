@@ -180,3 +180,64 @@ test('a malformed persisted row (null) is dropped on load, never a boot crash', 
   expect(listed).toHaveLength(1);
   expect(listed[0].id).toBe('job-ok');
 });
+
+test('starting a new setup for a box supersedes its stale needs-interactive job', async () => {
+  const m = make({ sshStream: sudoSsh('sudo: a terminal is required to read the password\n', 1) });
+  const first = m.start(BOX, {});
+  await m._settled(first.id);
+  expect(m.getJob(first.id).status).toBe('needs-interactive');
+
+  const second = m.start(BOX, {});
+  await m._settled(second.id);
+  expect(second.id).not.toBe(first.id);
+  const old = m.getJob(first.id);
+  expect(old.status).toBe('superseded');
+  expect(old.finishedAt).toBeTruthy();
+});
+
+test('superseded jobs count as terminal history and are pruned past maxJobs', async () => {
+  const m = make({ sshStream: sudoSsh('sudo: a terminal is required to read the password\n', 1), maxJobs: 0 });
+  const first = m.start(BOX, {});
+  await m._settled(first.id);
+  const second = m.start(BOX, {});
+  await m._settled(second.id);
+  // maxJobs 0 keeps no terminal history: the superseded job is gone, the live
+  // needs-interactive one (non-terminal) is retained.
+  expect(m.getJob(first.id)).toBeUndefined();
+  expect(m.getJob(second.id)).toBeTruthy();
+});
+
+test('cancelForBox during the waiting-ssh phase stops the job before any ssh is spawned', async () => {
+  const ssh = fakeSsh({ chunks: [], code: 0 });
+  let m;
+  // The cancel arrives while the readiness probe is still failing.
+  const probe = async () => { m.cancelForBox(BOX.id); return false; };
+  m = make({ sshStream: ssh, probe, readyAttempts: 5, readyDelayMs: 0 });
+  const s = m.start(BOX, {}, { waitForSsh: true });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('error');
+  expect(job.error).toMatch(/cancel/i);
+  expect(ssh.calls).toHaveLength(0);
+});
+
+test('streaming output coalesces persistence instead of one full save per chunk', async () => {
+  const chunks = Array.from({ length: 100 }, (_, i) => ['stdout', `line-${i}\n`]);
+  let saves = 0;
+  const m = make({ sshStream: fakeSsh({ chunks, code: 0 }), save: () => { saves += 1; }, nowMs: () => 0 });
+  const s = m.start(BOX, {});
+  await m._settled(s.id);
+  expect(m.getJob(s.id).log).toContain('line-99'); // nothing lost
+  expect(m.getJob(s.id).status).toBe('done');
+  expect(saves).toBeLessThan(10); // was one save per chunk (~100+)
+});
+
+test('a large output burst still persists promptly via the byte threshold', async () => {
+  let saves = 0;
+  const m = make({ sshStream: fakeSsh({ chunks: [['stdout', 'x'.repeat(9000)]], code: 0 }), save: () => { saves += 1; }, nowMs: () => 0 });
+  const baseline = saves;
+  const s = m.start(BOX, {});
+  await m._settled(s.id);
+  expect(m.getJob(s.id).log).toContain('xxx');
+  expect(saves).toBeGreaterThan(baseline); // the 9KB chunk itself forced a persist
+});

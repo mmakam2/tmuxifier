@@ -471,3 +471,15 @@ test('no setupOptions -> startSetup is not called', async () => {
   await mgr._settled((await mgr.createProvision({ presetId: 'p2', hostname: 'dev-01' })).id);
   expect(started).toHaveLength(0);
 });
+
+test('the in-memory job map prunes terminal jobs past maxJobs, like the persisted file', async () => {
+  const mgr = createProvisionManager(base({
+    proxmoxStore: makeStore(PRESET_STATIC), makeClient: () => okClient(), maxJobs: 2,
+  }));
+  for (const name of ['dev-01', 'dev-02', 'dev-03']) {
+    await mgr._settled((await mgr.createProvision({ presetId: 'p2', hostname: name })).id);
+  }
+  const listed = mgr.listProvisions();
+  expect(listed).toHaveLength(2);
+  expect(listed.map((j) => j.hostname)).toEqual(['dev-03', 'dev-02']); // newest kept
+});

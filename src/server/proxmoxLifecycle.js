@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import { createNetboxClient } from './netboxApi.js';
+import { newestFirst } from './jobOrder.js';
 
 const ACTIONS = new Set(['start', 'shutdown', 'stop', 'reboot', 'deprovision']);
 const TERMINAL = new Set(['done', 'error', 'interrupted']);
@@ -25,10 +26,12 @@ export function createProxmoxLifecycleManager({
     }
     jobs.set(job.id, job);
   }
-  const ordered = () => [...jobs.values()].sort((a, b) => a.createdAt < b.createdAt ? 1 : -1);
+  const ordered = () => [...jobs.values()].sort(newestFirst);
   const prune = () => {
     const terminal = ordered().filter((job) => TERMINAL.has(job.status));
-    for (const job of terminal.slice(maxJobs)) jobs.delete(job.id);
+    // Drop the settles entry with the job, or the promise map grows for the
+    // life of the process (one entry per job ever created).
+    for (const job of terminal.slice(maxJobs)) { jobs.delete(job.id); settles.delete(job.id); }
   };
   const persist = () => { prune(); save(ordered()); };
   const appendLog = (job, text) => { if (text) job.log = `${job.log}${text}`.slice(-maxLogBytes); };
