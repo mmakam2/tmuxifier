@@ -1,3 +1,5 @@
+import type { SetupOptions } from './api';
+
 export interface PveHost {
   id: string; name: string; endpoint: string; tokenId: string; hasToken: boolean;
   verifyMode: 'pin' | 'ca' | 'insecure'; fingerprint256: string | null; defaultNode: string | null; createdAt: string;
@@ -58,7 +60,7 @@ export const pve = {
   addPreset(spec: unknown) { return jr<PvePreset>(fetch('/api/proxmox/presets', post(spec))); },
   updatePreset(id: string, spec: unknown) { return jr<PvePreset>(fetch(`/api/proxmox/presets/${id}`, json('PUT', spec))); },
   removePreset(id: string) { return jr(fetch(`/api/proxmox/presets/${id}`, { method: 'DELETE' })); },
-  createProvision(spec: { presetId: string; hostname: string; vmid?: number; ip?: string; tags?: string[] }) { return jr<ProvisionSummary>(fetch('/api/proxmox/provisions', post(spec))); },
+  createProvision(spec: { presetId: string; hostname: string; vmid?: number; ip?: string; tags?: string[]; setupOptions?: SetupOptions }) { return jr<ProvisionSummary>(fetch('/api/proxmox/provisions', post(spec))); },
   provisions() { return jr<ProvisionSummary[]>(fetch('/api/proxmox/provisions')); },
   provision(id: string) { return jr<ProvisionJob>(fetch(`/api/proxmox/provisions/${id}?t=${Date.now()}`)); },
   linkedContainers() { return jr<PveLinkedContainer[]>(fetch('/api/proxmox/containers')); },

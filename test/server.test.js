@@ -916,6 +916,28 @@ test('provisions: validation, create, poll, 404', async () => {
   expect((await app.inject({ method: 'GET', url: '/api/proxmox/provisions/NOPE', headers })).statusCode).toBe(404);
 });
 
+test('provisions: forwards setupOptions from the request body to the provision manager', async () => {
+  // Guards the client -> server contract for setup options: the route must forward
+  // req.body as-is (including setupOptions) to provisionManager.createProvision, since
+  // that's what makes server-side setup auto-start on box link.
+  const received = [];
+  const provisionManager = {
+    createProvision: async (body) => { received.push(body); return { id: 'J1', status: 'running', hostname: body.hostname }; },
+    listProvisions: () => [],
+    getProvision: () => undefined,
+  };
+  app = await makeApp({ ...proxmoxStubs([]), provisionManager });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const setupOptions = { ohMyTmux: true, ohMyZsh: false, ohMyBash: false, tools: ['git', 'curl'] };
+  const res = await app.inject({
+    method: 'POST', url: '/api/proxmox/provisions', headers,
+    payload: { presetId: 'P1', hostname: 'dev-01', setupOptions },
+  });
+  expect(res.statusCode).toBe(201);
+  expect(received[0].setupOptions).toEqual(setupOptions);
+});
+
 test('add-host: token verify failure returns 400 and never persists the host', async () => {
   const calls = [];
   const stubs = proxmoxStubs(calls);

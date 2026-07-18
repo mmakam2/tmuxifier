@@ -98,9 +98,10 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
     const go = el('button', { type: 'submit', onclick: async (e) => {
       e.preventDefault(); box.querySelector('.pve-err')?.remove();
       const t = tag.value.trim();
+      const setupOptions: SetupOptions = { ohMyTmux: (omt as HTMLInputElement).checked, ohMyZsh: (shZsh as HTMLInputElement).checked, ohMyBash: (shBash as HTMLInputElement).checked, tools: toolsGroup.selected() };
       try {
-        const job = await pve.createProvision({ presetId: sel.value, hostname: hostname.value.trim(), ip: curPreset()?.net.ipMode === 'static' ? (ip.value.trim() || undefined) : undefined, tags: t ? [t] : [] });
-        showJob(job.id, { ohMyTmux: (omt as HTMLInputElement).checked, ohMyZsh: (shZsh as HTMLInputElement).checked, ohMyBash: (shBash as HTMLInputElement).checked, tools: toolsGroup.selected() });
+        const job = await pve.createProvision({ presetId: sel.value, hostname: hostname.value.trim(), ip: curPreset()?.net.ipMode === 'static' ? (ip.value.trim() || undefined) : undefined, tags: t ? [t] : [], setupOptions });
+        showJob(job.id, setupOptions);
       } catch (er) { box.append(err((er as Error).message)); }
     } }, ['Provision']);
 
@@ -142,7 +143,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
       } }, ['Open terminal']);
     }
 
-    async function runSetup(boxId: string, vmid: number | null, _opt: SetupOptions) {
+    async function runSetup(boxId: string, vmid: number | null) {
       // The provision manager auto-started a server-side setup job on link (Task 6): the
       // SSH-readiness wait and the setup run itself now happen server-side. Discover that
       // job and poll it; the WS terminal is opened only as the "Finish interactively"
@@ -187,7 +188,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
       footer.replaceChildren();
       if (job.boxId && !linked) { linked = true; opts.onBoxLinked(); }
       if (job.boxId) {
-        if (setup && !setupStarted) { setupStarted = true; void runSetup(job.boxId, job.vmid, setup); return; }
+        if (setup && !setupStarted) { setupStarted = true; void runSetup(job.boxId, job.vmid); return; }
         footer.replaceChildren(openTerminalBtn(job.boxId));
       } else if (job.needsHost) {
         footer.append(el('span', { class: 'pve-sub' }, [`Container ${job.vmid} is up but no IP was discovered — add a box manually.`]));
