@@ -70,3 +70,22 @@ test('a finished fleet job is findable from the Jobs button after a reload', asy
   await history.locator('.fleet-history-item', { hasText: 'SECOND_RUN_MARKER' }).first().click();
   await expect(page.locator('#fleet-panel .fleet-detail')).toContainText('SECOND_RUN_MARKER');
 });
+
+test('Ctrl+Enter inside the script editor triggers Run instead of inserting a newline', async ({ page }) => {
+  await loginAndWait(page);
+  await page.getByRole('button', { name: 'Fleet Command', exact: true }).click();
+  await page.locator('.box', { hasText: 'localhost' }).locator('input.box-check').check();
+
+  // Open the CodeMirror script editor. It takes focus on open, and the
+  // document-level fallback defers to the editor's own keymap while it is
+  // focused — so this exercises the editor keymap itself, where defaultKeymap's
+  // Mod-Enter (insertBlankLine) used to shadow the run binding.
+  await page.locator('.fleet-expand').click();
+  await expect(page.locator('.fleet-script-modal .cm-content')).toBeVisible();
+  await page.keyboard.type('echo CM_RUN_MARKER');
+  await page.keyboard.press('Control+Enter');
+
+  // A successful run closes the modal and lands on the live job detail.
+  const detail = page.locator('#fleet-panel .fleet-detail');
+  await expect(detail).toContainText('CM_RUN_MARKER', { timeout: 20000 });
+});

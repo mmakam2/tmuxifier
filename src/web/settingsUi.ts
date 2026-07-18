@@ -1,6 +1,7 @@
 // The app-wide settings modal: a tabbed shell (hub-style chrome); each tab is
 // a self-contained section module rendering into the content area.
 import { el } from './dom';
+import { registerModal } from './modalRegistry';
 import { renderNetboxSection } from './settingsNetbox';
 import { renderProxmoxSection } from './settingsProxmox';
 
@@ -20,8 +21,10 @@ export function openSettingsModal(tab: SettingsTab = 'netbox', onClose?: () => v
   const content = el('div', { class: 'pve-content' });
 
   function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
-  function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); onClose?.(); }
+  function close() { unregister(); document.removeEventListener('keydown', onKey); backdrop.remove(); onClose?.(); }
   document.addEventListener('keydown', onKey);
+  // Body-mounted: logout/session-expiry teardown closes it via the registry.
+  const unregister = registerModal(close);
   // Only close on a genuine backdrop click (see the box modal for why mousedown
   // must also have started on the backdrop).
   let pressedOnBackdrop = false;

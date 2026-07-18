@@ -2,7 +2,7 @@
 // Replaces the plain <textarea> with shell syntax highlighting, line numbers,
 // bracket matching and a token/recent-command autocompleter — while keeping the
 // modal's contract (a getValue/onChange/onRun surface) so main.ts stays thin.
-import { EditorState, type Extension } from '@codemirror/state';
+import { EditorState, Prec, type Extension } from '@codemirror/state';
 import {
   EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter,
   drawSelection, dropCursor, placeholder as cmPlaceholder,
@@ -118,10 +118,15 @@ export interface FleetScriptEditorOptions {
 export function createFleetScriptEditor(opts: FleetScriptEditorOptions): FleetScriptEditor {
   const completions = buildCompletions(opts.recent);
 
-  const runKeymap = keymap.of([
+  // Mod-Enter needs Prec.high: defaultKeymap (in the combined keymap below,
+  // registered earlier = higher precedence) binds Mod-Enter to insertBlankLine,
+  // which would otherwise shadow the advertised run shortcut entirely. Escape
+  // deliberately stays at default precedence AFTER the combined keymap, so
+  // completionKeymap consumes it first while the popup is open.
+  const runKeymap = Prec.high(keymap.of([
     { key: 'Mod-Enter', preventDefault: true, run: () => { opts.onRun?.(); return true; } },
-    // Only reached when the completion popup is closed — completionKeymap (higher
-    // precedence below) consumes Escape first while it is open.
+  ]));
+  const escapeKeymap = keymap.of([
     { key: 'Escape', run: () => { opts.onEscape?.(); return true; } },
   ]);
 
@@ -141,9 +146,10 @@ export function createFleetScriptEditor(opts: FleetScriptEditorOptions): FleetSc
     EditorState.allowMultipleSelections.of(true),
     EditorView.lineWrapping,
     THEME,
-    // completionKeymap before runKeymap so Escape closes an open popup first.
+    // completionKeymap before escapeKeymap so Escape closes an open popup first.
     keymap.of([...closeBracketsKeymap, ...completionKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
     runKeymap,
+    escapeKeymap,
   ];
 
   if (opts.placeholder) extensions.push(cmPlaceholder(opts.placeholder));

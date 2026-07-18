@@ -205,6 +205,11 @@ history: pure SVG-path builder and event-line formatters), `setupStatus.ts` (pur
 text/actions/badge helpers shared by the provision panel and the Proxmox hub),
 `fleetSelection.ts`/`fleetHistory.ts`/`fleetEditor.ts` (Fleet
 Command selection, recent-command history, and the CodeMirror bash-script editor),
+`fleetPoll.ts` (the generation-guarded fleet job-detail poll loop — a stale response can
+neither paint over nor stop the newer selection's polling), `interactiveLauncher.ts`
+(at-most-one live "Finish interactively" setup terminal, shared by the provision panel and the
+hub), `modalRegistry.ts` (body-mounted modals register their close() so logout/session-expiry
+teardown reaches them),
 `proxmox.ts`/`proxmoxUi.ts` (the Proxmox fetch layer and operations-only hub shell: Containers,
 Presets, Provision, and Activity tabs — host/secret setup lives in the settings modal;
 `proxmoxUi.ts`'s Provision tab polls the server-side setup job once a box links),

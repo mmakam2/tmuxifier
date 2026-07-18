@@ -7,6 +7,9 @@ import { formatEvent, relTime, unseenCount } from './healthEvents';
 import { toggleBox, setBoxes, groupState } from './fleetSelection';
 import { addRecent, parseRecent } from './fleetHistory';
 import { createFleetScriptEditor } from './fleetEditor';
+import { createFleetPoller } from './fleetPoll';
+import { createInteractiveLauncher } from './interactiveLauncher';
+import { closeAllModals } from './modalRegistry';
 import logoUrl from './assets/tmuxifier-logo.png';
 import { openProxmoxHub } from './proxmoxUi';
 import { pve } from './proxmox';
@@ -453,6 +456,7 @@ async function renderDashboard() {
     closeFleetJobsPanel();
     closeEventsPanel();
     closeProvisionPanel();
+    closeAllModals(); // body-mounted modals (Proxmox hub, settings) survive the #app re-render
     await api.logout(); await renderLogin();
   });
   app.querySelector('#sidebar-toggle')!.addEventListener('click', () => {
@@ -1001,14 +1005,15 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
 
   let stopped = false;
   let pollTimer: number | undefined;
-  let interactiveTerm: ReturnType<typeof openProvisionTerminal> | null = null;
+  // One interactive session at a time: a second "Finish interactively" click
+  // must not start a concurrent setup script run on the same box.
+  const interactive = createInteractiveLauncher<ReturnType<typeof openProvisionTerminal>>();
   const stop = () => {
     stopped = true;
     if (pollTimer) clearTimeout(pollTimer);
-    // dispose() is a no-op once the interactive session's own onComplete
-    // already ran; this only matters if the panel is closed mid-session.
-    interactiveTerm?.dispose();
-    interactiveTerm = null;
+    // Disposes a live interactive session; no-op when its own onComplete
+    // already ran. Only matters if the panel is closed mid-session.
+    interactive.stop();
   };
 
   function btn(label: string, onclick: () => void, cls = '') {
@@ -1027,7 +1032,13 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
         closeProvisionPanel();
         refresh();
       }, 'danger'));
-      else if (a === 'finish-interactive') actions.append(btn('Finish interactively', () => finishInteractive(), 'pve-primary'));
+      else if (a === 'finish-interactive') {
+        const b = btn('Finish interactively', () => { finishInteractive(); b.disabled = true; }, 'pve-primary');
+        // The poll re-renders these actions while the job stays
+        // needs-interactive — keep the button disabled while a session is live.
+        b.disabled = interactive.active();
+        actions.append(b);
+      }
     }
   }
 
@@ -1035,13 +1046,14 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
     // The existing WS PTY runs the same idempotent script with the user present
     // to type the sudo password. On exit, the server marks the job; the
     // background poll (still running) picks up the new status.
+    if (interactive.active()) return;
     log.style.display = 'none';
     const term = document.createElement('div'); term.style.height = '320px'; container.insertBefore(term, actions);
-    interactiveTerm = openProvisionTerminal(term, box.id, opts, () => {
-      interactiveTerm = null;
+    interactive.launch(() => openProvisionTerminal(term, box.id, opts, () => {
+      interactive.done();
       log.style.display = '';
       term.remove();
-    });
+    }));
   }
 
   async function poll(id: string) {
@@ -1697,10 +1709,25 @@ function renderEventsPanel() {
   updateEventsBadge();
 }
 
-let fleetPollTimer: any = null;
-let fleetPollJobId: string | null = null;
+// Generation-guarded job-detail poller (fleetPoll.ts): a stale response for a
+// previously selected job can neither paint over nor stop the polling of the
+// job the user has since switched to.
+const fleetPoller = createFleetPoller<import('./api').FleetJob>({
+  fetchJob: (id) => api.getFleetJob(id),
+  render: (job) => {
+    const detail = document.querySelector('#fleet-panel .fleet-detail') as HTMLElement | null;
+    if (!detail) return false;
+    renderFleetJob(detail, job);
+    return true;
+  },
+  renderError: () => {
+    const detail = document.querySelector('#fleet-panel .fleet-detail') as HTMLElement | null;
+    if (detail) detail.innerHTML = '<p class="err">Could not load job.</p>';
+  },
+  onFinished: () => renderFleetHistory(),
+});
 
-function stopFleetPoll() { if (fleetPollTimer) { clearTimeout(fleetPollTimer); fleetPollTimer = null; } fleetPollJobId = null; }
+function stopFleetPoll() { fleetPoller.stop(); }
 
 function closeFleetJobsPanel() {
   stopFleetPoll();
@@ -1743,24 +1770,8 @@ async function renderFleetHistory() {
   }
 }
 
-async function showFleetJob(id: string) {
-  stopFleetPoll();
-  const detail = document.querySelector('#fleet-panel .fleet-detail') as HTMLElement | null;
-  if (!detail) return;
-  let job: import('./api').FleetJob;
-  try { job = await api.getFleetJob(id); } catch { detail.innerHTML = '<p class="err">Could not load job.</p>'; return; }
-  renderFleetJob(detail, job);
-  if (job.status === 'running') { fleetPollJobId = id; fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500); }
-}
-
-async function pollFleetJob(id: string) {
-  const detail = document.querySelector('#fleet-panel .fleet-detail') as HTMLElement | null;
-  if (!detail) { stopFleetPoll(); return; }
-  let job: import('./api').FleetJob;
-  try { job = await api.getFleetJob(id); } catch { if (fleetPollJobId === id) fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500); return; }
-  if (fleetPollJobId === id) renderFleetJob(detail, job);
-  if (job.status === 'running') { if (fleetPollJobId === id) fleetPollTimer = setTimeout(() => pollFleetJob(id), 1500); }
-  else { stopFleetPoll(); renderFleetHistory(); }
+function showFleetJob(id: string) {
+  void fleetPoller.show(id);
 }
 
 function renderFleetJob(detail: HTMLElement, job: import('./api').FleetJob) {
@@ -1826,6 +1837,9 @@ onUnauthorized(() => {
   closeFleetJobsPanel();
   closeEventsPanel();
   closeProvisionPanel();
+  // Body-mounted modals (Proxmox hub, settings) are outside #app: without an
+  // explicit close they would overlay the login screen with pollers running.
+  closeAllModals();
   void renderLogin();
   showToast('Session expired — please log in again.', 'error');
 });

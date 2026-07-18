@@ -8,6 +8,8 @@ import { renderContainersTab } from './proxmoxContainers';
 import { renderActivityTab } from './proxmoxActivity';
 import { toolsCheckboxGroup } from './provisionTools';
 import { setupStatusText } from './setupStatus';
+import { createInteractiveLauncher } from './interactiveLauncher';
+import { registerModal } from './modalRegistry';
 
 type SetupOptions = { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[] };
 
@@ -23,14 +25,18 @@ type Tab = typeof TABS[number];
 export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
   let pollTimer: number | null = null;
   let pollGen = 0;
-  let setupTerm: { dispose: () => void } | null = null;
-  const stopPoll = () => { pollGen++; if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } if (setupTerm) { setupTerm.dispose(); setupTerm = null; } };
+  // One interactive setup session at a time (same rule as the provision panel).
+  const setupLauncher = createInteractiveLauncher<{ dispose: () => void }>();
+  const stopPoll = () => { pollGen++; if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } setupLauncher.stop(); };
 
   const backdrop = el('div', { class: 'modal-backdrop' });
   const modal = el('div', { class: 'modal pve-hub' });
   const tabStrip = el('div', { class: 'pve-tabs' });
   const content = el('div', { class: 'pve-content' });
-  const close = () => { stopPoll(); backdrop.remove(); };
+  const close = () => { unregister(); stopPoll(); backdrop.remove(); };
+  // Body-mounted: register so logout/session-expiry teardown can close the hub
+  // (it survives the #app re-render and its pollers would run forever).
+  const unregister = registerModal(close);
   // Only close on a genuine backdrop click. A text selection that starts inside the modal
   // and ends on the backdrop produces a click whose target is the backdrop (the common
   // ancestor), which would otherwise close the modal — so require the press to have
@@ -164,10 +170,15 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
         opts.onBoxLinked();
         footer.replaceChildren();
         if (job.status === 'needs-interactive') {
-          footer.append(el('button', { type: 'button', class: 'pve-primary', onclick: () => {
+          const finishBtn = el('button', { type: 'button', class: 'pve-primary' }, ['Finish interactively']) as HTMLButtonElement;
+          finishBtn.disabled = setupLauncher.active();
+          finishBtn.onclick = () => {
+            if (setupLauncher.active()) return;
+            finishBtn.disabled = true;
             const term = el('div', {}); (term as HTMLElement).style.height = '320px'; setupArea.append(term);
-            setupTerm = openProvisionTerminal(term as HTMLElement, boxId, job.options, () => { void tickSetup(); });
-          } }, ['Finish interactively']), openTerminalBtn(boxId));
+            setupLauncher.launch(() => openProvisionTerminal(term as HTMLElement, boxId, job.options, () => { setupLauncher.done(); void tickSetup(); }));
+          };
+          footer.append(finishBtn, openTerminalBtn(boxId));
         } else {
           footer.append(openTerminalBtn(boxId));
         }

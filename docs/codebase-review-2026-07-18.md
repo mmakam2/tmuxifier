@@ -17,6 +17,18 @@ folded in below with their old IDs noted.
 > note under this header describing the batch — the same convention
 > `codebase-review-2026-07-04.md` uses.
 
+**Status note, 2026-07-18 (batch 2, v1.7.5):** the web cluster shipped, test-first — B9
+(fleet job-detail polling moved into a generation-guarded `fleetPoll.ts`, so a stale response
+for a previously selected job can neither paint over nor stop the newer selection's polling),
+B10 (the fleet script editor's ⌘/Ctrl+Enter run binding is `Prec.high`, out from under
+defaultKeymap's insertBlankLine — verified by a new Playwright test that failed against the old
+bundle), B11 (both setup-job viewers route their "Finish interactively" terminal through a new
+`interactiveLauncher.ts`, refusing concurrent sessions and disabling the button while one is
+live), and B12 (body-mounted modals — the Proxmox hub and settings — register with a new
+`modalRegistry.ts` that logout/session-expiry teardown closes). Suite: 837/837 unit tests
+(11 new); fleet e2e 4/4 including the new shortcut test; full e2e 10 passed with only the two
+known pre-existing zsh-root-shell failures.
+
 **Status note, 2026-07-18 (batch 1, v1.7.4):** the "silent-failure killers" batch shipped,
 test-first — B1 (boot failures now exit 1; the keep-alive exception handlers are registered
 only after `app.listen` succeeds), B2 (`config.json` is written atomically via
@@ -49,10 +61,10 @@ explanation in the sections that follow the tables.
 | B6 | setup | Setup jobs stuck in `needs-interactive` are never superseded or pruned, so they accumulate forever (each carrying up to 64 KB of log) | Med | S | When a new setup job starts for a box, mark older non-running jobs for that box with a terminal `superseded` status | Open |
 | B7 | setup | Cancelling a setup job during its `waiting-ssh` phase does nothing, so the install script still runs against a box the user just deleted | Med | S | Add a per-job cancellation flag that the wait loop checks before each probe and before launching ssh | Open |
 | B8 | stores | Nothing flushes the debounced job stores on shutdown, so a deploy restart can lose the final save and completed jobs reload as `interrupted` | Med | S | Add a SIGTERM/SIGINT handler that awaits every store's `whenIdle()` before exiting | ✅ v1.7.4 |
-| B9 | web | A stale poll response for a finished fleet job can silently stop the polling of a newer job the user has switched to | Med | S | Guard the finished-job branch (and the initial render) with a check that the response still belongs to the selected job | Open |
-| B10 | web | The advertised ⌘/Ctrl+Enter "run" shortcut in the fleet script editor never fires — CodeMirror's default keymap intercepts it and inserts a blank line | Med | S | Register the run keybinding ahead of the default keymap (or wrap it in `Prec.high`) | Open |
-| B11 | web | Clicking "Finish interactively" more than once opens multiple concurrent setup terminals against the same box and leaks all but the last | Med | S | Disable the button after the first click, and dispose the previous terminal handle before creating a new one | Open |
-| B12 | web | Logout / session-expiry teardown misses modals mounted on `document.body`, so an open Proxmox hub stays on top of the login screen, polling forever | Med | S | Give body-mounted modals a registered close hook that the teardown path invokes | Open |
+| B9 | web | A stale poll response for a finished fleet job can silently stop the polling of a newer job the user has switched to | Med | S | Guard the finished-job branch (and the initial render) with a check that the response still belongs to the selected job | ✅ v1.7.5 |
+| B10 | web | The advertised ⌘/Ctrl+Enter "run" shortcut in the fleet script editor never fires — CodeMirror's default keymap intercepts it and inserts a blank line | Med | S | Register the run keybinding ahead of the default keymap (or wrap it in `Prec.high`) | ✅ v1.7.5 |
+| B11 | web | Clicking "Finish interactively" more than once opens multiple concurrent setup terminals against the same box and leaks all but the last | Med | S | Disable the button after the first click, and dispose the previous terminal handle before creating a new one | ✅ v1.7.5 |
+| B12 | web | Logout / session-expiry teardown misses modals mounted on `document.body`, so an open Proxmox hub stays on top of the login screen, polling forever | Med | S | Give body-mounted modals a registered close hook that the teardown path invokes | ✅ v1.7.5 |
 | B13 | fleet | Job history pruning can evict a fleet job that is still running, making it invisible and uncancellable (old L3) | Low | S | Skip `running` jobs when pruning, mirroring the setup manager's retention policy | Open |
 | B14 | boxes | The background cleanup after removing a box can tear down the SSH ControlMaster of an identical box the user re-added moments later | Low | S | Before tearing down the master, re-check the store for a box with the same host/user/port and skip if one exists | Open |
 | B15 | ssh | SSH output is decoded chunk-by-chunk, so a multi-byte UTF-8 character split across two chunks becomes a � in the setup log | Low | S | Decode each stream with a `string_decoder.StringDecoder` instead of per-chunk `toString` | Open |
