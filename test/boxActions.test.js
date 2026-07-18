@@ -36,6 +36,18 @@ test('buildEnsureTmuxRemote installs tmux when missing and creates the session',
   expect(remote).toContain("\"$TMUX_BIN\" new-session -d -s 'web' 'echo '\\''hi'\\'''");
 });
 
+test('buildEnsureTmuxRemote installs tmux before the optional tools', () => {
+  // tmux is the one thing the terminal needs; the tools (esp. `upgrade`) are
+  // slow and failure-prone under `set -eu`. Installing tmux first means a tool
+  // failure or a mid-run interruption still leaves a terminal-usable box.
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['upgrade', 'node'] });
+  const tmuxIdx = remote.indexOf('--no-install-recommends tmux');
+  const upgradeIdx = remote.indexOf('apt-get -y upgrade'); // the `upgrade` tool block
+  expect(tmuxIdx).toBeGreaterThan(-1);
+  expect(upgradeIdx).toBeGreaterThan(-1);
+  expect(tmuxIdx).toBeLessThan(upgradeIdx);
+});
+
 test('buildEnsureTmuxRemote includes Oh My Tmux manual install steps when requested', () => {
   const remote = buildEnsureTmuxRemote('web', undefined, { installOhMyTmux: true });
 
@@ -457,9 +469,12 @@ test('buildEnsureTmuxRemote installs claude and agy via their curl installers', 
   expect(remote).toContain('$HOME/.local/bin:$PATH');
 });
 
-test('buildEnsureTmuxRemote runs tools before the git/tmux bootstrap', () => {
-  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['upgrade'] });
-  expect(remote.indexOf('apt-get -y upgrade')).toBeLessThan(remote.indexOf('command -v tmux'));
+test('buildEnsureTmuxRemote keeps upgrade first AMONG the tools (fresh indexes for later tool installs)', () => {
+  // The tools now run after the tmux bootstrap (see the tmux-before-tools test),
+  // but upgrade must still lead the tool blocks so curl/git/gh/node see fresh
+  // package indexes.
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['upgrade', 'node'] });
+  expect(remote.indexOf('apt-get -y upgrade')).toBeLessThan(remote.indexOf('nodejs npm'));
 });
 
 test('buildEnsureTmuxRemote omits tool blocks and PATH line when no tools selected', () => {

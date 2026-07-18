@@ -280,7 +280,6 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
   ] : [];
   return [
     'set -eu',
-    ...toolBlocks,
     // Ensure git is available before oh-my-tmux / oh-my-zsh
     'if ! command -v git >/dev/null 2>&1; then',
     "  SUDO=''",
@@ -335,6 +334,11 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     '  for p in /usr/bin/tmux /usr/local/bin/tmux /bin/tmux; do if [ -x "$p" ]; then TMUX_BIN="$p"; break; fi; done',
     'fi',
     '[ -n "$TMUX_BIN" ]',
+    // Optional tools run only AFTER tmux (and git) are installed: they are slow
+    // (`upgrade`) and failure-prone, and under `set -eu` a tool failure aborts
+    // the script. Installing tmux first means a failed/interrupted tool run
+    // still leaves a terminal-usable box (the attach creates the session).
+    ...toolBlocks,
     ...ohMyTmux,
     ...ohMyZsh,
     ...ohMyBash,

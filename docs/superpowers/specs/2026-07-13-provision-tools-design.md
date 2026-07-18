@@ -113,3 +113,22 @@ silently.
 - Free-form package names.
 - A post-provision job phase / Activity-tab install reporting.
 - Version pinning or non-distro node (nvm/nodesource).
+
+## Amendment (2026-07-18): tmux bootstrap moved before the tool blocks
+
+The original **Install order** (`upgrade` → distro packages → npm, *before* the
+git/tmux bootstrap) put tmux — the one binary the browser terminal needs — last.
+Under `set -eu`, any tool failure (or a mid-run interruption, e.g. a Tmuxifier
+restart) aborted the script before tmux was ever installed, leaving a box the
+terminal couldn't attach to (`tmux: command not found`).
+
+**Change:** the git + tmux bootstrap now runs **before** the tool blocks. The
+tools still run in the same order among themselves (`upgrade` first, so later
+tool installs see fresh indexes). The "fresh indexes" rationale for running
+`upgrade` before *tmux* is redundant: the tmux and git install blocks already
+self-heal a stale index (`apt-get install … || { apt-get update; … }`), so
+installing tmux first is safe. Result: a failed or interrupted tool run still
+leaves a terminal-usable box.
+
+Locked by `test/boxActions.test.js`: "installs tmux before the optional tools"
+and "keeps upgrade first AMONG the tools".
