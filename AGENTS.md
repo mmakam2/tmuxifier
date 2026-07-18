@@ -23,8 +23,9 @@ Configuration, secrets, and runtime state all live **inside the repo**:
   (Proxmox host profiles with **encrypted** API tokens, SSH management keys, and an optional root
   password — all AES-256-GCM sealed — plus container presets), `netbox.json` (NetBox integration
   settings with an **encrypted** API token), `provision-jobs.json` (provision history),
-  `proxmox-lifecycle-jobs.json` (LXC power/deprovision job history), `health-events.json` (in-app
-  health event log), and SSH ControlMaster sockets under `data/cm/`.
+  `setup-jobs.json` (server-side box setup job history), `proxmox-lifecycle-jobs.json` (LXC
+  power/deprovision job history), `health-events.json` (in-app health event log), and SSH
+  ControlMaster sockets under `data/cm/`.
 
 When adding a new config knob or persisted file, keep it under the repo folder by default.
 Don't introduce dependencies on `$HOME`-level state other than the user's existing SSH setup.
@@ -95,12 +96,19 @@ pattern for new modules.
 - `googleAuth.js` — dependency-free Google OIDC helper: authorization-code flow, PKCE, id_token
   payload decoding, and exact-email allowlist checks.
 - `server.js` — Fastify app: login rate-limiting, REST under `/api/*`, and the `/term` WebSocket.
+  Box setup routes: `POST /api/boxes/:id/setup` (start), `GET /api/setup` (list), `GET
+  /api/setup/:id` and `GET /api/boxes/:id/setup` (poll one/by-box). The `/term?mode=provision`
+  WebSocket is now the on-demand **interactive fallback** for sudo-password boxes — it reports its
+  exit code via `setupManager.markInteractiveResult` and no longer rolls back/removes a box on
+  failure.
 - `store.js` — `data/boxes.json` CRUD; normalizes/validates boxes; exports/imports the box list as
   a versioned JSON file (`exportBoxes`/`importBoxes`; import re-mints ids and skips dup/unsafe entries).
 - `sshCommand.js` — builds `ssh` argv for attach/probe; **all box fields are validated by
   `assertBoxSafe` and never shell-interpolated unquoted**. Touch this carefully (command-injection
-  surface). Includes ControlMaster multiplexing args.
-- `sshRun.js` — run one-shot ssh probes.
+  surface). Includes ControlMaster multiplexing args. `buildSetupArgv` is the non-interactive
+  (`BatchMode`) box-setup argv, delegating to `buildProbeArgv`.
+- `sshRun.js` — run one-shot ssh probes; `sshStream` (streaming `spawn('ssh')`, non-buffered
+  stdout/stderr) is what the setup manager tails.
 - `boxActions.js` — `createBoxActions`: per-box SSH operations over the shared ControlMaster —
   ensure/install tmux, selected shell frameworks, and the curated provision-time tool catalog
   (`TOOL_IDS`/`resolveTools`: system upgrade, curl, git, gh, node/npm, bubblewrap, and the
@@ -133,6 +141,13 @@ pattern for new modules.
 - `fleet.js` / `fleetStore.js` — `createFleetManager` runs one command across many boxes as a single
   persisted, pollable job (Fleet Command), fanning out at `fleetConcurrency`; `createFleetStore` is
   the debounced `data/fleet-jobs.json` persistence.
+- `setupManager.js` / `setupStore.js` — `createSetupManager` runs the on-box setup script (tmux +
+  shell frameworks + tool catalog from `buildEnsureTmuxRemote`) as a persisted, pollable, resumable
+  server-side job over the shared ControlMaster, streaming into a rolling capped log; statuses
+  `running`/`done`/`error`/`needs-interactive`/`interrupted` — a sudo-password stderr signature
+  flips a job to `needs-interactive` for an on-demand interactive finish, and `running` jobs
+  reconcile to `interrupted` on restart. Never removes a box on failure (keep-box + retry).
+  `createSetupStore` is the debounced `data/setup-jobs.json` persistence (mirrors `provisionStore.js`).
 - `healthHistory.js` / `healthEventsStore.js` — `createHealthHistory` keeps a rolling in-memory
   sample series per box (fed by the status poller after each snapshot swap) and derives an
   edge-triggered events log (down/up/needs-auth/threshold, persisted to `data/health-events.json`
@@ -153,7 +168,9 @@ pattern for new modules.
   management key so provisioned containers trust Tmuxifier (override with `TMUXIFIER_PVE_DEFAULT_PUBKEY`).
 - `provisionStore.js` / `proxmoxProvision.js` — debounced `data/provision-jobs.json` persistence and
   the create→poll→start→discover→auto-link-box job manager (with an `allocate-ip` NetBox phase
-  first for `auto-static` presets; the Fleet job pattern).
+  first for `auto-static` presets; the Fleet job pattern). On box-link it auto-starts a server-side
+  setup job (injected `startSetup`, `waitForSsh: true`) so the container is usable without the
+  browser staying open.
 - `proxmoxInventory.js` — cluster-wide linked-LXC inventory and status authority (one
   `/cluster/resources` call per host); auto-follows node migrations by updating the stored
   link's node (guarded against active lifecycle jobs), and re-homes an orphaned link when a
@@ -180,13 +197,17 @@ pattern for new modules.
   `createNetboxClient` also serves provisioning: `auto-static` presets reserve the next free IP
   from the VLAN's NetBox prefix (released again on failure or deprovision).
 
-Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts`, `api.ts`,
-`terminal.ts`, `index.html`, `style.css`, plus feature modules — `reconnect.ts` (escalating
-backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health history: pure SVG-path builder
-and event-line formatters), `fleetSelection.ts`/`fleetHistory.ts`/`fleetEditor.ts` (Fleet
+Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts` (also drives the
+provision panel, a poll-based setup-job viewer — Retry / Remove / Finish-interactively — now that
+setup runs server-side), `api.ts`, `terminal.ts`, `index.html`, `style.css`, plus feature modules —
+`reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
+history: pure SVG-path builder and event-line formatters), `setupStatus.ts` (pure setup-status
+text/actions/badge helpers shared by the provision panel and the Proxmox hub),
+`fleetSelection.ts`/`fleetHistory.ts`/`fleetEditor.ts` (Fleet
 Command selection, recent-command history, and the CodeMirror bash-script editor),
 `proxmox.ts`/`proxmoxUi.ts` (the Proxmox fetch layer and operations-only hub shell: Containers,
-Presets, Provision, and Activity tabs — host/secret setup lives in the settings modal),
+Presets, Provision, and Activity tabs — host/secret setup lives in the settings modal;
+`proxmoxUi.ts`'s Provision tab polls the server-side setup job once a box links),
 `proxmoxPresets.ts` (the Presets tab's master-detail create/edit/delete form, dependent Proxmox
 loaders, stale saved-option fallbacks, and additional-disk modal; the `auto-static` IP mode is
 offered only once NetBox is configured),
@@ -283,6 +304,9 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   `POST /api/boxes/:id/forget-hostkey` (confirm-gated in the UI). Ordinary box removal does
   **not** forget a key — the machine still exists and `~/.ssh/known_hosts` is shared with your
   regular ssh usage.
+- Box setup now runs server-side over the already-authenticated ControlMaster (`BatchMode`),
+  decoupled from the browser tab that started it; a failed setup keeps the box — it is removed
+  only via the explicit user action.
 
 ## Docs
 
