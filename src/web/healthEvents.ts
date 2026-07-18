@@ -15,6 +15,7 @@ export function formatEvent(e: HealthEvent): EventLine {
   switch (e.kind) {
     case 'up': return { icon: '🟢', text: `${name} — recovered`, level: 'ok' };
     case 'needs-auth': return { icon: '🟣', text: `${name} — needs login`, level: 'auth' };
+    case 'key-changed': return { icon: '🔑', text: `${name} — host key changed (rebuilt? use ⚷ to forget)`, level: 'crit' };
     case 'down': {
       const reason = classifyError(e.reason);
       const suffix = reason && reason !== 'Unreachable' ? ` (${reason})` : '';

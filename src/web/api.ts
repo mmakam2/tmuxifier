@@ -25,8 +25,8 @@ export interface Status {
 // `stopped` marks a confirmed-by-Proxmox stopped box: `up` is true for it (see
 // sampleOf), so this flag is how the sparkline/health UI tells "healthy stopped"
 // apart from a genuinely reachable box.
-export interface Sample { t: number; up: boolean; stopped?: boolean; tmux?: boolean; needsAuth?: boolean; cpuPct?: number; memPct?: number; diskPct?: number; }
-export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'threshold' | 'threshold-clear';
+export interface Sample { t: number; up: boolean; stopped?: boolean; tmux?: boolean; needsAuth?: boolean; keyChanged?: boolean; cpuPct?: number; memPct?: number; diskPct?: number; }
+export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'key-changed' | 'threshold' | 'threshold-clear';
 export interface HealthEvent {
   seq: number; boxId: string; label: string; host: string; t: number;
   kind: HealthEventKind; reason?: string; metric?: 'cpu' | 'mem' | 'disk'; value?: number;

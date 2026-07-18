@@ -20,6 +20,7 @@ export function sampleOf(status, at) {
   if (stopped) sample.stopped = true;
   if (s.tmux != null) sample.tmux = !!s.tmux;
   if (s.needsAuth) sample.needsAuth = true;
+  if (s.hostKeyChanged) sample.keyChanged = true;
   const m = s.metrics;
   if (m) {
     // Prefer true cgroup utilization; fall back to load only when there is no
@@ -66,11 +67,19 @@ export function classifyTransitions(prev, next, thresholds, state) {
     return { events, state: st };
   }
 
-  // reachability / auth edges
-  if (prev.up && !next.up) events.push(next.needsAuth ? { kind: 'needs-auth' } : { kind: 'down' });
-  else if (!prev.up && next.up) events.push({ kind: 'up' });
-  else if (!prev.up && !next.up && !prev.needsAuth && next.needsAuth) events.push({ kind: 'needs-auth' });
-  else if (!prev.up && !next.up && prev.needsAuth && !next.needsAuth) events.push({ kind: 'down' });
+  // reachability / auth / host-key edges. keyChanged wins over needsAuth (they
+  // never co-occur: key verification aborts before auth).
+  if (prev.up && !next.up) {
+    events.push(next.keyChanged ? { kind: 'key-changed' } : next.needsAuth ? { kind: 'needs-auth' } : { kind: 'down' });
+  } else if (!prev.up && next.up) {
+    events.push({ kind: 'up' });
+  } else if (!prev.up && !next.up && !prev.keyChanged && next.keyChanged) {
+    events.push({ kind: 'key-changed' });
+  } else if (!prev.up && !next.up && !prev.needsAuth && next.needsAuth && !next.keyChanged) {
+    events.push({ kind: 'needs-auth' });
+  } else if (!prev.up && !next.up && (prev.needsAuth || prev.keyChanged) && !next.needsAuth && !next.keyChanged) {
+    events.push({ kind: 'down' });
+  }
 
   // mem / disk: immediate crossing with hysteresis clear
   for (const metric of ['mem', 'disk']) {

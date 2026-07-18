@@ -148,3 +148,22 @@ test('running to stopped does not emit a false down event', () => {
   history.record({ b1: { reachable: false, proxmoxState: 'stopped' } }, [BOXES[0]]);
   expect(history.getEvents({}).events).toEqual([]);
 });
+
+test('sampleOf carries keyChanged through', () => {
+  const s = sampleOf({ reachable: false, hostKeyChanged: true }, 1000);
+  expect(s.up).toBe(false);
+  expect(s.keyChanged).toBe(true);
+});
+
+test('classifyTransitions emits key-changed on the falling edge and within-down transition', () => {
+  const thresholds = { cpu: 90, mem: 90, disk: 90, hysteresis: 5 };
+  // up -> down with keyChanged
+  let r = classifyTransitions({ t: 0, up: true }, { t: 1, up: false, keyChanged: true }, thresholds, initThresholdState());
+  expect(r.events).toEqual([{ kind: 'key-changed' }]);
+  // down (plain) -> down (keyChanged)
+  r = classifyTransitions({ t: 0, up: false }, { t: 1, up: false, keyChanged: true }, thresholds, initThresholdState());
+  expect(r.events).toEqual([{ kind: 'key-changed' }]);
+  // keyChanged -> plain down
+  r = classifyTransitions({ t: 0, up: false, keyChanged: true }, { t: 1, up: false }, thresholds, initThresholdState());
+  expect(r.events).toEqual([{ kind: 'down' }]);
+});
