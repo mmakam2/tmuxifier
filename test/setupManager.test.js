@@ -110,14 +110,15 @@ test('reconciles a running job to interrupted on load', () => {
   expect(m.getJob('old').status).toBe('interrupted');
 });
 
-test('persists at most maxJobs newest jobs', async () => {
-  const saved = [];
-  const m = make({ maxJobs: 2, save: (j) => saved.push(j), _saved: saved });
-  m.start({ ...BOX, id: 'x1' }, { tools: [] });
-  m.start({ ...BOX, id: 'x2' }, { tools: [] });
-  m.start({ ...BOX, id: 'x3' }, { tools: [] });
-  const last = saved[saved.length - 1];
-  expect(last.length).toBeLessThanOrEqual(2);
+test('caps terminal history at maxJobs, evicting the oldest terminal job', async () => {
+  const m = make({ maxJobs: 2 });
+  const a = m.start({ ...BOX, id: 'x1' }, { tools: [] });
+  const b = m.start({ ...BOX, id: 'x2' }, { tools: [] });
+  const c = m.start({ ...BOX, id: 'x3' }, { tools: [] });
+  await Promise.all([m._settled(a.id), m._settled(b.id), m._settled(c.id)]);
+  expect(m.listJobs().length).toBe(2);       // only newest 2 terminal kept
+  expect(m.getJob(a.id)).toBeUndefined();     // oldest evicted
+  expect(m.getJob(c.id)).toBeTruthy();        // newest kept
 });
 
 test('sudo phrase split across stderr chunks still -> needs-interactive', async () => {
@@ -156,6 +157,8 @@ test('prune keeps an in-flight running job even when newer terminal jobs arrive'
   await m._settled(b.id);
   expect(m.getJob(a.id)).toBeTruthy();
   expect(m.getJob(a.id).status).toBe('running');
+  expect(m.getJob(b.id)).toBeTruthy();
+  expect(m.getJob(b.id).status).toBe('done');
 });
 
 test('cancelForBox kills the running job handle', async () => {

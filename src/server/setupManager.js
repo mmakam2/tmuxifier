@@ -40,14 +40,27 @@ export function createSetupManager({
   persist();
 
   function ordered() { return [...jobs.values()].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)); }
-  function persist() { save(ordered().slice(0, maxJobs)); prune(); }
-  function prune() {
+  // Retention policy shared by prune() and persist() so the in-memory map and the
+  // persisted file never diverge: every non-terminal job (running or
+  // needs-interactive — still in flight or awaiting the user) is always kept, and
+  // the newest maxJobs TERMINAL jobs are kept as history. maxJobs caps history
+  // only; active jobs are never dropped (losing a running job would make its
+  // outcome unobservable and its ssh child uncancellable).
+  function retainedIds() {
     const all = ordered();
     const keep = new Set();
-    for (const j of all) if (!TERMINAL.has(j.status)) keep.add(j.id); // in-flight / needs-interactive: always keep
-    for (const j of all) { if (keep.size >= maxJobs) break; keep.add(j.id); } // newest terminal jobs fill the rest
+    for (const j of all) if (!TERMINAL.has(j.status)) keep.add(j.id);
+    let terminalKept = 0;
+    for (const j of all) {
+      if (TERMINAL.has(j.status) && terminalKept < maxJobs) { keep.add(j.id); terminalKept += 1; }
+    }
+    return keep;
+  }
+  function prune() {
+    const keep = retainedIds();
     for (const id of [...jobs.keys()]) if (!keep.has(id)) jobs.delete(id);
   }
+  function persist() { prune(); save(ordered()); }
   function summary(j) {
     return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, createdAt: j.createdAt, finishedAt: j.finishedAt };
   }
