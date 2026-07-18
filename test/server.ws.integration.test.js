@@ -171,7 +171,7 @@ test('provision WS streams script output and sends exit frame on success', async
   // if tmux is already present — either is valid behavior
 }, 45000);
 
-test('provision WS rolls back box on non-zero exit', async () => {
+test('provision WS keeps the box on non-zero exit (no auto-rollback)', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-prov-rollback-'));
   const config = {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
@@ -238,9 +238,11 @@ test('provision WS rolls back box on non-zero exit', async () => {
   expect(exitFrame).toBeTruthy();
   expect(exitFrame.code).toBe(1);
 
-  // Box should have been rolled back
+  // Box is kept even though setup failed: the interactive PTY is the setup
+  // job's manual-finish path, and a failed setup must not delete the box
+  // (the user retries or removes it explicitly from the UI).
   const boxes = await store.listBoxes();
-  expect(boxes.find((b) => b.id === saved.id)).toBeFalsy();
+  expect(boxes.find((b) => b.id === saved.id)).toBeTruthy();
 }, 10000);
 
 // Task 3: the provision WS accepts a `tools=` CSV query param and validates it

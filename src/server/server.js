@@ -58,7 +58,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', ['kill-session', '-t', sessionName], { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, knownHosts }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, knownHosts, setupManager }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -253,6 +253,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (lifecycleManager?.hasActiveJob(req.params.id)) {
       return reply.code(409).send({ error: 'box has an active lifecycle job' });
     }
+    try { setupManager?.cancelForBox(req.params.id); } catch {}
     if (removeBox) return removeBox(req.params.id);
     await store.removeBox(req.params.id);
     return { ok: true };
@@ -435,6 +436,29 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   app.get('/api/proxmox/provisions/:id', { preHandler: requireAuth }, async (req, reply) => {
     const job = provisionManager.getProvision(req.params.id);
     if (!job) return reply.code(404).send({ error: 'provision not found' });
+    return job;
+  });
+
+  // --- Box setup jobs (server-side, resumable) ---
+  app.post('/api/boxes/:id/setup', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'unknown box' });
+    const b = req.body || {};
+    let tools;
+    try { tools = resolveTools(Array.isArray(b.tools) ? b.tools.join(',') : (typeof b.tools === 'string' ? b.tools : '')); }
+    catch { return reply.code(400).send({ error: 'invalid tools' }); }
+    const options = { ohMyTmux: !!b.ohMyTmux, ohMyZsh: !!b.ohMyZsh, ohMyBash: !!b.ohMyBash, tools };
+    return reply.code(201).send(setupManager.start(box, options));
+  });
+  app.get('/api/setup', { preHandler: requireAuth }, async () => setupManager.listJobs());
+  app.get('/api/setup/:id', { preHandler: requireAuth }, async (req, reply) => {
+    const job = setupManager.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: 'setup job not found' });
+    return job;
+  });
+  app.get('/api/boxes/:id/setup', { preHandler: requireAuth }, async (req, reply) => {
+    const job = setupManager.currentForBox(req.params.id);
+    if (!job) return reply.code(204).send();
     return job;
   });
 
@@ -746,14 +770,10 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
           try {
             if (socket.readyState === 1) socket.send(JSON.stringify({ t: 'x', code }));
           } catch {}
-          if (code !== 0 && box.source !== 'proxmox') {
-            // Best-effort rollback: the exit frame already told the client
-            // about the failure. If removeBox fails the box will linger in the
-            // list but is unreachable — the user can remove it manually.
-            // Proxmox-provisioned boxes are kept: the LXC really exists, so the
-            // box is how the user reaches it to retry the setup.
-            store.removeBox(boxId).catch(() => {});
-          }
+          // The interactive PTY is the setup job's manual-finish path. Report the
+          // outcome to the manager (0 -> done; non-zero leaves needs-interactive).
+          // No auto-rollback: a failed setup keeps the box (Retry / Remove in the UI).
+          try { setupManager?.markInteractiveResult(boxId, code); } catch {}
           try { socket.close(1000); } catch {}
         });
         socket.on('message', (raw) => {
