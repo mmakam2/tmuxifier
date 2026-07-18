@@ -220,7 +220,8 @@ Command selection, recent-command history, and the CodeMirror bash-script editor
 neither paint over nor stop the newer selection's polling), `interactiveLauncher.ts`
 (at-most-one live "Finish interactively" setup terminal, shared by the provision panel and the
 hub), `modalRegistry.ts` (body-mounted modals register their close() so logout/session-expiry
-teardown reaches them),
+teardown reaches them), `setupPoller.ts` (the generation-guarded setup-job poll loop shared by
+the provision panel and the hub — the injected policy renders and returns the next delay),
 `proxmox.ts`/`proxmoxUi.ts` (the Proxmox fetch layer and operations-only hub shell: Containers,
 Presets, Provision, and Activity tabs — host/secret setup lives in the settings modal;
 `proxmoxUi.ts`'s Provision tab polls the server-side setup job once a box links),
@@ -234,7 +235,7 @@ link/unlink picker — hidden until a Proxmox host profile exists, except for al
 boxes), `settingsUi.ts` (the ⚙ settings
 modal's tabbed shell, with NetBox (`settingsNetbox.ts`) and Proxmox host/secret
 (`settingsProxmox.ts`) tabs) with `settingsForm.ts` (pure payload/result helpers), `netbox.ts`
-(fetch layer), and `dom.ts` (shared DOM builders used by both the settings modal and the hub),
+(fetch layer), and `dom.ts` (shared DOM builders plus `openModal` — the one modal scaffold with backdrop-click guard and Escape-to-close — and `makeRadio`, used across the settings modal, the hub, and the main.ts dialogs),
 `clipboard.ts`, `upload.ts` (pure paste/drop upload helpers: DataTransfer extraction, pasted-image
 naming, size check), and `termFont.ts` (pure builder for the xterm
 font stack — prepends `TMUXIFIER_TERM_FONT` onto the bundled stack (MesloLGMDZ Nerd Font default,

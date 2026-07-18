@@ -1,5 +1,5 @@
 import { pve, type PveHost, type PveMount, type PvePreset } from './proxmox';
-import { el, err, field, group, input } from './dom';
+import { el, err, field, group, input, openModal } from './dom';
 import { nbx } from './netbox';
 
 export type PresetsDeps = { openSettingsModal: (tab: 'proxmox') => void };
@@ -33,14 +33,10 @@ function templateStorage(template: string) {
 }
 
 function openAddDiskModal(opts: { id: string; storages: string[]; onAdd: (mount: PveMount) => void }) {
-  const backdrop = el('div', { class: 'modal-backdrop' });
   const modal = el('div', { class: 'modal pve-disk-modal' });
-  const close = () => backdrop.remove();
-  let pressed = false;
-  backdrop.addEventListener('mousedown', (event) => { pressed = event.target === backdrop; });
-  backdrop.addEventListener('click', (event) => {
-    if (event.target === backdrop && pressed) close();
-  });
+  // openModal also gives this dialog Escape-to-close, which its hand-rolled
+  // scaffold had drifted away from.
+  const { close } = openModal({ modal });
 
   const storage = el('select', {}, opts.storages.map((name) =>
     el('option', { value: name }, [name]))) as HTMLSelectElement;
@@ -71,8 +67,6 @@ function openAddDiskModal(opts: { id: string; storages: string[]; onAdd: (mount:
     el('div', { class: 'modal-actions' }, [cancel, add]),
   );
   modal.append(box);
-  backdrop.append(modal);
-  document.body.append(backdrop);
 }
 
 export async function renderPresetsTab(content: HTMLElement, deps: PresetsDeps): Promise<void> {

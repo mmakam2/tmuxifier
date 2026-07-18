@@ -10,6 +10,8 @@ import { createFleetScriptEditor } from './fleetEditor';
 import { createFleetPoller } from './fleetPoll';
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { closeAllModals } from './modalRegistry';
+import { openModal, makeRadio } from './dom';
+import { createSetupJobPoller } from './setupPoller';
 import logoUrl from './assets/tmuxifier-logo.png';
 import { openProxmoxHub } from './proxmoxUi';
 import { pve } from './proxmox';
@@ -883,8 +885,6 @@ async function openLocalShellEditModal() {
   let currentShell = 'none';
   try { currentShell = (await api.getLocalShell()).shell; } catch {}
 
-  const backdrop = document.createElement('div');
-  backdrop.className = 'modal-backdrop';
   const form = document.createElement('form');
   form.className = 'modal';
 
@@ -898,24 +898,11 @@ async function openLocalShellEditModal() {
   shellLegend.textContent = 'Shell framework';
   shellGroup.append(shellLegend);
 
-  function makeRadio(value: string, label: string) {
-    const wrap = document.createElement('label');
-    wrap.className = 'check-field';
-    const input = document.createElement('input');
-    input.type = 'radio';
-    input.name = 'localShellFramework';
-    input.value = value;
-    input.checked = currentShell === value
-      || (value === 'none' && !['none', 'omz', 'omb'].includes(currentShell));
-    const span = document.createElement('span');
-    span.textContent = label;
-    wrap.append(input, span);
-    return { wrap, input };
-  }
-
-  const shellNone = makeRadio('none', 'None');
-  const shellZsh = makeRadio('omz', 'Oh My Zsh');
-  const shellBash = makeRadio('omb', 'Oh My Bash');
+  const isShell = (v: string) => currentShell === v
+    || (v === 'none' && !['none', 'omz', 'omb'].includes(currentShell));
+  const shellNone = makeRadio('localShellFramework', 'none', 'None', isShell('none'));
+  const shellZsh = makeRadio('localShellFramework', 'omz', 'Oh My Zsh', isShell('omz'));
+  const shellBash = makeRadio('localShellFramework', 'omb', 'Oh My Bash', isShell('omb'));
   shellGroup.append(shellNone.wrap, shellZsh.wrap, shellBash.wrap);
 
   const err = document.createElement('p');
@@ -931,20 +918,8 @@ async function openLocalShellEditModal() {
   actions.append(cancel, submit);
 
   form.append(title, shellGroup, err, actions);
-  backdrop.appendChild(form);
-  app.appendChild(backdrop);
-
-  function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
-  function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); }
-  document.addEventListener('keydown', onKey);
+  const { close } = openModal({ modal: form, mount: app });
   cancel.addEventListener('click', close);
-  // Only close on a genuine backdrop click. A text selection that starts inside
-  // an input and ends on the backdrop produces a click whose target is the
-  // backdrop (the common ancestor), which would otherwise close the modal — so
-  // require the press to have started on the backdrop too.
-  let pressedOnBackdrop = false;
-  backdrop.addEventListener('mousedown', (e) => { pressedOnBackdrop = e.target === backdrop; });
-  backdrop.addEventListener('click', (e) => { if (e.target === backdrop && pressedOnBackdrop) close(); });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1006,14 +981,31 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
   actions.className = 'modal-actions';
   container.append(log, actions);
 
-  let stopped = false;
-  let pollTimer: number | undefined;
+  let currentJobId: string | null = null;
+  let autoCloseTimer: number | undefined;
   // One interactive session at a time: a second "Finish interactively" click
   // must not start a concurrent setup script run on the same box.
   const interactive = createInteractiveLauncher<ReturnType<typeof openProvisionTerminal>>();
+  // Shared poll loop (setupPoller.ts); the onJob policy below renders this
+  // panel's chrome and decides the cadence per status.
+  const poller = createSetupJobPoller<SetupJob>({
+    fetchJob: () => api.getSetup(currentJobId!),
+    onJob: (job) => {
+      if (!job) return 1500; // transient fetch error — keep trying
+      status.textContent = setupStatusText(job);
+      status.className = 'provision-status' + (job.status === 'done' ? ' success' : (job.status === 'error' || job.status === 'interrupted' || job.status === 'needs-interactive') ? ' error' : '');
+      log.textContent = job.log || '';
+      log.scrollTop = log.scrollHeight;
+      renderActions(job.status);
+      if (job.status === 'running') return 1500;
+      if (job.status === 'done') { refresh(); autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), 2000); return null; }
+      if (job.status === 'needs-interactive') return 2500;
+      return null; // error / interrupted: terminal for this run — Retry/Remove/Close cover it
+    },
+  });
   const stop = () => {
-    stopped = true;
-    if (pollTimer) clearTimeout(pollTimer);
+    poller.stop();
+    if (autoCloseTimer) clearTimeout(autoCloseTimer);
     // Disposes a live interactive session; no-op when its own onComplete
     // already ran. Only matters if the panel is closed mid-session.
     interactive.stop();
@@ -1059,26 +1051,11 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
     }));
   }
 
-  async function poll(id: string) {
-    if (stopped) return;
-    let job: SetupJob;
-    try { job = await api.getSetup(id); } catch { pollTimer = window.setTimeout(() => poll(id), 1500); return; }
-    if (stopped) return;
-    status.textContent = setupStatusText(job);
-    status.className = 'provision-status' + (job.status === 'done' ? ' success' : (job.status === 'error' || job.status === 'interrupted' || job.status === 'needs-interactive') ? ' error' : '');
-    log.textContent = job.log || '';
-    log.scrollTop = log.scrollHeight;
-    renderActions(job.status);
-    if (job.status === 'running') { pollTimer = window.setTimeout(() => poll(id), 1500); return; }
-    if (job.status === 'done') { refresh(); pollTimer = window.setTimeout(() => closeProvisionPanel(), 2000); }
-    else if (job.status === 'needs-interactive') { pollTimer = window.setTimeout(() => poll(id), 2500); }
-    // error / interrupted: terminal for this run — Retry/Remove/Close cover it, no further polling.
-  }
-
   async function begin() {
     try {
       const s = await api.startSetup(box.id, opts);
-      void poll(s.id);
+      currentJobId = s.id;
+      poller.start();
     } catch (e) {
       status.textContent = e instanceof Error ? e.message : 'Failed to start setup';
       status.className = 'provision-status error';
@@ -1212,20 +1189,6 @@ function openBoxDialog(box?: Box) {
   shellLegend.textContent = 'Shell framework';
   shellGroup.append(shellLegend);
 
-  function makeRadio(name: string, value: string, label: string, defaultChecked: boolean) {
-    const wrap = document.createElement('label');
-    wrap.className = 'check-field';
-    const input = document.createElement('input');
-    input.type = 'radio';
-    input.name = name;
-    input.value = value;
-    input.checked = defaultChecked;
-    const span = document.createElement('span');
-    span.textContent = label;
-    wrap.append(input, span);
-    return { wrap, input };
-  }
-
   const shellNone = makeRadio('shellFramework', 'none', 'None', true);
   const shellZsh = makeRadio('shellFramework', 'omz', 'Install Oh My Zsh if missing', false);
   const shellBash = makeRadio('shellFramework', 'omb', 'Install Oh My Bash if missing', false);
@@ -1234,8 +1197,6 @@ function openBoxDialog(box?: Box) {
 
   const toolsGroup = toolsCheckboxGroup();
 
-  const backdrop = document.createElement('div');
-  backdrop.className = 'modal-backdrop';
   const form = document.createElement('form');
   form.className = 'modal box-modal';
   const title = document.createElement('h2');
@@ -1316,21 +1277,9 @@ function openBoxDialog(box?: Box) {
     shellNone.input.checked = true;
   }
 
-  backdrop.appendChild(form);
-  app.appendChild(backdrop);
+  const { close } = openModal({ modal: form, mount: app });
   fields.host.focus();
-
-  function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
-  function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); }
-  document.addEventListener('keydown', onKey);
   cancel.addEventListener('click', close);
-  // Only close on a genuine backdrop click. A text selection that starts inside
-  // an input and ends on the backdrop produces a click whose target is the
-  // backdrop (the common ancestor), which would otherwise close the modal — so
-  // require the press to have started on the backdrop too.
-  let pressedOnBackdrop = false;
-  backdrop.addEventListener('mousedown', (e) => { pressedOnBackdrop = e.target === backdrop; });
-  backdrop.addEventListener('click', (e) => { if (e.target === backdrop && pressedOnBackdrop) close(); });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1504,8 +1453,6 @@ function syncFleetUI() {
 }
 
 function openFleetConfirm(command: string, targets: { id: string; label: string }[]) {
-  const backdrop = document.createElement('div');
-  backdrop.className = 'modal-backdrop';
   const form = document.createElement('form');
   form.className = 'modal fleet-confirm';
 
@@ -1533,16 +1480,8 @@ function openFleetConfirm(command: string, targets: { id: string; label: string 
   actions.append(cancel, confirm);
 
   form.append(title, cmd, targetList, err, actions);
-  backdrop.appendChild(form);
-  app.appendChild(backdrop);
-
-  function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
-  function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); }
-  document.addEventListener('keydown', onKey);
+  const { close } = openModal({ modal: form, mount: app });
   cancel.addEventListener('click', close);
-  let pressedOnBackdrop = false;
-  backdrop.addEventListener('mousedown', (e) => { pressedOnBackdrop = e.target === backdrop; });
-  backdrop.addEventListener('click', (e) => { if (e.target === backdrop && pressedOnBackdrop) close(); });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1563,8 +1502,6 @@ function openFleetConfirm(command: string, targets: { id: string; label: string 
 // executed by each box's login shell, so newlines run exactly like a local
 // script. Doubles as the confirm step — its Run button creates the job directly.
 function openFleetScriptEditor(initial: string, targets: { id: string; label: string }[]) {
-  const backdrop = document.createElement('div');
-  backdrop.className = 'modal-backdrop';
   const form = document.createElement('form');
   form.className = 'modal fleet-script-modal';
 
@@ -1600,8 +1537,13 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
   actions.append(cancel, runBtn);
 
   form.append(title, hint, editorHost, targetList, err, actions);
-  backdrop.appendChild(form);
-  app.appendChild(backdrop);
+  // closeOnEscape off: while the editor has focus its own keymap owns Escape
+  // (so an open completion popup's Escape doesn't also tear down the modal);
+  // the fallback handler below covers Escape/Mod-Enter when focus is elsewhere.
+  const { close } = openModal({
+    modal: form, mount: app, closeOnEscape: false,
+    onClose: () => { document.removeEventListener('keydown', onKey); cm.destroy(); },
+  });
 
   // CodeMirror handles its own Mod-Enter (run) / Escape (close) while focused;
   // onChange persists the in-progress script so reopening restores it (cleared
@@ -1625,12 +1567,8 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
     if (e.key === 'Escape') close();
     else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); form.requestSubmit(); }
   }
-  function close() { document.removeEventListener('keydown', onKey); cm.destroy(); backdrop.remove(); }
   document.addEventListener('keydown', onKey);
   cancel.addEventListener('click', close);
-  let pressedOnBackdrop = false;
-  backdrop.addEventListener('mousedown', (e) => { pressedOnBackdrop = e.target === backdrop; });
-  backdrop.addEventListener('click', (e) => { if (e.target === backdrop && pressedOnBackdrop) close(); });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();

@@ -1,5 +1,5 @@
 import { pve, type LifecycleAction, type PveContainerState, type PveLinkedContainer } from './proxmox';
-import { el, err, input } from './dom';
+import { el, err, input, openModal } from './dom';
 
 export function actionsForState(state: PveContainerState): LifecycleAction[] {
   if (state === 'running') return ['shutdown', 'stop', 'reboot', 'deprovision'];
@@ -18,17 +18,11 @@ export function containerMatches(container: PveLinkedContainer, term: string): b
 }
 
 function openDeprovisionDialog(container: PveLinkedContainer, onConfirm: (name: string) => Promise<void>) {
-  const backdrop = el('div', { class: 'modal-backdrop' });
   const modal = el('form', { class: 'modal pve-deprovision-modal' });
   const typed = input('', { autocomplete: 'off' });
   const submit = el('button', { type: 'submit', class: 'pve-primary', disabled: true }, ['Deprovision']);
   const errorLine = el('div', { class: 'pve-err' });
-  const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
-  const close = () => { document.removeEventListener('keydown', onKeyDown); backdrop.remove(); };
-  let pressedOnBackdrop = false;
-  backdrop.addEventListener('mousedown', (event) => { pressedOnBackdrop = event.target === backdrop; });
-  backdrop.addEventListener('click', (event) => { if (pressedOnBackdrop && event.target === backdrop) close(); });
-  document.addEventListener('keydown', onKeyDown);
+  const { close } = openModal({ modal });
   typed.addEventListener('input', () => { submit.disabled = typed.value !== container.boxLabel; });
   modal.addEventListener('submit', async (event) => {
     event.preventDefault(); submit.disabled = true; errorLine.textContent = '';
@@ -45,7 +39,7 @@ function openDeprovisionDialog(container: PveLinkedContainer, onConfirm: (name: 
     errorLine,
     el('div', { class: 'modal-actions' }, [el('button', { type: 'button', onclick: close }, ['Cancel']), submit]),
   );
-  backdrop.append(modal); document.body.append(backdrop); typed.focus();
+  typed.focus();
 }
 
 export async function renderContainersTab(content: HTMLElement, deps: {

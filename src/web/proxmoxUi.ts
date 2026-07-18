@@ -1,7 +1,7 @@
 import { api, type Box } from './api';
 import { pve, type PvePreset, type ProvisionStatus } from './proxmox';
 import { openProvisionTerminal } from './terminal';
-import { el, input, field, err } from './dom';
+import { el, input, field, err, openModal } from './dom';
 import { openSettingsModal } from './settingsUi';
 import { renderPresetsTab } from './proxmoxPresets';
 import { renderContainersTab } from './proxmoxContainers';
@@ -10,6 +10,7 @@ import { toolsCheckboxGroup } from './provisionTools';
 import { setupStatusText } from './setupStatus';
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { registerModal } from './modalRegistry';
+import { createSetupJobPoller } from './setupPoller';
 
 type SetupOptions = { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[] };
 
@@ -27,23 +28,18 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
   let pollGen = 0;
   // One interactive setup session at a time (same rule as the provision panel).
   const setupLauncher = createInteractiveLauncher<{ dispose: () => void }>();
-  const stopPoll = () => { pollGen++; if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } setupLauncher.stop(); };
+  let setupPoller: { start: () => void; stop: () => void } | null = null;
+  const stopPoll = () => { pollGen++; if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } setupPoller?.stop(); setupPoller = null; setupLauncher.stop(); };
 
-  const backdrop = el('div', { class: 'modal-backdrop' });
   const modal = el('div', { class: 'modal pve-hub' });
   const tabStrip = el('div', { class: 'pve-tabs' });
   const content = el('div', { class: 'pve-content' });
-  const close = () => { unregister(); stopPoll(); backdrop.remove(); };
+  // openModal also gives the hub Escape-to-close, which its hand-rolled
+  // scaffold had drifted away from.
+  const { close } = openModal({ modal, onClose: () => { unregister(); stopPoll(); } });
   // Body-mounted: register so logout/session-expiry teardown can close the hub
   // (it survives the #app re-render and its pollers would run forever).
   const unregister = registerModal(close);
-  // Only close on a genuine backdrop click. A text selection that starts inside the modal
-  // and ends on the backdrop produces a click whose target is the backdrop (the common
-  // ancestor), which would otherwise close the modal — so require the press to have
-  // started on the backdrop too (matches the box/fleet modals in main.ts).
-  let pressedOnBackdrop = false;
-  backdrop.addEventListener('mousedown', (e) => { pressedOnBackdrop = e.target === backdrop; });
-  backdrop.addEventListener('click', (e) => { if (e.target === backdrop && pressedOnBackdrop) close(); });
 
   let active: Tab = initial.tab ?? 'Containers';
   const renderers: Record<Tab, () => Promise<void> | void> = {
@@ -63,8 +59,6 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
     el('div', { class: 'pve-head' }, [el('h2', {}, ['Proxmox']), el('button', { type: 'button', class: 'pve-close', title: 'Close', onclick: close }, ['✕'])]),
     tabStrip, content,
   );
-  backdrop.append(modal);
-  document.body.append(backdrop);
   selectTab(active);
 
   function setContent(...nodes: (Node | string)[]) { content.replaceChildren(...nodes); }
@@ -158,32 +152,36 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
       const setupLog = el('pre', { class: 'pve-log' });
       setupArea.replaceChildren(setupLog);
 
-      async function tickSetup() {
-        if (myGen !== pollGen) return;
-        const job = await api.getBoxSetup(boxId).catch(() => null);
-        if (myGen !== pollGen) return;
-        if (!job) { pollTimer = window.setTimeout(tickSetup, 1500); return; }
-        phase.textContent = `vmid ${vmid ?? ''} · ${setupStatusText(job)}`;
-        setupLog.textContent = job.log || '';
-        setupLog.scrollTop = setupLog.scrollHeight;
-        if (job.status === 'running') { pollTimer = window.setTimeout(tickSetup, 1500); return; }
-        opts.onBoxLinked();
-        footer.replaceChildren();
-        if (job.status === 'needs-interactive') {
-          const finishBtn = el('button', { type: 'button', class: 'pve-primary' }, ['Finish interactively']) as HTMLButtonElement;
-          finishBtn.disabled = setupLauncher.active();
-          finishBtn.onclick = () => {
-            if (setupLauncher.active()) return;
-            finishBtn.disabled = true;
-            const term = el('div', {}); (term as HTMLElement).style.height = '320px'; setupArea.append(term);
-            setupLauncher.launch(() => openProvisionTerminal(term as HTMLElement, boxId, job.options, () => { setupLauncher.done(); void tickSetup(); }));
-          };
-          footer.append(finishBtn, openTerminalBtn(boxId));
-        } else {
-          footer.append(openTerminalBtn(boxId));
-        }
-      }
-      void tickSetup();
+      // Shared poll loop (setupPoller.ts); the policy renders this tab's chrome.
+      setupPoller?.stop();
+      const poller = createSetupJobPoller<import('./api').SetupJob>({
+        fetchJob: () => api.getBoxSetup(boxId),
+        onJob: (job) => {
+          if (!job) return 1500; // job not discovered yet / transient fetch error
+          phase.textContent = `vmid ${vmid ?? ''} · ${setupStatusText(job)}`;
+          setupLog.textContent = job.log || '';
+          setupLog.scrollTop = setupLog.scrollHeight;
+          if (job.status === 'running') return 1500;
+          opts.onBoxLinked();
+          footer.replaceChildren();
+          if (job.status === 'needs-interactive') {
+            const finishBtn = el('button', { type: 'button', class: 'pve-primary' }, ['Finish interactively']) as HTMLButtonElement;
+            finishBtn.disabled = setupLauncher.active();
+            finishBtn.onclick = () => {
+              if (setupLauncher.active()) return;
+              finishBtn.disabled = true;
+              const term = el('div', {}); (term as HTMLElement).style.height = '320px'; setupArea.append(term);
+              setupLauncher.launch(() => openProvisionTerminal(term as HTMLElement, boxId, job.options, () => { setupLauncher.done(); poller.start(); }));
+            };
+            footer.append(finishBtn, openTerminalBtn(boxId));
+          } else {
+            footer.append(openTerminalBtn(boxId));
+          }
+          return null; // settled — the interactive fallback re-enters via poller.start()
+        },
+      });
+      setupPoller = poller;
+      poller.start();
     }
 
     const RUNNING: ProvisionStatus[] = ['running'];

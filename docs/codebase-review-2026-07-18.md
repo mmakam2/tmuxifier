@@ -17,6 +17,16 @@ folded in below with their old IDs noted.
 > note under this header describing the batch — the same convention
 > `codebase-review-2026-07-04.md` uses.
 
+**Status note, 2026-07-18 (batch 6, v1.7.9): the board is clear — all 57 findings are
+resolved.** C2 (the modal scaffold — backdrop, genuine-backdrop-click guard, Escape, one
+idempotent teardown — lives once as `openModal` in dom.ts; all eight call sites migrated, and
+the two drifted copies that lacked Escape-to-close, the Proxmox hub and the add-disk dialog,
+now have it; `makeRadio` is also shared). C3 (both setup-job viewers poll through a shared
+generation-guarded loop in `setupPoller.ts` — the rendering chrome stays per-surface, the
+injected policy returns the next delay or null to stop; the timer/generation bookkeeping the
+two copies had each hand-rolled, and where B9-class races breed, exists once and is unit
+tested). Suite: 875/875; e2e 12/12.
+
 **Status note, 2026-07-18 (batch 5, v1.7.8):** B4 plus the server-side consolidation set.
 B4 (every `boxes.json` mutation is serialized through a per-store promise queue — the RED test
 lost 7 of 8 concurrent writes before the fix). Consolidation: C1 (the four byte-identical
@@ -157,8 +167,8 @@ explanation in the sections that follow the tables.
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
 | C1 | stores | Four store modules (`fleetStore`, `setupStore`, `provisionStore`, `proxmoxLifecycleStore`) are byte-for-byte copies of each other | Med | M | Extract a shared `createDebouncedJsonStore({ dataDir, filename })` factory; each store becomes a one-line wrapper | ✅ v1.7.8 |
-| C2 | web | The modal scaffold (backdrop, click guard, Escape handling, teardown) is copy-pasted eight times and has already drifted — two copies lack Escape handling; `makeRadio` is duplicated too | Med | M | Add an `openModal({ onClose })` helper to `dom.ts` and migrate the eight call sites | Open |
-| C3 | web | Two parallel setup-job viewers (the provision panel and the Proxmox hub) re-implement the same poll/render/interactive-fallback state machine | Low | M | Extract one shared setup-job viewer module used by both | Open |
+| C2 | web | The modal scaffold (backdrop, click guard, Escape handling, teardown) is copy-pasted eight times and has already drifted — two copies lack Escape handling; `makeRadio` is duplicated too | Med | M | Add an `openModal({ onClose })` helper to `dom.ts` and migrate the eight call sites | ✅ v1.7.9 |
+| C3 | web | Two parallel setup-job viewers (the provision panel and the Proxmox hub) re-implement the same poll/render/interactive-fallback state machine | Low | M | Extract one shared setup-job viewer module used by both | ✅ v1.7.9 |
 | C4 | proxmox | The PVE task-polling loop and job-manager scaffolding are duplicated between the provision and lifecycle managers | Low | M | Extract a shared `pollPveTask` helper | ✅ v1.7.8 |
 | C5 | tls | The pinned-connection wiring is duplicated verbatim between the Proxmox and NetBox HTTP clients | Low | S | Export a `pinnedConnectionFactory` helper from `tlsPin.js` and use it in both | ✅ v1.7.8 |
 | C6 | proxmox | `proxmoxApi.js` re-implements endpoint host/port parsing twice instead of reusing the existing `parseEndpoint` | Low | S | Import and reuse `parseEndpoint` from `proxmoxValidate.js` | ✅ v1.7.8 |
