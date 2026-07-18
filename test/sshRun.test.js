@@ -64,3 +64,30 @@ test('sshStream kill() terminates the child', async () => {
   h.kill();
   expect((await h.done).code).not.toBe(0);
 });
+
+// A multi-byte UTF-8 character split across two pipe chunks must decode
+// intact — per-chunk Buffer→string conversion turns the split glyph into
+// replacement characters (installer progress bars hit this constantly).
+test('decodes UTF-8 split across chunk boundaries without mojibake', async () => {
+  // ✓ is U+2713 = e2 9c 93; flush mid-character to force a chunk split.
+  const script = "printf '\\342\\234'; sleep 0.05; printf '\\223\\n'";
+  const res = await sshRunStdin(['-c', script], '', { cmd: '/bin/sh', timeout: 10000 });
+  expect(res.code).toBe(0);
+  expect(res.stdout).toContain('✓');
+  expect(res.stdout).not.toContain('�');
+});
+
+// A killed-by-timeout ssh must not read as "the remote command exited 1" —
+// resolve 124 (the shell timeout convention sshRunStdin already uses).
+test('sshRun resolves code 124 with timedOut set when killed by its timeout', async () => {
+  const { sshRun } = await import('../src/server/sshRun.js');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-sshrun-t-'));
+  const shim = path.join(dir, 'ssh');
+  await fs.writeFile(shim, '#!/bin/sh\nsleep 5\n', { mode: 0o755 });
+  // Shim dir first so `ssh` resolves to it; system dirs kept so the shim's
+  // own `sleep` still resolves.
+  const res = await sshRun(['whatever'], { env: { PATH: `${dir}:/usr/bin:/bin` }, timeout: 200 });
+  expect(res.code).toBe(124);
+  expect(res.timedOut).toBe(true);
+  await fs.rm(dir, { recursive: true, force: true });
+});

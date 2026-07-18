@@ -254,3 +254,12 @@ test('setProxmoxLink can move an existing link to a new node, preserving vmid/ho
   const reloaded = (await createStore({ dataDir: dir }).getBox(box.id));
   expect(reloaded.proxmox).toEqual({ hostId: 'H1', node: 'pve2', vmid: 131, endpoint: 'pve.example.com:8006' });
 });
+
+test('an explicit null label clears back to the host default', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-store-lbl-'));
+  const store = createStore({ dataDir: dir });
+  const b = await store.addBox({ host: '192.168.1.10', user: 'root', label: 'friendly' });
+  const updated = await store.updateBox(b.id, { label: null });
+  expect(updated.label).toBe('192.168.1.10');
+  await fs.rm(dir, { recursive: true, force: true });
+});

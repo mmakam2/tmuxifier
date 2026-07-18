@@ -75,3 +75,10 @@ test('upsertEnvFile tightens permissions on an already-existing loose file', () 
   upsertEnvFile(file, { FOO: 'baz' });
   expect(fs.statSync(file).mode & 0o777).toBe(0o600);
 });
+
+test('an unquoted inline # comment is stripped from the value', () => {
+  const parsed = parseEnvFile('TMUXIFIER_PORT=8080 # dashboard port\nX=plain#nothash\nY="quoted # kept"');
+  expect(parsed.TMUXIFIER_PORT).toBe('8080');
+  expect(parsed.X).toBe('plain#nothash'); // no space before # — part of the value
+  expect(parsed.Y).toBe('quoted # kept'); // quoted values keep everything
+});

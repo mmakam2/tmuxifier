@@ -365,7 +365,9 @@ async function pollStatus() {
       }
       if (selected && status[selected.id]?.proxmoxState === 'stopped') {
         showStoppedBox(selected);
-      } else {
+      } else if (!selected || status[selected.id]?.proxmoxState !== 'unknown') {
+        // 'unknown' means the PVE read failed or is stale — it must never be
+        // read as "the container started", so keep the stopped panel up.
         const stage = app.querySelector('#stage') as HTMLElement;
         const stoppedPanel = stage.querySelector('.stopped-box-state');
         if (stoppedPanel) {
@@ -555,8 +557,9 @@ async function renderDashboard() {
 async function refresh() {
   const list = app.querySelector('#boxes'); if (!list) return;
   allBoxes = await api.boxes();
-  latestStatus = {};
-  latestSetups = [];
+  // Keep the previous status/setup caches until fresh responses land — wiping
+  // them here flashed every dot gray and dropped setup badges on each add/
+  // edit/remove/import.
   api.status().then((s) => { latestStatus = s; filterAndPaint(); }).catch(() => {});
   api.listSetups().then((s) => { latestSetups = s; filterAndPaint(); }).catch(() => {});
   filterAndPaint();

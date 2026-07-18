@@ -47,10 +47,16 @@ export function sessionValue(now = Date.now()) {
   return `ok.${Math.floor(now / 1000)}`;
 }
 
-export function sessionValueValid(value, now = Date.now()) {
+export function sessionValueValid(value, now = Date.now(), { notBeforeMs = 0 } = {}) {
   const m = /^ok\.(\d{1,12})$/.exec(String(value ?? ''));
   if (!m) return false; // includes the legacy constant 'ok' — re-login once
-  const ageSeconds = Math.floor(now / 1000) - Number(m[1]);
+  const issuedSeconds = Number(m[1]);
+  // Server-side revocation watermark: logout advances it, so a cookie captured
+  // before the logout stops validating even though it is stateless. Compared
+  // at second granularity (the value's resolution), so a re-login in the same
+  // second as the logout still works.
+  if (notBeforeMs && issuedSeconds < Math.floor(notBeforeMs / 1000)) return false;
+  const ageSeconds = Math.floor(now / 1000) - issuedSeconds;
   return ageSeconds >= -CLOCK_SKEW_SECONDS && ageSeconds <= SESSION_TTL_SECONDS;
 }
 

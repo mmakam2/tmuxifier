@@ -67,3 +67,11 @@ test('a far-future session value is rejected (beyond clock-skew allowance)', () 
 test('cookie maxAge matches the server-side session TTL', () => {
   expect(cookieOptions(true).maxAge).toBe(SESSION_TTL_SECONDS);
 });
+
+test('a cookie issued before the invalidation watermark is rejected (logout revocation)', () => {
+  const v = sessionValue(1_000_000_000_000);
+  expect(sessionValueValid(v, 1_000_000_100_000)).toBe(true);
+  expect(sessionValueValid(v, 1_000_000_100_000, { notBeforeMs: 1_000_000_050_000 })).toBe(false);
+  const fresh = sessionValue(1_000_000_060_000);
+  expect(sessionValueValid(fresh, 1_000_000_100_000, { notBeforeMs: 1_000_000_050_000 })).toBe(true);
+});

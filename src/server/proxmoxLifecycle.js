@@ -114,9 +114,13 @@ export function createProxmoxLifecycleManager({
     const hostIp = isIP(String(box?.host || '')) ? box.host : null;
     if ((!ipId && !hostIp) || !netboxStore) return;
     let settings = null;
-    try { settings = await netboxStore.getSettings({ withSecret: true }); } catch { settings = null; }
+    let readError = null;
+    try { settings = await netboxStore.getSettings({ withSecret: true }); } catch (e) { readError = e?.message || String(e); }
     if (!settings) {
-      if (ipId) { appendLog(job, `# could not release NetBox ip ${ipId}: NetBox integration not configured\n`); persist(); }
+      // Distinguish "never configured" from a real read/decrypt failure — the
+      // latter means an allocated IP was NOT released for a fixable reason.
+      const why = readError ? `settings could not be read: ${readError}` : 'NetBox integration not configured';
+      if (ipId) { appendLog(job, `# could not release NetBox ip ${ipId}: ${why}\n`); persist(); }
       return;
     }
     const client = makeNetboxClient(settings);

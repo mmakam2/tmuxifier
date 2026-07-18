@@ -18,12 +18,48 @@ export function writeCredentials(file, hash, { makeSecret = () => randomBytes(32
   return { wroteSecret };
 }
 
+// Prompt without echoing: raw-mode TTY reads keep the password off the screen
+// (the plain readline prompt echoed it). Non-TTY stdin (pipes, CI) falls back
+// to a normal line read.
+async function promptHidden(question) {
+  if (!process.stdin.isTTY) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const value = await rl.question(question);
+    rl.close();
+    return value;
+  }
+  return new Promise((resolve) => {
+    process.stdout.write(question);
+    const { stdin } = process;
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding('utf8');
+    let buf = '';
+    const onData = (ch) => {
+      if (ch === '\r' || ch === '\n' || ch === '') {
+        stdin.setRawMode(false); stdin.pause(); stdin.off('data', onData);
+        process.stdout.write('\n');
+        resolve(buf);
+      } else if (ch === '') { // Ctrl-C
+        stdin.setRawMode(false);
+        process.stdout.write('\n');
+        process.exit(130);
+      } else if (ch === '' || ch === '\b') {
+        buf = buf.slice(0, -1);
+      } else {
+        buf += ch;
+      }
+    };
+    stdin.on('data', onData);
+  });
+}
+
 async function main() {
   let password = process.argv[2];
-  if (!password) {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    password = await rl.question('New Tmuxifier password: ');
-    rl.close();
+  if (password) {
+    console.error('Warning: passing the password as an argument exposes it in shell history and `ps`; run without arguments to be prompted instead.');
+  } else {
+    password = await promptHidden('New Tmuxifier password: ');
   }
   const hash = await hashPassword(password);
   const envFile = path.join(process.cwd(), '.env');

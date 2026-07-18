@@ -167,3 +167,13 @@ test('classifyTransitions emits key-changed on the falling edge and within-down 
   r = classifyTransitions({ t: 0, up: false, keyChanged: true }, { t: 1, up: false }, thresholds, initThresholdState());
   expect(r.events).toEqual([{ kind: 'down' }]);
 });
+
+test('one record() pass saves the events log once, not once per event', () => {
+  let saves = 0;
+  const h = createHealthHistory({ maxSamples: 10, maxEvents: 100, thresholds: TH, load: () => [], save: () => { saves += 1; } });
+  const boxes = [{ id: 'a', host: 'a' }, { id: 'b', host: 'b' }];
+  h.record({ a: { reachable: true }, b: { reachable: true } }, boxes); // seed, no events
+  const before = saves;
+  h.record({ a: { reachable: false, error: 'x' }, b: { reachable: false, error: 'x' } }, boxes); // two down events
+  expect(saves - before).toBe(1);
+});

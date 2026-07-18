@@ -69,7 +69,10 @@ const AUTH_FAIL_RE = /permission denied|authentication failed|too many authentic
 // only auto-accepts unknown hosts). Typical after a NetBox-recycled IP lands
 // on a rebuilt container. Distinguished so the UI can offer an explicit
 // "Forget host key" action instead of a generic red dot.
-const HOSTKEY_CHANGE_RE = /remote host identification has changed|host key verification failed/i;
+// Only the explicit changed-key banner. A bare "Host key verification failed"
+// also appears when a proxyJump box's JUMP host key fails — classifying that
+// as hostKeyChanged would point the ⚷ forget-key action at the wrong host.
+const HOSTKEY_CHANGE_RE = /remote host identification has changed/i;
 
 // ssh prints this to stderr when it finds a leftover control socket it can't use
 // as a master and falls back to a direct connection. The orphan file then keeps
@@ -238,6 +241,13 @@ export function createStatusChecker({
     },
     resetBackoff(box) {
       backoff.delete(typeof box === 'string' ? box : keyFor(box));
+    },
+    // Box removed: drop its per-box state so the maps don't grow forever
+    // (ids are UUIDs, so a removed box's entries could never be reused).
+    forgetBox(box) {
+      const key = typeof box === 'string' ? box : keyFor(box);
+      backoff.delete(key);
+      cpuPrev.delete(key);
     },
   };
 }

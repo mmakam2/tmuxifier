@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
+import path from 'node:path';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
@@ -10,6 +11,7 @@ import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
 import { buildEnsureTmuxRemote, resolveTools } from './boxActions.js';
 import { assertBoxSafe } from './sshCommand.js';
 import { upsertConfigFile } from './configFile.js';
+import { readJsonSync, writeJsonSync } from './jsonFile.js';
 import { mapWithConcurrency } from './concurrency.js';
 import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
 import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js';
@@ -128,19 +130,33 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
       if (!reply.hasHeader(name)) reply.header(name, value);
     }
-    if (String(config.publicUrl || '').toLowerCase().startsWith('https://')) {
+    // Same predicate as the Secure cookie flag: local TLS counts, not only an
+    // https external URL — the self-hosted TLS mode the docs recommend was the
+    // one deployment NOT getting HSTS.
+    if (config.secureCookie || String(config.publicUrl || '').toLowerCase().startsWith('https://')) {
       reply.header('strict-transport-security', 'max-age=31536000; includeSubDomains');
     }
     if (req.raw.url?.startsWith('/api/')) reply.header('cache-control', 'no-store');
     return payload;
   });
 
+  // Server-side session revocation: logout advances this watermark, and any
+  // cookie issued before it is rejected — so a captured cookie actually dies
+  // on logout instead of staying valid for the rest of its 7-day TTL.
+  // Persisted under data/ so it survives restarts.
+  const authStateFile = path.join(config.dataDir || '.', 'auth-state.json');
+  let sessionsInvalidBeforeMs = 0;
+  try {
+    const st = readJsonSync(authStateFile, { fallback: null, validate: (v) => !!v && typeof v === 'object' });
+    sessionsInvalidBeforeMs = Number(st?.sessionsInvalidBeforeMs) || 0;
+  } catch { sessionsInvalidBeforeMs = 0; }
+
   function isAuthed(req) {
     // Primary: use req.cookies if populated (normal case)
     const raw = req.cookies?.[COOKIE_NAME];
     if (raw) {
       const r = app.unsignCookie(raw);
-      return r.valid && sessionValueValid(r.value);
+      return r.valid && sessionValueValid(r.value, Date.now(), { notBeforeMs: sessionsInvalidBeforeMs });
     }
     // Fallback: parse the cookie header manually. Under @fastify/websocket v10
     // this WAS the WebSocket-upgrade path (req.cookies stayed empty there);
@@ -161,7 +177,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         let value;
         try { value = decodeURIComponent(trimmed.slice(eqIdx + 1).trim()); } catch { return false; }
         const r = app.unsignCookie(value);
-        return r.valid && sessionValueValid(r.value);
+        return r.valid && sessionValueValid(r.value, Date.now(), { notBeforeMs: sessionsInvalidBeforeMs });
       }
     }
     return false;
@@ -218,6 +234,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   }
 
   app.post('/api/logout', async (req, reply) => {
+    // Advance the revocation watermark so every previously issued cookie is
+    // dead server-side, not just cleared in this browser. Best-effort persist
+    // — a write failure still leaves the in-memory watermark active.
+    sessionsInvalidBeforeMs = Date.now();
+    try { writeJsonSync(authStateFile, { sessionsInvalidBeforeMs }); } catch { /* keep in-memory watermark */ }
     reply.clearCookie(COOKIE_NAME, { path: '/' });
     return { ok: true };
   });
@@ -399,8 +420,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       const group = (kind) => list.filter((s) => String(s.content || '').split(',').includes(kind));
       return { rootdir: group('rootdir'), vztmpl: group('vztmpl') };
     }));
-  app.get('/api/proxmox/hosts/:id/nodes/:node/templates', { preHandler: requireAuth }, async (req, reply) =>
-    callHost(reply, req.params.id, (c) => c.templates(req.params.node, req.query.storage)));
+  app.get('/api/proxmox/hosts/:id/nodes/:node/templates', { preHandler: requireAuth }, async (req, reply) => {
+    // Without this, a missing param builds /storage/undefined/content upstream
+    // and surfaces as a confusing PVE 502 instead of a clear client error.
+    if (!req.query.storage) return reply.code(400).send({ error: 'storage query parameter is required' });
+    return callHost(reply, req.params.id, (c) => c.templates(req.params.node, req.query.storage));
+  });
   app.get('/api/proxmox/hosts/:id/nodes/:node/bridges', { preHandler: requireAuth }, async (req, reply) =>
     callHost(reply, req.params.id, (c) => c.bridges(req.params.node)));
 

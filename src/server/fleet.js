@@ -126,7 +126,9 @@ export function createFleetManager({
           t.truncated = out.truncated || err.truncated;
           t.code = res && typeof res.code === 'number' ? res.code : null;
           t.status = t.code === 0 ? 'ok' : 'error';
-          if (t.status === 'error' && !t.error) t.error = `exited ${t.code}`;
+          // 124 is the shell timeout convention sshRun/sshRunStdin resolve on a
+          // killed-by-timeout ssh — "exited 1" used to hide timeouts entirely.
+          if (t.status === 'error' && !t.error) t.error = (res && res.timedOut) || t.code === 124 ? 'timed out' : `exited ${t.code}`;
         } catch (e) {
           t.status = 'error';
           t.code = null;
@@ -154,6 +156,7 @@ export function createFleetManager({
     async createJob({ boxIds, command }) {
       if (typeof command !== 'string' || !command.trim()) throw new Error('command is required');
       if (!Array.isArray(boxIds) || boxIds.length === 0) throw new Error('select at least one box');
+      boxIds = [...new Set(boxIds)]; // a duplicated id must not run the command twice on one box
       const boxById = new Map();
       for (const id of boxIds) {
         const box = await store.getBox(id);

@@ -133,11 +133,12 @@ export function createHealthHistory({
   const listeners = new Set();
   if (typeof onEvent === 'function') listeners.add(onEvent);
 
+  // Persistence happens once per record() pass, not here — a 30-box outage
+  // would otherwise do 30 back-to-back synchronous full-file writes.
   function emit(e) {
     e.seq = ++seq;
     events.push(e);
     while (events.length > maxEvents) events.shift();
-    save(events);
     // Phase-2 delivery seam: browser/webhook/email would subscribe here. A
     // listener error must never break the poll.
     for (const fn of listeners) { try { fn(e); } catch { /* ignore */ } }
@@ -147,6 +148,7 @@ export function createHealthHistory({
     record(snapshot, boxes) {
       const at = now();
       const present = new Set();
+      let emitted = 0;
       for (const box of boxes) {
         present.add(box.id);
         const status = snapshot[box.id];
@@ -168,8 +170,10 @@ export function createHealthHistory({
           // is persisted and re-served whole on every events poll.
           if (ev.kind === 'down' && status.error) out.reason = String(status.error).slice(0, 300);
           emit(out);
+          emitted += 1;
         }
       }
+      if (emitted) save(events);
       for (const id of [...series.keys()]) {
         if (!present.has(id)) { series.delete(id); lastSample.delete(id); threshState.delete(id); }
       }

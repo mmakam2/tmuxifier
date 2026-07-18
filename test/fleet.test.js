@@ -275,3 +275,26 @@ test('prune never evicts a still-running job (it would become invisible and unca
   await mgr._settled(running.id);
   expect(mgr.getJob(running.id).status).toBe('done');
 });
+
+test('duplicate boxIds are de-duplicated — one target, one run per box', async () => {
+  const seen = [];
+  const mgr = createFleetManager({
+    store: makeStore(BOXES),
+    execCommand: async (box) => { seen.push(box.id); return { code: 0, stdout: '', stderr: '' }; },
+  });
+  const job = await mgr.createJob({ boxIds: ['b1', 'b1', 'b2'], command: 'uptime' });
+  await mgr._settled(job.id);
+  expect(job.targets).toHaveLength(2);
+  expect(seen.sort()).toEqual(['b1', 'b2']);
+});
+
+test('an exec that timed out is labeled timed out, not exited 124', async () => {
+  const mgr = createFleetManager({
+    store: makeStore(BOXES),
+    execCommand: async () => ({ code: 124, timedOut: true, stdout: '', stderr: '' }),
+  });
+  const job = await mgr.createJob({ boxIds: ['b1'], command: 'slow' });
+  await mgr._settled(job.id);
+  expect(job.targets[0].status).toBe('error');
+  expect(job.targets[0].error).toBe('timed out');
+});

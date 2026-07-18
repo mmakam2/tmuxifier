@@ -58,3 +58,14 @@ test('isAllowed is case-insensitive and rejects unlisted addresses', () => {
   expect(g.isAllowed('bob@example.com')).toBe(false);
   expect(g.isAllowed(undefined)).toBe(false);
 });
+
+test('the token exchange carries an abort signal so a hung endpoint cannot pin the callback forever', async () => {
+  let captured;
+  const fetchImpl = async (url, opts) => {
+    captured = opts;
+    return { ok: true, json: async () => ({ id_token: 'x.' + Buffer.from(JSON.stringify({ email: 'a@b.c' })).toString('base64url') + '.y' }) };
+  };
+  const g = createGoogleAuth({ clientId: 'cid', clientSecret: 'sec', redirectUri: 'https://x/cb', fetchImpl });
+  await g.exchangeCodeForEmail({ code: 'abc', codeVerifier: 'ver' });
+  expect(captured.signal).toBeInstanceOf(AbortSignal);
+});

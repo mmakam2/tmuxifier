@@ -1,8 +1,12 @@
 import { execFile, spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 
 export function sshRun(argv, { env = process.env, timeout = 12000 } = {}) {
   return new Promise((resolve) => {
     execFile('ssh', argv, { env, timeout, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      // Killed by the timeout: resolve 124 (shell timeout convention, same as
+      // sshRunStdin) so callers can tell a timeout from a real exit 1.
+      if (err && err.killed) return resolve({ code: 124, timedOut: true, stdout, stderr });
       resolve({ code: err && typeof err.code === 'number' ? err.code : err ? 1 : 0, stdout, stderr });
     });
   });
@@ -31,8 +35,12 @@ export function sshRunStdin(argv, input, { env = process.env, timeout = 60000, c
       try { child.kill('SIGKILL'); } catch {}
       finish(124);
     }, timeout);
-    child.stdout.on('data', (d) => { if (stdout.length < MAX_CAPTURE) stdout += d; });
-    child.stderr.on('data', (d) => { if (stderr.length < MAX_CAPTURE) stderr += d; });
+    // Per-stream decoders hold a multi-byte UTF-8 character split across chunk
+    // boundaries instead of emitting replacement characters.
+    const outDec = new StringDecoder('utf8');
+    const errDec = new StringDecoder('utf8');
+    child.stdout.on('data', (d) => { if (stdout.length < MAX_CAPTURE) stdout += outDec.write(d); });
+    child.stderr.on('data', (d) => { if (stderr.length < MAX_CAPTURE) stderr += errDec.write(d); });
     child.on('error', () => finish(1));
     child.on('close', (code) => finish(typeof code === 'number' ? code : 1));
     // A child that exits before consuming stdin (auth failure, bad remote
@@ -65,8 +73,12 @@ export function sshStream(argv, { env = process.env, timeout = 600000, onData, c
     resolveDone({ code });
   };
   const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} finish(124); }, timeout);
-  child.stdout.on('data', (d) => { if (onData) onData(d.toString(), 'stdout'); });
-  child.stderr.on('data', (d) => { if (onData) onData(d.toString(), 'stderr'); });
+  // Same split-character safety as sshRunStdin: apt/npm progress output is full
+  // of multi-byte glyphs that land on chunk boundaries.
+  const outDec = new StringDecoder('utf8');
+  const errDec = new StringDecoder('utf8');
+  child.stdout.on('data', (d) => { if (onData) onData(outDec.write(d), 'stdout'); });
+  child.stderr.on('data', (d) => { if (onData) onData(errDec.write(d), 'stderr'); });
   child.on('error', () => finish(1));
   child.on('close', (code) => finish(typeof code === 'number' ? code : 1));
   return { done: donePromise, kill: () => { try { child.kill('SIGKILL'); } catch {} finish(137); } };

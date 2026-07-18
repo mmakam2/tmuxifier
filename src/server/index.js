@@ -29,7 +29,7 @@ import { createProxmoxInventory, mergeProxmoxStatus } from './proxmoxInventory.j
 import { createProxmoxLifecycleStore } from './proxmoxLifecycleStore.js';
 import { createProxmoxLifecycleManager } from './proxmoxLifecycle.js';
 import { createKnownHosts } from './knownHosts.js';
-import { readDefaultPublicKey } from './defaultKey.js';
+import { readDefaultPublicKey, createDefaultKeyProvider } from './defaultKey.js';
 import os from 'node:os';
 import { registerShutdownFlush } from './shutdown.js';
 
@@ -65,7 +65,6 @@ const setupManager = createSetupManager({
   controlDir: config.controlDir,
   controlPersist: config.controlPersist,
 });
-const removeBox = createBoxRemoval({ store, sessions, boxActions });
 const statusChecker = createStatusChecker({
   run: (argv) => sshRun(argv),
   hostKeyPolicy: config.hostKeyPolicy,
@@ -81,6 +80,7 @@ const statusChecker = createStatusChecker({
   hasLiveSession: (box) => sessions.hasLiveSession(box.id),
   masterAlive: (box) => boxActions.isMasterAlive(box),
 });
+const removeBox = createBoxRemoval({ store, sessions, boxActions, statusChecker });
 const localShellActions = createLocalShellActions();
 const fleetStore = createFleetStore({ dataDir: config.dataDir });
 const fleetManager = createFleetManager({
@@ -103,13 +103,12 @@ const netboxStore = createNetboxStore({ dataDir: config.dataDir, secretBox });
 const provisionStore = createProvisionStore({ dataDir: config.dataDir });
 const makeProxmoxClient = (host) => createProxmoxClient({ host, timeoutMs: config.pveTimeoutMs });
 // Cache the first successful read: deriving the key shells out to ssh-keygen
-// and the host key doesn't change while the server runs. A null result is NOT
-// cached, so adding a key later still gets picked up without a restart.
-let cachedDefaultKey = null;
-const defaultPublicKey = async () => {
-  if (!cachedDefaultKey) cachedDefaultKey = await readDefaultPublicKey({ configuredPath: config.pveDefaultPubKeyPath, home: os.homedir() });
-  return cachedDefaultKey;
-};
+// and the host key doesn't change while the server runs. The provider caches
+// the promise (concurrent first calls share one ssh-keygen) and drops a null
+// result, so adding a key later still gets picked up without a restart.
+const defaultPublicKey = createDefaultKeyProvider({
+  read: () => readDefaultPublicKey({ configuredPath: config.pveDefaultPubKeyPath, home: os.homedir() }),
+});
 const knownHosts = createKnownHosts();
 const provisionManager = createProvisionManager({
   proxmoxStore,

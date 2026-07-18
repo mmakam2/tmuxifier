@@ -26,8 +26,12 @@ export function createSecretBox(cookieSecret) {
       const parts = String(sealed).split(':');
       if (parts.length !== 4 || parts[0] !== SCHEME) throw new Error('unrecognized sealed secret');
       const [, ivb, ctb, tagb] = parts;
+      const tag = Buffer.from(tagb, 'base64');
+      // GCM accepts truncated tags by default, which weakens forgery
+      // resistance from 2^-128 to 2^-(8·len) — require the full 16 bytes.
+      if (tag.length !== 16) throw new Error('invalid auth tag');
       const d = createDecipheriv('aes-256-gcm', key, Buffer.from(ivb, 'base64'));
-      d.setAuthTag(Buffer.from(tagb, 'base64'));
+      d.setAuthTag(tag);
       return d.update(Buffer.from(ctb, 'base64'), undefined, 'utf8') + d.final('utf8');
     },
     isSealed(v) {

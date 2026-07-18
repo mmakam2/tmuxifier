@@ -70,3 +70,32 @@ test('ordinary box removal never touches known_hosts', async () => {
   await tick(); await tick();
   expect(calls).not.toContain('forgetHostKey');
 });
+
+test('the background master teardown is skipped when an identical box was re-added', async () => {
+  const calls = [];
+  const box = { id: 'B1', host: 'h', user: 'u', port: 22 };
+  const removeBox = createBoxRemoval({
+    store: {
+      getBox: async () => box,
+      removeBox: async () => {},
+      listBoxes: async () => [{ id: 'B2', host: 'h', user: 'u', port: 22 }],
+    },
+    sessions: { closeKey: () => {} },
+    boxActions: { killSession: async () => calls.push('kill'), exitMaster: async () => calls.push('master') },
+  });
+  await removeBox('B1');
+  await tick(); await tick();
+  expect(calls).toEqual(['kill']); // the ControlMaster now belongs to the re-added box
+});
+
+test('removal forgets the box in the status checker (backoff/cpu maps)', async () => {
+  const forgotten = [];
+  const removeBox = createBoxRemoval({
+    store: { getBox: async () => ({ id: 'B1', host: 'h' }), removeBox: async () => {} },
+    sessions: { closeKey: () => {} },
+    boxActions: {},
+    statusChecker: { forgetBox: (id) => forgotten.push(id) },
+  });
+  await removeBox('B1');
+  expect(forgotten).toEqual(['B1']);
+});

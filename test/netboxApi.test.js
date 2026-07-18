@@ -232,3 +232,17 @@ test('jsonRequest POSTs JSON with fixed Content-Length against a real local serv
     expect(JSON.parse(seen.data)).toEqual({ address: '192.168.30.50/24', status: 'active' });
   } finally { srv.close(); }
 });
+
+test('pin mode resolves TLS once per client, not one probe handshake per API call', async () => {
+  let connects = 0;
+  const client = createNetboxClient(
+    { url: 'https://netbox.example.com', tlsMode: 'pin', fingerprint256: 'AB:CD', token: 't' },
+    {
+      connect: async () => { connects += 1; return { fingerprint256: 'AB:CD' }; },
+      request: async () => ({ status: 200, json: { results: [{ id: 1, prefix: '192.168.30.0/24' }] }, text: '' }),
+    },
+  );
+  await client.findPrefixByVlan(30);
+  await client.findPrefixByVlan(30);
+  expect(connects).toBe(1);
+});

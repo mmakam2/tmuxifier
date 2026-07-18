@@ -92,6 +92,9 @@ export function createStore({ dataDir }) {
       for (const key of ['user', 'port', 'proxyJump']) {
         if (key in patch && patch[key] === null) boxes[index][key] = undefined;
       }
+      // Clearing the label falls back to the host (the addBox default) — the
+      // `spec.label || base.label` merge in normalize swallows ''/null.
+      if ('label' in patch && (patch.label === null || patch.label === '')) boxes[index].label = boxes[index].host;
       assertBoxSafe(boxes[index]);
       assertUniqueBox(boxes, boxes[index], id);
       await writeAll(boxes);
@@ -148,16 +151,24 @@ export function createStore({ dataDir }) {
           ? payload.boxes
           : null;
       if (!incoming) throw new Error('invalid box export: expected a boxes array');
+      // One read and one write for the whole batch — importing N boxes used to
+      // do N full read/validate/rewrite cycles of boxes.json.
+      const boxes = await readAll();
       const added = [];
       let skipped = 0;
       for (const spec of incoming) {
         try {
           const { id: _id, createdAt: _createdAt, source: _source, proxmox: _proxmox, ...safeSpec } = spec || {};
-          added.push(await this.addBox(safeSpec));
+          const box = normalize(safeSpec);
+          assertBoxSafe(box);
+          assertUniqueBox(boxes, box);
+          boxes.push(box);
+          added.push(box);
         } catch {
           skipped += 1; // duplicate host/label or unsafe/invalid entry
         }
       }
+      if (added.length) await writeAll(boxes);
       return { added, skipped };
     },
   };

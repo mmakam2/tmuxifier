@@ -33,3 +33,28 @@ test('returns null when no key is found', async () => {
   await expect(readDefaultPublicKey({ home: '/h', ...fakeFs({}), derivePub: async () => null })).resolves.toBeNull();
   await expect(readDefaultPublicKey({})).resolves.toBeNull();
 });
+
+test('provider caches the in-flight promise: concurrent first calls share one read', async () => {
+  const { createDefaultKeyProvider } = await import('../src/server/defaultKey.js');
+  let reads = 0; let release;
+  const gate = new Promise((r) => { release = r; });
+  const provider = createDefaultKeyProvider({ read: async () => { reads += 1; await gate; return 'ssh-ed25519 K'; } });
+  const [a, b] = [provider(), provider()];
+  release();
+  expect(await a).toBe('ssh-ed25519 K');
+  expect(await b).toBe('ssh-ed25519 K');
+  await provider();
+  expect(reads).toBe(1);
+});
+
+test('provider does not cache a null result or a rejection', async () => {
+  const { createDefaultKeyProvider } = await import('../src/server/defaultKey.js');
+  let n = 0;
+  const p1 = createDefaultKeyProvider({ read: async () => (++n === 1 ? null : 'ssh-rsa X') });
+  expect(await p1()).toBeNull();
+  expect(await p1()).toBe('ssh-rsa X');
+  let m = 0;
+  const p2 = createDefaultKeyProvider({ read: async () => { if (++m === 1) throw new Error('boom'); return 'k'; } });
+  await expect(p2()).rejects.toThrow('boom');
+  expect(await p2()).toBe('k');
+});

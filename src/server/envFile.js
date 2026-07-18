@@ -24,7 +24,13 @@ export function parseEnvFile(text) {
     if (!line.trim() || line.trim().startsWith('#')) continue;
     const m = LINE.exec(line);
     if (!m) continue;
-    out[m[1]] = unquote(m[2]);
+    const value = m[2];
+    const q = value[0];
+    const quoted = value.length >= 2 && (q === '"' || q === "'") && value[value.length - 1] === q;
+    // Unquoted values drop an inline ` # comment` (dotenv behavior) — without
+    // this, `PORT=8080 # dashboard` parses as "8080 # dashboard" and numeric
+    // knobs silently fall back to their defaults. `a#b` (no space) is kept.
+    out[m[1]] = quoted ? value.slice(1, -1) : value.replace(/\s+#.*$/, '').trimEnd();
   }
   return out;
 }

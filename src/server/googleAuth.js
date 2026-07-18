@@ -56,6 +56,9 @@ export function createGoogleAuth({ clientId, clientSecret, redirectUri, allowedE
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body: body.toString(),
+        // fetch has no default timeout — without this, a hung token endpoint
+        // pins the OAuth callback request forever.
+        signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) throw new Error(`token exchange failed: ${res.status}`);
       const data = await res.json();

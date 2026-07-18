@@ -36,3 +36,14 @@ test('writeCredentials preserves unrelated keys', () => {
   writeCredentials(file, 'HASH', { makeSecret: () => 'S' });
   expect(readEnvFile(file).TMUXIFIER_PORT).toBe('9000');
 });
+
+test('passing the password via argv still works but warns about shell history/ps exposure', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-hp-cli-'));
+  const script = path.resolve('scripts/hash-password.js');
+  const r = spawnSync(process.execPath, [script, 'hunter2'], { cwd: dir, encoding: 'utf8' });
+  expect(r.status).toBe(0);
+  expect(readEnvFile(path.join(dir, '.env')).TMUXIFIER_PASSWORD_HASH).toMatch(/^scrypt\$/);
+  expect(r.stderr).toMatch(/shell history|argument/i);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

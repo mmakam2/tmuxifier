@@ -483,3 +483,14 @@ test('the in-memory job map prunes terminal jobs past maxJobs, like the persiste
   expect(listed).toHaveLength(2);
   expect(listed.map((j) => j.hostname)).toEqual(['dev-03', 'dev-02']); // newest kept
 });
+
+test('a NetBox settings read/decrypt error surfaces as itself, not as "not configured"', async () => {
+  const mgr = createProvisionManager(base({
+    proxmoxStore: makeStore(PRESET_AUTO), makeClient: () => okClient(),
+    netboxStore: { getSettings: async () => { throw new Error('sealed secret decrypt failed'); } },
+  }));
+  await expect(mgr.createProvision({ presetId: 'p3', hostname: 'dev-01' }))
+    .rejects.toThrow(/decrypt failed/);
+  await expect(mgr.createProvision({ presetId: 'p3', hostname: 'dev-02' }))
+    .rejects.not.toThrow(/configure it in Settings/);
+});

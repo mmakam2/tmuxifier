@@ -120,8 +120,18 @@ export function firstUsableIp(prefixCidr) {
 // pin mode verifies the fingerprint via resolveTlsOpts BEFORE any
 // authenticated request is sent.
 export function createNetboxClient(settings, { request = jsonRequest, connect = tlsProbe, timeoutMs = 10000 } = {}) {
+  // Resolve TLS once per client instance (as the Proxmox client does): pin
+  // mode's probe is a full extra handshake, and the pinned request connection
+  // re-verifies the fingerprint anyway — the probe result can't go stale
+  // within one client's life. Failures are not cached, so a transient probe
+  // error doesn't poison later calls.
+  let tlsPromise = null;
+  const resolveOnce = () => (tlsPromise ??= resolveTlsOpts(settings, { connect, timeoutMs }).then(
+    (r) => { if (r.failure) tlsPromise = null; return r; },
+    (e) => { tlsPromise = null; throw e; },
+  ));
   async function call(method, path, body) {
-    const { failure, tlsOpts } = await resolveTlsOpts(settings, { connect, timeoutMs });
+    const { failure, tlsOpts } = await resolveOnce();
     if (failure) throw new Error(failure.error);
     const res = await request({
       url: `${settings.url}/api${path}`, method, body, timeoutMs, tls: tlsOpts,

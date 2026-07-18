@@ -17,6 +17,25 @@ folded in below with their old IDs noted.
 > note under this header describing the batch — the same convention
 > `codebase-review-2026-07-04.md` uses.
 
+**Status note, 2026-07-18 (batch 4, v1.7.7):** the sweep — 23 findings, test-first. Bugs:
+B14 (post-removal master teardown skipped when an identical box was re-added), B15
+(StringDecoder per ssh stream — no more split-glyph mojibake in setup logs), B16 (a transient
+PVE `unknown` no longer closes the stopped-box panel), B17 (NetBox read/decrypt errors surface
+as themselves, in both provision and lifecycle release), B19 (Google token exchange gets a 10s
+abort signal), B20 (unquoted inline `#` comments stripped from `.env` values), B21 (ssh
+timeouts resolve 124/`timedOut` and fleet labels them "timed out"), B22 (fleet de-duplicates
+box ids), B23 (an explicit empty label clears to the host default), B24 (templates without
+`?storage` is a 400), B25 (`formatEvent` gained a default case). Safety: S3 (logout advances a
+persisted revocation watermark in `data/auth-state.json` — a captured cookie dies on logout),
+S4 (HSTS follows the Secure-cookie predicate, so local-TLS deployments get it), S5
+(`secretBox.open` rejects non-16-byte GCM tags), S6 (`set-password` masks the interactive
+prompt and warns on the argv form), S7 (the changed-host-key regex no longer matches jump-host
+failures). Efficiency: E2 (NetBox client resolves TLS once per instance), E4 (health events
+save once per poll pass), E5 (`refresh()` keeps caches — no gray-dot flash), E6
+(`forgetBox` clears backoff/cpu maps on removal), E7 (batch import: one read, one write), E8
+(git bootstrap only when a framework needs it), E9 (default-key provider caches the promise).
+Suite: 870/870 (24 new tests); full e2e green except the two known zsh-shell assertions.
+
 **Status note, 2026-07-18 (batch 3, v1.7.6):** the job-manager cluster shipped, test-first —
 B6 (starting a new setup for a box flips a stale `needs-interactive` job to a terminal
 `superseded` status, so parked jobs stop accumulating), B7 (a per-job cancellation flag makes
@@ -78,18 +97,18 @@ explanation in the sections that follow the tables.
 | B11 | web | Clicking "Finish interactively" more than once opens multiple concurrent setup terminals against the same box and leaks all but the last | Med | S | Disable the button after the first click, and dispose the previous terminal handle before creating a new one | ✅ v1.7.5 |
 | B12 | web | Logout / session-expiry teardown misses modals mounted on `document.body`, so an open Proxmox hub stays on top of the login screen, polling forever | Med | S | Give body-mounted modals a registered close hook that the teardown path invokes | ✅ v1.7.5 |
 | B13 | fleet | Job history pruning can evict a fleet job that is still running, making it invisible and uncancellable (old L3) | Low | S | Skip `running` jobs when pruning, mirroring the setup manager's retention policy | ✅ v1.7.6 |
-| B14 | boxes | The background cleanup after removing a box can tear down the SSH ControlMaster of an identical box the user re-added moments later | Low | S | Before tearing down the master, re-check the store for a box with the same host/user/port and skip if one exists | Open |
-| B15 | ssh | SSH output is decoded chunk-by-chunk, so a multi-byte UTF-8 character split across two chunks becomes a � in the setup log | Low | S | Decode each stream with a `string_decoder.StringDecoder` instead of per-chunk `toString` | Open |
-| B16 | web | A momentary Proxmox API failure (state `unknown`) is misread as "container restarted": the stopped-box panel closes and the selection is lost | Low | S | Only treat an affirmative `running` state as a restart; keep the panel open on `unknown` | Open |
-| B17 | netbox | Errors while reading or decrypting NetBox settings are reported as "NetBox is not configured", hiding the real problem | Low | S | Distinguish "no settings stored" from a read/decrypt error and surface the error message | Open |
+| B14 | boxes | The background cleanup after removing a box can tear down the SSH ControlMaster of an identical box the user re-added moments later | Low | S | Before tearing down the master, re-check the store for a box with the same host/user/port and skip if one exists | ✅ v1.7.7 |
+| B15 | ssh | SSH output is decoded chunk-by-chunk, so a multi-byte UTF-8 character split across two chunks becomes a � in the setup log | Low | S | Decode each stream with a `string_decoder.StringDecoder` instead of per-chunk `toString` | ✅ v1.7.7 |
+| B16 | web | A momentary Proxmox API failure (state `unknown`) is misread as "container restarted": the stopped-box panel closes and the selection is lost | Low | S | Only treat an affirmative `running` state as a restart; keep the panel open on `unknown` | ✅ v1.7.7 |
+| B17 | netbox | Errors while reading or decrypting NetBox settings are reported as "NetBox is not configured", hiding the real problem | Low | S | Distinguish "no settings stored" from a read/decrypt error and surface the error message | ✅ v1.7.7 |
 | B18 | server | `tmux kill-session -t local` uses tmux's prefix matching, so it can kill an unrelated session such as `local-dev` on the Tmuxifier host | Low | S | Use tmux's exact-match form: `-t =local` | ✅ v1.7.4 |
-| B19 | auth | The Google OAuth token exchange has no timeout, so a hung Google endpoint pins the login callback forever (old L12) | Low | S | Pass `signal: AbortSignal.timeout(10000)` and route the abort into the existing error path | Open |
-| B20 | config | An inline comment in `.env` (`TMUXIFIER_PORT=8080 # dashboard`) becomes part of the value, and numeric settings then silently fall back to defaults | Low | S | Strip unquoted ` #…` suffixes when parsing, matching dotenv behavior | Open |
-| B21 | fleet | An SSH timeout during a fleet run is reported as `exited 1`, indistinguishable from a real exit code 1 (old L2) | Low | S | Detect the killed/timeout case in `sshRun` and report it as `timed out` | Open |
-| B22 | fleet | Passing the same box id twice to a fleet job runs the command twice on that box (old L4) | Low | S | De-duplicate the box id list when creating the job | Open |
-| B23 | store | A box's label can never be cleared once set — `updateBox` ignores an explicit empty value (old L11) | Low | S | Treat an explicit empty/null label as "clear it", like the existing user/port/proxyJump clearing | Open |
-| B24 | proxmox | Requesting the template list without a `?storage` parameter builds the URL `/storage/undefined/content` and returns a confusing 502 (old L14) | Low | S | Validate the parameter and return a 400 when it is missing | Open |
-| B25 | web | The health-events formatter has no default case, so a single unknown event type from a newer server breaks the whole events panel (old L15) | Low | S | Add a default branch that renders a generic event line | Open |
+| B19 | auth | The Google OAuth token exchange has no timeout, so a hung Google endpoint pins the login callback forever (old L12) | Low | S | Pass `signal: AbortSignal.timeout(10000)` and route the abort into the existing error path | ✅ v1.7.7 |
+| B20 | config | An inline comment in `.env` (`TMUXIFIER_PORT=8080 # dashboard`) becomes part of the value, and numeric settings then silently fall back to defaults | Low | S | Strip unquoted ` #…` suffixes when parsing, matching dotenv behavior | ✅ v1.7.7 |
+| B21 | fleet | An SSH timeout during a fleet run is reported as `exited 1`, indistinguishable from a real exit code 1 (old L2) | Low | S | Detect the killed/timeout case in `sshRun` and report it as `timed out` | ✅ v1.7.7 |
+| B22 | fleet | Passing the same box id twice to a fleet job runs the command twice on that box (old L4) | Low | S | De-duplicate the box id list when creating the job | ✅ v1.7.7 |
+| B23 | store | A box's label can never be cleared once set — `updateBox` ignores an explicit empty value (old L11) | Low | S | Treat an explicit empty/null label as "clear it", like the existing user/port/proxyJump clearing | ✅ v1.7.7 |
+| B24 | proxmox | Requesting the template list without a `?storage` parameter builds the URL `/storage/undefined/content` and returns a confusing 502 (old L14) | Low | S | Validate the parameter and return a 400 when it is missing | ✅ v1.7.7 |
+| B25 | web | The health-events formatter has no default case, so a single unknown event type from a newer server breaks the whole events panel (old L15) | Low | S | Add a default branch that renders a generic event line | ✅ v1.7.7 |
 
 ### Safety and security
 
@@ -97,25 +116,25 @@ explanation in the sections that follow the tables.
 |----|------|---------|----------|--------|--------------|--------|
 | S1 | known_hosts | Forgetting the host key of a box on a nonstandard port also deletes the bare-hostname entry — which belongs to whatever machine answers port 22 at that address | Med | S | When the port is nonstandard, remove only the `[host]:port` entry | ✅ v1.7.4 |
 | S2 | repo | `.agents/`, `graphify-out/`, and `skills-lock.json` are untracked and not gitignored; the release checklist stages with `git add -A`, so the next release would commit them to the public repository | Med | S | Add all three to `.gitignore` | ✅ v1.7.4 |
-| S3 | auth | Logging out only clears the browser cookie — a captured session cookie remains valid for up to 7 days afterward | Low | S | Keep a server-side "sessions issued before X are invalid" watermark that logout advances, or document logout as client-side only | Open |
-| S4 | server | The HSTS header is only sent when an external HTTPS URL is configured, so the documented local-TLS deployment never gets it | Low | S | Send HSTS under the same condition that marks the cookie `Secure` (local TLS counts) | Open |
-| S5 | secrets | `secretBox.open` accepts truncated GCM authentication tags, weakening forgery resistance (old L13) | Low | S | Pass `{ authTagLength: 16 }` to `createDecipheriv`, or reject tags that are not 16 bytes | Open |
-| S6 | scripts | `set-password` still accepts the password as a command-line argument (visible in shell history and `ps`) and echoes it when prompted interactively (old L23) | Low | S | Mask the interactive input and deprecate the argument form | Open |
-| S7 | status | The changed-host-key detector also matches jump-host key failures, so the ⚷ "forget key" button can appear for the wrong host on proxyJump boxes (known deferred item from v1.7.1) | Low | S | Drop the over-broad pattern alternation, or add a tooltip caveat | Open |
+| S3 | auth | Logging out only clears the browser cookie — a captured session cookie remains valid for up to 7 days afterward | Low | S | Keep a server-side "sessions issued before X are invalid" watermark that logout advances, or document logout as client-side only | ✅ v1.7.7 |
+| S4 | server | The HSTS header is only sent when an external HTTPS URL is configured, so the documented local-TLS deployment never gets it | Low | S | Send HSTS under the same condition that marks the cookie `Secure` (local TLS counts) | ✅ v1.7.7 |
+| S5 | secrets | `secretBox.open` accepts truncated GCM authentication tags, weakening forgery resistance (old L13) | Low | S | Pass `{ authTagLength: 16 }` to `createDecipheriv`, or reject tags that are not 16 bytes | ✅ v1.7.7 |
+| S6 | scripts | `set-password` still accepts the password as a command-line argument (visible in shell history and `ps`) and echoes it when prompted interactively (old L23) | Low | S | Mask the interactive input and deprecate the argument form | ✅ v1.7.7 |
+| S7 | status | The changed-host-key detector also matches jump-host key failures, so the ⚷ "forget key" button can appear for the wrong host on proxyJump boxes (known deferred item from v1.7.1) | Low | S | Drop the over-broad pattern alternation, or add a tooltip caveat | ✅ v1.7.7 |
 
 ### Efficiency
 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
 | E1 | setup | The setup manager persists the entire job history to disk on every chunk of SSH output — a chatty install produces thousands of multi-megabyte serializations | Med | S | Coalesce log persistence on a timer or byte threshold; keep immediate persistence for status changes | ✅ v1.7.6 |
-| E2 | netbox | In fingerprint-pinning mode, every NetBox API call performs an extra full TLS handshake just to re-probe the certificate | Med | S | Cache the resolved TLS options per client, as the Proxmox client already does | Open |
+| E2 | netbox | In fingerprint-pinning mode, every NetBox API call performs an extra full TLS handshake just to re-probe the certificate | Med | S | Cache the resolved TLS options per client, as the Proxmox client already does | ✅ v1.7.7 |
 | E3 | provision | The provision manager's in-memory job map is never pruned, and the on-disk cap can even drop a still-running job's record | Med | S | Adopt the lifecycle manager's terminal-only pruning, and clean up the companion `settles` map | ✅ v1.7.6 |
-| E4 | health | Each health event is written to disk with its own synchronous full-file write — a 30-box outage performs 30 back-to-back writes in one poll pass | Low | S | Collect events during the pass and save once at the end | Open |
-| E5 | web | Every dashboard refresh wipes the cached status data before repainting, flashing every status dot gray and issuing duplicate status fetches (old L17) | Low | S | Keep the previous caches until the fresh responses arrive, then paint once | Open |
-| E6 | status | The status checker's backoff and CPU-tracking maps keep entries for removed boxes forever | Low | S | Add a `forgetBox(id)` cleanup call invoked from box removal | Open |
-| E7 | store | Importing N boxes performs N separate full read-and-rewrite cycles of `boxes.json` | Low | S | Add a batch import path: read once, validate all entries in memory, write once | Open |
-| E8 | boxActions | The setup script installs git unconditionally, even when nothing the user selected needs it | Low | S | Only include the git bootstrap when oh-my-tmux, oh-my-zsh, or the git tool was selected | Open |
-| E9 | index | The default-public-key helper caches the resolved value rather than the promise, so concurrent first calls each spawn their own `ssh-keygen` | Low | S | Cache the promise instead, resetting it if the read fails or returns nothing | Open |
+| E4 | health | Each health event is written to disk with its own synchronous full-file write — a 30-box outage performs 30 back-to-back writes in one poll pass | Low | S | Collect events during the pass and save once at the end | ✅ v1.7.7 |
+| E5 | web | Every dashboard refresh wipes the cached status data before repainting, flashing every status dot gray and issuing duplicate status fetches (old L17) | Low | S | Keep the previous caches until the fresh responses arrive, then paint once | ✅ v1.7.7 |
+| E6 | status | The status checker's backoff and CPU-tracking maps keep entries for removed boxes forever | Low | S | Add a `forgetBox(id)` cleanup call invoked from box removal | ✅ v1.7.7 |
+| E7 | store | Importing N boxes performs N separate full read-and-rewrite cycles of `boxes.json` | Low | S | Add a batch import path: read once, validate all entries in memory, write once | ✅ v1.7.7 |
+| E8 | boxActions | The setup script installs git unconditionally, even when nothing the user selected needs it | Low | S | Only include the git bootstrap when oh-my-tmux, oh-my-zsh, or the git tool was selected | ✅ v1.7.7 |
+| E9 | index | The default-public-key helper caches the resolved value rather than the promise, so concurrent first calls each spawn their own `ssh-keygen` | Low | S | Cache the promise instead, resetting it if the read fails or returns nothing | ✅ v1.7.7 |
 
 ### Complexity and duplication
 

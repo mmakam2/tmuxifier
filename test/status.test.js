@@ -513,3 +513,26 @@ test('listSessions: a failed probe leaves the backoff window alone', async () =>
   await sc.checkBox({ host: 'h' });            // still inside the window
   expect(calls).toBe(2);                       // poll stayed throttled
 });
+
+test('a bare "Host key verification failed" (jump-host failure) is NOT classified hostKeyChanged', async () => {
+  // proxyJump: the JUMP host's key failing produces this line without the
+  // REMOTE HOST IDENTIFICATION banner — the ⚷ forget-key action must not
+  // point at the target box.
+  const run = async () => ({ code: 255, stdout: '', stderr: 'Host key verification failed.' });
+  const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
+  expect(status.reachable).toBe(false);
+  expect(status.hostKeyChanged).toBeFalsy();
+});
+
+test('forgetBox clears the backoff window so a re-added box probes immediately', async () => {
+  let calls = 0;
+  const run = async () => { calls += 1; return { code: 255, stdout: '', stderr: 'Connection refused' }; };
+  const checker = createStatusChecker({ run });
+  await checker.checkBox({ host: 'h' });
+  expect(calls).toBe(1);
+  await checker.checkBox({ host: 'h' }); // inside the backoff window — cached
+  expect(calls).toBe(1);
+  checker.forgetBox('h');
+  await checker.checkBox({ host: 'h' }); // state forgotten — probes again
+  expect(calls).toBe(2);
+});

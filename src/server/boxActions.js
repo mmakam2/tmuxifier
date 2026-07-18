@@ -278,9 +278,11 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     // Same guarded delete-then-append as the omz branch above.
     'if [ -f .tmux.conf.local ]; then sed -i \'/^set-option -g default-shell/d\' .tmux.conf.local 2>/dev/null || true; echo "set-option -g default-shell \"$BASH_BIN\"" >> .tmux.conf.local; fi',
   ] : [];
-  return [
-    'set -eu',
-    // Ensure git is available before oh-my-tmux / oh-my-zsh
+  // git is only a prerequisite of the oh-my-* framework installs (their
+  // installers clone). A bare setup must not mutate the box's packages, and
+  // the explicit git tool has its own catalog entry.
+  const needsGit = !!(options.installOhMyTmux || options.installOhMyZsh || options.installOhMyBash);
+  const gitBootstrap = needsGit ? [
     'if ! command -v git >/dev/null 2>&1; then',
     "  SUDO=''",
     "  if [ \"$(id -u)\" != '0' ]; then SUDO='sudo'; fi",
@@ -302,6 +304,10 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     '    exit 127',
     '  fi',
     'fi',
+  ] : [];
+  return [
+    'set -eu',
+    ...gitBootstrap,
     'TMUX_BIN="$(command -v tmux || true)"',
     'if [ -z "$TMUX_BIN" ]; then',
     '  for p in /usr/bin/tmux /usr/local/bin/tmux /bin/tmux; do if [ -x "$p" ]; then TMUX_BIN="$p"; break; fi; done',

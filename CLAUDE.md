@@ -24,7 +24,8 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   password — all AES-256-GCM sealed — plus container presets), `netbox.json` (NetBox integration
   settings with an **encrypted** API token), `provision-jobs.json` (provision history),
   `setup-jobs.json` (server-side box setup job history), `proxmox-lifecycle-jobs.json` (LXC
-  power/deprovision job history), `health-events.json` (in-app health event log), and SSH
+  power/deprovision job history), `health-events.json` (in-app health event log),
+  `auth-state.json` (the logout session-revocation watermark), and SSH
   ControlMaster sockets under `data/cm/`.
 
 When adding a new config knob or persisted file, keep it under the repo folder by default.

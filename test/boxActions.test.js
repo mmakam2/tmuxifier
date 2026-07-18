@@ -601,3 +601,12 @@ test('generated setup script is syntactically valid with all tools and framework
   expect(res.stderr).toBe('');
   expect(res.code).toBe(0);
 });
+
+test('the git bootstrap is included only when a selected option needs git', () => {
+  const GIT_APT = 'apt-get install -y --no-install-recommends git';
+  const bare = String(buildEnsureTmuxRemote('web', null, {}));
+  expect(bare).not.toContain(GIT_APT);
+  expect(String(buildEnsureTmuxRemote('web', null, { installOhMyZsh: true }))).toContain(GIT_APT);
+  expect(String(buildEnsureTmuxRemote('web', null, { installOhMyTmux: true }))).toContain(GIT_APT);
+  expect(String(buildEnsureTmuxRemote('web', null, { installOhMyBash: true }))).toContain(GIT_APT);
+});

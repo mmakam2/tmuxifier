@@ -15,6 +15,20 @@ const execFileAsync = promisify(execFile);
 const PUB_CANDIDATES = ['id_ed25519.pub', 'id_rsa.pub', 'id_ecdsa.pub'];
 const PRIV_CANDIDATES = ['id_ed25519', 'id_rsa', 'id_ecdsa'];
 
+// Caches the read as a PROMISE so concurrent first calls share one ssh-keygen
+// child instead of racing separate ones. A null result or a rejection is not
+// cached — a key added later is still picked up without a restart.
+export function createDefaultKeyProvider({ read }) {
+  let cached = null;
+  return () => {
+    cached ??= read().then(
+      (key) => { if (!key) cached = null; return key; },
+      (err) => { cached = null; throw err; },
+    );
+    return cached;
+  };
+}
+
 async function defaultDerivePub(privPath) {
   // -y prints the public key for a private key. Non-interactive (stdin is a pipe, so no TTY
   // passphrase prompt) and time-bounded so an encrypted key can't hang provisioning.

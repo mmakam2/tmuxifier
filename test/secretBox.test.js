@@ -32,3 +32,12 @@ test('isSealed rejects plaintext and requires a cookie secret', () => {
   expect(box.isSealed('plain')).toBe(false);
   expect(() => createSecretBox('')).toThrow(/cookieSecret/);
 });
+
+test('a truncated GCM auth tag is rejected, never decrypted', () => {
+  const box = createSecretBox('test-secret');
+  const sealed = box.seal('hunter2');
+  const parts = sealed.split(':');
+  const shortTag = Buffer.from(parts[3], 'base64').subarray(0, 4).toString('base64');
+  const tampered = [parts[0], parts[1], parts[2], shortTag].join(':');
+  expect(() => box.open(tampered)).toThrow();
+});

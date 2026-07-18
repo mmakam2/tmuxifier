@@ -25,3 +25,10 @@ test('unseenCount counts events past the last-seen seq', () => {
   expect(unseenCount(evs, 1)).toBe(2);
   expect(unseenCount(evs, 3)).toBe(0);
 });
+
+test('an unknown event kind from a newer server renders a generic line instead of breaking the panel', () => {
+  const line = formatEvent({ ...base, kind: 'future-kind' });
+  expect(line).toBeTruthy();
+  expect(line.text).toContain('web-01');
+  expect(['ok', 'warn', 'crit', 'auth']).toContain(line.level);
+});

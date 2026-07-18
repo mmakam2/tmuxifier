@@ -44,8 +44,13 @@ export function createProvisionManager({
   function appendLog(j, text) { if (text) j.log = (j.log + text).slice(-maxLogBytes); }
 
   async function requireNetboxSettings() {
-    let settings = null;
-    try { settings = netboxStore ? await netboxStore.getSettings({ withSecret: true }) : null; } catch { settings = null; }
+    if (!netboxStore) throw new Error('auto-static requires the NetBox integration — configure it in Settings (⚙)');
+    let settings;
+    // A read/decrypt failure (rotated cookieSecret, unreadable file) is a real
+    // error — reporting it as "not configured" sends the user to re-configure
+    // an integration that is already configured.
+    try { settings = await netboxStore.getSettings({ withSecret: true }); }
+    catch (e) { throw new Error(`NetBox settings could not be read: ${e?.message || e}`); }
     if (!settings) throw new Error('auto-static requires the NetBox integration — configure it in Settings (⚙)');
     return settings;
   }
