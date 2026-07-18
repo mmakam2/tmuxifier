@@ -1,5 +1,6 @@
 import https from 'node:https';
-import { tlsProbe, pinnedSocket, normFp } from './tlsPin.js';
+import { tlsProbe, pinnedConnectionFactory, normFp } from './tlsPin.js';
+import { parseEndpoint } from './proxmoxValidate.js';
 
 function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 15000, tls: tlsOpts = {} }) {
   return new Promise((resolve, reject) => {
@@ -10,14 +11,7 @@ function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 150
     const reqHeaders = body == null ? headers : { ...headers, 'Content-Length': Buffer.byteLength(body) };
     const req = https.request({ hostname: u.hostname, port: u.port || 8006, path: u.pathname + u.search, method, headers: reqHeaders, timeout: timeoutMs,
       ...(tlsOpts.pin ? {
-        // Pin mode: the fingerprint is verified on this request's own
-        // connection before any header (the token) is written. No agent
-        // option here: http honors createConnection only when agent is
-        // left undefined (agent: false would mint a normal Agent instead).
-        createConnection: (_opts, oncreate) => {
-          pinnedSocket({ host: u.hostname, port: Number(u.port) || 8006, fingerprint256: tlsOpts.pin, timeoutMs })
-            .then((socket) => oncreate(null, socket), (error) => oncreate(error));
-        },
+        createConnection: pinnedConnectionFactory({ host: u.hostname, port: Number(u.port) || 8006, fingerprint256: tlsOpts.pin, timeoutMs }),
       } : { rejectUnauthorized: tlsOpts.rejectUnauthorized !== false }),
     }, (res) => { let data = ''; res.on('data', (c) => { data += c; }); res.on('end', () => { let json = null; try { json = data ? JSON.parse(data) : null; } catch {} resolve({ status: res.statusCode, statusMessage: res.statusMessage, json, text: data }); }); });
     req.on('timeout', () => req.destroy(new Error('Proxmox request timed out')));
@@ -30,9 +24,7 @@ function cleanParams(params) { const out = {}; for (const [k, v] of Object.entri
 
 export function createProxmoxClient({ host, request = httpsRequest, connect = tlsProbe, timeoutMs = 15000 }) {
   const base = `https://${host.endpoint}/api2/json`;
-  const idx = String(host.endpoint).lastIndexOf(':');
-  const hostName = idx === -1 ? host.endpoint : host.endpoint.slice(0, idx);
-  const port = idx === -1 ? 8006 : Number(host.endpoint.slice(idx + 1)) || 8006;
+  const { host: hostName, port } = parseEndpoint(host.endpoint);
   let tlsPromise = null;
   function resolveTls() {
     if (tlsPromise) return tlsPromise;
@@ -105,9 +97,7 @@ export function createProxmoxClient({ host, request = httpsRequest, connect = tl
   };
 }
 export async function inspectEndpoint(endpoint, { connect = tlsProbe, timeoutMs = 8000 } = {}) {
-  const idx = String(endpoint).lastIndexOf(':');
-  const host = idx === -1 ? endpoint : endpoint.slice(0, idx);
-  const port = idx === -1 ? 8006 : Number(endpoint.slice(idx + 1)) || 8006;
+  const { host, port } = parseEndpoint(endpoint);
   let probe; try { probe = await connect({ host, port, timeoutMs }); } catch (e) { return { reachable: false, error: e.message }; }
   return { reachable: true, fingerprint256: probe.fingerprint256 || null, subject: probe.subject ? probe.subject.CN || '' : '', issuer: probe.issuer ? probe.issuer.CN || '' : '', validTo: probe.valid_to || null, caValid: probe.authorized === true };
 }

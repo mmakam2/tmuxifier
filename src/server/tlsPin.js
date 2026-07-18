@@ -2,6 +2,18 @@ import tls from 'node:tls';
 
 // Shared TLS fingerprint-pinning helpers (TOFU, like ssh accept-new) used by the
 // Proxmox and NetBox API clients.
+
+// The one subtle piece of pin-mode glue, shared by both HTTP clients: route
+// the request through pinnedSocket so the fingerprint is verified on the
+// request's OWN connection before any header (the token) is written. No agent
+// option must accompany this — node's http honors createConnection only when
+// agent is left undefined (agent: false would mint a normal Agent instead).
+export function pinnedConnectionFactory({ host, port, fingerprint256, timeoutMs }) {
+  return (_opts, oncreate) => {
+    pinnedSocket({ host, port, fingerprint256, timeoutMs })
+      .then((socket) => oncreate(null, socket), (error) => oncreate(error));
+  };
+}
 export function tlsProbe({ host, port, timeoutMs = 15000 }) {
   return new Promise((resolve, reject) => {
     // SNI is only valid for hostnames, not IP literals (RFC 6066); omit it for IPs.

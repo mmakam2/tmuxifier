@@ -63,6 +63,18 @@ export function createStore({ dataDir }) {
   // container can never be linked to two boxes at once.
   const linkKey = (link) => `${link.hostId}\u0000${link.node}\u0000${link.vmid}`;
 
+  // Every mutation is a read-modify-write cycle over the whole file; without
+  // serialization, two concurrent ones (a background provision addBox racing a
+  // user PATCH) both read the same array and the second write silently drops
+  // the first's change. Reads stay unserialized — the atomic rename underneath
+  // makes a read during a write safe.
+  let queue = Promise.resolve();
+  function serialize(op) {
+    const run = queue.then(op, op); // run regardless of the predecessor's fate
+    queue = run.then(() => {}, () => {}); // the chain itself must never reject
+    return run;
+  }
+
   return {
     async listBoxes() {
       return readAll();
@@ -71,64 +83,74 @@ export function createStore({ dataDir }) {
       return (await readAll()).find((b) => b.id === id);
     },
     async addBox(spec, { trustedProxmox = false } = {}) {
-      const boxes = await readAll();
-      const box = normalize(spec, {}, { trustedProxmox });
-      assertBoxSafe(box);
-      assertUniqueBox(boxes, box);
-      boxes.push(box);
-      await writeAll(boxes);
-      return box;
+      return serialize(async () => {
+        const boxes = await readAll();
+        const box = normalize(spec, {}, { trustedProxmox });
+        assertBoxSafe(box);
+        assertUniqueBox(boxes, box);
+        boxes.push(box);
+        await writeAll(boxes);
+        return box;
+      });
     },
     async updateBox(id, patch) {
       if ('source' in patch || 'proxmox' in patch) throw new Error('proxmox linkage must use the dedicated link route');
-      const boxes = await readAll();
-      const index = boxes.findIndex((box) => box.id === id);
-      if (index === -1) throw new Error('box not found');
-      boxes[index] = normalize(
-        { ...boxes[index], ...patch, host: patch.host ?? boxes[index].host },
-        boxes[index],
-      );
-      // null means "clear this field" — ?? cannot express that, so handle explicitly
-      for (const key of ['user', 'port', 'proxyJump']) {
-        if (key in patch && patch[key] === null) boxes[index][key] = undefined;
-      }
-      // Clearing the label falls back to the host (the addBox default) — the
-      // `spec.label || base.label` merge in normalize swallows ''/null.
-      if ('label' in patch && (patch.label === null || patch.label === '')) boxes[index].label = boxes[index].host;
-      assertBoxSafe(boxes[index]);
-      assertUniqueBox(boxes, boxes[index], id);
-      await writeAll(boxes);
-      return boxes[index];
+      return serialize(async () => {
+        const boxes = await readAll();
+        const index = boxes.findIndex((box) => box.id === id);
+        if (index === -1) throw new Error('box not found');
+        boxes[index] = normalize(
+          { ...boxes[index], ...patch, host: patch.host ?? boxes[index].host },
+          boxes[index],
+        );
+        // null means "clear this field" — ?? cannot express that, so handle explicitly
+        for (const key of ['user', 'port', 'proxyJump']) {
+          if (key in patch && patch[key] === null) boxes[index][key] = undefined;
+        }
+        // Clearing the label falls back to the host (the addBox default) — the
+        // `spec.label || base.label` merge in normalize swallows ''/null.
+        if ('label' in patch && (patch.label === null || patch.label === '')) boxes[index].label = boxes[index].host;
+        assertBoxSafe(boxes[index]);
+        assertUniqueBox(boxes, boxes[index], id);
+        await writeAll(boxes);
+        return boxes[index];
+      });
     },
     async setProxmoxLink(id, link) {
-      const boxes = await readAll();
-      const index = boxes.findIndex((box) => box.id === id);
-      if (index === -1) throw new Error('box not found');
-      const key = linkKey(link);
-      if (boxes.some((box) => box.id !== id && box.proxmox && linkKey(box.proxmox) === key)) {
-        throw new Error('proxmox container is already linked');
-      }
-      boxes[index] = normalize(
-        { ...boxes[index], proxmox: link },
-        boxes[index],
-        { trustedProxmox: true },
-      );
-      assertBoxSafe(boxes[index]);
-      await writeAll(boxes);
-      return boxes[index];
+      return serialize(async () => {
+        const boxes = await readAll();
+        const index = boxes.findIndex((box) => box.id === id);
+        if (index === -1) throw new Error('box not found');
+        const key = linkKey(link);
+        if (boxes.some((box) => box.id !== id && box.proxmox && linkKey(box.proxmox) === key)) {
+          throw new Error('proxmox container is already linked');
+        }
+        boxes[index] = normalize(
+          { ...boxes[index], proxmox: link },
+          boxes[index],
+          { trustedProxmox: true },
+        );
+        assertBoxSafe(boxes[index]);
+        await writeAll(boxes);
+        return boxes[index];
+      });
     },
     async clearProxmoxLink(id) {
-      const boxes = await readAll();
-      const index = boxes.findIndex((box) => box.id === id);
-      if (index === -1) throw new Error('box not found');
-      const { proxmox: _link, ...base } = boxes[index];
-      boxes[index] = { ...base, source: 'manual' };
-      await writeAll(boxes);
-      return boxes[index];
+      return serialize(async () => {
+        const boxes = await readAll();
+        const index = boxes.findIndex((box) => box.id === id);
+        if (index === -1) throw new Error('box not found');
+        const { proxmox: _link, ...base } = boxes[index];
+        boxes[index] = { ...base, source: 'manual' };
+        await writeAll(boxes);
+        return boxes[index];
+      });
     },
     async removeBox(id) {
-      const boxes = await readAll();
-      await writeAll(boxes.filter((b) => b.id !== id));
+      return serialize(async () => {
+        const boxes = await readAll();
+        await writeAll(boxes.filter((b) => b.id !== id));
+      });
     },
     // Snapshot every box for download. The wrapper carries a type/version so
     // importBoxes can recognise its own files and reject unrelated JSON.
@@ -153,23 +175,25 @@ export function createStore({ dataDir }) {
       if (!incoming) throw new Error('invalid box export: expected a boxes array');
       // One read and one write for the whole batch — importing N boxes used to
       // do N full read/validate/rewrite cycles of boxes.json.
-      const boxes = await readAll();
-      const added = [];
-      let skipped = 0;
-      for (const spec of incoming) {
-        try {
-          const { id: _id, createdAt: _createdAt, source: _source, proxmox: _proxmox, ...safeSpec } = spec || {};
-          const box = normalize(safeSpec);
-          assertBoxSafe(box);
-          assertUniqueBox(boxes, box);
-          boxes.push(box);
-          added.push(box);
-        } catch {
-          skipped += 1; // duplicate host/label or unsafe/invalid entry
+      return serialize(async () => {
+        const boxes = await readAll();
+        const added = [];
+        let skipped = 0;
+        for (const spec of incoming) {
+          try {
+            const { id: _id, createdAt: _createdAt, source: _source, proxmox: _proxmox, ...safeSpec } = spec || {};
+            const box = normalize(safeSpec);
+            assertBoxSafe(box);
+            assertUniqueBox(boxes, box);
+            boxes.push(box);
+            added.push(box);
+          } catch {
+            skipped += 1; // duplicate host/label or unsafe/invalid entry
+          }
         }
-      }
-      if (added.length) await writeAll(boxes);
-      return { added, skipped };
+        if (added.length) await writeAll(boxes);
+        return { added, skipped };
+      });
     },
   };
 }

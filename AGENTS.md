@@ -89,6 +89,15 @@ pattern for new modules.
   and are rename()d into place (a crash never truncates), an unparseable/wrong-shape file is
   quarantined to `<file>.corrupt-<timestamp>` instead of being silently read as empty, and files
   are written `0o600`. The store modules build on it.
+- `debouncedJsonStore.js` — the shared debounced-write store behind the four persisted job
+  managers (`fleetStore`/`setupStore`/`provisionStore`/`proxmoxLifecycleStore` are one-line
+  wrappers); `whenIdle()` is the graceful-shutdown flush seam.
+- `jobOrder.js` — `newestFirst`, the shared newest-first job comparator (id tie-break, a valid
+  total order) used by the setup/provision/lifecycle managers.
+- `pveTask.js` — `pollPveTask`, the shared PVE task poller (log tailing, consecutive-failure
+  tolerance, deadline) used by the provision and lifecycle managers.
+- `shutdown.js` — `registerShutdownFlush`: SIGTERM/SIGINT handler that flushes the debounced
+  job stores before exit, so a deploy restart can't lose a just-finished job's final save.
 - `auth.js` — scrypt password hashing, signed-cookie options (`COOKIE_NAME`), and the session
   value helpers (`sessionValue`/`sessionValueValid`): the cookie embeds its issue time and is
   rejected server-side after `SESSION_TTL_SECONDS`, so a captured cookie can't authenticate forever.

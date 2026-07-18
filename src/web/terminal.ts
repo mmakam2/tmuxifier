@@ -257,7 +257,7 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
     // Immediate feedback so opening a box is never a mystery blank cursor — the
     // user knows it's connecting (and that a password prompt may be coming).
     term.write(`\x1b[2m[connecting to ${name}…]\x1b[0m\r\n`);
-    ws = new WebSocket(`${proto}://${location.host}/term?box=${boxId}&cols=${cols}&rows=${rows}`);
+    ws = new WebSocket(`${proto}://${location.host}/term?box=${encodeURIComponent(boxId)}&cols=${cols}&rows=${rows}`);
     ws.onopen = () => {
       sendResize();
       // Only treat the connection as a real session once it survives a while; the

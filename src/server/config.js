@@ -183,12 +183,12 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   const fontSize = Number(merged.termFontSize);
   merged.termFontSize = Number.isFinite(fontSize) && fontSize >= 6 && fontSize <= 32 ? fontSize : 12;
   // Health knobs share the clampInt fallback-to-default behavior above.
-  merged.healthHistoryMax = clampInt(merged.healthHistoryMax, 10, 5000, 120);
-  merged.healthEventsMax = clampInt(merged.healthEventsMax, 10, 5000, 200);
-  merged.healthCpuWarnPct = clampInt(merged.healthCpuWarnPct, 1, 100, 90);
-  merged.healthMemWarnPct = clampInt(merged.healthMemWarnPct, 1, 100, 90);
-  merged.healthDiskWarnPct = clampInt(merged.healthDiskWarnPct, 1, 100, 90);
-  merged.healthThresholdHysteresisPct = clampInt(merged.healthThresholdHysteresisPct, 0, 50, 5);
+  merged.healthHistoryMax = clampInt(merged.healthHistoryMax, 10, 5000, DEFAULTS.healthHistoryMax);
+  merged.healthEventsMax = clampInt(merged.healthEventsMax, 10, 5000, DEFAULTS.healthEventsMax);
+  merged.healthCpuWarnPct = clampInt(merged.healthCpuWarnPct, 1, 100, DEFAULTS.healthCpuWarnPct);
+  merged.healthMemWarnPct = clampInt(merged.healthMemWarnPct, 1, 100, DEFAULTS.healthMemWarnPct);
+  merged.healthDiskWarnPct = clampInt(merged.healthDiskWarnPct, 1, 100, DEFAULTS.healthDiskWarnPct);
+  merged.healthThresholdHysteresisPct = clampInt(merged.healthThresholdHysteresisPct, 0, 50, DEFAULTS.healthThresholdHysteresisPct);
   return merged;
 }
 

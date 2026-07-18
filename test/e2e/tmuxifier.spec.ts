@@ -15,7 +15,7 @@ test('login, open a box terminal, reload, and reattach to the same session', asy
   // the WebSocket is still connecting is dropped, so typing must wait until the
   // remote session has actually drawn.
   await localhost.click();
-  await expect(page.locator('.xterm-rows').first()).toContainText('bash', { timeout: 15000 });
+  await expect(page.locator('.xterm-rows').first()).toContainText(/[#$%>]/, { timeout: 15000 });
 
   // Type a unique marker into the shell
   await page.keyboard.type('echo TMUXIFIER_E2E_MARKER\n');
@@ -38,7 +38,7 @@ test('logout then re-login can reopen a box terminal (no stale detached tab)', a
   const localhost = page.locator('.box .name', { hasText: 'localhost' });
   await expect(localhost).toBeVisible({ timeout: 10000 });
   await localhost.click();
-  await expect(page.locator('.xterm-rows').first()).toContainText('bash', { timeout: 15000 });
+  await expect(page.locator('.xterm-rows').first()).toContainText(/[#$%>]/, { timeout: 15000 });
 
   // Logout must dispose the terminal tab; before the fix the module-level tabs
   // map kept a detached element, so re-opening the box after re-login showed
@@ -52,7 +52,7 @@ test('logout then re-login can reopen a box terminal (no stale detached tab)', a
   await localhost.click();
 
   // Wait for the reattached tmux to draw before typing (see the comment above).
-  await expect(page.locator('.xterm-rows').first()).toContainText('bash', { timeout: 15000 });
+  await expect(page.locator('.xterm-rows').first()).toContainText(/[#$%>]/, { timeout: 15000 });
   await page.keyboard.type('echo TMUXIFIER_RELOGIN_MARKER\n');
   await expect(page.locator('.xterm-rows').first()).toContainText('TMUXIFIER_RELOGIN_MARKER', { timeout: 10000 });
 });

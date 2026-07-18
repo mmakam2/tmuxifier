@@ -4,6 +4,7 @@ import { buildCreateParams } from './proxmoxParams.js';
 import { assertProvisionInput, isCidr } from './proxmoxValidate.js';
 import { createNetboxClient } from './netboxApi.js';
 import { newestFirst } from './jobOrder.js';
+import { pollPveTask } from './pveTask.js';
 
 // 'cancelled' has no producer anymore (the never-wired cancel API was removed)
 // but stays terminal so legacy persisted jobs reconcile correctly on load.
@@ -55,35 +56,11 @@ export function createProvisionManager({
     return settings;
   }
 
-  async function pollTask(client, node, upid, j) {
-    const deadline = Date.now() + taskTimeoutMs;
-    let logStart = 0;
-    let statusFailures = 0;
-    for (;;) {
-      const lines = await client.taskLog(node, upid, logStart).catch(() => []);
-      if (Array.isArray(lines) && lines.length) {
-        logStart += lines.length;
-        appendLog(j, lines.map((l) => l.t).join('\n') + '\n');
-        persist();
-      }
-      // One transient hiccup (network blip, pveproxy restart) during a
-      // minutes-long create/start poll must not fail the whole job and orphan
-      // the container on PVE — only consecutive failures count as an outage.
-      let st = null;
-      try {
-        st = await client.taskStatus(node, upid);
-        statusFailures = 0;
-      } catch (e) {
-        statusFailures += 1;
-        if (statusFailures >= maxPollFailures) throw e;
-      }
-      if (st && st.status === 'stopped') {
-        if (st.exitstatus && st.exitstatus !== 'OK') throw new Error(`task failed: ${st.exitstatus}`);
-        return;
-      }
-      if (Date.now() > deadline) throw new Error('task timed out');
-      await sleep(pollMs);
-    }
+  function pollTask(client, node, upid, j) {
+    return pollPveTask(client, node, upid, {
+      onLog: (text) => { appendLog(j, text); persist(); },
+      timeoutMs: taskTimeoutMs, pollMs, sleep, maxPollFailures,
+    });
   }
 
   async function discoverIp(client, node, vmid) {

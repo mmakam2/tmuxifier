@@ -12,7 +12,6 @@ import { buildEnsureTmuxRemote, resolveTools } from './boxActions.js';
 import { assertBoxSafe } from './sshCommand.js';
 import { upsertConfigFile } from './configFile.js';
 import { readJsonSync, writeJsonSync } from './jsonFile.js';
-import { mapWithConcurrency } from './concurrency.js';
 import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
 import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js';
 import { testNetbox } from './netboxApi.js';
@@ -599,22 +598,14 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     } catch (e) { return reply.code(400).send({ error: e.message }); }
     return netboxTest(candidate);
   });
-  app.get('/api/status', { preHandler: requireAuth }, async () => {
-    // Serve the shared, server-side poll snapshot when a poller is wired: every
-    // open tab reads the same cache instead of driving its own SSH probe cycle,
-    // so connection volume is independent of how many tabs are watching. See
-    // src/server/statusPoller.js. Falls back to on-demand probing when no poller
-    // is provided (e.g. unit tests).
-    if (statusPoller) return statusPoller.getSnapshot();
-    const boxes = await store.listBoxes();
-    const out = {};
-    // Probe in small batches, not all at once: a fleet-wide burst of simultaneous
-    // SSH handshakes trips connection-rate/IPS blocks on the path and makes boxes
-    // flicker red. See src/server/concurrency.js.
-    await mapWithConcurrency(boxes, config.statusConcurrency || 4, async (b) => {
-      out[b.id] = await statusChecker.checkBox(b);
-    });
-    return out;
+  app.get('/api/status', { preHandler: requireAuth }, async (req, reply) => {
+    // Serve the shared, server-side poll snapshot: every open tab reads the
+    // same cache instead of driving its own SSH probe cycle, so connection
+    // volume is independent of how many tabs are watching. See
+    // src/server/statusPoller.js. index.js always wires a poller; tests stub
+    // one — there is no on-demand probing fallback anymore.
+    if (!statusPoller) return reply.code(503).send({ error: 'status poller unavailable' });
+    return statusPoller.getSnapshot();
   });
 
   // Rolling per-box health series (for row sparklines) and the in-app events

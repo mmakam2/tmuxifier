@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import { createNetboxClient } from './netboxApi.js';
 import { newestFirst } from './jobOrder.js';
+import { pollPveTask } from './pveTask.js';
 
 const ACTIONS = new Set(['start', 'shutdown', 'stop', 'reboot', 'deprovision']);
 const TERMINAL = new Set(['done', 'error', 'interrupted']);
@@ -39,32 +40,11 @@ export function createProxmoxLifecycleManager({
   const assertTargetIdle = (key) => { if ([...jobs.values()].some((job) => job.status === 'running' && targetKey(job) === key)) throw serviceError(409, 'container already has an active lifecycle job'); };
   persist();
 
-  async function pollTask(client, job, upid) {
-    const deadline = Date.now() + taskTimeoutMs;
-    let logStart = 0;
-    let failures = 0;
-    for (;;) {
-      const lines = await client.taskLog(job.node, upid, logStart).catch(() => []);
-      if (Array.isArray(lines) && lines.length) {
-        logStart += lines.length;
-        appendLog(job, `${lines.map((line) => line.t).join('\n')}\n`);
-        persist();
-      }
-      let status = null;
-      try {
-        status = await client.taskStatus(job.node, upid);
-        failures = 0;
-      } catch (error) {
-        failures += 1;
-        if (failures >= maxPollFailures) throw error;
-      }
-      if (status?.status === 'stopped') {
-        if (status.exitstatus && status.exitstatus !== 'OK') throw new Error(`task failed: ${status.exitstatus}`);
-        return;
-      }
-      if (Date.now() > deadline) throw new Error('task timed out');
-      await sleep(pollMs);
-    }
+  function pollTask(client, job, upid) {
+    return pollPveTask(client, job.node, upid, {
+      onLog: (text) => { appendLog(job, text); persist(); },
+      timeoutMs: taskTimeoutMs, pollMs, sleep, maxPollFailures,
+    });
   }
 
   async function resolveTarget(job) {

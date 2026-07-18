@@ -263,3 +263,11 @@ test('an explicit null label clears back to the host default', async () => {
   expect(updated.label).toBe('192.168.1.10');
   await fs.rm(dir, { recursive: true, force: true });
 });
+
+test('concurrent mutations are serialized — no write is lost to a read-modify-write race', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-store-race-'));
+  const store = createStore({ dataDir: dir });
+  await Promise.all(Array.from({ length: 8 }, (_, i) => store.addBox({ host: `192.168.1.${10 + i}` })));
+  expect(await store.listBoxes()).toHaveLength(8);
+  await fs.rm(dir, { recursive: true, force: true });
+});

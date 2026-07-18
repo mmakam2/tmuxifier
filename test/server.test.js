@@ -319,37 +319,15 @@ test('wrong password is rejected', async () => {
   expect(res.statusCode).toBe(401);
 });
 
-test('status endpoint returns a map keyed by box id', async () => {
+// The on-demand probing fallback was removed with the review's D1: the route
+// only serves the poller snapshot (covered below), and the bounded-concurrency
+// property lives in statusPoller — see test/statusPoller.test.js ("pollOnce
+// probes with bounded concurrency").
+test('status endpoint without a poller answers 503, never probes on demand', async () => {
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
-  const created = await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1' } });
-  const id = created.json().id;
   const res = await app.inject({ method: 'GET', url: '/api/status', headers });
-  expect(res.json()[id]).toMatchObject({ reachable: true });
-});
-
-test('status endpoint probes boxes with bounded concurrency (no fleet-wide SSH burst)', async () => {
-  let inFlight = 0;
-  let peak = 0;
-  const statusChecker = {
-    checkBox: async () => {
-      inFlight++;
-      peak = Math.max(peak, inFlight);
-      await new Promise((r) => setTimeout(r, 5));
-      inFlight--;
-      return { reachable: true };
-    },
-  };
-  app = await makeApp({ statusChecker, config: { statusConcurrency: 2 } });
-  const cookie = await login();
-  const headers = { cookie: `${cookie.name}=${cookie.value}` };
-  for (let i = 0; i < 6; i++) {
-    await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: `h${i}` } });
-  }
-  const res = await app.inject({ method: 'GET', url: '/api/status', headers });
-  expect(Object.keys(res.json())).toHaveLength(6); // every box still probed
-  expect(peak).toBeGreaterThan(0);
-  expect(peak).toBeLessThanOrEqual(2);             // never more than the limit at once
+  expect(res.statusCode).toBe(503);
 });
 
 test('status endpoint serves the poller snapshot without probing on each GET (no per-tab SSH amplification)', async () => {

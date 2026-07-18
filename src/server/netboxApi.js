@@ -1,6 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
-import { tlsProbe, pinnedSocket, normFp } from './tlsPin.js';
+import { tlsProbe, pinnedConnectionFactory, normFp } from './tlsPin.js';
 
 // Certificate-verification failure codes OpenSSL/Node surface on the request
 // error. Seeing one in ca mode means "the cert exists but isn't CA-trusted" —
@@ -27,14 +27,7 @@ function jsonRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 1000
       hostname: u.hostname, port: u.port || (secure ? 443 : 80), path: u.pathname + u.search,
       method, headers: reqHeaders, timeout: timeoutMs,
       ...(secure ? (tlsOpts.pin ? {
-        // Pin mode: the fingerprint is verified on this request's own
-        // connection before any header (the token) is written. No agent
-        // option here: http honors createConnection only when agent is
-        // left undefined (agent: false would mint a normal Agent instead).
-        createConnection: (_opts, oncreate) => {
-          pinnedSocket({ host: u.hostname, port: Number(u.port) || 443, fingerprint256: tlsOpts.pin, timeoutMs })
-            .then((socket) => oncreate(null, socket), (error) => oncreate(error));
-        },
+        createConnection: pinnedConnectionFactory({ host: u.hostname, port: Number(u.port) || 443, fingerprint256: tlsOpts.pin, timeoutMs }),
       } : { rejectUnauthorized: tlsOpts.rejectUnauthorized !== false }) : {}),
     }, (res) => {
       let data = '';

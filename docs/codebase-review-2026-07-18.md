@@ -17,6 +17,22 @@ folded in below with their old IDs noted.
 > note under this header describing the batch — the same convention
 > `codebase-review-2026-07-04.md` uses.
 
+**Status note, 2026-07-18 (batch 5, v1.7.8):** B4 plus the server-side consolidation set.
+B4 (every `boxes.json` mutation is serialized through a per-store promise queue — the RED test
+lost 7 of 8 concurrent writes before the fix). Consolidation: C1 (the four byte-identical
+debounced stores collapse into one `debouncedJsonStore.js`; each store is now a one-line
+wrapper), C4 (the duplicated PVE task poller becomes a shared `pveTask.js`), C5 (the
+pin-mode `createConnection` glue moves into `tlsPin.js`'s `pinnedConnectionFactory`), C6
+(`proxmoxApi` reuses `parseEndpoint`), C7 (health clamps reference `DEFAULTS.*`), C8
+(`buildEnsureLocalShellScript` takes the session name; `createLocalShellActions` threads
+`localSession`). Dead code: D1 (the unreachable `/api/status` probing fallback is deleted —
+the route serves the poller snapshot only, and the bounded-concurrency property is covered in
+statusPoller's own tests), D3 (`writeFileAtomic`/`Sync` fsync the temp file before the rename,
+making the module's power-loss claim true). Housekeeping: N1 (terminal WS URL encodes the box
+id), N2 (the two long-failing e2e specs asserted the literal string "bash" on a zsh host —
+they now wait for a shell prompt, and **the full e2e suite is green for the first time,
+12/12**), N3 (~180 stale review-diff scratch files deleted). Suite: 871/871.
+
 **Status note, 2026-07-18 (batch 4, v1.7.7):** the sweep — 23 findings, test-first. Bugs:
 B14 (post-removal master teardown skipped when an identical box was re-added), B15
 (StringDecoder per ssh stream — no more split-glyph mojibake in setup logs), B16 (a transient
@@ -87,7 +103,7 @@ explanation in the sections that follow the tables.
 | B1 | boot | A fatal error during startup makes the process exit with code 0, so systemd (`Restart=on-failure`) never restarts the service | Med | S | Exit 1 from the `uncaughtException` handler, or register the keep-alive handlers only after `app.listen` succeeds | ✅ v1.7.4 |
 | B2 | config | `config.json` is written in place (not atomically), so a crash mid-write leaves invalid JSON that prevents every subsequent boot | Med | S | Use the existing `writeFileAtomicSync` from `jsonFile.js` | ✅ v1.7.4 |
 | B3 | sessions | The attach-time "resize jiggle" never restores the original width, so provision/setup PTYs shrink by one column per reattach | Med | S | Save the original column count before the jiggle and restore that saved value | ✅ v1.7.4 |
-| B4 | store | All `boxes.json` mutations are unserialized read-modify-write cycles, so two concurrent changes silently lose one of them | Med | S | Serialize mutations through a per-store promise queue | Open |
+| B4 | store | All `boxes.json` mutations are unserialized read-modify-write cycles, so two concurrent changes silently lose one of them | Med | S | Serialize mutations through a per-store promise queue | ✅ v1.7.8 |
 | B5 | setup | A malformed row (for example `null`) in `data/setup-jobs.json` crashes the server at boot | Med | S | Filter loaded rows through a shape check, as `fleet.js` already does | ✅ v1.7.4 |
 | B6 | setup | Setup jobs stuck in `needs-interactive` are never superseded or pruned, so they accumulate forever (each carrying up to 64 KB of log) | Med | S | When a new setup job starts for a box, mark older non-running jobs for that box with a terminal `superseded` status | ✅ v1.7.6 |
 | B7 | setup | Cancelling a setup job during its `waiting-ssh` phase does nothing, so the install script still runs against a box the user just deleted | Med | S | Add a per-job cancellation flag that the wait loop checks before each probe and before launching ssh | ✅ v1.7.6 |
@@ -140,31 +156,31 @@ explanation in the sections that follow the tables.
 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
-| C1 | stores | Four store modules (`fleetStore`, `setupStore`, `provisionStore`, `proxmoxLifecycleStore`) are byte-for-byte copies of each other | Med | M | Extract a shared `createDebouncedJsonStore({ dataDir, filename })` factory; each store becomes a one-line wrapper | Open |
+| C1 | stores | Four store modules (`fleetStore`, `setupStore`, `provisionStore`, `proxmoxLifecycleStore`) are byte-for-byte copies of each other | Med | M | Extract a shared `createDebouncedJsonStore({ dataDir, filename })` factory; each store becomes a one-line wrapper | ✅ v1.7.8 |
 | C2 | web | The modal scaffold (backdrop, click guard, Escape handling, teardown) is copy-pasted eight times and has already drifted — two copies lack Escape handling; `makeRadio` is duplicated too | Med | M | Add an `openModal({ onClose })` helper to `dom.ts` and migrate the eight call sites | Open |
 | C3 | web | Two parallel setup-job viewers (the provision panel and the Proxmox hub) re-implement the same poll/render/interactive-fallback state machine | Low | M | Extract one shared setup-job viewer module used by both | Open |
-| C4 | proxmox | The PVE task-polling loop and job-manager scaffolding are duplicated between the provision and lifecycle managers | Low | M | Extract a shared `pollPveTask` helper | Open |
-| C5 | tls | The pinned-connection wiring is duplicated verbatim between the Proxmox and NetBox HTTP clients | Low | S | Export a `pinnedConnectionFactory` helper from `tlsPin.js` and use it in both | Open |
-| C6 | proxmox | `proxmoxApi.js` re-implements endpoint host/port parsing twice instead of reusing the existing `parseEndpoint` | Low | S | Import and reuse `parseEndpoint` from `proxmoxValidate.js` | Open |
-| C7 | config | The six health-setting clamps hardcode fallback numbers that duplicate values already defined in `DEFAULTS` | Low | S | Reference `DEFAULTS.*` instead of repeating the literals | Open |
-| C8 | local | The local-shell setup script hardcodes the tmux session name `local` while a configurable `localSession` parameter exists elsewhere — the two can silently disagree | Low | S | Thread the session name through, or remove the parameter and commit to the constant | Open |
+| C4 | proxmox | The PVE task-polling loop and job-manager scaffolding are duplicated between the provision and lifecycle managers | Low | M | Extract a shared `pollPveTask` helper | ✅ v1.7.8 |
+| C5 | tls | The pinned-connection wiring is duplicated verbatim between the Proxmox and NetBox HTTP clients | Low | S | Export a `pinnedConnectionFactory` helper from `tlsPin.js` and use it in both | ✅ v1.7.8 |
+| C6 | proxmox | `proxmoxApi.js` re-implements endpoint host/port parsing twice instead of reusing the existing `parseEndpoint` | Low | S | Import and reuse `parseEndpoint` from `proxmoxValidate.js` | ✅ v1.7.8 |
+| C7 | config | The six health-setting clamps hardcode fallback numbers that duplicate values already defined in `DEFAULTS` | Low | S | Reference `DEFAULTS.*` instead of repeating the literals | ✅ v1.7.8 |
+| C8 | local | The local-shell setup script hardcodes the tmux session name `local` while a configurable `localSession` parameter exists elsewhere — the two can silently disagree | Low | S | Thread the session name through, or remove the parameter and commit to the constant | ✅ v1.7.8 |
 | C9 | setup | The job-ordering comparator returns −1 for equal timestamps (not a valid total order); the provision manager has the same flaw | Low | S | Use a shared comparator that tie-breaks by job id | ✅ v1.7.6 |
 
 ### Dead code
 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
-| D1 | server | The `/api/status` fallback branch for a missing status poller is unreachable in production — `index.js` always provides one | Low | S | Make the poller a required dependency, stub it in tests, and delete the branch | Open |
+| D1 | server | The `/api/status` fallback branch for a missing status poller is unreachable in production — `index.js` always provides one | Low | S | Make the poller a required dependency, stub it in tests, and delete the branch | ✅ v1.7.8 |
 | D2 | stores | `whenIdle()` exists in all four job stores but is only ever called by tests | Low | S | Wire it into the B8 shutdown flush rather than deleting it | ✅ v1.7.4 |
-| D3 | jsonFile | The module's comment claims power-loss safety, but the write path never calls fsync, so that claim doesn't hold | Low | S | fsync the temp file (and optionally the directory) before renaming, or soften the comment to "process crash" | Open |
+| D3 | jsonFile | The module's comment claims power-loss safety, but the write path never calls fsync, so that claim doesn't hold | Low | S | fsync the temp file (and optionally the directory) before renaming, or soften the comment to "process crash" | ✅ v1.7.8 |
 
 ### Notes and housekeeping
 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
-| N1 | web | The interactive terminal's WebSocket URL doesn't URL-encode the box id, while the provision path does — inconsistent, though harmless today | Info | S | Apply `encodeURIComponent` for consistency | Open |
-| N2 | e2e | Two pre-existing end-to-end test failures (zsh root shell), noted in the internal ledger, remain unfixed | Info | — | Fix separately; unrelated to any finding here | Open |
-| N3 | repo | Roughly 180 `review-*.diff` scratch files have accumulated in `.superpowers/sdd/` (gitignored, but heavy clutter) | Info | S | Delete or archive them | Open |
+| N1 | web | The interactive terminal's WebSocket URL doesn't URL-encode the box id, while the provision path does — inconsistent, though harmless today | Info | S | Apply `encodeURIComponent` for consistency | ✅ v1.7.8 |
+| N2 | e2e | Two pre-existing end-to-end test failures (zsh root shell), noted in the internal ledger, remain unfixed | Info | — | Fix separately; unrelated to any finding here | ✅ v1.7.8 |
+| N3 | repo | Roughly 180 `review-*.diff` scratch files have accumulated in `.superpowers/sdd/` (gitignored, but heavy clutter) | Info | S | Delete or archive them | ✅ v1.7.8 |
 | N4 | repo | The working-tree `CLAUDE.md` gained a graphify section; it is a tracked file, so it will be published on the next release | Info | — | User decision: keep it public, or move the rule into the gitignored `.claude/` config | ✅ 2026-07-18 (moved to gitignored `CLAUDE.local.md`) |
 
 Items from the 2026-07-04 review that were re-verified as **fixed** in the meantime: L6 (the

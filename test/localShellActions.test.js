@@ -51,3 +51,15 @@ test('createLocalShellActions skips setup for none', async () => {
 
   expect(calls).toEqual([]);
 });
+
+test('the ensure script targets the configured tmux session name, not a hardcoded local', async () => {
+  const custom = String(buildEnsureLocalShellScript('omz', 'sess42'));
+  expect(custom).toContain('sess42');
+  const scripts = [];
+  const actions = createLocalShellActions({
+    run: async (script) => { scripts.push(String(script)); return { code: 0, stdout: '', stderr: '' }; },
+    localSession: 'sess42',
+  });
+  await actions.ensureReady('omz');
+  expect(scripts[0]).toContain('sess42');
+});
