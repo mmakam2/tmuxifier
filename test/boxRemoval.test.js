@@ -48,3 +48,25 @@ test('removeBox is idempotent for an absent box', async () => {
   const removeBox = createBoxRemoval({ store: { getBox: async () => undefined, removeBox: async () => {} } });
   await expect(removeBox('missing')).resolves.toEqual({ ok: true });
 });
+
+// Security invariant: a known_hosts entry is removed only on verified
+// deprovision, fresh provision, or an explicit user click — never on ordinary
+// box removal. This is a regression lock, not a drive of new behavior:
+// createBoxRemoval never calls a `forgetHostKey` boxAction today, so this
+// passes immediately and stays green as long as that stays true.
+test('ordinary box removal never touches known_hosts', async () => {
+  const calls = [];
+  const box = { id: 'B1', host: '192.168.1.10' };
+  const removeBox = createBoxRemoval({
+    store: { getBox: async () => box, removeBox: async () => {} },
+    sessions: { closeKey: () => {} },
+    boxActions: {
+      killSession: async () => { calls.push('kill'); },
+      exitMaster: async () => { calls.push('master'); },
+      forgetHostKey: async () => { calls.push('forgetHostKey'); },
+    },
+  });
+  await expect(removeBox('B1')).resolves.toEqual({ ok: true });
+  await tick(); await tick();
+  expect(calls).not.toContain('forgetHostKey');
+});

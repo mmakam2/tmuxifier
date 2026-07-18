@@ -249,6 +249,57 @@ test('destroy failure preserves the linked box', async () => {
   expect(calls).toEqual(['destroy']);
 });
 
+test('deprovision forgets the box host key after destroying the container', async () => {
+  let state = 'stopped';
+  const calls = [];
+  const forgets = [];
+  const { manager } = fixture('stopped', {
+    inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
+    makeClient: () => ({
+      destroyLxc: async () => { calls.push('destroy'); state = 'missing'; return 'UPID:destroy'; },
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+      taskLog: async () => [],
+    }),
+    removeLinkedBox: async (id) => calls.push(`remove:${id}`),
+    knownHosts: { forget: async (host, port) => { forgets.push([host, port]); return []; } },
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(calls).toEqual(['destroy', 'remove:B1']);
+  expect(forgets).toEqual([['192.168.1.10', undefined]]);
+  expect(manager.getJob(job.id)).toMatchObject({ status: 'done', phase: 'done' });
+});
+
+test('missing-container deprovision also forgets the box host key', async () => {
+  const removed = [];
+  const forgets = [];
+  const { manager } = fixture('missing', {
+    removeLinkedBox: async (id) => removed.push(id),
+    knownHosts: { forget: async (host, port) => { forgets.push([host, port]); return []; } },
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(removed).toEqual(['B1']);
+  expect(forgets).toEqual([['192.168.1.10', undefined]]);
+  expect(manager.getJob(job.id).status).toBe('done');
+});
+
+test('deprovision succeeds even when forgetting the host key rejects', async () => {
+  let state = 'stopped';
+  const { manager } = fixture('stopped', {
+    inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
+    makeClient: () => ({
+      destroyLxc: async () => { state = 'missing'; return 'UPID:destroy'; },
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+      taskLog: async () => [],
+    }),
+    knownHosts: { forget: async () => { throw new Error('ssh-keygen missing'); } },
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id).status).toBe('done');
+});
+
 test('graceful task timeout never calls force stop, destroy, or local removal', async () => {
   const calls = [];
   const { manager } = fixture('running', {

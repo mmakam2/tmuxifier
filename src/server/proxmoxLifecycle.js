@@ -9,7 +9,7 @@ const targetKey = (link) => `${link.hostId}\u0000${link.node}\u0000${Number(link
 const serviceError = (statusCode, message) => Object.assign(new Error(message), { statusCode });
 
 export function createProxmoxLifecycleManager({
-  boxStore, proxmoxStore, inventory, makeClient, removeLinkedBox,
+  boxStore, proxmoxStore, inventory, makeClient, removeLinkedBox, knownHosts = null,
   netboxStore = null, makeNetboxClient = createNetboxClient,
   load = () => [], save = () => {}, now = () => new Date().toISOString(), makeId = randomUUID,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), pollMs = 1500,
@@ -153,6 +153,9 @@ export function createProxmoxLifecycleManager({
     if (current.state === 'unknown') throw new Error(current.error || 'Proxmox state unavailable');
     if (current.state === 'missing') {
       job.phase = 'unlink'; persist();
+      // The container is verifiably gone — its host key is dead by definition.
+      // Best-effort: a failure here must never fail the deprovision.
+      if (knownHosts) { try { await knownHosts.forget(box.host, box.port); } catch { /* best-effort */ } }
       await releaseNetboxIp(job, box);
       await removeLinkedBox(job.boxId);
       return;
@@ -172,6 +175,9 @@ export function createProxmoxLifecycleManager({
     job.phase = 'verify'; persist();
     await waitForState(job, 'missing', taskTimeoutMs);
     job.phase = 'unlink'; persist();
+    // The container is verifiably gone — its host key is dead by definition.
+    // Best-effort: a failure here must never fail the deprovision.
+    if (knownHosts) { try { await knownHosts.forget(box.host, box.port); } catch { /* best-effort */ } }
     await releaseNetboxIp(job, box);
     await removeLinkedBox(job.boxId);
   }

@@ -25,6 +25,7 @@ import { createProxmoxClient, inspectEndpoint } from './proxmoxApi.js';
 import { createProxmoxInventory, mergeProxmoxStatus } from './proxmoxInventory.js';
 import { createProxmoxLifecycleStore } from './proxmoxLifecycleStore.js';
 import { createProxmoxLifecycleManager } from './proxmoxLifecycle.js';
+import { createKnownHosts } from './knownHosts.js';
 import { readDefaultPublicKey } from './defaultKey.js';
 import os from 'node:os';
 
@@ -122,11 +123,12 @@ const proxmoxInventory = createProxmoxInventory({
   proxmoxStore, makeClient: makeProxmoxClient, boxStore: store,
   freshnessMs: config.statusPollMs * 2,
 });
+const knownHosts = createKnownHosts();
 const lifecycleStore = createProxmoxLifecycleStore({ dataDir: config.dataDir });
 const lifecycleManager = createProxmoxLifecycleManager({
   boxStore: store, proxmoxStore, inventory: proxmoxInventory,
   makeClient: makeProxmoxClient, removeLinkedBox: removeBox,
-  netboxStore,
+  netboxStore, knownHosts,
   load: () => lifecycleStore.load(), save: (jobs) => lifecycleStore.save(jobs),
   pollMs: config.pvePollMs,
   taskTimeoutMs: config.pveProvisionTimeoutMs,
