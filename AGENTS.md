@@ -164,6 +164,11 @@ pattern for new modules.
   deletes any remaining NetBox records matching the box's current IP, so manually created
   records don't go stale (best-effort).
 - `boxRemoval.js` — shared session/tmux/store cleanup for ordinary removal and verified deprovision.
+- `knownHosts.js` — `createKnownHosts`: best-effort `ssh-keygen -R` wrapper (argv, no shell).
+  A known_hosts entry is removed only on verified deprovision, on provisioning a fresh
+  container's IP, or via the explicit `POST /api/boxes/:id/forget-hostkey` user action —
+  never automatically on a connection failure (`status.js` classifies changed keys as
+  `hostKeyChanged` so the UI can offer the ⚷ button).
 - `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`pinnedSocket`/`normFp`) used
   by both the Proxmox and NetBox API clients. Pin mode verifies the pinned fingerprint on each
   request's own connection (`pinnedSocket` via `createConnection`) instead of OpenSSL chain
@@ -271,6 +276,13 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 - The NetBox API token is sealed the same way in `data/netbox.json` (`0o600`) and never returned
   to the browser (`hasToken` only). NetBox TLS supports CA verification, TOFU fingerprint pinning
   (shared `tlsPin.js` helpers), or an explicit insecure mode — off by default.
+- A changed SSH host key is treated as a possible MITM, not a nuisance: Tmuxifier never clears a
+  `known_hosts` entry merely because a connection failed. It is removed only when Tmuxifier can
+  prove the old identity is gone or new (verified Proxmox deprovision; provisioning a fresh
+  container once its IP is known) or the user explicitly consents via the authenticated
+  `POST /api/boxes/:id/forget-hostkey` (confirm-gated in the UI). Ordinary box removal does
+  **not** forget a key — the machine still exists and `~/.ssh/known_hosts` is shared with your
+  regular ssh usage.
 
 ## Docs
 

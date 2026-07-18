@@ -210,6 +210,17 @@ configured remote tmux session, and clears the status-probe backoff — then reo
 Use it when a box's connection state looks wedged (e.g. stuck red after a network change) or to
 force a fresh login; on-box work in *other* tmux sessions is untouched.
 
+If a box's SSH host key changes (e.g. it was rebuilt at the same address), ssh's own
+man-in-the-middle defense refuses the connection: the dot stays red but its tooltip reads "Host
+key changed — verify the box," and the row gains a ⚷ **Forget host key** action. It's
+confirm-gated — only use it once you've verified the rebuild yourself — and removes the stale
+`~/.ssh/known_hosts` entry, then reopens the terminal for a fresh key exchange. Tmuxifier never
+clears a `known_hosts` entry just because a connection failed: the only automatic clearing
+happens when Tmuxifier itself proves the old machine is gone (a verified Proxmox deprovision) or
+just created the new one (provisioning a container onto a freshly assigned address, e.g. a
+NetBox-recycled IP); ordinary box removal leaves `known_hosts` untouched since it's shared with
+your regular ssh usage.
+
 ## Status, multiplexing & rate-limit safety
 Tmuxifier talks to each box over SSH continuously — a background **status probe** keeps the
 sidebar dots current, and each open terminal is another SSH connection. Left naive, that churn
@@ -259,13 +270,14 @@ re-arming them. To clear one immediately, unban the Tmuxifier host's IP on that 
 The dashboard keeps a rolling per-box health trend from the samples the 30-second status poll
 already collects — **no extra SSH**. Each box row shows a small sparkline of the last ~hour
 (click it to cycle CPU → memory → disk), and the sidebar's **Events** button opens an in-app
-timeline of transitions: box went down / recovered / needs login, plus CPU/mem/disk crossing a
-warn threshold (default 90%, with hysteresis so a hovering value doesn't flap). Unseen events
-show as a count badge on the button and are marked seen when the panel is opened. Events survive
-restarts in `data/health-events.json`; the sample series is in-memory only. Everything is
-**display-only** — Tmuxifier sends no browser, email, or webhook notifications (a possible future
-phase). Tune with `TMUXIFIER_HEALTH_HISTORY_MAX`, `TMUXIFIER_HEALTH_EVENTS_MAX`,
-`TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT`, and `TMUXIFIER_HEALTH_HYSTERESIS_PCT`.
+timeline of transitions: box went down / recovered / needs login / host key changed, plus
+CPU/mem/disk crossing a warn threshold (default 90%, with hysteresis so a hovering value doesn't
+flap). Unseen events show as a count badge on the button and are marked seen when the panel is
+opened. Events survive restarts in `data/health-events.json`; the sample series is in-memory
+only. Everything is **display-only** — Tmuxifier sends no browser, email, or webhook
+notifications (a possible future phase). Tune with `TMUXIFIER_HEALTH_HISTORY_MAX`,
+`TMUXIFIER_HEALTH_EVENTS_MAX`, `TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT`, and
+`TMUXIFIER_HEALTH_HYSTERESIS_PCT`.
 
 ### Fleet Command
 
