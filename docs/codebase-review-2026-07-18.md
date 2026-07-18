@@ -2,262 +2,763 @@
 
 **Date:** 2026-07-18
 **Version reviewed:** v1.7.3 (`main` @ 2330bcc, working tree)
-**Scope:** All of `src/server/`, `src/web/`, scripts, tests, repo hygiene.
-**Method:** Five parallel deep reviews (server core, SSH/session/box, Proxmox/NetBox,
-fleet/setup/health, web client) plus first-hand spot verification of the top findings and a
-dead-export sweep. Baseline: `npm test` green (819/819 across 74 files, ~36s). Still-open items
-from the 2026-07-04 review were re-verified against v1.7.3 and are folded in below with their
-old IDs.
+**Scope:** All of `src/server/`, `src/web/`, scripts, tests, and repository hygiene.
+**Method:** Five parallel deep reviews (server core, SSH/session/box layer, Proxmox/NetBox,
+fleet/setup/health, web client), followed by first-hand verification of the top findings and a
+dead-export sweep. Baseline: `npm test` is green (819/819 tests across 74 files, ~36s).
+Items that were still open from the 2026-07-04 review were re-verified against v1.7.3 and are
+folded in below with their old IDs noted.
 
-> Point-in-time review for triage; nothing here has been fixed yet. Line numbers reference the
-> reviewed commit and will drift. The **Status** column in the table below is the live fix
-> ledger: flip entries to `✅ vX.Y.Z` as fixes ship and add a dated status note here per batch
-> (same convention as `codebase-review-2026-07-04.md`).
-
-## Findings & fix tracking
-
-Severity is likelihood × blast radius for this single-user tool. Effort: **S** < 1h, **M** = a
-few hours. **Status is the tracking ledger for this review** — update it in place as fixes land
-(`Open` → `✅ vX.Y.Z`, or `Won't fix` with a reason), and add a dated status note under the
-header above when a batch ships, mirroring the 2026-07-04 review's convention.
-
-| ID | Area | Finding | Sev | Eff | Fix | Status |
-|----|------|---------|-----|-----|-----|--------|
-| B1 | boot | Fatal boot errors exit code 0 — systemd `Restart=on-failure` never restarts | Med | S | `process.exit(1)` in `uncaughtException` handler, or register swallow handlers only after `app.listen` | Open |
-| B2 | config | `upsertConfigFile` writes `config.json` non-atomically; torn write + B1 = silently dead service | Med | S | Use `writeFileAtomicSync` from jsonFile.js | Open |
-| B3 | sessions | Attach "resize jiggle" second call is a no-op; provision PTYs ratchet narrower per reattach | Med | S | Capture `const c = pty.cols` before jiggle; restore to `c` | Open |
-| B4 | store | boxes.json mutators are unserialized read-modify-write; concurrent writes lost | Med | S | Per-store promise-chain queue (`queue = queue.then(op)`) | Open |
-| B5 | setup | `[null]` row in `setup-jobs.json` crashes the server at boot (fleet.js guards this, setupManager doesn't) | Med | S | Same `validJob`-style shape filter fleet.js uses | Open |
-| B6 | setup | `needs-interactive` jobs never superseded/pruned — unbounded accumulation incl. 64KB logs | Med | S | On new `start()` for a box, flip older non-running jobs to terminal `superseded` | Open |
-| B7 | setup | `cancelForBox` is a no-op during the `waiting-ssh` phase — setup proceeds against a deleted box | Med | S | Per-job `cancelled` flag checked between probe attempts and before `sshStream` | Open |
-| B8 | stores | No SIGTERM flush of debounced stores — deploy restart loses final save; done jobs reload `interrupted` | Med | S | SIGTERM/SIGINT handler awaiting all stores' `whenIdle()` (with C1, D2) | Open |
-| B9 | web | Stale fleet-job poll response for finished job A kills job B's poll loop (old L16, sharpened) | Med | S | Guard finished branch and `showFleetJob` render with `fleetPollJobId === id` | Open |
-| B10 | web | ⌘/Ctrl+Enter in fleet editor shadowed by CM6 `defaultKeymap` `Mod-Enter` — inserts blank line, never runs | Med | S | Put `runKeymap` before combined keymap (or `Prec.high`) | Open |
-| B11 | web | "Finish interactively" multi-click opens concurrent setup PTYs on one box; prior handle leaked (also `proxmoxUi.ts` setupTerm) | Med | S | Disable button once clicked; dispose prior `interactiveTerm`/`setupTerm` before reassign | Open |
-| B12 | web | 401/logout teardown misses `document.body`-mounted modals — Proxmox hub polls forever atop login screen | Med | S | Registered close hook for body-mounted modals, invoked by `onUnauthorized`/logout | Open |
-| B13 | fleet | `prune()` evicts a still-running job (old L3, confirmed open) | Low | S | Skip `running` jobs in prune (mirror setupManager's retention) | Open |
-| B14 | boxes | Post-removal background `exitMaster` can tear down the master of a same-host box re-added within ~18s | Low | S | Re-check store for same host/user/port before `exitMaster`, skip if found | Open |
-| B15 | ssh | Per-chunk Buffer→string decode garbles UTF-8 split across chunk boundaries in setup logs | Low | S | `string_decoder.StringDecoder` per stream in sshRun.js | Open |
-| B16 | web | Transient PVE `unknown` state closes the stopped-box panel and clears selection | Low | S | Only affirmative `running` counts as "restarted"; keep panel on `unknown` | Open |
-| B17 | netbox | `requireNetboxSettings` masks decrypt/read errors as "not configured" | Low | S | Distinguish null settings from thrown read/decrypt error; surface the latter | Open |
-| B18 | server | `tmux kill-session -t local` prefix-matches — can kill the operator's own `local-*` session | Low | S | Exact-match target `-t =local` | Open |
-| B19 | auth | Google token exchange has no timeout (old L12, confirmed open) | Low | S | `signal: AbortSignal.timeout(10000)`, map abort into existing catch | Open |
-| B20 | config | `parseEnvFile` folds inline `# comment` into the value; numeric knobs silently fall back to defaults | Low | S | Strip unquoted ` #…` suffix (dotenv-compatible) | Open |
-| B21 | fleet | ssh timeout reported as `exited 1` (old L2, confirmed open) | Low | S | Surface `err.killed`/`err.signal` as `timed out` in sshRun/fleet | Open |
-| B22 | fleet | Duplicate `boxIds` run a command twice on one box (old L4, confirmed open) | Low | S | Dedupe `boxIds` in `createJob` | Open |
-| B23 | store | `updateBox` can't clear `label` (old L11, confirmed open) | Low | S | Honor explicit `''`/`null` label like the user/port/proxyJump clear loop | Open |
-| B24 | proxmox | Templates route without `?storage` → `/storage/undefined/content` 502 (old L14, confirmed open) | Low | S | Return 400 when `?storage` missing | Open |
-| B25 | web | `formatEvent` has no default case — unknown event kind from a newer server bricks the panel (old L15, confirmed open) | Low | S | Default branch returning a generic event line | Open |
-| S1 | known_hosts | `forget(host, port)` on a nonstandard-port box also deletes the bare-host entry — a *different* machine's port-22 identity | Med | S | When `port && port !== 22`, remove only the `[host]:port` form | Open |
-| S2 | repo | `.agents/`, `graphify-out/`, `skills-lock.json` un-ignored; shipping flow's `git add -A` would commit them to the public repo | Med | S | Add all three to `.gitignore` | Open |
-| S3 | auth | Logout revokes nothing server-side; captured cookie valid up to 7 days after logout | Low | S | "Sessions invalid before <ts>" watermark bumped on logout, or document client-side-only | Open |
-| S4 | server | HSTS sent only for `https://` publicUrl — absent in the documented local-TLS mode | Low | S | Use the same predicate as `secureCookie` (local TLS ⇒ HSTS too) | Open |
-| S5 | secrets | `secretBox.open` accepts truncated GCM auth tags (old L13, confirmed open) | Low | S | Pass `{ authTagLength: 16 }` (or reject tags ≠ 16 bytes) | Open |
-| S6 | scripts | `set-password` accepts the password via argv and echoes the interactive prompt (old L23, confirmed open) | Low | S | Mask interactive input; deprecate the argv form | Open |
-| S7 | status | `HOSTKEY_CHANGE_RE` second alternation over-matches jump-host key failures — ⚷ misleads for proxyJump boxes (known deferred, v1.7.1) | Low | S | Drop the alternation or add a tooltip caveat | Open |
-| E1 | setup | `persist()` on every ssh output chunk — full-history sort + multi-MB stringify + atomic write per chunk | Med | S | Coalesce log persistence (≥250ms / 8KB); keep immediate persist for status transitions | Open |
-| E2 | netbox | Pin mode runs a full `tlsProbe` handshake before **every** API call — 2× handshakes per request | Med | S | Cache resolved TLS options per client (as proxmoxApi does), or skip probe when pin known | Open |
-| E3 | provision | In-memory `jobs`/`settles` Maps never pruned; disk slice can drop a still-running job's record | Med | S | Adopt lifecycle's terminal-only `prune()`; delete matching `settles` entries (both managers) | Open |
-| E4 | health | One synchronous full-file write per emitted event — 30-box outage = 30 back-to-back writes | Low | S | Collect events during `record()`, `save` once at end of pass | Open |
-| E5 | web | `refresh()` wipes status/setup caches before repaint — gray-dot flash + duplicate fetches (old L17) | Low | S | Keep previous caches until fresh responses land; paint once per response | Open |
-| E6 | status | `backoff`/`cpuPrev` maps never pruned on box removal | Low | S | `forgetBox(id)` on the checker, called from box removal | Open |
-| E7 | store | `importBoxes` does N full read/write cycles for N boxes | Low | S | Batch path: read once, validate against in-memory list, write once | Open |
-| E8 | boxActions | Setup installs git unconditionally even when nothing selected needs it | Low | S | Gate git bootstrap on `installOhMyTmux \|\| installOhMyZsh \|\| tools.includes('git')` | Open |
-| E9 | index | `defaultPublicKey` caches the value, not the promise — concurrent first calls spawn duplicate ssh-keygen | Low | S | Cache the promise (`??=`); reset to null on null-resolve/reject | Open |
-| C1 | stores | Four byte-equivalent debounced store factories | Med | M | Extract `createDebouncedJsonStore({ dataDir, filename })`; four one-line wrappers | Open |
-| C2 | web | Modal scaffold copy-pasted ×8 with drift (two sites lack Escape); `makeRadio` ×2 | Med | M | `openModal({ onClose })` helper in dom.ts; migrate the eight sites | Open |
-| C3 | web | Two parallel setup-job poll viewers (provision panel vs `proxmoxUi`) | Low | M | Extract one setup-job viewer module (poll loop + log/actions render) | Open |
-| C4 | proxmox | `pollTask` + job-manager scaffolding duplicated between provision and lifecycle managers | Low | M | Shared `pollPveTask(client, node, upid, opts)` helper | Open |
-| C5 | tls | Pinned-`createConnection` glue duplicated between proxmoxApi and netboxApi | Low | S | `pinnedConnectionFactory(...)` exported from tlsPin.js | Open |
-| C6 | proxmox | Endpoint host/port split re-implemented twice in proxmoxApi | Low | S | Reuse `parseEndpoint` from proxmoxValidate.js | Open |
-| C7 | config | Health-knob clamps hardcode fallback literals duplicating `DEFAULTS` | Low | S | Replace literals with `DEFAULTS.*` references | Open |
-| C8 | local | `buildEnsureLocalShellScript` hardcodes `'local'` while a `localSession` knob exists | Low | S | Thread the session name through, or drop the knob and commit to the constant | Open |
-| C9 | setup | `ordered()` comparator not a total order (−1 on equal `createdAt`); same in proxmoxProvision | Low | S | Shared tie-break-by-id comparator used by both | Open |
-| D1 | server | `/api/status` `!statusPoller` fallback branch unreachable in production | Low | S | Make `statusPoller` required, stub in tests, delete branch + `mapWithConcurrency` import | Open |
-| D2 | stores | `whenIdle()` production-dead in all four stores | Low | S | Wire into B8's shutdown flush (don't delete) | Open |
-| D3 | jsonFile | "power loss can never truncate" comment overclaims — no fsync before rename | Low | S | fsync fd (± directory) before rename, or soften claim to process-crash | Open |
-| N1 | web | `terminal.ts:260` WS URL unencoded vs encoded provision path (old L19) | Info | S | `encodeURIComponent(boxId)` for consistency | Open |
-| N2 | e2e | 2 pre-existing e2e failures (zsh root shell), noted in the sdd ledger | Info | — | Fix separately; not introduced by any pending change | Open |
-| N3 | repo | ~180 `review-*.diff` files in `.superpowers/sdd/` (gitignored but heavy clutter) | Info | S | Delete or archive the diff files | Open |
-| N4 | repo | Working-tree CLAUDE.md gained a graphify section — tracked file, ships publicly on next release | Info | — | User decision: keep public, or move rule into gitignored `.claude/` | Open |
-
-Old-review items verified **fixed** since 2026-07-04: L6 (cpu threshold seed), plus everything
-marked fixed in that doc. `proxmoxUi` `_opt` dead param (ledger minor) already cleaned.
+> This is a point-in-time review captured for triage; nothing in it has been fixed yet. Line
+> numbers reference the reviewed commit and will drift as fixes land.
+>
+> **The Status column in the tables below is the live fix ledger.** When a fix ships, change
+> its entry from `Open` to `✅ vX.Y.Z` (or `Won't fix` with a reason), and add a dated status
+> note under this header describing the batch — the same convention
+> `codebase-review-2026-07-04.md` uses.
 
 ---
 
-## Details — bugs
+## Findings and fix tracking
 
-### B1 — Fatal boot errors exit 0; systemd never restarts
-`src/server/index.js:35-36` registers blanket `uncaughtException`/`unhandledRejection` handlers
-that log and continue, before `loadConfig()`/`buildServer()` run. A throw during boot (corrupt
-`config.json`, bad `TMUXIFIER_TLS_CERT` path) is logged and the process exits **0**;
-`deploy/tmuxifier.service` uses `Restart=on-failure`, so the service stays dead. Verified
-empirically. Meanwhile `requiredConfigError` correctly exits 1 — only some boot failures signal
-failure. **Fix:** `process.exit(1)` in the `uncaughtException` handler, or register the
-swallow-and-continue handlers only after `app.listen` succeeds.
+Severity reflects likelihood × blast radius for this single-user tool, not CVSS. Effort is a
+rough fix-size guess: **S** = under an hour, **M** = a few hours. Every finding has a detailed
+explanation in the sections that follow the tables.
 
-### B2 — `config.json` written in place
-`src/server/configFile.js:30-31` uses raw `writeFileSync` (no temp+rename). `PATCH
-/api/local-shell` writes this file at runtime; a torn write leaves invalid JSON,
-`readConfigFile` deliberately throws, `loadConfig` is unguarded at boot — combined with B1 the
-service then dies silently on every start. `writeFileAtomicSync` already exists in jsonFile.js
-for exactly this. **Fix:** use it (also un-deads that export).
+### Bugs
 
-### B3 — Resize jiggle is a no-op on the restore side
-`src/server/sessions.js:119-121`:
+| ID | Area | Finding | Severity | Effort | Proposed fix | Status |
+|----|------|---------|----------|--------|--------------|--------|
+| B1 | boot | A fatal error during startup makes the process exit with code 0, so systemd (`Restart=on-failure`) never restarts the service | Med | S | Exit 1 from the `uncaughtException` handler, or register the keep-alive handlers only after `app.listen` succeeds | Open |
+| B2 | config | `config.json` is written in place (not atomically), so a crash mid-write leaves invalid JSON that prevents every subsequent boot | Med | S | Use the existing `writeFileAtomicSync` from `jsonFile.js` | Open |
+| B3 | sessions | The attach-time "resize jiggle" never restores the original width, so provision/setup PTYs shrink by one column per reattach | Med | S | Save the original column count before the jiggle and restore that saved value | Open |
+| B4 | store | All `boxes.json` mutations are unserialized read-modify-write cycles, so two concurrent changes silently lose one of them | Med | S | Serialize mutations through a per-store promise queue | Open |
+| B5 | setup | A malformed row (for example `null`) in `data/setup-jobs.json` crashes the server at boot | Med | S | Filter loaded rows through a shape check, as `fleet.js` already does | Open |
+| B6 | setup | Setup jobs stuck in `needs-interactive` are never superseded or pruned, so they accumulate forever (each carrying up to 64 KB of log) | Med | S | When a new setup job starts for a box, mark older non-running jobs for that box with a terminal `superseded` status | Open |
+| B7 | setup | Cancelling a setup job during its `waiting-ssh` phase does nothing, so the install script still runs against a box the user just deleted | Med | S | Add a per-job cancellation flag that the wait loop checks before each probe and before launching ssh | Open |
+| B8 | stores | Nothing flushes the debounced job stores on shutdown, so a deploy restart can lose the final save and completed jobs reload as `interrupted` | Med | S | Add a SIGTERM/SIGINT handler that awaits every store's `whenIdle()` before exiting | Open |
+| B9 | web | A stale poll response for a finished fleet job can silently stop the polling of a newer job the user has switched to | Med | S | Guard the finished-job branch (and the initial render) with a check that the response still belongs to the selected job | Open |
+| B10 | web | The advertised ⌘/Ctrl+Enter "run" shortcut in the fleet script editor never fires — CodeMirror's default keymap intercepts it and inserts a blank line | Med | S | Register the run keybinding ahead of the default keymap (or wrap it in `Prec.high`) | Open |
+| B11 | web | Clicking "Finish interactively" more than once opens multiple concurrent setup terminals against the same box and leaks all but the last | Med | S | Disable the button after the first click, and dispose the previous terminal handle before creating a new one | Open |
+| B12 | web | Logout / session-expiry teardown misses modals mounted on `document.body`, so an open Proxmox hub stays on top of the login screen, polling forever | Med | S | Give body-mounted modals a registered close hook that the teardown path invokes | Open |
+| B13 | fleet | Job history pruning can evict a fleet job that is still running, making it invisible and uncancellable (old L3) | Low | S | Skip `running` jobs when pruning, mirroring the setup manager's retention policy | Open |
+| B14 | boxes | The background cleanup after removing a box can tear down the SSH ControlMaster of an identical box the user re-added moments later | Low | S | Before tearing down the master, re-check the store for a box with the same host/user/port and skip if one exists | Open |
+| B15 | ssh | SSH output is decoded chunk-by-chunk, so a multi-byte UTF-8 character split across two chunks becomes a � in the setup log | Low | S | Decode each stream with a `string_decoder.StringDecoder` instead of per-chunk `toString` | Open |
+| B16 | web | A momentary Proxmox API failure (state `unknown`) is misread as "container restarted": the stopped-box panel closes and the selection is lost | Low | S | Only treat an affirmative `running` state as a restart; keep the panel open on `unknown` | Open |
+| B17 | netbox | Errors while reading or decrypting NetBox settings are reported as "NetBox is not configured", hiding the real problem | Low | S | Distinguish "no settings stored" from a read/decrypt error and surface the error message | Open |
+| B18 | server | `tmux kill-session -t local` uses tmux's prefix matching, so it can kill an unrelated session such as `local-dev` on the Tmuxifier host | Low | S | Use tmux's exact-match form: `-t =local` | Open |
+| B19 | auth | The Google OAuth token exchange has no timeout, so a hung Google endpoint pins the login callback forever (old L12) | Low | S | Pass `signal: AbortSignal.timeout(10000)` and route the abort into the existing error path | Open |
+| B20 | config | An inline comment in `.env` (`TMUXIFIER_PORT=8080 # dashboard`) becomes part of the value, and numeric settings then silently fall back to defaults | Low | S | Strip unquoted ` #…` suffixes when parsing, matching dotenv behavior | Open |
+| B21 | fleet | An SSH timeout during a fleet run is reported as `exited 1`, indistinguishable from a real exit code 1 (old L2) | Low | S | Detect the killed/timeout case in `sshRun` and report it as `timed out` | Open |
+| B22 | fleet | Passing the same box id twice to a fleet job runs the command twice on that box (old L4) | Low | S | De-duplicate the box id list when creating the job | Open |
+| B23 | store | A box's label can never be cleared once set — `updateBox` ignores an explicit empty value (old L11) | Low | S | Treat an explicit empty/null label as "clear it", like the existing user/port/proxyJump clearing | Open |
+| B24 | proxmox | Requesting the template list without a `?storage` parameter builds the URL `/storage/undefined/content` and returns a confusing 502 (old L14) | Low | S | Validate the parameter and return a 400 when it is missing | Open |
+| B25 | web | The health-events formatter has no default case, so a single unknown event type from a newer server breaks the whole events panel (old L15) | Low | S | Add a default branch that renders a generic event line | Open |
+
+### Safety and security
+
+| ID | Area | Finding | Severity | Effort | Proposed fix | Status |
+|----|------|---------|----------|--------|--------------|--------|
+| S1 | known_hosts | Forgetting the host key of a box on a nonstandard port also deletes the bare-hostname entry — which belongs to whatever machine answers port 22 at that address | Med | S | When the port is nonstandard, remove only the `[host]:port` entry | Open |
+| S2 | repo | `.agents/`, `graphify-out/`, and `skills-lock.json` are untracked and not gitignored; the release checklist stages with `git add -A`, so the next release would commit them to the public repository | Med | S | Add all three to `.gitignore` | Open |
+| S3 | auth | Logging out only clears the browser cookie — a captured session cookie remains valid for up to 7 days afterward | Low | S | Keep a server-side "sessions issued before X are invalid" watermark that logout advances, or document logout as client-side only | Open |
+| S4 | server | The HSTS header is only sent when an external HTTPS URL is configured, so the documented local-TLS deployment never gets it | Low | S | Send HSTS under the same condition that marks the cookie `Secure` (local TLS counts) | Open |
+| S5 | secrets | `secretBox.open` accepts truncated GCM authentication tags, weakening forgery resistance (old L13) | Low | S | Pass `{ authTagLength: 16 }` to `createDecipheriv`, or reject tags that are not 16 bytes | Open |
+| S6 | scripts | `set-password` still accepts the password as a command-line argument (visible in shell history and `ps`) and echoes it when prompted interactively (old L23) | Low | S | Mask the interactive input and deprecate the argument form | Open |
+| S7 | status | The changed-host-key detector also matches jump-host key failures, so the ⚷ "forget key" button can appear for the wrong host on proxyJump boxes (known deferred item from v1.7.1) | Low | S | Drop the over-broad pattern alternation, or add a tooltip caveat | Open |
+
+### Efficiency
+
+| ID | Area | Finding | Severity | Effort | Proposed fix | Status |
+|----|------|---------|----------|--------|--------------|--------|
+| E1 | setup | The setup manager persists the entire job history to disk on every chunk of SSH output — a chatty install produces thousands of multi-megabyte serializations | Med | S | Coalesce log persistence on a timer or byte threshold; keep immediate persistence for status changes | Open |
+| E2 | netbox | In fingerprint-pinning mode, every NetBox API call performs an extra full TLS handshake just to re-probe the certificate | Med | S | Cache the resolved TLS options per client, as the Proxmox client already does | Open |
+| E3 | provision | The provision manager's in-memory job map is never pruned, and the on-disk cap can even drop a still-running job's record | Med | S | Adopt the lifecycle manager's terminal-only pruning, and clean up the companion `settles` map | Open |
+| E4 | health | Each health event is written to disk with its own synchronous full-file write — a 30-box outage performs 30 back-to-back writes in one poll pass | Low | S | Collect events during the pass and save once at the end | Open |
+| E5 | web | Every dashboard refresh wipes the cached status data before repainting, flashing every status dot gray and issuing duplicate status fetches (old L17) | Low | S | Keep the previous caches until the fresh responses arrive, then paint once | Open |
+| E6 | status | The status checker's backoff and CPU-tracking maps keep entries for removed boxes forever | Low | S | Add a `forgetBox(id)` cleanup call invoked from box removal | Open |
+| E7 | store | Importing N boxes performs N separate full read-and-rewrite cycles of `boxes.json` | Low | S | Add a batch import path: read once, validate all entries in memory, write once | Open |
+| E8 | boxActions | The setup script installs git unconditionally, even when nothing the user selected needs it | Low | S | Only include the git bootstrap when oh-my-tmux, oh-my-zsh, or the git tool was selected | Open |
+| E9 | index | The default-public-key helper caches the resolved value rather than the promise, so concurrent first calls each spawn their own `ssh-keygen` | Low | S | Cache the promise instead, resetting it if the read fails or returns nothing | Open |
+
+### Complexity and duplication
+
+| ID | Area | Finding | Severity | Effort | Proposed fix | Status |
+|----|------|---------|----------|--------|--------------|--------|
+| C1 | stores | Four store modules (`fleetStore`, `setupStore`, `provisionStore`, `proxmoxLifecycleStore`) are byte-for-byte copies of each other | Med | M | Extract a shared `createDebouncedJsonStore({ dataDir, filename })` factory; each store becomes a one-line wrapper | Open |
+| C2 | web | The modal scaffold (backdrop, click guard, Escape handling, teardown) is copy-pasted eight times and has already drifted — two copies lack Escape handling; `makeRadio` is duplicated too | Med | M | Add an `openModal({ onClose })` helper to `dom.ts` and migrate the eight call sites | Open |
+| C3 | web | Two parallel setup-job viewers (the provision panel and the Proxmox hub) re-implement the same poll/render/interactive-fallback state machine | Low | M | Extract one shared setup-job viewer module used by both | Open |
+| C4 | proxmox | The PVE task-polling loop and job-manager scaffolding are duplicated between the provision and lifecycle managers | Low | M | Extract a shared `pollPveTask` helper | Open |
+| C5 | tls | The pinned-connection wiring is duplicated verbatim between the Proxmox and NetBox HTTP clients | Low | S | Export a `pinnedConnectionFactory` helper from `tlsPin.js` and use it in both | Open |
+| C6 | proxmox | `proxmoxApi.js` re-implements endpoint host/port parsing twice instead of reusing the existing `parseEndpoint` | Low | S | Import and reuse `parseEndpoint` from `proxmoxValidate.js` | Open |
+| C7 | config | The six health-setting clamps hardcode fallback numbers that duplicate values already defined in `DEFAULTS` | Low | S | Reference `DEFAULTS.*` instead of repeating the literals | Open |
+| C8 | local | The local-shell setup script hardcodes the tmux session name `local` while a configurable `localSession` parameter exists elsewhere — the two can silently disagree | Low | S | Thread the session name through, or remove the parameter and commit to the constant | Open |
+| C9 | setup | The job-ordering comparator returns −1 for equal timestamps (not a valid total order); the provision manager has the same flaw | Low | S | Use a shared comparator that tie-breaks by job id | Open |
+
+### Dead code
+
+| ID | Area | Finding | Severity | Effort | Proposed fix | Status |
+|----|------|---------|----------|--------|--------------|--------|
+| D1 | server | The `/api/status` fallback branch for a missing status poller is unreachable in production — `index.js` always provides one | Low | S | Make the poller a required dependency, stub it in tests, and delete the branch | Open |
+| D2 | stores | `whenIdle()` exists in all four job stores but is only ever called by tests | Low | S | Wire it into the B8 shutdown flush rather than deleting it | Open |
+| D3 | jsonFile | The module's comment claims power-loss safety, but the write path never calls fsync, so that claim doesn't hold | Low | S | fsync the temp file (and optionally the directory) before renaming, or soften the comment to "process crash" | Open |
+
+### Notes and housekeeping
+
+| ID | Area | Finding | Severity | Effort | Proposed fix | Status |
+|----|------|---------|----------|--------|--------------|--------|
+| N1 | web | The interactive terminal's WebSocket URL doesn't URL-encode the box id, while the provision path does — inconsistent, though harmless today | Info | S | Apply `encodeURIComponent` for consistency | Open |
+| N2 | e2e | Two pre-existing end-to-end test failures (zsh root shell), noted in the internal ledger, remain unfixed | Info | — | Fix separately; unrelated to any finding here | Open |
+| N3 | repo | Roughly 180 `review-*.diff` scratch files have accumulated in `.superpowers/sdd/` (gitignored, but heavy clutter) | Info | S | Delete or archive them | Open |
+| N4 | repo | The working-tree `CLAUDE.md` gained a graphify section; it is a tracked file, so it will be published on the next release | Info | — | User decision: keep it public, or move the rule into the gitignored `.claude/` config | Open |
+
+Items from the 2026-07-04 review that were re-verified as **fixed** in the meantime: L6 (the
+CPU-threshold seeding gap), plus everything already marked fixed in that document. The
+`proxmoxUi` `_opt` dead parameter from the internal ledger has also already been cleaned up.
+
+---
+
+## Detailed findings — bugs
+
+### B1 — A fatal boot error exits with code 0, so systemd never restarts the service
+
+`src/server/index.js:35-36` registers blanket `uncaughtException` and `unhandledRejection`
+handlers that log the error and let the process continue. They are registered *before*
+configuration is loaded and the server is built. If anything throws during startup — a corrupt
+`config.json`, an unreadable TLS certificate path — the error is logged and the process then
+simply runs out of work and exits with code **0**. The systemd unit uses `Restart=on-failure`,
+which treats exit 0 as a deliberate stop, so the service stays down until someone notices.
+This was verified empirically with a repro script. Note the inconsistency: the explicit
+missing-config check a few lines later correctly calls `process.exit(1)`, so only *some* boot
+failures signal failure.
+
+**Fix:** call `process.exit(1)` from the `uncaughtException` handler, or (cleaner) register
+the keep-the-server-alive handlers only after `app.listen` succeeds, so that anything thrown
+during boot crashes the process with a nonzero code as Node normally would.
+
+### B2 — `config.json` is written in place, so a torn write bricks every subsequent boot
+
+`src/server/configFile.js:30-31` writes `config.json` with a plain `fs.writeFileSync` — no
+temp-file-and-rename step. This file is written at runtime by `PATCH /api/local-shell`. If the
+process crashes or the machine loses power mid-write, the file is left as truncated, invalid
+JSON. On the next boot, `readConfigFile` deliberately throws on invalid JSON (by design, so a
+broken file is never silently overwritten), `loadConfig` calls it unguarded — and combined
+with B1, the service then dies silently with exit code 0 on **every** start until someone
+repairs the file by hand. The repository already contains exactly the right tool:
+`writeFileAtomicSync` in `jsonFile.js`.
+
+**Fix:** use `writeFileAtomicSync` in `upsertConfigFile`. (This also gives that export a
+production caller — it is currently only used internally.)
+
+### B3 — The attach-time "resize jiggle" never restores the original terminal width
+
+When a client attaches to an existing PTY, `src/server/sessions.js:119-121` nudges the PTY one
+column narrower and then "back" to force a repaint:
+
 ```js
 entry.pty.resize(entry.pty.cols === 1 ? 2 : entry.pty.cols - 1, entry.pty.rows);
 entry.pty.resize(entry.pty.cols, entry.pty.rows);
 ```
-node-pty's `resize()` mutates `_cols`, and `get cols()` returns it — the second call re-reads
-the already-shrunken value and resizes to the same width. Interactive terminals are masked
-because the client sends `{t:'r'}` on open, but provision/setup sockets never send resize and
-the server ignores `'r'` in provision mode, so the fixed 120-col PTY runs at 119 and each
-replacement-socket reattach ratchets it one more column down. **Fix:** capture `const c =
-entry.pty.cols` before the jiggle; restore to `c`.
 
-### B4 — boxes.json read-modify-write races
-Every `store.js` mutator does `await readAll()` … `await writeAll(boxes)` with no
-serialization. `proxmoxProvision.js:140` calls `addBox` from a background job while the user
-PATCHes another box → both read the same array, second write drops the first's change.
-**Fix:** per-store promise-chain queue (`queue = queue.then(op)`).
+The bug: node-pty's `resize()` mutates its stored column count, and the `cols` getter returns
+that stored value. So by the time the second line runs, `entry.pty.cols` is already the
+*shrunken* value — the second call resizes to the same width and the PTY stays one column
+narrower. Interactive terminals mask this because the browser immediately sends its own resize
+message after connecting. But provision/setup terminals never send resize (the server ignores
+resize frames in provision mode), so the fixed 120-column provision PTY actually runs at 119 —
+and every reconnection shrinks it by one more column.
 
-### B5 — Malformed setup-jobs row crashes boot
-`src/server/setupManager.js:36-39` iterates `load() || []` and dereferences `j.status`; the
-store's `validate: Array.isArray` accepts `[null]`. fleet.js:31-36 filters exactly this
-("one bad history row must never keep the server from booting") — setupManager, which mirrors
-it, lacks the guard. **Fix:** same shape filter as fleet.
+**Fix:** capture the width first (`const c = entry.pty.cols`), then jiggle, then restore to
+the captured value.
 
-### B6 — `needs-interactive` jobs accumulate forever
-`start()` only short-circuits on `running`; `retainedIds()` keeps every non-terminal job;
-`markInteractiveResult` resolves only the newest job per box. Each Retry that hits the
-sudo-password path strands another `needs-interactive` job (plus its 64KB log) in memory, on
-disk, and in `listJobs()` — unboundedly. **Fix:** when `start()` creates a new job for a box,
-flip older non-running jobs for that box to a terminal `superseded` status.
+### B4 — Concurrent `boxes.json` mutations silently lose writes
 
-### B7 — Cancel is a no-op during `waiting-ssh`
-The ssh handle is registered only after the ready-probe loop (`setupManager.js:111`);
-`cancelForBox` only kills registered handles and sets no flag the loop checks. Provision
-auto-starts setup with `waitForSsh: true` (up to ~90s window); deleting the box in that window
-cancels nothing and the full install script then runs against the removed box. **Fix:**
-per-job `cancelled` flag checked between probe attempts and before `sshStream`.
+Every mutator in `src/server/store.js` (add, update, remove, import) follows the same pattern:
+`await readAll()`, modify the array in memory, `await writeAll(boxes)` — with no lock or queue
+around the sequence. The atomic-rename layer underneath makes each individual *write* safe,
+but not the read-modify-write *cycle*. This is not hypothetical: a background provision job
+calls `addBox` when a container finishes provisioning, while the user may simultaneously be
+editing another box in the UI. Both read the same array; whichever writes second erases the
+other's change.
 
-### B8 — No shutdown flush for debounced stores
-No SIGTERM/SIGINT handler exists; `whenIdle()` is called only by tests. `systemctl restart
-tmuxifier` (the documented deploy step) can lose the final debounced save; on boot the stale
-file still says `running` and reconciliation flips a completed job to `interrupted` — the
-exact recurring symptom recorded in the deploy-restart memory note. **Fix:** SIGTERM handler
-awaiting all stores' `whenIdle()` (also resolves D2).
+**Fix:** serialize mutations through a per-store promise chain (`queue = queue.then(op)`) —
+a small change that the factory structure makes easy.
 
-### B9-B12 — web client (see table)
-- **B9** `main.ts:1756-1763`: `pollFleetJob`'s finished branch calls `stopFleetPoll()`
-  unguarded by `fleetPollJobId === id`; a stale response for finished job A silently freezes
-  newly-selected job B's detail view. `showFleetJob`'s initial render is also unguarded (slower
-  of two rapid clicks paints over the newer selection).
-- **B10** `fleetEditor.ts:145-146`: `defaultKeymap` (contains `Mod-Enter: insertBlankLine`)
-  precedes `runKeymap`, so the advertised ⌘/Ctrl+Enter run shortcut inserts a blank line while
-  the editor has focus. Put `runKeymap` first or wrap in `Prec.high`.
-- **B11** `main.ts:1030-1045` (+ `proxmoxUi.ts:166-170`): "Finish interactively" is never
-  disabled and the poll re-creates it every 2.5s; each click overwrites `interactiveTerm`
-  without disposing — concurrent interactive setup scripts (e.g. two apts) on one box, leaked
-  WS PTYs.
-- **B12** `main.ts:1821-1831`: `onUnauthorized` closes `#app` panels but not the
-  `document.body`-mounted Proxmox hub / settings modal; the hub's tick loop retries a failing
-  fetch every 1.5s forever on top of the login screen (`jr()` has no 401 seam, nothing bumps
-  `pollGen`). Register body-mounted modals with a close hook the teardown invokes.
+### B5 — A malformed row in `setup-jobs.json` crashes the server at boot
 
-### B13-B25 — smaller bugs
-See the table; all confirmed against v1.7.3 source. Notables: **B14** — `boxRemoval.js:13-20`
-background cleanup (`killSession` 12s + `exitMaster` 6s timeouts) unconditionally unlinks the
-`%C` socket, which can kill the fresh master of an identical box re-added within the window.
-**B15** — `sshRun.js` decodes per chunk (`stdout += d`); use `string_decoder`. **B18** —
-`tmux kill-session -t local` prefix-matches; `-t =local` is exact. **B20** —
-`TMUXIFIER_PORT=8080 # dashboard` yields `"8080 # dashboard"` → NaN → silent default 7437.
+`src/server/setupManager.js:36-39` iterates the loaded job list and immediately dereferences
+`j.status` on each row. The persistence layer's validation only checks that the file contains
+*an array* — so a file containing `[null]` (valid JSON, is an array) passes validation and
+then throws a `TypeError` inside `createSetupManager()`, which runs during startup in
+`index.js`. The server cannot boot until the file is repaired by hand. The fleet manager had
+this exact bug fixed earlier (its comment reads "one bad history row must never keep the
+server from booting", and there is a test for it) — the setup manager, which mirrors the fleet
+manager's design, never got the same guard.
+
+**Fix:** filter loaded rows through the same shape check the fleet manager uses (drop
+non-object rows and rows without a string id).
+
+### B6 — `needs-interactive` setup jobs accumulate forever
+
+A setup job that hits the sudo-password wall is parked in the `needs-interactive` status,
+which is deliberately not a terminal status (the user can still finish it interactively). The
+problem is the combination of three facts in `src/server/setupManager.js`: (1) `start()` only
+refuses to create a new job while an existing one is `running`, so Retry happily creates a new
+job alongside a parked one; (2) the retention policy keeps every non-terminal job forever;
+(3) `markInteractiveResult` only ever resolves the *newest* job for a box. So each Retry that
+lands back in the sudo-password path strands one more `needs-interactive` job — in memory, in
+`data/setup-jobs.json`, and in the jobs list the UI shows — each carrying up to 64 KB of log,
+with no path that ever cleans them up.
+
+**Fix:** when `start()` creates a new job for a box, flip any older non-running job for that
+box to a terminal status such as `superseded`, which makes it eligible for normal history
+pruning.
+
+### B7 — Cancelling a setup job during `waiting-ssh` does nothing
+
+`cancelForBox` in `src/server/setupManager.js:149-152` works by killing the job's registered
+ssh handle — but the handle is only registered *after* the readiness-probe loop completes.
+Jobs started by the provisioner use `waitForSsh: true`, which probes the box for up to ~90
+seconds before launching the script. If the user deletes the box during that window (the
+delete route does call `cancelForBox`), nothing is cancelled: the loop keeps probing, and the
+full install script is then streamed into a box that no longer exists in Tmuxifier.
+
+**Fix:** add a per-job `cancelled` flag that `cancelForBox` sets and that `run()` checks
+between probe attempts and once more before launching ssh, finishing the job as an error
+instead.
+
+### B8 — Nothing flushes the debounced stores on shutdown
+
+The four job stores (fleet, setup, provision, lifecycle) debounce their disk writes, and each
+exposes a `whenIdle()` method that resolves when pending writes have landed — but nothing in
+production ever calls it, and `index.js` registers no SIGTERM/SIGINT handler at all. The
+documented deploy step is `systemctl restart tmuxifier`: if a job finishes just before the
+restart, its final debounced save can be lost. On the next boot the stale file still says
+`running`, and the reconciliation logic dutifully flips a job that actually *completed* to
+`interrupted`. This matches a known recurring annoyance ("deploy restart interrupts setup
+jobs") that until now looked like an unavoidable property of restarts — it is actually just a
+missing flush.
+
+**Fix:** add a SIGTERM/SIGINT handler that awaits every store's `whenIdle()` before exiting.
+This also resolves most of finding D2 (the "dead" `whenIdle` export).
+
+### B9 — A stale fleet-job poll response can freeze the newly selected job's view
+
+The fleet-job detail view polls every 1.5 seconds. In `src/web/main.ts:1756-1763`, the poll
+callback correctly checks "is this response still for the job the user is viewing?" before
+re-rendering — but only on the still-running branch. The finished-job branch
+(`stopFleetPoll(); renderFleetHistory()`) runs unconditionally. Sequence: the user is viewing
+running job A; its poll request is in flight; the user clicks job B, which starts B's polling;
+A's response then arrives reporting A finished — and the unguarded branch stops *B's* polling.
+B's detail view silently freezes at whatever it first rendered. A second, related gap: the
+initial render in `showFleetJob` also lacks the guard, so of two quick clicks, the slower
+response can paint over the user's newer selection.
+
+**Fix:** apply the same "is this still the selected job?" guard to the finished branch and to
+the initial render.
+
+### B10 — The fleet editor's ⌘/Ctrl+Enter shortcut inserts a blank line instead of running
+
+The fleet command modal advertises "⌘/Ctrl+Enter to run". In CodeMirror 6, whichever keymap is
+registered *earlier* wins, and `src/web/fleetEditor.ts:145-146` registers the bundled
+`defaultKeymap` before the custom run keymap. `defaultKeymap` binds Mod-Enter to
+`insertBlankLine` (verified in the installed package), and that handler always claims the key.
+The document-level fallback handler in `main.ts` explicitly defers while focus is inside the
+editor — which is exactly where focus normally is. Net effect: the advertised shortcut has
+never worked from inside the editor; it just inserts a newline.
+
+**Fix:** register the run keymap ahead of the default keymap, or wrap it in `Prec.high`.
+
+### B11 — Clicking "Finish interactively" repeatedly opens concurrent setup terminals
+
+When a setup job needs the user's sudo password, the UI offers a "Finish interactively"
+button that opens a terminal running the setup script. In `src/web/main.ts:1030-1045` (and the
+same pattern in `proxmoxUi.ts:166-170`), each click creates a fresh terminal and overwrites
+the variable holding the previous one without disposing it — and the button is never disabled;
+the 2.5-second status poll even keeps re-rendering it. Every extra click therefore launches
+another concurrent run of the setup script on the same box (two simultaneous apt runs, for
+example), and the earlier WebSocket terminals leak until their scripts exit.
+
+**Fix:** disable or remove the button once clicked, and dispose the previous terminal handle
+before assigning a new one.
+
+### B12 — Logout/session-expiry teardown misses modals mounted on `document.body`
+
+The central "session expired" handler (`src/web/main.ts:1821-1831`) closes the terminal tabs
+and the three fixed side panels, then re-renders the login screen into `#app`. But the Proxmox
+hub and the settings modal are appended to `document.body`, not `#app`, so they survive the
+teardown and sit on top of the login form. Worse, the hub's job-polling loop keeps retrying
+its (now 401-failing) fetch every 1.5 seconds indefinitely — the Proxmox fetch layer has no
+401 hook, and nothing bumps the poll generation counter that would stop it.
+
+**Fix:** give body-mounted modals a registered close hook (the provision panel already has
+this pattern) and invoke it from the logout and session-expiry paths.
+
+### B13 — Fleet job pruning can evict a job that is still running (old L3)
+
+`prune()` in `src/server/fleet.js:57-63` evicts strictly the oldest jobs whenever the list
+exceeds `maxJobs` (default 50), with no regard for status. Creating the 51st job while job #1
+is still running shifts it out of the list: its runner keeps executing against boxes, but the
+job is now invisible to `GET /api/fleet/jobs/:id`, absent from history, and uncancellable. The
+setup manager's retention policy explicitly documents and avoids this exact hazard; the fleet
+manager predates that policy.
+
+**Fix:** make `prune()` skip `running` jobs, capping terminal history only.
+
+### B14 — Post-removal cleanup can kill the ControlMaster of a re-added box
+
+Removing a box triggers a fire-and-forget background cleanup (`src/server/boxRemoval.js:13-20`)
+that can take up to ~18 seconds (a 12-second kill-session timeout plus a 6-second master-exit
+timeout), and ends by unconditionally deleting the ControlMaster socket. The socket path is
+derived only from host/user/port. So if the user removes a box and quickly re-adds the same
+machine (a common "start over" flow), the stale cleanup can tear down the *new* box's freshly
+authenticated master — flipping it back to needs-auth for no visible reason.
+
+**Fix:** before the master teardown, re-check the store for a box with the same
+host/user/port and skip the teardown if one exists.
+
+### B15 — Split UTF-8 characters are garbled in captured SSH output
+
+Both output paths in `src/server/sshRun.js` (`sshRunStdin` at lines 34-35, `sshStream` at
+68-69) convert each incoming Buffer chunk to a string independently. A multi-byte UTF-8
+character that straddles a chunk boundary — easy to hit with the progress bars and box-drawing
+characters installers print — decodes as replacement characters (�) in the persisted setup
+log.
+
+**Fix:** decode each stream through a `string_decoder.StringDecoder`, which holds partial
+sequences across chunks.
+
+### B16 — A transient Proxmox blip closes the stopped-box panel
+
+When the selected box is a stopped container, the dashboard shows a "stopped box" panel. The
+poll reconciliation in `src/web/main.ts:363-379` removes that panel and clears the selection
+whenever the box's state is anything other than `stopped` — but the status layer's own
+documentation says the `unknown` state means "the Proxmox read failed or is stale and must
+never grant display authority". A single failed PVE poll therefore looks like "the container
+started", the panel closes, the selection is cleared, and nothing restores it when the next
+poll says `stopped` again.
+
+**Fix:** only treat an affirmative `running` state as a restart; keep the panel as-is on
+`unknown`.
+
+### B17 — NetBox read/decrypt errors masquerade as "not configured"
+
+`requireNetboxSettings` (`src/server/proxmoxProvision.js:37-42`, same pattern in
+`proxmoxLifecycle.js`) wraps the settings read in a catch-all that maps *any* failure to "the
+NetBox integration is not configured". But the read can fail for real reasons — the encrypted
+token can't be decrypted because the cookie secret rotated, or the file is unreadable. The
+user is then told to configure an integration that is already configured, and during
+deprovisioning the same pattern hides the fact that an allocated IP was *not* released.
+
+**Fix:** distinguish "no settings stored" (a null return) from a thrown error, and surface
+the error's message.
+
+### B18 — `tmux kill-session -t local` can kill the wrong session
+
+tmux's `-t` target resolution falls back to *prefix* matching when there is no exact match.
+`killTmuxSession` in `src/server/server.js:57-59` targets `local`; if the Tmuxifier host has
+no session named exactly `local` (say the local terminal was never opened) but the operator
+has their own session named `local-dev`, the reconnect endpoint kills it. The exact-match
+syntax exists precisely for this.
+
+**Fix:** use `tmux kill-session -t =local` (the `=` prefix forces an exact match).
+
+### B19 — The Google token exchange can hang the login callback forever (old L12)
+
+`src/server/googleAuth.js:55-59` calls `fetch` against Google's token endpoint with no
+`AbortSignal`, and Node's `fetch` has no default timeout. If the endpoint stalls or egress is
+black-holed, the OAuth callback request simply never completes.
+
+**Fix:** pass `signal: AbortSignal.timeout(10000)` and let the abort flow into the existing
+catch, which already redirects to `/?error=google`.
+
+### B20 — Inline `#` comments in `.env` corrupt the value silently
+
+`parseEnvFile` (`src/server/envFile.js`) captures everything after `=` to the end of the line,
+so `TMUXIFIER_PORT=8080 # dashboard` produces the value `"8080 # dashboard"`. For numeric
+settings, the clamp layer then quietly falls back to the default (port 7437) with no warning —
+the user set 8080 and got 7437 with nothing in the logs. Non-numeric settings would carry the
+comment text into actual use.
+
+**Fix:** strip an unquoted ` #…` suffix during parsing (dotenv-compatible behavior), or
+explicitly document that inline comments are unsupported.
+
+### B21 — SSH timeouts in fleet runs are reported as "exited 1" (old L2)
+
+`sshRun` collapses every non-numeric error code to 1, including the killed-by-timeout case.
+Fleet job results then show `exited 1` for a box that actually timed out — indistinguishable
+from a command that genuinely failed with exit code 1, which sends the user debugging the
+wrong thing.
+
+**Fix:** detect the timeout/killed case (`err.killed` / `err.signal`) in `sshRun` and surface
+it as `timed out` in the fleet target status.
+
+### B22 — Duplicate box ids in a fleet job run the command twice (old L4)
+
+Neither the fleet route nor `createJob` de-duplicates the incoming `boxIds` array, so a
+duplicated id runs the command twice on the same box and shows two target rows for it.
+
+**Fix:** de-duplicate the id list in `createJob`.
+
+### B23 — A box label can never be cleared (old L11)
+
+`updateBox` computes `label: spec.label || base.label || spec.host`, so an explicit empty
+string or null keeps the old label. The explicit null-clearing loop a few lines down covers
+user/port/proxyJump but not label.
+
+**Fix:** include label in the explicit clearing logic.
+
+### B24 — Missing `?storage` parameter produces a confusing 502 (old L14)
+
+The templates route builds the PVE path with `req.query.storage` unvalidated; omitting the
+parameter yields `/storage/undefined/content` and a 502 from PVE, instead of a clear 400 from
+Tmuxifier.
+
+**Fix:** validate the parameter and return 400 when missing.
+
+### B25 — One unknown health-event type breaks the whole events panel (old L15)
+
+`formatEvent` in `src/web/healthEvents.ts` is an exhaustive switch over the event kinds known
+*at compile time*, with no default case — it returns `undefined` for anything else, and the
+panel renderer then dereferences the result. TypeScript can't protect this boundary: the
+events come from the server, so a newer server (with a new event kind, as happened when
+`key-changed` was added) against a cached older client breaks the entire timeline render.
+
+**Fix:** add a default branch returning a generic line (icon, event name, neutral level).
 
 ---
 
-## Details — safety
+## Detailed findings — safety and security
 
-### S1 — known_hosts forget removes the wrong identity
-`src/server/knownHosts.js:26-28`: `targets = [String(host)]` unconditionally, with
-`[host]:port` appended for nonstandard ports. OpenSSH stores a port-2222 box only as
-`[host]:2222`; the bare `host` entry is whatever answers port 22 at that address. In the
-NAT/port-forward setups where nonstandard ports actually occur, deprovisioning container A
-erases the unrelated port-22 host's key — violating the project rule that a key is removed
-only when *that* identity is proven gone. **Fix:** when `port && port !== 22`, remove only the
-bracketed form.
+### S1 — Forgetting a nonstandard-port host key deletes a different machine's key
 
-### S2 — un-ignored local artifacts + `git add -A` shipping flow
-`.agents/`, `graphify-out/` (knowledge-graph cache, cost.json, report), and
-`skills-lock.json` are untracked and not in `.gitignore`. The CLAUDE.md shipping checklist
-stages with `git add -A`, so the next release would commit all of it to the **public** repo.
-The PII-scrub step reviews the staged diff, but relying on manual review for machine-local
-artifacts is fragile. **Fix:** add the three to `.gitignore`. Related, user decision: the
-working-tree CLAUDE.md now contains a graphify section referencing local tooling — keep it
-public, or move the rule into gitignored `.claude/` config.
+OpenSSH stores host keys for nonstandard ports under the bracketed form `[host]:2222`; the
+bare `host` entry belongs to whatever answers on port 22 at that address. `forget(host, port)`
+in `src/server/knownHosts.js:26-28` always removes the bare-host entry and *additionally*
+removes the bracketed one for nonstandard ports. In exactly the setups where nonstandard ports
+occur — one routable IP with containers behind port forwards — deprovisioning the container on
+port 2222 therefore erases the trusted key of the unrelated machine on port 22. This violates
+the project's own carefully stated rule that a known_hosts entry is removed only when *that
+specific identity* is provably gone.
 
-### S3-S7
-See table. S3 (logout is client-side only) and S5 (`authTagLength`) are small hardening items
-inside the codebase's own stated threat model; S4 aligns HSTS with the `secureCookie`
-predicate; S6/S7 are known deferred items re-confirmed open.
+**Fix:** when the port is nonstandard, remove only the `[host]:port` entry; remove the bare
+entry only for port 22 (or no port).
+
+### S2 — Untracked local artifacts will be committed to the public repo by the release flow
+
+Three machine-local artifacts sit in the working tree untracked and **not** gitignored:
+`.agents/`, `graphify-out/` (a generated knowledge-graph cache including cost data), and
+`skills-lock.json`. The release checklist in CLAUDE.md stages with `git add -A` — so the next
+routine release would publish all of them to the public GitHub repository. There is a manual
+"review the staged diff" step, but relying on a human catch for known machine-local files is
+fragile.
+
+**Fix:** add all three to `.gitignore` now. Related user decision (N4): the tracked
+`CLAUDE.md` has gained a graphify section in the working tree; decide whether that should ship
+publicly or live in the gitignored `.claude/` config instead.
+
+### S3 — Logout does not invalidate the session server-side
+
+The session cookie is stateless (a signed value embedding its issue time), and `POST
+/api/logout` only clears the cookie in the browser. Within the threat model the code itself
+documents (a captured cookie), logout therefore gives false assurance: a copied cookie keeps
+working until its 7-day TTL expires or the cookie secret is manually rotated.
+
+**Fix:** persist a small "sessions issued before X are invalid" watermark that logout
+advances, and check it during validation — or explicitly document logout as client-side only.
+
+### S4 — HSTS is missing exactly in the recommended local-TLS deployment
+
+The HSTS header is sent only when the configured external URL starts with `https://`. The
+Secure-cookie decision uses a broader condition: external HTTPS *or* local TLS certificates
+configured. A deployment serving TLS directly (the documented self-hosted mode) without an
+external URL set gets Secure cookies but never HSTS — missing first-visit downgrade
+protection in the exact case the header exists for.
+
+**Fix:** send HSTS under the same condition as the Secure cookie flag.
+
+### S5 — Truncated GCM authentication tags are accepted (old L13)
+
+`secretBox.open` sets the auth tag without specifying `authTagLength` and without checking its
+length, so a tag truncated to 4 bytes still decrypts. That reduces forgery resistance from
+2⁻¹²⁸ to 2⁻³² per attempt. It only matters to an attacker who can already write the data
+files, so the practical risk is low — but the fix is one line.
+
+**Fix:** pass `{ authTagLength: 16 }` to `createDecipheriv` (or reject tags ≠ 16 bytes).
+
+### S6 — `set-password` exposes the password in argv and echoes it (old L23)
+
+`scripts/hash-password.js` still accepts the new password as a command-line argument — which
+lands in shell history and is visible in `ps` — and the interactive fallback uses a plain
+readline prompt that echoes the password to the terminal.
+
+**Fix:** mask the interactive input and deprecate the argument form.
+
+### S7 — The changed-host-key detector over-matches jump-host failures (known deferred)
+
+The regex that classifies "host key changed" also matches the generic "host key verification
+failed" message, which appears when a *jump host's* key fails — so the ⚷ forget-key button can
+show up for a proxyJump box whose own key is fine. The action is consent-gated and confirmed,
+so harm is low, but the button points at the wrong host. This was a documented deferred item
+from the v1.7.1 work.
+
+**Fix:** drop the over-broad alternation, or add a tooltip caveat for proxyJump boxes.
 
 ---
 
-## Details — efficiency
+## Detailed findings — efficiency
 
-- **E1** `setupManager.js:100-109`: `onData` → `appendLog` + `persist()` per ssh chunk;
-  `persist()` sorts all jobs and `setupStore.save` stringifies the entire history (up to ~50 ×
-  64KB) eagerly per call. An apt upgrade emitting thousands of chunks = thousands of multi-MB
-  stringifies and near-continuous atomic writes. Coalesce on a timer/byte threshold; keep
-  immediate persist for status transitions.
-- **E2** `netboxApi.js:59-61`: `call()` re-runs `resolveTlsOpts` per request; pin mode probes
-  (full handshake) then `pinnedSocket` verifies again on the real connection. `proxmoxApi.js`
-  already caches `tlsPromise` per client. An auto-static allocation costs 6 handshakes instead
-  of 3.
-- **E3** `proxmoxProvision.js`: `persist()` slices to `maxJobs` on disk only; in-memory
-  `jobs`/`settles` grow forever and the disk slice ignores job status (can drop a running
-  job's record). Adopt lifecycle's terminal-only `prune()` (and delete `settles` entries —
-  lifecycle itself leaks `settles` too, E-minor).
-- **E4-E9**: see table.
+### E1 — The setup manager rewrites its entire history on every chunk of SSH output
+
+In `src/server/setupManager.js`, the streaming `onData` callback appends the chunk to the
+job's log and then calls `persist()` — which sorts the full job list and hands it to the
+store, whose `save` eagerly `JSON.stringify`s *everything* (up to 50 retained jobs × 64 KB of
+log ≈ multiple megabytes) on every call. An apt upgrade emitting thousands of output chunks
+therefore causes thousands of multi-megabyte serializations and near-continuous full-file
+atomic writes for the duration of the install. The debounce in the store only coalesces
+concurrent *disk* writes; the serialization cost is paid every time.
+
+**Fix:** while a job is streaming, persist the log on a timer or byte threshold (say, at most
+every 250 ms or 8 KB), keeping immediate persistence for status and phase transitions.
+
+### E2 — NetBox pin mode performs a redundant TLS handshake per API call
+
+`createNetboxClient.call()` re-resolves its TLS options on every request, and in
+fingerprint-pinning mode that resolution unconditionally runs a full probe handshake — even
+though the pinned request that follows *already* verifies the fingerprint on its own
+connection (which is the actual security boundary). Every NetBox call thus costs two
+handshakes; an auto-static IP allocation (three API calls) costs six. The Proxmox client
+solved this identically-shaped problem already by caching the resolved TLS options per client
+instance.
+
+**Fix:** cache the resolved TLS options per client, or skip the probe entirely when a
+fingerprint is already pinned.
+
+### E3 — Provision jobs are never pruned from memory
+
+The provision manager caps what it writes to disk (`save(ordered().slice(0, maxJobs))`) but
+never deletes anything from its in-memory `jobs` and `settles` Maps — every provision job ever
+run stays resident, log and all, for the life of the process. Two knock-on effects: the jobs
+list the UI shows diverges from what survives a restart, and the naive disk slice is by
+creation date, so it can even drop a *still-running* job's record from the file. The lifecycle
+manager next door already has the correct terminal-only `prune()`; it just never made it back
+into the provision manager. (The lifecycle manager has its own smaller leak: it prunes `jobs`
+but not its `settles` map.)
+
+**Fix:** port the lifecycle manager's terminal-only pruning to the provision manager, and
+delete `settles` entries alongside pruned jobs in both.
+
+### E4 — Health events are written to disk one at a time, synchronously
+
+Each health event emission does its own synchronous full-file write of the events log. Events
+are emitted inside the per-box loop of a single poll pass — so an outage that downs 30 boxes
+performs 30 back-to-back synchronous write-and-rename cycles of the same file, on the event
+loop, in one pass.
+
+**Fix:** collect the pass's events and save once at the end; listeners can still be notified
+per event.
+
+### E5 — Every dashboard refresh blanks the status dots (old L17)
+
+`refresh()` in `src/web/main.ts:551-559` clears the cached status and setup data *before*
+repainting, so every add/edit/remove/import flashes all status dots gray and drops setup
+badges until two fresh fetches land — three full sidebar rebuilds and one duplicate `/api/status`
+fetch (on top of the 30-second poller) per mutation.
+
+**Fix:** keep the previous caches until the fresh responses arrive, then paint once per
+response.
+
+### E6 — Status-checker maps leak entries for removed boxes
+
+The per-box backoff map and the CPU-delta tracking map in `src/server/status.js` only ever
+grow. Removing a box deletes it from the store but nothing clears these maps, and box ids are
+UUIDs so the entries can never be reused. Slow, unbounded growth on a long-running server.
+
+**Fix:** add a `forgetBox(id)` method to the status checker that clears both maps, called
+from box removal.
+
+### E7 — Importing N boxes rewrites `boxes.json` N times
+
+`importBoxes` calls `addBox` per entry, and each `addBox` does a full read-parse-append-write
+cycle. Importing a 50-box export therefore performs 50 full-file cycles plus 50 uniqueness
+scans over a growing list, where one read, one in-memory validation pass, and one write would
+do. (Fixing B4 first makes this batch path trivial to add safely.)
+
+**Fix:** add a batch import path — read once, validate each entry against the in-memory list,
+write once.
+
+### E8 — The setup script installs git even when nothing needs it
+
+The generated setup script's fixed preamble includes an "ensure git" block (apt update +
+install), originally there for the oh-my-* framework clones — but it runs even for a bare
+setup with no frameworks and no git tool selected. That's an unrequested package mutation on
+the target box, and it duplicates the explicit git entry in the tool catalog.
+
+**Fix:** include the git bootstrap only when oh-my-tmux, oh-my-zsh, or the git tool was
+actually selected.
+
+### E9 — Concurrent first uses of the default public key each spawn `ssh-keygen`
+
+`defaultPublicKey` in `src/server/index.js:110-114` caches the *resolved value*: `if
+(!cachedDefaultKey) cachedDefaultKey = await readDefaultPublicKey(...)`. Between the check and
+the resolution, every other caller still sees null and starts its own `ssh-keygen` child. A
+provision job and the default-key API route racing at startup do exactly this.
+
+**Fix:** cache the promise instead (`cachedDefaultKey ??= readDefaultPublicKey(...)`),
+resetting it to null if it resolves null or rejects — preserving the current "a key added
+later is picked up without restart" behavior.
 
 ---
 
-## Details — complexity / dead code
+## Detailed findings — complexity and duplication
 
-- **C1** Four byte-identical debounced store factories (`diff` confirms only names/comments
-  differ). Extract `createDebouncedJsonStore({ dataDir, filename })` next to jsonFile.js;
-  four one-line wrappers. Pairs with B8/D2 (single place to wire shutdown flush).
-- **C2** Modal scaffold ×8 with drift (`openAddDiskModal` and the hub lack Escape); `makeRadio`
-  ×2. `dom.ts` is the designated home — add `openModal({ onClose })`.
-- **C3** Provision panel (`main.ts:979-1082`) and `proxmoxUi.ts:146-176` re-implement the same
-  setup-job poll/render/interactive-fallback state machine; `setupStatus.ts` is already the
-  shared pure layer — extract the stateful loop too.
-- **C4-C9**: see table.
-- **D1** `server.js:570-586` `!statusPoller` fallback: index.js always passes a poller; branch
-  is test-only. Make the dependency required, stub it in tests, delete the branch (removes
-  server.js's `mapWithConcurrency` import).
-- **D2** `whenIdle()`: production-dead ×4, but it is the natural shutdown-flush seam — wire it
-  (B8) rather than delete.
-- **D3** jsonFile.js comment claims power-loss safety; no fsync before rename. Either fsync
-  (fd + optionally directory) or soften the claim to process-crash safety.
-- Dead-export sweep found **no** truly dead exports: the test-only exports
-  (`PROBE_REMOTE`, `_count`, `buildKillTmuxRemote`, the pure web helpers, etc.) are deliberate
-  TDD seams per repo convention.
+### C1 — Four job stores are byte-for-byte copies
+
+`fleetStore.js`, `setupStore.js`, `provisionStore.js`, and `proxmoxLifecycleStore.js` are the
+same module four times — `diff` shows only the factory name, filename, and comment wording
+differ. All four re-implement the same debounced-write machinery (`pending`/`flushing`/idle
+resolvers) around the shared JSON persistence layer. Any fix to that machinery currently has
+to be hand-copied to four files.
+
+**Fix:** extract a single `createDebouncedJsonStore({ dataDir, filename })` factory (a natural
+neighbor of `jsonFile.js`) and reduce the four stores to one-line wrappers. This also creates
+the single obvious place to wire the B8 shutdown flush.
+
+### C2 — The modal scaffold is copy-pasted eight times and drifting
+
+The same backdrop-plus-guard-plus-Escape-plus-teardown block appears verbatim in eight places
+across `main.ts`, `settingsUi.ts`, `proxmoxUi.ts`, `proxmoxContainers.ts`, and
+`proxmoxPresets.ts` — and the copies have already diverged: two of them (the additional-disk
+modal and the Proxmox hub) lack the Escape-to-close handling the others have. A `makeRadio`
+helper is separately duplicated within `main.ts`. `dom.ts` exists precisely to hold shared DOM
+builders.
+
+**Fix:** add an `openModal({ onClose })` helper to `dom.ts` that returns
+`{ backdrop, close }` with the guard and Escape wiring, and migrate the eight call sites.
+
+### C3 — Two parallel setup-job viewers implement the same state machine
+
+The provision panel in `main.ts` and the Provision tab in `proxmoxUi.ts` each implement the
+same loop: poll the setup job, render status text and the scrolling log, and offer the
+interactive-terminal fallback when the job needs sudo. Only the surrounding chrome differs.
+The pure formatting layer (`setupStatus.ts`) is already shared; the stateful loop is not — and
+findings B11/B12 had to be reported against *both* copies, which is the cost of this
+duplication in miniature.
+
+**Fix:** extract one setup-job viewer module (poll loop plus log/actions rendering, with the
+container and callbacks injected) used by both.
+
+### C4 — The PVE task-polling loop is duplicated between two job managers
+
+`pollTask` — task-log tailing, tolerance for consecutive poll failures, the exit-status check,
+the deadline — is implemented nearly line-for-line in both `proxmoxProvision.js` and
+`proxmoxLifecycle.js`, along with much of the surrounding job-manager scaffolding. The
+poll-failure-tolerance lesson (M6 from the previous review) had to be applied to both copies
+by hand.
+
+**Fix:** extract a shared `pollPveTask(client, node, upid, options)` helper.
+
+### C5 — The pinned-TLS connection glue is duplicated between the two API clients
+
+The subtle `createConnection` wiring that routes requests through `pinnedSocket` — including
+its explanatory comment — is duplicated verbatim in `proxmoxApi.js` and `netboxApi.js`. It is
+exactly the kind of security-relevant glue that should exist once.
+
+**Fix:** export a `pinnedConnectionFactory({ host, port, fingerprint256, timeoutMs })` from
+`tlsPin.js` and use it in both clients.
+
+### C6 — Endpoint parsing is re-implemented inside `proxmoxApi.js`
+
+Both `createProxmoxClient` and `inspectEndpoint` split `host:port` by hand with the
+`lastIndexOf(':')` dance, while `parseEndpoint` in `proxmoxValidate.js` already does this with
+validation.
+
+**Fix:** import and reuse `parseEndpoint`.
+
+### C7 — Health-setting clamps hardcode numbers that `DEFAULTS` already defines
+
+The six health-related clamps in `config.js` pass literal fallback values (120, 200, 90, 90,
+90, 5) that duplicate the entries in the `DEFAULTS` object, unlike every other clamp in the
+file, which references `DEFAULTS.x`. Editing a default would silently diverge from its clamp
+fallback.
+
+**Fix:** replace the literals with `DEFAULTS.*` references.
+
+### C8 — The local-shell script hardcodes a session name that is configurable elsewhere
+
+`buildEnsureLocalShellScript` hardcodes tmux session name `local`, while the session manager
+and server accept a configurable `localSession` parameter (only ever set to a non-default
+value by tests). If the parameter were ever used for real, setup would ensure one session and
+the terminal would attach to another. Either the knob is over-general or the hardcode is a
+latent bug.
+
+**Fix:** thread the session name through to the script builder, or delete the parameter and
+commit to the constant.
+
+### C9 — The job-ordering comparator is not a valid total order (known ledger minor)
+
+`ordered()` in `setupManager.js` (and the same pattern in `proxmoxProvision.js`) sorts with a
+comparator that returns −1 when two timestamps are equal. V8's stable sort makes this
+deterministic in practice today, but it is formally invalid and a portability hazard.
+
+**Fix:** a shared comparator that tie-breaks by job id, used by both files.
+
+---
+
+## Detailed findings — dead code
+
+### D1 — The status route's "no poller" fallback is unreachable in production
+
+`GET /api/status` in `server.js` contains a fallback branch (probing all boxes on demand) for
+the case where no status poller was injected — but `index.js` unconditionally constructs and
+injects one, and the branch's own comment admits it exists for unit tests. It is the only
+consumer of `mapWithConcurrency` in that file.
+
+**Fix:** make the poller a required dependency, pass a stub in the tests, and delete the
+branch.
+
+### D2 — `whenIdle()` has no production caller in any of the four stores
+
+Grep confirms `whenIdle` is called only from the four store test files. It is, however, the
+natural graceful-shutdown seam — so rather than deleting it, wire it into the B8 shutdown
+flush, which turns it into real production surface.
+
+### D3 — The atomic-write module's power-loss claim is stronger than the code
+
+`jsonFile.js` promises that "a crash or power loss mid-write can never truncate the live
+file". The temp-file-plus-rename pattern genuinely guarantees this for *process* crashes, but
+not for power loss: without an fsync of the temp file before the rename, the filesystem may
+journal the rename before the file's data blocks reach disk (the classic ext4
+delayed-allocation hazard), leaving a zero-length file after the machine comes back.
+
+**Fix:** fsync the temp file's descriptor before renaming (and optionally the directory
+after), or soften the comment to claim process-crash safety only.
 
 ---
 
 ## What's solid (calibration)
 
-- **SSH injection surface**: all argv builders route through `assertBoxSafe`; `shSingleQuote`
-  correct; upload names allowlisted and re-validated. No hole found.
-- **XSS**: every dynamic value reaches the DOM via `textContent`/text nodes; the only
-  `innerHTML` sinks are static literals. Terminal echo paths strip control chars.
-- **Secrets**: sealing, 0600 modes, browser-facing redaction all verified. Pin mode verifies
-  the fingerprint on each request's own connection in both API clients.
-- **Auth**: cookie signing/TTL, scrypt fail-closed hex check, rate-limiter eviction, origin
-  checks verified correct.
-- **Inventory re-homing**: the orphan-heal and drift-follow CAS + active-job guards held up
-  under targeted race probing.
-- Ring buffers, log caps, and threshold streaks in fleet/setup/health: no off-by-ones; no
-  unhandled-rejection paths in any job manager.
+The review specifically probed these areas and found them sound:
+
+- **SSH command-injection surface.** Every user-controlled box field passes through
+  `assertBoxSafe` before reaching an ssh argv; `shSingleQuote` is a correct POSIX quoter;
+  upload filenames are allowlist-validated and re-validated at use. No hole found.
+- **XSS.** Every dynamic value (box labels, commands, fleet output, server errors, Proxmox
+  names) reaches the DOM via `textContent` or text nodes; the only `innerHTML` sinks are
+  fully static literals. Terminal echo paths strip control characters.
+- **Secrets at rest.** AES-256-GCM sealing, owner-only (0600) file modes, and
+  browser-facing redaction all verified (the S5 tag-length nit aside). API error messages
+  never include the Authorization header.
+- **TLS pinning.** Both API clients verify the pinned fingerprint on each request's own
+  connection — the probe is advisory, the per-request check is the enforcement point.
+- **Auth paths.** Cookie signing and TTL, the fail-closed scrypt hash check, rate-limiter
+  eviction, and origin checks all held up under re-examination.
+- **Proxmox inventory re-homing.** The orphan-heal and migration-follow paths' compare-and-swap
+  re-reads and active-job guards close the race windows that were probed.
+- **Bounded buffers.** The log caps, ring buffers, and threshold streak counters in the
+  fleet/setup/health modules are all correct against their tests; no unhandled-rejection
+  paths were found in any job manager.
+
+The test-only exports flagged by the dead-export sweep (`PROBE_REMOTE`, `_count`,
+`buildKillTmuxRemote`, the pure web helpers, and so on) are deliberate seams consistent with
+the repository's TDD convention, not dead code.
