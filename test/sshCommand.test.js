@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { buildAttachArgv, buildProbeArgv, buildProvisionArgv, buildControlExitArgv, buildControlCheckArgv, buildControlPathArgv, sanitizeSession } from '../src/server/sshCommand.js';
+import { buildAttachArgv, buildProbeArgv, buildSetupArgv, buildProvisionArgv, buildControlExitArgv, buildControlCheckArgv, buildControlPathArgv, sanitizeSession } from '../src/server/sshCommand.js';
 
 test('buildAttachArgv does not expose an unused size parameter', () => {
   expect(buildAttachArgv).toHaveLength(2);
@@ -227,4 +227,16 @@ test('buildProbeArgv: includes ServerAlive keepalive so a probe-established mast
   const argv = buildProbeArgv({ host: 'h' }, 'tmux ls');
   expect(argv).toContain('ServerAliveInterval=15');
   expect(argv).toContain('ServerAliveCountMax=3');
+});
+
+test('buildSetupArgv is non-interactive: BatchMode on, no -tt, script last', () => {
+  const argv = buildSetupArgv({ host: 'prod' }, 'echo hi');
+  expect(argv).not.toContain('-tt');
+  expect(argv).toContain('BatchMode=yes');
+  expect(argv[argv.length - 1]).toBe('echo hi');
+  expect(argv[argv.length - 2]).toBe('prod');
+});
+
+test('buildSetupArgv validates box fields (command-injection guard)', () => {
+  expect(() => buildSetupArgv({ host: '-oProxyCommand=evil' }, 'x')).toThrow();
 });

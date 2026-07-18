@@ -106,6 +106,14 @@ export function buildProbeArgv(box, remoteCmd, opts = {}) {
   return argv;
 }
 
+// Non-interactive box setup: identical connection profile to a probe
+// (BatchMode, no PTY, ControlMaster multiplexing) with the generated setup
+// script as the remote command. Kept as its own named export so the setup
+// manager's command-injection surface is explicit and independently testable.
+export function buildSetupArgv(box, script, opts = {}) {
+  return buildProbeArgv(box, script, opts);
+}
+
 // Send a control command (`exit`, `check`, …) to a box's persistent
 // ControlMaster. This talks to the local control socket only — no network auth,
 // no PTY — so it is safe to run regardless of the box's auth method.
