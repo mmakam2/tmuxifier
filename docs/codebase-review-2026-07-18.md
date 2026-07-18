@@ -122,7 +122,7 @@ explanation in the sections that follow the tables.
 | N1 | web | The interactive terminal's WebSocket URL doesn't URL-encode the box id, while the provision path does — inconsistent, though harmless today | Info | S | Apply `encodeURIComponent` for consistency | Open |
 | N2 | e2e | Two pre-existing end-to-end test failures (zsh root shell), noted in the internal ledger, remain unfixed | Info | — | Fix separately; unrelated to any finding here | Open |
 | N3 | repo | Roughly 180 `review-*.diff` scratch files have accumulated in `.superpowers/sdd/` (gitignored, but heavy clutter) | Info | S | Delete or archive them | Open |
-| N4 | repo | The working-tree `CLAUDE.md` gained a graphify section; it is a tracked file, so it will be published on the next release | Info | — | User decision: keep it public, or move the rule into the gitignored `.claude/` config | Open |
+| N4 | repo | The working-tree `CLAUDE.md` gained a graphify section; it is a tracked file, so it will be published on the next release | Info | — | User decision: keep it public, or move the rule into the gitignored `.claude/` config | ✅ 2026-07-18 (moved to gitignored `CLAUDE.local.md`) |
 
 Items from the 2026-07-04 review that were re-verified as **fixed** in the meantime: L6 (the
 CPU-threshold seeding gap), plus everything already marked fixed in that document. The

@@ -30,3 +30,7 @@ playwright-report/
 .agents/
 graphify-out/
 skills-lock.json
+
+# Personal per-project agent memory (auto-loaded by Claude Code; the *.local
+# pattern above does not match it — it ends in .md)
+CLAUDE.local.md
