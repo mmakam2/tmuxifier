@@ -97,12 +97,14 @@ const defaultPublicKey = async () => {
   if (!cachedDefaultKey) cachedDefaultKey = await readDefaultPublicKey({ configuredPath: config.pveDefaultPubKeyPath, home: os.homedir() });
   return cachedDefaultKey;
 };
+const knownHosts = createKnownHosts();
 const provisionManager = createProvisionManager({
   proxmoxStore,
   netboxStore,
   boxStore: store,
   makeClient: makeProxmoxClient,
   defaultPublicKey,
+  knownHosts,
   load: () => provisionStore.load(),
   save: (jobs) => provisionStore.save(jobs),
   pollMs: config.pvePollMs,
@@ -123,7 +125,6 @@ const proxmoxInventory = createProxmoxInventory({
   proxmoxStore, makeClient: makeProxmoxClient, boxStore: store,
   freshnessMs: config.statusPollMs * 2,
 });
-const knownHosts = createKnownHosts();
 const lifecycleStore = createProxmoxLifecycleStore({ dataDir: config.dataDir });
 const lifecycleManager = createProxmoxLifecycleManager({
   boxStore: store, proxmoxStore, inventory: proxmoxInventory,

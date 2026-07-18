@@ -264,6 +264,40 @@ test('auto-static allocates before create, provisions with the allocated CIDR, a
   expect(calls.some((c) => c[0] === 'release')).toBe(false);
 });
 
+// A NetBox-recycled IP may still carry a stale known_hosts entry from
+// whatever previously lived at that address. Forgetting it before linking
+// the box means Tmuxifier never falsely flags the fresh container as a
+// spoofed host.
+test('provision forgets any stale host key for the new IP before linking the box', async () => {
+  const { client: netbox } = fakeNetbox();
+  const boxStore = fakeBoxStore();
+  const events = [];
+  const trackedStore = { ...boxStore, addBox: async (b, o) => { events.push(['addBox', b.host]); return boxStore.addBox(b, o); } };
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(PRESET_AUTO), boxStore: trackedStore, makeClient: () => okClient(),
+    netboxStore: nbStore, makeNetboxClient: () => netbox,
+    knownHosts: { forget: async (host, port) => { events.push(['forget', host, port]); return []; } },
+    load: () => [], save: () => {},
+  });
+  const j = await m.createProvision({ presetId: 'p3', hostname: 'dev-01' });
+  await m._settled(j.id);
+  expect(m.getProvision(j.id).status).toBe('done');
+  expect(events).toEqual([['forget', '192.168.30.50', 22], ['addBox', '192.168.30.50']]);
+});
+
+test('provision succeeds even when forgetting the host key rejects', async () => {
+  const { client: netbox } = fakeNetbox();
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(PRESET_AUTO), boxStore: fakeBoxStore(), makeClient: () => okClient(),
+    netboxStore: nbStore, makeNetboxClient: () => netbox,
+    knownHosts: { forget: async () => { throw new Error('boom'); } },
+    load: () => [], save: () => {},
+  });
+  const j = await m.createProvision({ presetId: 'p3', hostname: 'dev-01' });
+  await m._settled(j.id);
+  expect(m.getProvision(j.id).status).toBe('done');
+});
+
 test('a legacy auto-static preset with a stored gateway still uses the inferred one', async () => {
   const { client: netbox } = fakeNetbox();
   const createCalls = [];

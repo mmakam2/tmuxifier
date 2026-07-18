@@ -9,6 +9,7 @@ const TERMINAL = new Set(['done', 'error', 'cancelled', 'interrupted']);
 
 export function createProvisionManager({
   proxmoxStore, boxStore, makeClient, load, save, defaultPublicKey = () => null,
+  knownHosts = null,
   netboxStore = null, makeNetboxClient = createNetboxClient,
   now = () => new Date().toISOString(), makeId = randomUUID, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   pollMs = 1500, taskTimeoutMs = 600000, leaseTimeoutMs = 60000, maxJobs = 50, maxLogBytes = 65536,
@@ -123,6 +124,10 @@ export function createProvisionManager({
 
       if (boxHost) {
         j.phase = 'link'; persist();
+        // Tmuxifier just created this guest at boxHost — any known_hosts entry
+        // for that address is by definition stale (NetBox-recycled IP).
+        // Best-effort; provisioned boxes use the default port 22.
+        if (knownHosts) { try { await knownHosts.forget(boxHost, 22); } catch {} }
         const bd = preset.boxDefaults || {};
         const box = await boxStore.addBox({
           label: j.hostname, host: boxHost, user: bd.user || 'root',
