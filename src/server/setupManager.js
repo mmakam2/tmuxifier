@@ -7,6 +7,10 @@ import { buildEnsureTmuxRemote } from './boxActions.js';
 // is converted to `interrupted` on load.
 const SUDO_PW_RE = /a terminal is required to read the password|sudo:[^\n]*password is required|askpass/i;
 
+// Statuses that will never change again on their own — used by prune() to
+// decide what is safe to evict from the in-memory jobs map.
+const TERMINAL = new Set(['done', 'error', 'interrupted']);
+
 export function createSetupManager({
   sshStream,
   buildSetupArgv,
@@ -38,7 +42,10 @@ export function createSetupManager({
   function ordered() { return [...jobs.values()].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)); }
   function persist() { save(ordered().slice(0, maxJobs)); prune(); }
   function prune() {
-    const keep = new Set(ordered().slice(0, maxJobs).map((j) => j.id));
+    const all = ordered();
+    const keep = new Set();
+    for (const j of all) if (!TERMINAL.has(j.status)) keep.add(j.id); // in-flight / needs-interactive: always keep
+    for (const j of all) { if (keep.size >= maxJobs) break; keep.add(j.id); } // newest terminal jobs fill the rest
     for (const id of [...jobs.keys()]) if (!keep.has(id)) jobs.delete(id);
   }
   function summary(j) {
@@ -55,6 +62,7 @@ export function createSetupManager({
     j.phase = null;
     if (status !== 'needs-interactive') j.finishedAt = now();
     persist();
+    settles.delete(j.id);
   }
 
   async function run(j, box, { waitForSsh }) {
@@ -73,11 +81,17 @@ export function createSetupManager({
       const script = buildScript(box, j.options);
       const argv = buildSetupArgv(box, script, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
       let sawSudoPw = false;
+      let stderrTail = '';
       const handle = sshStream(argv, {
         timeout: taskTimeoutMs,
         onData: (chunk, stream) => {
           appendLog(j, chunk);
-          if (stream === 'stderr' && !sawSudoPw && SUDO_PW_RE.test(j.log)) sawSudoPw = true;
+          if (stream === 'stderr') {
+            // Bounded stderr-only accumulator so a phrase split across chunks is
+            // still detected, without matching sudo text that appeared on stdout.
+            stderrTail = (stderrTail + chunk).slice(-4096);
+            if (!sawSudoPw && SUDO_PW_RE.test(stderrTail)) sawSudoPw = true;
+          }
           persist();
         },
       });

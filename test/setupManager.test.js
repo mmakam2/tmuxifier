@@ -119,3 +119,49 @@ test('persists at most maxJobs newest jobs', async () => {
   const last = saved[saved.length - 1];
   expect(last.length).toBeLessThanOrEqual(2);
 });
+
+test('sudo phrase split across stderr chunks still -> needs-interactive', async () => {
+  const m = make({ sshStream: (argv, { onData }) => {
+    onData?.('sudo: a terminal is required to ', 'stderr');
+    onData?.('read the password; see below\n', 'stderr');
+    return { done: Promise.resolve({ code: 1 }), kill() {} };
+  } });
+  const s = m.start(BOX, { tools: [] });
+  await m._settled(s.id);
+  expect(m.getJob(s.id).status).toBe('needs-interactive');
+});
+
+test('matching text on stdout does NOT trigger needs-interactive (stderr-scoped)', async () => {
+  const m = make({ sshStream: (argv, { onData }) => {
+    onData?.('installing ssh-askpass helper\n', 'stdout'); // regex-matching text, but on stdout
+    onData?.('E: apt failed\n', 'stderr');
+    return { done: Promise.resolve({ code: 1 }), kill() {} };
+  } });
+  const s = m.start(BOX, { tools: [] });
+  await m._settled(s.id);
+  expect(m.getJob(s.id).status).toBe('error');
+});
+
+test('needs-interactive job is NOT reconciled on load', () => {
+  const m = make({ load: () => [{ id: 'ni', boxId: 'bni', status: 'needs-interactive', phase: null, createdAt: '2026-01-01T00:00:00.000Z', log: '' }] });
+  expect(m.getJob('ni').status).toBe('needs-interactive');
+});
+
+test('prune keeps an in-flight running job even when newer terminal jobs arrive', async () => {
+  let call = 0;
+  const pending = { done: new Promise(() => {}), kill() {} };
+  const m = make({ maxJobs: 1, sshStream: () => (call++ === 0 ? pending : { done: Promise.resolve({ code: 0 }), kill() {} }) });
+  const a = m.start({ ...BOX, id: 'b1' }, { tools: [] }); // stays running (pending)
+  const b = m.start({ ...BOX, id: 'b2' }, { tools: [] }); // completes
+  await m._settled(b.id);
+  expect(m.getJob(a.id)).toBeTruthy();
+  expect(m.getJob(a.id).status).toBe('running');
+});
+
+test('cancelForBox kills the running job handle', async () => {
+  let killed = false;
+  const m = make({ sshStream: () => ({ done: new Promise(() => {}), kill: () => { killed = true; } }) });
+  m.start(BOX, { tools: [] });
+  m.cancelForBox(BOX.id);
+  expect(killed).toBe(true);
+});
