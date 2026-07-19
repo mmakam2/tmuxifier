@@ -108,8 +108,11 @@ Third tab in the settings modal, same section pattern as NetBox/Proxmox
 - Permission line: current state (`granted` / `denied` / `default`) with an **Enable
   browser notifications** button calling `Notification.requestPermission()` (hidden once
   granted; `denied` shows a "re-enable in browser site settings" note).
-- One checkbox per event kind, labeled from the `notifyPrefs.ts` catalog, saved to
-  localStorage immediately on change.
+- One checkbox per event kind — every kind is toggleable: unreachable (`down`), recovered
+  (`up`), needs login (`needs-auth`), host key changed (`key-changed`), threshold crossed
+  (`threshold`), threshold cleared (`threshold-clear`), claude waiting for input
+  (`agent-input`), and claude finished (`agent-done`) — labeled from the `notifyPrefs.ts`
+  catalog, saved to localStorage immediately on change.
 - A one-line note that these settings are per-browser and that all events always appear in
   the events log regardless.
 
