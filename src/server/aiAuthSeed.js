@@ -20,6 +20,11 @@ export function buildClaudeSeedScript() {
     'for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do',
     '  if [ -f "$rc" ]; then',
     "    sed -i '/# tmuxifier-claude-token$/d' \"$rc\" 2>/dev/null || true",
+    // Appending to a file without a trailing newline merges onto its last
+    // line: the export never parses as its own line (silent seeding
+    // failure) and a later run's sed delete then eats that merged line too,
+    // destroying the user's original content. Force a newline first.
+    '    if [ -s "$rc" ] && [ -n "$(tail -c 1 "$rc")" ]; then printf \'\\n\' >> "$rc"; fi',
     '    printf \'export CLAUDE_CODE_OAUTH_TOKEN=%s # tmuxifier-claude-token\\n\' "\'$token\'" >> "$rc"',
     '  fi',
     'done',

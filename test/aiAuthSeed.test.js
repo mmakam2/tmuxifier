@@ -50,6 +50,23 @@ test('claude rc line is delete-then-append idempotent and onboarding file is gua
   expect(await fs.readFile(path.join(dir, '.claude.json'), 'utf8')).toBe('{"custom":true}');
 });
 
+test('claude rc append is safe when rc file lacks a trailing newline (real shell)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-seed-nonl-'));
+  await fs.writeFile(path.join(dir, '.bashrc'), "alias ll='ls -la'");
+  const script = buildClaudeSeedScript();
+  const env = { HOME: dir };
+  for (let i = 0; i < 2; i++) {
+    const res = await runShell(`printf %s 'sk-ant-oat-EXAMPLE' | ( ${script} )`, env);
+    expect(res.code).toBe(0);
+  }
+  const rc = await fs.readFile(path.join(dir, '.bashrc'), 'utf8');
+  const lines = rc.split('\n');
+  expect(lines).toContain("alias ll='ls -la'");
+  const tagged = lines.filter((l) => l.includes('tmuxifier-claude-token'));
+  expect(tagged).toHaveLength(1);
+  expect(tagged[0]).toBe("export CLAUDE_CODE_OAUTH_TOKEN='sk-ant-oat-EXAMPLE' # tmuxifier-claude-token");
+});
+
 test('codex script round-trips bytes with 0600 (real shell)', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-seed-cx-'));
   const payload = JSON.stringify({ tokens: { refresh: 'r-EXAMPLE' } });
