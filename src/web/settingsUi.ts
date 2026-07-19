@@ -4,14 +4,16 @@ import { el, openModal } from './dom';
 import { registerModal } from './modalRegistry';
 import { renderNetboxSection } from './settingsNetbox';
 import { renderProxmoxSection } from './settingsProxmox';
+import { renderNotificationsSection } from './settingsNotifications';
 
-export type SettingsTab = 'netbox' | 'proxmox';
+export type SettingsTab = 'netbox' | 'proxmox' | 'notifications';
 
 type Section = { label: string; render: (content: HTMLElement, close: () => void) => void | Promise<void> };
 
 const SECTIONS: Record<SettingsTab, Section> = {
   netbox: { label: 'NetBox', render: renderNetboxSection },
   proxmox: { label: 'Proxmox', render: (content) => renderProxmoxSection(content) },
+  notifications: { label: 'Notifications', render: (content) => renderNotificationsSection(content) },
 };
 
 export function openSettingsModal(tab: SettingsTab = 'netbox', onClose?: () => void): void {
