@@ -53,7 +53,7 @@ export function createAiAuthSeeder({ runStdin, token = null, readLocal = () => f
       const results = [];
       if (!token) {
         results.push({ target: 'claude', ok: false, skipped: 'TMUXIFIER_CLAUDE_OAUTH_TOKEN not configured' });
-      } else if (token.includes("'")) {
+      } else if (/['\r\n]/.test(token)) {
         results.push({ target: 'claude', ok: false, skipped: 'unsupported token characters' });
       } else {
         const res = await runStdin(box, buildClaudeSeedScript(), Buffer.from(token));

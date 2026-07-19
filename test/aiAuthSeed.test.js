@@ -100,6 +100,10 @@ test('seeder skips per target: no token, missing local codex auth, quote in toke
   ]);
   const quoted = createAiAuthSeeder({ runStdin: async () => ({ ok: true }), token: "bad'token", readLocal: async () => { throw new Error('ENOENT'); } });
   expect((await quoted.seed({ host: 'h1' }))[0]).toEqual({ target: 'claude', ok: false, skipped: 'unsupported token characters' });
+  const newlined = createAiAuthSeeder({ runStdin: async () => ({ ok: true }), token: 'tok\nen', readLocal: async () => { throw new Error('ENOENT'); } });
+  expect((await newlined.seed({ host: 'h1' }))[0]).toEqual({ target: 'claude', ok: false, skipped: 'unsupported token characters' });
+  const creturned = createAiAuthSeeder({ runStdin: async () => ({ ok: true }), token: 'tok\ren', readLocal: async () => { throw new Error('ENOENT'); } });
+  expect((await creturned.seed({ host: 'h1' }))[0]).toEqual({ target: 'claude', ok: false, skipped: 'unsupported token characters' });
 });
 
 test('seeder reports transport failure without secret material', async () => {
