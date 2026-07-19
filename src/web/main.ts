@@ -3,7 +3,8 @@ import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUpload
 import { setupStatusText, setupActions, setupBadge } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
 import { sparkline } from './sparkline';
-import { formatEvent, relTime, unseenCount } from './healthEvents';
+import { formatEvent, relTime, unseenCountFiltered } from './healthEvents';
+import { loadNotifyPrefs, enabledKinds } from './notifyPrefs';
 import { toggleBox, setBoxes, groupState } from './fleetSelection';
 import { addRecent, parseRecent } from './fleetHistory';
 import { createFleetScriptEditor } from './fleetEditor';
@@ -43,6 +44,7 @@ const SPARK_LABEL: Record<SparkMetric, string> = { cpuPct: 'CPU', memPct: 'memor
 let latestSeries: Record<string, Sample[]> = {};
 let latestEvents: HealthEvent[] = [];
 let latestEventSeq = 0;
+let lastNotifiedSeq = -1; // -1 until the first poll seeds it (no startup flood)
 
 function sparkMetric(): SparkMetric {
   const v = localStorage.getItem(SPARK_METRIC_KEY) as SparkMetric | null;
@@ -103,7 +105,7 @@ function writeLastSeenSeq(seq: number) { localStorage.setItem(EVENTS_SEEN_KEY, S
 function updateEventsBadge() {
   const badge = document.getElementById('events-badge');
   if (!badge) return;
-  const n = unseenCount(latestEvents, readLastSeenSeq());
+  const n = unseenCountFiltered(latestEvents, readLastSeenSeq(), enabledKinds(loadNotifyPrefs()));
   badge.hidden = n === 0;
   badge.textContent = n > 99 ? '99+' : String(n);
 }
@@ -405,6 +407,30 @@ async function pollHealth() {
     // Self-heal a stale high-water mark: if the server's events log was reset,
     // seq restarts below the stored cursor and the badge would never fire again.
     if (readLastSeenSeq() > latestSeq) writeLastSeenSeq(latestSeq);
+    // Browser notifications for newly-arrived enabled events. Seed the cursor
+    // on the first poll so a page load never replays history. Fire only when
+    // permission is granted and this tab is not focused — a focused tab already
+    // shows the badge, so a popup would be redundant.
+    // Self-heal like the seen-cursor above: a server events-log reset restarts
+    // seq below our cursor, which would otherwise mute notifications forever.
+    if (lastNotifiedSeq > latestSeq) lastNotifiedSeq = latestSeq;
+    if (lastNotifiedSeq < 0) {
+      lastNotifiedSeq = latestSeq;
+    } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && !document.hasFocus()) {
+      const enabled = enabledKinds(loadNotifyPrefs());
+      for (const e of events) {
+        if (e.seq > lastNotifiedSeq && enabled.has(e.kind)) {
+          const line = formatEvent(e);
+          try {
+            const n = new Notification(`Tmuxifier — ${e.label || e.host}`, { body: line.text, tag: `${e.kind}:${e.boxId}` });
+            n.onclick = () => { window.focus(); n.close(); };
+          } catch { /* notifications unavailable */ }
+        }
+      }
+      lastNotifiedSeq = latestSeq;
+    } else {
+      lastNotifiedSeq = latestSeq; // keep the cursor current while unfocused-but-denied or focused
+    }
     updateEventsBadge();
     // Keep an open panel live; rendering also marks the new events seen.
     if (document.getElementById('events-panel')?.classList.contains('open')) renderEventsPanel();
