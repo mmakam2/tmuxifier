@@ -252,6 +252,14 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     // '#…#d' sed script is a COMMENT: the old form deleted nothing, so every
     // ensure run appended another line).
     'if [ -f .tmux.conf.local ]; then sed -i \'/^set-option -g default-shell/d\' .tmux.conf.local 2>/dev/null || true; echo "set-option -g default-shell \"$ZSH_BIN\"" >> .tmux.conf.local; fi',
+    // Unattended fleet boxes must not self-update their shell framework at
+    // random shell starts — updates happen deliberately, via Fleet Command.
+    // The line must precede the oh-my-zsh source line to take effect; the grep
+    // guard keeps re-runs idempotent, and a custom .zshrc without the source
+    // line is left untouched (insert matches nothing).
+    'if [ -f .zshrc ] && ! grep -q "zstyle \':omz:update\' mode disabled" .zshrc; then',
+    '  sed -i "/oh-my-zsh\\.sh/i zstyle \':omz:update\' mode disabled" .zshrc',
+    'fi',
   ] : [];
   const ohMyBash = options.installOhMyBash ? [
     'BASH_BIN="$(command -v bash || true)"',
@@ -277,6 +285,11 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     'fi',
     // Same guarded delete-then-append as the omz branch above.
     'if [ -f .tmux.conf.local ]; then sed -i \'/^set-option -g default-shell/d\' .tmux.conf.local 2>/dev/null || true; echo "set-option -g default-shell \"$BASH_BIN\"" >> .tmux.conf.local; fi',
+    // Same rationale as the omz branch — and omb\'s check_for_upgrade is also
+    // known to strand a stale update.lock when first-start shells race it.
+    'if [ -f .bashrc ] && ! grep -q \'^DISABLE_AUTO_UPDATE=\' .bashrc; then',
+    '  sed -i \'/oh-my-bash\\.sh/i DISABLE_AUTO_UPDATE="true"\' .bashrc',
+    'fi',
   ] : [];
   // git is only a prerequisite of the oh-my-* framework installs (their
   // installers clone). A bare setup must not mutate the box's packages, and

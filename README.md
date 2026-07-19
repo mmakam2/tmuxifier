@@ -354,6 +354,10 @@ linked containers don't leave stale IPAM entries behind. Then **Provision → pi
 hostname** (optionally a tag, oh-my-tmux/zsh/bash, and the same "Additional tools" checklist as the
 Add/Edit Box modal). Watch the live task log; once the container is up Tmuxifier installs tmux
 (and any selected frameworks/tools) over SSH, then an **Open terminal** button drops you into it.
+Installed shell frameworks come with their auto-updater disabled (`zstyle ':omz:update' mode
+disabled` / `DISABLE_AUTO_UPDATE="true"`): unattended boxes shouldn't self-update at random
+shell starts — update them deliberately with a Fleet Command run (`omz update` / `bash
+~/.oh-my-bash/tools/upgrade.sh`) when you choose to.
 
 **Security.** The API token, any added SSH keys, and the optional root password are **encrypted at
 rest** (AES-256-GCM; key derived from your cookie secret) in the gitignored `data/proxmox.json`

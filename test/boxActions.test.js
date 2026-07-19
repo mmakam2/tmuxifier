@@ -632,3 +632,13 @@ test('execScriptStdin reports failure without throwing', async () => {
   const res = await actions.execScriptStdin({ host: 'h1' }, 'cat > /dev/null', Buffer.from('x'));
   expect(res).toEqual({ ok: false, error: 'boom' });
 });
+
+test('framework installs disable the auto-updater in the generated rc (updates happen deliberately, via Fleet Command)', () => {
+  const zsh = String(buildEnsureTmuxRemote('web', null, { installOhMyZsh: true }));
+  expect(zsh).toContain("zstyle ':omz:update' mode disabled");
+  const bash = String(buildEnsureTmuxRemote('web', null, { installOhMyBash: true }));
+  expect(bash).toContain('DISABLE_AUTO_UPDATE="true"');
+  const bare = String(buildEnsureTmuxRemote('web', null, {}));
+  expect(bare).not.toContain('omz:update');
+  expect(bare).not.toContain('DISABLE_AUTO_UPDATE');
+});
