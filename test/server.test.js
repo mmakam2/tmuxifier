@@ -545,6 +545,17 @@ test('seed-ai-auth returns 503 when no seeder is wired', async () => {
   expect(res.statusCode).toBe(503);
 });
 
+test('seed-ai-auth never echoes a thrown error into the response body', async () => {
+  app = await makeApp({ aiAuthSeeder: { seed: async () => { throw new Error('sk-ant-oat-LEAKED token material'); } } });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1', sessionName: 'work' } });
+  const res = await app.inject({ method: 'POST', url: `/api/boxes/${created.json().id}/seed-ai-auth`, headers });
+  expect(res.statusCode).toBe(500);
+  expect(res.body).not.toContain('LEAKED');
+  expect(res.json()).toEqual({ error: 'seeding failed' });
+});
+
 test('GET /api/local-shell returns default shell', async () => {
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };

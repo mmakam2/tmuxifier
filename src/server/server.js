@@ -344,7 +344,15 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const box = await store.getBox(req.params.id);
     if (!box) return reply.code(404).send({ error: 'box not found' });
     if (!aiAuthSeeder?.seed) return reply.code(503).send({ error: 'seeding unavailable' });
-    const results = await aiAuthSeeder.seed(box);
+    let results;
+    try {
+      results = await aiAuthSeeder.seed(box);
+    } catch {
+      // Last line of defense for this API surface: a rejection must never
+      // echo its message (it could carry secret-adjacent material) into the
+      // response body.
+      return reply.code(500).send({ error: 'seeding failed' });
+    }
     return { results };
   });
   app.get('/api/export', { preHandler: requireAuth }, async (req, reply) => {
