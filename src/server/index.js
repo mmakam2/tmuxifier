@@ -172,6 +172,7 @@ const history = createHealthHistory({
     disk: config.healthDiskWarnPct,
     hysteresis: config.healthThresholdHysteresisPct,
   },
+  agentIdleSec: config.agentIdleSec,
   load: () => healthEventsStore.load(),
   save: (events) => healthEventsStore.save(events),
 });

@@ -177,3 +177,68 @@ test('one record() pass saves the events log once, not once per event', () => {
   h.record({ a: { reachable: false, error: 'x' }, b: { reachable: false, error: 'x' } }, boxes); // two down events
   expect(saves - before).toBe(1);
 });
+
+const AGENT = { agentIdleSec: 45, sessionName: 'web' };
+const withAgent = (over) => ({ reachable: true, metrics: { boxNowSec: 1000 }, sessions: [{ name: 'web', attached: false, activity: 1000, paneCmd: 'claude' }], ...over });
+
+test('sampleOf marks a busy claude session working, an idle one waiting', () => {
+  // active now → working
+  expect(sampleOf(withAgent(), 5, AGENT).agent).toBe('working');
+  // idle 60s (>= 45) → waiting
+  const idle = withAgent({ sessions: [{ name: 'web', attached: false, activity: 940, paneCmd: 'claude' }] });
+  expect(sampleOf(idle, 5, AGENT).agent).toBe('waiting');
+});
+
+test('sampleOf without a box clock still reports presence as working (never waiting, never absent)', () => {
+  // A failed __META__ line must not erase the agent (a false agent-done) or
+  // invent idleness (a false agent-input): presence comes from the pane alone,
+  // idleness only from the box clock.
+  const noMeta = withAgent({ metrics: undefined });
+  expect(sampleOf(noMeta, 5, AGENT).agent).toBe('working');
+});
+
+test('sampleOf ignores non-claude panes and the wrong session', () => {
+  expect(sampleOf(withAgent({ sessions: [{ name: 'web', attached: false, activity: 1000, paneCmd: 'zsh' }] }), 5, AGENT).agent).toBeUndefined();
+  expect(sampleOf(withAgent({ sessions: [{ name: 'other', attached: false, activity: 940, paneCmd: 'claude' }] }), 5, AGENT).agent).toBeUndefined();
+  expect(sampleOf(withAgent(), 5, {}).agent).toBeUndefined(); // no sessionName → no agent state
+});
+
+test('sampleOf carries the configured session attached flag even without a claude pane', () => {
+  // Attachment is a SESSION property: it must survive the poll where claude
+  // exits, so agent-done suppression can honor it on both ends of the edge.
+  expect(sampleOf(withAgent({ sessions: [{ name: 'web', attached: true, activity: 940, paneCmd: 'claude' }] }), 5, AGENT).agentAttached).toBe(true);
+  expect(sampleOf(withAgent({ sessions: [{ name: 'web', attached: true, activity: 940, paneCmd: 'zsh' }] }), 5, AGENT).agentAttached).toBe(true);
+  expect(sampleOf(withAgent({ sessions: [{ name: 'web', attached: false, activity: 940, paneCmd: 'zsh' }] }), 5, AGENT).agent).toBeUndefined();
+});
+
+test('classifyTransitions emits agent-input on working->waiting when detached, once', () => {
+  const th = TH;
+  const w = { up: true, agent: 'working', agentAttached: false };
+  const idle = { up: true, agent: 'waiting', agentAttached: false };
+  const r1 = classifyTransitions(w, idle, th, initThresholdState());
+  expect(r1.events).toContainEqual({ kind: 'agent-input' });
+  // still waiting → no re-fire
+  const r2 = classifyTransitions(idle, idle, th, r1.state);
+  expect(r2.events).not.toContainEqual({ kind: 'agent-input' });
+});
+
+test('classifyTransitions suppresses agent-input while attached', () => {
+  const w = { up: true, agent: 'working', agentAttached: true };
+  const idle = { up: true, agent: 'waiting', agentAttached: true };
+  expect(classifyTransitions(w, idle, TH, initThresholdState()).events).not.toContainEqual({ kind: 'agent-input' });
+});
+
+test('classifyTransitions emits agent-done when the agent disappears on an up box, detached', () => {
+  const w = { up: true, agent: 'working', agentAttached: false };
+  const gone = { up: true, agentAttached: false };
+  expect(classifyTransitions(w, gone, TH, initThresholdState()).events).toContainEqual({ kind: 'agent-done' });
+  // suppressed if EITHER end of the edge was attached (watching = no ping)
+  const wA = { up: true, agent: 'working', agentAttached: true };
+  expect(classifyTransitions(wA, { up: true, agentAttached: false }, TH, initThresholdState()).events).not.toContainEqual({ kind: 'agent-done' });
+  expect(classifyTransitions(w, { up: true, agentAttached: true }, TH, initThresholdState()).events).not.toContainEqual({ kind: 'agent-done' });
+});
+
+test('agent kinds never fire on the first sample (no prev)', () => {
+  const idle = { up: true, agent: 'waiting', agentAttached: false };
+  expect(classifyTransitions(null, idle, TH, initThresholdState()).events).toEqual([]);
+});

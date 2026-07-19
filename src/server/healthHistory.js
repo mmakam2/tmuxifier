@@ -13,7 +13,7 @@ function cpuLoadPct(m) {
 // true`) even though SSH can't reach it: an intentionally-stopped container is
 // not a failure, so classifyTransitions must not fire a false down/up pair
 // around the moment it stops or starts back up.
-export function sampleOf(status, at) {
+export function sampleOf(status, at, opts = {}) {
   const s = status || {};
   const stopped = s.proxmoxState === 'stopped';
   const sample = { t: at, up: stopped || (!!s.reachable && !s.needsAuth) };
@@ -34,6 +34,24 @@ export function sampleOf(status, at) {
       ? m.diskPct
       : (m.diskTotalKb && m.diskUsedKb != null ? Math.round((m.diskUsedKb / m.diskTotalKb) * 100) : undefined);
     if (disk != null) sample.diskPct = disk;
+  }
+  // Agent state for the box's configured session only (opts.sessionName).
+  // PRESENCE comes from the pane command alone; the box clock only decides
+  // working vs waiting. A poll whose __META__ line failed (no boxNowSec) must
+  // neither erase the agent (false agent-done) nor invent idleness (false
+  // agent-input) — it degrades to 'working'. agentAttached is a SESSION
+  // property, set whenever the configured session exists, so suppression
+  // still sees attachment on the sample where claude has already exited.
+  const { sessionName, agentIdleSec } = opts;
+  if (sessionName && Array.isArray(s.sessions)) {
+    const sess = s.sessions.find((x) => x.name === sessionName);
+    if (sess) {
+      sample.agentAttached = !!sess.attached;
+      if (/^claude(-|$)/.test(String(sess.paneCmd || ''))) {
+        const idleSec = m && m.boxNowSec != null ? m.boxNowSec - Number(sess.activity || 0) : 0;
+        sample.agent = idleSec >= Number(agentIdleSec || 45) ? 'waiting' : 'working';
+      }
+    }
   }
   return sample;
 }
@@ -81,6 +99,18 @@ export function classifyTransitions(prev, next, thresholds, state) {
     events.push({ kind: 'down' });
   }
 
+  // Agent edges (box's configured session only). Suppressed while that session
+  // is attached — watching the terminal is its own notification; agent-done
+  // checks BOTH ends of the edge, since the user may attach in the final poll
+  // interval. Edge-triggered like the others: no emission without a prev sample.
+  if (prev) {
+    if (prev.agent === 'working' && next.agent === 'waiting' && !next.agentAttached) {
+      events.push({ kind: 'agent-input' });
+    } else if (prev.agent && !next.agent && next.up && !prev.agentAttached && !next.agentAttached) {
+      events.push({ kind: 'agent-done' });
+    }
+  }
+
   // mem / disk: immediate crossing with hysteresis clear
   for (const metric of ['mem', 'disk']) {
     const v = next[`${metric}Pct`];
@@ -119,6 +149,7 @@ export function createHealthHistory({
   maxSamples = 120,
   maxEvents = 200,
   thresholds = { cpu: 90, mem: 90, disk: 90, hysteresis: 5 },
+  agentIdleSec = 45,
   load = () => [],
   save = () => {},
   now = () => Date.now(),
@@ -153,7 +184,7 @@ export function createHealthHistory({
         present.add(box.id);
         const status = snapshot[box.id];
         if (!status) continue;
-        const sample = sampleOf(status, at);
+        const sample = sampleOf(status, at, { sessionName: box.sessionName, agentIdleSec });
         const ring = series.get(box.id) || [];
         ring.push(sample);
         while (ring.length > maxSamples) ring.shift();
