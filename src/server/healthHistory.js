@@ -38,18 +38,26 @@ export function sampleOf(status, at, opts = {}) {
   // Agent state for the box's configured session only (opts.sessionName).
   // PRESENCE comes from the pane command alone; the box clock only decides
   // working vs waiting. A poll whose __META__ line failed (no boxNowSec) must
-  // neither erase the agent (false agent-done) nor invent idleness (false
-  // agent-input) — it degrades to 'working'. agentAttached is a SESSION
-  // property, set whenever the configured session exists, so suppression
-  // still sees attachment on the sample where claude has already exited.
+  // neither erase the agent (false agent-done) nor fabricate an observed idle
+  // state: a fabricated 'working' would make the recovery poll look like a
+  // genuine working->waiting edge and fire a false agent-input one poll after
+  // the gap. So no clock => 'unknown', which sits on neither side of the
+  // input edge (at worst a real transition inside the gap is missed once).
+  // agentAttached is a SESSION property, set whenever the configured session
+  // exists, so suppression still sees attachment on the sample where claude
+  // has already exited.
   const { sessionName, agentIdleSec } = opts;
   if (sessionName && Array.isArray(s.sessions)) {
     const sess = s.sessions.find((x) => x.name === sessionName);
     if (sess) {
       sample.agentAttached = !!sess.attached;
       if (/^claude(-|$)/.test(String(sess.paneCmd || ''))) {
-        const idleSec = m && m.boxNowSec != null ? m.boxNowSec - Number(sess.activity || 0) : 0;
-        sample.agent = idleSec >= Number(agentIdleSec || 45) ? 'waiting' : 'working';
+        if (m && m.boxNowSec != null) {
+          const idleSec = m.boxNowSec - Number(sess.activity || 0);
+          sample.agent = idleSec >= Number(agentIdleSec ?? 45) ? 'waiting' : 'working';
+        } else {
+          sample.agent = 'unknown';
+        }
       }
     }
   }
@@ -102,7 +110,9 @@ export function classifyTransitions(prev, next, thresholds, state) {
   // Agent edges (box's configured session only). Suppressed while that session
   // is attached — watching the terminal is its own notification; agent-done
   // checks BOTH ends of the edge, since the user may attach in the final poll
-  // interval. Edge-triggered like the others: no emission without a prev sample.
+  // interval. 'unknown' (clock unavailable) matches neither side of the input
+  // edge but still counts as presence for agent-done. Edge-triggered like the
+  // others: no emission without a prev sample.
   if (prev) {
     if (prev.agent === 'working' && next.agent === 'waiting' && !next.agentAttached) {
       events.push({ kind: 'agent-input' });
