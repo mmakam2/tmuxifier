@@ -3,7 +3,7 @@ import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUpload
 import { setupStatusText, setupActions, setupBadge } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
 import { sparkline } from './sparkline';
-import { formatEvent, relTime, unseenCountFiltered } from './healthEvents';
+import { formatEvent, relTime, unseenCountFiltered, notificationsToFire } from './healthEvents';
 import { loadNotifyPrefs, enabledKinds } from './notifyPrefs';
 import { toggleBox, setBoxes, groupState } from './fleetSelection';
 import { addRecent, parseRecent } from './fleetHistory';
@@ -417,24 +417,28 @@ async function pollHealth() {
     // seq below our cursor, which would otherwise mute notifications forever.
     if (lastNotifiedSeq > latestSeq) lastNotifiedSeq = latestSeq;
     if (lastNotifiedSeq < 0) {
-      lastNotifiedSeq = latestSeq;
-    } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && !document.hasFocus()) {
-      const enabled = enabledKinds(loadNotifyPrefs());
-      // events arrives newest-first; walk oldest-first so when two new events
-      // share a tag (`kind:boxId`) the newest one is the last write and wins —
-      // same-tag Notification construction replaces whatever is currently shown.
-      for (const e of [...events].reverse()) {
-        if (e.seq > lastNotifiedSeq && enabled.has(e.kind)) {
-          const line = formatEvent(e);
-          try {
-            const n = new Notification(`Tmuxifier — ${e.label || e.host}`, { body: line.text, tag: `${e.kind}:${e.boxId}` });
-            n.onclick = () => { window.focus(); n.close(); };
-          } catch { /* notifications unavailable */ }
-        }
-      }
-      lastNotifiedSeq = latestSeq;
+      lastNotifiedSeq = latestSeq; // seed on first poll — a page load never replays history
     } else {
-      lastNotifiedSeq = latestSeq; // keep the cursor current while unfocused-but-denied or focused
+      // notificationsToFire (healthEvents.ts) owns the semantics: fire only from
+      // an unfocused, permission-granted tab, and never consume an event the
+      // user hasn't seen while focused (so a transition that happened just
+      // before you tabbed away still notifies you).
+      const { fire, nextCursor } = notificationsToFire({
+        events, latestSeq, lastNotifiedSeq, lastSeenSeq: readLastSeenSeq(),
+        focused: typeof document !== 'undefined' && document.hasFocus(),
+        permissionGranted: typeof Notification !== 'undefined' && Notification.permission === 'granted',
+        enabled: enabledKinds(loadNotifyPrefs()),
+      });
+      // fire is newest-first; walk oldest-first so a shared tag (`kind:boxId`)
+      // ends on the newest event, which wins the replacement.
+      for (const e of [...fire].reverse()) {
+        const line = formatEvent(e);
+        try {
+          const n = new Notification(`Tmuxifier — ${e.label || e.host}`, { body: line.text, tag: `${e.kind}:${e.boxId}` });
+          n.onclick = () => { window.focus(); n.close(); };
+        } catch { /* notifications unavailable */ }
+      }
+      lastNotifiedSeq = nextCursor;
     }
     updateEventsBadge();
     // Keep an open panel live; rendering also marks the new events seen.

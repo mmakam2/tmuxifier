@@ -10,6 +10,36 @@ export interface EventLine { icon: string; text: string; level: EventLevel; }
 const METRIC_LABEL = { cpu: 'CPU', mem: 'memory', disk: 'disk' } as const;
 const METRIC_ICON = { cpu: '🔥', mem: '🧠', disk: '💾' } as const;
 
+// Decide which events should raise a browser notification this poll, and where
+// the notification cursor should advance to. Pure so the delivery semantics are
+// unit-tested without a DOM.
+//
+// The rule: browser notifications fire only from an unfocused tab with
+// permission — a focused tab already shows the badge. But a focused poll must
+// NOT consume an event the user has not actually viewed: doing so (the v1.9.0
+// bug) meant a "waiting for input" transition that happened in the ~30s before
+// you tabbed away was burned, and switching away never notified you. So while
+// focused (or without permission) the cursor advances only past what the user
+// has SEEN (lastSeenSeq — the events panel marks events seen), leaving
+// arrived-while-focused-but-unviewed events pending to fire the moment the tab
+// loses focus.
+export function notificationsToFire(opts: {
+  events: HealthEvent[];
+  latestSeq: number;
+  lastNotifiedSeq: number;
+  lastSeenSeq: number;
+  focused: boolean;
+  permissionGranted: boolean;
+  enabled: Set<HealthEventKind>;
+}): { fire: HealthEvent[]; nextCursor: number } {
+  const { events, latestSeq, lastNotifiedSeq, lastSeenSeq, focused, permissionGranted, enabled } = opts;
+  if (permissionGranted && !focused) {
+    const fire = events.filter((e) => e.seq > lastNotifiedSeq && enabled.has(e.kind));
+    return { fire, nextCursor: latestSeq };
+  }
+  return { fire: [], nextCursor: Math.max(lastNotifiedSeq, lastSeenSeq) };
+}
+
 export function formatEvent(e: HealthEvent): EventLine {
   const name = e.label || e.host;
   switch (e.kind) {
