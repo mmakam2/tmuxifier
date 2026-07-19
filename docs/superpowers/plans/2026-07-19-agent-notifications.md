@@ -33,7 +33,7 @@
 **Interfaces:**
 - Produces: `parseTmuxSessions(stdout)` entries gain `paneCmd: string` (the active pane's command, `''` when absent). `parseMeta(stdout)` output gains `boxNowSec: number` when present. No other shape change.
 
-**Context:** `STATUS_FMT` (status.js:3) is the `tmux ls -F` format; pane variables in `tmux ls` resolve against each session's active pane. `META_PROBE` builds the `__META__` numbers line parsed by `parseMeta` and gated by `META_KEYS`. The probe is one ssh round-trip — these fields cost nothing extra.
+**Context:** `STATUS_FMT` (status.js:3) is the `tmux ls -F` format; pane variables in `tmux ls` resolve against each session's active pane — verified empirically on tmux 3.5a (a `list-sessions` format with `#{pane_current_command}` reports `claude` for a session running Claude Code). `META_PROBE` builds the `__META__` numbers line parsed by `parseMeta` and gated by `META_KEYS`. The probe is one ssh round-trip — these fields cost nothing extra.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -215,14 +215,26 @@ test('sampleOf marks a busy claude session working, an idle one waiting', () => 
   expect(sampleOf(idle, 5, AGENT).agent).toBe('waiting');
 });
 
+test('sampleOf without a box clock still reports presence as working (never waiting, never absent)', () => {
+  // A failed __META__ line must not erase the agent (a false agent-done) or
+  // invent idleness (a false agent-input): presence comes from the pane alone,
+  // idleness only from the box clock.
+  const noMeta = withAgent({ metrics: undefined });
+  expect(sampleOf(noMeta, 5, AGENT).agent).toBe('working');
+});
+
 test('sampleOf ignores non-claude panes and the wrong session', () => {
   expect(sampleOf(withAgent({ sessions: [{ name: 'web', attached: false, activity: 1000, paneCmd: 'zsh' }] }), 5, AGENT).agent).toBeUndefined();
   expect(sampleOf(withAgent({ sessions: [{ name: 'other', attached: false, activity: 940, paneCmd: 'claude' }] }), 5, AGENT).agent).toBeUndefined();
   expect(sampleOf(withAgent(), 5, {}).agent).toBeUndefined(); // no sessionName → no agent state
 });
 
-test('sampleOf carries the matched session attached flag', () => {
+test('sampleOf carries the configured session attached flag even without a claude pane', () => {
+  // Attachment is a SESSION property: it must survive the poll where claude
+  // exits, so agent-done suppression can honor it on both ends of the edge.
   expect(sampleOf(withAgent({ sessions: [{ name: 'web', attached: true, activity: 940, paneCmd: 'claude' }] }), 5, AGENT).agentAttached).toBe(true);
+  expect(sampleOf(withAgent({ sessions: [{ name: 'web', attached: true, activity: 940, paneCmd: 'zsh' }] }), 5, AGENT).agentAttached).toBe(true);
+  expect(sampleOf(withAgent({ sessions: [{ name: 'web', attached: false, activity: 940, paneCmd: 'zsh' }] }), 5, AGENT).agent).toBeUndefined();
 });
 
 test('classifyTransitions emits agent-input on working->waiting when detached, once', () => {
@@ -244,11 +256,12 @@ test('classifyTransitions suppresses agent-input while attached', () => {
 
 test('classifyTransitions emits agent-done when the agent disappears on an up box, detached', () => {
   const w = { up: true, agent: 'working', agentAttached: false };
-  const gone = { up: true };
+  const gone = { up: true, agentAttached: false };
   expect(classifyTransitions(w, gone, TH, initThresholdState()).events).toContainEqual({ kind: 'agent-done' });
-  // suppressed if the last sample was attached
+  // suppressed if EITHER end of the edge was attached (watching = no ping)
   const wA = { up: true, agent: 'working', agentAttached: true };
-  expect(classifyTransitions(wA, gone, TH, initThresholdState()).events).not.toContainEqual({ kind: 'agent-done' });
+  expect(classifyTransitions(wA, { up: true, agentAttached: false }, TH, initThresholdState()).events).not.toContainEqual({ kind: 'agent-done' });
+  expect(classifyTransitions(w, { up: true, agentAttached: true }, TH, initThresholdState()).events).not.toContainEqual({ kind: 'agent-done' });
 });
 
 test('agent kinds never fire on the first sample (no prev)', () => {
@@ -267,17 +280,22 @@ Expected: FAIL — `agent` undefined; new kinds not emitted.
 `sampleOf` — add an options parameter and derive agent state before the return. Change the signature to `export function sampleOf(status, at, opts = {})` and insert before `return sample;`:
 
 ```js
-  // Agent state for the box's configured session only (opts.sessionName). A
-  // claude-family active pane that has been silent for >= agentIdleSec (by the
-  // box's own clock) is waiting for input; otherwise working. Absent when there
-  // is no claude pane in that session, no sessionName, or no box clock.
+  // Agent state for the box's configured session only (opts.sessionName).
+  // PRESENCE comes from the pane command alone; the box clock only decides
+  // working vs waiting. A poll whose __META__ line failed (no boxNowSec) must
+  // neither erase the agent (false agent-done) nor invent idleness (false
+  // agent-input) — it degrades to 'working'. agentAttached is a SESSION
+  // property, set whenever the configured session exists, so suppression
+  // still sees attachment on the sample where claude has already exited.
   const { sessionName, agentIdleSec } = opts;
-  if (sessionName && Array.isArray(s.sessions) && m && m.boxNowSec != null) {
+  if (sessionName && Array.isArray(s.sessions)) {
     const sess = s.sessions.find((x) => x.name === sessionName);
-    if (sess && /^claude(-|$)/.test(String(sess.paneCmd || ''))) {
-      const idleSec = m.boxNowSec - Number(sess.activity || 0);
-      sample.agent = idleSec >= Number(agentIdleSec || 45) ? 'waiting' : 'working';
+    if (sess) {
       sample.agentAttached = !!sess.attached;
+      if (/^claude(-|$)/.test(String(sess.paneCmd || ''))) {
+        const idleSec = m && m.boxNowSec != null ? m.boxNowSec - Number(sess.activity || 0) : 0;
+        sample.agent = idleSec >= Number(agentIdleSec || 45) ? 'waiting' : 'working';
+      }
     }
   }
 ```
@@ -286,12 +304,13 @@ Expected: FAIL — `agent` undefined; new kinds not emitted.
 
 ```js
   // Agent edges (box's configured session only). Suppressed while that session
-  // is attached — watching the terminal is its own notification. Edge-triggered
-  // like the others: no emission without a prev sample.
+  // is attached — watching the terminal is its own notification; agent-done
+  // checks BOTH ends of the edge, since the user may attach in the final poll
+  // interval. Edge-triggered like the others: no emission without a prev sample.
   if (prev) {
     if (prev.agent === 'working' && next.agent === 'waiting' && !next.agentAttached) {
       events.push({ kind: 'agent-input' });
-    } else if (prev.agent && !next.agent && next.up && !prev.agentAttached) {
+    } else if (prev.agent && !next.agent && next.up && !prev.agentAttached && !next.agentAttached) {
       events.push({ kind: 'agent-done' });
     }
   }
@@ -708,6 +727,9 @@ In `pollHealth()`, after `latestEventSeq = latestSeq;` and the stale-cursor self
     // on the first poll so a page load never replays history. Fire only when
     // permission is granted and this tab is not focused — a focused tab already
     // shows the badge, so a popup would be redundant.
+    // Self-heal like the seen-cursor above: a server events-log reset restarts
+    // seq below our cursor, which would otherwise mute notifications forever.
+    if (lastNotifiedSeq > latestSeq) lastNotifiedSeq = latestSeq;
     if (lastNotifiedSeq < 0) {
       lastNotifiedSeq = latestSeq;
     } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && !document.hasFocus()) {
