@@ -46,6 +46,9 @@ const DEFAULTS = {
   healthMemWarnPct: 90,
   healthDiskWarnPct: 90,
   healthThresholdHysteresisPct: 5,
+  // Seconds a claude pane's tmux session must be idle (no output) before it is
+  // read as "waiting for input" — see docs/superpowers/specs/2026-07-19-agent-notifications-design.md
+  agentIdleSec: 45,
   // Proxmox LXC provisioning (Phase 1). Poll cadence for PVE task progress, per-request
   // and overall-provision timeouts, DHCP-lease discovery window, and retained job history.
   pvePollMs: 1500,
@@ -95,6 +98,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     healthMemWarnPct: e.TMUXIFIER_HEALTH_MEM_WARN_PCT ? Number(e.TMUXIFIER_HEALTH_MEM_WARN_PCT) : undefined,
     healthDiskWarnPct: e.TMUXIFIER_HEALTH_DISK_WARN_PCT ? Number(e.TMUXIFIER_HEALTH_DISK_WARN_PCT) : undefined,
     healthThresholdHysteresisPct: e.TMUXIFIER_HEALTH_HYSTERESIS_PCT ? Number(e.TMUXIFIER_HEALTH_HYSTERESIS_PCT) : undefined,
+    agentIdleSec: e.TMUXIFIER_AGENT_IDLE_SEC ? Number(e.TMUXIFIER_AGENT_IDLE_SEC) : undefined,
     pvePollMs: e.TMUXIFIER_PVE_POLL_MS ? Number(e.TMUXIFIER_PVE_POLL_MS) : undefined,
     pveTimeoutMs: e.TMUXIFIER_PVE_TIMEOUT_MS ? Number(e.TMUXIFIER_PVE_TIMEOUT_MS) : undefined,
     pveProvisionTimeoutMs: e.TMUXIFIER_PVE_PROVISION_TIMEOUT_MS ? Number(e.TMUXIFIER_PVE_PROVISION_TIMEOUT_MS) : undefined,
@@ -192,6 +196,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   merged.healthMemWarnPct = clampInt(merged.healthMemWarnPct, 1, 100, DEFAULTS.healthMemWarnPct);
   merged.healthDiskWarnPct = clampInt(merged.healthDiskWarnPct, 1, 100, DEFAULTS.healthDiskWarnPct);
   merged.healthThresholdHysteresisPct = clampInt(merged.healthThresholdHysteresisPct, 0, 50, DEFAULTS.healthThresholdHysteresisPct);
+  merged.agentIdleSec = clampInt(merged.agentIdleSec, 10, 3600, DEFAULTS.agentIdleSec);
   return merged;
 }
 

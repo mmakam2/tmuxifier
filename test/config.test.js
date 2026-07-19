@@ -393,3 +393,13 @@ test('claudeOauthToken defaults to null and empty string stays null', () => {
   expect(loadConfig({}, { env: {}, cwd: '/nonexistent' }).claudeOauthToken).toBe(null);
   expect(loadConfig({}, { env: { TMUXIFIER_CLAUDE_OAUTH_TOKEN: '   ' }, cwd: '/nonexistent' }).claudeOauthToken).toBe(null);
 });
+
+test('agentIdleSec defaults to 45 and is read from TMUXIFIER_AGENT_IDLE_SEC', () => {
+  expect(loadConfig({}, { env: {}, cwd: '/nonexistent' }).agentIdleSec).toBe(45);
+  expect(loadConfig({}, { env: { TMUXIFIER_AGENT_IDLE_SEC: '90' }, cwd: '/nonexistent' }).agentIdleSec).toBe(90);
+});
+
+test('agentIdleSec clamps out-of-range and non-numeric values to the default', () => {
+  expect(loadConfig({}, { env: { TMUXIFIER_AGENT_IDLE_SEC: '2' }, cwd: '/nonexistent' }).agentIdleSec).toBe(45);
+  expect(loadConfig({}, { env: { TMUXIFIER_AGENT_IDLE_SEC: 'abc' }, cwd: '/nonexistent' }).agentIdleSec).toBe(45);
+});
