@@ -21,7 +21,9 @@ export function toolsCheckboxGroup(): { element: HTMLFieldSetElement; selected: 
   group.className = 'radio-group';
   const legend = document.createElement('legend');
   legend.textContent = 'Additional tools';
-  group.append(legend);
+  const grid = document.createElement('div');
+  grid.className = 'tools-grid';
+  group.append(legend, grid);
   const inputs: { id: string; input: HTMLInputElement }[] = [];
   for (const t of PROVISION_TOOLS) {
     const wrap = document.createElement('label');
@@ -32,7 +34,7 @@ export function toolsCheckboxGroup(): { element: HTMLFieldSetElement; selected: 
     const span = document.createElement('span');
     span.textContent = t.label;
     wrap.append(input, span);
-    group.append(wrap);
+    grid.append(wrap);
     inputs.push({ id: t.id, input });
   }
   return {
