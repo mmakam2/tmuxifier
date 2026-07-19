@@ -610,3 +610,25 @@ test('the git bootstrap is included only when a selected option needs git', () =
   expect(String(buildEnsureTmuxRemote('web', null, { installOhMyTmux: true }))).toContain(GIT_APT);
   expect(String(buildEnsureTmuxRemote('web', null, { installOhMyBash: true }))).toContain(GIT_APT);
 });
+
+test('execScriptStdin pipes input on stdin and never embeds it in argv', async () => {
+  const calls = [];
+  const actions = createBoxActions({
+    run: async () => ({ code: 0, stdout: '', stderr: '' }),
+    runStdin: async (argv, input) => { calls.push({ argv, input }); return { code: 0, stdout: '', stderr: '' }; },
+  });
+  const res = await actions.execScriptStdin({ host: 'h1' }, 'umask 077; cat > /tmp/x', Buffer.from('SECRET'));
+  expect(res.ok).toBe(true);
+  expect(calls).toHaveLength(1);
+  expect(String(calls[0].input)).toBe('SECRET');
+  expect(calls[0].argv.join(' ')).not.toContain('SECRET');
+});
+
+test('execScriptStdin reports failure without throwing', async () => {
+  const actions = createBoxActions({
+    run: async () => ({ code: 0, stdout: '', stderr: '' }),
+    runStdin: async () => ({ code: 1, stdout: '', stderr: 'boom' }),
+  });
+  const res = await actions.execScriptStdin({ host: 'h1' }, 'cat > /dev/null', Buffer.from('x'));
+  expect(res).toEqual({ ok: false, error: 'boom' });
+});

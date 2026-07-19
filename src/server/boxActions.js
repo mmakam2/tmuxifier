@@ -433,6 +433,24 @@ export function createBoxActions({ run, runStdin, hostKeyPolicy = 'accept-new', 
       if (!remotePath.startsWith('/')) return { ok: false, error: 'could not resolve upload path' };
       return { ok: true, path: remotePath };
     },
+    // Generic stdin-piped remote script (the uploadFile transport minus upload
+    // specifics). Secrets travel on stdin only — the script text goes into ssh
+    // argv, so callers must never interpolate secret material into it.
+    async execScriptStdin(box, script, input, { timeoutMs = 60000 } = {}) {
+      if (typeof runStdin !== 'function') return { ok: false, error: 'stdin exec not supported' };
+      let argv;
+      try {
+        argv = buildProbeArgv(box, script, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
+      } catch (e) {
+        return { ok: false, error: e?.message || 'invalid box' };
+      }
+      const res = await runStdin(argv, input, { timeout: timeoutMs });
+      if (!res || res.code !== 0) {
+        const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
+        return { ok: false, error: msg || `ssh exited ${res ? res.code : 'unknown'}` };
+      }
+      return { ok: true };
+    },
     // After an upload lands, type its quoted path into the box session's
     // active pane — but only when the pane is a Claude Code or shell prompt
     // (tmuxInject.js classifies a capture-pane snapshot; busy panes get a
