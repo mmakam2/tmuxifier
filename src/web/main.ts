@@ -943,6 +943,13 @@ async function openLocalShellEditModal() {
 // tear the panel down too.
 let activeProvisionCleanup: (() => void) | null = null;
 
+// Bumped on every panel open and every run teardown, so a fire-and-forget
+// callback (the seed-AI-auth request below) can tell whether the panel it
+// was writing to still belongs to the run that started it. Without this, a
+// slow seed request from a previous box's run can land after the panel was
+// reopened for a different box and append onto the wrong status line.
+let provisionPanelGen = 0;
+
 function closeProvisionPanel() {
   const panel = document.getElementById('provision-panel')!;
   panel.classList.remove('open');
@@ -967,6 +974,7 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
 
   // Tear down any previous run first (pending poll timer / auto-close, live interactive WS).
   closeProvisionPanel();
+  provisionPanelGen += 1;
 
   title.textContent = `Setup — ${box.label}`;
   status.textContent = '';
@@ -1006,10 +1014,15 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
         refresh();
         if (seedAiAuth && !seeded) {
           seeded = true;
+          const myGen = provisionPanelGen;
           void api.seedAiAuth(box.id).then(({ results }) => {
+            if (provisionPanelGen !== myGen) return; // panel closed/reopened while the request was in flight
             const txt = results.map((r) => `${r.target} ${r.ok ? '✓' : `skipped (${r.skipped ?? r.error ?? 'failed'})`}`).join(' · ');
             status.textContent = `${status.textContent} · auth: ${txt}`;
-          }).catch(() => { status.textContent = `${status.textContent} · auth: request failed`; });
+          }).catch(() => {
+            if (provisionPanelGen !== myGen) return; // panel closed/reopened while the request was in flight
+            status.textContent = `${status.textContent} · auth: request failed`;
+          });
         }
         autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), 2000);
         return null;
@@ -1024,6 +1037,7 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
     // Disposes a live interactive session; no-op when its own onComplete
     // already ran. Only matters if the panel is closed mid-session.
     interactive.stop();
+    provisionPanelGen += 1;
   };
 
   function btn(label: string, onclick: () => void, cls = '') {
