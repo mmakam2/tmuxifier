@@ -6,13 +6,14 @@ import { openSettingsModal } from './settingsUi';
 import { renderPresetsTab } from './proxmoxPresets';
 import { renderContainersTab } from './proxmoxContainers';
 import { renderActivityTab } from './proxmoxActivity';
-import { toolsCheckboxGroup } from './provisionTools';
 import { setupStatusText } from './setupStatus';
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { registerModal } from './modalRegistry';
 import { createSetupJobPoller } from './setupPoller';
+import { createSetupOptionsForm, type SetupOptionsValues } from './setupOptions';
+import { presetSummary } from './presetSummary';
 
-type SetupOptions = { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth: boolean };
+type SetupOptions = SetupOptionsValues;
 
 type HubOpts = {
   openBox: (box: Box) => void;
@@ -78,28 +79,24 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
     const tagDatalist = el('datalist', { id: tagListId }, tagOptions.map((t) => el('option', { value: t })));
     const tag = input('', { placeholder: 'prod, staging (optional)', list: tagListId });
 
-    // Post-create setup (mirrors the box modal). Base tmux is always installed by the setup
-    // script; these toggle the optional frameworks.
-    const omt = el('input', { type: 'checkbox' }); (omt as HTMLInputElement).checked = true;
-    const radio = (value: string, checked: boolean) => { const r = el('input', { type: 'radio', name: 'pve-shell', value }); (r as HTMLInputElement).checked = checked; return r; };
-    const shNone = radio('none', true), shZsh = radio('omz', false), shBash = radio('omb', false);
-    const toolsGroup = toolsCheckboxGroup();
-    const seedAuth = el('input', { type: 'checkbox' });
+    const setupForm = createSetupOptionsForm();
 
     const box = el('div', {});
     const curPreset = (): PvePreset | undefined => presets.find((p) => p.id === sel.value);
-    const ipAutoNote = el('div', { class: 'pve-sub' }, ['IP: auto-allocated from NetBox']);
-    const syncStatic = () => {
-      const mode = curPreset()?.net.ipMode;
-      ipField.style.display = mode === 'static' ? '' : 'none';
-      ipAutoNote.style.display = mode === 'auto-static' ? '' : 'none';
+    // Live one-line description of the selected preset; also decides whether
+    // the static-IP override field applies.
+    const summary = el('div', { class: 'pve-sub' });
+    const syncPreset = () => {
+      const p = curPreset();
+      summary.textContent = p ? presetSummary(p) : '';
+      ipField.style.display = p?.net.ipMode === 'static' ? '' : 'none';
     };
-    sel.addEventListener('change', syncStatic);
+    sel.addEventListener('change', syncPreset);
 
     const go = el('button', { type: 'submit', onclick: async (e) => {
       e.preventDefault(); box.querySelector('.pve-err')?.remove();
       const t = tag.value.trim();
-      const setupOptions: SetupOptions = { ohMyTmux: (omt as HTMLInputElement).checked, ohMyZsh: (shZsh as HTMLInputElement).checked, ohMyBash: (shBash as HTMLInputElement).checked, tools: toolsGroup.selected(), seedAiAuth: (seedAuth as HTMLInputElement).checked };
+      const setupOptions: SetupOptions = setupForm.values();
       try {
         const job = await pve.createProvision({ presetId: sel.value, hostname: hostname.value.trim(), ip: curPreset()?.net.ipMode === 'static' ? (ip.value.trim() || undefined) : undefined, tags: t ? [t] : [], setupOptions });
         showJob(job.id, setupOptions);
@@ -108,20 +105,17 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
 
     box.append(
       el('h3', {}, ['Provision a container']),
-      field('Preset', sel), field('Hostname', hostname), ipField, ipAutoNote,
-      field('Tag', tag), tagDatalist,
-      el('label', { class: 'check-field' }, [omt, el('span', {}, ['Install Oh My Tmux'])]),
-      el('div', { class: 'field' }, [el('span', {}, ['Shell framework']),
-        el('label', { class: 'check-field' }, [shNone, el('span', {}, ['None'])]),
-        el('label', { class: 'check-field' }, [shZsh, el('span', {}, ['Oh My Zsh'])]),
-        el('label', { class: 'check-field' }, [shBash, el('span', {}, ['Oh My Bash'])]),
+      el('fieldset', { class: 'setup-section' }, [
+        el('legend', {}, ['Container']),
+        field('Preset', sel), summary,
+        field('Hostname', hostname), ipField,
+        field('Tag', tag), tagDatalist,
       ]),
-      toolsGroup.element,
-      el('label', { class: 'check-field', title: 'Copies subscription credentials from the Tmuxifier host to this box — seed only boxes you trust with your own login' }, [seedAuth, el('span', {}, ['Seed AI CLI auth (claude/codex) from this host'])]),
+      setupForm.element,
       el('div', { class: 'modal-actions' }, [go]),
     );
     setContent(box);
-    syncStatic();
+    syncPreset();
   }
 
   // --- Job panel (shared) ---
