@@ -18,7 +18,7 @@ import { openProxmoxHub } from './proxmoxUi';
 import { pve } from './proxmox';
 import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
-import { toolsCheckboxGroup } from './provisionTools';
+import { createSetupOptionsForm } from './setupOptions';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
@@ -1164,15 +1164,6 @@ function openBoxDialog(box?: Box) {
     return wrap;
   }
 
-  const installOhMyTmux = document.createElement('label');
-  installOhMyTmux.className = 'check-field';
-  const installOhMyTmuxInput = document.createElement('input');
-  installOhMyTmuxInput.type = 'checkbox';
-  installOhMyTmuxInput.checked = true;
-  const installOhMyTmuxText = document.createElement('span');
-  installOhMyTmuxText.textContent = 'Install Oh My Tmux if missing';
-  installOhMyTmux.append(installOhMyTmuxInput, installOhMyTmuxText);
-
   // tmux session: a type-or-pick field. The datalist pre-fills from the status
   // snapshot we already cache (0 new SSH); the ⟳ button does a user-triggered
   // live probe. Empty submits as 'web' (the store default).
@@ -1255,29 +1246,9 @@ function openBoxDialog(box?: Box) {
     }
   });
 
-  // Shell framework radio group
-  const shellGroup = document.createElement('fieldset');
-  shellGroup.className = 'radio-group';
-  const shellLegend = document.createElement('legend');
-  shellLegend.textContent = 'Shell framework';
-  shellGroup.append(shellLegend);
-
-  const shellNone = makeRadio('shellFramework', 'none', 'None', true);
-  const shellZsh = makeRadio('shellFramework', 'omz', 'Install Oh My Zsh if missing', false);
-  const shellBash = makeRadio('shellFramework', 'omb', 'Install Oh My Bash if missing', false);
-
-  shellGroup.append(shellNone.wrap, shellZsh.wrap, shellBash.wrap);
-
-  const toolsGroup = toolsCheckboxGroup();
-
-  const seedAiAuth = document.createElement('label');
-  seedAiAuth.className = 'check-field';
-  seedAiAuth.title = 'Copies subscription credentials from the Tmuxifier host to this box — seed only boxes you trust with your own login';
-  const seedAiAuthInput = document.createElement('input');
-  seedAiAuthInput.type = 'checkbox';
-  const seedAiAuthText = document.createElement('span');
-  seedAiAuthText.textContent = 'Seed AI CLI auth (claude/codex) from this host';
-  seedAiAuth.append(seedAiAuthInput, seedAiAuthText);
+  // Shared setup-options component (Terminal / Tools / AI auth seeding).
+  // Edit mode defaults Oh My Tmux off — the box already went through setup.
+  const setupForm = createSetupOptionsForm({ ohMyTmux: !isEdit });
 
   const form = document.createElement('form');
   form.className = 'modal box-modal';
@@ -1328,17 +1299,13 @@ function openBoxDialog(box?: Box) {
     field('proxyJump', 'ProxyJump (optional)', { placeholder: 'jump host this server can reach' }),
   );
 
-  const setupGrid = document.createElement('div');
-  setupGrid.className = 'field-grid';
-  setupGrid.append(shellGroup, installOhMyTmux, toolsGroup.element, seedAiAuth);
-
   const modalBody = document.createElement('div');
   modalBody.className = 'modal-body';
   modalBody.append(
     fieldGrid,
     tagDatalist,
     sessionWrap,
-    setupGrid,
+    setupForm.element,
     proxmoxAssociation.element,
   );
 
@@ -1351,12 +1318,6 @@ function openBoxDialog(box?: Box) {
     if (box!.user) fields.user.value = box!.user;
     if (box!.port) fields.port.value = String(box!.port);
     if (box!.proxyJump) fields.proxyJump.value = box!.proxyJump;
-  }
-
-  // Default checkboxes/radios to unchecked/None in edit mode
-  if (isEdit) {
-    installOhMyTmuxInput.checked = false;
-    shellNone.input.checked = true;
   }
 
   const { close } = openModal({ modal: form, mount: app });
@@ -1392,23 +1353,13 @@ function openBoxDialog(box?: Box) {
         }
         close();
         await refresh();
-        const installOhMyZsh = shellZsh.input.checked;
-        const installOhMyBash = shellBash.input.checked;
-        const selectedTools = toolsGroup.selected();
-        if (installOhMyTmuxInput.checked || installOhMyZsh || installOhMyBash || selectedTools.length || seedAiAuthInput.checked) {
-          openProvisionPanel(updatedBox, {
-            ohMyTmux: installOhMyTmuxInput.checked,
-            ohMyZsh: installOhMyZsh,
-            ohMyBash: installOhMyBash,
-            tools: selectedTools,
-            seedAiAuth: seedAiAuthInput.checked,
-          });
+        const so = setupForm.values();
+        if (so.ohMyTmux || so.ohMyZsh || so.ohMyBash || so.tools.length || so.seedAiAuth) {
+          openProvisionPanel(updatedBox, so);
         }
       } else {
         const host = fields.host.value.trim();
         if (!host) { err.textContent = 'Host is required'; submit.disabled = false; return; }
-        const installOhMyZsh = shellZsh.input.checked;
-        const installOhMyBash = shellBash.input.checked;
         const spec: AddBoxSpec = { host };
         const label = fields.label.value.trim(); if (label) spec.label = label;
         const tag = canonicalTagForInput(fields.tag.value); if (tag) spec.tags = [tag];
@@ -1433,13 +1384,7 @@ function openBoxDialog(box?: Box) {
           return;
         }
         close();
-        openProvisionPanel(newBox, {
-          ohMyTmux: installOhMyTmuxInput.checked,
-          ohMyZsh: installOhMyZsh,
-          ohMyBash: installOhMyBash,
-          tools: toolsGroup.selected(),
-          seedAiAuth: seedAiAuthInput.checked,
-        });
+        openProvisionPanel(newBox, setupForm.values());
       }
     } catch (e: any) {
       err.textContent = e?.message || `Could not ${isEdit ? 'save' : 'add'} box`;
