@@ -83,5 +83,20 @@ export function createAiAuthSeeder({ runStdin, token = null, readLocal = () => f
       }
       return results;
     },
+    // Host-side readiness for the provision forms. Reasons reuse the exact
+    // skip strings seed() emits; no secret bytes ever appear in the result.
+    async status() {
+      const claude = !token
+        ? { ready: false, reason: 'TMUXIFIER_CLAUDE_OAUTH_TOKEN not configured' }
+        : /['\r\n]/.test(token)
+          ? { ready: false, reason: 'unsupported token characters' }
+          : { ready: true };
+      let codexBytes = null;
+      try { codexBytes = await readLocal(); } catch { /* no local auth */ }
+      const codex = codexBytes && codexBytes.length
+        ? { ready: true }
+        : { ready: false, reason: 'no codex auth on the Tmuxifier host' };
+      return { claude, codex };
+    },
   };
 }

@@ -126,3 +126,21 @@ test('seeder reports transport failure without secret material', async () => {
   expect(results[0]).toEqual({ target: 'claude', ok: false, error: 'seed failed' });
   expect(results[1]).toEqual({ target: 'codex', ok: false, error: 'seed failed' });
 });
+
+test('status reports per-CLI readiness with the seeder skip reasons, no secret material', async () => {
+  const ready = createAiAuthSeeder({ runStdin: async () => ({ ok: true }), token: 'sk-ant-oat-EXAMPLE', readLocal: async () => Buffer.from('{"codex":true}') });
+  expect(await ready.status()).toEqual({ claude: { ready: true }, codex: { ready: true } });
+  expect(JSON.stringify(await ready.status())).not.toContain('EXAMPLE');
+
+  const none = createAiAuthSeeder({ runStdin: async () => ({ ok: true }), token: null, readLocal: async () => { throw new Error('ENOENT'); } });
+  expect(await none.status()).toEqual({
+    claude: { ready: false, reason: 'TMUXIFIER_CLAUDE_OAUTH_TOKEN not configured' },
+    codex: { ready: false, reason: 'no codex auth on the Tmuxifier host' },
+  });
+
+  const bad = createAiAuthSeeder({ runStdin: async () => ({ ok: true }), token: "bad'token", readLocal: async () => Buffer.from('') });
+  expect(await bad.status()).toEqual({
+    claude: { ready: false, reason: 'unsupported token characters' },
+    codex: { ready: false, reason: 'no codex auth on the Tmuxifier host' },
+  });
+});
