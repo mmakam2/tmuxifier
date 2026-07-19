@@ -16,7 +16,7 @@ export type ProxmoxBoxState = 'running' | 'stopped' | 'missing' | 'unknown';
 export interface Status {
   reachable: boolean; tmux?: boolean; needsAuth?: boolean; inUse?: boolean; paused?: boolean;
   hostKeyChanged?: boolean;
-  nextProbeAt?: number; sessions?: { name: string; windows: number; attached?: boolean; activity?: number }[];
+  nextProbeAt?: number; sessions?: { name: string; windows: number; attached?: boolean; activity?: number; paneCmd?: string }[];
   metrics?: BoxMetrics; error?: string;
   proxmoxState?: ProxmoxBoxState; proxmoxNode?: string; proxmoxVmid?: number;
 }
@@ -25,7 +25,14 @@ export interface Status {
 // `stopped` marks a confirmed-by-Proxmox stopped box: `up` is true for it (see
 // sampleOf), so this flag is how the sparkline/health UI tells "healthy stopped"
 // apart from a genuinely reachable box.
-export interface Sample { t: number; up: boolean; stopped?: boolean; tmux?: boolean; needsAuth?: boolean; keyChanged?: boolean; cpuPct?: number; memPct?: number; diskPct?: number; }
+export interface Sample {
+  t: number; up: boolean; stopped?: boolean; tmux?: boolean; needsAuth?: boolean; keyChanged?: boolean;
+  cpuPct?: number; memPct?: number; diskPct?: number;
+  // Agent presence/idleness for the box's configured session (see healthHistory.js
+  // sampleOf) and whether that session is attached. Unused by the client today —
+  // typing only, to keep this interface truthful to what the API actually serves.
+  agent?: 'working' | 'waiting' | 'unknown'; agentAttached?: boolean;
+}
 export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'key-changed' | 'threshold' | 'threshold-clear' | 'agent-input' | 'agent-done';
 export interface HealthEvent {
   seq: number; boxId: string; label: string; host: string; t: number;
