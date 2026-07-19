@@ -141,3 +141,5 @@ Two spec details didn't match final-review implementation:
   both in `main.ts`'s `openProvisionPanel` and `proxmoxUi.ts`'s hub Provision tab — reflecting
   the v1.7.9 refactor to poll-based, resumable server-side setup jobs (`setupManager.js`)
   instead of a live provision-terminal WebSocket exit event.
+
+- **2026-07-19 (v1.8.1):** the `~/.claude.json` write is no longer only-if-absent: installing the claude provision tool runs the installer before seeding, and its first run creates the file without `hasCompletedOnboarding` — interactive claude then showed the login picker despite a valid seeded token. The seed script now merges the flag into an existing file (python3, node fallback, best-effort), preserving all existing keys.

@@ -28,8 +28,22 @@ export function buildClaudeSeedScript() {
     '    printf \'export CLAUDE_CODE_OAUTH_TOKEN=%s # tmuxifier-claude-token\\n\' "\'$token\'" >> "$rc"',
     '  fi',
     'done',
+    // The onboarding flag must end up in ~/.claude.json even when the file
+    // already exists: installing the claude provision tool runs the installer
+    // BEFORE seeding, and its first run creates the file without the flag —
+    // an only-if-absent write then skips it, and interactive claude shows the
+    // login-method picker despite a valid token in the environment. Merge is
+    // best-effort (|| true): the token/rc seeding above already succeeded, so
+    // an unparseable file must not fail the target; existing keys are always
+    // preserved.
     'if [ ! -f "$HOME/.claude.json" ]; then',
     '  printf \'{"hasCompletedOnboarding": true}\\n\' > "$HOME/.claude.json"',
+    'elif ! grep -q \'"hasCompletedOnboarding"\' "$HOME/.claude.json"; then',
+    '  if command -v python3 >/dev/null 2>&1; then',
+    '    python3 -c \'import json,sys;p=sys.argv[1];d=json.load(open(p));d["hasCompletedOnboarding"]=True;json.dump(d,open(p,"w"),indent=2)\' "$HOME/.claude.json" || true',
+    '  elif command -v node >/dev/null 2>&1; then',
+    '    node -e \'const fs=require("fs");const p=process.argv[1];const d=JSON.parse(fs.readFileSync(p,"utf8"));d.hasCompletedOnboarding=true;fs.writeFileSync(p,JSON.stringify(d,null,2))\' "$HOME/.claude.json" || true',
+    '  fi',
     'fi',
   ].join('\n');
 }

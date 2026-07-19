@@ -44,10 +44,20 @@ test('claude rc line is delete-then-append idempotent and onboarding file is gua
   expect(rc).toContain("export CLAUDE_CODE_OAUTH_TOKEN='sk-ant-oat-EXAMPLE'");
   const onboarding = JSON.parse(await fs.readFile(path.join(dir, '.claude.json'), 'utf8'));
   expect(onboarding.hasCompletedOnboarding).toBe(true);
-  // guarded: pre-existing .claude.json must never be overwritten
+  // A pre-existing .claude.json must be preserved, with the onboarding flag
+  // MERGED in. The claude installer's own first run (the claude provision
+  // tool) creates this file during setup — before seeding — so an
+  // only-if-absent guard would silently skip the flag and interactive claude
+  // would show the login picker despite a valid token in the environment.
   await fs.writeFile(path.join(dir, '.claude.json'), '{"custom":true}');
   await runShell(`printf %s 'sk-ant-oat-EXAMPLE' | ( ${script} )`, env);
-  expect(await fs.readFile(path.join(dir, '.claude.json'), 'utf8')).toBe('{"custom":true}');
+  const merged = JSON.parse(await fs.readFile(path.join(dir, '.claude.json'), 'utf8'));
+  expect(merged.custom).toBe(true);
+  expect(merged.hasCompletedOnboarding).toBe(true);
+  // Re-running must not corrupt it (idempotent merge).
+  await runShell(`printf %s 'sk-ant-oat-EXAMPLE' | ( ${script} )`, env);
+  const merged2 = JSON.parse(await fs.readFile(path.join(dir, '.claude.json'), 'utf8'));
+  expect(merged2).toEqual(merged);
 });
 
 test('claude rc append is safe when rc file lacks a trailing newline (real shell)', async () => {
