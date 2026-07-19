@@ -56,6 +56,7 @@ export interface SetupSummary {
   createdAt: string; finishedAt: string | null;
 }
 export interface SetupJob extends SetupSummary { log: string; }
+export interface SeedResult { target: 'claude' | 'codex'; ok: boolean; skipped?: string; error?: string }
 
 // Central 401 seam. When the session cookie expires (or the server restarts
 // with a new secret) every poller and action starts failing with 401s; without
@@ -92,6 +93,7 @@ export const api = {
   },
   async reconnectBox(id: string) { return j<{ ok: boolean }>(await fetch(`/api/boxes/${id}/reconnect`, { method: 'POST' })); },
   async forgetHostKey(id: string) { return j<{ ok: boolean }>(await fetch(`/api/boxes/${id}/forget-hostkey`, { method: 'POST' })); },
+  async seedAiAuth(id: string) { return j<{ results: SeedResult[] }>(await fetch(`/api/boxes/${id}/seed-ai-auth`, { method: 'POST' })); },
   async probeSessions(spec: { id?: string; host: string; user?: string; port?: number; proxyJump?: string }) {
     return j<Status>(await fetch('/api/boxes/probe-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(spec) }));
   },

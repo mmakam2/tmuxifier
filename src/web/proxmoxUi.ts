@@ -12,7 +12,7 @@ import { createInteractiveLauncher } from './interactiveLauncher';
 import { registerModal } from './modalRegistry';
 import { createSetupJobPoller } from './setupPoller';
 
-type SetupOptions = { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[] };
+type SetupOptions = { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth: boolean };
 
 type HubOpts = {
   openBox: (box: Box) => void;
@@ -84,6 +84,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
     const radio = (value: string, checked: boolean) => { const r = el('input', { type: 'radio', name: 'pve-shell', value }); (r as HTMLInputElement).checked = checked; return r; };
     const shNone = radio('none', true), shZsh = radio('omz', false), shBash = radio('omb', false);
     const toolsGroup = toolsCheckboxGroup();
+    const seedAuth = el('input', { type: 'checkbox' });
 
     const box = el('div', {});
     const curPreset = (): PvePreset | undefined => presets.find((p) => p.id === sel.value);
@@ -98,7 +99,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
     const go = el('button', { type: 'submit', onclick: async (e) => {
       e.preventDefault(); box.querySelector('.pve-err')?.remove();
       const t = tag.value.trim();
-      const setupOptions: SetupOptions = { ohMyTmux: (omt as HTMLInputElement).checked, ohMyZsh: (shZsh as HTMLInputElement).checked, ohMyBash: (shBash as HTMLInputElement).checked, tools: toolsGroup.selected() };
+      const setupOptions: SetupOptions = { ohMyTmux: (omt as HTMLInputElement).checked, ohMyZsh: (shZsh as HTMLInputElement).checked, ohMyBash: (shBash as HTMLInputElement).checked, tools: toolsGroup.selected(), seedAiAuth: (seedAuth as HTMLInputElement).checked };
       try {
         const job = await pve.createProvision({ presetId: sel.value, hostname: hostname.value.trim(), ip: curPreset()?.net.ipMode === 'static' ? (ip.value.trim() || undefined) : undefined, tags: t ? [t] : [], setupOptions });
         showJob(job.id, setupOptions);
@@ -116,6 +117,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
         el('label', { class: 'check-field' }, [shBash, el('span', {}, ['Oh My Bash'])]),
       ]),
       toolsGroup.element,
+      el('label', { class: 'check-field', title: 'Copies subscription credentials from the Tmuxifier host to this box — seed only boxes you trust with your own login' }, [seedAuth, el('span', {}, ['Seed AI CLI auth (claude/codex) from this host'])]),
       el('div', { class: 'modal-actions' }, [go]),
     );
     setContent(box);
@@ -151,6 +153,10 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
       setupArea.style.marginTop = '8px';
       const setupLog = el('pre', { class: 'pve-log' });
       setupArea.replaceChildren(setupLog);
+      // Fire-once guard for this runSetup call: the needs-interactive fallback
+      // re-enters polling (poller.start() below), so 'done' can be observed
+      // more than once per call without this.
+      let seeded = false;
 
       // Shared poll loop (setupPoller.ts); the policy renders this tab's chrome.
       setupPoller?.stop();
@@ -164,6 +170,13 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
           if (job.status === 'running') return 1500;
           opts.onBoxLinked();
           footer.replaceChildren();
+          if (job.status === 'done' && setup?.seedAiAuth && !seeded) {
+            seeded = true;
+            void api.seedAiAuth(boxId).then(({ results }) => {
+              const txt = results.map((r) => `${r.target} ${r.ok ? '✓' : `skipped (${r.skipped ?? r.error ?? 'failed'})`}`).join(' · ');
+              phase.textContent = `${phase.textContent} · auth: ${txt}`;
+            }).catch(() => { phase.textContent = `${phase.textContent} · auth: request failed`; });
+          }
           if (job.status === 'needs-interactive') {
             const finishBtn = el('button', { type: 'button', class: 'pve-primary' }, ['Finish interactively']) as HTMLButtonElement;
             finishBtn.disabled = setupLauncher.active();

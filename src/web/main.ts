@@ -958,7 +958,7 @@ function closeProvisionPanel() {
 // existing WS PTY (openProvisionTerminal) so the user can type it in; the
 // server marks the job's outcome from that session (markInteractiveResult),
 // so polling simply keeps going until the status changes.
-function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools?: string[] }) {
+function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools?: string[]; seedAiAuth?: boolean }) {
   const panel = document.getElementById('provision-panel')!;
   const title = panel.querySelector('.provision-title')!;
   const status = panel.querySelector('.provision-status')!;
@@ -975,6 +975,7 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
   panel.classList.add('open');
 
   const opts = { ohMyTmux: options.ohMyTmux, ohMyZsh: options.ohMyZsh, ohMyBash: options.ohMyBash, tools: options.tools || [] };
+  const seedAiAuth = !!options.seedAiAuth;
   const log = document.createElement('pre');
   log.className = 'provision-log';
   const actions = document.createElement('div');
@@ -983,6 +984,9 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
 
   let currentJobId: string | null = null;
   let autoCloseTimer: number | undefined;
+  // Fire-once guard: onJob observes 'done' once per normal run, but the
+  // needs-interactive fallback re-enters polling, so this must survive restarts.
+  let seeded = false;
   // One interactive session at a time: a second "Finish interactively" click
   // must not start a concurrent setup script run on the same box.
   const interactive = createInteractiveLauncher<ReturnType<typeof openProvisionTerminal>>();
@@ -998,7 +1002,18 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
       log.scrollTop = log.scrollHeight;
       renderActions(job.status);
       if (job.status === 'running') return 1500;
-      if (job.status === 'done') { refresh(); autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), 2000); return null; }
+      if (job.status === 'done') {
+        refresh();
+        if (seedAiAuth && !seeded) {
+          seeded = true;
+          void api.seedAiAuth(box.id).then(({ results }) => {
+            const txt = results.map((r) => `${r.target} ${r.ok ? '✓' : `skipped (${r.skipped ?? r.error ?? 'failed'})`}`).join(' · ');
+            status.textContent = `${status.textContent} · auth: ${txt}`;
+          }).catch(() => { status.textContent = `${status.textContent} · auth: request failed`; });
+        }
+        autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), 2000);
+        return null;
+      }
       if (job.status === 'needs-interactive') return 2500;
       return null; // error / interrupted: terminal for this run — Retry/Remove/Close cover it
     },
@@ -1197,6 +1212,15 @@ function openBoxDialog(box?: Box) {
 
   const toolsGroup = toolsCheckboxGroup();
 
+  const seedAiAuth = document.createElement('label');
+  seedAiAuth.className = 'check-field';
+  seedAiAuth.title = 'Copies subscription credentials from the Tmuxifier host to this box — seed only boxes you trust with your own login';
+  const seedAiAuthInput = document.createElement('input');
+  seedAiAuthInput.type = 'checkbox';
+  const seedAiAuthText = document.createElement('span');
+  seedAiAuthText.textContent = 'Seed AI CLI auth (claude/codex) from this host';
+  seedAiAuth.append(seedAiAuthInput, seedAiAuthText);
+
   const form = document.createElement('form');
   form.className = 'modal box-modal';
   const title = document.createElement('h2');
@@ -1248,7 +1272,7 @@ function openBoxDialog(box?: Box) {
 
   const setupGrid = document.createElement('div');
   setupGrid.className = 'field-grid';
-  setupGrid.append(shellGroup, installOhMyTmux, toolsGroup.element);
+  setupGrid.append(shellGroup, installOhMyTmux, toolsGroup.element, seedAiAuth);
 
   const modalBody = document.createElement('div');
   modalBody.className = 'modal-body';
@@ -1313,12 +1337,13 @@ function openBoxDialog(box?: Box) {
         const installOhMyZsh = shellZsh.input.checked;
         const installOhMyBash = shellBash.input.checked;
         const selectedTools = toolsGroup.selected();
-        if (installOhMyTmuxInput.checked || installOhMyZsh || installOhMyBash || selectedTools.length) {
+        if (installOhMyTmuxInput.checked || installOhMyZsh || installOhMyBash || selectedTools.length || seedAiAuthInput.checked) {
           openProvisionPanel(updatedBox, {
             ohMyTmux: installOhMyTmuxInput.checked,
             ohMyZsh: installOhMyZsh,
             ohMyBash: installOhMyBash,
             tools: selectedTools,
+            seedAiAuth: seedAiAuthInput.checked,
           });
         }
       } else {
@@ -1355,6 +1380,7 @@ function openBoxDialog(box?: Box) {
           ohMyZsh: installOhMyZsh,
           ohMyBash: installOhMyBash,
           tools: toolsGroup.selected(),
+          seedAiAuth: seedAiAuthInput.checked,
         });
       }
     } catch (e: any) {
