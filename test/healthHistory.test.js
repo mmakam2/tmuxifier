@@ -254,6 +254,12 @@ test('classifyTransitions emits agent-done when the agent disappears on an up bo
   expect(classifyTransitions(w, { up: true, agentAttached: true }, TH, initThresholdState()).events).not.toContainEqual({ kind: 'agent-done' });
 });
 
+test('stopping a Proxmox box does not fire a false agent-done', () => {
+  const w = { up: true, agent: 'working', agentAttached: false };
+  const stoppedBox = { up: true, stopped: true };
+  expect(classifyTransitions(w, stoppedBox, TH, initThresholdState()).events).toEqual([]);
+});
+
 test('agent kinds never fire on the first sample (no prev)', () => {
   const idle = { up: true, agent: 'waiting', agentAttached: false };
   expect(classifyTransitions(null, idle, TH, initThresholdState()).events).toEqual([]);

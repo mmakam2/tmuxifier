@@ -112,11 +112,15 @@ export function classifyTransitions(prev, next, thresholds, state) {
   // checks BOTH ends of the edge, since the user may attach in the final poll
   // interval. 'unknown' (clock unavailable) matches neither side of the input
   // edge but still counts as presence for agent-done. Edge-triggered like the
-  // others: no emission without a prev sample.
+  // others: no emission without a prev sample. agent-done additionally
+  // requires !next.stopped: a Proxmox-stopped box carries no `sessions` (see
+  // sampleOf), so it always looks like "agent disappeared" — but that absence
+  // is a stopped container, not a live probe's observation, so it must not
+  // read as the agent finishing.
   if (prev) {
     if (prev.agent === 'working' && next.agent === 'waiting' && !next.agentAttached) {
       events.push({ kind: 'agent-input' });
-    } else if (prev.agent && !next.agent && next.up && !prev.agentAttached && !next.agentAttached) {
+    } else if (prev.agent && !next.agent && next.up && !next.stopped && !prev.agentAttached && !next.agentAttached) {
       events.push({ kind: 'agent-done' });
     }
   }
