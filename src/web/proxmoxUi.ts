@@ -173,7 +173,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
           if (job.status === 'done' && setup?.seedAiAuth && !seeded) {
             seeded = true;
             void api.seedAiAuth(boxId).then(({ results }) => {
-              const txt = results.map((r) => `${r.target} ${r.ok ? '✓' : `skipped (${r.skipped ?? r.error ?? 'failed'})`}`).join(' · ');
+              const txt = results.map((r) => `${r.target} ${r.ok ? '✓' : r.skipped ? `skipped (${r.skipped})` : `failed (${r.error ?? 'failed'})`}`).join(' · ');
               phase.textContent = `${phase.textContent} · auth: ${txt}`;
             }).catch(() => { phase.textContent = `${phase.textContent} · auth: request failed`; });
           }

@@ -1012,19 +1012,28 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
       if (job.status === 'running') return 1500;
       if (job.status === 'done') {
         refresh();
-        if (seedAiAuth && !seeded) {
-          seeded = true;
-          const myGen = provisionPanelGen;
-          void api.seedAiAuth(box.id).then(({ results }) => {
-            if (provisionPanelGen !== myGen) return; // panel closed/reopened while the request was in flight
-            const txt = results.map((r) => `${r.target} ${r.ok ? '✓' : `skipped (${r.skipped ?? r.error ?? 'failed'})`}`).join(' · ');
-            status.textContent = `${status.textContent} · auth: ${txt}`;
-          }).catch(() => {
-            if (provisionPanelGen !== myGen) return; // panel closed/reopened while the request was in flight
-            status.textContent = `${status.textContent} · auth: request failed`;
-          });
+        if (seedAiAuth) {
+          // Auto-close must wait for the seed outcome to render (below) before
+          // arming, or it destroys the outcome (e.g. a skip reason) before the
+          // operator can read it — see the generation guard on each branch.
+          if (!seeded) {
+            seeded = true;
+            const myGen = provisionPanelGen;
+            void api.seedAiAuth(box.id).then(({ results }) => {
+              if (provisionPanelGen !== myGen) return; // panel closed/reopened while the request was in flight
+              const txt = results.map((r) => `${r.target} ${r.ok ? '✓' : r.skipped ? `skipped (${r.skipped})` : `failed (${r.error ?? 'failed'})`}`).join(' · ');
+              status.textContent = `${status.textContent} · auth: ${txt}`;
+            }).catch(() => {
+              if (provisionPanelGen !== myGen) return; // panel closed/reopened while the request was in flight
+              status.textContent = `${status.textContent} · auth: request failed`;
+            }).finally(() => {
+              if (provisionPanelGen !== myGen) return; // panel closed/reopened while the request was in flight
+              autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), 5000);
+            });
+          }
+        } else {
+          autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), 2000);
         }
-        autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), 2000);
         return null;
       }
       if (job.status === 'needs-interactive') return 2500;
