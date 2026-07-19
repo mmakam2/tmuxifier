@@ -1701,7 +1701,7 @@ function renderEventsPanel() {
   if (!latestEvents.length) {
     const li = document.createElement('li');
     li.className = 'events-empty';
-    li.textContent = 'No events yet. Box transitions (down / up / needs login / metric thresholds) will appear here.';
+    li.textContent = 'No events yet. Box transitions (down / up / needs login / metric thresholds / claude waiting for input / claude finished) will appear here.';
     list.appendChild(li);
   }
   const now = Date.now();
