@@ -1,6 +1,6 @@
 import { buildProbeArgv } from './sshCommand.js';
 
-const STATUS_FMT = '#{session_name}:#{session_windows}:#{session_attached}:#{session_activity}';
+const STATUS_FMT = '#{session_name}:#{session_windows}:#{session_attached}:#{session_activity}:#{pane_current_command}';
 
 // A compact host-health line emitted *before* the tmux output on the SSH probe
 // we already run every poll, so load/mem/disk cost no extra connection. Format is
@@ -27,6 +27,7 @@ const META_PROBE =
   `awk '/^MemTotal:/{printf " memTotalKb=%s",$2} /^MemAvailable:/{printf " memAvailKb=%s",$2}' /proc/meminfo; ` +
   `df -P / | awk 'NR==2{sub(/%/,"",$5); printf " diskTotalKb=%s diskUsedKb=%s diskPct=%s",$2,$3,$5}'; ` +
   `u=$(awk '{printf "%d",$1}' /proc/uptime) && printf ' uptimeSec=%s' "$u"; ` +
+  `printf ' boxNowSec=%s' "$(date +%s)"; ` +
   `echo; } 2>/dev/null;`;
 
 export const PROBE_REMOTE =
@@ -34,7 +35,7 @@ export const PROBE_REMOTE =
 
 const META_KEYS = new Set([
   'load1', 'load5', 'load15', 'cpus', 'cpuUsageUsec',
-  'memTotalKb', 'memAvailKb', 'diskTotalKb', 'diskUsedKb', 'diskPct', 'uptimeSec',
+  'memTotalKb', 'memAvailKb', 'diskTotalKb', 'diskUsedKb', 'diskPct', 'uptimeSec', 'boxNowSec',
 ]);
 
 // Pull the `__META__` health line out of probe stdout into a numbers-only object.
@@ -85,8 +86,8 @@ export function parseTmuxSessions(stdout) {
     .split(/\r?\n/)
     .filter((l) => l.trim() && !l.includes('__NO_TMUX__') && !l.startsWith('__META__'))
     .map((line) => {
-      const [name, windows, attached, activity] = line.split(':');
-      return { name, windows: Number(windows), attached: attached === '1', activity: Number(activity) };
+      const [name, windows, attached, activity, paneCmd] = line.split(':');
+      return { name, windows: Number(windows), attached: attached === '1', activity: Number(activity), paneCmd: paneCmd || '' };
     });
 }
 

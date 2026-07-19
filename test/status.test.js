@@ -8,15 +8,15 @@ import { parseTmuxSessions, parseMeta, createStatusChecker, PROBE_REMOTE } from 
 test('parseTmuxSessions maps fields', () => {
   const out = 'web:3:1:1718000000\nbuild:1:0:1718000100\n';
   expect(parseTmuxSessions(out)).toEqual([
-    { name: 'web', windows: 3, attached: true, activity: 1718000000 },
-    { name: 'build', windows: 1, attached: false, activity: 1718000100 },
+    { name: 'web', windows: 3, attached: true, activity: 1718000000, paneCmd: '' },
+    { name: 'build', windows: 1, attached: false, activity: 1718000100, paneCmd: '' },
   ]);
 });
 
 test('parseTmuxSessions ignores the __META__ health line and still parses sessions after it', () => {
   const out = '__META__ load1=0.42 cpus=4 diskPct=61\nweb:2:1:1718000000\n';
   expect(parseTmuxSessions(out)).toEqual([
-    { name: 'web', windows: 2, attached: true, activity: 1718000000 },
+    { name: 'web', windows: 2, attached: true, activity: 1718000000, paneCmd: '' },
   ]);
 });
 
@@ -199,7 +199,7 @@ test('checkBox: surfaces host metrics from the __META__ line when present', asyn
   const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
   expect(status.reachable).toBe(true);
   expect(status.tmux).toBe(true);
-  expect(status.sessions).toEqual([{ name: 'web', windows: 1, attached: false, activity: 1718000000 }]);
+  expect(status.sessions).toEqual([{ name: 'web', windows: 1, attached: false, activity: 1718000000, paneCmd: '' }]);
   expect(status.metrics).toEqual({ load1: 0.7, memTotalKb: 1000, memAvailKb: 400, diskPct: 55 });
 });
 
@@ -419,8 +419,8 @@ test('listSessions: returns parsed sessions when tmux is running', async () => {
     reachable: true,
     tmux: true,
     sessions: [
-      { name: 'web', windows: 3, attached: true, activity: 1718000000 },
-      { name: 'main', windows: 1, attached: false, activity: 1718000100 },
+      { name: 'web', windows: 3, attached: true, activity: 1718000000, paneCmd: '' },
+      { name: 'main', windows: 1, attached: false, activity: 1718000100, paneCmd: '' },
     ],
   });
 });
@@ -463,8 +463,8 @@ test('listSessions: probes over the live master when a session is live but the m
     reachable: true,
     tmux: true,
     sessions: [
-      { name: 'web', windows: 1, attached: true, activity: 1718000000 },
-      { name: 'mine', windows: 2, attached: false, activity: 1718000100 },
+      { name: 'web', windows: 1, attached: true, activity: 1718000000, paneCmd: '' },
+      { name: 'mine', windows: 2, attached: false, activity: 1718000100, paneCmd: '' },
     ],
   });
 });
@@ -535,4 +535,21 @@ test('forgetBox clears the backoff window so a re-added box probes immediately',
   checker.forgetBox('h');
   await checker.checkBox({ host: 'h' }); // state forgotten — probes again
   expect(calls).toBe(2);
+});
+
+test('parseTmuxSessions captures the active pane command as paneCmd', () => {
+  const out = 'web:1:1:1721350000:claude\nscratch:2:0:1721349000:zsh\n';
+  const s = parseTmuxSessions(out);
+  expect(s).toEqual([
+    { name: 'web', windows: 1, attached: true, activity: 1721350000, paneCmd: 'claude' },
+    { name: 'scratch', windows: 2, attached: false, activity: 1721349000, paneCmd: 'zsh' },
+  ]);
+});
+
+test('parseTmuxSessions tolerates a missing pane command (older format / no panes)', () => {
+  expect(parseTmuxSessions('web:1:1:1721350000\n')[0].paneCmd).toBe('');
+});
+
+test('parseMeta reads boxNowSec (the box clock) when present', () => {
+  expect(parseMeta('__META__ boxNowSec=1721350123 memTotalKb=100 memAvailKb=40\n').boxNowSec).toBe(1721350123);
 });
