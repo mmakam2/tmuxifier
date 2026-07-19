@@ -383,3 +383,13 @@ test('TMUXIFIER_UPLOAD_MAX_MB overrides and clamps the upload limit', () => {
   expect(mb('9999')).toBe(25);   // out of range -> default
   expect(mb('abc')).toBe(25);    // non-numeric -> default
 });
+
+test('claudeOauthToken comes from TMUXIFIER_CLAUDE_OAUTH_TOKEN, trimmed', () => {
+  const cfg = loadConfig({}, { env: { TMUXIFIER_CLAUDE_OAUTH_TOKEN: '  sk-ant-oat-EXAMPLE  ' }, cwd: '/nonexistent' });
+  expect(cfg.claudeOauthToken).toBe('sk-ant-oat-EXAMPLE');
+});
+
+test('claudeOauthToken defaults to null and empty string stays null', () => {
+  expect(loadConfig({}, { env: {}, cwd: '/nonexistent' }).claudeOauthToken).toBe(null);
+  expect(loadConfig({}, { env: { TMUXIFIER_CLAUDE_OAUTH_TOKEN: '   ' }, cwd: '/nonexistent' }).claudeOauthToken).toBe(null);
+});

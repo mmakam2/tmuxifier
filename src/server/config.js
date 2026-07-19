@@ -15,6 +15,8 @@ const DEFAULTS = {
   // Validated/normalized below so an unsafe or out-of-range value falls back.
   termFont: undefined,
   termFontSize: 12,
+  // claude setup-token output for seeding boxes — see docs/superpowers/specs/2026-07-18-ai-auth-seeding-design.md
+  claudeOauthToken: null,
   // Probe at most this many boxes at once on /api/status. A small batch keeps
   // Tmuxifier from opening the whole fleet's SSH connections simultaneously,
   // which rate-limiters/IPS on the path read as a brute-force burst.
@@ -115,6 +117,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     tlsKey: e.TMUXIFIER_TLS_KEY,
     termFont: e.TMUXIFIER_TERM_FONT,
     termFontSize: e.TMUXIFIER_TERM_FONT_SIZE ? Number(e.TMUXIFIER_TERM_FONT_SIZE) : undefined,
+    claudeOauthToken: e.TMUXIFIER_CLAUDE_OAUTH_TOKEN && e.TMUXIFIER_CLAUDE_OAUTH_TOKEN.trim() ? e.TMUXIFIER_CLAUDE_OAUTH_TOKEN.trim() : undefined,
     uploadMaxMb: e.TMUXIFIER_UPLOAD_MAX_MB ? Number(e.TMUXIFIER_UPLOAD_MAX_MB) : undefined,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
