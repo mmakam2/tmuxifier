@@ -66,7 +66,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, knownHosts, setupManager }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, knownHosts, setupManager, aiAuthSeeder }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -336,6 +336,16 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     }
     if (statusChecker?.resetBackoff) statusChecker.resetBackoff(box.id);
     return { ok: true };
+  });
+  // Seeds subscription credentials for the AI CLIs onto the box (opt-in
+  // checkbox in the provision flows). Response is redacted to target/ok/skip —
+  // secret material never appears in any API body.
+  app.post('/api/boxes/:id/seed-ai-auth', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'box not found' });
+    if (!aiAuthSeeder?.seed) return reply.code(503).send({ error: 'seeding unavailable' });
+    const results = await aiAuthSeeder.seed(box);
+    return { results };
   });
   app.get('/api/export', { preHandler: requireAuth }, async (req, reply) => {
     const payload = await store.exportBoxes();

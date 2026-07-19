@@ -29,6 +29,7 @@ import { createProxmoxInventory, mergeProxmoxStatus } from './proxmoxInventory.j
 import { createProxmoxLifecycleStore } from './proxmoxLifecycleStore.js';
 import { createProxmoxLifecycleManager } from './proxmoxLifecycle.js';
 import { createKnownHosts } from './knownHosts.js';
+import { createAiAuthSeeder } from './aiAuthSeed.js';
 import { readDefaultPublicKey, createDefaultKeyProvider } from './defaultKey.js';
 import os from 'node:os';
 import { registerShutdownFlush } from './shutdown.js';
@@ -52,6 +53,10 @@ const boxActions = createBoxActions({
   sshConfigFile: config.sshConfigFile,
   controlDir: config.controlDir,
   controlPersist: config.controlPersist,
+});
+const aiAuthSeeder = createAiAuthSeeder({
+  runStdin: (box, script, input) => boxActions.execScriptStdin(box, script, input),
+  token: config.claudeOauthToken,
 });
 const setupStore = createSetupStore({ dataDir: config.dataDir });
 const setupManager = createSetupManager({
@@ -187,7 +192,7 @@ const statusPoller = createStatusPoller({
   },
 });
 
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });

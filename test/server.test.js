@@ -506,6 +506,45 @@ test('forget-hostkey returns 404 for unknown box and requires auth', async () =>
   expect(unauthed.statusCode).toBe(401);
 });
 
+test('seed-ai-auth runs the seeder and returns redacted results only', async () => {
+  const seeded = [];
+  const aiAuthSeeder = { async seed(box) { seeded.push(box.host); return [
+    { target: 'claude', ok: true },
+    { target: 'codex', ok: false, skipped: 'no codex auth on the Tmuxifier host' },
+  ]; } };
+  app = await makeApp({ aiAuthSeeder });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1', sessionName: 'work' } });
+  const box = created.json();
+  const res = await app.inject({ method: 'POST', url: `/api/boxes/${box.id}/seed-ai-auth`, headers });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ results: [
+    { target: 'claude', ok: true },
+    { target: 'codex', ok: false, skipped: 'no codex auth on the Tmuxifier host' },
+  ] });
+  expect(seeded).toEqual(['h1']);
+  expect(res.body).not.toContain('sk-ant');
+});
+
+test('seed-ai-auth 404s unknown box and requires auth', async () => {
+  app = await makeApp({ aiAuthSeeder: { seed: async () => [] } });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  expect((await app.inject({ method: 'POST', url: '/api/boxes/nonexistent/seed-ai-auth', headers })).statusCode).toBe(404);
+  expect((await app.inject({ method: 'POST', url: '/api/boxes/nonexistent/seed-ai-auth' })).statusCode).toBe(401);
+});
+
+test('seed-ai-auth returns 503 when no seeder is wired', async () => {
+  app = await makeApp();
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1', sessionName: 'work' } });
+  const box = created.json();
+  const res = await app.inject({ method: 'POST', url: `/api/boxes/${box.id}/seed-ai-auth`, headers });
+  expect(res.statusCode).toBe(503);
+});
+
 test('GET /api/local-shell returns default shell', async () => {
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
