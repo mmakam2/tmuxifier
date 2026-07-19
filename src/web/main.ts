@@ -1724,8 +1724,9 @@ function renderEventsPanel() {
   }
   // Viewing the panel marks everything seen — but only once real data has
   // loaded (an open before the first fetch must not regress the cursor to 0).
-  // The badge stays a passive in-app indicator — no Notification API, no
-  // outbound request.
+  // updateEventsBadge() itself is a local recount from the already-fetched
+  // cache — no Notification API call, no outbound request (browser
+  // notifications fire separately from pollHealth, above).
   if (latestEventSeq) writeLastSeenSeq(latestEventSeq);
   updateEventsBadge();
 }

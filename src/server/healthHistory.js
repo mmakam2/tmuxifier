@@ -157,8 +157,10 @@ export function classifyTransitions(prev, next, thresholds, state) {
 // Owns the rolling per-box sample series (in-memory ring buffers) and the
 // edge-triggered events log (persisted via the injected load/save — see
 // healthEventsStore.js). Fed by the status poller after each snapshot swap;
-// read by GET /api/health/*. onEvent is the Phase-2 delivery seam — nothing
-// subscribes in Phase 1 (in-app display only, no notifications).
+// read by GET /api/health/*. Browser notifications are delivered client-side
+// (src/web/main.ts pollHealth reads GET /api/health/events and filters by
+// Settings → Notifications) — onEvent below is an unused server-push seam
+// (webhook/email) that nothing currently subscribes to.
 export function createHealthHistory({
   maxSamples = 120,
   maxEvents = 200,
@@ -184,7 +186,8 @@ export function createHealthHistory({
     e.seq = ++seq;
     events.push(e);
     while (events.length > maxEvents) events.shift();
-    // Phase-2 delivery seam: browser/webhook/email would subscribe here. A
+    // Unused server-push seam (webhook/email would subscribe here; browser
+    // notifications instead poll GET /api/health/events client-side). A
     // listener error must never break the poll.
     for (const fn of listeners) { try { fn(e); } catch { /* ignore */ } }
   }

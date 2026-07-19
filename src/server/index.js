@@ -161,7 +161,8 @@ const lifecycleManager = createProxmoxLifecycleManager({
 proxmoxInventory.setActiveJobGuard((boxId) => lifecycleManager.hasActiveJob(boxId));
 // Health history rides on the status poll: each snapshot is projected into a
 // rolling per-box series (in-memory) and an edge-triggered events log
-// (persisted). In-app display only — nothing subscribes to onEvent in Phase 1.
+// (persisted). Browser notifications are delivered client-side from that log
+// (src/web/main.ts pollHealth) — onEvent is an unused server-push seam.
 const healthEventsStore = createHealthEventsStore({ dataDir: config.dataDir });
 const history = createHealthHistory({
   maxSamples: config.healthHistoryMax,
