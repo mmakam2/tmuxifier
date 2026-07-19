@@ -19,6 +19,8 @@ export function seedStatusLine(cli: 'claude' | 'codex', s: AiAuthCliStatus | nul
 // name keeps their shell selections independent.
 let shellRadioSeq = 0;
 
+const SEED_TRUST_TITLE = 'Copies subscription credentials from the Tmuxifier host to this box — seed only boxes you trust with your own login';
+
 // Shared post-create setup options — Terminal (tmux + shell framework),
 // Tools, AI auth seeding — used by the Add/Edit Box modal and the Proxmox
 // hub's Provision tab. Fetches seed readiness on creation; a failed fetch
@@ -48,7 +50,7 @@ export function createSetupOptionsForm(initial: { ohMyTmux?: boolean } = {}): {
   const seedInput = el('input', { type: 'checkbox' }) as HTMLInputElement;
   const seedField = el('label', {
     class: 'check-field',
-    title: 'Copies subscription credentials from the Tmuxifier host to this box — seed only boxes you trust with your own login',
+    title: SEED_TRUST_TITLE,
   }, [seedInput, el('span', {}, ['Seed AI CLI auth (claude/codex) from this host'])]);
   const claudeRow = el('div', { class: 'seed-status' }, ['claude: checking…']);
   const codexRow = el('div', { class: 'seed-status' }, ['codex: checking…']);
@@ -58,9 +60,11 @@ export function createSetupOptionsForm(initial: { ohMyTmux?: boolean } = {}): {
     codexRow.textContent = seedStatusLine('codex', s?.codex ?? null);
     const bothUnready = !!s && !s.claude.ready && !s.codex.ready;
     seedInput.disabled = bothUnready;
+    seedField.title = bothUnready
+      ? 'Nothing to seed yet — set up claude and/or codex auth on the Tmuxifier host first'
+      : SEED_TRUST_TITLE;
     if (bothUnready) {
       seedInput.checked = false;
-      seedField.title = 'Nothing to seed yet — set up claude and/or codex auth on the Tmuxifier host first';
     }
   }
   void api.aiAuthStatus().then(applySeedStatus).catch(() => applySeedStatus(null));
