@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { formatEvent, relTime, unseenCount } from '../src/web/healthEvents.ts';
+import { formatEvent, relTime, unseenCount, unseenCountFiltered } from '../src/web/healthEvents.ts';
 
 const base = { seq: 1, boxId: 'b1', label: 'web-01', host: 'h1', t: 0 };
 
@@ -40,4 +40,15 @@ test('an unknown event kind from a newer server renders a generic line instead o
   expect(line).toBeTruthy();
   expect(line.text).toContain('web-01');
   expect(['ok', 'warn', 'crit', 'auth']).toContain(line.level);
+});
+
+test('unseenCountFiltered counts only enabled kinds newer than the cursor', () => {
+  const evs = [
+    { ...base, seq: 5, kind: 'down' },
+    { ...base, seq: 6, kind: 'up' },
+    { ...base, seq: 7, kind: 'agent-input' },
+  ];
+  const enabled = new Set(['down', 'agent-input']);
+  expect(unseenCountFiltered(evs, 4, enabled)).toBe(2); // down + agent-input, up excluded
+  expect(unseenCountFiltered(evs, 6, enabled)).toBe(1); // only seq 7
 });

@@ -1,4 +1,4 @@
-import type { HealthEvent } from './api';
+import type { HealthEvent, HealthEventKind } from './api';
 import { classifyError } from './statusDot';
 
 // Pure formatting for the in-app Events panel. Levels reuse the meta-line tiers
@@ -44,4 +44,8 @@ export function relTime(t: number, now: number): string {
 
 export function unseenCount(events: HealthEvent[], lastSeenSeq: number): number {
   return events.reduce((c, e) => (e.seq > lastSeenSeq ? c + 1 : c), 0);
+}
+
+export function unseenCountFiltered(events: HealthEvent[], lastSeenSeq: number, enabled: Set<HealthEventKind>): number {
+  return events.reduce((c, e) => (e.seq > lastSeenSeq && enabled.has(e.kind) ? c + 1 : c), 0);
 }
