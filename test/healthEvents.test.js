@@ -26,6 +26,15 @@ test('unseenCount counts events past the last-seen seq', () => {
   expect(unseenCount(evs, 3)).toBe(0);
 });
 
+test('formatEvent renders the agent kinds', () => {
+  const input = formatEvent({ ...base, kind: 'agent-input' });
+  expect(input.text).toContain('waiting for input');
+  expect(input.level).toBe('warn');
+  const done = formatEvent({ ...base, kind: 'agent-done' });
+  expect(done.text).toContain('finished');
+  expect(done.level).toBe('ok');
+});
+
 test('an unknown event kind from a newer server renders a generic line instead of breaking the panel', () => {
   const line = formatEvent({ ...base, kind: 'future-kind' });
   expect(line).toBeTruthy();

@@ -25,6 +25,8 @@ export function formatEvent(e: HealthEvent): EventLine {
       return { icon: METRIC_ICON[e.metric!], text: `${name} — ${METRIC_LABEL[e.metric!]} ${e.value}%`, level: 'warn' };
     case 'threshold-clear':
       return { icon: '✅', text: `${name} — ${METRIC_LABEL[e.metric!]} back to ${e.value}%`, level: 'ok' };
+    case 'agent-input': return { icon: '⌨️', text: `${name} — claude is waiting for input`, level: 'warn' };
+    case 'agent-done': return { icon: '🤖', text: `${name} — claude finished`, level: 'ok' };
     default:
       // A newer server may ship event kinds this bundle doesn't know yet — one
       // unknown kind must degrade to a generic line, not brick the panel.
