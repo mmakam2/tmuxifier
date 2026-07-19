@@ -4,7 +4,7 @@ import type { PvePreset } from './proxmox';
 // preset select in the hub's Provision tab. Pure — node tests import this
 // without a DOM.
 export function presetSummary(p: PvePreset): string {
-  const template = (p.template.split('/').pop() ?? p.template).replace(/\.tar\.(gz|xz|zst)$/, '');
+  const template = (p.template.split('/').pop() ?? p.template).replace(/\.tar\.(gz|xz|zst|bz2)$/, '');
   const gib = p.memoryMiB / 1024;
   const mem = Number.isInteger(gib) ? `${gib}` : gib.toFixed(1);
   const parts = [template, `${p.cores}c / ${mem} GiB`, `disk ${p.diskGiB} GiB`];

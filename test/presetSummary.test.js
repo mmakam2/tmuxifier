@@ -25,3 +25,8 @@ test('static ip mode and fractional GiB memory', () => {
   const p = { ...base, memoryMiB: 1536, net: { ...base.net, ipMode: 'static' } };
   expect(presetSummary(p)).toBe('debian-12-standard_12.7-1_amd64 · 2c / 1.5 GiB · disk 8 GiB · vlan 3 · static IP');
 });
+
+test('strips .tar.bz2 template extension', () => {
+  const p = { ...base, template: 'local:vztmpl/alpine-3.20-default_20240606_amd64.tar.bz2' };
+  expect(presetSummary(p)).toBe('alpine-3.20-default_20240606_amd64 · 2c / 2 GiB · disk 8 GiB · vlan 3 · IP auto (NetBox)');
+});

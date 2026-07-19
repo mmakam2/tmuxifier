@@ -107,7 +107,8 @@ pattern for new modules.
   payload decoding, and exact-email allowlist checks.
 - `server.js` — Fastify app: login rate-limiting, REST under `/api/*`, and the `/term` WebSocket.
   Box setup routes: `POST /api/boxes/:id/setup` (start), `GET /api/setup` (list), `GET
-  /api/setup/:id` and `GET /api/boxes/:id/setup` (poll one/by-box). The `/term?mode=provision`
+  /api/setup/:id` and `GET /api/boxes/:id/setup` (poll one/by-box). `GET /api/ai-auth/status`
+  reports host-side AI-auth seed readiness for the provision forms. The `/term?mode=provision`
   WebSocket is now the on-demand **interactive fallback** for sudo-password boxes — it reports its
   exit code via `setupManager.markInteractiveResult` and no longer rolls back/removes a box on
   failure.
