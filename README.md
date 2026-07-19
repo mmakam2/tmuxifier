@@ -64,6 +64,7 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | health events retained | `TMUXIFIER_HEALTH_EVENTS_MAX` | `200` |
 | health cpu/mem/disk warn % | `TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT` | `90` |
 | health threshold hysteresis % | `TMUXIFIER_HEALTH_HYSTERESIS_PCT` | `5` |
+| agent idle threshold (s) | `TMUXIFIER_AGENT_IDLE_SEC` | `45` |
 | Proxmox task poll interval (ms) | `TMUXIFIER_PVE_POLL_MS` | `1500` |
 | Proxmox per-request timeout (ms) | `TMUXIFIER_PVE_TIMEOUT_MS` | `15000` |
 | Proxmox provision timeout (ms) | `TMUXIFIER_PVE_PROVISION_TIMEOUT_MS` | `600000` |
@@ -99,7 +100,7 @@ As an alternative to `.env`, a `config.json` in the repo root works too, using c
 (`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`, `trustProxy`,
 `statusConcurrency`, `statusPollMs`, `controlPersist`, `termFont`, `termFontSize`, `fleetConcurrency`, `fleetTimeoutMs`,
 `fleetMaxJobs`, `fleetMaxOutputBytes`, `healthHistoryMax`, `healthEventsMax`, `healthCpuWarnPct`,
-`healthMemWarnPct`, `healthDiskWarnPct`, `healthThresholdHysteresisPct`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
+`healthMemWarnPct`, `healthDiskWarnPct`, `healthThresholdHysteresisPct`, `agentIdleSec`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
 `pveLeaseTimeoutMs`, `pveMaxJobs`, `pveDefaultPubKeyPath`, `authMode`, `publicUrl`, `googleClientId`,
 `googleClientSecret`, `allowedEmails`, `dataDir`, `controlDir`, `sshConfigFile`, `tlsCert`,
 `tlsKey`). The UI also persists `localShell` in `config.json`; it does not have an env key.
@@ -120,11 +121,12 @@ It carries no SSH secrets; boxes still rely on your keys/agent/`~/.ssh/config` a
 The sidebar itself and each tag group can be collapsed (‹ next to the brand, click a group
 header); both states persist across reloads.
 
-A ⚙ **settings** modal (top of the sidebar) has two tabs: **NetBox** (an http/https selector +
+A ⚙ **settings** modal (top of the sidebar) has three tabs: **NetBox** (an http/https selector +
 host and token — the TLS options, including fingerprint pinning for self-signed certs, appear
 only for https — plus a connection test; also powers `auto-static` IP allocation during
-provisioning) and **Proxmox** (host profiles and LXC secrets); see
-[Proxmox LXC provisioning](#proxmox-lxc-provisioning) below for both.
+provisioning), **Proxmox** (host profiles and LXC secrets), and **Notifications** (browser
+notification permission and per-event-kind toggles); see
+[Proxmox LXC provisioning](#proxmox-lxc-provisioning) below for NetBox and Proxmox details.
 
 ## Authentication
 `TMUXIFIER_AUTH_MODE` selects one login method. The default is `password`; set it to
