@@ -403,3 +403,46 @@ test('agentIdleSec clamps out-of-range and non-numeric values to the default', (
   expect(loadConfig({}, { env: { TMUXIFIER_AGENT_IDLE_SEC: '2' }, cwd: '/nonexistent' }).agentIdleSec).toBe(45);
   expect(loadConfig({}, { env: { TMUXIFIER_AGENT_IDLE_SEC: 'abc' }, cwd: '/nonexistent' }).agentIdleSec).toBe(45);
 });
+
+test('rpId derives from the base external URL hostname', () => {
+  const c = loadConfig({}, { env: { TMUXIFIER_BASE_EXTERNAL_URL: 'https://tmux.example.com' }, cwd: '/app' });
+  expect(c.rpId).toBe('tmux.example.com');
+  expect(c.rpIdError).toBeNull();
+});
+
+test('an explicit TMUXIFIER_RP_ID wins over the derived hostname', () => {
+  const c = loadConfig({}, { env: { TMUXIFIER_BASE_EXTERNAL_URL: 'https://tmux.example.com', TMUXIFIER_RP_ID: 'Example.COM' }, cwd: '/app' });
+  expect(c.rpId).toBe('example.com');
+});
+
+test('rpId falls back to localhost with no external URL', () => {
+  expect(loadConfig({}, { env: {}, cwd: '/app' }).rpId).toBe('localhost');
+});
+
+// An IP-addressed deployment works today with password/Google sign-in. Passkeys
+// are simply unavailable there; refusing to boot would be a regression.
+test('an IP-derived rpId disables passkeys without failing configuration', () => {
+  const c = loadConfig({}, { env: {
+    TMUXIFIER_BASE_EXTERNAL_URL: 'https://192.168.1.10:7437',
+    TMUXIFIER_COOKIE_SECRET: 's', TMUXIFIER_PASSWORD_HASH: 'h',
+  }, cwd: '/app' });
+  expect(c.rpId).toBeNull();
+  expect(c.rpIdError).toBeNull();
+  expect(requiredConfigError(c)).toBeNull();
+});
+
+// An explicit value is a stated intent that cannot work — fail loudly.
+test('an explicit IP TMUXIFIER_RP_ID is a configuration error', () => {
+  const c = loadConfig({}, { env: {
+    TMUXIFIER_RP_ID: '192.168.1.10',
+    TMUXIFIER_COOKIE_SECRET: 's', TMUXIFIER_PASSWORD_HASH: 'h',
+  }, cwd: '/app' });
+  expect(c.rpId).toBeNull();
+  expect(c.rpIdError).toMatch(/domain name/);
+  expect(requiredConfigError(c)).toMatch(/domain name/);
+});
+
+test('TMUXIFIER_PASSKEY_ONLY=off arms the break-glass kill switch', () => {
+  expect(loadConfig({}, { env: {}, cwd: '/app' }).passkeyOnlyKillSwitch).toBe(false);
+  expect(loadConfig({}, { env: { TMUXIFIER_PASSKEY_ONLY: 'off' }, cwd: '/app' }).passkeyOnlyKillSwitch).toBe(true);
+});
