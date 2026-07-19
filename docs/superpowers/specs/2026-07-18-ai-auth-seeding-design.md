@@ -127,3 +127,17 @@ Real code, DI fakes, TDD:
 - Auto-refresh/rotation management of either credential.
 - Seeding other CLIs (gh auth, etc.) — same mechanism could extend later.
 - Fleet-wide bulk seeding of existing boxes (could be a Fleet Command later; route is per-box).
+
+## Erratum (2026-07-19)
+
+Two spec details didn't match final-review implementation:
+
+- **Route (`src/server/server.js`)**: the local-shell 400 branch (`'local shell does not need
+  seeding'`) was dropped at implementation time — `__local__` is not addressable via
+  `/api/boxes/:id` (ids are server-minted, never `__local__`), so the existing 404-on-unknown-box
+  path already covers it. There is no dedicated local-shell branch.
+- **UI (`src/web/`)**: seeding is not triggered by a provision-terminal exit-`0` hook. It fires
+  from the shared server-side setup-job poller (`onJob`) when a job's `status` reaches `done` —
+  both in `main.ts`'s `openProvisionPanel` and `proxmoxUi.ts`'s hub Provision tab — reflecting
+  the v1.7.9 refactor to poll-based, resumable server-side setup jobs (`setupManager.js`)
+  instead of a live provision-terminal WebSocket exit event.
