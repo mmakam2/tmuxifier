@@ -180,6 +180,21 @@ curl, git, the GitHub CLI, Node.js + npm, Bubblewrap, and the Codex, Claude Code
 Antigravity CLIs — using the same idempotent multi-distro install script, so re-running
 provisioning skips anything already installed.
 
+Both surfaces also offer a **"Seed AI CLI auth (claude/codex) from this host"** checkbox
+(unchecked by default). Ticking it copies the *Tmuxifier host's own* AI CLI subscription
+credentials onto the box once its setup job reports done: a Claude Code OAuth token and/or the
+host's live Codex login. This needs one-time setup on the Tmuxifier host itself, per CLI you want
+seeded — skip either one and that target is silently skipped per box:
+- **Claude**: run `claude setup-token` on the Tmuxifier host and put its output in `.env` as
+  `TMUXIFIER_CLAUDE_OAUTH_TOKEN=sk-ant-oat-EXAMPLE`.
+- **Codex**: run `codex login` on the Tmuxifier host so `~/.codex/auth.json` exists there —
+  Tmuxifier reads it live at seed time and never stores a copy of its own.
+
+Either secret travels to the box over stdin on the same SSH connection used for provisioning —
+never in a command line, a script file, a log, or an API response. **Seeding hands that box your
+Claude and/or Codex subscription identity, exactly as if you'd logged in on it yourself — seed
+only boxes you trust the way you'd trust anyone holding your own login.**
+
 ## Pasting images & files
 
 Pasting an image (Ctrl/Cmd+V) or dropping any file onto a terminal uploads it to

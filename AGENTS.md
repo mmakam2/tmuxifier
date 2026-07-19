@@ -197,6 +197,11 @@ pattern for new modules.
   container's IP, or via the explicit `POST /api/boxes/:id/forget-hostkey` user action —
   never automatically on a connection failure (`status.js` classifies changed keys as
   `hostKeyChanged` so the UI can offer the ⚷ button).
+- `aiAuthSeed.js` — `createAiAuthSeeder` + pure seed-script builders: opt-in copying of the
+  host's AI CLI subscription credentials to a box (Claude via the `.env`
+  `TMUXIFIER_CLAUDE_OAUTH_TOKEN` from `claude setup-token`; Codex via the host's live
+  `~/.codex/auth.json`, never stored). Secrets travel stdin-only over the ControlMaster
+  (`boxActions.execScriptStdin`) — never in script text, argv, logs, or API responses.
 - `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`pinnedSocket`/`normFp`) used
   by both the Proxmox and NetBox API clients. Pin mode verifies the pinned fingerprint on each
   request's own connection (`pinnedSocket` via `createConnection`) instead of OpenSSL chain
@@ -324,6 +329,9 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 - Box setup now runs server-side over the already-authenticated ControlMaster (`BatchMode`),
   decoupled from the browser tab that started it; a failed setup keeps the box — it is removed
   only via the explicit user action.
+- `TMUXIFIER_CLAUDE_OAUTH_TOKEN` joins the `.env` secret class (password hash, cookie secret);
+  seeding a box with it (and/or the host's `~/.codex/auth.json`) hands that box your Claude/Codex
+  subscription identity, so seed only boxes you trust.
 
 ## Docs
 
