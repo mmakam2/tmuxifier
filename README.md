@@ -192,6 +192,10 @@ seeded — skip either one and that target is silently skipped per box:
 - **Codex**: run `codex login` on the Tmuxifier host so `~/.codex/auth.json` exists there —
   Tmuxifier reads it live at seed time and never stores a copy of its own.
 
+The form shows per-CLI readiness next to the checkbox — a CLI that isn't set up on the
+Tmuxifier host shows the exact command to run (`claude setup-token` / `codex login`), and the
+checkbox is disabled when there is nothing to seed yet.
+
 Either secret travels to the box over stdin on the same SSH connection used for provisioning —
 never in a command line, a script file, a log, or an API response. **Seeding hands that box your
 Claude and/or Codex subscription identity, exactly as if you'd logged in on it yourself — seed

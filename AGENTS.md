@@ -211,6 +211,8 @@ pattern for new modules.
   `TMUXIFIER_CLAUDE_OAUTH_TOKEN` from `claude setup-token`; Codex via the host's live
   `~/.codex/auth.json`, never stored). Secrets travel stdin-only over the ControlMaster
   (`boxActions.execScriptStdin`) — never in script text, argv, logs, or API responses.
+  `status()` reports per-CLI host readiness (no secret material) and is served by the
+  auth-gated `GET /api/ai-auth/status` for the provision forms' readiness rows.
 - `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`pinnedSocket`/`normFp`) used
   by both the Proxmox and NetBox API clients. Pin mode verifies the pinned fingerprint on each
   request's own connection (`pinnedSocket` via `createConnection`) instead of OpenSSL chain
@@ -228,7 +230,11 @@ setup runs server-side), `api.ts`, `terminal.ts`, `index.html`, `style.css`, plu
 `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
 history: pure SVG-path builder and event-line formatters), `notifyPrefs.ts` (per-kind
 browser-notification preferences, localStorage-backed, defaults all-on except `up`/
-`threshold-clear`), `setupStatus.ts` (pure setup-status
+`threshold-clear`), `setupOptions.ts` (the shared post-create setup form — Terminal/Tools/AI-auth sections —
+used by the Add/Edit Box modal and the hub's Provision tab; fetches `GET /api/ai-auth/status`
+to show per-CLI seed readiness with fix-it commands, and disables the seed checkbox only when
+both CLIs are unready), `presetSummary.ts` (pure one-line preset description builder),
+`setupStatus.ts` (pure setup-status
 text/actions/badge helpers shared by the provision panel and the Proxmox hub),
 `fleetSelection.ts`/`fleetHistory.ts`/`fleetEditor.ts` (Fleet
 Command selection, recent-command history, and the CodeMirror bash-script editor),
