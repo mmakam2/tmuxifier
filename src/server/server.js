@@ -355,6 +355,19 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     }
     return { results };
   });
+
+  // Host-side AI-auth readiness for the provision forms: is there anything to
+  // seed? Reasons are the seeder's fixed skip strings — never secret material,
+  // and a rejection must never echo its message into the body.
+  app.get('/api/ai-auth/status', { preHandler: requireAuth }, async (req, reply) => {
+    if (!aiAuthSeeder?.status) return reply.code(503).send({ error: 'seeding unavailable' });
+    try {
+      return await aiAuthSeeder.status();
+    } catch {
+      return reply.code(500).send({ error: 'status failed' });
+    }
+  });
+
   app.get('/api/export', { preHandler: requireAuth }, async (req, reply) => {
     const payload = await store.exportBoxes();
     const stamp = payload.exportedAt.slice(0, 10);

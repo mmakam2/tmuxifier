@@ -556,6 +556,42 @@ test('seed-ai-auth never echoes a thrown error into the response body', async ()
   expect(res.json()).toEqual({ error: 'seeding failed' });
 });
 
+test('ai-auth status returns per-CLI readiness and requires auth', async () => {
+  const aiAuthSeeder = { seed: async () => [], status: async () => ({
+    claude: { ready: true },
+    codex: { ready: false, reason: 'no codex auth on the Tmuxifier host' },
+  }) };
+  app = await makeApp({ aiAuthSeeder });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'GET', url: '/api/ai-auth/status', headers });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({
+    claude: { ready: true },
+    codex: { ready: false, reason: 'no codex auth on the Tmuxifier host' },
+  });
+  expect((await app.inject({ method: 'GET', url: '/api/ai-auth/status' })).statusCode).toBe(401);
+});
+
+test('ai-auth status 503s when no seeder is wired', async () => {
+  app = await makeApp();
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'GET', url: '/api/ai-auth/status', headers });
+  expect(res.statusCode).toBe(503);
+});
+
+test('ai-auth status never echoes a thrown error into the response body', async () => {
+  const aiAuthSeeder = { seed: async () => [], status: async () => { throw new Error('sk-ant-oat-LEAKED'); } };
+  app = await makeApp({ aiAuthSeeder });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'GET', url: '/api/ai-auth/status', headers });
+  expect(res.statusCode).toBe(500);
+  expect(res.body).not.toContain('LEAKED');
+  expect(res.json()).toEqual({ error: 'status failed' });
+});
+
 test('GET /api/local-shell returns default shell', async () => {
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
