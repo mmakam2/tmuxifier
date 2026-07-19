@@ -100,8 +100,10 @@ function applySparkline(li: HTMLElement, id: string) {
 function readLastSeenSeq(): number { return Number(localStorage.getItem(EVENTS_SEEN_KEY)) || 0; }
 function writeLastSeenSeq(seq: number) { localStorage.setItem(EVENTS_SEEN_KEY, String(seq)); }
 
-// The badge is a passive in-app count of not-yet-viewed events — never a
-// browser notification (Phase 2, deliberately deferred).
+// The badge counts not-yet-viewed events of kinds enabled in Settings →
+// Notifications (loadNotifyPrefs/enabledKinds) — the events log itself is
+// never filtered. Browser notifications for those same enabled kinds fire
+// separately, from an unfocused tab, in pollHealth below.
 function updateEventsBadge() {
   const badge = document.getElementById('events-badge');
   if (!badge) return;

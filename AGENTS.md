@@ -144,7 +144,10 @@ pattern for new modules.
   window keeps a dropped PTY alive for seamless reconnects, then it's killed while the on-box tmux
   session keeps running.
 - `status.js` — per-box reachability/status probes; coalesces concurrent probes of the same box
-  (in-flight de-dup) so multiple pollers don't fan out duplicate SSH connections.
+  (in-flight de-dup) so multiple pollers don't fan out duplicate SSH connections. Each probe also
+  reports every tmux session's active-pane command and last-activity time, plus the box's own
+  clock, which `healthHistory.js` uses to derive per-session agent idle state without any extra
+  SSH round trip.
 - `statusPoller.js` — single server-side poll loop: probes every box on an interval
   (`statusPollMs`) and caches the snapshot `/api/status` serves, so status SSH volume is
   independent of how many dashboard tabs are open.
@@ -162,9 +165,15 @@ pattern for new modules.
 - `healthHistory.js` / `healthEventsStore.js` — `createHealthHistory` keeps a rolling in-memory
   sample series per box (fed by the status poller after each snapshot swap) and derives an
   edge-triggered events log (down/up/needs-auth/threshold, persisted to `data/health-events.json`
-  by `createHealthEventsStore`); served by `GET /api/health/series|events`. `onEvent(cb)` is the
-  deferred Phase-2 delivery seam — nothing subscribes in Phase 1 (in-app display only, no
-  notifications).
+  by `createHealthEventsStore`); served by `GET /api/health/series|events`. It also derives a
+  per-box agent state (`working`/`waiting`, or `unknown` when the box clock is unavailable) for
+  the box's configured session from the status probe's active-pane command and idle time
+  (`agentIdleSec` / `TMUXIFIER_AGENT_IDLE_SEC`, default 45s), and emits edge-triggered
+  `agent-input`/`agent-done` events — suppressed while that session is attached, since watching
+  the terminal is its own notification. `onEvent(cb)` is the deferred server-push delivery seam —
+  nothing subscribes to it; browser notifications are instead delivered client-side, by `main.ts`
+  polling `GET /api/health/events` and filtering by the kinds enabled in Settings → Notifications
+  (`notifyPrefs.ts`).
 - `secretBox.js` — AES-256-GCM seal/open for secrets at rest; key derived from `cookieSecret` via
   HKDF. Encrypts the persisted Proxmox secrets: the API token, any added SSH management keys, and
   the optional root password.
@@ -217,7 +226,9 @@ Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts` (al
 provision panel, a poll-based setup-job viewer — Retry / Remove / Finish-interactively — now that
 setup runs server-side), `api.ts`, `terminal.ts`, `index.html`, `style.css`, plus feature modules —
 `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
-history: pure SVG-path builder and event-line formatters), `setupStatus.ts` (pure setup-status
+history: pure SVG-path builder and event-line formatters), `notifyPrefs.ts` (per-kind
+browser-notification preferences, localStorage-backed, defaults all-on except `up`/
+`threshold-clear`), `setupStatus.ts` (pure setup-status
 text/actions/badge helpers shared by the provision panel and the Proxmox hub),
 `fleetSelection.ts`/`fleetHistory.ts`/`fleetEditor.ts` (Fleet
 Command selection, recent-command history, and the CodeMirror bash-script editor),
@@ -238,8 +249,9 @@ the deprovision confirm dialog), `proxmoxActivity.ts` (the Activity tab merging 
 lifecycle jobs newest-first), `proxmoxAssociation.ts` (the Add/Edit Box modals' manual Proxmox
 link/unlink picker — hidden until a Proxmox host profile exists, except for already-linked
 boxes), `settingsUi.ts` (the ⚙ settings
-modal's tabbed shell, with NetBox (`settingsNetbox.ts`) and Proxmox host/secret
-(`settingsProxmox.ts`) tabs) with `settingsForm.ts` (pure payload/result helpers), `netbox.ts`
+modal's tabbed shell, with NetBox (`settingsNetbox.ts`), Proxmox host/secret
+(`settingsProxmox.ts`), and Notifications (`settingsNotifications.ts`: browser-notification
+permission flow plus per-kind toggles) tabs) with `settingsForm.ts` (pure payload/result helpers), `netbox.ts`
 (fetch layer), and `dom.ts` (shared DOM builders plus `openModal` — the one modal scaffold with backdrop-click guard and Escape-to-close — and `makeRadio`, used across the settings modal, the hub, and the main.ts dialogs),
 `clipboard.ts`, `upload.ts` (pure paste/drop upload helpers: DataTransfer extraction, pasted-image
 naming, size check), and `termFont.ts` (pure builder for the xterm

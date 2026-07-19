@@ -297,10 +297,17 @@ timeline of transitions: box went down / recovered / needs login / host key chan
 CPU/mem/disk crossing a warn threshold (default 90%, with hysteresis so a hovering value doesn't
 flap). Unseen events show as a count badge on the button and are marked seen when the panel is
 opened. Events survive restarts in `data/health-events.json`; the sample series is in-memory
-only. Everything is **display-only** — Tmuxifier sends no browser, email, or webhook
-notifications (a possible future phase). Tune with `TMUXIFIER_HEALTH_HISTORY_MAX`,
-`TMUXIFIER_HEALTH_EVENTS_MAX`, `TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT`, and
-`TMUXIFIER_HEALTH_HYSTERESIS_PCT`.
+only. Tune with `TMUXIFIER_HEALTH_HISTORY_MAX`, `TMUXIFIER_HEALTH_EVENTS_MAX`,
+`TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT`, and `TMUXIFIER_HEALTH_HYSTERESIS_PCT`.
+
+Tmuxifier also watches each box's configured tmux session for Claude Code and raises **claude is
+waiting for input** (idle past `TMUXIFIER_AGENT_IDLE_SEC`, default 45s) / **claude finished**
+(the pane is no longer running Claude Code) events into the same timeline — suppressed while
+you're actively attached to that session, since watching it is its own notification. Browser
+notifications for these agent events and for the box-health events above can be toggled per kind
+in **Settings → Notifications**: per-browser, and they only fire once you grant the browser's
+notification permission (which itself requires an HTTPS dashboard). All events always appear in
+the events log regardless of which kinds have notifications enabled.
 
 ### Fleet Command
 
