@@ -420,7 +420,10 @@ async function pollHealth() {
       lastNotifiedSeq = latestSeq;
     } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && !document.hasFocus()) {
       const enabled = enabledKinds(loadNotifyPrefs());
-      for (const e of events) {
+      // events arrives newest-first; walk oldest-first so when two new events
+      // share a tag (`kind:boxId`) the newest one is the last write and wins —
+      // same-tag Notification construction replaces whatever is currently shown.
+      for (const e of [...events].reverse()) {
         if (e.seq > lastNotifiedSeq && enabled.has(e.kind)) {
           const line = formatEvent(e);
           try {
