@@ -1851,6 +1851,10 @@ function renderFleetJob(detail: HTMLElement, job: import('./api').FleetJob) {
 // surviving tabs would keep detached terminal elements and live reconnect
 // loops — and land on the login screen with a notice. No-op when the login
 // screen is already up (e.g. the 401 from a wrong password on /api/login).
+// A Settings → Notifications toggle recounts the badge right away rather than
+// waiting for the next health poll (see settingsNotifications.ts).
+window.addEventListener('tmuxifier:notify-prefs-changed', () => updateEventsBadge());
+
 onUnauthorized(() => {
   if (!app.querySelector('.layout')) return;
   if (pollInterval) clearInterval(pollInterval);

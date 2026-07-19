@@ -26,7 +26,13 @@ export function renderNotificationsSection(content: HTMLElement): void {
   const rows = NOTIFY_KINDS.map(({ kind, label }) => {
     const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
     cb.checked = !!prefs[kind];
-    cb.onchange = () => { prefs[kind] = cb.checked; saveNotifyPrefs(prefs); };
+    cb.onchange = () => {
+      prefs[kind] = cb.checked;
+      saveNotifyPrefs(prefs);
+      // Let the badge recount immediately instead of waiting up to POLL_MS for
+      // the next health poll to pick up the new filter.
+      window.dispatchEvent(new Event('tmuxifier:notify-prefs-changed'));
+    };
     return el('label', { class: 'check-field' }, [cb, el('span', {}, [label])]);
   });
 
