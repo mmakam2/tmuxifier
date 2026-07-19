@@ -74,6 +74,29 @@ export async function writeClipboard(text: string, deps: ClipboardDeps): Promise
   return deps.fallbackCopy ? deps.fallbackCopy(text) : false;
 }
 
+// OSC 52 payload decoder ("<selection>;<base64>", the part after "52;").
+// This is how terminal applications set the system clipboard from inside the
+// terminal: tmux copy-mode yanks and TUI apps that own the mouse (Claude Code
+// fullscreen, vim) emit it, because a browser-level drag never reaches them.
+// Returns the decoded text, or null for anything that must not touch the
+// clipboard: a "?" payload is the app asking to READ the clipboard (never
+// answered — that would leak clipboard contents to the remote), and invalid
+// base64 is dropped.
+export function parseOsc52(payload: string): string | null {
+  const semi = payload.indexOf(';');
+  if (semi === -1) return null;
+  const data = payload.slice(semi + 1);
+  if (!data || data === '?') return null;
+  try {
+    const bin = atob(data);
+    const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return text || null;
+  } catch {
+    return null; // invalid base64 or not valid UTF-8
+  }
+}
+
 // Read the system clipboard for the explicit paste shortcut. Returns '' when
 // reading is unavailable (insecure context), in which case the caller should
 // simply do nothing and let native paste cover the working cases.

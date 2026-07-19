@@ -95,3 +95,15 @@ test('readClipboard: returns clipboard text when readText is available', async (
 test('readClipboard: returns empty string when reading is unavailable (insecure context)', async () => {
   expect(await readClipboard({})).toBe('');
 });
+
+test('parseOsc52 decodes a base64 clipboard write and rejects queries/garbage', async () => {
+  const { parseOsc52 } = await import('../src/web/clipboard.ts');
+  expect(parseOsc52('c;aGVsbG8=')).toBe('hello');            // plain write
+  expect(parseOsc52('pc;aGVsbG8=')).toBe('hello');           // selection list prefix
+  expect(parseOsc52(';aGVsbG8=')).toBe('hello');             // empty selection field
+  expect(parseOsc52('c;4pyTIG9r')).toBe('✓ ok');        // UTF-8 multibyte survives
+  expect(parseOsc52('c;?')).toBe(null);                      // query — app asks to READ; never answer
+  expect(parseOsc52('c;')).toBe(null);                       // empty payload
+  expect(parseOsc52('c;!!notbase64!!')).toBe(null);          // invalid base64
+  expect(parseOsc52('')).toBe(null);
+});

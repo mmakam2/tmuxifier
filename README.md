@@ -211,6 +211,14 @@ Uploaded files older than 24 hours are cleaned up automatically on the next
 upload to that machine. The size limit is 25 MB by default
 (`TMUXIFIER_UPLOAD_MAX_MB`).
 
+**Copying out of a terminal:** selecting text copies it to your clipboard
+automatically (plus Cmd+C on macOS, Ctrl+Shift+C elsewhere; both need an HTTPS
+dashboard). When a full-screen app owns the mouse — Claude Code, vim, tmux
+copy-mode — a plain drag goes to the app instead of selecting: either hold
+**Shift** while dragging to select in the browser, or just use the app's own
+copy — Tmuxifier understands OSC 52, so in-app copies (a tmux copy-mode yank,
+Claude Code's selection copy) land on your system clipboard too.
+
 ## Host Shell & per-box Reconnect
 The **Host Shell** entry at the bottom of the sidebar opens a terminal on the Tmuxifier host
 itself, backed by a local tmux session (`local`) with the same reattach-on-reconnect behavior as

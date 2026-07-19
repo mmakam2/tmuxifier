@@ -2,7 +2,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { reconnectDelay } from './reconnect';
-import { clipboardActionForKey, writeClipboard, readClipboard, type ClipboardDeps } from './clipboard';
+import { clipboardActionForKey, writeClipboard, readClipboard, parseOsc52, type ClipboardDeps } from './clipboard';
 import { buildFontFamily, clampFontSize, DEFAULT_TERM_FONT_SIZE } from './termFont';
 import { api } from './api';
 import { filesFromDataTransfer, uploadName, sizeError, termSafe } from './upload';
@@ -47,6 +47,17 @@ function wireClipboard(term: Terminal): void {
     fallbackCopy: execCommandCopy,
   };
   const env = { mac: isMacPlatform() };
+
+  // OSC 52 bridge: apps that own the mouse (Claude Code fullscreen, vim, tmux
+  // copy-mode) never see a browser drag — they copy by emitting OSC 52, which
+  // xterm.js ignores unless explicitly handled. parseOsc52 returns null for
+  // read-queries ("?") and garbage, so those consume the sequence without
+  // touching the clipboard; returning true stops xterm's default handling.
+  term.parser.registerOscHandler(52, (payload) => {
+    const text = parseOsc52(payload);
+    if (text) void writeClipboard(text, deps);
+    return true;
+  });
 
   // Copy-on-select: mirror any new selection to the clipboard immediately.
   // Async Clipboard API only — never the execCommand fallback here, whose hidden
