@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from 'vitest';
-import { evaluateVoice, isVoiceHotkey, isVoiceHotkeyRelease, wireVoice, createVoiceController } from '../src/web/voiceUi';
+import { evaluateVoice, isVoiceHotkey, createVoiceHotkeyHandler, wireVoice, createVoiceController } from '../src/web/voiceUi';
 
 // wireVoice calls the global fetch (via api.uiConfig) and, once voice turns
 // out to be enabled, the global document (to mount a button), navigator/window
@@ -87,48 +87,99 @@ test('auto-repeat while the key is held is not a second press', () => {
   expect(isVoiceHotkey(ev)).toBe(false);
 });
 
-test('isVoiceHotkey no longer matches keyup — release is isVoiceHotkeyRelease\'s job', () => {
+test('isVoiceHotkey does not match keyup — only a keydown can toggle', () => {
   const ev = { type: 'keyup', key: ' ', code: 'Space', ctrlKey: true, shiftKey: true,
                metaKey: false, altKey: false, repeat: false };
   expect(isVoiceHotkey(ev)).toBe(false);
 });
 
-// I2: releasing Ctrl before Space is roughly a coin flip on an ordinary chord
-// release, and by the time that Space keyup fires its own ctrlKey already
-// reads false. Requiring all three modifiers to still be held on release (the
-// original bug) made stopping unreachable on a normal release order, leaving
-// the mic live until the 120s auto-stop.
-const keyup = (over) => ({ type: 'keyup', key: ' ', code: 'Space', ctrlKey: true, shiftKey: true,
-                            metaKey: false, altKey: false, ...over });
-
-test('releasing Space first still stops the recording — the common case', () => {
-  expect(isVoiceHotkeyRelease(keyup({}))).toBe(true);
-});
-
-test('releasing Ctrl before Space still stops the recording', () => {
-  // Ctrl's own keyup naturally reports ctrlKey: false — it is not held down
-  // by the very key event that reports its release.
-  expect(isVoiceHotkeyRelease(keyup({ key: 'Control', code: 'ControlLeft', ctrlKey: false }))).toBe(true);
-});
-
-test('releasing Shift before Space still stops the recording', () => {
-  expect(isVoiceHotkeyRelease(keyup({ key: 'Shift', code: 'ShiftLeft', shiftKey: false }))).toBe(true);
-});
-
-test('keydown still requires the full chord together, unaffected by the release predicate', () => {
-  // isVoiceHotkey (start) is unchanged: dropping any one modifier still fails
-  // it on keydown, exactly as before this fix.
+test('keydown still requires the full chord together', () => {
+  // Dropping any one modifier still fails it, exactly as before the toggle change.
   const down = (over) => ({ type: 'keydown', key: ' ', code: 'Space', ctrlKey: true, shiftKey: true,
                              metaKey: false, altKey: false, repeat: false, ...over });
   expect(isVoiceHotkey(down({}))).toBe(true);
   expect(isVoiceHotkey(down({ ctrlKey: false }))).toBe(false);
   expect(isVoiceHotkey(down({ shiftKey: false }))).toBe(false);
-  // And isVoiceHotkeyRelease is a keyup-only predicate — it never matches keydown.
-  expect(isVoiceHotkeyRelease(down({}))).toBe(false);
 });
 
-test('an unrelated key release is not part of the chord', () => {
-  expect(isVoiceHotkeyRelease(keyup({ key: 'v', code: 'KeyV' }))).toBe(false);
+// createVoiceHotkeyHandler owns the actual toggle decision (which isVoiceHotkey
+// alone can't express, since it matches every fresh chord press identically
+// regardless of whether one is already in flight) plus the swallow-the-whole-
+// chord state machine. `voice` here is the minimal shape terminal.ts hands it
+// — no real controller/recorder needed since the handler only ever calls
+// voice.recording()/begin()/finish(), never touches a mic itself.
+function fakeVoiceTarget(readyValue = true) {
+  let recording = false;
+  const calls = [];
+  return {
+    ready: () => readyValue,
+    recording: () => recording,
+    begin: () => { calls.push('begin'); recording = true; },
+    finish: () => { calls.push('finish'); recording = false; },
+    calls,
+  };
+}
+
+const down = (over) => ({ type: 'keydown', key: ' ', code: 'Space', ctrlKey: true, shiftKey: true,
+                           metaKey: false, altKey: false, repeat: false, ...over });
+const up = (over) => ({ type: 'keyup', key: ' ', code: 'Space', ctrlKey: true, shiftKey: true,
+                         metaKey: false, altKey: false, ...over });
+
+test('a first non-repeat keydown starts a recording', () => {
+  const voice = fakeVoiceTarget();
+  const handle = createVoiceHotkeyHandler(voice);
+  expect(handle(down({}))).toBe(true); // consumed
+  expect(voice.calls).toEqual(['begin']);
+  expect(voice.recording()).toBe(true);
+});
+
+test('a second press (after the chord is fully released) stops the recording', () => {
+  const voice = fakeVoiceTarget();
+  const handle = createVoiceHotkeyHandler(voice);
+  handle(down({}));                    // starts
+  expect(handle(up({}))).toBe(true);   // Space released — ends this physical press, still consumed
+  expect(handle(down({}))).toBe(true); // second tap
+  expect(voice.calls).toEqual(['begin', 'finish']);
+  expect(voice.recording()).toBe(false);
+});
+
+test('ev.repeat keydowns while the chord is held do not toggle — they are swallowed instead', () => {
+  const voice = fakeVoiceTarget();
+  const handle = createVoiceHotkeyHandler(voice);
+  handle(down({}));
+  expect(handle(down({ repeat: true }))).toBe(true); // consumed, not a second toggle
+  expect(handle(down({ repeat: true }))).toBe(true);
+  expect(voice.calls).toEqual(['begin']); // only the original press acted
+});
+
+test('a keyup of Control or Shift mid-chord is swallowed too, without ending the press', () => {
+  const voice = fakeVoiceTarget();
+  const handle = createVoiceHotkeyHandler(voice);
+  handle(down({}));
+  // Releasing a modifier before Space (the common real-world release order)
+  // must still be consumed, and must not itself be mistaken for the chord's
+  // end — repeats of Space could still be arriving.
+  expect(handle(up({ key: 'Control', code: 'ControlLeft', ctrlKey: false }))).toBe(true);
+  expect(handle(down({ repeat: true }))).toBe(true); // Space is still physically held
+  expect(voice.calls).toEqual(['begin']);
+  expect(handle(up({}))).toBe(true); // Space finally comes up — press ends
+  expect(handle(down({}))).toBe(true); // a genuinely new press toggles again
+  expect(voice.calls).toEqual(['begin', 'finish']);
+});
+
+test('an unrelated key event is not part of the chord and falls through', () => {
+  const voice = fakeVoiceTarget();
+  const handle = createVoiceHotkeyHandler(voice);
+  expect(handle(down({ key: 'v', code: 'KeyV' }))).toBe(false);
+  expect(handle(up({ key: 'v', code: 'KeyV' }))).toBe(false);
+  expect(voice.calls).toEqual([]);
+});
+
+test('the chord falls through untouched when voice is not ready', () => {
+  const voice = fakeVoiceTarget(false);
+  const handle = createVoiceHotkeyHandler(voice);
+  expect(handle(down({}))).toBe(false);
+  expect(voice.calls).toEqual([]);
 });
 
 // I1: a finish() that lands before start() resolves must not orphan a live

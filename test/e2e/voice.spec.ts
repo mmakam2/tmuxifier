@@ -51,6 +51,32 @@ test('dictation types the transcript into the tmux pane', async ({ page }) => {
     .toContainText('hello from the fixture', { timeout: 15000 });
 });
 
+test('the hotkey toggles dictation: tap to start, tap again to stop', async ({ page }) => {
+  await openLocalhostBox(page);
+
+  // This suite's tests share one persistent tmux session/pane (that's the
+  // whole point of reattach), and the previous test leaves its own
+  // "hello from the fixture" transcript sitting unsubmitted at the prompt —
+  // see "the transcript is typed but never submitted" below. Clear that
+  // leftover line first (Ctrl+U, the standard readline kill-to-start-of-line
+  // binding both bash and zsh honor) so this test's own assertion can only
+  // pass because the hotkey itself typed the text, not because it was
+  // already sitting there from a previous test.
+  await page.keyboard.press('Control+U');
+
+  // No button interaction here at all — this is the headline trigger
+  // (Ctrl+Shift+Space), now a tap-to-toggle instead of hold-to-talk. Opening
+  // the box already focused the terminal (see tmuxifier.spec.ts's plain
+  // page.keyboard.type() right after localhost.click()), so the chord lands
+  // on xterm's custom key event handler without an extra click.
+  await page.keyboard.press('Control+Shift+Space'); // first tap: starts recording
+  await page.waitForTimeout(500);                    // capture a little synthetic audio
+  await page.keyboard.press('Control+Shift+Space'); // second tap: stops and transcribes
+
+  await expect(page.locator('.xterm-rows').first())
+    .toContainText('hello from the fixture', { timeout: 15000 });
+});
+
 test('the transcript is typed but never submitted', async ({ page }) => {
   await openLocalhostBox(page);
   const mic = page.locator('.voice-btn');

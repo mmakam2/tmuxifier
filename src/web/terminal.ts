@@ -6,7 +6,7 @@ import { clipboardActionForKey, writeClipboard, readClipboard, parseOsc52, type 
 import { buildFontFamily, clampFontSize, DEFAULT_TERM_FONT_SIZE } from './termFont';
 import { api } from './api';
 import { filesFromDataTransfer, uploadName, sizeError, termSafe } from './upload';
-import { wireVoice, isVoiceHotkey, isVoiceHotkeyRelease } from './voiceUi';
+import { wireVoice, createVoiceHotkeyHandler, type VoiceHotkeyTarget } from './voiceUi';
 
 // Synchronous execCommand('copy') used when the async Clipboard API is missing
 // (insecure context) or rejects (document not focused). A hidden textarea is the
@@ -46,7 +46,8 @@ function isMacPlatform(): boolean {
 // attachCustomKeyEventHandler keeps only ONE handler, so voice must be checked
 // in this same callback rather than attaching a second one, which would
 // silently replace this handler and disable copy/paste.
-function wireClipboard(term: Terminal, voice?: { ready(): boolean; recording(): boolean; begin(): void; finish(): void }): void {
+function wireClipboard(term: Terminal, voice?: VoiceHotkeyTarget): void {
+  const voiceKey = voice ? createVoiceHotkeyHandler(voice) : null;
   const deps: ClipboardDeps = {
     clipboard: typeof navigator !== 'undefined' ? navigator.clipboard : undefined,
     fallbackCopy: execCommandCopy,
@@ -76,34 +77,22 @@ function wireClipboard(term: Terminal, voice?: { ready(): boolean; recording(): 
   });
 
   term.attachCustomKeyEventHandler((ev) => {
-    // Voice is checked first and returns false so the combo never reaches the
-    // PTY. xterm keeps only ONE custom key handler, so this must live in the
-    // same callback as the clipboard bindings — a second attach call would
-    // silently replace them. Only intercept when a controller is actually
-    // mounted AND usable (voice.ready() — false while the /api/ui-config
-    // readiness fetch is still pending, when the server has voice off, or
-    // when the mounted verdict itself was not ok, e.g. plain HTTP): with
-    // nothing able to act on the keystroke either way, it must fall through
-    // to normal xterm handling rather than being silently swallowed or
-    // handed to a controller that would just throw.
-    //
-    // Start and stop are deliberately asymmetric. isVoiceHotkey (keydown)
-    // requires the full Ctrl+Shift+Space chord together. Stopping instead
-    // fires on ANY keyup that releases part of that chord while a recording
-    // is in flight (voice.recording()) — physical chord releases are rarely
-    // simultaneous, and requiring all three modifiers to still be held on
-    // release would leave the mic live until the 120s auto-stop on a normal
-    // release order (e.g. Ctrl lifted just before Space).
-    if (voice?.ready()) {
-      if (ev.type === 'keydown' && isVoiceHotkey(ev)) {
-        voice.begin();
-        return false;
-      }
-      if (ev.type === 'keyup' && voice.recording() && isVoiceHotkeyRelease(ev)) {
-        voice.finish();
-        return false;
-      }
-    }
+    // Voice is checked first and returns false so nothing belonging to the
+    // Ctrl+Shift+Space chord ever reaches the PTY. xterm keeps only ONE
+    // custom key handler, so this must live in the same callback as the
+    // clipboard bindings — a second attach call would silently replace them.
+    // createVoiceHotkeyHandler (voiceUi.ts) owns the whole chord state
+    // machine: the first non-repeat keydown of the chord toggles (starts a
+    // recording, or finishes one already in flight), and every other event
+    // belonging to that same physical press — auto-repeat keydowns fired
+    // while Space stays held, and the keyups as the keys come back up in
+    // whatever order — is swallowed too, so a chord held for several seconds
+    // can't leak spaces into the pane. It internally no-ops (returns false,
+    // letting the keys fall through here) whenever voice isn't actually
+    // usable — the /api/ui-config readiness fetch still pending, the server
+    // has voice off, or the mounted readiness verdict itself was not ok
+    // (e.g. plain HTTP) — since nothing could act on the keystroke either way.
+    if (voiceKey?.(ev)) return false;
     const action = clipboardActionForKey(ev, env);
     if (action === 'copy') {
       const sel = term.getSelection();

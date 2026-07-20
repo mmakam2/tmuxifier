@@ -38,13 +38,15 @@ export function evaluateVoice(env: VoiceEnv): VoiceVerdict {
   return { ok: true, reason: '', hint: '' };
 }
 
-// Ctrl+Shift+Space to START recording. Deliberately not Ctrl+Shift+V —
-// clipboard.ts already claims that for paste. `repeat` is excluded because a
-// held key auto-repeats keydown, which would otherwise read as a stream of
-// fresh presses. Keydown stays strict (all three modifiers required together)
-// because a false-positive START is cheap to recover from (release stops it)
-// while a false-positive STOP is not — see isVoiceHotkeyRelease below for why
-// release can't use this same strict check.
+// Ctrl+Shift+Space TOGGLES recording: this same non-repeat keydown match is
+// used both to start (no recording in flight) and to stop (one already is) —
+// see createVoiceHotkeyHandler below, which is what actually decides which.
+// Deliberately not Ctrl+Shift+V — clipboard.ts already claims that for paste.
+// `repeat` is excluded because a held key auto-repeats keydown, which would
+// otherwise read as a stream of fresh presses; createVoiceHotkeyHandler still
+// has to swallow those repeats (and the eventual keyups) so a held chord
+// can't leak Space characters into the terminal, it just doesn't treat them
+// as a second toggle.
 export function isVoiceHotkey(ev: KeyboardEvent): boolean {
   if (ev.type !== 'keydown') return false;
   if (ev.repeat) return false;
@@ -52,21 +54,63 @@ export function isVoiceHotkey(ev: KeyboardEvent): boolean {
   return ev.code === 'Space';
 }
 
-// Whether this keyup is the release of one of the three chord keys
-// (Ctrl+Shift+Space) that should STOP an in-flight recording. Deliberately
-// does NOT re-require the other two modifiers to still be held: a keyup
-// reports modifier state as of the instant that specific key was released,
-// and physical chord releases are rarely simultaneous. Releasing Ctrl even
-// ~20ms before Space already reports ctrlKey: false on the Space keyup —
-// roughly a coin flip on an ordinary release — so requiring all three here
-// would make stopping unreachable on a normal release order, stranding a
-// live microphone until the 120s auto-stop transcribes whatever the room said
-// in the meantime. The caller is expected to gate this on a recording
-// actually being in flight, since outside that window an ordinary Ctrl/Shift
-// keyup (e.g. after typing a capital letter) must not be swallowed.
-export function isVoiceHotkeyRelease(ev: KeyboardEvent): boolean {
-  if (ev.type !== 'keyup') return false;
-  return ev.code === 'Space' || ev.key === 'Control' || ev.key === 'Shift';
+// The three physical keys of the Ctrl+Shift+Space chord (either Control,
+// either Shift, Space), matched on `code` regardless of event type or repeat.
+// Used only by createVoiceHotkeyHandler while a chord press is already in
+// progress, to swallow every remaining event that belongs to it. Matching on
+// physical key identity rather than re-checking modifier state is
+// deliberate: this used to matter for deciding when to STOP (the old
+// hold-to-talk design), where a release order like "Ctrl up, then Space up"
+// already reports ctrlKey: false on the Space keyup, which made a naive
+// require-all-three check unreliable. Toggling removed that decision
+// entirely, but the same reasoning still applies here for a different
+// purpose — swallowing must not depend on which modifier let go first either.
+function isVoiceHotkeyChordKey(ev: KeyboardEvent): boolean {
+  return ev.code === 'Space' || ev.code === 'ControlLeft' || ev.code === 'ControlRight'
+    || ev.code === 'ShiftLeft' || ev.code === 'ShiftRight';
+}
+
+export interface VoiceHotkeyTarget {
+  ready(): boolean;
+  recording(): boolean;
+  begin(): void;
+  finish(): void;
+}
+
+// Wires the Ctrl+Shift+Space chord as a toggle for terminal.ts's single xterm
+// custom key event handler: the first non-repeat keydown of the chord starts
+// a recording, or finishes one already in flight, depending on
+// voice.recording() at that instant. Every other event belonging to that same
+// physical press — the auto-repeat keydowns fired for as long as Space stays
+// held, and the keyups as the keys come back up in whatever order — is
+// swallowed too rather than left to fall through, so a chord held for
+// several seconds can never leak spaces (or anything else) into the pane.
+// Returns a per-event predicate: true means "consumed — the caller should
+// return false to xterm"; false means "not ours, keep evaluating (clipboard,
+// then ordinary pass-through)". Internally checks voice.ready() so the chord
+// falls through untouched whenever voice isn't actually usable yet (readiness
+// fetch still in flight, server has voice off, or the readiness verdict
+// itself failed, e.g. plain HTTP) — a controller that isn't there can't be
+// handed a begin()/finish() call anyway.
+export function createVoiceHotkeyHandler(voice: VoiceHotkeyTarget): (ev: KeyboardEvent) => boolean {
+  let chordActive = false;
+  return (ev: KeyboardEvent): boolean => {
+    if (!voice.ready()) return false;
+    if (chordActive) {
+      if (!isVoiceHotkeyChordKey(ev)) return false;
+      // Space coming back up is what ends this physical press — regardless
+      // of whether Ctrl/Shift already let go earlier or haven't yet, since a
+      // released modifier doesn't stop Space's auto-repeat by itself.
+      if (ev.type === 'keyup' && ev.code === 'Space') chordActive = false;
+      return true;
+    }
+    if (ev.type === 'keydown' && isVoiceHotkey(ev)) {
+      chordActive = true;
+      if (voice.recording()) voice.finish(); else voice.begin();
+      return true;
+    }
+    return false;
+  };
 }
 
 export function detectVoiceEnv(enabled: boolean): VoiceEnv {
@@ -102,7 +146,9 @@ export function createVoiceController(
     if (!button) return;
     button.dataset.state = s;
     button.textContent = s === 'recording' ? '● rec' : s === 'working' ? '… ' : '🎤';
-    button.title = s === 'recording' ? 'Release to transcribe' : 'Hold to dictate (Ctrl+Shift+Space)';
+    button.title = s === 'recording'
+      ? 'Release to transcribe (or tap Ctrl+Shift+Space to stop)'
+      : 'Hold to dictate (or tap Ctrl+Shift+Space to start/stop)';
   }
 
   async function begin(): Promise<void> {
@@ -177,10 +223,10 @@ export function createVoiceController(
     begin,
     finish,
     // Whether a recording is currently in flight (mic live or already handed
-    // off to finish()'s transcription round trip). terminal.ts's keyup
-    // handler consults this before treating a bare Ctrl/Shift release as the
-    // "stop" half of the chord, so an ordinary Ctrl/Shift keyup outside a
-    // recording (e.g. after typing a capital letter) is left alone.
+    // off to finish()'s transcription round trip). createVoiceHotkeyHandler
+    // consults this on every fresh (non-repeat) chord keydown to decide
+    // whether that press should start a new recording or finish the current
+    // one — that's the entire toggle decision.
     recording(): boolean { return recorder !== null || busy; },
     cancel(): void { recorder?.cancel(); recorder = null; setState('idle'); },
     mount(parent: HTMLElement, verdict: VoiceVerdict): void {
@@ -223,12 +269,14 @@ export function wireVoice(parent: HTMLElement, boxId: string, host: VoiceHost) {
     verdictOk = verdict.ok;
   }).catch(() => {});
 
-  // Alt-tab (or any other focus loss) fires no keyup at all for a held
-  // chord, so a mid-recording blur is the one "stop" trigger that can't come
-  // through the keyboard handler. Finishing (not cancelling) mirrors the
-  // capTimer auto-stop: transcribe whatever was captured rather than
-  // discarding it. Harmless when nothing is recording — finish() itself
-  // no-ops without a live recorder.
+  // A toggle-started recording has no second keypress guaranteed to ever
+  // arrive — alt-tab (or any other focus loss) can leave a tab hidden with
+  // the mic still live and nobody watching the '● rec' indicator, which is a
+  // real privacy problem, not just an inconvenience. Blur is the safety net
+  // that doesn't depend on the keyboard handler at all. Finishing (not
+  // cancelling) mirrors the capTimer auto-stop: transcribe whatever was
+  // captured rather than discarding it. Harmless when nothing is recording —
+  // finish() itself no-ops without a live recorder.
   const onBlur = (): void => { controller?.finish(); };
   if (typeof window !== 'undefined') window.addEventListener('blur', onBlur);
 

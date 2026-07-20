@@ -321,10 +321,12 @@ decoding; the input sample rate is a parameter, not an assumption, since `AudioC
 is device-dependent — commonly 48000, often 44100), `voiceRecorder.ts` (microphone capture via
 `getUserMedia` and an AudioWorklet, producing WAV bytes), `voiceUi.ts` (the readiness verdict
 `evaluateVoice` — ordered browser-support then secure-context then server-enablement, the same
-shape as `passkeys.ts`'s `evaluateOrigin` — the hotkey predicates, the mic button, and the
-controller), and `voiceWorklet.js` (the AudioWorklet processor, shipped as a real Vite-emitted
-static asset rather than a blob: URL, specifically so the Content-Security-Policy can stay
-`script-src 'self'`).
+shape as `passkeys.ts`'s `evaluateOrigin` — the hotkey predicate and its toggle handler
+(`createVoiceHotkeyHandler`: Ctrl+Shift+Space tap-to-start/tap-to-stop, swallowing every event of
+the chord — including auto-repeat keydowns and keyups — so a held key can't leak into the pane),
+the mic button (click-and-hold, unchanged), and the controller), and `voiceWorklet.js` (the
+AudioWorklet processor, shipped as a real Vite-emitted static asset rather than a blob: URL,
+specifically so the Content-Security-Policy can stay `script-src 'self'`).
 
 ## Conventions
 

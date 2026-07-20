@@ -103,4 +103,4 @@ upsertEnvFile(path.join(repoRoot, '.env'), {
 console.error('\nVoice dictation installed.');
 console.error(`  binary ${binPath}`);
 console.error(`  model  ${finalModel}`);
-console.error('\nRestart Tmuxifier, then hold Ctrl+Shift+Space in a terminal to dictate.');
+console.error('\nRestart Tmuxifier, then tap Ctrl+Shift+Space in a terminal to start dictating and tap it again to stop.');

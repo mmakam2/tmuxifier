@@ -290,10 +290,12 @@ Claude Code's selection copy) land on your system clipboard too.
 
 ## Voice dictation
 
-Hold **Ctrl+Shift+Space** in any terminal to dictate: your browser records audio from your
-microphone while the key is held, sends it to Tmuxifier when you release, and the transcribed
-text is typed into the pane — the same way a pasted file path is typed in (see
-[Pasting images & files](#pasting-images--files) above).
+Tap **Ctrl+Shift+Space** in any terminal to start dictating, and tap it again to stop: your
+browser records audio from your microphone in between, sends it to Tmuxifier on the second tap,
+and the transcribed text is typed into the pane — the same way a pasted file path is typed in
+(see [Pasting images & files](#pasting-images--files) above). The mic button next to the terminal
+works the other way — click and hold it, then release to transcribe — since a physical button has
+an unambiguous release and a key chord doesn't.
 
 This is not the same thing as Claude Code's own `/voice` command, and `/voice` cannot work on a
 headless box: it opens an audio device on the machine the CLI process runs on, and a box managed
