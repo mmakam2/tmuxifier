@@ -126,3 +126,60 @@ test('an empty transcript is reported, not typed', async () => {
   expect(res.json()).toEqual({ text: '', injected: false, mode: 'empty' });
   expect(injected).toEqual([]);
 });
+
+test('clamps a nonsense/out-of-range engine error status to 502', async () => {
+  const boom = (status) => ({
+    transcribe: async () => { const e = new Error('x'); e.status = status; throw e; },
+    stop: async () => {}, state: () => 'stopped',
+  });
+  // 200 (success-range) and 999 (out of HTTP range) must never pass through
+  // verbatim — only a genuine 4xx/5xx integer from the engine should.
+  for (const status of [200, 999, -1, 0, 'nope', undefined, null, NaN]) {
+    const a = await makeApp({ server: { voiceEngine: boom(status) } });
+    const res = await post(a, await login(a));
+    expect(res.statusCode).toBe(502);
+  }
+});
+
+// --- box=__local__ ------------------------------------------------------
+
+test('injects into the local session via injectLocalText (not boxActions.injectText) for box=__local__', async () => {
+  const localCalls = [];
+  const a = await makeApp({ server: {
+    injectLocalText: async (session, text) => { localCalls.push([session, text]); return { injected: true, mode: 'shell' }; },
+  } });
+  const res = await post(a, await login(a), wav(), '/api/voice?box=__local__');
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ text: 'hello world', injected: true, mode: 'shell' });
+  expect(localCalls).toEqual([['local', 'hello world']]);
+  // The box-side injector must not have been touched for a local dictation.
+  expect(injected).toEqual([]);
+});
+
+test('box=__local__ dictation does not go through store.getBox', async () => {
+  const getBoxCalls = [];
+  const store = {
+    listBoxes: async () => [],
+    // '__local__' is not a real box id; if the route ever called getBox with
+    // it, a real store would return null for it. Track calls directly so a
+    // regression that starts calling getBox is caught regardless of what it
+    // returns.
+    getBox: async (id) => { getBoxCalls.push(id); return null; },
+  };
+  const a = await makeApp({ server: {
+    store,
+    injectLocalText: async () => ({ injected: true, mode: 'shell' }),
+  } });
+  const res = await post(a, await login(a), wav(), '/api/voice?box=__local__');
+  expect(res.statusCode).toBe(200);
+  expect(getBoxCalls).toEqual([]);
+});
+
+test('the transcript is still returned when __local__ injection is refused', async () => {
+  const a = await makeApp({ server: {
+    injectLocalText: async () => ({ injected: false, mode: 'busy' }),
+  } });
+  const res = await post(a, await login(a), wav(), '/api/voice?box=__local__');
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ text: 'hello world', injected: false, mode: 'busy' });
+});

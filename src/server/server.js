@@ -1007,7 +1007,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     try {
       raw = await voiceEngine.transcribe(body);
     } catch (e) {
-      const status = Number(e?.status) || 502;
+      // Only pass through a genuine 4xx/5xx integer from the engine — an
+      // out-of-range or non-numeric status (e.g. a hypothetical e.status =
+      // 200) must not turn an engine failure into a non-error response.
+      const rawStatus = Number(e?.status);
+      const status = Number.isInteger(rawStatus) && rawStatus >= 400 && rawStatus <= 599 ? rawStatus : 502;
       return reply.code(status).send({ error: `transcription failed: ${e?.message || 'error'}` });
     }
 
@@ -1017,7 +1021,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const session = box ? box.sessionName : localSession;
     let inj = { injected: false, mode: 'error' };
     if (boxId === '__local__') {
-      inj = await injectLocalText(session, text).catch(() => ({ injected: false, mode: 'error' }));
+      inj = typeof injectLocalText === 'function'
+        ? await injectLocalText(session, text).catch(() => ({ injected: false, mode: 'error' }))
+        : { injected: false, mode: 'error' };
     } else if (typeof boxActions?.injectText === 'function') {
       inj = await boxActions.injectText(box, session, text).catch(() => ({ injected: false, mode: 'error' }));
     }
