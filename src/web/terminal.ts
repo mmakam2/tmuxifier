@@ -6,6 +6,7 @@ import { clipboardActionForKey, writeClipboard, readClipboard, parseOsc52, type 
 import { buildFontFamily, clampFontSize, DEFAULT_TERM_FONT_SIZE } from './termFont';
 import { api } from './api';
 import { filesFromDataTransfer, uploadName, sizeError, termSafe } from './upload';
+import { wireVoice, isVoiceHotkey } from './voiceUi';
 
 // Synchronous execCommand('copy') used when the async Clipboard API is missing
 // (insecure context) or rejects (document not focused). A hidden textarea is the
@@ -41,7 +42,11 @@ function isMacPlatform(): boolean {
 // Cmd/Ctrl+Shift+C to copy and Ctrl+Shift+V to paste. Decisions about which
 // key combos count live in the pure ./clipboard module; this only supplies the
 // browser objects and forwards the result. See the diagnosis in clipboard.ts.
-function wireClipboard(term: Terminal): void {
+// Also handles the voice hotkey (Ctrl+Shift+Space): xterm's
+// attachCustomKeyEventHandler keeps only ONE handler, so voice must be checked
+// in this same callback rather than attaching a second one, which would
+// silently replace this handler and disable copy/paste.
+function wireClipboard(term: Terminal, voice?: { begin(): void; finish(): void }): void {
   const deps: ClipboardDeps = {
     clipboard: typeof navigator !== 'undefined' ? navigator.clipboard : undefined,
     fallbackCopy: execCommandCopy,
@@ -71,6 +76,15 @@ function wireClipboard(term: Terminal): void {
   });
 
   term.attachCustomKeyEventHandler((ev) => {
+    // Voice is checked first and returns false so the combo never reaches the
+    // PTY. xterm keeps only ONE custom key handler, so this must live in the
+    // same callback as the clipboard bindings — a second attach call would
+    // silently replace them.
+    if (voice && isVoiceHotkey(ev)) {
+      if (ev.type === 'keydown') voice.begin();
+      else voice.finish();
+      return false;
+    }
     const action = clipboardActionForKey(ev, env);
     if (action === 'copy') {
       const sel = term.getSelection();
@@ -245,7 +259,19 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
   term.open(parent);
   fit.fit();
   refitWhenFontReady(term, fit);
-  wireClipboard(term);
+  // Built here rather than reaching into wireClipboard: ClipboardDeps is
+  // assembled inline there and never exported. execCommandCopy is the
+  // module-local synchronous fallback for insecure contexts.
+  const voice = wireVoice(parent, boxId, {
+    write: (t) => term.write(t),
+    copy: (t) => {
+      void writeClipboard(t, {
+        clipboard: typeof navigator !== 'undefined' ? navigator.clipboard : undefined,
+        fallbackCopy: execCommandCopy,
+      });
+    },
+  });
+  wireClipboard(term, voice);
   const offUploads = wireUploads(parent, term, boxId);
 
   // Strip control chars so a box label can't inject escape sequences into the
@@ -299,7 +325,7 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
 
   return {
     focus: () => term.focus(),
-    dispose: () => { offUploads(); closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
+    dispose: () => { offUploads(); voice.dispose(); closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
     refit: onResize,
   };
 }

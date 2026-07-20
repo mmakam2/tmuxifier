@@ -116,11 +116,17 @@ export const api = {
   async status() { return j<Record<string, Status>>(await fetch(`/api/status?t=${Date.now()}`)); },
   async healthSeries() { return j<Record<string, Sample[]>>(await fetch(`/api/health/series?t=${Date.now()}`)); },
   async healthEvents() { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?t=${Date.now()}`)); },
-  async uiConfig() { return j<{ termFont: string | null; termFontSize: number; uploadMaxBytes: number }>(await fetch('/api/ui-config')); },
+  async uiConfig() { return j<{ termFont: string | null; termFontSize: number; uploadMaxBytes: number; voice: boolean; voiceMaxSeconds: number }>(await fetch('/api/ui-config')); },
   async uploadFile(boxId: string, name: string, blob: Blob) {
     return j<{ path: string; injected: boolean; mode: 'claude' | 'shell' | 'busy' | 'error' }>(await fetch(`/api/upload?box=${encodeURIComponent(boxId)}&name=${encodeURIComponent(name)}`, {
       method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: blob,
     }));
+  },
+  async postVoice(boxId: string, blob: Blob) {
+    return j<{ text: string; injected: boolean; mode: 'claude' | 'shell' | 'busy' | 'error' | 'empty' }>(
+      await fetch(`/api/voice?box=${encodeURIComponent(boxId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: blob,
+      }));
   },
   async getLocalShell() { return j<{ shell: string }>(await fetch('/api/local-shell')); },
   async updateLocalShell(shell: string) { return j<{ ok: boolean }>(await fetch('/api/local-shell', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shell }) })); },
