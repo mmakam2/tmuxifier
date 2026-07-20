@@ -1,7 +1,8 @@
 import { test, expect } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
-import { cborDecodeFirst, coseToKey, SUPPORTED_ALGS } from '../src/server/webauthn.js';
+import { cborDecodeFirst, coseToKey, SUPPORTED_ALGS, verifyAssertion, makeOriginCheck } from '../src/server/webauthn.js';
 import { enc } from './helpers/cbor.js';
+import { makeAuthenticator, makeAssertion, b64u, FLAG_UP, FLAG_UV } from './helpers/webauthnFixtures.js';
 
 test('decodes unsigned and negative integers across width boundaries', () => {
   for (const n of [0, 23, 24, 255, 256, 65535, 65536, -1, -24, -25, -256]) {
@@ -189,4 +190,99 @@ test('refuses an all-zero RSA exponent', () => {
     [-2, Buffer.from([0x00])],
   ]));
   expect(() => coseToKey(cose)).toThrow(/cose:.*exponent/i);
+});
+
+const RP = 'tmux.example.com';
+const ORIGIN = `https://${RP}`;
+const originOk = makeOriginCheck(RP);
+const CHALLENGE = Buffer.alloc(32, 7);
+
+function verify(assertion, over = {}) {
+  const auth = over.authenticator ?? AUTH;
+  return verifyAssertion({
+    response: assertion.response,
+    expectedChallenge: over.expectedChallenge ?? CHALLENGE,
+    rpId: over.rpId ?? RP,
+    originOk: over.originOk ?? originOk,
+    publicKey: b64u(auth.cose),
+    storedSignCount: over.storedSignCount ?? 0,
+  });
+}
+
+const AUTH = makeAuthenticator();
+
+test('accepts a well-formed assertion and reports the new sign count', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, signCount: 4 });
+  expect(verify(a)).toEqual({ signCount: 4 });
+});
+
+test('rejects a challenge that does not match', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: Buffer.alloc(32, 9), origin: ORIGIN, rpId: RP });
+  expect(() => verify(a)).toThrow(/challenge/);
+});
+
+test('rejects an untrusted origin', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: 'https://evil.example.net', rpId: RP });
+  expect(() => verify(a)).toThrow(/origin/);
+});
+
+test('rejects authenticator data signed for a different rp id', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: 'other.example.com' });
+  expect(() => verify(a)).toThrow(/rp id/);
+});
+
+test('rejects a clientData type of webauthn.create on the login path', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  const cd = JSON.parse(Buffer.from(a.response.clientDataJSON, 'base64url').toString('utf8'));
+  cd.type = 'webauthn.create';
+  a.response.clientDataJSON = b64u(Buffer.from(JSON.stringify(cd), 'utf8'));
+  expect(() => verify(a)).toThrow(/clientData type/);
+});
+
+test('rejects a missing user-presence flag', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, flags: FLAG_UV });
+  expect(() => verify(a)).toThrow(/user presence/);
+});
+
+test('rejects a missing user-verification flag', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, flags: FLAG_UP });
+  expect(() => verify(a)).toThrow(/user verification/);
+});
+
+test('rejects a tampered signature', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, tamper: 'signature' });
+  expect(() => verify(a)).toThrow(/signature/);
+});
+
+test('rejects a signature made by a different key', () => {
+  const other = makeAuthenticator();
+  const a = makeAssertion({ authenticator: other, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  expect(() => verify(a)).toThrow(/signature/);
+});
+
+// A counter that fails to advance is the standard cloned-authenticator signal.
+test('rejects a sign count that did not increase', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, signCount: 3 });
+  expect(() => verify(a, { storedSignCount: 3 })).toThrow(/sign count/);
+});
+
+// Plenty of authenticators never increment; zero-to-zero must stay usable.
+test('accepts a sign count of zero when the stored count is also zero', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, signCount: 0 });
+  expect(verify(a, { storedSignCount: 0 })).toEqual({ signCount: 0 });
+});
+
+test('the origin check requires an exact hostname match and https', () => {
+  expect(originOk('https://tmux.example.com')).toBe(true);
+  expect(originOk('https://tmux.example.com:8443')).toBe(true);
+  expect(originOk('http://tmux.example.com')).toBe(false);
+  expect(originOk('https://evil.tmux.example.com')).toBe(false);
+  expect(originOk('https://tmux.example.com.evil.net')).toBe(false);
+  expect(originOk('not a url')).toBe(false);
+});
+
+test('the origin check allows plain http only for localhost', () => {
+  const local = makeOriginCheck('localhost');
+  expect(local('http://localhost:7437')).toBe(true);
+  expect(local('https://localhost')).toBe(true);
 });

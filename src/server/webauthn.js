@@ -5,7 +5,7 @@
 // CBOR appears ONLY in registration (the attestation object). The login
 // assertion path below touches none of it.
 
-import { createPublicKey } from 'node:crypto';
+import { createHash, createPublicKey, timingSafeEqual, verify as cryptoVerify } from 'node:crypto';
 
 // Only the subset authenticators actually emit: unsigned ints, negative ints,
 // byte strings, text strings, arrays, maps. Indefinite lengths, tags, floats
@@ -148,4 +148,66 @@ export function coseMapToKey(m) {
 
 export function coseToKey(bytes) {
   return coseMapToKey(cborDecodeFirst(bytes).value);
+}
+
+// The Relying Party id must equal the origin's hostname exactly — no wildcard
+// or registrable-suffix matching, which a single-user deployment never needs.
+// The port is ignored; the scheme is not.
+export function makeOriginCheck(rpId) {
+  const want = String(rpId).toLowerCase();
+  return (origin) => {
+    let u;
+    try { u = new URL(String(origin)); } catch { return false; }
+    const host = u.hostname.toLowerCase();
+    if (host !== want) return false;
+    return u.protocol === 'https:' || (u.protocol === 'http:' && host === 'localhost');
+  };
+}
+
+function parseAuthData(ad) {
+  if (!Buffer.isBuffer(ad) || ad.length < 37) throw new Error('authenticator data too short');
+  return { rpIdHash: ad.subarray(0, 32), flags: ad[32], signCount: ad.readUInt32BE(33), rest: ad.subarray(37) };
+}
+
+function assertChallenge(actual, expected) {
+  const a = Buffer.from(String(actual ?? ''), 'base64url');
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) throw new Error('challenge mismatch');
+}
+
+function checkClientData(clientDataJSON, { type, expectedChallenge, originOk }) {
+  const c = JSON.parse(clientDataJSON.toString('utf8'));
+  if (c.type !== type) throw new Error(`unexpected clientData type ${c.type}`);
+  assertChallenge(c.challenge, expectedChallenge);
+  if (!originOk(c.origin)) throw new Error(`untrusted origin ${c.origin}`);
+}
+
+function checkAuthData(ad, { rpId, requireAttested = false }) {
+  const parsed = parseAuthData(ad);
+  if (!parsed.rpIdHash.equals(createHash('sha256').update(rpId).digest())) throw new Error('rp id mismatch');
+  if (!(parsed.flags & 0x01)) throw new Error('user presence flag not set');
+  if (!(parsed.flags & 0x04)) throw new Error('user verification flag not set');
+  if (requireAttested && !(parsed.flags & 0x40)) throw new Error('no attested credential data');
+  return parsed;
+}
+
+function signatureValid(alg, key, data, sig) {
+  // Ed25519 signs the message directly; ES256/RS256 prehash with SHA-256. The
+  // ECDSA signature is DER-encoded, which is node's default dsaEncoding.
+  return cryptoVerify(alg === -8 ? null : 'sha256', data, key, sig);
+}
+
+export function verifyAssertion({ response, expectedChallenge, rpId, originOk, publicKey, storedSignCount = 0 }) {
+  const clientDataJSON = Buffer.from(String(response?.clientDataJSON ?? ''), 'base64url');
+  checkClientData(clientDataJSON, { type: 'webauthn.get', expectedChallenge, originOk });
+  const authData = Buffer.from(String(response?.authenticatorData ?? ''), 'base64url');
+  const { signCount } = checkAuthData(authData, { rpId });
+  const { alg, key } = coseToKey(Buffer.from(String(publicKey), 'base64url'));
+  const signed = Buffer.concat([authData, createHash('sha256').update(clientDataJSON).digest()]);
+  const sig = Buffer.from(String(response?.signature ?? ''), 'base64url');
+  if (!signatureValid(alg, key, signed, sig)) throw new Error('bad signature');
+  // A counter that fails to advance means the credential was cloned. A pair of
+  // zeroes is not a regression — many authenticators never implement it.
+  if (storedSignCount > 0 && signCount <= storedSignCount) throw new Error('sign count did not increase');
+  return { signCount };
 }
