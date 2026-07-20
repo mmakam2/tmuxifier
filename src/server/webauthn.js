@@ -180,11 +180,56 @@ function parseAuthData(ad) {
 // undecodable presented challenge.
 const MIN_CHALLENGE_BYTES = 16;
 
+// expectedChallenge must be the raw challenge bytes as a Buffer — the shape a
+// server-side challenge store hands back. Every other shape is rejected here
+// rather than guessed at, INCLUDING a base64url *string* (a plausible
+// session-storage form): silently reading a string as UTF-8 used to produce
+// a permanent, wrong-reason "challenge mismatch" (the decoded byte length
+// never matches) instead of a message pointing at the real problem — the
+// caller passed the wrong type. Buffer.from(x) itself throws a raw TypeError
+// for null/undefined/number/plain-object input before the friendly message
+// below ever runs — and null/undefined here is exactly the "expired or
+// missing session challenge" scenario called out below — so every
+// non-Buffer shape is folded into that same friendly "missing or too short"
+// message instead of letting node:crypto's bare TypeError escape first.
+function coerceChallengeBytes(expected) {
+  return Buffer.isBuffer(expected) ? expected : null;
+}
+
 function assertChallenge(actual, expected) {
   const a = Buffer.from(String(actual ?? ''), 'base64url');
-  const b = Buffer.from(expected);
-  if (b.length < MIN_CHALLENGE_BYTES) throw new Error('expected challenge missing or too short');
+  const b = coerceChallengeBytes(expected);
+  if (!b || b.length < MIN_CHALLENGE_BYTES) throw new Error('expected challenge missing or too short');
   if (a.length !== b.length || !timingSafeEqual(a, b)) throw new Error('challenge mismatch');
+}
+
+// Single choke point for interpolating attacker-controlled clientData fields
+// (type/origin) into a thrown message on this unauthenticated login path.
+// Three independent hardenings, applied in order:
+//   1. String(v) first, so a non-string value collapses to a short, fixed
+//      representation (e.g. `[object Object]`) instead of JSON.stringify
+//      recursively re-serializing an arbitrary attacker-controlled
+//      structure — an object-valued `origin` was observed to produce a
+//      10,319-character err.message this way (log amplification on this
+//      unauthenticated path).
+//   2. JSON.stringify the resulting string, which quotes it and escapes
+//      embedded quotes/backslashes/LF/CR/TAB — then additionally escape
+//      U+0085/U+2028/U+2029 as \uXXXX. JSON permits those three Unicode
+//      line-breaking code points verbatim inside a string, so
+//      JSON.stringify alone leaves them raw: a crafted value could still
+//      split the message across two lines under Unicode line-breaking in a
+//      terminal `tail -f` or a JS-based log viewer, even though \n/\r are
+//      already closed by step 2 itself.
+//   3. Truncate to a fixed bound, so no single field can blow up log size
+//      regardless of the above — String() alone doesn't fully bound an
+//      array (Array.prototype.toString joins elements rather than
+//      collapsing to a fixed placeholder), so truncation is the actual
+//      guarantee, not just a backstop for the plain-object case.
+const MAX_LOGGED_FIELD = 120;
+function sanitizeForLog(value) {
+  const s = JSON.stringify(String(value))
+    .replace(new RegExp(`[${String.fromCharCode(0x0085, 0x2028, 0x2029)}]`, 'g'), (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  return s.length > MAX_LOGGED_FIELD ? `${s.slice(0, MAX_LOGGED_FIELD)}…(truncated)` : s;
 }
 
 function checkClientData(clientDataJSON, { type, expectedChallenge, originOk }) {
@@ -197,13 +242,15 @@ function checkClientData(clientDataJSON, { type, expectedChallenge, originOk }) 
   if (c === null || typeof c !== 'object' || Array.isArray(c)) {
     throw new Error('malformed clientData: expected a JSON object');
   }
-  // JSON.stringify escapes newlines/quotes in these attacker-controlled fields
-  // before they ever reach a thrown message — interpolating them raw would let
-  // a crafted clientData value forge extra lines in whatever a caller logs
-  // this error to (e.g. `err.message`) on this unauthenticated login path.
-  if (c.type !== type) throw new Error(`unexpected clientData type ${JSON.stringify(c.type)}`);
+  if (c.type !== type) throw new Error(`unexpected clientData type ${sanitizeForLog(c.type)}`);
   assertChallenge(c.challenge, expectedChallenge);
-  if (!originOk(c.origin)) throw new Error(`untrusted origin ${JSON.stringify(c.origin)}`);
+  // A missing/non-function originOk is a caller wiring bug (e.g. an omitted
+  // dependency-injection argument), not attacker input — but failing closed
+  // here with a plain, greppable Error keeps this module's one-error-style
+  // convention instead of letting `originOk(c.origin)` below throw node's own
+  // bare `TypeError: originOk is not a function`.
+  if (typeof originOk !== 'function') throw new Error('originOk must be a function');
+  if (!originOk(c.origin)) throw new Error(`untrusted origin ${sanitizeForLog(c.origin)}`);
 }
 
 function checkAuthData(ad, { rpId, requireAttested = false }) {
@@ -244,7 +291,22 @@ export function verifyAssertion({ response, expectedChallenge, rpId, originOk, p
   // comparison: `null > 0` and `NaN > 0` are both false in JS, which would
   // otherwise disable the mandated cloned-authenticator check exactly as if
   // no count had ever been stored, letting a replayed (stalled) count through.
-  if (typeof storedSignCount !== 'number' || !Number.isInteger(storedSignCount) || storedSignCount < 0) {
+  //
+  // The upper bound guards a different failure mode: `signCount` above is
+  // read from authenticator data with `readUInt32BE`, so a genuine
+  // authenticator can never report more than 0xFFFFFFFF. A stored value
+  // above that ceiling (store corruption, or a future bug elsewhere) would
+  // otherwise make `signCount <= storedSignCount` true forever, permanently
+  // bricking the credential with "sign count did not increase" on every
+  // future login attempt — silently mislabeling store corruption as a
+  // cloned authenticator, exactly the failure mode this validation exists to
+  // avoid. Rejecting it here reports it as what it is instead.
+  if (
+    typeof storedSignCount !== 'number' ||
+    !Number.isInteger(storedSignCount) ||
+    storedSignCount < 0 ||
+    storedSignCount > 0xffffffff
+  ) {
     throw new Error('invalid stored sign count');
   }
   // A counter that fails to advance means the credential was cloned. A pair of

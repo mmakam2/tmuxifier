@@ -201,7 +201,11 @@ function verify(assertion, over = {}) {
   const auth = over.authenticator ?? AUTH;
   return verifyAssertion({
     response: assertion.response,
-    expectedChallenge: over.expectedChallenge ?? CHALLENGE,
+    // `??` would coalesce an explicitly-passed `null`/`undefined` right back
+    // to CHALLENGE, masking exactly the caller-shaped-expectedChallenge cases
+    // this file tests for. Default to CHALLENGE only when the caller omits
+    // the field entirely.
+    expectedChallenge: 'expectedChallenge' in over ? over.expectedChallenge : CHALLENGE,
     rpId: over.rpId ?? RP,
     originOk: over.originOk ?? originOk,
     publicKey: b64u(auth.cose),
@@ -239,9 +243,91 @@ test('rejects an expected challenge shorter than the minimum plausible length, e
   expect(() => verify(a, { expectedChallenge: shortChallenge })).toThrow(/challenge/);
 });
 
+// `expectedChallenge` normally arrives as a Buffer (what a session challenge
+// store would hand back), but a caller can pass this function anything —
+// most concretely, an expired/missing session challenge defaulting to
+// `null`/`undefined`. `Buffer.from(expected)` used to throw node's own raw
+// TypeError for these before the friendly "missing or too short" message
+// ever got a chance to run; each of the next four tests pins one
+// caller-shaped input to that same friendly message and a plain `Error`
+// constructor instead.
+test('rejects a null expected challenge with a plain Error, not a raw TypeError', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  let caught;
+  try { verify(a, { expectedChallenge: null }); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.constructor).toBe(Error);
+  expect(caught.message).toMatch(/challenge/);
+});
+
+test('rejects an undefined expected challenge with a plain Error, not a raw TypeError', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  let caught;
+  try { verify(a, { expectedChallenge: undefined }); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.constructor).toBe(Error);
+  expect(caught.message).toMatch(/challenge/);
+});
+
+test('rejects a numeric expected challenge with a plain Error, not a raw TypeError', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  let caught;
+  try { verify(a, { expectedChallenge: 42 }); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.constructor).toBe(Error);
+  expect(caught.message).toMatch(/challenge/);
+});
+
+test('rejects an object-valued expected challenge with a plain Error, not a raw TypeError', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  let caught;
+  try { verify(a, { expectedChallenge: {} }); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.constructor).toBe(Error);
+  expect(caught.message).toMatch(/challenge/);
+});
+
+// The accepted type for expectedChallenge is otherwise undocumented: a
+// base64url *string* (a plausible session-storage form) was silently read as
+// UTF-8 bytes, so it never matched the presented challenge — a permanent,
+// wrong-reason "challenge mismatch" instead of a message pointing at the
+// real problem (wrong type, not wrong bytes).
+test('rejects a base64url string expected challenge rather than silently misreading it as UTF-8', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  let caught;
+  try { verify(a, { expectedChallenge: CHALLENGE.toString('base64url') }); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.constructor).toBe(Error);
+  // Pinned to the specific "missing or too short" wording, not just any
+  // challenge-related message: reading the string as UTF-8 bytes (its old
+  // behavior) produces a *different* byte length than the real 32-byte
+  // challenge, which already throws a plain-Error "challenge mismatch" on
+  // its own — so a loose /challenge/ match would stay green even without
+  // this fix and prove nothing about the string case specifically.
+  expect(caught.message).toMatch(/missing or too short/);
+});
+
 test('rejects an untrusted origin', () => {
   const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: 'https://evil.example.net', rpId: RP });
   expect(() => verify(a)).toThrow(/origin/);
+});
+
+test('rejects a missing originOk with a plain Error, not a raw "is not a function" TypeError', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  let caught;
+  try {
+    verifyAssertion({
+      response: a.response,
+      expectedChallenge: CHALLENGE,
+      rpId: RP,
+      // originOk intentionally omitted — a caller wiring bug, not attacker input.
+      publicKey: b64u(AUTH.cose),
+      storedSignCount: 0,
+    });
+  } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.constructor).toBe(Error);
+  expect(caught.message).toMatch(/originOk/);
 });
 
 test('rejects authenticator data signed for a different rp id', () => {
@@ -308,6 +394,21 @@ test('rejects a clientData payload that is valid JSON but not an object, with a 
   expect(caught.constructor).toBe(Error);
 });
 
+// Arrays are `typeof 'object'` in JS, so the `null`/non-object guard above
+// does not by itself catch a JSON array payload — that is what the dedicated
+// Array.isArray branch is for. Pinned to its specific message so a
+// regression that dropped just that branch (falling through to whatever
+// `c.type`/`c.challenge` evaluate to on an array) doesn't go unnoticed.
+test('rejects a clientData payload that is a JSON array rather than an object, with a plain Error', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  a.response.clientDataJSON = b64u(Buffer.from('[]', 'utf8'));
+  let caught;
+  try { verify(a); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.constructor).toBe(Error);
+  expect(caught.message).toMatch(/expected a JSON object/);
+});
+
 // A crafted clientData field containing a real newline must not reach a
 // thrown message verbatim: a route that logs err.message would otherwise let
 // an unauthenticated caller forge extra log lines (log injection).
@@ -320,6 +421,12 @@ test('does not let an attacker-controlled clientData type inject a newline into 
   try { verify(a); } catch (err) { caught = err; }
   expect(caught).toBeInstanceOf(Error);
   expect(caught.message).not.toContain('\n');
+  // Pins this to the clientData-type check specifically — the plain string
+  // 'bad signature' (or any other generic error) would also satisfy the two
+  // assertions above, silently passing even if a regression dropped the
+  // interpolation entirely or moved signature verification ahead of the
+  // type/origin checks.
+  expect(caught.message).toMatch(/clientData type/);
 });
 
 test('does not let an attacker-controlled clientData origin inject a newline into the thrown message', () => {
@@ -331,6 +438,57 @@ test('does not let an attacker-controlled clientData origin inject a newline int
   try { verify(a); } catch (err) { caught = err; }
   expect(caught).toBeInstanceOf(Error);
   expect(caught.message).not.toContain('\n');
+  // Pins this to the origin check specifically, for the same reason as above.
+  expect(caught.message).toMatch(/untrusted origin/);
+});
+
+// JSON.stringify escapes LF/CR/TAB but leaves U+0085 (NEL), U+2028 (LINE
+// SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR) raw — JSON permits them
+// verbatim inside a string. journald and line-oriented file loggers only
+// break on LF, but a terminal `tail -f` or a JS-based log viewer still
+// breaks a line on these.
+test('does not let U+2028/U+2029/U+0085 line-separator characters survive raw in the thrown message', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  const cd = JSON.parse(Buffer.from(a.response.clientDataJSON, 'base64url').toString('utf8'));
+  cd.origin = `https://evil.example.net${String.fromCharCode(0x2028)}${String.fromCharCode(0x2029)}${String.fromCharCode(0x85)}INJECTED`;
+  a.response.clientDataJSON = b64u(Buffer.from(JSON.stringify(cd), 'utf8'));
+  let caught;
+  try { verify(a); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  // Built via fromCharCode/RegExp rather than a literal character class so
+  // this test file itself contains no raw line-separator bytes.
+  const lineBreakers = new RegExp(`[${String.fromCharCode(0x0085, 0x2028, 0x2029)}]`);
+  expect(caught.message).not.toMatch(lineBreakers);
+  expect(caught.message).toMatch(/untrusted origin/);
+});
+
+// An object-valued clientData field must not blow up the thrown message:
+// JSON.stringify would otherwise recursively re-serialize arbitrary
+// attacker-controlled structure (observed: a 10,319-character err.message
+// from an object-valued origin) — log amplification on the unauthenticated
+// login path.
+test('bounds the thrown message length when clientData origin is an object rather than a string', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  const cd = JSON.parse(Buffer.from(a.response.clientDataJSON, 'base64url').toString('utf8'));
+  cd.origin = { evil: 'x'.repeat(20000) };
+  a.response.clientDataJSON = b64u(Buffer.from(JSON.stringify(cd), 'utf8'));
+  let caught;
+  try { verify(a); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.message).toMatch(/untrusted origin/);
+  expect(caught.message.length).toBeLessThan(300);
+});
+
+test('bounds the thrown message length when clientData type is an object rather than a string', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  const cd = JSON.parse(Buffer.from(a.response.clientDataJSON, 'base64url').toString('utf8'));
+  cd.type = { evil: 'x'.repeat(20000) };
+  a.response.clientDataJSON = b64u(Buffer.from(JSON.stringify(cd), 'utf8'));
+  let caught;
+  try { verify(a); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.message).toMatch(/clientData type/);
+  expect(caught.message.length).toBeLessThan(300);
 });
 
 test('rejects a missing user-presence flag', () => {
@@ -380,6 +538,45 @@ test('rejects rather than silently disabling the counter check when the stored s
 test('accepts a sign count of zero when the stored count is also zero', () => {
   const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, signCount: 0 });
   expect(verify(a, { storedSignCount: 0 })).toEqual({ signCount: 0 });
+});
+
+// The stored-count validation's individual branches (typeof/Number.isInteger/
+// negative/upper-bound) are each pinned to the exact "invalid stored sign
+// count" message rather than a generic "sign count" substring — some of
+// these inputs also happen to trip the separate did-not-increase check below
+// (e.g. `'3' > 0` and `3 <= '3'` both coerce truthy in JS, so a non-numeric
+// string that skipped the type guard would still throw, just from the wrong
+// check for the wrong reason), so a loose match would not actually prove the
+// type guard fired.
+test('rejects a negative stored sign count', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, signCount: 3 });
+  expect(() => verify(a, { storedSignCount: -1 })).toThrow(/invalid stored sign count/);
+});
+
+test('rejects a non-numeric string stored sign count', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, signCount: 3 });
+  expect(() => verify(a, { storedSignCount: '3' })).toThrow(/invalid stored sign count/);
+});
+
+// `signCount` is read from authenticator data with `readUInt32BE`, so a real
+// authenticator can never report more than 0xFFFFFFFF. A stored value above
+// that ceiling would otherwise make `signCount <= storedSignCount` true
+// forever, permanently bricking the credential with "sign count did not
+// increase" on every future login — silently mislabeling store corruption as
+// a cloned authenticator, exactly the failure mode this validation exists to
+// avoid. Pinned to the specific "invalid stored sign count" message: both of
+// these inputs are large enough that the pre-fix did-not-increase check would
+// *also* throw (just for the wrong reason), so a generic /sign count/ match
+// alone would not catch a regression that dropped only the new upper-bound
+// guard.
+test('rejects a stored sign count above the uint32 max an authenticator counter can ever report', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, signCount: 3 });
+  expect(() => verify(a, { storedSignCount: 4294967296 })).toThrow(/invalid stored sign count/);
+});
+
+test('rejects Number.MAX_SAFE_INTEGER as a stored sign count', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, signCount: 3 });
+  expect(() => verify(a, { storedSignCount: Number.MAX_SAFE_INTEGER })).toThrow(/invalid stored sign count/);
 });
 
 test('the origin check requires an exact hostname match and https', () => {
