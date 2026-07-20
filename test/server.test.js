@@ -133,6 +133,23 @@ test('public responses include browser hardening headers', async () => {
   expect(res.headers['cache-control']).toBe('no-store');
 });
 
+// Pins script-src to 'self' with no 'blob:' widening. The voice-dictation
+// AudioWorklet was briefly loaded from a blob: URL, which required widening
+// script-src to 'self' blob: — a standing invitation for any future feature
+// that blobs semi-trusted text into a silent script-execution gadget.
+// The worklet now ships as a Vite-emitted same-origin asset instead (see
+// voiceRecorder.ts/voiceWorklet.js), so 'self' alone covers it. This test
+// guards against either the relaxation or its accidental reintroduction
+// landing unnoticed.
+test('CSP script-src stays self-only, with no blob: widening', async () => {
+  const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
+  const csp = res.headers['content-security-policy'];
+  expect(csp).toContain("script-src 'self'");
+  const scriptSrc = csp.split(';').find((d) => d.trim().startsWith('script-src'));
+  expect(scriptSrc.trim()).toBe("script-src 'self'");
+  expect(csp).not.toContain('blob:');
+});
+
 // permissions-policy's microphone token must track config.voiceEnabled: an
 // empty allowlist disables getUserMedia() for the top-level document itself
 // (not just embedded frames), so it would silently break voice dictation if it

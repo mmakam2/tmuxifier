@@ -3,19 +3,11 @@
 // so whisper receives its native format and no ffmpeg is needed server-side.
 
 import { encodeWav } from './wavEncode';
-
-// Inlined as a Blob URL rather than a separate asset: Vite would otherwise need
-// a worklet entry point, and the module is four lines.
-const WORKLET_SRC = `
-class Cap extends AudioWorkletProcessor {
-  process(inputs) {
-    const ch = inputs[0] && inputs[0][0];
-    if (ch && ch.length) this.port.postMessage(new Float32Array(ch));
-    return true;
-  }
-}
-registerProcessor('tmuxifier-capture', Cap);
-`;
+// `?url` makes Vite emit voiceWorklet.js as a real, content-hashed, same-origin
+// static asset rather than bundling it — addModule() needs a URL to fetch, and
+// this keeps that fetch same-origin so CSP's `script-src 'self'` covers it with
+// no `blob:` widening (see voiceWorklet.js and the CSP comment in server.js).
+import workletUrl from './voiceWorklet.js?url';
 
 export interface VoiceRecorder {
   start(): Promise<void>;
@@ -47,10 +39,10 @@ export function createVoiceRecorder(maxSeconds: number, onAutoStop: () => void):
       if (ctx) return;
       // getUserMedia() resolving makes the mic LIVE (the browser's recording
       // indicator lights up) before any of the AudioContext/AudioWorklet setup
-      // below runs. If any of that setup throws — addModule() over a blob: URL
-      // is the realistic failure, Safari has long-standing trouble with it —
-      // the mic must not stay live with no reference left to stop it, so any
-      // throw from here on tears everything down before rethrowing.
+      // below runs. If any of that setup throws — addModule() is the realistic
+      // failure point — the mic must not stay live with no reference left to
+      // stop it, so any throw from here on tears everything down before
+      // rethrowing.
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
@@ -58,12 +50,7 @@ export function createVoiceRecorder(maxSeconds: number, onAutoStop: () => void):
         ctx = new AudioContext();
         rate = ctx.sampleRate;   // device-dependent: commonly 48000, often 44100
         chunks = [];
-        const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'text/javascript' }));
-        try {
-          await ctx.audioWorklet.addModule(url);
-        } finally {
-          URL.revokeObjectURL(url);
-        }
+        await ctx.audioWorklet.addModule(workletUrl);
         node = new AudioWorkletNode(ctx, 'tmuxifier-capture');
         node.port.onmessage = (e: MessageEvent) => { chunks.push(e.data as Float32Array); };
         ctx.createMediaStreamSource(stream).connect(node);
