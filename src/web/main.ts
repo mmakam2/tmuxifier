@@ -19,7 +19,7 @@ import { pve } from './proxmox';
 import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createSetupOptionsForm } from './setupOptions';
-import { pk, getPasskey, serializeAssertion, hasWebAuthn } from './passkeys';
+import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
@@ -309,7 +309,18 @@ async function renderLogin() {
     if (info.passkey) passkey = info.passkey;
   } catch {}
   const err = readLoginError();
-  const canPasskey = passkey.enrolled > 0 && hasWebAuthn();
+  // "No usable passkey" has two triggers, not one: no WebAuthn support, and a
+  // mismatched origin (this hostname/protocol doesn't match the configured
+  // rpId). evaluateOrigin (passkeys.ts) is the single source of truth for
+  // both — the same helper settingsPasskeys.ts uses for the authenticated
+  // Settings tab. This screen is unauthenticated, so there is no stored rpId
+  // to compare against (that only comes from the authenticated
+  // GET /api/passkeys) — pass null, same as "nothing enrolled in this browser".
+  const verdict = evaluateOrigin({
+    rpId: passkey.rpId, storedRpId: null,
+    hostname: location.hostname, protocol: location.protocol, hasWebAuthn: hasWebAuthn(),
+  });
+  const canPasskey = passkey.enrolled > 0 && verdict.ok;
   const brand = `<div class="login-brand">
         <img class="login-logo" src="${logoUrl}" alt="" />
         <h1>tmuxifier</h1>
@@ -324,10 +335,18 @@ async function renderLogin() {
   if (passkey.only && !canPasskey) {
     app.innerHTML = `<div class="login">${brand}
         <p id="err" class="err">${err || 'This Tmuxifier requires a passkey, and this browser cannot use one.'}</p>
+        <p id="pk-reason" class="login-note"></p>
         <p class="login-note">Open Tmuxifier on the device holding your passkey, or set
           <code>TMUXIFIER_PASSKEY_ONLY=off</code> in <code>.env</code> and restart to sign in with a password.</p>
         ${footer}
       </div>`;
+    // verdict.reason/hint carry the server-supplied rpId, so they can never be
+    // interpolated into the innerHTML template above (a crafted rpId must not
+    // be able to inject markup). Query the empty placeholder and set
+    // textContent instead — the same pattern wirePasskeyButton below uses for
+    // the error text.
+    const reasonEl = app.querySelector('#pk-reason') as HTMLElement | null;
+    if (reasonEl) reasonEl.textContent = [verdict.reason, verdict.hint].filter(Boolean).join(' ');
     return;
   }
 

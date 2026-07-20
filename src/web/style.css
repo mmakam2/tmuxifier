@@ -117,15 +117,19 @@ body {
 .google-mark { width: 18px; height: 18px; flex: 0 0 auto; }
 .gbtn:hover { background: #f7f8f8; }
 /* Passkey sign-in: same footprint as the Google button so a login screen
-   offering both reads as one stack of equal options. */
-.pkbtn {
+   offering both reads as one stack of equal options.
+   Selector is `button.pkbtn`, not `.pkbtn`, on purpose: specificity (0,1,1)
+   ties the pre-existing `.login button` rule above (which paints the cyan/
+   green "Unlock" gradient) instead of losing to it outright at (0,1,0) — a
+   tie resolves to whichever rule is later in the file, which this is. */
+button.pkbtn {
   display: flex; align-items: center; justify-content: center; gap: .5rem;
   width: 100%; padding: .6rem 1rem; margin-top: .5rem;
   border: 1px solid var(--border, #3a3a3a); border-radius: 6px;
   background: transparent; color: inherit; font: inherit; cursor: pointer;
 }
-.pkbtn:hover:not(:disabled) { background: rgba(127, 127, 127, .12); }
-.pkbtn:disabled { opacity: .5; cursor: default; }
+button.pkbtn:hover:not(:disabled) { background: rgba(127, 127, 127, .12); }
+button.pkbtn:disabled { opacity: .5; cursor: default; }
 .login-note { font-size: .85em; opacity: .75; text-align: center; }
 .login-note code { font-family: ui-monospace, monospace; }
 .err { color: #f85149; min-height: 1em; text-align: center; }
