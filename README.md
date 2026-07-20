@@ -87,6 +87,12 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | path to TLS cert (PEM file) | `TMUXIFIER_TLS_CERT` | (none → serves HTTP) |
 | path to TLS key (PEM file) | `TMUXIFIER_TLS_KEY` | (none → serves HTTP) |
 | terminal upload size limit (MB) | `TMUXIFIER_UPLOAD_MAX_MB` | `25` |
+| whisper.cpp server binary path | `TMUXIFIER_WHISPER_BIN` | (none → voice disabled) |
+| whisper speech model path | `TMUXIFIER_WHISPER_MODEL` | (none → voice disabled) |
+| voice dictation kill switch | `TMUXIFIER_VOICE` | (unset) |
+| whisper idle shutdown (ms) | `TMUXIFIER_VOICE_IDLE_MS` | `600000` |
+| voice upload size limit (MB) | `TMUXIFIER_VOICE_MAX_MB` | `8` |
+| voice dictation max length (s) | `TMUXIFIER_VOICE_MAX_SECONDS` | `120` |
 
 Set **both** `TMUXIFIER_TLS_CERT` and `TMUXIFIER_TLS_KEY` to serve HTTPS directly; when TLS is active
 the session cookie is automatically marked `Secure`. An `https://` `TMUXIFIER_BASE_EXTERNAL_URL`

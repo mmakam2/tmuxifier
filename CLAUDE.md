@@ -29,6 +29,9 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   credentials, the pinned relying party id, and the passkey-only flag — public keys only, so
   unlike `proxmox.json`/`netbox.json` nothing in it is encrypted, though it's still written
   `0o600`), and SSH ControlMaster sockets under `data/cm/`.
+- `vendor/` (gitignored) — the whisper.cpp checkout, its build output, and the downloaded speech
+  model, all created by `npm run setup-voice`. Together they take up roughly 1.2 GB;
+  `rm -rf vendor/whisper` reclaims it.
 
 When adding a new config knob or persisted file, keep it under the repo folder by default.
 Don't introduce dependencies on `$HOME`-level state other than the user's existing SSH setup.
@@ -52,6 +55,7 @@ npm run dev          # vite + node --watch, proxies /api and /term to the backen
 npm run typecheck    # tsc --noEmit over src/web (the TS client; vite/vitest strip types unchecked)
 npm test             # typecheck + vitest run (unit + integration)
 npm run test:e2e     # playwright (spins up a local sshd-backed box; see test/helpers)
+npm run setup-voice  # builds whisper.cpp + downloads a pinned model into vendor/; writes .env
 ```
 
 ## Configuration model
@@ -306,11 +310,21 @@ Passkeys render as the same reason/hint text), and `dom.ts` (shared DOM builders
 — the one modal scaffold with backdrop-click guard and Escape-to-close — and `makeRadio`, used
 across the settings modal, the hub, and the main.ts dialogs),
 `clipboard.ts`, `upload.ts` (pure paste/drop upload helpers: DataTransfer extraction, pasted-image
-naming, size check), and `termFont.ts` (pure builder for the xterm
+naming, size check), `termFont.ts` (pure builder for the xterm
 font stack — prepends `TMUXIFIER_TERM_FONT` onto the bundled stack (MesloLGMDZ Nerd Font default,
 then MesloLGSDZ + JuliaMono fallback); the server
 validates the name in `config.js` and serves it via `GET /api/ui-config`, which `main.ts` applies
-at boot before any terminal opens).
+at boot before any terminal opens), `wavEncode.ts` (pure Float32-to-16kHz-mono-16-bit-PCM WAV
+encoder — the reason the project needs no ffmpeg dependency: whisper.cpp wants exactly that
+format, and the browser's MediaRecorder would have emitted webm/opus requiring server-side
+decoding; the input sample rate is a parameter, not an assumption, since `AudioContext.sampleRate`
+is device-dependent — commonly 48000, often 44100), `voiceRecorder.ts` (microphone capture via
+`getUserMedia` and an AudioWorklet, producing WAV bytes), `voiceUi.ts` (the readiness verdict
+`evaluateVoice` — ordered browser-support then secure-context then server-enablement, the same
+shape as `passkeys.ts`'s `evaluateOrigin` — the hotkey predicates, the mic button, and the
+controller), and `voiceWorklet.js` (the AudioWorklet processor, shipped as a real Vite-emitted
+static asset rather than a blob: URL, specifically so the Content-Security-Policy can stay
+`script-src 'self'`).
 
 ## Conventions
 
