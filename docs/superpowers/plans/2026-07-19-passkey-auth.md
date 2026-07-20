@@ -2400,7 +2400,7 @@ export async function renderPasskeysSection(content: HTMLElement): Promise<void>
       el('div', { class: 'pve-sub' }, [`added ${when(c.created)} · last used ${when(c.lastUsed)}${c.transports.length ? ` · ${c.transports.join(', ')}` : ''}`]),
     ]),
     el('button', {
-      type: 'button', class: 'pve-danger',
+      type: 'button', class: 'danger',
       onclick: () => confirmRemove(c.id, c.label, state, reload, fail),
     }, ['Remove']),
   ]));
@@ -2473,7 +2473,7 @@ function addPasskey(reload: () => void): void {
     el('label', { class: 'field' }, [el('span', {}, ['Name']), nameField]),
     el('p', { class: 'pve-sub' }, ['Your browser will ask you to confirm with your fingerprint, face, PIN or security key.']),
     errLine,
-    el('div', { class: 'pve-actions' }, [el('button', { type: 'button', onclick: close }, ['Cancel']), save]),
+    el('div', { class: 'modal-actions' }, [el('button', { type: 'button', onclick: close }, ['Cancel']), save]),
   );
   nameField.focus();
 }
@@ -2488,10 +2488,10 @@ function confirmRemove(id: string, label: string, state: PasskeyState, reload: (
     ...(last && state.passkeyOnly
       ? [el('p', { class: 'pve-sub' }, ['This is the last passkey, so “require a passkey” will be turned off and password sign-in re-enabled.'])]
       : []),
-    el('div', { class: 'pve-actions' }, [
+    el('div', { class: 'modal-actions' }, [
       el('button', { type: 'button', onclick: close }, ['Cancel']),
       el('button', {
-        type: 'button', class: 'pve-danger',
+        type: 'button', class: 'danger',
         onclick: () => { close(); void pk.remove(id).then(reload).catch(fail); },
       }, ['Remove']),
     ]),
@@ -2509,7 +2509,7 @@ function confirmArm(onConfirm: () => void, onCancel: () => void): void {
     el('h2', {}, ['Require a passkey?']),
     el('p', {}, ['Password and Google sign-in will be refused. Only an enrolled passkey will get you in.']),
     el('p', { class: 'pve-sub' }, ['If you lose your authenticator: set TMUXIFIER_PASSKEY_ONLY=off in .env and restart Tmuxifier.']),
-    el('div', { class: 'pve-actions' }, [
+    el('div', { class: 'modal-actions' }, [
       el('button', { type: 'button', onclick: close }, ['Cancel']),
       el('button', {
         type: 'button', class: 'pve-primary',
