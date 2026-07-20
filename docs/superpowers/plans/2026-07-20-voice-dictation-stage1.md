@@ -333,7 +333,9 @@ git commit -m "feat(voice): pinned model catalog with verified checksums"
 
 **Interfaces:**
 - Consumes: `classifyPaneState`, `buildSendKeysRemote`, `buildDisplayMessageRemote` from Task 0 (existing code).
-- Produces: `injectTextVia(runScript, session, text, { label }) => {injected, mode}`; `boxActions.injectText(box, session, text, {timeoutMs}) => {injected, mode}`. `injectVia(runScript, session, remotePath)` keeps its exact current signature and behaviour.
+- Produces: `injectTextVia(runScript, session, text, { label, okMsg, busyMsg }) => {injected, mode}` — `label` drives the default messages for the common case; `okMsg`/`busyMsg` are optional builders that override them, which is how `injectVia` keeps the upload wording. Also `boxActions.injectText(box, session, text, {timeoutMs}) => {injected, mode}`; `boxActions.injectText(box, session, text, {timeoutMs}) => {injected, mode}`. `injectVia(runScript, session, remotePath)` keeps its exact current signature and observable behaviour, but becomes a thin wrapper.
+
+**There must be exactly one copy of the capture → classify → send-keys body.** `injectVia` delegates to `injectTextVia`, supplying its own message builders so the upload wording is preserved byte-for-byte. Do not duplicate the orchestration.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -375,6 +377,30 @@ test('injectTextVia never types empty text', async () => {
   expect(calls.some((c) => c.includes('send-keys'))).toBe(false);
 });
 
+test('injectVia keeps its original upload wording after delegation', async () => {
+  // Locks the refactor: injectVia now delegates to injectTextVia, so the
+  // upload-specific message text must be asserted explicitly rather than
+  // assumed to have survived.
+  const calls = [];
+  const run = async (script) => {
+    calls.push(script);
+    if (script.includes('capture-pane')) return { code: 0, stdout: 'bash\n$ ' };
+    return { code: 0, stdout: '' };
+  };
+  await injectVia(run, 'web', '/root/.tmuxifier-uploads/1-aa-shot.png');
+  expect(calls.find((c) => c.includes('display-message'))).toContain('image pasted: 1-aa-shot.png');
+
+  const busy = [];
+  const runBusy = async (script) => {
+    busy.push(script);
+    if (script.includes('capture-pane')) return { code: 0, stdout: 'make\n' };
+    return { code: 0, stdout: '' };
+  };
+  await injectVia(runBusy, 'web', '/x/y.png');
+  expect(busy.find((c) => c.includes('display-message')))
+    .toContain('image uploaded: /x/y.png (pane busy — not typed)');
+});
+
 test('injectTextVia sh-quotes text containing quotes and semicolons', async () => {
   const calls = [];
   const run = async (script) => {
@@ -409,10 +435,18 @@ In `src/server/tmuxInject.js`, replace the existing `injectVia` (lines 122-140) 
 // `text` is typed literally via send-keys -l and is never followed by Enter:
 // the operator reviews before submitting. `label` only names the thing in tmux
 // status messages ('image', 'dictation').
-export async function injectTextVia(runScript, session, text, { label = 'text' } = {}) {
+// `text` is typed literally via send-keys -l and is never followed by Enter:
+// the operator reviews before submitting. `label` names the thing in the
+// default tmux status messages ('image', 'dictation'); okMsg/busyMsg override
+// those entirely, which is how the upload wrapper below keeps its original
+// wording without a second copy of this body.
+export async function injectTextVia(runScript, session, text, { label = 'text', okMsg, busyMsg } = {}) {
   const body = String(text ?? '');
   // Nothing to type is not a failure — and must not produce a bare send-keys.
   if (!body.trim()) return { injected: false, mode: 'empty' };
+  const onOk = okMsg || (() => `[tmuxifier] ${label} inserted`);
+  const onBusy = busyMsg || (() => `[tmuxifier] ${label} ready (pane busy — not typed)`);
+  const say = async (msg) => { try { await runScript(buildDisplayMessageRemote(session, msg)); } catch {} };
   let mode = 'busy';
   try {
     const cap = await runScript(buildPaneStateRemote(session));
@@ -420,40 +454,30 @@ export async function injectTextVia(runScript, session, text, { label = 'text' }
     if (mode === 'claude' || mode === 'shell') {
       const sent = await runScript(buildSendKeysRemote(session, body));
       if (!sent || sent.code !== 0) throw new Error('send-keys failed');
-      try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] ${label} inserted`)); } catch {}
+      await say(onOk());
       return { injected: true, mode };
     }
-    try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] ${label} ready (pane busy — not typed)`)); } catch {}
+    await say(onBusy());
     return { injected: false, mode: 'busy' };
   } catch {
-    try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] ${label} ready (pane busy — not typed)`)); } catch {}
+    await say(onBusy());
     return { injected: false, mode: 'error' };
   }
 }
 
-// Upload-specific wrapper: quotes the path and keeps the original wording of
-// the tmux status messages, so the upload flow's observable behaviour is
-// unchanged by the generalization above.
-export async function injectVia(runScript, session, remotePath) {
+// Upload-specific wrapper. It quotes the path and supplies the original tmux
+// status wording, so the upload flow's observable behaviour is unchanged —
+// while the capture/classify/send-keys body exists exactly once, above.
+export function injectVia(runScript, session, remotePath) {
   const name = String(remotePath).split('/').pop() || String(remotePath);
-  let mode = 'busy';
-  try {
-    const cap = await runScript(buildPaneStateRemote(session));
-    mode = cap && cap.code === 0 ? classifyPaneState(parsePaneState(cap.stdout)) : 'busy';
-    if (mode === 'claude' || mode === 'shell') {
-      const sent = await runScript(buildSendKeysRemote(session, injectionText(remotePath)));
-      if (!sent || sent.code !== 0) throw new Error('send-keys failed');
-      try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] image pasted: ${name}`)); } catch {}
-      return { injected: true, mode };
-    }
-    try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] image uploaded: ${remotePath} (pane busy — not typed)`)); } catch {}
-    return { injected: false, mode: 'busy' };
-  } catch {
-    try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] image uploaded: ${remotePath} (pane busy — not typed)`)); } catch {}
-    return { injected: false, mode: 'error' };
-  }
+  return injectTextVia(runScript, session, injectionText(remotePath), {
+    okMsg: () => `[tmuxifier] image pasted: ${name}`,
+    busyMsg: () => `[tmuxifier] image uploaded: ${remotePath} (pane busy — not typed)`,
+  });
 }
 ```
+
+**One behavioural difference to verify, not assume:** `injectTextVia` returns `{injected:false, mode:'empty'}` for blank input, whereas the old `injectVia` would have proceeded. `injectionText(path)` appends a trailing space and always contains the quoted path, so it is never blank for any real path — but confirm the existing upload tests still pass rather than reasoning it through. If any upload test now fails, the wrapper is wrong; fix the wrapper, never the test.
 
 Then add the text-injection sibling to `src/server/boxActions.js`, immediately after `injectUploadPath` (line 474). Add `injectTextVia` to the existing `tmuxInject.js` import at the top of the file:
 
