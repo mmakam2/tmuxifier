@@ -1,6 +1,7 @@
 import { test, expect, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
+import net from 'node:net';
 import { spawn as spawnRealProcess } from 'node:child_process';
 import { createVoiceEngine } from '../src/server/voiceEngine.js';
 
@@ -93,9 +94,24 @@ function fakeSpawnNeverReady() {
   return fn;
 }
 
-// Ephemeral ports, allocated per engine so parallel tests never collide.
-let nextPort = 39000;
-const pickPort = async () => nextPort++;
+// Genuinely ephemeral ports: bind :0, read what the OS assigned, release it.
+// A fixed counter (this was `let nextPort = 39000`) only avoids collisions
+// WITHIN one process — two concurrent vitest runs, or a socket from a previous
+// run not yet fully released, both land on the same base and fail the suite
+// with EADDRINUSE. That surfaced as an intermittent failure on the very first
+// test. Asking the OS is the same approach voiceEngine.js's own default
+// pickPort uses, and it cannot collide.
+async function freePort() {
+  const srv = net.createServer();
+  await new Promise((resolve, reject) => {
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = srv.address();
+  await new Promise((resolve) => srv.close(resolve));
+  return port;
+}
+const pickPort = freePort;
 
 const WAV = Buffer.from('RIFF....WAVEfmt ');
 
@@ -266,7 +282,7 @@ test('an inference that never responds rejects in bounded time and the next requ
 // only two requests rather than the ~160 real production would take before
 // wedging -- "shrink the volume ... by writing a larger chunk per request."
 test('drains real child stdio so large per-request writes cannot wedge the child', async () => {
-  const port = nextPort++;
+  const port = await freePort();
   const chunkBytes = 200 * 1024; // well past the 64 KiB pipe buffer in one write
   const script = [
     "const http = require('http');",
