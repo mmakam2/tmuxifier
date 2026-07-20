@@ -38,24 +38,27 @@ export function evaluateOrigin(
   { rpId: string | null; storedRpId: string | null; hostname: string; protocol: string; hasWebAuthn: boolean },
 ): OriginVerdict {
   const host = hostname.toLowerCase();
+  const normalizedRpId = rpId ? rpId.toLowerCase() : null;
+  const normalizedStoredRpId = storedRpId ? storedRpId.toLowerCase() : null;
+
   if (!hasWebAuthn) {
     return { ok: false, reason: 'This browser does not support passkeys.', hint: 'Use a current version of Chrome, Safari, Firefox or Edge.' };
   }
-  if (!rpId) {
+  if (!normalizedRpId) {
     return {
       ok: false,
       reason: 'Passkeys need a domain name, and this server is reached by IP address.',
       hint: 'Set TMUXIFIER_RP_ID in .env (or point TMUXIFIER_BASE_EXTERNAL_URL at a hostname) and restart.',
     };
   }
-  if (storedRpId && storedRpId !== rpId) {
+  if (normalizedStoredRpId && normalizedStoredRpId !== normalizedRpId) {
     return {
       ok: false,
       reason: `The enrolled passkeys belong to ${storedRpId}, but this server is configured for ${rpId}.`,
       hint: `Reach Tmuxifier at ${storedRpId}, or remove every passkey here and enroll again.`,
     };
   }
-  if (host !== rpId) {
+  if (host !== normalizedRpId) {
     return { ok: false, reason: `Passkeys are bound to ${rpId}, but you are on ${hostname}.`, hint: `Open Tmuxifier at https://${rpId}.` };
   }
   if (protocol !== 'https:' && host !== 'localhost') {
@@ -136,11 +139,33 @@ async function jr<T>(p: Promise<Response>): Promise<T> {
 }
 const jsonBody = (method: string, v: unknown) => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(v) });
 
+interface SerializedRegistration {
+  id: string;
+  type: string;
+  response: {
+    clientDataJSON: string;
+    attestationObject: string;
+    transports: string[];
+  };
+}
+
+interface SerializedAssertion {
+  id: string;
+  type: string;
+  response: {
+    clientDataJSON: string;
+    authenticatorData: string;
+    signature: string;
+    userHandle: string | null;
+  };
+}
+
 export const pk = {
   state() { return jr<PasskeyState>(fetch('/api/passkeys')); },
   registerBegin() { return jr<CreationOptionsJson>(fetch('/api/passkeys/register/begin', { method: 'POST' })); },
-  registerFinish(label: string, response: unknown) {
-    return jr<{ credential: PasskeyCredential }>(fetch('/api/passkeys/register/finish', jsonBody('POST', { label, response })));
+  /** registerFinish accepts the full serialized credential from serializeRegistration and sends it to the server. */
+  registerFinish(label: string, credential: SerializedRegistration) {
+    return jr<{ credential: PasskeyCredential }>(fetch('/api/passkeys/register/finish', jsonBody('POST', { label, response: credential.response })));
   },
   remove(id: string) { return jr<{ ok: boolean; disarmed: boolean }>(fetch(`/api/passkeys/${encodeURIComponent(id)}`, { method: 'DELETE' })); },
   setOnly(enabled: boolean) { return jr<{ passkeyOnly: boolean }>(fetch('/api/passkeys/only', jsonBody('POST', { enabled }))); },
@@ -148,7 +173,8 @@ export const pk = {
     return jr<{ challenge: string; rpId: string; timeout: number; userVerification: string }>(
       fetch('/api/auth/passkey/login/begin', { method: 'POST' }));
   },
-  loginFinish(assertion: unknown) { return jr<{ ok: boolean }>(fetch('/api/auth/passkey/login/finish', jsonBody('POST', assertion))); },
+  /** loginFinish accepts the full serialized assertion from serializeAssertion and sends it to the server. */
+  loginFinish(assertion: SerializedAssertion) { return jr<{ ok: boolean }>(fetch('/api/auth/passkey/login/finish', jsonBody('POST', assertion))); },
 };
 
 // Thin wrappers so callers never touch navigator.credentials directly.
