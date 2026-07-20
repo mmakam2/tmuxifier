@@ -125,6 +125,17 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   const pkLoginChallenges = passkeyChallenges ?? createPasskeyChallenges({ ttlMs: PK_TTL_SECONDS * 1000 });
   const challengeStoreFor = (kind) => (kind === 'auth' ? pkLoginChallenges : pkChallenges);
 
+  // Whether the configured rpId could ever complete a passkey login right
+  // now: a real domain name is set, AND (nothing is pinned yet OR the pin
+  // matches it). pkReady() below layers store-existence and per-route status
+  // codes/messages on top of this same test for the login/enroll routes; the
+  // arming guard in POST /api/passkeys/only reuses it unchanged so both
+  // places agree on what "usable" means — arming while this is false would
+  // strand the operator with zero working logins.
+  function rpIdCurrentlyUsable(pinnedRpId) {
+    return !!rpId && (!pinnedRpId || pinnedRpId === rpId);
+  }
+
   // Replies with the reason and returns false when passkeys cannot be used.
   // exposeStoredRpId gates the specific 409 message naming the previously
   // pinned hostname: fine on the authenticated enroll routes (operationally
@@ -141,7 +152,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       return false;
     }
     const pinned = await passkeyStore.getRpId();
-    if (pinned && pinned !== rpId) {
+    if (!rpIdCurrentlyUsable(pinned)) {
       reply.code(409).send(
         exposeStoredRpId
           ? { error: `these passkeys were enrolled for ${pinned}, but this server is configured for ${rpId}` }
@@ -184,12 +195,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   }
 
   // The fresh-per-request snapshot fetch that feeds passkeyOnlyArmed() above,
-  // factored out once so the login gate and both Google routes below share
-  // one fail-open implementation instead of three separately hand-written
-  // try/catch copies — a lockout-adjacent gate is exactly the wrong place for
-  // three chances to typo the failure behavior. Mirrors /api/auth/info's own
-  // inline fetch: a store read error degrades to "not armed" (fail open),
-  // never to a 500 or an unhandled rejection.
+  // factored out once so the login gate, both Google routes below, and
+  // GET /api/auth/info share one fail-open implementation instead of four
+  // separately hand-written try/catch copies — a lockout-adjacent gate is
+  // exactly the wrong place for four chances to typo the failure behavior.
+  // A store read error degrades to "not armed" / "no credentials" (fail
+  // open), never to a 500 or an unhandled rejection.
   async function passkeySnapshot() {
     if (!passkeyStore) return null;
     try { return await passkeyStore.snapshot(); } catch { return null; }
@@ -260,8 +271,36 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (config.passkeyOnlyKillSwitch) {
       return reply.code(409).send({ error: 'TMUXIFIER_PASSKEY_ONLY=off is set in .env — remove it and restart before arming this' });
     }
+    // Require an explicit boolean: a missing/malformed body must not be
+    // silently interpreted as `enabled: false` and disarm a security control
+    // that forgot its payload.
+    const enabled = req.body?.enabled;
+    if (enabled !== true && enabled !== false) {
+      return reply.code(400).send({ error: 'enabled must be true or false' });
+    }
+    // Arming only — disarming is the recovery path and must stay
+    // unconditional, so this guard is skipped entirely when enabled is false.
+    // A credential *count* is not the same as a *usable* login: reuse the
+    // same rpId conditions pkReady() already checks for the login/enroll
+    // routes, so arming refuses (409) instead of succeeding into a state
+    // where every enrolled passkey is unverifiable (rpId changed since
+    // enrollment, or never configured at all).
+    if (enabled) {
+      const pinned = await passkeyStore.getRpId();
+      if (!rpIdCurrentlyUsable(pinned)) {
+        return reply.code(409).send({
+          error: !rpId
+            ? 'passkeys need a domain name — set TMUXIFIER_RP_ID (or TMUXIFIER_BASE_EXTERNAL_URL) before requiring passkey sign-in'
+            : `these passkeys were enrolled for ${pinned}, but this server is configured for ${rpId} — fix the configuration before requiring passkey sign-in`,
+        });
+      }
+    }
     try {
-      return { passkeyOnly: await passkeyStore.setPasskeyOnly(req.body?.enabled === true) };
+      const result = await passkeyStore.setPasskeyOnly(enabled);
+      // The fleet's most consequential auth setting just flipped — worth an
+      // audit line. No attacker-controlled text: this is a fixed string.
+      log(`[tmuxifier] passkey-only mode ${result ? 'armed' : 'disarmed'}`);
+      return { passkeyOnly: result };
     } catch (e) {
       return reply.code(409).send({ error: e.message });
     }
@@ -406,13 +445,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   }
 
   app.get('/api/auth/info', async () => {
-    // One snapshot serves both fields below instead of each doing its own
-    // disk read + JSON parse — see passkeyStore.js's snapshot(). A read
+    // Same fetch-and-fail-open logic as the login gate and Google routes
+    // below, via the shared passkeySnapshot() helper (see its comment) — one
+    // disk read + JSON parse instead of a hand-rolled second copy. A read
     // failure degrades to "no passkeys" rather than 500ing the login page.
-    let pk = null;
-    if (passkeyStore) {
-      try { pk = await passkeyStore.snapshot(); } catch { pk = null; }
-    }
+    const pk = await passkeySnapshot();
     return {
       mode: config.authMode === 'google' ? 'google' : 'password',
       // Unauthenticated on purpose: the login screen needs to know whether to

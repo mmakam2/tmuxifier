@@ -425,3 +425,103 @@ test('an out-of-range stored sign count is rejected without the cloned-authentic
   expect(res.json()).toEqual({ error: 'passkey verification failed' });
   expect(logs.some((m) => /cloned authenticator/.test(m))).toBe(false);
 });
+
+// --- Fix pass: review findings on POST /api/passkeys/only ---
+
+// Finding 1: arming checked credential *count* only, never whether the
+// enrolled credentials are actually *usable* (rpId configured, and matching
+// what's pinned in the store) — the exact conditions pkReady() already
+// checks for the login/enroll routes. Both of the scenarios below were
+// confirmed to arm successfully (200) and lock the dashboard out on the spot
+// before this fix; login/begin already answers 409/503 one request earlier,
+// proving the server has everything it needs to refuse the arm instead.
+test('arming is refused when the pinned rpId no longer matches the configured one (would otherwise lock out immediately)', async () => {
+  await enroll(); // pins the store to RP
+  const h = await headers(); // session cookie minted while still unarmed
+  app = await build({ rpId: 'changed.example.com' });
+  // Passkey login is already unusable at this configuration — same 409 the
+  // enroll routes report — so arming here would strand the operator.
+  const loginBegin = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  expect(loginBegin.statusCode).toBe(409);
+
+  const res = await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: true } });
+  expect(res.statusCode).toBe(409);
+  expect(res.json().error).toMatch(/enrolled for/);
+  expect(await passkeyStore.getPasskeyOnly()).toBe(false);
+
+  // Password login must still work — arming was refused, not merely mis-reported.
+  expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(200);
+});
+
+test('arming is refused when rpId is unset (an IP-addressed deployment, would otherwise lock out immediately)', async () => {
+  await enroll();
+  const h = await headers();
+  app = await build({ rpId: null });
+  const loginBegin = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  expect(loginBegin.statusCode).toBe(503);
+
+  const res = await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: true } });
+  expect(res.statusCode).toBe(409);
+  expect(res.json().error).toMatch(/domain name/);
+  expect(await passkeyStore.getPasskeyOnly()).toBe(false);
+
+  expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(200);
+});
+
+// Disarming is the recovery path and must keep working in exactly the broken
+// states above — the new guard only runs when enabled === true. Simulates
+// "was armed while rpId was fine, then the configuration/DNS changed
+// underneath it" by arming directly on the store (bypassing the route),
+// which is the only way to reach an armed+mismatched state now that arming
+// itself refuses to create one.
+test('disarming still works when the pinned rpId no longer matches the configured one', async () => {
+  await enroll();
+  const h = await headers(); // minted while still unarmed
+  await passkeyStore.setPasskeyOnly(true);
+  app = await build({ rpId: 'changed.example.com' });
+  const res = await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: false } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ passkeyOnly: false });
+});
+
+// Finding 2: a bodyless or malformed request must not be treated as an
+// implicit disarm — require an explicit boolean.
+test('POST /api/passkeys/only rejects a missing or non-boolean enabled with 400, and never disarms', async () => {
+  await enroll();
+  const h = await headers();
+  expect((await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: true } })).json())
+    .toEqual({ passkeyOnly: true });
+  const badBodies = [undefined, {}, [], { enabled: 'true' }, { enabled: 1 }, { enabled: null }];
+  for (const payload of badBodies) {
+    const res = payload === undefined
+      ? await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h })
+      : await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload });
+    expect(res.statusCode).toBe(400);
+  }
+  // None of the malformed attempts above disarmed the flag.
+  expect(await passkeyStore.getPasskeyOnly()).toBe(true);
+});
+
+// Finding 3: /api/auth/info now calls the shared passkeySnapshot() helper
+// instead of hand-rolling its own copy — must behave identically, including
+// on a broken store (fail open to "no passkeys", never a 500).
+test('auth/info still fails open when the passkey store cannot be read', async () => {
+  const brokenStore = { snapshot: async () => { throw new Error('disk error'); } };
+  app = await build({}, { passkeyStore: brokenStore });
+  const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ mode: 'password', passkey: { enrolled: 0, rpId: RP, only: false } });
+});
+
+// Finding 4: arming/disarming is the fleet's most consequential auth
+// setting and must leave an audit trail.
+test('arming and disarming passkey-only each write one audit log line', async () => {
+  const logs = [];
+  app = await build({}, { log: (msg) => logs.push(msg) });
+  await enroll();
+  const h = await headers();
+  await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: true } });
+  await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: false } });
+  expect(logs).toContain('[tmuxifier] passkey-only mode armed');
+  expect(logs).toContain('[tmuxifier] passkey-only mode disarmed');
+});
