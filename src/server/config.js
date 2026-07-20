@@ -207,6 +207,24 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   merged.voiceMaxBytes = merged.voiceMaxMb * 1024 * 1024;
   merged.voiceMaxSeconds = clampInt(merged.voiceMaxSeconds, 5, 600, DEFAULTS.voiceMaxSeconds);
   merged.voiceIdleMs = clampInt(merged.voiceIdleMs, 30000, 3600000, DEFAULTS.voiceIdleMs);
+  // whisperBin/whisperModel can arrive via config.json/overrides as well as
+  // env, so trim and treat a whitespace-only value as unset here rather than
+  // only in envCfg (mirrors claudeOauthToken's trim-and-treat-empty-as-unset
+  // above) — otherwise "   " is truthy and voiceEnabled reports an unusable path.
+  merged.whisperBin = String(merged.whisperBin ?? '').trim() || undefined;
+  merged.whisperModel = String(merged.whisperModel ?? '').trim() || undefined;
+  // voiceOff is the TMUXIFIER_VOICE=off hard kill switch. config.json (a
+  // documented camelCase alternative to .env) and the overrides argument pass
+  // values through raw, so this can already be a real boolean rather than a
+  // string — the envCfg mapping above only normalizes the .env/shell-env string
+  // form, so a string like "off" arriving via config.json/overrides bypassed
+  // that regex entirely and `merged.voiceOff !== true` below saw "off" !== true
+  // and never engaged. Same shape as passkeyOnlyKillSwitch's boolean-vs-string
+  // handling: a real boolean is passed through unchanged; only a non-boolean
+  // goes through the string-form parse.
+  merged.voiceOff = typeof merged.voiceOff === 'boolean'
+    ? merged.voiceOff
+    : /^(off|0|false|no)$/i.test(String(merged.voiceOff ?? '').trim());
   // Requires both halves: a binary with no model (or the reverse) cannot
   // transcribe, and advertising voice to the client would only produce 503s.
   merged.voiceEnabled = Boolean(merged.whisperBin && merged.whisperModel) && merged.voiceOff !== true;

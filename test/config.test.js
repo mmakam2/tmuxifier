@@ -507,3 +507,71 @@ test('voice limits are clamped to sane ranges', () => {
   expect(c.voiceMaxSeconds).toBe(120);           // 0 is below the 5s floor -> default (120)
   expect(c.voiceIdleMs).toBe(600000);            // 10 is below the 30s floor -> default (600000ms)
 });
+
+// voiceOff is the TMUXIFIER_VOICE=off hard kill switch. Its string->boolean
+// normalization (/^(off|0|false|no)$/i) previously lived only in the envCfg
+// mapping above, so a value arriving as a string through config.json or the
+// overrides argument (both of which bypass that mapping entirely) skipped
+// normalization: merged.voiceOff stayed the string "off", and the final check
+// `merged.voiceOff !== true` saw "off" !== true and never engaged. Same shape
+// as the passkeyOnlyKillSwitch boolean-vs-string test above; overrides sit at
+// the same merge point a real config.json value would.
+test('voiceOff as the string "off" via overrides disables voice even with bin+model set', () => {
+  const c = loadConfig({
+    voiceOff: 'off',
+    whisperBin: '/repo/vendor/whisper/build/bin/whisper-server',
+    whisperModel: '/repo/vendor/whisper/models/ggml-small.en.bin',
+  }, { env: {}, cwd: '/repo' });
+  expect(c.voiceEnabled).toBe(false);
+});
+
+test('voiceOff as the string "off" via config.json disables voice even with bin+model set', async () => {
+  const fs = await import('node:fs');
+  const osMod = await import('node:os');
+  const pathMod = await import('node:path');
+  const dir = fs.mkdtempSync(pathMod.join(osMod.tmpdir(), 'tmuxifier-voiceoff-'));
+  fs.writeFileSync(pathMod.join(dir, 'config.json'), JSON.stringify({
+    voiceOff: 'off',
+    whisperBin: '/repo/vendor/whisper/build/bin/whisper-server',
+    whisperModel: '/repo/vendor/whisper/models/ggml-small.en.bin',
+  }));
+  const c = loadConfig({}, { env: {}, cwd: dir });
+  expect(c.voiceEnabled).toBe(false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('voiceOff as a real boolean true via overrides disables voice', () => {
+  const c = loadConfig({
+    voiceOff: true,
+    whisperBin: '/repo/vendor/whisper/build/bin/whisper-server',
+    whisperModel: '/repo/vendor/whisper/models/ggml-small.en.bin',
+  }, { env: {}, cwd: '/repo' });
+  expect(c.voiceEnabled).toBe(false);
+});
+
+test('voiceOff as a real boolean false via overrides does not disable voice', () => {
+  const c = loadConfig({
+    voiceOff: false,
+    whisperBin: '/repo/vendor/whisper/build/bin/whisper-server',
+    whisperModel: '/repo/vendor/whisper/models/ggml-small.en.bin',
+  }, { env: {}, cwd: '/repo' });
+  expect(c.voiceEnabled).toBe(true);
+});
+
+// whisperBin/whisperModel are not trimmed today, so a whitespace-only value is
+// truthy and voiceEnabled reports true with an unusable path. claudeOauthToken
+// already does trim-and-treat-empty-as-unset (see above) — voiceEnabled should
+// mean "actually usable" the same way.
+test('whitespace-only whisperBin/whisperModel is treated as unset', () => {
+  const withBlankBin = loadConfig({}, {
+    env: { TMUXIFIER_WHISPER_BIN: '   ', TMUXIFIER_WHISPER_MODEL: '/repo/vendor/whisper/models/ggml-small.en.bin' },
+    cwd: '/repo',
+  });
+  expect(withBlankBin.voiceEnabled).toBe(false);
+
+  const withBlankModel = loadConfig({}, {
+    env: { TMUXIFIER_WHISPER_BIN: '/repo/vendor/whisper/build/bin/whisper-server', TMUXIFIER_WHISPER_MODEL: '   ' },
+    cwd: '/repo',
+  });
+  expect(withBlankModel.voiceEnabled).toBe(false);
+});
