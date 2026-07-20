@@ -183,3 +183,60 @@ test('the transcript is still returned when __local__ injection is refused', asy
   expect(res.statusCode).toBe(200);
   expect(res.json()).toEqual({ text: 'hello world', injected: false, mode: 'busy' });
 });
+
+// --- stage 2: data/voice.json governs the running server ---------------------
+// resolveVoice is injected, so these prove the route consults the store's
+// resolved state rather than the boot-time config.
+
+test('/api/ui-config reports voice off when the store disables it', async () => {
+  const a = await makeApp({ server: {
+    resolveVoice: async () => ({ bin: '/w', model: '/m', enabled: false, pinned: { bin: 'vendor', model: 'store' } }),
+  } });
+  const cookie = await login(a);
+  const res = await a.inject({ method: 'GET', url: '/api/ui-config', headers: { cookie: `${cookie.name}=${cookie.value}` } });
+  expect(res.json().voice).toBe(false);
+});
+
+test('/api/ui-config reports voice on when the store enables it', async () => {
+  const a = await makeApp({ server: {
+    resolveVoice: async () => ({ bin: '/w', model: '/m', enabled: true, pinned: { bin: 'vendor', model: 'store' } }),
+  } });
+  const cookie = await login(a);
+  const res = await a.inject({ method: 'GET', url: '/api/ui-config', headers: { cookie: `${cookie.name}=${cookie.value}` } });
+  expect(res.json().voice).toBe(true);
+});
+
+test('transcription is refused when the store has voice disabled', async () => {
+  const a = await makeApp({ server: {
+    resolveVoice: async () => ({ bin: '/w', model: '/m', enabled: false, pinned: { bin: null, model: null } }),
+  } });
+  const res = await post(a, await login(a));
+  expect(res.statusCode).toBe(503);
+});
+
+test('the permissions-policy header follows the store, not boot config', async () => {
+  // The header gates getUserMedia and is set in a synchronous hook, so it
+  // reads a cache refreshed by voiceState(). Enabling voice at runtime must
+  // eventually flip it, or the mic stays blocked despite the UI saying on.
+  const a = await makeApp({ server: {
+    resolveVoice: async () => ({ bin: '/w', model: '/m', enabled: true, pinned: { bin: null, model: null } }),
+  } });
+  const cookie = await login(a);
+  const hdrs = { cookie: `${cookie.name}=${cookie.value}` };
+  await a.inject({ method: 'GET', url: '/api/ui-config', headers: hdrs }); // refreshes the cache
+  const res = await a.inject({ method: 'GET', url: '/api/ui-config', headers: hdrs });
+  expect(res.headers['permissions-policy']).toContain('microphone=(self)');
+});
+
+test('the engine is taken from getVoiceEngine when supplied, so a model switch is picked up', async () => {
+  let handed = 0;
+  const a = await makeApp({ server: {
+    voiceEngine: null,
+    getVoiceEngine: async () => { handed += 1; return { transcribe: async () => 'from the new engine', stop: async () => {}, state: () => 'ready' }; },
+    resolveVoice: async () => ({ bin: '/w', model: '/m', enabled: true, pinned: { bin: null, model: null } }),
+  } });
+  const res = await post(a, await login(a));
+  expect(res.statusCode).toBe(200);
+  expect(res.json().text).toBe('from the new engine');
+  expect(handed).toBeGreaterThan(0);
+});

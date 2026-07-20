@@ -86,7 +86,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -109,6 +109,31 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (req, body, done) => done(null, body));
   const uploadMaxBytes = Number(config.uploadMaxBytes) || 25 * 1024 * 1024;
   const voiceMaxBytes = Number(config.voiceMaxBytes) || 8 * 1024 * 1024;
+
+  // data/voice.json is authoritative for whether voice is on and which model
+  // is selected, and it is read per request so a Settings change applies
+  // without a restart. `voiceEnabledCache` exists because the
+  // permissions-policy header is set in a SYNCHRONOUS onSend hook and cannot
+  // await the store — it is refreshed on every path that could change the
+  // answer. Note the header is per-document: a browser tab loaded while voice
+  // was off keeps `microphone=()` until it is reloaded, which is why the
+  // Settings tab tells the operator to reload after enabling.
+  let voiceEnabledCache = Boolean(config.voiceEnabled);
+  async function voiceState() {
+    if (!resolveVoice) {
+      // No store wired (older callers, and most unit tests): fall back to the
+      // boot-time config so stage 1's behaviour is unchanged.
+      return { bin: null, model: null, enabled: Boolean(config.voiceEnabled), pinned: { bin: null, model: null } };
+    }
+    const s = await resolveVoice();
+    voiceEnabledCache = s.enabled;
+    return s;
+  }
+  // The engine is rebuilt when the selected model changes, so callers must ask
+  // for the current one rather than closing over a value that goes stale.
+  async function currentEngine() {
+    return getVoiceEngine ? getVoiceEngine() : voiceEngine;
+  }
 
   const OAUTH_COOKIE = 'tmuxifier_oauth';
   let google = googleAuth;
@@ -407,7 +432,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       if (!reply.hasHeader(name)) reply.header(name, value);
     }
     if (!reply.hasHeader('permissions-policy')) {
-      reply.header('permissions-policy', permissionsPolicyHeader(config.voiceEnabled));
+      reply.header('permissions-policy', permissionsPolicyHeader(voiceEnabledCache));
     }
     // Same predicate as the Secure cookie flag: local TLS counts, not only an
     // https external URL — the self-hosted TLS mode the docs recommend was the
@@ -961,7 +986,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       uploadMaxBytes,
       // The client renders no microphone at all unless voice is usable, so a
       // half-installed host never shows a button that only 503s.
-      voice: Boolean(config.voiceEnabled) && Boolean(voiceEngine),
+      voice: (await voiceState()).enabled && Boolean(await currentEngine()),
       voiceMaxSeconds: config.voiceMaxSeconds ?? 120,
     };
   });
@@ -1013,7 +1038,8 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   // puts it on the clipboard, so a busy pane never costs the user what they
   // just said. Fastify enforces voiceMaxBytes via bodyLimit (413).
   app.post('/api/voice', { onRequest: requireAuth, bodyLimit: voiceMaxBytes }, async (req, reply) => {
-    if (!config.voiceEnabled || !voiceEngine) {
+    const engine = await currentEngine();
+    if (!(await voiceState()).enabled || !engine) {
       return reply.code(503).send({ error: 'voice dictation is not enabled' });
     }
     const body = Buffer.isBuffer(req.body) ? req.body : null;
@@ -1025,7 +1051,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
     let raw;
     try {
-      raw = await voiceEngine.transcribe(body);
+      raw = await engine.transcribe(body);
     } catch (e) {
       // Only pass through a genuine 4xx/5xx integer from the engine — an
       // out-of-range or non-numeric status (e.g. a hypothetical e.status =

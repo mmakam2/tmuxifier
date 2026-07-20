@@ -13,7 +13,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { resolveModel, MODEL_IDS, DEFAULT_MODEL_ID, WHISPER_REPO, WHISPER_REF } from '../src/server/voiceCatalog.js';
-import { upsertEnvFile } from '../src/server/envFile.js';
+import { createVoiceStore } from '../src/server/voiceStore.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const vendorDir = path.join(repoRoot, 'vendor', 'whisper');
@@ -95,12 +95,13 @@ if (!fs.existsSync(finalModel)) {
   fs.renameSync(tmp, finalModel);
 }
 
-upsertEnvFile(path.join(repoRoot, '.env'), {
-  TMUXIFIER_WHISPER_BIN: binPath,
-  TMUXIFIER_WHISPER_MODEL: finalModel,
-});
+// data/voice.json is authoritative, and is read per request — so this applies
+// without a restart and stays in step with Settings -> Voice. Writing
+// TMUXIFIER_WHISPER_* into .env instead would PIN the paths, making the
+// Settings model picker inert (.env wins, and is only parsed at boot).
+await createVoiceStore({ dataDir: path.join(repoRoot, 'data') }).update({ enabled: true, model: modelId });
 
-console.error('\nVoice dictation installed.');
+console.error('\nVoice dictation installed and enabled.');
 console.error(`  binary ${binPath}`);
 console.error(`  model  ${finalModel}`);
 console.error('\nRestart Tmuxifier, then tap Ctrl+Shift+Space in a terminal to start dictating and tap it again to stop.');
