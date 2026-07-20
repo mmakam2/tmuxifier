@@ -278,6 +278,7 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
         fallbackCopy: execCommandCopy,
       });
     },
+    focus: () => term.focus(),
   });
   wireClipboard(term, voice);
   const offUploads = wireUploads(parent, term, boxId);

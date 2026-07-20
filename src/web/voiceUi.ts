@@ -126,6 +126,7 @@ export function detectVoiceEnv(enabled: boolean): VoiceEnv {
 export interface VoiceHost {
   write(text: string): void;      // echo status into the terminal
   copy(text: string): void;       // clipboard fallback when a pane is busy
+  focus(): void;                  // return keyboard focus to the terminal
 }
 
 // Owns one recorder and the button element. Returned dispose() detaches it.
@@ -216,6 +217,15 @@ export function createVoiceController(
     } finally {
       busy = false;
       setState('idle');
+      // Hand keyboard focus back to the terminal. Clicking the button moves
+      // DOM focus onto it, so without this the transcript lands in the pane
+      // but Enter goes to the button instead of the PTY — the user has to
+      // click the pane before they can submit what they just dictated. The
+      // mousedown handler also preventDefault()s to stop focus moving in the
+      // first place; this covers the paths that one cannot (focus already
+      // elsewhere, the hotkey used while another element held focus).
+      // Matches wireUploads, which likewise refocuses after an upload.
+      host.focus();
     }
   }
 
@@ -237,7 +247,11 @@ export function createVoiceController(
         button.disabled = true;
         button.title = `${verdict.reason} ${verdict.hint}`.trim();
       } else {
-        button.addEventListener('mousedown', () => { void begin(); });
+        // preventDefault() stops the button taking DOM focus on press, so the
+        // terminal keeps it for the whole hold — you can dictate and then hit
+        // Enter without clicking back into the pane. mouseup/mouseleave still
+        // fire normally; only the focus/selection default is suppressed.
+        button.addEventListener('mousedown', (ev) => { ev.preventDefault(); void begin(); });
         button.addEventListener('mouseup', () => { void finish(); });
         button.addEventListener('mouseleave', () => { void finish(); });
       }

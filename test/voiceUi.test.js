@@ -195,7 +195,7 @@ test('finish() landing before start() resolves releases the mic once start() cat
     cancel() { this.cancelled = true; },
     recording: () => true,
   };
-  const controller = createVoiceController('box1', 120, { write() {}, copy() {} }, () => rec);
+  const controller = createVoiceController('box1', 120, { write() {}, copy() {}, focus() {} }, () => rec);
 
   const beginPromise = controller.begin();
   // finish() runs while start() is still pending — the original bug's
@@ -234,7 +234,7 @@ test('a superseded recorder is released without disturbing a newer, still-active
     recording: () => true,
   };
   let call = 0;
-  const controller = createVoiceController('box1', 120, { write() {}, copy() {} }, () => (call++ === 0 ? stale : fresh));
+  const controller = createVoiceController('box1', 120, { write() {}, copy() {}, focus() {} }, () => (call++ === 0 ? stale : fresh));
 
   const staleBegin = controller.begin(); // recorder = stale, awaiting stale.start()
   await controller.finish();             // supersedes stale (recorder -> null); stale.start() still pending
@@ -258,7 +258,7 @@ test('a zero-sample clip is short-circuited client-side and never reaches the se
     recording: () => true,
   };
   const writes = [];
-  const controller = createVoiceController('box1', 120, { write: (t) => writes.push(t), copy() {} }, () => rec);
+  const controller = createVoiceController('box1', 120, { write: (t) => writes.push(t), copy() {}, focus() {} }, () => rec);
   await controller.begin();
   await controller.finish();
   // Without the short-circuit this reaches api.postVoice() -> a real fetch()
@@ -275,7 +275,7 @@ test('wireVoice().ready() is false until the /api/ui-config fetch settles', asyn
   let resolveFetch;
   globalThis.fetch = () => new Promise((r) => { resolveFetch = r; });
   const parent = { appendChild() {} };
-  const host = { write() {}, copy() {} };
+  const host = { write() {}, copy() {}, focus() {} };
 
   const voice = wireVoice(parent, 'box1', host);
   // Synchronously — before the readiness fetch has any chance to settle —
@@ -292,7 +292,7 @@ test('wireVoice().ready() is false until the /api/ui-config fetch settles', asyn
 
 test('wireVoice().ready() also stays false when the readiness fetch fails outright', async () => {
   globalThis.fetch = () => Promise.reject(new Error('network error'));
-  const voice = wireVoice({ appendChild() {} }, 'box1', { write() {}, copy() {} });
+  const voice = wireVoice({ appendChild() {} }, 'box1', { write() {}, copy() {}, focus() {} });
   await new Promise((r) => setTimeout(r, 0));
   expect(voice.ready()).toBe(false);
 });
@@ -306,7 +306,7 @@ test('wireVoice().ready() becomes true once voice is enabled and mounts, and fal
   stubSupportedSecureEnv();
   const parent = { appendChild() {} };
 
-  const voice = wireVoice(parent, 'box1', { write() {}, copy() {} });
+  const voice = wireVoice(parent, 'box1', { write() {}, copy() {}, focus() {} });
   expect(voice.ready()).toBe(false);
   await new Promise((r) => setTimeout(r, 0));
   expect(voice.ready()).toBe(true);
@@ -333,11 +333,53 @@ test('wireVoice().ready() stays false when a controller mounts but the readiness
   globalThis.window = { isSecureContext: false, addEventListener() {}, removeEventListener() {} };
   const parent = { appendChild() {} };
 
-  const voice = wireVoice(parent, 'box1', { write() {}, copy() {} });
+  const voice = wireVoice(parent, 'box1', { write() {}, copy() {}, focus() {} });
   await new Promise((r) => setTimeout(r, 0));
   // A controller DID mount (a disabled button exists to click) — but ready()
   // must still be false so terminal.ts's hotkey handler falls through to
   // xterm rather than calling begin() on an unusable controller.
   expect(voice.ready()).toBe(false);
   expect(() => { voice.begin(); voice.finish(); }).not.toThrow();
+});
+
+// The button takes DOM focus when clicked, so without an explicit handback the
+// transcript lands in the pane but Enter goes to the button rather than the
+// PTY — the user has to click the pane before they can submit what they just
+// dictated. mount()'s mousedown preventDefault() stops focus moving at all;
+// this pins the belt-and-braces handback for the paths that cannot cover
+// (focus already elsewhere, or the hotkey used while another element had it).
+test('finish() hands keyboard focus back to the terminal', async () => {
+  const rec = {
+    start: () => Promise.resolve(),
+    stop: () => Promise.resolve(new ArrayBuffer(44)), // header-only: short-circuits before any fetch
+    cancel() {},
+    recording: () => true,
+  };
+  let focused = 0;
+  const controller = createVoiceController(
+    'box1', 120, { write() {}, copy() {}, focus() { focused += 1; } }, () => rec,
+  );
+  await controller.begin();
+  await controller.finish();
+  expect(focused).toBe(1);
+});
+
+test('focus is handed back even when the transcription round trip throws', async () => {
+  const rec = {
+    start: () => Promise.resolve(),
+    stop: () => Promise.reject(new Error('recorder blew up')),
+    cancel() {},
+    recording: () => true,
+  };
+  let focused = 0;
+  const writes = [];
+  const controller = createVoiceController(
+    'box1', 120, { write: (t) => writes.push(t), copy() {}, focus() { focused += 1; } }, () => rec,
+  );
+  await controller.begin();
+  await controller.finish();
+  // The failure is reported to the pane AND focus still returns, so a failed
+  // dictation cannot strand the keyboard on the button.
+  expect(writes.join('')).toContain('voice failed');
+  expect(focused).toBe(1);
 });
