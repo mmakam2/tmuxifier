@@ -1,4 +1,4 @@
-import { el } from './dom';
+import { el, makeRadio } from './dom';
 import { voiceApi, type VoiceStatus, type VoiceJob } from './voice';
 import { detectVoiceEnv } from './voiceUi';
 import { createSetupJobPoller } from './setupPoller';
@@ -61,78 +61,22 @@ export function installPollDelay(job: VoiceJob | null): number | null {
 }
 
 export async function renderVoiceSection(content: HTMLElement): Promise<void> {
-  content.textContent = 'Loading…';
+  content.replaceChildren(el('div', { class: 'pve-sub' }, ['Loading…']));
   let status: VoiceStatus;
   try {
     status = await voiceApi.status();
   } catch (e) {
-    content.textContent = `Could not load voice settings: ${(e as Error).message}`;
+    content.replaceChildren(
+      el('h3', {}, ['Voice dictation']),
+      el('div', { class: 'pve-err' }, [`Could not load voice settings: ${(e as Error).message}`]),
+    );
     return;
   }
 
-  content.textContent = '';
-  content.appendChild(el('p', { class: 'muted' }, [voiceStatusLine(status)]));
-
-  const logBox = el('pre', { class: 'voice-log' });
+  const refresh = () => renderVoiceSection(content);
+  const logBox = el('pre', { class: 'pve-log' });
   logBox.style.display = 'none';
 
-  const refresh = () => renderVoiceSection(content);
-
-  // --- enable toggle -------------------------------------------------------
-  if (status.installed) {
-    const toggle = el('input', { type: 'checkbox' }) as HTMLInputElement;
-    toggle.checked = status.enabled;
-    toggle.addEventListener('change', async () => {
-      toggle.disabled = true;
-      const turningOn = toggle.checked;
-      try {
-        await voiceApi.saveSettings({ enabled: turningOn });
-        // Permissions-Policy is per-document: a tab loaded while voice was off
-        // was served microphone=(), and no amount of enabling changes that for
-        // the page already in the browser. Say so rather than letting the mic
-        // appear broken.
-        if (turningOn) {
-          content.appendChild(el('p', { class: 'muted' },
-            ['Reload this page for the browser to grant microphone access.']));
-        }
-        await refresh();
-      } finally {
-        toggle.disabled = false;
-      }
-    });
-    content.appendChild(el('label', {}, [toggle, ' Enable voice dictation']));
-
-    // --- microphone permission check ---------------------------------------
-    // Only offered once voice is on: while it is off the page is served
-    // microphone=(), so getUserMedia would fail for a reason that has nothing
-    // to do with the operator's browser permission.
-    if (status.enabled) {
-      const result = el('p', { class: 'muted' });
-      const test = el('button', {}, ['Check microphone access']) as HTMLButtonElement;
-      test.addEventListener('click', async () => {
-        test.disabled = true;
-        result.textContent = 'Checking…';
-        const env = detectVoiceEnv(true);
-        let stream: MediaStream | null = null;
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          result.textContent = micTestMessage(null, env);
-        } catch (e) {
-          result.textContent = micTestMessage(e as { name?: string; message?: string }, env);
-        } finally {
-          // Release immediately. This probe only asks the browser for
-          // permission — holding the track would leave the tab's recording
-          // indicator lit with nothing listening.
-          try { stream?.getTracks().forEach((t) => t.stop()); } catch { /* already gone */ }
-          test.disabled = false;
-        }
-      });
-      content.appendChild(test);
-      content.appendChild(result);
-    }
-  }
-
-  // --- install -------------------------------------------------------------
   function watch(id: string): void {
     logBox.style.display = '';
     const poller = createSetupJobPoller<VoiceJob>({
@@ -154,43 +98,89 @@ export async function renderVoiceSection(content: HTMLElement): Promise<void> {
     logBox.style.display = '';
     logBox.textContent = 'Starting…';
     try {
-      const job = await voiceApi.install(model);
-      watch(job.id);
+      watch((await voiceApi.install(model)).id);
     } catch (e) {
       logBox.textContent = `Install could not start: ${(e as Error).message}`;
     }
   }
 
-  // --- model picker --------------------------------------------------------
+  const rows: (Node | string)[] = [
+    el('h3', {}, ['Voice dictation']),
+    el('div', { class: 'pve-sub' }, [voiceStatusLine(status)]),
+  ];
+
+  if (status.installed) {
+    const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    cb.checked = status.enabled;
+    cb.onchange = async () => {
+      cb.disabled = true;
+      try {
+        await voiceApi.saveSettings({ enabled: cb.checked });
+        await refresh();
+      } finally {
+        cb.disabled = false;
+      }
+    };
+    rows.push(el('label', { class: 'check-field' }, [cb, el('span', {}, ['Enable voice dictation'])]));
+
+    if (status.enabled) {
+      // Permissions-Policy is applied when a page loads, so a tab that was open
+      // while voice was off keeps microphone=() until it is reloaded.
+      rows.push(el('div', { class: 'pve-sub' }, [
+        'If you just enabled voice, reload this page before the browser will grant microphone access.',
+      ]));
+
+      const result = el('div', { class: 'pve-sub' });
+      const test = el('button', { type: 'button', class: 'pve-btn' }, ['Check microphone access']) as HTMLButtonElement;
+      test.onclick = async () => {
+        test.disabled = true;
+        result.textContent = 'Checking…';
+        const env = detectVoiceEnv(true);
+        let stream: MediaStream | null = null;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          result.textContent = micTestMessage(null, env);
+        } catch (e) {
+          result.textContent = micTestMessage(e as { name?: string; message?: string }, env);
+        } finally {
+          // Release immediately: this probe only asks for permission, so
+          // holding the track would leave the tab's recording indicator lit
+          // with nothing listening.
+          try { stream?.getTracks().forEach((t) => t.stop()); } catch { /* already gone */ }
+          test.disabled = false;
+        }
+      };
+      rows.push(test, result);
+    }
+  }
+
+  // --- model picker ---------------------------------------------------------
   const pinned = status.pinned.model === 'env';
-  const list = el('div', { class: 'voice-models' });
+  rows.push(el('div', { class: 'pve-eyebrow' }, ['Speech model']));
   for (const m of status.models) {
-    const row = el('label', { class: 'voice-model' });
-    const radio = el('input', { type: 'radio', name: 'voice-model' }) as HTMLInputElement;
-    radio.checked = m.id === status.model;
-    radio.disabled = pinned;
-    radio.addEventListener('change', async () => {
-      if (!radio.checked) return;
+    const label = `${m.id} — ${(m.bytes / 1024 ** 2).toFixed(0)} MB${m.installed ? ' (installed)' : ' (will download)'}`;
+    const { wrap, input } = makeRadio('voice-model', m.id, label, m.id === status.model);
+    input.disabled = pinned;
+    input.onchange = async () => {
+      if (!input.checked) return;
       // Choosing a model that is not on disk is what triggers a download.
       if (m.installed) { await voiceApi.saveSettings({ model: m.id }); await refresh(); }
       else await startInstall(m.id);
-    });
-    row.append(radio, ` ${m.id} — ${(m.bytes / 1024 ** 2).toFixed(0)} MB`,
-      m.installed ? ' (installed)' : ' (will download)');
-    list.appendChild(row);
+    };
+    rows.push(wrap);
   }
-  content.appendChild(list);
 
   if (!status.installed) {
-    const btn = el('button', { class: 'primary' }, ['Install whisper.cpp']) as HTMLButtonElement;
-    btn.addEventListener('click', () => { btn.disabled = true; void startInstall(status.model || 'small.en'); });
-    content.appendChild(btn);
-    content.appendChild(el('p', { class: 'muted' }, [
-      'Takes roughly two minutes and about 1.2 GB of disk. Installs cmake if it is missing, builds whisper.cpp from a pinned release, and downloads the model. You can navigate away — it runs on the server.',
+    const btn = el('button', { type: 'button', class: 'pve-primary' }, ['Install whisper.cpp']) as HTMLButtonElement;
+    btn.onclick = () => { btn.disabled = true; void startInstall(status.model || 'small.en'); };
+    rows.push(btn, el('p', { class: 'pve-sub' }, [
+      'Takes roughly two minutes and about 1.2 GB of disk. Installs cmake if it is missing, builds whisper.cpp from a pinned release, and downloads the model. You can close this modal — it runs on the server.',
     ]));
   }
 
-  content.appendChild(logBox);
+  rows.push(logBox);
+  content.replaceChildren(...rows);
+
   // A build already running when the tab opens (after a refresh, or from
   // another browser) is re-attached rather than orphaned.
   if (status.job && status.job.status === 'running') watch(status.job.id);
