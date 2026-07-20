@@ -174,8 +174,9 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     voiceMaxMb: e.TMUXIFIER_VOICE_MAX_MB ? Number(e.TMUXIFIER_VOICE_MAX_MB) : undefined,
     voiceMaxSeconds: e.TMUXIFIER_VOICE_MAX_SECONDS ? Number(e.TMUXIFIER_VOICE_MAX_SECONDS) : undefined,
     // Break-glass: an operator can make voice impossible regardless of what is
-    // installed, mirroring TMUXIFIER_PASSKEY_ONLY=off.
-    voiceOff: e.TMUXIFIER_VOICE !== undefined ? /^(off|0|false|no)$/i.test(String(e.TMUXIFIER_VOICE)) : undefined,
+    // installed, mirroring TMUXIFIER_PASSKEY_ONLY=off. Trimming and boolean
+    // handling are done post-merge below, like passkeyOnlyKillSwitch.
+    voiceOff: e.TMUXIFIER_VOICE,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
   // Every numeric knob is clamped to a sane range; a non-numeric or

@@ -575,3 +575,35 @@ test('whitespace-only whisperBin/whisperModel is treated as unset', () => {
   });
   expect(withBlankModel.voiceEnabled).toBe(false);
 });
+
+// TMUXIFIER_VOICE env values with padding (e.g. export TMUXIFIER_VOICE=" off ")
+// should be trimmed before the kill-switch regex; the env mapping was previously
+// doing its own regex conversion without trim, so padded values silently failed.
+test('TMUXIFIER_VOICE=" off " (padded) disables voice when bin+model are set', () => {
+  const c = loadConfig({}, {
+    env: { TMUXIFIER_VOICE: ' off ',
+           TMUXIFIER_WHISPER_BIN: '/repo/vendor/whisper/build/bin/whisper-server',
+           TMUXIFIER_WHISPER_MODEL: '/repo/vendor/whisper/models/ggml-small.en.bin' },
+    cwd: '/repo',
+  });
+  expect(c.voiceEnabled).toBe(false);
+});
+
+test('TMUXIFIER_VOICE="off" (unpadded) still disables voice (regression guard)', () => {
+  const c = loadConfig({}, {
+    env: { TMUXIFIER_VOICE: 'off',
+           TMUXIFIER_WHISPER_BIN: '/repo/vendor/whisper/build/bin/whisper-server',
+           TMUXIFIER_WHISPER_MODEL: '/repo/vendor/whisper/models/ggml-small.en.bin' },
+    cwd: '/repo',
+  });
+  expect(c.voiceEnabled).toBe(false);
+});
+
+test('TMUXIFIER_VOICE absent leaves voice enabled when bin+model are set', () => {
+  const c = loadConfig({}, {
+    env: { TMUXIFIER_WHISPER_BIN: '/repo/vendor/whisper/build/bin/whisper-server',
+           TMUXIFIER_WHISPER_MODEL: '/repo/vendor/whisper/models/ggml-small.en.bin' },
+    cwd: '/repo',
+  });
+  expect(c.voiceEnabled).toBe(true);
+});
