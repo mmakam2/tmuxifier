@@ -58,6 +58,10 @@ const DEFAULTS = {
   pveMaxJobs: 50,
   // Terminal file upload (paste/drag-drop): max accepted body size in MB.
   uploadMaxMb: 25,
+  // WebAuthn passkeys. rpId is resolved below (see resolveRpId); the kill switch
+  // is the .env break-glass that forces the stored passkey-only flag off.
+  rpId: undefined,
+  passkeyOnlyKillSwitch: undefined,
 };
 
 function clean(obj) {
@@ -73,6 +77,37 @@ function normalizePublicUrl(value) {
   const s = String(value || '').trim().replace(/\/+$/, '');
   if (!s) return undefined;
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s}`;
+}
+
+// A WebAuthn Relying Party id must be a domain name — never an IP literal. Each
+// label is 1-63 chars of letters/digits/hyphen and cannot start or end with a
+// hyphen; the whole name is at most 253 chars.
+const RP_ID_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
+
+function isValidRpId(host) {
+  if (!host || host.length > 253) return false;
+  if (!RP_ID_RE.test(host)) return false;
+  // An all-numeric label chain is an IPv4 literal. IPv6 arrives from
+  // URL.hostname wrapped in brackets and already fails RP_ID_RE.
+  if (/^\d+(\.\d+)*$/.test(host)) return false;
+  return true;
+}
+
+// The hostname passkeys are bound to. A passkey enrolled under one RP id is
+// unusable under another, so this is derived from the URL the browser already
+// uses rather than invented. An explicit value that cannot work is a hard
+// error; a derived one that cannot work just disables the feature.
+export function resolveRpId({ explicit, publicUrl }) {
+  const stated = String(explicit ?? '').trim().toLowerCase();
+  if (stated) {
+    return isValidRpId(stated)
+      ? { rpId: stated, error: null }
+      : { rpId: null, error: `TMUXIFIER_RP_ID must be a domain name, not an IP address or URL: ${stated}` };
+  }
+  let host = '';
+  try { host = publicUrl ? new URL(publicUrl).hostname.toLowerCase() : ''; } catch { host = ''; }
+  if (!host) return { rpId: 'localhost', error: null };
+  return { rpId: isValidRpId(host) ? host : null, error: null };
 }
 
 export function loadConfig(overrides = {}, { env = process.env, cwd = process.cwd() } = {}) {
@@ -108,6 +143,8 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     hostKeyPolicy: e.TMUXIFIER_HOSTKEY_POLICY,
     trustProxy: e.TMUXIFIER_TRUST_PROXY,
     authMode: e.TMUXIFIER_AUTH_MODE,
+    rpId: e.TMUXIFIER_RP_ID,
+    passkeyOnlyKillSwitch: e.TMUXIFIER_PASSKEY_ONLY,
     publicUrl: e.TMUXIFIER_BASE_EXTERNAL_URL ?? e.TMUXIFIER_PUBLIC_URL,
     googleClientId: e.TMUXIFIER_OAUTH_CLIENT_ID ?? e.TMUXIFIER_GOOGLE_CLIENT_ID,
     googleClientSecret: e.TMUXIFIER_OAUTH_CLIENT_SECRET ?? e.TMUXIFIER_GOOGLE_CLIENT_SECRET,
@@ -175,6 +212,20 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   // Auth mode: password (default) or oauth. "google" is accepted as a legacy alias.
   merged.authMode = ['oauth', 'google'].includes(merged.authMode) ? 'google' : 'password';
   merged.publicUrl = normalizePublicUrl(merged.publicUrl);
+  // rpId === null means passkeys are unavailable at this deployment (an
+  // IP-addressed one). rpIdError is set only for an explicit unusable value.
+  const rp = resolveRpId({ explicit: merged.rpId, publicUrl: merged.publicUrl });
+  merged.rpId = rp.rpId;
+  merged.rpIdError = rp.error;
+  // config.json (a documented camelCase alternative to .env) passes values through raw, so
+  // this can already be a real boolean rather than a string — String(true)/String(false) would
+  // otherwise be tested against the off/0/no/false regex below and invert both directions
+  // (true -> doesn't match -> false; false -> matches "false" -> true). A real boolean is
+  // therefore passed through unchanged; only a non-boolean (.env is always a string) goes
+  // through the string-form parse, which additionally accepts 0/no/false alongside "off".
+  merged.passkeyOnlyKillSwitch = typeof merged.passkeyOnlyKillSwitch === 'boolean'
+    ? merged.passkeyOnlyKillSwitch
+    : /^(off|0|no|false)$/i.test(String(merged.passkeyOnlyKillSwitch ?? '').trim());
   merged.allowedEmails = parseEmails(merged.allowedEmails);
   // Mark the session cookie Secure when we serve HTTPS locally OR sit behind an
   // HTTPS public URL, for example a TLS-terminating Cloudflare tunnel.
@@ -204,6 +255,7 @@ export function requiredConfigError(config) {
   if (!config.cookieSecret) {
     return 'Missing TMUXIFIER_COOKIE_SECRET. Run: npm run set-password (password mode) or npm run gen-secret (oauth mode).';
   }
+  if (config.rpIdError) return config.rpIdError;
   if (config.authMode === 'google') {
     const missing = [];
     if (!config.googleClientId) missing.push('TMUXIFIER_OAUTH_CLIENT_ID');

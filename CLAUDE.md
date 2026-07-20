@@ -25,8 +25,10 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   settings with an **encrypted** API token), `provision-jobs.json` (provision history),
   `setup-jobs.json` (server-side box setup job history), `proxmox-lifecycle-jobs.json` (LXC
   power/deprovision job history), `health-events.json` (in-app health event log),
-  `auth-state.json` (the logout session-revocation watermark), and SSH
-  ControlMaster sockets under `data/cm/`.
+  `auth-state.json` (the logout session-revocation watermark), `passkeys.json` (enrolled WebAuthn
+  credentials, the pinned relying party id, and the passkey-only flag — public keys only, so
+  unlike `proxmox.json`/`netbox.json` nothing in it is encrypted, though it's still written
+  `0o600`), and SSH ControlMaster sockets under `data/cm/`.
 
 When adding a new config knob or persisted file, keep it under the repo folder by default.
 Don't introduce dependencies on `$HOME`-level state other than the user's existing SSH setup.
@@ -67,8 +69,10 @@ defaults  →  config.json  →  .env file  →  shell env  →  overrides
   it or in tests. Tests pass explicit `{ env, cwd }`. Preserve this.
 - `set-password` writes the hash every run but only generates a cookie secret when one is absent,
   so password changes don't rotate the secret / log everyone out.
-- `TMUXIFIER_AUTH_MODE` is `password` (default) or `oauth`; modes are mutually exclusive.
-  `google` is still accepted as a legacy alias for OAuth mode.
+- `TMUXIFIER_AUTH_MODE` is `password` (default) or `oauth`; **these two remain mutually
+  exclusive with each other** — exactly one is active. `google` is still accepted as a legacy
+  alias for OAuth mode. A passkey is a separate, additive third login path mounted in **both**
+  modes regardless of `TMUXIFIER_AUTH_MODE` — see `webauthn.js` below and the Security notes.
 - In OAuth mode, `TMUXIFIER_BASE_EXTERNAL_URL` builds the OAuth callback URL. A scheme-less value is
   normalized to HTTPS, and an `https://` value marks the session cookie `Secure` even when local
   TLS is not configured. `TMUXIFIER_PUBLIC_URL` is accepted as a legacy alias.
@@ -105,13 +109,37 @@ pattern for new modules.
   evicts the oldest window, never clears everyone).
 - `googleAuth.js` — dependency-free Google OIDC helper: authorization-code flow, PKCE, id_token
   payload decoding, and exact-email allowlist checks.
+- `webauthn.js` — dependency-free WebAuthn verification, in the spirit of `googleAuth.js`: a
+  minimal CBOR reader (only ever fed a registration's attestation object, or a previously
+  validated stored public key being re-decoded at login — never attacker-supplied bytes at
+  login), COSE→`KeyObject` import (ES256/RS256/EdDSA), `makeOriginCheck`, `verifyRegistration`,
+  and `verifyAssertion` (login). Attestation `none` only: any other format is refused rather than
+  accepted unverified.
+- `passkeyChallenges.js` — `createPasskeyChallenges`: bounded, single-use, 120s WebAuthn challenge
+  store. Eviction is two-layered, not simple oldest-first: a caller already at its own quota
+  (default 3) evicts its own soonest-expiring entry first, and only once the whole store is full
+  does it evict from whichever owner currently holds the most entries — so one flooding source
+  can only ever evict its own in-flight challenges, never a stranger's, short of presenting enough
+  distinct owner identities (e.g. source IPs) to out-crowd them, the same residual limit as
+  `rateLimit.js`'s per-IP bucket. The token rides a signed, httpOnly, `SameSite=strict`
+  `tmuxifier_pk` cookie.
+- `passkeyStore.js` — `data/passkeys.json` CRUD plus the `passkeyOnly` flag and the pinned relying
+  party id. Public keys are not secrets, so nothing here is sealed (unlike `proxmox.json`/
+  `netbox.json`), but the file is still written `0o600` via `jsonFile.js`. The RP id is pinned by
+  the first enrollment and cleared when the last credential is removed; removing the last
+  credential also disarms `passkeyOnly`. A corrupt store fails **open** (reads as empty, which
+  also disarms `passkeyOnly`) by design — failing closed would brick fleet access on a disk
+  glitch, and whoever can corrupt this file can already read the password hash from `.env` on the
+  same disk.
 - `server.js` — Fastify app: login rate-limiting, REST under `/api/*`, and the `/term` WebSocket.
   Box setup routes: `POST /api/boxes/:id/setup` (start), `GET /api/setup` (list), `GET
   /api/setup/:id` and `GET /api/boxes/:id/setup` (poll one/by-box). `GET /api/ai-auth/status`
   reports host-side AI-auth seed readiness for the provision forms. The `/term?mode=provision`
   WebSocket is now the on-demand **interactive fallback** for sudo-password boxes — it reports its
   exit code via `setupManager.markInteractiveResult` and no longer rolls back/removes a box on
-  failure.
+  failure. Passkey routes (`GET/POST/DELETE /api/passkeys*`, `POST
+  /api/auth/passkey/login/begin|finish`) mount unconditionally in **both** auth modes — passkey is
+  a third, additive login path, not a third value of `TMUXIFIER_AUTH_MODE`.
 - `store.js` — `data/boxes.json` CRUD; normalizes/validates boxes; exports/imports the box list as
   a versioned JSON file (`exportBoxes`/`importBoxes`; import re-mints ids and skips dup/unsafe entries).
 - `sshCommand.js` — builds `ssh` argv for attach/probe; **all box fields are validated by
@@ -227,7 +255,9 @@ pattern for new modules.
 
 Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts` (also drives the
 provision panel, a poll-based setup-job viewer — Retry / Remove / Finish-interactively — now that
-setup runs server-side), `api.ts`, `terminal.ts`, `index.html`, `style.css`, plus feature modules —
+setup runs server-side; the login screen also wires the passkey button through the same
+`evaluateOrigin` verdict, with a dead-end message when "require a passkey" is armed but this
+browser has no usable one), `api.ts`, `terminal.ts`, `index.html`, `style.css`, plus feature modules —
 `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
 history: pure SVG-path builder and event-line formatters), `notifyPrefs.ts` (per-kind
 browser-notification preferences, localStorage-backed, defaults all-on except `up`/
@@ -257,9 +287,18 @@ lifecycle jobs newest-first), `proxmoxAssociation.ts` (the Add/Edit Box modals' 
 link/unlink picker — hidden until a Proxmox host profile exists, except for already-linked
 boxes), `settingsUi.ts` (the ⚙ settings
 modal's tabbed shell, with NetBox (`settingsNetbox.ts`), Proxmox host/secret
-(`settingsProxmox.ts`), and Notifications (`settingsNotifications.ts`: browser-notification
-permission flow plus per-kind toggles) tabs) with `settingsForm.ts` (pure payload/result helpers), `netbox.ts`
-(fetch layer), and `dom.ts` (shared DOM builders plus `openModal` — the one modal scaffold with backdrop-click guard and Escape-to-close — and `makeRadio`, used across the settings modal, the hub, and the main.ts dialogs),
+(`settingsProxmox.ts`), Passkeys (`settingsPasskeys.ts`: readiness row, enrolled-credential list
+with remove — confirm-gated by one modal; removing the last credential while "require a passkey"
+is armed adds only an extra explanatory paragraph to that same modal, not a second gate — and the
+sign-in policy toggle, where only *arming* is confirm-gated since disarming can only restore
+access), and Notifications (`settingsNotifications.ts`:
+browser-notification permission flow plus per-kind toggles) tabs) with `settingsForm.ts` (pure
+payload/result helpers), `netbox.ts` (fetch layer), `passkeys.ts` (passkey fetch layer,
+base64url↔bytes helpers, the pure WebAuthn option/credential converters, and `evaluateOrigin` —
+the ordered readiness check, browser support first, that both the login screen and Settings →
+Passkeys render as the same reason/hint text), and `dom.ts` (shared DOM builders plus `openModal`
+— the one modal scaffold with backdrop-click guard and Escape-to-close — and `makeRadio`, used
+across the settings modal, the hub, and the main.ts dialogs),
 `clipboard.ts`, `upload.ts` (pure paste/drop upload helpers: DataTransfer extraction, pasted-image
 naming, size check), and `termFont.ts` (pure builder for the xterm
 font stack — prepends `TMUXIFIER_TERM_FONT` onto the bundled stack (MesloLGMDZ Nerd Font default,
@@ -309,11 +348,38 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 
 - The login gate is the crown jewel (Tmuxifier can SSH into your whole fleet). Binds to
   `127.0.0.1` by default; expose only behind TLS.
-- Auth modes are mutually exclusive: password mode mounts `POST /api/login`; OAuth mode mounts
-  `/api/auth/google/*` and removes the password login path.
+- Password and OAuth modes are mutually exclusive **with each other**: password mode mounts
+  `POST /api/login`; OAuth mode mounts `/api/auth/google/*` instead and removes the password
+  login path. A passkey is a third, additive login path that mounts in **both** modes regardless
+  of `TMUXIFIER_AUTH_MODE` — it is not a value of that setting.
 - Google auth is hand-rolled OIDC in `googleAuth.js`: state cookie + PKCE, token exchange
   server-to-server, then exact-email allowlist. The id_token payload is trusted because it is
   fetched directly from Google's token endpoint over TLS in the authorization-code flow.
+- In OAuth mode, a passkey login never consults `TMUXIFIER_ALLOWED_EMAILS` — it authenticates a
+  device credential, not a Google identity. Removing an email from the allowlist does **not**
+  revoke a passkey already enrolled under that account; the passkey itself must be removed from
+  Settings → Passkeys. Enrollment requires an authenticated session (password/Google remains the
+  bootstrap and the recovery route), so this is not a privilege-escalation path — just a separate
+  revocation step to remember.
+- Passkeys' opt-in "require a passkey" toggle (`passkeyStore.js`'s `passkeyOnly` flag) disables
+  password and Google sign-in entirely, so arming it is guarded three ways against locking the
+  operator out: it is refused with a 409 unless at least one credential is enrolled **and** the
+  configured relying party id is actually usable against them (refused when the RP id is `null`
+  — i.e. derived from an IP address rather than a hostname; the RP id itself is never unset,
+  since it defaults to `localhost` — or when the enrolled passkeys are pinned to a different
+  hostname than the server is now configured for); removing the last credential auto-disarms
+  it; and `TMUXIFIER_PASSKEY_ONLY=off`
+  in `.env` overrides the stored flag as the break-glass — the recovery path for when arming
+  succeeded legitimately (a real, usable passkey) but that authenticator is later lost. Takes
+  effect on restart.
+- Passkey login shares the per-IP `rateLimit.js` login-lockout bucket with password login, so it
+  is not a way around that lockout. Assertion failures return one generic 401 whether the
+  credential is unknown or the signature is bad, so credential ids cannot be enumerated.
+  Separately, the WebAuthn challenge issued per login/enroll attempt is bounded per client address
+  (`passkeyChallenges.js`), not globally: a single flooding source can no longer evict another
+  user's in-flight challenge, but an attacker spread across many source addresses still can — the
+  same residual limit as the login rate limiter itself. Under "require a passkey" that would deny
+  sign-in outright, with the `.env` break-glass above as the remedy.
 - Passwords are scrypt-hashed; login attempts are rate-limited per IP (`rateLimit.js` — set
   `TMUXIFIER_TRUST_PROXY` behind a reverse proxy so the limiter sees real client IPs, and only
   then, since trusting forwarded headers from direct clients lets them spoof their IP). The

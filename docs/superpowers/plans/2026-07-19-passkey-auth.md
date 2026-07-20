@@ -1149,6 +1149,16 @@ test('touch records the new sign count and last-used time', async () => {
   expect((await store.list())[0].lastUsed).toBe(1700000000000);
 });
 
+// verifyAssertion rejects a non-numeric stored count, so a record whose
+// signCount persisted as null must not reach it — that would turn a valid
+// passkey into a permanent 401.
+test('listRaw normalizes a missing or null sign count to 0', async () => {
+  await store.add({ ...CRED, signCount: null }, { rpId: 'tmux.example.com' });
+  expect((await store.listRaw())[0].signCount).toBe(0);
+  await store.add({ id: 'cred-b', publicKey: 'cose-b', alg: -7, label: 'B', transports: [] }, { rpId: 'tmux.example.com' });
+  expect((await store.listRaw()).find((c) => c.id === 'cred-b').signCount).toBe(0);
+});
+
 test('remove reports whether anything was removed', async () => {
   await store.add(CRED, { rpId: 'tmux.example.com' });
   expect(await store.remove('nope')).toEqual({ removed: false, disarmed: false });
@@ -1251,7 +1261,23 @@ export function createPasskeyStore({ dataDir, now = () => Date.now(), log = (msg
   return {
     async list() { return (await readAll()).credentials.map(publicView); },
     // Server-internal: includes the public key and sign count.
-    async listRaw() { return (await readAll()).credentials; },
+    // Server-internal: includes the public key and sign count. signCount is
+    // normalized to a number here because verifyAssertion rejects a non-numeric
+    // stored count (fail closed on a corrupt store) — without this, a record
+    // whose signCount persisted as null would turn a valid passkey into a
+    // permanent 401. Non-integer and negative values land on 0.
+    //
+    // Deliberately NOT normalized: an integer above 0xFFFFFFFF. signCount is
+    // read from authenticator data as a uint32, so a larger stored value is
+    // corruption — and verifyAssertion rejects it, which locks that one
+    // credential rather than silently clamping to 0 and disabling clone
+    // detection for it. Fail closed on the credential, not open.
+    async listRaw() {
+      return (await readAll()).credentials.map((c) => ({
+        ...c,
+        signCount: Number.isInteger(c.signCount) && c.signCount >= 0 ? c.signCount : 0,
+      }));
+    },
     async getRpId() { return (await readAll()).rpId ?? null; },
     async getPasskeyOnly() { return (await readAll()).passkeyOnly === true; },
 
@@ -1755,7 +1781,50 @@ test('failed passkey logins count toward the per-ip lockout', async () => {
 Run: `npx vitest run test/passkeyRoutes.test.js`
 Expected: FAIL — 404 on `/api/auth/passkey/login/begin`
 
-- [ ] **Step 3: Implement the login routes**
+- [ ] **Step 3: Give the unauthenticated login flow its own challenge store**
+
+Enrollment and login must not share one bounded map. `createPasskeyChallenges` evicts the
+soonest-expiring entry when full, and at a uniform TTL that is the earliest issued — so with a
+single 64-slot store, 64 unauthenticated `login/begin` calls flush an authenticated operator's
+in-flight enrollment challenge and they can never enroll a passkey. Verified: with one shared
+store, the enrolling user's challenge does not survive 64 anonymous issues.
+
+In `src/server/server.js`, alongside the existing `pkChallenges`:
+
+```js
+  // Separate bounded stores per ceremony. login/begin is unauthenticated, so a
+  // flood of anonymous challenges must not be able to evict the enrollment
+  // challenge of an authenticated operator mid-ceremony.
+  const pkLoginChallenges = createPasskeyChallenges({ ttlMs: PK_TTL_SECONDS * 1000 });
+  const challengeStoreFor = (kind) => (kind === 'auth' ? pkLoginChallenges : pkChallenges);
+```
+
+and route both helpers through it — in `issueChallenge`, replace `pkChallenges.issue(kind)` with
+`challengeStoreFor(kind).issue(kind)`; in `takeChallenge`, replace `pkChallenges.take(...)` with
+`challengeStoreFor(kind).take(...)`.
+
+Add a test proving the isolation:
+
+```js
+test('a flood of anonymous login challenges cannot evict an enrollment challenge', async () => {
+  const h = await headers();
+  await enroll();
+  const begin = await app.inject({ method: 'POST', url: '/api/passkeys/register/begin', headers: h });
+  // More than the 64-entry default bound, all unauthenticated.
+  for (let i = 0; i < 70; i++) await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  const auth = makeAuthenticator({ credentialId: Buffer.from('cred-late') });
+  const fin = await app.inject({
+    method: 'POST', url: '/api/passkeys/register/finish',
+    headers: { ...h, cookie: `${h.cookie}; ${pkCookie(begin)}` },
+    payload: { label: 'Laptop', response: makeRegistration({
+      authenticator: auth, challenge: Buffer.from(begin.json().challenge, 'base64url'), origin: ORIGIN, rpId: RP,
+    }).response },
+  });
+  expect(fin.statusCode).toBe(200);
+});
+```
+
+- [ ] **Step 4: Implement the login routes**
 
 In `src/server/server.js`, replace the existing `/api/auth/info` route with:
 
@@ -1806,13 +1875,20 @@ Add after the `DELETE /api/passkeys/:id` route:
       result = verifyAssertion({
         response: req.body?.response ?? {},
         expectedChallenge: challenge, rpId, originOk: passkeyOriginOk,
-        publicKey: credential.publicKey, storedSignCount: credential.signCount ?? 0,
+        // NOT `credential.signCount ?? 0`: verifyAssertion rejects a non-numeric
+        // stored count on purpose, and `??` would launder a null straight past
+        // that guard, silently disabling the cloned-authenticator check.
+        // passkeyStore.listRaw() guarantees a number — see Task 7.
+        publicKey: credential.publicKey, storedSignCount: credential.signCount,
       });
     } catch (e) {
       loginLimiter.fail(ip);
       // A stalled counter is the one failure worth naming in the log; the
       // response stays generic so a caller cannot enumerate credential ids.
-      if (credential && /sign count/.test(e.message)) {
+      // Match the stall message specifically, NOT /sign count/ — that would also
+      // match 'invalid stored sign count', logging a corrupt-store lockout as a
+      // cloned authenticator, the exact mislabel this log line exists to avoid.
+      if (credential && /did not increase/.test(e.message)) {
         log(`[tmuxifier] passkey "${credential.label}" sign count did not increase — possible cloned authenticator`);
       }
       return reply.code(401).send({ error: 'passkey verification failed' });
@@ -1824,7 +1900,7 @@ Add after the `DELETE /api/passkeys/:id` route:
   });
 ```
 
-- [ ] **Step 4: Update the two existing `/api/auth/info` assertions**
+- [ ] **Step 5: Update the two existing `/api/auth/info` assertions**
 
 Both use exact equality and will now fail, since the response carries a `passkey` object.
 
@@ -1855,12 +1931,12 @@ with:
 
 (Neither suite passes a `config.rpId`, so `rpId` reads as `null` there — passkeys are simply inert in those fixtures.)
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 6: Run tests to verify they pass**
 
 Run: `npx vitest run test/passkeyRoutes.test.js test/server.test.js test/server.google.test.js`
 Expected: PASS, all three suites.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/server/server.js test/passkeyRoutes.test.js test/server.test.js test/server.google.test.js
@@ -2324,7 +2400,7 @@ export async function renderPasskeysSection(content: HTMLElement): Promise<void>
       el('div', { class: 'pve-sub' }, [`added ${when(c.created)} · last used ${when(c.lastUsed)}${c.transports.length ? ` · ${c.transports.join(', ')}` : ''}`]),
     ]),
     el('button', {
-      type: 'button', class: 'pve-danger',
+      type: 'button', class: 'danger',
       onclick: () => confirmRemove(c.id, c.label, state, reload, fail),
     }, ['Remove']),
   ]));
@@ -2397,7 +2473,7 @@ function addPasskey(reload: () => void): void {
     el('label', { class: 'field' }, [el('span', {}, ['Name']), nameField]),
     el('p', { class: 'pve-sub' }, ['Your browser will ask you to confirm with your fingerprint, face, PIN or security key.']),
     errLine,
-    el('div', { class: 'pve-actions' }, [el('button', { type: 'button', onclick: close }, ['Cancel']), save]),
+    el('div', { class: 'modal-actions' }, [el('button', { type: 'button', onclick: close }, ['Cancel']), save]),
   );
   nameField.focus();
 }
@@ -2412,10 +2488,10 @@ function confirmRemove(id: string, label: string, state: PasskeyState, reload: (
     ...(last && state.passkeyOnly
       ? [el('p', { class: 'pve-sub' }, ['This is the last passkey, so “require a passkey” will be turned off and password sign-in re-enabled.'])]
       : []),
-    el('div', { class: 'pve-actions' }, [
+    el('div', { class: 'modal-actions' }, [
       el('button', { type: 'button', onclick: close }, ['Cancel']),
       el('button', {
-        type: 'button', class: 'pve-danger',
+        type: 'button', class: 'danger',
         onclick: () => { close(); void pk.remove(id).then(reload).catch(fail); },
       }, ['Remove']),
     ]),
@@ -2433,7 +2509,7 @@ function confirmArm(onConfirm: () => void, onCancel: () => void): void {
     el('h2', {}, ['Require a passkey?']),
     el('p', {}, ['Password and Google sign-in will be refused. Only an enrolled passkey will get you in.']),
     el('p', { class: 'pve-sub' }, ['If you lose your authenticator: set TMUXIFIER_PASSKEY_ONLY=off in .env and restart Tmuxifier.']),
-    el('div', { class: 'pve-actions' }, [
+    el('div', { class: 'modal-actions' }, [
       el('button', { type: 'button', onclick: close }, ['Cancel']),
       el('button', {
         type: 'button', class: 'pve-primary',
@@ -2528,7 +2604,15 @@ async function renderLogin() {
     if (info.passkey) passkey = info.passkey;
   } catch {}
   const err = readLoginError();
-  const canPasskey = passkey.enrolled > 0 && hasWebAuthn();
+  // Gate on the full origin verdict, not just WebAuthn support. A mismatched
+  // hostname is the other way "no usable passkey here" happens, and with
+  // passkey.only armed that would otherwise render a button that cannot work
+  // beside a hidden password form — a dead screen.
+  const verdict = evaluateOrigin({
+    rpId: passkey.rpId, storedRpId: null,
+    hostname: location.hostname, protocol: location.protocol, hasWebAuthn: hasWebAuthn(),
+  });
+  const canPasskey = passkey.enrolled > 0 && verdict.ok;
   const brand = `<div class="login-brand">
         <img class="login-logo" src="${logoUrl}" alt="" />
         <h1>tmuxifier</h1>
@@ -2607,14 +2691,14 @@ Append to `src/web/style.css`, next to the existing `.gbtn` rules:
 ```css
 /* Passkey sign-in: same footprint as the Google button so a login screen
    offering both reads as one stack of equal options. */
-.pkbtn {
+button.pkbtn {
   display: flex; align-items: center; justify-content: center; gap: .5rem;
   width: 100%; padding: .6rem 1rem; margin-top: .5rem;
   border: 1px solid var(--border, #3a3a3a); border-radius: 6px;
   background: transparent; color: inherit; font: inherit; cursor: pointer;
 }
-.pkbtn:hover:not(:disabled) { background: rgba(127, 127, 127, .12); }
-.pkbtn:disabled { opacity: .5; cursor: default; }
+button.pkbtn:hover:not(:disabled) { background: rgba(127, 127, 127, .12); }
+button.pkbtn:disabled { opacity: .5; cursor: default; }
 .login-note { font-size: .85em; opacity: .75; text-align: center; }
 .login-note code { font-family: ui-monospace, monospace; }
 ```

@@ -53,7 +53,7 @@ let app;
 beforeEach(async () => { app = await makeApp(); });
 
 test('/api/auth/info reports google mode and /api/login is gone', async () => {
-  expect((await app.inject({ method: 'GET', url: '/api/auth/info' })).json()).toEqual({ mode: 'google' });
+  expect((await app.inject({ method: 'GET', url: '/api/auth/info' })).json()).toMatchObject({ mode: 'google' });
   const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'x' } });
   expect(login.statusCode).toBe(404);
 });

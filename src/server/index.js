@@ -22,6 +22,7 @@ import { buildServer } from './server.js';
 import { createSecretBox } from './secretBox.js';
 import { createProxmoxStore } from './proxmoxStore.js';
 import { createNetboxStore } from './netboxStore.js';
+import { createPasskeyStore } from './passkeyStore.js';
 import { createProvisionStore } from './provisionStore.js';
 import { createProvisionManager } from './proxmoxProvision.js';
 import { createProxmoxClient, inspectEndpoint } from './proxmoxApi.js';
@@ -105,6 +106,7 @@ const fleetManager = createFleetManager({
 const secretBox = createSecretBox(config.cookieSecret);
 const proxmoxStore = createProxmoxStore({ dataDir: config.dataDir, secretBox });
 const netboxStore = createNetboxStore({ dataDir: config.dataDir, secretBox });
+const passkeyStore = createPasskeyStore({ dataDir: config.dataDir });
 const provisionStore = createProvisionStore({ dataDir: config.dataDir });
 const makeProxmoxClient = (host) => createProxmoxClient({ host, timeoutMs: config.pveTimeoutMs });
 // Cache the first successful read: deriving the key shells out to ssh-keygen
@@ -194,7 +196,7 @@ const statusPoller = createStatusPoller({
   },
 });
 
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });

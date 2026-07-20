@@ -14,7 +14,7 @@ unit); adjust paths if you install elsewhere.
 | `.env` | no (gitignored) | All `TMUXIFIER_*` config, incl. password hash + cookie secret (mode `0600`) |
 | `config.json` | no (gitignored) | Optional camelCase alternative to `.env`; also where the UI persists `localShell` |
 | `tls/` | no (gitignored) | `cert.pem` / `key.pem` for HTTPS (private key stays out of git) |
-| `data/` | no (gitignored) | `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json` (encrypted Proxmox host/key/preset profiles), `netbox.json` (NetBox settings with an encrypted API token), `provision-jobs.json` (provision history), `proxmox-lifecycle-jobs.json` (LXC power/deprovision job history), `health-events.json` (in-app health event log), `auth-state.json` (the logout session-revocation watermark), and SSH ControlMaster sockets (`data/cm/`) |
+| `data/` | no (gitignored) | `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json` (encrypted Proxmox host/key/preset profiles), `netbox.json` (NetBox settings with an encrypted API token), `provision-jobs.json` (provision history), `setup-jobs.json` (server-side box setup job history), `proxmox-lifecycle-jobs.json` (LXC power/deprovision job history), `health-events.json` (in-app health event log), `auth-state.json` (the logout session-revocation watermark), `passkeys.json` (enrolled WebAuthn credentials and the passkey-only flag — public keys only, so unlike the files above nothing in it is encrypted, though it's still `0600`), and SSH ControlMaster sockets (`data/cm/`) |
 | `deploy/tmuxifier.service` | yes | Sample systemd unit (no secrets) |
 | `.env.example` | yes | Template for `.env` |
 
@@ -89,6 +89,39 @@ https://tmuxifier.example.com/api/auth/google/callback
 Copy the client id and secret into `.env`, restart the service, and the login page will show
 Google sign-in instead of the password form. `TMUXIFIER_ALLOWED_EMAILS` is a comma-separated
 exact-email allowlist, matched case-insensitively.
+
+## Passkeys and the relying party id
+
+A passkey is an additional sign-in path available regardless of `TMUXIFIER_AUTH_MODE` — it is
+not a third value of that setting, just a third route mounted alongside whichever of the two is
+active. The one thing it needs from the deployment is a usable relying party id (RP id), the
+hostname WebAuthn binds every passkey to. Tmuxifier derives it from the hostname of
+`TMUXIFIER_BASE_EXTERNAL_URL` (falling back to `localhost` when that is unset), or you can set
+`TMUXIFIER_RP_ID` explicitly.
+
+- Serve over `https://<hostname>`. Plain `http` works only for `localhost`.
+- An IP address cannot be a relying party id. Reaching Tmuxifier at `https://192.168.1.10`
+  leaves passkeys unavailable — Settings → Passkeys explains why — while password/Google
+  sign-in and everything else keep working. That quiet fallback only happens when the RP id is
+  *derived* this way, though: an explicit `TMUXIFIER_RP_ID` that isn't a valid domain name is
+  instead treated as a configuration mistake and **fails startup** with an explanatory message,
+  the same fail-fast treatment as a missing `TMUXIFIER_COOKIE_SECRET`.
+- Changing the hostname invalidates every enrolled passkey. Remove them from
+  Settings → Passkeys and enroll again on the new hostname.
+
+Enrolling a passkey requires an authenticated session (Settings → Passkeys), so password/Google
+sign-in is always the bootstrap. Once enrolled, an operator can optionally arm **Require a
+passkey** there too, which disables password and Google sign-in entirely — arming is refused
+unless at least one passkey is both enrolled and usable against the current RP id, and removing
+the last passkey turns the requirement back off automatically. Even so, keep the break-glass in
+mind before arming it: if every enrolled authenticator is ever lost while it's armed, set
+
+```ini
+TMUXIFIER_PASSKEY_ONLY=off
+```
+
+in `.env` and restart the service to force password/Google sign-in back on. This is the only
+recovery path — there is no admin override reachable from the UI once you're signed out.
 
 ## SSH access to your boxes (passwordless)
 

@@ -19,6 +19,7 @@ import { pve } from './proxmox';
 import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createSetupOptionsForm } from './setupOptions';
+import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
@@ -295,21 +296,75 @@ function readLoginError(): string {
   return code === 'forbidden' ? 'This Google account is not allowed.'
     : code === 'google' ? 'Google sign-in failed. Please try again.'
     : code === 'state' ? 'Login session expired. Please try again.'
+    : code === 'passkey-only' ? 'This Tmuxifier requires a passkey. Password and Google sign-in are disabled.'
     : 'Sign-in failed. Please try again.';
 }
 
 async function renderLogin() {
   let mode: 'password' | 'google' = 'password';
-  try { mode = (await api.authInfo()).mode; } catch {}
+  let passkey = { enrolled: 0, rpId: null as string | null, only: false };
+  try {
+    const info = await api.authInfo();
+    mode = info.mode;
+    if (info.passkey) passkey = info.passkey;
+  } catch {}
   const err = readLoginError();
-  if (mode === 'google') {
-    app.innerHTML = `<div class="login">
-        <div class="login-brand">
-          <img class="login-logo" src="${logoUrl}" alt="" />
-          <h1>tmuxifier</h1>
-          <p>persistent remote terminals for your boxes</p>
-        </div>
-        <a id="gsignin" class="gbtn" href="/api/auth/google/login">
+  // "No usable passkey" has two triggers, not one: no WebAuthn support, and a
+  // mismatched origin (this hostname/protocol doesn't match the configured
+  // rpId). evaluateOrigin (passkeys.ts) is the single source of truth for
+  // both — the same helper settingsPasskeys.ts uses for the authenticated
+  // Settings tab. This screen is unauthenticated, so there is no stored rpId
+  // to compare against (that only comes from the authenticated
+  // GET /api/passkeys) — pass null, same as "nothing enrolled in this browser".
+  const verdict = evaluateOrigin({
+    rpId: passkey.rpId, storedRpId: null,
+    hostname: location.hostname, protocol: location.protocol, hasWebAuthn: hasWebAuthn(),
+  });
+  const canPasskey = passkey.enrolled > 0 && verdict.ok;
+  const brand = `<div class="login-brand">
+        <img class="login-logo" src="${logoUrl}" alt="" />
+        <h1>tmuxifier</h1>
+        <p>persistent remote terminals for your boxes</p>
+      </div>`;
+  const footer = '<footer class="login-footer">Babendums Engineering &amp; Fabrication, Llc.</footer>';
+  const passkeyBtn = canPasskey
+    ? '<button id="pkbtn" type="button" class="pkbtn">Sign in with a passkey</button>'
+    : '';
+  // Shown whenever "require a passkey" is armed, regardless of canPasskey —
+  // not only in the dead-end branch below. The button can still fail at
+  // click time for a reason this unauthenticated screen cannot see up front
+  // (e.g. the enrolled passkeys are pinned to a hostname other than the one
+  // this server is now configured for: storedRpId only comes from the
+  // authenticated GET /api/passkeys, never here, so verdict.ok can be true
+  // while the actual login/begin call still 409s). A locked-out operator
+  // needs this instruction on screen up front, not only after a failed
+  // attempt. Static text, no interpolated values — safe to inline into
+  // innerHTML like brand/footer below.
+  const breakGlass = passkey.only
+    ? '<p class="login-note">Lost access to your passkey? Set <code>TMUXIFIER_PASSKEY_ONLY=off</code> in <code>.env</code> and restart to sign in with a password.</p>'
+    : '';
+
+  // passkey-only with no usable passkey here would otherwise be a dead end.
+  if (passkey.only && !canPasskey) {
+    app.innerHTML = `<div class="login">${brand}
+        <p id="err" class="err">${err || 'This Tmuxifier requires a passkey, and this browser cannot use one.'}</p>
+        <p id="pk-reason" class="login-note"></p>
+        <p class="login-note">Open Tmuxifier on the device holding your passkey.</p>
+        ${breakGlass}
+        ${footer}
+      </div>`;
+    // verdict.reason/hint carry the server-supplied rpId, so they can never be
+    // interpolated into the innerHTML template above (a crafted rpId must not
+    // be able to inject markup). Query the empty placeholder and set
+    // textContent instead — the same pattern wirePasskeyButton below uses for
+    // the error text.
+    const reasonEl = app.querySelector('#pk-reason') as HTMLElement | null;
+    if (reasonEl) reasonEl.textContent = [verdict.reason, verdict.hint].filter(Boolean).join(' ');
+    return;
+  }
+
+  if (passkey.only || mode === 'google') {
+    const google = passkey.only ? '' : `<a id="gsignin" class="gbtn" href="/api/auth/google/login">
           <svg class="google-mark" viewBox="0 0 18 18" aria-hidden="true">
             <path fill="#4285f4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.91c1.7-1.57 2.69-3.88 2.69-6.62z"/>
             <path fill="#34a853" d="M9 18c2.43 0 4.47-.81 5.96-2.18l-2.91-2.26c-.8.54-1.84.86-3.05.86-2.34 0-4.33-1.58-5.04-3.71H.96v2.33A9 9 0 0 0 9 18z"/>
@@ -317,27 +372,61 @@ async function renderLogin() {
             <path fill="#ea4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58A8.65 8.65 0 0 0 9 0 9 9 0 0 0 .96 4.96l3 2.33C4.67 5.16 6.66 3.58 9 3.58z"/>
           </svg>
           <span>Sign in with Google</span>
-        </a>
-        <p id="err" class="err">${err}</p>
-        <footer class="login-footer">Babendums Engineering &amp; Fabrication, Llc.</footer>
-      </div>`;
+        </a>`;
+    app.innerHTML = `<div class="login">${brand}${google}${passkeyBtn}<p id="err" class="err">${err}</p>${breakGlass}${footer}</div>`;
+    wirePasskeyButton();
     return;
   }
-  app.innerHTML = `<form id="login" class="login">
-      <div class="login-brand">
-        <img class="login-logo" src="${logoUrl}" alt="" />
-        <h1>tmuxifier</h1>
-        <p>persistent remote terminals for your boxes</p>
-      </div>
+
+  app.innerHTML = `<form id="login" class="login">${brand}
       <input id="pw" type="password" placeholder="Password" autofocus />
       <button>Unlock</button>
+      ${passkeyBtn}
       <p id="err" class="err">${err}</p>
-      <footer class="login-footer">Babendums Engineering &amp; Fabrication, Llc.</footer>
+      ${breakGlass}
+      ${footer}
     </form>`;
   app.querySelector('#login')!.addEventListener('submit', async (e) => {
     e.preventDefault();
     try { await api.login((app.querySelector('#pw') as HTMLInputElement).value); renderDashboard(); }
-    catch { (app.querySelector('#err') as HTMLElement).textContent = 'Invalid password'; }
+    catch (ex) {
+      // The server's error is always a fixed string on this route (e.g.
+      // "invalid", "too many attempts", or "passkey required" against a
+      // freshly-armed instance whose stale page still shows this form) —
+      // never attacker-supplied text — so surfacing it is safe and far more
+      // actionable than a blanket "Invalid password". Empty/non-Error
+      // rejections still fall back to the old generic message.
+      (app.querySelector('#err') as HTMLElement).textContent = (ex as Error)?.message || 'Invalid password';
+    }
+  });
+  wirePasskeyButton();
+}
+
+function wirePasskeyButton() {
+  const btn = app.querySelector('#pkbtn') as HTMLButtonElement | null;
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const errEl = app.querySelector('#err') as HTMLElement;
+    btn.disabled = true;
+    errEl.textContent = '';
+    try {
+      const options = await pk.loginBegin();
+      const credential = await getPasskey(options);
+      await pk.loginFinish(serializeAssertion(credential));
+      renderDashboard();
+    } catch (e) {
+      btn.disabled = false;
+      // Every message the two unauthenticated passkey routes
+      // (loginBegin/loginFinish) can send back is a fixed server-side string
+      // — "too many attempts", "challenge expired — start again", the
+      // generic 409 for an rpId mismatch, the domain-name 503 — never
+      // attacker-supplied text, so surfacing it via textContent here is
+      // safe. NotAllowedError is the browser's own "the user cancelled the
+      // prompt" signal and keeps its friendlier text; anything else falls
+      // back to the old generic message only when e.message is empty.
+      const err = e as Error;
+      errEl.textContent = err?.name === 'NotAllowedError' ? 'Passkey sign-in cancelled.' : (err?.message || 'Passkey sign-in failed.');
+    }
   });
 }
 
