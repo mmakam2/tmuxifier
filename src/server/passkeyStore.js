@@ -32,9 +32,33 @@ export function createPasskeyStore({ dataDir, now = () => Date.now(), log = (msg
     transports: Array.isArray(c.transports) ? c.transports : [],
   });
 
+  // Every mutator below is a read-modify-write (readAll() then save()) over
+  // the same file, with nothing otherwise stopping two concurrent calls from
+  // both reading before either writes — the second save() would silently
+  // clobber the first (a lost credential, a passkeyOnly flip that didn't
+  // stick, two different minted user handles). withLock serializes every
+  // mutating call onto a single promise chain so each read-modify-write
+  // finishes before the next one starts.
+  //
+  // This is an IN-PROCESS mutex only — it does nothing across multiple OS
+  // processes sharing data/passkeys.json. That's sufficient here: Tmuxifier
+  // runs as a single Node process, so every mutation of this store goes
+  // through this one queue.
+  //
+  // `fn` may reject (e.g. setPasskeyOnly(true) with no credentials
+  // enrolled). The caller still observes that rejection via `result`, but
+  // `queue` is re-armed with a handler that swallows it either way, so one
+  // failed operation can never wedge every later call behind a permanently
+  // rejected promise.
+  let queue = Promise.resolve();
+  function withLock(fn) {
+    const result = queue.then(fn, fn);
+    queue = result.then(() => {}, () => {});
+    return result;
+  }
+
   return {
     async list() { return (await readAll()).credentials.map(publicView); },
-    // Server-internal: includes the public key and sign count.
     // Server-internal: includes the public key and sign count. signCount is
     // normalized to a number here because verifyAssertion rejects a non-numeric
     // stored count (fail closed on a corrupt store) — without this, a record
@@ -55,53 +79,78 @@ export function createPasskeyStore({ dataDir, now = () => Date.now(), log = (msg
     async getRpId() { return (await readAll()).rpId ?? null; },
     async getPasskeyOnly() { return (await readAll()).passkeyOnly === true; },
 
-    async setPasskeyOnly(enabled) {
-      const data = await readAll();
-      if (enabled && data.credentials.length === 0) {
-        throw new Error('enroll a passkey before requiring passkey sign-in');
-      }
-      data.passkeyOnly = !!enabled;
-      await save(data);
-      return data.passkeyOnly;
+    setPasskeyOnly(enabled) {
+      return withLock(async () => {
+        const data = await readAll();
+        if (enabled && data.credentials.length === 0) {
+          throw new Error('enroll a passkey before requiring passkey sign-in');
+        }
+        data.passkeyOnly = !!enabled;
+        await save(data);
+        return data.passkeyOnly;
+      });
     },
 
     // A stable WebAuthn user id, so re-enrolling the same authenticator
     // replaces its credential instead of stacking duplicates in the keychain.
-    async getUserHandle() {
-      const data = await readAll();
-      if (data.userHandle) return data.userHandle;
-      data.userHandle = randomBytes(16).toString('base64url');
-      await save(data);
-      return data.userHandle;
+    getUserHandle() {
+      return withLock(async () => {
+        const data = await readAll();
+        if (data.userHandle) return data.userHandle;
+        data.userHandle = randomBytes(16).toString('base64url');
+        await save(data);
+        return data.userHandle;
+      });
     },
 
-    async add(cred, { rpId }) {
-      const data = await readAll();
-      data.rpId = data.rpId ?? rpId; // pinned by the first enrollment only
-      const entry = { ...cred, created: cred.created ?? now(), lastUsed: null };
-      data.credentials = [...data.credentials.filter((c) => c.id !== cred.id), entry];
-      await save(data);
-      return publicView(entry);
+    add(cred, { rpId } = {}) {
+      return withLock(async () => {
+        // The pin only protects anything if it's always a real hostname:
+        // `undefined` would vanish from the persisted JSON entirely (so the
+        // pin silently evaporates and a later add() re-pins to a different
+        // host), and '' would pin the store to the empty string forever
+        // (`'' ?? x` keeps `''`, and nothing else can clear it).
+        if (typeof rpId !== 'string' || rpId.length === 0) {
+          throw new Error('add() requires a non-empty rpId');
+        }
+        const data = await readAll();
+        data.rpId = data.rpId ?? rpId; // pinned by the first enrollment only
+        // Upsert by credential id: preserve the original `created` (shown in
+        // the UI as "added on") instead of resetting it to now on re-enrollment.
+        const existing = data.credentials.find((c) => c.id === cred.id);
+        const entry = {
+          ...cred,
+          created: existing ? existing.created : (cred.created ?? now()),
+          lastUsed: null,
+        };
+        data.credentials = [...data.credentials.filter((c) => c.id !== cred.id), entry];
+        await save(data);
+        return publicView(entry);
+      });
     },
 
-    async remove(id) {
-      const data = await readAll();
-      const before = data.credentials.length;
-      data.credentials = data.credentials.filter((c) => c.id !== id);
-      if (data.credentials.length === before) return { removed: false, disarmed: false };
-      const disarmed = data.credentials.length === 0 && data.passkeyOnly === true;
-      if (data.credentials.length === 0) { data.passkeyOnly = false; data.rpId = null; }
-      await save(data);
-      return { removed: true, disarmed };
+    remove(id) {
+      return withLock(async () => {
+        const data = await readAll();
+        const before = data.credentials.length;
+        data.credentials = data.credentials.filter((c) => c.id !== id);
+        if (data.credentials.length === before) return { removed: false, disarmed: false };
+        const disarmed = data.credentials.length === 0 && data.passkeyOnly === true;
+        if (data.credentials.length === 0) { data.passkeyOnly = false; data.rpId = null; }
+        await save(data);
+        return { removed: true, disarmed };
+      });
     },
 
-    async touch(id, { signCount }) {
-      const data = await readAll();
-      const cred = data.credentials.find((c) => c.id === id);
-      if (!cred) return;
-      cred.signCount = signCount;
-      cred.lastUsed = now();
-      await save(data);
+    touch(id, { signCount }) {
+      return withLock(async () => {
+        const data = await readAll();
+        const cred = data.credentials.find((c) => c.id === id);
+        if (!cred) return;
+        cred.signCount = signCount;
+        cred.lastUsed = now();
+        await save(data);
+      });
     },
   };
 }
