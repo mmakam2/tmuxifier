@@ -82,6 +82,21 @@ export const SUPPORTED_ALGS = [-7, -257, -8];
 
 const b64u = (b) => Buffer.from(b).toString('base64url');
 
+// node:crypto's own JWK import is the last line of defense on key shape, but
+// a rejection there surfaces as its own bare error (e.g. `TypeError: Invalid
+// JWK EC key` for a syntactically valid but off-curve point) rather than this
+// module's `cose: ...` convention. Every branch below imports through this
+// helper so a caller only ever sees one error style, regardless of whether
+// this module's manual checks or node:crypto's deeper import is what rejects
+// the key.
+function importCoseKey(label, jwk) {
+  try {
+    return createPublicKey({ key: jwk, format: 'jwk' });
+  } catch (err) {
+    throw new Error(`cose: invalid ${label} key material (${err.message})`);
+  }
+}
+
 // COSE label numbers are context-dependent: for EC2/OKP keys -1 is the curve,
 // -2/-3 are the coordinates; for RSA keys -1 is the modulus and -2 the
 // exponent. They are spelled out per branch rather than shared as constants.
@@ -98,20 +113,37 @@ export function coseMapToKey(m) {
     if (!Buffer.isBuffer(x) || !Buffer.isBuffer(y) || x.length !== 32 || y.length !== 32) {
       throw new Error('cose: bad EC coordinates');
     }
-    return { alg, key: createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: b64u(x), y: b64u(y) }, format: 'jwk' }) };
+    return { alg, key: importCoseKey('EC', { kty: 'EC', crv: 'P-256', x: b64u(x), y: b64u(y) }) };
   }
   if (alg === -257) {
     if (kty !== 3) throw new Error('cose: RS256 requires an RSA key');
     const n = m.get(-1);
     const e = m.get(-2);
     if (!Buffer.isBuffer(n) || !Buffer.isBuffer(e)) throw new Error('cose: bad RSA parameters');
-    return { alg, key: createPublicKey({ key: { kty: 'RSA', n: b64u(n), e: b64u(e) }, format: 'jwk' }) };
+    // A registration attestation is attacker-influenced, and node:crypto's
+    // JWK import performs no strength/sanity check of its own: a 1-byte or
+    // even empty modulus, and an empty or all-zero exponent, all import
+    // without error (confirmed against this project's Node version). Left
+    // unchecked, a planted degenerate credential would be a durable backdoor.
+    // 2048 bits is the project's floor (matches the modulus size the test
+    // suite generates); a genuine RSA modulus of that size always has its top
+    // bit set, so this never rejects a legitimate key.
+    if (n.length < 256) throw new Error('cose: RSA modulus too small (must be at least 2048 bits)');
+    // Buffer#every is vacuously true on an empty exponent, so this one check
+    // also covers the empty case, not just all-zero.
+    if (e.every((byte) => byte === 0)) throw new Error('cose: RSA exponent must be non-zero');
+    return { alg, key: importCoseKey('RSA', { kty: 'RSA', n: b64u(n), e: b64u(e) }) };
   }
   if (kty !== 1) throw new Error('cose: EdDSA requires an OKP key');
   if (m.get(-1) !== 6) throw new Error('cose: EdDSA requires curve Ed25519');
   const x = m.get(-2);
   if (!Buffer.isBuffer(x) || x.length !== 32) throw new Error('cose: bad Ed25519 key');
-  return { alg, key: createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: b64u(x) }, format: 'jwk' }) };
+  // Unlike EC2 above, there is no cheap way to check here that `x` is a valid
+  // Ed25519 curve point (no coordinate-recovery-free membership test at this
+  // layer, and node:crypto's OKP JWK import accepts any 32 bytes without
+  // checking). An invalid point simply fails signature verification later,
+  // which is fail-closed — this is a deliberate deferral, not an oversight.
+  return { alg, key: importCoseKey('Ed25519', { kty: 'OKP', crv: 'Ed25519', x: b64u(x) }) };
 }
 
 export function coseToKey(bytes) {

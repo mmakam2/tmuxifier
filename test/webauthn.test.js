@@ -152,3 +152,41 @@ test('refuses ES256 coordinates of the wrong length', () => {
   const cose = enc(new Map([[1, 2], [3, -7], [-1, 1], [-2, Buffer.alloc(31)], [-3, Buffer.alloc(32)]]));
   expect(() => coseToKey(cose)).toThrow(/coordinates/);
 });
+
+// A syntactically valid (correct curve id, correct 32-byte lengths) point
+// that does not lie on P-256 sails past every manual check above and reaches
+// node:crypto's own JWK import, which throws its own bare TypeError rather
+// than one of this module's `cose: ...` errors. All-zero coordinates are not
+// a point on P-256 (the curve's b parameter is nonzero, so x=0 has no y=0
+// solution), so this exercises exactly that gap.
+test('refuses an ES256 point of the right shape that is not on the P-256 curve', () => {
+  const cose = enc(new Map([[1, 2], [3, -7], [-1, 1], [-2, Buffer.alloc(32)], [-3, Buffer.alloc(32)]]));
+  expect(() => coseToKey(cose)).toThrow(/^cose:/);
+});
+
+test('refuses an RSA modulus shorter than 2048 bits', () => {
+  const cose = enc(new Map([
+    [1, 3], [3, -257],
+    [-1, Buffer.alloc(128, 0x01)], // 1024-bit modulus, well under the 256-byte floor
+    [-2, Buffer.from([0x01, 0x00, 0x01])],
+  ]));
+  expect(() => coseToKey(cose)).toThrow(/cose:.*modulus/i);
+});
+
+test('refuses an empty RSA exponent', () => {
+  const cose = enc(new Map([
+    [1, 3], [3, -257],
+    [-1, Buffer.alloc(256, 0x01)],
+    [-2, Buffer.alloc(0)],
+  ]));
+  expect(() => coseToKey(cose)).toThrow(/cose:.*exponent/i);
+});
+
+test('refuses an all-zero RSA exponent', () => {
+  const cose = enc(new Map([
+    [1, 3], [3, -257],
+    [-1, Buffer.alloc(256, 0x01)],
+    [-2, Buffer.from([0x00])],
+  ]));
+  expect(() => coseToKey(cose)).toThrow(/cose:.*exponent/i);
+});
