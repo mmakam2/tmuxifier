@@ -81,6 +81,13 @@ along and the server's `Content-Disposition` names the file.
 - Remove the three handlers wiring them (currently lines 603–628).
 - Add a `window.addEventListener('tmuxifier:boxes-changed', ...)` that calls `refresh()`.
 
+### Changed: `src/web/style.css`
+
+The collapsed-sidebar hide rule lists `#export` and `#import` among the elements it hides. Both
+become dead selectors and are removed. No new CSS is added — the section is built from classes the
+settings modal already defines (`pve-sub`, `pve-err`, `pve-primary`, `pve-btn`, `pve-inline`).
+`.brand-actions` is an `inline-flex` with a gap, so the shorter button row needs no adjustment.
+
 ## Data flow: repainting the box list after an import
 
 An import mutates the box list while the settings modal is still open, so the dashboard must
