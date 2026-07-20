@@ -29,6 +29,9 @@ Configuration, secrets, and runtime state all live **inside the repo**:
   credentials, the pinned relying party id, and the passkey-only flag — public keys only, so
   unlike `proxmox.json`/`netbox.json` nothing in it is encrypted, though it's still written
   `0o600`), and SSH ControlMaster sockets under `data/cm/`.
+- `vendor/` (gitignored) — the whisper.cpp checkout, its build output, and the downloaded speech
+  model, all created by `npm run setup-voice`. Together they take up roughly 1.2 GB;
+  `rm -rf vendor/whisper` reclaims it.
 
 When adding a new config knob or persisted file, keep it under the repo folder by default.
 Don't introduce dependencies on `$HOME`-level state other than the user's existing SSH setup.
@@ -36,7 +39,7 @@ Don't introduce dependencies on `$HOME`-level state other than the user's existi
 Any file that must hold real secrets or PII to run locally is **gitignored and ships with a
 placeholder counterpart**, so contributors get the shape without the data: `.env` → `.env.example`;
 `config.json` → the same keys in `.env.example` (camelCase); `tls/` → generation steps in
-`docs/DEPLOY.md`; `data/boxes.json` → created at runtime (boxes are added via the UI, or imported
+`docs/DEPLOY.md`; `data/voice.json` (voice enable flag + model choice), `data/voice-jobs.json` (whisper install job history), `data/boxes.json` → created at runtime (boxes are added via the UI, or imported
 from a JSON file previously produced by the export button). Add the placeholder/instructions in the
 same change that introduces the file.
 
@@ -52,6 +55,7 @@ npm run dev          # vite + node --watch, proxies /api and /term to the backen
 npm run typecheck    # tsc --noEmit over src/web (the TS client; vite/vitest strip types unchecked)
 npm test             # typecheck + vitest run (unit + integration)
 npm run test:e2e     # playwright (spins up a local sshd-backed box; see test/helpers)
+npm run setup-voice  # headless equivalent of Settings -> Voice: builds whisper.cpp + downloads a pinned model into vendor/, records the choice in data/voice.json
 ```
 
 ## Configuration model
@@ -167,6 +171,23 @@ pattern for new modules.
   -l` (busy panes get a `display-message` instead; never auto-Enter, no `/image` — it
   doesn't exist). `boxActions.injectUploadPath` runs it over the ControlMaster;
   `injectLocalUploadPath` covers the `__local__` terminal's local tmux session.
+- `voiceStore.js` / `voiceInstall.js` / `voiceInstallStore.js` / `voiceDownload.js` / `voicePaths.js` —
+  voice dictation, stage 2. `data/voice.json` is the authoritative record of whether voice is on
+  and which model is selected: it is read per request, so a Settings change applies without a
+  restart, unlike `.env` which is parsed once at boot. `voiceInstall.js` is the single-flight
+  persisted install job (preflight disk check, apt, pinned clone, RAM-capped build, verified
+  download, then enable) with a rolling capped log, mirroring `setupManager.js`;
+  `voiceInstallStore.js` is its debounced `data/voice-jobs.json` persistence. `voiceDownload.js`
+  streams and hashes incrementally, writing to a temp path and renaming only after the pinned
+  SHA-256 matches, so an unverified blob never occupies the real path. `voicePaths.js` holds the
+  pure precedence rules: `TMUXIFIER_WHISPER_BIN`/`MODEL` are escape hatches that win when set and
+  are surfaced in the UI as pinned rather than silently overriding the picker.
+- `voiceText.js` / `voiceCatalog.js` / `voiceEngine.js` — voice dictation: pure transcript
+  normalization (newline collapse is load-bearing — a newline through `send-keys` is Enter),
+  the pinned model allowlist with SHA-256 digests (the chokepoint that keeps no user-supplied
+  URL or path from reaching a download), and the lazily-spawned whisper.cpp server with an
+  idle timeout. `POST /api/voice` transcribes a browser-recorded WAV and types the result into
+  the pane via the same `injectVia` guard uploads use. Audio never leaves the host.
 - `localShellActions.js` — `createLocalShellActions`: provisions the optional local shell
   (`localShell` = `none`/`omz`/`omb`) that backs a terminal on the Tmuxifier host itself.
 - `sessions.js` — PTY lifecycle: PTYs keyed by `boxId`, listeners refcounted, a `graceSeconds`
@@ -300,11 +321,23 @@ Passkeys render as the same reason/hint text), and `dom.ts` (shared DOM builders
 — the one modal scaffold with backdrop-click guard and Escape-to-close — and `makeRadio`, used
 across the settings modal, the hub, and the main.ts dialogs),
 `clipboard.ts`, `upload.ts` (pure paste/drop upload helpers: DataTransfer extraction, pasted-image
-naming, size check), and `termFont.ts` (pure builder for the xterm
+naming, size check), `termFont.ts` (pure builder for the xterm
 font stack — prepends `TMUXIFIER_TERM_FONT` onto the bundled stack (MesloLGMDZ Nerd Font default,
 then MesloLGSDZ + JuliaMono fallback); the server
 validates the name in `config.js` and serves it via `GET /api/ui-config`, which `main.ts` applies
-at boot before any terminal opens).
+at boot before any terminal opens), `wavEncode.ts` (pure Float32-to-16kHz-mono-16-bit-PCM WAV
+encoder — the reason the project needs no ffmpeg dependency: whisper.cpp wants exactly that
+format, and the browser's MediaRecorder would have emitted webm/opus requiring server-side
+decoding; the input sample rate is a parameter, not an assumption, since `AudioContext.sampleRate`
+is device-dependent — commonly 48000, often 44100), `voiceRecorder.ts` (microphone capture via
+`getUserMedia` and an AudioWorklet, producing WAV bytes), `voiceUi.ts` (the readiness verdict
+`evaluateVoice` — ordered browser-support then secure-context then server-enablement, the same
+shape as `passkeys.ts`'s `evaluateOrigin` — the hotkey predicate and its toggle handler
+(`createVoiceHotkeyHandler`: Ctrl+Shift+Space tap-to-start/tap-to-stop, swallowing every event of
+the chord — including auto-repeat keydowns and keyups — so a held key can't leak into the pane),
+the mic button (click-and-hold, unchanged), and the controller), and `voiceWorklet.js` (the
+AudioWorklet processor, shipped as a real Vite-emitted static asset rather than a blob: URL,
+specifically so the Content-Security-Policy can stay `script-src 'self'`).
 
 ## Conventions
 
@@ -417,6 +450,11 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 - `TMUXIFIER_CLAUDE_OAUTH_TOKEN` joins the `.env` secret class (password hash, cookie secret);
   seeding a box with it (and/or the host's `~/.codex/auth.json`) hands that box your Claude/Codex
   subscription identity, so seed only boxes you trust.
+- Voice dictation is off unless `data/voice.json` enables it and a whisper binary and model resolve (see `voicePaths.js`); the legacy `TMUXIFIER_WHISPER_BIN`/`TMUXIFIER_WHISPER_MODEL` are
+  set, and `TMUXIFIER_VOICE=off` hard-disables it regardless. Transcripts are stripped of
+  control characters before reaching `send-keys`, so a transcription artefact cannot emit an
+  escape sequence into a pane. Audio is transcribed by a local whisper.cpp process and is never
+  sent to Anthropic or any third party — unlike Claude Code's built-in `/voice`.
 
 ## Docs
 

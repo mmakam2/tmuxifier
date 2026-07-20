@@ -87,6 +87,12 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | path to TLS cert (PEM file) | `TMUXIFIER_TLS_CERT` | (none → serves HTTP) |
 | path to TLS key (PEM file) | `TMUXIFIER_TLS_KEY` | (none → serves HTTP) |
 | terminal upload size limit (MB) | `TMUXIFIER_UPLOAD_MAX_MB` | `25` |
+| whisper.cpp server binary path (escape hatch; pins the control in Settings → Voice) | `TMUXIFIER_WHISPER_BIN` | (none → use the vendored build) |
+| whisper speech model path (escape hatch; pins the model picker in Settings → Voice) | `TMUXIFIER_WHISPER_MODEL` | (none → use the model chosen in Settings) |
+| voice dictation kill switch | `TMUXIFIER_VOICE` | (unset) |
+| whisper idle shutdown (ms) | `TMUXIFIER_VOICE_IDLE_MS` | `600000` |
+| voice upload size limit (MB) | `TMUXIFIER_VOICE_MAX_MB` | `8` |
+| voice dictation max length (s) | `TMUXIFIER_VOICE_MAX_SECONDS` | `120` |
 
 Set **both** `TMUXIFIER_TLS_CERT` and `TMUXIFIER_TLS_KEY` to serve HTTPS directly; when TLS is active
 the session cookie is automatically marked `Secure`. An `https://` `TMUXIFIER_BASE_EXTERNAL_URL`
@@ -281,6 +287,57 @@ copy-mode — a plain drag goes to the app instead of selecting: either hold
 **Shift** while dragging to select in the browser, or just use the app's own
 copy — Tmuxifier understands OSC 52, so in-app copies (a tmux copy-mode yank,
 Claude Code's selection copy) land on your system clipboard too.
+
+## Voice dictation
+
+Tap **Ctrl+Shift+Space** in any terminal to start dictating, and tap it again to stop: your
+browser records audio from your microphone in between, sends it to Tmuxifier on the second tap,
+and the transcribed text is typed into the pane — the same way a pasted file path is typed in
+(see [Pasting images & files](#pasting-images--files) above). The mic button next to the terminal
+works the other way — click and hold it, then release to transcribe — since a physical button has
+an unambiguous release and a key chord doesn't.
+
+This is not the same thing as Claude Code's own `/voice` command, and `/voice` cannot work on a
+headless box: it opens an audio device on the machine the CLI process runs on, and a box managed
+by Tmuxifier has no microphone of its own — it's a remote machine you're SSHed into, often
+running unattended. Tmuxifier's voice dictation instead captures audio in *your* browser, where
+the microphone actually is, and only ships the recording to the Tmuxifier host for transcription.
+
+Install it from **Settings → Voice**. The tab installs [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
+into a repo-local `vendor/whisper/` directory and downloads a speech model from a small pinned
+allowlist (verified by SHA-256 before it's written to disk — no user-supplied URL or path is ever
+accepted). The install runs on the server as a background job with a live log, so you can close
+the modal or navigate away while it works; it takes roughly two minutes and about 1.2 GB of disk.
+The same tab has the on/off switch and the model picker, and both take effect immediately.
+
+After turning voice **on**, reload the page. Browsers apply the microphone permission policy when
+a page loads, so a tab that was open while voice was off keeps the old policy until it's
+reloaded.
+
+There is an equivalent command-line path for headless setups:
+```bash
+npm run setup-voice           # or: npm run setup-voice -- <model-id>
+```
+
+Settings are stored in `data/voice.json` and read on every request, which is why changes apply
+without a restart. `TMUXIFIER_VOICE=off` in `.env` disables voice entirely regardless of what's
+installed. `TMUXIFIER_WHISPER_BIN` and `TMUXIFIER_WHISPER_MODEL` are escape hatches for pointing
+at a whisper build you manage yourself — setting either one overrides the corresponding control,
+which the Settings tab then shows as pinned rather than leaving you with a picker that appears to
+do nothing.
+
+Microphone access is a browser security-sensitive permission and requires a secure context:
+dictation works automatically when Tmuxifier is reached at `http://127.0.0.1:...` or
+`http://localhost:...`, but from any other address you need HTTPS — see `TMUXIFIER_TLS_CERT`/
+`TMUXIFIER_TLS_KEY` or a TLS-terminating reverse proxy in [Configuration](#configuration).
+
+Audio never leaves the host: transcription runs locally via the whisper.cpp process Tmuxifier
+spawns, not a cloud API, and nothing is sent to Anthropic or any other third party — unlike
+Claude Code's built-in `/voice`.
+
+The installed engine and model together take up roughly 1.2 GB under `vendor/`. Run
+`rm -rf vendor/whisper` at any time to remove them and reclaim the disk space; re-run
+`npm run setup-voice` — or Settings → Voice — later to reinstall.
 
 ## Host Shell & per-box Reconnect
 The **Host Shell** entry at the bottom of the sidebar opens a terminal on the Tmuxifier host

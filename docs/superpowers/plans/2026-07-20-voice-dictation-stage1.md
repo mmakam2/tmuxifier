@@ -333,7 +333,9 @@ git commit -m "feat(voice): pinned model catalog with verified checksums"
 
 **Interfaces:**
 - Consumes: `classifyPaneState`, `buildSendKeysRemote`, `buildDisplayMessageRemote` from Task 0 (existing code).
-- Produces: `injectTextVia(runScript, session, text, { label }) => {injected, mode}`; `boxActions.injectText(box, session, text, {timeoutMs}) => {injected, mode}`. `injectVia(runScript, session, remotePath)` keeps its exact current signature and behaviour.
+- Produces: `injectTextVia(runScript, session, text, { label, okMsg, busyMsg }) => {injected, mode}` — `label` drives the default messages for the common case; `okMsg`/`busyMsg` are optional builders that override them, which is how `injectVia` keeps the upload wording. Also `boxActions.injectText(box, session, text, {timeoutMs}) => {injected, mode}`; `boxActions.injectText(box, session, text, {timeoutMs}) => {injected, mode}`. `injectVia(runScript, session, remotePath)` keeps its exact current signature and observable behaviour, but becomes a thin wrapper.
+
+**There must be exactly one copy of the capture → classify → send-keys body.** `injectVia` delegates to `injectTextVia`, supplying its own message builders so the upload wording is preserved byte-for-byte. Do not duplicate the orchestration.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -375,6 +377,30 @@ test('injectTextVia never types empty text', async () => {
   expect(calls.some((c) => c.includes('send-keys'))).toBe(false);
 });
 
+test('injectVia keeps its original upload wording after delegation', async () => {
+  // Locks the refactor: injectVia now delegates to injectTextVia, so the
+  // upload-specific message text must be asserted explicitly rather than
+  // assumed to have survived.
+  const calls = [];
+  const run = async (script) => {
+    calls.push(script);
+    if (script.includes('capture-pane')) return { code: 0, stdout: 'bash\n$ ' };
+    return { code: 0, stdout: '' };
+  };
+  await injectVia(run, 'web', '/root/.tmuxifier-uploads/1-aa-shot.png');
+  expect(calls.find((c) => c.includes('display-message'))).toContain('image pasted: 1-aa-shot.png');
+
+  const busy = [];
+  const runBusy = async (script) => {
+    busy.push(script);
+    if (script.includes('capture-pane')) return { code: 0, stdout: 'make\n' };
+    return { code: 0, stdout: '' };
+  };
+  await injectVia(runBusy, 'web', '/x/y.png');
+  expect(busy.find((c) => c.includes('display-message')))
+    .toContain('image uploaded: /x/y.png (pane busy — not typed)');
+});
+
 test('injectTextVia sh-quotes text containing quotes and semicolons', async () => {
   const calls = [];
   const run = async (script) => {
@@ -409,10 +435,18 @@ In `src/server/tmuxInject.js`, replace the existing `injectVia` (lines 122-140) 
 // `text` is typed literally via send-keys -l and is never followed by Enter:
 // the operator reviews before submitting. `label` only names the thing in tmux
 // status messages ('image', 'dictation').
-export async function injectTextVia(runScript, session, text, { label = 'text' } = {}) {
+// `text` is typed literally via send-keys -l and is never followed by Enter:
+// the operator reviews before submitting. `label` names the thing in the
+// default tmux status messages ('image', 'dictation'); okMsg/busyMsg override
+// those entirely, which is how the upload wrapper below keeps its original
+// wording without a second copy of this body.
+export async function injectTextVia(runScript, session, text, { label = 'text', okMsg, busyMsg } = {}) {
   const body = String(text ?? '');
   // Nothing to type is not a failure — and must not produce a bare send-keys.
   if (!body.trim()) return { injected: false, mode: 'empty' };
+  const onOk = okMsg || (() => `[tmuxifier] ${label} inserted`);
+  const onBusy = busyMsg || (() => `[tmuxifier] ${label} ready (pane busy — not typed)`);
+  const say = async (msg) => { try { await runScript(buildDisplayMessageRemote(session, msg)); } catch {} };
   let mode = 'busy';
   try {
     const cap = await runScript(buildPaneStateRemote(session));
@@ -420,40 +454,30 @@ export async function injectTextVia(runScript, session, text, { label = 'text' }
     if (mode === 'claude' || mode === 'shell') {
       const sent = await runScript(buildSendKeysRemote(session, body));
       if (!sent || sent.code !== 0) throw new Error('send-keys failed');
-      try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] ${label} inserted`)); } catch {}
+      await say(onOk());
       return { injected: true, mode };
     }
-    try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] ${label} ready (pane busy — not typed)`)); } catch {}
+    await say(onBusy());
     return { injected: false, mode: 'busy' };
   } catch {
-    try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] ${label} ready (pane busy — not typed)`)); } catch {}
+    await say(onBusy());
     return { injected: false, mode: 'error' };
   }
 }
 
-// Upload-specific wrapper: quotes the path and keeps the original wording of
-// the tmux status messages, so the upload flow's observable behaviour is
-// unchanged by the generalization above.
-export async function injectVia(runScript, session, remotePath) {
+// Upload-specific wrapper. It quotes the path and supplies the original tmux
+// status wording, so the upload flow's observable behaviour is unchanged —
+// while the capture/classify/send-keys body exists exactly once, above.
+export function injectVia(runScript, session, remotePath) {
   const name = String(remotePath).split('/').pop() || String(remotePath);
-  let mode = 'busy';
-  try {
-    const cap = await runScript(buildPaneStateRemote(session));
-    mode = cap && cap.code === 0 ? classifyPaneState(parsePaneState(cap.stdout)) : 'busy';
-    if (mode === 'claude' || mode === 'shell') {
-      const sent = await runScript(buildSendKeysRemote(session, injectionText(remotePath)));
-      if (!sent || sent.code !== 0) throw new Error('send-keys failed');
-      try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] image pasted: ${name}`)); } catch {}
-      return { injected: true, mode };
-    }
-    try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] image uploaded: ${remotePath} (pane busy — not typed)`)); } catch {}
-    return { injected: false, mode: 'busy' };
-  } catch {
-    try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] image uploaded: ${remotePath} (pane busy — not typed)`)); } catch {}
-    return { injected: false, mode: 'error' };
-  }
+  return injectTextVia(runScript, session, injectionText(remotePath), {
+    okMsg: () => `[tmuxifier] image pasted: ${name}`,
+    busyMsg: () => `[tmuxifier] image uploaded: ${remotePath} (pane busy — not typed)`,
+  });
 }
 ```
+
+**One behavioural difference to verify, not assume:** `injectTextVia` returns `{injected:false, mode:'empty'}` for blank input, whereas the old `injectVia` would have proceeded. `injectionText(path)` appends a trailing space and always contains the quoted path, so it is never blank for any real path — but confirm the existing upload tests still pass rather than reasoning it through. If any upload test now fails, the wrapper is wrong; fix the wrapper, never the test.
 
 Then add the text-injection sibling to `src/server/boxActions.js`, immediately after `injectUploadPath` (line 474). Add `injectTextVia` to the existing `tmuxInject.js` import at the top of the file:
 
@@ -1272,7 +1296,7 @@ Pure, DOM-free, and the reason no ffmpeg dependency is needed: the browser hands
 
 **Files:**
 - Create: `src/web/wavEncode.ts`
-- Test: `test/wavEncode.test.ts`
+- Test: `test/wavEncode.test.js`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -1280,7 +1304,7 @@ Pure, DOM-free, and the reason no ffmpeg dependency is needed: the browser hands
 
 - [ ] **Step 1: Write the failing test**
 
-Create `test/wavEncode.test.ts`:
+Create `test/wavEncode.test.js`:
 
 ```ts
 import { test, expect } from 'vitest';
@@ -1358,7 +1382,7 @@ test('produces a header-only file for no input', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run test/wavEncode.test.ts`
+Run: `npx vitest run test/wavEncode.test.js`
 Expected: FAIL — `Failed to resolve import "../src/web/wavEncode"`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1440,13 +1464,13 @@ export function encodeWav(chunks: Float32Array[], inputRate: number): ArrayBuffe
 
 - [ ] **Step 4: Run test and typecheck**
 
-Run: `npx vitest run test/wavEncode.test.ts && npx tsc --noEmit`
+Run: `npx vitest run test/wavEncode.test.js && npx tsc --noEmit`
 Expected: PASS, 7 tests; typecheck clean.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/web/wavEncode.ts test/wavEncode.test.ts
+git add src/web/wavEncode.ts test/wavEncode.test.js
 git commit -m "feat(voice): pure 16 kHz mono WAV encoder for browser capture"
 ```
 
@@ -1457,7 +1481,7 @@ git commit -m "feat(voice): pure 16 kHz mono WAV encoder for browser capture"
 **Files:**
 - Create: `src/web/voiceRecorder.ts`
 - Create: `src/web/voiceUi.ts`
-- Test: `test/voiceUi.test.ts`
+- Test: `test/voiceUi.test.js`
 - Modify: `src/web/api.ts:119-124` (`uiConfig` type, new `postVoice`)
 - Modify: `src/web/terminal.ts:73-95` (extend the existing key handler), `:236+` (`openTerminal`)
 
@@ -1474,9 +1498,9 @@ git commit -m "feat(voice): pure 16 kHz mono WAV encoder for browser capture"
 
 - [ ] **Step 1: Write the failing test**
 
-Create `test/voiceUi.test.ts`. Only the pure readiness logic and the key predicate are tested here; the microphone itself is covered by the e2e in Task 10:
+Create `test/voiceUi.test.js` — plain JavaScript, no type annotations. This repo's `vitest.config.js` uses `include: ['test/**/*.test.js']`, and every web-module test is a `.test.js` importing the `.ts` source; a `.test.ts` file is invisible to the runner. Only the pure readiness logic and the key predicate are tested here; the microphone itself is covered by the e2e in Task 10:
 
-```ts
+```js
 import { test, expect } from 'vitest';
 import { evaluateVoice, isVoiceHotkey } from '../src/web/voiceUi';
 
@@ -1508,9 +1532,9 @@ test('a server with voice off says so rather than blaming the browser', () => {
 });
 
 test('Ctrl+Shift+Space is the hotkey and Ctrl+Shift+V is left to paste', () => {
-  const ev = (over: Record<string, unknown>) =>
+  const ev = (over) =>
     ({ type: 'keydown', key: ' ', code: 'Space', ctrlKey: true, shiftKey: true,
-       metaKey: false, altKey: false, repeat: false, ...over }) as unknown as KeyboardEvent;
+       metaKey: false, altKey: false, repeat: false, ...over });
   expect(isVoiceHotkey(ev({}))).toBe(true);
   expect(isVoiceHotkey(ev({ key: 'v', code: 'KeyV' }))).toBe(false); // clipboard paste
   expect(isVoiceHotkey(ev({ shiftKey: false }))).toBe(false);
@@ -1520,14 +1544,14 @@ test('Ctrl+Shift+Space is the hotkey and Ctrl+Shift+V is left to paste', () => {
 
 test('auto-repeat while the key is held is not a second press', () => {
   const ev = { type: 'keydown', key: ' ', code: 'Space', ctrlKey: true, shiftKey: true,
-               metaKey: false, altKey: false, repeat: true } as unknown as KeyboardEvent;
+               metaKey: false, altKey: false, repeat: true };
   expect(isVoiceHotkey(ev)).toBe(false);
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run test/voiceUi.test.ts`
+Run: `npx vitest run test/voiceUi.test.js`
 Expected: FAIL — `Failed to resolve import "../src/web/voiceUi"`.
 
 - [ ] **Step 3: Write the recorder**
@@ -1890,7 +1914,7 @@ The button is absolutely positioned, so its containing block must be positioned.
 
 - [ ] **Step 7: Run tests and typecheck**
 
-Run: `npx vitest run test/voiceUi.test.ts && npx tsc --noEmit`
+Run: `npx vitest run test/voiceUi.test.js && npx tsc --noEmit`
 Expected: PASS, 6 tests; typecheck clean.
 
 - [ ] **Step 7b: Verify the clipboard bindings still work**
@@ -1903,7 +1927,7 @@ Expected: paste still works. If it does not, a second `attachCustomKeyEventHandl
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/web/voiceRecorder.ts src/web/voiceUi.ts src/web/api.ts src/web/terminal.ts src/web/style.css test/voiceUi.test.ts
+git add src/web/voiceRecorder.ts src/web/voiceUi.ts src/web/api.ts src/web/terminal.ts src/web/style.css test/voiceUi.test.js
 git commit -m "feat(voice): browser capture, readiness gate, and hold-to-talk hotkey"
 ```
 

@@ -6,9 +6,10 @@ import { renderBoxesSection } from './settingsBoxes';
 import { renderNetboxSection } from './settingsNetbox';
 import { renderProxmoxSection } from './settingsProxmox';
 import { renderPasskeysSection } from './settingsPasskeys';
+import { renderVoiceSection } from './settingsVoice';
 import { renderNotificationsSection } from './settingsNotifications';
 
-export type SettingsTab = 'boxes' | 'netbox' | 'proxmox' | 'passkeys' | 'notifications';
+export type SettingsTab = 'boxes' | 'netbox' | 'proxmox' | 'passkeys' | 'voice' | 'notifications';
 
 type Section = { label: string; render: (content: HTMLElement, close: () => void) => void | Promise<void> };
 
@@ -18,6 +19,9 @@ const SECTIONS: Record<SettingsTab, Section> = {
   netbox: { label: 'NetBox', render: renderNetboxSection },
   proxmox: { label: 'Proxmox', render: (content) => renderProxmoxSection(content) },
   passkeys: { label: 'Passkeys', render: (content) => renderPasskeysSection(content) },
+  // renderVoiceSection resolves with the status it painted (the install-settle
+  // loop checks it); the tab shell only cares that it finished.
+  voice: { label: 'Voice', render: async (content) => { await renderVoiceSection(content); } },
   notifications: { label: 'Notifications', render: (content) => renderNotificationsSection(content) },
 };
 

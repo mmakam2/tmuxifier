@@ -16,13 +16,22 @@ import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
 import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js';
 import { testNetbox } from './netboxApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
-import { injectLocalUploadPath } from './tmuxInject.js';
+import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault } from './tmuxInject.js';
+import { normalizeTranscript } from './voiceText.js';
+import { MODEL_IDS, resolveModel } from './voiceCatalog.js';
+import { vendorModelPath } from './voicePaths.js';
 import { verifyAssertion, verifyRegistration, makeOriginCheck, SUPPORTED_ALGS } from './webauthn.js';
 import { createPasskeyChallenges } from './passkeyChallenges.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': [
     "default-src 'self'",
+    // voiceRecorder.ts's AudioWorklet loads voiceWorklet.js as a Vite-emitted,
+    // content-hashed, same-origin static asset (`?url` import) rather than a
+    // blob: URL, so it's already covered by 'self' — no widening needed here.
+    // Keep it that way: 'blob:' in script-src would be a standing invitation
+    // for any future feature that blobs semi-trusted text to become a silent
+    // script-execution gadget, on an app with no unsafe-inline/unsafe-eval.
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
@@ -36,8 +45,19 @@ const SECURITY_HEADERS = {
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
-  'permissions-policy': 'camera=(), microphone=(), geolocation=()',
 };
+
+// permissions-policy is computed per-server (not a static header) because the
+// microphone token depends on config.voiceEnabled: an empty allowlist
+// (`microphone=()`) disables the microphone for the top-level document itself,
+// not merely embedded frames, so it must never ship that way while voice
+// dictation is on or getUserMedia() rejects with a policy error regardless of
+// HTTPS/user consent. `(self)` grants only this app's own origin — never
+// embedded third-party frames — and this app already sends `frame-ancestors
+// 'none'`, so that stays tight. camera/geolocation remain locked down always.
+function permissionsPolicyHeader(voiceEnabled) {
+  return `camera=(), microphone=(${voiceEnabled ? 'self' : ''}), geolocation=()`;
+}
 
 function originOf(value) {
   try { return new URL(value).origin; } catch { return null; }
@@ -68,7 +88,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -90,6 +110,44 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   // this content type only — JSON handling everywhere else is untouched.
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (req, body, done) => done(null, body));
   const uploadMaxBytes = Number(config.uploadMaxBytes) || 25 * 1024 * 1024;
+  const voiceMaxBytes = Number(config.voiceMaxBytes) || 8 * 1024 * 1024;
+
+  // data/voice.json is authoritative for whether voice is on and which model
+  // is selected, and it is read per request so a Settings change applies
+  // without a restart. `voiceEnabledCache` exists because the
+  // permissions-policy header is set in a SYNCHRONOUS onSend hook and cannot
+  // await the store — it is refreshed on every path that could change the
+  // answer. Note the header is per-document: a browser tab loaded while voice
+  // was off keeps `microphone=()` until it is reloaded, which is why the
+  // Settings tab tells the operator to reload after enabling.
+  // Seeded from the resolved store state when the caller supplies it. Falling
+  // back to config.voiceEnabled would serve the FIRST page load of a fresh
+  // boot with microphone=() whenever voice is enabled via data/voice.json
+  // rather than .env — and since Permissions-Policy is per-document, that tab
+  // would have the mic blocked until reloaded.
+  let voiceEnabledCache = voiceEnabledInitial === null
+    ? Boolean(config.voiceEnabled)
+    : Boolean(voiceEnabledInitial);
+  async function voiceState() {
+    if (!resolveVoice) {
+      // No store wired (older callers, and most unit tests): fall back to the
+      // boot-time config so stage 1's behaviour is unchanged.
+      return { bin: null, model: null, enabled: Boolean(config.voiceEnabled), pinned: { bin: null, model: null } };
+    }
+    const s = await resolveVoice();
+    voiceEnabledCache = s.enabled;
+    return s;
+  }
+  // Whether a given model FILE is present on disk. Injectable so route tests
+  // stay filesystem-free; defaults to the vendored models directory.
+  const modelInstalledFn = modelInstalled
+    || ((file) => fs.existsSync(vendorModelPath(process.cwd(), file)));
+
+  // The engine is rebuilt when the selected model changes, so callers must ask
+  // for the current one rather than closing over a value that goes stale.
+  async function currentEngine() {
+    return getVoiceEngine ? getVoiceEngine() : voiceEngine;
+  }
 
   const OAUTH_COOKIE = 'tmuxifier_oauth';
   let google = googleAuth;
@@ -386,6 +444,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   app.addHook('onSend', async (req, reply, payload) => {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
       if (!reply.hasHeader(name)) reply.header(name, value);
+    }
+    if (!reply.hasHeader('permissions-policy')) {
+      reply.header('permissions-policy', permissionsPolicyHeader(voiceEnabledCache));
     }
     // Same predicate as the Secure cookie flag: local TLS counts, not only an
     // https external URL — the self-hosted TLS mode the docs recommend was the
@@ -929,10 +990,19 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return history.getEvents({ since });
   });
 
-  // Client UI settings the browser needs at boot. Currently just the terminal
-  // font, validated/normalized server-side (config.js); the name is not secret.
+  // Client UI settings the browser needs at boot: terminal font/size
+  // (validated/normalized server-side in config.js; the name is not secret),
+  // the upload size limit, and voice dictation readiness.
   app.get('/api/ui-config', { preHandler: requireAuth }, async () => {
-    return { termFont: config.termFont ?? null, termFontSize: config.termFontSize ?? 12, uploadMaxBytes };
+    return {
+      termFont: config.termFont ?? null,
+      termFontSize: config.termFontSize ?? 12,
+      uploadMaxBytes,
+      // The client renders no microphone at all unless voice is usable, so a
+      // half-installed host never shows a button that only 503s.
+      voice: (await voiceState()).enabled && Boolean(await currentEngine()),
+      voiceMaxSeconds: config.voiceMaxSeconds ?? 120,
+    };
   });
 
   // Land a pasted/dropped file on a box (or the Tmuxifier host for the local
@@ -972,6 +1042,116 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       ? await boxActions.injectUploadPath(box, box.sessionName, res.path).catch(() => ({ injected: false, mode: 'error' }))
       : { injected: false, mode: 'error' };
     return { path: res.path, ...inj };
+  });
+
+  // --- Voice management (Settings -> Voice) ---------------------------------
+  // All authenticated. Model ids are validated against the catalog allowlist
+  // before reaching the install job, which shells out to apt/git/cmake.
+
+  app.get('/api/voice/status', { preHandler: requireAuth }, async () => {
+    const state = await voiceState();
+    const settings = voiceStore ? await voiceStore.read() : { enabled: false, model: null };
+    // Each model's own on-disk presence — NOT "is this the selected one".
+    // Conflating the two would make an already-downloaded model read as
+    // "will download" and re-trigger an install the operator did not need.
+    const models = MODEL_IDS.map((id) => {
+      const m = resolveModel(id);
+      return { id, file: m.file, bytes: m.bytes, installed: modelInstalledFn(m.file) };
+    });
+    return {
+      installed: Boolean(state.bin && state.model),
+      enabled: state.enabled,
+      model: settings.model,
+      pinned: state.pinned,
+      engine: (await currentEngine())?.state?.() ?? 'stopped',
+      models,
+      job: voiceInstallManager ? voiceInstallManager.current() : null,
+    };
+  });
+
+  app.post('/api/voice/install', { preHandler: requireAuth }, async (req, reply) => {
+    if (!voiceInstallManager) return reply.code(503).send({ error: 'install manager unavailable' });
+    const model = String(req.body?.model || '');
+    if (!resolveModel(model)) return reply.code(400).send({ error: 'unknown model' });
+    try {
+      return await voiceInstallManager.start(model);
+    } catch (e) {
+      // Single-flight: a concurrent install is a conflict, not a server error.
+      const msg = e?.message || 'install failed';
+      return reply.code(/already/i.test(msg) ? 409 : 500).send({ error: msg });
+    }
+  });
+
+  app.get('/api/voice/install/:id', { preHandler: requireAuth }, async (req, reply) => {
+    if (!voiceInstallManager) return reply.code(503).send({ error: 'install manager unavailable' });
+    const job = voiceInstallManager.getJob(String(req.params.id));
+    if (!job) return reply.code(404).send({ error: 'unknown job' });
+    return job;
+  });
+
+  app.patch('/api/voice/settings', { preHandler: requireAuth }, async (req, reply) => {
+    if (!voiceStore) return reply.code(503).send({ error: 'voice settings unavailable' });
+    const patch = {};
+    if (req.body?.enabled !== undefined) patch.enabled = req.body.enabled === true;
+    if (req.body?.model !== undefined) {
+      if (!resolveModel(String(req.body.model))) return reply.code(400).send({ error: 'unknown model' });
+      patch.model = String(req.body.model);
+    }
+    try {
+      const next = await voiceStore.update(patch);
+      // Refresh the cached flag the permissions-policy hook reads, so a newly
+      // loaded page gets microphone=(self) without waiting for another call.
+      await voiceState();
+      return next;
+    } catch (e) {
+      return reply.code(400).send({ error: e?.message || 'could not save voice settings' });
+    }
+  });
+
+  // Transcribe a browser-recorded WAV with the local whisper engine and type
+  // the result into the box's tmux pane, using the same pane-aware guard as
+  // uploads (tmuxInject.js). Audio never leaves this host.
+  //
+  // The transcript is returned even when injection is refused — the client
+  // puts it on the clipboard, so a busy pane never costs the user what they
+  // just said. Fastify enforces voiceMaxBytes via bodyLimit (413).
+  app.post('/api/voice', { onRequest: requireAuth, bodyLimit: voiceMaxBytes }, async (req, reply) => {
+    const engine = await currentEngine();
+    if (!(await voiceState()).enabled || !engine) {
+      return reply.code(503).send({ error: 'voice dictation is not enabled' });
+    }
+    const body = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!body || body.length === 0) return reply.code(400).send({ error: 'missing audio body' });
+
+    const boxId = String(req.query?.box || '');
+    const box = boxId === '__local__' ? null : await store.getBox(boxId);
+    if (boxId !== '__local__' && !box) return reply.code(400).send({ error: 'unknown box' });
+
+    let raw;
+    try {
+      raw = await engine.transcribe(body);
+    } catch (e) {
+      // Only pass through a genuine 4xx/5xx integer from the engine — an
+      // out-of-range or non-numeric status (e.g. a hypothetical e.status =
+      // 200) must not turn an engine failure into a non-error response.
+      const rawStatus = Number(e?.status);
+      const status = Number.isInteger(rawStatus) && rawStatus >= 400 && rawStatus <= 599 ? rawStatus : 502;
+      return reply.code(status).send({ error: `transcription failed: ${e?.message || 'error'}` });
+    }
+
+    const text = normalizeTranscript(raw);
+    if (!text) return { text: '', injected: false, mode: 'empty' };
+
+    const session = box ? box.sessionName : localSession;
+    let inj = { injected: false, mode: 'error' };
+    if (boxId === '__local__') {
+      inj = typeof injectLocalText === 'function'
+        ? await injectLocalText(session, text).catch(() => ({ injected: false, mode: 'error' }))
+        : { injected: false, mode: 'error' };
+    } else if (typeof boxActions?.injectText === 'function') {
+      inj = await boxActions.injectText(box, session, text).catch(() => ({ injected: false, mode: 'error' }));
+    }
+    return { text, ...inj };
   });
 
   app.get('/api/local-shell', { preHandler: requireAuth }, async () => {

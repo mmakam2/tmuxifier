@@ -141,6 +141,30 @@ This mirrors the existing `passkeyOnly` precedent:
 - `.env` `TMUXIFIER_VOICE=off` is a deploy-level hard kill switch that overrides the stored
   flag, for an operator who wants voice impossible regardless of what the UI says.
 
+**Amendment (stage 2 planning).** `data/voice.json` is authoritative for both the enable flag
+and the model choice. The deciding factor is lifetime: `.env` is parsed once at boot, so a
+Settings picker writing to it could not take effect until a restart and would appear to do
+nothing in the meantime, whereas `data/voice.json` is read per request and applies
+immediately.
+
+Path resolution therefore becomes, in order:
+
+- Binary: `TMUXIFIER_WHISPER_BIN` if set, else the vendored build path if it exists.
+- Model: `TMUXIFIER_WHISPER_MODEL` if set, else `voiceCatalog.resolveModel(store.model)`
+  mapped into the vendored models directory.
+- Enabled: the resolved binary and model both exist, AND `data/voice.json`'s `enabled` is
+  true, AND `TMUXIFIER_VOICE=off` is not set.
+
+The two `TMUXIFIER_WHISPER_*` variables are retained as deliberate escape hatches — a custom
+whisper build, or the e2e suite pointing at a fixture. When either is set it wins, and the
+Settings tab shows the affected control as pinned by `.env` rather than offering a picker that
+silently does nothing.
+
+Migration: stage 1's `setup-voice` script wrote both variables into `.env`. Stage 2 stops
+writing them and instead records the model in `data/voice.json`. An existing deployment that
+ran stage 1 must have those two lines removed for the picker to govern; the Settings tab
+surfaces this rather than failing quietly.
+
 ## Data flow
 
 ### Dictation

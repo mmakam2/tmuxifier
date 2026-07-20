@@ -44,3 +44,48 @@ test('a hanging flusher cannot block shutdown past the timeout, and a rejecting 
   });
   expect(exitCode).toBe(0);
 });
+
+test('SIGTERM stops the voice engine before exiting', async () => {
+  const proc = new EventEmitter();
+  let exitCode = null;
+  let stopped = false;
+  await new Promise((resolve) => {
+    registerShutdownFlush({
+      proc,
+      voiceEngine: { stop: async () => { stopped = true; } },
+      flush: [],
+      exit: (code) => { exitCode = code; resolve(); },
+    });
+    proc.emit('SIGTERM');
+  });
+  expect(stopped).toBe(true);
+  expect(exitCode).toBe(0);
+});
+
+test('a rejecting voiceEngine.stop() does not prevent the job-store flushes from running', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-shutdown-voice-'));
+  const store = createFleetStore({ dataDir: dir });
+  store.save([{ id: 'j2', status: 'done', targets: [] }]); // schedules a debounced write
+
+  const proc = new EventEmitter();
+  let exitCode = null;
+  await new Promise((resolve) => {
+    registerShutdownFlush({
+      proc,
+      // A broken engine must not strand the flush that saves a
+      // just-finished job's final state — that's the regression that
+      // actually matters here.
+      voiceEngine: { stop: async () => { throw new Error('engine wedged'); } },
+      flush: [() => store.whenIdle()],
+      exit: (code) => { exitCode = code; resolve(); },
+      log: () => {},
+    });
+    proc.emit('SIGTERM');
+  });
+
+  expect(exitCode).toBe(0);
+  const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'fleet-jobs.json'), 'utf8'));
+  expect(onDisk).toHaveLength(1);
+  expect(onDisk[0].id).toBe('j2');
+  fs.rmSync(dir, { recursive: true, force: true });
+});

@@ -133,6 +133,44 @@ test('public responses include browser hardening headers', async () => {
   expect(res.headers['cache-control']).toBe('no-store');
 });
 
+// Pins script-src to 'self' with no 'blob:' widening. The voice-dictation
+// AudioWorklet was briefly loaded from a blob: URL, which required widening
+// script-src to 'self' blob: — a standing invitation for any future feature
+// that blobs semi-trusted text into a silent script-execution gadget.
+// The worklet now ships as a Vite-emitted same-origin asset instead (see
+// voiceRecorder.ts/voiceWorklet.js), so 'self' alone covers it. This test
+// guards against either the relaxation or its accidental reintroduction
+// landing unnoticed.
+test('CSP script-src stays self-only, with no blob: widening', async () => {
+  const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
+  const csp = res.headers['content-security-policy'];
+  expect(csp).toContain("script-src 'self'");
+  const scriptSrc = csp.split(';').find((d) => d.trim().startsWith('script-src'));
+  expect(scriptSrc.trim()).toBe("script-src 'self'");
+  expect(csp).not.toContain('blob:');
+});
+
+// permissions-policy's microphone token must track config.voiceEnabled: an
+// empty allowlist disables getUserMedia() for the top-level document itself
+// (not just embedded frames), so it would silently break voice dictation if it
+// never opened up. camera/geolocation must stay locked down in both cases —
+// this change must never quietly widen them.
+test('permissions-policy locks the microphone down when voice is disabled', async () => {
+  app = await makeApp({ config: { voiceEnabled: false } });
+  const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
+  expect(res.headers['permissions-policy']).toContain('microphone=()');
+  expect(res.headers['permissions-policy']).toContain('camera=()');
+  expect(res.headers['permissions-policy']).toContain('geolocation=()');
+});
+
+test('permissions-policy allows the microphone for this origin only when voice is enabled', async () => {
+  app = await makeApp({ config: { voiceEnabled: true } });
+  const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
+  expect(res.headers['permissions-policy']).toContain('microphone=(self)');
+  expect(res.headers['permissions-policy']).toContain('camera=()');
+  expect(res.headers['permissions-policy']).toContain('geolocation=()');
+});
+
 test('/api/ui-config requires auth and returns terminal font defaults', async () => {
   const unauth = await app.inject({ method: 'GET', url: '/api/ui-config' });
   expect(unauth.statusCode).toBe(401);
@@ -141,7 +179,7 @@ test('/api/ui-config requires auth and returns terminal font defaults', async ()
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
   const res = await app.inject({ method: 'GET', url: '/api/ui-config', headers });
   expect(res.statusCode).toBe(200);
-  expect(res.json()).toEqual({ termFont: null, termFontSize: 12, uploadMaxBytes: 25 * 1024 * 1024 });
+  expect(res.json()).toEqual({ termFont: null, termFontSize: 12, uploadMaxBytes: 25 * 1024 * 1024, voice: false, voiceMaxSeconds: 120 });
 });
 
 test('/api/ui-config reflects the configured terminal font', async () => {
@@ -149,7 +187,32 @@ test('/api/ui-config reflects the configured terminal font', async () => {
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
   const res = await app.inject({ method: 'GET', url: '/api/ui-config', headers });
-  expect(res.json()).toEqual({ termFont: 'Fira Code', termFontSize: 13, uploadMaxBytes: 25 * 1024 * 1024 });
+  expect(res.json()).toEqual({ termFont: 'Fira Code', termFontSize: 13, uploadMaxBytes: 25 * 1024 * 1024, voice: false, voiceMaxSeconds: 120 });
+});
+
+// voice is advertised only when BOTH halves are true: config says voice is
+// possible (a whisper binary + model are configured) AND a live voiceEngine
+// was actually wired into the server. Either alone must not show a
+// microphone that would only 503 — see server.js's /api/ui-config comment.
+test('/api/ui-config only reports voice true when both config.voiceEnabled and a voiceEngine are present', async () => {
+  app = await makeApp({ voiceEngine: {}, config: { voiceEnabled: false, voiceMaxSeconds: 60 } });
+  let cookie = await login();
+  let headers = { cookie: `${cookie.name}=${cookie.value}` };
+  let res = await app.inject({ method: 'GET', url: '/api/ui-config', headers });
+  expect(res.json().voice).toBe(false); // engine present, but config says voice isn't usable
+
+  app = await makeApp({ voiceEngine: null, config: { voiceEnabled: true, voiceMaxSeconds: 60 } });
+  cookie = await login();
+  headers = { cookie: `${cookie.name}=${cookie.value}` };
+  res = await app.inject({ method: 'GET', url: '/api/ui-config', headers });
+  expect(res.json().voice).toBe(false); // config says usable, but no engine was wired in
+
+  app = await makeApp({ voiceEngine: {}, config: { voiceEnabled: true, voiceMaxSeconds: 60 } });
+  cookie = await login();
+  headers = { cookie: `${cookie.name}=${cookie.value}` };
+  res = await app.inject({ method: 'GET', url: '/api/ui-config', headers });
+  expect(res.json().voice).toBe(true);
+  expect(res.json().voiceMaxSeconds).toBe(60);
 });
 
 test('login then CRUD a box', async () => {

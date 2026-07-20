@@ -116,27 +116,49 @@ export function injectionText(path) {
 
 // Orchestration: capture → classify → type or message. runScript executes one
 // sh command on the target (over ssh for a box, /bin/sh for __local__) and
-// resolves {code, stdout, stderr}. Never throws — the upload already
-// succeeded, so injection failures degrade to a status message and a mode
-// the client can surface.
-export async function injectVia(runScript, session, remotePath) {
-  const name = String(remotePath).split('/').pop() || String(remotePath);
+// resolves {code, stdout, stderr}. Never throws — the caller's work (an upload,
+// a transcription) already succeeded, so injection failures degrade to a status
+// message and a mode the client can surface.
+//
+// `text` is typed literally via send-keys -l and is never followed by Enter:
+// the operator reviews before submitting. `label` names the thing in the
+// default tmux status messages ('image', 'dictation'); okMsg/busyMsg override
+// those entirely, which is how the upload wrapper below keeps its original
+// wording without a second copy of this body.
+export async function injectTextVia(runScript, session, text, { label = 'text', okMsg, busyMsg } = {}) {
+  const body = String(text ?? '');
+  // Nothing to type is not a failure — and must not produce a bare send-keys.
+  if (!body.trim()) return { injected: false, mode: 'empty' };
+  const onOk = okMsg || (() => `[tmuxifier] ${label} inserted`);
+  const onBusy = busyMsg || (() => `[tmuxifier] ${label} ready (pane busy — not typed)`);
+  const say = async (msg) => { try { await runScript(buildDisplayMessageRemote(session, msg)); } catch {} };
   let mode = 'busy';
   try {
     const cap = await runScript(buildPaneStateRemote(session));
     mode = cap && cap.code === 0 ? classifyPaneState(parsePaneState(cap.stdout)) : 'busy';
     if (mode === 'claude' || mode === 'shell') {
-      const sent = await runScript(buildSendKeysRemote(session, injectionText(remotePath)));
+      const sent = await runScript(buildSendKeysRemote(session, body));
       if (!sent || sent.code !== 0) throw new Error('send-keys failed');
-      try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] image pasted: ${name}`)); } catch {}
+      await say(onOk());
       return { injected: true, mode };
     }
-    try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] image uploaded: ${remotePath} (pane busy — not typed)`)); } catch {}
+    await say(onBusy());
     return { injected: false, mode: 'busy' };
   } catch {
-    try { await runScript(buildDisplayMessageRemote(session, `[tmuxifier] image uploaded: ${remotePath} (pane busy — not typed)`)); } catch {}
+    await say(onBusy());
     return { injected: false, mode: 'error' };
   }
+}
+
+// Upload-specific wrapper. It quotes the path and supplies the original tmux
+// status wording, so the upload flow's observable behaviour is unchanged —
+// while the capture/classify/send-keys body exists exactly once, above.
+export function injectVia(runScript, session, remotePath) {
+  const name = String(remotePath).split('/').pop() || String(remotePath);
+  return injectTextVia(runScript, session, injectionText(remotePath), {
+    okMsg: () => `[tmuxifier] image pasted: ${name}`,
+    busyMsg: () => `[tmuxifier] image uploaded: ${remotePath} (pane busy — not typed)`,
+  });
 }
 
 function runLocalScript(script, { timeout = 8000 } = {}) {
@@ -151,4 +173,10 @@ function runLocalScript(script, { timeout = 8000 } = {}) {
 // so the same flow works with a /bin/sh runner on the Tmuxifier host.
 export function injectLocalUploadPath(session, path, { run = runLocalScript } = {}) {
   return injectVia(run, session, path);
+}
+
+// The __local__ terminal runs inside a real local tmux session
+// (sessions.openLocal), so the same flow works with a /bin/sh runner.
+export function injectLocalText(session, text, { run = runLocalScript } = {}) {
+  return injectTextVia(run, session, text, { label: 'dictation' });
 }

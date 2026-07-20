@@ -34,6 +34,11 @@ import { createAiAuthSeeder } from './aiAuthSeed.js';
 import { readDefaultPublicKey, createDefaultKeyProvider } from './defaultKey.js';
 import os from 'node:os';
 import { registerShutdownFlush } from './shutdown.js';
+import { createVoiceEngine } from './voiceEngine.js';
+import { createVoiceStore } from './voiceStore.js';
+import { createVoiceInstallStore } from './voiceInstallStore.js';
+import { createVoiceInstallManager } from './voiceInstall.js';
+import { resolveVoicePaths } from './voicePaths.js';
 
 const config = loadConfig();
 config.configPath = path.resolve('config.json');
@@ -55,6 +60,39 @@ const boxActions = createBoxActions({
   controlDir: config.controlDir,
   controlPersist: config.controlPersist,
 });
+// Voice dictation state lives in data/voice.json, resolved per request so a
+// Settings change applies without a restart (see voicePaths.js for the
+// precedence rules and the .env escape hatches).
+const repoRoot = process.cwd();
+const voiceStore = createVoiceStore({ dataDir: config.dataDir });
+const voiceInstallManager = createVoiceInstallManager({
+  repoRoot,
+  store: createVoiceInstallStore({ dataDir: config.dataDir }),
+  voiceStore,
+});
+const resolveVoice = async () =>
+  resolveVoicePaths({ repoRoot, config, settings: await voiceStore.read() });
+
+// Nothing is spawned and no RAM is held until the first dictation: the engine
+// itself is lazy, and this only constructs it once voice is actually usable.
+// It is rebuilt when the effective model changes, so switching model in
+// Settings takes effect on the next dictation rather than needing a restart.
+let voiceEngine = null;
+let voiceEngineModel = null;
+async function getVoiceEngine() {
+  const { bin, model, enabled } = await resolveVoice();
+  if (!enabled) return null;
+  if (voiceEngine && voiceEngineModel === model) return voiceEngine;
+  if (voiceEngine) await voiceEngine.stop();
+  voiceEngineModel = model;
+  voiceEngine = createVoiceEngine({
+    bin,
+    model,
+    idleMs: config.voiceIdleMs,
+    threads: Math.min(4, os.cpus().length || 1),
+  });
+  return voiceEngine;
+}
 const aiAuthSeeder = createAiAuthSeeder({
   runStdin: (box, script, input) => boxActions.execScriptStdin(box, script, input),
   token: config.claudeOauthToken,
@@ -196,7 +234,10 @@ const statusPoller = createStatusPoller({
   },
 });
 
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore });
+// Resolve once at boot so the permissions-policy header is correct on the very
+// first page load, not only after something has called voiceState().
+const voiceEnabledInitial = (await resolveVoice()).enabled;
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
@@ -219,6 +260,7 @@ app.listen({ host: config.bindAddress, port: config.port })
     // reload as 'interrupted').
     registerShutdownFlush({
       flush: [fleetStore, setupStore, provisionStore, lifecycleStore].map((s) => () => s.whenIdle()),
+      voiceEngine: { stop: async () => { if (voiceEngine) await voiceEngine.stop(); } },
     });
     statusPoller.start().catch((err) => console.error('status poll failed to start:', err));
     console.log(`Tmuxifier listening on ${scheme}://${config.bindAddress}:${config.port}`);

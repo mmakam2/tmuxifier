@@ -1,10 +1,15 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { setupLocalBox } from '../helpers/localBox.js';
 import { hashPassword } from '../../src/server/auth.js';
 import { createStore } from '../../src/server/store.js';
+
+// Absolute (not cwd-relative) so the e2e server finds the fixture regardless
+// of where `playwright test` happens to be invoked from.
+const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
 export default async function globalSetup() {
   const lb = await setupLocalBox();
@@ -49,6 +54,14 @@ export default async function globalSetup() {
       TMUXIFIER_TLS_KEY: '',
       TMUXIFIER_BASE_EXTERNAL_URL: '',
       TMUXIFIER_PUBLIC_URL: '',
+      // Voice dictation, pointed at the fixture whisper-server (test/e2e/fixtures)
+      // rather than a real model/binary, so the suite needs no compiler or GPU
+      // and CI can run it. This is a real exported var on the spawned child's
+      // env, which per config.js's precedence (.env file -> shell env) wins
+      // over whatever TMUXIFIER_WHISPER_BIN/MODEL a contributor's own .env
+      // happens to have set for real transcription.
+      TMUXIFIER_WHISPER_BIN: path.join(fixturesDir, 'fake-whisper-server.mjs'),
+      TMUXIFIER_WHISPER_MODEL: path.join(fixturesDir, 'fake-model.bin'),
     },
     stdio: 'inherit',
   });

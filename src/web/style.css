@@ -316,6 +316,30 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .stopped-box-state { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--muted); }
 .stopped-box-state strong { color: var(--text); font-size: 15px; }
 .term { position: absolute; inset: 0; padding: 6px; }
+/* The button is appended to the terminal's own parent (there is no toolbar
+   element), so it floats over the top-right corner of the xterm canvas.
+   .term is already `position: absolute` (see above), which is itself a
+   positioned element and therefore already establishes the containing block
+   this needs — no extra `position: relative` was required here. */
+.voice-btn {
+  position: absolute;
+  top: 6px;
+  right: 12px;
+  z-index: 5;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+  border: 1px solid #2a3040;
+  border-radius: 4px;
+  background: #131822;
+  color: #c9d1d9;
+  cursor: pointer;
+  opacity: 0.55;
+}
+.voice-btn:hover { opacity: 1; }
+.voice-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.voice-btn[data-state='recording'] { color: #e5534b; border-color: #e5534b; font-weight: 600; opacity: 1; }
+.voice-btn[data-state='working'] { opacity: 0.7; }
 .provision-panel {
   position: fixed;
   top: 0; right: 0;
@@ -671,3 +695,4 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
   .pve-container-row { grid-template-columns: minmax(0, 1fr) auto; }
   .pve-container-row .pve-row-actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
+
