@@ -1,6 +1,7 @@
 import { test, expect, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
+import { spawn as spawnRealProcess } from 'node:child_process';
 import { createVoiceEngine } from '../src/server/voiceEngine.js';
 
 const started = [];
@@ -46,11 +47,24 @@ function fakeSpawn({ reply = { text: 'hello world' }, crashAfter = null, gate = 
         req.destroy();
         return;
       }
+      // The real whisper-server binary unconditionally prints roughly a dozen
+      // lines per request across stdout/stderr (~365 bytes of stderr alone --
+      // see the I3 finding). Emitting a comparable amount here means the
+      // engine's drain-listener code path is genuinely exercised by every
+      // ordinary test in this file, not just the dedicated backpressure test
+      // below (which is the one that can actually prove draining, since a
+      // bare EventEmitter's 'data' event never blocks regardless of whether
+      // anything is listening).
+      child.stderr.emit('data', Buffer.from(`whisper_server: processing '<clip>' (16000 samples, 1.0 sec)\n`.repeat(5)));
       if (gate) await gate.wait();
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(reply));
     });
-    const close = () => new Promise((r) => server.close(() => r()));
+    // closeAllConnections() (Node 18.2+) forcibly ends any still-open
+    // connection before waiting on the close callback, so cleanup can never
+    // hang behind a request a test deliberately left unanswered (e.g. the I4
+    // fake-never-responds test).
+    const close = () => new Promise((r) => { server.closeAllConnections(); server.close(() => r()); });
     started.push(close);
     server.listen(port, '127.0.0.1');
     child.kill = () => { child.killed = true; void close(); child.emit('exit', 0, 'SIGTERM'); };
@@ -211,3 +225,82 @@ test('stop() is idempotent and safe before any spawn', async () => {
   await engine.stop();
   expect(engine.state()).toBe('stopped');
 });
+
+// I4: without an inference timeout, a wedged child leaves inFlight stuck
+// above 0 forever -- armIdle() never re-arms, teardown() never runs, and
+// every dictation after this one would 429 until Tmuxifier itself restarts.
+// `gate.wait()` here never resolves, standing in for a child that accepted
+// the request but will never answer it -- the /inference response itself
+// hangs, not the connection.
+test('an inference that never responds rejects in bounded time and the next request gets a fresh child', async () => {
+  const gate = { wait: () => new Promise(() => {}) }; // never resolves
+  const spawn = fakeSpawn({ gate });
+  const engine = makeEngine(spawn, { inferenceTimeoutMs: 50 });
+
+  await expect(engine.transcribe(WAV)).rejects.toMatchObject({ status: 502 });
+  expect(spawn.calls.length).toBe(1);
+  expect(engine.state()).toBe('stopped'); // the wedged child was torn down, not left dangling
+
+  // Release the gate so a stray retry against the stale child (there should
+  // be none) can't hang the suite; the fresh child below reads the gate too,
+  // since fakeSpawn's request handler reads `gate.wait` fresh on every call.
+  gate.wait = () => Promise.resolve();
+
+  expect(await engine.transcribe(WAV)).toBe('hello world');
+  expect(spawn.calls.length).toBe(2); // a genuinely fresh child, not the wedged one
+  await engine.stop();
+}, 10000);
+
+// I3 regression guard: the real whisper-server binary is not a well-behaved
+// Node child -- its printf/fprintf calls are raw, unbuffered libc write()
+// syscalls against the stdout/stderr pipes. If nothing reads those pipes,
+// the kernel buffer (64 KiB on Linux) fills and the child's *next* write()
+// blocks it mid-request. fakeSpawn above cannot reproduce that: emitting a
+// 'data' event on a bare EventEmitter never blocks regardless of whether
+// anything is listening, so it cannot tell a present drain listener from a
+// removed one. This test spawns a REAL child process that performs a real,
+// synchronous, unbuffered write (fs.writeSync, bypassing Node's own
+// stdout/stderr stream buffering) so an actually-undrained pipe would
+// actually block it, the same way the real binary would. A single write
+// larger than the 64 KiB pipe buffer proves it either way, so this needs
+// only two requests rather than the ~160 real production would take before
+// wedging -- "shrink the volume ... by writing a larger chunk per request."
+test('drains real child stdio so large per-request writes cannot wedge the child', async () => {
+  const port = nextPort++;
+  const chunkBytes = 200 * 1024; // well past the 64 KiB pipe buffer in one write
+  const script = [
+    "const http = require('http');",
+    "const fs = require('fs');",
+    `const chunk = Buffer.alloc(${chunkBytes}, 'x');`,
+    'const server = http.createServer((req, res) => {',
+    "  if (req.url !== '/inference') { res.writeHead(200); res.end(); return; }",
+    '  fs.writeSync(2, chunk);', // raw blocking write, like the real binary's fprintf(stderr, ...)
+    '  fs.writeSync(1, chunk);', // and stdout, per the same eleven-print-sites finding
+    "  res.writeHead(200, { 'content-type': 'application/json' });",
+    "  res.end(JSON.stringify({ text: 'hello world' }));",
+    '});',
+    `server.listen(${port}, '127.0.0.1');`,
+  ].join('\n');
+
+  let realChild = null;
+  const spawn = () => {
+    realChild = spawnRealProcess(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+    return realChild;
+  };
+  // Safety net alongside engine.stop() below: if an assertion throws before
+  // that runs, this still reaps the real OS process rather than leaking it.
+  started.push(() => new Promise((resolve) => {
+    if (!realChild || realChild.exitCode !== null || realChild.killed) return resolve();
+    realChild.once('exit', () => resolve());
+    try { realChild.kill('SIGKILL'); } catch { resolve(); }
+  }));
+
+  const engine = makeEngine(spawn, { pickPort: async () => port, inferenceTimeoutMs: 5000 });
+  // Two sequential requests against the warm child: if the drain listeners
+  // were ever removed, the first request's raw write would already exceed
+  // the pipe buffer and block the child forever, so this would time out
+  // (via inferenceTimeoutMs above) rather than resolve quickly.
+  expect(await engine.transcribe(WAV)).toBe('hello world');
+  expect(await engine.transcribe(WAV)).toBe('hello world');
+  await engine.stop();
+}, 10000);

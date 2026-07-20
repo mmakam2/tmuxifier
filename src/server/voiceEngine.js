@@ -24,6 +24,25 @@ function err(message, status) {
 // only bounds the *next* one.
 const READY_POLL_MS = 250;
 
+// Tail of the child's combined stdout/stderr kept for diagnostics, capped so
+// a long warm session can never grow this unboundedly. The real binary
+// (verified against vendor/whisper/examples/server/server.cpp) has eleven
+// unconditional print sites per request across both streams -- roughly 365
+// bytes of stderr alone -- so keeping only the last few KiB is plenty of
+// context for "why did the last transcription fail" without accumulating.
+const OUTPUT_RING_BYTES = 8192;
+
+function createOutputRing(capBytes) {
+  let buf = Buffer.alloc(0);
+  return {
+    push(chunk) {
+      buf = buf.length ? Buffer.concat([buf, chunk]) : Buffer.from(chunk);
+      if (buf.length > capBytes) buf = buf.subarray(buf.length - capBytes);
+    },
+    text() { return buf.toString('utf8'); },
+  };
+}
+
 // Ask the OS for a free port by binding :0 and reading it back. Racy in
 // principle (the port could be taken between close and the child's bind), but
 // this is a single-user local dashboard and the failure mode is a readiness
@@ -50,6 +69,15 @@ export function createVoiceEngine({
   // is ready in under a second. 120s covers the first dictation after a
   // reboot without making a genuinely broken startup wait forever.
   readyTimeoutMs = 120000,
+  // Bounds a single /inference call. Sized generously like readyTimeoutMs
+  // (whisper.cpp turns a maxSeconds clip into text well inside real time even
+  // on modest hardware) because its job isn't a tight SLA -- it only has to
+  // guarantee SOME request eventually settles if the child wedges. Without
+  // this, a hung child leaves the promise pending forever: inFlight never
+  // drops to 0, armIdle() (guarded on inFlight > 0) never re-arms, teardown()
+  // never runs, and every subsequent dictation 429s until Tmuxifier itself is
+  // restarted.
+  inferenceTimeoutMs = 120000,
   spawn = nodeSpawn,
   pickPort = ephemeralPort,
   // Injected so tests can exercise the real readiness-probe and inference
@@ -155,13 +183,28 @@ export function createVoiceEngine({
       ];
       const c = spawn(bin, argv, { stdio: ['ignore', 'pipe', 'pipe'] });
 
+      // Drain both piped streams unconditionally, starting immediately (before
+      // readiness is even established) and for the child's whole lifetime.
+      // Node leaves piped child streams paused until something reads them, so
+      // with no listener the 64 KiB kernel pipe buffer is the only sink for
+      // the real binary's per-request stdout/stderr diagnostics; after
+      // roughly 160 transcriptions in one warm window the child blocks inside
+      // its own write() call mid-request. Piping into a small ring buffer
+      // (rather than 'ignore') means an operator has something to read when a
+      // transcription fails, since the engine otherwise captures nothing at
+      // all from the child.
+      const output = createOutputRing(OUTPUT_RING_BYTES);
+      c.stdout.on('data', (chunk) => output.push(chunk));
+      c.stderr.on('data', (chunk) => output.push(chunk));
+
       await waitForReady(c, p);
 
       // A crash *after* startup invalidates the warm child; the next request
       // spawns a fresh one rather than fetching into a closed port.
       c.on('exit', (code, signal) => {
         if (child === c) {
-          log(`[voice] whisper exited (code ${code}, signal ${signal})`);
+          const tail = output.text();
+          log(`[voice] whisper exited (code ${code}, signal ${signal})${tail ? `\n${tail}` : ''}`);
           teardown();
         }
       });
@@ -183,8 +226,20 @@ export function createVoiceEngine({
     form.append('temperature', '0');
     let res;
     try {
-      res = await fetchImpl(`http://127.0.0.1:${port}/inference`, { method: 'POST', body: form });
+      res = await fetchImpl(`http://127.0.0.1:${port}/inference`, {
+        method: 'POST',
+        body: form,
+        signal: AbortSignal.timeout(inferenceTimeoutMs),
+      });
     } catch (e) {
+      // Covers a genuine timeout/abort as well as any other request failure.
+      // Tearing the child down here (rather than only on its own 'exit'
+      // event) is what lets the *next* request spawn a fresh, healthy child
+      // instead of retrying against -- or queueing behind -- one that just
+      // proved it hangs. Safe to call unconditionally: teardown() is a no-op
+      // once the child is already gone (e.g. it crashed independently and its
+      // own 'exit' listener already tore it down).
+      teardown();
       throw err(`whisper request failed: ${e.message}`, 502);
     }
     if (!res.ok) throw err(`whisper returned ${res.status}`, 502);
@@ -199,9 +254,11 @@ export function createVoiceEngine({
       return starting ? 'starting' : 'stopped';
     },
 
-    // Serialized behind a bounded queue: whisper-server processes one clip at
-    // a time, so letting requests pile up would only convert latency into
-    // memory pressure. Overflow is a fast 429 rather than an unbounded wait.
+    // Bounded by a concurrency cap, not a FIFO queue: `queued`/`inFlight` are
+    // just counters, so requests under queueLimit run concurrently rather
+    // than being serialized -- this only caps how many may be in flight or
+    // waiting on the child at once, converting overflow into a fast 429
+    // rather than an unbounded pile-up.
     async transcribe(wav) {
       if (queued >= queueLimit) throw err('voice engine busy', 429);
       queued += 1;

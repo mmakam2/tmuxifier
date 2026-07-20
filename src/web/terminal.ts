@@ -6,7 +6,7 @@ import { clipboardActionForKey, writeClipboard, readClipboard, parseOsc52, type 
 import { buildFontFamily, clampFontSize, DEFAULT_TERM_FONT_SIZE } from './termFont';
 import { api } from './api';
 import { filesFromDataTransfer, uploadName, sizeError, termSafe } from './upload';
-import { wireVoice, isVoiceHotkey } from './voiceUi';
+import { wireVoice, isVoiceHotkey, isVoiceHotkeyRelease } from './voiceUi';
 
 // Synchronous execCommand('copy') used when the async Clipboard API is missing
 // (insecure context) or rejects (document not focused). A hidden textarea is the
@@ -46,7 +46,7 @@ function isMacPlatform(): boolean {
 // attachCustomKeyEventHandler keeps only ONE handler, so voice must be checked
 // in this same callback rather than attaching a second one, which would
 // silently replace this handler and disable copy/paste.
-function wireClipboard(term: Terminal, voice?: { ready(): boolean; begin(): void; finish(): void }): void {
+function wireClipboard(term: Terminal, voice?: { ready(): boolean; recording(): boolean; begin(): void; finish(): void }): void {
   const deps: ClipboardDeps = {
     clipboard: typeof navigator !== 'undefined' ? navigator.clipboard : undefined,
     fallbackCopy: execCommandCopy,
@@ -80,14 +80,29 @@ function wireClipboard(term: Terminal, voice?: { ready(): boolean; begin(): void
     // PTY. xterm keeps only ONE custom key handler, so this must live in the
     // same callback as the clipboard bindings — a second attach call would
     // silently replace them. Only intercept when a controller is actually
-    // mounted (voice.ready()): while the /api/ui-config readiness fetch is
-    // still pending, or when the server has voice off, there is nothing to
-    // hand the keystroke to, so it must fall through to normal xterm handling
-    // instead of being silently swallowed.
-    if (voice?.ready() && isVoiceHotkey(ev)) {
-      if (ev.type === 'keydown') voice.begin();
-      else voice.finish();
-      return false;
+    // mounted AND usable (voice.ready() — false while the /api/ui-config
+    // readiness fetch is still pending, when the server has voice off, or
+    // when the mounted verdict itself was not ok, e.g. plain HTTP): with
+    // nothing able to act on the keystroke either way, it must fall through
+    // to normal xterm handling rather than being silently swallowed or
+    // handed to a controller that would just throw.
+    //
+    // Start and stop are deliberately asymmetric. isVoiceHotkey (keydown)
+    // requires the full Ctrl+Shift+Space chord together. Stopping instead
+    // fires on ANY keyup that releases part of that chord while a recording
+    // is in flight (voice.recording()) — physical chord releases are rarely
+    // simultaneous, and requiring all three modifiers to still be held on
+    // release would leave the mic live until the 120s auto-stop on a normal
+    // release order (e.g. Ctrl lifted just before Space).
+    if (voice?.ready()) {
+      if (ev.type === 'keydown' && isVoiceHotkey(ev)) {
+        voice.begin();
+        return false;
+      }
+      if (ev.type === 'keyup' && voice.recording() && isVoiceHotkeyRelease(ev)) {
+        voice.finish();
+        return false;
+      }
     }
     const action = clipboardActionForKey(ev, env);
     if (action === 'copy') {
