@@ -6,7 +6,7 @@ import { buildServer } from '../src/server/server.js';
 import { createStore } from '../src/server/store.js';
 import { createPasskeyStore } from '../src/server/passkeyStore.js';
 import { hashPassword } from '../src/server/auth.js';
-import { makeAuthenticator, makeRegistration, b64u } from './helpers/webauthnFixtures.js';
+import { makeAuthenticator, makeRegistration, makeAssertion, b64u } from './helpers/webauthnFixtures.js';
 
 const RP = 'tmux.example.com';
 const ORIGIN = `https://${RP}`;
@@ -140,4 +140,107 @@ test('a pinned rp id that no longer matches the configuration is a 409', async (
   const res = await app.inject({ method: 'POST', url: '/api/passkeys/register/begin', headers: await headers() });
   expect(res.statusCode).toBe(409);
   expect(res.json().error).toMatch(/old\.example\.com/);
+});
+
+async function enroll(store = passkeyStore) {
+  const auth = makeAuthenticator();
+  await store.add({
+    id: auth.id, publicKey: b64u(auth.cose), alg: -7, signCount: 0, label: 'Laptop', transports: ['internal'],
+  }, { rpId: RP });
+  return auth;
+}
+
+test('auth/info reports passkey state without authentication', async () => {
+  expect((await app.inject({ method: 'GET', url: '/api/auth/info' })).json())
+    .toEqual({ mode: 'password', passkey: { enrolled: 0, rpId: RP, only: false } });
+  await enroll();
+  expect((await app.inject({ method: 'GET', url: '/api/auth/info' })).json().passkey.enrolled).toBe(1);
+});
+
+test('login/begin refuses before any passkey is enrolled', async () => {
+  const res = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  expect(res.statusCode).toBe(503);
+  expect(res.json().error).toMatch(/no passkey enrolled/);
+});
+
+test('login/begin sends no allowCredentials, so credential ids stay private', async () => {
+  await enroll();
+  const res = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  expect(res.statusCode).toBe(200);
+  expect(res.json().allowCredentials).toEqual([]);
+  expect(res.json()).toMatchObject({ rpId: RP, userVerification: 'required' });
+});
+
+test('a full passkey login mints a session cookie that authenticates', async () => {
+  const auth = await enroll();
+  const begin = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  const assertion = makeAssertion({
+    authenticator: auth, challenge: Buffer.from(begin.json().challenge, 'base64url'),
+    origin: ORIGIN, rpId: RP, signCount: 5,
+  });
+  const fin = await app.inject({
+    method: 'POST', url: '/api/auth/passkey/login/finish',
+    headers: { cookie: pkCookie(begin) }, payload: assertion,
+  });
+  expect(fin.statusCode).toBe(200);
+  const session = fin.cookies.find((c) => c.name === 'tmuxifier_session');
+  const me = await app.inject({ method: 'GET', url: '/api/me', headers: { cookie: `${session.name}=${session.value}` } });
+  expect(me.statusCode).toBe(200);
+  expect((await passkeyStore.listRaw())[0].signCount).toBe(5);
+});
+
+test('an unknown credential and a bad signature are indistinguishable', async () => {
+  const auth = await enroll();
+  const begin1 = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  const stranger = makeAuthenticator({ credentialId: Buffer.from('cred-zzzz') });
+  const unknown = await app.inject({
+    method: 'POST', url: '/api/auth/passkey/login/finish', headers: { cookie: pkCookie(begin1) },
+    payload: makeAssertion({ authenticator: stranger, challenge: Buffer.from(begin1.json().challenge, 'base64url'), origin: ORIGIN, rpId: RP }),
+  });
+  const begin2 = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  const forged = makeAssertion({ authenticator: auth, challenge: Buffer.from(begin2.json().challenge, 'base64url'), origin: ORIGIN, rpId: RP, tamper: 'signature' });
+  const bad = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/finish', headers: { cookie: pkCookie(begin2) }, payload: forged });
+  expect(unknown.statusCode).toBe(401);
+  expect(bad.statusCode).toBe(401);
+  expect(unknown.json()).toEqual(bad.json());
+});
+
+test('an assertion from a foreign origin is rejected', async () => {
+  const auth = await enroll();
+  const begin = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  const res = await app.inject({
+    method: 'POST', url: '/api/auth/passkey/login/finish', headers: { cookie: pkCookie(begin) },
+    payload: makeAssertion({ authenticator: auth, challenge: Buffer.from(begin.json().challenge, 'base64url'), origin: 'https://evil.example.net', rpId: RP }),
+  });
+  expect(res.statusCode).toBe(401);
+});
+
+// Passkey login shares the password lockout bucket rather than bypassing it.
+test('failed passkey logins count toward the per-ip lockout', async () => {
+  const auth = await enroll();
+  for (let i = 0; i < 10; i++) {
+    const begin = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+    await app.inject({
+      method: 'POST', url: '/api/auth/passkey/login/finish', headers: { cookie: pkCookie(begin) },
+      payload: makeAssertion({ authenticator: auth, challenge: Buffer.from(begin.json().challenge, 'base64url'), origin: ORIGIN, rpId: RP, tamper: 'signature' }),
+    });
+  }
+  expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(429);
+});
+
+test('a flood of anonymous login challenges cannot evict an enrollment challenge', async () => {
+  const h = await headers();
+  await enroll();
+  const begin = await app.inject({ method: 'POST', url: '/api/passkeys/register/begin', headers: h });
+  // More than the 64-entry default bound, all unauthenticated.
+  for (let i = 0; i < 70; i++) await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  const auth = makeAuthenticator({ credentialId: Buffer.from('cred-late') });
+  const fin = await app.inject({
+    method: 'POST', url: '/api/passkeys/register/finish',
+    headers: { ...h, cookie: `${h.cookie}; ${pkCookie(begin)}` },
+    payload: { label: 'Laptop', response: makeRegistration({
+      authenticator: auth, challenge: Buffer.from(begin.json().challenge, 'base64url'), origin: ORIGIN, rpId: RP,
+    }).response },
+  });
+  expect(fin.statusCode).toBe(200);
 });

@@ -119,7 +119,8 @@ test('rejects unauthenticated box listing', async () => {
 test('/api/auth/info reports password mode', async () => {
   const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
   expect(res.statusCode).toBe(200);
-  expect(res.json()).toEqual({ mode: 'password' });
+  expect(res.json()).toMatchObject({ mode: 'password' });
+  expect(res.json().passkey).toEqual({ enrolled: 0, rpId: null, only: false });
 });
 
 test('public responses include browser hardening headers', async () => {

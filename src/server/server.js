@@ -115,6 +115,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   const rpId = config.rpId || null;
   const passkeyOriginOk = rpId ? makeOriginCheck(rpId) : () => false;
 
+  // Separate bounded stores per ceremony. login/begin is unauthenticated, so a
+  // flood of anonymous challenges must not be able to evict the enrollment
+  // challenge of an authenticated operator mid-ceremony.
+  const pkLoginChallenges = createPasskeyChallenges({ ttlMs: PK_TTL_SECONDS * 1000 });
+  const challengeStoreFor = (kind) => (kind === 'auth' ? pkLoginChallenges : pkChallenges);
+
   // Replies with the reason and returns false when passkeys cannot be used.
   async function pkReady(reply) {
     if (!passkeyStore) {
@@ -134,7 +140,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   }
 
   function issueChallenge(reply, kind) {
-    const { token, challenge } = pkChallenges.issue(kind);
+    const { token, challenge } = challengeStoreFor(kind).issue(kind);
     reply.setCookie(PK_COOKIE, token, {
       httpOnly: true, sameSite: 'strict', secure: !!config.secureCookie,
       path: '/', signed: true, maxAge: PK_TTL_SECONDS,
@@ -147,7 +153,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (!raw) return null;
     const unsigned = app.unsignCookie(raw);
     if (!unsigned.valid || !unsigned.value) return null;
-    return pkChallenges.take(unsigned.value, kind);
+    return challengeStoreFor(kind).take(unsigned.value, kind);
   }
 
   // Read per request, never captured at boot, so the toggle takes effect at once.
@@ -199,7 +205,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       return reply.code(400).send({ error: `passkey registration failed: ${String(e.message).slice(0, 160)}` });
     }
     const transports = Array.isArray(req.body?.response?.transports)
-      ? req.body.response.transports.filter((t) => typeof t === 'string' && /^[a-z-]{1,16}$/.test(t)).slice(0, 8)
+      ? [...new Set(req.body.response.transports.filter((t) => typeof t === 'string' && /^[a-z-]{1,16}$/.test(t)))].slice(0, 8)
       : [];
     const credential = await passkeyStore.add({
       id: reg.credentialId.toString('base64url'),
@@ -214,6 +220,60 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const result = await passkeyStore.remove(req.params.id);
     if (!result.removed) return reply.code(404).send({ error: 'passkey not found' });
     return { ok: true, disarmed: result.disarmed };
+  });
+
+  app.post('/api/auth/passkey/login/begin', async (req, reply) => {
+    if (loginLimiter.limited(req.ip)) return reply.code(429).send({ error: 'too many attempts' });
+    if (!(await pkReady(reply))) return reply;
+    if ((await passkeyStore.listRaw()).length === 0) return reply.code(503).send({ error: 'no passkey enrolled' });
+    const challenge = issueChallenge(reply, 'auth');
+    return {
+      challenge: challenge.toString('base64url'),
+      rpId,
+      timeout: PK_TTL_SECONDS * 1000,
+      userVerification: 'required',
+      // Discoverable credentials identify the user themselves; an empty list
+      // also avoids handing out credential ids before authentication.
+      allowCredentials: [],
+    };
+  });
+
+  app.post('/api/auth/passkey/login/finish', async (req, reply) => {
+    const ip = req.ip;
+    if (loginLimiter.limited(ip)) return reply.code(429).send({ error: 'too many attempts' });
+    if (!(await pkReady(reply))) return reply;
+    const challenge = takeChallenge(req, 'auth');
+    reply.clearCookie(PK_COOKIE, { path: '/' });
+    if (!challenge) return reply.code(400).send({ error: 'challenge expired — start again' });
+    const credential = (await passkeyStore.listRaw()).find((c) => c.id === req.body?.id);
+    let result;
+    try {
+      if (!credential) throw new Error('unknown credential');
+      result = verifyAssertion({
+        response: req.body?.response ?? {},
+        expectedChallenge: challenge, rpId, originOk: passkeyOriginOk,
+        // NOT `credential.signCount ?? 0`: verifyAssertion rejects a non-numeric
+        // stored count on purpose, and `??` would launder a null straight past
+        // that guard, silently disabling the cloned-authenticator check.
+        // passkeyStore.listRaw() guarantees a number — see Task 7.
+        publicKey: credential.publicKey, storedSignCount: credential.signCount,
+      });
+    } catch (e) {
+      loginLimiter.fail(ip);
+      // A stalled counter is the one failure worth naming in the log; the
+      // response stays generic so a caller cannot enumerate credential ids.
+      // Match the stall message specifically, NOT /sign count/ — that would also
+      // match 'invalid stored sign count', logging a corrupt-store lockout as a
+      // cloned authenticator, the exact mislabel this log line exists to avoid.
+      if (credential && /did not increase/.test(e.message)) {
+        log(`[tmuxifier] passkey "${credential.label}" sign count did not increase — possible cloned authenticator`);
+      }
+      return reply.code(401).send({ error: 'passkey verification failed' });
+    }
+    loginLimiter.succeed(ip);
+    await passkeyStore.touch(credential.id, { signCount: result.signCount });
+    reply.setCookie(COOKIE_NAME, sessionValue(), cookieOptions(config.secureCookie));
+    return { ok: true };
   });
 
   function allowedOrigins(req) {
@@ -300,7 +360,17 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     done();
   }
 
-  app.get('/api/auth/info', async () => ({ mode: config.authMode === 'google' ? 'google' : 'password' }));
+  app.get('/api/auth/info', async () => ({
+    mode: config.authMode === 'google' ? 'google' : 'password',
+    // Unauthenticated on purpose: the login screen needs to know whether to
+    // draw the passkey button. It exposes only the hostname the client is
+    // already talking to, plus a count.
+    passkey: {
+      enrolled: passkeyStore ? (await passkeyStore.list()).length : 0,
+      rpId,
+      only: await passkeyOnlyArmed(),
+    },
+  }));
 
   if (config.authMode !== 'google') {
     app.post('/api/login', async (req, reply) => {
