@@ -59,3 +59,24 @@ export function makeAssertion({
     },
   };
 }
+
+export function makeRegistration({
+  authenticator, challenge, origin, rpId,
+  fmt = 'none', flags = FLAG_UP | FLAG_UV | FLAG_AT, signCount = 0,
+}) {
+  const authData = buildAuthData({
+    rpId, flags, signCount,
+    attested: { credentialId: authenticator.credentialId, cose: authenticator.cose },
+  });
+  const clientDataJSON = buildClientData({ type: 'webauthn.create', challenge, origin });
+  const attestationObject = enc(new Map([['fmt', fmt], ['attStmt', new Map()], ['authData', authData]]));
+  return {
+    id: authenticator.id,
+    type: 'public-key',
+    response: {
+      clientDataJSON: b64u(clientDataJSON),
+      attestationObject: b64u(attestationObject),
+      transports: ['internal', 'hybrid'],
+    },
+  };
+}

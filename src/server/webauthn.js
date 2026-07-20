@@ -274,6 +274,29 @@ function signatureValid(alg, key, data, sig) {
   return cryptoVerify(alg === -8 ? null : 'sha256', data, key, sig);
 }
 
+export function verifyRegistration({ response, expectedChallenge, rpId, originOk }) {
+  const clientDataJSON = Buffer.from(String(response?.clientDataJSON ?? ''), 'base64url');
+  checkClientData(clientDataJSON, { type: 'webauthn.create', expectedChallenge, originOk });
+
+  const { value: att } = cborDecodeFirst(Buffer.from(String(response?.attestationObject ?? ''), 'base64url'));
+  if (!(att instanceof Map)) throw new Error('malformed attestation object');
+  // We request attestation "none"; anything else would need real verification.
+  if (att.get('fmt') !== 'none') throw new Error(`unsupported attestation format: ${att.get('fmt')}`);
+
+  const { rest, signCount } = checkAuthData(att.get('authData'), { rpId, requireAttested: true });
+  // Attested credential data: 16-byte AAGUID, 2-byte id length, credential id,
+  // then the COSE key (optionally followed by extension data).
+  if (rest.length < 18) throw new Error('attested credential data too short');
+  const idLen = rest.readUInt16BE(16);
+  if (idLen === 0 || rest.length < 18 + idLen) throw new Error('attested credential data too short');
+  const credentialId = rest.subarray(18, 18 + idLen);
+  const coseBytes = rest.subarray(18 + idLen);
+  const { value: coseMap, end } = cborDecodeFirst(coseBytes);
+  const { alg } = coseMapToKey(coseMap);
+  // Trim any trailing extension data so the stored key is exactly the COSE key.
+  return { credentialId, publicKey: coseBytes.subarray(0, end), alg, signCount };
+}
+
 export function verifyAssertion({ response, expectedChallenge, rpId, originOk, publicKey, storedSignCount = 0 }) {
   const clientDataJSON = Buffer.from(String(response?.clientDataJSON ?? ''), 'base64url');
   checkClientData(clientDataJSON, { type: 'webauthn.get', expectedChallenge, originOk });

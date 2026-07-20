@@ -1,8 +1,8 @@
 import { test, expect } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
-import { cborDecodeFirst, coseToKey, SUPPORTED_ALGS, verifyAssertion, makeOriginCheck } from '../src/server/webauthn.js';
+import { cborDecodeFirst, coseToKey, SUPPORTED_ALGS, verifyAssertion, verifyRegistration, makeOriginCheck } from '../src/server/webauthn.js';
 import { enc } from './helpers/cbor.js';
-import { makeAuthenticator, makeAssertion, b64u, FLAG_UP, FLAG_UV } from './helpers/webauthnFixtures.js';
+import { makeAuthenticator, makeAssertion, makeRegistration, b64u, FLAG_UP, FLAG_UV, FLAG_AT } from './helpers/webauthnFixtures.js';
 
 test('decodes unsigned and negative integers across width boundaries', () => {
   for (const n of [0, 23, 24, 255, 256, 65535, 65536, -1, -24, -25, -256]) {
@@ -592,4 +592,68 @@ test('the origin check allows plain http only for localhost', () => {
   const local = makeOriginCheck('localhost');
   expect(local('http://localhost:7437')).toBe(true);
   expect(local('https://localhost')).toBe(true);
+});
+
+function verifyReg(reg, over = {}) {
+  return verifyRegistration({
+    response: reg.response,
+    expectedChallenge: over.expectedChallenge ?? CHALLENGE,
+    rpId: over.rpId ?? RP,
+    originOk: over.originOk ?? originOk,
+  });
+}
+
+test('accepts a well-formed registration and returns the credential and key', () => {
+  const r = makeRegistration({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  const out = verifyReg(r);
+  expect(out.credentialId.equals(AUTH.credentialId)).toBe(true);
+  expect(out.publicKey.equals(AUTH.cose)).toBe(true);
+  expect(out.alg).toBe(-7);
+  expect(out.signCount).toBe(0);
+});
+
+// We ask for attestation "none". Any other format would have to be verified to
+// be meaningful, so accepting it unverified is worse than refusing it.
+test('refuses an attestation format other than none', () => {
+  const r = makeRegistration({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, fmt: 'packed' });
+  expect(() => verifyReg(r)).toThrow(/attestation format/);
+});
+
+test('rejects a registration challenge that does not match', () => {
+  const r = makeRegistration({ authenticator: AUTH, challenge: Buffer.alloc(32, 9), origin: ORIGIN, rpId: RP });
+  expect(() => verifyReg(r)).toThrow(/challenge/);
+});
+
+test('rejects a registration from an untrusted origin', () => {
+  const r = makeRegistration({ authenticator: AUTH, challenge: CHALLENGE, origin: 'https://evil.example.net', rpId: RP });
+  expect(() => verifyReg(r)).toThrow(/origin/);
+});
+
+test('rejects a clientData type of webauthn.get on the registration path', () => {
+  const r = makeRegistration({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  const cd = JSON.parse(Buffer.from(r.response.clientDataJSON, 'base64url').toString('utf8'));
+  cd.type = 'webauthn.get';
+  r.response.clientDataJSON = b64u(Buffer.from(JSON.stringify(cd), 'utf8'));
+  expect(() => verifyReg(r)).toThrow(/clientData type/);
+});
+
+test('rejects a registration without the attested-credential-data flag', () => {
+  const r = makeRegistration({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, flags: FLAG_UP | FLAG_UV });
+  expect(() => verifyReg(r)).toThrow(/attested credential data/);
+});
+
+test('rejects a registration without user verification', () => {
+  const r = makeRegistration({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, flags: FLAG_UP | FLAG_AT });
+  expect(() => verifyReg(r)).toThrow(/user verification/);
+});
+
+// The key it returns must be the one that later verifies logins.
+test('the returned public key verifies a subsequent assertion', () => {
+  const r = makeRegistration({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  const { publicKey } = verifyReg(r);
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, signCount: 2 });
+  expect(verifyAssertion({
+    response: a.response, expectedChallenge: CHALLENGE, rpId: RP, originOk,
+    publicKey: b64u(publicKey), storedSignCount: 1,
+  })).toEqual({ signCount: 2 });
 });
