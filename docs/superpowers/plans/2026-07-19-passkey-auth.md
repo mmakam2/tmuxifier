@@ -1265,7 +1265,13 @@ export function createPasskeyStore({ dataDir, now = () => Date.now(), log = (msg
     // normalized to a number here because verifyAssertion rejects a non-numeric
     // stored count (fail closed on a corrupt store) — without this, a record
     // whose signCount persisted as null would turn a valid passkey into a
-    // permanent 401. "Never counted" and "corrupt" both land on 0.
+    // permanent 401. Non-integer and negative values land on 0.
+    //
+    // Deliberately NOT normalized: an integer above 0xFFFFFFFF. signCount is
+    // read from authenticator data as a uint32, so a larger stored value is
+    // corruption — and verifyAssertion rejects it, which locks that one
+    // credential rather than silently clamping to 0 and disabling clone
+    // detection for it. Fail closed on the credential, not open.
     async listRaw() {
       return (await readAll()).credentials.map((c) => ({
         ...c,
@@ -1836,7 +1842,10 @@ Add after the `DELETE /api/passkeys/:id` route:
       loginLimiter.fail(ip);
       // A stalled counter is the one failure worth naming in the log; the
       // response stays generic so a caller cannot enumerate credential ids.
-      if (credential && /sign count/.test(e.message)) {
+      // Match the stall message specifically, NOT /sign count/ — that would also
+      // match 'invalid stored sign count', logging a corrupt-store lockout as a
+      // cloned authenticator, the exact mislabel this log line exists to avoid.
+      if (credential && /did not increase/.test(e.message)) {
         log(`[tmuxifier] passkey "${credential.label}" sign count did not increase — possible cloned authenticator`);
       }
       return reply.code(401).send({ error: 'passkey verification failed' });
