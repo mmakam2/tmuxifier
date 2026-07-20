@@ -1149,6 +1149,16 @@ test('touch records the new sign count and last-used time', async () => {
   expect((await store.list())[0].lastUsed).toBe(1700000000000);
 });
 
+// verifyAssertion rejects a non-numeric stored count, so a record whose
+// signCount persisted as null must not reach it — that would turn a valid
+// passkey into a permanent 401.
+test('listRaw normalizes a missing or null sign count to 0', async () => {
+  await store.add({ ...CRED, signCount: null }, { rpId: 'tmux.example.com' });
+  expect((await store.listRaw())[0].signCount).toBe(0);
+  await store.add({ id: 'cred-b', publicKey: 'cose-b', alg: -7, label: 'B', transports: [] }, { rpId: 'tmux.example.com' });
+  expect((await store.listRaw()).find((c) => c.id === 'cred-b').signCount).toBe(0);
+});
+
 test('remove reports whether anything was removed', async () => {
   await store.add(CRED, { rpId: 'tmux.example.com' });
   expect(await store.remove('nope')).toEqual({ removed: false, disarmed: false });
@@ -1251,7 +1261,17 @@ export function createPasskeyStore({ dataDir, now = () => Date.now(), log = (msg
   return {
     async list() { return (await readAll()).credentials.map(publicView); },
     // Server-internal: includes the public key and sign count.
-    async listRaw() { return (await readAll()).credentials; },
+    // Server-internal: includes the public key and sign count. signCount is
+    // normalized to a number here because verifyAssertion rejects a non-numeric
+    // stored count (fail closed on a corrupt store) — without this, a record
+    // whose signCount persisted as null would turn a valid passkey into a
+    // permanent 401. "Never counted" and "corrupt" both land on 0.
+    async listRaw() {
+      return (await readAll()).credentials.map((c) => ({
+        ...c,
+        signCount: Number.isInteger(c.signCount) && c.signCount >= 0 ? c.signCount : 0,
+      }));
+    },
     async getRpId() { return (await readAll()).rpId ?? null; },
     async getPasskeyOnly() { return (await readAll()).passkeyOnly === true; },
 
@@ -1806,7 +1826,11 @@ Add after the `DELETE /api/passkeys/:id` route:
       result = verifyAssertion({
         response: req.body?.response ?? {},
         expectedChallenge: challenge, rpId, originOk: passkeyOriginOk,
-        publicKey: credential.publicKey, storedSignCount: credential.signCount ?? 0,
+        // NOT `credential.signCount ?? 0`: verifyAssertion rejects a non-numeric
+        // stored count on purpose, and `??` would launder a null straight past
+        // that guard, silently disabling the cloned-authenticator check.
+        // passkeyStore.listRaw() guarantees a number — see Task 7.
+        publicKey: credential.publicKey, storedSignCount: credential.signCount,
       });
     } catch (e) {
       loginLimiter.fail(ip);
