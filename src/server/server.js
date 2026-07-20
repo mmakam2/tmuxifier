@@ -18,6 +18,8 @@ import { testNetbox } from './netboxApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
 import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault } from './tmuxInject.js';
 import { normalizeTranscript } from './voiceText.js';
+import { MODEL_IDS, resolveModel } from './voiceCatalog.js';
+import { vendorModelPath } from './voicePaths.js';
 import { verifyAssertion, verifyRegistration, makeOriginCheck, SUPPORTED_ALGS } from './webauthn.js';
 import { createPasskeyChallenges } from './passkeyChallenges.js';
 
@@ -86,7 +88,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -129,6 +131,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     voiceEnabledCache = s.enabled;
     return s;
   }
+  // Whether a given model FILE is present on disk. Injectable so route tests
+  // stay filesystem-free; defaults to the vendored models directory.
+  const modelInstalledFn = modelInstalled
+    || ((file) => fs.existsSync(vendorModelPath(process.cwd(), file)));
+
   // The engine is rebuilt when the selected model changes, so callers must ask
   // for the current one rather than closing over a value that goes stale.
   async function currentEngine() {
@@ -1028,6 +1035,70 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       ? await boxActions.injectUploadPath(box, box.sessionName, res.path).catch(() => ({ injected: false, mode: 'error' }))
       : { injected: false, mode: 'error' };
     return { path: res.path, ...inj };
+  });
+
+  // --- Voice management (Settings -> Voice) ---------------------------------
+  // All authenticated. Model ids are validated against the catalog allowlist
+  // before reaching the install job, which shells out to apt/git/cmake.
+
+  app.get('/api/voice/status', { preHandler: requireAuth }, async () => {
+    const state = await voiceState();
+    const settings = voiceStore ? await voiceStore.read() : { enabled: false, model: null };
+    // Each model's own on-disk presence — NOT "is this the selected one".
+    // Conflating the two would make an already-downloaded model read as
+    // "will download" and re-trigger an install the operator did not need.
+    const models = MODEL_IDS.map((id) => {
+      const m = resolveModel(id);
+      return { id, file: m.file, bytes: m.bytes, installed: modelInstalledFn(m.file) };
+    });
+    return {
+      installed: Boolean(state.bin && state.model),
+      enabled: state.enabled,
+      model: settings.model,
+      pinned: state.pinned,
+      engine: (await currentEngine())?.state?.() ?? 'stopped',
+      models,
+      job: voiceInstallManager ? voiceInstallManager.current() : null,
+    };
+  });
+
+  app.post('/api/voice/install', { preHandler: requireAuth }, async (req, reply) => {
+    if (!voiceInstallManager) return reply.code(503).send({ error: 'install manager unavailable' });
+    const model = String(req.body?.model || '');
+    if (!resolveModel(model)) return reply.code(400).send({ error: 'unknown model' });
+    try {
+      return await voiceInstallManager.start(model);
+    } catch (e) {
+      // Single-flight: a concurrent install is a conflict, not a server error.
+      const msg = e?.message || 'install failed';
+      return reply.code(/already/i.test(msg) ? 409 : 500).send({ error: msg });
+    }
+  });
+
+  app.get('/api/voice/install/:id', { preHandler: requireAuth }, async (req, reply) => {
+    if (!voiceInstallManager) return reply.code(503).send({ error: 'install manager unavailable' });
+    const job = voiceInstallManager.getJob(String(req.params.id));
+    if (!job) return reply.code(404).send({ error: 'unknown job' });
+    return job;
+  });
+
+  app.patch('/api/voice/settings', { preHandler: requireAuth }, async (req, reply) => {
+    if (!voiceStore) return reply.code(503).send({ error: 'voice settings unavailable' });
+    const patch = {};
+    if (req.body?.enabled !== undefined) patch.enabled = req.body.enabled === true;
+    if (req.body?.model !== undefined) {
+      if (!resolveModel(String(req.body.model))) return reply.code(400).send({ error: 'unknown model' });
+      patch.model = String(req.body.model);
+    }
+    try {
+      const next = await voiceStore.update(patch);
+      // Refresh the cached flag the permissions-policy hook reads, so a newly
+      // loaded page gets microphone=(self) without waiting for another call.
+      await voiceState();
+      return next;
+    } catch (e) {
+      return reply.code(400).send({ error: e?.message || 'could not save voice settings' });
+    }
   });
 
   // Transcribe a browser-recorded WAV with the local whisper engine and type
