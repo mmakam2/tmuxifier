@@ -183,6 +183,18 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return !!pk && !config.passkeyOnlyKillSwitch && pk.passkeyOnly === true;
   }
 
+  // The fresh-per-request snapshot fetch that feeds passkeyOnlyArmed() above,
+  // factored out once so the login gate and both Google routes below share
+  // one fail-open implementation instead of three separately hand-written
+  // try/catch copies — a lockout-adjacent gate is exactly the wrong place for
+  // three chances to typo the failure behavior. Mirrors /api/auth/info's own
+  // inline fetch: a store read error degrades to "not armed" (fail open),
+  // never to a 500 or an unhandled rejection.
+  async function passkeySnapshot() {
+    if (!passkeyStore) return null;
+    try { return await passkeyStore.snapshot(); } catch { return null; }
+  }
+
   app.get('/api/passkeys', { preHandler: requireAuth }, async () => ({
     credentials: passkeyStore ? await passkeyStore.list() : [],
     rpId,
@@ -241,6 +253,18 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const result = await passkeyStore.remove(req.params.id);
     if (!result.removed) return reply.code(404).send({ error: 'passkey not found' });
     return { ok: true, disarmed: result.disarmed };
+  });
+
+  app.post('/api/passkeys/only', { preHandler: requireAuth }, async (req, reply) => {
+    if (!passkeyStore) return reply.code(503).send({ error: 'passkeys are not configured' });
+    if (config.passkeyOnlyKillSwitch) {
+      return reply.code(409).send({ error: 'TMUXIFIER_PASSKEY_ONLY=off is set in .env — remove it and restart before arming this' });
+    }
+    try {
+      return { passkeyOnly: await passkeyStore.setPasskeyOnly(req.body?.enabled === true) };
+    } catch (e) {
+      return reply.code(409).send({ error: e.message });
+    }
   });
 
   app.post('/api/auth/passkey/login/begin', async (req, reply) => {
@@ -404,6 +428,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
   if (config.authMode !== 'google') {
     app.post('/api/login', async (req, reply) => {
+      if (passkeyOnlyArmed(await passkeySnapshot())) return reply.code(403).send({ error: 'passkey required' });
       const ip = req.ip;
       if (loginLimiter.limited(ip)) return reply.code(429).send({ error: 'too many attempts' });
       const ok = await verifyPassword(req.body?.password || '', config.passwordHash);
@@ -416,6 +441,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
   if (config.authMode === 'google') {
     app.get('/api/auth/google/login', async (req, reply) => {
+      if (passkeyOnlyArmed(await passkeySnapshot())) return reply.redirect('/?error=passkey-only');
       const state = randomState();
       const { verifier, challenge } = pkcePair();
       // SameSite=lax lets this short-lived state cookie survive Google's top-level redirect back.
@@ -426,6 +452,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     });
 
     app.get('/api/auth/google/callback', async (req, reply) => {
+      if (passkeyOnlyArmed(await passkeySnapshot())) return reply.redirect('/?error=passkey-only');
       const raw = req.cookies?.[OAUTH_COOKIE];
       reply.clearCookie(OAUTH_COOKIE, { path: '/' });
       if (!raw) return reply.redirect('/?error=state');

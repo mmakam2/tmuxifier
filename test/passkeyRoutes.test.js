@@ -301,3 +301,127 @@ test('an injected passkeyChallenges store backs both the enrollment and login ce
   expect(login.statusCode).toBe(200);
   expect(shared._size()).toBe(2);
 });
+
+test('arming passkey-only is refused with nothing enrolled', async () => {
+  const res = await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: await headers(), payload: { enabled: true } });
+  expect(res.statusCode).toBe(409);
+  expect(res.json().error).toMatch(/enroll a passkey/);
+});
+
+test('arming passkey-only makes password login 403', async () => {
+  await enroll();
+  const h = await headers();
+  expect((await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: true } })).json())
+    .toEqual({ passkeyOnly: true });
+  const res = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  expect(res.statusCode).toBe(403);
+  expect(res.json().error).toMatch(/passkey required/);
+  expect((await app.inject({ method: 'GET', url: '/api/auth/info' })).json().passkey.only).toBe(true);
+});
+
+test('disarming passkey-only restores password login', async () => {
+  await enroll();
+  const h = await headers();
+  await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: true } });
+  await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: false } });
+  expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(200);
+});
+
+// Without this, a flow started before the toggle was armed still issues a session.
+test('arming passkey-only blocks both Google routes, callback included', async () => {
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-pkg-'));
+  passkeyStore = createPasskeyStore({ dataDir: dir });
+  const google = { authorizationUrl: () => 'https://accounts.google.com/x', exchangeCodeForEmail: async () => ({ email: 'you@example.com', emailVerified: true }), isAllowed: () => true };
+  const config = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
+    cookieSecret: 'test-secret', dataDir: dir, localShell: 'none', authMode: 'google',
+    secureCookie: false, publicUrl: 'https://tmux.example.com',
+    rpId: RP, rpIdError: null, passkeyOnlyKillSwitch: false,
+  };
+  const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
+  const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
+  const gapp = buildServer({ config, store: createStore({ dataDir: dir }), sessions, statusChecker, passkeyStore, googleAuth: google });
+  await enroll(passkeyStore);
+  await passkeyStore.setPasskeyOnly(true);
+  const login = await gapp.inject({ method: 'GET', url: '/api/auth/google/login' });
+  const callback = await gapp.inject({ method: 'GET', url: '/api/auth/google/callback?code=c&state=s' });
+  expect(login.headers.location).toBe('/?error=passkey-only');
+  expect(callback.headers.location).toBe('/?error=passkey-only');
+});
+
+// The .env break-glass for a lost authenticator.
+test('the kill switch overrides the stored flag', async () => {
+  await enroll();
+  await passkeyStore.setPasskeyOnly(true);
+  app = await build({ passkeyOnlyKillSwitch: true });
+  expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(200);
+  const res = await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: await headers(), payload: { enabled: true } });
+  expect(res.statusCode).toBe(409);
+  expect(res.json().error).toMatch(/TMUXIFIER_PASSKEY_ONLY/);
+});
+
+test('removing the last passkey disarms passkey-only', async () => {
+  const auth = await enroll();
+  const h = await headers();
+  await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: true } });
+  expect((await app.inject({ method: 'DELETE', url: `/api/passkeys/${encodeURIComponent(auth.id)}`, headers: h })).json())
+    .toEqual({ ok: true, disarmed: true });
+  expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(200);
+});
+
+// Prior-review gap: passkeyOnlyArmed's fail-open behavior when the store
+// can't be read had zero coverage. A disk hiccup must fail OPEN (login still
+// works) rather than fail closed (a silent, unrecoverable lockout no toggle
+// ever asked for).
+test('a passkey store read failure fails open on the login gate rather than locking out password login', async () => {
+  const brokenStore = { snapshot: async () => { throw new Error('disk error'); } };
+  app = await build({}, { passkeyStore: brokenStore });
+  const res = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  expect(res.statusCode).toBe(200);
+});
+
+// Prior-review gap: the cloned-authenticator log branch in login/finish
+// (distinguishing a replayed sign count from a merely-corrupt stored count)
+// was untested. A first login establishes signCount=5, then a second
+// assertion from the same authenticator replays a lower count (3) with a
+// otherwise-valid signature — exactly what a cloned authenticator looks like.
+test('a replayed sign count is logged as a possible cloned authenticator', async () => {
+  const logs = [];
+  app = await build({}, { log: (msg) => logs.push(msg) });
+  const auth = await enroll();
+  const begin1 = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  const first = await app.inject({
+    method: 'POST', url: '/api/auth/passkey/login/finish', headers: { cookie: pkCookie(begin1) },
+    payload: makeAssertion({ authenticator: auth, challenge: Buffer.from(begin1.json().challenge, 'base64url'), origin: ORIGIN, rpId: RP, signCount: 5 }),
+  });
+  expect(first.statusCode).toBe(200);
+  const begin2 = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  const replay = await app.inject({
+    method: 'POST', url: '/api/auth/passkey/login/finish', headers: { cookie: pkCookie(begin2) },
+    payload: makeAssertion({ authenticator: auth, challenge: Buffer.from(begin2.json().challenge, 'base64url'), origin: ORIGIN, rpId: RP, signCount: 3 }),
+  });
+  expect(replay.statusCode).toBe(401);
+  expect(replay.json()).toEqual({ error: 'passkey verification failed' });
+  expect(logs.some((m) => /passkey "Laptop" sign count did not increase — possible cloned authenticator/.test(m))).toBe(true);
+});
+
+// The other half of the same distinction: an out-of-range stored sign count
+// (store corruption, not a clone) must be rejected WITHOUT the cloned-
+// authenticator label, so an operator never mis-triages a disk problem as a
+// stolen/cloned credential.
+test('an out-of-range stored sign count is rejected without the cloned-authenticator label', async () => {
+  const logs = [];
+  app = await build({}, { log: (msg) => logs.push(msg) });
+  const auth = makeAuthenticator();
+  await passkeyStore.add({
+    id: auth.id, publicKey: b64u(auth.cose), alg: -7, signCount: 0x100000000, label: 'Laptop', transports: ['internal'],
+  }, { rpId: RP });
+  const begin = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  const res = await app.inject({
+    method: 'POST', url: '/api/auth/passkey/login/finish', headers: { cookie: pkCookie(begin) },
+    payload: makeAssertion({ authenticator: auth, challenge: Buffer.from(begin.json().challenge, 'base64url'), origin: ORIGIN, rpId: RP, signCount: 5 }),
+  });
+  expect(res.statusCode).toBe(401);
+  expect(res.json()).toEqual({ error: 'passkey verification failed' });
+  expect(logs.some((m) => /cloned authenticator/.test(m))).toBe(false);
+});
