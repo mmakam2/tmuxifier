@@ -17,6 +17,8 @@ import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js
 import { testNetbox } from './netboxApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
 import { injectLocalUploadPath } from './tmuxInject.js';
+import { verifyAssertion, verifyRegistration, makeOriginCheck, SUPPORTED_ALGS } from './webauthn.js';
+import { createPasskeyChallenges } from './passkeyChallenges.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': [
@@ -66,7 +68,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, knownHosts, setupManager, aiAuthSeeder }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -101,6 +103,118 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   }
 
   const loginLimiter = createLoginRateLimiter(); // per-ip lockout for POST /api/login
+
+  // --- passkeys (WebAuthn) ---
+  // A third login path alongside password/Google. It mints exactly the same
+  // session cookie, so the session TTL, revocation watermark and WebSocket auth
+  // all apply unchanged.
+  const PK_COOKIE = 'tmuxifier_pk';
+  const PK_TTL_SECONDS = 120;
+  const LABEL_RE = /^[A-Za-z0-9 ._-]{1,32}$/;
+  const pkChallenges = passkeyChallenges ?? createPasskeyChallenges({ ttlMs: PK_TTL_SECONDS * 1000 });
+  const rpId = config.rpId || null;
+  const passkeyOriginOk = rpId ? makeOriginCheck(rpId) : () => false;
+
+  // Replies with the reason and returns false when passkeys cannot be used.
+  async function pkReady(reply) {
+    if (!passkeyStore) {
+      reply.code(503).send({ error: 'passkeys are not configured' });
+      return false;
+    }
+    if (!rpId) {
+      reply.code(503).send({ error: 'passkeys need a domain name — set TMUXIFIER_RP_ID, or point TMUXIFIER_BASE_EXTERNAL_URL at a hostname (an IP address cannot be a WebAuthn relying party)' });
+      return false;
+    }
+    const pinned = await passkeyStore.getRpId();
+    if (pinned && pinned !== rpId) {
+      reply.code(409).send({ error: `these passkeys were enrolled for ${pinned}, but this server is configured for ${rpId}` });
+      return false;
+    }
+    return true;
+  }
+
+  function issueChallenge(reply, kind) {
+    const { token, challenge } = pkChallenges.issue(kind);
+    reply.setCookie(PK_COOKIE, token, {
+      httpOnly: true, sameSite: 'strict', secure: !!config.secureCookie,
+      path: '/', signed: true, maxAge: PK_TTL_SECONDS,
+    });
+    return challenge;
+  }
+
+  function takeChallenge(req, kind) {
+    const raw = req.cookies?.[PK_COOKIE];
+    if (!raw) return null;
+    const unsigned = app.unsignCookie(raw);
+    if (!unsigned.valid || !unsigned.value) return null;
+    return pkChallenges.take(unsigned.value, kind);
+  }
+
+  // Read per request, never captured at boot, so the toggle takes effect at once.
+  async function passkeyOnlyArmed() {
+    if (!passkeyStore || config.passkeyOnlyKillSwitch) return false;
+    try { return await passkeyStore.getPasskeyOnly(); } catch { return false; }
+  }
+
+  app.get('/api/passkeys', { preHandler: requireAuth }, async () => ({
+    credentials: passkeyStore ? await passkeyStore.list() : [],
+    rpId,
+    storedRpId: passkeyStore ? await passkeyStore.getRpId() : null,
+    passkeyOnly: passkeyStore ? await passkeyStore.getPasskeyOnly() : false,
+    killSwitch: !!config.passkeyOnlyKillSwitch,
+  }));
+
+  app.post('/api/passkeys/register/begin', { preHandler: requireAuth }, async (req, reply) => {
+    if (!(await pkReady(reply))) return reply;
+    const challenge = issueChallenge(reply, 'reg');
+    const enrolled = await passkeyStore.listRaw();
+    return {
+      challenge: challenge.toString('base64url'),
+      rp: { id: rpId, name: 'Tmuxifier' },
+      user: { id: await passkeyStore.getUserHandle(), name: `tmuxifier@${rpId}`, displayName: 'Tmuxifier' },
+      pubKeyCredParams: SUPPORTED_ALGS.map((alg) => ({ type: 'public-key', alg })),
+      // Discoverable so login needs no username; user verification so the
+      // passkey is a real second factor on the device itself.
+      authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' },
+      attestation: 'none',
+      timeout: PK_TTL_SECONDS * 1000,
+      excludeCredentials: enrolled.map((c) => ({ type: 'public-key', id: c.id, transports: c.transports ?? [] })),
+    };
+  });
+
+  app.post('/api/passkeys/register/finish', { preHandler: requireAuth }, async (req, reply) => {
+    if (!(await pkReady(reply))) return reply;
+    const label = String(req.body?.label ?? '').trim() || 'passkey';
+    if (!LABEL_RE.test(label)) {
+      return reply.code(400).send({ error: 'label must be 1-32 characters of letters, digits, space, dot, underscore or hyphen' });
+    }
+    const challenge = takeChallenge(req, 'reg');
+    reply.clearCookie(PK_COOKIE, { path: '/' });
+    if (!challenge) return reply.code(400).send({ error: 'challenge expired — start again' });
+    let reg;
+    try {
+      reg = verifyRegistration({ response: req.body?.response ?? {}, expectedChallenge: challenge, rpId, originOk: passkeyOriginOk });
+    } catch (e) {
+      // This endpoint is authenticated, so a specific reason is safe and useful.
+      return reply.code(400).send({ error: `passkey registration failed: ${String(e.message).slice(0, 160)}` });
+    }
+    const transports = Array.isArray(req.body?.response?.transports)
+      ? req.body.response.transports.filter((t) => typeof t === 'string' && /^[a-z-]{1,16}$/.test(t)).slice(0, 8)
+      : [];
+    const credential = await passkeyStore.add({
+      id: reg.credentialId.toString('base64url'),
+      publicKey: reg.publicKey.toString('base64url'),
+      alg: reg.alg, signCount: reg.signCount, label, transports,
+    }, { rpId });
+    return { credential };
+  });
+
+  app.delete('/api/passkeys/:id', { preHandler: requireAuth }, async (req, reply) => {
+    if (!passkeyStore) return reply.code(503).send({ error: 'passkeys are not configured' });
+    const result = await passkeyStore.remove(req.params.id);
+    if (!result.removed) return reply.code(404).send({ error: 'passkey not found' });
+    return { ok: true, disarmed: result.disarmed };
+  });
 
   function allowedOrigins(req) {
     const origins = new Set(requestHostOrigins(req));
