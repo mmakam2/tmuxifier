@@ -1,0 +1,8 @@
+# Files excluded from the graphify knowledge graph (gitignore syntax).
+#
+# docs/superpowers/ holds point-in-time specs and plans that are append-only by
+# convention: they are never rewritten when the design moves on, so indexing them
+# freezes superseded designs into the graph and query answers go stale.
+# docs/screenshots/ is image material with no queryable structure.
+docs/superpowers/
+docs/screenshots/
