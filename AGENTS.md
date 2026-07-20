@@ -167,6 +167,12 @@ pattern for new modules.
   -l` (busy panes get a `display-message` instead; never auto-Enter, no `/image` — it
   doesn't exist). `boxActions.injectUploadPath` runs it over the ControlMaster;
   `injectLocalUploadPath` covers the `__local__` terminal's local tmux session.
+- `voiceText.js` / `voiceCatalog.js` / `voiceEngine.js` — voice dictation: pure transcript
+  normalization (newline collapse is load-bearing — a newline through `send-keys` is Enter),
+  the pinned model allowlist with SHA-256 digests (the chokepoint that keeps no user-supplied
+  URL or path from reaching a download), and the lazily-spawned whisper.cpp server with an
+  idle timeout. `POST /api/voice` transcribes a browser-recorded WAV and types the result into
+  the pane via the same `injectVia` guard uploads use. Audio never leaves the host.
 - `localShellActions.js` — `createLocalShellActions`: provisions the optional local shell
   (`localShell` = `none`/`omz`/`omb`) that backs a terminal on the Tmuxifier host itself.
 - `sessions.js` — PTY lifecycle: PTYs keyed by `boxId`, listeners refcounted, a `graceSeconds`
@@ -417,6 +423,11 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 - `TMUXIFIER_CLAUDE_OAUTH_TOKEN` joins the `.env` secret class (password hash, cookie secret);
   seeding a box with it (and/or the host's `~/.codex/auth.json`) hands that box your Claude/Codex
   subscription identity, so seed only boxes you trust.
+- Voice dictation is off unless both `TMUXIFIER_WHISPER_BIN` and `TMUXIFIER_WHISPER_MODEL` are
+  set, and `TMUXIFIER_VOICE=off` hard-disables it regardless. Transcripts are stripped of
+  control characters before reaching `send-keys`, so a transcription artefact cannot emit an
+  escape sequence into a pane. Audio is transcribed by a local whisper.cpp process and is never
+  sent to Anthropic or any third party — unlike Claude Code's built-in `/voice`.
 
 ## Docs
 
