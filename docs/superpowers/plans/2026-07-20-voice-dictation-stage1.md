@@ -1296,7 +1296,7 @@ Pure, DOM-free, and the reason no ffmpeg dependency is needed: the browser hands
 
 **Files:**
 - Create: `src/web/wavEncode.ts`
-- Test: `test/wavEncode.test.ts`
+- Test: `test/wavEncode.test.js`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -1304,7 +1304,7 @@ Pure, DOM-free, and the reason no ffmpeg dependency is needed: the browser hands
 
 - [ ] **Step 1: Write the failing test**
 
-Create `test/wavEncode.test.ts`:
+Create `test/wavEncode.test.js`:
 
 ```ts
 import { test, expect } from 'vitest';
@@ -1382,7 +1382,7 @@ test('produces a header-only file for no input', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run test/wavEncode.test.ts`
+Run: `npx vitest run test/wavEncode.test.js`
 Expected: FAIL — `Failed to resolve import "../src/web/wavEncode"`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1464,13 +1464,13 @@ export function encodeWav(chunks: Float32Array[], inputRate: number): ArrayBuffe
 
 - [ ] **Step 4: Run test and typecheck**
 
-Run: `npx vitest run test/wavEncode.test.ts && npx tsc --noEmit`
+Run: `npx vitest run test/wavEncode.test.js && npx tsc --noEmit`
 Expected: PASS, 7 tests; typecheck clean.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/web/wavEncode.ts test/wavEncode.test.ts
+git add src/web/wavEncode.ts test/wavEncode.test.js
 git commit -m "feat(voice): pure 16 kHz mono WAV encoder for browser capture"
 ```
 
@@ -1481,7 +1481,7 @@ git commit -m "feat(voice): pure 16 kHz mono WAV encoder for browser capture"
 **Files:**
 - Create: `src/web/voiceRecorder.ts`
 - Create: `src/web/voiceUi.ts`
-- Test: `test/voiceUi.test.ts`
+- Test: `test/voiceUi.test.js`
 - Modify: `src/web/api.ts:119-124` (`uiConfig` type, new `postVoice`)
 - Modify: `src/web/terminal.ts:73-95` (extend the existing key handler), `:236+` (`openTerminal`)
 
@@ -1498,9 +1498,9 @@ git commit -m "feat(voice): pure 16 kHz mono WAV encoder for browser capture"
 
 - [ ] **Step 1: Write the failing test**
 
-Create `test/voiceUi.test.ts`. Only the pure readiness logic and the key predicate are tested here; the microphone itself is covered by the e2e in Task 10:
+Create `test/voiceUi.test.js` — plain JavaScript, no type annotations. This repo's `vitest.config.js` uses `include: ['test/**/*.test.js']`, and every web-module test is a `.test.js` importing the `.ts` source; a `.test.ts` file is invisible to the runner. Only the pure readiness logic and the key predicate are tested here; the microphone itself is covered by the e2e in Task 10:
 
-```ts
+```js
 import { test, expect } from 'vitest';
 import { evaluateVoice, isVoiceHotkey } from '../src/web/voiceUi';
 
@@ -1532,9 +1532,9 @@ test('a server with voice off says so rather than blaming the browser', () => {
 });
 
 test('Ctrl+Shift+Space is the hotkey and Ctrl+Shift+V is left to paste', () => {
-  const ev = (over: Record<string, unknown>) =>
+  const ev = (over) =>
     ({ type: 'keydown', key: ' ', code: 'Space', ctrlKey: true, shiftKey: true,
-       metaKey: false, altKey: false, repeat: false, ...over }) as unknown as KeyboardEvent;
+       metaKey: false, altKey: false, repeat: false, ...over });
   expect(isVoiceHotkey(ev({}))).toBe(true);
   expect(isVoiceHotkey(ev({ key: 'v', code: 'KeyV' }))).toBe(false); // clipboard paste
   expect(isVoiceHotkey(ev({ shiftKey: false }))).toBe(false);
@@ -1544,14 +1544,14 @@ test('Ctrl+Shift+Space is the hotkey and Ctrl+Shift+V is left to paste', () => {
 
 test('auto-repeat while the key is held is not a second press', () => {
   const ev = { type: 'keydown', key: ' ', code: 'Space', ctrlKey: true, shiftKey: true,
-               metaKey: false, altKey: false, repeat: true } as unknown as KeyboardEvent;
+               metaKey: false, altKey: false, repeat: true };
   expect(isVoiceHotkey(ev)).toBe(false);
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run test/voiceUi.test.ts`
+Run: `npx vitest run test/voiceUi.test.js`
 Expected: FAIL — `Failed to resolve import "../src/web/voiceUi"`.
 
 - [ ] **Step 3: Write the recorder**
@@ -1914,7 +1914,7 @@ The button is absolutely positioned, so its containing block must be positioned.
 
 - [ ] **Step 7: Run tests and typecheck**
 
-Run: `npx vitest run test/voiceUi.test.ts && npx tsc --noEmit`
+Run: `npx vitest run test/voiceUi.test.js && npx tsc --noEmit`
 Expected: PASS, 6 tests; typecheck clean.
 
 - [ ] **Step 7b: Verify the clipboard bindings still work**
@@ -1927,7 +1927,7 @@ Expected: paste still works. If it does not, a second `attachCustomKeyEventHandl
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/web/voiceRecorder.ts src/web/voiceUi.ts src/web/api.ts src/web/terminal.ts src/web/style.css test/voiceUi.test.ts
+git add src/web/voiceRecorder.ts src/web/voiceUi.ts src/web/api.ts src/web/terminal.ts src/web/style.css test/voiceUi.test.js
 git commit -m "feat(voice): browser capture, readiness gate, and hold-to-talk hotkey"
 ```
 
