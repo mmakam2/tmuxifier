@@ -26,6 +26,30 @@ test('unknown and traversal ids resolve to null, never a path', () => {
   }
 });
 
+test('prototype-chain keys resolve to null — resolveModel defends against object traversal', () => {
+  // These keys exist on Object.prototype and would resolve via bare index
+  // if resolveModel used CATALOG[id] instead of hasOwnProperty.call(CATALOG, id).
+  for (const protoKey of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
+    expect(resolveModel(protoKey)).toBeNull();
+  }
+});
+
+test('sha256 and file fields are unique across catalog entries', () => {
+  const sha256s = MODEL_IDS.map(id => resolveModel(id).sha256);
+  const files = MODEL_IDS.map(id => resolveModel(id).file);
+
+  // Set size equals array length iff all entries are unique
+  expect(new Set(sha256s).size).toBe(MODEL_IDS.length);
+  expect(new Set(files).size).toBe(MODEL_IDS.length);
+});
+
+test('resolveModel is case-sensitive — case-varied ids do not resolve', () => {
+  expect(resolveModel('Small.En')).toBeNull();
+  expect(resolveModel('SMALL.EN')).toBeNull();
+  expect(resolveModel('Base.EN')).toBeNull();
+  expect(resolveModel('MEDIUM.EN-Q5_0')).toBeNull();
+});
+
 test('resolveModel rejects non-string input', () => {
   expect(resolveModel(null)).toBeNull();
   expect(resolveModel(undefined)).toBeNull();
