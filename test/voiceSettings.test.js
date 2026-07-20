@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { voiceStatusLine, installPollDelay } from '../src/web/settingsVoice';
+import { voiceStatusLine, installPollDelay, micTestMessage } from '../src/web/settingsVoice';
 
 test('describes an uninstalled server', () => {
   const s = voiceStatusLine({ installed: false, enabled: false, model: 'small.en', pinned: { bin: null, model: null } });
@@ -36,4 +36,44 @@ test('polls fast while running and stops once settled', () => {
   expect(installPollDelay({ status: 'interrupted' })).toBe(null);
   // A dropped poll must keep trying rather than silently abandoning a live build.
   expect(installPollDelay(null)).toBeGreaterThan(0);
+});
+
+// --- microphone permission test button --------------------------------------
+
+const ok = { supported: true, secureContext: true };
+
+test('reports success when getUserMedia resolves', () => {
+  expect(micTestMessage(null, ok)).toMatch(/granted/i);
+});
+
+test('an unsupported browser is reported before anything else', () => {
+  expect(micTestMessage(null, { supported: false, secureContext: false })).toMatch(/browser/i);
+});
+
+test('an insecure context explains HTTPS rather than blaming permission', () => {
+  const m = micTestMessage({ name: 'NotAllowedError' }, { supported: true, secureContext: false });
+  expect(m).toMatch(/https|secure/i);
+  expect(m).not.toMatch(/denied/i);
+});
+
+test('a blocked permission names both plausible causes, including the reload', () => {
+  // NotAllowedError covers BOTH a user denial and a page loaded before voice
+  // was enabled (Permissions-Policy). We cannot tell them apart, so say so
+  // rather than guessing and sending the user down the wrong path.
+  const m = micTestMessage({ name: 'NotAllowedError' }, ok);
+  expect(m).toMatch(/reload/i);
+  expect(m).toMatch(/denied|blocked/i);
+});
+
+test('no capture device is distinguished from a permission problem', () => {
+  const m = micTestMessage({ name: 'NotFoundError' }, ok);
+  expect(m).toMatch(/no microphone|not found|no capture/i);
+  expect(m).not.toMatch(/reload/i);
+});
+
+test('an unknown error still yields a usable message rather than undefined', () => {
+  const m = micTestMessage({ name: 'WeirdError', message: 'something odd' }, ok);
+  expect(typeof m).toBe('string');
+  expect(m.length).toBeGreaterThan(0);
+  expect(m).toMatch(/something odd|WeirdError/);
 });

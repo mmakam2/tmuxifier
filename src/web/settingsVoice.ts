@@ -1,5 +1,6 @@
 import { el } from './dom';
 import { voiceApi, type VoiceStatus, type VoiceJob } from './voice';
+import { detectVoiceEnv } from './voiceUi';
 import { createSetupJobPoller } from './setupPoller';
 
 // Pure: the one-line summary at the top of the tab. Kept out of the DOM code so
@@ -16,6 +17,40 @@ export function voiceStatusLine(
   return s.pinned.model === 'env'
     ? `${base} The model is pinned by TMUXIFIER_WHISPER_MODEL in .env; remove that line to choose here.`
     : base;
+}
+
+// Pure: turn the outcome of a getUserMedia probe into something actionable.
+// `err` is null on success. Ordered like evaluateVoice — the most fundamental
+// blocker wins, so an unsupported browser is never told to go fix TLS.
+export function micTestMessage(
+  err: { name?: string; message?: string } | null,
+  env: { supported: boolean; secureContext: boolean },
+): string {
+  if (!env.supported) return 'This browser has no microphone capture support.';
+  if (!env.secureContext) {
+    return 'Microphone access needs a secure context (HTTPS or localhost). Configure TLS — see docs/DEPLOY.md — or reach Tmuxifier on localhost.';
+  }
+  if (!err) return 'Microphone access granted. Voice dictation is ready to use.';
+
+  switch (err.name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      // NotAllowedError covers BOTH a user denial and a page that was loaded
+      // before voice was enabled (Permissions-Policy is applied at document
+      // load and cannot be changed afterwards). The browser does not let us
+      // tell them apart, so name both rather than guessing and sending the
+      // operator down the wrong path.
+      return 'Microphone blocked. If you enabled voice just now, reload this page and try again — '
+        + 'the browser fixes the microphone policy when the page loads. Otherwise access was '
+        + 'denied for this site; re-allow it in your browser’s site settings.';
+    case 'NotFoundError':
+    case 'DevicesNotFoundError':
+      return 'No microphone found. Connect a capture device and try again.';
+    case 'NotReadableError':
+      return 'The microphone is in use by another application and could not be opened.';
+    default:
+      return `Microphone test failed: ${err.message || err.name || 'unknown error'}`;
+  }
 }
 
 // Pure: poll policy for the install job. Milliseconds until the next poll, or
@@ -66,6 +101,35 @@ export async function renderVoiceSection(content: HTMLElement): Promise<void> {
       }
     });
     content.appendChild(el('label', {}, [toggle, ' Enable voice dictation']));
+
+    // --- microphone permission check ---------------------------------------
+    // Only offered once voice is on: while it is off the page is served
+    // microphone=(), so getUserMedia would fail for a reason that has nothing
+    // to do with the operator's browser permission.
+    if (status.enabled) {
+      const result = el('p', { class: 'muted' });
+      const test = el('button', {}, ['Check microphone access']) as HTMLButtonElement;
+      test.addEventListener('click', async () => {
+        test.disabled = true;
+        result.textContent = 'Checking…';
+        const env = detectVoiceEnv(true);
+        let stream: MediaStream | null = null;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          result.textContent = micTestMessage(null, env);
+        } catch (e) {
+          result.textContent = micTestMessage(e as { name?: string; message?: string }, env);
+        } finally {
+          // Release immediately. This probe only asks the browser for
+          // permission — holding the track would leave the tab's recording
+          // indicator lit with nothing listening.
+          try { stream?.getTracks().forEach((t) => t.stop()); } catch { /* already gone */ }
+          test.disabled = false;
+        }
+      });
+      content.appendChild(test);
+      content.appendChild(result);
+    }
   }
 
   // --- install -------------------------------------------------------------
