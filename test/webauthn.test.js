@@ -2,7 +2,7 @@ import { test, expect } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import { cborDecodeFirst, coseToKey, SUPPORTED_ALGS, verifyAssertion, verifyRegistration, makeOriginCheck } from '../src/server/webauthn.js';
 import { enc } from './helpers/cbor.js';
-import { makeAuthenticator, makeAssertion, makeRegistration, b64u, FLAG_UP, FLAG_UV, FLAG_AT } from './helpers/webauthnFixtures.js';
+import { makeAuthenticator, makeAssertion, makeRegistration, buildAuthData, buildClientData, b64u, FLAG_UP, FLAG_UV, FLAG_AT } from './helpers/webauthnFixtures.js';
 
 test('decodes unsigned and negative integers across width boundaries', () => {
   for (const n of [0, 23, 24, 255, 256, 65535, 65536, -1, -24, -25, -256]) {
@@ -619,6 +619,33 @@ test('refuses an attestation format other than none', () => {
   expect(() => verifyReg(r)).toThrow(/attestation format/);
 });
 
+// `fmt` is decoded straight from the untrusted attestationObject CBOR before
+// any validation runs — exactly as attacker-controlled as clientData type/
+// origin, which checkClientData already routes through sanitizeForLog for
+// precisely this reason.
+test('does not let an attacker-controlled attestation fmt inject a newline into the thrown message', () => {
+  const r = makeRegistration({
+    authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP,
+    fmt: 'packed\nINJECTED LOG LINE: registration succeeded for admin',
+  });
+  let caught;
+  try { verifyReg(r); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.message).not.toContain('\n');
+  // Pinned to the attestation-format check specifically, so this can't pass
+  // on some other check's error.
+  expect(caught.message).toMatch(/attestation format/);
+});
+
+test('bounds the thrown message length when attestation fmt is an unbounded string', () => {
+  const r = makeRegistration({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, fmt: 'x'.repeat(20000) });
+  let caught;
+  try { verifyReg(r); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.message).toMatch(/attestation format/);
+  expect(caught.message.length).toBeLessThan(300);
+});
+
 test('rejects a registration challenge that does not match', () => {
   const r = makeRegistration({ authenticator: AUTH, challenge: Buffer.alloc(32, 9), origin: ORIGIN, rpId: RP });
   expect(() => verifyReg(r)).toThrow(/challenge/);
@@ -645,6 +672,114 @@ test('rejects a registration without the attested-credential-data flag', () => {
 test('rejects a registration without user verification', () => {
   const r = makeRegistration({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, flags: FLAG_UP | FLAG_AT });
   expect(() => verifyReg(r)).toThrow(/user verification/);
+});
+
+// Finding 3 & 4 regression helpers: build a registration response around a
+// caller-supplied attestationObject/authData directly, bypassing
+// makeRegistration's normal construction. makeRegistration/buildAuthData's
+// attested branch always derives the 2-byte id-length field from the real
+// credentialId.length, so it can never produce a lying length or an
+// undersized/oversized "rest" — these edge cases have to be built by hand.
+function regWithAttestationObject(attestationObject) {
+  const clientDataJSON = buildClientData({ type: 'webauthn.create', challenge: CHALLENGE, origin: ORIGIN });
+  return { response: { clientDataJSON: b64u(clientDataJSON), attestationObject: b64u(attestationObject) } };
+}
+
+function regWithAuthData(authData) {
+  const attestationObject = enc(new Map([['fmt', 'none'], ['attStmt', new Map()], ['authData', authData]]));
+  return regWithAttestationObject(attestationObject);
+}
+
+// `restBytes` stands in for the attested-credential-data portion of authData
+// (everything after the 37-byte rpIdHash/flags/signCount header): 16-byte
+// AAGUID + 2-byte id length + credential id + COSE key. Built by hand so a
+// test can lie about the length field or truncate the buffer, which
+// buildAuthData's attested branch cannot do.
+function authDataWithRest(restBytes, { flags = FLAG_UP | FLAG_UV | FLAG_AT, signCount = 0 } = {}) {
+  return Buffer.concat([buildAuthData({ rpId: RP, flags, signCount }), restBytes]);
+}
+
+// `verifyRegistration` is the first call site that can reach parseAuthData
+// with a non-Buffer authData: verifyAssertion always pre-coerces through
+// Buffer.from first, but verifyRegistration passes att.get('authData')
+// straight from the decoded CBOR map, whatever shape it turns out to be.
+test('rejects a top-level attestation object that is not a CBOR map', () => {
+  const r = regWithAttestationObject(enc([1, 2, 3]));
+  expect(() => verifyReg(r)).toThrow(/malformed attestation object/);
+});
+
+test('rejects an attestation object missing the authData entry', () => {
+  const attestationObject = enc(new Map([['fmt', 'none'], ['attStmt', new Map()]]));
+  const r = regWithAttestationObject(attestationObject);
+  expect(() => verifyReg(r)).toThrow(/authenticator data too short/);
+});
+
+// 42 (a plain integer, CBOR major type 0) rather than a short string: a short
+// string also has a `.length` under 37 and would trip parseAuthData's length
+// check even without its Buffer.isBuffer guard, proving nothing about the
+// type check specifically. A number's `.length` is `undefined`, which is not
+// less than 37, so only the type check rejects it.
+test('rejects an attestation object whose authData entry is not a byte string', () => {
+  const r = regWithAuthData(42);
+  expect(() => verifyReg(r)).toThrow(/authenticator data too short/);
+});
+
+// Bounds-check edge cases for the attested-credential-data parsing. Buffer#
+// subarray clamps rather than throwing on an out-of-range end, so a bounds
+// check that relied on an exception here would silently hand back truncated
+// (or empty) slices instead of rejecting — these pin the actual rejections.
+test('rejects a declared credential-id length larger than the remaining buffer', () => {
+  const idLen = Buffer.alloc(2);
+  idLen.writeUInt16BE(1000, 0);
+  const rest = Buffer.concat([Buffer.alloc(16), idLen, Buffer.alloc(10)]);
+  const r = regWithAuthData(authDataWithRest(rest));
+  expect(() => verifyReg(r)).toThrow(/attested credential data too short/);
+});
+
+test('rejects attested credential data shorter than 18 bytes', () => {
+  const r = regWithAuthData(authDataWithRest(Buffer.alloc(17)));
+  expect(() => verifyReg(r)).toThrow(/attested credential data too short/);
+});
+
+// idLen here exactly equals the bytes remaining, so the length check itself
+// does not fire (18 + idLen is not greater than rest.length) — the CBOR
+// decoder's own "truncated" rejection on the resulting empty buffer is what
+// actually catches this, one layer down.
+test('rejects a declared credential-id length that exactly consumes the remaining buffer, leaving no COSE key', () => {
+  const credentialId = Buffer.alloc(5, 0xaa);
+  const idLen = Buffer.alloc(2);
+  idLen.writeUInt16BE(credentialId.length, 0);
+  const rest = Buffer.concat([Buffer.alloc(16), idLen, credentialId]);
+  const r = regWithAuthData(authDataWithRest(rest));
+  expect(() => verifyReg(r)).toThrow(/cbor: truncated/);
+});
+
+// Without the idLen === 0 guard specifically, this would not merely throw a
+// different error: idLen 0 still satisfies the length check (18 + 0 is not
+// greater than rest.length here), so credentialId would silently become a
+// valid empty subarray and coseBytes would land exactly on AUTH.cose — a
+// genuine, verifiable key — meaning removing this guard would let a
+// zero-length credential id through completely silently, with no error at
+// all, rather than merely changing the error.
+test('rejects a declared credential-id length of zero', () => {
+  const idLen = Buffer.alloc(2); // zero-filled: declares idLen = 0
+  const rest = Buffer.concat([Buffer.alloc(16), idLen, AUTH.cose]);
+  const r = regWithAuthData(authDataWithRest(rest));
+  expect(() => verifyReg(r)).toThrow(/attested credential data too short/);
+});
+
+// A reviewer hand-built an authData blob with 39 bytes of trailing garbage
+// after the COSE key and found that storing the UNTRIMMED key still verifies
+// a later login — CBOR is self-delimiting, so coseToKey decodes only the
+// leading COSE map and never notices a trailer. That means "a later login
+// succeeds" cannot distinguish trimmed from untrimmed; only asserting on the
+// returned publicKey's own bytes can.
+test('trims trailing extension data after the COSE key rather than persisting it', () => {
+  const extensionData = Buffer.alloc(39, 0xee);
+  const r = makeRegistration({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, extensionData });
+  const out = verifyReg(r);
+  expect(out.publicKey.length).toBe(AUTH.cose.length);
+  expect(out.publicKey.equals(AUTH.cose)).toBe(true);
 });
 
 // The key it returns must be the one that later verifies logins.

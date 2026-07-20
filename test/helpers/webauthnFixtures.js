@@ -29,7 +29,13 @@ export function buildAuthData({ rpId, flags, signCount = 0, attested = null }) {
   if (!attested) return head;
   const idLen = Buffer.alloc(2);
   idLen.writeUInt16BE(attested.credentialId.length, 0);
-  return Buffer.concat([head, Buffer.alloc(16), idLen, attested.credentialId, attested.cose]);
+  const parts = [head, Buffer.alloc(16), idLen, attested.credentialId, attested.cose];
+  // Attested credential data may be followed by extension data (the
+  // authenticator's ED flag) after the COSE key. Only the trimming-regression
+  // fixture passes this; every other caller omits it and gets exactly the
+  // same bytes as before this option existed.
+  if (attested.extensionData) parts.push(attested.extensionData);
+  return Buffer.concat(parts);
 }
 
 export function buildClientData({ type, challenge, origin }) {
@@ -62,11 +68,11 @@ export function makeAssertion({
 
 export function makeRegistration({
   authenticator, challenge, origin, rpId,
-  fmt = 'none', flags = FLAG_UP | FLAG_UV | FLAG_AT, signCount = 0,
+  fmt = 'none', flags = FLAG_UP | FLAG_UV | FLAG_AT, signCount = 0, extensionData = null,
 }) {
   const authData = buildAuthData({
     rpId, flags, signCount,
-    attested: { credentialId: authenticator.credentialId, cose: authenticator.cose },
+    attested: { credentialId: authenticator.credentialId, cose: authenticator.cose, extensionData },
   });
   const clientDataJSON = buildClientData({ type: 'webauthn.create', challenge, origin });
   const attestationObject = enc(new Map([['fmt', fmt], ['attStmt', new Map()], ['authData', authData]]));

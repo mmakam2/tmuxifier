@@ -281,7 +281,12 @@ export function verifyRegistration({ response, expectedChallenge, rpId, originOk
   const { value: att } = cborDecodeFirst(Buffer.from(String(response?.attestationObject ?? ''), 'base64url'));
   if (!(att instanceof Map)) throw new Error('malformed attestation object');
   // We request attestation "none"; anything else would need real verification.
-  if (att.get('fmt') !== 'none') throw new Error(`unsupported attestation format: ${att.get('fmt')}`);
+  // `fmt` is decoded straight from the untrusted attestationObject CBOR before
+  // any other validation runs — exactly as attacker-controlled as clientData
+  // type/origin below, which routes through the same sanitizeForLog for
+  // precisely this reason (unsanitized, a crafted fmt can inject raw newlines
+  // into a logged err.message, or blow it up to tens of thousands of chars).
+  if (att.get('fmt') !== 'none') throw new Error(`unsupported attestation format: ${sanitizeForLog(att.get('fmt'))}`);
 
   const { rest, signCount } = checkAuthData(att.get('authData'), { rpId, requireAttested: true });
   // Attested credential data: 16-byte AAGUID, 2-byte id length, credential id,
@@ -293,7 +298,14 @@ export function verifyRegistration({ response, expectedChallenge, rpId, originOk
   const coseBytes = rest.subarray(18 + idLen);
   const { value: coseMap, end } = cborDecodeFirst(coseBytes);
   const { alg } = coseMapToKey(coseMap);
-  // Trim any trailing extension data so the stored key is exactly the COSE key.
+  // Trim any bytes after the COSE key (present when the authenticator returns
+  // extension data). This is NOT required for a later login to work: CBOR is
+  // self-delimiting, so coseToKey/cborDecodeFirst decodes the same leading
+  // COSE map either way and simply never notices an untrimmed trailer — an
+  // untrimmed key still verifies signatures identically. The actual reason to
+  // trim is bounded storage: without it, an attacker-supplied registration
+  // could make the credential store persist arbitrary "extension data" after
+  // the key forever.
   return { credentialId, publicKey: coseBytes.subarray(0, end), alg, signCount };
 }
 
