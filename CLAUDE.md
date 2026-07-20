@@ -39,7 +39,7 @@ Don't introduce dependencies on `$HOME`-level state other than the user's existi
 Any file that must hold real secrets or PII to run locally is **gitignored and ships with a
 placeholder counterpart**, so contributors get the shape without the data: `.env` → `.env.example`;
 `config.json` → the same keys in `.env.example` (camelCase); `tls/` → generation steps in
-`docs/DEPLOY.md`; `data/boxes.json` → created at runtime (boxes are added via the UI, or imported
+`docs/DEPLOY.md`; `data/voice.json` (voice enable flag + model choice), `data/voice-jobs.json` (whisper install job history), `data/boxes.json` → created at runtime (boxes are added via the UI, or imported
 from a JSON file previously produced by the export button). Add the placeholder/instructions in the
 same change that introduces the file.
 
@@ -55,7 +55,7 @@ npm run dev          # vite + node --watch, proxies /api and /term to the backen
 npm run typecheck    # tsc --noEmit over src/web (the TS client; vite/vitest strip types unchecked)
 npm test             # typecheck + vitest run (unit + integration)
 npm run test:e2e     # playwright (spins up a local sshd-backed box; see test/helpers)
-npm run setup-voice  # builds whisper.cpp + downloads a pinned model into vendor/; writes .env
+npm run setup-voice  # headless equivalent of Settings -> Voice: builds whisper.cpp + downloads a pinned model into vendor/, records the choice in data/voice.json
 ```
 
 ## Configuration model
@@ -171,6 +171,17 @@ pattern for new modules.
   -l` (busy panes get a `display-message` instead; never auto-Enter, no `/image` — it
   doesn't exist). `boxActions.injectUploadPath` runs it over the ControlMaster;
   `injectLocalUploadPath` covers the `__local__` terminal's local tmux session.
+- `voiceStore.js` / `voiceInstall.js` / `voiceInstallStore.js` / `voiceDownload.js` / `voicePaths.js` —
+  voice dictation, stage 2. `data/voice.json` is the authoritative record of whether voice is on
+  and which model is selected: it is read per request, so a Settings change applies without a
+  restart, unlike `.env` which is parsed once at boot. `voiceInstall.js` is the single-flight
+  persisted install job (preflight disk check, apt, pinned clone, RAM-capped build, verified
+  download, then enable) with a rolling capped log, mirroring `setupManager.js`;
+  `voiceInstallStore.js` is its debounced `data/voice-jobs.json` persistence. `voiceDownload.js`
+  streams and hashes incrementally, writing to a temp path and renaming only after the pinned
+  SHA-256 matches, so an unverified blob never occupies the real path. `voicePaths.js` holds the
+  pure precedence rules: `TMUXIFIER_WHISPER_BIN`/`MODEL` are escape hatches that win when set and
+  are surfaced in the UI as pinned rather than silently overriding the picker.
 - `voiceText.js` / `voiceCatalog.js` / `voiceEngine.js` — voice dictation: pure transcript
   normalization (newline collapse is load-bearing — a newline through `send-keys` is Enter),
   the pinned model allowlist with SHA-256 digests (the chokepoint that keeps no user-supplied
@@ -439,7 +450,7 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 - `TMUXIFIER_CLAUDE_OAUTH_TOKEN` joins the `.env` secret class (password hash, cookie secret);
   seeding a box with it (and/or the host's `~/.codex/auth.json`) hands that box your Claude/Codex
   subscription identity, so seed only boxes you trust.
-- Voice dictation is off unless both `TMUXIFIER_WHISPER_BIN` and `TMUXIFIER_WHISPER_MODEL` are
+- Voice dictation is off unless `data/voice.json` enables it and a whisper binary and model resolve (see `voicePaths.js`); the legacy `TMUXIFIER_WHISPER_BIN`/`TMUXIFIER_WHISPER_MODEL` are
   set, and `TMUXIFIER_VOICE=off` hard-disables it regardless. Transcripts are stripped of
   control characters before reaching `send-keys`, so a transcription artefact cannot emit an
   escape sequence into a pane. Audio is transcribed by a local whisper.cpp process and is never

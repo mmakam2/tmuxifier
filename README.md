@@ -87,8 +87,8 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | path to TLS cert (PEM file) | `TMUXIFIER_TLS_CERT` | (none → serves HTTP) |
 | path to TLS key (PEM file) | `TMUXIFIER_TLS_KEY` | (none → serves HTTP) |
 | terminal upload size limit (MB) | `TMUXIFIER_UPLOAD_MAX_MB` | `25` |
-| whisper.cpp server binary path | `TMUXIFIER_WHISPER_BIN` | (none → voice disabled) |
-| whisper speech model path | `TMUXIFIER_WHISPER_MODEL` | (none → voice disabled) |
+| whisper.cpp server binary path (escape hatch; pins the control in Settings → Voice) | `TMUXIFIER_WHISPER_BIN` | (none → use the vendored build) |
+| whisper speech model path (escape hatch; pins the model picker in Settings → Voice) | `TMUXIFIER_WHISPER_MODEL` | (none → use the model chosen in Settings) |
 | voice dictation kill switch | `TMUXIFIER_VOICE` | (unset) |
 | whisper idle shutdown (ms) | `TMUXIFIER_VOICE_IDLE_MS` | `600000` |
 | voice upload size limit (MB) | `TMUXIFIER_VOICE_MAX_MB` | `8` |
@@ -303,16 +303,28 @@ by Tmuxifier has no microphone of its own — it's a remote machine you're SSHed
 running unattended. Tmuxifier's voice dictation instead captures audio in *your* browser, where
 the microphone actually is, and only ships the recording to the Tmuxifier host for transcription.
 
-Install it with:
+Install it from **Settings → Voice**. The tab installs [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
+into a repo-local `vendor/whisper/` directory and downloads a speech model from a small pinned
+allowlist (verified by SHA-256 before it's written to disk — no user-supplied URL or path is ever
+accepted). The install runs on the server as a background job with a live log, so you can close
+the modal or navigate away while it works; it takes roughly two minutes and about 1.2 GB of disk.
+The same tab has the on/off switch and the model picker, and both take effect immediately.
+
+After turning voice **on**, reload the page. Browsers apply the microphone permission policy when
+a page loads, so a tab that was open while voice was off keeps the old policy until it's
+reloaded.
+
+There is an equivalent command-line path for headless setups:
 ```bash
 npm run setup-voice           # or: npm run setup-voice -- <model-id>
 ```
-This compiles [whisper.cpp](https://github.com/ggerganov/whisper.cpp) into a repo-local
-`vendor/whisper/` directory and downloads a speech model from a small pinned allowlist (verified
-by SHA-256 before it's written to disk — no user-supplied URL or path is ever accepted), then
-records `TMUXIFIER_WHISPER_BIN` and `TMUXIFIER_WHISPER_MODEL` in `.env`. Restart Tmuxifier
-afterward for the new config to take effect. Voice dictation stays off until both variables are
-set; `TMUXIFIER_VOICE=off` in `.env` disables it again regardless of what's installed.
+
+Settings are stored in `data/voice.json` and read on every request, which is why changes apply
+without a restart. `TMUXIFIER_VOICE=off` in `.env` disables voice entirely regardless of what's
+installed. `TMUXIFIER_WHISPER_BIN` and `TMUXIFIER_WHISPER_MODEL` are escape hatches for pointing
+at a whisper build you manage yourself — setting either one overrides the corresponding control,
+which the Settings tab then shows as pinned rather than leaving you with a picker that appears to
+do nothing.
 
 Microphone access is a browser security-sensitive permission and requires a secure context:
 dictation works automatically when Tmuxifier is reached at `http://127.0.0.1:...` or
@@ -325,7 +337,7 @@ Claude Code's built-in `/voice`.
 
 The installed engine and model together take up roughly 1.2 GB under `vendor/`. Run
 `rm -rf vendor/whisper` at any time to remove them and reclaim the disk space; re-run
-`npm run setup-voice` later to reinstall.
+`npm run setup-voice` — or Settings → Voice — later to reinstall.
 
 ## Host Shell & per-box Reconnect
 The **Host Shell** entry at the bottom of the sidebar opens a terminal on the Tmuxifier host
