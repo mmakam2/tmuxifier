@@ -149,3 +149,21 @@ test('enabling voice through settings flips what /api/ui-config reports', async 
   const after = await app.inject({ method: 'GET', url: '/api/ui-config', headers: auth(c) });
   expect(after.json().voice).toBe(true);
 });
+
+test('the very first response already allows the microphone when voice is enabled at boot', async () => {
+  // Regression guard: the permissions-policy cache used to seed from
+  // config.voiceEnabled, which is false once the paths live in
+  // data/voice.json rather than .env. That served the FIRST page load of a
+  // fresh boot with microphone=(), and since Permissions-Policy is
+  // per-document, that tab had the mic blocked until it was reloaded.
+  const a = await makeApp({ voiceEnabledInitial: true });
+  const res = await a.inject({ method: 'GET', url: '/api/auth/info' }); // unauthenticated, no prior call
+  expect(res.headers['permissions-policy']).toContain('microphone=(self)');
+});
+
+test('the first response denies the microphone when voice is disabled at boot', async () => {
+  const a = await makeApp({ voiceEnabledInitial: false });
+  const res = await a.inject({ method: 'GET', url: '/api/auth/info' });
+  expect(res.headers['permissions-policy']).toContain('microphone=()');
+  expect(res.headers['permissions-policy']).toContain('camera=()');
+});

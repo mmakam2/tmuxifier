@@ -88,7 +88,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -120,7 +120,14 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   // answer. Note the header is per-document: a browser tab loaded while voice
   // was off keeps `microphone=()` until it is reloaded, which is why the
   // Settings tab tells the operator to reload after enabling.
-  let voiceEnabledCache = Boolean(config.voiceEnabled);
+  // Seeded from the resolved store state when the caller supplies it. Falling
+  // back to config.voiceEnabled would serve the FIRST page load of a fresh
+  // boot with microphone=() whenever voice is enabled via data/voice.json
+  // rather than .env — and since Permissions-Policy is per-document, that tab
+  // would have the mic blocked until reloaded.
+  let voiceEnabledCache = voiceEnabledInitial === null
+    ? Boolean(config.voiceEnabled)
+    : Boolean(voiceEnabledInitial);
   async function voiceState() {
     if (!resolveVoice) {
       // No store wired (older callers, and most unit tests): fall back to the
