@@ -22,7 +22,15 @@ function readUint(buf, pos, ai) {
   throw new Error(`cbor: unsupported additional info ${ai}`);
 }
 
-function readItem(buf, pos) {
+// Legitimate attestation objects and COSE keys nest 2-3 levels deep at most,
+// so this is generous headroom, not a tight fit. Without a bound, a buffer of
+// a few thousand repeated single-element-array headers drives readItem's
+// recursion past V8's stack limit — an uncontrolled RangeError instead of a
+// clean, greppable rejection like every other error in this file.
+const MAX_CBOR_DEPTH = 32;
+
+function readItem(buf, pos, depth = 0) {
+  if (depth > MAX_CBOR_DEPTH) throw new Error('cbor: nesting too deep');
   if (pos >= buf.length) throw new Error('cbor: truncated');
   const initial = buf[pos];
   const major = initial >> 5;
@@ -41,7 +49,7 @@ function readItem(buf, pos) {
     const [len, p0] = readUint(buf, start, ai);
     const arr = [];
     let p = p0;
-    for (let i = 0; i < len; i++) { const [v, np] = readItem(buf, p); arr.push(v); p = np; }
+    for (let i = 0; i < len; i++) { const [v, np] = readItem(buf, p, depth + 1); arr.push(v); p = np; }
     return [arr, p];
   }
   if (major === 5) {
@@ -49,8 +57,8 @@ function readItem(buf, pos) {
     const map = new Map();
     let p = p0;
     for (let i = 0; i < len; i++) {
-      const [k, kp] = readItem(buf, p);
-      const [v, vp] = readItem(buf, kp);
+      const [k, kp] = readItem(buf, p, depth + 1);
+      const [v, vp] = readItem(buf, kp, depth + 1);
       if (map.has(k)) throw new Error('cbor: duplicate map key');
       map.set(k, v);
       p = vp;
