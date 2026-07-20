@@ -5,6 +5,7 @@ import path from 'node:path';
 import { buildServer } from '../src/server/server.js';
 import { createStore } from '../src/server/store.js';
 import { createPasskeyStore } from '../src/server/passkeyStore.js';
+import { createPasskeyChallenges } from '../src/server/passkeyChallenges.js';
 import { hashPassword } from '../src/server/auth.js';
 import { makeAuthenticator, makeRegistration, makeAssertion, b64u } from './helpers/webauthnFixtures.js';
 
@@ -13,7 +14,7 @@ const ORIGIN = `https://${RP}`;
 
 let app, dir, passkeyStore;
 
-async function build(overrides = {}) {
+async function build(overrides = {}, serverOverrides = {}) {
   const config = {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
     passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir,
@@ -23,7 +24,7 @@ async function build(overrides = {}) {
   };
   const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
   const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
-  return buildServer({ config, store: createStore({ dataDir: dir }), sessions, statusChecker, passkeyStore });
+  return buildServer({ config, store: createStore({ dataDir: dir }), sessions, statusChecker, passkeyStore, ...serverOverrides });
 }
 
 beforeEach(async () => {
@@ -232,8 +233,13 @@ test('a flood of anonymous login challenges cannot evict an enrollment challenge
   const h = await headers();
   await enroll();
   const begin = await app.inject({ method: 'POST', url: '/api/passkeys/register/begin', headers: h });
-  // More than the 64-entry default bound, all unauthenticated.
-  for (let i = 0; i < 70; i++) await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  // More than the 64-entry default bound, all unauthenticated. Asserted
+  // inline: if begin ever started refusing, the loop would issue zero
+  // challenges and the guard below would pass for the wrong reason.
+  for (let i = 0; i < 70; i++) {
+    const res = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+    expect(res.statusCode).toBe(200);
+  }
   const auth = makeAuthenticator({ credentialId: Buffer.from('cred-late') });
   const fin = await app.inject({
     method: 'POST', url: '/api/passkeys/register/finish',
@@ -243,4 +249,55 @@ test('a flood of anonymous login challenges cannot evict an enrollment challenge
     }).response },
   });
   expect(fin.statusCode).toBe(200);
+});
+
+// Mirror of the test above, but for the login ceremony itself rather than
+// enrollment: a flood of login/begin calls from OTHER source IPs must not
+// evict a legitimate caller's own in-flight login challenge.
+test('a flood of login challenges from another IP cannot evict a victim\'s login challenge', async () => {
+  const auth = await enroll();
+  const begin = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin', remoteAddress: '203.0.113.9' });
+  expect(begin.statusCode).toBe(200);
+  // More than the 64-entry default bound, all from a single different IP.
+  for (let i = 0; i < 70; i++) {
+    const res = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin', remoteAddress: '203.0.113.66' });
+    expect(res.statusCode).toBe(200);
+  }
+  const assertion = makeAssertion({
+    authenticator: auth, challenge: Buffer.from(begin.json().challenge, 'base64url'),
+    origin: ORIGIN, rpId: RP, signCount: 5,
+  });
+  const fin = await app.inject({
+    method: 'POST', url: '/api/auth/passkey/login/finish',
+    headers: { cookie: pkCookie(begin) }, payload: assertion,
+  });
+  expect(fin.statusCode).toBe(200);
+});
+
+// The 409 below names the previously-pinned rp id. That's fine on the
+// authenticated enroll routes (already covered by the register/begin 409
+// test above) but must not leak to an anonymous caller on the login routes.
+test('a pinned rp id mismatch on the login routes does not leak the stored hostname', async () => {
+  await passkeyStore.add({ id: 'cred-a', publicKey: 'x', alg: -7, signCount: 0, label: 'L', transports: [] }, { rpId: 'old.example.com' });
+  const begin = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  expect(begin.statusCode).toBe(409);
+  expect(begin.json().error).not.toMatch(/old\.example\.com/);
+  const finish = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/finish', payload: {} });
+  expect(finish.statusCode).toBe(409);
+  expect(finish.json().error).not.toMatch(/old\.example\.com/);
+});
+
+// buildServer's passkeyChallenges DI seam must apply uniformly: an injected
+// store silently controlling only enrollment (while login always gets a
+// fresh, uninjected store) would be a seam a test author could easily miss.
+test('an injected passkeyChallenges store backs both the enrollment and login ceremonies', async () => {
+  const shared = createPasskeyChallenges({ ttlMs: 120000 });
+  app = await build({}, { passkeyChallenges: shared });
+  await enroll();
+  const h = await headers();
+  const reg = await app.inject({ method: 'POST', url: '/api/passkeys/register/begin', headers: h });
+  const login = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  expect(reg.statusCode).toBe(200);
+  expect(login.statusCode).toBe(200);
+  expect(shared._size()).toBe(2);
 });

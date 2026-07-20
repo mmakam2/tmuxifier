@@ -115,14 +115,23 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   const rpId = config.rpId || null;
   const passkeyOriginOk = rpId ? makeOriginCheck(rpId) : () => false;
 
-  // Separate bounded stores per ceremony. login/begin is unauthenticated, so a
-  // flood of anonymous challenges must not be able to evict the enrollment
-  // challenge of an authenticated operator mid-ceremony.
-  const pkLoginChallenges = createPasskeyChallenges({ ttlMs: PK_TTL_SECONDS * 1000 });
+  // Separate bounded stores per ceremony by default. login/begin is
+  // unauthenticated, so a flood of anonymous challenges must not be able to
+  // evict the enrollment challenge of an authenticated operator mid-ceremony.
+  // A caller that injects its own passkeyChallenges (e.g. a test wanting a
+  // deterministic clock) gets it applied to BOTH ceremonies — an injected
+  // store silently controlling only enrollment would be a seam a caller
+  // could easily miss.
+  const pkLoginChallenges = passkeyChallenges ?? createPasskeyChallenges({ ttlMs: PK_TTL_SECONDS * 1000 });
   const challengeStoreFor = (kind) => (kind === 'auth' ? pkLoginChallenges : pkChallenges);
 
   // Replies with the reason and returns false when passkeys cannot be used.
-  async function pkReady(reply) {
+  // exposeStoredRpId gates the specific 409 message naming the previously
+  // pinned hostname: fine on the authenticated enroll routes (operationally
+  // useful, and the caller already runs the dashboard), but the two
+  // unauthenticated login routes must not hand an anonymous caller a
+  // hostname it isn't currently talking to.
+  async function pkReady(reply, { exposeStoredRpId = true } = {}) {
     if (!passkeyStore) {
       reply.code(503).send({ error: 'passkeys are not configured' });
       return false;
@@ -133,14 +142,21 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     }
     const pinned = await passkeyStore.getRpId();
     if (pinned && pinned !== rpId) {
-      reply.code(409).send({ error: `these passkeys were enrolled for ${pinned}, but this server is configured for ${rpId}` });
+      reply.code(409).send(
+        exposeStoredRpId
+          ? { error: `these passkeys were enrolled for ${pinned}, but this server is configured for ${rpId}` }
+          : { error: 'passkeys are not available for this server configuration' },
+      );
       return false;
     }
     return true;
   }
 
-  function issueChallenge(reply, kind) {
-    const { token, challenge } = challengeStoreFor(kind).issue(kind);
+  // owner is the requester's IP: an outstanding-challenge quota keyed to it
+  // is what stops an anonymous flood from evicting a different caller's
+  // in-flight challenge (see passkeyChallenges.js).
+  function issueChallenge(req, reply, kind) {
+    const { token, challenge } = challengeStoreFor(kind).issue(kind, { owner: req.ip });
     reply.setCookie(PK_COOKIE, token, {
       httpOnly: true, sameSite: 'strict', secure: !!config.secureCookie,
       path: '/', signed: true, maxAge: PK_TTL_SECONDS,
@@ -156,10 +172,15 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return challengeStoreFor(kind).take(unsigned.value, kind);
   }
 
-  // Read per request, never captured at boot, so the toggle takes effect at once.
-  async function passkeyOnlyArmed() {
-    if (!passkeyStore || config.passkeyOnlyKillSwitch) return false;
-    try { return await passkeyStore.getPasskeyOnly(); } catch { return false; }
+  // Combines the persisted flag with the kill switch, given an already-
+  // fetched store snapshot rather than reading the store itself — the
+  // snapshot is still fetched fresh per request by the caller (never
+  // captured at boot), so toggling either the kill switch or the stored flag
+  // still takes effect at once. Sharing the snapshot lets a caller that also
+  // needs other passkeyStore fields (GET /api/auth/info below) do one
+  // readAll() instead of one per field.
+  function passkeyOnlyArmed(pk) {
+    return !!pk && !config.passkeyOnlyKillSwitch && pk.passkeyOnly === true;
   }
 
   app.get('/api/passkeys', { preHandler: requireAuth }, async () => ({
@@ -172,7 +193,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
   app.post('/api/passkeys/register/begin', { preHandler: requireAuth }, async (req, reply) => {
     if (!(await pkReady(reply))) return reply;
-    const challenge = issueChallenge(reply, 'reg');
+    const challenge = issueChallenge(req, reply, 'reg');
     const enrolled = await passkeyStore.listRaw();
     return {
       challenge: challenge.toString('base64url'),
@@ -224,9 +245,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
   app.post('/api/auth/passkey/login/begin', async (req, reply) => {
     if (loginLimiter.limited(req.ip)) return reply.code(429).send({ error: 'too many attempts' });
-    if (!(await pkReady(reply))) return reply;
+    if (!(await pkReady(reply, { exposeStoredRpId: false }))) return reply;
     if ((await passkeyStore.listRaw()).length === 0) return reply.code(503).send({ error: 'no passkey enrolled' });
-    const challenge = issueChallenge(reply, 'auth');
+    const challenge = issueChallenge(req, reply, 'auth');
     return {
       challenge: challenge.toString('base64url'),
       rpId,
@@ -241,7 +262,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   app.post('/api/auth/passkey/login/finish', async (req, reply) => {
     const ip = req.ip;
     if (loginLimiter.limited(ip)) return reply.code(429).send({ error: 'too many attempts' });
-    if (!(await pkReady(reply))) return reply;
+    if (!(await pkReady(reply, { exposeStoredRpId: false }))) return reply;
     const challenge = takeChallenge(req, 'auth');
     reply.clearCookie(PK_COOKIE, { path: '/' });
     if (!challenge) return reply.code(400).send({ error: 'challenge expired — start again' });
@@ -360,17 +381,26 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     done();
   }
 
-  app.get('/api/auth/info', async () => ({
-    mode: config.authMode === 'google' ? 'google' : 'password',
-    // Unauthenticated on purpose: the login screen needs to know whether to
-    // draw the passkey button. It exposes only the hostname the client is
-    // already talking to, plus a count.
-    passkey: {
-      enrolled: passkeyStore ? (await passkeyStore.list()).length : 0,
-      rpId,
-      only: await passkeyOnlyArmed(),
-    },
-  }));
+  app.get('/api/auth/info', async () => {
+    // One snapshot serves both fields below instead of each doing its own
+    // disk read + JSON parse — see passkeyStore.js's snapshot(). A read
+    // failure degrades to "no passkeys" rather than 500ing the login page.
+    let pk = null;
+    if (passkeyStore) {
+      try { pk = await passkeyStore.snapshot(); } catch { pk = null; }
+    }
+    return {
+      mode: config.authMode === 'google' ? 'google' : 'password',
+      // Unauthenticated on purpose: the login screen needs to know whether to
+      // draw the passkey button. It exposes only the hostname the client is
+      // already talking to, plus a count.
+      passkey: {
+        enrolled: pk ? pk.credentials.length : 0,
+        rpId,
+        only: passkeyOnlyArmed(pk),
+      },
+    };
+  });
 
   if (config.authMode !== 'google') {
     app.post('/api/login', async (req, reply) => {

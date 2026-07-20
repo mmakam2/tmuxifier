@@ -231,3 +231,18 @@ test('re-enrolling the same credential id preserves the original created time', 
   expect(list[0].created).toBe(1000);
   expect(list[0].label).toBe('Renamed');
 });
+
+// snapshot() exists so a caller needing more than one field (GET
+// /api/auth/info, unauthenticated and hit on every login-page load) can do
+// one readAll() instead of one per field.
+test('snapshot starts empty and unarmed', async () => {
+  expect(await store.snapshot()).toEqual({ credentials: [], passkeyOnly: false });
+});
+
+test('snapshot reports credentials and the passkeyOnly flag together', async () => {
+  await store.add(CRED, { rpId: 'tmux.example.com' });
+  await store.setPasskeyOnly(true);
+  const snap = await store.snapshot();
+  expect(snap.credentials).toEqual(await store.list());
+  expect(snap.passkeyOnly).toBe(true);
+});

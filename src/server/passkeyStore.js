@@ -79,6 +79,16 @@ export function createPasskeyStore({ dataDir, now = () => Date.now(), log = (msg
     async getRpId() { return (await readAll()).rpId ?? null; },
     async getPasskeyOnly() { return (await readAll()).passkeyOnly === true; },
 
+    // One readAll() shared by a caller that needs more than one field at
+    // once — GET /api/auth/info is unauthenticated and hit on every load of
+    // the login page, so serving `enrolled` and `only` from two separate
+    // readAll() calls was two disk reads and two JSON parses per hit for no
+    // reason. Read-only: does not touch the mutation paths above.
+    async snapshot() {
+      const data = await readAll();
+      return { credentials: data.credentials.map(publicView), passkeyOnly: data.passkeyOnly === true };
+    },
+
     setPasskeyOnly(enabled) {
       return withLock(async () => {
         const data = await readAll();

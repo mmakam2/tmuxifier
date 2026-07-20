@@ -111,3 +111,66 @@ test('max: NaN does not unbind the map', () => {
   expect(c._size()).toBeLessThanOrEqual(100);
   expect(c._size()).toBeGreaterThan(0);
 });
+
+// --- Per-owner quota + busiest-owner eviction ---
+// login/begin is unauthenticated, so without a per-owner limit one anonymous
+// caller could flood enough challenges to evict a DIFFERENT caller's
+// in-flight challenge out of the shared bounded map (the soonest-expiring
+// entry, at a uniform TTL, is whichever was issued first — typically the
+// victim, who was there before the flood started).
+
+test('a single busy owner cannot evict a different owner\'s challenge even under sustained flooding', () => {
+  const c = createPasskeyChallenges({ max: 4, maxPerOwner: 3 });
+  const victim = c.issue('auth', { owner: 'victim' });
+  // Attacker floods far past the tiny global max, all from one owner.
+  for (let i = 0; i < 20; i++) c.issue('auth', { owner: 'attacker' });
+  expect(c.take(victim.token, 'auth')).not.toBeNull();
+});
+
+test('global overflow evicts from the owner holding the most outstanding challenges, not a lighter victim', () => {
+  const c = createPasskeyChallenges({ max: 7, maxPerOwner: 3 });
+  const victim = c.issue('auth', { owner: 'victim' });
+  for (let i = 0; i < 3; i++) c.issue('auth', { owner: 'attacker-a' });
+  for (let i = 0; i < 3; i++) c.issue('auth', { owner: 'attacker-b' });
+  // The map is now exactly full (1 + 3 + 3 = 7). One more issue from a third
+  // owner forces an eviction; it must land on one of the two owners tied
+  // for busiest, never on the victim's single-entry bucket.
+  c.issue('auth', { owner: 'attacker-c' });
+  expect(c.take(victim.token, 'auth')).not.toBeNull();
+});
+
+test('a missing or empty owner does not throw and is treated as one shared bucket', () => {
+  const c = createPasskeyChallenges({ maxPerOwner: 2 });
+  expect(() => c.issue('auth')).not.toThrow();
+  expect(() => c.issue('auth', {})).not.toThrow();
+  expect(() => c.issue('auth', { owner: '' })).not.toThrow();
+  expect(() => c.issue('auth', { owner: null })).not.toThrow();
+  // All four share the '' bucket, quota-capped at 2.
+  expect(c._size()).toBe(2);
+});
+
+test('defaults maxPerOwner to 3', () => {
+  const c = createPasskeyChallenges();
+  const first = c.issue('auth', { owner: 'x' });
+  c.issue('auth', { owner: 'x' });
+  c.issue('auth', { owner: 'x' });
+  c.issue('auth', { owner: 'x' });
+  expect(c._size()).toBe(3);
+  expect(c.take(first.token, 'auth')).toBeNull();
+});
+
+test('maxPerOwner: 0 does not hang and clamps to default', { timeout: 1000 }, () => {
+  const c = createPasskeyChallenges({ maxPerOwner: 0 });
+  const a = c.issue('auth', { owner: 'x' });
+  const b = c.issue('auth', { owner: 'x' });
+  expect(c._size()).toBe(2);
+  expect(c.take(a.token, 'auth')).not.toBeNull();
+  expect(c.take(b.token, 'auth')).not.toBeNull();
+});
+
+test('maxPerOwner: NaN does not unbind an owner\'s bucket', () => {
+  const c = createPasskeyChallenges({ maxPerOwner: NaN });
+  for (let i = 0; i < 50; i++) c.issue('auth', { owner: 'x' });
+  expect(c._size()).toBeLessThanOrEqual(50);
+  expect(c._size()).toBeGreaterThan(0);
+});
