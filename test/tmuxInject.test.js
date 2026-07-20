@@ -8,6 +8,7 @@ import {
   buildDisplayMessageRemote,
   injectionText,
   injectVia,
+  injectTextVia,
   injectLocalUploadPath,
 } from '../src/server/tmuxInject.js';
 
@@ -168,4 +169,86 @@ test('injectLocalUploadPath runs the same flow through the injected runner', asy
   const res = await injectLocalUploadPath('local', '/home/u/.tmuxifier-uploads/1-aa-x.png', { run });
   expect(res).toEqual({ injected: true, mode: 'shell' });
   expect(calls[0]).toContain("-t '=local:'");
+});
+
+test('injectTextVia types arbitrary text into a shell pane', async () => {
+  const calls = [];
+  const run = async (script) => {
+    calls.push(script);
+    if (script.includes('capture-pane')) return { code: 0, stdout: 'bash\nuser@host:~$ ' };
+    return { code: 0, stdout: '' };
+  };
+  const res = await injectTextVia(run, 'web', 'refactor the auth middleware', { label: 'dictation' });
+  expect(res).toEqual({ injected: true, mode: 'shell' });
+  const sendKeys = calls.find((c) => c.includes('send-keys'));
+  expect(sendKeys).toContain("'refactor the auth middleware'");
+  // No trailing space and no Enter: the upload convention applies to voice too.
+  expect(sendKeys).not.toContain('Enter');
+});
+
+test('injectTextVia uses the label in its status messages', async () => {
+  const calls = [];
+  const run = async (script) => {
+    calls.push(script);
+    if (script.includes('capture-pane')) return { code: 0, stdout: 'make\n' };
+    return { code: 0, stdout: '' };
+  };
+  const res = await injectTextVia(run, 'web', 'hello', { label: 'dictation' });
+  expect(res).toEqual({ injected: false, mode: 'busy' });
+  // Excludes the pane-state script: its first line is itself a
+  // `tmux display-message -p ...` call (to read #{pane_current_command}),
+  // so a plain substring match would pick that up instead of the actual
+  // status message — same trap the pre-existing tests above already guard.
+  expect(calls.find((c) => c.startsWith('tmux display-message') && !c.includes('#{pane_current_command}'))).toContain('dictation');
+});
+
+test('injectTextVia never types empty text', async () => {
+  const calls = [];
+  const run = async (script) => { calls.push(script); return { code: 0, stdout: 'bash\n$ ' }; };
+  const res = await injectTextVia(run, 'web', '   ', { label: 'dictation' });
+  expect(res).toEqual({ injected: false, mode: 'empty' });
+  expect(calls.some((c) => c.includes('send-keys'))).toBe(false);
+});
+
+test('injectVia keeps its original upload wording after delegation', async () => {
+  // Locks the refactor: injectVia now delegates to injectTextVia, so the
+  // upload-specific message text must be asserted explicitly rather than
+  // assumed to have survived.
+  const calls = [];
+  const run = async (script) => {
+    calls.push(script);
+    if (script.includes('capture-pane')) return { code: 0, stdout: 'bash\n$ ' };
+    return { code: 0, stdout: '' };
+  };
+  await injectVia(run, 'web', '/root/.tmuxifier-uploads/1-aa-shot.png');
+  // Excludes the pane-state script for the same reason as above: it also
+  // contains the substring 'display-message' (the #{pane_current_command}
+  // probe), so a bare substring match would find that call instead of the
+  // real status message.
+  expect(calls.find((c) => c.startsWith('tmux display-message') && !c.includes('#{pane_current_command}')))
+    .toContain('image pasted: 1-aa-shot.png');
+
+  const busy = [];
+  const runBusy = async (script) => {
+    busy.push(script);
+    if (script.includes('capture-pane')) return { code: 0, stdout: 'make\n' };
+    return { code: 0, stdout: '' };
+  };
+  await injectVia(runBusy, 'web', '/x/y.png');
+  expect(busy.find((c) => c.startsWith('tmux display-message') && !c.includes('#{pane_current_command}')))
+    .toContain('image uploaded: /x/y.png (pane busy — not typed)');
+});
+
+test('injectTextVia sh-quotes text containing quotes and semicolons', async () => {
+  const calls = [];
+  const run = async (script) => {
+    calls.push(script);
+    if (script.includes('capture-pane')) return { code: 0, stdout: 'bash\n$ ' };
+    return { code: 0, stdout: '' };
+  };
+  await injectTextVia(run, 'web', "it's fine; rm -rf /", { label: 'dictation' });
+  const sendKeys = calls.find((c) => c.includes('send-keys'));
+  // shSingleQuote renders an embedded apostrophe as '\'' — the shell never
+  // sees an unquoted ; or an unbalanced quote.
+  expect(sendKeys).toContain(`'it'\\''s fine; rm -rf /'`);
 });

@@ -8,7 +8,7 @@ import {
   shSingleQuote,
 } from './sshCommand.js';
 import { storedUploadName, buildUploadRemote } from './uploads.js';
-import { injectVia } from './tmuxInject.js';
+import { injectVia, injectTextVia } from './tmuxInject.js';
 
 // Curated provision-time tools. Ids are the ONLY strings that ever reach the
 // generated shell script — resolveTools throws on anything not in the catalog,
@@ -471,6 +471,12 @@ export function createBoxActions({ run, runStdin, hostKeyPolicy = 'accept-new', 
     // uploadFile; never throws — the upload already succeeded.
     async injectUploadPath(box, session, remotePath, { timeoutMs = 8000 } = {}) {
       return injectVia((script) => runRemote(box, script, timeoutMs), session, remotePath);
+    },
+    // Pane-aware injection of dictated text. Same guard as injectUploadPath;
+    // never throws — the transcription already succeeded and is returned to
+    // the client regardless of whether it could be typed.
+    async injectText(box, session, text, { timeoutMs = 8000 } = {}) {
+      return injectTextVia((script) => runRemote(box, script, timeoutMs), session, text, { label: 'dictation' });
     },
     async exitMaster(box) {
       try {
