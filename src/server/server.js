@@ -37,8 +37,19 @@ const SECURITY_HEADERS = {
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
-  'permissions-policy': 'camera=(), microphone=(), geolocation=()',
 };
+
+// permissions-policy is computed per-server (not a static header) because the
+// microphone token depends on config.voiceEnabled: an empty allowlist
+// (`microphone=()`) disables the microphone for the top-level document itself,
+// not merely embedded frames, so it must never ship that way while voice
+// dictation is on or getUserMedia() rejects with a policy error regardless of
+// HTTPS/user consent. `(self)` grants only this app's own origin — never
+// embedded third-party frames — and this app already sends `frame-ancestors
+// 'none'`, so that stays tight. camera/geolocation remain locked down always.
+function permissionsPolicyHeader(voiceEnabled) {
+  return `camera=(), microphone=(${voiceEnabled ? 'self' : ''}), geolocation=()`;
+}
 
 function originOf(value) {
   try { return new URL(value).origin; } catch { return null; }
@@ -388,6 +399,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   app.addHook('onSend', async (req, reply, payload) => {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
       if (!reply.hasHeader(name)) reply.header(name, value);
+    }
+    if (!reply.hasHeader('permissions-policy')) {
+      reply.header('permissions-policy', permissionsPolicyHeader(config.voiceEnabled));
     }
     // Same predicate as the Secure cookie flag: local TLS counts, not only an
     // https external URL — the self-hosted TLS mode the docs recommend was the

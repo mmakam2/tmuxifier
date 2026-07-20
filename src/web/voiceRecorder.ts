@@ -45,24 +45,35 @@ export function createVoiceRecorder(maxSeconds: number, onAutoStop: () => void):
 
     async start(): Promise<void> {
       if (ctx) return;
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-      });
-      ctx = new AudioContext();
-      rate = ctx.sampleRate;   // device-dependent: commonly 48000, often 44100
-      chunks = [];
-      const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'text/javascript' }));
+      // getUserMedia() resolving makes the mic LIVE (the browser's recording
+      // indicator lights up) before any of the AudioContext/AudioWorklet setup
+      // below runs. If any of that setup throws — addModule() over a blob: URL
+      // is the realistic failure, Safari has long-standing trouble with it —
+      // the mic must not stay live with no reference left to stop it, so any
+      // throw from here on tears everything down before rethrowing.
       try {
-        await ctx.audioWorklet.addModule(url);
-      } finally {
-        URL.revokeObjectURL(url);
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+        });
+        ctx = new AudioContext();
+        rate = ctx.sampleRate;   // device-dependent: commonly 48000, often 44100
+        chunks = [];
+        const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'text/javascript' }));
+        try {
+          await ctx.audioWorklet.addModule(url);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+        node = new AudioWorkletNode(ctx, 'tmuxifier-capture');
+        node.port.onmessage = (e: MessageEvent) => { chunks.push(e.data as Float32Array); };
+        ctx.createMediaStreamSource(stream).connect(node);
+        // Transcribe what was captured rather than discarding it: never lose
+        // speech to a forgotten key.
+        capTimer = setTimeout(onAutoStop, maxSeconds * 1000);
+      } catch (e) {
+        teardown();
+        throw e;
       }
-      node = new AudioWorkletNode(ctx, 'tmuxifier-capture');
-      node.port.onmessage = (e: MessageEvent) => { chunks.push(e.data as Float32Array); };
-      ctx.createMediaStreamSource(stream).connect(node);
-      // Transcribe what was captured rather than discarding it: never lose
-      // speech to a forgotten key.
-      capTimer = setTimeout(onAutoStop, maxSeconds * 1000);
     },
 
     async stop(): Promise<ArrayBuffer> {

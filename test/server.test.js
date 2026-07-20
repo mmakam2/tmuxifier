@@ -133,6 +133,27 @@ test('public responses include browser hardening headers', async () => {
   expect(res.headers['cache-control']).toBe('no-store');
 });
 
+// permissions-policy's microphone token must track config.voiceEnabled: an
+// empty allowlist disables getUserMedia() for the top-level document itself
+// (not just embedded frames), so it would silently break voice dictation if it
+// never opened up. camera/geolocation must stay locked down in both cases —
+// this change must never quietly widen them.
+test('permissions-policy locks the microphone down when voice is disabled', async () => {
+  app = await makeApp({ config: { voiceEnabled: false } });
+  const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
+  expect(res.headers['permissions-policy']).toContain('microphone=()');
+  expect(res.headers['permissions-policy']).toContain('camera=()');
+  expect(res.headers['permissions-policy']).toContain('geolocation=()');
+});
+
+test('permissions-policy allows the microphone for this origin only when voice is enabled', async () => {
+  app = await makeApp({ config: { voiceEnabled: true } });
+  const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
+  expect(res.headers['permissions-policy']).toContain('microphone=(self)');
+  expect(res.headers['permissions-policy']).toContain('camera=()');
+  expect(res.headers['permissions-policy']).toContain('geolocation=()');
+});
+
 test('/api/ui-config requires auth and returns terminal font defaults', async () => {
   const unauth = await app.inject({ method: 'GET', url: '/api/ui-config' });
   expect(unauth.statusCode).toBe(401);

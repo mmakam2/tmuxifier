@@ -46,7 +46,7 @@ function isMacPlatform(): boolean {
 // attachCustomKeyEventHandler keeps only ONE handler, so voice must be checked
 // in this same callback rather than attaching a second one, which would
 // silently replace this handler and disable copy/paste.
-function wireClipboard(term: Terminal, voice?: { begin(): void; finish(): void }): void {
+function wireClipboard(term: Terminal, voice?: { ready(): boolean; begin(): void; finish(): void }): void {
   const deps: ClipboardDeps = {
     clipboard: typeof navigator !== 'undefined' ? navigator.clipboard : undefined,
     fallbackCopy: execCommandCopy,
@@ -79,8 +79,12 @@ function wireClipboard(term: Terminal, voice?: { begin(): void; finish(): void }
     // Voice is checked first and returns false so the combo never reaches the
     // PTY. xterm keeps only ONE custom key handler, so this must live in the
     // same callback as the clipboard bindings — a second attach call would
-    // silently replace them.
-    if (voice && isVoiceHotkey(ev)) {
+    // silently replace them. Only intercept when a controller is actually
+    // mounted (voice.ready()): while the /api/ui-config readiness fetch is
+    // still pending, or when the server has voice off, there is nothing to
+    // hand the keystroke to, so it must fall through to normal xterm handling
+    // instead of being silently swallowed.
+    if (voice?.ready() && isVoiceHotkey(ev)) {
       if (ev.type === 'keydown') voice.begin();
       else voice.finish();
       return false;

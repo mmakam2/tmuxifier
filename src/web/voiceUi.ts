@@ -78,11 +78,17 @@ export function createVoiceController(boxId: string, maxSeconds: number, host: V
 
   async function begin(): Promise<void> {
     if (busy || recorder) return;
-    recorder = createVoiceRecorder(maxSeconds, () => { void finish(); });
+    const r = createVoiceRecorder(maxSeconds, () => { void finish(); });
+    recorder = r;
     try {
-      await recorder.start();
+      await r.start();
       setState('recording');
     } catch (e) {
+      // start() tears itself down on failure, but that's defense in depth —
+      // cancel() is called here too via the still-live local reference `r`
+      // rather than only nulling the field, so a live mic track can never
+      // outlive the object that was the only handle on it.
+      r.cancel();
       recorder = null;
       setState('idle');
       host.write(`\r\n\x1b[33m[voice: ${termSafe((e as Error).message || 'microphone unavailable')}]\x1b[0m\r\n`);
@@ -101,9 +107,15 @@ export function createVoiceController(boxId: string, maxSeconds: number, host: V
       if (!res.text) {
         host.write('\r\n\x1b[2m[voice: nothing heard]\x1b[0m\r\n');
       } else if (!res.injected) {
-        // A refused injection must never cost the user what they said.
+        // A refused injection must never cost the user what they said, on
+        // EITHER path — a busy pane and a genuine injection error land in the
+        // same !res.injected branch, but only 'busy' is actually a busy pane;
+        // misreporting a real error as "pane busy" would hide the failure.
         host.copy(res.text);
-        host.write(`\r\n\x1b[33m[voice: pane busy — transcript copied to clipboard]\x1b[0m\r\n`);
+        const why = res.mode === 'busy'
+          ? 'pane busy — transcript copied to clipboard'
+          : 'injection failed — transcript copied to clipboard';
+        host.write(`\r\n\x1b[33m[voice: ${why}]\x1b[0m\r\n`);
       }
     } catch (e) {
       host.write(`\r\n\x1b[33m[voice failed: ${termSafe((e as Error).message || 'error')}]\x1b[0m\r\n`);
@@ -154,6 +166,12 @@ export function wireVoice(parent: HTMLElement, boxId: string, host: VoiceHost) {
   }).catch(() => {});
 
   return {
+    // True once a controller is actually mounted — false while the
+    // /api/ui-config readiness fetch is still in flight, and permanently false
+    // when the server has voice off. terminal.ts's key handler consults this
+    // so the hotkey isn't swallowed with no explanation when voice can't act
+    // on it anyway.
+    ready(): boolean { return controller !== null; },
     begin(): void { void controller?.begin(); },
     finish(): void { void controller?.finish(); },
     dispose(): void { disposed = true; controller?.dispose(); controller = null; },
