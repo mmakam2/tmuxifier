@@ -169,22 +169,52 @@ function parseAuthData(ad) {
   return { rpIdHash: ad.subarray(0, 32), flags: ad[32], signCount: ad.readUInt32BE(33), rest: ad.subarray(37) };
 }
 
+// Real challenges in this project are 32 bytes. An expected challenge shorter
+// than this floor is never legitimate — it means the caller lost track of the
+// real value (e.g. an expired/missing session challenge defaulted to '' or
+// something equally short) rather than that the presented one is merely
+// wrong. Rejecting it here, before the byte comparison, closes a vacuous-match
+// hole: a zero-length expected challenge would otherwise equal a zero-length
+// presented one (including the empty buffer that base64url decoding of junk
+// silently produces), which would make this check pass for literally any
+// undecodable presented challenge.
+const MIN_CHALLENGE_BYTES = 16;
+
 function assertChallenge(actual, expected) {
   const a = Buffer.from(String(actual ?? ''), 'base64url');
   const b = Buffer.from(expected);
+  if (b.length < MIN_CHALLENGE_BYTES) throw new Error('expected challenge missing or too short');
   if (a.length !== b.length || !timingSafeEqual(a, b)) throw new Error('challenge mismatch');
 }
 
 function checkClientData(clientDataJSON, { type, expectedChallenge, originOk }) {
-  const c = JSON.parse(clientDataJSON.toString('utf8'));
-  if (c.type !== type) throw new Error(`unexpected clientData type ${c.type}`);
+  let c;
+  try {
+    c = JSON.parse(clientDataJSON.toString('utf8'));
+  } catch {
+    throw new Error('malformed clientData: invalid JSON');
+  }
+  if (c === null || typeof c !== 'object' || Array.isArray(c)) {
+    throw new Error('malformed clientData: expected a JSON object');
+  }
+  // JSON.stringify escapes newlines/quotes in these attacker-controlled fields
+  // before they ever reach a thrown message — interpolating them raw would let
+  // a crafted clientData value forge extra lines in whatever a caller logs
+  // this error to (e.g. `err.message`) on this unauthenticated login path.
+  if (c.type !== type) throw new Error(`unexpected clientData type ${JSON.stringify(c.type)}`);
   assertChallenge(c.challenge, expectedChallenge);
-  if (!originOk(c.origin)) throw new Error(`untrusted origin ${c.origin}`);
+  if (!originOk(c.origin)) throw new Error(`untrusted origin ${JSON.stringify(c.origin)}`);
 }
 
 function checkAuthData(ad, { rpId, requireAttested = false }) {
   const parsed = parseAuthData(ad);
-  if (!parsed.rpIdHash.equals(createHash('sha256').update(rpId).digest())) throw new Error('rp id mismatch');
+  // Normalized the same way makeOriginCheck normalizes the origin's hostname:
+  // browsers hash whatever hostname they actually navigated to (canonically
+  // lowercase) into rpIdHash, so a configured rp id with stray capitals must
+  // be lowercased here too — otherwise it would pass the (already
+  // case-insensitive) origin check and then permanently fail this one.
+  const normalizedRpId = String(rpId).toLowerCase();
+  if (!parsed.rpIdHash.equals(createHash('sha256').update(normalizedRpId).digest())) throw new Error('rp id mismatch');
   if (!(parsed.flags & 0x01)) throw new Error('user presence flag not set');
   if (!(parsed.flags & 0x04)) throw new Error('user verification flag not set');
   if (requireAttested && !(parsed.flags & 0x40)) throw new Error('no attested credential data');
@@ -206,6 +236,17 @@ export function verifyAssertion({ response, expectedChallenge, rpId, originOk, p
   const signed = Buffer.concat([authData, createHash('sha256').update(clientDataJSON).digest()]);
   const sig = Buffer.from(String(response?.signature ?? ''), 'base64url');
   if (!signatureValid(alg, key, signed, sig)) throw new Error('bad signature');
+  // storedSignCount round-trips through a JSON store file, where a missing or
+  // reset numeric field commonly persists as null (or, via other bugs, NaN) —
+  // ordinary store data, not attacker input. The `= 0` destructuring default
+  // above only fires on `undefined`, so anything else non-numeric must be
+  // rejected explicitly here rather than silently folded into a bare `> 0`
+  // comparison: `null > 0` and `NaN > 0` are both false in JS, which would
+  // otherwise disable the mandated cloned-authenticator check exactly as if
+  // no count had ever been stored, letting a replayed (stalled) count through.
+  if (typeof storedSignCount !== 'number' || !Number.isInteger(storedSignCount) || storedSignCount < 0) {
+    throw new Error('invalid stored sign count');
+  }
   // A counter that fails to advance means the credential was cloned. A pair of
   // zeroes is not a regression — many authenticators never implement it.
   if (storedSignCount > 0 && signCount <= storedSignCount) throw new Error('sign count did not increase');

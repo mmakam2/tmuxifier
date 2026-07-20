@@ -205,7 +205,11 @@ function verify(assertion, over = {}) {
     rpId: over.rpId ?? RP,
     originOk: over.originOk ?? originOk,
     publicKey: b64u(auth.cose),
-    storedSignCount: over.storedSignCount ?? 0,
+    // `??` would coalesce an explicitly-passed `null`/`NaN` right back to 0,
+    // masking exactly the storedSignCount coercion bug this file tests for.
+    // Default to 0 only when the caller omits the field entirely, mirroring
+    // verifyAssertion's own `storedSignCount = 0` destructuring default.
+    storedSignCount: 'storedSignCount' in over ? over.storedSignCount : 0,
   });
 }
 
@@ -221,6 +225,20 @@ test('rejects a challenge that does not match', () => {
   expect(() => verify(a)).toThrow(/challenge/);
 });
 
+// An empty expected challenge must never behave as a wildcard: a route bug such
+// as `Buffer.from(session.challenge ?? '', 'base64url')` (missing/expired
+// session challenge) must still fail closed instead of accepting anything.
+test('rejects an empty expected challenge instead of treating it as a wildcard match', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: Buffer.alloc(0), origin: ORIGIN, rpId: RP });
+  expect(() => verify(a, { expectedChallenge: Buffer.alloc(0) })).toThrow(/challenge/);
+});
+
+test('rejects an expected challenge shorter than the minimum plausible length, even when it matches exactly', () => {
+  const shortChallenge = Buffer.alloc(8, 7);
+  const a = makeAssertion({ authenticator: AUTH, challenge: shortChallenge, origin: ORIGIN, rpId: RP });
+  expect(() => verify(a, { expectedChallenge: shortChallenge })).toThrow(/challenge/);
+});
+
 test('rejects an untrusted origin', () => {
   const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: 'https://evil.example.net', rpId: RP });
   expect(() => verify(a)).toThrow(/origin/);
@@ -231,12 +249,88 @@ test('rejects authenticator data signed for a different rp id', () => {
   expect(() => verify(a)).toThrow(/rp id/);
 });
 
+// makeOriginCheck lowercases both sides of its comparison, but browsers always
+// hash whatever hostname they actually navigated to (canonically lowercase)
+// into rpIdHash. If a deployer's configured rp id has stray capitals, the
+// origin check (already case-insensitive) must not be the only half that
+// tolerates it — checkAuthData has to normalize the same way, or a mixed-case
+// config permanently fails every real login despite passing the origin check.
+test('rp id hashing normalizes case the same way the origin check does', () => {
+  const configuredRpId = 'Passkey.Example.COM';
+  const realHostname = configuredRpId.toLowerCase();
+  const localOriginOk = makeOriginCheck(configuredRpId);
+  const a = makeAssertion({
+    authenticator: AUTH, challenge: CHALLENGE, origin: `https://${realHostname}`, rpId: realHostname, signCount: 4,
+  });
+  expect(verifyAssertion({
+    response: a.response,
+    expectedChallenge: CHALLENGE,
+    rpId: configuredRpId,
+    originOk: localOriginOk,
+    publicKey: b64u(AUTH.cose),
+    storedSignCount: 0,
+  })).toEqual({ signCount: 4 });
+});
+
 test('rejects a clientData type of webauthn.create on the login path', () => {
   const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
   const cd = JSON.parse(Buffer.from(a.response.clientDataJSON, 'base64url').toString('utf8'));
   cd.type = 'webauthn.create';
   a.response.clientDataJSON = b64u(Buffer.from(JSON.stringify(cd), 'utf8'));
   expect(() => verify(a)).toThrow(/clientData type/);
+});
+
+// Unlike the mutated-signature version above, this response is signed AFTER
+// setting type to webauthn.create, so the signature is fully valid over the
+// real payload. It proves a genuine, otherwise-perfect registration ceremony
+// response is refused on its own terms — not just a tampered assertion whose
+// signature would have failed anyway regardless of the type check.
+test('rejects a correctly-signed webauthn.create response on the login path', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, type: 'webauthn.create' });
+  expect(() => verify(a)).toThrow(/clientData type/);
+});
+
+test('rejects malformed (empty) clientDataJSON with a plain Error, not a raw JSON parse error', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  a.response.clientDataJSON = '';
+  let caught;
+  try { verify(a); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.constructor).toBe(Error);
+});
+
+test('rejects a clientData payload that is valid JSON but not an object, with a plain Error', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  a.response.clientDataJSON = b64u(Buffer.from('null', 'utf8'));
+  let caught;
+  try { verify(a); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.constructor).toBe(Error);
+});
+
+// A crafted clientData field containing a real newline must not reach a
+// thrown message verbatim: a route that logs err.message would otherwise let
+// an unauthenticated caller forge extra log lines (log injection).
+test('does not let an attacker-controlled clientData type inject a newline into the thrown message', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  const cd = JSON.parse(Buffer.from(a.response.clientDataJSON, 'base64url').toString('utf8'));
+  cd.type = 'webauthn.get\nINJECTED LOG LINE: login succeeded for admin';
+  a.response.clientDataJSON = b64u(Buffer.from(JSON.stringify(cd), 'utf8'));
+  let caught;
+  try { verify(a); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.message).not.toContain('\n');
+});
+
+test('does not let an attacker-controlled clientData origin inject a newline into the thrown message', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+  const cd = JSON.parse(Buffer.from(a.response.clientDataJSON, 'base64url').toString('utf8'));
+  cd.origin = 'https://evil.example.net\nINJECTED LOG LINE: login succeeded for admin';
+  a.response.clientDataJSON = b64u(Buffer.from(JSON.stringify(cd), 'utf8'));
+  let caught;
+  try { verify(a); } catch (err) { caught = err; }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught.message).not.toContain('\n');
 });
 
 test('rejects a missing user-presence flag', () => {
@@ -264,6 +358,22 @@ test('rejects a signature made by a different key', () => {
 test('rejects a sign count that did not increase', () => {
   const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, signCount: 3 });
   expect(() => verify(a, { storedSignCount: 3 })).toThrow(/sign count/);
+});
+
+// storedSignCount round-trips through a JSON store file, where a missing or
+// reset numeric field commonly persists as null (or, via other bugs, NaN).
+// The `storedSignCount = 0` destructuring default only fires on `undefined`,
+// so a stored `null`/`NaN` is ordinary store data, not attacker input — and
+// it must not silently disable the mandated cloned-authenticator check by
+// coercing into whatever falls out of a bare `> 0` comparison.
+test('rejects rather than silently disabling the counter check when the stored sign count is null', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, signCount: 3 });
+  expect(() => verify(a, { storedSignCount: null })).toThrow(/sign count/);
+});
+
+test('rejects rather than silently disabling the counter check when the stored sign count is NaN', () => {
+  const a = makeAssertion({ authenticator: AUTH, challenge: CHALLENGE, origin: ORIGIN, rpId: RP, signCount: 3 });
+  expect(() => verify(a, { storedSignCount: NaN })).toThrow(/sign count/);
 });
 
 // Plenty of authenticators never increment; zero-to-zero must stay usable.

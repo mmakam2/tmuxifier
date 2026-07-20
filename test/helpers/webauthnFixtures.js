@@ -42,10 +42,10 @@ function esSign(privateKey, data) {
 
 export function makeAssertion({
   authenticator, challenge, origin, rpId,
-  signCount = 1, flags = FLAG_UP | FLAG_UV, tamper = null,
+  signCount = 1, flags = FLAG_UP | FLAG_UV, tamper = null, type = 'webauthn.get',
 }) {
   const authData = buildAuthData({ rpId, flags, signCount });
-  const clientDataJSON = buildClientData({ type: 'webauthn.get', challenge, origin });
+  const clientDataJSON = buildClientData({ type, challenge, origin });
   const signature = esSign(authenticator.privateKey, Buffer.concat([authData, createHash('sha256').update(clientDataJSON).digest()]));
   if (tamper === 'signature') signature[signature.length - 1] ^= 0xff;
   return {
