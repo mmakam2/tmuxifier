@@ -1781,7 +1781,50 @@ test('failed passkey logins count toward the per-ip lockout', async () => {
 Run: `npx vitest run test/passkeyRoutes.test.js`
 Expected: FAIL — 404 on `/api/auth/passkey/login/begin`
 
-- [ ] **Step 3: Implement the login routes**
+- [ ] **Step 3: Give the unauthenticated login flow its own challenge store**
+
+Enrollment and login must not share one bounded map. `createPasskeyChallenges` evicts the
+soonest-expiring entry when full, and at a uniform TTL that is the earliest issued — so with a
+single 64-slot store, 64 unauthenticated `login/begin` calls flush an authenticated operator's
+in-flight enrollment challenge and they can never enroll a passkey. Verified: with one shared
+store, the enrolling user's challenge does not survive 64 anonymous issues.
+
+In `src/server/server.js`, alongside the existing `pkChallenges`:
+
+```js
+  // Separate bounded stores per ceremony. login/begin is unauthenticated, so a
+  // flood of anonymous challenges must not be able to evict the enrollment
+  // challenge of an authenticated operator mid-ceremony.
+  const pkLoginChallenges = createPasskeyChallenges({ ttlMs: PK_TTL_SECONDS * 1000 });
+  const challengeStoreFor = (kind) => (kind === 'auth' ? pkLoginChallenges : pkChallenges);
+```
+
+and route both helpers through it — in `issueChallenge`, replace `pkChallenges.issue(kind)` with
+`challengeStoreFor(kind).issue(kind)`; in `takeChallenge`, replace `pkChallenges.take(...)` with
+`challengeStoreFor(kind).take(...)`.
+
+Add a test proving the isolation:
+
+```js
+test('a flood of anonymous login challenges cannot evict an enrollment challenge', async () => {
+  const h = await headers();
+  await enroll();
+  const begin = await app.inject({ method: 'POST', url: '/api/passkeys/register/begin', headers: h });
+  // More than the 64-entry default bound, all unauthenticated.
+  for (let i = 0; i < 70; i++) await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  const auth = makeAuthenticator({ credentialId: Buffer.from('cred-late') });
+  const fin = await app.inject({
+    method: 'POST', url: '/api/passkeys/register/finish',
+    headers: { ...h, cookie: `${h.cookie}; ${pkCookie(begin)}` },
+    payload: { label: 'Laptop', response: makeRegistration({
+      authenticator: auth, challenge: Buffer.from(begin.json().challenge, 'base64url'), origin: ORIGIN, rpId: RP,
+    }).response },
+  });
+  expect(fin.statusCode).toBe(200);
+});
+```
+
+- [ ] **Step 4: Implement the login routes**
 
 In `src/server/server.js`, replace the existing `/api/auth/info` route with:
 
@@ -1857,7 +1900,7 @@ Add after the `DELETE /api/passkeys/:id` route:
   });
 ```
 
-- [ ] **Step 4: Update the two existing `/api/auth/info` assertions**
+- [ ] **Step 5: Update the two existing `/api/auth/info` assertions**
 
 Both use exact equality and will now fail, since the response carries a `passkey` object.
 
@@ -1888,12 +1931,12 @@ with:
 
 (Neither suite passes a `config.rpId`, so `rpId` reads as `null` there — passkeys are simply inert in those fixtures.)
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 6: Run tests to verify they pass**
 
 Run: `npx vitest run test/passkeyRoutes.test.js test/server.test.js test/server.google.test.js`
 Expected: PASS, all three suites.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/server/server.js test/passkeyRoutes.test.js test/server.test.js test/server.google.test.js
