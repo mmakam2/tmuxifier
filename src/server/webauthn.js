@@ -5,6 +5,8 @@
 // CBOR appears ONLY in registration (the attestation object). The login
 // assertion path below touches none of it.
 
+import { createPublicKey } from 'node:crypto';
+
 // Only the subset authenticators actually emit: unsigned ints, negative ints,
 // byte strings, text strings, arrays, maps. Indefinite lengths, tags, floats
 // and simple values are refused rather than guessed at.
@@ -73,4 +75,45 @@ function readItem(buf, pos, depth = 0) {
 export function cborDecodeFirst(buf) {
   const [value, end] = readItem(Buffer.from(buf), 0);
   return { value, end };
+}
+
+// COSE algorithm ids we advertise in pubKeyCredParams, in preference order.
+export const SUPPORTED_ALGS = [-7, -257, -8];
+
+const b64u = (b) => Buffer.from(b).toString('base64url');
+
+// COSE label numbers are context-dependent: for EC2/OKP keys -1 is the curve,
+// -2/-3 are the coordinates; for RSA keys -1 is the modulus and -2 the
+// exponent. They are spelled out per branch rather than shared as constants.
+export function coseMapToKey(m) {
+  if (!(m instanceof Map)) throw new Error('cose: not a map');
+  const kty = m.get(1);
+  const alg = m.get(3);
+  if (!SUPPORTED_ALGS.includes(alg)) throw new Error(`cose: unsupported alg ${alg}`);
+  if (alg === -7) {
+    if (kty !== 2) throw new Error('cose: ES256 requires an EC2 key');
+    if (m.get(-1) !== 1) throw new Error('cose: ES256 requires curve P-256');
+    const x = m.get(-2);
+    const y = m.get(-3);
+    if (!Buffer.isBuffer(x) || !Buffer.isBuffer(y) || x.length !== 32 || y.length !== 32) {
+      throw new Error('cose: bad EC coordinates');
+    }
+    return { alg, key: createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: b64u(x), y: b64u(y) }, format: 'jwk' }) };
+  }
+  if (alg === -257) {
+    if (kty !== 3) throw new Error('cose: RS256 requires an RSA key');
+    const n = m.get(-1);
+    const e = m.get(-2);
+    if (!Buffer.isBuffer(n) || !Buffer.isBuffer(e)) throw new Error('cose: bad RSA parameters');
+    return { alg, key: createPublicKey({ key: { kty: 'RSA', n: b64u(n), e: b64u(e) }, format: 'jwk' }) };
+  }
+  if (kty !== 1) throw new Error('cose: EdDSA requires an OKP key');
+  if (m.get(-1) !== 6) throw new Error('cose: EdDSA requires curve Ed25519');
+  const x = m.get(-2);
+  if (!Buffer.isBuffer(x) || x.length !== 32) throw new Error('cose: bad Ed25519 key');
+  return { alg, key: createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: b64u(x) }, format: 'jwk' }) };
+}
+
+export function coseToKey(bytes) {
+  return coseMapToKey(cborDecodeFirst(bytes).value);
 }

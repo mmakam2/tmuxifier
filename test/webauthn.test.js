@@ -1,5 +1,6 @@
 import { test, expect } from 'vitest';
-import { cborDecodeFirst } from '../src/server/webauthn.js';
+import { generateKeyPairSync } from 'node:crypto';
+import { cborDecodeFirst, coseToKey, SUPPORTED_ALGS } from '../src/server/webauthn.js';
 import { enc } from './helpers/cbor.js';
 
 test('decodes unsigned and negative integers across width boundaries', () => {
@@ -103,4 +104,51 @@ test('end is correct for a nested array/map/array structure', () => {
 
   const withTrailer = Buffer.concat([encoded, Buffer.from([0xff, 0xff])]);
   expect(cborDecodeFirst(withTrailer).end).toBe(6);
+});
+
+const b64uToBuf = (s) => Buffer.from(s, 'base64url');
+
+function coseES256(publicKey) {
+  const jwk = publicKey.export({ format: 'jwk' });
+  return enc(new Map([[1, 2], [3, -7], [-1, 1], [-2, b64uToBuf(jwk.x)], [-3, b64uToBuf(jwk.y)]]));
+}
+
+test('offers exactly ES256, RS256 and EdDSA', () => {
+  expect(SUPPORTED_ALGS).toEqual([-7, -257, -8]);
+});
+
+test('imports an ES256 (EC2/P-256) COSE key', () => {
+  const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const { alg, key } = coseToKey(coseES256(publicKey));
+  expect(alg).toBe(-7);
+  expect(key.export({ format: 'jwk' }).x).toBe(publicKey.export({ format: 'jwk' }).x);
+});
+
+test('imports an RS256 COSE key', () => {
+  const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwk = publicKey.export({ format: 'jwk' });
+  const cose = enc(new Map([[1, 3], [3, -257], [-1, b64uToBuf(jwk.n)], [-2, b64uToBuf(jwk.e)]]));
+  expect(coseToKey(cose).alg).toBe(-257);
+});
+
+test('imports an EdDSA (OKP/Ed25519) COSE key', () => {
+  const { publicKey } = generateKeyPairSync('ed25519');
+  const jwk = publicKey.export({ format: 'jwk' });
+  const cose = enc(new Map([[1, 1], [3, -8], [-1, 6], [-2, b64uToBuf(jwk.x)]]));
+  expect(coseToKey(cose).alg).toBe(-8);
+});
+
+test('refuses an unsupported algorithm', () => {
+  const cose = enc(new Map([[1, 2], [3, -36], [-1, 1], [-2, Buffer.alloc(32)], [-3, Buffer.alloc(32)]]));
+  expect(() => coseToKey(cose)).toThrow(/unsupported alg/);
+});
+
+test('refuses an ES256 key on the wrong curve', () => {
+  const cose = enc(new Map([[1, 2], [3, -7], [-1, 2], [-2, Buffer.alloc(32)], [-3, Buffer.alloc(32)]]));
+  expect(() => coseToKey(cose)).toThrow(/P-256/);
+});
+
+test('refuses ES256 coordinates of the wrong length', () => {
+  const cose = enc(new Map([[1, 2], [3, -7], [-1, 1], [-2, Buffer.alloc(31)], [-3, Buffer.alloc(32)]]));
+  expect(() => coseToKey(cose)).toThrow(/coordinates/);
 });
