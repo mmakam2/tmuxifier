@@ -2,8 +2,10 @@
 // is deliberately bounded: we request attestation "none", so no attestation
 // statement is ever parsed — which is what keeps this small enough to own.
 //
-// CBOR appears ONLY in registration (the attestation object). The login
-// assertion path below touches none of it.
+// Attacker-supplied CBOR appears ONLY in registration (the attestation
+// object). The login assertion path decodes CBOR too — coseToKey re-parses the
+// stored public key — but only bytes this server already verified and wrote
+// itself at enrollment, never bytes from the request being authenticated.
 
 import { createHash, createPublicKey, timingSafeEqual, verify as cryptoVerify } from 'node:crypto';
 
