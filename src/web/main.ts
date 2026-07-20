@@ -19,6 +19,7 @@ import { pve } from './proxmox';
 import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createSetupOptionsForm } from './setupOptions';
+import { pk, getPasskey, serializeAssertion, hasWebAuthn } from './passkeys';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
@@ -295,21 +296,43 @@ function readLoginError(): string {
   return code === 'forbidden' ? 'This Google account is not allowed.'
     : code === 'google' ? 'Google sign-in failed. Please try again.'
     : code === 'state' ? 'Login session expired. Please try again.'
+    : code === 'passkey-only' ? 'This Tmuxifier requires a passkey. Password and Google sign-in are disabled.'
     : 'Sign-in failed. Please try again.';
 }
 
 async function renderLogin() {
   let mode: 'password' | 'google' = 'password';
-  try { mode = (await api.authInfo()).mode; } catch {}
+  let passkey = { enrolled: 0, rpId: null as string | null, only: false };
+  try {
+    const info = await api.authInfo();
+    mode = info.mode;
+    if (info.passkey) passkey = info.passkey;
+  } catch {}
   const err = readLoginError();
-  if (mode === 'google') {
-    app.innerHTML = `<div class="login">
-        <div class="login-brand">
-          <img class="login-logo" src="${logoUrl}" alt="" />
-          <h1>tmuxifier</h1>
-          <p>persistent remote terminals for your boxes</p>
-        </div>
-        <a id="gsignin" class="gbtn" href="/api/auth/google/login">
+  const canPasskey = passkey.enrolled > 0 && hasWebAuthn();
+  const brand = `<div class="login-brand">
+        <img class="login-logo" src="${logoUrl}" alt="" />
+        <h1>tmuxifier</h1>
+        <p>persistent remote terminals for your boxes</p>
+      </div>`;
+  const footer = '<footer class="login-footer">Babendums Engineering &amp; Fabrication, Llc.</footer>';
+  const passkeyBtn = canPasskey
+    ? '<button id="pkbtn" type="button" class="pkbtn">Sign in with a passkey</button>'
+    : '';
+
+  // passkey-only with no usable passkey here would otherwise be a dead end.
+  if (passkey.only && !canPasskey) {
+    app.innerHTML = `<div class="login">${brand}
+        <p id="err" class="err">${err || 'This Tmuxifier requires a passkey, and this browser cannot use one.'}</p>
+        <p class="login-note">Open Tmuxifier on the device holding your passkey, or set
+          <code>TMUXIFIER_PASSKEY_ONLY=off</code> in <code>.env</code> and restart to sign in with a password.</p>
+        ${footer}
+      </div>`;
+    return;
+  }
+
+  if (passkey.only || mode === 'google') {
+    const google = passkey.only ? '' : `<a id="gsignin" class="gbtn" href="/api/auth/google/login">
           <svg class="google-mark" viewBox="0 0 18 18" aria-hidden="true">
             <path fill="#4285f4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.91c1.7-1.57 2.69-3.88 2.69-6.62z"/>
             <path fill="#34a853" d="M9 18c2.43 0 4.47-.81 5.96-2.18l-2.91-2.26c-.8.54-1.84.86-3.05.86-2.34 0-4.33-1.58-5.04-3.71H.96v2.33A9 9 0 0 0 9 18z"/>
@@ -317,27 +340,43 @@ async function renderLogin() {
             <path fill="#ea4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58A8.65 8.65 0 0 0 9 0 9 9 0 0 0 .96 4.96l3 2.33C4.67 5.16 6.66 3.58 9 3.58z"/>
           </svg>
           <span>Sign in with Google</span>
-        </a>
-        <p id="err" class="err">${err}</p>
-        <footer class="login-footer">Babendums Engineering &amp; Fabrication, Llc.</footer>
-      </div>`;
+        </a>`;
+    app.innerHTML = `<div class="login">${brand}${google}${passkeyBtn}<p id="err" class="err">${err}</p>${footer}</div>`;
+    wirePasskeyButton();
     return;
   }
-  app.innerHTML = `<form id="login" class="login">
-      <div class="login-brand">
-        <img class="login-logo" src="${logoUrl}" alt="" />
-        <h1>tmuxifier</h1>
-        <p>persistent remote terminals for your boxes</p>
-      </div>
+
+  app.innerHTML = `<form id="login" class="login">${brand}
       <input id="pw" type="password" placeholder="Password" autofocus />
       <button>Unlock</button>
+      ${passkeyBtn}
       <p id="err" class="err">${err}</p>
-      <footer class="login-footer">Babendums Engineering &amp; Fabrication, Llc.</footer>
+      ${footer}
     </form>`;
   app.querySelector('#login')!.addEventListener('submit', async (e) => {
     e.preventDefault();
     try { await api.login((app.querySelector('#pw') as HTMLInputElement).value); renderDashboard(); }
     catch { (app.querySelector('#err') as HTMLElement).textContent = 'Invalid password'; }
+  });
+  wirePasskeyButton();
+}
+
+function wirePasskeyButton() {
+  const btn = app.querySelector('#pkbtn') as HTMLButtonElement | null;
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const errEl = app.querySelector('#err') as HTMLElement;
+    btn.disabled = true;
+    errEl.textContent = '';
+    try {
+      const options = await pk.loginBegin();
+      const credential = await getPasskey(options);
+      await pk.loginFinish(serializeAssertion(credential));
+      renderDashboard();
+    } catch (e) {
+      btn.disabled = false;
+      errEl.textContent = (e as Error).name === 'NotAllowedError' ? 'Passkey sign-in cancelled.' : 'Passkey sign-in failed.';
+    }
   });
 }
 
