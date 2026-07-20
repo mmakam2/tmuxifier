@@ -60,7 +60,7 @@ export function installPollDelay(job: VoiceJob | null): number | null {
   return job.status === 'running' ? 1000 : null;
 }
 
-export async function renderVoiceSection(content: HTMLElement): Promise<void> {
+export async function renderVoiceSection(content: HTMLElement): Promise<VoiceStatus | null> {
   content.replaceChildren(el('div', { class: 'pve-sub' }, ['Loading…']));
   let status: VoiceStatus;
   try {
@@ -70,7 +70,7 @@ export async function renderVoiceSection(content: HTMLElement): Promise<void> {
       el('h3', {}, ['Voice dictation']),
       el('div', { class: 'pve-err' }, [`Could not load voice settings: ${(e as Error).message}`]),
     );
-    return;
+    return null;
   }
 
   const refresh = () => renderVoiceSection(content);
@@ -86,12 +86,28 @@ export async function renderVoiceSection(content: HTMLElement): Promise<void> {
           logBox.textContent = job.log || '(no output yet)';
           if (job.status === 'error') logBox.textContent += `\n\nFAILED: ${job.error}`;
           logBox.scrollTop = logBox.scrollHeight;
-          if (job.status !== 'running') void refresh();
+          if (job.status !== 'running') void settle(job);
         }
         return installPollDelay(job);
       },
     });
     poller.start();
+  }
+
+  // Re-render until the rows actually agree with the server, bounded.
+  // A finished install used to update the tab through ONE fire-and-forget
+  // refresh: if that single attempt was missed — a dropped poll, or a render
+  // painting into a content node the modal had since replaced — the row kept
+  // reading "will download" until the modal was reopened, even though the
+  // model was installed. Verifying what was painted, and retrying briefly,
+  // makes the final state self-healing instead of depending on one event.
+  async function settle(job: VoiceJob): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const painted = await refresh();
+      if (!painted || job.status !== 'done') return;
+      if (painted.models.some((m) => m.id === job.model && m.installed)) return;
+      await new Promise((r) => { setTimeout(r, 600); });
+    }
   }
 
   async function startInstall(model: string): Promise<void> {
@@ -184,4 +200,5 @@ export async function renderVoiceSection(content: HTMLElement): Promise<void> {
   // A build already running when the tab opens (after a refresh, or from
   // another browser) is re-attached rather than orphaned.
   if (status.job && status.job.status === 'running') watch(status.job.id);
+  return status;
 }

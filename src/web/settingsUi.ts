@@ -19,7 +19,9 @@ const SECTIONS: Record<SettingsTab, Section> = {
   netbox: { label: 'NetBox', render: renderNetboxSection },
   proxmox: { label: 'Proxmox', render: (content) => renderProxmoxSection(content) },
   passkeys: { label: 'Passkeys', render: (content) => renderPasskeysSection(content) },
-  voice: { label: 'Voice', render: (content) => renderVoiceSection(content) },
+  // renderVoiceSection resolves with the status it painted (the install-settle
+  // loop checks it); the tab shell only cares that it finished.
+  voice: { label: 'Voice', render: async (content) => { await renderVoiceSection(content); } },
   notifications: { label: 'Notifications', render: (content) => renderNotificationsSection(content) },
 };
 
