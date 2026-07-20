@@ -18,6 +18,12 @@ function err(message, status) {
   return e;
 }
 
+// How often to probe the port while waiting for the child to come up. Modest
+// enough that a warm start (port already accepting connections) is still
+// near-instant, since the first probe fires immediately and this interval
+// only bounds the *next* one.
+const READY_POLL_MS = 250;
+
 // Ask the OS for a free port by binding :0 and reading it back. Racy in
 // principle (the port could be taken between close and the child's bind), but
 // this is a single-user local dashboard and the failure mode is a readiness
@@ -39,9 +45,16 @@ export function createVoiceEngine({
   threads = 4,
   idleMs = 600000,
   queueLimit = 2,
-  readyTimeoutMs = 30000,
+  // whisper-server's own model load can take 30s+ on a cold page cache for a
+  // large model (measured >30s for ggml-small.en.bin, 487 MB); warm, the port
+  // is ready in under a second. 120s covers the first dictation after a
+  // reboot without making a genuinely broken startup wait forever.
+  readyTimeoutMs = 120000,
   spawn = nodeSpawn,
   pickPort = ephemeralPort,
+  // Injected so tests can exercise the real readiness-probe and inference
+  // code paths against a stub HTTP child instead of mocking the engine.
+  fetch: fetchImpl = fetch,
   log = (msg) => console.error(msg),
 } = {}) {
   let child = null;
@@ -77,6 +90,58 @@ export function createVoiceEngine({
     }
   }
 
+  // Readiness is decided by actually probing the port whisper-server was told
+  // to bind, not by parsing its logs. The real binary (verified against
+  // whisper.cpp v1.9.1) prints all model-load diagnostics to stderr and never
+  // prints anything at all on stdout, and never emits a "listening at" (or
+  // any other) readiness announcement on either stream — so log-matching can
+  // never work here. Probing what we actually depend on is also strictly
+  // more robust than parsing text: it can't be broken by upstream changing
+  // its logging, and it's true by construction. Any HTTP response counts as
+  // ready (the root path may legitimately 404); only a connection-level
+  // failure means "not ready yet".
+  function waitForReady(c, p) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let probing = false;
+      const finish = (fn, arg) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadline);
+        clearInterval(poller);
+        c.removeListener('error', onError);
+        c.removeListener('exit', onExit);
+        fn(arg);
+      };
+      const deadline = setTimeout(
+        () => { try { c.kill('SIGTERM'); } catch {} finish(reject, err('whisper did not become ready', 503)); },
+        readyTimeoutMs,
+      );
+      // Fail fast on a real startup failure rather than waiting out the
+      // whole deadline.
+      const onError = (e) => finish(reject, err(`whisper failed to start: ${e.message}`, 503));
+      const onExit = (code) => finish(reject, err(`whisper exited during startup (code ${code})`, 503));
+      c.on('error', onError);
+      c.on('exit', onExit);
+
+      const probe = async () => {
+        if (settled || probing) return;
+        probing = true;
+        try {
+          await fetchImpl(`http://127.0.0.1:${p}/`);
+          finish(resolve);
+        } catch {
+          // Connection-level failure (nothing bound yet) -- keep polling.
+        } finally {
+          probing = false;
+        }
+      };
+
+      const poller = setInterval(() => { void probe(); }, READY_POLL_MS);
+      void probe(); // try immediately so a warm start is near-instant
+    });
+  }
+
   async function start() {
     if (child) return;
     if (starting) return starting;
@@ -90,20 +155,7 @@ export function createVoiceEngine({
       ];
       const c = spawn(bin, argv, { stdio: ['ignore', 'pipe', 'pipe'] });
 
-      await new Promise((resolve, reject) => {
-        let settled = false;
-        const done = (fn, arg) => { if (!settled) { settled = true; clearTimeout(timer); fn(arg); } };
-        const timer = setTimeout(
-          () => { try { c.kill('SIGTERM'); } catch {} done(reject, err('whisper did not become ready', 503)); },
-          readyTimeoutMs,
-        );
-        // whisper-server announces itself on stdout once bound.
-        const onData = (buf) => { if (/listening at/i.test(String(buf))) done(resolve); };
-        c.stdout.on('data', onData);
-        c.stderr.on('data', (b) => { if (/listening at/i.test(String(b))) done(resolve); });
-        c.on('error', (e) => done(reject, err(`whisper failed to start: ${e.message}`, 503)));
-        c.on('exit', (code) => done(reject, err(`whisper exited during startup (code ${code})`, 503)));
-      });
+      await waitForReady(c, p);
 
       // A crash *after* startup invalidates the warm child; the next request
       // spawns a fresh one rather than fetching into a closed port.
@@ -131,7 +183,7 @@ export function createVoiceEngine({
     form.append('temperature', '0');
     let res;
     try {
-      res = await fetch(`http://127.0.0.1:${port}/inference`, { method: 'POST', body: form });
+      res = await fetchImpl(`http://127.0.0.1:${port}/inference`, { method: 'POST', body: form });
     } catch (e) {
       throw err(`whisper request failed: ${e.message}`, 502);
     }

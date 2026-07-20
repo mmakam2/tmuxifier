@@ -8,14 +8,20 @@ afterEach(async () => { while (started.length) await started.pop()(); });
 
 // A fake `spawn` whose child is a real HTTP server speaking whisper-server's
 // /inference contract. Only the process boundary is faked: the engine's fetch,
-// multipart encoding, readiness parsing and lifecycle all run for real.
+// multipart encoding, readiness probing and lifecycle all run for real.
+// It never emits anything on stdout or stderr -- matching the real
+// whisper-server binary, which prints all model-load diagnostics to stderr
+// and never announces readiness on either stream. Readiness is therefore
+// only ever observable by the port actually accepting a connection, same as
+// production; see the "no readiness line" test below for the regression
+// guard this protects.
 // `gate`, when provided, is a mutable `{ wait }` holder: the server awaits
 // `gate.wait()` before responding to each request. Defaults to an
 // already-resolved wait so ordinary tests see the original instant-reply
 // behavior; a test can swap in a controlled, not-yet-resolved wait to
 // deterministically hold a specific request "in flight" for as long as it
 // needs, rather than relying on how fast a real HTTP round trip happens to be.
-function fakeSpawn({ reply = { text: 'hello world' }, readyLine = true, crashAfter = null, gate = null } = {}) {
+function fakeSpawn({ reply = { text: 'hello world' }, crashAfter = null, gate = null } = {}) {
   const calls = [];
   const fn = (bin, argv) => {
     const port = Number(argv[argv.indexOf('--port') + 1]);
@@ -25,6 +31,14 @@ function fakeSpawn({ reply = { text: 'hello world' }, readyLine = true, crashAft
     child.killed = false;
     let served = 0;
     const server = http.createServer(async (req, res) => {
+      // The engine's readiness probe hits `/`, distinct from the real
+      // `/inference` calls -- it must not count toward crashAfter, or a
+      // probe landing between two transcribes would shift the crash by one.
+      if (req.url !== '/inference') {
+        res.writeHead(200);
+        res.end();
+        return;
+      }
       served += 1;
       if (crashAfter !== null && served > crashAfter) {
         server.close();
@@ -38,10 +52,26 @@ function fakeSpawn({ reply = { text: 'hello world' }, readyLine = true, crashAft
     });
     const close = () => new Promise((r) => server.close(() => r()));
     started.push(close);
-    server.listen(port, '127.0.0.1', () => {
-      if (readyLine) child.stdout.emit('data', Buffer.from(`whisper server listening at http://127.0.0.1:${port}\n`));
-    });
+    server.listen(port, '127.0.0.1');
     child.kill = () => { child.killed = true; void close(); child.emit('exit', 0, 'SIGTERM'); };
+    calls.push({ bin, argv, child });
+    return child;
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+// A fake `spawn` whose child never binds the port, never emits 'error', and
+// never emits 'exit' -- it simply never becomes reachable, the way a genuinely
+// wedged startup would look from the engine's point of view.
+function fakeSpawnNeverReady() {
+  const calls = [];
+  const fn = (bin, argv) => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.killed = false;
+    child.kill = () => { child.killed = true; };
     calls.push({ bin, argv, child });
     return child;
   };
@@ -127,11 +157,31 @@ test('the idle timer is cancelled during a request, not merely reset', async () 
   await engine.stop();
 });
 
-test('rejects with 503 when the child never signals readiness', async () => {
-  const spawn = fakeSpawn({ readyLine: false });
+test('rejects with 503 when the child never becomes reachable', async () => {
+  // Unlike fakeSpawn, this child never binds the port -- readiness must time
+  // out (the deadline path), not resolve. A short readyTimeoutMs keeps the
+  // test fast while still exercising the real timeout->kill->reject path.
+  const spawn = fakeSpawnNeverReady();
   const engine = makeEngine(spawn, { readyTimeoutMs: 120 });
   await expect(engine.transcribe(WAV)).rejects.toMatchObject({ status: 503 });
   expect(engine.state()).toBe('stopped');
+  await engine.stop();
+});
+
+// Regression guard for the bug this change fixes: the real whisper-server
+// (verified against whisper.cpp v1.9.1) prints all model-load diagnostics to
+// stderr and prints nothing at all -- and in particular never a "listening
+// at" or other readiness line -- on either stream. A readiness check that
+// depends on matching such a line would hang until readyTimeoutMs and reject
+// with 503 on every real transcription. This test fails against that old
+// regex-based implementation because fakeSpawn (see above) never emits any
+// stdout/stderr data at all; readiness must come from the port itself
+// accepting a connection.
+test('becomes ready by probing the port, with no readiness line on stdout or stderr', async () => {
+  const spawn = fakeSpawn();
+  const engine = makeEngine(spawn);
+  expect(await engine.transcribe(WAV)).toBe('hello world');
+  expect(engine.state()).toBe('ready');
   await engine.stop();
 });
 
