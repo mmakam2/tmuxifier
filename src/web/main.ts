@@ -554,11 +554,8 @@ async function renderDashboard() {
           <div class="brand-actions">
             <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-label="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-expanded="${sidebarCollapsed ? 'false' : 'true'}">${sidebarCollapsed ? '›' : '‹'}</button>
             <button id="settings" type="button" title="Settings" aria-label="Settings">⚙</button>
-            <button id="export" type="button" title="Export boxes to a file" aria-label="Export boxes to a file">⤓</button>
-            <button id="import" type="button" title="Import boxes from a file" aria-label="Import boxes from a file">⤒</button>
             <button id="logout" title="Log out">⎋</button>
           </div>
-          <input id="import-file" type="file" accept="application/json,.json" hidden />
         </div>
         <div class="actions"><button id="add">+ Add box</button></div>
         <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button><button id="proxmox" type="button" class="proxmox-btn" title="Provision Proxmox LXC containers" hidden>Proxmox</button><button id="events" type="button" class="events-btn" title="Box health events (down/up/needs login/thresholds)">Events<span id="events-badge" class="events-badge" hidden></span></button></div>
@@ -600,32 +597,6 @@ async function renderDashboard() {
     window.setTimeout(refitActiveTerminals, 260);
   });
   app.querySelector('#settings')!.addEventListener('click', () => { openSettingsModal('netbox', () => { void syncProxmoxButton(); }); });
-  app.querySelector('#export')!.addEventListener('click', () => {
-    // Same-origin GET navigation; the session cookie rides along and the server
-    // sets Content-Disposition, so the browser saves the file with its name.
-    const a = document.createElement('a');
-    a.href = '/api/export';
-    a.download = '';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  });
-  const importFile = app.querySelector('#import-file') as HTMLInputElement;
-  app.querySelector('#import')!.addEventListener('click', () => importFile.click());
-  importFile.addEventListener('change', async () => {
-    const file = importFile.files?.[0];
-    importFile.value = ''; // reset so re-selecting the same file fires change again
-    if (!file) return;
-    try {
-      const payload = JSON.parse(await file.text());
-      const { added, skipped } = await api.importBoxes(payload);
-      await refresh();
-      const msg = `Imported ${added.length} box${added.length === 1 ? '' : 'es'}${skipped ? `, ${skipped} skipped` : ''}`;
-      showToast(msg);
-    } catch (e) {
-      showToast(`Import failed: ${(e as Error).message}`, 'error');
-    }
-  });
   app.querySelector('#add')!.addEventListener('click', () => openBoxDialog());
   app.querySelector('#search')!.addEventListener('input', () => filterAndPaint());
   app.querySelector('#fleet-toggle')!.addEventListener('click', () => {
@@ -1892,6 +1863,11 @@ function renderFleetJob(detail: HTMLElement, job: import('./api').FleetJob) {
 // A Settings → Notifications toggle recounts the badge right away rather than
 // waiting for the next health poll (see settingsNotifications.ts).
 window.addEventListener('tmuxifier:notify-prefs-changed', () => updateEventsBadge());
+// An import from Settings → Boxes mutates the box list while the modal is still
+// open (see settingsBoxes.ts). Module scope, not renderDashboard(), which
+// re-runs on every re-login and would stack duplicate listeners. Safe on the
+// login screen too: refresh() returns early when #boxes is absent.
+window.addEventListener('tmuxifier:boxes-changed', () => { void refresh(); });
 
 onUnauthorized(() => {
   if (!app.querySelector('.layout')) return;

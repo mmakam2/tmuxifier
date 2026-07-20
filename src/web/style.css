@@ -151,8 +151,6 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .layout.sidebar-collapsed .brand-name { display: none; }
 .layout.sidebar-collapsed .brand-actions { flex-direction: column; }
 .layout.sidebar-collapsed #logout,
-.layout.sidebar-collapsed #export,
-.layout.sidebar-collapsed #import,
 .layout.sidebar-collapsed .actions,
 .layout.sidebar-collapsed .fleet-actions,
 .layout.sidebar-collapsed .fleet-bar,
