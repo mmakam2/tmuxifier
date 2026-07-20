@@ -34,6 +34,7 @@ import { createAiAuthSeeder } from './aiAuthSeed.js';
 import { readDefaultPublicKey, createDefaultKeyProvider } from './defaultKey.js';
 import os from 'node:os';
 import { registerShutdownFlush } from './shutdown.js';
+import { createVoiceEngine } from './voiceEngine.js';
 
 const config = loadConfig();
 config.configPath = path.resolve('config.json');
@@ -55,6 +56,16 @@ const boxActions = createBoxActions({
   controlDir: config.controlDir,
   controlPersist: config.controlPersist,
 });
+// Only constructed when configured: with voice off this is null and the route
+// answers 503, so nothing is spawned and no RAM is held.
+const voiceEngine = config.voiceEnabled
+  ? createVoiceEngine({
+      bin: config.whisperBin,
+      model: config.whisperModel,
+      idleMs: config.voiceIdleMs,
+      threads: Math.min(4, os.cpus().length || 1),
+    })
+  : null;
 const aiAuthSeeder = createAiAuthSeeder({
   runStdin: (box, script, input) => boxActions.execScriptStdin(box, script, input),
   token: config.claudeOauthToken,
@@ -196,7 +207,7 @@ const statusPoller = createStatusPoller({
   },
 });
 
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceEngine });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
@@ -219,6 +230,7 @@ app.listen({ host: config.bindAddress, port: config.port })
     // reload as 'interrupted').
     registerShutdownFlush({
       flush: [fleetStore, setupStore, provisionStore, lifecycleStore].map((s) => () => s.whenIdle()),
+      voiceEngine,
     });
     statusPoller.start().catch((err) => console.error('status poll failed to start:', err));
     console.log(`Tmuxifier listening on ${scheme}://${config.bindAddress}:${config.port}`);

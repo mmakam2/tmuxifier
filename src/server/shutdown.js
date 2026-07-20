@@ -6,11 +6,15 @@
 export function registerShutdownFlush({
   proc = process,
   flush = [],
+  voiceEngine = null,
   exit = (code) => process.exit(code),
   log = (...args) => console.error(...args),
   timeoutMs = 5000,
 } = {}) {
   const handler = async () => {
+    // Kill the whisper child before flushing stores: it holds no state, and
+    // leaving it alive across a restart would strand ~0.85 GB.
+    if (voiceEngine?.stop) { try { await voiceEngine.stop(); } catch {} }
     try {
       await Promise.race([
         Promise.all(flush.map((fn) => fn())),

@@ -16,7 +16,8 @@ import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
 import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js';
 import { testNetbox } from './netboxApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
-import { injectLocalUploadPath } from './tmuxInject.js';
+import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault } from './tmuxInject.js';
+import { normalizeTranscript } from './voiceText.js';
 import { verifyAssertion, verifyRegistration, makeOriginCheck, SUPPORTED_ALGS } from './webauthn.js';
 import { createPasskeyChallenges } from './passkeyChallenges.js';
 
@@ -68,7 +69,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -90,6 +91,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   // this content type only — JSON handling everywhere else is untouched.
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (req, body, done) => done(null, body));
   const uploadMaxBytes = Number(config.uploadMaxBytes) || 25 * 1024 * 1024;
+  const voiceMaxBytes = Number(config.voiceMaxBytes) || 8 * 1024 * 1024;
 
   const OAUTH_COOKIE = 'tmuxifier_oauth';
   let google = googleAuth;
@@ -981,6 +983,45 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       ? await boxActions.injectUploadPath(box, box.sessionName, res.path).catch(() => ({ injected: false, mode: 'error' }))
       : { injected: false, mode: 'error' };
     return { path: res.path, ...inj };
+  });
+
+  // Transcribe a browser-recorded WAV with the local whisper engine and type
+  // the result into the box's tmux pane, using the same pane-aware guard as
+  // uploads (tmuxInject.js). Audio never leaves this host.
+  //
+  // The transcript is returned even when injection is refused — the client
+  // puts it on the clipboard, so a busy pane never costs the user what they
+  // just said. Fastify enforces voiceMaxBytes via bodyLimit (413).
+  app.post('/api/voice', { onRequest: requireAuth, bodyLimit: voiceMaxBytes }, async (req, reply) => {
+    if (!config.voiceEnabled || !voiceEngine) {
+      return reply.code(503).send({ error: 'voice dictation is not enabled' });
+    }
+    const body = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!body || body.length === 0) return reply.code(400).send({ error: 'missing audio body' });
+
+    const boxId = String(req.query?.box || '');
+    const box = boxId === '__local__' ? null : await store.getBox(boxId);
+    if (boxId !== '__local__' && !box) return reply.code(400).send({ error: 'unknown box' });
+
+    let raw;
+    try {
+      raw = await voiceEngine.transcribe(body);
+    } catch (e) {
+      const status = Number(e?.status) || 502;
+      return reply.code(status).send({ error: `transcription failed: ${e?.message || 'error'}` });
+    }
+
+    const text = normalizeTranscript(raw);
+    if (!text) return { text: '', injected: false, mode: 'empty' };
+
+    const session = box ? box.sessionName : localSession;
+    let inj = { injected: false, mode: 'error' };
+    if (boxId === '__local__') {
+      inj = await injectLocalText(session, text).catch(() => ({ injected: false, mode: 'error' }));
+    } else if (typeof boxActions?.injectText === 'function') {
+      inj = await boxActions.injectText(box, session, text).catch(() => ({ injected: false, mode: 'error' }));
+    }
+    return { text, ...inj };
   });
 
   app.get('/api/local-shell', { preHandler: requireAuth }, async () => {

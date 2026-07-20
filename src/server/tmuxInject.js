@@ -174,3 +174,9 @@ function runLocalScript(script, { timeout = 8000 } = {}) {
 export function injectLocalUploadPath(session, path, { run = runLocalScript } = {}) {
   return injectVia(run, session, path);
 }
+
+// The __local__ terminal runs inside a real local tmux session
+// (sessions.openLocal), so the same flow works with a /bin/sh runner.
+export function injectLocalText(session, text, { run = runLocalScript } = {}) {
+  return injectTextVia(run, session, text, { label: 'dictation' });
+}
