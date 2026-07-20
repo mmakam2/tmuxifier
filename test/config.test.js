@@ -458,3 +458,52 @@ test('passkeyOnlyKillSwitch accepts a real boolean from config.json / overrides 
   expect(loadConfig({ passkeyOnlyKillSwitch: true }, { env: {}, cwd: '/app' }).passkeyOnlyKillSwitch).toBe(true);
   expect(loadConfig({ passkeyOnlyKillSwitch: false }, { env: {}, cwd: '/app' }).passkeyOnlyKillSwitch).toBe(false);
 });
+
+test('voice is off by default', () => {
+  const c = loadConfig({}, { env: {}, cwd: '/repo' });
+  expect(c.voiceEnabled).toBe(false);
+  expect(c.voiceIdleMs).toBe(600000);
+  expect(c.voiceMaxSeconds).toBe(120);
+  expect(c.voiceMaxBytes).toBe(8 * 1024 * 1024);
+});
+
+test('voice turns on when a binary and model are configured', () => {
+  const c = loadConfig({}, {
+    env: { TMUXIFIER_WHISPER_BIN: '/repo/vendor/whisper/build/bin/whisper-server',
+           TMUXIFIER_WHISPER_MODEL: '/repo/vendor/whisper/models/ggml-small.en.bin' },
+    cwd: '/repo',
+  });
+  expect(c.voiceEnabled).toBe(true);
+  expect(c.whisperBin).toBe('/repo/vendor/whisper/build/bin/whisper-server');
+});
+
+test('TMUXIFIER_VOICE=off is a hard kill switch', () => {
+  const c = loadConfig({}, {
+    env: { TMUXIFIER_VOICE: 'off',
+           TMUXIFIER_WHISPER_BIN: '/repo/vendor/whisper/build/bin/whisper-server',
+           TMUXIFIER_WHISPER_MODEL: '/repo/vendor/whisper/models/ggml-small.en.bin' },
+    cwd: '/repo',
+  });
+  expect(c.voiceEnabled).toBe(false);
+});
+
+test('voice stays off when only one of binary and model is set', () => {
+  const only = (env) => loadConfig({}, { env, cwd: '/repo' }).voiceEnabled;
+  expect(only({ TMUXIFIER_WHISPER_BIN: '/x/whisper-server' })).toBe(false);
+  expect(only({ TMUXIFIER_WHISPER_MODEL: '/x/model.bin' })).toBe(false);
+});
+
+// clampInt in this file rejects an out-of-range value and falls back to the
+// DEFAULT — it does not clamp to the nearest bound (see uploadMaxMb's own
+// test above: out-of-range 9999 -> default 25, not clamped to 1024). All
+// three inputs here are out of range, so all three land on their defaults.
+test('voice limits are clamped to sane ranges', () => {
+  const c = loadConfig({}, {
+    env: { TMUXIFIER_VOICE_MAX_MB: '9999', TMUXIFIER_VOICE_MAX_SECONDS: '0',
+           TMUXIFIER_VOICE_IDLE_MS: '10' },
+    cwd: '/repo',
+  });
+  expect(c.voiceMaxBytes).toBe(8 * 1024 * 1024); // 9999 is above the 64 MB ceiling -> default (8 MB)
+  expect(c.voiceMaxSeconds).toBe(120);           // 0 is below the 5s floor -> default (120)
+  expect(c.voiceIdleMs).toBe(600000);            // 10 is below the 30s floor -> default (600000ms)
+});

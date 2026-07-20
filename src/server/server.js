@@ -68,7 +68,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -929,10 +929,19 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return history.getEvents({ since });
   });
 
-  // Client UI settings the browser needs at boot. Currently just the terminal
-  // font, validated/normalized server-side (config.js); the name is not secret.
+  // Client UI settings the browser needs at boot: terminal font/size
+  // (validated/normalized server-side in config.js; the name is not secret),
+  // the upload size limit, and voice dictation readiness.
   app.get('/api/ui-config', { preHandler: requireAuth }, async () => {
-    return { termFont: config.termFont ?? null, termFontSize: config.termFontSize ?? 12, uploadMaxBytes };
+    return {
+      termFont: config.termFont ?? null,
+      termFontSize: config.termFontSize ?? 12,
+      uploadMaxBytes,
+      // The client renders no microphone at all unless voice is usable, so a
+      // half-installed host never shows a button that only 503s.
+      voice: Boolean(config.voiceEnabled) && Boolean(voiceEngine),
+      voiceMaxSeconds: config.voiceMaxSeconds ?? 120,
+    };
   });
 
   // Land a pasted/dropped file on a box (or the Tmuxifier host for the local

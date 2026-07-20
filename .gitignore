@@ -34,3 +34,6 @@ skills-lock.json
 # Personal per-project agent memory (auto-loaded by Claude Code; the *.local
 # pattern above does not match it — it ends in .md)
 CLAUDE.local.md
+
+# whisper.cpp source, build output and models (npm run setup-voice)
+vendor/

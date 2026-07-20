@@ -58,6 +58,14 @@ const DEFAULTS = {
   pveMaxJobs: 50,
   // Terminal file upload (paste/drag-drop): max accepted body size in MB.
   uploadMaxMb: 25,
+  // Voice dictation. Off unless both a whisper binary and a model are
+  // configured — stage 1 sets these from `npm run setup-voice`.
+  whisperBin: undefined,
+  whisperModel: undefined,
+  voiceIdleMs: 600000,
+  voiceMaxMb: 8,
+  voiceMaxSeconds: 120,
+  voiceOff: false,
   // WebAuthn passkeys. rpId is resolved below (see resolveRpId); the kill switch
   // is the .env break-glass that forces the stored passkey-only flag off.
   rpId: undefined,
@@ -160,6 +168,14 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     termFontSize: e.TMUXIFIER_TERM_FONT_SIZE ? Number(e.TMUXIFIER_TERM_FONT_SIZE) : undefined,
     claudeOauthToken: e.TMUXIFIER_CLAUDE_OAUTH_TOKEN && e.TMUXIFIER_CLAUDE_OAUTH_TOKEN.trim() ? e.TMUXIFIER_CLAUDE_OAUTH_TOKEN.trim() : undefined,
     uploadMaxMb: e.TMUXIFIER_UPLOAD_MAX_MB ? Number(e.TMUXIFIER_UPLOAD_MAX_MB) : undefined,
+    whisperBin: e.TMUXIFIER_WHISPER_BIN,
+    whisperModel: e.TMUXIFIER_WHISPER_MODEL,
+    voiceIdleMs: e.TMUXIFIER_VOICE_IDLE_MS ? Number(e.TMUXIFIER_VOICE_IDLE_MS) : undefined,
+    voiceMaxMb: e.TMUXIFIER_VOICE_MAX_MB ? Number(e.TMUXIFIER_VOICE_MAX_MB) : undefined,
+    voiceMaxSeconds: e.TMUXIFIER_VOICE_MAX_SECONDS ? Number(e.TMUXIFIER_VOICE_MAX_SECONDS) : undefined,
+    // Break-glass: an operator can make voice impossible regardless of what is
+    // installed, mirroring TMUXIFIER_PASSKEY_ONLY=off.
+    voiceOff: e.TMUXIFIER_VOICE !== undefined ? /^(off|0|false|no)$/i.test(String(e.TMUXIFIER_VOICE)) : undefined,
   });
   const merged = { ...DEFAULTS, ...clean(fileCfg), ...envCfg, ...clean(overrides) };
   // Every numeric knob is clamped to a sane range; a non-numeric or
@@ -187,6 +203,13 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   merged.pveMaxJobs = clampInt(merged.pveMaxJobs, 1, 10000, DEFAULTS.pveMaxJobs);
   merged.uploadMaxMb = clampInt(merged.uploadMaxMb, 1, 1024, DEFAULTS.uploadMaxMb);
   merged.uploadMaxBytes = merged.uploadMaxMb * 1024 * 1024;
+  merged.voiceMaxMb = clampInt(merged.voiceMaxMb, 1, 64, DEFAULTS.voiceMaxMb);
+  merged.voiceMaxBytes = merged.voiceMaxMb * 1024 * 1024;
+  merged.voiceMaxSeconds = clampInt(merged.voiceMaxSeconds, 5, 600, DEFAULTS.voiceMaxSeconds);
+  merged.voiceIdleMs = clampInt(merged.voiceIdleMs, 30000, 3600000, DEFAULTS.voiceIdleMs);
+  // Requires both halves: a binary with no model (or the reverse) cannot
+  // transcribe, and advertising voice to the client would only produce 503s.
+  merged.voiceEnabled = Boolean(merged.whisperBin && merged.whisperModel) && merged.voiceOff !== true;
   merged.dataDir = merged.dataDir ?? path.join(cwd, 'data');
   // Directory for SSH ControlMaster sockets. Multiplexing every probe and
   // terminal for a box over one persistent connection keeps Tmuxifier from
