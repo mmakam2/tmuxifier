@@ -2604,7 +2604,15 @@ async function renderLogin() {
     if (info.passkey) passkey = info.passkey;
   } catch {}
   const err = readLoginError();
-  const canPasskey = passkey.enrolled > 0 && hasWebAuthn();
+  // Gate on the full origin verdict, not just WebAuthn support. A mismatched
+  // hostname is the other way "no usable passkey here" happens, and with
+  // passkey.only armed that would otherwise render a button that cannot work
+  // beside a hidden password form — a dead screen.
+  const verdict = evaluateOrigin({
+    rpId: passkey.rpId, storedRpId: null,
+    hostname: location.hostname, protocol: location.protocol, hasWebAuthn: hasWebAuthn(),
+  });
+  const canPasskey = passkey.enrolled > 0 && verdict.ok;
   const brand = `<div class="login-brand">
         <img class="login-logo" src="${logoUrl}" alt="" />
         <h1>tmuxifier</h1>
@@ -2683,14 +2691,14 @@ Append to `src/web/style.css`, next to the existing `.gbtn` rules:
 ```css
 /* Passkey sign-in: same footprint as the Google button so a login screen
    offering both reads as one stack of equal options. */
-.pkbtn {
+button.pkbtn {
   display: flex; align-items: center; justify-content: center; gap: .5rem;
   width: 100%; padding: .6rem 1rem; margin-top: .5rem;
   border: 1px solid var(--border, #3a3a3a); border-radius: 6px;
   background: transparent; color: inherit; font: inherit; cursor: pointer;
 }
-.pkbtn:hover:not(:disabled) { background: rgba(127, 127, 127, .12); }
-.pkbtn:disabled { opacity: .5; cursor: default; }
+button.pkbtn:hover:not(:disabled) { background: rgba(127, 127, 127, .12); }
+button.pkbtn:disabled { opacity: .5; cursor: default; }
 .login-note { font-size: .85em; opacity: .75; text-align: center; }
 .login-note code { font-family: ui-monospace, monospace; }
 ```
