@@ -109,6 +109,9 @@ As an alternative to `.env`, a `config.json` in the repo root works too, using c
 `config.json`; it does not have an env key.
 `TMUXIFIER_SSH_CONFIG`/`sshConfigFile` is passed to `ssh` as `-F`, so it is an alternate config
 file for Tmuxifier's SSH commands, not an extra file merged with `~/.ssh/config`.
+Unlike the `.env` string form (`TMUXIFIER_PASSKEY_ONLY`, which additionally accepts `0`, `no` or
+`false` alongside `off`), the `config.json` key `passkeyOnlyKillSwitch` is a plain boolean —
+`true` engages the break-glass kill switch, `false` or an absent key does not.
 
 `TMUXIFIER_TERM_FONT` sets the font for the browser **terminal sessions** (not the dashboard
 chrome). It is a single family name, prepended to the bundled font stack, so it must be installed
@@ -189,14 +192,16 @@ Optionally, **Require a passkey** (Settings → Passkeys → sign-in policy) dis
 Google sign-in entirely. Arming it is guarded against locking you out by accident: it's refused
 (409) unless at least one passkey is enrolled *and* usable against the server's current relying
 party id, and removing your last passkey turns it back off automatically. **If you still lose
-your authenticator while it's armed, the only way back in is the `.env` break-glass:** set
+your authenticator while it's armed, the only way back in without filesystem access is the
+`.env` break-glass:** set
 
 ```ini
 TMUXIFIER_PASSKEY_ONLY=off
 ```
 
-and restart Tmuxifier. This is the sole recovery path once passkey-only is armed — keep it in
-mind before arming it.
+and restart Tmuxifier. This is the only recovery path reachable without filesystem access once
+passkey-only is armed — there is no admin override reachable from the UI once you're signed
+out — so keep it in mind before arming it.
 
 Two more things worth knowing about the security model:
 

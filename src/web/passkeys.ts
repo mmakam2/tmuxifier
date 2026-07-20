@@ -59,7 +59,18 @@ export function evaluateOrigin(
     };
   }
   if (host !== normalizedRpId) {
-    return { ok: false, reason: `Passkeys are bound to ${rpId}, but you are on ${hostname}.`, hint: `Open Tmuxifier at https://${rpId}.` };
+    return {
+      ok: false,
+      reason: `Passkeys are bound to ${rpId}, but you are on ${hostname}.`,
+      // Two independent remedies, not one: reaching Tmuxifier at the bound
+      // hostname is right for a legitimate localhost-over-SSH-tunnel setup,
+      // but on the far more common default-upgrade path — an existing
+      // password-mode deployment behind a reverse proxy, where rpId derived
+      // to "localhost" because TMUXIFIER_BASE_EXTERNAL_URL was never set —
+      // the actual fix is pointing TMUXIFIER_RP_ID at the hostname already
+      // in use. Naming only the first left that operator with no visible fix.
+      hint: `Open Tmuxifier at https://${rpId}, or set TMUXIFIER_RP_ID to ${hostname} in .env and restart.`,
+    };
   }
   if (protocol !== 'https:' && host !== 'localhost') {
     return { ok: false, reason: 'Passkeys require a secure connection.', hint: `Open Tmuxifier at https://${rpId}.` };

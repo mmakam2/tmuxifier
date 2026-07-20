@@ -217,7 +217,15 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   const rp = resolveRpId({ explicit: merged.rpId, publicUrl: merged.publicUrl });
   merged.rpId = rp.rpId;
   merged.rpIdError = rp.error;
-  merged.passkeyOnlyKillSwitch = /^(off|0|no|false)$/i.test(String(merged.passkeyOnlyKillSwitch ?? '').trim());
+  // config.json (a documented camelCase alternative to .env) passes values through raw, so
+  // this can already be a real boolean rather than a string — String(true)/String(false) would
+  // otherwise be tested against the off/0/no/false regex below and invert both directions
+  // (true -> doesn't match -> false; false -> matches "false" -> true). A real boolean is
+  // therefore passed through unchanged; only a non-boolean (.env is always a string) goes
+  // through the string-form parse, which additionally accepts 0/no/false alongside "off".
+  merged.passkeyOnlyKillSwitch = typeof merged.passkeyOnlyKillSwitch === 'boolean'
+    ? merged.passkeyOnlyKillSwitch
+    : /^(off|0|no|false)$/i.test(String(merged.passkeyOnlyKillSwitch ?? '').trim());
   merged.allowedEmails = parseEmails(merged.allowedEmails);
   // Mark the session cookie Secure when we serve HTTPS locally OR sit behind an
   // HTTPS public URL, for example a TLS-terminating Cloudflare tunnel.

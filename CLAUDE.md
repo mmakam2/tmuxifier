@@ -288,9 +288,10 @@ link/unlink picker — hidden until a Proxmox host profile exists, except for al
 boxes), `settingsUi.ts` (the ⚙ settings
 modal's tabbed shell, with NetBox (`settingsNetbox.ts`), Proxmox host/secret
 (`settingsProxmox.ts`), Passkeys (`settingsPasskeys.ts`: readiness row, enrolled-credential list
-with remove — itself confirm-gated, and doubly so when it's the last credential while "require a
-passkey" is armed — and the sign-in policy toggle, where only *arming* is confirm-gated since
-disarming can only restore access), and Notifications (`settingsNotifications.ts`:
+with remove — confirm-gated by one modal; removing the last credential while "require a passkey"
+is armed adds only an extra explanatory paragraph to that same modal, not a second gate — and the
+sign-in policy toggle, where only *arming* is confirm-gated since disarming can only restore
+access), and Notifications (`settingsNotifications.ts`:
 browser-notification permission flow plus per-kind toggles) tabs) with `settingsForm.ts` (pure
 payload/result helpers), `netbox.ts` (fetch layer), `passkeys.ts` (passkey fetch layer,
 base64url↔bytes helpers, the pure WebAuthn option/credential converters, and `evaluateOrigin` —
@@ -363,9 +364,11 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 - Passkeys' opt-in "require a passkey" toggle (`passkeyStore.js`'s `passkeyOnly` flag) disables
   password and Google sign-in entirely, so arming it is guarded three ways against locking the
   operator out: it is refused with a 409 unless at least one credential is enrolled **and** the
-  configured relying party id is actually usable against them (refused when the RP id is unset,
-  or when the enrolled passkeys are pinned to a different hostname than the server is now
-  configured for); removing the last credential auto-disarms it; and `TMUXIFIER_PASSKEY_ONLY=off`
+  configured relying party id is actually usable against them (refused when the RP id is `null`
+  — i.e. derived from an IP address rather than a hostname; the RP id itself is never unset,
+  since it defaults to `localhost` — or when the enrolled passkeys are pinned to a different
+  hostname than the server is now configured for); removing the last credential auto-disarms
+  it; and `TMUXIFIER_PASSKEY_ONLY=off`
   in `.env` overrides the stored flag as the break-glass — the recovery path for when arming
   succeeded legitimately (a real, usable passkey) but that authenticator is later lost. Takes
   effect on restart.

@@ -330,14 +330,27 @@ async function renderLogin() {
   const passkeyBtn = canPasskey
     ? '<button id="pkbtn" type="button" class="pkbtn">Sign in with a passkey</button>'
     : '';
+  // Shown whenever "require a passkey" is armed, regardless of canPasskey —
+  // not only in the dead-end branch below. The button can still fail at
+  // click time for a reason this unauthenticated screen cannot see up front
+  // (e.g. the enrolled passkeys are pinned to a hostname other than the one
+  // this server is now configured for: storedRpId only comes from the
+  // authenticated GET /api/passkeys, never here, so verdict.ok can be true
+  // while the actual login/begin call still 409s). A locked-out operator
+  // needs this instruction on screen up front, not only after a failed
+  // attempt. Static text, no interpolated values — safe to inline into
+  // innerHTML like brand/footer below.
+  const breakGlass = passkey.only
+    ? '<p class="login-note">Lost access to your passkey? Set <code>TMUXIFIER_PASSKEY_ONLY=off</code> in <code>.env</code> and restart to sign in with a password.</p>'
+    : '';
 
   // passkey-only with no usable passkey here would otherwise be a dead end.
   if (passkey.only && !canPasskey) {
     app.innerHTML = `<div class="login">${brand}
         <p id="err" class="err">${err || 'This Tmuxifier requires a passkey, and this browser cannot use one.'}</p>
         <p id="pk-reason" class="login-note"></p>
-        <p class="login-note">Open Tmuxifier on the device holding your passkey, or set
-          <code>TMUXIFIER_PASSKEY_ONLY=off</code> in <code>.env</code> and restart to sign in with a password.</p>
+        <p class="login-note">Open Tmuxifier on the device holding your passkey.</p>
+        ${breakGlass}
         ${footer}
       </div>`;
     // verdict.reason/hint carry the server-supplied rpId, so they can never be
@@ -360,7 +373,7 @@ async function renderLogin() {
           </svg>
           <span>Sign in with Google</span>
         </a>`;
-    app.innerHTML = `<div class="login">${brand}${google}${passkeyBtn}<p id="err" class="err">${err}</p>${footer}</div>`;
+    app.innerHTML = `<div class="login">${brand}${google}${passkeyBtn}<p id="err" class="err">${err}</p>${breakGlass}${footer}</div>`;
     wirePasskeyButton();
     return;
   }
@@ -370,12 +383,21 @@ async function renderLogin() {
       <button>Unlock</button>
       ${passkeyBtn}
       <p id="err" class="err">${err}</p>
+      ${breakGlass}
       ${footer}
     </form>`;
   app.querySelector('#login')!.addEventListener('submit', async (e) => {
     e.preventDefault();
     try { await api.login((app.querySelector('#pw') as HTMLInputElement).value); renderDashboard(); }
-    catch { (app.querySelector('#err') as HTMLElement).textContent = 'Invalid password'; }
+    catch (ex) {
+      // The server's error is always a fixed string on this route (e.g.
+      // "invalid", "too many attempts", or "passkey required" against a
+      // freshly-armed instance whose stale page still shows this form) —
+      // never attacker-supplied text — so surfacing it is safe and far more
+      // actionable than a blanket "Invalid password". Empty/non-Error
+      // rejections still fall back to the old generic message.
+      (app.querySelector('#err') as HTMLElement).textContent = (ex as Error)?.message || 'Invalid password';
+    }
   });
   wirePasskeyButton();
 }
@@ -394,7 +416,16 @@ function wirePasskeyButton() {
       renderDashboard();
     } catch (e) {
       btn.disabled = false;
-      errEl.textContent = (e as Error).name === 'NotAllowedError' ? 'Passkey sign-in cancelled.' : 'Passkey sign-in failed.';
+      // Every message the two unauthenticated passkey routes
+      // (loginBegin/loginFinish) can send back is a fixed server-side string
+      // — "too many attempts", "challenge expired — start again", the
+      // generic 409 for an rpId mismatch, the domain-name 503 — never
+      // attacker-supplied text, so surfacing it via textContent here is
+      // safe. NotAllowedError is the browser's own "the user cancelled the
+      // prompt" signal and keeps its friendlier text; anything else falls
+      // back to the old generic message only when e.message is empty.
+      const err = e as Error;
+      errEl.textContent = err?.name === 'NotAllowedError' ? 'Passkey sign-in cancelled.' : (err?.message || 'Passkey sign-in failed.');
     }
   });
 }

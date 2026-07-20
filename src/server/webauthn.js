@@ -285,7 +285,7 @@ export function verifyRegistration({ response, expectedChallenge, rpId, originOk
   // We request attestation "none"; anything else would need real verification.
   // `fmt` is decoded straight from the untrusted attestationObject CBOR before
   // any other validation runs — exactly as attacker-controlled as clientData
-  // type/origin below, which routes through the same sanitizeForLog for
+  // type/origin above, which routes through the same sanitizeForLog for
   // precisely this reason (unsanitized, a crafted fmt can inject raw newlines
   // into a logged err.message, or blow it up to tens of thousands of chars).
   if (att.get('fmt') !== 'none') throw new Error(`unsupported attestation format: ${sanitizeForLog(att.get('fmt'))}`);

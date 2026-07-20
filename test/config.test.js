@@ -446,3 +446,15 @@ test('TMUXIFIER_PASSKEY_ONLY=off arms the break-glass kill switch', () => {
   expect(loadConfig({}, { env: {}, cwd: '/app' }).passkeyOnlyKillSwitch).toBe(false);
   expect(loadConfig({}, { env: { TMUXIFIER_PASSKEY_ONLY: 'off' }, cwd: '/app' }).passkeyOnlyKillSwitch).toBe(true);
 });
+
+// config.json is a documented camelCase alternative to .env (see README.md) and passes
+// values through raw, so passkeyOnlyKillSwitch can arrive as a real boolean rather than a
+// string. A naive `/^(off|0|no|false)$/.test(String(v))` inverts both booleans: String(true)
+// doesn't match -> false (kill switch silently refuses to arm), and String(false) matches
+// "false" -> true (kill switch silently engages when the operator explicitly wrote false).
+// Same shape as the trustProxy boolean test above; overrides sit at the same merge point a
+// real config.json value would.
+test('passkeyOnlyKillSwitch accepts a real boolean from config.json / overrides without inverting it', () => {
+  expect(loadConfig({ passkeyOnlyKillSwitch: true }, { env: {}, cwd: '/app' }).passkeyOnlyKillSwitch).toBe(true);
+  expect(loadConfig({ passkeyOnlyKillSwitch: false }, { env: {}, cwd: '/app' }).passkeyOnlyKillSwitch).toBe(false);
+});
