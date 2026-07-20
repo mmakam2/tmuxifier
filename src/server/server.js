@@ -24,7 +24,17 @@ import { createPasskeyChallenges } from './passkeyChallenges.js';
 const SECURITY_HEADERS = {
   'content-security-policy': [
     "default-src 'self'",
-    "script-src 'self'",
+    // 'blob:' is required for voiceRecorder.ts's AudioWorklet: the capture
+    // processor is registered from a blob: URL (four lines, inlined rather
+    // than shipped as a separate Vite worklet entry point — see the comment
+    // there), and 'self' alone does not cover it. Without this, every real
+    // deployment's CSP silently breaks voice dictation at the
+    // audioWorklet.addModule() call (AbortError: "Unable to load a
+    // worklet's module."), invisible to any test that doesn't run a real,
+    // CSP-enforcing browser — confirmed empirically while building the
+    // Task 10 e2e coverage, which is exactly the class of test that catches
+    // it. Nothing else in the app loads a script from blob:.
+    "script-src 'self' blob:",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "font-src 'self'",
