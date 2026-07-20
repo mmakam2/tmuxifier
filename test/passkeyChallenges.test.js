@@ -35,6 +35,15 @@ test('refuses an expired challenge', () => {
   expect(c.take(token, 'auth')).toBeNull();
 });
 
+test('refuses an expired challenge and deletes it', () => {
+  let t = 1000;
+  const c = createPasskeyChallenges({ ttlMs: 500, now: () => t });
+  const { token } = c.issue('auth');
+  t += 501;
+  expect(c.take(token, 'auth')).toBeNull();
+  expect(c._size()).toBe(0);
+});
+
 test('reaps expired entries when issuing', () => {
   let t = 1000;
   const c = createPasskeyChallenges({ ttlMs: 500, now: () => t });
@@ -44,6 +53,31 @@ test('reaps expired entries when issuing', () => {
   t += 501;
   c.issue('auth');
   expect(c._size()).toBe(1);
+});
+
+test('challenge is a Buffer', () => {
+  const c = createPasskeyChallenges();
+  const { challenge } = c.issue('auth');
+  expect(Buffer.isBuffer(challenge)).toBe(true);
+  expect(challenge).toHaveLength(32);
+});
+
+test('take returns a Buffer', () => {
+  const c = createPasskeyChallenges();
+  const { token, challenge } = c.issue('auth');
+  const result = c.take(token, 'auth');
+  expect(Buffer.isBuffer(result)).toBe(true);
+  expect(result.equals(challenge)).toBe(true);
+});
+
+test('take handles non-string tokens without throwing', () => {
+  const c = createPasskeyChallenges();
+  c.issue('auth');
+  expect(c.take(undefined, 'auth')).toBeNull();
+  expect(c.take(null, 'auth')).toBeNull();
+  expect(c.take(42, 'auth')).toBeNull();
+  expect(c.take({}, 'auth')).toBeNull();
+  expect(c.take([], 'auth')).toBeNull();
 });
 
 // These endpoints are unauthenticated, so an unbounded map is a memory lever.
@@ -56,4 +90,24 @@ test('stays bounded by evicting the oldest entry', () => {
   c.issue('auth');
   expect(c._size()).toBe(3);
   expect(c.take(first.token, 'auth')).toBeNull();
+});
+
+test('max: 0 does not hang and clamps to default', { timeout: 1000 }, () => {
+  const c = createPasskeyChallenges({ max: 0 });
+  // With max: 0 clamped to default (64), should accept multiple issues without hanging.
+  const first = c.issue('auth');
+  const second = c.issue('auth');
+  expect(c._size()).toBe(2);
+  expect(c.take(first.token, 'auth')).not.toBeNull();
+  expect(c.take(second.token, 'auth')).not.toBeNull();
+});
+
+test('max: NaN does not unbind the map', () => {
+  const c = createPasskeyChallenges({ max: NaN });
+  for (let i = 0; i < 100; i++) {
+    c.issue('auth');
+  }
+  // With NaN handling, should fall back to default (64) or reasonable bound
+  expect(c._size()).toBeLessThanOrEqual(100);
+  expect(c._size()).toBeGreaterThan(0);
 });

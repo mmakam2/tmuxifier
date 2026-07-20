@@ -7,6 +7,9 @@ import { randomBytes } from 'node:crypto';
 // clearing it, which would let one caller wipe everyone else's in-flight
 // sign-in. Same rule as rateLimit.js.
 export function createPasskeyChallenges({ ttlMs = 120000, max = 64, now = Date.now } = {}) {
+  // Clamp max to a valid positive integer; a degenerate max (0, NaN, negative, etc)
+  // would either hang the eviction loop (max <= 0) or void the bounding guarantee (max is NaN).
+  const boundMax = Number.isFinite(max) && max > 0 ? Math.floor(max) : 64;
   const entries = new Map(); // token -> { kind, challenge, exp }
 
   function reap() {
@@ -26,7 +29,7 @@ export function createPasskeyChallenges({ ttlMs = 120000, max = 64, now = Date.n
   return {
     issue(kind) {
       reap();
-      while (entries.size >= max) evictOldest();
+      while (entries.size >= boundMax) evictOldest();
       const token = randomBytes(24).toString('base64url');
       const challenge = randomBytes(32);
       entries.set(token, { kind, challenge, exp: now() + ttlMs });
