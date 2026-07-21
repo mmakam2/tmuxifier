@@ -1,8 +1,11 @@
-import type { SetupJob, SetupStatus } from './api';
+import type { SeedResult, SetupJob, SetupStatus } from './api';
 
 export function setupStatusText(job: Pick<SetupJob, 'status' | 'phase' | 'error'>): string {
   switch (job.status) {
-    case 'running': return job.phase === 'waiting-ssh' ? 'Waiting for SSH…' : 'Running setup…';
+    case 'running':
+      return job.phase === 'waiting-ssh' ? 'Waiting for SSH…'
+        : job.phase === 'seeding' ? 'Seeding AI credentials…'
+        : 'Running setup…';
     case 'done': return 'Setup complete ✓';
     case 'error': return `Setup failed${job.error ? ` — ${job.error}` : ''}`;
     case 'needs-interactive': return 'Needs sudo password — finish interactively';
@@ -31,4 +34,15 @@ export function setupBadge(status: SetupStatus): { text: string; cls: string } |
     case 'needs-interactive': return { text: 'needs sudo', cls: 'badge-warn' };
     default: return null;
   }
+}
+
+// One line summarising a job's seed outcome, e.g.
+// "claude ✓ · codex skipped (no codex auth on the Tmuxifier host)".
+// Empty string when nothing was seeded, so callers can test it for truthiness
+// rather than special-casing old jobs that have no seed field at all.
+export function formatSeedResults(seed: SeedResult[] | null | undefined): string {
+  if (!seed || !seed.length) return '';
+  return seed
+    .map((r) => `${r.target} ${r.ok ? '✓' : r.skipped ? `skipped (${r.skipped})` : `failed (${r.error ?? 'failed'})`}`)
+    .join(' · ');
 }
