@@ -144,6 +144,10 @@ pattern for new modules.
   failure. Passkey routes (`GET/POST/DELETE /api/passkeys*`, `POST
   /api/auth/passkey/login/begin|finish`) mount unconditionally in **both** auth modes — passkey is
   a third, additive login path, not a third value of `TMUXIFIER_AUTH_MODE`.
+  The `/term` WebSocket refuses a normal box terminal (close `1008 'setting up'`) while that
+  box's setup job is `running`, so a shell can never start with an environment predating the
+  seeded credentials and installed tools; `mode=provision` stays ungated so the interactive
+  finish still works.
 - `store.js` — `data/boxes.json` CRUD; normalizes/validates boxes; exports/imports the box list as
   a versioned JSON file (`exportBoxes`/`importBoxes`; import re-mints ids and skips dup/unsafe entries).
 - `sshCommand.js` — builds `ssh` argv for attach/probe; **all box fields are validated by
@@ -282,7 +286,9 @@ pattern for new modules.
 
 Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts` (also drives the
 provision panel, a poll-based setup-job viewer — Retry / Remove / Finish-interactively — now that
-setup runs server-side; the login screen also wires the passkey button through the same
+setup runs server-side; clicking a box whose setup job is still `running` renders a live
+setting-up panel (`blocksTerminal` in `setupStatus.ts`) instead of a terminal, and opens the
+terminal itself once the job settles; the login screen also wires the passkey button through the same
 `evaluateOrigin` verdict, with a dead-end message when "require a passkey" is armed but this
 browser has no usable one), `api.ts`, `terminal.ts`, `index.html`, `style.css`, plus feature modules —
 `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
