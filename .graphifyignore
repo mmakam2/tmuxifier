@@ -1,8 +1,21 @@
 # Files excluded from the graphify knowledge graph (gitignore syntax).
 #
-# docs/superpowers/ holds point-in-time specs and plans that are append-only by
-# convention: they are never rewritten when the design moves on, so indexing them
-# freezes superseded designs into the graph and query answers go stale.
-# docs/screenshots/ is image material with no queryable structure.
+# Point-in-time records are append-only by convention: they are never rewritten
+# when the design moves on, so indexing them freezes superseded designs and
+# already-fixed findings into the graph and query answers go stale. Living
+# documentation (README.md, CLAUDE.md, AGENTS.md, docs/DEPLOY.md) is kept.
 docs/superpowers/
+docs/*-review-*.md
+docs/feature-suggestions-*.md
+
+# Image material with no queryable structure.
 docs/screenshots/
+
+# Agent tooling, not project code: skill definitions, harness settings, and the
+# subagent task briefs / reports / review diffs written during development.
+# Graphify skips dot-directories by default; these are listed explicitly so the
+# exclusion does not depend on that default.
+.claude/
+.agents/
+.superpowers/
+.codex/
