@@ -108,6 +108,11 @@ const setupManager = createSetupManager({
   sshConfigFile: config.sshConfigFile,
   controlDir: config.controlDir,
   controlPersist: config.controlPersist,
+  // Post-setup AI-auth seeding: the job seeds itself on reaching done, so a
+  // closed browser tab can no longer skip it. getBox is only needed for the
+  // interactive finish path, which knows a boxId and nothing else.
+  seed: (box) => aiAuthSeeder.seed(box),
+  getBox: (id) => store.getBox(id),
 });
 const statusChecker = createStatusChecker({
   run: (argv) => sshRun(argv),
