@@ -211,6 +211,10 @@ pattern for new modules.
   needs-interactive job replaced by a newer run for the same box) — a sudo-password stderr signature
   flips a job to `needs-interactive` for an on-demand interactive finish, and `running` jobs
   reconcile to `interrupted` on restart. Never removes a box on failure (keep-box + retry).
+  On reaching `done` — from either the non-interactive run or an interactive finish — a job whose
+  options asked for it seeds the box's AI CLI auth (injected `seed`/`getBox`) under a `seeding`
+  phase, records the redacted per-target result on `job.seed`, and only then flips to `done`; a
+  failed seed is recorded, never promoted to a job failure.
   `createSetupStore` is the debounced `data/setup-jobs.json` persistence (mirrors `provisionStore.js`).
 - `healthHistory.js` / `healthEventsStore.js` — `createHealthHistory` keeps a rolling in-memory
   sample series per box (fed by the status poller after each snapshot swap) and derives an
@@ -263,6 +267,8 @@ pattern for new modules.
   (`boxActions.execScriptStdin`) — never in script text, argv, logs, or API responses.
   `status()` reports per-CLI host readiness (no secret material) and is served by the
   auth-gated `GET /api/ai-auth/status` for the provision forms' readiness rows.
+  The trigger is the setup job itself (see `setupManager.js`), not the browser; `POST
+  /api/boxes/:id/seed-ai-auth` remains as the manual re-seed path with no UI caller.
 - `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`pinnedSocket`/`normFp`) used
   by both the Proxmox and NetBox API clients. Pin mode verifies the pinned fingerprint on each
   request's own connection (`pinnedSocket` via `createConnection`) instead of OpenSSL chain

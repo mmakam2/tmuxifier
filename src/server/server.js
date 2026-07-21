@@ -848,7 +848,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     let tools;
     try { tools = resolveTools(Array.isArray(b.tools) ? b.tools.join(',') : (typeof b.tools === 'string' ? b.tools : '')); }
     catch { return reply.code(400).send({ error: 'invalid tools' }); }
-    const options = { ohMyTmux: !!b.ohMyTmux, ohMyZsh: !!b.ohMyZsh, ohMyBash: !!b.ohMyBash, tools };
+    const options = { ohMyTmux: !!b.ohMyTmux, ohMyZsh: !!b.ohMyZsh, ohMyBash: !!b.ohMyBash, tools, seedAiAuth: !!b.seedAiAuth };
     return reply.code(201).send(setupManager.start(box, options));
   });
   app.get('/api/setup', { preHandler: requireAuth }, async () => setupManager.listJobs());

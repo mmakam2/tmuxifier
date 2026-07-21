@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { setupStatusText, setupActions, setupBadge } from '../src/web/setupStatus.ts';
+import { setupStatusText, setupActions, setupBadge, formatSeedResults } from '../src/web/setupStatus.ts';
 
 test('status text covers each state', () => {
   expect(setupStatusText({ status: 'running', phase: 'waiting-ssh' })).toMatch(/waiting/i);
@@ -22,4 +22,26 @@ test('badge is null for terminal-done and present otherwise', () => {
   expect(setupBadge('done')).toBeNull();
   expect(setupBadge('running')).not.toBeNull();
   expect(setupBadge('needs-interactive')?.cls).toContain('warn');
+});
+
+test('seed results render one segment per target', () => {
+  expect(formatSeedResults([
+    { target: 'claude', ok: true },
+    { target: 'codex', ok: false, skipped: 'no codex auth on the Tmuxifier host' },
+  ])).toBe('claude ✓ · codex skipped (no codex auth on the Tmuxifier host)');
+});
+
+test('seed results render failures, including the whole-step marker', () => {
+  expect(formatSeedResults([{ target: 'all', ok: false, error: 'seed failed' }])).toBe('all failed (seed failed)');
+  expect(formatSeedResults([{ target: 'claude', ok: false }])).toBe('claude failed (failed)');
+});
+
+test('seed results are empty for jobs that never seeded', () => {
+  expect(formatSeedResults([])).toBe('');
+  expect(formatSeedResults(undefined)).toBe('');
+  expect(formatSeedResults(null)).toBe('');
+});
+
+test('the seeding phase has its own status text', () => {
+  expect(setupStatusText({ status: 'running', phase: 'seeding' })).toMatch(/seeding/i);
 });

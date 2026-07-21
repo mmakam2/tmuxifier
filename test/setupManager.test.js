@@ -26,6 +26,16 @@ function fakeSsh(plan) {
 // resolves with the given exit code. Replaces the brief's inline `require` trick.
 const sudoSsh = (phrase, code) => (argv, { onData }) => { onData?.(phrase, 'stderr'); return { done: Promise.resolve({ code }), kill() {} }; };
 
+// Polls a predicate instead of counting microtasks: the seed step introduces a
+// real await chain, and "await Promise.resolve() three times" would be a guess.
+async function waitFor(fn, ms = 1000) {
+  const t0 = Date.now();
+  while (!fn()) {
+    if (Date.now() - t0 > ms) throw new Error('timeout waiting for condition');
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
 function make(overrides = {}) {
   let seq = 0;
   const saved = [];
@@ -240,4 +250,168 @@ test('a large output burst still persists promptly via the byte threshold', asyn
   await m._settled(s.id);
   expect(m.getJob(s.id).log).toContain('xxx');
   expect(saves).toBeGreaterThan(baseline); // the 9KB chunk itself forced a persist
+});
+
+test('seeds before done, records the result, and exposes it on the summary', async () => {
+  const seen = [];
+  const m = make({ seed: async (box) => { seen.push(box.id); return [{ target: 'claude', ok: true }]; } });
+  const s = m.start(BOX, { tools: [], seedAiAuth: true });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(seen).toEqual(['b1']);
+  expect(job.seed).toEqual([{ target: 'claude', ok: true }]);
+  expect(job.status).toBe('done');
+  expect(m.listJobs()[0].seed).toEqual([{ target: 'claude', ok: true }]);
+});
+
+test('phase is seeding while the seed is in flight; done only after it settles', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const m = make({ seed: async () => { await gate; return [{ target: 'codex', ok: true }]; } });
+  const s = m.start(BOX, { tools: [], seedAiAuth: true });
+  await waitFor(() => m.getJob(s.id).phase === 'seeding');
+  expect(m.getJob(s.id).status).toBe('running');
+  release();
+  await m._settled(s.id);
+  expect(m.getJob(s.id).status).toBe('done');
+  expect(m.getJob(s.id).phase).toBe(null);
+});
+
+test('seedAiAuth off: the seed never runs', async () => {
+  let calls = 0;
+  const m = make({ seed: async () => { calls += 1; return []; } });
+  const s = m.start(BOX, { tools: [] });
+  await m._settled(s.id);
+  expect(calls).toBe(0);
+  expect(m.getJob(s.id).seed).toBeUndefined();
+  expect(m.getJob(s.id).status).toBe('done');
+});
+
+test('no seeder wired: seedAiAuth is skipped rather than failing', async () => {
+  const m = make();
+  const s = m.start(BOX, { tools: [], seedAiAuth: true });
+  await m._settled(s.id);
+  expect(m.getJob(s.id).status).toBe('done');
+  expect(m.getJob(s.id).seed).toBeUndefined();
+});
+
+test('a rejecting seed is recorded but never fails the job', async () => {
+  const m = make({ seed: async () => { throw new Error('boom'); } });
+  const s = m.start(BOX, { tools: [], seedAiAuth: true });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(job.seed).toEqual([{ target: 'all', ok: false, error: 'seed failed' }]);
+  expect(job.error).toBe(null);
+  expect(JSON.stringify(job)).not.toContain('boom');
+});
+
+test('seed survives save -> load into a fresh manager', async () => {
+  const rows = [];
+  const m = make({
+    save: (jobs) => { rows.length = 0; rows.push(...jobs); },
+    seed: async () => [{ target: 'claude', ok: true }],
+  });
+  const s = m.start(BOX, { tools: [], seedAiAuth: true });
+  await m._settled(s.id);
+  const m2 = make({ load: () => JSON.parse(JSON.stringify(rows)) });
+  expect(m2.getJob(s.id).seed).toEqual([{ target: 'claude', ok: true }]);
+});
+
+const SUDO = 'sudo: a terminal is required to read the password; see below\n';
+
+test('interactive finish seeds via getBox, then reaches done', async () => {
+  let asked = null;
+  const m = make({
+    sshStream: sudoSsh(SUDO, 1),
+    getBox: async (id) => { asked = id; return BOX; },
+    seed: async () => [{ target: 'codex', ok: true }],
+  });
+  const s = m.start(BOX, { tools: [], seedAiAuth: true });
+  await m._settled(s.id);
+  expect(m.getJob(s.id).status).toBe('needs-interactive');
+
+  m.markInteractiveResult(BOX.id, 0);
+  await m._settled(s.id);
+  expect(asked).toBe('b1');
+  expect(m.getJob(s.id).seed).toEqual([{ target: 'codex', ok: true }]);
+  expect(m.getJob(s.id).status).toBe('done');
+});
+
+test('a second interactive result during the seed does not seed twice', async () => {
+  let calls = 0;
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const m = make({
+    sshStream: sudoSsh(SUDO, 1),
+    getBox: async () => BOX,
+    seed: async () => { calls += 1; await gate; return [{ target: 'claude', ok: true }]; },
+  });
+  const s = m.start(BOX, { tools: [], seedAiAuth: true });
+  await m._settled(s.id);
+
+  m.markInteractiveResult(BOX.id, 0);
+  m.markInteractiveResult(BOX.id, 0);
+  release();
+  await m._settled(s.id);
+  expect(calls).toBe(1);
+  expect(m.getJob(s.id).status).toBe('done');
+});
+
+test('box deleted before the interactive finish: done without seeding', async () => {
+  let calls = 0;
+  const m = make({
+    sshStream: sudoSsh(SUDO, 1),
+    getBox: async () => null,
+    seed: async () => { calls += 1; return []; },
+  });
+  const s = m.start(BOX, { tools: [], seedAiAuth: true });
+  await m._settled(s.id);
+  m.markInteractiveResult(BOX.id, 0);
+  await m._settled(s.id);
+  expect(calls).toBe(0);
+  expect(m.getJob(s.id).status).toBe('done');
+});
+
+test('a getBox that throws still lets the job finish', async () => {
+  let calls = 0;
+  const m = make({
+    sshStream: sudoSsh(SUDO, 1),
+    getBox: async () => { throw new Error('store offline'); },
+    seed: async () => { calls += 1; return []; },
+  });
+  const s = m.start(BOX, { tools: [], seedAiAuth: true });
+  await m._settled(s.id);
+  m.markInteractiveResult(BOX.id, 0);
+  await m._settled(s.id);
+  expect(calls).toBe(0);
+  expect(m.getJob(s.id).status).toBe('done');
+});
+
+test('cancel arriving after the script exits skips the seed', async () => {
+  let calls = 0;
+  let finishSsh;
+  const ssh = () => ({ done: new Promise((r) => { finishSsh = () => r({ code: 0 }); }), kill() {} });
+  const m = make({ sshStream: ssh, seed: async () => { calls += 1; return []; } });
+  const s = m.start(BOX, { tools: [], seedAiAuth: true });
+  m.cancelForBox(BOX.id);
+  finishSsh();
+  await m._settled(s.id);
+  expect(calls).toBe(0);
+  expect(m.getJob(s.id).status).toBe('done');
+});
+
+test('a non-zero interactive result still leaves the job needs-interactive', async () => {
+  let calls = 0;
+  const m = make({
+    sshStream: sudoSsh(SUDO, 1),
+    getBox: async () => BOX,
+    seed: async () => { calls += 1; return []; },
+  });
+  const s = m.start(BOX, { tools: [], seedAiAuth: true });
+  await m._settled(s.id);
+  m.markInteractiveResult(BOX.id, 1);
+  await m._settled(s.id);
+  expect(calls).toBe(0);
+  expect(m.getJob(s.id).status).toBe('needs-interactive');
 });

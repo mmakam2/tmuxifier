@@ -23,6 +23,10 @@ export function createSetupManager({
     tools: options.tools || [],
   }),
   probe = async () => true,
+  // Post-setup AI-auth seeding. Both default to null: an unwired manager skips
+  // the step entirely, which is also what every existing test constructs.
+  seed = null,
+  getBox = null,
   load, save,
   hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist,
   now = () => new Date().toISOString(),
@@ -69,11 +73,15 @@ export function createSetupManager({
   }
   function persist() { prune(); save(ordered()); }
   function summary(j) {
-    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, createdAt: j.createdAt, finishedAt: j.finishedAt };
+    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, seed: j.seed ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
   }
   function appendLog(j, text) { if (text) j.log = (j.log + text).slice(-maxLogBytes); }
   function normalizeOptions(o = {}) {
-    return { ohMyTmux: !!o.ohMyTmux, ohMyZsh: !!o.ohMyZsh, ohMyBash: !!o.ohMyBash, tools: Array.isArray(o.tools) ? o.tools : [] };
+    return {
+      ohMyTmux: !!o.ohMyTmux, ohMyZsh: !!o.ohMyZsh, ohMyBash: !!o.ohMyBash,
+      tools: Array.isArray(o.tools) ? o.tools : [],
+      seedAiAuth: !!o.seedAiAuth,
+    };
   }
   function currentForBox(boxId) { return ordered().find((j) => j.boxId === boxId) || null; }
 
@@ -83,6 +91,29 @@ export function createSetupManager({
     if (status !== 'needs-interactive') j.finishedAt = now();
     persist();
     settles.delete(j.id);
+  }
+
+  // The one place a job becomes 'done'. Seeding runs here rather than in the
+  // browser so closing the tab can't silently skip it (the whole point of this
+  // step), and it runs BEFORE the status flip because setupPoller stops polling
+  // the moment it reads a terminal status.
+  //
+  // A seed failure is recorded, never promoted: setup itself succeeded, and a
+  // missing host credential must not turn a good box red. j.cancelled means the
+  // box is on its way out (usually removal), so seeding it is pointless.
+  async function completeDone(j, box) {
+    if (seed && j.options.seedAiAuth && box && !j.cancelled) {
+      j.phase = 'seeding';
+      persist();
+      try {
+        j.seed = await seed(box);
+      } catch {
+        // Never echo the rejection: it could carry secret-adjacent material,
+        // and 'all' means the step died before per-target results existed.
+        j.seed = [{ target: 'all', ok: false, error: 'seed failed' }];
+      }
+    }
+    finish(j, 'done');
   }
 
   async function run(j, box, { waitForSsh }) {
@@ -135,7 +166,7 @@ export function createSetupManager({
       const { code } = await handle.done;
       runningHandles.delete(j.id);
 
-      if (code === 0) finish(j, 'done');
+      if (code === 0) await completeDone(j, box);
       else if (sawSudoPw) finish(j, 'needs-interactive');
       else if (code === 124) { j.error = 'setup timed out'; finish(j, 'error'); }
       else { j.error = `setup exited ${code}`; finish(j, 'error'); }
@@ -176,8 +207,23 @@ export function createSetupManager({
   function markInteractiveResult(boxId, code) {
     const j = currentForBox(boxId);
     if (!j || j.status !== 'needs-interactive') return;
-    if (code === 0) { j.status = 'done'; j.finishedAt = now(); persist(); }
     // non-zero: cancelled or still-failing — stays needs-interactive (retryable).
+    if (code !== 0) return;
+    // Flip SYNCHRONOUSLY, before the first await below. The guard above is the
+    // only thing stopping a second PTY exit event from re-entering, and without
+    // this the status would stay 'needs-interactive' for the whole seed round
+    // trip — long enough to seed the same box twice.
+    j.status = 'running';
+    j.phase = 'running';
+    persist();
+    const p = (async () => {
+      let box = null;
+      // A deleted box (or a store that errors) must not strand the job: seeding
+      // is skipped, the job still reaches done.
+      try { box = getBox ? await getBox(boxId) : null; } catch { box = null; }
+      await completeDone(j, box);
+    })();
+    settles.set(j.id, p);
   }
 
   function cancelForBox(boxId) {

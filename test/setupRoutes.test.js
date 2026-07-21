@@ -79,3 +79,16 @@ test('setup routes require auth', async () => {
   expect((await app.inject({ method: 'GET', url: '/api/setup' })).statusCode).toBe(401);
   expect((await app.inject({ method: 'POST', url: '/api/boxes/b1/setup', payload: {} })).statusCode).toBe(401);
 });
+
+test('setup route forwards seedAiAuth', async () => {
+  const h = await headers();
+  const res = await app.inject({ method: 'POST', url: `/api/boxes/${BOX.id}/setup`, headers: h, payload: { seedAiAuth: true } });
+  expect(res.statusCode).toBe(201);
+  expect(sm._started[0].options.seedAiAuth).toBe(true);
+});
+
+test('setup route defaults seedAiAuth to false', async () => {
+  const h = await headers();
+  await app.inject({ method: 'POST', url: `/api/boxes/${BOX.id}/setup`, headers: h, payload: { ohMyTmux: true } });
+  expect(sm._started[0].options.seedAiAuth).toBe(false);
+});
