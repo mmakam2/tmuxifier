@@ -180,6 +180,10 @@ function wireUploads(parent: HTMLElement, term: Terminal, boxId: string): () => 
 // reconnect backoff. The WebSocket to the server always opens, so onopen itself
 // can't be the success signal — it must stay up past the box's ConnectTimeout (10s).
 const STABLE_MS = 15000;
+// A terminal refused because the box is mid-setup is a bounded wait, not an
+// outage: setup finishes in seconds-to-minutes, so retry on a fixed short
+// interval rather than the escalating outage backoff.
+const SETUP_RETRY_MS = 2000;
 
 // Terminal font. The family is the bundled stack (MesloLGMDZ Nerd Font for
 // text/powerline/icons/ballot/sparkle, then MesloLGSDZ and JuliaMono as fallbacks
@@ -312,9 +316,18 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
       stableTimer = setTimeout(() => { failures = 0; }, STABLE_MS);
     };
     ws.onmessage = (e) => term.write(typeof e.data === 'string' ? e.data : '');
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       clearTimeout(stableTimer);
       if (closedByUser) return;
+      // The server refuses a terminal while the box's setup job runs. Retry
+      // promptly and leave `failures` untouched: counting this as a failure
+      // would poison the backoff that real outages depend on, and could leave
+      // the tab idle for minutes after setup had already finished.
+      if (ev.reason === 'setting up') {
+        term.write('\r\n\x1b[33m[setting up — reconnecting when ready…]\x1b[0m\r\n');
+        retryTimer = setTimeout(connect, SETUP_RETRY_MS);
+        return;
+      }
       failures += 1;
       const delay = reconnectDelay(failures);
       // Escalating backoff to a 5-minute floor (never gives up): a down box settles
