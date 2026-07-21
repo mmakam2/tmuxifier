@@ -478,6 +478,16 @@ async function pollStatus() {
         }
       }
     } catch {}
+    // latestSetups is otherwise refreshed only by refresh() (boot, add/edit/
+    // remove/import), so a job finishing while the dashboard sits idle leaves a
+    // stale "setting up" pill until the page is reloaded. Re-fetch only while
+    // something is actually in flight, so steady state costs no extra request.
+    if (latestSetups.some((s) => s.status === 'running')) {
+      try {
+        latestSetups = await api.listSetups();
+        filterAndPaint();
+      } catch {}
+    }
     // Health extras (sparkline series + events) ride the same tick but fail
     // independently — a hiccup on either side must not stop the dots.
     await pollHealth();
@@ -960,6 +970,10 @@ function showSettingUpBox(box: Box) {
       // a stale 'running' entry bounces straight back into this panel, whose
       // poller immediately sees 'done' again, forever.
       clearSettingUpPanel();
+      // Refresh the box list and setup cache so the sidebar's "setting up" pill
+      // clears immediately for the box being watched, rather than waiting for
+      // the next status tick to notice.
+      void refresh();
       openBox(box, { fromSetupGate: true });
       return null;
     },
