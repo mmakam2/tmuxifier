@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { setupLocalBox } from '../helpers/localBox.js';
 import { hashPassword } from '../../src/server/auth.js';
 import { createStore } from '../../src/server/store.js';
+import { createVoiceStore } from '../../src/server/voiceStore.js';
 
 // Absolute (not cwd-relative) so the e2e server finds the fixture regardless
 // of where `playwright test` happens to be invoked from.
@@ -34,6 +35,14 @@ export default async function globalSetup() {
   await store.addBox({ host: lb.box.host, label: 'localhost', sessionName: lb.session, tags: ['Prod'] });
   await store.addBox({ host: 'tmuxifierlocal-db', label: 'db-primary', sessionName: lb.session, tags: ['Prod'] });
   await store.addBox({ host: 'tmuxifierlocal-worker', label: 'untagged-worker', sessionName: lb.session });
+
+  // Enable voice the way a real operator does — through data/voice.json, which
+  // is what the running server reads per request. The WHISPER_BIN/MODEL env
+  // pins below only satisfy the *engine* half of GET /api/ui-config's
+  // `enabled && engine` check; without this the temp data dir has no
+  // voice.json, voice reads as off, and wireVoice deliberately mounts no
+  // microphone button, so every voice spec fails on the .voice-btn locator.
+  await createVoiceStore({ dataDir }).update({ enabled: true });
 
   const hash = await hashPassword('e2e');
 
