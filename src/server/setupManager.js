@@ -207,8 +207,23 @@ export function createSetupManager({
   function markInteractiveResult(boxId, code) {
     const j = currentForBox(boxId);
     if (!j || j.status !== 'needs-interactive') return;
-    if (code === 0) { j.status = 'done'; j.finishedAt = now(); persist(); }
     // non-zero: cancelled or still-failing — stays needs-interactive (retryable).
+    if (code !== 0) return;
+    // Flip SYNCHRONOUSLY, before the first await below. The guard above is the
+    // only thing stopping a second PTY exit event from re-entering, and without
+    // this the status would stay 'needs-interactive' for the whole seed round
+    // trip — long enough to seed the same box twice.
+    j.status = 'running';
+    j.phase = 'running';
+    persist();
+    const p = (async () => {
+      let box = null;
+      // A deleted box (or a store that errors) must not strand the job: seeding
+      // is skipped, the job still reaches done.
+      try { box = getBox ? await getBox(boxId) : null; } catch { box = null; }
+      await completeDone(j, box);
+    })();
+    settles.set(j.id, p);
   }
 
   function cancelForBox(boxId) {
