@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { seedStatusLine } from '../src/web/setupOptions.ts';
+import { seedStatusLine, seedStatusParts } from '../src/web/setupOptions.ts';
 
 test('ready CLI renders a ready row', () => {
   expect(seedStatusLine('claude', { ready: true })).toBe('claude: ● ready');
@@ -23,4 +23,24 @@ test('unready codex says to run codex login on the host', () => {
 test('null status renders status unknown', () => {
   expect(seedStatusLine('claude', null)).toBe('claude: status unknown');
   expect(seedStatusLine('codex', null)).toBe('codex: status unknown');
+});
+
+test('parts tag the dot with a tone so it can be coloured, and still join to the line', () => {
+  const ready = seedStatusParts('claude', { ready: true });
+  expect(ready.tone).toBe('ok');
+  expect(ready.dot).toBe('●');
+
+  const unready = seedStatusParts('codex', { ready: false, reason: 'no codex auth on the Tmuxifier host' });
+  expect(unready.tone).toBe('bad');
+  expect(unready.dot).toBe('○');
+
+  const unknown = seedStatusParts('claude', null);
+  expect(unknown.tone).toBe('unknown');
+  expect(unknown.dot).toBe('');
+
+  // The parts are the line — no second source of truth for the wording.
+  for (const [cli, s] of [['claude', { ready: true }], ['codex', { ready: false }], ['claude', null]]) {
+    const p = seedStatusParts(cli, s);
+    expect(p.before + p.dot + p.after).toBe(seedStatusLine(cli, s));
+  }
 });

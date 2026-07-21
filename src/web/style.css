@@ -301,6 +301,10 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .modal .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 @media (max-width: 620px) { .modal .tools-grid { grid-template-columns: 1fr; } }
 .modal .seed-status { font-size: 12px; color: #8b949e; line-height: 1.4; }
+/* Unscoped so the dot colours in the Proxmox hub's Provision tab too; the
+   higher specificity still beats the muted row colour above. */
+.seed-status .seed-dot.ok { color: #3fb950; }
+.seed-status .seed-dot.bad { color: #f85149; }
 .modal .settings-hint { margin: 0; font-size: 11px; color: #6e7681; min-height: 1em; }
 .modal .settings-hint.err { color: #f85149; }
 .modal .settings-hint.ok { color: #3fb950; }

@@ -4,15 +4,27 @@ import { api, type AiAuthStatus, type AiAuthCliStatus } from './api';
 
 export interface SetupOptionsValues { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth: boolean }
 
-// Pure text for one CLI's readiness row — exported for node-env tests, so it
-// must stay DOM-free.
-export function seedStatusLine(cli: 'claude' | 'codex', s: AiAuthCliStatus | null): string {
-  if (!s) return `${cli}: status unknown`;
-  if (s.ready) return `${cli}: ● ready`;
+export type SeedTone = 'ok' | 'bad' | 'unknown';
+
+// One CLI's readiness row, split around its status dot so the dot alone can be
+// coloured (the row text stays muted). Pure — exported for node-env tests, so
+// it must stay DOM-free. `before + dot + after` is the whole line.
+export function seedStatusParts(cli: 'claude' | 'codex', s: AiAuthCliStatus | null): {
+  tone: SeedTone; before: string; dot: string; after: string;
+} {
+  if (!s) return { tone: 'unknown', before: `${cli}: status unknown`, dot: '', after: '' };
+  if (s.ready) return { tone: 'ok', before: `${cli}: `, dot: '●', after: ' ready' };
   const fix = cli === 'claude'
     ? 'run `claude setup-token` on the Tmuxifier host, put the token in .env as TMUXIFIER_CLAUDE_OAUTH_TOKEN, then restart Tmuxifier'
     : 'run `codex login` on the Tmuxifier host';
-  return `${cli}: ○ not set up — ${fix}`;
+  return { tone: 'bad', before: `${cli}: `, dot: '○', after: ` not set up — ${fix}` };
+}
+
+// Pure text for one CLI's readiness row — exported for node-env tests, so it
+// must stay DOM-free.
+export function seedStatusLine(cli: 'claude' | 'codex', s: AiAuthCliStatus | null): string {
+  const { before, dot, after } = seedStatusParts(cli, s);
+  return before + dot + after;
 }
 
 // Two forms can be open at once (hub tab + box modal); a per-instance radio
@@ -55,9 +67,14 @@ export function createSetupOptionsForm(initial: { ohMyTmux?: boolean } = {}): {
   const claudeRow = el('div', { class: 'seed-status' }, ['claude: checking…']);
   const codexRow = el('div', { class: 'seed-status' }, ['codex: checking…']);
 
+  function renderSeedRow(row: HTMLElement, cli: 'claude' | 'codex', s: AiAuthCliStatus | null) {
+    const { tone, before, dot, after } = seedStatusParts(cli, s);
+    row.replaceChildren(before, ...(dot ? [el('span', { class: `seed-dot ${tone}` }, [dot])] : []), after);
+  }
+
   function applySeedStatus(s: AiAuthStatus | null) {
-    claudeRow.textContent = seedStatusLine('claude', s?.claude ?? null);
-    codexRow.textContent = seedStatusLine('codex', s?.codex ?? null);
+    renderSeedRow(claudeRow, 'claude', s?.claude ?? null);
+    renderSeedRow(codexRow, 'codex', s?.codex ?? null);
     const bothUnready = !!s && !s.claude.ready && !s.codex.ready;
     seedInput.disabled = bothUnready;
     seedField.title = bothUnready
