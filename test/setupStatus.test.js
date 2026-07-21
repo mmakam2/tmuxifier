@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { setupStatusText, setupActions, setupBadge, formatSeedResults } from '../src/web/setupStatus.ts';
+import { setupStatusText, setupActions, setupBadge, formatSeedResults, blocksTerminal } from '../src/web/setupStatus.ts';
 
 test('status text covers each state', () => {
   expect(setupStatusText({ status: 'running', phase: 'waiting-ssh' })).toMatch(/waiting/i);
@@ -44,4 +44,24 @@ test('seed results are empty for jobs that never seeded', () => {
 
 test('the seeding phase has its own status text', () => {
   expect(setupStatusText({ status: 'running', phase: 'seeding' })).toMatch(/seeding/i);
+});
+
+test('only a running setup job blocks the terminal', () => {
+  expect(blocksTerminal('running')).toBe(true);
+});
+
+test('parked and finished jobs never block the terminal', () => {
+  // needs-interactive can sit parked for days, and error/interrupted boxes are
+  // exactly the ones you need a shell on to diagnose. Blocking any of these
+  // would make a box unreachable rather than merely not-ready.
+  expect(blocksTerminal('needs-interactive')).toBe(false);
+  expect(blocksTerminal('done')).toBe(false);
+  expect(blocksTerminal('error')).toBe(false);
+  expect(blocksTerminal('interrupted')).toBe(false);
+  expect(blocksTerminal('superseded')).toBe(false);
+});
+
+test('no job at all does not block', () => {
+  expect(blocksTerminal(undefined)).toBe(false);
+  expect(blocksTerminal(null)).toBe(false);
 });

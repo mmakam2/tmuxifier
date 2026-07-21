@@ -1,6 +1,6 @@
 import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent, type SetupJob, type SetupSummary } from './api';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
-import { setupStatusText, setupActions, setupBadge, formatSeedResults } from './setupStatus';
+import { setupStatusText, setupActions, setupBadge, formatSeedResults, blocksTerminal } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
 import { sparkline } from './sparkline';
 import { formatEvent, relTime, unseenCountFiltered, notificationsToFire } from './healthEvents';
@@ -910,6 +910,63 @@ function highlightBox(boxId: string | null) {
 // A Proxmox-linked box confirmed stopped has no reachable tmux, so instead of a
 // dead terminal the stage shows a static panel with the container's identity and
 // a shortcut into the Proxmox Containers tab (Start / Deprovision live there).
+// The setting-up panel owns a poll loop, so it needs an explicit teardown:
+// every path that replaces the stage content must stop it, or a dead panel
+// keeps polling (and can auto-open a terminal for a box you navigated away
+// from).
+let settingUpPoller: { start: () => void; stop: () => void } | null = null;
+
+function clearSettingUpPanel() {
+  settingUpPoller?.stop();
+  settingUpPoller = null;
+  const stage = app.querySelector('#stage') as HTMLElement;
+  stage.querySelector('.setting-up-state')?.remove();
+}
+
+// Stage panel shown instead of a terminal while a box's setup job is running.
+// Mirrors showStoppedBox below, but live: it polls the job, renders its status
+// and log, and opens the terminal itself once the job settles.
+function showSettingUpBox(box: Box) {
+  activeBoxId = box.id;
+  highlightBox(box.id);
+  app.querySelector('.local-shell')?.classList.remove('active');
+  for (const terminal of tabs.values()) terminal.el.style.display = 'none';
+  const stage = app.querySelector('#stage') as HTMLElement;
+  stage.querySelector('.empty')?.remove();
+  stage.querySelector('.stopped-box-state')?.remove();
+  clearSettingUpPanel();
+
+  const panel = document.createElement('div');
+  panel.className = 'setting-up-state';
+  const title = document.createElement('strong');
+  title.textContent = `${box.label} is being set up`;
+  const detail = document.createElement('span');
+  detail.textContent = 'Checking…';
+  const log = document.createElement('pre');
+  log.className = 'provision-log';
+  panel.append(title, detail, log);
+  stage.append(panel);
+
+  settingUpPoller = createSetupJobPoller<SetupJob>({
+    fetchJob: () => api.getBoxSetup(box.id),
+    onJob: (job) => {
+      if (!job) return 1500; // not discovered yet / transient fetch error
+      detail.textContent = setupStatusText(job);
+      log.textContent = job.log || '';
+      log.scrollTop = log.scrollHeight;
+      if (blocksTerminal(job.status)) return 1000;
+      // This job state came straight from the API, so it beats the cached
+      // latestSetups that openBox would otherwise consult — without the bypass
+      // a stale 'running' entry bounces straight back into this panel, whose
+      // poller immediately sees 'done' again, forever.
+      clearSettingUpPanel();
+      openBox(box, { fromSetupGate: true });
+      return null;
+    },
+  });
+  settingUpPoller.start();
+}
+
 function showStoppedBox(box: Box) {
   activeBoxId = box.id;
   highlightBox(box.id);
@@ -918,6 +975,7 @@ function showStoppedBox(box: Box) {
   const stage = app.querySelector('#stage') as HTMLElement;
   stage.querySelector('.empty')?.remove();
   stage.querySelector('.stopped-box-state')?.remove();
+  clearSettingUpPanel();
   const state = latestStatus[box.id];
   const panel = document.createElement('div');
   panel.className = 'stopped-box-state';
@@ -938,12 +996,21 @@ function showStoppedBox(box: Box) {
   stage.append(panel);
 }
 
-function openBox(b: Box) {
+function openBox(b: Box, opts?: { fromSetupGate?: boolean }) {
   if (latestStatus[b.id]?.proxmoxState === 'stopped') {
     closeTab(b.id);
     showStoppedBox(b);
     return;
   }
+  // A terminal opened mid-setup gets a shell whose environment predates the
+  // seeded credentials and installed tools. fromSetupGate is the panel's own
+  // auto-open, which has fresher job state than this cached list.
+  if (!opts?.fromSetupGate && blocksTerminal(latestSetups.find((s) => s.boxId === b.id)?.status)) {
+    closeTab(b.id);
+    showSettingUpBox(b);
+    return;
+  }
+  clearSettingUpPanel();
   activeBoxId = b.id;
   highlightBox(b.id);
   // De-highlight local shell bar when switching to a box

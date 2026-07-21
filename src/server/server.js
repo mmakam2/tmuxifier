@@ -1304,6 +1304,15 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       }
 
       // --- Interactive mode (existing) ---
+      // A shell reads its rc files once, at startup: a terminal opened while
+      // setup is still running gets an environment predating the seeded
+      // credentials and the installed tools. Only 'running' gates — parked and
+      // failed jobs must stay reachable — and provision mode above is
+      // deliberately ungated so the interactive finish still works.
+      if (setupManager?.currentForBox(boxId)?.status === 'running') {
+        socket.close(1008, 'setting up');
+        return;
+      }
       const size = { cols: Number(cols) || 80, rows: Number(rows) || 24 };
 
       let entry;

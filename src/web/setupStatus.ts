@@ -46,3 +46,13 @@ export function formatSeedResults(seed: SeedResult[] | null | undefined): string
     .map((r) => `${r.target} ${r.ok ? '✓' : r.skipped ? `skipped (${r.skipped})` : `failed (${r.error ?? 'failed'})`}`)
     .join(' · ');
 }
+
+// Whether a setup job in this status must prevent opening the box's terminal.
+// Only `running` does. A shell reads its rc files once at startup, so one
+// opened mid-setup holds an environment that predates the seeded credentials
+// and the installed tools — but `needs-interactive`, `error`, and `interrupted`
+// are paused or dead states where nothing is mutating the box and a shell is
+// often exactly what's needed. Gating those would make a box unreachable.
+export function blocksTerminal(status?: SetupStatus | null): boolean {
+  return status === 'running';
+}
