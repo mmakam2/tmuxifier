@@ -21,12 +21,19 @@ export function createSetupManager({
     installOhMyZsh: !!options.ohMyZsh,
     installOhMyBash: !!options.ohMyBash,
     tools: options.tools || [],
+    // The session is created by the ensureSession step instead, after seeding.
+    createSession: false,
   }),
   probe = async () => true,
   // Post-setup AI-auth seeding. Both default to null: an unwired manager skips
   // the step entirely, which is also what every existing test constructs.
   seed = null,
   getBox = null,
+  // Pre-creates the box's tmux session, as the last step of a successful job.
+  // It must run after `seed`: a session's shell reads its rc files once, at
+  // creation, so one created earlier holds an environment with no seeded token
+  // in it.
+  ensureSession = null,
   load, save,
   hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist,
   now = () => new Date().toISOString(),
@@ -112,6 +119,13 @@ export function createSetupManager({
         // and 'all' means the step died before per-target results existed.
         j.seed = [{ target: 'all', ok: false, error: 'seed failed' }];
       }
+    }
+    // Strictly after the seed, so the session's first shell reads rc files that
+    // already carry the token. Failure is swallowed: attaching creates the
+    // session anyway (`new-session -A`), so this costs a convenience, not the
+    // box.
+    if (ensureSession && box && !j.cancelled) {
+      try { await ensureSession(box, j.options); } catch { /* attach will create it */ }
     }
     finish(j, 'done');
   }

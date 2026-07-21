@@ -365,9 +365,51 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     // which would wipe (or predate) the ~/.local/bin line the claude/agy
     // installers rely on.
     ...localBinPath,
+    // Session creation is opt-out: a session's shell reads its rc files once,
+    // at creation, so a session created here predates anything that writes rc
+    // afterwards — notably the AI-auth seed, whose token lands in
+    // ~/.profile/.bashrc/.zshrc. setupManager passes createSession: false and
+    // runs buildEnsureSessionRemote below once seeding is done.
+    ...(options.createSession === false ? [] : [
+      `"$TMUX_BIN" has-session -t ${sess} 2>/dev/null || "$TMUX_BIN" new-session -d -s ${sess}${startup}`,
+      `[ -n "\${ZSH_BIN-}" ] && { "$TMUX_BIN" set-option -g default-shell "$ZSH_BIN" 2>/dev/null || true; W=\$("$TMUX_BIN" list-windows -t ${sess} -F '#{window_index}' 2>/dev/null | head -1); [ -n "\$W" ] && "$TMUX_BIN" respawn-window -t ${sess}:\$W -k "$ZSH_BIN" 2>/dev/null || true; } || true`,
+      `[ -n "\${BASH_BIN-}" ] && { "$TMUX_BIN" set-option -g default-shell "$BASH_BIN" 2>/dev/null || true; W=\$("$TMUX_BIN" list-windows -t ${sess} -F '#{window_index}' 2>/dev/null | head -1); [ -n "\$W" ] && "$TMUX_BIN" respawn-window -t ${sess}:\$W -k "$BASH_BIN" 2>/dev/null || true; } || true`,
+    ]),
+  ].join('\n');
+}
+
+// Pre-creates the box's tmux session, as the step that runs AFTER everything
+// which writes shell rc files — the setup script's installers and then the
+// AI-auth seed. A shell reads rc once, at startup, so a session created before
+// the seed holds an environment with no token in it and `claude` shows as
+// logged out until the session is killed and recreated.
+//
+// Attaching would create the session anyway (`new-session -A` in
+// sshCommand.js), so this only pre-creates it — a box whose setup failed is
+// still reachable.
+//
+// Unlike the setup script's tail, this sets tmux's default-shell BEFORE
+// creating the session rather than respawning the window afterwards: the very
+// first shell is then already the right one, so nothing running in a pane is
+// ever killed.
+export function buildEnsureSessionRemote(session, startupCommand, options = {}) {
+  const sess = shSingleQuote(sanitizeSession(session));
+  const startup = startupCommand ? ` ${shSingleQuote(startupCommand)}` : '';
+  const shell = options.installOhMyZsh ? 'zsh' : options.installOhMyBash ? 'bash' : null;
+  return [
+    'set -eu',
+    'TMUX_BIN="$(command -v tmux || true)"',
+    'if [ -z "$TMUX_BIN" ]; then',
+    '  for p in /usr/bin/tmux /usr/local/bin/tmux /bin/tmux; do if [ -x "$p" ]; then TMUX_BIN="$p"; break; fi; done',
+    'fi',
+    '[ -n "$TMUX_BIN" ]',
+    ...(shell ? [
+      `SHELL_BIN="$(command -v ${shell} || true)"`,
+      // start-server first: set-option -g needs a running server, and on a
+      // fresh box nothing has started one yet.
+      '[ -n "$SHELL_BIN" ] && { "$TMUX_BIN" start-server 2>/dev/null || true; "$TMUX_BIN" set-option -g default-shell "$SHELL_BIN" 2>/dev/null || true; } || true',
+    ] : []),
     `"$TMUX_BIN" has-session -t ${sess} 2>/dev/null || "$TMUX_BIN" new-session -d -s ${sess}${startup}`,
-    `[ -n "\${ZSH_BIN-}" ] && { "$TMUX_BIN" set-option -g default-shell "$ZSH_BIN" 2>/dev/null || true; W=\$("$TMUX_BIN" list-windows -t ${sess} -F '#{window_index}' 2>/dev/null | head -1); [ -n "\$W" ] && "$TMUX_BIN" respawn-window -t ${sess}:\$W -k "$ZSH_BIN" 2>/dev/null || true; } || true`,
-    `[ -n "\${BASH_BIN-}" ] && { "$TMUX_BIN" set-option -g default-shell "$BASH_BIN" 2>/dev/null || true; W=\$("$TMUX_BIN" list-windows -t ${sess} -F '#{window_index}' 2>/dev/null | head -1); [ -n "\$W" ] && "$TMUX_BIN" respawn-window -t ${sess}:\$W -k "$BASH_BIN" 2>/dev/null || true; } || true`,
   ].join('\n');
 }
 

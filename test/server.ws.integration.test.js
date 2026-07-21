@@ -407,8 +407,13 @@ test('provision WS accepts tools=curl: passes validation and builds the script w
     buildEnsureTmuxRemote(saved.sessionName, saved.startupCommand, {
       installOhMyTmux: false, installOhMyZsh: false, installOhMyBash: false,
       tools: resolveTools('curl'),
+      // The interactive finish no longer creates the session: setupManager's
+      // ensureSession step does, after any seeding, so the session's first
+      // shell reads rc files that already carry the token.
+      createSession: false,
     }),
   );
+  expect(provisionArgs.script).not.toContain('new-session');
 
   ws.close();
 }, 10000);

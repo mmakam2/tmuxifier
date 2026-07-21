@@ -1256,6 +1256,10 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
           installOhMyZsh: ohMyZsh === '1',
           installOhMyBash: ohMyBash === '1',
           tools: toolIds,
+          // Same ordering rule as the non-interactive run: the session is
+          // created by setupManager's ensureSession step once this finish has
+          // been reported and any seeding has happened.
+          createSession: false,
         });
 
         if (!sessions?.provision) {

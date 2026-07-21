@@ -8,7 +8,7 @@ import { createStatusChecker } from './status.js';
 import { createStatusPoller } from './statusPoller.js';
 import { createSessionManager } from './sessions.js';
 import { sshRun, sshRunStdin, sshStream } from './sshRun.js';
-import { createBoxActions } from './boxActions.js';
+import { createBoxActions, buildEnsureSessionRemote } from './boxActions.js';
 import { buildSetupArgv } from './sshCommand.js';
 import { createSetupStore } from './setupStore.js';
 import { createSetupManager } from './setupManager.js';
@@ -113,6 +113,15 @@ const setupManager = createSetupManager({
   // interactive finish path, which knows a boxId and nothing else.
   seed: (box) => aiAuthSeeder.seed(box),
   getBox: (id) => store.getBox(id),
+  // Runs after the seed so the session's first shell reads rc files that
+  // already carry the seeded credentials.
+  ensureSession: (box, options) => boxActions.execCommand(
+    box,
+    buildEnsureSessionRemote(box.sessionName, box.startupCommand, {
+      installOhMyZsh: !!options.ohMyZsh,
+      installOhMyBash: !!options.ohMyBash,
+    }),
+  ),
 });
 const statusChecker = createStatusChecker({
   run: (argv) => sshRun(argv),

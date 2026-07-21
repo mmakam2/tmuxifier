@@ -415,3 +415,51 @@ test('a non-zero interactive result still leaves the job needs-interactive', asy
   expect(calls).toBe(0);
   expect(m.getJob(s.id).status).toBe('needs-interactive');
 });
+
+test('the tmux session is created after seeding, never before', async () => {
+  // The whole point: a session created before the seed holds a shell whose
+  // environment predates the token export in the rc files.
+  const order = [];
+  const m = make({
+    seed: async () => { order.push('seed'); return [{ target: 'claude', ok: true }]; },
+    ensureSession: async () => { order.push('session'); },
+  });
+  const s = m.start(BOX, { tools: [], seedAiAuth: true });
+  await m._settled(s.id);
+  expect(order).toEqual(['seed', 'session']);
+  expect(m.getJob(s.id).status).toBe('done');
+});
+
+test('the session is still created when nothing is seeded', async () => {
+  const seen = [];
+  const m = make({ ensureSession: async (box, options) => { seen.push([box.id, options.ohMyZsh]); } });
+  const s = m.start(BOX, { tools: [], ohMyZsh: true });
+  await m._settled(s.id);
+  expect(seen).toEqual([['b1', true]]);
+  expect(m.getJob(s.id).status).toBe('done');
+});
+
+test('a failing ensureSession never fails the job', async () => {
+  // Attaching creates the session anyway (new-session -A), so a failure here
+  // costs a convenience, not the box.
+  const m = make({ ensureSession: async () => { throw new Error('nope'); } });
+  const s = m.start(BOX, { tools: [] });
+  await m._settled(s.id);
+  expect(m.getJob(s.id).status).toBe('done');
+  expect(m.getJob(s.id).error).toBe(null);
+});
+
+test('interactive finish also creates the session after seeding', async () => {
+  const order = [];
+  const m = make({
+    sshStream: sudoSsh('sudo: a terminal is required to read the password\n', 1),
+    getBox: async () => BOX,
+    seed: async () => { order.push('seed'); return []; },
+    ensureSession: async () => { order.push('session'); },
+  });
+  const s = m.start(BOX, { tools: [], seedAiAuth: true });
+  await m._settled(s.id);
+  m.markInteractiveResult(BOX.id, 0);
+  await m._settled(s.id);
+  expect(order).toEqual(['seed', 'session']);
+});

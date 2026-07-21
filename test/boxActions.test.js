@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { buildEnsureTmuxRemote, buildKillTmuxRemote, createBoxActions, resolveTools, TOOL_IDS } from '../src/server/boxActions.js';
+import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildKillTmuxRemote, createBoxActions, resolveTools, TOOL_IDS } from '../src/server/boxActions.js';
 
 function runShell(script, env) {
   return new Promise((resolve) => {
@@ -641,4 +641,41 @@ test('framework installs disable the auto-updater in the generated rc (updates h
   const bare = String(buildEnsureTmuxRemote('web', null, {}));
   expect(bare).not.toContain('omz:update');
   expect(bare).not.toContain('DISABLE_AUTO_UPDATE');
+});
+
+test('buildEnsureTmuxRemote can omit session creation, deferring it past the seed', () => {
+  // A session's shell reads rc once, at creation. Creating it inside the setup
+  // script means it predates the AI-auth seed, which appends the token export
+  // to the rc files — so the setup run must be able to skip it.
+  const remote = buildEnsureTmuxRemote('web', "echo 'hi'", { createSession: false });
+  expect(remote).not.toContain('new-session');
+  expect(remote).not.toContain('respawn-window');
+  expect(remote).toContain('command -v tmux'); // still installs tmux
+});
+
+test('buildEnsureTmuxRemote still creates the session by default', () => {
+  const remote = buildEnsureTmuxRemote('web', "echo 'hi'");
+  expect(remote).toContain("\"$TMUX_BIN\" new-session -d -s 'web' 'echo '\\''hi'\\'''");
+});
+
+test('buildEnsureSessionRemote creates the session and quotes the startup command', () => {
+  const remote = buildEnsureSessionRemote('web', "echo 'hi'");
+  expect(remote).toContain("\"$TMUX_BIN\" has-session -t 'web'");
+  expect(remote).toContain("\"$TMUX_BIN\" new-session -d -s 'web' 'echo '\\''hi'\\'''");
+});
+
+test('buildEnsureSessionRemote sets the default shell BEFORE creating the session', () => {
+  // Setting it first means the session's very first shell is already the right
+  // one — no respawn, so nothing running in the pane is ever killed.
+  const remote = buildEnsureSessionRemote('web', null, { installOhMyZsh: true });
+  const setOpt = remote.indexOf('default-shell');
+  const create = remote.indexOf('new-session');
+  expect(setOpt).toBeGreaterThan(-1);
+  expect(create).toBeGreaterThan(-1);
+  expect(setOpt).toBeLessThan(create);
+});
+
+test('buildEnsureSessionRemote sanitizes the session name', () => {
+  const remote = buildEnsureSessionRemote('we b;rm -rf /', null);
+  expect(remote).not.toContain('rm -rf /');
 });

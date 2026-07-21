@@ -218,7 +218,12 @@ pattern for new modules.
   On reaching `done` — from either the non-interactive run or an interactive finish — a job whose
   options asked for it seeds the box's AI CLI auth (injected `seed`/`getBox`) under a `seeding`
   phase, records the redacted per-target result on `job.seed`, and only then flips to `done`; a
-  failed seed is recorded, never promoted to a job failure.
+  failed seed is recorded, never promoted to a job failure. The box's tmux session is created
+  **last**, by the injected `ensureSession` step (`buildEnsureSessionRemote`), strictly after the
+  seed — a shell reads its rc files once at startup, so a session created earlier (as the setup
+  script used to do) holds an environment with no seeded token in it. The setup script therefore
+  runs with `createSession: false`, and attaching would create the session anyway
+  (`new-session -A`), so a failed `ensureSession` costs a convenience, not the box.
   `createSetupStore` is the debounced `data/setup-jobs.json` persistence (mirrors `provisionStore.js`).
 - `healthHistory.js` / `healthEventsStore.js` — `createHealthHistory` keeps a rolling in-memory
   sample series per box (fed by the status poller after each snapshot swap) and derives an
