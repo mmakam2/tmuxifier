@@ -498,3 +498,82 @@ test('WS drops non-string input frames instead of throwing; session keeps workin
   expect(writes).toEqual(['still alive\n']);
   ws.close();
 }, 10000);
+
+// Builds a server whose box has a setup job in the given status.
+async function gateFixture(status) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-gate-'));
+  const config = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
+    passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
+    sshConfigPath: path.join(dir, 'nope'),
+  };
+  const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
+  const saved = await store.addBox({ host: '192.168.1.10', sessionName: 'web' });
+  const state = { opened: false, provisioned: false };
+  const sessions = {
+    open() { state.opened = true; return {}; },
+    provision() { state.provisioned = true; return {}; },
+    attach() {}, write() {}, resize() {}, detach() {}, close() {}, closeIfUnwatched() {}, onExit() {},
+  };
+  const setupManager = status
+    ? { currentForBox: () => ({ id: 'j1', boxId: saved.id, status }) }
+    : undefined;
+  const app = buildServer({
+    config, store, sessions, setupManager,
+    statusChecker: { checkBox: async () => ({ reachable: true }) },
+  });
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const { port } = app.server.address();
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === COOKIE_NAME);
+  teardown = async () => { await app.close(); await fs.rm(dir, { recursive: true, force: true }); };
+  return { port, boxId: saved.id, cookie: `${c.name}=${c.value}`, state };
+}
+
+// Resolves { closed: code } or { open: true } — whichever happens first.
+function raceOpenClose(url, cookie, ms = 500) {
+  const ws = new WebSocket(url, { headers: { cookie } });
+  return new Promise((resolve, reject) => {
+    ws.on('close', (code) => resolve({ closed: code }));
+    ws.on('open', () => setTimeout(() => { ws.close(); resolve({ open: true }); }, ms));
+    ws.on('error', reject);
+  });
+}
+
+test('/term refuses a box whose setup job is running', async () => {
+  const { port, boxId, cookie, state } = await gateFixture('running');
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/term?box=${boxId}&cols=80&rows=24`, { headers: { cookie } });
+  const { code, reason } = await new Promise((resolve, reject) => {
+    ws.on('close', (c, r) => resolve({ code: c, reason: r.toString() }));
+    ws.on('error', reject);
+  });
+  expect(code).toBe(1008);
+  expect(reason).toBe('setting up');
+  expect(state.opened).toBe(false);
+}, 10000);
+
+test('/term connects once the setup job is done', async () => {
+  const { port, boxId, cookie, state } = await gateFixture('done');
+  const res = await raceOpenClose(`ws://127.0.0.1:${port}/term?box=${boxId}&cols=80&rows=24`, cookie);
+  expect(res.open).toBe(true);
+  expect(state.opened).toBe(true);
+}, 10000);
+
+test('/term provision mode is never gated, even while running', async () => {
+  // The interactive finish is how a needs-interactive box gets unstuck. If the
+  // gate is ever placed above the provision branch, this deadlocks.
+  const { port, boxId, cookie, state } = await gateFixture('running');
+  const res = await raceOpenClose(
+    `ws://127.0.0.1:${port}/term?box=${boxId}&mode=provision&cols=80&rows=24&ohMyTmux=0&ohMyZsh=0&ohMyBash=0`,
+    cookie,
+  );
+  expect(res.open).toBe(true);
+  expect(state.provisioned).toBe(true);
+}, 10000);
+
+test('/term is ungated when no setupManager is wired', async () => {
+  const { port, boxId, cookie, state } = await gateFixture(null);
+  const res = await raceOpenClose(`ws://127.0.0.1:${port}/term?box=${boxId}&cols=80&rows=24`, cookie);
+  expect(res.open).toBe(true);
+  expect(state.opened).toBe(true);
+}, 10000);
