@@ -6,7 +6,7 @@ import { openSettingsModal } from './settingsUi';
 import { renderPresetsTab } from './proxmoxPresets';
 import { renderContainersTab } from './proxmoxContainers';
 import { renderActivityTab } from './proxmoxActivity';
-import { setupStatusText } from './setupStatus';
+import { setupStatusText, formatSeedResults } from './setupStatus';
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { registerModal } from './modalRegistry';
 import { createSetupJobPoller } from './setupPoller';
@@ -147,10 +147,6 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
       setupArea.style.marginTop = '8px';
       const setupLog = el('pre', { class: 'pve-log' });
       setupArea.replaceChildren(setupLog);
-      // Fire-once guard for this runSetup call: the needs-interactive fallback
-      // re-enters polling (poller.start() below), so 'done' can be observed
-      // more than once per call without this.
-      let seeded = false;
 
       // Shared poll loop (setupPoller.ts); the policy renders this tab's chrome.
       setupPoller?.stop();
@@ -164,13 +160,10 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
           if (job.status === 'running') return 1500;
           opts.onBoxLinked();
           footer.replaceChildren();
-          if (job.status === 'done' && setup?.seedAiAuth && !seeded) {
-            seeded = true;
-            void api.seedAiAuth(boxId).then(({ results }) => {
-              const txt = results.map((r) => `${r.target} ${r.ok ? '✓' : r.skipped ? `skipped (${r.skipped})` : `failed (${r.error ?? 'failed'})`}`).join(' · ');
-              phase.textContent = `${phase.textContent} · auth: ${txt}`;
-            }).catch(() => { phase.textContent = `${phase.textContent} · auth: request failed`; });
-          }
+          // Seeding happened inside the job, before this status flip — read it
+          // off the job rather than firing a request from the tab.
+          const seedTxt = formatSeedResults(job.seed);
+          if (seedTxt) phase.textContent = `${phase.textContent} · auth: ${seedTxt}`;
           if (job.status === 'needs-interactive') {
             const finishBtn = el('button', { type: 'button', class: 'pve-primary' }, ['Finish interactively']) as HTMLButtonElement;
             finishBtn.disabled = setupLauncher.active();

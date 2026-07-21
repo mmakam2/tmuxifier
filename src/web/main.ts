@@ -1,6 +1,6 @@
 import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent, type SetupJob, type SetupSummary } from './api';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
-import { setupStatusText, setupActions, setupBadge } from './setupStatus';
+import { setupStatusText, setupActions, setupBadge, formatSeedResults } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
 import { sparkline } from './sparkline';
 import { formatEvent, relTime, unseenCountFiltered, notificationsToFire } from './healthEvents';
@@ -1077,8 +1077,9 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
   container.innerHTML = '';
   panel.classList.add('open');
 
-  const opts = { ohMyTmux: options.ohMyTmux, ohMyZsh: options.ohMyZsh, ohMyBash: options.ohMyBash, tools: options.tools || [] };
-  const seedAiAuth = !!options.seedAiAuth;
+  // seedAiAuth rides along to the server: it is what makes the setup job seed
+  // itself on completion, so dropping it here silently disables the feature.
+  const opts = { ohMyTmux: options.ohMyTmux, ohMyZsh: options.ohMyZsh, ohMyBash: options.ohMyBash, tools: options.tools || [], seedAiAuth: !!options.seedAiAuth };
   const log = document.createElement('pre');
   log.className = 'provision-log';
   const actions = document.createElement('div');
@@ -1087,9 +1088,6 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
 
   let currentJobId: string | null = null;
   let autoCloseTimer: number | undefined;
-  // Fire-once guard: onJob observes 'done' once per normal run, but the
-  // needs-interactive fallback re-enters polling, so this must survive restarts.
-  let seeded = false;
   // One interactive session at a time: a second "Finish interactively" click
   // must not start a concurrent setup script run on the same box.
   const interactive = createInteractiveLauncher<ReturnType<typeof openProvisionTerminal>>();
@@ -1107,28 +1105,13 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
       if (job.status === 'running') return 1500;
       if (job.status === 'done') {
         refresh();
-        if (seedAiAuth) {
-          // Auto-close must wait for the seed outcome to render (below) before
-          // arming, or it destroys the outcome (e.g. a skip reason) before the
-          // operator can read it — see the generation guard on each branch.
-          if (!seeded) {
-            seeded = true;
-            const myGen = provisionPanelGen;
-            void api.seedAiAuth(box.id).then(({ results }) => {
-              if (provisionPanelGen !== myGen) return; // panel closed/reopened while the request was in flight
-              const txt = results.map((r) => `${r.target} ${r.ok ? '✓' : r.skipped ? `skipped (${r.skipped})` : `failed (${r.error ?? 'failed'})`}`).join(' · ');
-              status.textContent = `${status.textContent} · auth: ${txt}`;
-            }).catch(() => {
-              if (provisionPanelGen !== myGen) return; // panel closed/reopened while the request was in flight
-              status.textContent = `${status.textContent} · auth: request failed`;
-            }).finally(() => {
-              if (provisionPanelGen !== myGen) return; // panel closed/reopened while the request was in flight
-              autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), 5000);
-            });
-          }
-        } else {
-          autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), 2000);
-        }
+        // The seed already ran server-side, before this status flip — so the
+        // outcome is here on the first (and only) 'done' this poller sees.
+        // Nothing to request, nothing to race, nothing to guard.
+        const seedTxt = formatSeedResults(job.seed);
+        if (seedTxt) status.textContent = `${status.textContent} · auth: ${seedTxt}`;
+        // A seed outcome deserves longer on screen than a bare success.
+        autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), seedTxt ? 5000 : 2000);
         return null;
       }
       if (job.status === 'needs-interactive') return 2500;
