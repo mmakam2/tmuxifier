@@ -5,6 +5,7 @@ export function setupStatusText(job: Pick<SetupJob, 'status' | 'phase' | 'error'
     case 'running':
       return job.phase === 'waiting-ssh' ? 'Waiting for SSH…'
         : job.phase === 'seeding' ? 'Seeding AI credentials…'
+        : job.phase === 'statusline' ? 'Configuring statusline…'
         : 'Running setup…';
     case 'done': return 'Setup complete ✓';
     case 'error': return `Setup failed${job.error ? ` — ${job.error}` : ''}`;
@@ -45,6 +46,16 @@ export function formatSeedResults(seed: SeedResult[] | null | undefined): string
   return seed
     .map((r) => `${r.target} ${r.ok ? '✓' : r.skipped ? `skipped (${r.skipped})` : `failed (${r.error ?? 'failed'})`}`)
     .join(' · ');
+}
+
+// One-line summary of a job's statusline-push outcome, e.g.
+// "statusline ✓" / "statusline skipped (no Claude on the box)".
+// Empty string when nothing was pushed, so callers test it for truthiness and
+// old jobs without a statusline field render nothing.
+export function formatStatuslineResult(statusline: SeedResult | null | undefined): string {
+  if (!statusline) return '';
+  const r = statusline;
+  return `${r.target} ${r.ok ? '✓' : r.skipped ? `skipped (${r.skipped})` : `failed (${r.error ?? 'failed'})`}`;
 }
 
 // Whether a setup job in this status must prevent opening the box's terminal.

@@ -56,18 +56,20 @@ export interface FleetJobSummary {
   targetCount: number; okCount: number; errorCount: number;
 }
 export type SetupStatus = 'running' | 'done' | 'error' | 'needs-interactive' | 'interrupted' | 'superseded';
-export interface SetupOptions { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth?: boolean }
+export interface SetupOptions { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth?: boolean; claudeStatusline?: boolean }
 export interface SetupSummary {
   id: string; boxId: string; boxLabel: string; status: SetupStatus;
-  phase: 'waiting-ssh' | 'running' | 'seeding' | null; options: SetupOptions; error: string | null;
+  phase: 'waiting-ssh' | 'running' | 'seeding' | 'statusline' | null; options: SetupOptions; error: string | null;
   // Present once a job that asked for seeding has attempted it. Absent (or
   // null) on jobs that predate server-side seeding, and on jobs that never
   // asked for it.
   seed?: SeedResult[] | null;
+  // Present once a job that asked for the statusline push has attempted it.
+  statusline?: SeedResult | null;
   createdAt: string; finishedAt: string | null;
 }
 export interface SetupJob extends SetupSummary { log: string; }
-export interface SeedResult { target: 'claude' | 'codex' | 'all'; ok: boolean; skipped?: string; error?: string }
+export interface SeedResult { target: 'claude' | 'codex' | 'all' | 'statusline'; ok: boolean; skipped?: string; error?: string }
 export interface AiAuthCliStatus { ready: boolean; reason?: string }
 export interface AiAuthStatus { claude: AiAuthCliStatus; codex: AiAuthCliStatus }
 
