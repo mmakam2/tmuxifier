@@ -31,6 +31,7 @@ import { createProxmoxLifecycleStore } from './proxmoxLifecycleStore.js';
 import { createProxmoxLifecycleManager } from './proxmoxLifecycle.js';
 import { createKnownHosts } from './knownHosts.js';
 import { createAiAuthSeeder } from './aiAuthSeed.js';
+import { createStatuslinePusher } from './claudeStatusline.js';
 import { readDefaultPublicKey, createDefaultKeyProvider } from './defaultKey.js';
 import os from 'node:os';
 import { registerShutdownFlush } from './shutdown.js';
@@ -97,6 +98,10 @@ const aiAuthSeeder = createAiAuthSeeder({
   runStdin: (box, script, input) => boxActions.execScriptStdin(box, script, input),
   token: config.claudeOauthToken,
 });
+const statuslinePusher = createStatuslinePusher({
+  runStdin: (box, script, input) => boxActions.execScriptStdin(box, script, input),
+  readAsset: () => fs.promises.readFile(new URL('./assets/claude-statusline.sh', import.meta.url)),
+});
 const setupStore = createSetupStore({ dataDir: config.dataDir });
 const setupManager = createSetupManager({
   sshStream: (argv, opts) => sshStream(argv, opts),
@@ -122,6 +127,7 @@ const setupManager = createSetupManager({
       installOhMyBash: !!options.ohMyBash,
     }),
   ),
+  pushStatusline: (box) => statuslinePusher.push(box),
 });
 const statusChecker = createStatusChecker({
   run: (argv) => sshRun(argv),
