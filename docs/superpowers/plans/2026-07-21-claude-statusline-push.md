@@ -47,11 +47,12 @@ chmod 755 src/server/assets/claude-statusline.sh
 
 Run:
 ```bash
-grep -q 'CLAUDE_CONFIG_DIR:-$HOME/.claude"/plugins/cache/caveman' src/server/assets/claude-statusline.sh && \
-grep -q "jq -r '.model.display_name" src/server/assets/claude-statusline.sh && \
+f=src/server/assets/claude-statusline.sh
+grep -Fq '${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/caveman/caveman/' "$f" && \
+grep -Fq "jq -r '.model.display_name" "$f" && \
 echo OK
 ```
-Expected: `OK` (portable caveman glob + jq-driven model field present). If not `OK`, the wrong file was copied — stop and re-copy.
+Expected: `OK` (portable caveman glob + jq-driven model field present). Use `grep -F` (fixed strings) — the glob line contains regex metacharacters (`$`, `{`, `}`, `.`). If not `OK`, the wrong file was copied — stop and re-copy.
 
 - [ ] **Step 3: Write the failing asset test**
 
