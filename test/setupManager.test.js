@@ -318,6 +318,56 @@ test('seed survives save -> load into a fresh manager', async () => {
   expect(m2.getJob(s.id).seed).toEqual([{ target: 'claude', ok: true }]);
 });
 
+test('claudeStatusline on + pusher wired: runs, records result, reaches done', async () => {
+  const seen = [];
+  const m = make({ pushStatusline: async (box) => { seen.push(box.id); return { target: 'statusline', ok: true }; } });
+  const s = m.start(BOX, { tools: [], claudeStatusline: true });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(seen).toEqual([BOX.id]);
+  expect(job.statusline).toEqual({ target: 'statusline', ok: true });
+  expect(m.listJobs()[0].statusline).toEqual({ target: 'statusline', ok: true });
+});
+
+test('claudeStatusline off: the push never runs', async () => {
+  let calls = 0;
+  const m = make({ pushStatusline: async () => { calls += 1; return { target: 'statusline', ok: true }; } });
+  const s = m.start(BOX, { tools: [], claudeStatusline: false });
+  await m._settled(s.id);
+  expect(calls).toBe(0);
+  expect(m.getJob(s.id).statusline).toBeUndefined();
+  expect(m.getJob(s.id).status).toBe('done');
+});
+
+test('no pusher wired: claudeStatusline is skipped rather than failing', async () => {
+  const m = make();
+  const s = m.start(BOX, { tools: [], claudeStatusline: true });
+  await m._settled(s.id);
+  expect(m.getJob(s.id).status).toBe('done');
+  expect(m.getJob(s.id).statusline).toBeUndefined();
+});
+
+test('statusline push failure is recorded, never promoted to a job failure', async () => {
+  const m = make({ pushStatusline: async () => { throw new Error('boom'); } });
+  const s = m.start(BOX, { tools: [], claudeStatusline: true });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(job.statusline).toEqual({ target: 'statusline', ok: false, error: 'statusline push failed' });
+});
+
+test('statusline runs before ensureSession', async () => {
+  const order = [];
+  const m = make({
+    pushStatusline: async () => { order.push('statusline'); return { target: 'statusline', ok: true }; },
+    ensureSession: async () => { order.push('ensureSession'); },
+  });
+  const s = m.start(BOX, { tools: [], claudeStatusline: true });
+  await m._settled(s.id);
+  expect(order).toEqual(['statusline', 'ensureSession']);
+});
+
 const SUDO = 'sudo: a terminal is required to read the password; see below\n';
 
 test('interactive finish seeds via getBox, then reaches done', async () => {

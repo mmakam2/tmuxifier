@@ -34,6 +34,9 @@ export function createSetupManager({
   // creation, so one created earlier holds an environment with no seeded token
   // in it.
   ensureSession = null,
+  // Post-setup Claude statusline push. Default null: an unwired manager skips
+  // the step, which is what existing tests construct.
+  pushStatusline = null,
   load, save,
   hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist,
   now = () => new Date().toISOString(),
@@ -80,7 +83,7 @@ export function createSetupManager({
   }
   function persist() { prune(); save(ordered()); }
   function summary(j) {
-    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, seed: j.seed ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
+    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, seed: j.seed ?? null, statusline: j.statusline ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
   }
   function appendLog(j, text) { if (text) j.log = (j.log + text).slice(-maxLogBytes); }
   function normalizeOptions(o = {}) {
@@ -88,6 +91,7 @@ export function createSetupManager({
       ohMyTmux: !!o.ohMyTmux, ohMyZsh: !!o.ohMyZsh, ohMyBash: !!o.ohMyBash,
       tools: Array.isArray(o.tools) ? o.tools : [],
       seedAiAuth: !!o.seedAiAuth,
+      claudeStatusline: !!o.claudeStatusline,
     };
   }
   function currentForBox(boxId) { return ordered().find((j) => j.boxId === boxId) || null; }
@@ -119,6 +123,17 @@ export function createSetupManager({
         // and 'all' means the step died before per-target results existed.
         j.seed = [{ target: 'all', ok: false, error: 'seed failed' }];
       }
+    }
+    // Push the Claude statusline (opt-in). The box itself decides via a
+    // command -v claude check whether to apply, so this yields "nothing
+    // happens" for a box without Claude and "apply" for one that has it — no
+    // add-vs-edit branching. A skip/failure is recorded, never promoted: setup
+    // succeeded, and a box without Claude Code must not turn red.
+    if (pushStatusline && j.options.claudeStatusline && box && !j.cancelled) {
+      j.phase = 'statusline';
+      persist();
+      try { j.statusline = await pushStatusline(box); }
+      catch { j.statusline = { target: 'statusline', ok: false, error: 'statusline push failed' }; }
     }
     // Strictly after the seed, so the session's first shell reads rc files that
     // already carry the token. Failure is swallowed: attaching creates the
