@@ -500,11 +500,14 @@ export function createBoxActions({ run, runStdin, hostKeyPolicy = 'accept-new', 
         return { ok: false, error: e?.message || 'invalid box' };
       }
       const res = await runStdin(argv, input, { timeout: timeoutMs });
+      const code = res ? res.code : null;
+      const stdout = String((res && res.stdout) || '');
+      const stderr = String((res && res.stderr) || '');
       if (!res || res.code !== 0) {
         const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
-        return { ok: false, error: msg || `ssh exited ${res ? res.code : 'unknown'}` };
+        return { ok: false, code, stdout, stderr, error: msg || `ssh exited ${res ? res.code : 'unknown'}` };
       }
-      return { ok: true };
+      return { ok: true, code, stdout, stderr };
     },
     // After an upload lands, type its quoted path into the box session's
     // active pane — but only when the pane is a Claude Code or shell prompt

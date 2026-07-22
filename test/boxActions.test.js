@@ -630,7 +630,7 @@ test('execScriptStdin reports failure without throwing', async () => {
     runStdin: async () => ({ code: 1, stdout: '', stderr: 'boom' }),
   });
   const res = await actions.execScriptStdin({ host: 'h1' }, 'cat > /dev/null', Buffer.from('x'));
-  expect(res).toEqual({ ok: false, error: 'boom' });
+  expect(res).toEqual({ ok: false, code: 1, stdout: '', stderr: 'boom', error: 'boom' });
 });
 
 test('framework installs disable the auto-updater in the generated rc (updates happen deliberately, via Fleet Command)', () => {
@@ -678,4 +678,30 @@ test('buildEnsureSessionRemote sets the default shell BEFORE creating the sessio
 test('buildEnsureSessionRemote sanitizes the session name', () => {
   const remote = buildEnsureSessionRemote('we b;rm -rf /', null);
   expect(remote).not.toContain('rm -rf /');
+});
+
+test('execScriptStdin surfaces code/stdout/stderr on success', async () => {
+  const box = { id: 'b1', label: 'x', host: '192.168.1.10', user: 'root', sessionName: 'web' };
+  const actions = createBoxActions({
+    run: async () => ({ code: 0 }),
+    runStdin: async () => ({ code: 0, stdout: 'OUT', stderr: '' }),
+  });
+  const res = await actions.execScriptStdin(box, 'echo OUT', Buffer.from('x'));
+  expect(res.ok).toBe(true);
+  expect(res.code).toBe(0);
+  expect(res.stdout).toBe('OUT');
+  expect(res.stderr).toBe('');
+});
+
+test('execScriptStdin surfaces code/stdout/stderr on non-zero exit and sets ok=false', async () => {
+  const box = { id: 'b1', label: 'x', host: '192.168.1.10', user: 'root', sessionName: 'web' };
+  const actions = createBoxActions({
+    run: async () => ({ code: 0 }),
+    runStdin: async () => ({ code: 4, stdout: 'MARKER', stderr: 'boom' }),
+  });
+  const res = await actions.execScriptStdin(box, 'exit 4', Buffer.from('x'));
+  expect(res.ok).toBe(false);
+  expect(res.code).toBe(4);
+  expect(res.stdout).toBe('MARKER');
+  expect(res.stderr).toBe('boom');
 });
