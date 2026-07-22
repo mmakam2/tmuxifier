@@ -609,7 +609,7 @@ git commit -m "feat(setup): wire the statusline pusher into the setup manager"
 **Files:**
 - Modify: `src/web/api.ts` (`SetupSummary` phase + `statusline` field)
 - Modify: `src/web/setupStatus.ts` (phase label + `formatStatuslineResult`)
-- Test: `test/setupStatus.test.js` (create if absent; otherwise extend)
+- Test: `test/setupStatus.test.js` — **this file ALREADY EXISTS with 10 tests** (setupStatusText/setupActions/setupBadge/formatSeedResults/blocksTerminal). **Extend it — do NOT overwrite.** Read it first, then append the two new tests below.
 
 **Interfaces:**
 - Consumes (from Task 4): the `statusline` field on setup summaries; `SeedResult` (already defined in `api.ts`).
