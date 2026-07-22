@@ -1,6 +1,6 @@
 import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent, type SetupJob, type SetupSummary } from './api';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
-import { setupStatusText, setupActions, setupBadge, formatSeedResults, blocksTerminal } from './setupStatus';
+import { setupStatusText, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, blocksTerminal } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
 import { sparkline } from './sparkline';
 import { formatEvent, relTime, unseenCountFiltered, notificationsToFire } from './healthEvents';
@@ -1191,8 +1191,10 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
         // Nothing to request, nothing to race, nothing to guard.
         const seedTxt = formatSeedResults(job.seed);
         if (seedTxt) status.textContent = `${status.textContent} · auth: ${seedTxt}`;
-        // A seed outcome deserves longer on screen than a bare success.
-        autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), seedTxt ? 5000 : 2000);
+        const slTxt = formatStatuslineResult(job.statusline);
+        if (slTxt) status.textContent = `${status.textContent} · ${slTxt}`;
+        // An outcome deserves longer on screen than a bare success.
+        autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), (seedTxt || slTxt) ? 5000 : 2000);
         return null;
       }
       if (job.status === 'needs-interactive') return 2500;
@@ -1478,7 +1480,7 @@ function openBoxDialog(box?: Box) {
         close();
         await refresh();
         const so = setupForm.values();
-        if (so.ohMyTmux || so.ohMyZsh || so.ohMyBash || so.tools.length || so.seedAiAuth) {
+        if (so.ohMyTmux || so.ohMyZsh || so.ohMyBash || so.tools.length || so.seedAiAuth || so.claudeStatusline) {
           openProvisionPanel(updatedBox, so);
         }
       } else {
