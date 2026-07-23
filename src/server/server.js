@@ -324,6 +324,30 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return { ok: true, disarmed: result.disarmed };
   });
 
+  // Arming passkey-only requires proof that a credential works NOW, in the
+  // arming browser — not merely that one is enrolled (it may live on a
+  // since-lost device). This begins that ceremony; the assertion is verified
+  // by POST /api/passkeys/only itself. Kind 'arm' lands in the authenticated
+  // challenge store (see challengeStoreFor), so anonymous login floods cannot
+  // evict it, and take()'s kind check keeps login challenges unusable here.
+  app.post('/api/passkeys/only/begin', { preHandler: requireAuth }, async (req, reply) => {
+    if (config.passkeyOnlyKillSwitch) {
+      return reply.code(409).send({ error: 'TMUXIFIER_PASSKEY_ONLY=off is set in .env — remove it and restart before arming this' });
+    }
+    if (!(await pkReady(reply))) return reply;
+    if ((await passkeyStore.listRaw()).length === 0) {
+      return reply.code(409).send({ error: 'enroll a passkey first' });
+    }
+    const challenge = issueChallenge(req, reply, 'arm');
+    return {
+      challenge: challenge.toString('base64url'),
+      rpId,
+      timeout: PK_TTL_SECONDS * 1000,
+      userVerification: 'required',
+      allowCredentials: [],
+    };
+  });
+
   app.post('/api/passkeys/only', { preHandler: requireAuth }, async (req, reply) => {
     if (!passkeyStore) return reply.code(503).send({ error: 'passkeys are not configured' });
     if (config.passkeyOnlyKillSwitch) {

@@ -525,3 +525,44 @@ test('arming and disarming passkey-only each write one audit log line', async ()
   expect(logs).toContain('[tmuxifier] passkey-only mode armed');
   expect(logs).toContain('[tmuxifier] passkey-only mode disarmed');
 });
+
+// --- fresh-assertion arming (spec: 2026-07-23-passkey-fresh-assertion-arming-design.md) ---
+
+test('only/begin requires auth', async () => {
+  expect((await app.inject({ method: 'POST', url: '/api/passkeys/only/begin' })).statusCode).toBe(401);
+});
+
+test('only/begin issues an arm challenge with the login-begin shape', async () => {
+  await enroll();
+  const res = await app.inject({ method: 'POST', url: '/api/passkeys/only/begin', headers: await headers() });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toMatchObject({ rpId: RP, userVerification: 'required', allowCredentials: [] });
+  expect(Buffer.from(res.json().challenge, 'base64url')).toHaveLength(32);
+  expect(pkCookie(res)).toMatch(/^tmuxifier_pk=/);
+});
+
+test('only/begin refuses when the kill switch is set', async () => {
+  await enroll();
+  app = await build({ passkeyOnlyKillSwitch: true });
+  const res = await app.inject({ method: 'POST', url: '/api/passkeys/only/begin', headers: await headers() });
+  expect(res.statusCode).toBe(409);
+  expect(res.json().error).toMatch(/TMUXIFIER_PASSKEY_ONLY/);
+});
+
+test('only/begin refuses with nothing enrolled', async () => {
+  const res = await app.inject({ method: 'POST', url: '/api/passkeys/only/begin', headers: await headers() });
+  expect(res.statusCode).toBe(409);
+  expect(res.json().error).toMatch(/enroll a passkey/);
+});
+
+test('only/begin reports the same rp-id failures as the other authenticated ceremonies', async () => {
+  await enroll(); // pins the store to RP
+  app = await build({ rpId: null });
+  const noRp = await app.inject({ method: 'POST', url: '/api/passkeys/only/begin', headers: await headers() });
+  expect(noRp.statusCode).toBe(503);
+  expect(noRp.json().error).toMatch(/domain name/);
+  app = await build({ rpId: 'changed.example.com' });
+  const mismatch = await app.inject({ method: 'POST', url: '/api/passkeys/only/begin', headers: await headers() });
+  expect(mismatch.statusCode).toBe(409);
+  expect(mismatch.json().error).toMatch(/enrolled for/);
+});
