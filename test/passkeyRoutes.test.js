@@ -151,6 +151,22 @@ async function enroll(store = passkeyStore) {
   return auth;
 }
 
+// Full arm ceremony: begin, sign the challenge with the fixture
+// authenticator, finish. Returns the finish response.
+async function armWithAssertion(h, auth, { signCount = 5 } = {}) {
+  const begin = await app.inject({ method: 'POST', url: '/api/passkeys/only/begin', headers: h });
+  expect(begin.statusCode).toBe(200);
+  const assertion = makeAssertion({
+    authenticator: auth, challenge: Buffer.from(begin.json().challenge, 'base64url'),
+    origin: ORIGIN, rpId: RP, signCount,
+  });
+  return app.inject({
+    method: 'POST', url: '/api/passkeys/only',
+    headers: { ...h, cookie: `${h.cookie}; ${pkCookie(begin)}` },
+    payload: { enabled: true, id: assertion.id, response: assertion.response },
+  });
+}
+
 test('auth/info reports passkey state without authentication', async () => {
   expect((await app.inject({ method: 'GET', url: '/api/auth/info' })).json())
     .toEqual({ mode: 'password', passkey: { enrolled: 0, rpId: RP, only: false } });
@@ -309,10 +325,9 @@ test('arming passkey-only is refused with nothing enrolled', async () => {
 });
 
 test('arming passkey-only makes password login 403', async () => {
-  await enroll();
+  const auth = await enroll();
   const h = await headers();
-  expect((await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: true } })).json())
-    .toEqual({ passkeyOnly: true });
+  expect((await armWithAssertion(h, auth)).json()).toEqual({ passkeyOnly: true });
   const res = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
   expect(res.statusCode).toBe(403);
   expect(res.json().error).toMatch(/passkey required/);
@@ -320,9 +335,9 @@ test('arming passkey-only makes password login 403', async () => {
 });
 
 test('disarming passkey-only restores password login', async () => {
-  await enroll();
+  const auth = await enroll();
   const h = await headers();
-  await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: true } });
+  await armWithAssertion(h, auth);
   await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: false } });
   expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(200);
 });
@@ -363,7 +378,7 @@ test('the kill switch overrides the stored flag', async () => {
 test('removing the last passkey disarms passkey-only', async () => {
   const auth = await enroll();
   const h = await headers();
-  await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: true } });
+  await armWithAssertion(h, auth);
   expect((await app.inject({ method: 'DELETE', url: `/api/passkeys/${encodeURIComponent(auth.id)}`, headers: h })).json())
     .toEqual({ ok: true, disarmed: true });
   expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(200);
@@ -487,10 +502,9 @@ test('disarming still works when the pinned rpId no longer matches the configure
 // Finding 2: a bodyless or malformed request must not be treated as an
 // implicit disarm — require an explicit boolean.
 test('POST /api/passkeys/only rejects a missing or non-boolean enabled with 400, and never disarms', async () => {
-  await enroll();
+  const auth = await enroll();
   const h = await headers();
-  expect((await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: true } })).json())
-    .toEqual({ passkeyOnly: true });
+  expect((await armWithAssertion(h, auth)).json()).toEqual({ passkeyOnly: true });
   const badBodies = [undefined, {}, [], { enabled: 'true' }, { enabled: 1 }, { enabled: null }];
   for (const payload of badBodies) {
     const res = payload === undefined
@@ -518,9 +532,9 @@ test('auth/info still fails open when the passkey store cannot be read', async (
 test('arming and disarming passkey-only each write one audit log line', async () => {
   const logs = [];
   app = await build({}, { log: (msg) => logs.push(msg) });
-  await enroll();
+  const auth = await enroll();
   const h = await headers();
-  await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: true } });
+  await armWithAssertion(h, auth);
   await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: false } });
   expect(logs).toContain('[tmuxifier] passkey-only mode armed');
   expect(logs).toContain('[tmuxifier] passkey-only mode disarmed');
@@ -565,4 +579,121 @@ test('only/begin reports the same rp-id failures as the other authenticated cere
   const mismatch = await app.inject({ method: 'POST', url: '/api/passkeys/only/begin', headers: await headers() });
   expect(mismatch.statusCode).toBe(409);
   expect(mismatch.json().error).toMatch(/enrolled for/);
+});
+
+// The regression this feature exists for: an arm request with no fresh
+// assertion must be refused, even with a credential enrolled.
+test('arming without a fresh assertion is refused', async () => {
+  await enroll();
+  const res = await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: await headers(), payload: { enabled: true } });
+  expect(res.statusCode).toBe(400);
+  expect(res.json().error).toMatch(/fresh passkey assertion/);
+  expect(await passkeyStore.getPasskeyOnly()).toBe(false);
+});
+
+test('a full arm ceremony arms the flag and persists the sign count', async () => {
+  const auth = await enroll();
+  const res = await armWithAssertion(await headers(), auth);
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ passkeyOnly: true });
+  expect((await passkeyStore.listRaw())[0].signCount).toBe(5);
+});
+
+test('a login challenge cannot finish an arm ceremony, nor an arm challenge a login', async () => {
+  const auth = await enroll();
+  const h = await headers();
+  // login-issued challenge presented to the arm finish
+  const loginBegin = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  const loginAssertion = makeAssertion({
+    authenticator: auth, challenge: Buffer.from(loginBegin.json().challenge, 'base64url'),
+    origin: ORIGIN, rpId: RP, signCount: 5,
+  });
+  const crossArm = await app.inject({
+    method: 'POST', url: '/api/passkeys/only',
+    headers: { ...h, cookie: `${h.cookie}; ${pkCookie(loginBegin)}` },
+    payload: { enabled: true, id: loginAssertion.id, response: loginAssertion.response },
+  });
+  expect(crossArm.statusCode).toBe(400);
+  expect(crossArm.json().error).toMatch(/fresh passkey assertion/);
+  expect(await passkeyStore.getPasskeyOnly()).toBe(false);
+  // arm-issued challenge presented to login/finish
+  const armBegin = await app.inject({ method: 'POST', url: '/api/passkeys/only/begin', headers: h });
+  const armAssertion = makeAssertion({
+    authenticator: auth, challenge: Buffer.from(armBegin.json().challenge, 'base64url'),
+    origin: ORIGIN, rpId: RP, signCount: 6,
+  });
+  const crossLogin = await app.inject({
+    method: 'POST', url: '/api/auth/passkey/login/finish',
+    headers: { cookie: pkCookie(armBegin) }, payload: armAssertion,
+  });
+  expect(crossLogin.statusCode).toBe(400);
+  expect(crossLogin.json().error).toMatch(/challenge expired/);
+});
+
+test('an arm assertion with a bad signature is refused and the flag stays off', async () => {
+  const auth = await enroll();
+  const h = await headers();
+  const begin = await app.inject({ method: 'POST', url: '/api/passkeys/only/begin', headers: h });
+  const forged = makeAssertion({
+    authenticator: auth, challenge: Buffer.from(begin.json().challenge, 'base64url'),
+    origin: ORIGIN, rpId: RP, signCount: 5, tamper: 'signature',
+  });
+  const res = await app.inject({
+    method: 'POST', url: '/api/passkeys/only',
+    headers: { ...h, cookie: `${h.cookie}; ${pkCookie(begin)}` },
+    payload: { enabled: true, id: forged.id, response: forged.response },
+  });
+  expect(res.statusCode).toBe(400);
+  expect(res.json().error).toMatch(/arming failed/);
+  expect(await passkeyStore.getPasskeyOnly()).toBe(false);
+});
+
+test('an unknown credential id on the arm finish is refused', async () => {
+  await enroll();
+  const h = await headers();
+  const begin = await app.inject({ method: 'POST', url: '/api/passkeys/only/begin', headers: h });
+  const stranger = makeAuthenticator({ credentialId: Buffer.from('cred-zzzz') });
+  const assertion = makeAssertion({
+    authenticator: stranger, challenge: Buffer.from(begin.json().challenge, 'base64url'),
+    origin: ORIGIN, rpId: RP, signCount: 5,
+  });
+  const res = await app.inject({
+    method: 'POST', url: '/api/passkeys/only',
+    headers: { ...h, cookie: `${h.cookie}; ${pkCookie(begin)}` },
+    payload: { enabled: true, id: assertion.id, response: assertion.response },
+  });
+  expect(res.statusCode).toBe(400);
+  expect(res.json().error).toMatch(/arming failed/);
+  expect(await passkeyStore.getPasskeyOnly()).toBe(false);
+});
+
+test('a stalled sign count on the arm finish is refused and logged like login', async () => {
+  const logs = [];
+  app = await build({}, { log: (msg) => logs.push(msg) });
+  const auth = await enroll();
+  const h = await headers();
+  // Establish stored signCount=5 via a real login first.
+  const loginBegin = await app.inject({ method: 'POST', url: '/api/auth/passkey/login/begin' });
+  const login = await app.inject({
+    method: 'POST', url: '/api/auth/passkey/login/finish', headers: { cookie: pkCookie(loginBegin) },
+    payload: makeAssertion({ authenticator: auth, challenge: Buffer.from(loginBegin.json().challenge, 'base64url'), origin: ORIGIN, rpId: RP, signCount: 5 }),
+  });
+  expect(login.statusCode).toBe(200);
+  const res = await armWithAssertion(h, auth, { signCount: 3 });
+  expect(res.statusCode).toBe(400);
+  expect(res.json().error).toMatch(/arming failed/);
+  expect(await passkeyStore.getPasskeyOnly()).toBe(false);
+  expect(logs.some((m) => /passkey "Laptop" sign count did not increase — possible cloned authenticator/.test(m))).toBe(true);
+});
+
+// The rpId guards fire BEFORE the assertion requirement, so a misconfigured
+// deployment still gets the specific 409 rather than a misleading
+// "assertion missing" — this pins the guard order.
+test('the rpId-usable 409 still precedes the assertion requirement', async () => {
+  await enroll();
+  const h = await headers();
+  app = await build({ rpId: 'changed.example.com' });
+  const res = await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: h, payload: { enabled: true } });
+  expect(res.statusCode).toBe(409);
+  expect(res.json().error).toMatch(/enrolled for/);
 });

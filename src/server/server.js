@@ -376,6 +376,42 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
             : `these passkeys were enrolled for ${pinned}, but this server is configured for ${rpId} — fix the configuration before requiring passkey sign-in`,
         });
       }
+      const enrolled = await passkeyStore.listRaw();
+      if (enrolled.length === 0) {
+        return reply.code(409).send({ error: 'enroll a passkey first' });
+      }
+      // Enrolled months ago is not usable today: arming demands a fresh
+      // assertion, verified exactly like login/finish — same crypto, same
+      // sign-count semantics, same cloned-authenticator audit line. The
+      // failure responses stay specific (register/finish's disclosure
+      // policy): this route is authenticated, unlike login/finish.
+      const challenge = takeChallenge(req, 'arm');
+      reply.clearCookie(PK_COOKIE, { path: '/' });
+      if (!challenge) {
+        return reply.code(400).send({ error: 'arming requires a fresh passkey assertion — start again' });
+      }
+      const credential = enrolled.find((c) => c.id === req.body?.id);
+      let verified;
+      try {
+        if (!credential) throw new Error('unknown credential');
+        verified = verifyAssertion({
+          response: req.body?.response ?? {},
+          expectedChallenge: challenge, rpId, originOk: passkeyOriginOk,
+          // NOT `credential.signCount ?? 0` — same reason as login/finish:
+          // `??` would launder a corrupt stored count past verifyAssertion's
+          // own guard, silently disabling the cloned-authenticator check.
+          publicKey: credential.publicKey, storedSignCount: credential.signCount,
+        });
+      } catch (e) {
+        // Same stall-specific match as login/finish — 'did not increase',
+        // NOT /sign count/, so a corrupt-store rejection is never mislabelled
+        // as a cloned authenticator.
+        if (credential && /did not increase/.test(e.message)) {
+          log(`[tmuxifier] passkey "${credential.label}" sign count did not increase — possible cloned authenticator`);
+        }
+        return reply.code(400).send({ error: `arming failed: ${String(e.message).slice(0, 160)}` });
+      }
+      await passkeyStore.touch(credential.id, { signCount: verified.signCount });
     }
     try {
       const result = await passkeyStore.setPasskeyOnly(enabled);
