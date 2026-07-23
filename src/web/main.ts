@@ -330,19 +330,12 @@ async function renderLogin() {
   const passkeyBtn = canPasskey
     ? '<button id="pkbtn" type="button" class="pkbtn">Sign in with a passkey</button>'
     : '';
-  // Shown whenever "require a passkey" is armed, regardless of canPasskey —
-  // not only in the dead-end branch below. The button can still fail at
-  // click time for a reason this unauthenticated screen cannot see up front
-  // (e.g. the enrolled passkeys are pinned to a hostname other than the one
-  // this server is now configured for: storedRpId only comes from the
-  // authenticated GET /api/passkeys, never here, so verdict.ok can be true
-  // while the actual login/begin call still 409s). A locked-out operator
-  // needs this instruction on screen up front, not only after a failed
-  // attempt. Static text, no interpolated values — safe to inline into
-  // innerHTML like brand/footer below.
-  const breakGlass = passkey.only
-    ? '<p class="login-note">Lost access to your passkey? Set <code>TMUXIFIER_PASSKEY_ONLY=off</code> in <code>.env</code> and restart to sign in with a password.</p>'
-    : '';
+  // The TMUXIFIER_PASSKEY_ONLY=off break-glass is deliberately NOT documented
+  // on this screen: it is pre-authentication and reachable by anyone who can
+  // see the login page, and naming the escape hatch there tells a stranger
+  // exactly which knob disables the passkey requirement. The operator finds it
+  // in Settings -> Passkeys (settingsPasskeys.ts), in README.md, and in
+  // docs/DEPLOY.md instead.
 
   // passkey-only with no usable passkey here would otherwise be a dead end.
   if (passkey.only && !canPasskey) {
@@ -350,7 +343,6 @@ async function renderLogin() {
         <p id="err" class="err">${err || 'This Tmuxifier requires a passkey, and this browser cannot use one.'}</p>
         <p id="pk-reason" class="login-note"></p>
         <p class="login-note">Open Tmuxifier on the device holding your passkey.</p>
-        ${breakGlass}
         ${footer}
       </div>`;
     // verdict.reason/hint carry the server-supplied rpId, so they can never be
@@ -373,7 +365,7 @@ async function renderLogin() {
           </svg>
           <span>Sign in with Google</span>
         </a>`;
-    app.innerHTML = `<div class="login">${brand}${google}${passkeyBtn}<p id="err" class="err">${err}</p>${breakGlass}${footer}</div>`;
+    app.innerHTML = `<div class="login">${brand}${google}${passkeyBtn}<p id="err" class="err">${err}</p>${footer}</div>`;
     wirePasskeyButton();
     return;
   }
@@ -383,7 +375,6 @@ async function renderLogin() {
       <button>Unlock</button>
       ${passkeyBtn}
       <p id="err" class="err">${err}</p>
-      ${breakGlass}
       ${footer}
     </form>`;
   app.querySelector('#login')!.addEventListener('submit', async (e) => {
