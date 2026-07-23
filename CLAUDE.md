@@ -412,8 +412,11 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   bootstrap and the recovery route), so this is not a privilege-escalation path — just a separate
   revocation step to remember.
 - Passkeys' opt-in "require a passkey" toggle (`passkeyStore.js`'s `passkeyOnly` flag) disables
-  password and Google sign-in entirely, so arming it is guarded three ways against locking the
-  operator out: it is refused with a 409 unless at least one credential is enrolled **and** the
+  password and Google sign-in entirely, so arming it is guarded four ways against locking the
+  operator out: arming demands a fresh, successful WebAuthn assertion in the arming browser
+  (`POST /api/passkeys/only/begin` starts the ceremony and `POST /api/passkeys/only` verifies
+  the assertion with the same machinery as login, so arming proves a credential works *now*,
+  not merely that one is enrolled); it is refused with a 409 unless at least one credential is enrolled **and** the
   configured relying party id is actually usable against them (refused when the RP id is `null`
   — i.e. derived from an IP address rather than a hostname; the RP id itself is never unset,
   since it defaults to `localhost` — or when the enrolled passkeys are pinned to a different

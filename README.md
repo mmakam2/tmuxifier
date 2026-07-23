@@ -195,9 +195,11 @@ from `TMUXIFIER_RP_ID` if set, else the hostname of `TMUXIFIER_BASE_EXTERNAL_URL
   mismatch and names the hostname the existing passkeys belong to.
 
 Optionally, **Require a passkey** (Settings → Passkeys → sign-in policy) disables password and
-Google sign-in entirely. Arming it is guarded against locking you out by accident: it's refused
-(409) unless at least one passkey is enrolled *and* usable against the server's current relying
-party id, and removing your last passkey turns it back off automatically. **If you still lose
+Google sign-in entirely. Arming it is guarded against locking you out by accident: arming asks
+your browser for a fresh passkey confirmation first (so it only succeeds where a passkey
+actually works right now), it's refused (409) unless at least one passkey is enrolled *and*
+usable against the server's current relying party id, and removing your last passkey turns it
+back off automatically. **If you still lose
 your authenticator while it's armed, the only way back in without filesystem access is the
 `.env` break-glass:** set
 
