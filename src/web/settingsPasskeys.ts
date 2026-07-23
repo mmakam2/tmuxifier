@@ -1,7 +1,7 @@
 // Settings → Passkeys: a readiness row, the enrolled-credential list, and the
 // passkey-only ("require a passkey") sign-in policy toggle.
 import { el, input, field, err, openModal } from './dom';
-import { pk, evaluateOrigin, createPasskey, serializeRegistration, hasWebAuthn, type PasskeyState } from './passkeys';
+import { pk, evaluateOrigin, createPasskey, serializeRegistration, getPasskey, serializeAssertion, hasWebAuthn, type PasskeyState } from './passkeys';
 
 const when = (t: number | null) => (t ? new Date(t).toLocaleString() : 'never');
 
@@ -69,13 +69,31 @@ export async function renderPasskeysSection(content: HTMLElement, notice?: strin
     ? 'TMUXIFIER_PASSKEY_ONLY=off is set in .env — remove it and restart to use this.'
     : state.credentials.length === 0
       ? 'Enroll a passkey first.'
-      : '';
+      : !armed && !verdict.ok
+        // Arming requires an assertion right here, so a browser that cannot
+        // produce one gets the dead end explained up front. Never disable
+        // while armed: disarming must always stay reachable.
+        ? verdict.reason
+        : '';
   if (onlyReason) { onlyBox.disabled = true; onlyBox.title = onlyReason; }
   onlyBox.onchange = () => {
     if (!onlyBox.checked) { void pk.setOnly(false).then(() => reload()).catch((e) => { onlyBox.checked = true; fail(e); }); return; }
-    // Arming is the one action here that can lock the user out of the fleet.
-    confirmArm(() => void pk.setOnly(true).then(() => reload()).catch((e) => { onlyBox.checked = false; fail(e); }),
-      () => { onlyBox.checked = false; });
+    // Arming is the one action here that can lock the user out of the fleet:
+    // confirm intent first, then prove a passkey works right now in this
+    // browser — the assertion is verified server-side before the flag flips.
+    const armCeremony = async () => {
+      try {
+        const options = await pk.onlyBegin();
+        const credential = await getPasskey(options);
+        await pk.setOnly(true, serializeAssertion(credential));
+        reload();
+      } catch (e) {
+        onlyBox.checked = false;
+        if (e instanceof Error && e.name === 'NotAllowedError') { errLine.textContent = 'Cancelled.'; return; }
+        fail(e);
+      }
+    };
+    confirmArm(() => { void armCeremony(); }, () => { onlyBox.checked = false; });
   };
 
   content.replaceChildren(
@@ -166,6 +184,7 @@ function confirmArm(onConfirm: () => void, onCancel: () => void): void {
     el('h2', {}, ['Require a passkey?']),
     el('p', {}, ['Password and Google sign-in will be refused. Only an enrolled passkey will get you in.']),
     el('p', { class: 'pve-sub' }, ['If you lose your authenticator: set TMUXIFIER_PASSKEY_ONLY=off in .env and restart Tmuxifier.']),
+    el('p', { class: 'pve-sub' }, ['Your browser will ask you to confirm with your fingerprint, face, PIN or security key.']),
     el('div', { class: 'modal-actions' }, [
       el('button', { type: 'button', onclick: close }, ['Cancel']),
       el('button', {

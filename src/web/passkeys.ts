@@ -179,7 +179,14 @@ export const pk = {
     return jr<{ credential: PasskeyCredential }>(fetch('/api/passkeys/register/finish', jsonBody('POST', { label, response: credential.response })));
   },
   remove(id: string) { return jr<{ ok: boolean; disarmed: boolean }>(fetch(`/api/passkeys/${encodeURIComponent(id)}`, { method: 'DELETE' })); },
-  setOnly(enabled: boolean) { return jr<{ passkeyOnly: boolean }>(fetch('/api/passkeys/only', jsonBody('POST', { enabled }))); },
+  setOnly(enabled: boolean, assertion?: SerializedAssertion) {
+    return jr<{ passkeyOnly: boolean }>(fetch('/api/passkeys/only', jsonBody('POST',
+      assertion ? { enabled, id: assertion.id, response: assertion.response } : { enabled })));
+  },
+  onlyBegin() {
+    return jr<{ challenge: string; rpId: string; timeout: number; userVerification: string }>(
+      fetch('/api/passkeys/only/begin', { method: 'POST' }));
+  },
   loginBegin() {
     return jr<{ challenge: string; rpId: string; timeout: number; userVerification: string }>(
       fetch('/api/auth/passkey/login/begin', { method: 'POST' }));
