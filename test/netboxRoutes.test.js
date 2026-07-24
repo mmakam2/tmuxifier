@@ -8,7 +8,7 @@ import { createNetboxStore } from '../src/server/netboxStore.js';
 import { createSecretBox } from '../src/server/secretBox.js';
 import { hashPassword } from '../src/server/auth.js';
 
-let app, dir, netboxStore, testCalls;
+let app, dir, netboxStore, testCalls, baseDeps;
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-nbxr-'));
@@ -21,14 +21,15 @@ beforeEach(async () => {
   };
   const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
   const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
-  app = buildServer({
+  baseDeps = {
     config, store: createStore({ dataDir: dir }), sessions, statusChecker, netboxStore,
     netboxTest: async (candidate) => { testCalls.push(candidate); return { ok: true, version: '4.3.2' }; },
-  });
+  };
+  app = buildServer(baseDeps);
 });
 
-async function headers() {
-  const res = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+async function headers(a = app) {
+  const res = await a.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
   const c = res.cookies.find((x) => x.name === 'tmuxifier_session');
   return { cookie: `${c.name}=${c.value}` };
 }
@@ -38,6 +39,7 @@ test('netbox routes require auth', async () => {
   expect((await app.inject({ method: 'PUT', url: '/api/netbox/settings', payload: {} })).statusCode).toBe(401);
   expect((await app.inject({ method: 'DELETE', url: '/api/netbox/settings' })).statusCode).toBe(401);
   expect((await app.inject({ method: 'POST', url: '/api/netbox/test', payload: {} })).statusCode).toBe(401);
+  expect((await app.inject({ method: 'GET', url: '/api/netbox/next-ip?vlan=30' })).statusCode).toBe(401);
 });
 
 test('GET returns null settings before configuration', async () => {
@@ -103,6 +105,48 @@ test('POST test in pin mode with no fingerprint anywhere reaches the probe inste
   });
   expect(res.statusCode).toBe(200);
   expect(testCalls[0]).toMatchObject({ tlsMode: 'pin', fingerprint256: null });
+});
+
+test('next-ip: non-numeric vlan is a 400', async () => {
+  const h = await headers();
+  const res = await app.inject({ method: 'GET', url: '/api/netbox/next-ip?vlan=abc', headers: h });
+  expect(res.statusCode).toBe(400);
+  expect(res.json()).toMatchObject({ ok: false, error: expect.stringMatching(/vlan/i) });
+});
+
+test('next-ip: unconfigured NetBox reports ok:false without touching the client', async () => {
+  let made = 0;
+  const a = buildServer({ ...baseDeps, makeNetboxClient: () => { made += 1; return {}; } });
+  const h = await headers(a);
+  const res = await a.inject({ method: 'GET', url: '/api/netbox/next-ip?vlan=30', headers: h });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toMatchObject({ ok: false, error: expect.stringMatching(/not configured/i) });
+  expect(made).toBe(0);
+});
+
+test('next-ip: previews via the client and never leaks the token', async () => {
+  const nextIpCalls = [];
+  const a = buildServer({ ...baseDeps, makeNetboxClient: (settings) => ({
+    nextIp: async (vid) => { nextIpCalls.push([vid, settings.token]); return { address: '192.168.30.50/24', prefix: '192.168.30.0/24' }; },
+  }) });
+  const h = await headers(a);
+  await a.inject({ method: 'PUT', url: '/api/netbox/settings', headers: h, payload: { url: 'https://netbox.example.com', token: 'nb-secret-token' } });
+  const res = await a.inject({ method: 'GET', url: '/api/netbox/next-ip?vlan=30', headers: h });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true, address: '192.168.30.50/24', prefix: '192.168.30.0/24' });
+  expect(nextIpCalls).toEqual([[30, 'nb-secret-token']]); // decrypted settings reach the client, vlan is numeric
+  expect(res.body).not.toContain('nb-secret-token');
+});
+
+test('next-ip: a client error (e.g. prefix full) is ok:false with the message', async () => {
+  const a = buildServer({ ...baseDeps, makeNetboxClient: () => ({
+    nextIp: async () => { throw new Error('prefix 192.168.30.0/24 has no available IPs'); },
+  }) });
+  const h = await headers(a);
+  await a.inject({ method: 'PUT', url: '/api/netbox/settings', headers: h, payload: { url: 'https://netbox.example.com', token: 't0k' } });
+  const res = await a.inject({ method: 'GET', url: '/api/netbox/next-ip?vlan=30', headers: h });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: false, error: 'prefix 192.168.30.0/24 has no available IPs' });
 });
 
 test('POST test with a body token needs no stored settings', async () => {

@@ -14,7 +14,7 @@ import { upsertConfigFile } from './configFile.js';
 import { readJsonSync, writeJsonSync } from './jsonFile.js';
 import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
 import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js';
-import { testNetbox } from './netboxApi.js';
+import { testNetbox, createNetboxClient } from './netboxApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
 import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault } from './tmuxInject.js';
 import { normalizeTranscript } from './voiceText.js';
@@ -88,7 +88,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -1027,6 +1027,22 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       };
     } catch (e) { return reply.code(400).send({ error: e.message }); }
     return netboxTest(candidate);
+  });
+  // Next-IP preview for auto-static provisioning. Read-only and result-shaped
+  // (the testNetbox pattern): expected states — unconfigured, unreachable,
+  // prefix full — are ok:false payloads, never 500s, so the provision form can
+  // render them inline. Non-binding: allocation happens at job time.
+  app.get('/api/netbox/next-ip', { preHandler: requireAuth }, async (req, reply) => {
+    const vlan = String((req.query && req.query.vlan) ?? '');
+    if (!/^\d{1,4}$/.test(vlan)) return reply.code(400).send({ ok: false, error: 'vlan must be a VLAN id (1..4094)' });
+    let settings = null;
+    try { settings = await netboxStore.getSettings({ withSecret: true }); }
+    catch { return { ok: false, error: 'could not decrypt the stored NetBox token — re-enter it (was TMUXIFIER_COOKIE_SECRET rotated?)' }; }
+    if (!settings) return { ok: false, error: 'NetBox is not configured — set it up in Settings (⚙)' };
+    try {
+      const { address, prefix } = await makeNetboxClient(settings).nextIp(Number(vlan));
+      return { ok: true, address, prefix };
+    } catch (e) { return { ok: false, error: e.message }; }
   });
   app.get('/api/status', { preHandler: requireAuth }, async (req, reply) => {
     // Serve the shared, server-side poll snapshot: every open tab reads the
