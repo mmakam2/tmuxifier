@@ -4,7 +4,7 @@ import type { NetboxSettingsInput, NetboxTestResult } from './netbox';
 
 export interface NetboxFormState {
   scheme: 'http' | 'https'; host: string; token: string; tlsMode: 'ca' | 'pin' | 'insecure';
-  fingerprint256: string | null; hasToken: boolean;
+  fingerprint256: string | null; hasToken: boolean; dnsSuffix: string;
 }
 
 // Parse a stored canonical URL into the selector + host controls. Scheme-less
@@ -28,6 +28,10 @@ export function buildSavePayload(s: NetboxFormState): { payload?: NetboxSettings
   if (!token && !s.hasToken) return { error: 'an API token is required' };
   const payload: NetboxSettingsInput = { url: `${s.scheme}://${host}` };
   if (token) payload.token = token;
+  // Blank omits the key: the server rebuilds settings from the payload, so an
+  // absent dnsSuffix clears a stored one — which is what an emptied field means.
+  const dnsSuffix = s.dnsSuffix.trim();
+  if (dnsSuffix) payload.dnsSuffix = dnsSuffix;
   if (s.scheme === 'https') {
     payload.tlsMode = s.tlsMode;
     if (s.tlsMode === 'pin') {

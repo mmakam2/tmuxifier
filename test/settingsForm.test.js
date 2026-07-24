@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import { splitNetboxUrl, normalizeHostInput, buildSavePayload, describeTestResult } from '../src/web/settingsForm.ts';
 
-const state = (over = {}) => ({ scheme: 'https', host: 'netbox.example.com', token: 'tok', tlsMode: 'ca', fingerprint256: null, hasToken: false, ...over });
+const state = (over = {}) => ({ scheme: 'https', host: 'netbox.example.com', token: 'tok', tlsMode: 'ca', fingerprint256: null, hasToken: false, dnsSuffix: '', ...over });
 
 test('splitNetboxUrl parses stored URLs and defaults scheme-less input to https', () => {
   expect(splitNetboxUrl('https://netbox.example.com')).toEqual({ scheme: 'https', host: 'netbox.example.com' });
@@ -36,6 +36,15 @@ test('buildSavePayload: http omits tlsMode even if one is set; empty host errors
   expect(buildSavePayload(state({ scheme: 'http', host: '192.168.1.10:8000', tlsMode: 'pin' })).payload)
     .toEqual({ url: 'http://192.168.1.10:8000', token: 'tok' });
   expect(buildSavePayload(state({ host: '  ' })).error).toMatch(/host/i);
+});
+
+test('buildSavePayload: a non-blank dnsSuffix is trimmed into the payload', () => {
+  expect(buildSavePayload({ ...state(), dnsSuffix: ' lan.example.com ' }).payload.dnsSuffix).toBe('lan.example.com');
+});
+
+test('buildSavePayload: a blank dnsSuffix is omitted (server clears the stored one)', () => {
+  expect(buildSavePayload({ ...state(), dnsSuffix: '  ' }).payload.dnsSuffix).toBeUndefined();
+  expect(buildSavePayload(state()).payload.dnsSuffix).toBeUndefined();
 });
 
 test('describeTestResult: success, failure, and the pin offer', () => {

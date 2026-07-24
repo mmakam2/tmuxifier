@@ -1,10 +1,11 @@
 export interface NetboxSettings {
   url: string; tlsMode: 'ca' | 'pin' | 'insecure' | null;
-  fingerprint256: string | null; hasToken: boolean; updatedAt: string;
+  fingerprint256: string | null; dnsSuffix: string | null; hasToken: boolean; updatedAt: string;
 }
 export interface NetboxSettingsInput {
-  url: string; token?: string; tlsMode?: 'ca' | 'pin' | 'insecure'; fingerprint256?: string | null;
+  url: string; token?: string; tlsMode?: 'ca' | 'pin' | 'insecure'; fingerprint256?: string | null; dnsSuffix?: string;
 }
+export type NetboxNextIp = { ok: true; address: string; prefix: string } | { ok: false; error: string };
 export type NetboxTestResult =
   | { ok: true; version: string }
   | { ok: false; kind: 'unreachable' | 'tls' | 'auth' | 'unexpected'; error: string; fingerprint256?: string | null };
@@ -21,4 +22,5 @@ export const nbx = {
   save(spec: NetboxSettingsInput) { return jr<{ settings: NetboxSettings }>(fetch('/api/netbox/settings', jsonBody('PUT', spec))); },
   clear() { return jr<{ ok: boolean }>(fetch('/api/netbox/settings', { method: 'DELETE' })); },
   test(spec: Partial<NetboxSettingsInput>) { return jr<NetboxTestResult>(fetch('/api/netbox/test', jsonBody('POST', spec))); },
+  nextIp(vlan: number) { return jr<NetboxNextIp>(fetch(`/api/netbox/next-ip?vlan=${vlan}`)); },
 };

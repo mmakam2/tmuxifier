@@ -42,6 +42,15 @@ export async function renderNetboxSection(content: HTMLElement, close: () => voi
   httpNote.className = 'settings-hint';
   httpNote.textContent = 'http:// — the token travels in cleartext; LAN use only.';
 
+  const dnsSuffix = document.createElement('input');
+  dnsSuffix.type = 'text';
+  dnsSuffix.placeholder = 'lan.example.com (optional)';
+  dnsSuffix.value = current?.dnsSuffix ?? '';
+  dnsSuffix.autocomplete = 'off';
+  const suffixHint = document.createElement('p');
+  suffixHint.className = 'settings-hint';
+  suffixHint.textContent = 'Appended to the hostname as the NetBox record’s dns_name when provisioning (auto-static).';
+
   // TLS mode (https only)
   const tlsGroup = document.createElement('fieldset');
   tlsGroup.className = 'radio-group';
@@ -109,7 +118,7 @@ export async function renderNetboxSection(content: HTMLElement, close: () => voi
   testRow.append(testBtn, pinBtn);
 
   function formState(): NetboxFormState {
-    return { scheme, host: host.value, token: token.value, tlsMode, fingerprint256, hasToken: !!current?.hasToken };
+    return { scheme, host: host.value, token: token.value, tlsMode, fingerprint256, hasToken: !!current?.hasToken, dnsSuffix: dnsSuffix.value };
   }
 
   testBtn.addEventListener('click', async () => {
@@ -159,7 +168,7 @@ export async function renderNetboxSection(content: HTMLElement, close: () => voi
   submit.textContent = 'Save';
   actions.append(clearBtn, cancel, submit);
 
-  form.append(section, field('NetBox URL', urlRow), httpNote, field('API token', token), tlsGroup, testRow, testOut, errLine, actions);
+  form.append(section, field('NetBox URL', urlRow), httpNote, field('API token', token), field('DNS suffix', dnsSuffix), suffixHint, tlsGroup, testRow, testOut, errLine, actions);
   content.replaceChildren(form);
   syncSchemeUi();
 
