@@ -155,6 +155,28 @@ test('allocateIp: only the gateway left (or nothing) means prefix full', async (
   await expect(empty.allocateIp({ id: 7, prefix: '192.168.3.0/24' }, {})).rejects.toThrow('has no available IPs');
 });
 
+test('nextIp previews the same pick allocateIp would make, without reserving', async () => {
+  const calls = [];
+  const client = createNetboxClient(NB, { request: async (o) => {
+    calls.push(o);
+    if (o.url.includes('/ipam/prefixes/?vlan_vid=')) {
+      return { status: 200, json: { results: [{ id: 7, prefix: '192.168.30.0/24' }] }, text: '' };
+    }
+    return { status: 200, json: [{ address: '192.168.30.1/24' }, { address: '192.168.30.50/24' }], text: '' };
+  } });
+  await expect(client.nextIp(30)).resolves.toEqual({ address: '192.168.30.50/24', prefix: '192.168.30.0/24' });
+  expect(calls.map((c) => c.method)).toEqual(['GET', 'GET']); // never a POST — nothing reserved
+  expect(calls[1].url).toBe('https://netbox.example.com/api/ipam/prefixes/7/available-ips/');
+});
+
+test('nextIp: gateway-only availability means prefix full', async () => {
+  const client = createNetboxClient(NB, { request: async (o) => {
+    if (o.url.includes('vlan_vid')) return { status: 200, json: { results: [{ id: 7, prefix: '192.168.30.0/24' }] }, text: '' };
+    return { status: 200, json: [{ address: '192.168.30.1/24' }], text: '' };
+  } });
+  await expect(client.nextIp(30)).rejects.toThrow('prefix 192.168.30.0/24 has no available IPs');
+});
+
 test('releaseIp DELETEs the ip-address record and tolerates an empty 204 body', async () => {
   const calls = [];
   const client = createNetboxClient(NB, { request: async (o) => { calls.push(o); return { status: 204, json: null, text: '' }; } });

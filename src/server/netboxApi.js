@@ -136,26 +136,39 @@ export function createNetboxClient(settings, { request = jsonRequest, connect = 
     }
     return res.json;
   }
+  async function findPrefixByVlan(vid) {
+    const data = await call('GET', `/ipam/prefixes/?vlan_vid=${encodeURIComponent(vid)}`);
+    const results = (data && data.results) || [];
+    if (results.length === 0) throw new Error(`no NetBox prefix for VLAN ${vid}`);
+    if (results.length > 1) throw new Error(`VLAN ${vid} maps to multiple NetBox prefixes; cannot auto-allocate`);
+    return { id: results[0].id, prefix: results[0].prefix };
+  }
+  // Shared free-address selection for the preview and the allocator — one code
+  // path, so the preview can never show an address allocateIp would not pick.
+  // GET available-ips instead of NetBox's atomic next-free POST: the atomic
+  // endpoint happily hands out an unregistered gateway address (bit us in
+  // production). A concurrent duplicate reservation makes NetBox reject the
+  // later POST -> the job errors cleanly and a retry succeeds; acceptable for
+  // a single-user tool.
+  async function findFreeIp(prefix) {
+    const gateway = firstUsableIp(prefix.prefix);
+    const avail = await call('GET', `/ipam/prefixes/${encodeURIComponent(prefix.id)}/available-ips/`);
+    const list = Array.isArray(avail) ? avail : [];
+    const pick = list.find((item) => item && item.address && String(item.address).split('/')[0] !== gateway);
+    if (!pick) throw new Error(`prefix ${prefix.prefix} has no available IPs`);
+    return { address: String(pick.address), gateway };
+  }
   return {
-    async findPrefixByVlan(vid) {
-      const data = await call('GET', `/ipam/prefixes/?vlan_vid=${encodeURIComponent(vid)}`);
-      const results = (data && data.results) || [];
-      if (results.length === 0) throw new Error(`no NetBox prefix for VLAN ${vid}`);
-      if (results.length > 1) throw new Error(`VLAN ${vid} maps to multiple NetBox prefixes; cannot auto-allocate`);
-      return { id: results[0].id, prefix: results[0].prefix };
+    findPrefixByVlan,
+    // Non-binding preview: same selection as allocateIp, no reservation.
+    async nextIp(vid) {
+      const prefix = await findPrefixByVlan(vid);
+      const { address } = await findFreeIp(prefix);
+      return { address, prefix: prefix.prefix };
     },
     async allocateIp(prefix, fields) {
-      const gateway = firstUsableIp(prefix.prefix);
-      // GET-then-POST instead of NetBox's atomic next-free POST: the atomic
-      // endpoint happily hands out an unregistered gateway address (bit us in
-      // production). A concurrent duplicate reservation makes NetBox reject
-      // the POST -> the job errors cleanly and a retry succeeds; acceptable
-      // for a single-user tool.
-      const avail = await call('GET', `/ipam/prefixes/${encodeURIComponent(prefix.id)}/available-ips/`);
-      const list = Array.isArray(avail) ? avail : [];
-      const pick = list.find((item) => item && item.address && String(item.address).split('/')[0] !== gateway);
-      if (!pick) throw new Error(`prefix ${prefix.prefix} has no available IPs`);
-      const created = await call('POST', '/ipam/ip-addresses/', { address: pick.address, ...fields });
+      const { address, gateway } = await findFreeIp(prefix);
+      const created = await call('POST', '/ipam/ip-addresses/', { address, ...fields });
       if (!created || !created.address) throw new Error(`prefix ${prefix.prefix} has no available IPs`);
       return { id: created.id, address: created.address, gateway };
     },
