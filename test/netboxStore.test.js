@@ -65,6 +65,20 @@ test('clearSettings removes the stored settings', async () => {
   expect(await store.getSettings()).toBeNull();
 });
 
+test('dnsSuffix persists, is normalized, and survives the redacted read', async () => {
+  const store = make();
+  await store.setSettings({ ...SPEC, dnsSuffix: ' Lan.Example.COM ' });
+  expect((await store.getSettings()).dnsSuffix).toBe('lan.example.com');
+  expect((await store.getSettings({ withSecret: true })).dnsSuffix).toBe('lan.example.com');
+});
+
+test('omitting dnsSuffix on a later save clears it (rebuilt, not merged)', async () => {
+  const store = make();
+  await store.setSettings({ ...SPEC, dnsSuffix: 'lan.example.com' });
+  await store.setSettings(SPEC);
+  expect((await store.getSettings()).dnsSuffix).toBeNull();
+});
+
 test('after clearSettings, a blank token on the next save is rejected (no stale hasToken to fall back on)', async () => {
   const store = make();
   await store.setSettings(SPEC);
