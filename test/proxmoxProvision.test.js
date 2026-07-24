@@ -254,7 +254,7 @@ test('auto-static allocates before create, provisions with the allocated CIDR, a
   expect(done.status).toBe('done');
   expect(done.netboxIpId).toBe(99);
   expect(calls[0]).toEqual(['find', 30]);
-  expect(calls[1][2]).toEqual({ status: 'active', description: 'tmuxifier: dev-01' });
+  expect(calls[1][2]).toEqual({ status: 'active', description: 'tmuxifier: dev-01', dns_name: 'dev-01' });
   expect(createCalls[0].net0).toContain('ip=192.168.30.50/24');
   expect(createCalls[0].net0).toContain('gw=192.168.30.1'); // inferred, not from the preset
   expect(done.gateway).toBe('192.168.30.1');
@@ -262,6 +262,20 @@ test('auto-static allocates before create, provisions with the allocated CIDR, a
   expect(boxStore.added[0].host).toBe('192.168.30.50');
   expect(boxStore.added[0].proxmox.netboxIpId).toBe(99);
   expect(calls.some((c) => c[0] === 'release')).toBe(false);
+});
+
+test('a configured dnsSuffix lands on the allocated record as hostname.suffix', async () => {
+  const { calls, client: netbox } = fakeNetbox();
+  const suffixStore = { getSettings: async () => ({ url: 'https://netbox.example.com', tlsMode: 'ca', fingerprint256: null, token: 't', dnsSuffix: 'lan.example.com' }) };
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(PRESET_AUTO), boxStore: fakeBoxStore(), makeClient: () => okClient(),
+    netboxStore: suffixStore, makeNetboxClient: () => netbox,
+    load: () => [], save: () => {},
+  });
+  const j = await m.createProvision({ presetId: 'p3', hostname: 'dev-01' });
+  await m._settled(j.id);
+  expect(m.getProvision(j.id).status).toBe('done');
+  expect(calls[1][2]).toEqual({ status: 'active', description: 'tmuxifier: dev-01', dns_name: 'dev-01.lan.example.com' });
 });
 
 // A NetBox-recycled IP may still carry a stale known_hosts entry from

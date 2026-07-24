@@ -81,9 +81,14 @@ export function createProvisionManager({
 
       if (preset.net.ipMode === 'auto-static') {
         j.phase = 'allocate-ip'; persist();
-        const netbox = makeNetboxClient(await requireNetboxSettings());
+        const settings = await requireNetboxSettings();
+        const netbox = makeNetboxClient(settings);
         const prefix = await netbox.findPrefixByVlan(preset.net.vlan);
-        const res = await netbox.allocateIp(prefix, { status: 'active', description: `tmuxifier: ${j.hostname}` });
+        // dns_name: suffix validated at settings save, hostname at request
+        // time — the composed value needs no re-validation. Write-once: a
+        // later box rename never updates the NetBox record (by design).
+        const dnsName = settings.dnsSuffix ? `${j.hostname}.${settings.dnsSuffix}` : j.hostname;
+        const res = await netbox.allocateIp(prefix, { status: 'active', description: `tmuxifier: ${j.hostname}`, dns_name: dnsName });
         j.netboxIpId = res.id;
         if (!isCidr(res.address)) throw new Error('NetBox returned an unusable address: ' + res.address);
         j.ip = res.address;
