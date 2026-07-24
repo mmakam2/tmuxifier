@@ -326,7 +326,6 @@ async function renderLogin() {
         <h1>tmuxifier</h1>
         <p>persistent remote terminals for your boxes</p>
       </div>`;
-  const footer = '<footer class="login-footer">Babendums Engineering &amp; Fabrication, Llc.</footer>';
   const passkeyBtn = canPasskey
     ? '<button id="pkbtn" type="button" class="pkbtn">Sign in with a passkey</button>'
     : '';
@@ -343,7 +342,6 @@ async function renderLogin() {
         <p id="err" class="err">${err || 'This Tmuxifier requires a passkey, and this browser cannot use one.'}</p>
         <p id="pk-reason" class="login-note"></p>
         <p class="login-note">Open Tmuxifier on the device holding your passkey.</p>
-        ${footer}
       </div>`;
     // verdict.reason/hint carry the server-supplied rpId, so they can never be
     // interpolated into the innerHTML template above (a crafted rpId must not
@@ -365,7 +363,7 @@ async function renderLogin() {
           </svg>
           <span>Sign in with Google</span>
         </a>`;
-    app.innerHTML = `<div class="login">${brand}${google}${passkeyBtn}<p id="err" class="err">${err}</p>${footer}</div>`;
+    app.innerHTML = `<div class="login">${brand}${google}${passkeyBtn}<p id="err" class="err">${err}</p></div>`;
     wirePasskeyButton();
     return;
   }
@@ -375,7 +373,6 @@ async function renderLogin() {
       <button>Unlock</button>
       ${passkeyBtn}
       <p id="err" class="err">${err}</p>
-      ${footer}
     </form>`;
   app.querySelector('#login')!.addEventListener('submit', async (e) => {
     e.preventDefault();
