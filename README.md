@@ -487,7 +487,10 @@ container, and releases it if provisioning fails or when the container is deprov
 NetBox is configured (and stays visible on a preset already set to it), and provisioning an
 existing `auto-static` preset without NetBox is rejected immediately instead of starting a job). Deprovisioning also deletes any NetBox
 IP record matching the box's current IP — including records created by hand — so manually
-linked containers don't leave stale IPAM entries behind. Then **Provision → pick a preset → enter a
+linked containers don't leave stale IPAM entries behind. An optional **DNS suffix** (e.g.
+`lan.example.com`) is appended to the hostname and written to the allocated record's
+`dns_name`; the provision form also previews the next available IP for auto-static presets
+(non-binding). Then **Provision → pick a preset → enter a
 hostname** (optionally a tag, oh-my-tmux/zsh/bash, and the same "Additional tools" checklist as the
 Add/Edit Box modal). Watch the live task log; once the container is up Tmuxifier installs tmux
 (and any selected frameworks/tools) over SSH, then an **Open terminal** button drops you into it.

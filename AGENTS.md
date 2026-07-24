@@ -287,7 +287,10 @@ pattern for new modules.
   input validators, the sealed `data/netbox.json` store (token AES-256-GCM encrypted, redacted to
   `hasToken` on read), and the `/api/status/` connection probe with ca/pin/insecure TLS modes.
   `createNetboxClient` also serves provisioning: `auto-static` presets reserve the next free IP
-  from the VLAN's NetBox prefix (released again on failure or deprovision).
+  from the VLAN's NetBox prefix (released again on failure or deprovision), stamping the
+  record's `dns_name` from the hostname plus the optional global DNS suffix setting; `nextIp`
+  (same free-IP selection as the allocator, no reservation) powers the provision form's
+  non-binding next-IP preview via `GET /api/netbox/next-ip`.
 
 Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts` (also drives the
 provision panel, a poll-based setup-job viewer — Retry / Remove / Finish-interactively — now that
