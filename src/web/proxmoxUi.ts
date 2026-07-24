@@ -1,4 +1,5 @@
 import { api, type Box } from './api';
+import { nbx } from './netbox';
 import { pve, type PvePreset, type ProvisionStatus } from './proxmox';
 import { openProvisionTerminal } from './terminal';
 import { el, input, field, err, openModal } from './dom';
@@ -86,10 +87,31 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
     // Live one-line description of the selected preset; also decides whether
     // the static-IP override field applies.
     const summary = el('div', { class: 'pve-sub' });
+    // Non-binding next-IP preview for auto-static presets. Generation-guarded:
+    // a response landing after the user switched presets must not paint
+    // (same stale-response discipline as fleetPoll.ts / setupPoller.ts).
+    const preview = el('div', { class: 'pve-sub' });
+    let previewGen = 0;
+    async function syncPreview(p: PvePreset | undefined) {
+      const gen = ++previewGen;
+      if (!p || p.net.ipMode !== 'auto-static' || p.net.vlan == null) { preview.textContent = ''; return; }
+      preview.textContent = 'next IP: …';
+      try {
+        const r = await nbx.nextIp(p.net.vlan);
+        if (gen !== previewGen) return;
+        preview.textContent = r.ok
+          ? `next IP: ${r.address.split('/')[0]} (from ${r.prefix}, non-binding)`
+          : `next IP unavailable: ${r.error}`;
+      } catch (e) {
+        if (gen !== previewGen) return;
+        preview.textContent = `next IP unavailable: ${(e as Error).message}`;
+      }
+    }
     const syncPreset = () => {
       const p = curPreset();
       summary.textContent = p ? presetSummary(p) : '';
       ipField.style.display = p?.net.ipMode === 'static' ? '' : 'none';
+      void syncPreview(p);
     };
     sel.addEventListener('change', syncPreset);
 
@@ -107,7 +129,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
       el('h3', {}, ['Provision a container']),
       el('fieldset', { class: 'setup-section' }, [
         el('legend', {}, ['Container']),
-        field('Preset', sel), summary,
+        field('Preset', sel), summary, preview,
         field('Hostname', hostname), ipField,
         field('Tag', tag), tagDatalist,
       ]),
