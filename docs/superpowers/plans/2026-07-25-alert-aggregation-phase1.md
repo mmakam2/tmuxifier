@@ -1162,6 +1162,26 @@ test('getState reports the last result and the next due time', async () => {
   });
 });
 
+test('the sealed secret is resolved for a due check so executors can authenticate', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'runner-'));
+  const seen = [];
+  const redacted = { ...chk(), hasSecret: true };
+  const runner = createCheckRunner({
+    checkStore: {
+      // A listing is redacted, exactly as checkStore.listChecks returns it.
+      listChecks: async () => [redacted],
+      getCheck: async (_id, opts) => (opts?.withSecret ? { ...chk(), secret: 'tok-abc' } : redacted),
+    },
+    dispatcher: createCheckDispatcher({
+      runners: { http: async (c) => { seen.push(c.secret); return { ok: true, detail: '', latencyMs: 1 }; } },
+    }),
+    eventLog: createEventLog({ dir, prefix: 'checks', now: () => 1000 }),
+    now: () => 1000, jitter: () => 0,
+  });
+  await runner.runDue();
+  expect(seen).toEqual(['tok-abc']);
+});
+
 test('an unknown type fails the check with a readable detail instead of crashing', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'runner-'));
   const eventLog = createEventLog({ dir, prefix: 'checks', now: () => 1000 });
@@ -1282,7 +1302,14 @@ export function createCheckRunner({
     inFlight = (async () => {
       const checks = (await checkStore.listChecks()).filter((c) => c.enabled);
       const due = checks.filter((c) => now() >= entry(c.id).nextRunAt);
-      await mapWithConcurrency(due, concurrency, (c) => execute(c));
+      // Listings are redacted, so resolve the sealed secret only for the checks
+      // actually about to run. The decrypted value lives in memory for the
+      // duration of one probe and never enters a listing, a route response, or
+      // the event log.
+      await mapWithConcurrency(due, concurrency, async (c) => {
+        const full = await checkStore.getCheck(c.id, { withSecret: true });
+        return execute(full || c);
+      });
     })().finally(() => { inFlight = null; });
     return inFlight;
   }
@@ -1290,7 +1317,7 @@ export function createCheckRunner({
   return {
     runDue,
     async runOne(id) {
-      const check = await checkStore.getCheck(id);
+      const check = await checkStore.getCheck(id, { withSecret: true });
       if (!check) return null;
       return execute(check);
     },
@@ -3877,18 +3904,17 @@ Add `maxEventsPerCheckPerHour = 60` to the factory arguments, and in `execute`, 
       s.windowStart = s.windowStart && ts - s.windowStart < 3600000 ? s.windowStart : ts;
       if (s.windowStart === ts) s.windowCount = 0;
       s.windowCount = (s.windowCount || 0) + 1;
-      if (s.windowCount === maxEventsPerCheckPerHour + 1) {
+      const capped = s.windowCount > maxEventsPerCheckPerHour;
+      // One append with a computed title: past the ceiling the runner says so
+      // exactly once, then goes quiet for the rest of the hour.
+      if (!capped || s.windowCount === maxEventsPerCheckPerHour + 1) {
         await eventLog.append({
           via: 'check', source: `check:${check.id}`, key: `check:${check.id}`, norm: null,
           severity: check.severity, state: 'firing',
-          title: `${check.label} is flooding — capped at ${maxEventsPerCheckPerHour} events/hour`,
+          title: capped
+            ? `${check.label} is flooding — capped at ${maxEventsPerCheckPerHour} events/hour`
+            : `${check.label}: ${result.detail}`,
           body: result.detail || '',
-        });
-      } else if (s.windowCount <= maxEventsPerCheckPerHour) {
-        await eventLog.append({
-          via: 'check', source: `check:${check.id}`, key: `check:${check.id}`, norm: null,
-          severity: check.severity, state: 'firing',
-          title: `${check.label}: ${result.detail}`, body: result.detail || '',
         });
       }
     }
