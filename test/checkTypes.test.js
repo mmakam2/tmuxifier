@@ -114,6 +114,14 @@ test('heartbeat rejects a zero or negative window, not merely a missing one', ()
   expect(() => assertCheckInput({ label: 'x', type: 'heartbeat', target: { windowSec: -5 } })).toThrow(/windowSec/);
 });
 
+test('heartbeat rejects a fractional window, not just non-numeric or non-positive ones', () => {
+  // The 0/-5 cases above and the missing-windowSec case both fail Number.isFinite
+  // too, so they can't distinguish Number.isInteger from a weakened
+  // Number.isFinite swap. A fractional, finite, positive value is the only
+  // input that tells the two predicates apart.
+  expect(() => assertCheckInput({ label: 'x', type: 'heartbeat', target: { windowSec: 10.5 } })).toThrow(/windowSec/);
+});
+
 test('heartbeat graceSec defaults to 0 and is clamped independently of windowSec', () => {
   expect(assertCheckInput({ label: 'x', type: 'heartbeat', target: { windowSec: 3600 } }).target)
     .toEqual({ windowSec: 3600, graceSec: 0 });
@@ -192,6 +200,15 @@ test('enabled is normalized to a strict boolean, not passed through as whatever 
 
 test('a caller-supplied assert object is carried through unchanged', () => {
   expect(assertCheckInput({ ...base, assert: { statusCode: 200 } }).assert).toEqual({ statusCode: 200 });
+});
+
+test('assert is defensively copied, not the same reference the caller passed in', () => {
+  // toEqual above is deep-equality only, so it can't tell a copy apart from the
+  // original object -- a store (Task 5) that freezes or later mutates its own
+  // copy must not be able to reach back into the caller's object, or vice versa.
+  const input = { statusCode: 200 };
+  const out = assertCheckInput({ ...base, assert: input });
+  expect(out.assert).not.toBe(input);
 });
 
 test('label, host, command, boxId, and path are trimmed, not merely checked for non-blankness', () => {
