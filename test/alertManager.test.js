@@ -190,6 +190,46 @@ test('an event older than the lookback window ages out of evaluation', async () 
   expect(await manager.listAlerts()).toEqual([]);
 });
 
+test('with no channels configured, a notifying alert is recorded notify:failed, not a phantom notified', async () => {
+  // channels: [] must never be read as "vacuously delivered". A default
+  // install with no mail relay configured wires channels: [] (Task 12), so
+  // this is the actual default path, not an edge case: reason:'notified' here
+  // would mean every alert that clears the bar is recorded and displayed as
+  // sent while nobody was ever told, and the cooldown would then guarantee
+  // the alert never gets a second chance to be noticed.
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'alertmgr-'));
+  const now = () => 1000;
+  const checks = createEventLog({ dir: dataDir, prefix: 'checks', now });
+  const decisions = createEventLog({ dir: dataDir, prefix: 'decisions', now });
+  const stateStore = createAlertStateStore({ dataDir, now });
+  const manager = createAlertManager({
+    eventLogs: [checks], decisionLog: decisions, stateStore, channels: [], now,
+  });
+  await checks.append(firing());
+  const got = await manager.evaluate();
+  expect(got[0]).toMatchObject({ reason: 'notify:failed', notify: false });
+  expect(got[0].error).toBeTruthy();
+});
+
+test('with no channels configured, the alert is not silenced by a cooldown on the next cycle', async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'alertmgr-'));
+  let t = 1000;
+  const now = () => t;
+  const checks = createEventLog({ dir: dataDir, prefix: 'checks', now });
+  const decisions = createEventLog({ dir: dataDir, prefix: 'decisions', now });
+  const stateStore = createAlertStateStore({ dataDir, now });
+  const manager = createAlertManager({
+    eventLogs: [checks], decisionLog: decisions, stateStore, channels: [], now,
+  });
+  await checks.append(firing());
+  await manager.evaluate();
+  t += 60000;
+  await checks.append(firing());
+  await manager.evaluate();
+  const reasons = (await decisions.readSince(0)).map((d) => d.reason);
+  expect(reasons).toEqual(['notify:failed', 'notify:failed']);
+});
+
 test('a warning alert that persists past the threshold eventually notifies', async () => {
   const { manager, checks, decisions, clock, sent } = await mk();
   await checks.append(firing({ severity: 'warning' }));

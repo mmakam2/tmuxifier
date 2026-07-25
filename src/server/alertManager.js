@@ -50,7 +50,14 @@ export function createAlertManager({
           out.push(await decisionLog.append({ key: alert.key, reason, notify: false, error: null }));
           continue;
         }
-        let error = null;
+        // With no channels wired (a default install with no mail relay
+        // configured, per Task 12), the loop below never runs and `error`
+        // would otherwise stay null - recording a phantom 'notified' for an
+        // alert nobody was actually told about, and starting a 6-hour
+        // cooldown on a delivery that never happened. Seeding `error` here
+        // keeps that case on the same 'notify:failed' path as a real relay
+        // failure, so the very next cycle retries instead of going quiet.
+        let error = channels.length === 0 ? 'no channels configured' : null;
         for (const ch of channels) {
           // A channel that throws instead of returning {ok:false} must not
           // abort this alert's delivery loop, and must not abort the outer
