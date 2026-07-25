@@ -14,8 +14,9 @@ unit); adjust paths if you install elsewhere.
 | `.env` | no (gitignored) | All `TMUXIFIER_*` config, incl. password hash + cookie secret (mode `0600`) |
 | `config.json` | no (gitignored) | Optional camelCase alternative to `.env`; also where the UI persists `localShell` |
 | `tls/` | no (gitignored) | `cert.pem` / `key.pem` for HTTPS (private key stays out of git) |
-| `data/` | no (gitignored) | `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json` (encrypted Proxmox host/key/preset profiles), `netbox.json` (NetBox settings with an encrypted API token), `provision-jobs.json` (provision history), `setup-jobs.json` (server-side box setup job history), `proxmox-lifecycle-jobs.json` (LXC power/deprovision job history), `health-events.json` (in-app health event log), `auth-state.json` (the logout session-revocation watermark), `passkeys.json` (enrolled WebAuthn credentials and the passkey-only flag — public keys only, so unlike the files above nothing in it is encrypted, though it's still `0600`), and SSH ControlMaster sockets (`data/cm/`) |
+| `data/` | no (gitignored) | `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json` (encrypted Proxmox host/key/preset profiles), `netbox.json` (NetBox settings with an encrypted API token), `provision-jobs.json` (provision history), `setup-jobs.json` (server-side box setup job history), `proxmox-lifecycle-jobs.json` (LXC power/deprovision job history), `health-events.json` (in-app health event log), `auth-state.json` (the logout session-revocation watermark), `passkeys.json` (enrolled WebAuthn credentials and the passkey-only flag — public keys only, so unlike the files above nothing in it is encrypted, though it's still `0600`), `checks.json` (alert check definitions, any per-check secret encrypted), `alert-rules.json` / `alert-triage.json` (mutes, overrides, acks), `ingest-heartbeat.json` (ingest liveness stamp), the append-only NDJSON day files under `data/events/`, and SSH ControlMaster sockets (`data/cm/`) |
 | `deploy/tmuxifier.service` | yes | Sample systemd unit (no secrets) |
+| `deploy/tmuxifier-ingest.service` | yes | Sample unit for the optional alert heartbeat receiver (no secrets — it holds none) |
 | `.env.example` | yes | Template for `.env` |
 
 ## First-time setup
@@ -219,6 +220,39 @@ BASE="$(node -e "import('./src/server/config.js').then(({loadConfig})=>{const c=
 curl -sk -o /dev/null -w '%{http_code}\n' "$BASE/"        # 200
 curl -sk -o /dev/null -w '%{http_code}\n' "$BASE/api/me"  # 401 until you log in
 ```
+
+## Install the alert ingest daemon (optional)
+
+Only needed if you want **heartbeat** checks — the ones that fire because a job *didn't* run. Every
+other check type is driven by the dashboard process and needs nothing here.
+
+```bash
+sudo cp deploy/tmuxifier-ingest.service /etc/systemd/system/tmuxifier-ingest.service
+# edit User=/WorkingDirectory=/HOME= if you are not running from /root/tmuxifier as root
+sudo systemctl daemon-reload
+sudo systemctl enable --now tmuxifier-ingest
+systemctl status tmuxifier-ingest
+curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8788/hb/nope   # 404 — it is up and refusing
+```
+
+A second unit, not a thread in the main process, because this is the only part of Tmuxifier that
+accepts input from the network. It holds **no** SSH keys, no cookie secret, no box store, and no API
+tokens, so a flaw here reaches nothing else. `Restart=always` is deliberate: a receiver that stays
+down looks exactly like a quiet night, which is the failure this feature exists to prevent.
+
+**Ordering does not matter.** The daemon reads `data/checks.json` — written by the dashboard — fresh
+on every request, so it can start first, and a check you add, disable, or delete in the UI takes
+effect on the next check-in without restarting anything. `data/checks.json` not existing yet simply
+means every token is unknown (404).
+
+**Bind address.** It binds `127.0.0.1:8788` by default, which is right when the jobs checking in run
+on the Tmuxifier host itself. For jobs on other machines, either widen it
+(`TMUXIFIER_INGEST_BIND=0.0.0.0`, `TMUXIFIER_INGEST_PORT=…` in `.env`, then restart the unit) or —
+better — front it with the same reverse proxy already terminating TLS for the dashboard. The URL
+token is the entire authentication, so prefer TLS if a check-in crosses a network you don't trust.
+
+The dashboard shows a banner when this daemon is not reporting, and the check-in URL for each
+heartbeat check appears on its row in the Alerts hub → **Checks** tab.
 
 ## Updating an existing deployment
 

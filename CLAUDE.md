@@ -28,7 +28,12 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   `auth-state.json` (the logout session-revocation watermark), `passkeys.json` (enrolled WebAuthn
   credentials, the pinned relying party id, and the passkey-only flag — public keys only, so
   unlike `proxmox.json`/`netbox.json` nothing in it is encrypted, though it's still written
-  `0o600`), and SSH ControlMaster sockets under `data/cm/`.
+  `0o600`), `checks.json` (alert check definitions, with any per-check secret **encrypted**),
+  `alert-rules.json` (mutes and per-key overrides) and `alert-triage.json` (acks),
+  `ingest-heartbeat.json` (the liveness stamp the ingest daemon writes and the dashboard reads),
+  the append-only NDJSON day files under `data/events/` (`checks-*` occurrences, `checkins-*`
+  heartbeat check-ins, `decisions-*` policy outcomes), and SSH ControlMaster sockets under
+  `data/cm/`.
 - `vendor/` (gitignored) — the whisper.cpp checkout, its build output, and the downloaded speech
   model, all created by `npm run setup-voice`. Together they take up roughly 1.2 GB;
   `rm -rf vendor/whisper` reclaims it.
@@ -51,6 +56,7 @@ npm run build        # vite build -> dist/ (server serves this statically; build
 npm run set-password # writes TMUXIFIER_PASSWORD_HASH + TMUXIFIER_COOKIE_SECRET into ./.env
 npm run gen-secret   # writes only TMUXIFIER_COOKIE_SECRET for OAuth mode
 npm start            # node src/server/index.js
+npm run start:ingest # the alert heartbeat receiver (separate process, holds no credentials)
 npm run dev          # vite + node --watch, proxies /api and /term to the backend
 npm run typecheck    # tsc --noEmit over src/web (the TS client; vite/vitest strip types unchecked)
 npm test             # typecheck + vitest run (unit + integration)
@@ -239,6 +245,29 @@ pattern for new modules.
   nothing subscribes to it; browser notifications are instead delivered client-side, by `main.ts`
   polling `GET /api/health/events` and filtering by the kinds enabled in Settings → Notifications
   (`notifyPrefs.ts`).
+- Alert aggregation (`eventLog.js`, `alertFold.js`, `alertPolicy.js`, `alertManager.js`,
+  `alertDigest.js`, `checkTypes.js`, `checkStore.js`, `checkRunner.js`, `checks/`, `mailer.js`,
+  `alertMail.js`, `alertStateStore.js`, `ingestLiveness.js`, `ingest/`) — the monitoring
+  subsystem. `eventLog.js` is append-only day-partitioned NDJSON, deliberately **not**
+  `jsonFile.js`: that module quarantines a whole corrupt file, which is right for a state document
+  and wrong for a log where one bad line must not cost a day of history. An alert is not a stored
+  row — `alertFold.js` folds occurrences by key on read, so there is no alert state to corrupt.
+  `alertPolicy.js` is the pure severity × persistence decision (`decideAlert`; mutes match the
+  alert's **key or its source**), `alertManager.js` the evaluation loop that records every
+  decision and delivers what clears the bar — its cooldown watermark is re-derived from the
+  decision log rather than held in memory, so a restart never re-notifies. `alertDigest.js` sends
+  the daily below-the-line summary (same restart-safe trick, marker in the decision log) and is
+  the only thing that prunes the logs. `checkTypes.js` validates definitions (the five
+  `CHECK_TYPES`), `checkStore.js` seals per-check secrets in `data/checks.json`, `checkRunner.js`
+  schedules and appends occurrences with a per-check hourly flood ceiling, and `checks/` holds one
+  executor per type behind an injected dispatcher. **Every executor returns `{ ok, detail,
+  latencyMs }` and never throws or rejects** — a throw aborts the runner's whole due cycle, so
+  every check scheduled alongside goes unrun — which is why nothing is read off `check` outside
+  the guard. A false `ok: true` is the most severe bug class here: a malformed definition must
+  fail the check or fall back to a safe default, never pass it. `mailer.js` is a dependency-free
+  SMTP client in the spirit of `googleAuth.js`; `ingest/` is the separate-process heartbeat
+  receiver and `ingestLiveness.js` reads the stamp it writes, so a dead receiver never reads as a
+  quiet night.
 - `secretBox.js` — AES-256-GCM seal/open for secrets at rest; key derived from `cookieSecret` via
   HKDF. Encrypts the persisted Proxmox secrets: the API token, any added SSH management keys, and
   the optional root password.
@@ -362,6 +391,17 @@ the ordered readiness check, browser support first, that both the login screen a
 Passkeys render as the same reason/hint text), and `dom.ts` (shared DOM builders plus `openModal`
 — the one modal scaffold with backdrop-click guard and Escape-to-close — and `makeRadio`, used
 across the settings modal, the hub, and the main.ts dialogs),
+`alertFormat.ts`/`alerts.ts`/`checkForm.ts`/`alertsUi.ts` (the alerts hub, structurally the twin of
+the Proxmox one: pure formatters — `laneFor` drops resolved alerts so a recovered check leaves the
+open list, and `reasonLabel` is the trust surface, giving every policy outcome operator-facing text
+and falling back to the raw code rather than rendering blank — the fetch layer, the pure form
+helpers, and the Alerts/Checks/Feed/Sources tab shell with the ingest-liveness banner above the tab
+strip. `checkForm.ts`'s `IMPLEMENTED_TYPES` is narrower than the server's `CHECK_TYPES` by design:
+offering a type with no executor wired would let an operator create a check whose only possible
+outcome is a false alarm about our own missing code, and `test/checkForm.test.js` locks the list to
+types the server accepts. `checkFormPayload` carries `assert` through untouched — the server resets
+it to `{}` for any spec that omits it, so dropping it would silently downgrade a check to a bare
+reachability probe that still reports green),
 `clipboard.ts`, `upload.ts` (pure paste/drop upload helpers: DataTransfer extraction, pasted-image
 naming, size check), `termFont.ts` (pure builder for the xterm
 font stack — prepends `TMUXIFIER_TERM_FONT` onto the bundled stack (MesloLGMDZ Nerd Font default,
@@ -495,6 +535,19 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 - `TMUXIFIER_CLAUDE_OAUTH_TOKEN` joins the `.env` secret class (password hash, cookie secret);
   seeding a box with it (and/or the host's `~/.codex/auth.json`) hands that box your Claude/Codex
   subscription identity, so seed only boxes you trust.
+- The alert ingest daemon (`src/server/ingest/`, `deploy/tmuxifier-ingest.service`) is a
+  **separate process and its own systemd unit**, and that is the whole point: it is the only thing
+  here that accepts input from the network, so it holds no SSH keys, no cookie secret, no box
+  store, and no API tokens. Bare `node:http`, no framework, no sessions — the token in the URL is
+  the entire authentication and grants nothing but the right to check one check in. Tokens are read
+  from `data/checks.json` per request and never written, so a check enabled or deleted in the
+  dashboard takes effect on the next check-in with no restart and no channel between the processes
+  beyond that file. The URL pattern refuses anything that is not a plain token before the lookup
+  runs, oversized bodies are rejected rather than buffered, and it binds `127.0.0.1` by default.
+  Keep it credential-free if you extend it.
+- Check-ins are appended to `checkins-*.ndjson`, **never** to the logs the alert manager reads:
+  `foldEvents` treats any event that is not `state: 'resolved'` as a firing occurrence, so a
+  check-in in that set would raise an alert announcing that the backup succeeded.
 - Voice dictation is off unless `data/voice.json` enables it and a whisper binary and model resolve
   (see `voicePaths.js`) — or the legacy `TMUXIFIER_WHISPER_BIN`/`TMUXIFIER_WHISPER_MODEL` are set,
   which pins them. `TMUXIFIER_VOICE=off` hard-disables it regardless. Transcripts are stripped of
@@ -508,5 +561,8 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 - `AGENTS.md` — this file, adapted for general coding agents (kept in sync with CLAUDE.md).
 - `docs/DEPLOY.md` + `deploy/tmuxifier.service` — running it as a systemd service (self-contained
   layout, no secrets in the unit; `HOME` set in the unit so ssh children find `~/.ssh`).
+  `deploy/tmuxifier-ingest.service` is the optional second unit for the alert heartbeat receiver;
+  it uses `Restart=always` rather than `on-failure` because a receiver that stays down is
+  indistinguishable from a quiet network.
 - `docs/superpowers/specs/` and `docs/superpowers/plans/` — point-in-time design/plan records;
   don't rewrite history there, add a new dated doc for new work.
