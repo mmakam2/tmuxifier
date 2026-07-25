@@ -1,0 +1,112 @@
+import { mapWithConcurrency } from './concurrency.js';
+
+// Scheduling only. The runner decides *when* a check runs and translates its
+// result into occurrences; it never decides whether anything is worth telling
+// the operator — that is alertPolicy.js, and keeping the two apart is what makes
+// the notification rules testable without a scheduler.
+//
+// Recovery deliberately requires two consecutive successes: a flapping check
+// would otherwise emit a resolve-and-refire pair every cycle, which is its own
+// kind of drowning.
+const RESOLVE_AFTER_OK = 2;
+
+export function createCheckRunner({
+  checkStore, dispatcher, eventLog, deps = {},
+  now = () => Date.now(), intervalMs = 5000, concurrency = 4,
+  setIntervalFn = setInterval, clearIntervalFn = clearInterval,
+  jitter = (ms) => Math.floor(Math.random() * ms),
+}) {
+  const state = new Map();
+  let timer = null;
+  let inFlight = null;
+
+  const entry = (id) => {
+    if (!state.has(id)) {
+      state.set(id, { lastRunAt: null, nextRunAt: 0, ok: null, consecutiveOk: 0, consecutiveFail: 0, detail: '', latencyMs: null });
+    }
+    return state.get(id);
+  };
+
+  async function execute(check) {
+    const s = entry(check.id);
+    let result;
+    try {
+      result = await dispatcher.run(check, deps);
+    } catch (e) {
+      // The dispatcher itself never throws (createCheckDispatcher awaits the
+      // executor internally), but an executor is arbitrary injected code, so
+      // this catch is the one place in the cycle that stands between a bad
+      // executor and an unhandled rejection taking the whole cycle down.
+      result = { ok: false, detail: e?.message || 'check threw', latencyMs: 0 };
+    }
+    const ts = now();
+    s.lastRunAt = ts;
+    // Jitter spreads same-interval checks so they do not all fire on the same
+    // tick and stampede a shared target.
+    s.nextRunAt = ts + check.intervalSec * 1000 + jitter(1000);
+    s.ok = result.ok;
+    s.detail = result.detail;
+    s.latencyMs = result.latencyMs;
+
+    if (result.ok) {
+      s.consecutiveFail = 0;
+      s.consecutiveOk += 1;
+      // resolvedPending is set by any failure and cleared only once two
+      // successes have landed, which is what stops a flapping check from
+      // emitting a resolve-and-refire pair every cycle.
+      if (s.resolvedPending && s.consecutiveOk >= RESOLVE_AFTER_OK) {
+        s.resolvedPending = false;
+        await eventLog.append({
+          via: 'check', source: `check:${check.id}`, key: `check:${check.id}`, norm: null,
+          severity: check.severity, state: 'resolved',
+          title: `${check.label} recovered`, body: result.detail || '',
+        });
+      }
+    } else {
+      s.consecutiveOk = 0;
+      s.consecutiveFail += 1;
+      s.resolvedPending = true;
+      await eventLog.append({
+        via: 'check', source: `check:${check.id}`, key: `check:${check.id}`, norm: null,
+        severity: check.severity, state: 'firing',
+        title: `${check.label}: ${result.detail}`, body: result.detail || '',
+      });
+    }
+    return result;
+  }
+
+  function runDue() {
+    // Coalesce, exactly as statusPoller.js does: the tick fires on a fixed
+    // cadence whether or not the previous cycle finished.
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      const checks = (await checkStore.listChecks()).filter((c) => c.enabled);
+      const due = checks.filter((c) => now() >= entry(c.id).nextRunAt);
+      // Listings are redacted, so resolve the sealed secret only for the checks
+      // actually about to run. The decrypted value lives in memory for the
+      // duration of one probe and never enters a listing, a route response, or
+      // the event log.
+      await mapWithConcurrency(due, concurrency, async (c) => {
+        const full = await checkStore.getCheck(c.id, { withSecret: true });
+        return execute(full || c);
+      });
+    })().finally(() => { inFlight = null; });
+    return inFlight;
+  }
+
+  return {
+    runDue,
+    async runOne(id) {
+      const check = await checkStore.getCheck(id, { withSecret: true });
+      if (!check) return null;
+      return execute(check);
+    },
+    getState: () => Object.fromEntries([...state.entries()].map(([k, v]) => [k, { ...v }])),
+    async start() {
+      await runDue();
+      timer = setIntervalFn(() => { runDue().catch(() => {}); }, intervalMs);
+      return timer;
+    },
+    stop() { if (timer != null) { clearIntervalFn(timer); timer = null; } },
+  };
+}
