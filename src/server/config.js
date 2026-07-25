@@ -55,6 +55,11 @@ const DEFAULTS = {
   alertRetentionDays: 90,
   alertCooldownHours: 6,
   alertMail: { host: '', port: 25, from: '', to: '', user: '', pass: '', useTls: false },
+  // The ingest daemon (src/server/ingest/) runs as its own process and binds
+  // loopback by default: reaching it from elsewhere is a deliberate act, either
+  // widening this bind or putting a reverse proxy in front of it.
+  ingestBind: '127.0.0.1',
+  ingestPort: 8788,
   // Proxmox LXC provisioning (Phase 1). Poll cadence for PVE task progress, per-request
   // and overall-provision timeouts, DHCP-lease discovery window, and retained job history.
   pvePollMs: 1500,
@@ -157,6 +162,8 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
       user: e.TMUXIFIER_ALERT_MAIL_USER, pass: e.TMUXIFIER_ALERT_MAIL_PASS,
       useTls: e.TMUXIFIER_ALERT_MAIL_TLS === undefined ? undefined : e.TMUXIFIER_ALERT_MAIL_TLS === 'on',
     },
+    ingestBind: e.TMUXIFIER_INGEST_BIND,
+    ingestPort: e.TMUXIFIER_INGEST_PORT ? Number(e.TMUXIFIER_INGEST_PORT) : undefined,
     pvePollMs: e.TMUXIFIER_PVE_POLL_MS ? Number(e.TMUXIFIER_PVE_POLL_MS) : undefined,
     pveTimeoutMs: e.TMUXIFIER_PVE_TIMEOUT_MS ? Number(e.TMUXIFIER_PVE_TIMEOUT_MS) : undefined,
     pveProvisionTimeoutMs: e.TMUXIFIER_PVE_PROVISION_TIMEOUT_MS ? Number(e.TMUXIFIER_PVE_PROVISION_TIMEOUT_MS) : undefined,
@@ -316,6 +323,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   merged.alertMail = { ...DEFAULTS.alertMail, ...Object.fromEntries(
     Object.entries(merged.alertMail || {}).filter(([, v]) => v !== undefined && v !== '')) };
   merged.alertMail.port = clampInt(merged.alertMail.port, 1, 65535, DEFAULTS.alertMail.port);
+  merged.ingestPort = clampInt(merged.ingestPort, 1, 65535, DEFAULTS.ingestPort);
   return merged;
 }
 

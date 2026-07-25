@@ -412,6 +412,23 @@ test('alert aggregation knobs have defaults', () => {
   expect(c.alertMail).toEqual({ host: '', port: 25, from: '', to: '', user: '', pass: '', useTls: false });
 });
 
+test('the ingest daemon binds loopback on a fixed port by default', () => {
+  const c = loadConfig({}, { env: {}, cwd: '/app' });
+  expect(c.ingestBind).toBe('127.0.0.1');
+  expect(c.ingestPort).toBe(8788);
+});
+
+test('the ingest bind and port are overridable, and a bad port falls back rather than binding it', () => {
+  const c = loadConfig({}, { env: { TMUXIFIER_INGEST_BIND: '0.0.0.0', TMUXIFIER_INGEST_PORT: '9000' }, cwd: '/app' });
+  expect(c.ingestBind).toBe('0.0.0.0');
+  expect(c.ingestPort).toBe(9000);
+  // A port of 0 would bind an arbitrary free port, which for a receiver that
+  // cron jobs post to by URL is silent breakage, not a convenience.
+  expect(loadConfig({}, { env: { TMUXIFIER_INGEST_PORT: '0' }, cwd: '/app' }).ingestPort).toBe(8788);
+  expect(loadConfig({}, { env: { TMUXIFIER_INGEST_PORT: '99999' }, cwd: '/app' }).ingestPort).toBe(8788);
+  expect(loadConfig({}, { env: { TMUXIFIER_INGEST_PORT: 'abc' }, cwd: '/app' }).ingestPort).toBe(8788);
+});
+
 test('alert aggregation knobs are overridable via env', () => {
   const c = loadConfig({}, {
     env: {

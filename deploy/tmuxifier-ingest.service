@@ -1,0 +1,26 @@
+# The alert ingest daemon. Runs as a separate unit from tmuxifier.service on
+# purpose: it is the only process that accepts input from the network, and it
+# holds no SSH keys, no cookie secret, and no API tokens. Install:
+#   sudo cp deploy/tmuxifier-ingest.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now tmuxifier-ingest
+[Unit]
+Description=Tmuxifier alert ingest (heartbeat receiver)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/tmuxifier
+Environment=HOME=/root
+ExecStart=/usr/bin/node /root/tmuxifier/src/server/ingest/index.js
+# Always, not on-failure: a receiver that stays down looks identical to a quiet
+# network, which is the failure mode this whole system exists to prevent.
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+# Needed only if you later bind port 25 for the phase 2 SMTP sink.
+#AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
