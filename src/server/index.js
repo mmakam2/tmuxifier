@@ -53,6 +53,7 @@ import { runHeartbeatCheck } from './checks/heartbeatCheck.js';
 import { createAlertManager } from './alertManager.js';
 import { DEFAULT_THRESHOLDS } from './alertPolicy.js';
 import { createMailChannel } from './alertMail.js';
+import { createDigestScheduler } from './alertDigest.js';
 import { createMailer } from './mailer.js';
 
 const config = loadConfig();
@@ -311,6 +312,13 @@ const alertManager = createAlertManager({
   channels: alertChannels, intervalMs: config.alertEvalMs,
   thresholds: { ...DEFAULT_THRESHOLDS, cooldownMs: config.alertCooldownHours * 3600000 },
 });
+// The daily below-the-line summary, and the only thing that prunes the event
+// logs — retention rides the digest pass rather than a separate cleanup job.
+const digest = createDigestScheduler({
+  alertManager, eventLogs: [checkEventLog, checkinLog, inboundEventLog], decisionLog,
+  mailer: config.alertMail.host ? createMailer(config.alertMail) : null,
+  retentionDays: config.alertRetentionDays,
+});
 
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
@@ -354,6 +362,7 @@ app.listen({ host: config.bindAddress, port: config.port })
     // pattern instead.)
     checkRunner.start().catch((err) => console.error('check runner failed to start:', err));
     alertManager.start().catch((err) => console.error('alert manager failed to start:', err));
+    digest.start().catch((err) => console.error('alert digest failed to start:', err));
     console.log(`Tmuxifier listening on ${scheme}://${config.bindAddress}:${config.port}`);
   })
   .catch((err) => {
