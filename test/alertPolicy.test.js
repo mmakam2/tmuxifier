@@ -153,3 +153,61 @@ test('a per-key cooldownMs override shortens the cooldown for that key', () => {
   });
   expect(got).toEqual({ notify: true, reason: 'notified' });
 });
+
+// --- Gaps found by the reviewer's own mutation pass: every fixture above
+// happens to have source === key (mutes match on either) and every override
+// value used is truthy (?? and || agree on a truthy value), so a mutant that
+// swaps key<->source or ??<->|| survives all tests above undetected.
+
+test('a mute on the key alone still suppresses when the source is a distinct, unmuted value', () => {
+  // Isolates mutes.includes(alert.key): the fixture's source ('other-host')
+  // is deliberately NOT in mutes, so a mutant that drops the key check and
+  // keeps only the source check would fall through to notify instead.
+  const got = decideAlert({
+    alert: alert({ key: 'check:a', source: 'other-host', severity: 'critical' }),
+    rules: { mutes: ['check:a'], overrides: {} },
+    nowMs: 0, lastNotifiedAt: null,
+  });
+  expect(got).toEqual({ notify: false, reason: 'suppressed:muted' });
+});
+
+test('an override keyed by source is not applied — overrides match alert.key only', () => {
+  // Isolates the overrides lookup key: with source !== key, an override
+  // stored under the source would only be picked up by a mutant that looks
+  // overrides up by alert.source instead of alert.key. Correct behavior is
+  // no override found, so the default repeat gate (3) applies and a single
+  // recent occurrence 1000ms in is held, not notified.
+  const got = decideAlert({
+    alert: alert({ key: 'check:a', source: 'other-host', recentCount: 1, firstTs: 0 }),
+    rules: { mutes: [], overrides: { 'other-host': { failuresBeforeNotify: 1 } } },
+    nowMs: 1000, lastNotifiedAt: null,
+  });
+  expect(got).toEqual({ notify: false, reason: 'held:below-persistence' });
+});
+
+test('a cooldownMs override of 0 means no cooldown at all, even at zero elapsed time', () => {
+  // Isolates ?? over ||: 0 is a legitimate "no cooldown" override, but is
+  // falsy, so a mutant using || would fall back to the 6h default and wrongly
+  // suppress. nowMs === lastNotifiedAt (0 elapsed) makes `0 < 0` false, so a
+  // correct ?? lookup notifies immediately.
+  const got = decideAlert({
+    alert: alert({ severity: 'critical' }),
+    rules: { mutes: [], overrides: { 'check:a': { cooldownMs: 0 } } },
+    nowMs: 500, lastNotifiedAt: 500,
+  });
+  expect(got).toEqual({ notify: true, reason: 'notified' });
+});
+
+test('a failuresBeforeNotify override of 0 notifies on any recentCount, including the fixture default', () => {
+  // Isolates ?? over ||: 0 is a legitimate "notify on first sighting" repeat
+  // gate, but is falsy, so a mutant using || would fall back to the default
+  // gate of 3. recentCount is 1 (fixture default) and elapsed time (1000ms)
+  // stays well below the persistence gate, so only a correct ?? lookup
+  // (repeatGate 0, 1 >= 0) notifies here.
+  const got = decideAlert({
+    alert: alert({ recentCount: 1, firstTs: 0 }),
+    rules: { mutes: [], overrides: { 'check:a': { failuresBeforeNotify: 0 } } },
+    nowMs: 1000, lastNotifiedAt: null,
+  });
+  expect(got).toEqual({ notify: true, reason: 'notified' });
+});
