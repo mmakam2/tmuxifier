@@ -34,7 +34,7 @@ const FIELDS: Record<string, CheckField[]> = {
 //
 // Each slice adds its types here as the executor lands: Slice B appends 'tcp',
 // 'json', and 'exec'; Slice C appends 'heartbeat'.
-export const IMPLEMENTED_TYPES = ['http', 'tcp', 'json'];
+export const IMPLEMENTED_TYPES = ['http', 'tcp', 'json', 'exec'];
 
 export function checkFieldsFor(type: string): CheckField[] {
   return FIELDS[type] ?? [];
