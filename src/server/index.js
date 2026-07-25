@@ -40,6 +40,16 @@ import { createVoiceStore } from './voiceStore.js';
 import { createVoiceInstallStore } from './voiceInstallStore.js';
 import { createVoiceInstallManager } from './voiceInstall.js';
 import { resolveVoicePaths } from './voicePaths.js';
+import { createEventLog } from './eventLog.js';
+import { createCheckStore } from './checkStore.js';
+import { createAlertStateStore } from './alertStateStore.js';
+import { createCheckRunner } from './checkRunner.js';
+import { createCheckDispatcher } from './checks/index.js';
+import { runHttpCheck } from './checks/httpCheck.js';
+import { createAlertManager } from './alertManager.js';
+import { DEFAULT_THRESHOLDS } from './alertPolicy.js';
+import { createMailChannel } from './alertMail.js';
+import { createMailer } from './mailer.js';
 
 const config = loadConfig();
 config.configPath = path.resolve('config.json');
@@ -254,10 +264,41 @@ const statusPoller = createStatusPoller({
   },
 });
 
+// Alert aggregation: append-only event logs (checks, and phase 2's inbound
+// SMTP sink), the sealed check-definition store, operator decisions (mute/ack),
+// the scheduler that runs checks and turns results into occurrences, and the
+// evaluation loop that folds occurrences into alerts and decides what may
+// notify. See docs/superpowers/plans/2026-07-25-alert-aggregation-phase1.md.
+const eventsDir = path.join(config.dataDir, 'events');
+const checkEventLog = createEventLog({ dir: eventsDir, prefix: 'checks' });
+const inboundEventLog = createEventLog({ dir: eventsDir, prefix: 'inbound' });
+const decisionLog = createEventLog({ dir: eventsDir, prefix: 'decisions' });
+const checkStore = createCheckStore({ dataDir: config.dataDir, secretBox });
+const alertState = createAlertStateStore({ dataDir: config.dataDir });
+const checkRunner = createCheckRunner({
+  checkStore,
+  dispatcher: createCheckDispatcher({ runners: { http: runHttpCheck } }),
+  eventLog: checkEventLog,
+});
+// Mail delivery is optional: with no relay configured the system still records
+// and displays everything, it just cannot interrupt anyone. A relay host with
+// a blank `to` still builds the channel here — mailer.js itself now refuses to
+// send with zero recipients (see mailer.js), which alertManager.js already
+// records as notify:failed, the same non-silent path as any other delivery
+// failure, rather than needing a second "is this configured enough" check here.
+const alertChannels = config.alertMail.host
+  ? [createMailChannel({ mailer: createMailer(config.alertMail) })]
+  : [];
+const alertManager = createAlertManager({
+  eventLogs: [checkEventLog, inboundEventLog], decisionLog, stateStore: alertState,
+  channels: alertChannels, intervalMs: config.alertEvalMs,
+  thresholds: { ...DEFAULT_THRESHOLDS, cooldownMs: config.alertCooldownHours * 3600000 },
+});
+
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
 const voiceEnabledInitial = (await resolveVoice()).enabled;
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial, checkStore, alertState, checkEventLog, decisionLog, alertManager, checkRunner });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
@@ -283,6 +324,19 @@ app.listen({ host: config.bindAddress, port: config.port })
       voiceEngine: { stop: async () => { if (voiceEngine) await voiceEngine.stop(); } },
     });
     statusPoller.start().catch((err) => console.error('status poll failed to start:', err));
+    // checkRunner and alertManager are the same shape of autonomous interval
+    // loop as statusPoller above (an initial run awaited inside .start(), then
+    // a timer) and are started the same way, for the same reason: only once
+    // the server is confirmed listening does a startup failure here become a
+    // logged-and-continue event rather than a silent one. (The brief for this
+    // task placed these two calls earlier, at module scope before app.listen()
+    // even ran, with failures swallowed via .catch(() => {}) — that would have
+    // been the only autonomous background loop in this file not gated on a
+    // successful listen(), and the only one whose startup failure produced no
+    // log line at all; moved here to match the established statusPoller
+    // pattern instead.)
+    checkRunner.start().catch((err) => console.error('check runner failed to start:', err));
+    alertManager.start().catch((err) => console.error('alert manager failed to start:', err));
     console.log(`Tmuxifier listening on ${scheme}://${config.bindAddress}:${config.port}`);
   })
   .catch((err) => {

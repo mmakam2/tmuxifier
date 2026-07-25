@@ -88,7 +88,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, checkStore = null, alertState = null, checkEventLog = null, decisionLog = null, alertManager = null, checkRunner = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -1044,6 +1044,72 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       return { ok: true, address, prefix };
     } catch (e) { return { ok: false, error: e.message }; }
   });
+
+  // --- Alert aggregation. Every route is auth-gated like the rest of /api; the
+  // check secret is sealed in the store and never round-trips to the browser. ---
+  if (checkStore && alertManager) {
+    app.get('/api/checks', { preHandler: requireAuth }, async () => ({
+      checks: await checkStore.listChecks(), state: checkRunner ? checkRunner.getState() : {},
+    }));
+    app.post('/api/checks', { preHandler: requireAuth }, async (req, reply) => {
+      try { return { check: await checkStore.addCheck(req.body || {}) }; }
+      catch (e) { return reply.code(400).send({ error: e.message }); }
+    });
+    app.put('/api/checks/:id', { preHandler: requireAuth }, async (req, reply) => {
+      try {
+        const check = await checkStore.updateCheck(req.params.id, req.body || {});
+        return check ? { check } : reply.code(404).send({ error: 'no such check' });
+      } catch (e) { return reply.code(400).send({ error: e.message }); }
+    });
+    app.delete('/api/checks/:id', { preHandler: requireAuth }, async (req, reply) => {
+      const ok = await checkStore.removeCheck(req.params.id);
+      return ok ? { ok: true } : reply.code(404).send({ error: 'no such check' });
+    });
+    app.post('/api/checks/:id/run', { preHandler: requireAuth }, async (req, reply) => {
+      if (!checkRunner) return reply.code(503).send({ error: 'check runner not running' });
+      let result;
+      try {
+        // checkRunner.runOne() resolves the check's sealed secret with
+        // withSecret: true, which decrypts — a corrupted sealed value, or a
+        // cookieSecret rotated after the check was saved, throws synchronously
+        // (see secretBox.js). runDue() already guards the same call for the
+        // scheduled path (Task 7); this route is runOne's only caller, so the
+        // guard belongs here. Match the established NetBox-route convention
+        // (see /api/netbox/next-ip above) rather than a global error handler:
+        // a generic message, never e.message, since the underlying crypto
+        // error text ("bad auth tag") is not something to hand back to the
+        // browser.
+        result = await checkRunner.runOne(req.params.id);
+      } catch {
+        return reply.code(502).send({ error: 'could not decrypt the stored check secret — re-enter it (was TMUXIFIER_COOKIE_SECRET rotated?)' });
+      }
+      return result ? { result } : reply.code(404).send({ error: 'no such check' });
+    });
+
+    app.get('/api/alerts', { preHandler: requireAuth }, async () => ({ alerts: await alertManager.listAlerts() }));
+    app.post('/api/alerts/:key/ack', { preHandler: requireAuth }, async (req) => {
+      await alertState.ack(req.params.key); return { ok: true };
+    });
+    app.post('/api/alerts/:key/mute', { preHandler: requireAuth }, async (req) => {
+      await alertState.mute(req.params.key); return { ok: true };
+    });
+    app.delete('/api/alerts/:key/mute', { preHandler: requireAuth }, async (req) => {
+      await alertState.unmute(req.params.key); return { ok: true };
+    });
+    app.get('/api/alerts/feed', { preHandler: requireAuth }, async (req) => {
+      const sinceMs = Number(req.query?.since) || 0;
+      const events = [];
+      for (const log of [checkEventLog].filter(Boolean)) events.push(...await log.readSince(sinceMs));
+      return { events: events.slice(-500) };
+    });
+    app.get('/api/alerts/decisions', { preHandler: requireAuth }, async (req) => {
+      const sinceMs = Number(req.query?.since) || 0;
+      const all = decisionLog ? await decisionLog.readSince(sinceMs) : [];
+      const key = req.query?.key;
+      return { decisions: (key ? all.filter((d) => d.key === key) : all).slice(-500) };
+    });
+  }
+
   app.get('/api/status', { preHandler: requireAuth }, async (req, reply) => {
     // Serve the shared, server-side poll snapshot: every open tab reads the
     // same cache instead of driving its own SSH probe cycle, so connection
