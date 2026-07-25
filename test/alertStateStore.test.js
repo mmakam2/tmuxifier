@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createAlertStateStore } from '../src/server/alertStateStore.js';
+import { decideAlert } from '../src/server/alertPolicy.js';
 
 const mk = async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'alertstate-'));
@@ -135,6 +136,77 @@ test('a corrupt triage file is quarantined and reads back as nothing acked', asy
 
   const left = await fs.readdir(dataDir);
   expect(left.some((f) => f.startsWith('alert-triage.json.corrupt-'))).toBe(true);
+});
+
+// --- Wrong-typed-but-parseable fields: a file like {"mutes": "disk-full"}
+// (a plausible forgotten-brackets hand-edit) is syntactically valid JSON and
+// passes the top-level objShape check, so readJson() does NOT quarantine it
+// — quarantine only fires on a parse failure or a non-object top level.
+// Without per-field coercion, r.mutes would come back as that raw string,
+// and alertPolicy.js's `mutes.includes(alert.key)` on a string is substring
+// search, not array membership: a critical, unrelated, unmuted alert could
+// be silently reported as suppressed:muted. These tests pin the coercion at
+// the store boundary — the layer that documents the "fail loud" guarantee —
+// rather than trusting alertPolicy.js to defend itself against a bad shape.
+
+test('a rules file with mutes as a string coerces to an empty array, not a substring-searchable string', async () => {
+  const { store, dataDir } = await mk();
+  await fs.writeFile(path.join(dataDir, 'alert-rules.json'), JSON.stringify({ mutes: 'disk-full', overrides: {} }));
+  expect(await store.getRules()).toEqual({ mutes: [], overrides: {} });
+  // The file was valid JSON and a valid top-level object, so it must NOT be
+  // treated as corrupt — coercion, not quarantine, is the fix here.
+  const left = await fs.readdir(dataDir);
+  expect(left.some((f) => f.startsWith('alert-rules.json.corrupt-'))).toBe(false);
+});
+
+test('a rules file with mutes as a number coerces to an empty array', async () => {
+  const { store, dataDir } = await mk();
+  await fs.writeFile(path.join(dataDir, 'alert-rules.json'), JSON.stringify({ mutes: 4, overrides: {} }));
+  expect((await store.getRules()).mutes).toEqual([]);
+});
+
+test('a rules file with mutes as null coerces to an empty array', async () => {
+  const { store, dataDir } = await mk();
+  await fs.writeFile(path.join(dataDir, 'alert-rules.json'), JSON.stringify({ mutes: null, overrides: {} }));
+  expect((await store.getRules()).mutes).toEqual([]);
+});
+
+test('a rules file with overrides as a non-object (an array) coerces to an empty object', async () => {
+  const { store, dataDir } = await mk();
+  await fs.writeFile(path.join(dataDir, 'alert-rules.json'), JSON.stringify({ mutes: [], overrides: ['nope'] }));
+  expect((await store.getRules()).overrides).toEqual({});
+});
+
+test('a rules file with overrides as a string coerces to an empty object', async () => {
+  const { store, dataDir } = await mk();
+  await fs.writeFile(path.join(dataDir, 'alert-rules.json'), JSON.stringify({ mutes: [], overrides: 'nope' }));
+  expect((await store.getRules()).overrides).toEqual({});
+});
+
+// Same coercion, triage side. isAcked() already happens to fail safe here
+// (indexing a non-object by key yields undefined -> not acked), but
+// getTriage() itself must still report the documented shape (an object) —
+// this is the assertion that actually distinguishes coerced from
+// uncoerced, since the isAcked half passes either way.
+test('a triage file with acks as a non-object coerces to an empty object', async () => {
+  const { store, dataDir } = await mk();
+  await fs.writeFile(path.join(dataDir, 'alert-triage.json'), JSON.stringify({ acks: 'nope' }));
+  expect(await store.getTriage()).toEqual({});
+  expect(await store.isAcked('check:a', 0)).toBe(false);
+});
+
+// End-to-end reproduction of the reported vulnerability: with the coercion
+// in place, decideAlert() must notify on this critical, unrelated,
+// genuinely-unmuted alert instead of reporting suppressed:muted.
+test('regression: a string-typed mutes field in the rules file no longer suppresses an unrelated critical alert', async () => {
+  const { store, dataDir } = await mk();
+  await fs.writeFile(path.join(dataDir, 'alert-rules.json'), JSON.stringify({ mutes: 'disk-full', overrides: {} }));
+  const rules = await store.getRules();
+  const alert = {
+    key: 'disk', source: 'disk', severity: 'critical', state: 'firing',
+    count: 1, recentCount: 1, firstTs: 0, lastTs: 0, title: 't', body: '',
+  };
+  expect(decideAlert({ alert, rules, nowMs: 0, lastNotifiedAt: null })).toEqual({ notify: true, reason: 'notified' });
 });
 
 // --- Concurrency: mute/unmute/setOverride are all read-modify-write over the

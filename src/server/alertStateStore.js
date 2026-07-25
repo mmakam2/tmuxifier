@@ -2,8 +2,6 @@ import path from 'node:path';
 import { readJson, writeJson } from './jsonFile.js';
 
 const VERSION = 1;
-const RULES_DEFAULT = { version: VERSION, mutes: [], overrides: {} };
-const TRIAGE_DEFAULT = { version: VERSION, acks: {} };
 
 // Operator decisions, split across two files because they have different
 // lifetimes: rules (mutes, per-key overrides) are durable policy meant to
@@ -14,23 +12,38 @@ export function createAlertStateStore({ dataDir, now = () => Date.now() }) {
   const triageFile = path.join(dataDir, 'alert-triage.json');
   const objShape = (v) => v && typeof v === 'object' && !Array.isArray(v);
 
-  // getRules() feeds decideAlert() every evaluation cycle. If the rules file
-  // is corrupt, readJson() already quarantines it and hands back `fallback`
-  // — that fallback MUST merge down to "no mutes, no overrides" so a corrupt
-  // file makes the system over-notify rather than silently going quiet
-  // behind a phantom mute (a false green, the one failure mode worse than
-  // noise). `{}` as the fallback plus the defaults spread below is what
-  // makes that hold.
+  // getRules() feeds decideAlert() every evaluation cycle, and decideAlert()
+  // calls mutes.includes(...) / looks overrides up by key with no shape
+  // check of its own — this store is where the guarantee is made, not
+  // there. readJson()'s `validate: objShape` only proves the top-level
+  // parse is a non-array object; it says nothing about what `mutes` or
+  // `overrides` actually hold. A hand-edited file like {"mutes":
+  // "disk-full"} (a forgotten pair of brackets) parses fine and passes
+  // objShape, so without the per-field coercion below, r.mutes would be a
+  // STRING — and "disk-full".includes(key) is substring search, not array
+  // membership, which can silently report an unrelated critical alert as
+  // suppressed:muted. Coercing each field to its expected type here (never
+  // trusting alertPolicy.js to defend itself against a malformed shape) is
+  // what keeps a wrong-typed-but-parseable file on the same "fail loud,
+  // never silent" side as a genuinely unparseable one.
   async function readRules() {
     const v = await readJson(rulesFile, { fallback: {}, validate: objShape });
-    return { ...RULES_DEFAULT, ...v };
+    return {
+      version: VERSION,
+      mutes: Array.isArray(v.mutes) ? v.mutes : [],
+      overrides: objShape(v.overrides) ? v.overrides : {},
+    };
   }
-  // Mirror on the triage side: a corrupt ack log must read back as "nothing
-  // acked" (isAcked() -> false -> the caller still notifies), never as
-  // silently-acked and never by throwing into the evaluation loop.
+  // Same coercion on the triage side, for consistency — though this side
+  // already fails safe even without it: a non-object `acks` indexed by key
+  // yields `undefined`, and isAcked() treats that as "not acked", which is
+  // the safe direction (over-notify, never silently-acked).
   async function readTriage() {
     const v = await readJson(triageFile, { fallback: {}, validate: objShape });
-    return { ...TRIAGE_DEFAULT, ...v };
+    return {
+      version: VERSION,
+      acks: objShape(v.acks) ? v.acks : {},
+    };
   }
 
   // Every mutator below is a read-modify-write over one of the two files.
