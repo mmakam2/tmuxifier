@@ -244,3 +244,11 @@ test('concurrent ack() calls for different keys do not lose either write', async
     'check:b': { ackedAt: 5000 },
   });
 });
+
+test('an unreadable rules file falls back to notifying, never to muting everything', async () => {
+  const { store, dataDir } = await mk();
+  await fs.writeFile(path.join(dataDir, 'alert-rules.json'), '{ this is not json');
+  // jsonFile.js quarantines the corrupt file and reads the fallback. The
+  // fallback must be "no mutes" — a bug here has to produce noise, not silence.
+  expect(await store.getRules()).toEqual({ mutes: [], overrides: {} });
+});

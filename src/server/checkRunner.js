@@ -15,6 +15,7 @@ export function createCheckRunner({
   now = () => Date.now(), intervalMs = 5000, concurrency = 4,
   setIntervalFn = setInterval, clearIntervalFn = clearInterval,
   jitter = (ms) => Math.floor(Math.random() * ms),
+  maxEventsPerCheckPerHour = 60,
 }) {
   const state = new Map();
   let timer = null;
@@ -22,7 +23,12 @@ export function createCheckRunner({
 
   const entry = (id) => {
     if (!state.has(id)) {
-      state.set(id, { lastRunAt: null, nextRunAt: 0, ok: null, consecutiveOk: 0, consecutiveFail: 0, detail: '', latencyMs: null });
+      state.set(id, {
+        lastRunAt: null, nextRunAt: 0, ok: null, consecutiveOk: 0, consecutiveFail: 0,
+        detail: '', latencyMs: null,
+        // Rolling hour used by the flood ceiling below.
+        windowStart: null, windowCount: 0,
+      });
     }
     return state.get(id);
   };
@@ -59,11 +65,33 @@ export function createCheckRunner({
       s.consecutiveOk = 0;
       s.consecutiveFail += 1;
       s.resolvedPending = true;
-      await eventLog.append({
-        via: 'check', source: `check:${check.id}`, key: `check:${check.id}`, norm: null,
-        severity: check.severity, state: 'firing',
-        title: `${check.label}: ${result.detail}`, body: result.detail || '',
-      });
+      // A check misconfigured to run every 10s against a permanently broken
+      // target would otherwise append thousands of identical lines an hour.
+      // Past the ceiling, stop appending individual occurrences and say so
+      // once: the disk, the fold, and the operator's attention are all
+      // protected by the same move.
+      //
+      // The cap is announced rather than enforced silently — a check that just
+      // stopped reporting is indistinguishable from one that recovered, and
+      // "quietly stopped telling you things" is the failure mode this whole
+      // system exists to prevent. One append with a computed title, then quiet
+      // for the rest of the hour.
+      if (s.windowStart === null || ts - s.windowStart >= 3600000) {
+        s.windowStart = ts;
+        s.windowCount = 0;
+      }
+      s.windowCount += 1;
+      const capped = s.windowCount > maxEventsPerCheckPerHour;
+      if (!capped || s.windowCount === maxEventsPerCheckPerHour + 1) {
+        await eventLog.append({
+          via: 'check', source: `check:${check.id}`, key: `check:${check.id}`, norm: null,
+          severity: check.severity, state: 'firing',
+          title: capped
+            ? `${check.label} is flooding — capped at ${maxEventsPerCheckPerHour} events/hour`
+            : `${check.label}: ${result.detail}`,
+          body: result.detail || '',
+        });
+      }
     }
     return result;
   }

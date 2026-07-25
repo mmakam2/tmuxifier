@@ -377,3 +377,53 @@ test('stop clears the scheduled interval', async () => {
   runner.stop();
   expect(cleared).toBe(99);
 });
+
+// A check pointed at a permanently broken target and scheduled every 10s would
+// append thousands of identical lines an hour. Past a per-check hourly ceiling
+// the runner stops appending individual occurrences and says so exactly once:
+// the disk, the fold, and the operator's attention are protected by the same
+// move. It must still be loud about the cap rather than going silently quiet —
+// a check that stopped reporting is indistinguishable from one that recovered.
+const flooding = async (maxEventsPerCheckPerHour) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'runner-flood-'));
+  let t = 1000;
+  const clock = { get: () => t, advance: (ms) => { t += ms; } };
+  const eventLog = createEventLog({ dir, prefix: 'checks', now: () => clock.get() });
+  const check = chk({ intervalSec: 10, failuresBeforeNotify: 1 });
+  const runner = createCheckRunner({
+    checkStore: { listChecks: async () => [check], getCheck: async () => check },
+    dispatcher: createCheckDispatcher({
+      runners: { http: async () => ({ ok: false, detail: 'down', latencyMs: 1 }) },
+    }),
+    eventLog, now: () => clock.get(), jitter: () => 0, maxEventsPerCheckPerHour,
+  });
+  return { runner, eventLog, clock };
+};
+
+test('a flooding check is capped and raises one meta-occurrence instead of thousands', async () => {
+  const { runner, eventLog, clock } = await flooding(3);
+  for (let i = 0; i < 10; i++) { await runner.runDue(); clock.advance(10000); }
+  const events = await eventLog.readSince(0);
+  const capped = events.filter((e) => e.title.includes('flooding'));
+  expect(capped).toHaveLength(1);
+  expect(events.length).toBeLessThan(10);
+  // The cap is announced, not merely enforced.
+  expect(capped[0]).toMatchObject({ key: 'check:c1', state: 'firing', severity: 'critical' });
+});
+
+test('the ceiling is per hour, so a new window reports again', async () => {
+  const { runner, eventLog, clock } = await flooding(2);
+  for (let i = 0; i < 5; i++) { await runner.runDue(); clock.advance(10000); }
+  const firstWindow = (await eventLog.readSince(0)).length;
+  clock.advance(3600001); // past the window
+  await runner.runDue();
+  expect((await eventLog.readSince(0)).length).toBeGreaterThan(firstWindow);
+});
+
+test('a check failing below the ceiling is never capped', async () => {
+  const { runner, eventLog, clock } = await flooding(60);
+  for (let i = 0; i < 5; i++) { await runner.runDue(); clock.advance(10000); }
+  const events = await eventLog.readSince(0);
+  expect(events).toHaveLength(5);
+  expect(events.some((e) => e.title.includes('flooding'))).toBe(false);
+});
