@@ -1281,7 +1281,6 @@ export function createCheckRunner({
           title: `${check.label} recovered`, body: result.detail || '',
         });
       }
-      void wasFailing;
     } else {
       s.consecutiveOk = 0;
       s.consecutiveFail += 1;
