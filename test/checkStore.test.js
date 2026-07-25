@@ -90,6 +90,18 @@ test('updating without resending the secret keeps the stored one', async () => {
   expect(got.secret).toBe('keepme');
 });
 
+test('updateCheck\'s own return value is redacted, not just a subsequent getCheck', async () => {
+  // Every other update test re-fetches via a separate getCheck call, which
+  // would still pass even if updateCheck itself handed back the raw record
+  // (sealed secret key included) — a live risk the moment a route echoes this
+  // return value straight to the browser. Inspect the return value directly.
+  const { store } = await mk();
+  const added = await store.addCheck({ ...httpSpec, secret: 'keepme' });
+  const updated = await store.updateCheck(added.id, { ...httpSpec, label: 'Renamed' });
+  expect(updated.hasSecret).toBe(true);
+  expect('secret' in updated).toBe(false);
+});
+
 test('updating with a whitespace-only secret also keeps the stored one', async () => {
   // "blank" must mean "empty or all-whitespace after trim", not merely "falsy" —
   // a naive `!spec.secret` check happens to agree with `.trim()` on '' but not on '   '.
@@ -133,6 +145,18 @@ test('an invalid update is refused before anything is written, leaving the exist
   expect(got.label).toBe('Invoice app');
   expect(got.type).toBe('http');
   expect(got.secret).toBe('keepme');
+});
+
+test('getCheck withSecret:true on a secret-less check returns secret: null without throwing', async () => {
+  // Task 7's runner calls getCheck(id, { withSecret: true }) for every due
+  // check before executing it, including secret-less http/tcp/heartbeat
+  // checks. secretBox.open(null) throws ("unrecognized sealed secret"), so an
+  // unconditional open() here (dropping the found.secret ? ... : null guard)
+  // would crash the runner on any check that never had a secret.
+  const { store } = await mk();
+  const added = await store.addCheck(httpSpec); // no secret at all
+  const got = await store.getCheck(added.id, { withSecret: true });
+  expect(got.secret).toBeNull();
 });
 
 test('getCheck returns null for an unknown id, with and without withSecret', async () => {
