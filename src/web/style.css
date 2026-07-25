@@ -699,3 +699,12 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
   .pve-container-row .pve-row-actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
 
+/* Alerts hub. Lanes reuse the severity colours already used by the status dot
+   and job badges, so a red row means the same thing everywhere in the UI. */
+.alert-lane { display: flex; flex-direction: column; gap: 6px; }
+.alert-row { border-left-width: 3px; }
+.alert-row.critical { border-left-color: #f85149; }
+.alert-row.warning { border-left-color: #d29922; }
+.alert-row.info { border-left-color: #8b949e; }
+.check-row { display: flex; flex-wrap: wrap; gap: 12px; }
+
