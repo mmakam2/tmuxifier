@@ -58,6 +58,17 @@ test('a digest lists withheld alerts one per line and names the day', () => {
   expect(text).toContain('x2');
 });
 
+test('a digest line renders fields in the documented order, not merely present somewhere in the line', () => {
+  // toContain(title) / toContain('xN') alone cannot tell a correctly ordered
+  // line from one with title and source swapped — both still contain both
+  // strings. Pin the whole line so a field-order regression fails here.
+  const { text } = formatDigest(
+    [alert({ severity: 'info', title: 'Backup ran long', count: 2 })],
+    { dayKey: '2026-07-25' },
+  );
+  expect(text).toContain('- [info] Backup ran long (x2, check:c1)');
+});
+
 test('a digest with multiple alerts keeps each on its own line', () => {
   const { text } = formatDigest(
     [
