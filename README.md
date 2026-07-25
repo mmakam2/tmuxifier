@@ -561,7 +561,10 @@ system tells you *why* it did or did not contact you, on every row.
 | `tcp` | A completed TCP handshake | Host, port |
 | `json` | One field of a JSON response (`equals`, `notEquals`, `greaterThan`, `lessThan`) | URL, dotted path |
 | `exec` | Exit code zero on a box, optional stdout marker | Box, command |
+| `dns` | A named resolver answers for a name (optionally with an expected address) | Resolver, name, record type |
 | `heartbeat` | That something called **in** — silence is the failure | Window, grace period |
+
+`dns` queries one *named* resolver rather than using the host's own configuration, because a fleet loses resolvers one at a time and the loss stays invisible while the survivors keep answering.
 
 `exec` runs over the ControlMaster Tmuxifier already holds open, so covering a service on a box
 needs no agent installed, no API exposed, and no new credential stored. An optional per-check

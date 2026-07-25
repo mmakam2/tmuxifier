@@ -16,6 +16,11 @@ const FIELDS: Record<string, CheckField[]> = {
     { name: 'boxId', label: 'Box', placeholder: 'pick a box' },
     { name: 'command', label: 'Command', placeholder: 'systemctl is-active myservice' },
   ],
+  dns: [
+    { name: 'server', label: 'Resolver', placeholder: '192.168.1.10' },
+    { name: 'name', label: 'Name to resolve', placeholder: 'example.com' },
+    { name: 'type', label: 'Record type', placeholder: 'A' },
+  ],
   heartbeat: [
     { name: 'windowSec', label: 'Expect a check-in every (seconds)', placeholder: '86400', numeric: true },
     { name: 'graceSec', label: 'Grace period (seconds)', placeholder: '3600', numeric: true },
@@ -34,7 +39,7 @@ const FIELDS: Record<string, CheckField[]> = {
 //
 // Each slice adds its types here as the executor lands: Slice B appends 'tcp',
 // 'json', and 'exec'; Slice C appends 'heartbeat'.
-export const IMPLEMENTED_TYPES = ['http', 'tcp', 'json', 'exec', 'heartbeat'];
+export const IMPLEMENTED_TYPES = ['http', 'tcp', 'json', 'exec', 'heartbeat', 'dns'];
 
 // A heartbeat check is driven by something calling in, so its id doubles as the
 // URL token the ingest daemon accepts (src/server/ingest/). Surfacing that path

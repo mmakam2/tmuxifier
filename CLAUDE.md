@@ -281,6 +281,14 @@ pattern for new modules.
   node's global agent keeps sockets alive, which for a fleet-wide sweep would mean a permanent
   connection to everything watched. Response bodies are capped at 256 KB so a probe cannot be made
   to exhaust the prober.
+- `checks/dnsCheck.js` — resolves one name against one **named** resolver (`node:dns`'s `Resolver`
+  with `setServers`, `tries: 1` so `check.timeoutMs` is the real bound). Aimed at a specific server
+  rather than the host's own configuration on purpose: a fleet loses resolvers one at a time and the
+  loss is invisible, because the survivors keep answering — only a query aimed at each in turn sees
+  it. An empty answer set fails rather than passing (a resolver returning nothing has resolved
+  nothing), MX/SRV/TXT answers are rendered readably instead of `[object Object]`, and the record
+  type is validated in `checkTypes.js` before the resolver is ever built, so a typo reads as a
+  configuration error rather than the DNS server's fault.
 - `secretBox.js` — AES-256-GCM seal/open for secrets at rest; key derived from `cookieSecret` via
   HKDF. Encrypts the persisted Proxmox secrets: the API token, any added SSH management keys, and
   the optional root password.

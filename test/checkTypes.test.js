@@ -16,7 +16,7 @@ test('a minimal http check normalizes with defaults applied', () => {
 });
 
 test('every supported type is accepted', () => {
-  expect(CHECK_TYPES).toEqual(['http', 'tcp', 'json', 'exec', 'heartbeat']);
+  expect(CHECK_TYPES).toEqual(['http', 'tcp', 'json', 'exec', 'heartbeat', 'dns']);
 });
 
 test('an unknown type is refused', () => {
@@ -268,4 +268,31 @@ test('a pinned fingerprint is normalised so formatting differences still match',
   });
   expect(c.tlsMode).toBe('pin');
   expect(c.fingerprint256).toBe('ABCDEF01');
+});
+
+test('a dns check normalizes its target and defaults to an A record', () => {
+  const c = assertCheckInput({
+    label: 'resolver', type: 'dns', target: { server: ' 192.168.1.2 ', name: ' example.com ' },
+  });
+  expect(c.target).toEqual({ server: '192.168.1.2', name: 'example.com', type: 'A' });
+});
+
+test('a dns check without a server or a name is refused', () => {
+  expect(() => assertCheckInput({ label: 'x', type: 'dns', target: { name: 'example.com' } })).toThrow(/server/);
+  expect(() => assertCheckInput({ label: 'x', type: 'dns', target: { server: '192.168.1.2' } })).toThrow(/name/);
+});
+
+// Refused here rather than reaching the resolver as a malformed query, where
+// the failure would look like the DNS server's fault instead of a typo.
+test('an unsupported dns record type is refused at validation', () => {
+  expect(() => assertCheckInput({
+    label: 'x', type: 'dns', target: { server: '192.168.1.2', name: 'example.com', type: 'HTTPSSVC' },
+  })).toThrow(/target.type/);
+});
+
+test('a dns record type is accepted case-insensitively', () => {
+  const c = assertCheckInput({
+    label: 'x', type: 'dns', target: { server: '192.168.1.2', name: 'example.com', type: 'mx' },
+  });
+  expect(c.target.type).toBe('MX');
 });

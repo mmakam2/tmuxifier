@@ -2,7 +2,10 @@ import { normFp } from './tlsPin.js';
 
 // Pure validation for check definitions. The server stays the validation
 // authority: nothing the browser sends reaches an executor unvalidated.
-export const CHECK_TYPES = ['http', 'tcp', 'json', 'exec', 'heartbeat'];
+export const CHECK_TYPES = ['http', 'tcp', 'json', 'exec', 'heartbeat', 'dns'];
+// Record types the dns executor will ask for. Kept here so a definition is
+// refused at the API rather than reaching the resolver as a bad query.
+export const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SRV', 'PTR'];
 // Certificate trust for the TLS-speaking types (http, json). Same three modes,
 // with the same meanings, as the NetBox and Proxmox clients: system trust,
 // TOFU fingerprint pin (like `ssh accept-new`), explicit opt-out.
@@ -39,6 +42,15 @@ function assertTarget(type, target) {
     const port = Number(t.port);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('target.port must be 1-65535');
     return { host: t.host.trim(), port };
+  }
+  if (type === 'dns') {
+    if (typeof t.server !== 'string' || !t.server.trim()) throw new Error('target.server is required');
+    if (typeof t.name !== 'string' || !t.name.trim()) throw new Error('target.name is required');
+    const recordType = t.type === undefined || t.type === '' ? 'A' : String(t.type).toUpperCase();
+    if (!DNS_RECORD_TYPES.includes(recordType)) {
+      throw new Error(`target.type must be one of ${DNS_RECORD_TYPES.join(', ')}`);
+    }
+    return { server: t.server.trim(), name: t.name.trim(), type: recordType };
   }
   if (type === 'exec') {
     if (typeof t.boxId !== 'string' || !t.boxId.trim()) throw new Error('target.boxId is required');

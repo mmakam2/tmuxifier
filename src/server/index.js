@@ -50,6 +50,7 @@ import { runTcpCheck } from './checks/tcpCheck.js';
 import { runJsonCheck } from './checks/jsonCheck.js';
 import { runExecCheck } from './checks/execCheck.js';
 import { runHeartbeatCheck } from './checks/heartbeatCheck.js';
+import { runDnsCheck } from './checks/dnsCheck.js';
 import { createAlertManager } from './alertManager.js';
 import { DEFAULT_THRESHOLDS } from './alertPolicy.js';
 import { createMailChannel } from './alertMail.js';
@@ -291,7 +292,7 @@ const checkRunner = createCheckRunner({
   dispatcher: createCheckDispatcher({
     runners: {
       http: runHttpCheck, tcp: runTcpCheck, json: runJsonCheck,
-      exec: runExecCheck, heartbeat: runHeartbeatCheck,
+      exec: runExecCheck, heartbeat: runHeartbeatCheck, dns: runDnsCheck,
     },
   }),
   eventLog: checkEventLog,
