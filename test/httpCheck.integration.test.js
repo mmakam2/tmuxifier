@@ -48,15 +48,94 @@ test('bodyIncludes passes when the marker is present', async () => {
   expect((await runHttpCheck(check(url, { assert: { bodyIncludes: 'healthy' } }))).ok).toBe(true);
 });
 
-test('a malformed assert.status (not a two-element range) fails without throwing', async () => {
+test('a non-iterable assert.status (a bare number) falls back to the default range instead of throwing', async () => {
   // checkTypes.js only shallow-copies `assert`, so nothing upstream guarantees
   // `assert.status` is actually a [min, max] tuple by the time it reaches
   // here. Destructuring a non-iterable like a bare number throws — this
-  // pins that such a throw is caught and reported as a failed check, not
-  // let escape and crash the runner's cycle.
-  const url = await serve((_req, res) => { res.writeHead(200); res.end(); });
-  await expect(runHttpCheck(check(url, { assert: { status: 200 } })))
-    .resolves.toMatchObject({ ok: false });
+  // pins that the executor treats that the same as an absent assert.status
+  // (falls back to the default range) rather than letting it escape and
+  // crash the runner's cycle. The response here (500) is deliberately
+  // outside the default range, so the assertion is meaningful: it would also
+  // pass if the executor just returned ok:true unconditionally for anything
+  // that didn't crash, which is not what we want to claim.
+  const url = await serve((_req, res) => { res.writeHead(500); res.end(); });
+  const got = await runHttpCheck(check(url, { assert: { status: 200 } }));
+  expect(got.ok).toBe(false);
+  expect(got.detail).toContain('200-399');
+});
+
+// The throw above is the loud failure mode. The dangerous one is silent: a
+// value that IS iterable but not actually a valid [min, max] pair doesn't
+// throw at all, it just corrupts the comparison — turning a real outage into
+// a false ok:true, which is the one failure class this whole system exists
+// to prevent. Each case below picks a response status that only a correctly
+// *rejecting* (fallback-to-default) implementation would fail on.
+test('a truncated assert.status ([500], missing the upper bound) does not leave max undefined and wide open', async () => {
+  // Bug this pins: `const [min, max] = [500]` leaves max === undefined, and
+  // `res.status > undefined` is always false — so with the unvalidated
+  // destructuring, ANY status >= 500 (not just >= 500 and <= some real
+  // ceiling) would incorrectly pass.
+  const url = await serve((_req, res) => { res.writeHead(599); res.end(); });
+  const got = await runHttpCheck(check(url, { assert: { status: [500] } }));
+  expect(got.ok).toBe(false);
+  expect(got.detail).toContain('200-399');
+});
+
+test('an empty assert.status ([]) does not leave both bounds undefined and let everything pass', async () => {
+  // Bug this pins: `const [min, max] = []` leaves both undefined, so neither
+  // `res.status < undefined` nor `res.status > undefined` is ever true —
+  // every status, including a plain 500, would incorrectly pass.
+  const url = await serve((_req, res) => { res.writeHead(500); res.end(); });
+  const got = await runHttpCheck(check(url, { assert: { status: [] } }));
+  expect(got.ok).toBe(false);
+  expect(got.detail).toContain('200-399');
+});
+
+test('a string assert.status does not get destructured character-by-character', async () => {
+  // Bug this pins: a string is iterable, so `const [min, max] = '200-400'`
+  // silently succeeds with min='2', max='0' — producing a nonsensical
+  // "expected 2-0" detail instead of either honoring intent or falling back
+  // cleanly to the real default range.
+  const url = await serve((_req, res) => { res.writeHead(500); res.end(); });
+  const got = await runHttpCheck(check(url, { assert: { status: '200-400' } }));
+  expect(got.ok).toBe(false);
+  expect(got.detail).toContain('200-399');
+  expect(got.detail).not.toContain('2-0');
+});
+
+test('an assert.status with extra trailing elements is rejected rather than using just its first two', async () => {
+  // Number.isFinite on the first two elements alone can't distinguish a
+  // well-formed 2-tuple from a longer array that merely happens to start
+  // with two finite numbers ([500] and [] are both already caught by the
+  // isFinite checks regardless of length) — this is what specifically
+  // requires the exact status.length === 2 check.
+  const url = await serve((_req, res) => { res.writeHead(500); res.end(); });
+  const got = await runHttpCheck(check(url, { assert: { status: [200, 300, 'note'] } }));
+  expect(got.ok).toBe(false);
+  expect(got.detail).toContain('200-399');
+});
+
+test('a typed array (iterable, has .length, but Array.isArray is false) is not treated as a valid custom range', async () => {
+  // Number.isFinite + length alone can't tell a real array apart from any
+  // other iterable that happens to have a numeric .length and finite values
+  // at [0]/[1] — a typed array is exactly such a case. If Array.isArray were
+  // dropped, this range (500-600) would be accepted as-is and a 500 response
+  // would wrongly pass; the correct behavior is to reject it as malformed
+  // and fall back to the real default (200-399), under which 500 fails.
+  const url = await serve((_req, res) => { res.writeHead(500); res.end(); });
+  const got = await runHttpCheck(check(url, { assert: { status: new Float64Array([500, 600]) } }));
+  expect(got.ok).toBe(false);
+  expect(got.detail).toContain('200-399');
+});
+
+test('an assert.status with a non-numeric bound falls back to the default range', async () => {
+  // Same root cause, one element short of the [500] case: length is right
+  // but a bound isn't actually a number, so a bare Array.isArray + length
+  // check alone would not be enough — this is what pins Number.isFinite.
+  const url = await serve((_req, res) => { res.writeHead(500); res.end(); });
+  const got = await runHttpCheck(check(url, { assert: { status: [200, 'x'] } }));
+  expect(got.ok).toBe(false);
+  expect(got.detail).toContain('200-399');
 });
 
 test('a hung server fails on the timeout rather than hanging the runner', async () => {

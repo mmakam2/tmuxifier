@@ -4,19 +4,31 @@
 // both are the check failing, which is what the operator wants to hear about.
 const DEFAULT_STATUS_RANGE = [200, 399];
 
+// checkTypes.js (Task 5) shallow-copies `assert` without validating what's
+// inside it, and data/checks.json is a mutable file on disk regardless — so a
+// stored check's `assert.status` is not guaranteed to be a [min, max] tuple by
+// the time it reaches here. A merely-iterable-but-wrong shape ([500], [], a
+// string) doesn't throw, so the try/catch below can't catch it: it silently
+// corrupts the comparison instead (e.g. [500] leaves max undefined, and
+// `res.status > undefined` is always false, so every status >= 500 passes).
+// That's worse than a crash — a false ok:true is exactly the "the outage went
+// unreported" failure this whole system exists to prevent. So this is the
+// executor's own last line of defense: anything that isn't unambiguously a
+// two-number range is treated as absent and falls back to the default range,
+// the same way an actually-absent assert.status already does.
+function resolveStatusRange(status) {
+  if (Array.isArray(status) && status.length === 2 && Number.isFinite(status[0]) && Number.isFinite(status[1])) {
+    return status;
+  }
+  return DEFAULT_STATUS_RANGE;
+}
+
 export async function runHttpCheck(check, { now = () => Date.now(), fetchImpl = fetch } = {}) {
   const started = now();
   const controller = new AbortController();
   let timer;
   try {
-    // checkTypes.js (Task 5) shallow-copies `assert` without validating what's
-    // inside it, so a stored check's `assert.status` could in principle be
-    // anything — not just the [min, max] tuple callers are expected to send.
-    // Destructuring that here, before the try, would let a malformed value
-    // (e.g. a bare number) throw "is not iterable" straight out of this
-    // function, breaking the one guarantee this executor exists to make.
-    // Keeping it inside the try means that failure is just another ok:false.
-    const [min, max] = check.assert?.status || DEFAULT_STATUS_RANGE;
+    const [min, max] = resolveStatusRange(check.assert?.status);
     timer = setTimeout(() => controller.abort(), check.timeoutMs || 10000);
     const res = await fetchImpl(check.target.url, {
       signal: controller.signal,
