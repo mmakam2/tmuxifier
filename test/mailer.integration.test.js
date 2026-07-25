@@ -191,6 +191,31 @@ test('a failed send closes its socket promptly rather than leaking it until the 
   await waitFor(() => running.closeCount === 1, 500);
 });
 
+// Carried-forward from Task 10's review ledger: splitting `to` on commas with
+// no floor check meant a blank/whitespace-only `to` produced zero RCPT TO
+// commands while the rest of the transaction still ran to completion and
+// returned ok:true — a "delivery" that reached nobody, reported as success.
+// No fake server is started for these: the fix must reject before ever
+// opening a connection, so a passing test here proves that, and a
+// regression back to the old behavior would either hang (no server to talk
+// to) or throw ECONNREFUSED — never resolve ok:true — making this a real
+// mutation-catching test rather than one that happens to pass either way.
+test('a blank `to` fails the send instead of silently succeeding with zero recipients', async () => {
+  const got = await createMailer({
+    host: '127.0.0.1', port: 1, from: 'alerts@example.com', to: '', timeoutMs: 200,
+  }).send({ subject: 's', text: 't' });
+  expect(got.ok).toBe(false);
+  expect(got.error).toMatch(/recipient/i);
+});
+
+test('a whitespace/comma-only `to` fails the send the same way', async () => {
+  const got = await createMailer({
+    host: '127.0.0.1', port: 1, from: 'alerts@example.com', to: ' , ,  ', timeoutMs: 200,
+  }).send({ subject: 's', text: 't' });
+  expect(got.ok).toBe(false);
+  expect(got.error).toMatch(/recipient/i);
+});
+
 test('a refused connection returns ok:false rather than throwing', async () => {
   const got = await createMailer({
     host: '127.0.0.1', port: 1, from: 'a@example.com', to: 'b@example.com', timeoutMs: 1000,

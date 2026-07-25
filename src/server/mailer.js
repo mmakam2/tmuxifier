@@ -80,8 +80,22 @@ function createReplyReader(sock) {
 export function createMailer({
   host, port = 25, from, to, user = null, pass = null, useTls = false, timeoutMs = 15000,
 }) {
+  // Computed once, up front — this used to happen inline, right before the RCPT
+  // TO loop below, which meant a blank/whitespace-only `to` (an empty config
+  // field, not a deliberate choice) produced zero RCPT TO commands and the
+  // transaction still ran to completion and returned ok:true: a "delivery"
+  // that reached nobody, reported as a success. Failing here instead, before a
+  // socket is even opened, means the caller (createMailChannel ->
+  // alertManager.js) records this the same way it already records any other
+  // delivery failure — notify:failed — which keeps the alert visible and
+  // retries next cycle instead of silently starting a cooldown on a send that
+  // never went anywhere.
+  const recipients = String(to ?? '').split(',').map((r) => r.trim()).filter(Boolean);
   return {
     async send({ subject, text, headers = {} }) {
+      if (recipients.length === 0) {
+        return { ok: false, error: 'no recipients configured (to is empty)' };
+      }
       let sock;
       try {
         sock = await new Promise((resolve, reject) => {
@@ -108,7 +122,6 @@ export function createMailer({
           await say(Buffer.from(pass, 'utf8').toString('base64'));
         }
         await say(`MAIL FROM:<${from}>`);
-        const recipients = String(to).split(',').map((r) => r.trim()).filter(Boolean);
         for (const rcpt of recipients) {
           await say(`RCPT TO:<${rcpt}>`);
         }
