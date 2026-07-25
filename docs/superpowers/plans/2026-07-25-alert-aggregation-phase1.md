@@ -2712,6 +2712,23 @@ git commit -m "feat(ui): alerts and checks hub panel"
 ---
 # Slice B — The remaining probe types
 
+**Executor contract — binds every task in this slice.** Each executor returns
+`{ ok, detail, latencyMs }` and NEVER throws: a refused connection, a DNS failure, a timeout, and a
+malformed check definition are all the check failing, and a thrown exception would crash the
+runner's whole cycle. Two traps found the hard way in Task 6, both of which apply here:
+
+1. **Nothing may be destructured or dereferenced from `check` before the `try` block.** The Task 6
+   brief did exactly that and threw instead of returning `ok:false`.
+2. **`checkTypes.js` does not validate the internal shape of `assert` at all**, and `data/checks.json`
+   is a mutable file on disk, so every executor is the last line of defense. A malformed value that
+   is merely *iterable* will not throw — it silently corrupts the comparison. In Task 6,
+   `assert.status: [500]` left `max` undefined and made every status >= 500 report healthy.
+
+**A false `ok: true` is the most severe bug class in this codebase.** This system exists to report
+outages; a check that reports green through a real failure is worse than no check at all. When a
+malformed definition cannot be interpreted, fall back to the safe default or fail the check — never
+pass it.
+
 Each type is an increment against a pipeline already proven end to end by Slice A.
 
 ## Task 15: TCP check executor
