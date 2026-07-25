@@ -707,6 +707,9 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .alert-row.warning { border-left-color: #d29922; }
 .alert-row.info { border-left-color: #8b949e; }
 .check-row { display: flex; flex-wrap: wrap; gap: 12px; }
+/* Bounded height with internal scrolling. Without it the form grows past the
+   viewport and its own Create button lands outside the clickable area. */
+.modal.check-form { max-height: 86vh; overflow-y: auto; }
 /* Sits above the tab strip: a dead ingest daemon invalidates every tab, so it
    must not be something the operator has to go looking for. */
 .alert-banner { margin: 8px 0 0; padding: 8px 10px; border: 1px solid rgba(248, 81, 73, 0.4);

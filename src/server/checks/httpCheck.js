@@ -2,6 +2,8 @@
 // timeout, refused connection — returns ok:false rather than throwing, so the
 // runner treats "the target is broken" and "the probe could not run" alike:
 // both are the check failing, which is what the operator wants to hear about.
+import { requestCheck, resolveCheckTls } from './tlsRequest.js';
+
 const DEFAULT_STATUS_RANGE = [200, 399];
 
 // checkTypes.js (Task 5) shallow-copies `assert` without validating what's
@@ -23,38 +25,41 @@ function resolveStatusRange(status) {
   return DEFAULT_STATUS_RANGE;
 }
 
-export async function runHttpCheck(check, { now = () => Date.now(), fetchImpl = fetch } = {}) {
+export async function runHttpCheck(check, { now = () => Date.now(), requestImpl = requestCheck } = {}) {
   const started = now();
-  const controller = new AbortController();
-  let timer;
+  // Held outside the try so the catch can word a timeout without re-reading
+  // `check` — the throw it is handling may well be a malformed `check`.
+  let timeoutMs = 10000;
   try {
     const [min, max] = resolveStatusRange(check.assert?.status);
-    timer = setTimeout(() => controller.abort(), check.timeoutMs || 10000);
-    const res = await fetchImpl(check.target.url, {
-      signal: controller.signal,
-      redirect: 'manual',
+    timeoutMs = check.timeoutMs || 10000;
+    // node:http/https rather than fetch, so an internal HTTPS service can be
+    // trusted by pin or explicitly waived (see tlsRequest.js). Redirects are
+    // never followed: reporting the target's 200 would hide that the checked
+    // URL itself has started redirecting, which is exactly the drift a check
+    // should surface.
+    const res = await requestImpl({
+      url: check.target.url,
+      timeoutMs,
+      tls: resolveCheckTls(check, check.target.url),
       headers: check.secret ? { authorization: `Bearer ${check.secret}` } : {},
     });
-    const body = check.assert?.bodyIncludes ? await res.text() : '';
     if (res.status < min || res.status > max) {
       return { ok: false, detail: `HTTP ${res.status} (expected ${min}-${max})`, latencyMs: now() - started };
     }
-    if (check.assert?.bodyIncludes && !body.includes(check.assert.bodyIncludes)) {
+    if (check.assert?.bodyIncludes && !res.text.includes(check.assert.bodyIncludes)) {
       return { ok: false, detail: `body did not contain "${check.assert.bodyIncludes}"`, latencyMs: now() - started };
     }
     return { ok: true, detail: `HTTP ${res.status}`, latencyMs: now() - started };
   } catch (e) {
-    // AbortError is the only way our own timer's abort() surfaces here, so it
-    // unambiguously means "timed out" — every other rejection (ECONNREFUSED,
-    // DNS failure, a fetchImpl that throws outright) is a distinct failure
-    // mode and must not be worded the same way.
-    const aborted = e?.name === 'AbortError';
+    // The timedOut marker is set only by our own timeout handler, so it
+    // unambiguously means "too slow to answer" — every other rejection
+    // (ECONNREFUSED, DNS failure, a TLS pin mismatch, a requestImpl that throws
+    // outright) is a distinct failure mode and must not be worded the same way.
     return {
       ok: false,
-      detail: aborted ? `timed out after ${check.timeoutMs || 10000}ms` : (e?.message || 'request failed'),
+      detail: e?.timedOut ? `timed out after ${timeoutMs}ms` : (e?.message || 'request failed'),
       latencyMs: now() - started,
     };
-  } finally {
-    clearTimeout(timer);
   }
 }

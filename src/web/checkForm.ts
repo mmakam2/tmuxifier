@@ -42,6 +42,16 @@ export const IMPLEMENTED_TYPES = ['http', 'tcp', 'json', 'exec', 'heartbeat'];
 // nothing can ever satisfy, so it would sit there failing forever.
 export const checkinPath = (checkId: string): string => `/hb/${checkId}`;
 
+// Certificate trust, offered only for the types that speak TLS. Mirrors
+// TLS_MODES in checkTypes.js, which stays the validation authority.
+export const TLS_MODES = ['ca', 'pin', 'insecure'] as const;
+export const TLS_TYPES = ['http', 'json'];
+export const tlsModeLabel = (mode: string): string => ({
+  ca: 'Verify against the system CA store (default)',
+  pin: 'Pin this certificate’s fingerprint',
+  insecure: 'Do not verify the certificate',
+}[mode] ?? mode);
+
 export function checkFieldsFor(type: string): CheckField[] {
   return FIELDS[type] ?? [];
 }
@@ -73,6 +83,13 @@ export function checkFormPayload(values: Record<string, unknown>): Record<string
   // still reporting green. No form field sets this yet; it exists to preserve
   // what is already there.
   if (values.assert && typeof values.assert === 'object') payload.assert = values.assert;
+  // Only sent for the TLS-speaking types, so a tcp/exec/heartbeat check never
+  // carries a trust mode that means nothing for it.
+  if (TLS_TYPES.includes(type)) {
+    if (values.tlsMode) payload.tlsMode = String(values.tlsMode);
+    const fp = typeof values.fingerprint256 === 'string' ? values.fingerprint256.trim() : '';
+    if (fp) payload.fingerprint256 = fp;
+  }
   // A blank secret means "leave the stored one alone" — omitting the key is what
   // lets an edit form avoid round-tripping a credential through the browser.
   const secret = typeof values.secret === 'string' ? values.secret.trim() : '';

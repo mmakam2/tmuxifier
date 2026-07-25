@@ -568,6 +568,15 @@ needs no agent installed, no API exposed, and no new credential stored. An optio
 secret is sealed at rest in `data/checks.json` and sent as a bearer token; it is never returned to
 the browser, and leaving the field blank on an edit keeps the stored one.
 
+**Internal HTTPS works.** `http` and `json` checks offer the same three certificate-trust modes as
+the NetBox and Proxmox integrations: verify against the system CA store (default), pin the
+certificate's SHA-256 fingerprint, or explicitly skip verification. Without this, anything behind a
+private CA — most of a homelab — reported a certificate error as an outage. One caveat worth
+knowing: pinning detects a swapped certificate but **breaks whenever the certificate is renewed**,
+so avoid it for short-lived internal certs that rotate on their own (Caddy's local CA, step-ca) and
+prefer skipping verification for those, or install the internal root into the host's trust store and
+stay on the default.
+
 **Heartbeats catch the job that never ran.** They are the one check that fires because nothing
 happened, so they need a receiver: a separate daemon (`npm run start:ingest`, or the systemd unit
 in `deploy/tmuxifier-ingest.service`) that accepts a check-in and nothing else. Append the call to

@@ -68,3 +68,32 @@ test('every offered type is one the server would accept', () => {
 test('every offered type has target fields to render', () => {
   for (const type of IMPLEMENTED_TYPES) expect(checkFieldsFor(type).length).toBeGreaterThan(0);
 });
+
+// Certificate trust reaches the payload only for the types that speak TLS, so a
+// tcp/exec/heartbeat check never carries a trust mode that means nothing for it.
+test('a tls mode is sent for http and json checks', () => {
+  const p = checkFormPayload({ label: 'x', type: 'http', url: 'https://example.com/h', tlsMode: 'insecure' });
+  expect(p.tlsMode).toBe('insecure');
+});
+
+test('a tls mode is not sent for types that never speak TLS', () => {
+  const p = checkFormPayload({ label: 'x', type: 'tcp', host: '192.168.1.10', port: '443', tlsMode: 'insecure' });
+  expect('tlsMode' in p).toBe(false);
+});
+
+test('a pinned fingerprint is carried, and a blank one is omitted', () => {
+  const pinned = checkFormPayload({
+    label: 'x', type: 'json', url: 'https://example.com/h', path: 'a', tlsMode: 'pin', fingerprint256: ' AA:BB ',
+  });
+  expect(pinned.fingerprint256).toBe('AA:BB');
+  const blank = checkFormPayload({
+    label: 'x', type: 'json', url: 'https://example.com/h', path: 'a', tlsMode: 'ca', fingerprint256: '   ',
+  });
+  expect('fingerprint256' in blank).toBe(false);
+});
+
+test('the offered tls modes match the server list', async () => {
+  const { TLS_MODES: serverModes } = await import('../src/server/checkTypes.js');
+  const { TLS_MODES } = await import('../src/web/checkForm.ts');
+  expect([...TLS_MODES]).toEqual(serverModes);
+});

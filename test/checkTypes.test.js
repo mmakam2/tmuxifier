@@ -9,6 +9,9 @@ test('a minimal http check normalizes with defaults applied', () => {
     label: 'Invoice app', type: 'http', target: { url: 'https://invoices.example.com/health' },
     assert: {}, intervalSec: 60, timeoutMs: 10000, severity: 'warning',
     failuresBeforeNotify: 3, enabled: true,
+    // Certificate trust defaults to the system store, the strictest of the
+    // three modes — a check never starts life trusting more than a browser would.
+    tlsMode: 'ca', fingerprint256: null,
   });
 });
 
@@ -223,4 +226,46 @@ test('a caller-supplied id (or any other unknown field) never survives into the 
   // have it echoed back, or a stored check could collide with / impersonate another.
   expect(assertCheckInput({ ...base, id: 'evil-id', extra: 'nope' })).not.toHaveProperty('id');
   expect(assertCheckInput({ ...base, id: 'evil-id', extra: 'nope' })).not.toHaveProperty('extra');
+});
+
+// Certificate trust for the TLS-speaking types. The three modes mean the same
+// here as in the NetBox and Proxmox clients, and the validation is strict for
+// the same reason severity is: an unrecognised value must not be read as 'ca'
+// (masking a typo) and must certainly not be read as something looser, which
+// would quietly disable certificate verification on a monitoring probe.
+test('tls mode defaults to system trust when unspecified', () => {
+  const c = assertCheckInput({ label: 'x', type: 'http', target: { url: 'https://example.com/h' } });
+  expect(c.tlsMode).toBe('ca');
+  expect(c.fingerprint256).toBe(null);
+});
+
+test('an unrecognised tls mode is refused rather than defaulted', () => {
+  expect(() => assertCheckInput({
+    label: 'x', type: 'http', target: { url: 'https://example.com/h' }, tlsMode: 'trust-me',
+  })).toThrow(/tlsMode/);
+});
+
+test('insecure mode is accepted only when asked for explicitly', () => {
+  const c = assertCheckInput({
+    label: 'x', type: 'http', target: { url: 'https://example.com/h' }, tlsMode: 'insecure',
+  });
+  expect(c.tlsMode).toBe('insecure');
+});
+
+// Storing 'pin' with no fingerprint would produce a check that cannot connect to
+// anything: tlsRequest.js refuses a blank pin at request time, so it would fail
+// forever with nothing pointing at the cause.
+test('pin mode without a fingerprint is refused at validation, not left to fail at run time', () => {
+  expect(() => assertCheckInput({
+    label: 'x', type: 'http', target: { url: 'https://example.com/h' }, tlsMode: 'pin',
+  })).toThrow(/fingerprint/i);
+});
+
+test('a pinned fingerprint is normalised so formatting differences still match', () => {
+  const c = assertCheckInput({
+    label: 'x', type: 'http', target: { url: 'https://example.com/h' },
+    tlsMode: 'pin', fingerprint256: 'ab:cd:ef:01',
+  });
+  expect(c.tlsMode).toBe('pin');
+  expect(c.fingerprint256).toBe('ABCDEF01');
 });

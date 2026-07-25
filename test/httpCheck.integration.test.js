@@ -1,4 +1,4 @@
-import { test, expect, afterEach, vi } from 'vitest';
+import { test, expect, afterEach } from 'vitest';
 import http from 'node:http';
 import { runHttpCheck } from '../src/server/checks/httpCheck.js';
 
@@ -168,12 +168,12 @@ test('a connection refused is a check failure, not a thrown error', async () => 
   expect(got.detail).not.toMatch(/timed out/i);
 });
 
-test('a fetchImpl that throws synchronously resolves to ok:false, never rejects', async () => {
-  // Guards the try/catch actually wrapping the fetchImpl call site (not just
+test('a requestImpl that throws synchronously resolves to ok:false, never rejects', async () => {
+  // Guards the try/catch actually wrapping the requestImpl call site (not just
   // the await of an already-pending promise) — a call-site throw and a
   // rejected promise are different JS mechanics and both must be caught.
   const throwing = () => { throw new Error('boom'); };
-  await expect(runHttpCheck(check('http://example.com/'), { fetchImpl: throwing }))
+  await expect(runHttpCheck(check('http://example.com/'), { requestImpl: throwing }))
     .resolves.toMatchObject({ ok: false, detail: expect.stringContaining('boom') });
 });
 
@@ -228,9 +228,11 @@ test('no auth header is sent when the check has no secret', async () => {
 });
 
 test('a redirect status is reported as-is rather than being silently followed', async () => {
-  // Without redirect:'manual', fetch would transparently follow the 302 and
-  // report the target's 200 — hiding the fact that the checked URL itself
-  // is redirecting, which is exactly the kind of drift a check should surface.
+  // node:http never follows redirects on its own, but a future switch back to
+  // a following client would transparently report the target's 200 — hiding
+  // that the checked URL itself is redirecting, which is exactly the kind of
+  // drift a check should surface. This pins the reported status to the one the
+  // checked URL actually returned.
   let targetHit = false;
   const target = await serve((_req, res) => { targetHit = true; res.writeHead(200); res.end(); });
   const url = await serve((_req, res) => { res.writeHead(302, { Location: target }); res.end(); });
@@ -239,30 +241,20 @@ test('a redirect status is reported as-is rather than being silently followed', 
   expect(targetHit).toBe(false);
 });
 
-test('the timeout timer is cleared on a successful response, not left to fire later', async () => {
-  // An uncleared timer is invisible to every assertion above (it only ever
-  // aborts a request that has already finished), so it needs its own probe.
-  // A bare spy on clearTimeout is not enough — undici's own fetch internals
-  // call clearTimeout too, so an unrelated call would make the assertion
-  // pass vacuously even if the executor's own timer leaked. Instead, capture
-  // the specific id the executor's setTimeout call returns (it runs
-  // synchronously before the first await, so it's necessarily the first
-  // timer created) and check clearTimeout was called with exactly that id.
-  const url = await serve((_req, res) => { res.writeHead(200); res.end(); });
-  const realSetTimeout = global.setTimeout;
-  let capturedTimer;
-  const setTimeoutSpy = vi.spyOn(global, 'setTimeout').mockImplementation((fn, ms, ...rest) => {
-    const id = realSetTimeout(fn, ms, ...rest);
-    if (capturedTimer === undefined) capturedTimer = id;
-    return id;
-  });
-  const clearSpy = vi.spyOn(global, 'clearTimeout');
-  try {
-    await runHttpCheck(check(url));
-    expect(capturedTimer).toBeDefined();
-    expect(clearSpy).toHaveBeenCalledWith(capturedTimer);
-  } finally {
-    setTimeoutSpy.mockRestore();
-    clearSpy.mockRestore();
-  }
+test('a successful response leaves no connection open on the target', async () => {
+  // Replaces an older test that spied on clearTimeout. The executor no longer
+  // arms its own setTimeout — the request carries its own timeout — so the
+  // leak worth pinning changed shape: node's global agent keeps sockets alive
+  // by default, which for a checker sweeping a fleet every 30s would mean a
+  // permanent connection to everything it watches. tlsRequest.js passes
+  // agent:false; this proves it.
+  let open = 0;
+  const server = http.createServer((_req, res) => { res.writeHead(200); res.end('ok'); });
+  server.on('connection', (sock) => { open += 1; sock.on('close', () => { open -= 1; }); });
+  servers.push(server);
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const got = await runHttpCheck(check(`http://127.0.0.1:${server.address().port}`));
+  expect(got.ok).toBe(true);
+  await new Promise((r) => setTimeout(r, 150));
+  expect(open).toBe(0);
 });

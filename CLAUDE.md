@@ -247,7 +247,7 @@ pattern for new modules.
   (`notifyPrefs.ts`).
 - Alert aggregation (`eventLog.js`, `alertFold.js`, `alertPolicy.js`, `alertManager.js`,
   `alertDigest.js`, `checkTypes.js`, `checkStore.js`, `checkRunner.js`, `checks/`, `mailer.js`,
-  `alertMail.js`, `alertStateStore.js`, `ingestLiveness.js`, `ingest/`) — the monitoring
+  `alertMail.js`, `alertStateStore.js`, `ingestLiveness.js`, `ingest/`, `checks/tlsRequest.js`) — the monitoring
   subsystem. `eventLog.js` is append-only day-partitioned NDJSON, deliberately **not**
   `jsonFile.js`: that module quarantines a whole corrupt file, which is right for a state document
   and wrong for a log where one bad line must not cost a day of history. An alert is not a stored
@@ -268,6 +268,19 @@ pattern for new modules.
   SMTP client in the spirit of `googleAuth.js`; `ingest/` is the separate-process heartbeat
   receiver and `ingestLiveness.js` reads the stamp it writes, so a dead receiver never reads as a
   quiet night.
+- `checks/tlsRequest.js` — the node:http/https request path the `http` and `json` executors share,
+  over `tlsPin.js`, giving them the same three certificate-trust modes as the NetBox and Proxmox
+  clients: `ca` (system store), `pin` (TOFU fingerprint), `insecure` (explicit opt-out). They used
+  bare `fetch` before, which cannot trust a private CA, so every internal HTTPS service failed with
+  `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` and the check reported that as the service being down. An
+  unrecognised mode resolves to `ca`, never to something looser, and pin mode with a blank
+  fingerprint refuses rather than falling back to system trust. Two non-obvious details: the pinned
+  factory is attached to an explicit `https.Agent` rather than passed as `options.createConnection`
+  (node silently ignores that option when `agent: false` is also set, which reads as "pinned" while
+  actually running ordinary validation), and `agent: false` keeps probes from pooling connections —
+  node's global agent keeps sockets alive, which for a fleet-wide sweep would mean a permanent
+  connection to everything watched. Response bodies are capped at 256 KB so a probe cannot be made
+  to exhaust the prober.
 - `secretBox.js` — AES-256-GCM seal/open for secrets at rest; key derived from `cookieSecret` via
   HKDF. Encrypts the persisted Proxmox secrets: the API token, any added SSH management keys, and
   the optional root password.

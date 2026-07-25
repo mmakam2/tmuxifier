@@ -1,6 +1,12 @@
+import { normFp } from './tlsPin.js';
+
 // Pure validation for check definitions. The server stays the validation
 // authority: nothing the browser sends reaches an executor unvalidated.
 export const CHECK_TYPES = ['http', 'tcp', 'json', 'exec', 'heartbeat'];
+// Certificate trust for the TLS-speaking types (http, json). Same three modes,
+// with the same meanings, as the NetBox and Proxmox clients: system trust,
+// TOFU fingerprint pin (like `ssh accept-new`), explicit opt-out.
+export const TLS_MODES = ['ca', 'pin', 'insecure'];
 export const SEVERITIES = ['critical', 'warning', 'info'];
 
 const clampInt = (v, lo, hi, dflt) => {
@@ -54,9 +60,25 @@ export function assertCheckInput(spec) {
   // one would mask a caller's typo as a real (wrong) severity choice.
   const severity = s.severity === undefined ? 'warning' : s.severity;
   if (!SEVERITIES.includes(severity)) throw new Error(`severity must be one of ${SEVERITIES.join(', ')}`);
+  // How to trust the certificate, for the types that speak TLS. Rejected rather
+  // than defaulted for the same reason as severity: silently reading an
+  // unrecognised mode as 'ca' would mask a typo, and reading it as anything
+  // looser would quietly disable certificate verification.
+  const tlsMode = s.tlsMode === undefined ? 'ca' : s.tlsMode;
+  if (!TLS_MODES.includes(tlsMode)) throw new Error(`tlsMode must be one of ${TLS_MODES.join(', ')}`);
+  // A pin is only meaningful as a fingerprint. Demanding one here is what stops
+  // 'pin' from being stored in a state that cannot connect to anything —
+  // tlsRequest.js refuses a blank pin at request time, so without this the
+  // check would simply fail forever with no hint as to why.
+  const fingerprint256 = normFp(s.fingerprint256);
+  if (tlsMode === 'pin' && !fingerprint256) {
+    throw new Error('tlsMode "pin" requires fingerprint256 — probe the server to capture it');
+  }
   return {
     label,
     type: s.type,
+    tlsMode,
+    fingerprint256: fingerprint256 || null,
     target: assertTarget(s.type, s.target),
     assert: s.assert && typeof s.assert === 'object' ? { ...s.assert } : {},
     intervalSec: clampInt(s.intervalSec, 10, 86400, 60),

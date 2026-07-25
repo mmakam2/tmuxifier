@@ -1,3 +1,5 @@
+import { requestCheck, resolveCheckTls } from './tlsRequest.js';
+
 // Assert on one field of a JSON API response. Covers the node-dashboard cases
 // (online score, QUIC status, free disk) and token-validity probes, where the
 // interesting signal is a field value rather than an HTTP status.
@@ -36,35 +38,35 @@ function evaluate(value, assert) {
   return { ok: true, detail: shown };
 }
 
-export async function runJsonCheck(check, { now = () => Date.now(), fetchImpl = fetch } = {}) {
+export async function runJsonCheck(check, { now = () => Date.now(), requestImpl = requestCheck } = {}) {
   const started = now();
-  const controller = new AbortController();
-  let timer;
   // Held outside the try so the catch can word a timeout without re-reading
   // `check` — the throw it is handling may well be a malformed `check`.
   let timeoutMs = 10000;
   try {
-    // Nothing is read off `check` above this line: the timer setup reads
-    // check.timeoutMs, and hoisting it out of the guard (as the brief did)
-    // turns a malformed stored definition into a synchronous throw that no
-    // catch here can see, taking the runner's whole due cycle with it.
+    // Nothing is read off `check` above this line: a malformed stored
+    // definition must surface as a failed check, not as a synchronous throw
+    // that no catch here can see, which would take the runner's whole due
+    // cycle with it.
     timeoutMs = check?.timeoutMs || 10000;
-    timer = setTimeout(() => controller.abort(), timeoutMs);
-    const res = await fetchImpl(check.target.url, {
-      signal: controller.signal,
+    // node:http/https rather than fetch, so a JSON API behind a private CA can
+    // be trusted by pin or explicitly waived (see tlsRequest.js).
+    const res = await requestImpl({
+      url: check.target.url,
+      timeoutMs,
+      tls: resolveCheckTls(check, check.target.url),
       headers: check.secret ? { authorization: `Bearer ${check.secret}` } : {},
     });
-    const payload = await res.json();
+    // Throws on a non-JSON body, which the catch turns into a failed check —
+    // an endpoint serving an HTML error page is not a healthy JSON API.
+    const payload = JSON.parse(res.text);
     const { ok, detail } = evaluate(pickPath(payload, check.target.path), check.assert || {});
     return { ok, detail: `${check.target.path}: ${detail}`, latencyMs: now() - started };
   } catch (e) {
-    const aborted = e?.name === 'AbortError';
     return {
       ok: false,
-      detail: aborted ? `timed out after ${timeoutMs}ms` : (e?.message || 'request failed'),
+      detail: e?.timedOut ? `timed out after ${timeoutMs}ms` : (e?.message || 'request failed'),
       latencyMs: now() - started,
     };
-  } finally {
-    clearTimeout(timer);
   }
 }

@@ -10,7 +10,10 @@ import {
   laneFor, severityRank, reasonLabel, occurrenceSummary, relativeAge, sourceRows,
   type Alert, type Severity,
 } from './alertFormat';
-import { checkFieldsFor, checkFormPayload, checkinPath, IMPLEMENTED_TYPES } from './checkForm';
+import {
+  checkFieldsFor, checkFormPayload, checkinPath, IMPLEMENTED_TYPES,
+  TLS_MODES, TLS_TYPES, tlsModeLabel,
+} from './checkForm';
 
 const TABS = ['Alerts', 'Checks', 'Feed', 'Sources'] as const;
 type Tab = typeof TABS[number];
@@ -302,7 +305,11 @@ export function openAlertsHub() {
   }
 
   function openCheckForm(existing: CheckSummary | null) {
-    const dialog = el('div', { class: 'modal' });
+    // Scrolls internally: the form is tall (target fields, severity, four
+    // numeric fields, certificate trust), and a modal that simply grows past
+    // the viewport puts its own submit button somewhere the pointer cannot
+    // reach — the backdrop ends up on top of it.
+    const dialog = el('div', { class: 'modal check-form' });
     const { close: closeForm } = openModal({ modal: dialog });
 
     const label = input(existing?.label ?? '', { placeholder: 'Invoice app' });
@@ -335,9 +342,46 @@ export function openAlertsHub() {
     }
     renderTarget();
 
+    // Certificate trust, shown only for the types that speak TLS. Without this
+    // an internal HTTPS service is unmonitorable from the UI: the system CA
+    // store will never vouch for a private cert, and the check would report the
+    // cert failure as the service being down.
+    let tlsMode = (existing as { tlsMode?: string } | null)?.tlsMode ?? 'ca';
+    const fingerprint = input((existing as { fingerprint256?: string } | null)?.fingerprint256 ?? '', {
+      placeholder: 'AA:BB:CC… (required for pin)',
+    });
+    const fingerprintField = field('Certificate fingerprint (SHA-256)', fingerprint);
+    const tlsRow = el('div', {}, TLS_MODES.map((m) => {
+      const r = makeRadio('check-tls', m, tlsModeLabel(m), m === tlsMode);
+      r.input.addEventListener('change', () => {
+        if (!r.input.checked) return;
+        tlsMode = m;
+        fingerprintField.style.display = m === 'pin' ? '' : 'none';
+      });
+      return r.wrap;
+    }));
+    const tlsSection = el('fieldset', { class: 'setup-section' }, [
+      el('legend', {}, ['Certificate trust']),
+      tlsRow,
+      fingerprintField,
+      el('div', { class: 'pve-sub' }, [
+        'Pinning detects a swapped certificate, but breaks whenever the certificate is renewed — '
+        + 'avoid it for short-lived internal certs (Caddy, step-ca) that rotate on their own.',
+      ]),
+    ]);
+    const syncTlsVisibility = () => {
+      tlsSection.style.display = TLS_TYPES.includes(type) ? '' : 'none';
+      fingerprintField.style.display = tlsMode === 'pin' ? '' : 'none';
+    };
+
     const typeRow = el('div', { class: 'check-row' }, IMPLEMENTED_TYPES.map((t) => {
       const r = makeRadio('check-type', t, t, t === type);
-      r.input.addEventListener('change', () => { if (r.input.checked) { type = t; renderTarget(); } });
+      r.input.addEventListener('change', () => {
+        if (!r.input.checked) return;
+        type = t;
+        renderTarget();
+        syncTlsVisibility();
+      });
       return r.wrap;
     }));
     const sevRow = el('div', { class: 'check-row' }, LANES.map((s) => {
@@ -353,6 +397,7 @@ export function openAlertsHub() {
         intervalSec: intervalSec.value, timeoutMs: timeoutMs.value,
         failuresBeforeNotify: failures.value,
         enabled: enabled.checked, secret: secret.value,
+        tlsMode, fingerprint256: fingerprint.value,
         // No field edits this, but omitting it would make the server reset the
         // stored assertion to {} — an edit of an unrelated field would quietly
         // turn a body/status/JSON assertion into a bare reachability probe.
@@ -373,6 +418,7 @@ export function openAlertsHub() {
       field('Label', label),
       el('label', { class: 'field' }, [el('span', {}, ['Type']), typeRow]),
       targetBox,
+      tlsSection,
       el('label', { class: 'field' }, [el('span', {}, ['Severity']), sevRow]),
       field('Interval (seconds)', intervalSec),
       field('Timeout (ms)', timeoutMs),
@@ -381,6 +427,7 @@ export function openAlertsHub() {
       el('label', { class: 'check-field' }, [enabled, el('span', {}, ['Enabled'])]),
       el('div', { class: 'modal-actions' }, [el('button', { type: 'button', onclick: closeForm }, ['Cancel']), save]),
     );
+    syncTlsVisibility();
     label.focus();
   }
 }
