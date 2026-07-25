@@ -138,6 +138,23 @@ test('getState reports the last result and the next due time', async () => {
   });
 });
 
+// Every other test pins jitter: () => 0, which cannot tell "jitter(1000) is
+// added to nextRunAt" apart from "the jitter term was never wired up at all" —
+// deleting `+ jitter(1000)` from the runner leaves the whole suite green
+// without this one. A non-zero, easily-distinguished offset (500, not a
+// multiple of the 30000ms interval) makes the addition unambiguous.
+test('nextRunAt incorporates the injected jitter offset on top of the interval', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'runner-'));
+  const runner = createCheckRunner({
+    checkStore: { listChecks: async () => [chk()], getCheck: async () => chk() },
+    dispatcher: createCheckDispatcher({ runners: { http: async () => ({ ok: true, detail: '', latencyMs: 1 }) } }),
+    eventLog: createEventLog({ dir, prefix: 'checks', now: () => 1000 }),
+    now: () => 1000, jitter: () => 500,
+  });
+  await runner.runDue();
+  expect(runner.getState().c1.nextRunAt).toBe(1000 + 30000 + 500);
+});
+
 test('the sealed secret is resolved for a due check so executors can authenticate', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'runner-'));
   const seen = [];
@@ -218,6 +235,46 @@ test('one check throwing does not stop other checks in the same cycle', async ()
   expect(events).toHaveLength(2);
   expect(events.some((e) => e.key === 'check:c1' && e.title.includes('boom'))).toBe(true);
   expect(events.some((e) => e.key === 'check:c2' && e.title.includes('HTTP 502'))).toBe(true);
+});
+
+// Contract 2 again, but for the *other* place a due check can fail before it
+// ever reaches the dispatcher: secretBox.open() (called inside the real
+// checkStore.getCheck(id, { withSecret: true })) throws synchronously on a
+// corrupted sealed value or a rotated cookieSecret — a real failure mode, not
+// a hypothetical one. concurrency: 1 forces the single-worker sequential shape
+// where an unguarded throw would kill the worker mid-loop and drop c2 entirely,
+// with runDue() itself rejecting and NEITHER check getting an event — worse
+// than "one check reported wrong": the monitor going silent for the whole
+// cycle. Both halves are asserted: the broken check still gets a readable
+// firing event, and the other due check in the same cycle still runs and
+// still logs its own event.
+test('a check whose secret fails to resolve does not stop another due check, and both get logged', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'runner-'));
+  const eventLog = createEventLog({ dir, prefix: 'checks', now: () => 1000 });
+  const checks = [chk({ id: 'c1' }), chk({ id: 'c2', label: 'Second app' })];
+  const runner = createCheckRunner({
+    checkStore: {
+      listChecks: async () => checks,
+      getCheck: async (id) => {
+        if (id === 'c1') throw new Error('bad auth tag');
+        return checks.find((c) => c.id === id);
+      },
+    },
+    dispatcher: createCheckDispatcher({
+      runners: { http: async () => ({ ok: false, detail: 'HTTP 502', latencyMs: 2 }) },
+    }),
+    eventLog, now: () => 1000, jitter: () => 0, concurrency: 1,
+  });
+  await runner.runDue();
+  const events = await eventLog.readSince(0);
+  expect(events).toHaveLength(2);
+  expect(events.some((e) => e.key === 'check:c1'
+    && e.state === 'firing'
+    && e.title.includes('secret resolution failed')
+    && e.title.includes('bad auth tag'))).toBe(true);
+  expect(events.some((e) => e.key === 'check:c2' && e.state === 'firing' && e.title.includes('HTTP 502'))).toBe(true);
+  expect(runner.getState().c1).toMatchObject({ ok: false, consecutiveFail: 1 });
+  expect(runner.getState().c2).toMatchObject({ ok: false, consecutiveFail: 1 });
 });
 
 // Pins the reset-on-success (consecutiveFail -> 0) and reset-on-failure

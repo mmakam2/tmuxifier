@@ -27,18 +27,11 @@ export function createCheckRunner({
     return state.get(id);
   };
 
-  async function execute(check) {
+  // Split out of execute() so a secret-resolution failure (see runDue below)
+  // can be recorded the same way a dispatch failure is, without needing to
+  // fabricate a dispatcher call for a check whose secret never resolved.
+  async function recordResult(check, result) {
     const s = entry(check.id);
-    let result;
-    try {
-      result = await dispatcher.run(check, deps);
-    } catch (e) {
-      // The dispatcher itself never throws (createCheckDispatcher awaits the
-      // executor internally), but an executor is arbitrary injected code, so
-      // this catch is the one place in the cycle that stands between a bad
-      // executor and an unhandled rejection taking the whole cycle down.
-      result = { ok: false, detail: e?.message || 'check threw', latencyMs: 0 };
-    }
     const ts = now();
     s.lastRunAt = ts;
     // Jitter spreads same-interval checks so they do not all fire on the same
@@ -75,6 +68,20 @@ export function createCheckRunner({
     return result;
   }
 
+  async function execute(check) {
+    let result;
+    try {
+      result = await dispatcher.run(check, deps);
+    } catch (e) {
+      // The dispatcher itself never throws (createCheckDispatcher awaits the
+      // executor internally), but an executor is arbitrary injected code, so
+      // this catch is the one place in the cycle that stands between a bad
+      // executor and an unhandled rejection taking the whole cycle down.
+      result = { ok: false, detail: e?.message || 'check threw', latencyMs: 0 };
+    }
+    return recordResult(check, result);
+  }
+
   function runDue() {
     // Coalesce, exactly as statusPoller.js does: the tick fires on a fixed
     // cadence whether or not the previous cycle finished.
@@ -87,7 +94,27 @@ export function createCheckRunner({
       // duration of one probe and never enters a listing, a route response, or
       // the event log.
       await mapWithConcurrency(due, concurrency, async (c) => {
-        const full = await checkStore.getCheck(c.id, { withSecret: true });
+        let full;
+        try {
+          full = await checkStore.getCheck(c.id, { withSecret: true });
+        } catch (e) {
+          // secretBox.open() throws synchronously on a bad auth tag (a
+          // corrupted sealed value, or cookieSecret rotated after the check
+          // was saved) — a real failure mode, not a defensive nicety. Left
+          // unguarded, this throw would escape mapWithConcurrency's worker
+          // loop: the worker dies mid-iteration (dropping every check still
+          // queued behind this one in that worker), Promise.all rejects, and
+          // runDue() itself rejects — logging NOTHING for any check that
+          // cycle, including this one. That is strictly worse than "one check
+          // reported wrong": it is the monitor going silent. Recording it as
+          // an ordinary failed check (using the redacted listing `c` already
+          // in hand, since a fresh `getCheck` won't return one) keeps this
+          // check's own failure visible and lets every other due check in the
+          // cycle still run.
+          return recordResult(c, {
+            ok: false, detail: `secret resolution failed: ${e?.message || 'unknown error'}`, latencyMs: 0,
+          });
+        }
         return execute(full || c);
       });
     })().finally(() => { inFlight = null; });
