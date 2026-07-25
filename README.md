@@ -126,19 +126,25 @@ on the device viewing the dashboard — otherwise that device transparently fall
 empty value is ignored. The bundled fonts (MesloLGMDZ, then MesloLGSDZ and JuliaMono) always remain
 as the fallback, so symbol glyphs (e.g. Claude Code's UI) keep rendering regardless of the choice.
 
-The sidebar's **export** (⤓) and **import** (⤒) buttons download and upload the full box list as a
-JSON file — a portable backup you can move between Tmuxifier instances. Import adds boxes from the
-file, re-minting each id and skipping any whose host/label already exists (so re-importing is safe).
+**Settings → Boxes** has **export** and **import** buttons that download and upload the full box
+list as a JSON file — a portable backup you can move between Tmuxifier instances. Import adds boxes
+from the file, re-minting each id and skipping any whose host/label already exists (so re-importing
+is safe).
 It carries no SSH secrets; boxes still rely on your keys/agent/`~/.ssh/config` at connect time.
 The sidebar itself and each tag group can be collapsed (‹ next to the brand, click a group
 header); both states persist across reloads.
 
-A ⚙ **settings** modal (top of the sidebar) has three tabs: **NetBox** (an http/https selector +
+A ⚙ **settings** modal (top of the sidebar) has six tabs: **Boxes** (box-list export/import,
+above), **NetBox** (an http/https selector +
 host and token — the TLS options, including fingerprint pinning for self-signed certs, appear
 only for https — plus a connection test; also powers `auto-static` IP allocation during
-provisioning), **Proxmox** (host profiles and LXC secrets), and **Notifications** (browser
+provisioning), **Proxmox** (host profiles and LXC secrets), **Passkeys** (enroll, remove, and the
+optional "require a passkey" sign-in policy), **Voice** (whisper.cpp install, model choice, and a
+mic test), and **Notifications** (browser
 notification permission and per-event-kind toggles); see
-[Proxmox LXC provisioning](#proxmox-lxc-provisioning) below for NetBox and Proxmox details.
+[Proxmox LXC provisioning](#proxmox-lxc-provisioning) below for NetBox and Proxmox details,
+[Passkeys](#passkeys) for the sign-in policy, and [Voice dictation](#voice-dictation) for the
+install flow.
 
 ## Authentication
 `TMUXIFIER_AUTH_MODE` selects the primary login method: `password` (default) or `oauth`, which
@@ -246,6 +252,13 @@ tools"** checklist that runs in the same provisioning step — a full system upd
 curl, git, the GitHub CLI, Node.js + npm, Bubblewrap, and the Codex, Claude Code, and
 Antigravity CLIs — using the same idempotent multi-distro install script, so re-running
 provisioning skips anything already installed.
+
+Below that checklist sits **"Push Claude Code statusline"** (unchecked by default). Ticking it
+copies *this host's own* Claude Code statusline script to the box and merges a `statusLine` block
+into the box's `~/.claude/settings.json`, preserving every other key in that file. The box decides
+whether it applies: with no Claude Code installed there the push is a recorded no-op, so ticking it
+for a box that gets Claude Code later takes effect the next time setup runs. It runs after the
+setup job's other work, and a skip or failure is recorded on the job without failing it.
 
 Both surfaces also offer a **"Seed AI CLI auth (claude/codex) from this host"** checkbox
 (unchecked by default). Ticking it copies the *Tmuxifier host's own* AI CLI subscription

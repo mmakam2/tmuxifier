@@ -218,7 +218,9 @@ pattern for new modules.
   On reaching `done` — from either the non-interactive run or an interactive finish — a job whose
   options asked for it seeds the box's AI CLI auth (injected `seed`/`getBox`) under a `seeding`
   phase, records the redacted per-target result on `job.seed`, and only then flips to `done`; a
-  failed seed is recorded, never promoted to a job failure. The box's tmux session is created
+  failed seed is recorded, never promoted to a job failure. An opt-in `statusline` phase
+  (injected `pushStatusline`, see `claudeStatusline.js`) runs next on the same terms — recorded on
+  `job.statusline`, never promoted. The box's tmux session is created
   **last**, by the injected `ensureSession` step (`buildEnsureSessionRemote`), strictly after the
   seed — a shell reads its rc files once at startup, so a session created earlier (as the setup
   script used to do) holds an environment with no seeded token in it. The setup script therefore
@@ -278,6 +280,15 @@ pattern for new modules.
   auth-gated `GET /api/ai-auth/status` for the provision forms' readiness rows.
   The trigger is the setup job itself (see `setupManager.js`), not the browser; `POST
   /api/boxes/:id/seed-ai-auth` remains as the manual re-seed path with no UI caller.
+- `claudeStatusline.js` — `buildStatuslineInstallScript` (pure) + `createStatuslinePusher`: the
+  opt-in push of this host's own Claude Code statusline (`src/server/assets/claude-statusline.sh`,
+  read through the injected `readAsset`) to a box. Structural twin of `aiAuthSeed.js`: the script
+  text interpolates **nothing** and the statusline file arrives on stdin. The apply-or-skip
+  decision is made **on the box** by a `command -v claude` check, so one rule covers both a fresh
+  box without Claude Code (skipped) and an edit of a box that already has it (applied) — no
+  add-vs-edit branching. The box's `settings.json` is merged in place, never overwritten (jq →
+  node → python3 fallback chain, atomic temp+rename; a box with none of the three reports
+  `error-no-json-tool`). Run by `setupManager.js` as the post-seed `statusline` phase.
 - `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`pinnedSocket`/`normFp`) used
   by both the Proxmox and NetBox API clients. Pin mode verifies the pinned fingerprint on each
   request's own connection (`pinnedSocket` via `createConnection`) instead of OpenSSL chain
@@ -305,7 +316,11 @@ browser-notification preferences, localStorage-backed, defaults all-on except `u
 `threshold-clear`), `setupOptions.ts` (the shared post-create setup form — Terminal/Tools/AI-auth sections —
 used by the Add/Edit Box modal and the hub's Provision tab; fetches `GET /api/ai-auth/status`
 to show per-CLI seed readiness with fix-it commands, and disables the seed checkbox only when
-both CLIs are unready), `presetSummary.ts` (pure one-line preset description builder),
+both CLIs are unready; the Tools section also carries the opt-in "Push Claude Code statusline"
+checkbox — `claudeStatusline` in the payload), `provisionTools.ts` (`PROVISION_TOOLS`, the curated
+provision-time tool id/label list plus its `toolsCheckboxGroup` builder; the ids mirror `TOOL_IDS`
+in `boxActions.js` — the server stays the validation authority and `test/provisionTools.test.js`
+locks the two lists together), `presetSummary.ts` (pure one-line preset description builder),
 `setupStatus.ts` (pure setup-status
 text/actions/badge helpers shared by the provision panel and the Proxmox hub),
 `fleetSelection.ts`/`fleetHistory.ts`/`fleetEditor.ts` (Fleet
@@ -327,14 +342,21 @@ the deprovision confirm dialog), `proxmoxActivity.ts` (the Activity tab merging 
 lifecycle jobs newest-first), `proxmoxAssociation.ts` (the Add/Edit Box modals' manual Proxmox
 link/unlink picker — hidden until a Proxmox host profile exists, except for already-linked
 boxes), `settingsUi.ts` (the ⚙ settings
-modal's tabbed shell, with NetBox (`settingsNetbox.ts`), Proxmox host/secret
+modal's tabbed shell — the `SECTIONS` object's key order builds the tab strip — with Boxes
+(`settingsBoxes.ts`: the leftmost tab, box-list JSON export/import moved out of the sidebar brand
+actions, which stay reserved for the routinely used controls; pure `importSummary`),
+NetBox (`settingsNetbox.ts`), Proxmox host/secret
 (`settingsProxmox.ts`), Passkeys (`settingsPasskeys.ts`: readiness row, enrolled-credential list
 with remove — confirm-gated by one modal; removing the last credential while "require a passkey"
 is armed adds only an extra explanatory paragraph to that same modal, not a second gate — and the
 sign-in policy toggle, where only *arming* is confirm-gated since disarming can only restore
-access), and Notifications (`settingsNotifications.ts`:
+access), Voice (`settingsVoice.ts`: the enable toggle and pinned-model picker, the whisper.cpp
+install job started through `POST /api/voice/install` and watched with the shared `setupPoller`
+(re-reading the painted tab afterwards rather than trusting one fire-and-forget refresh), the mic
+test, and pure `voiceStatusLine`/`micTestMessage`/`installPollDelay` helpers), and Notifications
+(`settingsNotifications.ts`:
 browser-notification permission flow plus per-kind toggles) tabs) with `settingsForm.ts` (pure
-payload/result helpers), `netbox.ts` (fetch layer), `passkeys.ts` (passkey fetch layer,
+payload/result helpers), `netbox.ts` and `voice.ts` (fetch layers), `passkeys.ts` (passkey fetch layer,
 base64url↔bytes helpers, the pure WebAuthn option/credential converters, and `evaluateOrigin` —
 the ordered readiness check, browser support first, that both the login screen and Settings →
 Passkeys render as the same reason/hint text), and `dom.ts` (shared DOM builders plus `openModal`
@@ -473,8 +495,9 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 - `TMUXIFIER_CLAUDE_OAUTH_TOKEN` joins the `.env` secret class (password hash, cookie secret);
   seeding a box with it (and/or the host's `~/.codex/auth.json`) hands that box your Claude/Codex
   subscription identity, so seed only boxes you trust.
-- Voice dictation is off unless `data/voice.json` enables it and a whisper binary and model resolve (see `voicePaths.js`); the legacy `TMUXIFIER_WHISPER_BIN`/`TMUXIFIER_WHISPER_MODEL` are
-  set, and `TMUXIFIER_VOICE=off` hard-disables it regardless. Transcripts are stripped of
+- Voice dictation is off unless `data/voice.json` enables it and a whisper binary and model resolve
+  (see `voicePaths.js`) — or the legacy `TMUXIFIER_WHISPER_BIN`/`TMUXIFIER_WHISPER_MODEL` are set,
+  which pins them. `TMUXIFIER_VOICE=off` hard-disables it regardless. Transcripts are stripped of
   control characters before reaching `send-keys`, so a transcription artefact cannot emit an
   escape sequence into a pane. Audio is transcribed by a local whisper.cpp process and is never
   sent to Anthropic or any third party — unlike Claude Code's built-in `/voice`.
