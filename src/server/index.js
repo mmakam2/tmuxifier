@@ -46,6 +46,7 @@ import { createAlertStateStore } from './alertStateStore.js';
 import { createCheckRunner } from './checkRunner.js';
 import { createCheckDispatcher } from './checks/index.js';
 import { runHttpCheck } from './checks/httpCheck.js';
+import { runTcpCheck } from './checks/tcpCheck.js';
 import { createAlertManager } from './alertManager.js';
 import { DEFAULT_THRESHOLDS } from './alertPolicy.js';
 import { createMailChannel } from './alertMail.js';
@@ -277,7 +278,7 @@ const checkStore = createCheckStore({ dataDir: config.dataDir, secretBox });
 const alertState = createAlertStateStore({ dataDir: config.dataDir });
 const checkRunner = createCheckRunner({
   checkStore,
-  dispatcher: createCheckDispatcher({ runners: { http: runHttpCheck } }),
+  dispatcher: createCheckDispatcher({ runners: { http: runHttpCheck, tcp: runTcpCheck } }),
   eventLog: checkEventLog,
 });
 // Mail delivery is optional: with no relay configured the system still records
