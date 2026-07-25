@@ -3,17 +3,23 @@ import { registerModal } from './modalRegistry';
 import {
   listAlerts, ackAlert, muteAlert, unmuteAlert,
   listChecks, createCheck, updateCheck, deleteCheck, runCheck,
+  listFeed, ingestStatus,
   type CheckSummary, type CheckRunState,
 } from './alerts';
 import {
-  laneFor, severityRank, reasonLabel, occurrenceSummary, relativeAge,
+  laneFor, severityRank, reasonLabel, occurrenceSummary, relativeAge, sourceRows,
   type Alert, type Severity,
 } from './alertFormat';
 import { checkFieldsFor, checkFormPayload, checkinPath, IMPLEMENTED_TYPES } from './checkForm';
 
-const TABS = ['Alerts', 'Checks'] as const;
+const TABS = ['Alerts', 'Checks', 'Feed', 'Sources'] as const;
 type Tab = typeof TABS[number];
 const LANES: Severity[] = ['critical', 'warning', 'info'];
+
+// The feed and decision routes return raw log lines, so every field is treated
+// as possibly absent or wrong-typed rather than trusted — these are NDJSON lines
+// read off disk, not a validated API shape.
+type FeedEvent = { ts?: number; source?: string; severity?: string; title?: string };
 
 // Mirrors the server's clamps in checkTypes.js. The server stays the authority —
 // these only spare the operator a round trip to discover the same bounds.
@@ -35,18 +41,38 @@ export function openAlertsHub() {
   // operator just muted.
   const muted = new Set<string>();
 
-  const renderers: Record<Tab, () => Promise<void>> = { Alerts: renderAlerts, Checks: renderChecks };
+  const renderers: Record<Tab, () => Promise<void>> = {
+    Alerts: renderAlerts, Checks: renderChecks, Feed: renderFeed, Sources: renderSources,
+  };
   function selectTab(t: Tab) {
     for (const b of tabStrip.children) (b as HTMLElement).classList.toggle('active', (b as HTMLElement).dataset.tab === t);
     void renderers[t]();
   }
   for (const t of TABS) tabStrip.append(el('button', { type: 'button', class: 'pve-tab', 'data-tab': t, onclick: () => selectTab(t) }, [t]));
 
+  // Above the tab strip, not inside a tab: a dead receiver invalidates what
+  // every tab shows, so it cannot be something the operator has to go looking
+  // for. Empty until the check answers, so a working install shows nothing.
+  const banner = el('div', {});
   modal.append(
     el('div', { class: 'pve-head' }, [el('h2', {}, ['Alerts']), el('button', { type: 'button', class: 'pve-close', title: 'Close', onclick: close }, ['✕'])]),
-    tabStrip, content,
+    banner, tabStrip, content,
   );
   selectTab('Alerts');
+  void syncIngestBanner();
+
+  async function syncIngestBanner() {
+    let st;
+    try { st = await ingestStatus(); } catch { return; } // a failed probe is not evidence of death
+    // alive === null means this build has no liveness reader wired at all, which
+    // is not the same claim as "the daemon is down" — say nothing rather than
+    // cry wolf.
+    if (st.alive !== false) { banner.replaceChildren(); return; }
+    const age = st.staleFor == null ? 'never seen' : `last check-in ${relativeAge(Date.now() - st.staleFor, Date.now())}`;
+    banner.replaceChildren(el('div', { class: 'alert-banner' }, [
+      `Alert ingest is not running — heartbeat checks cannot detect check-ins (${age}).`,
+    ]));
+  }
 
   function setContent(...nodes: (Node | string)[]) { content.replaceChildren(...nodes); }
   function showError(e: unknown) { content.prepend(err(e instanceof Error ? e.message : String(e))); }
@@ -150,6 +176,115 @@ export function openAlertsHub() {
     ]);
   }
 
+  // --- Feed ---
+  // Every occurrence, including the ones no rule will ever notify on. This is
+  // where a newly added check is confirmed working without interrupting anyone.
+  async function renderFeed() {
+    setContent(el('div', { class: 'pve-sub' }, ['Loading…']));
+    let events: FeedEvent[];
+    try { events = (await listFeed()) as FeedEvent[]; } catch (e) { setContent(err(e instanceof Error ? e.message : String(e))); return; }
+    if (!events.length) {
+      setContent(el('div', { class: 'pve-sub' }, ['Nothing recorded yet. Every occurrence lands here first, whether or not it notifies.']));
+      return;
+    }
+    const newest = [...events].reverse();
+    const filter = input('', { type: 'text', placeholder: 'Filter by title or source…' });
+    const list = el('div', { class: 'pve-list' });
+    const paint = () => {
+      const term = filter.value.trim().toLowerCase();
+      const shown = term
+        ? newest.filter((e) => `${e.title ?? ''} ${e.source ?? ''}`.toLowerCase().includes(term))
+        : newest;
+      list.replaceChildren(...(shown.length
+        ? shown.slice(0, 300).map(feedRow)
+        : [el('div', { class: 'pve-sub' }, ['Nothing matches that filter.'])]));
+    };
+    filter.addEventListener('input', paint);
+    setContent(el('div', { class: 'modal-actions' }, [filter]), list);
+    paint();
+  }
+
+  function feedRow(e: FeedEvent) {
+    const sev = String(e.severity ?? 'info');
+    const ts = Number(e.ts);
+    return el('div', { class: `pve-row alert-row ${sev}` }, [
+      el('div', {}, [
+        el('strong', {}, [String(e.title ?? '(untitled)')]),
+        el('div', { class: 'pve-sub' }, [
+          `${String(e.source ?? 'unknown')} · ${Number.isFinite(ts) ? relativeAge(ts, Date.now()) : 'unknown time'}`,
+        ]),
+      ]),
+      el('span', { class: 'pve-badge' }, [sev]),
+    ]);
+  }
+
+  // --- Sources ---
+  async function renderSources() {
+    setContent(el('div', { class: 'pve-sub' }, ['Loading…']));
+    let events: FeedEvent[];
+    let checks: CheckSummary[];
+    try {
+      const [ev, data] = await Promise.all([listFeed(), listChecks()]);
+      events = ev as FeedEvent[];
+      checks = data.checks;
+    } catch (e) { setContent(err(e instanceof Error ? e.message : String(e))); return; }
+    const rows = sourceRows(events.map((e) => ({ source: String(e.source ?? 'unknown'), ts: Number(e.ts) || 0 })));
+    if (!rows.length) {
+      setContent(el('div', { class: 'pve-sub' }, ['No sources have reported yet.']));
+      return;
+    }
+    const now = Date.now();
+    setContent(el('div', { class: 'pve-list' }, rows.map((row) => sourceRow(row, checks, now))));
+  }
+
+  function sourceRow(row: { source: string; count: number; lastTs: number }, checks: CheckSummary[], now: number) {
+    const isMuted = muted.has(row.source);
+    const actions: HTMLElement[] = [];
+    // A source-level mute: decideAlert matches rules.mutes against the alert's
+    // source as well as its key, so muting the source silences every alert it
+    // raises rather than only the one currently firing.
+    actions.push(el('button', { type: 'button', onclick: async () => {
+      try {
+        if (isMuted) { await unmuteAlert(row.source); muted.delete(row.source); }
+        else { await muteAlert(row.source); muted.add(row.source); }
+      } catch (e) { showError(e); return; }
+      await renderSources();
+    } }, [isMuted ? 'Unmute source' : 'Mute source']));
+
+    // The per-source notification threshold, for the sources that are checks.
+    // updateCheck re-validates the whole definition, so the full spec is resent
+    // with only this field changed — including `assert`, which the server would
+    // otherwise reset to {} and silently downgrade the check.
+    const check = checks.find((c) => `check:${c.id}` === row.source);
+    if (check) {
+      const box = input(String(check.failuresBeforeNotify), { type: 'number', min: 1, max: 1000, title: 'Consecutive failures before notifying' });
+      box.style.width = '64px';
+      box.addEventListener('change', async () => {
+        const n = Number(box.value);
+        if (!Number.isFinite(n) || n < 1) { box.value = String(check.failuresBeforeNotify); return; }
+        try {
+          await updateCheck(check.id, {
+            label: check.label, type: check.type, target: check.target, severity: check.severity,
+            intervalSec: check.intervalSec, timeoutMs: check.timeoutMs, failuresBeforeNotify: n,
+            enabled: check.enabled, assert: check.assert,
+          });
+        } catch (e) { showError(e); return; }
+        await renderSources();
+      });
+      actions.push(box);
+    }
+
+    return el('div', { class: 'pve-row' }, [
+      el('div', {}, [
+        el('strong', {}, [row.source]),
+        el('div', { class: 'pve-sub' }, [
+          `${row.count} occurrence${row.count === 1 ? '' : 's'} · last ${relativeAge(row.lastTs, now)}`,
+        ]),
+      ]),
+      el('div', { class: 'pve-row-actions' }, actions),
+    ]);
+  }
+
   function confirmDelete(c: CheckSummary) {
     const dialog = el('div', { class: 'modal' });
     const { close: closeConfirm } = openModal({ modal: dialog });
@@ -218,6 +353,10 @@ export function openAlertsHub() {
         intervalSec: intervalSec.value, timeoutMs: timeoutMs.value,
         failuresBeforeNotify: failures.value,
         enabled: enabled.checked, secret: secret.value,
+        // No field edits this, but omitting it would make the server reset the
+        // stored assertion to {} — an edit of an unrelated field would quietly
+        // turn a body/status/JSON assertion into a bare reachability probe.
+        assert: existing?.assert,
       };
       for (const [name, box] of targetInputs) values[name] = box.value;
       try {

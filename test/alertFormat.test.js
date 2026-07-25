@@ -48,6 +48,17 @@ test('a single occurrence does not say "1 occurrences"', () => {
   expect(occurrenceSummary(alert({ count: 1 }))).toContain('once');
 });
 
+test('sourceRows aggregates volume per source, busiest first', async () => {
+  const { sourceRows } = await import('../src/web/alertFormat.ts');
+  const rows = sourceRows([
+    { source: 'check:a', ts: 10 }, { source: 'check:b', ts: 20 }, { source: 'check:a', ts: 30 },
+  ]);
+  expect(rows).toEqual([
+    { source: 'check:a', count: 2, lastTs: 30 },
+    { source: 'check:b', count: 1, lastTs: 20 },
+  ]);
+});
+
 test('relative age renders seconds, minutes, hours, and days', () => {
   expect(relativeAge(0, 5000)).toBe('5s ago');
   expect(relativeAge(0, 120000)).toBe('2m ago');

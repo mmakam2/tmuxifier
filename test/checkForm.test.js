@@ -37,6 +37,23 @@ test('a supplied secret is included', () => {
   expect(payload.secret).toBe('tok');
 });
 
+// The server's assertCheckInput resets `assert` to {} for any spec that omits
+// it, and no form field edits assertions — so a payload that dropped `assert`
+// would make an edit of an unrelated field (a label typo, a longer interval)
+// silently erase a stored body marker, status range, or JSON comparison,
+// downgrading the check to a bare reachability probe that still reports green.
+test('an existing assert is carried through so an edit does not erase it', () => {
+  const payload = checkFormPayload({
+    label: 'x', type: 'http', url: 'https://example.com/h', assert: { bodyIncludes: 'OK' },
+  });
+  expect(payload.assert).toEqual({ bodyIncludes: 'OK' });
+});
+
+test('an absent assert stays absent rather than becoming a junk value', () => {
+  const payload = checkFormPayload({ label: 'x', type: 'http', url: 'https://example.com/h' });
+  expect('assert' in payload).toBe(false);
+});
+
 // The form must never offer a type the dispatcher has no executor for: the
 // server would accept the definition (CHECK_TYPES already lists all five), then
 // every run would return "no executor for type ...", which folds into a firing

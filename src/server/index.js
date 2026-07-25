@@ -54,6 +54,7 @@ import { createAlertManager } from './alertManager.js';
 import { DEFAULT_THRESHOLDS } from './alertPolicy.js';
 import { createMailChannel } from './alertMail.js';
 import { createDigestScheduler } from './alertDigest.js';
+import { createIngestLiveness } from './ingestLiveness.js';
 import { createMailer } from './mailer.js';
 
 const config = loadConfig();
@@ -319,11 +320,16 @@ const digest = createDigestScheduler({
   mailer: config.alertMail.host ? createMailer(config.alertMail) : null,
   retentionDays: config.alertRetentionDays,
 });
+// Reads the stamp the ingest daemon writes. This process never writes it — the
+// point is to observe whether that separate process is alive at all.
+const ingestLiveness = createIngestLiveness({
+  heartbeatFile: path.join(config.dataDir, 'ingest-heartbeat.json'),
+});
 
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
 const voiceEnabledInitial = (await resolveVoice()).enabled;
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial, checkStore, alertState, checkEventLog, decisionLog, alertManager, checkRunner });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial, checkStore, alertState, checkEventLog, decisionLog, alertManager, checkRunner, ingestLiveness });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });

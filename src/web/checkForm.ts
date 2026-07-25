@@ -66,6 +66,13 @@ export function checkFormPayload(values: Record<string, unknown>): Record<string
     payload.failuresBeforeNotify = Number(values.failuresBeforeNotify);
   }
   if (values.enabled !== undefined) payload.enabled = !!values.enabled;
+  // Carried through rather than dropped. The server's assertCheckInput resets
+  // `assert` to {} for any spec that omits it, so an edit form that left it out
+  // would silently erase a stored assertion — a body marker, a status range, a
+  // JSON comparison — downgrading the check to a bare reachability probe while
+  // still reporting green. No form field sets this yet; it exists to preserve
+  // what is already there.
+  if (values.assert && typeof values.assert === 'object') payload.assert = values.assert;
   // A blank secret means "leave the stored one alone" — omitting the key is what
   // lets an edit form avoid round-tripping a credential through the browser.
   const secret = typeof values.secret === 'string' ? values.secret.trim() : '';

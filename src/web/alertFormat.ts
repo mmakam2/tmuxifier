@@ -37,6 +37,19 @@ export function occurrenceSummary(alert: Alert): string {
   return alert.count === 1 ? 'seen once' : `seen ${alert.count} times`;
 }
 
+export interface SourceRow { source: string; count: number; lastTs: number }
+
+export function sourceRows(events: Array<{ source: string; ts: number }>): SourceRow[] {
+  const by = new Map<string, SourceRow>();
+  for (const e of events) {
+    const row = by.get(e.source) || { source: e.source, count: 0, lastTs: 0 };
+    row.count += 1;
+    row.lastTs = Math.max(row.lastTs, e.ts);
+    by.set(e.source, row);
+  }
+  return [...by.values()].sort((a, b) => b.count - a.count || b.lastTs - a.lastTs);
+}
+
 export function relativeAge(ms: number, nowMs: number): string {
   const d = Math.max(0, Math.floor((nowMs - ms) / 1000));
   if (d < 60) return `${d}s ago`;

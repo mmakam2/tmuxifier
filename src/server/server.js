@@ -84,11 +84,15 @@ export function killSessionArgs(sessionName) {
 
 // Async on purpose: a synchronous child process here (up to its 5s timeout)
 // would stall the event loop and freeze every open terminal's keystrokes.
+// How far back the alert feed and decision routes look when the caller does not
+// say. Seven days matches alertManager's own lookbackMs.
+const FEED_DEFAULT_LOOKBACK_MS = 7 * 86400000;
+
 async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, checkStore = null, alertState = null, checkEventLog = null, decisionLog = null, alertManager = null, checkRunner = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, checkStore = null, alertState = null, checkEventLog = null, decisionLog = null, alertManager = null, checkRunner = null, ingestLiveness = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -1101,18 +1105,30 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     app.delete('/api/alerts/:key/mute', { preHandler: requireAuth }, async (req) => {
       await alertState.unmute(req.params.key); return { ok: true };
     });
+    // A bounded default window, not the epoch. eventLog.readSince walks
+    // day-by-day from `since` to now, so since=0 builds ~20,000 day keys and
+    // attempts that many file reads on every call — and the Feed tab polls
+    // this. An explicit `since` is still honoured; only the unset case is
+    // bounded, which is also all the UI ever needs.
+    const feedSince = (raw) => {
+      const n = Number(raw);
+      return Number.isFinite(n) && n > 0 ? n : Date.now() - FEED_DEFAULT_LOOKBACK_MS;
+    };
     app.get('/api/alerts/feed', { preHandler: requireAuth }, async (req) => {
-      const sinceMs = Number(req.query?.since) || 0;
+      const sinceMs = feedSince(req.query?.since);
       const events = [];
       for (const log of [checkEventLog].filter(Boolean)) events.push(...await log.readSince(sinceMs));
       return { events: events.slice(-500) };
     });
     app.get('/api/alerts/decisions', { preHandler: requireAuth }, async (req) => {
-      const sinceMs = Number(req.query?.since) || 0;
+      const sinceMs = feedSince(req.query?.since);
       const all = decisionLog ? await decisionLog.readSince(sinceMs) : [];
       const key = req.query?.key;
       return { decisions: (key ? all.filter((d) => d.key === key) : all).slice(-500) };
     });
+    app.get('/api/alerts/ingest-status', { preHandler: requireAuth }, async () => (
+      ingestLiveness ? ingestLiveness.status() : { alive: null, lastSeenAt: null, staleFor: null }
+    ));
   }
 
   app.get('/api/status', { preHandler: requireAuth }, async (req, reply) => {

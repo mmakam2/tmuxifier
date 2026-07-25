@@ -13,15 +13,23 @@ import { createCheckRunner } from '../src/server/checkRunner.js';
 import { createCheckDispatcher } from '../src/server/checks/index.js';
 import { hashPassword } from '../src/server/auth.js';
 
-let app, dir, checkStore, alertState, checkLog, ranIds;
+let app, dir, checkStore, alertState, checkLog, ranIds, fixedNow;
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-alertr-'));
   const secretBox = createSecretBox('test-secret');
   checkStore = createCheckStore({ dataDir: dir, secretBox });
   alertState = createAlertStateStore({ dataDir: dir });
-  checkLog = createEventLog({ dir, prefix: 'checks', now: () => 1000 });
-  const decisionLog = createEventLog({ dir, prefix: 'decisions', now: () => 1000 });
+  // One fixed clock, anchored to real time rather than the epoch, shared by the
+  // logs and the alert manager. The feed and decision routes bound their default
+  // lookback from the wall clock (a from-the-epoch scan would walk ~20,000 day
+  // partitions), so a fixture pinned at ts=1000 would write its events into a
+  // 1970 day file that no realistic window can ever see. Fixed, so the folding
+  // and cooldown assertions stay deterministic; recent, so the routes under test
+  // are exercised through the same window production uses.
+  fixedNow = Date.now();
+  checkLog = createEventLog({ dir, prefix: 'checks', now: () => fixedNow });
+  const decisionLog = createEventLog({ dir, prefix: 'decisions', now: () => fixedNow });
   ranIds = [];
   const config = {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
@@ -34,7 +42,7 @@ beforeEach(async () => {
     config, store: createStore({ dataDir: dir }), sessions, statusChecker,
     checkStore, alertState, checkEventLog: checkLog, decisionLog,
     alertManager: createAlertManager({
-      eventLogs: [checkLog], decisionLog, stateStore: alertState, channels: [], now: () => 1000,
+      eventLogs: [checkLog], decisionLog, stateStore: alertState, channels: [], now: () => fixedNow,
     }),
     checkRunner: {
       // 'nope' stands in for an id checkStore doesn't recognize, matching the
@@ -148,6 +156,32 @@ test('GET /api/alerts returns folded alerts and mute/ack round-trip', async () =
   expect((await alertState.getRules()).mutes).toEqual([]);
   await app.inject({ method: 'POST', url: '/api/alerts/check:c1/ack', headers: h });
   expect(await alertState.getTriage()).toHaveProperty('check:c1');
+});
+
+// eventLog.readSince walks the day-partitioned log one day at a time from
+// `since` forward, so an unset `since` must not mean the epoch: that is ~20,000
+// day keys and as many attempted file reads per call, on a route the Feed tab
+// polls. An explicit since is still honoured; only the default is bounded.
+test('the feed defaults to a bounded window instead of scanning from the epoch', async () => {
+  const h = await headers();
+  await checkLog.append({
+    via: 'check', source: 'check:c1', key: 'check:c1', norm: null,
+    severity: 'info', state: 'firing', title: 'recent', body: '',
+  });
+  const started = Date.now();
+  const res = await app.inject({ method: 'GET', url: '/api/alerts/feed', headers: h });
+  expect(res.statusCode).toBe(200);
+  // A from-the-epoch scan takes hundreds of ms of failed opens; a bounded one is
+  // a handful of reads. The margin is wide enough not to be timing-flaky.
+  expect(Date.now() - started).toBeLessThan(300);
+});
+
+test('the ingest status route answers even with no liveness reader wired', async () => {
+  const h = await headers();
+  const body = (await app.inject({ method: 'GET', url: '/api/alerts/ingest-status', headers: h })).json();
+  // alive:null is "not wired", which is a different claim from "the daemon is
+  // down" — the UI must be able to tell them apart and stay quiet on the former.
+  expect(body.alive).toBe(null);
 });
 
 test('the feed returns raw occurrences and the decisions route filters by key', async () => {
