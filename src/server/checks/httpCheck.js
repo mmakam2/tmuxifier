@@ -6,10 +6,18 @@ const DEFAULT_STATUS_RANGE = [200, 399];
 
 export async function runHttpCheck(check, { now = () => Date.now(), fetchImpl = fetch } = {}) {
   const started = now();
-  const [min, max] = check.assert?.status || DEFAULT_STATUS_RANGE;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), check.timeoutMs || 10000);
+  let timer;
   try {
+    // checkTypes.js (Task 5) shallow-copies `assert` without validating what's
+    // inside it, so a stored check's `assert.status` could in principle be
+    // anything — not just the [min, max] tuple callers are expected to send.
+    // Destructuring that here, before the try, would let a malformed value
+    // (e.g. a bare number) throw "is not iterable" straight out of this
+    // function, breaking the one guarantee this executor exists to make.
+    // Keeping it inside the try means that failure is just another ok:false.
+    const [min, max] = check.assert?.status || DEFAULT_STATUS_RANGE;
+    timer = setTimeout(() => controller.abort(), check.timeoutMs || 10000);
     const res = await fetchImpl(check.target.url, {
       signal: controller.signal,
       redirect: 'manual',

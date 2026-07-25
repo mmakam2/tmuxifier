@@ -48,6 +48,17 @@ test('bodyIncludes passes when the marker is present', async () => {
   expect((await runHttpCheck(check(url, { assert: { bodyIncludes: 'healthy' } }))).ok).toBe(true);
 });
 
+test('a malformed assert.status (not a two-element range) fails without throwing', async () => {
+  // checkTypes.js only shallow-copies `assert`, so nothing upstream guarantees
+  // `assert.status` is actually a [min, max] tuple by the time it reaches
+  // here. Destructuring a non-iterable like a bare number throws — this
+  // pins that such a throw is caught and reported as a failed check, not
+  // let escape and crash the runner's cycle.
+  const url = await serve((_req, res) => { res.writeHead(200); res.end(); });
+  await expect(runHttpCheck(check(url, { assert: { status: 200 } })))
+    .resolves.toMatchObject({ ok: false });
+});
+
 test('a hung server fails on the timeout rather than hanging the runner', async () => {
   const url = await serve(() => { /* never responds */ });
   const got = await runHttpCheck(check(url, { timeoutMs: 1000 }));
