@@ -7,6 +7,7 @@ import net from 'node:net';
 export async function startFakeSmtp({ requireAuth = false, failAt = null, multilineEhlo = false } = {}) {
   const messages = [];
   let quitCount = 0; // proof the client actually said goodbye, not just abandoned the socket
+  let closeCount = 0; // proof a failed send closes its socket promptly, not just eventually
   const server = net.createServer((sock) => {
     let inData = false;
     let buf = '';
@@ -55,12 +56,14 @@ export async function startFakeSmtp({ requireAuth = false, failAt = null, multil
       }
     });
     sock.on('error', () => {});
+    sock.on('close', () => { closeCount += 1; });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   return {
     port: server.address().port,
     messages,
     get quitCount() { return quitCount; },
+    get closeCount() { return closeCount; },
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }

@@ -136,6 +136,22 @@ test('multiple comma-separated recipients each get their own RCPT TO', async () 
   ]);
 });
 
+test('a 5xx at EHLO returns ok:false with the code in the error', async () => {
+  running = await startFakeSmtp({ failAt: 'EHLO' });
+  const got = await mailerFor(running).send({ subject: 's', text: 't' });
+  expect(got.ok).toBe(false);
+  expect(got.error).toContain('550');
+  expect(running.messages).toHaveLength(0);
+});
+
+test('a 5xx at AUTH LOGIN returns ok:false with the code in the error', async () => {
+  running = await startFakeSmtp({ failAt: 'AUTH' });
+  const got = await mailerFor(running, { user: 'u', pass: 'p' }).send({ subject: 's', text: 't' });
+  expect(got.ok).toBe(false);
+  expect(got.error).toContain('550');
+  expect(running.messages).toHaveLength(0);
+});
+
 test('a 5xx at MAIL FROM returns ok:false with the code in the error', async () => {
   running = await startFakeSmtp({ failAt: 'MAIL' });
   const got = await mailerFor(running).send({ subject: 's', text: 't' });
@@ -158,6 +174,21 @@ test('a 5xx at DATA returns ok:false with the code in the error', async () => {
   expect(got.ok).toBe(false);
   expect(got.error).toContain('550');
   expect(running.messages).toHaveLength(0);
+});
+
+test('a failed send closes its socket promptly rather than leaking it until the idle timeout', async () => {
+  // timeoutMs is deliberately much larger than the poll bound below: a
+  // socket that only closes via the idle timer (i.e. the explicit
+  // sock.destroy() in send()'s finally block was lost) would still leave
+  // this test "passing" eventually, just ~10s slower - which is exactly the
+  // kind of accidental safety net that hid this gap the first time round.
+  // Asserting against the fake server's own close count, bounded well under
+  // timeoutMs, is what makes a missing destroy() an actual failure instead
+  // of a slow pass.
+  running = await startFakeSmtp({ failAt: 'RCPT' });
+  const got = await mailerFor(running, { timeoutMs: 10000 }).send({ subject: 's', text: 't' });
+  expect(got.ok).toBe(false);
+  await waitFor(() => running.closeCount === 1, 500);
 });
 
 test('a refused connection returns ok:false rather than throwing', async () => {
