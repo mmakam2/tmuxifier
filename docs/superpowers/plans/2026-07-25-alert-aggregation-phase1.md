@@ -56,7 +56,7 @@
 
 ```js
 // Occurrence event — one line in checks-*.ndjson / inbound-*.ndjson
-{ id: '1753440000123-0', ts: 1753440000123, via: 'check', source: 'check:abc',
+{ id: '1784976000123-0', ts: 1784976000123, via: 'check', source: 'check:abc',
   key: 'check:abc', norm: null, severity: 'critical', state: 'firing',
   title: 'HTTP 502 from https://invoices.example.com/health', body: '' }
 
@@ -102,10 +102,10 @@ const tmpDir = async () => fs.mkdtemp(path.join(os.tmpdir(), 'evlog-'));
 
 test('append writes one NDJSON line per event into a day-partitioned file', async () => {
   const dir = await tmpDir();
-  const log = createEventLog({ dir, prefix: 'checks', now: () => 1753440000123 });
+  const log = createEventLog({ dir, prefix: 'checks', now: () => 1784976000123 });
   const stored = await log.append({ key: 'check:a', severity: 'critical', title: 'down' });
-  expect(stored.id).toBe('1753440000123-0');
-  expect(stored.ts).toBe(1753440000123);
+  expect(stored.id).toBe('1784976000123-0');
+  expect(stored.ts).toBe(1784976000123);
   const raw = await fs.readFile(path.join(dir, 'checks-2026-07-25.ndjson'), 'utf8');
   expect(raw.trimEnd().split('\n')).toHaveLength(1);
   expect(JSON.parse(raw)).toMatchObject({ key: 'check:a', title: 'down' });
