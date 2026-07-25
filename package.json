@@ -12,6 +12,7 @@
     "dev:server": "node --watch src/server/index.js",
     "build": "vite build",
     "start": "node src/server/index.js",
+    "start:ingest": "node src/server/ingest/index.js",
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && vitest run",
     "test:watch": "vitest",

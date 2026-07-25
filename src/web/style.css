@@ -699,3 +699,16 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
   .pve-container-row .pve-row-actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
 
+/* Alerts hub. Lanes reuse the severity colours already used by the status dot
+   and job badges, so a red row means the same thing everywhere in the UI. */
+.alert-lane { display: flex; flex-direction: column; gap: 6px; }
+.alert-row { border-left-width: 3px; }
+.alert-row.critical { border-left-color: #f85149; }
+.alert-row.warning { border-left-color: #d29922; }
+.alert-row.info { border-left-color: #8b949e; }
+.check-row { display: flex; flex-wrap: wrap; gap: 12px; }
+/* Sits above the tab strip: a dead ingest daemon invalidates every tab, so it
+   must not be something the operator has to go looking for. */
+.alert-banner { margin: 8px 0 0; padding: 8px 10px; border: 1px solid rgba(248, 81, 73, 0.4);
+  border-radius: 8px; background: rgba(248, 81, 73, 0.12); color: #ffb4ad; font-size: 12px; line-height: 1.45; }
+

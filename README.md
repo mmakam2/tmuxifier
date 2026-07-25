@@ -547,9 +547,81 @@ confirm. It gracefully shuts the container down, destroys it **and its attached 
 any independent backup archives, then removes the local box. The hub's **Activity** tab merges
 lifecycle and provision jobs newest-first (history persists to `data/proxmox-lifecycle-jobs.json`).
 
+## Alerts and checks
+
+The **Alerts** button in the sidebar opens a hub for monitoring things Tmuxifier can reach. The
+design goal is not "send more email" — it is that a message arriving means something, so the
+system tells you *why* it did or did not contact you, on every row.
+
+**A check is a probe run on a schedule.** Five types:
+
+| Type | Asserts | Target fields |
+|---|---|---|
+| `http` | Status in range, optional body marker | URL |
+| `tcp` | A completed TCP handshake | Host, port |
+| `json` | One field of a JSON response (`equals`, `notEquals`, `greaterThan`, `lessThan`) | URL, dotted path |
+| `exec` | Exit code zero on a box, optional stdout marker | Box, command |
+| `heartbeat` | That something called **in** — silence is the failure | Window, grace period |
+
+`exec` runs over the ControlMaster Tmuxifier already holds open, so covering a service on a box
+needs no agent installed, no API exposed, and no new credential stored. An optional per-check
+secret is sealed at rest in `data/checks.json` and sent as a bearer token; it is never returned to
+the browser, and leaving the field blank on an edit keeps the stored one.
+
+**Heartbeats catch the job that never ran.** They are the one check that fires because nothing
+happened, so they need a receiver: a separate daemon (`npm run start:ingest`, or the systemd unit
+in `deploy/tmuxifier-ingest.service`) that accepts a check-in and nothing else. Append the call to
+the job you want to watch — the hub shows the exact URL on the check's row:
+
+```bash
+# in your backup script or crontab, after the work succeeds
+/usr/local/bin/do-backup && curl -fsS http://192.168.1.10:8788/hb/<check-id> || true
+```
+
+The daemon binds `127.0.0.1:8788` by default (`TMUXIFIER_INGEST_BIND` / `TMUXIFIER_INGEST_PORT`).
+It runs as its own unit deliberately: it is the only process here that accepts input from the
+network, and it holds no SSH keys, no cookie secret, and no API tokens. If it stops, the hub says
+so in a banner — a dead receiver and a quiet night look identical otherwise, and that ambiguity is
+the worst failure this feature has.
+
+**What notifies is severity × persistence, not every occurrence.** `info` never notifies and only
+appears in the daily digest. `warning` and `critical` notify once a check has failed
+`failuresBeforeNotify` times in a row (3 by default, per check). A notified alert then stays quiet
+for `TMUXIFIER_ALERT_COOLDOWN_HOURS` (6) before it may notify again, so an outage lasting all
+afternoon is one message, not one per poll. A check misconfigured to hammer a broken target is
+capped per hour and says so once instead of thousands of times.
+
+**Every decision is recorded and readable.** The hub's rows render the reason verbatim — *sent*,
+*waiting — not yet persistent or repeated enough*, *already sent recently*, *muted by you*, *info
+only — never notifies*, *delivery failed*. The **Feed** tab lists every occurrence including the
+ones nothing will ever notify on, which is how you confirm a newly added check works without
+interrupting anyone; **Sources** aggregates volume per source with a mute and a threshold. Under
+the hood these are append-only NDJSON day files in `data/events/` (`checks-*`, `checkins-*`,
+`decisions-*`), pruned after `TMUXIFIER_ALERT_RETENTION_DAYS` (90). Mutes and acks live in
+`data/alert-rules.json` and `data/alert-triage.json`.
+
+**Email is optional.** With no relay configured everything is still checked, recorded, folded, and
+visible in the dashboard — it simply cannot interrupt anyone. To deliver, set the relay in `.env`
+(see `.env.example`):
+
+```
+TMUXIFIER_ALERT_MAIL_HOST=192.168.1.25
+TMUXIFIER_ALERT_MAIL_PORT=25
+TMUXIFIER_ALERT_MAIL_FROM=tmuxifier-alerts@example.com
+TMUXIFIER_ALERT_MAIL_TO=you@example.com
+#TMUXIFIER_ALERT_MAIL_USER=          # AUTH LOGIN, if your relay wants it
+#TMUXIFIER_ALERT_MAIL_PASS=
+#TMUXIFIER_ALERT_MAIL_TLS=off
+```
+
+Once a day (08:00 UTC) a **digest** lists everything that stayed below the notification line, which
+is what makes adding a source safe. Every outbound message carries an `X-Tmuxifier-Alert` header so
+a future mail sink can refuse to re-ingest its own output.
+
 ## Security
 Tmuxifier can SSH into your whole fleet, so the login gate is the crown jewel. It binds to
-`127.0.0.1` by default. To expose it on a network, **always use TLS** — either set
+`127.0.0.1` by default. The alert ingest daemon is a **separate** process holding no
+credentials at all — see [Alerts and checks](#alerts-and-checks). To expose it on a network, **always use TLS** — either set
 `TMUXIFIER_TLS_CERT`/`TMUXIFIER_TLS_KEY` to serve HTTPS directly (a self-signed cert works; browsers
 show a one-time warning), or front it with a TLS reverse proxy — and set `TMUXIFIER_BIND`
 accordingly. Serving the login over plain HTTP on a non-loopback address sends credentials

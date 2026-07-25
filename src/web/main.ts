@@ -15,6 +15,7 @@ import { openModal, makeRadio } from './dom';
 import { createSetupJobPoller } from './setupPoller';
 import logoUrl from './assets/tmuxifier-logo.png';
 import { openProxmoxHub } from './proxmoxUi';
+import { openAlertsHub } from './alertsUi';
 import { pve } from './proxmox';
 import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
@@ -556,7 +557,7 @@ async function renderDashboard() {
           </div>
         </div>
         <div class="actions"><button id="add">+ Add box</button></div>
-        <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button><button id="proxmox" type="button" class="proxmox-btn" title="Provision Proxmox LXC containers" hidden>Proxmox</button><button id="events" type="button" class="events-btn" title="Box health events (down/up/needs login/thresholds)">Events<span id="events-badge" class="events-badge" hidden></span></button></div>
+        <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button><button id="proxmox" type="button" class="proxmox-btn" title="Provision Proxmox LXC containers" hidden>Proxmox</button><button id="alerts" type="button" class="alerts-btn" title="Checks and curated alerts">Alerts</button><button id="events" type="button" class="events-btn" title="Box health events (down/up/needs login/thresholds)">Events<span id="events-badge" class="events-badge" hidden></span></button></div>
         <div id="fleet-bar" class="fleet-bar" hidden></div>
         <input id="search" class="search" type="text" placeholder="Search…" autocomplete="off" />
         <ul id="boxes" class="boxes"></ul>
@@ -624,6 +625,10 @@ async function renderDashboard() {
     onBoxLinked: () => { void refresh(); },
   }));
   void syncProxmoxButton();
+  // Unlike Proxmox, the alerts hub needs no prior configuration — with no
+  // checks defined it is the empty state that explains what a check is, so the
+  // button is never hidden.
+  app.querySelector('#alerts')!.addEventListener('click', () => openAlertsHub());
 
   // Local shell — name click opens terminal
   app.querySelector('.local-name')!.addEventListener('click', () => openLocalShell());

@@ -56,7 +56,7 @@
 
 ```js
 // Occurrence event — one line in checks-*.ndjson / inbound-*.ndjson
-{ id: '1753440000123-0', ts: 1753440000123, via: 'check', source: 'check:abc',
+{ id: '1784976000123-0', ts: 1784976000123, via: 'check', source: 'check:abc',
   key: 'check:abc', norm: null, severity: 'critical', state: 'firing',
   title: 'HTTP 502 from https://invoices.example.com/health', body: '' }
 
@@ -102,10 +102,10 @@ const tmpDir = async () => fs.mkdtemp(path.join(os.tmpdir(), 'evlog-'));
 
 test('append writes one NDJSON line per event into a day-partitioned file', async () => {
   const dir = await tmpDir();
-  const log = createEventLog({ dir, prefix: 'checks', now: () => 1753440000123 });
+  const log = createEventLog({ dir, prefix: 'checks', now: () => 1784976000123 });
   const stored = await log.append({ key: 'check:a', severity: 'critical', title: 'down' });
-  expect(stored.id).toBe('1753440000123-0');
-  expect(stored.ts).toBe(1753440000123);
+  expect(stored.id).toBe('1784976000123-0');
+  expect(stored.ts).toBe(1784976000123);
   const raw = await fs.readFile(path.join(dir, 'checks-2026-07-25.ndjson'), 'utf8');
   expect(raw.trimEnd().split('\n')).toHaveLength(1);
   expect(JSON.parse(raw)).toMatchObject({ key: 'check:a', title: 'down' });
@@ -1162,6 +1162,26 @@ test('getState reports the last result and the next due time', async () => {
   });
 });
 
+test('the sealed secret is resolved for a due check so executors can authenticate', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'runner-'));
+  const seen = [];
+  const redacted = { ...chk(), hasSecret: true };
+  const runner = createCheckRunner({
+    checkStore: {
+      // A listing is redacted, exactly as checkStore.listChecks returns it.
+      listChecks: async () => [redacted],
+      getCheck: async (_id, opts) => (opts?.withSecret ? { ...chk(), secret: 'tok-abc' } : redacted),
+    },
+    dispatcher: createCheckDispatcher({
+      runners: { http: async (c) => { seen.push(c.secret); return { ok: true, detail: '', latencyMs: 1 }; } },
+    }),
+    eventLog: createEventLog({ dir, prefix: 'checks', now: () => 1000 }),
+    now: () => 1000, jitter: () => 0,
+  });
+  await runner.runDue();
+  expect(seen).toEqual(['tok-abc']);
+});
+
 test('an unknown type fails the check with a readable detail instead of crashing', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'runner-'));
   const eventLog = createEventLog({ dir, prefix: 'checks', now: () => 1000 });
@@ -1261,7 +1281,6 @@ export function createCheckRunner({
           title: `${check.label} recovered`, body: result.detail || '',
         });
       }
-      void wasFailing;
     } else {
       s.consecutiveOk = 0;
       s.consecutiveFail += 1;
@@ -1282,7 +1301,14 @@ export function createCheckRunner({
     inFlight = (async () => {
       const checks = (await checkStore.listChecks()).filter((c) => c.enabled);
       const due = checks.filter((c) => now() >= entry(c.id).nextRunAt);
-      await mapWithConcurrency(due, concurrency, (c) => execute(c));
+      // Listings are redacted, so resolve the sealed secret only for the checks
+      // actually about to run. The decrypted value lives in memory for the
+      // duration of one probe and never enters a listing, a route response, or
+      // the event log.
+      await mapWithConcurrency(due, concurrency, async (c) => {
+        const full = await checkStore.getCheck(c.id, { withSecret: true });
+        return execute(full || c);
+      });
     })().finally(() => { inFlight = null; });
     return inFlight;
   }
@@ -1290,7 +1316,7 @@ export function createCheckRunner({
   return {
     runDue,
     async runOne(id) {
-      const check = await checkStore.getCheck(id);
+      const check = await checkStore.getCheck(id, { withSecret: true });
       if (!check) return null;
       return execute(check);
     },
@@ -2685,6 +2711,23 @@ git commit -m "feat(ui): alerts and checks hub panel"
 ---
 # Slice B — The remaining probe types
 
+**Executor contract — binds every task in this slice.** Each executor returns
+`{ ok, detail, latencyMs }` and NEVER throws: a refused connection, a DNS failure, a timeout, and a
+malformed check definition are all the check failing, and a thrown exception would crash the
+runner's whole cycle. Two traps found the hard way in Task 6, both of which apply here:
+
+1. **Nothing may be destructured or dereferenced from `check` before the `try` block.** The Task 6
+   brief did exactly that and threw instead of returning `ok:false`.
+2. **`checkTypes.js` does not validate the internal shape of `assert` at all**, and `data/checks.json`
+   is a mutable file on disk, so every executor is the last line of defense. A malformed value that
+   is merely *iterable* will not throw — it silently corrupts the comparison. In Task 6,
+   `assert.status: [500]` left `max` undefined and made every status >= 500 report healthy.
+
+**A false `ok: true` is the most severe bug class in this codebase.** This system exists to report
+outages; a check that reports green through a real failure is worse than no check at all. When a
+malformed definition cannot be interpreted, fall back to the safe default or fail the check — never
+pass it.
+
 Each type is an increment against a pipeline already proven end to end by Slice A.
 
 ## Task 15: TCP check executor
@@ -3877,18 +3920,17 @@ Add `maxEventsPerCheckPerHour = 60` to the factory arguments, and in `execute`, 
       s.windowStart = s.windowStart && ts - s.windowStart < 3600000 ? s.windowStart : ts;
       if (s.windowStart === ts) s.windowCount = 0;
       s.windowCount = (s.windowCount || 0) + 1;
-      if (s.windowCount === maxEventsPerCheckPerHour + 1) {
+      const capped = s.windowCount > maxEventsPerCheckPerHour;
+      // One append with a computed title: past the ceiling the runner says so
+      // exactly once, then goes quiet for the rest of the hour.
+      if (!capped || s.windowCount === maxEventsPerCheckPerHour + 1) {
         await eventLog.append({
           via: 'check', source: `check:${check.id}`, key: `check:${check.id}`, norm: null,
           severity: check.severity, state: 'firing',
-          title: `${check.label} is flooding — capped at ${maxEventsPerCheckPerHour} events/hour`,
+          title: capped
+            ? `${check.label} is flooding — capped at ${maxEventsPerCheckPerHour} events/hour`
+            : `${check.label}: ${result.detail}`,
           body: result.detail || '',
-        });
-      } else if (s.windowCount <= maxEventsPerCheckPerHour) {
-        await eventLog.append({
-          via: 'check', source: `check:${check.id}`, key: `check:${check.id}`, norm: null,
-          severity: check.severity, state: 'firing',
-          title: `${check.label}: ${result.detail}`, body: result.detail || '',
         });
       }
     }

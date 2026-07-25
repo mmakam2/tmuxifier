@@ -404,6 +404,99 @@ test('agentIdleSec clamps out-of-range and non-numeric values to the default', (
   expect(loadConfig({}, { env: { TMUXIFIER_AGENT_IDLE_SEC: 'abc' }, cwd: '/nonexistent' }).agentIdleSec).toBe(45);
 });
 
+test('alert aggregation knobs have defaults', () => {
+  const c = loadConfig({}, { env: {}, cwd: '/app' });
+  expect(c.alertEvalMs).toBe(30000);
+  expect(c.alertRetentionDays).toBe(90);
+  expect(c.alertCooldownHours).toBe(6);
+  expect(c.alertMail).toEqual({ host: '', port: 25, from: '', to: '', user: '', pass: '', useTls: false });
+});
+
+test('the ingest daemon binds loopback on a fixed port by default', () => {
+  const c = loadConfig({}, { env: {}, cwd: '/app' });
+  expect(c.ingestBind).toBe('127.0.0.1');
+  expect(c.ingestPort).toBe(8788);
+});
+
+test('the ingest bind and port are overridable, and a bad port falls back rather than binding it', () => {
+  const c = loadConfig({}, { env: { TMUXIFIER_INGEST_BIND: '0.0.0.0', TMUXIFIER_INGEST_PORT: '9000' }, cwd: '/app' });
+  expect(c.ingestBind).toBe('0.0.0.0');
+  expect(c.ingestPort).toBe(9000);
+  // A port of 0 would bind an arbitrary free port, which for a receiver that
+  // cron jobs post to by URL is silent breakage, not a convenience.
+  expect(loadConfig({}, { env: { TMUXIFIER_INGEST_PORT: '0' }, cwd: '/app' }).ingestPort).toBe(8788);
+  expect(loadConfig({}, { env: { TMUXIFIER_INGEST_PORT: '99999' }, cwd: '/app' }).ingestPort).toBe(8788);
+  expect(loadConfig({}, { env: { TMUXIFIER_INGEST_PORT: 'abc' }, cwd: '/app' }).ingestPort).toBe(8788);
+});
+
+test('alert aggregation knobs are overridable via env', () => {
+  const c = loadConfig({}, {
+    env: {
+      TMUXIFIER_ALERT_EVAL_MS: '10000',
+      TMUXIFIER_ALERT_RETENTION_DAYS: '30',
+      TMUXIFIER_ALERT_COOLDOWN_HOURS: '2',
+    },
+    cwd: '/app',
+  });
+  expect(c.alertEvalMs).toBe(10000);
+  expect(c.alertRetentionDays).toBe(30);
+  expect(c.alertCooldownHours).toBe(2);
+});
+
+test('alert aggregation knobs clamp out-of-range and non-numeric values to the default', () => {
+  const c = loadConfig({}, {
+    env: {
+      TMUXIFIER_ALERT_EVAL_MS: '10',           // below the 1000ms floor
+      TMUXIFIER_ALERT_RETENTION_DAYS: '0',     // below the 1-day floor
+      TMUXIFIER_ALERT_COOLDOWN_HOURS: 'nope',  // non-numeric
+    },
+    cwd: '/app',
+  });
+  expect(c.alertEvalMs).toBe(30000);
+  expect(c.alertRetentionDays).toBe(90);
+  expect(c.alertCooldownHours).toBe(6);
+});
+
+// alertMail is a single object-valued default, unlike every other knob in this
+// file — envCfg.alertMail replaces DEFAULTS.alertMail wholesale in the initial
+// top-level merge (an object spread is not a deep merge), so any field the env
+// didn't set arrives as a literal `undefined`. Without the post-merge
+// re-layering onto DEFAULTS.alertMail (config.js), an install that only sets
+// TMUXIFIER_ALERT_MAIL_HOST would lose `port`/`from`/etc. to `undefined`
+// instead of keeping their defaults.
+test('alertMail merges env-provided fields onto the defaults rather than replacing the whole object', () => {
+  const c = loadConfig({}, { env: { TMUXIFIER_ALERT_MAIL_HOST: '192.168.1.25' }, cwd: '/app' });
+  expect(c.alertMail).toEqual({
+    host: '192.168.1.25', port: 25, from: '', to: '', user: '', pass: '', useTls: false,
+  });
+});
+
+test('alertMail reads every field from env and normalizes TLS to a boolean', () => {
+  const c = loadConfig({}, {
+    env: {
+      TMUXIFIER_ALERT_MAIL_HOST: '192.168.1.25', TMUXIFIER_ALERT_MAIL_PORT: '2525',
+      TMUXIFIER_ALERT_MAIL_FROM: 'alerts@example.com', TMUXIFIER_ALERT_MAIL_TO: 'you@example.com',
+      TMUXIFIER_ALERT_MAIL_USER: 'u', TMUXIFIER_ALERT_MAIL_PASS: 'p', TMUXIFIER_ALERT_MAIL_TLS: 'on',
+    },
+    cwd: '/app',
+  });
+  expect(c.alertMail).toEqual({
+    host: '192.168.1.25', port: 2525, from: 'alerts@example.com', to: 'you@example.com',
+    user: 'u', pass: 'p', useTls: true,
+  });
+  // Anything other than exactly "on" (including no value at all) stays off.
+  const off = loadConfig({}, { env: { TMUXIFIER_ALERT_MAIL_HOST: 'h', TMUXIFIER_ALERT_MAIL_TLS: 'true' }, cwd: '/app' });
+  expect(off.alertMail.useTls).toBe(false);
+});
+
+test('alertMail.port clamps out-of-range values to the default port', () => {
+  const c = loadConfig({}, {
+    env: { TMUXIFIER_ALERT_MAIL_HOST: 'h', TMUXIFIER_ALERT_MAIL_PORT: '99999' },
+    cwd: '/app',
+  });
+  expect(c.alertMail.port).toBe(25);
+});
+
 test('rpId derives from the base external URL hostname', () => {
   const c = loadConfig({}, { env: { TMUXIFIER_BASE_EXTERNAL_URL: 'https://tmux.example.com' }, cwd: '/app' });
   expect(c.rpId).toBe('tmux.example.com');

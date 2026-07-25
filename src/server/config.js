@@ -49,6 +49,17 @@ const DEFAULTS = {
   // Seconds a claude pane's tmux session must be idle (no output) before it is
   // read as "waiting for input" — see docs/superpowers/specs/2026-07-19-agent-notifications-design.md
   agentIdleSec: 45,
+  // Alert aggregation. The evaluation loop is cheap (it reads append-only files
+  // and runs a pure decision function), so it ticks faster than the status poll.
+  alertEvalMs: 30000,
+  alertRetentionDays: 90,
+  alertCooldownHours: 6,
+  alertMail: { host: '', port: 25, from: '', to: '', user: '', pass: '', useTls: false },
+  // The ingest daemon (src/server/ingest/) runs as its own process and binds
+  // loopback by default: reaching it from elsewhere is a deliberate act, either
+  // widening this bind or putting a reverse proxy in front of it.
+  ingestBind: '127.0.0.1',
+  ingestPort: 8788,
   // Proxmox LXC provisioning (Phase 1). Poll cadence for PVE task progress, per-request
   // and overall-provision timeouts, DHCP-lease discovery window, and retained job history.
   pvePollMs: 1500,
@@ -142,6 +153,17 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     healthDiskWarnPct: e.TMUXIFIER_HEALTH_DISK_WARN_PCT ? Number(e.TMUXIFIER_HEALTH_DISK_WARN_PCT) : undefined,
     healthThresholdHysteresisPct: e.TMUXIFIER_HEALTH_HYSTERESIS_PCT ? Number(e.TMUXIFIER_HEALTH_HYSTERESIS_PCT) : undefined,
     agentIdleSec: e.TMUXIFIER_AGENT_IDLE_SEC ? Number(e.TMUXIFIER_AGENT_IDLE_SEC) : undefined,
+    alertEvalMs: e.TMUXIFIER_ALERT_EVAL_MS ? Number(e.TMUXIFIER_ALERT_EVAL_MS) : undefined,
+    alertRetentionDays: e.TMUXIFIER_ALERT_RETENTION_DAYS ? Number(e.TMUXIFIER_ALERT_RETENTION_DAYS) : undefined,
+    alertCooldownHours: e.TMUXIFIER_ALERT_COOLDOWN_HOURS ? Number(e.TMUXIFIER_ALERT_COOLDOWN_HOURS) : undefined,
+    alertMail: {
+      host: e.TMUXIFIER_ALERT_MAIL_HOST, port: e.TMUXIFIER_ALERT_MAIL_PORT ? Number(e.TMUXIFIER_ALERT_MAIL_PORT) : undefined,
+      from: e.TMUXIFIER_ALERT_MAIL_FROM, to: e.TMUXIFIER_ALERT_MAIL_TO,
+      user: e.TMUXIFIER_ALERT_MAIL_USER, pass: e.TMUXIFIER_ALERT_MAIL_PASS,
+      useTls: e.TMUXIFIER_ALERT_MAIL_TLS === undefined ? undefined : e.TMUXIFIER_ALERT_MAIL_TLS === 'on',
+    },
+    ingestBind: e.TMUXIFIER_INGEST_BIND,
+    ingestPort: e.TMUXIFIER_INGEST_PORT ? Number(e.TMUXIFIER_INGEST_PORT) : undefined,
     pvePollMs: e.TMUXIFIER_PVE_POLL_MS ? Number(e.TMUXIFIER_PVE_POLL_MS) : undefined,
     pveTimeoutMs: e.TMUXIFIER_PVE_TIMEOUT_MS ? Number(e.TMUXIFIER_PVE_TIMEOUT_MS) : undefined,
     pveProvisionTimeoutMs: e.TMUXIFIER_PVE_PROVISION_TIMEOUT_MS ? Number(e.TMUXIFIER_PVE_PROVISION_TIMEOUT_MS) : undefined,
@@ -290,6 +312,18 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   merged.healthDiskWarnPct = clampInt(merged.healthDiskWarnPct, 1, 100, DEFAULTS.healthDiskWarnPct);
   merged.healthThresholdHysteresisPct = clampInt(merged.healthThresholdHysteresisPct, 0, 50, DEFAULTS.healthThresholdHysteresisPct);
   merged.agentIdleSec = clampInt(merged.agentIdleSec, 10, 3600, DEFAULTS.agentIdleSec);
+  merged.alertEvalMs = clampInt(merged.alertEvalMs, 1000, 3600000, DEFAULTS.alertEvalMs);
+  merged.alertRetentionDays = clampInt(merged.alertRetentionDays, 1, 3650, DEFAULTS.alertRetentionDays);
+  merged.alertCooldownHours = clampInt(merged.alertCooldownHours, 0, 720, DEFAULTS.alertCooldownHours);
+  // alertMail arrived above as a plain top-level spread (envCfg.alertMail replaces
+  // DEFAULTS.alertMail wholesale, field-by-field merge happens here instead), so an
+  // unset env var is a real `undefined` field at this point, not a missing key —
+  // filter those (and blank strings) out before re-layering onto DEFAULTS, or an
+  // unconfigured relay would overwrite its own defaults with undefined.
+  merged.alertMail = { ...DEFAULTS.alertMail, ...Object.fromEntries(
+    Object.entries(merged.alertMail || {}).filter(([, v]) => v !== undefined && v !== '')) };
+  merged.alertMail.port = clampInt(merged.alertMail.port, 1, 65535, DEFAULTS.alertMail.port);
+  merged.ingestPort = clampInt(merged.ingestPort, 1, 65535, DEFAULTS.ingestPort);
   return merged;
 }
 
