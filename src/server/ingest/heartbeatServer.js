@@ -7,11 +7,25 @@ import { writeJson } from '../jsonFile.js';
 // it identifies one check and grants nothing else.
 const MAX_BODY = 64 * 1024;
 
-export function createHeartbeatServer({ checkinLog, isKnownToken, heartbeatFile, now = () => Date.now() }) {
+export function createHeartbeatServer({
+  checkinLog, isKnownToken, heartbeatFile, now = () => Date.now(),
+  livenessIntervalMs = 60000, setIntervalFn = setInterval, clearIntervalFn = clearInterval,
+}) {
+  let livenessTimer = null;
+
   async function stampAlive() {
     // Absence of this stamp is how the dashboard distinguishes "nothing is
     // wrong" from "the receiver is dead" — the most dangerous failure here,
     // because nothing else looks broken.
+    //
+    // It is therefore THIS DAEMON's heartbeat, not a log of traffic: written on
+    // listen and then on a timer, whether or not anyone checks in. Stamping only
+    // on an accepted check-in made a healthy receiver report itself dead twice
+    // over — freshly installed with no check-ins yet, and for any heartbeat
+    // whose window exceeds the reader's staleMs, since a daily backup stamps
+    // once per 24h and leaves the stamp stale for 23h55m of every day. A banner
+    // lit almost permanently on a healthy system is worse than none: it teaches
+    // the operator to ignore the one indicator that says the receiver is gone.
     try { await writeJson(heartbeatFile, { at: now() }, { mode: 0o600 }); } catch { /* best effort */ }
   }
 
@@ -48,8 +62,21 @@ export function createHeartbeatServer({ checkinLog, isKnownToken, heartbeatFile,
   return {
     handle,
     listen(port, host) {
-      return new Promise((resolve) => server.listen(port, host, () => resolve(server.address().port)));
+      return new Promise((resolve, reject) => server.listen(port, host, () => {
+        // Stamp before resolving, so a dashboard that reads the file the instant
+        // the unit comes up sees it alive rather than reporting a fresh install
+        // as a dead receiver.
+        stampAlive().then(() => {
+          // Returns the promise so the tick is awaitable in tests; setInterval
+          // itself ignores the return value.
+          livenessTimer = setIntervalFn(() => stampAlive().catch(() => {}), livenessIntervalMs);
+          resolve(server.address().port);
+        }, reject);
+      }));
     },
-    close() { return new Promise((r) => server.close(r)); },
+    close() {
+      if (livenessTimer != null) { clearIntervalFn(livenessTimer); livenessTimer = null; }
+      return new Promise((r) => server.close(r));
+    },
   };
 }

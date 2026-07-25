@@ -60,12 +60,48 @@ test('an oversized request body is rejected rather than buffered', async () => {
   expect(res.status).toBe(413);
 });
 
-// This daemon is the only process in the system that accepts input from the
-// network, so the shape of what it refuses matters as much as what it accepts.
-test('an unknown token records no liveness stamp either', async () => {
-  const { port, heartbeatFile } = await start();
-  await fetch(`http://127.0.0.1:${port}/hb/nope`, { method: 'POST' });
-  await expect(fs.readFile(heartbeatFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+// Liveness is the DAEMON's heartbeat, not a record of traffic. Stamping only on
+// an accepted check-in (as this first shipped) made a healthy receiver report
+// itself dead in two ordinary situations: freshly installed with no check-ins
+// yet, and any heartbeat whose window is longer than staleMs — a daily backup
+// stamps once per 24h, leaving the stamp stale for 23h55m of every day. A banner
+// lit ~99.7% of the time on a healthy system trains the operator to ignore it,
+// which is the alert fatigue this whole feature exists to avoid.
+test('liveness is stamped on listen, before any check-in has arrived', async () => {
+  const { heartbeatFile } = await start();
+  expect(JSON.parse(await fs.readFile(heartbeatFile, 'utf8')).at).toBe(1000);
+});
+
+test('liveness is re-stamped on an interval, so an idle receiver never reads as dead', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hb-'));
+  const heartbeatFile = path.join(dir, 'ingest-heartbeat.json');
+  let t = 1000;
+  const ticks = [];
+  const server = createHeartbeatServer({
+    checkinLog: createEventLog({ dir, prefix: 'checkins', now: () => t }),
+    heartbeatFile, now: () => t, isKnownToken: async () => true,
+    setIntervalFn: (fn) => { ticks.push(fn); return 1; }, clearIntervalFn: () => {},
+  });
+  await server.listen(0, '127.0.0.1');
+  running = { server };
+  expect(ticks).toHaveLength(1);
+  t = 999000; // no traffic in the meantime
+  await ticks[0]();
+  expect(JSON.parse(await fs.readFile(heartbeatFile, 'utf8')).at).toBe(999000);
+});
+
+test('closing clears the liveness timer rather than leaving it running', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hb-'));
+  let cleared = null;
+  const server = createHeartbeatServer({
+    checkinLog: createEventLog({ dir, prefix: 'checkins', now: () => 1000 }),
+    heartbeatFile: path.join(dir, 'ingest-heartbeat.json'), now: () => 1000,
+    isKnownToken: async () => true,
+    setIntervalFn: () => 'timer-handle', clearIntervalFn: (h) => { cleared = h; },
+  });
+  await server.listen(0, '127.0.0.1');
+  await server.close();
+  expect(cleared).toBe('timer-handle');
 });
 
 test('a token with path traversal or a wildcard character is refused, not looked up', async () => {

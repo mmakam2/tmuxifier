@@ -275,6 +275,11 @@ npm version patch --no-git-tag-version # bump package.json + package-lock.json b
 npm run build                        # rebuild the web bundle
 sudo systemctl restart tmuxifier     # restart to pick up the new bundle
 systemctl status tmuxifier           # confirm the service is healthy
+# Both units run this same checkout, so the ingest daemon keeps serving the OLD
+# code until it is restarted too. Skipping it is silently wrong: the dashboard
+# looks correct while heartbeat check-ins are handled by stale code.
+sudo systemctl restart tmuxifier-ingest 2>/dev/null || echo "ingest unit not installed — heartbeat checks inert"
+systemctl is-active tmuxifier-ingest
 # Health check against the deployed bind address (derived from your config):
 BASE="$(node -e "import('./src/server/config.js').then(({loadConfig})=>{const c=loadConfig();process.stdout.write(((c.tlsCert&&c.tlsKey)?'https':'http')+'://'+c.bindAddress+':'+c.port)})")"
 curl -sk -o /dev/null -w '%{http_code}\n' "$BASE/"  # 200
