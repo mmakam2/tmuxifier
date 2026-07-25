@@ -3,7 +3,9 @@
 // first seen 03:12" is computed at read time rather than mutated in place.
 export function foldEvents(events, { nowMs = Date.now(), windowMs = 3600000 } = {}) {
   const byKey = new Map();
-  for (const e of [...events].sort((a, b) => a.ts - b.ts)) {
+  // Sort events chronologically by ts, then by id for determinism on ties.
+  // Same-ts events (common in Task 1's ${ts}-N pattern) must order consistently.
+  for (const e of [...events].sort((a, b) => (a.ts - b.ts) || (a.id < b.id ? -1 : 1))) {
     let a = byKey.get(e.key);
     if (!a) {
       a = { key: e.key, source: e.source, severity: e.severity, state: 'resolved',
@@ -28,5 +30,9 @@ export function foldEvents(events, { nowMs = Date.now(), windowMs = 3600000 } = 
     if (a.firstTs === null) a.firstTs = e.ts;
     a.lastTs = e.ts;
   }
-  return [...byKey.values()].sort((x, y) => (y.lastTs || 0) - (x.lastTs || 0));
+  // Sort by lastTs descending (newest first), with id as a tie-break for determinism.
+  return [...byKey.values()].sort((x, y) => {
+    const tsDiff = (y.lastTs || 0) - (x.lastTs || 0);
+    return tsDiff !== 0 ? tsDiff : (x.key < y.key ? -1 : 1);
+  });
 }
