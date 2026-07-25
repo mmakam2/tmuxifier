@@ -1050,6 +1050,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   if (checkStore && alertManager) {
     app.get('/api/checks', { preHandler: requireAuth }, async () => ({
       checks: await checkStore.listChecks(), state: checkRunner ? checkRunner.getState() : {},
+      // A heartbeat check is satisfied by something calling the ingest daemon at
+      // /hb/<check id>, so the hub has to be able to show a complete URL. The
+      // port is configurable and the daemon is a separate process, so it can
+      // only come from the server — the browser has no way to infer it.
+      ingestPort: config.ingestPort ?? null,
     }));
     app.post('/api/checks', { preHandler: requireAuth }, async (req, reply) => {
       try { return { check: await checkStore.addCheck(req.body || {}) }; }

@@ -90,6 +90,16 @@ test('running an unknown check id 404s instead of crashing', async () => {
   expect(res.statusCode).toBe(404);
 });
 
+// A heartbeat check is satisfied by something calling the ingest daemon at
+// /hb/<check id>. The daemon is a separate process on its own configurable
+// port, so the browser cannot infer the URL — without this the hub could only
+// show a token with nowhere to send it, and the check would fail forever.
+test('the checks route reports the ingest port so the hub can show a complete check-in URL', async () => {
+  const h = await headers();
+  const body = (await app.inject({ method: 'GET', url: '/api/checks', headers: h })).json();
+  expect('ingestPort' in body).toBe(true);
+});
+
 test('an invalid check definition is refused with 400 and a readable message', async () => {
   const h = await headers();
   const res = await app.inject({ method: 'POST', url: '/api/checks', headers: h, payload: { label: 'x', type: 'nope' } });

@@ -34,7 +34,13 @@ const FIELDS: Record<string, CheckField[]> = {
 //
 // Each slice adds its types here as the executor lands: Slice B appends 'tcp',
 // 'json', and 'exec'; Slice C appends 'heartbeat'.
-export const IMPLEMENTED_TYPES = ['http', 'tcp', 'json', 'exec'];
+export const IMPLEMENTED_TYPES = ['http', 'tcp', 'json', 'exec', 'heartbeat'];
+
+// A heartbeat check is driven by something calling in, so its id doubles as the
+// URL token the ingest daemon accepts (src/server/ingest/). Surfacing that path
+// is not decoration: a heartbeat whose token the operator cannot see is a check
+// nothing can ever satisfy, so it would sit there failing forever.
+export const checkinPath = (checkId: string): string => `/hb/${checkId}`;
 
 export function checkFieldsFor(type: string): CheckField[] {
   return FIELDS[type] ?? [];

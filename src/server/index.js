@@ -49,6 +49,7 @@ import { runHttpCheck } from './checks/httpCheck.js';
 import { runTcpCheck } from './checks/tcpCheck.js';
 import { runJsonCheck } from './checks/jsonCheck.js';
 import { runExecCheck } from './checks/execCheck.js';
+import { runHeartbeatCheck } from './checks/heartbeatCheck.js';
 import { createAlertManager } from './alertManager.js';
 import { DEFAULT_THRESHOLDS } from './alertPolicy.js';
 import { createMailChannel } from './alertMail.js';
@@ -276,17 +277,25 @@ const eventsDir = path.join(config.dataDir, 'events');
 const checkEventLog = createEventLog({ dir: eventsDir, prefix: 'checks' });
 const inboundEventLog = createEventLog({ dir: eventsDir, prefix: 'inbound' });
 const decisionLog = createEventLog({ dir: eventsDir, prefix: 'decisions' });
+// Written by the ingest daemon, read here only by the heartbeat executor. It is
+// kept out of the alert manager's eventLogs on purpose: foldEvents treats any
+// event that is not state:'resolved' as a firing occurrence, so a check-in in
+// that set would raise an alert announcing that the backup succeeded.
+const checkinLog = createEventLog({ dir: eventsDir, prefix: 'checkins' });
 const checkStore = createCheckStore({ dataDir: config.dataDir, secretBox });
 const alertState = createAlertStateStore({ dataDir: config.dataDir });
 const checkRunner = createCheckRunner({
   checkStore,
   dispatcher: createCheckDispatcher({
-    runners: { http: runHttpCheck, tcp: runTcpCheck, json: runJsonCheck, exec: runExecCheck },
+    runners: {
+      http: runHttpCheck, tcp: runTcpCheck, json: runJsonCheck,
+      exec: runExecCheck, heartbeat: runHeartbeatCheck,
+    },
   }),
   eventLog: checkEventLog,
-  // Only the exec executor uses these; the dispatcher hands the same deps to
-  // every runner, and the network executors ignore what they do not need.
-  deps: { boxActions, store },
+  // The dispatcher hands the same deps to every runner; each executor takes
+  // what it needs and the network ones ignore the rest.
+  deps: { boxActions, store, checkinLog },
 });
 // Mail delivery is optional: with no relay configured the system still records
 // and displays everything, it just cannot interrupt anyone. A relay host with

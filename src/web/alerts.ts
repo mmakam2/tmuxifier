@@ -27,7 +27,7 @@ export const ackAlert = (key: string) => send(`/api/alerts/${encodeURIComponent(
 export const muteAlert = (key: string) => send(`/api/alerts/${encodeURIComponent(key)}/mute`, 'POST');
 export const unmuteAlert = (key: string) => send(`/api/alerts/${encodeURIComponent(key)}/mute`, 'DELETE');
 export const listChecks = () =>
-  json<{ checks: CheckSummary[]; state: Record<string, CheckRunState> }>('/api/checks');
+  json<{ checks: CheckSummary[]; state: Record<string, CheckRunState>; ingestPort: number | null }>('/api/checks');
 export const createCheck = (spec: unknown) => send('/api/checks', 'POST', spec);
 export const updateCheck = (id: string, spec: unknown) => send(`/api/checks/${encodeURIComponent(id)}`, 'PUT', spec);
 export const deleteCheck = (id: string) => send(`/api/checks/${encodeURIComponent(id)}`, 'DELETE');

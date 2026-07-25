@@ -9,7 +9,7 @@ import {
   laneFor, severityRank, reasonLabel, occurrenceSummary, relativeAge,
   type Alert, type Severity,
 } from './alertFormat';
-import { checkFieldsFor, checkFormPayload, IMPLEMENTED_TYPES } from './checkForm';
+import { checkFieldsFor, checkFormPayload, checkinPath, IMPLEMENTED_TYPES } from './checkForm';
 
 const TABS = ['Alerts', 'Checks'] as const;
 type Tab = typeof TABS[number];
@@ -101,7 +101,7 @@ export function openAlertsHub() {
   // --- Checks ---
   async function renderChecks() {
     setContent(el('div', { class: 'pve-sub' }, ['Loading…']));
-    let data: { checks: CheckSummary[]; state: Record<string, CheckRunState> };
+    let data: { checks: CheckSummary[]; state: Record<string, CheckRunState>; ingestPort: number | null };
     try { data = await listChecks(); } catch (e) { setContent(err(e instanceof Error ? e.message : String(e))); return; }
     const now = Date.now();
     setContent(
@@ -109,7 +109,7 @@ export function openAlertsHub() {
         el('button', { type: 'button', class: 'pve-primary', onclick: () => openCheckForm(null) }, ['+ New check']),
       ]),
       data.checks.length
-        ? el('div', { class: 'pve-list' }, data.checks.map((c) => checkRow(c, data.state[c.id], now)))
+        ? el('div', { class: 'pve-list' }, data.checks.map((c) => checkRow(c, data.state[c.id], now, data.ingestPort)))
         : el('div', { class: 'pve-sub' }, ['No checks yet. A check is a probe run on a schedule; a failing one becomes an alert.']),
     );
   }
@@ -122,16 +122,26 @@ export function openAlertsHub() {
     return bits.join(' · ');
   }
 
-  function checkRow(c: CheckSummary, st: CheckRunState | undefined, now: number) {
+  function checkRow(c: CheckSummary, st: CheckRunState | undefined, now: number, ingestPort: number | null) {
     const act = async (fn: () => Promise<unknown>) => {
       try { await fn(); } catch (e) { showError(e); return; }
       await renderChecks();
     };
+    // A heartbeat is satisfied by something calling in, so the row carries the
+    // path to call — the check is unusable without it, and nothing else in the
+    // UI reveals the token.
+    const lines = [
+      el('strong', {}, [c.label]),
+      el('div', { class: 'pve-sub' }, [`${c.type}${c.enabled ? '' : ' · disabled'} · ${checkStatusText(st, now)}`]),
+    ];
+    if (c.type === 'heartbeat') {
+      const port = ingestPort ?? '<ingest-port>';
+      lines.push(el('div', { class: 'pve-sub' }, [
+        `check in with: curl -fsS http://<ingest-host>:${port}${checkinPath(c.id)}`,
+      ]));
+    }
     return el('div', { class: 'pve-row' }, [
-      el('div', {}, [
-        el('strong', {}, [c.label]),
-        el('div', { class: 'pve-sub' }, [`${c.type}${c.enabled ? '' : ' · disabled'} · ${checkStatusText(st, now)}`]),
-      ]),
+      el('div', {}, lines),
       el('div', { class: 'pve-row-actions' }, [
         el('button', { type: 'button', onclick: () => void act(() => runCheck(c.id)) }, ['Run now']),
         el('button', { type: 'button', onclick: () => openCheckForm(c) }, ['Edit']),
