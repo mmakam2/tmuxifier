@@ -49,9 +49,8 @@ export function focusMove(layout: StageLayout, focusedId: string | null, key: st
 
 export interface PaneHooks {
   contentFor(id: string): HTMLElement;
-  labelFor(id: string): string;
+  headerFor(id: string, split: boolean): HTMLElement;
   onFocus(id: string): void;
-  onUndock(id: string): void;
   onRatio(divider: number, firstShare: number, phase: 'drag' | 'commit'): void;
   onToggleOrientation(): void;
 }
@@ -139,20 +138,13 @@ function buildPane(id: string, split: boolean, focused: boolean, hooks: PaneHook
   pane.classList.toggle('focused', focused);
   // Capture-phase: xterm swallows bubbling mousedowns inside the terminal.
   pane.addEventListener('mousedown', () => hooks.onFocus(id), true);
-  if (split) {
-    const plate = document.createElement('div');
-    plate.className = 'pane-nameplate';
-    plate.textContent = hooks.labelFor(id);
-    const undock = document.createElement('button');
-    undock.type = 'button';
-    undock.className = 'pane-undock';
-    undock.title = 'Undock';
-    undock.setAttribute('aria-label', `Undock ${hooks.labelFor(id)}`);
-    undock.textContent = '✕';
-    undock.addEventListener('click', () => hooks.onUndock(id));
-    pane.append(plate, undock);
-  }
-  pane.append(hooks.contentFor(id));
+  pane.append(hooks.headerFor(id, split));
+  // .term children position absolutely against the body, not the pane, so the
+  // header keeps its own row instead of being painted over.
+  const body = document.createElement('div');
+  body.className = 'pane-body';
+  body.append(hooks.contentFor(id));
+  pane.append(body);
   return pane;
 }
 

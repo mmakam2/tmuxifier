@@ -285,12 +285,16 @@ Two boxes can share the stage. Drag a box row onto the stage and drop it on an e
 right docks side by side, top/bottom stacks — or use the row's ◫ **Dock** button (visible
 whenever exactly one other terminal is open) for the keyboard path. The divider between panes
 drags to resize (double-click resets 50/50, arrow keys work when it's focused, and its small
-⤢ control flips the split direction). Each pane shows its box name; the focused pane carries
-a cyan border, `Ctrl+Shift+Arrow` moves focus between panes, and plain-clicking another box
-in the sidebar replaces the **focused** pane while the other keeps running. The ✕ in a pane's
-corner undocks it (the terminal stays connected in the background, exactly like switching
-away). The split — pair, direction, and ratio — survives reloads; both sidebar rows show the
-cyan beacon while docked, with the focused one at full strength.
+⤢ control flips the split direction). Every terminal pane — split or not — carries a header
+bar: status dot, box name, and `user@host` on the left; on the right a state chip (agent
+**working**/**waiting** from the health poller, or connection state while the terminal
+reconnects) beside the voice, reconnect ↻, and — in a split — undock ✕ buttons, so nothing
+floats over the terminal itself. The focused pane's bar carries the cyan beacon,
+`Ctrl+Shift+Arrow` moves focus between panes, and plain-clicking another box in the sidebar
+replaces the **focused** pane while the other keeps running. Undocking keeps the terminal
+connected in the background, exactly like switching away. The split — pair, direction, and
+ratio — survives reloads; both sidebar rows show the cyan beacon while docked, with the
+focused one at full strength.
 
 ## Pasting images & files
 

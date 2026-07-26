@@ -29,8 +29,8 @@ export interface Sample {
   t: number; up: boolean; stopped?: boolean; tmux?: boolean; needsAuth?: boolean; keyChanged?: boolean;
   cpuPct?: number; memPct?: number; diskPct?: number;
   // Agent presence/idleness for the box's configured session (see healthHistory.js
-  // sampleOf) and whether that session is attached. Unused by the client today —
-  // typing only, to keep this interface truthful to what the API actually serves.
+  // sampleOf) and whether that session is attached. The pane header bar reads the
+  // latest sample's `agent` for its working/waiting chip (paneHeader.ts).
   agent?: 'working' | 'waiting' | 'unknown'; agentAttached?: boolean;
 }
 export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'key-changed' | 'threshold' | 'threshold-clear' | 'agent-input' | 'agent-done';
