@@ -77,12 +77,14 @@ Removed by this change: the floating `.voice-btn` mount over the canvas, and the
 ## Agent state source
 
 `healthHistory.js` already derives a per-box agent state (`working` / `waiting` /
-`unknown`) from each status probe; it is only consumed for edge-triggered notification
-events today. Smallest exposure: add an accessor (e.g. `agentState(boxId)`) and include
-`agent` per box in the `/api/status` snapshot payload. The client's existing status poll
-then feeds the chip — no new endpoint, no additional polling, no change to event
-semantics or attach-suppression (which applies to *events*; the bar shows current state
-and is naturally visible only when attached).
+`unknown`) from each status probe, and — as plan-writing surfaced — it already reaches
+the client: each `Sample` served by `GET /api/health/series` carries `agent`, typed in
+`api.ts` (whose comment even notes it is "unused by the client today — typing only").
+`main.ts` refreshes `latestSeries` on every poll tick for the sparklines. The chip
+therefore reads `latestSeries[boxId]`'s last sample — **zero server changes**, no new
+endpoint or payload field, no additional polling, and no change to event semantics or
+attach-suppression (which applies to *events*; the bar shows current state and is
+naturally visible only when attached).
 
 ## Pane content states
 
@@ -107,7 +109,7 @@ and is naturally visible only when attached).
 
 ## Out of scope
 
-- No server-side changes beyond the `/api/status` agent field.
+- No server-side changes at all (the agent field already ships in `/api/health/series`).
 - No new persistence or settings; the bar is not configurable or collapsible in v1.
 - No change to notification semantics, the sidebar rows, or the health events panel.
 - The pane cap stays `MAX_PANES = 2` (`main.ts`); the bar renders per-pane and is
