@@ -28,6 +28,7 @@ playwright-report/
 # Local agent/knowledge-graph artifacts (machine-specific caches; the release
 # checklist stages with `git add -A`, so anything not listed here would ship)
 .agents/
+.codex/
 graphify-out/
 skills-lock.json
 
