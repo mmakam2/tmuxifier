@@ -49,6 +49,27 @@ test('dock a second box, type into the focused pane, resize, and survive reload'
   await expect(page.locator('.stage-pane')).toHaveCount(1);
 });
 
+test('drag-to-dock: dropping a box row on the stage right edge docks it', async ({ page }) => {
+  await login(page);
+  await page.locator('.box .name', { hasText: 'localhost' }).click();
+  await expect(page.locator('.stage-pane')).toHaveCount(1);
+
+  // Native HTML5 drag: down on the row, at least two moves so the browser
+  // promotes it to a drag operation, then drop over the right-edge zone.
+  const row = page.locator('.box', { hasText: 'db-primary' });
+  const rowBox = (await row.boundingBox())!;
+  const stageBox = (await page.locator('#stage').boundingBox())!;
+  await page.mouse.move(rowBox.x + rowBox.width / 2, rowBox.y + rowBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(rowBox.x + rowBox.width / 2 + 12, rowBox.y + rowBox.height / 2, { steps: 4 });
+  await page.mouse.move(stageBox.x + stageBox.width - 30, stageBox.y + stageBox.height / 2, { steps: 10 });
+  await expect(page.locator('.drop-zone-right')).toBeVisible();
+  await page.mouse.up();
+
+  await expect(page.locator('.stage-pane')).toHaveCount(2);
+  await expect(page.locator('.pane-nameplate', { hasText: 'db-primary' })).toBeVisible();
+});
+
 test('plain-clicking a third box replaces the focused pane', async ({ page }) => {
   await login(page);
   await page.locator('.box .name', { hasText: 'localhost' }).click();

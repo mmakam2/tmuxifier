@@ -842,8 +842,18 @@ async function renderDashboard() {
 
     stage.addEventListener('dragenter', (e) => {
       if (!e.dataTransfer?.types.includes('text/x-tmuxifier-box')) return;
+      // Cancelling dragenter is what makes the hovered element the drop
+      // target; without it dragover/drop fire elsewhere and never reach us.
+      e.preventDefault();
       stage.classList.add('dragging');
-      buildZones(dragSourceId ?? '');
+      // Build once per drag: dragenter bubbles here from every zone, and
+      // rebuilding would replace the element the browser just accepted as
+      // the drop target — a removed node can never receive the drop.
+      if (!zones.childElementCount) buildZones(dragSourceId ?? '');
+    });
+    document.addEventListener('dragend', () => {
+      stage.classList.remove('dragging');
+      zones.replaceChildren(); // next drag rebuilds against the then-current layout
     });
     stage.addEventListener('dragover', (e) => {
       if (!e.dataTransfer?.types.includes('text/x-tmuxifier-box')) return;
@@ -856,10 +866,12 @@ async function renderDashboard() {
     });
     stage.addEventListener('drop', (e) => {
       e.preventDefault();
+      // Resolve the zone before clearing .dragging — removing the class hides
+      // the overlay (display: none), after which elementFromPoint can't see it.
+      const zone = document.elementFromPoint(e.clientX, e.clientY)?.closest('.drop-zone') as HTMLElement | null;
       stage.classList.remove('dragging');
       const id = e.dataTransfer?.getData('text/x-tmuxifier-box');
       if (!id) return;
-      const zone = document.elementFromPoint(e.clientX, e.clientY)?.closest('.drop-zone') as HTMLElement | null;
       if (!zone) return;
       if (zone.dataset.edge) {
         dockBox(id, zone.dataset.edge as Edge);
