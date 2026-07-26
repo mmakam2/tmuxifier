@@ -20,6 +20,8 @@ import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createSetupOptionsForm } from './setupOptions';
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
+import { type StageLayout, type Edge, emptyLayout, singleLayout, dockPane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
+import { renderStagePanes, applyRatios, focusMove, type PaneHooks } from './stagePanes';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
@@ -27,7 +29,11 @@ const SIDEBAR_COLLAPSED_KEY = 'tmuxifier.sidebarCollapsed';
 const GROUP_COLLAPSED_KEY = 'tmuxifier.collapsedTagGroups';
 const UNTAGGED_LABEL = 'Untagged';
 const UNTAGGED_KEY = '__untagged__';
-let activeBoxId: string | null = null;
+const STAGE_LAYOUT_KEY = 'tmuxifier.stageLayout';
+const MAX_PANES = 2; // gesture-layer cap; the model itself is N-capable
+let stageLayout: StageLayout = emptyLayout();
+let focusedBoxId: string | null = null; // the pane typing targets and plain clicks replace
+let lastPaneStates = ''; // pollStatus repaints only when a docked box's derived state flips
 let allBoxes: Box[] = [];
 let latestStatus: Record<string, Status> = {};
 let latestSetups: SetupSummary[] = [];
@@ -441,28 +447,19 @@ async function pollStatus() {
         if (!id) return;
         applyRowStatus(li as HTMLElement, id, status[id]);
       });
-      // Reconcile Proxmox-stopped state with open terminals and the stopped panel:
-      // a box that stopped out from under a live terminal loses that terminal, the
-      // active stopped box shows its panel, and a panel whose container restarted
-      // is cleared back to the empty stage.
-      const selected = activeBoxId ? allBoxes.find((box) => box.id === activeBoxId) : undefined;
+      // Reconcile pane content with Proxmox/setup state: a box that stopped
+      // out from under a live terminal loses it (its pane flips to the stopped
+      // panel), a restarted one flips back to a terminal. paneState treats an
+      // 'unknown' PVE read as sticky for a stopped pane, so a failed read is
+      // never mistaken for a start. One repaint only when a derived state
+      // flips, so steady state costs nothing.
       for (const [id] of tabs) {
-        if (id !== '__local__' && status[id]?.proxmoxState === 'stopped') closeTab(id);
-      }
-      if (selected && status[selected.id]?.proxmoxState === 'stopped') {
-        showStoppedBox(selected);
-      } else if (!selected || status[selected.id]?.proxmoxState !== 'unknown') {
-        // 'unknown' means the PVE read failed or is stale — it must never be
-        // read as "the container started", so keep the stopped panel up.
-        const stage = app.querySelector('#stage') as HTMLElement;
-        const stoppedPanel = stage.querySelector('.stopped-box-state');
-        if (stoppedPanel) {
-          stoppedPanel.remove();
-          activeBoxId = null;
-          highlightBox(null);
-          if (!stage.querySelector('.empty')) stage.append(emptyStagePanel());
+        if (id !== '__local__' && status[id]?.proxmoxState === 'stopped') {
+          closeTab(id, { keepPane: stageLayout.panes.includes(id) });
         }
       }
+      const paneStates = stageLayout.panes.map((id) => `${id}:${paneState(id)}`).join('|');
+      if (paneStates !== lastPaneStates) repaintStage();
     } catch {}
     // latestSetups is otherwise refreshed only by refresh() (boot, add/edit/
     // remove/import), so a job finishing while the dashboard sits idle leaves a
@@ -573,6 +570,131 @@ function emptyStagePanel(): HTMLElement {
   return panel;
 }
 
+// --- Stage panes: the layout model drives what the stage shows -------------
+// Terminals are created into the hidden parking div and MOVED into panes by
+// the renderer; undocked tabs return to parking. Parking is display:none —
+// the same keep-alive contract as the old display:none tab toggling.
+
+function persistStage() {
+  localStorage.setItem(STAGE_LAYOUT_KEY, serialize(stageLayout, focusedBoxId));
+}
+
+function stageGrid(): HTMLElement { return app.querySelector('.stage-grid') as HTMLElement; }
+function stageParking(): HTMLElement { return app.querySelector('.stage-parking') as HTMLElement; }
+
+function ensureTab(id: string) {
+  if (tabs.has(id)) return;
+  const el = document.createElement('div');
+  el.className = 'term';
+  stageParking().appendChild(el);
+  const box = allBoxes.find((b) => b.id === id);
+  const term = openTerminal(el, id, id === '__local__' ? 'local shell' : box?.label);
+  tabs.set(id, { el, term });
+  if (id === '__local__') updateLocalDot();
+}
+
+// Content states a pane can show instead of a terminal. 'unknown' PVE state is
+// sticky for a pane already showing its stopped panel — a failed/stale PVE read
+// must never be read as "the container started" (see pollStatus).
+const stoppedShown = new Set<string>();
+
+function paneState(id: string): 'terminal' | 'stopped' | 'setup' {
+  if (id === '__local__') return 'terminal';
+  const pveState = latestStatus[id]?.proxmoxState;
+  if (pveState === 'stopped') return 'stopped';
+  if (pveState === 'unknown' && stoppedShown.has(id)) return 'stopped';
+  if (blocksTerminal(latestSetups.find((s) => s.boxId === id)?.status)) return 'setup';
+  return 'terminal';
+}
+
+const settingUpPollers = new Map<string, { start: () => void; stop: () => void }>();
+
+function clearSettingUpPanel(id: string) {
+  settingUpPollers.get(id)?.stop();
+  settingUpPollers.delete(id);
+}
+
+function paneContentFor(id: string): HTMLElement {
+  const state = paneState(id);
+  const box = allBoxes.find((b) => b.id === id);
+  stoppedShown.delete(id);
+  if (state === 'stopped' && box) {
+    closeTab(id, { keepPane: true });
+    stoppedShown.add(id);
+    return buildStoppedPanel(box);
+  }
+  if (state === 'setup' && box) {
+    closeTab(id, { keepPane: true });
+    return buildSettingUpPanel(box);
+  }
+  ensureTab(id);
+  return tabs.get(id)!.el;
+}
+
+function paneHooks(): PaneHooks {
+  return {
+    contentFor: (id) => paneContentFor(id),
+    labelFor: (id) => (id === '__local__' ? 'Host Shell' : allBoxes.find((b) => b.id === id)?.label ?? id),
+    onFocus: (id) => { if (focusedBoxId !== id) { focusedBoxId = id; syncPaneFocus(); persistStage(); } },
+    onUndock: (id) => undockBox(id),
+    onRatio: (divider, firstShare, phase) => {
+      stageLayout = setRatio(stageLayout, divider, firstShare);
+      applyRatios(stageGrid(), stageLayout);
+      if (phase === 'commit') { refitActiveTerminals(); persistStage(); }
+      else requestAnimationFrame(refitActiveTerminals);
+    },
+    onToggleOrientation: () => { stageLayout = toggleOrientation(stageLayout); repaintStage(); },
+  };
+}
+
+// Focus paint without a full re-render (a re-render moves terminal DOM).
+function syncPaneFocus() {
+  const split = stageLayout.panes.length > 1;
+  stageGrid().querySelectorAll<HTMLElement>('.stage-pane').forEach((p) => {
+    p.classList.toggle('focused', split && p.dataset.paneId === focusedBoxId);
+  });
+  highlightStage();
+}
+
+function repaintStage() {
+  const grid = stageGrid();
+  // Panels that lost their pane (or whose box left setup) must stop polling.
+  for (const [id] of settingUpPollers) {
+    if (!stageLayout.panes.includes(id) || paneState(id) !== 'setup') clearSettingUpPanel(id);
+  }
+  for (const id of [...stoppedShown]) {
+    if (!stageLayout.panes.includes(id)) stoppedShown.delete(id);
+  }
+  // Park every tab first so replaceChildren() can't orphan a live terminal.
+  for (const t of tabs.values()) stageParking().appendChild(t.el);
+  if (stageLayout.panes.length === 0) {
+    grid.replaceChildren();
+    grid.style.gridTemplateColumns = '';
+    grid.style.gridTemplateRows = '';
+    grid.append(emptyStagePanel());
+  } else {
+    renderStagePanes(grid, stageLayout, focusedBoxId, paneHooks());
+  }
+  lastPaneStates = stageLayout.panes.map((id) => `${id}:${paneState(id)}`).join('|');
+  refitActiveTerminals();
+  highlightStage();
+  persistStage();
+  if (focusedBoxId) tabs.get(focusedBoxId)?.term.focus();
+  filterAndPaint(); // dock-button visibility and row highlights track the layout
+}
+
+function dockBox(id: string, edge: Edge) {
+  stageLayout = dockPane(stageLayout, id, edge);
+  focusedBoxId = id;
+  repaintStage();
+}
+
+function undockBox(id: string) {
+  stageLayout = undockPane(stageLayout, id);
+  if (focusedBoxId === id) focusedBoxId = stageLayout.panes[0] ?? null;
+  repaintStage();
+}
+
 async function renderDashboard() {
   if (pollInterval) clearInterval(pollInterval);
   const sidebarCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
@@ -599,16 +721,27 @@ async function renderDashboard() {
           <button class="local-edit" title="Configure shell" aria-label="Configure host shell">✎</button>
         </div>
       </aside>
-      <main id="stage" class="stage"></main>
+      <main id="stage" class="stage"><div class="stage-grid"></div><div class="stage-parking"></div></main>
     </div>`;
-  (app.querySelector('#stage') as HTMLElement).append(emptyStagePanel());
+  // Capture the persisted layout BEFORE the first repaint: repaintStage
+  // persists on every call, so painting the initial empty stage would
+  // otherwise clobber the saved split before restore ever reads it.
+  const savedStage = localStorage.getItem(STAGE_LAYOUT_KEY);
+  repaintStage();
   app.querySelector('#logout')!.addEventListener('click', async () => {
     if (pollInterval) clearInterval(pollInterval);
     stopFleetPoll();
     // Dispose every terminal before the login screen replaces the dashboard:
     // the tabs map is module-level, so surviving entries would keep detached
     // elements (unopenable boxes after re-login) and live reconnect loops.
-    for (const id of [...tabs.keys()]) closeTab(id);
+    // Torn down directly — NOT via closeTab/undock — so the persisted layout
+    // survives logout and re-login restores it.
+    for (const [, t] of tabs) { t.term.dispose(); t.el.remove(); }
+    tabs.clear();
+    updateLocalDot();
+    for (const id of [...settingUpPollers.keys()]) clearSettingUpPanel(id);
+    stageLayout = emptyLayout();
+    focusedBoxId = null;
     closeFleetJobsPanel();
     closeEventsPanel();
     closeProvisionPanel();
@@ -661,13 +794,13 @@ async function renderDashboard() {
   // Local shell — name click opens terminal
   app.querySelector('.local-name')!.addEventListener('click', () => openLocalShell());
 
-  // Local shell — refresh
+  // Local shell — refresh (keeps the pane; repaint rebuilds the terminal in place)
   app.querySelector('.local-refresh')!.addEventListener('click', async (e) => {
     e.stopPropagation();
     await api.reconnectLocalShell();
-    const wasActive = activeBoxId === '__local__';
-    closeTab('__local__');
-    if (wasActive) openLocalShell();
+    const wasDocked = stageLayout.panes.includes('__local__');
+    closeTab('__local__', { keepPane: wasDocked });
+    if (wasDocked) repaintStage();
   });
 
   // Local shell — edit
@@ -678,6 +811,14 @@ async function renderDashboard() {
 
   syncSparkMetricClass();
   await refresh();
+  // Restore the persisted stage layout now that the box list exists for
+  // pruning (a vanished box drops out; 0 panes left = the empty stage).
+  const restored = restore(savedStage, [...allBoxes.map((b) => b.id), '__local__']);
+  if (restored.layout.panes.length) {
+    stageLayout = restored.layout;
+    focusedBoxId = restored.focusedId;
+    repaintStage();
+  }
   pollInterval = setInterval(pollStatus, POLL_MS);
   void pollHealth(); // seed sparklines + events badge without waiting a tick
 }
@@ -697,7 +838,9 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   const st = status[b.id];
 
   const li = document.createElement('li');
-  li.className = b.id === activeBoxId ? 'box active' : 'box';
+  li.className = 'box';
+  if (b.id === focusedBoxId) li.classList.add('active');
+  else if (stageLayout.panes.includes(b.id)) li.classList.add('docked');
   li.dataset.id = b.id;
   li.dataset.boxId = b.id; // matches [data-box-id] used by tests/tooling to locate a card
 
@@ -759,9 +902,9 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   refreshBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     await api.reconnectBox(b.id);
-    const wasActive = activeBoxId === b.id;
-    closeTab(b.id);
-    if (wasActive) openBox(b);
+    const wasDocked = stageLayout.panes.includes(b.id);
+    closeTab(b.id, { keepPane: wasDocked });
+    if (wasDocked) repaintStage(); // rebuilds the terminal in its pane
   });
 
   const forgetKeyBtn = document.createElement('button');
@@ -774,9 +917,9 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
     e.stopPropagation();
     if (!confirm(`Forget the stored host key for ${b.label}? Only do this if the box was legitimately rebuilt.`)) return;
     await api.forgetHostKey(b.id);
-    const wasActive = activeBoxId === b.id;
-    closeTab(b.id);
-    if (wasActive) openBox(b);
+    const wasDocked = stageLayout.panes.includes(b.id);
+    closeTab(b.id, { keepPane: wasDocked });
+    if (wasDocked) repaintStage();
   });
 
   const edit = document.createElement('button');
@@ -852,7 +995,7 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
 
   for (const group of groupBoxes(boxes)) {
     const collapsed = !searching && isGroupCollapsed(group.key);
-    const containsActive = !!activeBoxId && group.boxes.some(b => b.id === activeBoxId);
+    const containsActive = !!focusedBoxId && group.boxes.some(b => b.id === focusedBoxId);
 
     const groupItem = document.createElement('li');
     groupItem.className = `box-group${collapsed ? ' collapsed' : ''}${containsActive ? ' active-child' : ''}`;
@@ -922,78 +1065,39 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
   if (fleetMode) syncFleetUI();
 }
 
-function openLocalShell() {
-  activeBoxId = '__local__';
-  // De-highlight all box items
-  app.querySelectorAll('.box').forEach(el => el.classList.remove('active'));
-  app.querySelectorAll('.box-group').forEach(el => el.classList.remove('active-child'));
-  // Highlight local shell bar
-  const ls = app.querySelector('.local-shell');
-  if (ls) ls.classList.add('active');
-  const stage = app.querySelector('#stage') as HTMLElement;
-  for (const t of tabs.values()) t.el.style.display = 'none';
-  stage.querySelector('.stopped-box-state')?.remove();
-  const existing = tabs.get('__local__');
-  if (existing) { existing.el.style.display = 'block'; existing.term.refit(); existing.term.focus(); updateLocalDot(); return; }
-  stage.querySelector('.empty')?.remove();
-  const el = document.createElement('div');
-  el.className = 'term';
-  stage.appendChild(el);
-  const term = openTerminal(el, '__local__', 'local shell');
-  tabs.set('__local__', { el, term });
-  term.focus();
-  // Update dot after tab creation so it turns green on first open
-  updateLocalDot();
-}
+function openLocalShell() { openPane('__local__'); }
 
 function updateLocalDot() {
   const dot = app.querySelector('.local-dot');
   if (dot) dot.classList.toggle('green', tabs.has('__local__'));
 }
 
-// Highlight one box row (and its containing tag group) as active, clearing the
-// rest. `null` de-highlights everything (local shell / empty stage). Shared by
-// openBox, showStoppedBox, and the poll reconcile so highlight state never drifts.
-function highlightBox(boxId: string | null) {
+// Sidebar highlight derived from the layout: docked = on stage (dimmed
+// beacon); active = the focused pane (full beacon). One derivation shared by
+// every repaint so highlight state never drifts.
+function highlightStage() {
   app.querySelectorAll('.box').forEach((element) => {
     const row = element as HTMLElement;
-    row.classList.toggle('active', boxId !== null && row.dataset.id === boxId);
+    const id = row.dataset.id ?? '';
+    row.classList.toggle('docked', stageLayout.panes.includes(id) && id !== focusedBoxId);
+    row.classList.toggle('active', id === focusedBoxId);
   });
   app.querySelectorAll('.box-group').forEach((element) => {
     const group = element as HTMLElement;
-    group.classList.toggle('active-child', boxId !== null && !!group.querySelector(`.box[data-id="${CSS.escape(boxId)}"]`));
+    group.classList.toggle('active-child', !!focusedBoxId && !!group.querySelector(`.box[data-id="${CSS.escape(focusedBoxId)}"]`));
   });
+  const ls = app.querySelector('.local-shell');
+  if (ls) {
+    ls.classList.toggle('docked', stageLayout.panes.includes('__local__') && focusedBoxId !== '__local__');
+    ls.classList.toggle('active', focusedBoxId === '__local__');
+  }
 }
 
-// A Proxmox-linked box confirmed stopped has no reachable tmux, so instead of a
-// dead terminal the stage shows a static panel with the container's identity and
-// a shortcut into the Proxmox Containers tab (Start / Deprovision live there).
-// The setting-up panel owns a poll loop, so it needs an explicit teardown:
-// every path that replaces the stage content must stop it, or a dead panel
-// keeps polling (and can auto-open a terminal for a box you navigated away
-// from).
-let settingUpPoller: { start: () => void; stop: () => void } | null = null;
-
-function clearSettingUpPanel() {
-  settingUpPoller?.stop();
-  settingUpPoller = null;
-  const stage = app.querySelector('#stage') as HTMLElement;
-  stage.querySelector('.setting-up-state')?.remove();
-}
-
-// Stage panel shown instead of a terminal while a box's setup job is running.
-// Mirrors showStoppedBox below, but live: it polls the job, renders its status
-// and log, and opens the terminal itself once the job settles.
-function showSettingUpBox(box: Box) {
-  activeBoxId = box.id;
-  highlightBox(box.id);
-  app.querySelector('.local-shell')?.classList.remove('active');
-  for (const terminal of tabs.values()) terminal.el.style.display = 'none';
-  const stage = app.querySelector('#stage') as HTMLElement;
-  stage.querySelector('.empty')?.remove();
-  stage.querySelector('.stopped-box-state')?.remove();
-  clearSettingUpPanel();
-
+// Pane panel shown instead of a terminal while a box's setup job is running.
+// Live: it polls the job, renders its status and log, and hands the pane back
+// to a terminal (via repaintStage's state re-resolution) once the job settles.
+function buildSettingUpPanel(box: Box): HTMLElement {
+  clearSettingUpPanel(box.id);
   const panel = document.createElement('div');
   panel.className = 'setting-up-state';
   const title = document.createElement('strong');
@@ -1004,9 +1108,8 @@ function showSettingUpBox(box: Box) {
   const log = document.createElement('pre');
   log.className = 'provision-log';
   panel.append(title, detail, log);
-  stage.append(panel);
 
-  settingUpPoller = createSetupJobPoller<SetupJob>({
+  const poller = createSetupJobPoller<SetupJob>({
     fetchJob: () => api.getBoxSetup(box.id),
     onJob: (job) => {
       if (!job) return 1500; // not discovered yet / transient fetch error
@@ -1014,31 +1117,24 @@ function showSettingUpBox(box: Box) {
       log.textContent = job.log || '';
       log.scrollTop = log.scrollHeight;
       if (blocksTerminal(job.status)) return 1000;
-      // This job state came straight from the API, so it beats the cached
-      // latestSetups that openBox would otherwise consult — without the bypass
-      // a stale 'running' entry bounces straight back into this panel, whose
-      // poller immediately sees 'done' again, forever.
-      clearSettingUpPanel();
-      // Refresh the box list and setup cache so the sidebar's "setting up" pill
-      // clears immediately for the box being watched, rather than waiting for
-      // the next status tick to notice.
+      // Job settled: refresh the sidebar's pill, then let the pane re-resolve
+      // to a terminal. The fresh job state beats the cached latestSetups list,
+      // so clear the poller first or the repaint would rebuild this panel.
+      clearSettingUpPanel(box.id);
       void refresh();
-      openBox(box, { fromSetupGate: true });
+      repaintStage();
       return null;
     },
   });
-  settingUpPoller.start();
+  settingUpPollers.set(box.id, poller);
+  poller.start();
+  return panel;
 }
 
-function showStoppedBox(box: Box) {
-  activeBoxId = box.id;
-  highlightBox(box.id);
-  app.querySelector('.local-shell')?.classList.remove('active');
-  for (const terminal of tabs.values()) terminal.el.style.display = 'none';
-  const stage = app.querySelector('#stage') as HTMLElement;
-  stage.querySelector('.empty')?.remove();
-  stage.querySelector('.stopped-box-state')?.remove();
-  clearSettingUpPanel();
+// A Proxmox-linked box confirmed stopped has no reachable tmux, so instead of
+// a dead terminal its pane shows a static panel with the container's identity
+// and a shortcut into the Proxmox Containers tab (Start / Deprovision live there).
+function buildStoppedPanel(box: Box): HTMLElement {
   const state = latestStatus[box.id];
   const panel = document.createElement('div');
   panel.className = 'stopped-box-state';
@@ -1056,62 +1152,37 @@ function showStoppedBox(box: Box) {
     onBoxLinked: () => { void refresh(); },
   }, { tab: 'Containers', focusBoxId: box.id }));
   panel.append(title, detail, manage);
-  stage.append(panel);
+  return panel;
 }
 
-function openBox(b: Box, opts?: { fromSetupGate?: boolean }) {
-  if (latestStatus[b.id]?.proxmoxState === 'stopped') {
-    closeTab(b.id);
-    showStoppedBox(b);
+function openBox(b: Box) { openPane(b.id); }
+
+// Plain activation (sidebar click): focus the pane if already docked, replace
+// the focused pane in a split, or become the single pane otherwise — the
+// confirmed "C replaces the focused pane" semantics.
+function openPane(id: string) {
+  if (stageLayout.panes.includes(id)) {
+    focusedBoxId = id;
+    syncPaneFocus();
+    persistStage();
+    tabs.get(id)?.term.focus();
     return;
   }
-  // A terminal opened mid-setup gets a shell whose environment predates the
-  // seeded credentials and installed tools. fromSetupGate is the panel's own
-  // auto-open, which has fresher job state than this cached list.
-  if (!opts?.fromSetupGate && blocksTerminal(latestSetups.find((s) => s.boxId === b.id)?.status)) {
-    closeTab(b.id);
-    showSettingUpBox(b);
-    return;
-  }
-  clearSettingUpPanel();
-  activeBoxId = b.id;
-  highlightBox(b.id);
-  // De-highlight local shell bar when switching to a box
-  const ls = app.querySelector('.local-shell');
-  if (ls) ls.classList.remove('active');
-  const stage = app.querySelector('#stage') as HTMLElement;
-  stage.querySelector('.stopped-box-state')?.remove();
-  for (const t of tabs.values()) t.el.style.display = 'none';
-  const existing = tabs.get(b.id);
-  if (existing) { existing.el.style.display = 'block'; existing.term.refit(); existing.term.focus(); return; }
-  stage.querySelector('.empty')?.remove();
-  const el = document.createElement('div');
-  el.className = 'term';
-  stage.appendChild(el);
-  const term = openTerminal(el, b.id, b.label);
-  tabs.set(b.id, { el, term });
-  term.focus();
+  stageLayout = stageLayout.panes.length <= 1 || !focusedBoxId
+    ? singleLayout(id)
+    : replacePane(stageLayout, focusedBoxId, id);
+  focusedBoxId = id;
+  repaintStage();
 }
 
-function closeTab(id: string) {
+// keepPane tears down the terminal but leaves the pane in the layout — used
+// when the pane is about to show a stopped/setting-up panel, or when a
+// reconnect will immediately rebuild the terminal in place.
+function closeTab(id: string, opts?: { keepPane?: boolean }) {
   const t = tabs.get(id);
   if (t) { t.term.dispose(); t.el.remove(); tabs.delete(id); }
-  if (activeBoxId === id) {
-    activeBoxId = null;
-    const activeEl = app.querySelector('.box.active');
-    if (activeEl) activeEl.classList.remove('active');
-    const ls = app.querySelector('.local-shell');
-    if (ls) ls.classList.remove('active');
-  }
   if (id === '__local__') updateLocalDot();
-  // Closing the visible tab (box removed, reconnect) must not leave a black
-  // void: restore the resting panel when nothing else occupies the stage. A
-  // reconnect's immediate re-open simply removes it again.
-  const stage = app.querySelector('#stage');
-  const anyVisible = [...tabs.values()].some((tab) => tab.el.style.display !== 'none');
-  if (stage && !anyVisible && !stage.querySelector('.empty, .stopped-box-state, .setting-up-state')) {
-    stage.append(emptyStagePanel());
-  }
+  if (!opts?.keepPane && stageLayout.panes.includes(id)) undockBox(id);
 }
 
 async function openLocalShellEditModal() {
