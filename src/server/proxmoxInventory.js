@@ -169,8 +169,48 @@ export function createProxmoxInventory({
     return inFlight;
   }
 
+  // Physical-node health for the standby dashboard's Proxmox readout: one
+  // `/cluster/resources?type=node` call per distinct endpoint (two profiles
+  // pointing at the same cluster answer identically — fetch once). Per-host
+  // failures degrade to one error record; the healthy clusters still report.
+  async function listClusterNodes() {
+    let summaries;
+    try { summaries = await proxmoxStore.listHosts(); } catch { return []; }
+    const pct = (used, max) => (Number.isFinite(used) && Number.isFinite(max) && max > 0
+      ? Math.round((used / max) * 100) : null);
+    const seen = new Set();
+    const out = [];
+    for (const summary of summaries) {
+      let host;
+      try { host = await proxmoxStore.getHost(summary.id, { withSecret: true }); } catch { host = null; }
+      if (!host || seen.has(host.endpoint)) continue;
+      seen.add(host.endpoint);
+      const base = {
+        hostId: host.id, hostName: host.name || null,
+        cpuPct: null, memPct: null, diskPct: null, uptimeSec: null, error: null,
+      };
+      let entries;
+      try { entries = await makeClient(host).clusterNodes(); } catch (error) {
+        out.push({ ...base, node: null, status: 'error', error: error.message });
+        continue;
+      }
+      for (const e of entries || []) {
+        if (!e || e.type !== 'node' || typeof e.node !== 'string' || !SAFE_NODE.test(e.node)) continue;
+        out.push({
+          ...base, node: e.node,
+          status: e.status === 'online' ? 'online' : e.status === 'offline' ? 'offline' : 'unknown',
+          cpuPct: Number.isFinite(e.cpu) ? Math.round(e.cpu * 100) : null,
+          memPct: pct(e.mem, e.maxmem), diskPct: pct(e.disk, e.maxdisk),
+          uptimeSec: Number.isFinite(e.uptime) ? e.uptime : null,
+        });
+      }
+    }
+    return out;
+  }
+
   return {
     refreshLinked,
+    listClusterNodes,
     setActiveJobGuard(fn) { activeJobGuard = fn; },
     async refreshBox(box) { return (await doRefresh([box]))[0]; },
     async getLinkedContainers(boxes) { return refreshLinked(boxes); },

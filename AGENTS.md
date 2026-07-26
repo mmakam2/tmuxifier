@@ -268,7 +268,10 @@ pattern for new modules.
   `/cluster/resources` call per host); auto-follows node migrations by updating the stored
   link's node (guarded against active lifecycle jobs), and re-homes an orphaned link when a
   removed host profile is re-added with the same endpoint (new id, exact `host:port` match,
-  vmid verified on that cluster, same CAS + job guards).
+  vmid verified on that cluster, same CAS + job guards). `listClusterNodes` (served by
+  `GET /api/proxmox/nodes`) reports each physical node's health from
+  `/cluster/resources?type=node` — one call per distinct endpoint — for the standby
+  dashboard's Proxmox readout.
 - `proxmoxLifecycle.js` / `proxmoxLifecycleStore.js` — persisted LXC power/deprovision jobs in
   `data/proxmox-lifecycle-jobs.json`; deprovision releases the box's NetBox-allocated IP and
   deletes any remaining NetBox records matching the box's current IP, so manually created

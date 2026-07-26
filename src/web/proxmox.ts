@@ -26,6 +26,12 @@ export type LifecycleAction = 'start' | 'shutdown' | 'stop' | 'reboot' | 'deprov
 export type LifecycleStatus = 'running' | 'done' | 'error' | 'interrupted';
 export interface PveLinkedContainer { boxId: string; boxLabel: string; hostId: string; hostName: string | null; node: string; vmid: number; containerName: string | null; state: PveContainerState; fetchedAt: number; error: string | null; activeJob: LifecycleJobSummary | null; }
 export interface PveNodeContainer { hostId: string; node: string; vmid: number; name: string; state: PveContainerState; linkedBoxId: string | null; }
+export interface PveClusterNode {
+  hostId: string; hostName: string | null; node: string | null;
+  status: 'online' | 'offline' | 'unknown' | 'error';
+  cpuPct: number | null; memPct: number | null; diskPct: number | null;
+  uptimeSec: number | null; error: string | null;
+}
 export interface LifecycleJobSummary { id: string; action: LifecycleAction; boxId: string; boxLabel: string; hostId: string; hostName: string; node: string; vmid: number; status: LifecycleStatus; phase: string; error: string | null; createdAt: string; finishedAt: string | null; }
 export interface LifecycleJob extends LifecycleJobSummary { log: string; }
 
@@ -64,6 +70,7 @@ export const pve = {
   provisions() { return jr<ProvisionSummary[]>(fetch('/api/proxmox/provisions')); },
   provision(id: string) { return jr<ProvisionJob>(fetch(`/api/proxmox/provisions/${id}?t=${Date.now()}`)); },
   linkedContainers() { return jr<PveLinkedContainer[]>(fetch('/api/proxmox/containers')); },
+  clusterNodes() { return jr<PveClusterNode[]>(fetch('/api/proxmox/nodes')); },
   nodeContainers(hostId: string, node: string) { return jr<PveNodeContainer[]>(fetch(`/api/proxmox/hosts/${hostId}/nodes/${encodeURIComponent(node)}/containers`)); },
   createLifecycleJob(spec: { boxId: string; action: LifecycleAction; confirmName?: string }) { return jr<LifecycleJobSummary>(fetch('/api/proxmox/lifecycle-jobs', post(spec))); },
   lifecycleJobs() { return jr<LifecycleJobSummary[]>(fetch('/api/proxmox/lifecycle-jobs')); },

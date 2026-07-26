@@ -587,7 +587,17 @@ function startDashPolling() {
       try { dash?.update({ netbox: await nbx.summary() }); } catch {}
       try {
         const hosts = await pve.hosts();
-        dash?.update({ containers: hosts.length ? await pve.linkedContainers() : null });
+        if (!hosts.length) {
+          dash?.update({ containers: null, nodes: null });
+        } else {
+          // Independent fetches: node health still paints when the container
+          // rollup fails, and vice versa (the paint falls back per side).
+          const [ctr, nds] = await Promise.allSettled([pve.linkedContainers(), pve.clusterNodes()]);
+          dash?.update({
+            containers: ctr.status === 'fulfilled' ? ctr.value : null,
+            nodes: nds.status === 'fulfilled' ? nds.value : null,
+          });
+        }
       } catch {}
     }
     dashTick++;

@@ -955,6 +955,13 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     } catch (error) { return serviceFailure(reply, error, 502); }
   });
 
+  // Physical-node health for the dashboard's Proxmox readout. Per-host
+  // failures are degraded records inside the payload, not route errors.
+  app.get('/api/proxmox/nodes', { preHandler: requireAuth }, async (_req, reply) => {
+    try { return await proxmoxInventory.listClusterNodes(); }
+    catch (error) { return serviceFailure(reply, error, 502); }
+  });
+
   app.get('/api/proxmox/hosts/:id/nodes/:node/containers', { preHandler: requireAuth }, async (req, reply) => {
     const host = await proxmoxStore.getHost(req.params.id);
     if (!host) return reply.code(404).send({ error: 'proxmox host not found' });
