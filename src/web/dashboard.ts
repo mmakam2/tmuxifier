@@ -164,8 +164,20 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
 
   const infra = document.createElement('section');
   infra.className = 'dash-infra';
-  const infraRow = div('dash-infra-row');
-  infra.append(legend('INFRASTRUCTURE'), infraRow);
+  const sublegend = (text: string) => {
+    const l = legend(text);
+    l.classList.add('dash-sublegend');
+    return l;
+  };
+  const pveGroup = div('dash-infra-group');
+  const pveRow = div('dash-infra-row');
+  pveGroup.append(sublegend('PROXMOX'), pveRow);
+  const ipamGroup = div('dash-infra-group');
+  const ipamRow = div('dash-infra-row');
+  ipamGroup.append(sublegend('IPAM'), ipamRow);
+  const infraGroups = div('dash-infra-groups');
+  infraGroups.append(pveGroup, ipamGroup);
+  infra.append(legend('INFRASTRUCTURE'), infraGroups);
 
   el.append(head, standby, fleet, services, infra);
 
@@ -305,31 +317,37 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
   }
 
   function paintInfra() {
-    const mods: HTMLElement[] = [];
+    // Non-interactive readouts: wholesale swaps are safe (no hover state to keep).
+    const pveMods: HTMLElement[] = [];
     if (data.containers !== null) {
       const rollup = pveHostRollup(data.containers);
       if (rollup.length === 0) {
-        mods.push(infraModule('', 'PROXMOX', 'no linked containers'));
+        pveMods.push(infraModule('', 'PROXMOX', 'no linked containers'));
       }
       for (const host of rollup) {
         const extra = host.other > 0 ? ` · ${host.other} other` : '';
-        mods.push(infraModule(host.running > 0 ? 'green' : '', host.hostName, `${host.running} running · ${host.stopped} stopped${extra}`));
+        pveMods.push(infraModule(host.running > 0 ? 'green' : '', host.hostName, `${host.running} running · ${host.stopped} stopped${extra}`));
       }
     }
+    pveRow.replaceChildren(...pveMods);
+    pveGroup.hidden = pveMods.length === 0;
+
+    const ipamMods: HTMLElement[] = [];
     if (data.netbox?.configured) {
       if (!data.netbox.ok) {
-        mods.push(infraModule('red', 'NETBOX', '—'));
+        ipamMods.push(infraModule('red', 'NETBOX', '—'));
       } else if (data.netbox.prefixes.length === 0) {
-        mods.push(infraModule('green', 'NETBOX', 'connected'));
+        ipamMods.push(infraModule('green', 'NETBOX', 'connected'));
       } else {
         for (const p of data.netbox.prefixes) {
-          mods.push(infraModule('green', 'NETBOX', `${p.prefix} · ${p.used}/${p.total}`));
+          ipamMods.push(infraModule('green', p.prefix, `${p.used}/${p.total}`));
         }
       }
     }
-    // Non-interactive readouts: a wholesale swap is safe (no hover state to keep).
-    infraRow.replaceChildren(...mods);
-    infra.hidden = mods.length === 0;
+    ipamRow.replaceChildren(...ipamMods);
+    ipamGroup.hidden = ipamMods.length === 0;
+
+    infra.hidden = pveMods.length === 0 && ipamMods.length === 0;
   }
 
   function repaint() {

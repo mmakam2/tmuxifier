@@ -294,8 +294,9 @@ When no terminal is docked, the stage shows a standby dashboard instead of a bla
   Tiles persist in `data/services.json` (no secrets).
 - **Fleet overview** — one cell per box: status lamp, agent working/waiting chip, session
   count, and the CPU sparkline. Clicking a cell opens that box's terminal.
-- **Infrastructure readout** — linked-container counts per Proxmox host and, when NetBox is
-  configured, utilization for each IPv4 prefix NetBox knows (first 100).
+- **Infrastructure readout** — a Proxmox group (linked-container counts per host) and, when
+  NetBox is configured, an IPAM group with utilization for each IPv4 prefix NetBox knows
+  (first 100).
 
 On a fresh install (no boxes, no services) the dashboard collapses to the original standby
 prompt with the `+ Add box` hint.

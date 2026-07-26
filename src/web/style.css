@@ -686,7 +686,11 @@ button.empty-kbd:hover { color: var(--text); }
 .dash-tile-bottom { display: flex; align-items: center; gap: 8px; min-height: 16px; }
 .dash-glyph { font-size: 16px; line-height: 1; color: var(--muted); }
 .dash-latency { margin-left: auto; font-size: 11px; color: var(--amber); font-variant-numeric: tabular-nums; }
-.dash-infra-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.dash-infra-groups { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+/* Category engravings inside the section (PROXMOX / IPAM): same legend type,
+   subordinated by opacity rather than a new type step. */
+.dash-sublegend { opacity: 0.7; }
+.dash-infra-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .dash-mod {
   display: flex;
   align-items: center;
