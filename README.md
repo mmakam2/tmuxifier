@@ -11,12 +11,12 @@ back into the same state.
 
 | Fleet standby dashboard | Fleet Command |
 |:---:|:---:|
-| [![Tmuxifier's standby dashboard: a fleet grid showing each box's reachability and session count, beside a sidebar of boxes grouped by tag with CPU, memory, and disk readouts](docs/screenshots/dashboard.png)](docs/screenshots/dashboard.png) | [![Fleet Command job history with an apt update run across 17 boxes, showing per-box exit status and captured output](docs/screenshots/fleet-command.png)](docs/screenshots/fleet-command.png) |
+| [![Tmuxifier's standby dashboard: a fleet grid showing each box's reachability and session count, beside a sidebar of boxes grouped by tag with CPU, memory, and disk readouts](docs/screenshots/dashboard-v1.19.png)](docs/screenshots/dashboard-v1.19.png) | [![Fleet Command job history with an apt update run across 17 boxes, showing per-box exit status and captured output](docs/screenshots/fleet-command-v1.19.png)](docs/screenshots/fleet-command-v1.19.png) |
 | The standby dashboard fills the stage whenever no terminal is docked — click any box to reattach to its on-box tmux session. | Select boxes by group, run a command or bash script with bounded concurrency, and inspect each result. |
 
 | Proxmox LXC provisioning |
 |:---:|
-| [![Tmuxifier Proxmox LXC provisioning workflow](docs/screenshots/proxmox-provision.png)](docs/screenshots/proxmox-provision.png) |
+| [![Tmuxifier Proxmox LXC provisioning workflow](docs/screenshots/proxmox-provision-v1.19.png)](docs/screenshots/proxmox-provision-v1.19.png) |
 | Provision from reusable presets, inject management keys, discover the container, and link it back as a Tmuxifier box. |
 
 ## Requirements
