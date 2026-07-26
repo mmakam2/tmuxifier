@@ -9,10 +9,10 @@ back into the same state.
 
 ## Screenshots
 
-| Persistent remote terminals | Fleet Command |
+| Fleet standby dashboard | Fleet Command |
 |:---:|:---:|
-| [![Tmuxifier dashboard with a persistent remote tmux terminal and grouped box health](docs/screenshots/dashboard.png)](docs/screenshots/dashboard.png) | [![Fleet Command running across three selected boxes with per-box results](docs/screenshots/fleet-command.png)](docs/screenshots/fleet-command.png) |
-| Reattach to on-box tmux sessions and monitor grouped boxes, resource metrics, and health at a glance. | Select boxes by group, run a command or bash script with bounded concurrency, and inspect each result. |
+| [![Tmuxifier's standby dashboard: a fleet grid showing each box's reachability and session count, beside a sidebar of boxes grouped by tag with CPU, memory, and disk readouts](docs/screenshots/dashboard.png)](docs/screenshots/dashboard.png) | [![Fleet Command job history with an apt update run across 17 boxes, showing per-box exit status and captured output](docs/screenshots/fleet-command.png)](docs/screenshots/fleet-command.png) |
+| The standby dashboard fills the stage whenever no terminal is docked — click any box to reattach to its on-box tmux session. | Select boxes by group, run a command or bash script with bounded concurrency, and inspect each result. |
 
 | Proxmox LXC provisioning |
 |:---:|
