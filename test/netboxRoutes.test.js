@@ -155,3 +155,23 @@ test('POST test with a body token needs no stored settings', async () => {
   expect(res.statusCode).toBe(200);
   expect(testCalls[0]).toMatchObject({ url: 'http://192.168.1.10:8000', token: 'fresh-tok', tlsMode: null });
 });
+
+test('summary requires auth and reports unconfigured without settings', async () => {
+  expect((await app.inject({ method: 'GET', url: '/api/netbox/summary' })).statusCode).toBe(401);
+  const h = await headers();
+  expect((await app.inject({ method: 'GET', url: '/api/netbox/summary', headers: h })).json()).toEqual({ configured: false });
+});
+
+test('summary is served from the injected builder and cached for 60s', async () => {
+  let calls = 0;
+  const fresh = buildServer({
+    ...baseDeps,
+    netboxSummaryFn: async () => { calls++; return { configured: true, ok: true, prefixes: [{ prefix: '192.168.50.0/24', used: 12, total: 254 }] }; },
+  });
+  const h = await headers(fresh);
+  await fresh.inject({ method: 'PUT', url: '/api/netbox/settings', headers: h, payload: { url: 'https://netbox.example.com', token: 't0k' } });
+  const first = await fresh.inject({ method: 'GET', url: '/api/netbox/summary', headers: h });
+  expect(first.json().prefixes).toEqual([{ prefix: '192.168.50.0/24', used: 12, total: 254 }]);
+  await fresh.inject({ method: 'GET', url: '/api/netbox/summary', headers: h });
+  expect(calls).toBe(1); // second hit came from the cache
+});
