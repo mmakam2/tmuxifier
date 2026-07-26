@@ -22,9 +22,12 @@ import { createSetupOptionsForm } from './setupOptions';
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
 import { type StageLayout, type Edge, emptyLayout, singleLayout, dockPane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
 import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks } from './stagePanes';
+import { paneHeaderModel, buildPaneHeader, type PaneConn, type PaneHeaderModel } from './paneHeader';
 
 const app = document.getElementById('app')!;
-const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
+const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal>; voiceMount: HTMLElement }>();
+const connStates = new Map<string, PaneConn>();
+const paneHeaders = new Map<string, (m: PaneHeaderModel) => void>();
 const SIDEBAR_COLLAPSED_KEY = 'tmuxifier.sidebarCollapsed';
 const GROUP_COLLAPSED_KEY = 'tmuxifier.collapsedTagGroups';
 const UNTAGGED_LABEL = 'Untagged';
@@ -451,6 +454,7 @@ async function pollStatus() {
         if (!id) return;
         applyRowStatus(li as HTMLElement, id, status[id]);
       });
+      updatePaneHeaders();
       // Reconcile pane content with Proxmox/setup state: a box that stopped
       // out from under a live terminal loses it (its pane flips to the stopped
       // panel), a restarted one flips back to a terminal. paneState treats an
@@ -487,6 +491,7 @@ async function pollHealth() {
   try {
     latestSeries = await api.healthSeries();
     repaintSparklines();
+    updatePaneHeaders(); // the agent chip's read arrives with the series
   } catch {}
   try {
     const { events, latestSeq } = await api.healthEvents();
@@ -592,8 +597,16 @@ function ensureTab(id: string) {
   el.className = 'term';
   stageParking().appendChild(el);
   const box = allBoxes.find((b) => b.id === id);
-  const term = openTerminal(el, id, id === '__local__' ? 'local shell' : box?.label);
-  tabs.set(id, { el, term });
+  // The voice button mounts into this slot, which the pane header adopts on
+  // every repaint — the button (and an in-flight recording) survives header
+  // rebuilds because the slot element persists with the tab, not the header.
+  const voiceMount = document.createElement('span');
+  voiceMount.className = 'pane-voice-slot';
+  const term = openTerminal(el, id, id === '__local__' ? 'local shell' : box?.label, {
+    voiceMount,
+    onConnState: (s) => { connStates.set(id, s); updatePaneHeaders(); },
+  });
+  tabs.set(id, { el, term, voiceMount });
   if (id === '__local__') updateLocalDot();
 }
 
@@ -635,12 +648,58 @@ function paneContentFor(id: string): HTMLElement {
   return tabs.get(id)!.el;
 }
 
+function paneHeaderModelFor(id: string): PaneHeaderModel {
+  const box = allBoxes.find((b) => b.id === id);
+  // Latest health sample carries the agent read (see the spec: the series
+  // already ships it; the bar is its first client consumer).
+  const series = latestSeries[id];
+  return paneHeaderModel({
+    local: id === '__local__',
+    label: id === '__local__' ? 'Host Shell' : box?.label ?? id,
+    user: box?.user,
+    host: box?.host,
+    status: latestStatus[id],
+    agent: series?.[series.length - 1]?.agent,
+    conn: connStates.get(id),
+    state: paneState(id),
+  });
+}
+
+function updatePaneHeaders() {
+  for (const [id, update] of paneHeaders) update(paneHeaderModelFor(id));
+}
+
 function paneHooks(): PaneHooks {
   return {
     contentFor: (id) => paneContentFor(id),
-    labelFor: (id) => (id === '__local__' ? 'Host Shell' : allBoxes.find((b) => b.id === id)?.label ?? id),
+    headerFor: (id, split) => {
+      const model = paneHeaderModelFor(id);
+      const terminalPane = paneState(id) === 'terminal';
+      const built = buildPaneHeader(model, {
+        // Stopped/setting-up panes keep the identity half only — their panels
+        // own the actions (spec). Undock stays: a non-terminal pane must
+        // remain removable from a split. The refresh aria-label deliberately
+        // differs from the sidebar row's `Reconnect ${label}` — an identical
+        // accessible name would trip Playwright strict mode.
+        ...(terminalPane ? {
+          onRefresh: async () => {
+            if (id === '__local__') await api.reconnectLocalShell();
+            else await api.reconnectBox(id);
+            closeTab(id, { keepPane: true });
+            repaintStage();
+          },
+          refreshLabel: `Reconnect ${model.title} terminal`,
+        } : {}),
+        ...(split ? { onUndock: () => undockBox(id), undockLabel: `Undock ${model.title}` } : {}),
+      });
+      if (terminalPane) {
+        ensureTab(id);
+        built.voiceSlot.append(tabs.get(id)!.voiceMount);
+      }
+      paneHeaders.set(id, built.update);
+      return built.el;
+    },
     onFocus: (id) => { if (focusedBoxId !== id) { focusedBoxId = id; syncPaneFocus(); persistStage(); } },
-    onUndock: (id) => undockBox(id),
     onRatio: (divider, firstShare, phase) => {
       stageLayout = setRatio(stageLayout, divider, firstShare);
       applyRatios(stageGrid(), stageLayout);
@@ -661,6 +720,7 @@ function syncPaneFocus() {
 }
 
 function repaintStage() {
+  paneHeaders.clear(); // stale update closures die with their DOM; headerFor re-registers survivors
   const grid = stageGrid();
   // Panels that lost their pane (or whose box left setup) must stop polling.
   for (const [id] of settingUpPollers) {
@@ -1316,7 +1376,7 @@ function openPane(id: string) {
 // reconnect will immediately rebuild the terminal in place.
 function closeTab(id: string, opts?: { keepPane?: boolean }) {
   const t = tabs.get(id);
-  if (t) { t.term.dispose(); t.el.remove(); tabs.delete(id); }
+  if (t) { t.term.dispose(); t.el.remove(); tabs.delete(id); connStates.delete(id); }
   if (id === '__local__') updateLocalDot();
   if (!opts?.keepPane && stageLayout.panes.includes(id)) undockBox(id);
 }

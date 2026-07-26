@@ -20,7 +20,7 @@ test('dock a second box, type into the focused pane, resize, and survive reload'
   await expect(page.locator('.stage-pane')).toHaveCount(1);
   await page.getByRole('button', { name: 'Dock db-primary beside current terminal' }).click();
   await expect(page.locator('.stage-pane')).toHaveCount(2);
-  await expect(page.locator('.pane-nameplate').first()).toHaveText(/localhost/i);
+  await expect(page.locator('.pane-header .pane-title').first()).toHaveText(/localhost/i);
 
   // Focus the localhost pane and prove keystrokes land there. Wait for the
   // remote prompt first — input typed while the WS connects is dropped.
@@ -43,8 +43,7 @@ test('dock a second box, type into the focused pane, resize, and survive reload'
   await expect(page.locator('.stage-pane')).toHaveCount(2, { timeout: 10000 });
   await expect(page.locator('.stage-divider')).toHaveAttribute('aria-valuenow', '55');
 
-  // Undock returns to a single full pane.
-  await page.locator('.stage-pane').nth(1).hover();
+  // Undock returns to a single full pane (the header button is always visible).
   await page.getByRole('button', { name: 'Undock db-primary' }).click();
   await expect(page.locator('.stage-pane')).toHaveCount(1);
 });
@@ -67,7 +66,7 @@ test('drag-to-dock: dropping a box row on the stage right edge docks it', async 
   await page.mouse.up();
 
   await expect(page.locator('.stage-pane')).toHaveCount(2);
-  await expect(page.locator('.pane-nameplate', { hasText: 'db-primary' })).toBeVisible();
+  await expect(page.locator('.pane-title', { hasText: 'db-primary' })).toBeVisible();
 });
 
 test('plain-clicking a third box replaces the focused pane', async ({ page }) => {
@@ -79,6 +78,6 @@ test('plain-clicking a third box replaces the focused pane', async ({ page }) =>
   // db-primary is focused (it was just docked); clicking untagged-worker replaces it.
   await page.locator('.box .name', { hasText: 'untagged-worker' }).click();
   await expect(page.locator('.stage-pane')).toHaveCount(2);
-  await expect(page.locator('.pane-nameplate', { hasText: 'untagged-worker' })).toBeVisible();
-  await expect(page.locator('.pane-nameplate', { hasText: 'db-primary' })).toHaveCount(0);
+  await expect(page.locator('.pane-title', { hasText: 'untagged-worker' })).toBeVisible();
+  await expect(page.locator('.pane-title', { hasText: 'db-primary' })).toHaveCount(0);
 });
