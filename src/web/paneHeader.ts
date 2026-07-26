@@ -48,3 +48,78 @@ export function paneHeaderModel(i: PaneHeaderInput): PaneHeaderModel {
     chip: paneHeaderChip(i),
   };
 }
+
+export interface PaneHeaderActions {
+  onRefresh?: () => void;
+  refreshLabel?: string;
+  onUndock?: () => void;
+  undockLabel?: string;
+}
+
+// update() rewrites text/classes only — the voice button lives inside
+// voiceSlot across updates, and rebuilding children would kill an in-flight
+// recording. Action buttons are fixed at build time: refresh/undock
+// availability changes only on a full stage repaint, never mid-poll.
+export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActions = {}): {
+  el: HTMLElement; voiceSlot: HTMLElement; update(m: PaneHeaderModel): void;
+} {
+  const el = document.createElement('div');
+  el.className = 'pane-header';
+
+  const dot = document.createElement('span');
+  const title = document.createElement('span');
+  title.className = 'pane-title';
+  const target = document.createElement('span');
+  target.className = 'pane-target';
+  const identity = document.createElement('div');
+  identity.className = 'pane-header-id';
+  identity.append(dot, title, target);
+
+  const chip = document.createElement('span');
+  const voiceSlot = document.createElement('span');
+  voiceSlot.className = 'pane-voice-slot';
+  const acts = document.createElement('div');
+  acts.className = 'pane-header-actions';
+  acts.append(chip, voiceSlot);
+
+  if (actions.onRefresh) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pane-act pane-refresh';
+    btn.textContent = '↻';
+    btn.title = 'Reconnect terminal';
+    btn.setAttribute('aria-label', actions.refreshLabel ?? 'Reconnect terminal');
+    btn.addEventListener('click', (e) => { e.stopPropagation(); actions.onRefresh!(); });
+    acts.append(btn);
+  }
+  if (actions.onUndock) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pane-act pane-undock';
+    btn.textContent = '✕';
+    btn.title = 'Undock';
+    btn.setAttribute('aria-label', actions.undockLabel ?? 'Undock');
+    btn.addEventListener('click', (e) => { e.stopPropagation(); actions.onUndock!(); });
+    acts.append(btn);
+  }
+
+  el.append(identity, acts);
+
+  const update = (m: PaneHeaderModel) => {
+    dot.className = `dot ${m.dotClass}`;
+    dot.title = m.dotTitle;
+    title.textContent = m.title;
+    target.textContent = m.target;
+    if (m.chip) {
+      chip.hidden = false;
+      chip.textContent = m.chip.text;
+      chip.className = `pane-chip ${m.chip.cls}`;
+    } else {
+      chip.hidden = true;
+      chip.className = 'pane-chip';
+      chip.textContent = '';
+    }
+  };
+  update(model);
+  return { el, voiceSlot, update };
+}
