@@ -33,6 +33,16 @@ export interface Sample {
   // latest sample's `agent` for its working/waiting chip (paneHeader.ts).
   agent?: 'working' | 'waiting' | 'unknown'; agentAttached?: boolean;
 }
+export type ServiceCheckKind = 'http' | 'tcp' | 'none';
+export interface ServiceCheck { kind: ServiceCheckKind; target?: string }
+export interface Service {
+  id: string; name: string; url: string; glyph?: string; group?: string;
+  check: ServiceCheck; createdAt: string;
+}
+// glyph/group accept null: the server's PATCH merge treats null as "clear".
+export type ServiceSpec = Partial<Omit<Service, 'id' | 'createdAt' | 'glyph' | 'group'>> & { glyph?: string | null; group?: string | null };
+export interface ServiceResult { state: 'up' | 'down'; latencyMs?: number; error?: string }
+export interface ServiceStatusSnapshot { checkedAt: string | null; results: Record<string, ServiceResult> }
 export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'key-changed' | 'threshold' | 'threshold-clear' | 'agent-input' | 'agent-done';
 export interface HealthEvent {
   seq: number; boxId: string; label: string; host: string; t: number;
@@ -119,6 +129,13 @@ export const api = {
   async importBoxes(payload: unknown) {
     return j<{ added: Box[]; skipped: number }>(await fetch('/api/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }));
   },
+  async services() { return j<Service[]>(await fetch('/api/services')); },
+  async addService(spec: ServiceSpec) { return j<Service>(await fetch('/api/services', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(spec) })); },
+  async updateService(id: string, patch: ServiceSpec) {
+    return j<Service>(await fetch(`/api/services/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }));
+  },
+  async removeService(id: string) { return j(await fetch(`/api/services/${id}`, { method: 'DELETE' })); },
+  async servicesStatus() { return j<ServiceStatusSnapshot>(await fetch(`/api/services/status?t=${Date.now()}`)); },
   async status() { return j<Record<string, Status>>(await fetch(`/api/status?t=${Date.now()}`)); },
   async healthSeries() { return j<Record<string, Sample[]>>(await fetch(`/api/health/series?t=${Date.now()}`)); },
   async healthEvents() { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?t=${Date.now()}`)); },
