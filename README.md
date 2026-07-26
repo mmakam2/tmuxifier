@@ -281,20 +281,23 @@ only boxes you trust the way you'd trust anyone holding your own login.**
 
 ## Split terminals
 
-Two boxes can share the stage. Drag a box row onto the stage and drop it on an edge — left/
-right docks side by side, top/bottom stacks — or use the row's ◫ **Dock** button (visible
-whenever exactly one other terminal is open) for the keyboard path. The divider between panes
-drags to resize (double-click resets 50/50, arrow keys work when it's focused, and its small
-⤢ control flips the split direction). Every terminal pane — split or not — carries a header
-bar: status dot, box name, and `user@host` on the left; on the right a state chip (agent
-**working**/**waiting** from the health poller, or connection state while the terminal
-reconnects) beside the voice, reconnect ↻, and — in a split — undock ✕ buttons, so nothing
-floats over the terminal itself. The focused pane's bar carries the cyan beacon,
-`Ctrl+Shift+Arrow` moves focus between panes, and plain-clicking another box in the sidebar
-replaces the **focused** pane while the other keeps running. Undocking keeps the terminal
-connected in the background, exactly like switching away. The split — pair, direction, and
-ratio — survives reloads; both sidebar rows show the cyan beacon while docked, with the
-focused one at full strength.
+Up to four boxes can share the stage, and splits nest. Drag a box row onto the stage:
+dropping on the stage's outer edge splits the whole stage (a full-width or full-height
+pane — two side-by-side terminals with a third across the bottom, say), dropping near an
+individual pane's edge splits just that pane, and dropping on a pane's center replaces it.
+The row's ◫ **Dock** button (visible while the stage has room) is the keyboard path. Every
+divider drags to resize its own split (double-click resets 50/50, arrow keys work when it's
+focused, and its small ⤢ control flips that split's direction). Every terminal pane — split
+or not — carries a header bar: status dot, box name, and `user@host` on the left; on the
+right a state chip (agent **working**/**waiting** from the health poller, or connection
+state while the terminal reconnects) beside the voice, reconnect ↻, and — in a split —
+undock ✕ buttons, so nothing floats over the terminal itself. The focused pane's bar
+carries the cyan beacon, `Ctrl+Shift+Arrow` moves focus to the geometrically adjacent pane,
+and plain-clicking another box in the sidebar replaces the **focused** pane while the
+others keep running. Undocking keeps the terminal connected in the background, exactly like
+switching away, and the neighboring pane absorbs the space. The whole arrangement — shape,
+directions, and ratios — survives reloads; docked boxes' sidebar rows show the cyan beacon,
+with the focused one at full strength.
 
 ## Pasting images & files
 
