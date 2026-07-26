@@ -108,6 +108,16 @@ export function firstUsableIp(prefixCidr) {
   return [(first >>> 24) & 255, (first >>> 16) & 255, (first >>> 8) & 255, first & 255].join('.');
 }
 
+// Usable host count for a v4 prefix — the denominator of the dashboard's
+// utilization readout. /31 and /32 follow RFC 3021 semantics.
+export function usableHostCount(prefixCidr) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/.exec(String(prefixCidr));
+  if (!m) throw new Error(`unparseable prefix: ${prefixCidr}`);
+  const len = Number(m[5]);
+  if (len >= 31) return len === 31 ? 2 : 1;
+  return 2 ** (32 - len) - 2;
+}
+
 // Throwing NetBox client for the provisioning/deprovisioning flows (testNetbox
 // stays result-shaped for the settings UI). Same auth header, same TLS modes;
 // pin mode verifies the fingerprint via resolveTlsOpts BEFORE any
@@ -179,5 +189,35 @@ export function createNetboxClient(settings, { request = jsonRequest, connect = 
       return ((data && data.results) || []).map((rec) => ({ id: rec.id, address: rec.address }));
     },
     async releaseIp(id) { await call('DELETE', `/ipam/ip-addresses/${encodeURIComponent(id)}/`); },
+    // Used-address count for the utilization readout: NetBox list responses
+    // carry a total `count`, so limit=1 keeps the payload tiny.
+    async countIpsInPrefix(prefixCidr) {
+      const data = await call('GET', `/ipam/ip-addresses/?parent=${encodeURIComponent(prefixCidr)}&limit=1`);
+      return data && typeof data.count === 'number' ? data.count : 0;
+    },
   };
+}
+
+// The dashboard's NetBox readout: reachability plus per-prefix utilization for
+// the VLANs the auto-static presets provision into. Result-shaped — a failing
+// NetBox degrades the readout, it must never throw into the route.
+export async function netboxSummary(settings, vids, { makeClient = createNetboxClient, test = testNetbox } = {}) {
+  const unique = [...new Set((vids || []).filter((v) => v != null))];
+  if (unique.length === 0) {
+    const probe = await test(settings);
+    return probe.ok
+      ? { configured: true, ok: true, prefixes: [] }
+      : { configured: true, ok: false, error: probe.error, prefixes: [] };
+  }
+  try {
+    const client = makeClient(settings);
+    const prefixes = [];
+    for (const vid of unique) {
+      const found = await client.findPrefixByVlan(vid);
+      prefixes.push({ prefix: found.prefix, used: await client.countIpsInPrefix(found.prefix), total: usableHostCount(found.prefix) });
+    }
+    return { configured: true, ok: true, prefixes };
+  } catch (e) {
+    return { configured: true, ok: false, error: e?.message || 'summary failed', prefixes: [] };
+  }
 }
