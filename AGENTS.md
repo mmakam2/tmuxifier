@@ -212,7 +212,7 @@ pattern for new modules.
   and the interval sweep (`TMUXIFIER_SERVICE_POLL_MS`, min 5s) whose cached snapshot
   `GET /api/services/status` serves — check volume is independent of open tabs.
   `GET /api/netbox/summary` (60s in-process cache) feeds the dashboard's NetBox
-  utilization readout from the auto-static presets' VLANs.
+  utilization readout — every IPv4 prefix NetBox knows (first 100), one row each.
 - `fleet.js` / `fleetStore.js` — `createFleetManager` runs one command across many boxes as a single
   persisted, pollable job (Fleet Command), fanning out at `fleetConcurrency`; `createFleetStore` is
   the debounced `data/fleet-jobs.json` persistence.

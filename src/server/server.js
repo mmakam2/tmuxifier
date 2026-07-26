@@ -1069,11 +1069,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     let settings = null;
     try { settings = await netboxStore.getSettings({ withSecret: true }); } catch { /* corrupt store reads as absent */ }
     if (!settings) return { configured: false };
-    const presets = proxmoxStore ? await proxmoxStore.listPresets() : [];
-    const vids = presets
-      .filter((p) => p?.net?.ipMode === 'auto-static' && p.net.vlan != null)
-      .map((p) => p.net.vlan);
-    const value = await netboxSummaryFn(settings, vids, { test: netboxTest });
+    const value = await netboxSummaryFn(settings);
     netboxSummaryCache = { at: Date.now(), value };
     return value;
   });

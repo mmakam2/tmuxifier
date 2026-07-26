@@ -53,6 +53,7 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | host-key policy | `TMUXIFIER_HOSTKEY_POLICY` | `accept-new` |
 | status probe concurrency | `TMUXIFIER_STATUS_CONCURRENCY` | `4` |
 | status poll interval (ms) | `TMUXIFIER_STATUS_POLL_MS` | `30000` |
+| service check sweep interval (ms, min 5000) | `TMUXIFIER_SERVICE_POLL_MS` | `30000` |
 | SSH ControlPersist seconds | `TMUXIFIER_CONTROL_PERSIST` | `600` |
 | terminal font family | `TMUXIFIER_TERM_FONT` | (bundled font) |
 | terminal font size (px) | `TMUXIFIER_TERM_FONT_SIZE` | `12` |
@@ -106,7 +107,7 @@ their IP.
 
 As an alternative to `.env`, a `config.json` in the repo root works too, using camelCase keys
 (`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`, `trustProxy`,
-`statusConcurrency`, `statusPollMs`, `controlPersist`, `termFont`, `termFontSize`, `fleetConcurrency`, `fleetTimeoutMs`,
+`statusConcurrency`, `statusPollMs`, `servicePollMs`, `controlPersist`, `termFont`, `termFontSize`, `fleetConcurrency`, `fleetTimeoutMs`,
 `fleetMaxJobs`, `fleetMaxOutputBytes`, `healthHistoryMax`, `healthEventsMax`, `healthCpuWarnPct`,
 `healthMemWarnPct`, `healthDiskWarnPct`, `healthThresholdHysteresisPct`, `agentIdleSec`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
 `pveLeaseTimeoutMs`, `pveMaxJobs`, `pveDefaultPubKeyPath`, `authMode`, `publicUrl`, `rpId`,
@@ -294,7 +295,7 @@ When no terminal is docked, the stage shows a standby dashboard instead of a bla
 - **Fleet overview** — one cell per box: status lamp, agent working/waiting chip, session
   count, and the CPU sparkline. Clicking a cell opens that box's terminal.
 - **Infrastructure readout** — linked-container counts per Proxmox host and, when NetBox is
-  configured, prefix utilization for the VLANs your auto-static presets provision into.
+  configured, utilization for each IPv4 prefix NetBox knows (first 100).
 
 On a fresh install (no boxes, no services) the dashboard collapses to the original standby
 prompt with the `+ Add box` hint.

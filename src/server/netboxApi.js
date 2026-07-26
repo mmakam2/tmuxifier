@@ -195,26 +195,27 @@ export function createNetboxClient(settings, { request = jsonRequest, connect = 
       const data = await call('GET', `/ipam/ip-addresses/?parent=${encodeURIComponent(prefixCidr)}&limit=1`);
       return data && typeof data.count === 'number' ? data.count : 0;
     },
+    // Every prefix NetBox knows, one bounded page — the dashboard readout
+    // shows them all, so 100 keeps a big instance from unbounded fan-out.
+    async listPrefixes() {
+      const data = await call('GET', '/ipam/prefixes/?limit=100');
+      return ((data && data.results) || []).map((rec) => ({ id: rec.id, prefix: String(rec.prefix) }));
+    },
   };
 }
 
-// The dashboard's NetBox readout: reachability plus per-prefix utilization for
-// the VLANs the auto-static presets provision into. Result-shaped — a failing
+// The dashboard's NetBox readout: utilization for every IPv4 prefix NetBox
+// knows (first 100). The prefix-list call doubles as the reachability probe —
+// an empty instance that answers is ok with no rows. Result-shaped: a failing
 // NetBox degrades the readout, it must never throw into the route.
-export async function netboxSummary(settings, vids, { makeClient = createNetboxClient, test = testNetbox } = {}) {
-  const unique = [...new Set((vids || []).filter((v) => v != null))];
-  if (unique.length === 0) {
-    const probe = await test(settings);
-    return probe.ok
-      ? { configured: true, ok: true, prefixes: [] }
-      : { configured: true, ok: false, error: probe.error, prefixes: [] };
-  }
+export async function netboxSummary(settings, { makeClient = createNetboxClient } = {}) {
   try {
     const client = makeClient(settings);
     const prefixes = [];
-    for (const vid of unique) {
-      const found = await client.findPrefixByVlan(vid);
-      prefixes.push({ prefix: found.prefix, used: await client.countIpsInPrefix(found.prefix), total: usableHostCount(found.prefix) });
+    for (const item of await client.listPrefixes()) {
+      let total;
+      try { total = usableHostCount(item.prefix); } catch { continue; } // IPv6 etc. — no v4 host math
+      prefixes.push({ prefix: item.prefix, used: await client.countIpsInPrefix(item.prefix), total });
     }
     return { configured: true, ok: true, prefixes };
   } catch (e) {
