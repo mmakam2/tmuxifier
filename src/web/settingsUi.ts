@@ -3,19 +3,21 @@
 import { el, openModal, syncTabSelection, wireTabStrip } from './dom';
 import { registerModal } from './modalRegistry';
 import { renderBoxesSection } from './settingsBoxes';
+import { renderServicesSection } from './settingsServices';
 import { renderNetboxSection } from './settingsNetbox';
 import { renderProxmoxSection } from './settingsProxmox';
 import { renderPasskeysSection } from './settingsPasskeys';
 import { renderVoiceSection } from './settingsVoice';
 import { renderNotificationsSection } from './settingsNotifications';
 
-export type SettingsTab = 'boxes' | 'netbox' | 'proxmox' | 'passkeys' | 'voice' | 'notifications';
+export type SettingsTab = 'boxes' | 'services' | 'netbox' | 'proxmox' | 'passkeys' | 'voice' | 'notifications';
 
 type Section = { label: string; render: (content: HTMLElement, close: () => void) => void | Promise<void> };
 
 const SECTIONS: Record<SettingsTab, Section> = {
   // Object.entries order builds the tab strip, so this is the leftmost tab.
   boxes: { label: 'Boxes', render: (content) => renderBoxesSection(content) },
+  services: { label: 'Services', render: async (content) => { await renderServicesSection(content); } },
   netbox: { label: 'NetBox', render: renderNetboxSection },
   proxmox: { label: 'Proxmox', render: (content) => renderProxmoxSection(content) },
   passkeys: { label: 'Passkeys', render: (content) => renderPasskeysSection(content) },
