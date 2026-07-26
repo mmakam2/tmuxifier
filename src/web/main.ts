@@ -21,7 +21,7 @@ import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createSetupOptionsForm } from './setupOptions';
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
 import { type StageLayout, type Edge, emptyLayout, singleLayout, dockPane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
-import { renderStagePanes, applyRatios, focusMove, type PaneHooks } from './stagePanes';
+import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks } from './stagePanes';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal> }>();
@@ -32,6 +32,9 @@ const UNTAGGED_KEY = '__untagged__';
 const STAGE_LAYOUT_KEY = 'tmuxifier.stageLayout';
 const MAX_PANES = 2; // gesture-layer cap; the model itself is N-capable
 let chordWired = false; // renderDashboard re-runs on re-login; wire document once
+// The DnD spec hides the payload until drop, but the drop-zone overlay needs
+// the dragged id at dragenter time to gate edge zones by the pane cap.
+let dragSourceId: string | null = null;
 let stageLayout: StageLayout = emptyLayout();
 let focusedBoxId: string | null = null; // the pane typing targets and plain clicks replace
 let lastPaneStates = ''; // pollStatus repaints only when a docked box's derived state flips
@@ -792,8 +795,84 @@ async function renderDashboard() {
   }));
   void syncProxmoxButton();
 
-  // Local shell — name click opens terminal
+  // Local shell — name click opens terminal; the row also drags like a box row
   app.querySelector('.local-name')!.addEventListener('click', () => openLocalShell());
+  const localRow = app.querySelector('.local-shell') as HTMLElement;
+  localRow.draggable = true;
+  localRow.addEventListener('dragstart', (e) => {
+    dragSourceId = '__local__';
+    e.dataTransfer?.setData('text/x-tmuxifier-box', '__local__');
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+  });
+  localRow.addEventListener('dragend', () => {
+    dragSourceId = null;
+    app.querySelector('#stage')?.classList.remove('dragging');
+  });
+
+  // Drag-to-dock: drop zones over the stage while a box row is in flight.
+  {
+    const stage = app.querySelector('#stage') as HTMLElement;
+    const zones = document.createElement('div');
+    zones.className = 'drop-zones';
+    stage.append(zones);
+
+    const buildZones = (draggedId: string) => {
+      zones.replaceChildren();
+      for (const t of dropTargets(stageLayout, draggedId, MAX_PANES)) {
+        const z = document.createElement('div');
+        if (t.kind === 'edge') {
+          z.className = `drop-zone drop-zone-${t.edge}`;
+          z.dataset.edge = t.edge;
+        } else {
+          z.className = 'drop-zone drop-zone-pane';
+          z.dataset.paneIndex = String(t.index);
+          // Center the zone over its pane by mirroring the pane's extent.
+          const rect = stageGrid().querySelectorAll('.stage-pane')[t.index]?.getBoundingClientRect();
+          const host = stage.getBoundingClientRect();
+          if (rect) {
+            z.style.left = `${rect.left - host.left + rect.width * 0.3}px`;
+            z.style.width = `${rect.width * 0.4}px`;
+            z.style.top = `${rect.top - host.top + rect.height * 0.3}px`;
+            z.style.height = `${rect.height * 0.4}px`;
+          }
+        }
+        zones.append(z);
+      }
+    };
+
+    stage.addEventListener('dragenter', (e) => {
+      if (!e.dataTransfer?.types.includes('text/x-tmuxifier-box')) return;
+      stage.classList.add('dragging');
+      buildZones(dragSourceId ?? '');
+    });
+    stage.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer?.types.includes('text/x-tmuxifier-box')) return;
+      e.preventDefault(); // required, or the browser refuses the drop
+      const over = document.elementFromPoint(e.clientX, e.clientY)?.closest('.drop-zone');
+      zones.querySelectorAll('.drop-zone').forEach((z) => z.classList.toggle('hover', z === over));
+    });
+    stage.addEventListener('dragleave', (e) => {
+      if (e.target === stage) stage.classList.remove('dragging');
+    });
+    stage.addEventListener('drop', (e) => {
+      e.preventDefault();
+      stage.classList.remove('dragging');
+      const id = e.dataTransfer?.getData('text/x-tmuxifier-box');
+      if (!id) return;
+      const zone = document.elementFromPoint(e.clientX, e.clientY)?.closest('.drop-zone') as HTMLElement | null;
+      if (!zone) return;
+      if (zone.dataset.edge) {
+        dockBox(id, zone.dataset.edge as Edge);
+      } else if (zone.dataset.paneIndex != null) {
+        const target = stageLayout.panes[Number(zone.dataset.paneIndex)];
+        if (target && target !== id) {
+          stageLayout = replacePane(stageLayout, target, id); // swaps when id is docked
+          focusedBoxId = id;
+          repaintStage();
+        }
+      }
+    });
+  }
 
   // Local shell — refresh (keeps the pane; repaint rebuilds the terminal in place)
   app.querySelector('.local-refresh')!.addEventListener('click', async (e) => {
@@ -914,6 +993,17 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   mainEl.append(nameEl, badgesEl, metaEl, sparkEl);
 
   li.addEventListener('click', () => openBox(b));
+
+  li.draggable = true;
+  li.addEventListener('dragstart', (e) => {
+    dragSourceId = b.id;
+    e.dataTransfer?.setData('text/x-tmuxifier-box', b.id);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+  });
+  li.addEventListener('dragend', () => {
+    dragSourceId = null;
+    app.querySelector('#stage')?.classList.remove('dragging');
+  });
 
   // Keyboard-path equivalent of dragging onto the trailing edge: visible only
   // when exactly one *other* pane is on stage and the cap allows a second.
