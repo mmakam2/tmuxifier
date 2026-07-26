@@ -207,7 +207,8 @@ pattern for new modules.
   (`statusPollMs`) and caches the snapshot `/api/status` serves, so status SSH volume is
   independent of how many dashboard tabs are open.
 - `servicesStore.js` / `serviceCheck.js` / `serviceChecker.js` — the standby dashboard's
-  service tiles: validated CRUD over `data/services.json`, the dependency-free HTTP/TCP
+  service tiles: validated CRUD over `data/services.json` (each tile carries a `section` —
+  services|infrastructure — plus a free-text `group` category within it), the dependency-free HTTP/TCP
   liveness engine (TLS errors tolerated — reachability probe, not a security boundary),
   and the interval sweep (`TMUXIFIER_SERVICE_POLL_MS`, min 5s) whose cached snapshot
   `GET /api/services/status` serves — check volume is independent of open tabs.

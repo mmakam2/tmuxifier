@@ -285,8 +285,11 @@ only boxes you trust the way you'd trust anyone holding your own login.**
 When no terminal is docked, the stage shows a standby dashboard instead of a blank screen:
 
 - **Service tiles** — your homelab's web services (Grafana, a NAS UI, anything with a URL),
-  managed under Settings (⚙) → Services. Each tile is a name, an optional Nerd Font glyph and
-  group, a link that opens in a new tab, and an optional liveness check — an HTTP(S) GET
+  managed under Settings (⚙) → Services. Each tile is a name, an optional Nerd Font glyph, a
+  parent section (Services or Infrastructure) with an optional category within it (e.g.
+  Services → DNS Filtering; under Infrastructure, the categories "Proxmox" and "IPAM" merge
+  the tile into those built-in groups), a link that opens in a new tab, and an optional
+  liveness check — an HTTP(S) GET
   (2xx/3xx = up) or a bare TCP connect for non-web services (DNS, MQTT, …). Checks run
   **server-side** on one shared sweep (`TMUXIFIER_SERVICE_POLL_MS`, default 30s, min 5s) and
   the dashboard reads a cached snapshot, so check volume doesn't scale with open tabs. HTTPS

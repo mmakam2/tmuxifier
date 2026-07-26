@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { groupServices, fmtLatency, serviceLamp, dashboardMode, pveHostRollup, nodeModules } from '../src/web/dashboard.ts';
+import { groupServices, fmtLatency, serviceLamp, dashboardMode, pveHostRollup, nodeModules, partitionInfraGroups, sectionServices } from '../src/web/dashboard.ts';
 
 const svc = (id, group, kind = 'http') => ({ id, name: id, url: 'http://x.example.com/', group, check: { kind }, createdAt: '' });
 
@@ -55,4 +55,27 @@ test('nodeModules: per-node health readout with linked-container counts merged',
 test('nodeModules: unknown status gets a dark lamp; no containers, no ctr segment', () => {
   const nodes = [{ hostId: 'H1', hostName: 'lab', node: 'pve1', status: 'unknown', cpuPct: 5, memPct: null, diskPct: null, uptimeSec: null, error: null }];
   expect(nodeModules(nodes, null)).toEqual([{ name: 'pve1', lamp: '', readout: 'cpu 5%' }]);
+});
+
+test('partitionInfraGroups: proxmox/ipam categories merge into the built-ins, others become extra groups', () => {
+  const s = (id, section, group) => ({ ...svc(id, group), section });
+  const parts = partitionInfraGroups([
+    s('a', 'infrastructure', 'Proxmox'),
+    s('b', 'infrastructure', 'IPAM'),
+    s('c', 'infrastructure', 'DNS Filtering'),
+    s('d', 'infrastructure', undefined),
+    s('e', 'services', 'Media'),      // not infrastructure — excluded
+    s('f', undefined, 'Media'),       // legacy record, defaults to services — excluded
+  ]);
+  expect(parts.proxmox.map((x) => x.id)).toEqual(['a']);
+  expect(parts.ipam.map((x) => x.id)).toEqual(['b']);
+  expect(parts.extra.map((g) => [g.name, g.services.map((x) => x.id)])).toEqual([
+    [null, ['d']],
+    ['DNS Filtering', ['c']],
+  ]);
+});
+
+test('sectionServices keeps only the services section, defaulting legacy records in', () => {
+  const s = (id, section) => ({ ...svc(id, undefined), section });
+  expect(sectionServices([s('a', 'services'), s('b', 'infrastructure'), s('c', undefined)]).map((x) => x.id)).toEqual(['a', 'c']);
 });

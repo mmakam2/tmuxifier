@@ -6,6 +6,7 @@ import { readJson, writeJson } from './jsonFile.js';
 // mold of store.js: normalize+validate inside, mutations serialized so two
 // concurrent read-modify-write cycles can't drop each other's change.
 const KINDS = ['http', 'tcp', 'none'];
+const SECTIONS = ['services', 'infrastructure'];
 const SAFE_TCP_HOST = /^[A-Za-z0-9_.-]+$/; // same family as sshCommand.js SAFE_HOST
 
 function assertHttpUrl(value, label) {
@@ -63,10 +64,15 @@ export function createServicesStore({ dataDir }) {
     if (!name || name.length > 64) throw new Error('service name is required (1-64 characters)');
     const url = String(spec.url ?? base.url ?? '').trim();
     assertHttpUrl(url, 'service url');
+    // The dashboard section the tile renders under; the free-text `group` is
+    // the category within it (e.g. infrastructure -> "DNS Filtering").
+    const section = spec.section ?? base.section ?? 'services';
+    if (!SECTIONS.includes(section)) throw new Error('section must be services or infrastructure');
     const out = {
       id: base.id || `svc-${randomUUID()}`,
       name,
       url,
+      section,
       check: normalizeCheck(spec.check, base.check),
       createdAt: base.createdAt || new Date().toISOString(),
     };

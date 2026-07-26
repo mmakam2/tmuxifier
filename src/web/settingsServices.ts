@@ -2,7 +2,7 @@
 // Master-detail scaled down: the list on top, one add/edit form below it.
 import { el, field, makeRadio, openModal } from './dom';
 import { registerModal } from './modalRegistry';
-import { api, type Service, type ServiceCheckKind, type ServiceSpec } from './api';
+import { api, type Service, type ServiceCheckKind, type ServiceSection, type ServiceSpec } from './api';
 
 // Starter palette of Nerd Font glyphs (the bundled Meslo NF renders these);
 // free-form entry stays open for anything not listed.
@@ -22,7 +22,7 @@ const GLYPHS: { glyph: string; label: string }[] = [
 // Pure so it can be tested without a DOM (the repo's web-test convention).
 // null (not undefined) for cleared optionals: the server's PATCH merge treats
 // null as "clear this field".
-export function buildServicePayload(f: { name: string; url: string; glyph: string; group: string; kind: ServiceCheckKind; target: string }): ServiceSpec {
+export function buildServicePayload(f: { name: string; url: string; glyph: string; group: string; kind: ServiceCheckKind; target: string; section: ServiceSection }): ServiceSpec {
   const target = f.target.trim();
   const check = f.kind === 'none' || !target ? { kind: f.kind } : { kind: f.kind, target };
   return {
@@ -30,6 +30,7 @@ export function buildServicePayload(f: { name: string; url: string; glyph: strin
     url: f.url.trim(),
     glyph: f.glyph.trim() || null,
     group: f.group.trim() || null,
+    section: f.section,
     check,
   };
 }
@@ -68,6 +69,16 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
   const kind = (): ServiceCheckKind =>
     (Object.entries(radios).find(([, r]) => r.input.checked)?.[0] as ServiceCheckKind) ?? 'http';
 
+  // Parent category on the dashboard; `group` is the sub-category within it.
+  // Infrastructure tiles whose category is Proxmox or IPAM merge into those
+  // built-in groups next to the node/prefix readouts.
+  const sectionRadios: Record<ServiceSection, { wrap: HTMLElement; input: HTMLInputElement }> = {
+    services: makeRadio('svc-section', 'services', 'Services', true),
+    infrastructure: makeRadio('svc-section', 'infrastructure', 'Infrastructure', false),
+  };
+  const section = (): ServiceSection =>
+    (Object.entries(sectionRadios).find(([, r]) => r.input.checked)?.[0] as ServiceSection) ?? 'services';
+
   const targetField = field('Probe URL (optional)', targetIn);
   const syncTarget = () => {
     const k = kind();
@@ -93,13 +104,15 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     targetIn.value = svc?.check.target ?? '';
     const k = svc?.check.kind ?? 'http';
     for (const [key, r] of Object.entries(radios)) r.input.checked = key === k;
+    const sec = svc?.section ?? 'services';
+    for (const [key, r] of Object.entries(sectionRadios)) r.input.checked = key === sec;
     syncTarget();
   }
 
   saveBtn.addEventListener('click', async () => {
     const payload = buildServicePayload({
       name: nameIn.value, url: urlIn.value, glyph: glyphIn.value,
-      group: groupIn.value, kind: kind(), target: targetIn.value,
+      group: groupIn.value, kind: kind(), target: targetIn.value, section: section(),
     });
     try {
       if (editing) await api.updateService(editing.id, payload);
@@ -133,7 +146,9 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
   // --- list ----------------------------------------------------------------
   const rows = services.map((svc) => el('div', { class: 'svc-row' }, [
     el('span', { class: 'svc-row-name' }, [svc.glyph ? `${svc.glyph}  ${svc.name}` : svc.name]),
-    el('span', { class: 'svc-row-group' }, [svc.group ?? '']),
+    el('span', { class: 'svc-row-group' }, [
+      `${svc.section === 'infrastructure' ? 'Infrastructure' : 'Services'}${svc.group ? ` → ${svc.group}` : ''}`,
+    ]),
     el('span', { class: 'svc-row-check' }, [svc.check.kind]),
     el('button', { type: 'button', class: 'pve-btn', onclick: () => fillForm(svc) }, ['Edit']),
     el('button', { type: 'button', class: 'pve-btn danger', onclick: () => confirmRemove(svc) }, ['Remove']),
@@ -149,7 +164,8 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
       field('URL (opens in a new tab)', urlIn),
       field('Glyph (optional)', glyphIn),
       palette,
-      field('Group (optional)', groupIn),
+      el('div', { class: 'svc-check-radios' }, [sectionRadios.services.wrap, sectionRadios.infrastructure.wrap]),
+      field('Category (optional — e.g. DNS Filtering; under Infrastructure, "Proxmox" and "IPAM" join the built-in groups)', groupIn),
       el('div', { class: 'svc-check-radios' }, [radios.http.wrap, radios.tcp.wrap, radios.none.wrap]),
       targetField,
       el('div', { class: 'pve-inline' }, [saveBtn, cancelBtn]),

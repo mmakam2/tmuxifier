@@ -78,3 +78,13 @@ test('removeService deletes; a corrupt file quarantines and reads as empty', asy
   const files = await fs.readdir(dir);
   expect(files.some((f) => f.startsWith('services.json.corrupt-'))).toBe(true);
 });
+
+test('section defaults to services, accepts infrastructure, rejects junk, survives PATCH merge', async () => {
+  const svc = await store.addService(spec);
+  expect(svc.section).toBe('services');
+  const infra = await store.addService({ ...spec, section: 'infrastructure', group: 'DNS Filtering' });
+  expect(infra.section).toBe('infrastructure');
+  await expect(store.addService({ ...spec, section: 'chassis' })).rejects.toThrow(/section/);
+  const upd = await store.updateService(infra.id, { name: 'AdGuard' });
+  expect(upd.section).toBe('infrastructure'); // merge keeps the stored section
+});

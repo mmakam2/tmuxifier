@@ -34,9 +34,12 @@ export interface Sample {
   agent?: 'working' | 'waiting' | 'unknown'; agentAttached?: boolean;
 }
 export type ServiceCheckKind = 'http' | 'tcp' | 'none';
+export type ServiceSection = 'services' | 'infrastructure';
 export interface ServiceCheck { kind: ServiceCheckKind; target?: string }
 export interface Service {
   id: string; name: string; url: string; glyph?: string; group?: string;
+  // Absent on records written before sections existed — read as 'services'.
+  section?: ServiceSection;
   check: ServiceCheck; createdAt: string;
 }
 // glyph/group accept null: the server's PATCH merge treats null as "clear".

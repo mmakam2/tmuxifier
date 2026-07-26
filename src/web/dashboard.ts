@@ -57,6 +57,29 @@ export function dashboardMode(boxCount: number, serviceCount: number): 'standby'
   return boxCount === 0 && serviceCount === 0 ? 'standby' : 'dash';
 }
 
+// Tiles that render in the Services section (legacy records without a
+// section field predate sections and belong here).
+export function sectionServices(services: Service[]): Service[] {
+  return services.filter((s) => (s.section ?? 'services') === 'services');
+}
+
+// Infrastructure-section tiles, split into the built-in categories they merge
+// with (case-insensitive "Proxmox"/"IPAM") and the remaining custom
+// categories (ungrouped first, then first-appearance order).
+export function partitionInfraGroups(services: Service[]): { proxmox: Service[]; ipam: Service[]; extra: { name: string | null; services: Service[] }[] } {
+  const proxmox: Service[] = [];
+  const ipam: Service[] = [];
+  const rest: Service[] = [];
+  for (const s of services) {
+    if (s.section !== 'infrastructure') continue;
+    const g = (s.group ?? '').trim().toLowerCase();
+    if (g === 'proxmox') proxmox.push(s);
+    else if (g === 'ipam') ipam.push(s);
+    else rest.push(s);
+  }
+  return { proxmox, ipam, extra: groupServices(rest) };
+}
+
 // One module per physical cluster node: online lamp + cpu/mem/disk readout,
 // with this node's linked-container tally appended when any exist. An error
 // record (node: null — the whole cluster unreachable) renders as the host
@@ -198,12 +221,15 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
   };
   const pveGroup = div('dash-infra-group');
   const pveRow = div('dash-infra-row');
-  pveGroup.append(sublegend('PROXMOX'), pveRow);
+  const pveTiles = div('dash-grid');
+  pveGroup.append(sublegend('PROXMOX'), pveRow, pveTiles);
   const ipamGroup = div('dash-infra-group');
   const ipamRow = div('dash-infra-row');
-  ipamGroup.append(sublegend('IPAM'), ipamRow);
+  const ipamTiles = div('dash-grid');
+  ipamGroup.append(sublegend('IPAM'), ipamRow, ipamTiles);
+  const infraExtra = div('dash-infra-extra');
   const infraGroups = div('dash-infra-groups');
-  infraGroups.append(pveGroup, ipamGroup);
+  infraGroups.append(pveGroup, ipamGroup, infraExtra);
   infra.append(legend('INFRASTRUCTURE'), infraGroups);
 
   el.append(head, standby, fleet, services, infra);
@@ -213,6 +239,11 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
   const boxEls = new Map<string, FleetRow>();
   const tileEls = new Map<string, Tile>();
   const groupEls = new Map<string | null, { root: HTMLElement; legendEl: HTMLElement | null; grid: HTMLElement }>();
+  const infraGroupEls = new Map<string | null, { root: HTMLElement; grid: HTMLElement }>();
+  // Tiles render across two sections (Services + Infrastructure categories);
+  // this repaint-scoped set lets one cleanup pass at the end of repaint()
+  // retire tiles that vanished from either.
+  let tilesSeen = new Set<string>();
 
   function makeFleetRow(id: string): FleetRow {
     const root = document.createElement('button');
@@ -288,9 +319,28 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     return { root, glyph, name, lamp, latency };
   }
 
+  // Create-or-update one tile and record the sighting; the caller appends the
+  // returned element into whichever grid the tile belongs to this repaint
+  // (appendChild moves an existing node, so hover survives regrouping too).
+  function paintTile(svc: Service): HTMLElement {
+    tilesSeen.add(svc.id);
+    let tile = tileEls.get(svc.id);
+    if (!tile) { tile = makeTile(); tileEls.set(svc.id, tile); }
+    tile.root.href = svc.url;
+    tile.name.textContent = svc.name;
+    tile.glyph.textContent = svc.glyph ?? '';
+    tile.glyph.hidden = !svc.glyph;
+    const lampState = serviceLamp(svc, data.serviceStatus);
+    tile.lamp.hidden = lampState === 'none';
+    tile.lamp.className = `dot${lampState === 'up' ? ' green' : lampState === 'down' ? ' red' : ''}`;
+    const result = data.serviceStatus?.results[svc.id];
+    tile.latency.textContent = lampState === 'none' ? '' : fmtLatency(result?.latencyMs);
+    tile.root.title = result?.state === 'down' && result.error ? result.error : '';
+    return tile.root;
+  }
+
   function paintServices() {
-    const groups = groupServices(data.services);
-    const seenTiles = new Set<string>();
+    const groups = groupServices(sectionServices(data.services));
     const seenGroups = new Set<string | null>();
     for (const g of groups) {
       seenGroups.add(g.name);
@@ -304,26 +354,8 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
         block = { root, legendEl, grid };
         groupEls.set(g.name, block);
       }
-      for (const svc of g.services) {
-        seenTiles.add(svc.id);
-        let tile = tileEls.get(svc.id);
-        if (!tile) { tile = makeTile(); tileEls.set(svc.id, tile); }
-        tile.root.href = svc.url;
-        tile.name.textContent = svc.name;
-        tile.glyph.textContent = svc.glyph ?? '';
-        tile.glyph.hidden = !svc.glyph;
-        const lampState = serviceLamp(svc, data.serviceStatus);
-        tile.lamp.hidden = lampState === 'none';
-        tile.lamp.className = `dot${lampState === 'up' ? ' green' : lampState === 'down' ? ' red' : ''}`;
-        const result = data.serviceStatus?.results[svc.id];
-        tile.latency.textContent = lampState === 'none' ? '' : fmtLatency(result?.latencyMs);
-        tile.root.title = result?.state === 'down' && result.error ? result.error : '';
-        block.grid.appendChild(tile.root);
-      }
+      for (const svc of g.services) block.grid.appendChild(paintTile(svc));
       servicesBody.appendChild(block.root);
-    }
-    for (const [id, tile] of tileEls) {
-      if (!seenTiles.has(id)) { tile.root.remove(); tileEls.delete(id); }
     }
     for (const [name, block] of groupEls) {
       if (!seenGroups.has(name)) { block.root.remove(); groupEls.delete(name); }
@@ -344,7 +376,9 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
   }
 
   function paintInfra() {
-    // Non-interactive readouts: wholesale swaps are safe (no hover state to keep).
+    const parts = partitionInfraGroups(data.services);
+
+    // Module readouts are non-interactive: wholesale swaps are safe there.
     const pveMods: HTMLElement[] = [];
     if (data.nodes !== null && data.nodes.length > 0) {
       // Physical nodes are the primary readout; container tallies fold into them.
@@ -363,7 +397,9 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
       }
     }
     pveRow.replaceChildren(...pveMods);
-    pveGroup.hidden = pveMods.length === 0;
+    for (const svc of parts.proxmox) pveTiles.appendChild(paintTile(svc));
+    pveTiles.hidden = parts.proxmox.length === 0;
+    pveGroup.hidden = pveMods.length === 0 && parts.proxmox.length === 0;
 
     const ipamMods: HTMLElement[] = [];
     if (data.netbox?.configured) {
@@ -378,19 +414,48 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
       }
     }
     ipamRow.replaceChildren(...ipamMods);
-    ipamGroup.hidden = ipamMods.length === 0;
+    for (const svc of parts.ipam) ipamTiles.appendChild(paintTile(svc));
+    ipamTiles.hidden = parts.ipam.length === 0;
+    ipamGroup.hidden = ipamMods.length === 0 && parts.ipam.length === 0;
 
-    infra.hidden = pveMods.length === 0 && ipamMods.length === 0;
+    // Custom infrastructure categories (e.g. DNS Filtering): tile-only groups.
+    const seenExtra = new Set<string | null>();
+    for (const g of parts.extra) {
+      seenExtra.add(g.name);
+      let block = infraGroupEls.get(g.name);
+      if (!block) {
+        const root = div('dash-infra-group');
+        const grid = div('dash-grid');
+        if (g.name !== null) root.append(sublegend(g.name.toUpperCase()));
+        root.append(grid);
+        block = { root, grid };
+        infraGroupEls.set(g.name, block);
+      }
+      for (const svc of g.services) block.grid.appendChild(paintTile(svc));
+      infraExtra.appendChild(block.root);
+    }
+    for (const [name, block] of infraGroupEls) {
+      if (!seenExtra.has(name)) { block.root.remove(); infraGroupEls.delete(name); }
+    }
+
+    infra.hidden = pveGroup.hidden && ipamGroup.hidden && parts.extra.length === 0;
   }
 
   function repaint() {
     const mode = dashboardMode(data.boxes.length, data.services.length);
     head.hidden = mode === 'standby';
     standby.hidden = mode === 'dash';
+    tilesSeen = new Set();
+    paintFleet();
+    paintServices();
+    paintInfra();
+    // One cleanup across both sections: a tile absent from every grid this
+    // repaint has been deleted (or its record vanished) — retire it.
+    for (const [id, tile] of tileEls) {
+      if (!tilesSeen.has(id)) { tile.root.remove(); tileEls.delete(id); }
+    }
     fleet.hidden = mode === 'standby' || data.boxes.length === 0;
     services.hidden = mode === 'standby';
-    if (mode === 'dash') { paintFleet(); paintServices(); }
-    paintInfra();
     if (mode === 'standby') infra.hidden = true;
   }
 
@@ -415,6 +480,7 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     boxEls.clear();
     tileEls.clear();
     groupEls.clear();
+    infraGroupEls.clear();
   }
 
   return { el, update, destroy };
