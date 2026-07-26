@@ -77,6 +77,12 @@ export function cpuLevel(pct: number): Level {
 // Nerd Font (iconClass 'nf'), which styles it a neutral color so the severity
 // color stays on the percentage alone.
 export const CPU_ICON = '\uF2DB';
+// Its metric siblings, from the same Font Awesome block of the bundled face:
+// 'fa-server' (stacked banks) for RAM, 'fa-hdd-o' for disk. Monochrome by
+// design \u2014 the color-emoji \uD83E\uDDE0/\uD83D\uDCBE they replaced broke the chrome's one-face,
+// LED-colors-only discipline (DESIGN.md).
+export const MEM_ICON = '\uF233';
+export const DISK_ICON = '\uF0A0';
 
 // `metric` names the underlying figure so the row's sparkline can highlight the
 // segment it is currently graphing (the line itself is otherwise anonymous).
@@ -106,12 +112,12 @@ function metricSegments(m: BoxMetrics | undefined): MetaSegment[] {
     }
   } // else: cgroup host warming up (one sample) — omit the cpu segment this cycle
   if (m.memTotalKb && m.memAvailKb != null) {
-    segs.push({ text: `${Math.round((1 - m.memAvailKb / m.memTotalKb) * 100)}%`, icon: '🧠', title: 'RAM used', metric: 'mem' });
+    segs.push({ text: `${Math.round((1 - m.memAvailKb / m.memTotalKb) * 100)}%`, icon: MEM_ICON, iconClass: 'nf', title: 'RAM used', metric: 'mem' });
   }
   const diskPct = m.diskPct != null
     ? m.diskPct
     : (m.diskTotalKb && m.diskUsedKb != null ? Math.round((m.diskUsedKb / m.diskTotalKb) * 100) : undefined);
-  if (diskPct != null) segs.push({ text: `${diskPct}%`, icon: '💾', title: 'Disk used (root filesystem /)', metric: 'disk' });
+  if (diskPct != null) segs.push({ text: `${diskPct}%`, icon: DISK_ICON, iconClass: 'nf', title: 'Disk used (root filesystem /)', metric: 'disk' });
   return segs;
 }
 
