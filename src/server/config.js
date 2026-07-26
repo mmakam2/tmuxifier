@@ -25,6 +25,9 @@ const DEFAULTS = {
   // polled here once per interval regardless of how many dashboard tabs are open,
   // so the SSH connection rate no longer scales with tab count. See statusPoller.js.
   statusPollMs: 30000,
+  // How often the server sweeps the dashboard's service tiles (HTTP/TCP
+  // liveness). Same single-loop rationale as statusPollMs. See serviceChecker.js.
+  servicePollMs: 30000,
   // ssh ControlPersist (seconds): how long a multiplexed master lingers after
   // its last use. Longer means cold-connect bursts (which trigger the blocks
   // above) happen far less often.
@@ -130,6 +133,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     graceSeconds: e.TMUXIFIER_GRACE ? Number(e.TMUXIFIER_GRACE) : undefined,
     statusConcurrency: e.TMUXIFIER_STATUS_CONCURRENCY ? Number(e.TMUXIFIER_STATUS_CONCURRENCY) : undefined,
     statusPollMs: e.TMUXIFIER_STATUS_POLL_MS ? Number(e.TMUXIFIER_STATUS_POLL_MS) : undefined,
+    servicePollMs: e.TMUXIFIER_SERVICE_POLL_MS ? Number(e.TMUXIFIER_SERVICE_POLL_MS) : undefined,
     controlPersist: e.TMUXIFIER_CONTROL_PERSIST ? Number(e.TMUXIFIER_CONTROL_PERSIST) : undefined,
     fleetConcurrency: e.TMUXIFIER_FLEET_CONCURRENCY ? Number(e.TMUXIFIER_FLEET_CONCURRENCY) : undefined,
     fleetTimeoutMs: e.TMUXIFIER_FLEET_TIMEOUT_MS ? Number(e.TMUXIFIER_FLEET_TIMEOUT_MS) : undefined,
@@ -192,6 +196,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   merged.graceSeconds = clampInt(merged.graceSeconds, 0, 86400, DEFAULTS.graceSeconds);
   merged.statusConcurrency = clampInt(merged.statusConcurrency, 1, 100, DEFAULTS.statusConcurrency);
   merged.statusPollMs = clampInt(merged.statusPollMs, 1000, 86400000, DEFAULTS.statusPollMs);
+  merged.servicePollMs = clampInt(merged.servicePollMs, 5000, 86400000, DEFAULTS.servicePollMs);
   merged.controlPersist = clampInt(merged.controlPersist, 0, 604800, DEFAULTS.controlPersist); // 0 = ssh "keep forever"
   merged.fleetConcurrency = clampInt(merged.fleetConcurrency, 1, 100, DEFAULTS.fleetConcurrency);
   merged.fleetTimeoutMs = clampInt(merged.fleetTimeoutMs, 100, 86400000, DEFAULTS.fleetTimeoutMs);
