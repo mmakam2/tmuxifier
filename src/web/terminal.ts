@@ -7,6 +7,7 @@ import { buildFontFamily, clampFontSize, DEFAULT_TERM_FONT_SIZE } from './termFo
 import { api } from './api';
 import { filesFromDataTransfer, uploadName, sizeError, termSafe } from './upload';
 import { wireVoice, createVoiceHotkeyHandler, type VoiceHotkeyTarget } from './voiceUi';
+import type { PaneConn } from './paneHeader';
 
 // Synchronous execCommand('copy') used when the async Clipboard API is missing
 // (insecure context) or rejects (document not focused). A hidden textarea is the
@@ -259,7 +260,12 @@ interface ProvisionOptions {
   tools?: string[];
 }
 
-export function openTerminal(parent: HTMLElement, boxId: string, label?: string) {
+export function openTerminal(
+  parent: HTMLElement,
+  boxId: string,
+  label?: string,
+  opts?: { voiceMount?: HTMLElement; onConnState?: (s: PaneConn) => void },
+) {
   const term = new Terminal({
     cursorBlink: true,
     fontSize: termFontSize,
@@ -274,7 +280,7 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
   // Built here rather than reaching into wireClipboard: ClipboardDeps is
   // assembled inline there and never exported. execCommandCopy is the
   // module-local synchronous fallback for insecure contexts.
-  const voice = wireVoice(parent, boxId, {
+  const voice = wireVoice(opts?.voiceMount ?? parent, boxId, {
     write: (t) => term.write(t),
     copy: (t) => {
       void writeClipboard(t, {
@@ -297,11 +303,15 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
   let stableTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // A listener error must never break the terminal it is only observing.
+  const emitConn = (s: PaneConn) => { try { opts?.onConnState?.(s); } catch {} };
+
   function connect() {
     // A backoff retry can fire after dispose() (its timer belongs to the old
     // tab); without this guard it would write to a disposed Terminal and open a
     // second WebSocket — a duplicate server-side PTY listener — for the box.
     if (closedByUser) return;
+    emitConn({ kind: 'connecting' });
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const { cols, rows } = term;
     // Immediate feedback so opening a box is never a mystery blank cursor — the
@@ -309,6 +319,7 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
     term.write(`\x1b[2m[connecting to ${name}…]\x1b[0m\r\n`);
     ws = new WebSocket(`${proto}://${location.host}/term?box=${encodeURIComponent(boxId)}&cols=${cols}&rows=${rows}`);
     ws.onopen = () => {
+      emitConn({ kind: 'open' });
       sendResize();
       // Only treat the connection as a real session once it survives a while; the
       // box's ssh fails ~10s in, before this fires, so a dead box keeps escalating.
@@ -324,11 +335,13 @@ export function openTerminal(parent: HTMLElement, boxId: string, label?: string)
       // would poison the backoff that real outages depend on, and could leave
       // the tab idle for minutes after setup had already finished.
       if (ev.reason === 'setting up') {
+        emitConn({ kind: 'setup' });
         term.write('\r\n\x1b[33m[setting up — reconnecting when ready…]\x1b[0m\r\n');
         retryTimer = setTimeout(connect, SETUP_RETRY_MS);
         return;
       }
       failures += 1;
+      emitConn({ kind: 'retrying', attempt: failures });
       const delay = reconnectDelay(failures);
       // Escalating backoff to a 5-minute floor (never gives up): a down box settles
       // to a gentle ~1 attempt/5min and auto-reconnects when it comes back.
