@@ -407,6 +407,17 @@ emails, box/fleet names). Real values live only in the gitignored files above; c
 examples, and tests use placeholders (`example.com`, RFC1918 IPs like `192.168.1.10`,
 `you@example.com`).
 
+Features are validated on the **live app before they merge**: build in the feature worktree,
+`rsync -a --delete <worktree>/dist/ ./dist/`, and restart the service. The restart is
+mandatory even for client-only changes — asset routes are registered per file at boot, so a
+freshly-swapped hashed bundle otherwise falls through to the SPA fallback (`text/html`) and
+the app renders blank. Verify by fetching one hashed asset end-to-end (expect its real
+content-type), not just `GET /`. Only after validation does the branch merge to main and the
+checklist below run (its build converges `dist/` onto the released version); a failed
+validation is fixed on the branch and redeployed, and rollback is just `npm run build` from
+main. Any restart — candidate or release — waits until no setup/provision/lifecycle/fleet/
+voice-install job is `running` (a restart would interrupt them).
+
 ```bash
 npm version patch --no-git-tag-version # bump package.json + package-lock.json by 0.0.1
 npm run build                          # rebuild the web bundle with the new version
