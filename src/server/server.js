@@ -88,7 +88,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -781,6 +781,23 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       return reply.code(400).send({ error: e.message });
     }
   });
+
+  // --- Standby dashboard services (tiles + cached liveness snapshot) ---
+  app.get('/api/services', { preHandler: requireAuth }, async () => servicesStore.listServices());
+  app.post('/api/services', { preHandler: requireAuth }, async (req, reply) => {
+    try { return await servicesStore.addService(req.body || {}); }
+    catch (e) { reply.code(400); return { error: e.message }; }
+  });
+  app.patch('/api/services/:id', { preHandler: requireAuth }, async (req, reply) => {
+    try { return await servicesStore.updateService(req.params.id, req.body || {}); }
+    catch (e) { reply.code(/not found/.test(e.message) ? 404 : 400); return { error: e.message }; }
+  });
+  app.delete('/api/services/:id', { preHandler: requireAuth }, async (req) => {
+    await servicesStore.removeService(req.params.id);
+    return { ok: true };
+  });
+  // Served purely from the sweep cache — a dashboard poll never triggers checks.
+  app.get('/api/services/status', { preHandler: requireAuth }, async () => serviceChecker.getSnapshot());
 
   app.post('/api/fleet/jobs', { preHandler: requireAuth }, async (req, reply) => {
     const { boxIds, command } = req.body || {};

@@ -6,6 +6,8 @@ import { loadConfig, requiredConfigError } from './config.js';
 import { createStore } from './store.js';
 import { createStatusChecker } from './status.js';
 import { createStatusPoller } from './statusPoller.js';
+import { createServicesStore } from './servicesStore.js';
+import { createServiceChecker } from './serviceChecker.js';
 import { createSessionManager } from './sessions.js';
 import { sshRun, sshRunStdin, sshStream } from './sshRun.js';
 import { createBoxActions, buildEnsureSessionRemote } from './boxActions.js';
@@ -254,10 +256,15 @@ const statusPoller = createStatusPoller({
   },
 });
 
+// The standby dashboard's service tiles: one sweep loop, same rationale as the
+// status poller — check volume is independent of open tab count.
+const servicesStore = createServicesStore({ dataDir: config.dataDir });
+const serviceChecker = createServiceChecker({ store: servicesStore, intervalMs: config.servicePollMs });
+
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
 const voiceEnabledInitial = (await resolveVoice()).enabled;
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore, serviceChecker, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
@@ -283,6 +290,7 @@ app.listen({ host: config.bindAddress, port: config.port })
       voiceEngine: { stop: async () => { if (voiceEngine) await voiceEngine.stop(); } },
     });
     statusPoller.start().catch((err) => console.error('status poll failed to start:', err));
+    serviceChecker.start().catch((err) => console.error('service check sweep failed to start:', err));
     console.log(`Tmuxifier listening on ${scheme}://${config.bindAddress}:${config.port}`);
   })
   .catch((err) => {
