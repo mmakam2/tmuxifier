@@ -279,6 +279,19 @@ never in a command line, a script file, a log, or an API response. **Seeding han
 Claude and/or Codex subscription identity, exactly as if you'd logged in on it yourself — seed
 only boxes you trust the way you'd trust anyone holding your own login.**
 
+## Split terminals
+
+Two boxes can share the stage. Drag a box row onto the stage and drop it on an edge — left/
+right docks side by side, top/bottom stacks — or use the row's ◫ **Dock** button (visible
+whenever exactly one other terminal is open) for the keyboard path. The divider between panes
+drags to resize (double-click resets 50/50, arrow keys work when it's focused, and its small
+⤢ control flips the split direction). Each pane shows its box name; the focused pane carries
+a cyan border, `Ctrl+Shift+Arrow` moves focus between panes, and plain-clicking another box
+in the sidebar replaces the **focused** pane while the other keeps running. The ✕ in a pane's
+corner undocks it (the terminal stays connected in the background, exactly like switching
+away). The split — pair, direction, and ratio — survives reloads; both sidebar rows show the
+cyan beacon while docked, with the focused one at full strength.
+
 ## Pasting images & files
 
 Pasting an image (Ctrl/Cmd+V) or dropping any file onto a terminal uploads it to

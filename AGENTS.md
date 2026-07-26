@@ -310,7 +310,13 @@ setting-up panel (`blocksTerminal` in `setupStatus.ts`) instead of a terminal, a
 terminal itself once the job settles; the login screen also wires the passkey button through the same
 `evaluateOrigin` verdict, with a dead-end message when "require a passkey" is armed but this
 browser has no usable one), `api.ts`, `terminal.ts`, `index.html`, `style.css`, plus feature modules —
-`reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
+`stageLayout.ts` (the pure, N-capable stage pane model — panes/orientation/ratios,
+dock/undock/replace/swap/setRatio, serialize/restore with vanished-box pruning; the
+two-pane cap is main.ts's `MAX_PANES`, not the model's), `stagePanes.ts` (pure grid/ARIA
+helpers plus the DOM renderer for panes, WAI-ARIA splitter dividers, nameplates, and drop
+targets; `main.ts` drives the stage from this layout + a focused pane, persisted under
+`tmuxifier.stageLayout`, and parks undocked terminals in a hidden div so they stay
+connected), `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
 history: pure SVG-path builder and event-line formatters), `notifyPrefs.ts` (per-kind
 browser-notification preferences, localStorage-backed, defaults all-on except `up`/
 `threshold-clear`), `setupOptions.ts` (the shared post-create setup form — Terminal/Tools/AI-auth sections —
