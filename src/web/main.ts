@@ -875,6 +875,40 @@ async function renderDashboard() {
     const zones = document.createElement('div');
     zones.className = 'drop-zones';
     stage.append(zones);
+    // The one visible drag indicator: previews the hovered zone's landing
+    // area (half the stage / half the pane / the whole pane). The zones
+    // themselves are invisible hit targets — painting them all at once made
+    // a 3-pane stage unreadable.
+    const preview = document.createElement('div');
+    preview.className = 'drop-preview';
+    stage.append(preview);
+
+    type Band = { left: number; top: number; width: number; height: number };
+    const bandOf = (r: Band, edge: string): Band =>
+      edge === 'left' ? { ...r, width: r.width / 2 }
+      : edge === 'right' ? { ...r, left: r.left + r.width / 2, width: r.width / 2 }
+      : edge === 'top' ? { ...r, height: r.height / 2 }
+      : { ...r, top: r.top + r.height / 2, height: r.height / 2 };
+
+    const showPreview = (zone: HTMLElement | null) => {
+      if (!zone) { preview.style.display = 'none'; return; }
+      const host = stage.getBoundingClientRect();
+      let rect: Band | null = null;
+      if (zone.dataset.kind === 'stage-edge') {
+        rect = bandOf({ left: 0, top: 0, width: host.width, height: host.height }, zone.dataset.edge!);
+      } else {
+        const paneEl = stageGrid().querySelector(`.stage-pane[data-pane-id='${zone.dataset.paneId}']`);
+        if (!paneEl) { preview.style.display = 'none'; return; }
+        const r = paneEl.getBoundingClientRect();
+        const rel: Band = { left: r.left - host.left, top: r.top - host.top, width: r.width, height: r.height };
+        rect = zone.dataset.kind === 'pane-edge' ? bandOf(rel, zone.dataset.edge!) : rel;
+      }
+      preview.style.left = `${rect.left}px`;
+      preview.style.top = `${rect.top}px`;
+      preview.style.width = `${rect.width}px`;
+      preview.style.height = `${rect.height}px`;
+      preview.style.display = 'block';
+    };
 
     const buildZones = (draggedId: string) => {
       zones.replaceChildren();
@@ -936,15 +970,15 @@ async function renderDashboard() {
     document.addEventListener('dragend', () => {
       stage.classList.remove('dragging');
       zones.replaceChildren(); // next drag rebuilds against the then-current layout
+      preview.style.display = 'none';
     });
     stage.addEventListener('dragover', (e) => {
       if (!e.dataTransfer?.types.includes('text/x-tmuxifier-box')) return;
       e.preventDefault(); // required, or the browser refuses the drop
-      const over = document.elementFromPoint(e.clientX, e.clientY)?.closest('.drop-zone');
-      zones.querySelectorAll('.drop-zone').forEach((z) => z.classList.toggle('hover', z === over));
+      showPreview(document.elementFromPoint(e.clientX, e.clientY)?.closest('.drop-zone') as HTMLElement | null);
     });
     stage.addEventListener('dragleave', (e) => {
-      if (e.target === stage) stage.classList.remove('dragging');
+      if (e.target === stage) { stage.classList.remove('dragging'); preview.style.display = 'none'; }
     });
     stage.addEventListener('drop', (e) => {
       e.preventDefault();
@@ -960,6 +994,7 @@ async function renderDashboard() {
       // trusting dragend is exactly the stale-zone cap-bypass bug (v1.16.0).
       zones.replaceChildren();
       dragSourceId = null;
+      preview.style.display = 'none';
       const kind = zone?.dataset.kind;
       if (kind === 'stage-edge') {
         dockBox(id, { kind: 'stage-edge', edge: zone!.dataset.edge as Edge });

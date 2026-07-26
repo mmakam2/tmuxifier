@@ -117,6 +117,15 @@ test('sub-partition: stage-bottom drop under a 2-up gives a full-width third pan
   await page.mouse.move(rowBox.x + rowBox.width / 2 + 12, rowBox.y + rowBox.height / 2, { steps: 4 });
   await page.mouse.move(stageBox.x + stageBox.width / 2, stageBox.y + stageBox.height - 20, { steps: 10 });
   await expect(page.locator('.drop-zone-bottom')).toBeVisible();
+  // Exactly one landing preview paints while hovering — the zones themselves
+  // are invisible hit targets, so the overlay stays calm.
+  await expect(page.locator('.drop-preview')).toBeVisible();
+  // Synthetic drags throttle dragover, so the preview can trail the cursor by
+  // one update; nudge and poll until it reflects the final hover position.
+  await page.mouse.move(stageBox.x + stageBox.width / 2 + 1, stageBox.y + stageBox.height - 20);
+  await expect
+    .poll(async () => (await page.locator('.drop-preview').boundingBox())!.width)
+    .toBeGreaterThan(stageBox.width * 0.9); // full-width bottom band
   await page.mouse.up();
 
   await expect(page.locator('.stage-pane')).toHaveCount(3);

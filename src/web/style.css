@@ -462,8 +462,15 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 /* Drop zones: shown only while a box row is dragged over the stage. */
 .drop-zones { position: absolute; inset: 0; z-index: 30; display: none; }
 .stage.dragging .drop-zones { display: block; }
-.drop-zone { position: absolute; border: 1px dashed rgba(36, 211, 232, 0.45); border-radius: 8px; background: rgba(36, 211, 232, 0.05); }
-.drop-zone.hover { background: rgba(36, 211, 232, 0.12); }
+/* Zones are pure hit targets — invisible, so a busy layout doesn't paint a
+   wall of boxes. The single .drop-preview below shows where the pane would
+   land for whichever zone the cursor is over. */
+.drop-zone { position: absolute; }
+.drop-preview {
+  position: absolute; z-index: 31; display: none; pointer-events: none;
+  border: 1px dashed rgba(36, 211, 232, 0.45); border-radius: 8px;
+  background: rgba(36, 211, 232, 0.12);
+}
 .drop-zone-left { left: 4px; top: 4px; bottom: 4px; width: 22%; }
 .drop-zone-right { right: 4px; top: 4px; bottom: 4px; width: 22%; }
 .drop-zone-top { top: 4px; left: 26%; right: 26%; height: 22%; }
