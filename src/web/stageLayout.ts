@@ -64,3 +64,29 @@ export function setRatio(layout: StageLayout, divider: number, firstShare: numbe
 export function toggleOrientation(layout: StageLayout): StageLayout {
   return { ...layout, orientation: layout.orientation === 'row' ? 'column' : 'row' };
 }
+
+export function serialize(layout: StageLayout, focusedId: string | null): string {
+  return JSON.stringify({ v: 1, layout, focusedId });
+}
+
+// Ratios survive only when every persisted pane survived (a prune changes the
+// geometry, so evens are honest) and the numbers are sane; otherwise re-even.
+export function restore(raw: string | null, knownIds: string[]): { layout: StageLayout; focusedId: string | null } {
+  const fallback = { layout: emptyLayout(), focusedId: null };
+  if (!raw) return fallback;
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return fallback; }
+  const p = parsed as { v?: unknown; layout?: Partial<StageLayout>; focusedId?: unknown };
+  if (p?.v !== 1 || !p.layout || !Array.isArray(p.layout.panes)) return fallback;
+  const known = new Set(knownIds);
+  const persisted = p.layout.panes.filter((id): id is string => typeof id === 'string');
+  const panes = persisted.filter((id) => known.has(id));
+  const orientation: Orientation = p.layout.orientation === 'column' ? 'column' : 'row';
+  const r = p.layout.ratios;
+  const ratiosSane = Array.isArray(r) && r.length === panes.length && panes.length === persisted.length
+    && r.every((x) => typeof x === 'number' && x >= MIN_RATIO - 0.001)
+    && Math.abs(r.reduce((a, b) => a + b, 0) - 1) < 0.01;
+  const ratios = ratiosSane ? (r as number[]) : even(panes.length);
+  const focusedId = typeof p.focusedId === 'string' && panes.includes(p.focusedId) ? p.focusedId : panes[0] ?? null;
+  return { layout: { orientation, panes, ratios }, focusedId };
+}
