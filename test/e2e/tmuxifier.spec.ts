@@ -140,7 +140,7 @@ test('edit box tag joins an existing group and can be cleared', async ({ page })
 
   await page.locator('.box', { hasText: 'untagged-worker' }).locator('.edit').click();
   await expect(page.getByRole('heading', { name: 'Edit box' })).toBeVisible();
-  await page.getByLabel('Tag').fill('prod');
+  await page.getByLabel('Tag', { exact: true }).fill('prod');
   await page.getByRole('button', { name: 'Save' }).click();
 
   await expect(page.getByRole('button', { name: /Prod\s+3/ })).toBeVisible();
@@ -152,7 +152,7 @@ test('edit box tag joins an existing group and can be cleared', async ({ page })
 
   await page.locator('.box', { hasText: 'untagged-worker' }).locator('.edit').click();
   await expect(page.getByRole('heading', { name: 'Edit box' })).toBeVisible();
-  await page.getByLabel('Tag').fill('');
+  await page.getByLabel('Tag', { exact: true }).fill('');
   await page.getByRole('button', { name: 'Save' }).click();
 
   await expect(page.getByRole('button', { name: /Prod\s+2/ })).toBeVisible();
