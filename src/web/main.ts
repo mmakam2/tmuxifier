@@ -20,8 +20,8 @@ import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createSetupOptionsForm } from './setupOptions';
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
-import { type StageLayout, type Edge, emptyLayout, singleLayout, dockPane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
-import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks } from './stagePanes';
+import { type PaneNode, type Edge, type DropSpec, panesOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
+import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks, type PaneRect } from './stagePanes';
 import { paneHeaderModel, buildPaneHeader, type PaneConn, type PaneHeaderModel } from './paneHeader';
 
 const app = document.getElementById('app')!;
@@ -33,12 +33,12 @@ const GROUP_COLLAPSED_KEY = 'tmuxifier.collapsedTagGroups';
 const UNTAGGED_LABEL = 'Untagged';
 const UNTAGGED_KEY = '__untagged__';
 const STAGE_LAYOUT_KEY = 'tmuxifier.stageLayout';
-const MAX_PANES = 2; // gesture-layer cap; the model itself is N-capable
+const MAX_PANES = 4; // gesture-layer cap; the model itself is N-capable
 let chordWired = false; // renderDashboard re-runs on re-login; wire document once
 // The DnD spec hides the payload until drop, but the drop-zone overlay needs
 // the dragged id at dragenter time to gate edge zones by the pane cap.
 let dragSourceId: string | null = null;
-let stageLayout: StageLayout = emptyLayout();
+let stageRoot: PaneNode | null = null;
 let focusedBoxId: string | null = null; // the pane typing targets and plain clicks replace
 let lastPaneStates = ''; // pollStatus repaints only when a docked box's derived state flips
 let allBoxes: Box[] = [];
@@ -463,10 +463,10 @@ async function pollStatus() {
       // flips, so steady state costs nothing.
       for (const [id] of tabs) {
         if (id !== '__local__' && status[id]?.proxmoxState === 'stopped') {
-          closeTab(id, { keepPane: stageLayout.panes.includes(id) });
+          closeTab(id, { keepPane: panesOf(stageRoot).includes(id) });
         }
       }
-      const paneStates = stageLayout.panes.map((id) => `${id}:${paneState(id)}`).join('|');
+      const paneStates = panesOf(stageRoot).map((id) => `${id}:${paneState(id)}`).join('|');
       if (paneStates !== lastPaneStates) repaintStage();
     } catch {}
     // latestSetups is otherwise refreshed only by refresh() (boot, add/edit/
@@ -585,7 +585,7 @@ function emptyStagePanel(): HTMLElement {
 // the same keep-alive contract as the old display:none tab toggling.
 
 function persistStage() {
-  localStorage.setItem(STAGE_LAYOUT_KEY, serialize(stageLayout, focusedBoxId));
+  localStorage.setItem(STAGE_LAYOUT_KEY, serialize(stageRoot, focusedBoxId));
 }
 
 function stageGrid(): HTMLElement { return app.querySelector('.stage-grid') as HTMLElement; }
@@ -700,19 +700,19 @@ function paneHooks(): PaneHooks {
       return built.el;
     },
     onFocus: (id) => { if (focusedBoxId !== id) { focusedBoxId = id; syncPaneFocus(); persistStage(); } },
-    onRatio: (divider, firstShare, phase) => {
-      stageLayout = setRatio(stageLayout, divider, firstShare);
-      applyRatios(stageGrid(), stageLayout);
+    onRatio: (path, divider, firstShare, phase) => {
+      stageRoot = setRatio(stageRoot, path, divider, firstShare);
+      if (stageRoot != null) applyRatios(stageGrid(), stageRoot);
       if (phase === 'commit') { refitActiveTerminals(); persistStage(); }
       else requestAnimationFrame(refitActiveTerminals);
     },
-    onToggleOrientation: () => { stageLayout = toggleOrientation(stageLayout); repaintStage(); },
+    onToggleOrientation: (path) => { stageRoot = toggleOrientation(stageRoot, path); repaintStage(); },
   };
 }
 
 // Focus paint without a full re-render (a re-render moves terminal DOM).
 function syncPaneFocus() {
-  const split = stageLayout.panes.length > 1;
+  const split = panesOf(stageRoot).length > 1;
   stageGrid().querySelectorAll<HTMLElement>('.stage-pane').forEach((p) => {
     p.classList.toggle('focused', split && p.dataset.paneId === focusedBoxId);
   });
@@ -724,22 +724,22 @@ function repaintStage() {
   const grid = stageGrid();
   // Panels that lost their pane (or whose box left setup) must stop polling.
   for (const [id] of settingUpPollers) {
-    if (!stageLayout.panes.includes(id) || paneState(id) !== 'setup') clearSettingUpPanel(id);
+    if (!panesOf(stageRoot).includes(id) || paneState(id) !== 'setup') clearSettingUpPanel(id);
   }
   for (const id of [...stoppedShown]) {
-    if (!stageLayout.panes.includes(id)) stoppedShown.delete(id);
+    if (!panesOf(stageRoot).includes(id)) stoppedShown.delete(id);
   }
   // Park every tab first so replaceChildren() can't orphan a live terminal.
   for (const t of tabs.values()) stageParking().appendChild(t.el);
-  if (stageLayout.panes.length === 0) {
+  if (stageRoot == null) {
     grid.replaceChildren();
     grid.style.gridTemplateColumns = '';
     grid.style.gridTemplateRows = '';
     grid.append(emptyStagePanel());
   } else {
-    renderStagePanes(grid, stageLayout, focusedBoxId, paneHooks());
+    renderStagePanes(grid, stageRoot, focusedBoxId, paneHooks());
   }
-  lastPaneStates = stageLayout.panes.map((id) => `${id}:${paneState(id)}`).join('|');
+  lastPaneStates = panesOf(stageRoot).map((id) => `${id}:${paneState(id)}`).join('|');
   refitActiveTerminals();
   highlightStage();
   persistStage();
@@ -747,15 +747,15 @@ function repaintStage() {
   filterAndPaint(); // dock-button visibility and row highlights track the layout
 }
 
-function dockBox(id: string, edge: Edge) {
-  stageLayout = dockPane(stageLayout, id, edge);
+function dockBox(id: string, drop: DropSpec) {
+  stageRoot = movePane(stageRoot, id, drop);
   focusedBoxId = id;
   repaintStage();
 }
 
 function undockBox(id: string) {
-  stageLayout = undockPane(stageLayout, id);
-  if (focusedBoxId === id) focusedBoxId = stageLayout.panes[0] ?? null;
+  stageRoot = undockPane(stageRoot, id);
+  if (focusedBoxId === id) focusedBoxId = panesOf(stageRoot)[0] ?? null;
   repaintStage();
 }
 
@@ -804,7 +804,7 @@ async function renderDashboard() {
     tabs.clear();
     updateLocalDot();
     for (const id of [...settingUpPollers.keys()]) clearSettingUpPanel(id);
-    stageLayout = emptyLayout();
+    stageRoot = null;
     focusedBoxId = null;
     closeFleetJobsPanel();
     closeEventsPanel();
@@ -878,22 +878,44 @@ async function renderDashboard() {
 
     const buildZones = (draggedId: string) => {
       zones.replaceChildren();
-      for (const t of dropTargets(stageLayout, draggedId, MAX_PANES)) {
+      const host = stage.getBoundingClientRect();
+      const paneRect = (paneId: string) =>
+        stageGrid().querySelector<HTMLElement>(`.stage-pane[data-pane-id='${paneId}']`)?.getBoundingClientRect();
+      for (const t of dropTargets(stageRoot, draggedId, MAX_PANES)) {
         const z = document.createElement('div');
-        if (t.kind === 'edge') {
+        if (t.kind === 'stage-edge') {
           z.className = `drop-zone drop-zone-${t.edge}`;
+          z.dataset.kind = 'stage-edge';
           z.dataset.edge = t.edge;
         } else {
-          z.className = 'drop-zone drop-zone-pane';
-          z.dataset.paneIndex = String(t.index);
-          // Center the zone over its pane by mirroring the pane's extent.
-          const rect = stageGrid().querySelectorAll('.stage-pane')[t.index]?.getBoundingClientRect();
-          const host = stage.getBoundingClientRect();
-          if (rect) {
-            z.style.left = `${rect.left - host.left + rect.width * 0.3}px`;
-            z.style.width = `${rect.width * 0.4}px`;
-            z.style.top = `${rect.top - host.top + rect.height * 0.3}px`;
-            z.style.height = `${rect.height * 0.4}px`;
+          const rect = paneRect(t.paneId);
+          if (!rect) continue;
+          const rel = { left: rect.left - host.left, top: rect.top - host.top };
+          if (t.kind === 'pane-edge') {
+            z.className = 'drop-zone drop-zone-pane-edge';
+            z.dataset.kind = 'pane-edge';
+            z.dataset.edge = t.edge;
+            z.dataset.paneId = t.paneId;
+            // Edge strips: outer 26% of the pane on that side, inset 8px from
+            // the stage rim so stage-edge zones keep a clean claim on the rim.
+            const d = 0.26;
+            if (t.edge === 'left' || t.edge === 'right') {
+              z.style.top = `${rel.top + 8}px`; z.style.height = `${rect.height - 16}px`;
+              z.style.width = `${rect.width * d}px`;
+              z.style.left = t.edge === 'left' ? `${rel.left + 8}px` : `${rel.left + rect.width * (1 - d) - 8}px`;
+            } else {
+              z.style.left = `${rel.left + 8}px`; z.style.width = `${rect.width - 16}px`;
+              z.style.height = `${rect.height * d}px`;
+              z.style.top = t.edge === 'top' ? `${rel.top + 8}px` : `${rel.top + rect.height * (1 - d) - 8}px`;
+            }
+          } else {
+            z.className = 'drop-zone drop-zone-replace';
+            z.dataset.kind = 'replace';
+            z.dataset.paneId = t.paneId;
+            z.style.left = `${rel.left + rect.width * 0.34}px`;
+            z.style.width = `${rect.width * 0.32}px`;
+            z.style.top = `${rel.top + rect.height * 0.34}px`;
+            z.style.height = `${rect.height * 0.32}px`;
           }
         }
         zones.append(z);
@@ -933,12 +955,20 @@ async function renderDashboard() {
       const id = e.dataTransfer?.getData('text/x-tmuxifier-box');
       if (!id) return;
       if (!zone) return;
-      if (zone.dataset.edge) {
-        dockBox(id, zone.dataset.edge as Edge);
-      } else if (zone.dataset.paneIndex != null) {
-        const target = stageLayout.panes[Number(zone.dataset.paneIndex)];
-        if (target && target !== id) {
-          stageLayout = replacePane(stageLayout, target, id); // swaps when id is docked
+      // Clear drag state HERE: a successful dock repaints the sidebar,
+      // destroying the drag's source row, so its dragend never fires —
+      // trusting dragend is exactly the stale-zone cap-bypass bug (v1.16.0).
+      zones.replaceChildren();
+      dragSourceId = null;
+      const kind = zone?.dataset.kind;
+      if (kind === 'stage-edge') {
+        dockBox(id, { kind: 'stage-edge', edge: zone!.dataset.edge as Edge });
+      } else if (kind === 'pane-edge') {
+        dockBox(id, { kind: 'pane-edge', paneId: zone!.dataset.paneId!, edge: zone!.dataset.edge as Edge });
+      } else if (kind === 'replace') {
+        const target = zone!.dataset.paneId!;
+        if (target !== id) {
+          stageRoot = replacePane(stageRoot, target, id);
           focusedBoxId = id;
           repaintStage();
         }
@@ -950,7 +980,7 @@ async function renderDashboard() {
   app.querySelector('.local-refresh')!.addEventListener('click', async (e) => {
     e.stopPropagation();
     await api.reconnectLocalShell();
-    const wasDocked = stageLayout.panes.includes('__local__');
+    const wasDocked = panesOf(stageRoot).includes('__local__');
     closeTab('__local__', { keepPane: wasDocked });
     if (wasDocked) repaintStage();
   });
@@ -967,11 +997,15 @@ async function renderDashboard() {
   if (!chordWired) {
     chordWired = true;
     document.addEventListener('keydown', (e) => {
-      if (!(e.ctrlKey && e.shiftKey) || stageLayout.panes.length < 2) return;
+      if (!(e.ctrlKey && e.shiftKey) || panesOf(stageRoot).length < 2) return;
       if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
       e.preventDefault();
       e.stopPropagation();
-      const target = focusMove(stageLayout, focusedBoxId, e.key);
+      const rects: PaneRect[] = [...stageGrid().querySelectorAll<HTMLElement>('.stage-pane')].map((p) => {
+        const r = p.getBoundingClientRect();
+        return { id: p.dataset.paneId!, x: r.x, y: r.y, w: r.width, h: r.height };
+      });
+      const target = focusMove(rects, focusedBoxId, e.key);
       if (target) {
         focusedBoxId = target;
         syncPaneFocus();
@@ -986,8 +1020,8 @@ async function renderDashboard() {
   // Restore the persisted stage layout now that the box list exists for
   // pruning (a vanished box drops out; 0 panes left = the empty stage).
   const restored = restore(savedStage, [...allBoxes.map((b) => b.id), '__local__']);
-  if (restored.layout.panes.length) {
-    stageLayout = restored.layout;
+  if (restored.root != null) {
+    stageRoot = restored.root;
     focusedBoxId = restored.focusedId;
     repaintStage();
   }
@@ -1012,7 +1046,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   const li = document.createElement('li');
   li.className = 'box';
   if (b.id === focusedBoxId) li.classList.add('active');
-  else if (stageLayout.panes.includes(b.id)) li.classList.add('docked');
+  else if (panesOf(stageRoot).includes(b.id)) li.classList.add('docked');
   li.dataset.id = b.id;
   li.dataset.boxId = b.id; // matches [data-box-id] used by tests/tooling to locate a card
 
@@ -1084,10 +1118,10 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   dock.title = 'Dock beside current terminal';
   dock.setAttribute('aria-label', `Dock ${b.label} beside current terminal`);
   dock.textContent = '◫';
-  dock.hidden = !(stageLayout.panes.length === 1 && !stageLayout.panes.includes(b.id) && MAX_PANES > 1);
+  dock.hidden = !(panesOf(stageRoot).length >= 1 && panesOf(stageRoot).length < MAX_PANES && !panesOf(stageRoot).includes(b.id));
   dock.addEventListener('click', (e) => {
     e.stopPropagation();
-    dockBox(b.id, stageLayout.orientation === 'row' ? 'right' : 'bottom');
+    dockBox(b.id, { kind: 'stage-edge', edge: 'right' });
   });
 
   const refreshBtn = document.createElement('button');
@@ -1098,7 +1132,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   refreshBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     await api.reconnectBox(b.id);
-    const wasDocked = stageLayout.panes.includes(b.id);
+    const wasDocked = panesOf(stageRoot).includes(b.id);
     closeTab(b.id, { keepPane: wasDocked });
     if (wasDocked) repaintStage(); // rebuilds the terminal in its pane
   });
@@ -1113,7 +1147,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
     e.stopPropagation();
     if (!confirm(`Forget the stored host key for ${b.label}? Only do this if the box was legitimately rebuilt.`)) return;
     await api.forgetHostKey(b.id);
-    const wasDocked = stageLayout.panes.includes(b.id);
+    const wasDocked = panesOf(stageRoot).includes(b.id);
     closeTab(b.id, { keepPane: wasDocked });
     if (wasDocked) repaintStage();
   });
@@ -1275,7 +1309,7 @@ function highlightStage() {
   app.querySelectorAll('.box').forEach((element) => {
     const row = element as HTMLElement;
     const id = row.dataset.id ?? '';
-    row.classList.toggle('docked', stageLayout.panes.includes(id) && id !== focusedBoxId);
+    row.classList.toggle('docked', panesOf(stageRoot).includes(id) && id !== focusedBoxId);
     row.classList.toggle('active', id === focusedBoxId);
   });
   app.querySelectorAll('.box-group').forEach((element) => {
@@ -1284,7 +1318,7 @@ function highlightStage() {
   });
   const ls = app.querySelector('.local-shell');
   if (ls) {
-    ls.classList.toggle('docked', stageLayout.panes.includes('__local__') && focusedBoxId !== '__local__');
+    ls.classList.toggle('docked', panesOf(stageRoot).includes('__local__') && focusedBoxId !== '__local__');
     ls.classList.toggle('active', focusedBoxId === '__local__');
   }
 }
@@ -1357,16 +1391,17 @@ function openBox(b: Box) { openPane(b.id); }
 // the focused pane in a split, or become the single pane otherwise — the
 // confirmed "C replaces the focused pane" semantics.
 function openPane(id: string) {
-  if (stageLayout.panes.includes(id)) {
+  if (panesOf(stageRoot).includes(id)) {
     focusedBoxId = id;
     syncPaneFocus();
     persistStage();
     tabs.get(id)?.term.focus();
     return;
   }
-  stageLayout = stageLayout.panes.length <= 1 || !focusedBoxId
-    ? singleLayout(id)
-    : replacePane(stageLayout, focusedBoxId, id);
+  const panes = panesOf(stageRoot);
+  stageRoot = panes.length === 0
+    ? id
+    : replacePane(stageRoot, panes.length <= 1 || !focusedBoxId ? panes[0] : focusedBoxId, id);
   focusedBoxId = id;
   repaintStage();
 }
@@ -1378,7 +1413,7 @@ function closeTab(id: string, opts?: { keepPane?: boolean }) {
   const t = tabs.get(id);
   if (t) { t.term.dispose(); t.el.remove(); tabs.delete(id); connStates.delete(id); }
   if (id === '__local__') updateLocalDot();
-  if (!opts?.keepPane && stageLayout.panes.includes(id)) undockBox(id);
+  if (!opts?.keepPane && panesOf(stageRoot).includes(id)) undockBox(id);
 }
 
 async function openLocalShellEditModal() {
