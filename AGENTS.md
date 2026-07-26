@@ -313,10 +313,15 @@ browser has no usable one), `api.ts`, `terminal.ts`, `index.html`, `style.css`, 
 `stageLayout.ts` (the pure, N-capable stage pane model — panes/orientation/ratios,
 dock/undock/replace/swap/setRatio, serialize/restore with vanished-box pruning; the
 two-pane cap is main.ts's `MAX_PANES`, not the model's), `stagePanes.ts` (pure grid/ARIA
-helpers plus the DOM renderer for panes, WAI-ARIA splitter dividers, nameplates, and drop
-targets; `main.ts` drives the stage from this layout + a focused pane, persisted under
+helpers plus the DOM renderer for panes, WAI-ARIA splitter dividers, and drop targets;
+every pane renders a header via the `headerFor` hook and wraps its content in `.pane-body`;
+`main.ts` drives the stage from this layout + a focused pane, persisted under
 `tmuxifier.stageLayout`, and parks undocked terminals in a hidden div so they stay
-connected), `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
+connected), `paneHeader.ts` (the pane header bar: the pure view-model — identity, status
+dot, and one state-chip slot with pane-state > connection > agent precedence, the agent
+read coming from the latest `/api/health/series` sample — plus the `buildPaneHeader` DOM
+layer whose `update()` rewrites in place, so the voice button (mounted into the bar via
+`openTerminal`'s `voiceMount` seam) survives polls), `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
 history: pure SVG-path builder and event-line formatters), `notifyPrefs.ts` (per-kind
 browser-notification preferences, localStorage-backed, defaults all-on except `up`/
 `threshold-clear`), `setupOptions.ts` (the shared post-create setup form — Terminal/Tools/AI-auth sections —

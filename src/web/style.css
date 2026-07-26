@@ -414,12 +414,12 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .pane-body { position: relative; overflow: hidden; min-width: 0; min-height: 0; }
 .stage-pane.focused { border-color: rgba(36, 211, 232, 0.45); }
 /* --- Pane header bar --- */
-/* Identity + state + actions above every pane's terminal. The bar is darker
-   than the terminal background (#0b0e14) so it reads as chrome, not content. */
+/* Identity + state + actions above every pane's terminal. Dead-Screen Black
+   (DESIGN.md): darker than the terminal well, so it reads as chrome, not content. */
 .pane-header {
   display: flex; align-items: center; gap: 8px;
   padding: 0 8px 0 12px; min-width: 0;
-  background: #05070a; border-bottom: 1px solid var(--border);
+  background: #070a0f; border-bottom: 1px solid var(--border);
   font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.09em;
   color: var(--muted); user-select: none;
 }

@@ -69,6 +69,27 @@ test('drag-to-dock: dropping a box row on the stage right edge docks it', async 
   await expect(page.locator('.pane-title', { hasText: 'db-primary' })).toBeVisible();
 });
 
+test('header bar: identity on a single pane, chip slot, and bar-refresh', async ({ page }) => {
+  await login(page);
+  await page.locator('.box .name', { hasText: 'localhost' }).click();
+
+  // The bar exists on a lone full-stage pane (not just in split view).
+  const header = page.locator('.pane-header');
+  await expect(header).toHaveCount(1);
+  await expect(header.locator('.pane-title')).toHaveText(/localhost/i);
+  await expect(header.locator('.pane-target')).toHaveText('tmuxifierlocal');
+
+  // Wait out the connect chip: once the WS is open the slot goes quiet
+  // (no agent runs in the e2e sshd session).
+  await expect(header.locator('.pane-chip')).toBeHidden({ timeout: 15000 });
+
+  // Bar refresh rebuilds the terminal in place — pane count is unchanged and
+  // the terminal reconnects (a live prompt appears again).
+  await page.getByRole('button', { name: 'Reconnect localhost terminal' }).click();
+  await expect(page.locator('.stage-pane')).toHaveCount(1);
+  await expect(page.locator('.stage-pane .xterm-rows')).toContainText(/[#$%>]/, { timeout: 15000 });
+});
+
 test('plain-clicking a third box replaces the focused pane', async ({ page }) => {
   await login(page);
   await page.locator('.box .name', { hasText: 'localhost' }).click();
