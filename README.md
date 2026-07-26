@@ -53,6 +53,7 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | host-key policy | `TMUXIFIER_HOSTKEY_POLICY` | `accept-new` |
 | status probe concurrency | `TMUXIFIER_STATUS_CONCURRENCY` | `4` |
 | status poll interval (ms) | `TMUXIFIER_STATUS_POLL_MS` | `30000` |
+| service check sweep interval (ms, min 5000) | `TMUXIFIER_SERVICE_POLL_MS` | `30000` |
 | SSH ControlPersist seconds | `TMUXIFIER_CONTROL_PERSIST` | `600` |
 | terminal font family | `TMUXIFIER_TERM_FONT` | (bundled font) |
 | terminal font size (px) | `TMUXIFIER_TERM_FONT_SIZE` | `12` |
@@ -106,7 +107,7 @@ their IP.
 
 As an alternative to `.env`, a `config.json` in the repo root works too, using camelCase keys
 (`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`, `trustProxy`,
-`statusConcurrency`, `statusPollMs`, `controlPersist`, `termFont`, `termFontSize`, `fleetConcurrency`, `fleetTimeoutMs`,
+`statusConcurrency`, `statusPollMs`, `servicePollMs`, `controlPersist`, `termFont`, `termFontSize`, `fleetConcurrency`, `fleetTimeoutMs`,
 `fleetMaxJobs`, `fleetMaxOutputBytes`, `healthHistoryMax`, `healthEventsMax`, `healthCpuWarnPct`,
 `healthMemWarnPct`, `healthDiskWarnPct`, `healthThresholdHysteresisPct`, `agentIdleSec`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
 `pveLeaseTimeoutMs`, `pveMaxJobs`, `pveDefaultPubKeyPath`, `authMode`, `publicUrl`, `rpId`,
@@ -278,6 +279,33 @@ Either secret travels to the box over stdin on the same SSH connection used for 
 never in a command line, a script file, a log, or an API response. **Seeding hands that box your
 Claude and/or Codex subscription identity, exactly as if you'd logged in on it yourself — seed
 only boxes you trust the way you'd trust anyone holding your own login.**
+
+## Standby dashboard
+
+When no terminal is docked, the stage shows a standby dashboard instead of a blank screen:
+
+- **Service tiles** — your homelab's web services (Grafana, a NAS UI, anything with a URL),
+  managed under Settings (⚙) → Services. Each tile is a name, an optional Nerd Font glyph, a
+  parent section (Services or Infrastructure) with an optional category within it (e.g.
+  Services → DNS Filtering; under Infrastructure, the categories "Proxmox" and "IPAM" merge
+  the tile into those built-in groups), a link that opens in a new tab, and an optional
+  liveness check — an HTTP(S) GET
+  (2xx/3xx = up) or a bare TCP connect for non-web services (DNS, MQTT, …). Checks run
+  **server-side** on one shared sweep (`TMUXIFIER_SERVICE_POLL_MS`, default 30s, min 5s) and
+  the dashboard reads a cached snapshot, so check volume doesn't scale with open tabs. HTTPS
+  checks tolerate self-signed certificates — they answer "is it up", not "is it authentic".
+  Tiles persist in `data/services.json` (no secrets).
+- **Fleet overview** — one cell per box: status lamp, agent working/waiting chip, session
+  count, and the CPU sparkline. Clicking a cell opens that box's terminal.
+- **Infrastructure readout** — a Proxmox group showing each physical cluster node's health
+  (online lamp, cpu/mem/disk, linked-container tally) and, when NetBox is configured, an
+  IPAM group with utilization for each IPv4 prefix NetBox knows (first 100).
+
+On a fresh install (no boxes, no services) the dashboard collapses to the original standby
+prompt with the `+ Add box` hint.
+
+The tmuxifier nameplate in the sidebar's top-left is the home key: clicking it returns to the
+dashboard. Docked terminals undock but keep running — clicking a box re-docks it.
 
 ## Split terminals
 

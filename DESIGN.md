@@ -203,13 +203,15 @@ it. No sans-serif anywhere.
 
 **Character:** authority comes from case and tracking, not size. Engraved legends are
 small, bold, uppercase, and tracked wide (0.12–0.16em); prose is regular-case at 12.5px;
-readout values glow amber. The two display moments differ in kind: the empty stage speaks
-the terminal's own vocabulary at 42px/400 (a prompt, not a headline), while the login
+readout values glow amber. The two display moments differ in kind: the standby dashboard
+speaks the terminal's own vocabulary — a 20px `~ $` masthead, growing to 42px/400 on a
+fresh install (a prompt, not a headline) — while the login
 nameplate is engraved — 26px/700, lowercase (brand commitment), tracked 0.22em, with a
 lit standby lamp beside it.
 
 ### Hierarchy
-- **Display** (400, 42px): the empty-stage standby prompt only.
+- **Display** (400, 42px): the standby dashboard's fresh-install prompt only (the masthead
+  prompt runs ~20px).
 - **Nameplate** (700, 26px, lowercase, 0.22em): the login engraving.
 - **Title** (700, 12.5px, upper, 0.1em): modal and hub headings.
 - **Legend** (700, 10px, upper, 0.12–0.14em): key labels, section engravings, tab labels.
@@ -280,9 +282,15 @@ rgba(255,176,0,0.6)` offset 2px).
   behind a bezel; content glows slightly (no text-shadow on body sizes — glow reserved for
   display-scale readouts).
 - **Tabs**: legend type; active tab's legend lits amber with a 2px amber underline seam.
-- **Empty stage (signature)**: the display in standby — the recessed glass holding a 42px
-  `~ $` prompt with a breathing amber block cursor, the `NO TERMINAL ATTACHED` legend, and
-  a keycap-drawn `+ Add box` hint. Reduced motion holds the cursor solid.
+- **Standby dashboard (signature)**: the display in standby — the recessed glass showing
+  the instrument's home readout: a shrunken `~ $` masthead with the breathing amber block
+  cursor, a fleet strip (lamps, agent chips, amber sparklines), grouped service tiles
+  (Nerd Font glyph, LED lamp, amber latency readout), and an infrastructure readout row
+  (Proxmox counts, NetBox prefix utilization). Everything on the glass is flat display
+  content — legends engrave, lamps light, hover brightens and edges glow amber; nothing
+  extrudes. On a fresh install (no boxes, no services) it collapses to the original
+  standby prompt: the 42px `~ $`, the `NO TERMINAL ATTACHED` legend, and a keycap-drawn
+  `+ Add box` hint. Reduced motion holds the cursor solid.
 - **Login (signature)**: the instrument's faceplate powered down to one module — machined
   logo badge, engraved lowercase nameplate with a breathing amber standby lamp, recessed
   password glass, and the orange UNLOCK commit key.

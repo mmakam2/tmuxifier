@@ -281,6 +281,17 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 }
 .brand { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 700; min-width: 0; }
 .brand span { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+/* The nameplate as the home key: same layout as the plain span, plus a press
+   affordance. Overrides the generic 24px .brand button icon sizing. */
+.brand .brand-home {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0;
+  width: auto; height: auto; padding: 0;
+  background: none; border: none; border-radius: 6px;
+  font: inherit; font-weight: 700; color: inherit; text-align: left;
+  cursor: pointer;
+}
+.brand .brand-home:hover { background: none; }
+.brand .brand-home:hover .brand-name { color: var(--amber); }
 /* Nameplate: engraved lowercase model name — cut into the metal, not lit. */
 .brand-name {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -486,7 +497,10 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .modal-actions button[type=submit]:hover { background: linear-gradient(180deg, #ff8a4d, #fb6c1a); color: #1a0e05; }
 .modal-actions button[type=submit]:active { box-shadow: 0 1px 0 #7a2f06, inset 0 1px 0 rgba(255, 255, 255, 0.2); }
 .modal-actions button:disabled { opacity: 0.45; cursor: default; transform: none; }
-.modal.settings-modal { width: 560px; max-height: 86vh; }
+/* 640px: seven tabs of legend type need ~570px; the strip also wraps as the
+   backstop so a narrow viewport degrades to two tab rows, never clipped tabs. */
+.modal.settings-modal { width: 640px; max-height: 86vh; }
+.settings-modal .pve-tabs { flex-wrap: wrap; }
 .settings-modal .settings-section { display: flex; flex-direction: column; gap: 10px; }
 .modal.settings-modal h3 { margin: 4px 0 0; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
 .modal.box-modal { width: 560px; max-height: 92vh; }
@@ -576,6 +590,160 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
   font-size: 11px;
   white-space: nowrap;
 }
+/* --- Standby dashboard ----------------------------------------------------
+   What the screen bay shows when no terminal is docked: display content on
+   the recessed glass — readout typography, lamps, engraved legends. Nothing
+   on the glass extrudes (keys live on the chassis); interactivity signals by
+   legend brightening and an amber border glow. */
+.dash {
+  height: 100%;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  color: var(--dim);
+  font-family: var(--face);
+  background: radial-gradient(ellipse 620px 400px at 50% 30%, rgba(255, 176, 0, 0.04), transparent 70%);
+}
+.dash-head { display: flex; align-items: center; gap: 14px; }
+.dash-head .empty-prompt { font-size: 20px; margin-bottom: 0; gap: 8px; }
+.dash-legend {
+  color: var(--dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.dash-legend.stale { opacity: 0.45; }
+/* Fresh-install hero: the original standby signature, kept as the floor. */
+.dash-standby { flex: 1; display: flex; }
+.dash-standby .empty { flex: 1; }
+button.empty-kbd { cursor: pointer; font-family: var(--face); }
+button.empty-kbd:hover { color: var(--text); }
+.dash-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dash-add-svc {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  color: var(--dim);
+  font: 700 10px/1.5 var(--face);
+  letter-spacing: 0.12em;
+  cursor: pointer;
+}
+.dash-add-svc:hover { color: var(--muted); border-color: var(--key-border); }
+.dash-fleet-grid, .dash-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.dash-group + .dash-group { margin-top: 12px; }
+/* Flat cells on the glass — 1px bezel, no extrusion. */
+.dash-box, .dash-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.015);
+  color: var(--muted);
+  font-family: var(--face);
+  font-size: 12.5px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  min-width: 0;
+}
+.dash-box:hover, .dash-tile:hover {
+  border-color: var(--amber-deep);
+  box-shadow: 0 0 12px rgba(255, 176, 0, 0.12);
+}
+.dash-box:hover .dash-box-name, .dash-tile:hover .dash-tile-name { color: var(--text); }
+.dash-box-top, .dash-tile-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dash-box-name, .dash-tile-name {
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash-box-meta { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.dash-spark { width: 64px; height: 16px; display: block; opacity: 0.7; }
+.dash-spark path { fill: none; stroke: var(--amber); stroke-width: 1; }
+.dash-chip {
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+.dash-chip-working { background: rgba(255, 176, 0, 0.14); color: var(--amber); }
+.dash-chip-waiting { background: rgba(255, 106, 26, 0.16); color: var(--orange); }
+.dash-tile-bottom { display: flex; align-items: center; gap: 8px; min-height: 16px; }
+.dash-glyph { font-size: 16px; line-height: 1; color: var(--muted); }
+.dash-latency { margin-left: auto; font-size: 11px; color: var(--amber); font-variant-numeric: tabular-nums; }
+.dash-infra-groups { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.dash-infra-extra { display: flex; flex-direction: column; gap: 12px; }
+.dash-infra-extra:empty { display: none; }
+/* Category engravings inside the section (PROXMOX / IPAM): same legend type,
+   subordinated by opacity rather than a new type step. */
+.dash-sublegend { opacity: 0.7; }
+.dash-infra-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.dash-mod {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.dash-mod-name {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.dash-mod-readout { color: var(--amber); }
+
+/* Settings → Services */
+.svc-list { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.svc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+.svc-row-name { flex: 1; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.svc-row-group { color: var(--dim); font-size: 11px; }
+.svc-row-check { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; }
+.svc-glyph-palette { display: flex; gap: 4px; flex-wrap: wrap; margin: 4px 0 8px; }
+.svc-glyph-key {
+  padding: 2px 7px;
+  background: var(--key-face);
+  border: 1px solid var(--key-border);
+  border-bottom-color: #101216;
+  border-radius: 4px;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  font-family: var(--face);
+  font-size: 14px;
+  cursor: pointer;
+}
+.svc-glyph-key:hover { color: var(--text); }
+.svc-glyph-key:active { transform: translateY(1px); box-shadow: 0 1px 0 rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.03); }
+.svc-check-radios { display: flex; gap: 12px; margin: 8px 0; }
+
 /* --- Stage panes (split terminals) ---------------------------------------- */
 /* The grid is the recessed glass; each pane is a display module mounted in it.
    Undocked tabs park unseen (same contract as the old display:none toggling —
@@ -1057,6 +1225,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 @media (max-width: 620px) { .box-pve-association .pve-picker-grid { grid-template-columns: 1fr; } }
 @media (max-width: 720px) {
   .modal.pve-hub { width: 92vw; }
+  .modal.settings-modal { width: 92vw; }
   .pve-presets-layout { grid-template-columns: minmax(0, 1fr); }
   .pve-preset-master { padding: 0 0 12px; border-right: 0; border-bottom: 1px solid var(--border); }
   .pve-preset-master-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }

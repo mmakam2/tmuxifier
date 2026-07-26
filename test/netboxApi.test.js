@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest';
 import http from 'node:http';
-import { testNetbox, createNetboxClient, firstUsableIp } from '../src/server/netboxApi.js';
+import { testNetbox, createNetboxClient, firstUsableIp, usableHostCount, netboxSummary } from '../src/server/netboxApi.js';
 
 const CA = { url: 'https://netbox.example.com', tlsMode: 'ca', fingerprint256: null, token: 'tok123' };
 const ok = { status: 200, json: { 'netbox-version': '4.3.2' }, text: '' };
@@ -267,4 +267,61 @@ test('pin mode resolves TLS once per client, not one probe handshake per API cal
   await client.findPrefixByVlan(30);
   await client.findPrefixByVlan(30);
   expect(connects).toBe(1);
+});
+
+test('usableHostCount: standard, /31 and /32 prefixes', () => {
+  expect(usableHostCount('192.168.50.0/24')).toBe(254);
+  expect(usableHostCount('10.0.0.0/16')).toBe(65534);
+  expect(usableHostCount('10.0.0.0/31')).toBe(2);
+  expect(usableHostCount('10.0.0.0/32')).toBe(1);
+  expect(() => usableHostCount('nonsense')).toThrow(/unparseable/);
+});
+
+test('netboxSummary enumerates every v4 prefix with utilization, skipping v6', async () => {
+  const counted = [];
+  const client = {
+    listPrefixes: async () => [
+      { id: 1, prefix: '192.168.3.0/24' },
+      { id: 2, prefix: '192.168.7.0/24' },
+      { id: 3, prefix: 'fd00::/64' }, // no v4 host math — skipped, never counted
+    ],
+    countIpsInPrefix: async (p) => { counted.push(p); return 12; },
+  };
+  const summary = await netboxSummary(NB, { makeClient: () => client });
+  expect(counted).toEqual(['192.168.3.0/24', '192.168.7.0/24']);
+  expect(summary).toEqual({ configured: true, ok: true, prefixes: [
+    { prefix: '192.168.3.0/24', used: 12, total: 254 },
+    { prefix: '192.168.7.0/24', used: 12, total: 254 },
+  ] });
+});
+
+test('netboxSummary with no prefixes is still ok — the list call proved reachability', async () => {
+  const summary = await netboxSummary(NB, { makeClient: () => ({ listPrefixes: async () => [] }) });
+  expect(summary).toEqual({ configured: true, ok: true, prefixes: [] });
+});
+
+test('netboxSummary reports a failure as ok:false, never throws', async () => {
+  const summary = await netboxSummary(NB, {
+    makeClient: () => ({ listPrefixes: async () => { throw new Error('NetBox API error 502'); } }),
+  });
+  expect(summary).toMatchObject({ configured: true, ok: false, prefixes: [] });
+  expect(summary.error).toMatch(/502/);
+});
+
+test('listPrefixes queries the prefixes endpoint with a bounded page', async () => {
+  const urls = [];
+  const client = createNetboxClient(NB, {
+    request: async ({ url }) => { urls.push(url); return { status: 200, json: { results: [{ id: 5, prefix: '192.168.9.0/24' }] }, text: '' }; },
+  });
+  expect(await client.listPrefixes()).toEqual([{ id: 5, prefix: '192.168.9.0/24' }]);
+  expect(urls[0]).toContain('/ipam/prefixes/?limit=100');
+});
+
+test('countIpsInPrefix queries ip-addresses by parent and returns count', async () => {
+  const urls = [];
+  const client = createNetboxClient(NB, {
+    request: async ({ url }) => { urls.push(url); return { status: 200, json: { count: 37, results: [] }, text: '' }; },
+  });
+  expect(await client.countIpsInPrefix('192.168.50.0/24')).toBe(37);
+  expect(urls[0]).toContain('/ipam/ip-addresses/?parent=192.168.50.0%2F24&limit=1');
 });

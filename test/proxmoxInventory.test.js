@@ -343,3 +343,51 @@ test('the drift write preserves netboxIpId on the link', async () => {
   await inventory.refreshLinked([box]);
   expect(writes[0][1].netboxIpId).toBe(99);
 });
+
+test('listClusterNodes maps per-node health, skipping malformed names', async () => {
+  const inventory = createProxmoxInventory({
+    proxmoxStore: {
+      listHosts: async () => [{ id: 'H1' }],
+      getHost: async (id) => (id === 'H1' ? HOST : undefined),
+    },
+    makeClient: () => ({
+      clusterNodes: async () => [
+        { type: 'node', node: 'pve1', status: 'online', cpu: 0.123, maxcpu: 8, mem: 4000, maxmem: 8000, disk: 30, maxdisk: 100, uptime: 3600 },
+        { type: 'node', node: 'pve2', status: 'offline' },
+        { type: 'node', node: 'bad node', status: 'online' }, // malformed — skipped
+      ],
+    }),
+    now: () => 1000,
+    log: () => {},
+  });
+  const nodes = await inventory.listClusterNodes();
+  expect(nodes).toEqual([
+    { hostId: 'H1', hostName: 'lab', node: 'pve1', status: 'online', cpuPct: 12, memPct: 50, diskPct: 30, uptimeSec: 3600, error: null },
+    { hostId: 'H1', hostName: 'lab', node: 'pve2', status: 'offline', cpuPct: null, memPct: null, diskPct: null, uptimeSec: null, error: null },
+  ]);
+});
+
+test('listClusterNodes degrades a failing host to one error record and dedupes same-endpoint profiles', async () => {
+  const inventory = createProxmoxInventory({
+    proxmoxStore: {
+      listHosts: async () => [{ id: 'H1' }, { id: 'H2' }, { id: 'H3' }],
+      getHost: async (id) => (
+        id === 'H1' ? HOST
+        : id === 'H2' ? { ...HOST, id: 'H2', name: 'lab-copy' } // same endpoint — same cluster, skipped
+        : { id: 'H3', name: 'lab2', endpoint: 'pve2.example.com:8006', tokenSecret: 'sek' }),
+    },
+    makeClient: (host) => ({
+      clusterNodes: async () => {
+        if (host.id === 'H3') throw new Error('connect ECONNREFUSED');
+        return [{ type: 'node', node: 'pve1', status: 'online' }];
+      },
+    }),
+    now: () => 1000,
+    log: () => {},
+  });
+  const nodes = await inventory.listClusterNodes();
+  expect(nodes).toEqual([
+    { hostId: 'H1', hostName: 'lab', node: 'pve1', status: 'online', cpuPct: null, memPct: null, diskPct: null, uptimeSec: null, error: null },
+    { hostId: 'H3', hostName: 'lab2', node: null, status: 'error', cpuPct: null, memPct: null, diskPct: null, uptimeSec: null, error: 'connect ECONNREFUSED' },
+  ]);
+});

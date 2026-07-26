@@ -607,3 +607,12 @@ test('TMUXIFIER_VOICE absent leaves voice enabled when bin+model are set', () =>
   });
   expect(c.voiceEnabled).toBe(true);
 });
+
+test('servicePollMs defaults to 30000, reads TMUXIFIER_SERVICE_POLL_MS, and rejects out-of-range values', () => {
+  expect(loadConfig({}, { env: {}, cwd: '/nonexistent' }).servicePollMs).toBe(30000);
+  expect(loadConfig({}, { env: { TMUXIFIER_SERVICE_POLL_MS: '12000' }, cwd: '/nonexistent' }).servicePollMs).toBe(12000);
+  // clampInt semantics: out-of-range falls back to the default (like statusPollMs),
+  // so a sub-5s sweep can never be configured. serviceChecker.js clamps again for
+  // direct construction.
+  expect(loadConfig({}, { env: { TMUXIFIER_SERVICE_POLL_MS: '10' }, cwd: '/nonexistent' }).servicePollMs).toBe(30000);
+});

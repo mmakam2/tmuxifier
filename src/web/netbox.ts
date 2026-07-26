@@ -9,6 +9,10 @@ export type NetboxNextIp = { ok: true; address: string; prefix: string } | { ok:
 export type NetboxTestResult =
   | { ok: true; version: string }
   | { ok: false; kind: 'unreachable' | 'tls' | 'auth' | 'unexpected'; error: string; fingerprint256?: string | null };
+export interface NetboxPrefixSummary { prefix: string; used: number; total: number }
+export type NetboxSummary =
+  | { configured: false }
+  | { configured: true; ok: boolean; error?: string; prefixes: NetboxPrefixSummary[] };
 
 async function jr<T>(p: Promise<Response>): Promise<T> {
   const res = await p;
@@ -23,4 +27,5 @@ export const nbx = {
   clear() { return jr<{ ok: boolean }>(fetch('/api/netbox/settings', { method: 'DELETE' })); },
   test(spec: Partial<NetboxSettingsInput>) { return jr<NetboxTestResult>(fetch('/api/netbox/test', jsonBody('POST', spec))); },
   nextIp(vlan: number) { return jr<NetboxNextIp>(fetch(`/api/netbox/next-ip?vlan=${vlan}`)); },
+  summary() { return jr<NetboxSummary>(fetch(`/api/netbox/summary?t=${Date.now()}`)); },
 };

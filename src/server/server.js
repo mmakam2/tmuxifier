@@ -14,7 +14,7 @@ import { upsertConfigFile } from './configFile.js';
 import { readJsonSync, writeJsonSync } from './jsonFile.js';
 import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
 import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js';
-import { testNetbox, createNetboxClient } from './netboxApi.js';
+import { testNetbox, createNetboxClient, netboxSummary } from './netboxApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
 import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault } from './tmuxInject.js';
 import { normalizeTranscript } from './voiceText.js';
@@ -88,7 +88,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -782,6 +782,23 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     }
   });
 
+  // --- Standby dashboard services (tiles + cached liveness snapshot) ---
+  app.get('/api/services', { preHandler: requireAuth }, async () => servicesStore.listServices());
+  app.post('/api/services', { preHandler: requireAuth }, async (req, reply) => {
+    try { return await servicesStore.addService(req.body || {}); }
+    catch (e) { reply.code(400); return { error: e.message }; }
+  });
+  app.patch('/api/services/:id', { preHandler: requireAuth }, async (req, reply) => {
+    try { return await servicesStore.updateService(req.params.id, req.body || {}); }
+    catch (e) { reply.code(/not found/.test(e.message) ? 404 : 400); return { error: e.message }; }
+  });
+  app.delete('/api/services/:id', { preHandler: requireAuth }, async (req) => {
+    await servicesStore.removeService(req.params.id);
+    return { ok: true };
+  });
+  // Served purely from the sweep cache — a dashboard poll never triggers checks.
+  app.get('/api/services/status', { preHandler: requireAuth }, async () => serviceChecker.getSnapshot());
+
   app.post('/api/fleet/jobs', { preHandler: requireAuth }, async (req, reply) => {
     const { boxIds, command } = req.body || {};
     if (typeof command !== 'string' || !command.trim()) return reply.code(400).send({ error: 'command is required' });
@@ -938,6 +955,13 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     } catch (error) { return serviceFailure(reply, error, 502); }
   });
 
+  // Physical-node health for the dashboard's Proxmox readout. Per-host
+  // failures are degraded records inside the payload, not route errors.
+  app.get('/api/proxmox/nodes', { preHandler: requireAuth }, async (_req, reply) => {
+    try { return await proxmoxInventory.listClusterNodes(); }
+    catch (error) { return serviceFailure(reply, error, 502); }
+  });
+
   app.get('/api/proxmox/hosts/:id/nodes/:node/containers', { preHandler: requireAuth }, async (req, reply) => {
     const host = await proxmoxStore.getHost(req.params.id);
     if (!host) return reply.code(404).send({ error: 'proxmox host not found' });
@@ -1043,6 +1067,18 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       const { address, prefix } = await makeNetboxClient(settings).nextIp(Number(vlan));
       return { ok: true, address, prefix };
     } catch (e) { return { ok: false, error: e.message }; }
+  });
+  // Dashboard readout. Cached in-process: the dashboard polls this once a
+  // minute per tab, and the summary itself costs NetBox API calls.
+  let netboxSummaryCache = { at: 0, value: null };
+  app.get('/api/netbox/summary', { preHandler: requireAuth }, async () => {
+    if (netboxSummaryCache.value && Date.now() - netboxSummaryCache.at < 60000) return netboxSummaryCache.value;
+    let settings = null;
+    try { settings = await netboxStore.getSettings({ withSecret: true }); } catch { /* corrupt store reads as absent */ }
+    if (!settings) return { configured: false };
+    const value = await netboxSummaryFn(settings);
+    netboxSummaryCache = { at: Date.now(), value };
+    return value;
   });
   app.get('/api/status', { preHandler: requireAuth }, async (req, reply) => {
     // Serve the shared, server-side poll snapshot: every open tab reads the

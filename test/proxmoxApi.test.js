@@ -143,3 +143,14 @@ test('destroyLxc puts purge params in the query string — pveproxy 501s any DEL
   expect(call.body).toBeUndefined();
   expect(call.headers['Content-Type']).toBeUndefined();
 });
+
+test('clusterNodes lists physical nodes with their health fields', async () => {
+  const request = fakeRequest(() => ({ status: 200, json: { data: [
+    { node: 'pve1', type: 'node', status: 'online', cpu: 0.12, maxcpu: 8, mem: 4, maxmem: 8, uptime: 3600 },
+  ] } }));
+  const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
+  const list = await client.clusterNodes();
+  expect(request.calls[0].url).toBe('https://pve.example.com:8006/api2/json/cluster/resources?type=node');
+  expect(request.calls[0].method).toBe('GET');
+  expect(list).toEqual([{ node: 'pve1', type: 'node', status: 'online', cpu: 0.12, maxcpu: 8, mem: 4, maxmem: 8, uptime: 3600 }]);
+});

@@ -16,6 +16,8 @@ import { createSetupJobPoller } from './setupPoller';
 import logoUrl from './assets/tmuxifier-logo.png';
 import { openProxmoxHub } from './proxmoxUi';
 import { pve } from './proxmox';
+import { nbx } from './netbox';
+import { createDashboard } from './dashboard';
 import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createSetupOptionsForm } from './setupOptions';
@@ -286,6 +288,11 @@ function filterAndPaint() {
   const term = getSearchTerm();
   const filtered = allBoxes.filter(b => boxMatchesSearch(b, term));
   paint(filtered, latestStatus, term);
+  // Every box-list change flows through here (boot refresh, add/edit/remove/
+  // import), so a mounted dashboard tracks it immediately — without this the
+  // first paint after login sat on the fresh-install hero until the next
+  // 30s status tick delivered the loaded box list.
+  if (dashTimer) dash?.update({ boxes: allBoxes, status: latestStatus, series: latestSeries });
 }
 
 function refitActiveTerminals() {
@@ -455,6 +462,7 @@ async function pollStatus() {
         applyRowStatus(li as HTMLElement, id, status[id]);
       });
       updatePaneHeaders();
+      if (dashTimer) dash?.update({ boxes: allBoxes, status, series: latestSeries });
       // Reconcile pane content with Proxmox/setup state: a box that stopped
       // out from under a live terminal loses it (its pane flips to the stopped
       // panel), a restarted one flips back to a terminal. paneState treats an
@@ -492,6 +500,7 @@ async function pollHealth() {
     latestSeries = await api.healthSeries();
     repaintSparklines();
     updatePaneHeaders(); // the agent chip's read arrives with the series
+    if (dashTimer) dash?.update({ series: latestSeries });
   } catch {}
   try {
     const { events, latestSeq } = await api.healthEvents();
@@ -546,37 +555,65 @@ async function syncProxmoxButton() {
   try { btn.hidden = (await pve.hosts()).length === 0; } catch { btn.hidden = true; }
 }
 
-// The stage's resting state, shared by renderDashboard and the poll-tick
-// reconcile so both paint the identical panel. An idle terminal prompt with a
-// breathing cursor — the product's own vocabulary — over the same cyan field
-// the login and fleet chrome carry. The prompt is decorative (aria-hidden);
-// the copy carries the state for assistive tech.
-function emptyStagePanel(): HTMLElement {
-  const panel = document.createElement('div');
-  panel.className = 'empty';
-  const prompt = document.createElement('div');
-  prompt.className = 'empty-prompt';
-  prompt.setAttribute('aria-hidden', 'true');
-  const tilde = document.createElement('span');
-  tilde.className = 'empty-tilde';
-  tilde.textContent = '~';
-  const dollar = document.createElement('span');
-  dollar.className = 'empty-dollar';
-  dollar.textContent = '$';
-  const cursor = document.createElement('span');
-  cursor.className = 'empty-cursor';
-  prompt.append(tilde, ' ', dollar, ' ', cursor);
-  const title = document.createElement('strong');
-  title.className = 'empty-title';
-  title.textContent = 'No terminal attached';
-  const hint = document.createElement('p');
-  hint.className = 'empty-hint';
-  const kbd = document.createElement('span');
-  kbd.className = 'empty-kbd';
-  kbd.textContent = '+ Add box';
-  hint.append('Select a box to open its terminal, or connect a new one with ', kbd, '.');
-  panel.append(prompt, title, hint);
-  return panel;
+// The stage's resting state: the standby dashboard (dashboard.ts) — service
+// tiles, fleet overview, and infra readouts on the screen-well glass, painted
+// by repaintStage whenever no pane is docked. One instance survives across
+// mounts so poll ticks update it in place; its services/infra polls run only
+// while it is actually mounted (dashTimer is the mounted signal).
+let dash: ReturnType<typeof createDashboard> | null = null;
+let dashTimer: ReturnType<typeof setInterval> | null = null;
+let dashTick = 0;
+
+function ensureDash() {
+  if (!dash) {
+    dash = createDashboard({
+      onOpenBox: (id) => openPane(id),
+      onAddBox: () => openBoxDialog(),
+      onAddService: () => openSettingsModal('services'),
+    });
+  }
+  return dash;
+}
+
+function startDashPolling() {
+  if (dashTimer) return;
+  dashTick = 0;
+  const tick = async () => {
+    try {
+      const [services, snap] = await Promise.all([api.services(), api.servicesStatus()]);
+      dash?.update({ services, serviceStatus: snap });
+    } catch { dash?.update({ serviceStatus: null }); } // stale marker; last tiles stay painted
+    if (dashTick % 6 === 0) { // infra readout every 60s
+      try { dash?.update({ netbox: await nbx.summary() }); } catch {}
+      try {
+        const hosts = await pve.hosts();
+        if (!hosts.length) {
+          dash?.update({ containers: null, nodes: null });
+        } else {
+          // Independent fetches: node health still paints when the container
+          // rollup fails, and vice versa (the paint falls back per side).
+          const [ctr, nds] = await Promise.allSettled([pve.linkedContainers(), pve.clusterNodes()]);
+          dash?.update({
+            containers: ctr.status === 'fulfilled' ? ctr.value : null,
+            nodes: nds.status === 'fulfilled' ? nds.value : null,
+          });
+        }
+      } catch {}
+    }
+    dashTick++;
+  };
+  void tick();
+  dashTimer = setInterval(tick, 10000);
+}
+
+function stopDashPolling() {
+  if (dashTimer) { clearInterval(dashTimer); dashTimer = null; }
+}
+
+function teardownDash() {
+  stopDashPolling();
+  dash?.destroy();
+  dash = null;
 }
 
 // --- Stage panes: the layout model drives what the stage shows -------------
@@ -735,8 +772,12 @@ function repaintStage() {
     grid.replaceChildren();
     grid.style.gridTemplateColumns = '';
     grid.style.gridTemplateRows = '';
-    grid.append(emptyStagePanel());
+    const d = ensureDash();
+    grid.append(d.el);
+    d.update({ boxes: allBoxes, status: latestStatus, series: latestSeries });
+    startDashPolling();
   } else {
+    stopDashPolling();
     renderStagePanes(grid, stageRoot, focusedBoxId, paneHooks());
   }
   lastPaneStates = panesOf(stageRoot).map((id) => `${id}:${paneState(id)}`).join('|');
@@ -766,7 +807,7 @@ async function renderDashboard() {
       <aside class="sidebar">
         <h1 class="sr-only">tmuxifier</h1>
         <div class="brand">
-          <span><img src="${logoUrl}" alt="" /><span class="brand-name">tmuxifier</span></span>
+          <button id="home" class="brand-home" type="button" title="Standby dashboard" aria-label="Standby dashboard"><img src="${logoUrl}" alt="" /><span class="brand-name">tmuxifier</span></button>
           <div class="brand-actions">
             <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-label="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-expanded="${sidebarCollapsed ? 'false' : 'true'}">${sidebarCollapsed ? '›' : '‹'}</button>
             <button id="settings" type="button" title="Settings" aria-label="Settings">⚙</button>
@@ -795,6 +836,7 @@ async function renderDashboard() {
   app.querySelector('#logout')!.addEventListener('click', async () => {
     if (pollInterval) clearInterval(pollInterval);
     stopFleetPoll();
+    teardownDash();
     // Dispose every terminal before the login screen replaces the dashboard:
     // the tabs map is module-level, so surviving entries would keep detached
     // elements (unopenable boxes after re-login) and live reconnect loops.
@@ -826,6 +868,15 @@ async function renderDashboard() {
   });
   app.querySelector('#settings')!.addEventListener('click', () => { openSettingsModal('netbox', () => { void syncProxmoxButton(); }); });
   app.querySelector('#add')!.addEventListener('click', () => openBoxDialog());
+  // The nameplate is the home key: back to the standby dashboard. Docked
+  // terminals undock into parking — still connected, one click re-docks —
+  // via the same repaint path as undocking each pane by hand.
+  app.querySelector('#home')!.addEventListener('click', () => {
+    if (stageRoot == null) return; // already home
+    stageRoot = null;
+    focusedBoxId = null;
+    repaintStage();
+  });
   app.querySelector('#search')!.addEventListener('input', () => filterAndPaint());
   app.querySelector('#fleet-toggle')!.addEventListener('click', () => {
     fleetMode = !fleetMode;
@@ -2344,11 +2395,17 @@ window.addEventListener('tmuxifier:notify-prefs-changed', () => updateEventsBadg
 // re-runs on every re-login and would stack duplicate listeners. Safe on the
 // login screen too: refresh() returns early when #boxes is absent.
 window.addEventListener('tmuxifier:boxes-changed', () => { void refresh(); });
+// A service saved in Settings repaints a mounted dashboard immediately: restart
+// the poll loop, whose first tick fetches the list and snapshot right away.
+window.addEventListener('tmuxifier:services-changed', () => {
+  if (dashTimer) { stopDashPolling(); startDashPolling(); }
+});
 
 onUnauthorized(() => {
   if (!app.querySelector('.layout')) return;
   if (pollInterval) clearInterval(pollInterval);
   stopFleetPoll();
+  teardownDash();
   for (const id of [...tabs.keys()]) closeTab(id);
   closeFleetJobsPanel();
   closeEventsPanel();

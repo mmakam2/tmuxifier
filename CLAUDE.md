@@ -24,7 +24,8 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   password — all AES-256-GCM sealed — plus container presets), `netbox.json` (NetBox integration
   settings with an **encrypted** API token), `provision-jobs.json` (provision history),
   `setup-jobs.json` (server-side box setup job history), `proxmox-lifecycle-jobs.json` (LXC
-  power/deprovision job history), `health-events.json` (in-app health event log),
+  power/deprovision job history), `services.json` (standby-dashboard service tiles — no
+  secrets), `health-events.json` (in-app health event log),
   `auth-state.json` (the logout session-revocation watermark), `passkeys.json` (enrolled WebAuthn
   credentials, the pinned relying party id, and the passkey-only flag — public keys only, so
   unlike `proxmox.json`/`netbox.json` nothing in it is encrypted, though it's still written
@@ -205,6 +206,14 @@ pattern for new modules.
 - `statusPoller.js` — single server-side poll loop: probes every box on an interval
   (`statusPollMs`) and caches the snapshot `/api/status` serves, so status SSH volume is
   independent of how many dashboard tabs are open.
+- `servicesStore.js` / `serviceCheck.js` / `serviceChecker.js` — the standby dashboard's
+  service tiles: validated CRUD over `data/services.json` (each tile carries a `section` —
+  services|infrastructure — plus a free-text `group` category within it), the dependency-free HTTP/TCP
+  liveness engine (TLS errors tolerated — reachability probe, not a security boundary),
+  and the interval sweep (`TMUXIFIER_SERVICE_POLL_MS`, min 5s) whose cached snapshot
+  `GET /api/services/status` serves — check volume is independent of open tabs.
+  `GET /api/netbox/summary` (60s in-process cache) feeds the dashboard's NetBox
+  utilization readout — every IPv4 prefix NetBox knows (first 100), one row each.
 - `fleet.js` / `fleetStore.js` — `createFleetManager` runs one command across many boxes as a single
   persisted, pollable job (Fleet Command), fanning out at `fleetConcurrency`; `createFleetStore` is
   the debounced `data/fleet-jobs.json` persistence.
@@ -260,7 +269,10 @@ pattern for new modules.
   `/cluster/resources` call per host); auto-follows node migrations by updating the stored
   link's node (guarded against active lifecycle jobs), and re-homes an orphaned link when a
   removed host profile is re-added with the same endpoint (new id, exact `host:port` match,
-  vmid verified on that cluster, same CAS + job guards).
+  vmid verified on that cluster, same CAS + job guards). `listClusterNodes` (served by
+  `GET /api/proxmox/nodes`) reports each physical node's health from
+  `/cluster/resources?type=node` — one call per distinct endpoint — for the standby
+  dashboard's Proxmox readout.
 - `proxmoxLifecycle.js` / `proxmoxLifecycleStore.js` — persisted LXC power/deprovision jobs in
   `data/proxmox-lifecycle-jobs.json`; deprovision releases the box's NetBox-allocated IP and
   deletes any remaining NetBox records matching the box's current IP, so manually created
@@ -325,7 +337,11 @@ connected), `paneHeader.ts` (the pane header bar: the pure view-model — identi
 dot, and one state-chip slot with pane-state > connection > agent precedence, the agent
 read coming from the latest `/api/health/series` sample — plus the `buildPaneHeader` DOM
 layer whose `update()` rewrites in place, so the voice button (mounted into the bar via
-`openTerminal`'s `voiceMount` seam) survives polls), `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
+`openTerminal`'s `voiceMount` seam) survives polls), `dashboard.ts` (the standby dashboard replacing the empty stage: pure
+view-model helpers (grouping, latency/lamp/mode, PVE rollup) plus an in-place-updating DOM
+layer; mounted by `main.ts` whenever no pane is docked, with a 10s services poll and 60s
+infra poll that run only while mounted; the sidebar nameplate `#home` returns to it,
+undocking — not killing — any docked terminals), `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
 history: pure SVG-path builder and event-line formatters), `notifyPrefs.ts` (per-kind
 browser-notification preferences, localStorage-backed, defaults all-on except `up`/
 `threshold-clear`), `setupOptions.ts` (the shared post-create setup form — Terminal/Tools/AI-auth sections —
@@ -360,6 +376,8 @@ boxes), `settingsUi.ts` (the ⚙ settings
 modal's tabbed shell — the `SECTIONS` object's key order builds the tab strip — with Boxes
 (`settingsBoxes.ts`: the leftmost tab, box-list JSON export/import moved out of the sidebar brand
 actions, which stay reserved for the routinely used controls; pure `importSummary`),
+Services (`settingsServices.ts`: the standby dashboard's service-tile CRUD — name/URL/glyph/
+group/check form with a Nerd Font starter glyph palette; pure `buildServicePayload`),
 NetBox (`settingsNetbox.ts`), Proxmox host/secret
 (`settingsProxmox.ts`), Passkeys (`settingsPasskeys.ts`: readiness row, enrolled-credential list
 with remove — confirm-gated by one modal; removing the last credential while "require a passkey"
