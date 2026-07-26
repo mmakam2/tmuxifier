@@ -86,8 +86,9 @@ function applySparkline(li: HTMLElement, id: string) {
   if (!el) return;
   const metric = sparkMetric();
   const d = sparkline(latestSeries[id] || [], metric);
-  if (!d) { el.replaceChildren(); el.removeAttribute('title'); return; }
+  if (!d) { el.replaceChildren(); el.removeAttribute('title'); el.removeAttribute('aria-label'); return; }
   el.title = `${SPARK_LABEL[metric]} trend — click to switch metric`;
+  el.setAttribute('aria-label', `${SPARK_LABEL[metric]} trend — switch metric`);
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('class', 'spark-svg');
@@ -149,6 +150,8 @@ function applyRowStatus(li: HTMLElement, _id: string, st: Status | undefined) {
 function showToast(message: string, kind: 'info' | 'error' = 'info') {
   const el = document.createElement('div');
   el.className = `toast toast-${kind}`;
+  // role=status implies a polite live region, so insertion announces the toast.
+  el.setAttribute('role', 'status');
   el.textContent = message;
   document.body.appendChild(el);
   window.setTimeout(() => el.classList.add('show'), 10);
@@ -339,7 +342,7 @@ async function renderLogin() {
   // passkey-only with no usable passkey here would otherwise be a dead end.
   if (passkey.only && !canPasskey) {
     app.innerHTML = `<div class="login">${brand}
-        <p id="err" class="err">${err || 'This Tmuxifier requires a passkey, and this browser cannot use one.'}</p>
+        <p id="err" class="err" role="alert">${err || 'This Tmuxifier requires a passkey, and this browser cannot use one.'}</p>
         <p id="pk-reason" class="login-note"></p>
         <p class="login-note">Open Tmuxifier on the device holding your passkey.</p>
       </div>`;
@@ -363,16 +366,16 @@ async function renderLogin() {
           </svg>
           <span>Sign in with Google</span>
         </a>`;
-    app.innerHTML = `<div class="login">${brand}${google}${passkeyBtn}<p id="err" class="err">${err}</p></div>`;
+    app.innerHTML = `<div class="login">${brand}${google}${passkeyBtn}<p id="err" class="err" role="alert">${err}</p></div>`;
     wirePasskeyButton();
     return;
   }
 
   app.innerHTML = `<form id="login" class="login">${brand}
-      <input id="pw" type="password" placeholder="Password" autofocus />
+      <input id="pw" type="password" placeholder="Password" aria-label="Password" autofocus />
       <button>Unlock</button>
       ${passkeyBtn}
-      <p id="err" class="err">${err}</p>
+      <p id="err" class="err" role="alert">${err}</p>
     </form>`;
   app.querySelector('#login')!.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -457,12 +460,7 @@ async function pollStatus() {
           stoppedPanel.remove();
           activeBoxId = null;
           highlightBox(null);
-          if (!stage.querySelector('.empty')) {
-            const empty = document.createElement('div');
-            empty.className = 'empty';
-            empty.textContent = 'Select a box to open a terminal.';
-            stage.append(empty);
-          }
+          if (!stage.querySelector('.empty')) stage.append(emptyStagePanel());
         }
       }
     } catch {}
@@ -542,33 +540,68 @@ async function syncProxmoxButton() {
   try { btn.hidden = (await pve.hosts()).length === 0; } catch { btn.hidden = true; }
 }
 
+// The stage's resting state, shared by renderDashboard and the poll-tick
+// reconcile so both paint the identical panel. An idle terminal prompt with a
+// breathing cursor — the product's own vocabulary — over the same cyan field
+// the login and fleet chrome carry. The prompt is decorative (aria-hidden);
+// the copy carries the state for assistive tech.
+function emptyStagePanel(): HTMLElement {
+  const panel = document.createElement('div');
+  panel.className = 'empty';
+  const prompt = document.createElement('div');
+  prompt.className = 'empty-prompt';
+  prompt.setAttribute('aria-hidden', 'true');
+  const tilde = document.createElement('span');
+  tilde.className = 'empty-tilde';
+  tilde.textContent = '~';
+  const dollar = document.createElement('span');
+  dollar.className = 'empty-dollar';
+  dollar.textContent = '$';
+  const cursor = document.createElement('span');
+  cursor.className = 'empty-cursor';
+  prompt.append(tilde, ' ', dollar, ' ', cursor);
+  const title = document.createElement('strong');
+  title.className = 'empty-title';
+  title.textContent = 'No terminal attached';
+  const hint = document.createElement('p');
+  hint.className = 'empty-hint';
+  const kbd = document.createElement('span');
+  kbd.className = 'empty-kbd';
+  kbd.textContent = '+ Add box';
+  hint.append('Select a box to open its terminal, or connect a new one with ', kbd, '.');
+  panel.append(prompt, title, hint);
+  return panel;
+}
+
 async function renderDashboard() {
   if (pollInterval) clearInterval(pollInterval);
   const sidebarCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
   app.innerHTML = `<div class="layout${sidebarCollapsed ? ' sidebar-collapsed' : ''}">
       <aside class="sidebar">
+        <h1 class="sr-only">tmuxifier</h1>
         <div class="brand">
           <span><img src="${logoUrl}" alt="" /><span class="brand-name">tmuxifier</span></span>
           <div class="brand-actions">
             <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-label="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-expanded="${sidebarCollapsed ? 'false' : 'true'}">${sidebarCollapsed ? '›' : '‹'}</button>
             <button id="settings" type="button" title="Settings" aria-label="Settings">⚙</button>
-            <button id="logout" title="Log out">⎋</button>
+            <button id="logout" title="Log out" aria-label="Log out">⎋</button>
           </div>
         </div>
         <div class="actions"><button id="add">+ Add box</button></div>
         <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button><button id="proxmox" type="button" class="proxmox-btn" title="Provision Proxmox LXC containers" hidden>Proxmox</button><button id="events" type="button" class="events-btn" title="Box health events (down/up/needs login/thresholds)">Events<span id="events-badge" class="events-badge" hidden></span></button></div>
         <div id="fleet-bar" class="fleet-bar" hidden></div>
-        <input id="search" class="search" type="text" placeholder="Search…" autocomplete="off" />
+        <input id="search" class="search" type="text" placeholder="Search…" aria-label="Search boxes" autocomplete="off" />
         <ul id="boxes" class="boxes"></ul>
         <div class="local-shell">
           <span class="local-dot"></span>
-          <span class="local-name">Host Shell</span>
-          <button class="local-refresh" title="Reconnect">↻</button>
-          <button class="local-edit" title="Configure shell">✎</button>
+          <button class="local-name" type="button">Host Shell</button>
+          <button class="local-refresh" title="Reconnect" aria-label="Reconnect host shell">↻</button>
+          <button class="local-edit" title="Configure shell" aria-label="Configure host shell">✎</button>
         </div>
       </aside>
-      <main id="stage" class="stage"><div class="empty">Select a box to open a terminal.</div></main>
+      <main id="stage" class="stage"></main>
     </div>`;
+  (app.querySelector('#stage') as HTMLElement).append(emptyStagePanel());
   app.querySelector('#logout')!.addEventListener('click', async () => {
     if (pollInterval) clearInterval(pollInterval);
     stopFleetPoll();
@@ -684,8 +717,12 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
 
   const mainEl = document.createElement('span');
   mainEl.className = 'box-main';
-  const nameEl = document.createElement('span');
+  // A real button so the row is keyboard-operable: its native activation click
+  // bubbles to the li's click handler below — one handler, no double-fire.
+  const nameEl = document.createElement('button');
+  nameEl.type = 'button';
   nameEl.className = 'name';
+  nameEl.setAttribute('aria-label', `Open terminal — ${b.label}`);
   nameEl.textContent = b.label;
   const badgesEl = document.createElement('span');
   badgesEl.className = 'box-badges';
@@ -703,7 +740,11 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   }
   const metaEl = document.createElement('span');
   metaEl.className = 'box-meta';
-  const sparkEl = document.createElement('span');
+  // A real button (sibling of the name button, so valid HTML): native keyboard
+  // activation fires the same click handler; stopPropagation keeps the row's
+  // open-terminal handler out of it, exactly as for mouse clicks.
+  const sparkEl = document.createElement('button');
+  sparkEl.type = 'button';
   sparkEl.className = 'spark';
   sparkEl.addEventListener('click', (e) => { e.stopPropagation(); cycleSparkMetric(); });
   mainEl.append(nameEl, badgesEl, metaEl, sparkEl);
@@ -713,6 +754,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   const refreshBtn = document.createElement('button');
   refreshBtn.className = 'refresh';
   refreshBtn.title = 'Reconnect';
+  refreshBtn.setAttribute('aria-label', `Reconnect ${b.label}`);
   refreshBtn.textContent = '↻';
   refreshBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -725,6 +767,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   const forgetKeyBtn = document.createElement('button');
   forgetKeyBtn.className = 'forget-key';
   forgetKeyBtn.title = 'Forget old host key — only if this box was legitimately rebuilt (removes its known_hosts entry, then reconnects)';
+  forgetKeyBtn.setAttribute('aria-label', `Forget old host key for ${b.label}`);
   forgetKeyBtn.textContent = '⚷';
   forgetKeyBtn.style.display = 'none';
   forgetKeyBtn.addEventListener('click', async (e) => {
@@ -739,6 +782,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   const edit = document.createElement('button');
   edit.className = 'edit';
   edit.title = 'Edit';
+  edit.setAttribute('aria-label', `Edit ${b.label}`);
   edit.textContent = '✎';
   edit.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -748,6 +792,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   const rm = document.createElement('button');
   rm.className = 'rm';
   rm.title = 'Remove';
+  rm.setAttribute('aria-label', `Remove ${b.label}`);
   rm.textContent = '✕';
   rm.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -859,6 +904,21 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
     groupItem.append(header, body);
     list.appendChild(groupItem);
   }
+  // Empty states: a fresh install (no boxes at all) points at + Add box; a
+  // search that filtered everything out says so instead of a silent void.
+  if (!boxes.length) {
+    const li = document.createElement('li');
+    li.className = 'boxes-empty';
+    if (searching) {
+      li.textContent = `No boxes match “${searchTerm}”.`;
+    } else {
+      const kbd = document.createElement('span');
+      kbd.className = 'empty-kbd';
+      kbd.textContent = '+ Add box';
+      li.append('No boxes yet — ', kbd, ' connects your first.');
+    }
+    list.appendChild(li);
+  }
   if (fleetMode) syncFleetUI();
 }
 
@@ -939,6 +999,7 @@ function showSettingUpBox(box: Box) {
   const title = document.createElement('strong');
   title.textContent = `${box.label} is being set up`;
   const detail = document.createElement('span');
+  detail.setAttribute('aria-live', 'polite');
   detail.textContent = 'Checking…';
   const log = document.createElement('pre');
   log.className = 'provision-log';
@@ -1043,6 +1104,14 @@ function closeTab(id: string) {
     if (ls) ls.classList.remove('active');
   }
   if (id === '__local__') updateLocalDot();
+  // Closing the visible tab (box removed, reconnect) must not leave a black
+  // void: restore the resting panel when nothing else occupies the stage. A
+  // reconnect's immediate re-open simply removes it again.
+  const stage = app.querySelector('#stage');
+  const anyVisible = [...tabs.values()].some((tab) => tab.el.style.display !== 'none');
+  if (stage && !anyVisible && !stage.querySelector('.empty, .stopped-box-state, .setting-up-state')) {
+    stage.append(emptyStagePanel());
+  }
 }
 
 async function openLocalShellEditModal() {
@@ -1071,6 +1140,7 @@ async function openLocalShellEditModal() {
 
   const err = document.createElement('p');
   err.className = 'err';
+  err.setAttribute('role', 'alert');
   const actions = document.createElement('div');
   actions.className = 'modal-actions';
   const cancel = document.createElement('button');
@@ -1295,6 +1365,7 @@ function openBoxDialog(box?: Box) {
   sessionRefresh.type = 'button';
   sessionRefresh.className = 'session-refresh';
   sessionRefresh.title = 'Fetch live tmux sessions from the host';
+  sessionRefresh.setAttribute('aria-label', 'Fetch live tmux sessions from the host');
   sessionRefresh.textContent = '⟳';
   // Known sessions show as clickable chips that fill the field on click; the
   // field itself stays free-text so you can also type a brand-new session name.
@@ -1302,6 +1373,7 @@ function openBoxDialog(box?: Box) {
   sessionPicker.className = 'session-picker';
   const sessionHint = document.createElement('span');
   sessionHint.className = 'session-hint';
+  sessionHint.setAttribute('aria-live', 'polite');
   function applySessions(names: string[]) {
     const all = Array.from(new Set(['web', ...names.filter(Boolean)]));
     sessionPicker.replaceChildren(...all.map((n) => {
@@ -1379,6 +1451,7 @@ function openBoxDialog(box?: Box) {
 
   const err = document.createElement('p');
   err.className = 'err';
+  err.setAttribute('role', 'alert');
   const actions = document.createElement('div');
   actions.className = 'modal-actions';
   const cancel = document.createElement('button');
@@ -1532,6 +1605,7 @@ function renderFleetBar() {
   input.type = 'text';
   input.className = 'fleet-input';
   input.placeholder = 'command to run on selected boxes…';
+  input.setAttribute('aria-label', 'Command to run on selected boxes');
   input.setAttribute('list', listId);
   input.autocomplete = 'off';
 
@@ -1612,6 +1686,7 @@ function openFleetConfirm(command: string, targets: { id: string; label: string 
 
   const err = document.createElement('p');
   err.className = 'err';
+  err.setAttribute('role', 'alert');
   const actions = document.createElement('div');
   actions.className = 'modal-actions';
   const cancel = document.createElement('button');
@@ -1666,6 +1741,7 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
 
   const err = document.createElement('p');
   err.className = 'err';
+  err.setAttribute('role', 'alert');
 
   const actions = document.createElement('div');
   actions.className = 'modal-actions';
@@ -1842,6 +1918,15 @@ async function renderFleetHistory() {
     const li = document.createElement('li');
     li.className = 'fleet-history-item';
     li.dataset.id = s.id;
+    // Keyboard-operable row: no nested controls here, so role=button on the li
+    // itself is safe (unlike the box rows, which hold their own buttons).
+    li.setAttribute('role', 'button');
+    li.tabIndex = 0;
+    li.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      showFleetJob(s.id);
+    });
     const cmdSpan = document.createElement('span');
     cmdSpan.className = 'fh-cmd';
     cmdSpan.textContent = s.command;

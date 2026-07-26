@@ -26,10 +26,11 @@ function fakeUiConfig(overrides = {}) {
 }
 
 // Minimal stand-in for the DOM node createVoiceController.mount() touches —
-// not a full jsdom, just enough surface (dataset/addEventListener/remove) for
-// the property assignments in voiceUi.ts's setState()/mount() to succeed.
+// not a full jsdom, just enough surface (dataset/addEventListener/remove/
+// setAttribute, the latter for the aria-label mirror) for the property
+// assignments in voiceUi.ts's setState()/mount() to succeed.
 function stubDocument() {
-  globalThis.document = { createElement: () => ({ dataset: {}, addEventListener() {}, remove() {} }) };
+  globalThis.document = { createElement: () => ({ dataset: {}, addEventListener() {}, remove() {}, setAttribute() {} }) };
 }
 
 // A browser that supports capture (mediaDevices.getUserMedia + AudioWorkletNode)

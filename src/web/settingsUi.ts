@@ -1,6 +1,6 @@
 // The app-wide settings modal: a tabbed shell (hub-style chrome); each tab is
 // a self-contained section module rendering into the content area.
-import { el, openModal } from './dom';
+import { el, openModal, syncTabSelection, wireTabStrip } from './dom';
 import { registerModal } from './modalRegistry';
 import { renderBoxesSection } from './settingsBoxes';
 import { renderNetboxSection } from './settingsNetbox';
@@ -35,15 +35,16 @@ export function openSettingsModal(tab: SettingsTab = 'netbox', onClose?: () => v
   const unregister = registerModal(close);
 
   function selectTab(t: SettingsTab) {
-    for (const b of tabStrip.children) (b as HTMLElement).classList.toggle('active', (b as HTMLElement).dataset.tab === t);
+    syncTabSelection(tabStrip, t);
     void SECTIONS[t].render(content, close);
   }
   for (const [key, s] of Object.entries(SECTIONS) as [SettingsTab, Section][]) {
     tabStrip.append(el('button', { type: 'button', class: 'pve-tab', 'data-tab': key, onclick: () => selectTab(key) }, [s.label]));
   }
+  wireTabStrip(tabStrip, content, (k) => selectTab(k as SettingsTab));
 
   modal.append(
-    el('div', { class: 'pve-head' }, [el('h2', {}, ['Settings']), el('button', { type: 'button', class: 'pve-close', title: 'Close', onclick: close }, ['✕'])]),
+    el('div', { class: 'pve-head' }, [el('h2', {}, ['Settings']), el('button', { type: 'button', class: 'pve-close', title: 'Close', 'aria-label': 'Close settings', onclick: close }, ['✕'])]),
     tabStrip, content,
   );
   selectTab(tab);

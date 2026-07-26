@@ -12,15 +12,15 @@
     <div id="provision-panel" class="provision-panel">
       <div class="provision-header">
         <span class="provision-title"></span>
-        <span class="provision-status"></span>
-        <button class="provision-close" title="Close (cancels a running provision)">&#x2715;</button>
+        <span class="provision-status" aria-live="polite"></span>
+        <button class="provision-close" title="Close (cancels a running provision)" aria-label="Close setup panel">&#x2715;</button>
       </div>
       <div class="provision-term"></div>
     </div>
     <div id="fleet-panel" class="fleet-panel">
       <div class="fleet-panel-header">
         <span class="fleet-panel-title">Fleet jobs</span>
-        <button class="fleet-panel-close" title="Close">&#x2715;</button>
+        <button class="fleet-panel-close" title="Close" aria-label="Close fleet jobs">&#x2715;</button>
       </div>
       <div class="fleet-panel-body">
         <ul class="fleet-history"></ul>
@@ -32,7 +32,7 @@
     <div id="events-panel" class="fleet-panel events-panel">
       <div class="fleet-panel-header">
         <span class="fleet-panel-title">Events</span>
-        <button class="fleet-panel-close" title="Close">&#x2715;</button>
+        <button class="fleet-panel-close" title="Close" aria-label="Close events">&#x2715;</button>
       </div>
       <div class="fleet-panel-body">
         <ul class="events-list"></ul>

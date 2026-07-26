@@ -2,7 +2,7 @@ import { api, type Box } from './api';
 import { nbx } from './netbox';
 import { pve, type PvePreset, type ProvisionStatus } from './proxmox';
 import { openProvisionTerminal } from './terminal';
-import { el, input, field, err, openModal } from './dom';
+import { el, input, field, err, openModal, syncTabSelection, wireTabStrip } from './dom';
 import { openSettingsModal } from './settingsUi';
 import { renderPresetsTab } from './proxmoxPresets';
 import { renderContainersTab } from './proxmoxContainers';
@@ -52,13 +52,14 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
   };
   function selectTab(t: Tab) {
     active = t; stopPoll();
-    for (const b of tabStrip.children) (b as HTMLElement).classList.toggle('active', (b as HTMLElement).dataset.tab === t);
+    syncTabSelection(tabStrip, t);
     void renderers[t]();
   }
   for (const t of TABS) tabStrip.append(el('button', { type: 'button', class: 'pve-tab', 'data-tab': t, onclick: () => selectTab(t) }, [t]));
+  wireTabStrip(tabStrip, content, (k) => selectTab(k as Tab));
 
   modal.append(
-    el('div', { class: 'pve-head' }, [el('h2', {}, ['Proxmox']), el('button', { type: 'button', class: 'pve-close', title: 'Close', onclick: close }, ['✕'])]),
+    el('div', { class: 'pve-head' }, [el('h2', {}, ['Proxmox']), el('button', { type: 'button', class: 'pve-close', title: 'Close', 'aria-label': 'Close Proxmox hub', onclick: close }, ['✕'])]),
     tabStrip, content,
   );
   selectTab(active);

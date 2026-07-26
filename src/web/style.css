@@ -71,6 +71,15 @@
    beats the UA [hidden] rule — this trap bit .pve-container-row, .radio-group,
    .box-pve-association, and .fleet-bar before this global override. */
 [hidden] { display: none !important; }
+/* Visually hidden but present for assistive tech (the dashboard's h1). */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* Branded keyboard-focus ring. :where() keeps specificity at the pseudo-class
+   alone, so any control that paints its own focus treatment can still opt out
+   with a single class rule (see .search / .fleet-input below). */
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid rgba(36, 211, 232, 0.65);
+  outline-offset: 2px;
+}
 /* The body carries the page gradient, so it must span the full viewport even
    when its content is short (the login card): with an auto-height body the
    gradient's positioning area hugs the content and the canvas tiles it — a
@@ -135,11 +144,30 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .err { color: #f85149; min-height: 1em; text-align: center; }
 .layout { display: grid; grid-template-columns: 320px 1fr; height: 100vh; transition: grid-template-columns 0.25s ease; }
 .layout.sidebar-collapsed { grid-template-columns: 56px 1fr; }
-.sidebar { border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 12px; gap: 10px; background: #090d13; overflow: hidden; min-width: 0; }
+/* Faint cyan wash at the top of the rail — the same atmosphere the body
+   gradient and login card carry, so the sidebar reads as part of the HUD
+   rather than a flat panel bolted beside it. */
+.sidebar {
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; padding: 12px; gap: 10px;
+  background:
+    linear-gradient(180deg, rgba(36, 211, 232, 0.05), rgba(36, 211, 232, 0) 150px),
+    #090d13;
+  overflow: hidden; min-width: 0;
+}
 .brand { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 700; letter-spacing: 1px; min-width: 0; }
 .brand span { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
-.brand-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.brand img { width: 28px; height: 28px; border-radius: 7px; flex: 0 0 auto; }
+/* Nameplate: the tracked-out caps the fleet cluster already owns, raised to
+   brand strength — same vocabulary, fuller conviction. */
+.brand-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 2.4px;
+  font-size: 13px;
+  color: #c2eaf1;
+  text-shadow: 0 0 14px rgba(36, 211, 232, 0.35);
+}
+.brand img { width: 28px; height: 28px; border-radius: 7px; flex: 0 0 auto; box-shadow: 0 0 14px rgba(36, 211, 232, 0.28); }
 .brand-actions { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .brand button { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 16px; width: 24px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; }
 .brand button:hover { background: var(--panel-2); color: var(--text); }
@@ -181,7 +209,9 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 }
 .search::placeholder { color: #4a5568; }
 .search:focus { border-color: rgba(36, 211, 232, 0.45); box-shadow: 0 0 0 2px rgba(36, 211, 232, 0.12); }
+.search:focus-visible { outline: none; } /* carries its own ring above */
 .boxes { list-style: none; margin: 0; padding: 0; flex: 1; overflow-y: auto; }
+.boxes-empty { padding: 18px 10px; color: var(--muted); font-size: 12.5px; line-height: 1.5; text-align: center; }
 .box-group { list-style: none; margin: 0 0 4px; padding: 0; }
 .group-header {
   width: 100%;
@@ -213,7 +243,11 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .box:hover { background: var(--panel-2); }
 .box.active { background: rgba(36, 211, 232, 0.12); box-shadow: inset 3px 0 0 var(--cyan); }
 .box-main { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; overflow: hidden; }
-.box .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+/* A button since the keyboard pass (its activation click bubbles to the row
+   handler); reset to render exactly as the span it replaced. The inset ring
+   keeps keyboard focus visible despite .box-main's overflow: hidden. */
+.box .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; background: none; border: 0; padding: 0; margin: 0; font-family: inherit; color: inherit; text-align: left; cursor: pointer; }
+.box .name:focus-visible { outline-offset: -2px; }
 .box-meta { font-size: 11px; line-height: 1.2; color: #6e7681; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .box-meta:empty { display: none; }
 .box-meta .lvl-ok { color: #2ea043; }
@@ -254,7 +288,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 }
 .local-shell:hover { background: rgba(36, 211, 232, 0.09); }
 .local-shell.active { background: rgba(36, 211, 232, 0.14); box-shadow: inset 3px 0 0 var(--cyan); }
-.local-shell .local-name { flex: 1; font-size: 13px; }
+.local-shell .local-name { flex: 1; font-size: 13px; background: none; border: 0; padding: 0; margin: 0; font-family: inherit; color: inherit; text-align: left; cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .local-shell .local-refresh,
 .local-shell .local-edit { background: none; border: none; color: #6e7681; cursor: pointer; }
 .local-shell .local-refresh { font-size: 14px; }
@@ -315,7 +349,59 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .modal .settings-url-row input { flex: 1; min-width: 0; }
 .modal .settings-url-row select { padding: 9px 10px; border-radius: 8px; border: 1px solid #232a36; background: #131722; color: #c9d1d9; font-size: 14px; }
 .stage { position: relative; overflow: hidden; }
-.empty { color: #6e7681; padding: 24px; }
+/* --- Empty stage --- */
+/* The stage's resting state: an idle terminal prompt — the product's own
+   vocabulary — over the same cyan field the login and fleet chrome carry.
+   The breathing cursor is the stage's single authored motion; reduced motion
+   holds it solid rather than killing the element. */
+.empty {
+  height: 100%;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  color: var(--muted);
+  background: radial-gradient(ellipse 640px 420px at 50% 44%, rgba(36, 211, 232, 0.07), transparent 70%);
+}
+.empty-prompt {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-family: 'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', ui-monospace, monospace;
+  font-size: 42px;
+  line-height: 1;
+}
+.empty-tilde { color: var(--green); text-shadow: 0 0 18px rgba(88, 229, 140, 0.35); }
+.empty-dollar { color: var(--cyan); text-shadow: 0 0 18px rgba(36, 211, 232, 0.4); }
+.empty-cursor {
+  width: 0.55em;
+  height: 1.02em;
+  border-radius: 2px;
+  background: var(--cyan);
+  box-shadow: 0 0 22px rgba(36, 211, 232, 0.5);
+  animation: empty-cursor-blink 1.25s steps(1, end) infinite;
+}
+@keyframes empty-cursor-blink {
+  0%, 55% { opacity: 1; }
+  56%, 100% { opacity: 0.18; }
+}
+@media (prefers-reduced-motion: reduce) { .empty-cursor { animation: none; } }
+.empty-title { color: var(--text); font-size: 15px; letter-spacing: 0.3px; }
+.empty-hint { margin: 0; max-width: 44ch; font-size: 13px; line-height: 1.55; color: var(--muted); }
+.empty-kbd {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+}
 .stopped-box-state, .setting-up-state { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--muted); }
 .stopped-box-state strong, .setting-up-state strong { color: var(--text); font-size: 15px; }
 .term { position: absolute; inset: 0; padding: 6px; }
@@ -497,6 +583,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .fleet-input { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 13px; outline: none; }
 .fleet-input::placeholder { color: #4a5568; }
 .fleet-input:focus { border-color: rgba(36, 211, 232, 0.45); box-shadow: 0 0 0 2px rgba(36, 211, 232, 0.12); }
+.fleet-input:focus-visible { outline: none; } /* carries its own ring above */
 /* Primary action — mirrors the login "Unlock" button (cyan→green gradient). */
 .fleet-run {
   width: 100%;
@@ -564,7 +651,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 /* --- Box health history (sparklines + events panel) --- */
 /* Per-row metric trend under the meta line. Hidden entirely when the series
    can't plot (span left empty), so rows without metrics don't grow. */
-.spark { display: block; margin-top: 1px; line-height: 0; cursor: pointer; }
+.spark { display: block; margin-top: 1px; line-height: 0; cursor: pointer; background: none; border: 0; padding: 0; }
 .spark:empty { display: none; }
 .spark-svg { width: 64px; height: 16px; display: block; opacity: 0.75; }
 .spark:hover .spark-svg { opacity: 1; }

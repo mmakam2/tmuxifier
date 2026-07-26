@@ -150,6 +150,9 @@ export function createVoiceController(
     button.title = s === 'recording'
       ? 'Release to transcribe (or tap Ctrl+Shift+Space to stop)'
       : 'Hold to dictate (or tap Ctrl+Shift+Space to start/stop)';
+    // The visible label is a glyph (🎤 / ● rec) — mirror the tooltip into the
+    // accessible name so the state change is announced, not just painted.
+    button.setAttribute('aria-label', button.title);
   }
 
   async function begin(): Promise<void> {
@@ -243,9 +246,14 @@ export function createVoiceController(
       button = document.createElement('button');
       button.className = 'voice-btn';
       button.type = 'button';
+      // setState first: it writes the idle title unconditionally, so the
+      // not-usable verdict tooltip below must land after it, not before —
+      // the old order left a disabled button advertising "Hold to dictate".
+      setState('idle');
       if (!verdict.ok) {
         button.disabled = true;
         button.title = `${verdict.reason} ${verdict.hint}`.trim();
+        button.setAttribute('aria-label', button.title);
       } else {
         // preventDefault() stops the button taking DOM focus on press, so the
         // terminal keeps it for the whole hold — you can dictate and then hit
@@ -255,7 +263,6 @@ export function createVoiceController(
         button.addEventListener('mouseup', () => { void finish(); });
         button.addEventListener('mouseleave', () => { void finish(); });
       }
-      setState('idle');
       parent.appendChild(button);
     },
     dispose(): void { recorder?.cancel(); recorder = null; button?.remove(); button = null; },
