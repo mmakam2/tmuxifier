@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-26T05:22:45Z",
+  "title": "Design System: tmuxifier",
+  "extensions": {
+    "colorMeta": {
+      "phosphor-cyan": { "role": "primary", "displayName": "Phosphor Cyan", "canonical": "oklch(79.5% 0.131 208.0)", "tonalRamp": ["oklch(15% 0.131 208.0)", "oklch(26% 0.131 208.0)", "oklch(38% 0.131 208.0)", "oklch(49% 0.131 208.0)", "oklch(61% 0.131 208.0)", "oklch(72% 0.131 208.0)", "oklch(84% 0.131 208.0)", "oklch(95% 0.131 208.0)"] },
+      "phosphor-green": { "role": "primary", "displayName": "Phosphor Green", "canonical": "oklch(82.4% 0.175 152.5)", "tonalRamp": ["oklch(15% 0.175 152.5)", "oklch(26% 0.175 152.5)", "oklch(38% 0.175 152.5)", "oklch(49% 0.175 152.5)", "oklch(61% 0.175 152.5)", "oklch(72% 0.175 152.5)", "oklch(84% 0.175 152.5)", "oklch(95% 0.175 152.5)"] },
+      "backlit-cyan": { "role": "primary", "displayName": "Backlit Cyan", "canonical": "oklch(91.1% 0.043 209.4)", "tonalRamp": ["oklch(15% 0.043 209.4)", "oklch(26% 0.043 209.4)", "oklch(38% 0.043 209.4)", "oklch(49% 0.043 209.4)", "oklch(61% 0.043 209.4)", "oklch(72% 0.043 209.4)", "oklch(84% 0.043 209.4)", "oklch(95% 0.043 209.4)"] },
+      "dead-screen-black": { "role": "neutral", "displayName": "Dead-Screen Black", "canonical": "oklch(14.4% 0.012 258.4)", "tonalRamp": ["oklch(15% 0.012 258.4)", "oklch(26% 0.012 258.4)", "oklch(38% 0.012 258.4)", "oklch(49% 0.012 258.4)", "oklch(61% 0.012 258.4)", "oklch(72% 0.012 258.4)", "oklch(84% 0.012 258.4)", "oklch(95% 0.012 258.4)"] },
+      "rail-black": { "role": "neutral", "displayName": "Rail Black", "canonical": "oklch(15.8% 0.014 258.2)", "tonalRamp": ["oklch(15% 0.014 258.2)", "oklch(26% 0.014 258.2)", "oklch(38% 0.014 258.2)", "oklch(49% 0.014 258.2)", "oklch(61% 0.014 258.2)", "oklch(72% 0.014 258.2)", "oklch(84% 0.014 258.2)", "oklch(95% 0.014 258.2)"] },
+      "glass-panel": { "role": "neutral", "displayName": "Glass Panel", "canonical": "oklch(18.2% 0.020 262.0)", "tonalRamp": ["oklch(15% 0.020 262.0)", "oklch(26% 0.020 262.0)", "oklch(38% 0.020 262.0)", "oklch(49% 0.020 262.0)", "oklch(61% 0.020 262.0)", "oklch(72% 0.020 262.0)", "oklch(84% 0.020 262.0)", "oklch(95% 0.020 262.0)"] },
+      "glass-panel-raised": { "role": "neutral", "displayName": "Glass Panel Raised", "canonical": "oklch(20.8% 0.026 260.9)", "tonalRamp": ["oklch(15% 0.026 260.9)", "oklch(26% 0.026 260.9)", "oklch(38% 0.026 260.9)", "oklch(49% 0.026 260.9)", "oklch(61% 0.026 260.9)", "oklch(72% 0.026 260.9)", "oklch(84% 0.026 260.9)", "oklch(95% 0.026 260.9)"] },
+      "terminal-well": { "role": "neutral", "displayName": "Terminal Well", "canonical": "oklch(16.3% 0.014 264.1)", "tonalRamp": ["oklch(15% 0.014 264.1)", "oklch(26% 0.014 264.1)", "oklch(38% 0.014 264.1)", "oklch(49% 0.014 264.1)", "oklch(61% 0.014 264.1)", "oklch(72% 0.014 264.1)", "oklch(84% 0.014 264.1)", "oklch(95% 0.014 264.1)"] },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "oklch(27.9% 0.031 260.5)", "tonalRamp": ["oklch(15% 0.031 260.5)", "oklch(26% 0.031 260.5)", "oklch(38% 0.031 260.5)", "oklch(49% 0.031 260.5)", "oklch(61% 0.031 260.5)", "oklch(72% 0.031 260.5)", "oklch(84% 0.031 260.5)", "oklch(95% 0.031 260.5)"] },
+      "instrument-white": { "role": "neutral", "displayName": "Instrument White", "canonical": "oklch(90.6% 0.016 248.0)", "tonalRamp": ["oklch(15% 0.016 248.0)", "oklch(26% 0.016 248.0)", "oklch(38% 0.016 248.0)", "oklch(49% 0.016 248.0)", "oklch(61% 0.016 248.0)", "oklch(72% 0.016 248.0)", "oklch(84% 0.016 248.0)", "oklch(95% 0.016 248.0)"] },
+      "dimmed-readout": { "role": "neutral", "displayName": "Dimmed Readout", "canonical": "oklch(63.2% 0.027 254.0)", "tonalRamp": ["oklch(15% 0.027 254.0)", "oklch(26% 0.027 254.0)", "oklch(38% 0.027 254.0)", "oklch(49% 0.027 254.0)", "oklch(61% 0.027 254.0)", "oklch(72% 0.027 254.0)", "oklch(84% 0.027 254.0)", "oklch(95% 0.027 254.0)"] },
+      "alert-red": { "role": "status", "displayName": "Alert Red", "canonical": "oklch(66.5% 0.205 27.0)", "tonalRamp": ["oklch(15% 0.205 27.0)", "oklch(26% 0.205 27.0)", "oklch(38% 0.205 27.0)", "oklch(49% 0.205 27.0)", "oklch(61% 0.205 27.0)", "oklch(72% 0.205 27.0)", "oklch(84% 0.205 27.0)", "oklch(95% 0.205 27.0)"] },
+      "warn-amber": { "role": "status", "displayName": "Warn Amber", "canonical": "oklch(72.0% 0.140 79.9)", "tonalRamp": ["oklch(15% 0.140 79.9)", "oklch(26% 0.140 79.9)", "oklch(38% 0.140 79.9)", "oklch(49% 0.140 79.9)", "oklch(61% 0.140 79.9)", "oklch(72% 0.140 79.9)", "oklch(84% 0.140 79.9)", "oklch(95% 0.140 79.9)"] },
+      "ok-green": { "role": "status", "displayName": "OK Green", "canonical": "oklch(62.2% 0.166 146.2)", "tonalRamp": ["oklch(15% 0.166 146.2)", "oklch(26% 0.166 146.2)", "oklch(38% 0.166 146.2)", "oklch(49% 0.166 146.2)", "oklch(61% 0.166 146.2)", "oklch(72% 0.166 146.2)", "oklch(84% 0.166 146.2)", "oklch(95% 0.166 146.2)"] },
+      "needs-auth-purple": { "role": "status", "displayName": "Needs-Auth Purple", "canonical": "oklch(66.1% 0.193 298.1)", "tonalRamp": ["oklch(15% 0.193 298.1)", "oklch(26% 0.193 298.1)", "oklch(38% 0.193 298.1)", "oklch(49% 0.193 298.1)", "oklch(61% 0.193 298.1)", "oklch(72% 0.193 298.1)", "oklch(84% 0.193 298.1)", "oklch(95% 0.193 298.1)"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display (Terminal Voice)", "purpose": "The empty-stage prompt glyphs only — the product's own monospace at hero scale." },
+      "headline": { "displayName": "Headline", "purpose": "The login h1; the one large sans moment." },
+      "title": { "displayName": "Title", "purpose": "Modal and hub headings (h2)." },
+      "body": { "displayName": "Body", "purpose": "Controls, rows, copy at fleet density; meta lines drop to 11px in Dimmed Readout." },
+      "label": { "displayName": "Label (HUD Register)", "purpose": "Eyebrows and HUD buttons: uppercase, 600, ~0.09em tracking." },
+      "mono": { "displayName": "Mono (Machine Text)", "purpose": "Terminal cells, logs, commands, fingerprints, session names — never chrome." }
+    },
+    "shadows": [
+      { "name": "floating-chrome", "value": "0 24px 80px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.04)", "purpose": "The login card — the only large ambient shadow; shadow means altitude." },
+      { "name": "toast-lift", "value": "0 8px 28px rgba(0,0,0,0.45)", "purpose": "Transient toasts floating over everything." },
+      { "name": "identity-glow", "value": "0 0 14px rgba(36,211,232,0.28)", "purpose": "Brand logo and nameplate aura — glow means identity." },
+      { "name": "hover-bloom", "value": "0 0 10px rgba(36,211,232,0.12), inset 0 0 8px rgba(36,211,232,0.05)", "purpose": "HUD buttons on hover — glow means attention." },
+      { "name": "engaged-aura", "value": "0 0 14px rgba(36,211,232,0.26), inset 0 0 10px rgba(36,211,232,0.12)", "purpose": "Fleet Command while active (pulses 2.4s) — the glow ceiling; nothing shines brighter." },
+      { "name": "focus-ring", "value": "outline: 2px solid rgba(36,211,232,0.65); outline-offset: 2px", "purpose": "Keyboard focus via :focus-visible; an outline, not a shadow, so it never shifts layout." },
+      { "name": "inset-beacon", "value": "inset 3px 0 0 #24d3e8", "purpose": "Selection: the 3px cyan bar on a selected row's left edge, paired with a 0.12-alpha cyan wash." }
+    ],
+    "motion": [
+      { "name": "state-transition", "value": "0.2s (color, border-color, background, box-shadow)", "purpose": "Default easing for hover/engage state changes on buttons and rows." },
+      { "name": "slide-chrome", "value": "transform 0.25s ease", "purpose": "Drawers and panels sliding in from the right; the sidebar rail collapse (0.25s on grid columns)." },
+      { "name": "sheen-sweep", "value": "transform 0.6s ease", "purpose": "Fleet Command's diagonal sheen crossing on hover." },
+      { "name": "engaged-pulse", "value": "2.4s ease-in-out infinite", "purpose": "The active Fleet Command aura breathing." },
+      { "name": "cursor-blink", "value": "1.25s steps(1, end) infinite", "purpose": "The empty-stage block cursor; holds solid under prefers-reduced-motion." },
+      { "name": "toast-enter", "value": "opacity 0.2s ease, translate 0.2s ease", "purpose": "Toast fades in while rising 16px." }
+    ],
+    "breakpoints": [
+      { "name": "modal-stack", "value": "620px", "purpose": "Modal field/tools grids collapse to one column." },
+      { "name": "hub-stack", "value": "720px", "purpose": "Proxmox hub goes 92vw; master-detail and container rows stack." }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one action a screen exists for — Unlock, Run on N boxes. Phosphor cyan→green gradient.",
+      "html": "<button class=\"ds-btn-primary\">Unlock</button>",
+      "css": ".ds-btn-primary { padding: 10px; border-radius: 8px; border: 1px solid rgba(36,211,232,0.38); background: linear-gradient(135deg, rgba(36,211,232,0.22), rgba(88,229,140,0.16)); color: var(--text, #d8e1ea); font-weight: 700; font-size: 14px; cursor: pointer; transition: border-color 0.2s, box-shadow 0.2s; } .ds-btn-primary:hover { border-color: rgba(36,211,232,0.6); } .ds-btn-primary:focus-visible { outline: 2px solid rgba(36,211,232,0.65); outline-offset: 2px; } .ds-btn-primary:disabled { opacity: 0.5; cursor: default; }"
+    },
+    {
+      "name": "HUD Button",
+      "kind": "button",
+      "refersTo": "button-hud",
+      "description": "The fleet console voice: uppercase tracked label on raised glass, lighting cyan on hover.",
+      "html": "<button class=\"ds-btn-hud\">Fleet Command</button>",
+      "css": ".ds-btn-hud { padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(36,211,232,0.3); background: linear-gradient(180deg, rgba(36,211,232,0.07), rgba(36,211,232,0) 65%), var(--panel-2, #111824); color: #c2eaf1; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.2px; cursor: pointer; transition: color 0.2s, border-color 0.2s, box-shadow 0.2s; } .ds-btn-hud:hover { border-color: rgba(36,211,232,0.6); color: var(--cyan, #24d3e8); box-shadow: 0 0 10px rgba(36,211,232,0.12), inset 0 0 8px rgba(36,211,232,0.05); } .ds-btn-hud:focus-visible { outline: 2px solid rgba(36,211,232,0.65); outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Quiet bordered action — Inspect, Cancel. Hairline at rest, warms on hover.",
+      "html": "<button class=\"ds-btn-secondary\">Inspect</button>",
+      "css": ".ds-btn-secondary { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border, #202938); background: var(--panel-2, #111824); color: var(--text, #d8e1ea); font-size: 13px; cursor: pointer; transition: border-color 0.2s; } .ds-btn-secondary:hover { border-color: rgba(36,211,232,0.45); } .ds-btn-secondary:focus-visible { outline: 2px solid rgba(36,211,232,0.65); outline-offset: 2px; }"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Raised-glass field that glows awake on focus instead of jumping.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Search…\" aria-label=\"Search boxes\" />",
+      "css": ".ds-input { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border, #202938); background: var(--panel-2, #111824); color: var(--text, #d8e1ea); font-size: 13px; outline: none; width: 100%; box-sizing: border-box; transition: border-color 0.2s, box-shadow 0.2s; } .ds-input::placeholder { color: var(--muted, #7f8b9a); } .ds-input:focus { border-color: rgba(36,211,232,0.45); box-shadow: 0 0 0 2px rgba(36,211,232,0.12); }"
+    },
+    {
+      "name": "Session Chip",
+      "kind": "chip",
+      "refersTo": "chip-session",
+      "description": "Pill picker for tmux session names; selection speaks cyan.",
+      "html": "<span><button class=\"ds-chip\">web</button> <button class=\"ds-chip ds-chip-selected\">agents</button></span>",
+      "css": ".ds-chip { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border, #202938); background: var(--panel-2, #111824); color: var(--text, #d8e1ea); cursor: pointer; font-size: 12px; line-height: 1.4; transition: border-color 0.2s, color 0.2s; } .ds-chip:hover { border-color: rgba(36,211,232,0.45); } .ds-chip-selected { border-color: var(--cyan, #24d3e8); color: var(--cyan, #24d3e8); } .ds-chip:focus-visible { outline: 2px solid rgba(36,211,232,0.65); outline-offset: 2px; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "badge-status",
+      "description": "Semantic status pills — info in cyan, warnings in amber; never decorative.",
+      "html": "<span><span class=\"ds-badge ds-badge-info\">seeded</span> <span class=\"ds-badge ds-badge-warn\">3 events</span></span>",
+      "css": ".ds-badge { display: inline-block; font-size: 10px; line-height: 1.5; padding: 0 6px; border-radius: 999px; border: 1px solid; white-space: nowrap; } .ds-badge-info { color: var(--cyan, #24d3e8); border-color: rgba(36,211,232,0.4); background: rgba(36,211,232,0.1); } .ds-badge-warn { color: #d29922; border-color: rgba(210,153,34,0.4); background: rgba(210,153,34,0.12); }"
+    },
+    {
+      "name": "Box Row",
+      "kind": "nav",
+      "refersTo": "tab",
+      "description": "The signature instrument: status dot, name, dimmed meta readout, and the Inset Beacon when attached.",
+      "html": "<ul class=\"ds-boxes\"><li class=\"ds-box ds-box-active\"><span class=\"ds-dot ds-dot-green\"></span><span class=\"ds-box-main\"><button class=\"ds-box-name\">build01</button><span class=\"ds-box-meta\">cpu 12% · mem 38% · disk 41%</span></span></li><li class=\"ds-box\"><span class=\"ds-dot ds-dot-auth\"></span><span class=\"ds-box-main\"><button class=\"ds-box-name\">agent02</button><span class=\"ds-box-meta\">needs login</span></span></li></ul>",
+      "css": ".ds-boxes { list-style: none; margin: 0; padding: 0; width: 260px; background: #090d13; } .ds-box { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; } .ds-box:hover { background: var(--panel-2, #111824); } .ds-box-active { background: rgba(36,211,232,0.12); box-shadow: inset 3px 0 0 var(--cyan, #24d3e8); } .ds-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted, #7f8b9a); flex: 0 0 auto; } .ds-dot-green { background: #2ea043; } .ds-dot-auth { background: #a371f7; box-shadow: 0 0 0 2px rgba(163,113,247,0.25); } .ds-box-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; } .ds-box-name { background: none; border: 0; padding: 0; font-size: 13px; color: var(--text, #d8e1ea); text-align: left; cursor: pointer; font-family: inherit; } .ds-box-name:focus-visible { outline: 2px solid rgba(36,211,232,0.65); outline-offset: -2px; } .ds-box-meta { font-size: 11px; color: var(--muted, #7f8b9a); }"
+    },
+    {
+      "name": "Toast",
+      "kind": "custom",
+      "refersTo": "badge-status",
+      "description": "Bottom-center transient notice; rises 16px while fading in, role=status.",
+      "html": "<div class=\"ds-toast\">Box added</div>",
+      "css": ".ds-toast { display: inline-block; background: var(--panel-2, #111824); color: var(--text, #d8e1ea); border: 1px solid var(--border, #202938); padding: 10px 16px; border-radius: 8px; font-size: 13px; box-shadow: 0 8px 28px rgba(0,0,0,0.45); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Fleet Bridge",
+    "overview": "Tmuxifier looks like the bridge of a ship on night watch: a near-black blue field, a handful of phosphor-lit instruments, and one operator with calm authority over many vessels. Everything on screen is an instrument — box rows are berth listings, the fleet buttons are a command console, the terminal is the main viewport — and instruments are quiet at rest, lit when touched, unmistakable when active. The personality is calm, precise, quietly lit: glow is rationed, severity colors carry meaning, and density serves scanning a fleet at a glance. Two confirmed anti-references bound the world on both sides: not neon cyberpunk overload, and not a generic SaaS dashboard.",
+    "keyCharacteristics": [
+      "One accent hue (Phosphor Cyan) doing all identity, focus, and selection work",
+      "Near-black blue depths layered tonally: hull, rail, panel, raised panel, terminal well",
+      "Tracked-out uppercase micro-labels as the HUD voice; terminal monospace as the display voice",
+      "Severity colors (red/amber/green/purple) reserved strictly for status semantics",
+      "Flat surfaces with 1px hairlines; glow signals state, shadow signals altitude",
+      "Dense, scannable rows built for dozens of boxes, not marketing whitespace"
+    ],
+    "rules": [
+      { "name": "The One Voice Rule", "body": "Phosphor Cyan is the only accent. No foreign blues — the GitHub-blue literals (#1f6feb, #2f6feb) still present on some modal submits and tab underlines are legacy drift scheduled for retirement, never a precedent.", "section": "colors" },
+      { "name": "The Signal Rule", "body": "Red, amber, green, and purple appear only as status semantics tied to a real machine state. Never decorate with them.", "section": "colors" },
+      { "name": "The Wash Ladder Rule", "body": "Interactive cyan comes as alpha washes on the documented ladder (0.05 / 0.12 / 0.22 / 0.45 / 0.65); don't invent intermediate opacities per surface.", "section": "colors" },
+      { "name": "The Mono Means Machine Rule", "body": "Monospace appears only where content is machine text — commands, logs, paths, fingerprints, prompt glyphs. UI chrome never wears it for style.", "section": "typography" },
+      { "name": "The Tracked Caps Rule", "body": "Uppercase + tracking is the HUD register, reserved for micro-labels (≤13px). Never track body copy or headlines beyond 1px.", "section": "typography" },
+      { "name": "The Glow Is State Rule", "body": "Cyan light means identity, attention, or engagement — never altitude. Black shadow means altitude — never decoration. A surface at rest is flat with a hairline.", "section": "elevation" },
+      { "name": "The Inset Beacon Rule", "body": "Selection is a 3px cyan bar inset on the left edge of the selected row (inset 3px 0 0) plus a 0.12-alpha cyan wash — boxes, groups, the Host Shell all signal \"attached here\" the same way. Never a filled row, never an outline.", "section": "shapes" }
+    ],
+    "dos": [
+      "Do pull every color from the frontmatter tokens; the :root custom properties (--bg, --panel, --panel-2, --border, --text, --muted, --cyan, --green) are the same system in code.",
+      "Do use the cyan wash ladder (0.05 / 0.12 / 0.22 / 0.45 / 0.65) for interactive states, and the Inset Beacon (3px inset bar + 0.12 wash) for selection.",
+      "Do give every animation a prefers-reduced-motion alternative that holds the element in a meaningful resting state (the cursor stays solid, the pulse stays lit) — never delete the element.",
+      "Do keep machine text in the bundled Meslo mono and put logs/terminals in the Terminal Well, one tonal step below the chrome around them.",
+      "Do write micro-labels in the HUD register: 10.5–12px, 600, uppercase, ~0.09em tracking."
+    ],
+    "donts": [
+      "Don't introduce foreign accent hues. The GitHub blues (#1f6feb, #2f6feb) on modal submits and tab underlines are known drift being retired — match new work to Phosphor Cyan, and prefer replacing a blue you touch.",
+      "Don't reach for the legacy near-duplicate grays (#c9d1d9, #8b949e, #6e7681, #232a36, #131722, #0f131c, #3fb950) — use Instrument White, Dimmed Readout, Hairline, Glass Panel, and OK Green. The duplicates fragment contrast (some fail AA where the token passes).",
+      "Don't use severity colors decoratively, and never repurpose Needs-Auth Purple.",
+      "Don't exceed the Engaged Aura glow ceiling or add large ambient shadows to resting surfaces — no SaaS card-grid look, no neon flood.",
+      "Don't let chrome outdress the terminal: no display-size sans headlines inside the app, no ornament on the stage beyond the empty-state prompt."
+    ]
+  }
+}
