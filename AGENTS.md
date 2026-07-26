@@ -310,10 +310,14 @@ setting-up panel (`blocksTerminal` in `setupStatus.ts`) instead of a terminal, a
 terminal itself once the job settles; the login screen also wires the passkey button through the same
 `evaluateOrigin` verdict, with a dead-end message when "require a passkey" is armed but this
 browser has no usable one), `api.ts`, `terminal.ts`, `index.html`, `style.css`, plus feature modules —
-`stageLayout.ts` (the pure, N-capable stage pane model — panes/orientation/ratios,
-dock/undock/replace/swap/setRatio, serialize/restore with vanished-box pruning; the
-two-pane cap is main.ts's `MAX_PANES`, not the model's), `stagePanes.ts` (pure grid/ARIA
-helpers plus the DOM renderer for panes, WAI-ARIA splitter dividers, and drop targets;
+`stageLayout.ts` (the pure split-tree stage model — a node is a box-id leaf or a split
+(orientation/children/ratios) in canonical form (splits ≥2 children, no same-orientation
+nesting), with stage-edge/pane-edge dock, atomic move, undock-collapse, path-addressed
+setRatio/toggleOrientation, and v2 serialize/restore with v1 migration and vanished-box
+pruning; the four-pane cap is main.ts's `MAX_PANES`, not the model's), `stagePanes.ts`
+(pure grid/ARIA helpers plus the recursive `.stage-split` DOM renderer with path-addressed
+WAI-ARIA splitter dividers, typed drop targets — stage-edge/pane-edge/replace — and
+spatial `focusMove`;
 every pane renders a header via the `headerFor` hook and wraps its content in `.pane-body`;
 `main.ts` drives the stage from this layout + a focused pane, persisted under
 `tmuxifier.stageLayout`, and parks undocked terminals in a hidden div so they stay

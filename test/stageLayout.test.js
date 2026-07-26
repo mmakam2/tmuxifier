@@ -1,86 +1,123 @@
 import { test, expect } from 'vitest';
-import { emptyLayout, singleLayout, dockPane, undockPane, replacePane, swapPanes, setRatio, toggleOrientation, serialize, restore, MIN_RATIO } from '../src/web/stageLayout.ts';
+import {
+  panesOf, dockAtStageEdge, dockAtPaneEdge, movePane, undockPane, replacePane,
+  setRatio, toggleOrientation, splitAt, serialize, restore, MIN_RATIO,
+} from '../src/web/stageLayout.ts';
 
-const split = () => ({ orientation: 'row', panes: ['a', 'b'], ratios: [0.5, 0.5] });
+const row = (children, ratios) => ({ orientation: 'row', children, ratios: ratios ?? children.map(() => 1 / children.length) });
+const col = (children, ratios) => ({ orientation: 'column', children, ratios: ratios ?? children.map(() => 1 / children.length) });
 
-test('emptyLayout and singleLayout are the degenerate cases', () => {
-  expect(emptyLayout()).toEqual({ orientation: 'row', panes: [], ratios: [] });
-  expect(singleLayout('a')).toEqual({ orientation: 'row', panes: ['a'], ratios: [1] });
+test('panesOf walks leaves in DFS order', () => {
+  expect(panesOf(null)).toEqual([]);
+  expect(panesOf('a')).toEqual(['a']);
+  expect(panesOf(col([row(['a', 'b']), 'c']))).toEqual(['a', 'b', 'c']);
 });
 
-test('docking on a horizontal edge makes a row split; the edge picks the position', () => {
-  const l = singleLayout('a');
-  expect(dockPane(l, 'b', 'right')).toEqual({ orientation: 'row', panes: ['a', 'b'], ratios: [0.5, 0.5] });
-  expect(dockPane(l, 'b', 'left')).toEqual({ orientation: 'row', panes: ['b', 'a'], ratios: [0.5, 0.5] });
+test('stage-edge dock: empty and single grow naturally', () => {
+  expect(dockAtStageEdge(null, 'a', 'right')).toBe('a');
+  expect(dockAtStageEdge('a', 'b', 'right')).toEqual(row(['a', 'b']));
+  expect(dockAtStageEdge('a', 'b', 'left')).toEqual(row(['b', 'a']));
+  expect(dockAtStageEdge('a', 'b', 'bottom')).toEqual(col(['a', 'b']));
 });
 
-test('docking on a vertical edge makes a column split', () => {
-  const l = singleLayout('a');
-  expect(dockPane(l, 'b', 'bottom')).toEqual({ orientation: 'column', panes: ['a', 'b'], ratios: [0.5, 0.5] });
-  expect(dockPane(l, 'b', 'top')).toEqual({ orientation: 'column', panes: ['b', 'a'], ratios: [0.5, 0.5] });
+test('stage-edge dock along the root axis inserts a sibling, never nests', () => {
+  expect(dockAtStageEdge(row(['a', 'b']), 'c', 'right')).toEqual(row(['a', 'b', 'c']));
+  expect(dockAtStageEdge(row(['a', 'b']), 'c', 'left')).toEqual(row(['c', 'a', 'b']));
 });
 
-test('docking an already-docked box moves it instead of duplicating', () => {
-  const l = { orientation: 'row', panes: ['a', 'b'], ratios: [0.5, 0.5] };
-  expect(dockPane(l, 'a', 'right')).toEqual({ orientation: 'row', panes: ['b', 'a'], ratios: [0.5, 0.5] });
+test('stage-edge dock across the root axis wraps: the reported 2-up + full-width case', () => {
+  expect(dockAtStageEdge(row(['a', 'b']), 'c', 'bottom')).toEqual(col([row(['a', 'b']), 'c']));
+  expect(dockAtStageEdge(row(['a', 'b']), 'c', 'top')).toEqual(col(['c', row(['a', 'b'])]));
 });
 
-test('docking onto the empty stage yields a single pane', () => {
-  expect(dockPane(emptyLayout(), 'a', 'left')).toEqual({ orientation: 'row', panes: ['a'], ratios: [1] });
+test('pane-edge dock splits just that pane', () => {
+  expect(dockAtPaneEdge(row(['a', 'b']), 'b', 'c', 'bottom')).toEqual(row(['a', col(['b', 'c'])]));
+  expect(dockAtPaneEdge(row(['a', 'b']), 'b', 'c', 'top')).toEqual(row(['a', col(['c', 'b'])]));
 });
 
-test('undocking removes the pane and re-evens the rest; unknown id is a no-op', () => {
-  const l = { orientation: 'row', panes: ['a', 'b'], ratios: [0.7, 0.3] };
-  expect(undockPane(l, 'a')).toEqual({ orientation: 'row', panes: ['b'], ratios: [1] });
-  expect(undockPane(l, 'zz')).toEqual(l);
+test('pane-edge dock along the parent axis becomes an adjacent sibling', () => {
+  expect(panesOf(dockAtPaneEdge(row(['a', 'b']), 'a', 'c', 'right'))).toEqual(['a', 'c', 'b']);
+  const t = dockAtPaneEdge(row(['a', 'b']), 'a', 'c', 'right');
+  expect(t.orientation).toBe('row');
+  expect(t.children).toEqual(['a', 'c', 'b']);
 });
 
-test('replacePane substitutes in place; replacing with a docked box swaps instead', () => {
-  expect(replacePane(split(), 'a', 'c').panes).toEqual(['c', 'b']);
-  expect(replacePane(split(), 'a', 'b').panes).toEqual(['b', 'a']);
-  expect(replacePane(split(), 'zz', 'c')).toEqual(split());
+test('nesting to depth 3: A | (B over (C | D))', () => {
+  let t = dockAtStageEdge('a', 'b', 'right');       // row[a,b]
+  t = dockAtPaneEdge(t, 'b', 'c', 'bottom');        // row[a, col[b,c]]
+  t = dockAtPaneEdge(t, 'c', 'd', 'right');         // row[a, col[b, row[c,d]]]
+  expect(t).toEqual(row(['a', col(['b', row(['c', 'd'])])]));
+  expect(panesOf(t)).toEqual(['a', 'b', 'c', 'd']);
 });
 
-test('swapPanes exchanges positions and keeps ratios by position', () => {
-  const l = { orientation: 'row', panes: ['a', 'b'], ratios: [0.7, 0.3] };
-  expect(swapPanes(l, 'a', 'b')).toEqual({ orientation: 'row', panes: ['b', 'a'], ratios: [0.7, 0.3] });
-  expect(swapPanes(l, 'a', 'zz')).toEqual(l);
+test('docking an already-docked pane is a move, not a duplicate', () => {
+  const t = movePane(row(['a', 'b']), 'a', { kind: 'stage-edge', edge: 'bottom' });
+  expect(t).toEqual(col(['b', 'a']));
+  const u = movePane(col([row(['a', 'b']), 'c']), 'c', { kind: 'pane-edge', paneId: 'a', edge: 'right' });
+  // Sibling-merge scales ratios by the parent slot ([0.25, 0.25, 0.5]) — assert
+  // structure, not ratios.
+  expect(u.orientation).toBe('row');
+  expect(u.children).toEqual(['a', 'c', 'b']);
 });
 
-test('setRatio moves the divider and clamps both sides at MIN_RATIO', () => {
-  expect(setRatio(split(), 0, 0.7).ratios).toEqual([0.7, 0.3]);
-  expect(setRatio(split(), 0, 0.05).ratios).toEqual([MIN_RATIO, 1 - MIN_RATIO]);
-  expect(setRatio(split(), 0, 0.99).ratios).toEqual([1 - MIN_RATIO, MIN_RATIO]);
-  expect(setRatio(split(), 5, 0.7)).toEqual(split()); // no such divider: no-op
+test('undock collapses one-child splits and rescales ratios proportionally', () => {
+  expect(undockPane(col([row(['a', 'b']), 'c']), 'c')).toEqual(row(['a', 'b']));
+  expect(undockPane(row(['a', 'b']), 'b')).toBe('a');
+  expect(undockPane('a', 'a')).toBeNull();
+  const t = undockPane(row(['a', 'b', 'c'], [0.5, 0.25, 0.25]), 'a');
+  expect(t.ratios).toEqual([0.5, 0.5]);
 });
 
-test('toggleOrientation flips row/column and nothing else', () => {
-  expect(toggleOrientation(split()).orientation).toBe('column');
-  expect(toggleOrientation(toggleOrientation(split()))).toEqual(split());
+test('replacePane substitutes an undocked id and swaps a docked one', () => {
+  expect(replacePane(row(['a', 'b']), 'b', 'c')).toEqual(row(['a', 'c']));
+  const swapped = replacePane(col([row(['a', 'b']), 'c']), 'a', 'c');
+  expect(swapped).toEqual(col([row(['c', 'b']), 'a']));
+  expect(replacePane(row(['a', 'b']), 'zz', 'c')).toEqual(row(['a', 'b']));
 });
 
-test('serialize/restore round-trips a split, ratios and focus included', () => {
-  const l = { orientation: 'column', panes: ['a', 'b'], ratios: [0.7, 0.3] };
-  expect(restore(serialize(l, 'b'), ['a', 'b', 'c'])).toEqual({ layout: l, focusedId: 'b' });
+test('setRatio addresses a split by path and clamps at MIN_RATIO', () => {
+  const t = col([row(['a', 'b']), 'c']);
+  const inner = setRatio(t, [0], 0, 0.7);
+  expect(splitAt(inner, [0]).ratios).toEqual([0.7, 0.3]);
+  const outer = setRatio(t, [], 0, 0.05);
+  expect(outer.ratios[0]).toBeCloseTo(MIN_RATIO);
+  expect(setRatio(t, [5], 0, 0.5)).toEqual(t); // bad path: unchanged
 });
 
-test('restore prunes vanished boxes, re-evens ratios, and moves focus to the first survivor', () => {
-  const l = { orientation: 'row', panes: ['a', 'gone'], ratios: [0.7, 0.3] };
-  expect(restore(serialize(l, 'gone'), ['a'])).toEqual({
-    layout: { orientation: 'row', panes: ['a'], ratios: [1] },
-    focusedId: 'a',
-  });
+test('toggleOrientation flips a split and re-normalizes the tree', () => {
+  const t = toggleOrientation(row(['a', 'b']), []);
+  expect(t).toEqual(col(['a', 'b']));
+  // flipping an inner split to the parent orientation merges it away
+  const u = toggleOrientation(row(['a', col(['b', 'c'])]), [1]);
+  expect(u.orientation).toBe('row');
+  expect(panesOf(u)).toEqual(['a', 'b', 'c']);
+  expect(u.children).toEqual(['a', 'b', 'c']);
 });
 
-test('restore falls back to the empty layout on null, garbage, or wrong shape', () => {
-  const fallback = { layout: emptyLayout(), focusedId: null };
-  expect(restore(null, ['a'])).toEqual(fallback);
-  expect(restore('not json', ['a'])).toEqual(fallback);
-  expect(restore(JSON.stringify({ v: 99 }), ['a'])).toEqual(fallback);
-  expect(restore(JSON.stringify({ v: 1, layout: { panes: 'nope' } }), ['a'])).toEqual(fallback);
+test('serialize/restore round-trips a tree (v2)', () => {
+  const t = col([row(['a', 'b'], [0.6, 0.4]), 'c'], [0.7, 0.3]);
+  const { root, focusedId } = restore(serialize(t, 'b'), ['a', 'b', 'c']);
+  expect(root).toEqual(t);
+  expect(focusedId).toBe('b');
 });
 
-test('restore rejects corrupt ratios by re-evening them', () => {
-  const raw = JSON.stringify({ v: 1, layout: { orientation: 'row', panes: ['a', 'b'], ratios: [2, -1] }, focusedId: 'a' });
-  expect(restore(raw, ['a', 'b']).layout.ratios).toEqual([0.5, 0.5]);
+test('restore migrates a v1 flat layout', () => {
+  const v1 = JSON.stringify({ v: 1, layout: { orientation: 'column', panes: ['a', 'b'], ratios: [0.7, 0.3] }, focusedId: 'b' });
+  expect(restore(v1, ['a', 'b'])).toEqual({ root: col(['a', 'b'], [0.7, 0.3]), focusedId: 'b' });
+  const single = JSON.stringify({ v: 1, layout: { orientation: 'row', panes: ['a'], ratios: [1] }, focusedId: 'a' });
+  expect(restore(single, ['a'])).toEqual({ root: 'a', focusedId: 'a' });
+});
+
+test('restore prunes vanished boxes through collapse and refocuses', () => {
+  const t = col([row(['a', 'gone'], [0.6, 0.4]), 'c'], [0.7, 0.3]);
+  const { root, focusedId } = restore(serialize(t, 'gone'), ['a', 'c']);
+  expect(root).toEqual(col(['a', 'c'], [0.7, 0.3]));
+  expect(focusedId).toBe('a');
+});
+
+test('restore rejects garbage and insane ratios', () => {
+  expect(restore('not json', ['a'])).toEqual({ root: null, focusedId: null });
+  expect(restore(JSON.stringify({ v: 2, root: { orientation: 'row', children: ['a'], ratios: [1] } }), ['a']).root).toBe('a');
+  const bad = JSON.stringify({ v: 2, root: { orientation: 'row', children: ['a', 'b'], ratios: [0.9, 0.9] }, focusedId: 'a' });
+  expect(restore(bad, ['a', 'b']).root).toEqual(row(['a', 'b']));
 });

@@ -1,80 +1,132 @@
 // Stage-pane rendering: pure geometry/ARIA helpers (unit-tested) plus the DOM
 // renderer (covered by the split e2e). Never imports main.ts — everything the
 // renderer needs arrives via PaneHooks.
-import { type StageLayout, type Edge } from './stageLayout';
+import { type PaneNode, type SplitNode, type Edge, isSplit, panesOf } from './stageLayout';
 
 export const DIVIDER_PX = 6;
 
-export function gridTemplate(layout: StageLayout): string {
-  return layout.ratios.map((r) => `${r}fr`).join(` ${DIVIDER_PX}px `);
+export function gridTemplate(split: SplitNode): string {
+  return split.ratios.map((r) => `${r}fr`).join(` ${DIVIDER_PX}px `);
 }
 
-export function dividerAria(layout: StageLayout, divider: number): { orientation: 'vertical' | 'horizontal'; valuenow: number } {
-  const pair = layout.ratios[divider] + layout.ratios[divider + 1];
+export function dividerAria(split: SplitNode, divider: number): { orientation: 'vertical' | 'horizontal'; valuenow: number } {
+  const pair = split.ratios[divider] + split.ratios[divider + 1];
   return {
-    orientation: layout.orientation === 'row' ? 'vertical' : 'horizontal',
-    valuenow: Math.round((layout.ratios[divider] / pair) * 100),
+    orientation: split.orientation === 'row' ? 'vertical' : 'horizontal',
+    valuenow: Math.round((split.ratios[divider] / pair) * 100),
   };
 }
 
-export function keyboardRatioStep(layout: StageLayout, divider: number, key: string): number | null {
-  const grow = layout.orientation === 'row' ? 'ArrowRight' : 'ArrowDown';
-  const shrink = layout.orientation === 'row' ? 'ArrowLeft' : 'ArrowUp';
+export function keyboardRatioStep(split: SplitNode, divider: number, key: string): number | null {
+  const grow = split.orientation === 'row' ? 'ArrowRight' : 'ArrowDown';
+  const shrink = split.orientation === 'row' ? 'ArrowLeft' : 'ArrowUp';
   if (key !== grow && key !== shrink) return null;
-  const { valuenow } = dividerAria(layout, divider);
+  const { valuenow } = dividerAria(split, divider);
   return (valuenow + (key === grow ? 5 : -5)) / 100;
 }
 
-export type DropTarget = { kind: 'edge'; edge: Edge } | { kind: 'pane'; index: number };
+export type DropTarget =
+  | { kind: 'stage-edge'; edge: Edge }
+  | { kind: 'pane-edge'; paneId: string; edge: Edge }
+  | { kind: 'replace'; paneId: string };
 
-export function dropTargets(layout: StageLayout, draggedId: string, maxPanes: number): DropTarget[] {
-  const docked = layout.panes.includes(draggedId);
-  const edges: Edge[] = docked || layout.panes.length < maxPanes ? ['left', 'right', 'top', 'bottom'] : [];
-  const panes = layout.panes
-    .map((id, index) => ({ kind: 'pane' as const, index }))
-    .filter((t) => layout.panes[t.index] !== draggedId);
-  return [...edges.map((edge) => ({ kind: 'edge' as const, edge })), ...panes];
+const EDGES: Edge[] = ['left', 'right', 'top', 'bottom'];
+
+// Splitting zones (stage edges + pane edges) are gated by the cap unless the
+// dragged pane is already docked (then it's a move, pane count unchanged).
+// Replace is always offered — it never grows the pane count.
+export function dropTargets(root: PaneNode | null, draggedId: string, maxPanes: number): DropTarget[] {
+  const panes = panesOf(root);
+  const docked = panes.includes(draggedId);
+  const canSplit = docked || panes.length < maxPanes;
+  const out: DropTarget[] = [];
+  if (canSplit) for (const edge of EDGES) out.push({ kind: 'stage-edge', edge });
+  for (const paneId of panes) {
+    if (paneId === draggedId) continue;
+    if (canSplit) for (const edge of EDGES) out.push({ kind: 'pane-edge', paneId, edge });
+    out.push({ kind: 'replace', paneId });
+  }
+  return out;
 }
 
-export function focusMove(layout: StageLayout, focusedId: string | null, key: string): string | null {
-  if (layout.panes.length < 2 || !focusedId) return null;
-  const next = layout.orientation === 'row' ? 'ArrowRight' : 'ArrowDown';
-  const prev = layout.orientation === 'row' ? 'ArrowLeft' : 'ArrowUp';
-  const i = layout.panes.indexOf(focusedId);
-  if (i === -1) return null;
-  if (key === next && i < layout.panes.length - 1) return layout.panes[i + 1];
-  if (key === prev && i > 0) return layout.panes[i - 1];
-  return null;
+export interface PaneRect { id: string; x: number; y: number; w: number; h: number }
+
+// Spatial focus: nearest pane whose center lies in the arrow's direction.
+// Candidates whose rect overlaps the source's perpendicular span outrank the
+// rest (from the top-left of a 2-up, ArrowRight must pick its neighbor, not
+// the geometrically-closer full-width pane below); ties break by axis
+// distance, then perpendicular center offset.
+export function focusMove(rects: PaneRect[], focusedId: string | null, key: string): string | null {
+  if (!focusedId) return null;
+  const from = rects.find((r) => r.id === focusedId);
+  if (!from) return null;
+  const cx = (r: PaneRect) => r.x + r.w / 2;
+  const cy = (r: PaneRect) => r.y + r.h / 2;
+  const overlaps = (a0: number, a1: number, b0: number, b1: number) => Math.min(a1, b1) - Math.max(a0, b0) > 0;
+  const vOverlap = (r: PaneRect) => overlaps(from.y, from.y + from.h, r.y, r.y + r.h);
+  const hOverlap = (r: PaneRect) => overlaps(from.x, from.x + from.w, r.x, r.x + r.w);
+  const dir: Record<string, (r: PaneRect) => [number, number, number] | null> = {
+    ArrowRight: (r) => (cx(r) > cx(from) + 1 ? [vOverlap(r) ? 0 : 1, cx(r) - cx(from), Math.abs(cy(r) - cy(from))] : null),
+    ArrowLeft: (r) => (cx(r) < cx(from) - 1 ? [vOverlap(r) ? 0 : 1, cx(from) - cx(r), Math.abs(cy(r) - cy(from))] : null),
+    ArrowDown: (r) => (cy(r) > cy(from) + 1 ? [hOverlap(r) ? 0 : 1, cy(r) - cy(from), Math.abs(cx(r) - cx(from))] : null),
+    ArrowUp: (r) => (cy(r) < cy(from) - 1 ? [hOverlap(r) ? 0 : 1, cy(from) - cy(r), Math.abs(cx(r) - cx(from))] : null),
+  };
+  const score = dir[key];
+  if (!score) return null;
+  let best: { id: string; d: [number, number, number] } | null = null;
+  for (const r of rects) {
+    if (r.id === focusedId) continue;
+    const d = score(r);
+    if (!d) continue;
+    if (!best || d[0] < best.d[0] || (d[0] === best.d[0] && (d[1] < best.d[1] || (d[1] === best.d[1] && d[2] < best.d[2])))) {
+      best = { id: r.id, d };
+    }
+  }
+  return best?.id ?? null;
 }
 
 export interface PaneHooks {
   contentFor(id: string): HTMLElement;
   headerFor(id: string, split: boolean): HTMLElement;
   onFocus(id: string): void;
-  onRatio(divider: number, firstShare: number, phase: 'drag' | 'commit'): void;
-  onToggleOrientation(): void;
+  onRatio(path: number[], divider: number, firstShare: number, phase: 'drag' | 'commit'): void;
+  onToggleOrientation(path: number[]): void;
 }
 
-export function applyRatios(grid: HTMLElement, layout: StageLayout): void {
-  if (layout.orientation === 'row') {
-    grid.style.gridTemplateColumns = gridTemplate(layout);
-    grid.style.gridTemplateRows = '';
+const pathKey = (path: number[]): string => JSON.stringify(path);
+
+function applySplitEl(el: HTMLElement, split: SplitNode): void {
+  el.classList.toggle('stage-split-column', split.orientation === 'column');
+  if (split.orientation === 'row') {
+    el.style.gridTemplateColumns = gridTemplate(split);
+    el.style.gridTemplateRows = '';
   } else {
-    grid.style.gridTemplateRows = gridTemplate(layout);
-    grid.style.gridTemplateColumns = '';
+    el.style.gridTemplateRows = gridTemplate(split);
+    el.style.gridTemplateColumns = '';
   }
-  grid.querySelectorAll<HTMLElement>('.stage-divider').forEach((d, i) => {
-    d.setAttribute('aria-valuenow', String(dividerAria(layout, i).valuenow));
+  el.querySelectorAll<HTMLElement>(':scope > .stage-divider').forEach((d, i) => {
+    d.setAttribute('aria-valuenow', String(dividerAria(split, i).valuenow));
+    d.setAttribute('aria-orientation', dividerAria(split, i).orientation);
   });
+}
+
+export function applyRatios(grid: HTMLElement, root: PaneNode): void {
+  const walk = (node: PaneNode, path: number[]): void => {
+    if (!isSplit(node)) return;
+    const el = grid.querySelector<HTMLElement>(`.stage-split[data-path='${pathKey(path)}']`);
+    if (el) applySplitEl(el, node);
+    node.children.forEach((c, i) => walk(c, [...path, i]));
+  };
+  walk(root, []);
 }
 
 // The divider reads the live ratio back off its own aria-valuenow so a
 // keyboard step after a pointer drag starts from where the drag left off,
 // not from the layout snapshot this closure rendered with.
-function buildDivider(layout: StageLayout, divider: number, hooks: PaneHooks): HTMLElement {
+function buildDivider(split: SplitNode, path: number[], divider: number, hooks: PaneHooks): HTMLElement {
   const el = document.createElement('div');
   el.className = 'stage-divider';
-  const aria = dividerAria(layout, divider);
+  const aria = dividerAria(split, divider);
   el.setAttribute('role', 'separator');
   el.setAttribute('tabindex', '0');
   el.setAttribute('aria-orientation', aria.orientation);
@@ -85,16 +137,16 @@ function buildDivider(layout: StageLayout, divider: number, hooks: PaneHooks): H
 
   el.addEventListener('keydown', (e) => {
     const current = Number(el.getAttribute('aria-valuenow')) / 100;
-    const pair = layout.ratios[divider] + layout.ratios[divider + 1];
-    const live: StageLayout = { ...layout, ratios: [...layout.ratios] };
+    const pair = split.ratios[divider] + split.ratios[divider + 1];
+    const live: SplitNode = { ...split, ratios: [...split.ratios] };
     live.ratios[divider] = current * pair;
     live.ratios[divider + 1] = (1 - current) * pair;
     const share = keyboardRatioStep(live, divider, e.key);
     if (share == null) return;
     e.preventDefault();
-    hooks.onRatio(divider, share, 'commit');
+    hooks.onRatio(path, divider, share, 'commit');
   });
-  el.addEventListener('dblclick', () => hooks.onRatio(divider, 0.5, 'commit'));
+  el.addEventListener('dblclick', () => hooks.onRatio(path, divider, 0.5, 'commit'));
 
   // Pointer drag: firstShare = pointer position across the two adjacent panes.
   el.addEventListener('pointerdown', (down) => {
@@ -105,15 +157,15 @@ function buildDivider(layout: StageLayout, divider: number, hooks: PaneHooks): H
     const shareAt = (ev: PointerEvent) => {
       const a = prev.getBoundingClientRect();
       const b = next.getBoundingClientRect();
-      return layout.orientation === 'row'
+      return split.orientation === 'row'
         ? (ev.clientX - a.left) / (b.right - a.left)
         : (ev.clientY - a.top) / (b.bottom - a.top);
     };
-    const move = (ev: PointerEvent) => hooks.onRatio(divider, shareAt(ev), 'drag');
+    const move = (ev: PointerEvent) => hooks.onRatio(path, divider, shareAt(ev), 'drag');
     const up = (ev: PointerEvent) => {
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
-      hooks.onRatio(divider, shareAt(ev), 'commit');
+      hooks.onRatio(path, divider, shareAt(ev), 'commit');
     };
     el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up);
@@ -124,8 +176,8 @@ function buildDivider(layout: StageLayout, divider: number, hooks: PaneHooks): H
   rotate.className = 'divider-rotate';
   rotate.title = 'Toggle split direction';
   rotate.setAttribute('aria-label', 'Toggle split direction');
-  rotate.textContent = '⤢';
-  rotate.addEventListener('click', (e) => { e.stopPropagation(); hooks.onToggleOrientation(); });
+  rotate.textContent = '\u2922';
+  rotate.addEventListener('click', (e) => { e.stopPropagation(); hooks.onToggleOrientation(path); });
   rotate.addEventListener('pointerdown', (e) => e.stopPropagation());
   el.append(rotate);
   return el;
@@ -148,13 +200,21 @@ function buildPane(id: string, split: boolean, focused: boolean, hooks: PaneHook
   return pane;
 }
 
-export function renderStagePanes(grid: HTMLElement, layout: StageLayout, focusedId: string | null, hooks: PaneHooks): void {
-  grid.classList.toggle('stage-grid-column', layout.orientation === 'column');
-  grid.replaceChildren();
-  const split = layout.panes.length > 1;
-  layout.panes.forEach((id, i) => {
-    if (i > 0) grid.append(buildDivider(layout, i - 1, hooks));
-    grid.append(buildPane(id, split, split && id === focusedId, hooks));
+function buildNode(node: PaneNode, path: number[], multi: boolean, focusedId: string | null, hooks: PaneHooks): HTMLElement {
+  if (!isSplit(node)) return buildPane(node, multi, multi && node === focusedId, hooks);
+  const el = document.createElement('div');
+  el.className = 'stage-split';
+  el.dataset.path = pathKey(path);
+  node.children.forEach((c, i) => {
+    if (i > 0) el.append(buildDivider(node, path, i - 1, hooks));
+    el.append(buildNode(c, [...path, i], multi, focusedId, hooks));
   });
-  applyRatios(grid, layout);
+  applySplitEl(el, node);
+  return el;
+}
+
+export function renderStagePanes(grid: HTMLElement, root: PaneNode, focusedId: string | null, hooks: PaneHooks): void {
+  grid.replaceChildren();
+  const multi = panesOf(root).length > 1;
+  grid.append(buildNode(root, [], multi, focusedId, hooks));
 }
