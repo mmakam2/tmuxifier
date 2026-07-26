@@ -31,6 +31,7 @@ const UNTAGGED_LABEL = 'Untagged';
 const UNTAGGED_KEY = '__untagged__';
 const STAGE_LAYOUT_KEY = 'tmuxifier.stageLayout';
 const MAX_PANES = 2; // gesture-layer cap; the model itself is N-capable
+let chordWired = false; // renderDashboard re-runs on re-login; wire document once
 let stageLayout: StageLayout = emptyLayout();
 let focusedBoxId: string | null = null; // the pane typing targets and plain clicks replace
 let lastPaneStates = ''; // pollStatus repaints only when a docked box's derived state flips
@@ -809,6 +810,26 @@ async function renderDashboard() {
     openLocalShellEditModal();
   });
 
+  // Pane-focus chord. Captured at the document level and swallowed whole —
+  // the same pattern as the voice hotkey — because plain Ctrl+Arrow belongs
+  // to the shell (word-jump) and must keep reaching the pane.
+  if (!chordWired) {
+    chordWired = true;
+    document.addEventListener('keydown', (e) => {
+      if (!(e.ctrlKey && e.shiftKey) || stageLayout.panes.length < 2) return;
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const target = focusMove(stageLayout, focusedBoxId, e.key);
+      if (target) {
+        focusedBoxId = target;
+        syncPaneFocus();
+        persistStage();
+        tabs.get(target)?.term.focus();
+      }
+    }, true);
+  }
+
   syncSparkMetricClass();
   await refresh();
   // Restore the persisted stage layout now that the box list exists for
@@ -894,6 +915,19 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
 
   li.addEventListener('click', () => openBox(b));
 
+  // Keyboard-path equivalent of dragging onto the trailing edge: visible only
+  // when exactly one *other* pane is on stage and the cap allows a second.
+  const dock = document.createElement('button');
+  dock.className = 'dock';
+  dock.title = 'Dock beside current terminal';
+  dock.setAttribute('aria-label', `Dock ${b.label} beside current terminal`);
+  dock.textContent = '◫';
+  dock.hidden = !(stageLayout.panes.length === 1 && !stageLayout.panes.includes(b.id) && MAX_PANES > 1);
+  dock.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dockBox(b.id, stageLayout.orientation === 'row' ? 'right' : 'bottom');
+  });
+
   const refreshBtn = document.createElement('button');
   refreshBtn.className = 'refresh';
   refreshBtn.title = 'Reconnect';
@@ -951,7 +985,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
 
   const actions = document.createElement('span');
   actions.className = 'box-actions';
-  actions.append(forgetKeyBtn, refreshBtn, edit, rm);
+  actions.append(dock, forgetKeyBtn, refreshBtn, edit, rm);
 
   li.append(check, dotEl, mainEl, actions);
   applyRowStatus(li, b.id, st);
