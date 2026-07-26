@@ -28,3 +28,39 @@ export function undockPane(layout: StageLayout, boxId: string): StageLayout {
   const panes = layout.panes.filter((p) => p !== boxId);
   return { ...layout, panes, ratios: even(panes.length) };
 }
+
+export function replacePane(layout: StageLayout, oldId: string, newId: string): StageLayout {
+  if (!layout.panes.includes(oldId)) return layout;
+  if (layout.panes.includes(newId)) return swapPanes(layout, oldId, newId);
+  return { ...layout, panes: layout.panes.map((p) => (p === oldId ? newId : p)) };
+}
+
+export function swapPanes(layout: StageLayout, a: string, b: string): StageLayout {
+  const i = layout.panes.indexOf(a);
+  const j = layout.panes.indexOf(b);
+  if (i === -1 || j === -1 || i === j) return layout;
+  const panes = [...layout.panes];
+  [panes[i], panes[j]] = [panes[j], panes[i]];
+  return { ...layout, panes };
+}
+
+// Divider `divider` sits between panes divider and divider+1. firstShare is the
+// first pane's share of the pair's combined ratio (what a pointer position or
+// aria-valuenow naturally produces). Both sides clamp at MIN_RATIO of the stage.
+export function setRatio(layout: StageLayout, divider: number, firstShare: number): StageLayout {
+  const j = divider + 1;
+  if (divider < 0 || j >= layout.panes.length) return layout;
+  const pair = layout.ratios[divider] + layout.ratios[j];
+  const first = Math.min(pair - MIN_RATIO, Math.max(MIN_RATIO, firstShare * pair));
+  const ratios = [...layout.ratios];
+  // Round to 4 decimals: keeps serialized layouts tidy and spares every caller
+  // (tests, aria-valuenow) from IEEE dust like 1 - 0.7 = 0.30000000000000004.
+  const round = (x: number) => Math.round(x * 1e4) / 1e4;
+  ratios[divider] = round(first);
+  ratios[j] = round(pair - first);
+  return { ...layout, ratios };
+}
+
+export function toggleOrientation(layout: StageLayout): StageLayout {
+  return { ...layout, orientation: layout.orientation === 'row' ? 'column' : 'row' };
+}

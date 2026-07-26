@@ -1,5 +1,7 @@
 import { test, expect } from 'vitest';
-import { emptyLayout, singleLayout, dockPane, undockPane } from '../src/web/stageLayout.ts';
+import { emptyLayout, singleLayout, dockPane, undockPane, replacePane, swapPanes, setRatio, toggleOrientation, MIN_RATIO } from '../src/web/stageLayout.ts';
+
+const split = () => ({ orientation: 'row', panes: ['a', 'b'], ratios: [0.5, 0.5] });
 
 test('emptyLayout and singleLayout are the degenerate cases', () => {
   expect(emptyLayout()).toEqual({ orientation: 'row', panes: [], ratios: [] });
@@ -31,4 +33,28 @@ test('undocking removes the pane and re-evens the rest; unknown id is a no-op', 
   const l = { orientation: 'row', panes: ['a', 'b'], ratios: [0.7, 0.3] };
   expect(undockPane(l, 'a')).toEqual({ orientation: 'row', panes: ['b'], ratios: [1] });
   expect(undockPane(l, 'zz')).toEqual(l);
+});
+
+test('replacePane substitutes in place; replacing with a docked box swaps instead', () => {
+  expect(replacePane(split(), 'a', 'c').panes).toEqual(['c', 'b']);
+  expect(replacePane(split(), 'a', 'b').panes).toEqual(['b', 'a']);
+  expect(replacePane(split(), 'zz', 'c')).toEqual(split());
+});
+
+test('swapPanes exchanges positions and keeps ratios by position', () => {
+  const l = { orientation: 'row', panes: ['a', 'b'], ratios: [0.7, 0.3] };
+  expect(swapPanes(l, 'a', 'b')).toEqual({ orientation: 'row', panes: ['b', 'a'], ratios: [0.7, 0.3] });
+  expect(swapPanes(l, 'a', 'zz')).toEqual(l);
+});
+
+test('setRatio moves the divider and clamps both sides at MIN_RATIO', () => {
+  expect(setRatio(split(), 0, 0.7).ratios).toEqual([0.7, 0.3]);
+  expect(setRatio(split(), 0, 0.05).ratios).toEqual([MIN_RATIO, 1 - MIN_RATIO]);
+  expect(setRatio(split(), 0, 0.99).ratios).toEqual([1 - MIN_RATIO, MIN_RATIO]);
+  expect(setRatio(split(), 5, 0.7)).toEqual(split()); // no such divider: no-op
+});
+
+test('toggleOrientation flips row/column and nothing else', () => {
+  expect(toggleOrientation(split()).orientation).toBe('column');
+  expect(toggleOrientation(toggleOrientation(split()))).toEqual(split());
 });
