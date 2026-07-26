@@ -9,15 +9,15 @@ back into the same state.
 
 ## Screenshots
 
-| Fleet standby dashboard | Fleet Command |
+| Persistent remote terminals | Fleet standby dashboard |
 |:---:|:---:|
-| [![Tmuxifier's standby dashboard: a fleet grid showing each box's reachability and session count, beside a sidebar of boxes grouped by tag with CPU, memory, and disk readouts](docs/screenshots/dashboard-v1.19.png)](docs/screenshots/dashboard-v1.19.png) | [![Fleet Command job history with an apt update run across 17 boxes, showing per-box exit status and captured output](docs/screenshots/fleet-command-v1.19.png)](docs/screenshots/fleet-command-v1.19.png) |
-| The standby dashboard fills the stage whenever no terminal is docked — click any box to reattach to its on-box tmux session. | Select boxes by group, run a command or bash script with bounded concurrency, and inspect each result. |
+| [![A browser terminal docked in Tmuxifier, attached to a tmux session running on the box, showing a test suite run to completion with the tmux status bar along the bottom](docs/screenshots/terminal-v1.19.png)](docs/screenshots/terminal-v1.19.png) | [![Tmuxifier's standby dashboard: a fleet grid showing each box's reachability and session count, beside a sidebar of boxes grouped by tag with CPU, memory, and disk readouts](docs/screenshots/dashboard-v1.19.png)](docs/screenshots/dashboard-v1.19.png) |
+| The tmux session runs on the box, not in the browser — close the tab or lose the network and the work carries on. Reconnecting reattaches it. | The standby dashboard fills the stage whenever no terminal is docked — click any box to reattach to its on-box tmux session. |
 
-| Proxmox LXC provisioning |
-|:---:|
-| [![Tmuxifier Proxmox LXC provisioning workflow](docs/screenshots/proxmox-provision-v1.19.png)](docs/screenshots/proxmox-provision-v1.19.png) |
-| Provision from reusable presets, inject management keys, discover the container, and link it back as a Tmuxifier box. |
+| Fleet Command | Proxmox LXC provisioning |
+|:---:|:---:|
+| [![Fleet Command job history with an apt update run across 17 boxes, showing per-box exit status and captured output](docs/screenshots/fleet-command-v1.19.png)](docs/screenshots/fleet-command-v1.19.png) | [![Tmuxifier Proxmox LXC provisioning workflow](docs/screenshots/proxmox-provision-v1.19.png)](docs/screenshots/proxmox-provision-v1.19.png) |
+| Select boxes by group, run a command or bash script with bounded concurrency, and inspect each result. | Provision from reusable presets, inject management keys, discover the container, and link it back as a Tmuxifier box. |
 
 ## Requirements
 - Node 20+
