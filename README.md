@@ -279,6 +279,26 @@ never in a command line, a script file, a log, or an API response. **Seeding han
 Claude and/or Codex subscription identity, exactly as if you'd logged in on it yourself — seed
 only boxes you trust the way you'd trust anyone holding your own login.**
 
+## Standby dashboard
+
+When no terminal is docked, the stage shows a standby dashboard instead of a blank screen:
+
+- **Service tiles** — your homelab's web services (Grafana, a NAS UI, anything with a URL),
+  managed under Settings (⚙) → Services. Each tile is a name, an optional Nerd Font glyph and
+  group, a link that opens in a new tab, and an optional liveness check — an HTTP(S) GET
+  (2xx/3xx = up) or a bare TCP connect for non-web services (DNS, MQTT, …). Checks run
+  **server-side** on one shared sweep (`TMUXIFIER_SERVICE_POLL_MS`, default 30s, min 5s) and
+  the dashboard reads a cached snapshot, so check volume doesn't scale with open tabs. HTTPS
+  checks tolerate self-signed certificates — they answer "is it up", not "is it authentic".
+  Tiles persist in `data/services.json` (no secrets).
+- **Fleet overview** — one cell per box: status lamp, agent working/waiting chip, session
+  count, and the CPU sparkline. Clicking a cell opens that box's terminal.
+- **Infrastructure readout** — linked-container counts per Proxmox host and, when NetBox is
+  configured, prefix utilization for the VLANs your auto-static presets provision into.
+
+On a fresh install (no boxes, no services) the dashboard collapses to the original standby
+prompt with the `+ Add box` hint.
+
 ## Split terminals
 
 Up to four boxes can share the stage, and splits nest. Drag a box row onto the stage:
