@@ -299,6 +299,9 @@ When no terminal is docked, the stage shows a standby dashboard instead of a bla
 On a fresh install (no boxes, no services) the dashboard collapses to the original standby
 prompt with the `+ Add box` hint.
 
+The tmuxifier nameplate in the sidebar's top-left is the home key: clicking it returns to the
+dashboard. Docked terminals undock but keep running — clicking a box re-docks it.
+
 ## Split terminals
 
 Up to four boxes can share the stage, and splits nest. Drag a box row onto the stage:

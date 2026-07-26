@@ -281,6 +281,17 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 }
 .brand { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 700; min-width: 0; }
 .brand span { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+/* The nameplate as the home key: same layout as the plain span, plus a press
+   affordance. Overrides the generic 24px .brand button icon sizing. */
+.brand .brand-home {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0;
+  width: auto; height: auto; padding: 0;
+  background: none; border: none; border-radius: 6px;
+  font: inherit; font-weight: 700; color: inherit; text-align: left;
+  cursor: pointer;
+}
+.brand .brand-home:hover { background: none; }
+.brand .brand-home:hover .brand-name { color: var(--amber); }
 /* Nameplate: engraved lowercase model name — cut into the metal, not lit. */
 .brand-name {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

@@ -288,6 +288,11 @@ function filterAndPaint() {
   const term = getSearchTerm();
   const filtered = allBoxes.filter(b => boxMatchesSearch(b, term));
   paint(filtered, latestStatus, term);
+  // Every box-list change flows through here (boot refresh, add/edit/remove/
+  // import), so a mounted dashboard tracks it immediately — without this the
+  // first paint after login sat on the fresh-install hero until the next
+  // 30s status tick delivered the loaded box list.
+  if (dashTimer) dash?.update({ boxes: allBoxes, status: latestStatus, series: latestSeries });
 }
 
 function refitActiveTerminals() {
@@ -792,7 +797,7 @@ async function renderDashboard() {
       <aside class="sidebar">
         <h1 class="sr-only">tmuxifier</h1>
         <div class="brand">
-          <span><img src="${logoUrl}" alt="" /><span class="brand-name">tmuxifier</span></span>
+          <button id="home" class="brand-home" type="button" title="Standby dashboard" aria-label="Standby dashboard"><img src="${logoUrl}" alt="" /><span class="brand-name">tmuxifier</span></button>
           <div class="brand-actions">
             <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-label="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-expanded="${sidebarCollapsed ? 'false' : 'true'}">${sidebarCollapsed ? '›' : '‹'}</button>
             <button id="settings" type="button" title="Settings" aria-label="Settings">⚙</button>
@@ -853,6 +858,15 @@ async function renderDashboard() {
   });
   app.querySelector('#settings')!.addEventListener('click', () => { openSettingsModal('netbox', () => { void syncProxmoxButton(); }); });
   app.querySelector('#add')!.addEventListener('click', () => openBoxDialog());
+  // The nameplate is the home key: back to the standby dashboard. Docked
+  // terminals undock into parking — still connected, one click re-docks —
+  // via the same repaint path as undocking each pane by hand.
+  app.querySelector('#home')!.addEventListener('click', () => {
+    if (stageRoot == null) return; // already home
+    stageRoot = null;
+    focusedBoxId = null;
+    repaintStage();
+  });
   app.querySelector('#search')!.addEventListener('input', () => filterAndPaint());
   app.querySelector('#fleet-toggle')!.addEventListener('click', () => {
     fleetMode = !fleetMode;

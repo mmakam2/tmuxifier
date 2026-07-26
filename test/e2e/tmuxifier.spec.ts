@@ -159,3 +159,27 @@ test('edit box tag joins an existing group and can be cleared', async ({ page })
   await expect(page.getByRole('button', { name: /Untagged\s+1/ })).toBeVisible();
   await expect(page.locator('.box-group[data-tag-key="__untagged__"] .box .name')).toHaveText(['untagged-worker']);
 });
+
+test('standby dashboard renders when no terminal is docked and opens a box', async ({ page }) => {
+  await page.goto('/');
+  await page.fill('#pw', 'e2e');
+  await page.click('button:has-text("Unlock")');
+
+  // With a seeded box the dashboard shows the fleet strip under the masthead
+  // prompt; the fresh-install hero stays hidden.
+  const dash = page.locator('.dash');
+  await expect(dash).toBeVisible({ timeout: 10000 });
+  await expect(page.locator('.dash-head .empty-prompt')).toBeVisible();
+  const cell = page.locator('.dash-box', { hasText: 'localhost' });
+  await expect(cell).toBeVisible({ timeout: 10000 });
+
+  // Clicking a fleet cell docks that box's terminal — the dashboard yields.
+  await cell.click();
+  await expect(page.locator('.xterm-rows').first()).toContainText(/[#$%>]/, { timeout: 15000 });
+  await expect(dash).toBeHidden();
+
+  // The nameplate is the home key: back to the dashboard, terminal undocked
+  // but still running (re-docking reattaches).
+  await page.click('#home');
+  await expect(dash).toBeVisible({ timeout: 10000 });
+});

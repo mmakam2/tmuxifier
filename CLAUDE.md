@@ -336,7 +336,8 @@ layer whose `update()` rewrites in place, so the voice button (mounted into the 
 `openTerminal`'s `voiceMount` seam) survives polls), `dashboard.ts` (the standby dashboard replacing the empty stage: pure
 view-model helpers (grouping, latency/lamp/mode, PVE rollup) plus an in-place-updating DOM
 layer; mounted by `main.ts` whenever no pane is docked, with a 10s services poll and 60s
-infra poll that run only while mounted), `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
+infra poll that run only while mounted; the sidebar nameplate `#home` returns to it,
+undocking — not killing — any docked terminals), `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
 history: pure SVG-path builder and event-line formatters), `notifyPrefs.ts` (per-kind
 browser-notification preferences, localStorage-backed, defaults all-on except `up`/
 `threshold-clear`), `setupOptions.ts` (the shared post-create setup form — Terminal/Tools/AI-auth sections —
