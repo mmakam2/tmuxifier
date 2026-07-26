@@ -46,3 +46,123 @@ export function focusMove(layout: StageLayout, focusedId: string | null, key: st
   if (key === prev && i > 0) return layout.panes[i - 1];
   return null;
 }
+
+export interface PaneHooks {
+  contentFor(id: string): HTMLElement;
+  labelFor(id: string): string;
+  onFocus(id: string): void;
+  onUndock(id: string): void;
+  onRatio(divider: number, firstShare: number, phase: 'drag' | 'commit'): void;
+  onToggleOrientation(): void;
+}
+
+export function applyRatios(grid: HTMLElement, layout: StageLayout): void {
+  if (layout.orientation === 'row') {
+    grid.style.gridTemplateColumns = gridTemplate(layout);
+    grid.style.gridTemplateRows = '';
+  } else {
+    grid.style.gridTemplateRows = gridTemplate(layout);
+    grid.style.gridTemplateColumns = '';
+  }
+  grid.querySelectorAll<HTMLElement>('.stage-divider').forEach((d, i) => {
+    d.setAttribute('aria-valuenow', String(dividerAria(layout, i).valuenow));
+  });
+}
+
+// The divider reads the live ratio back off its own aria-valuenow so a
+// keyboard step after a pointer drag starts from where the drag left off,
+// not from the layout snapshot this closure rendered with.
+function buildDivider(layout: StageLayout, divider: number, hooks: PaneHooks): HTMLElement {
+  const el = document.createElement('div');
+  el.className = 'stage-divider';
+  const aria = dividerAria(layout, divider);
+  el.setAttribute('role', 'separator');
+  el.setAttribute('tabindex', '0');
+  el.setAttribute('aria-orientation', aria.orientation);
+  el.setAttribute('aria-label', 'Resize split');
+  el.setAttribute('aria-valuemin', '20');
+  el.setAttribute('aria-valuemax', '80');
+  el.setAttribute('aria-valuenow', String(aria.valuenow));
+
+  el.addEventListener('keydown', (e) => {
+    const current = Number(el.getAttribute('aria-valuenow')) / 100;
+    const pair = layout.ratios[divider] + layout.ratios[divider + 1];
+    const live: StageLayout = { ...layout, ratios: [...layout.ratios] };
+    live.ratios[divider] = current * pair;
+    live.ratios[divider + 1] = (1 - current) * pair;
+    const share = keyboardRatioStep(live, divider, e.key);
+    if (share == null) return;
+    e.preventDefault();
+    hooks.onRatio(divider, share, 'commit');
+  });
+  el.addEventListener('dblclick', () => hooks.onRatio(divider, 0.5, 'commit'));
+
+  // Pointer drag: firstShare = pointer position across the two adjacent panes.
+  el.addEventListener('pointerdown', (down) => {
+    down.preventDefault();
+    el.setPointerCapture(down.pointerId);
+    const prev = el.previousElementSibling as HTMLElement;
+    const next = el.nextElementSibling as HTMLElement;
+    const shareAt = (ev: PointerEvent) => {
+      const a = prev.getBoundingClientRect();
+      const b = next.getBoundingClientRect();
+      return layout.orientation === 'row'
+        ? (ev.clientX - a.left) / (b.right - a.left)
+        : (ev.clientY - a.top) / (b.bottom - a.top);
+    };
+    const move = (ev: PointerEvent) => hooks.onRatio(divider, shareAt(ev), 'drag');
+    const up = (ev: PointerEvent) => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      hooks.onRatio(divider, shareAt(ev), 'commit');
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  });
+
+  const rotate = document.createElement('button');
+  rotate.type = 'button';
+  rotate.className = 'divider-rotate';
+  rotate.title = 'Toggle split direction';
+  rotate.setAttribute('aria-label', 'Toggle split direction');
+  rotate.textContent = '⤢';
+  rotate.addEventListener('click', (e) => { e.stopPropagation(); hooks.onToggleOrientation(); });
+  rotate.addEventListener('pointerdown', (e) => e.stopPropagation());
+  el.append(rotate);
+  return el;
+}
+
+function buildPane(id: string, split: boolean, focused: boolean, hooks: PaneHooks): HTMLElement {
+  const pane = document.createElement('div');
+  pane.className = 'stage-pane';
+  pane.dataset.paneId = id;
+  pane.classList.toggle('focused', focused);
+  // Capture-phase: xterm swallows bubbling mousedowns inside the terminal.
+  pane.addEventListener('mousedown', () => hooks.onFocus(id), true);
+  if (split) {
+    const plate = document.createElement('div');
+    plate.className = 'pane-nameplate';
+    plate.textContent = hooks.labelFor(id);
+    const undock = document.createElement('button');
+    undock.type = 'button';
+    undock.className = 'pane-undock';
+    undock.title = 'Undock';
+    undock.setAttribute('aria-label', `Undock ${hooks.labelFor(id)}`);
+    undock.textContent = '✕';
+    undock.addEventListener('click', () => hooks.onUndock(id));
+    pane.append(plate, undock);
+  }
+  pane.append(hooks.contentFor(id));
+  return pane;
+}
+
+export function renderStagePanes(grid: HTMLElement, layout: StageLayout, focusedId: string | null, hooks: PaneHooks): void {
+  grid.classList.toggle('stage-grid-column', layout.orientation === 'column');
+  grid.replaceChildren();
+  const split = layout.panes.length > 1;
+  layout.panes.forEach((id, i) => {
+    if (i > 0) grid.append(buildDivider(layout, i - 1, hooks));
+    grid.append(buildPane(id, split, split && id === focusedId, hooks));
+  });
+  applyRatios(grid, layout);
+}

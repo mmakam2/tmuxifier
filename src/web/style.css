@@ -402,6 +402,50 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
   font-size: 12px;
   white-space: nowrap;
 }
+/* --- Stage panes (split terminals) --- */
+/* The grid owns the stage rectangle; undocked tabs park unseen (same contract
+   as the old display:none toggling — terminals stay live while parked). */
+.stage-grid { position: absolute; inset: 0; display: grid; }
+.stage-parking { display: none; }
+.stage-pane { position: relative; overflow: hidden; min-width: 0; min-height: 0; border: 1px solid transparent; }
+.stage-pane.focused { border-color: rgba(36, 211, 232, 0.45); }
+/* HUD-register nameplate: which box is this pane. Dim when unfocused. */
+.pane-nameplate {
+  position: absolute; top: 8px; left: 12px; z-index: 5;
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.09em;
+  color: var(--muted); opacity: 0.4; pointer-events: none;
+}
+.stage-pane.focused .pane-nameplate { opacity: 1; }
+/* Undock sits left of the voice button (right: 12px) in the same corner idiom. */
+.pane-undock {
+  position: absolute; top: 6px; right: 44px; z-index: 5;
+  font: inherit; font-size: 12px; padding: 2px 8px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--panel-2); color: var(--text);
+  cursor: pointer; opacity: 0;
+}
+.stage-pane:hover .pane-undock, .pane-undock:focus-visible { opacity: 0.55; }
+.pane-undock:hover { opacity: 1; }
+.stage-divider { position: relative; background: var(--panel-2); cursor: col-resize; touch-action: none; }
+.stage-grid-column > .stage-divider { cursor: row-resize; }
+.stage-divider:hover, .stage-divider:focus-visible { background: rgba(36, 211, 232, 0.22); }
+.divider-rotate {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 6;
+  width: 20px; height: 20px; padding: 0; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--muted);
+  cursor: pointer; font-size: 12px; line-height: 1; opacity: 0;
+}
+.stage-divider:hover .divider-rotate, .stage-divider:focus-visible .divider-rotate, .divider-rotate:focus-visible { opacity: 1; }
+/* Drop zones: shown only while a box row is dragged over the stage. */
+.drop-zones { position: absolute; inset: 0; z-index: 30; display: none; }
+.stage.dragging .drop-zones { display: block; }
+.drop-zone { position: absolute; border: 1px dashed rgba(36, 211, 232, 0.45); border-radius: 8px; background: rgba(36, 211, 232, 0.05); }
+.drop-zone.hover { background: rgba(36, 211, 232, 0.12); }
+.drop-zone-left { left: 4px; top: 4px; bottom: 4px; width: 22%; }
+.drop-zone-right { right: 4px; top: 4px; bottom: 4px; width: 22%; }
+.drop-zone-top { top: 4px; left: 26%; right: 26%; height: 22%; }
+.drop-zone-bottom { bottom: 4px; left: 26%; right: 26%; height: 22%; }
+.drop-zone-pane { top: 30%; bottom: 30%; }
 .stopped-box-state, .setting-up-state { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--muted); }
 .stopped-box-state strong, .setting-up-state strong { color: var(--text); font-size: 15px; }
 .term { position: absolute; inset: 0; padding: 6px; }
