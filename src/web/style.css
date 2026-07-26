@@ -497,7 +497,10 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .modal-actions button[type=submit]:hover { background: linear-gradient(180deg, #ff8a4d, #fb6c1a); color: #1a0e05; }
 .modal-actions button[type=submit]:active { box-shadow: 0 1px 0 #7a2f06, inset 0 1px 0 rgba(255, 255, 255, 0.2); }
 .modal-actions button:disabled { opacity: 0.45; cursor: default; transform: none; }
-.modal.settings-modal { width: 560px; max-height: 86vh; }
+/* 640px: seven tabs of legend type need ~570px; the strip also wraps as the
+   backstop so a narrow viewport degrades to two tab rows, never clipped tabs. */
+.modal.settings-modal { width: 640px; max-height: 86vh; }
+.settings-modal .pve-tabs { flex-wrap: wrap; }
 .settings-modal .settings-section { display: flex; flex-direction: column; gap: 10px; }
 .modal.settings-modal h3 { margin: 4px 0 0; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
 .modal.box-modal { width: 560px; max-height: 92vh; }
@@ -1216,6 +1219,7 @@ button.empty-kbd:hover { color: var(--text); }
 @media (max-width: 620px) { .box-pve-association .pve-picker-grid { grid-template-columns: 1fr; } }
 @media (max-width: 720px) {
   .modal.pve-hub { width: 92vw; }
+  .modal.settings-modal { width: 92vw; }
   .pve-presets-layout { grid-template-columns: minmax(0, 1fr); }
   .pve-preset-master { padding: 0 0 12px; border-right: 0; border-bottom: 1px solid var(--border); }
   .pve-preset-master-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
