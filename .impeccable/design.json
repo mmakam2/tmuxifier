@@ -1,154 +1,249 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-26T05:22:45Z",
-  "title": "Design System: tmuxifier",
+  "generatedAt": "2026-07-26T17:10:00Z",
+  "title": "Design System: tmuxifier — The Bench Instrument",
   "extensions": {
     "colorMeta": {
-      "phosphor-cyan": { "role": "primary", "displayName": "Phosphor Cyan", "canonical": "oklch(79.5% 0.131 208.0)", "tonalRamp": ["oklch(15% 0.131 208.0)", "oklch(26% 0.131 208.0)", "oklch(38% 0.131 208.0)", "oklch(49% 0.131 208.0)", "oklch(61% 0.131 208.0)", "oklch(72% 0.131 208.0)", "oklch(84% 0.131 208.0)", "oklch(95% 0.131 208.0)"] },
-      "phosphor-green": { "role": "primary", "displayName": "Phosphor Green", "canonical": "oklch(82.4% 0.175 152.5)", "tonalRamp": ["oklch(15% 0.175 152.5)", "oklch(26% 0.175 152.5)", "oklch(38% 0.175 152.5)", "oklch(49% 0.175 152.5)", "oklch(61% 0.175 152.5)", "oklch(72% 0.175 152.5)", "oklch(84% 0.175 152.5)", "oklch(95% 0.175 152.5)"] },
-      "backlit-cyan": { "role": "primary", "displayName": "Backlit Cyan", "canonical": "oklch(91.1% 0.043 209.4)", "tonalRamp": ["oklch(15% 0.043 209.4)", "oklch(26% 0.043 209.4)", "oklch(38% 0.043 209.4)", "oklch(49% 0.043 209.4)", "oklch(61% 0.043 209.4)", "oklch(72% 0.043 209.4)", "oklch(84% 0.043 209.4)", "oklch(95% 0.043 209.4)"] },
-      "dead-screen-black": { "role": "neutral", "displayName": "Dead-Screen Black", "canonical": "oklch(14.4% 0.012 258.4)", "tonalRamp": ["oklch(15% 0.012 258.4)", "oklch(26% 0.012 258.4)", "oklch(38% 0.012 258.4)", "oklch(49% 0.012 258.4)", "oklch(61% 0.012 258.4)", "oklch(72% 0.012 258.4)", "oklch(84% 0.012 258.4)", "oklch(95% 0.012 258.4)"] },
-      "rail-black": { "role": "neutral", "displayName": "Rail Black", "canonical": "oklch(15.8% 0.014 258.2)", "tonalRamp": ["oklch(15% 0.014 258.2)", "oklch(26% 0.014 258.2)", "oklch(38% 0.014 258.2)", "oklch(49% 0.014 258.2)", "oklch(61% 0.014 258.2)", "oklch(72% 0.014 258.2)", "oklch(84% 0.014 258.2)", "oklch(95% 0.014 258.2)"] },
-      "glass-panel": { "role": "neutral", "displayName": "Glass Panel", "canonical": "oklch(18.2% 0.020 262.0)", "tonalRamp": ["oklch(15% 0.020 262.0)", "oklch(26% 0.020 262.0)", "oklch(38% 0.020 262.0)", "oklch(49% 0.020 262.0)", "oklch(61% 0.020 262.0)", "oklch(72% 0.020 262.0)", "oklch(84% 0.020 262.0)", "oklch(95% 0.020 262.0)"] },
-      "glass-panel-raised": { "role": "neutral", "displayName": "Glass Panel Raised", "canonical": "oklch(20.8% 0.026 260.9)", "tonalRamp": ["oklch(15% 0.026 260.9)", "oklch(26% 0.026 260.9)", "oklch(38% 0.026 260.9)", "oklch(49% 0.026 260.9)", "oklch(61% 0.026 260.9)", "oklch(72% 0.026 260.9)", "oklch(84% 0.026 260.9)", "oklch(95% 0.026 260.9)"] },
-      "terminal-well": { "role": "neutral", "displayName": "Terminal Well", "canonical": "oklch(16.3% 0.014 264.1)", "tonalRamp": ["oklch(15% 0.014 264.1)", "oklch(26% 0.014 264.1)", "oklch(38% 0.014 264.1)", "oklch(49% 0.014 264.1)", "oklch(61% 0.014 264.1)", "oklch(72% 0.014 264.1)", "oklch(84% 0.014 264.1)", "oklch(95% 0.014 264.1)"] },
-      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "oklch(27.9% 0.031 260.5)", "tonalRamp": ["oklch(15% 0.031 260.5)", "oklch(26% 0.031 260.5)", "oklch(38% 0.031 260.5)", "oklch(49% 0.031 260.5)", "oklch(61% 0.031 260.5)", "oklch(72% 0.031 260.5)", "oklch(84% 0.031 260.5)", "oklch(95% 0.031 260.5)"] },
-      "instrument-white": { "role": "neutral", "displayName": "Instrument White", "canonical": "oklch(90.6% 0.016 248.0)", "tonalRamp": ["oklch(15% 0.016 248.0)", "oklch(26% 0.016 248.0)", "oklch(38% 0.016 248.0)", "oklch(49% 0.016 248.0)", "oklch(61% 0.016 248.0)", "oklch(72% 0.016 248.0)", "oklch(84% 0.016 248.0)", "oklch(95% 0.016 248.0)"] },
-      "dimmed-readout": { "role": "neutral", "displayName": "Dimmed Readout", "canonical": "oklch(63.2% 0.027 254.0)", "tonalRamp": ["oklch(15% 0.027 254.0)", "oklch(26% 0.027 254.0)", "oklch(38% 0.027 254.0)", "oklch(49% 0.027 254.0)", "oklch(61% 0.027 254.0)", "oklch(72% 0.027 254.0)", "oklch(84% 0.027 254.0)", "oklch(95% 0.027 254.0)"] },
-      "alert-red": { "role": "status", "displayName": "Alert Red", "canonical": "oklch(66.5% 0.205 27.0)", "tonalRamp": ["oklch(15% 0.205 27.0)", "oklch(26% 0.205 27.0)", "oklch(38% 0.205 27.0)", "oklch(49% 0.205 27.0)", "oklch(61% 0.205 27.0)", "oklch(72% 0.205 27.0)", "oklch(84% 0.205 27.0)", "oklch(95% 0.205 27.0)"] },
-      "warn-amber": { "role": "status", "displayName": "Warn Amber", "canonical": "oklch(72.0% 0.140 79.9)", "tonalRamp": ["oklch(15% 0.140 79.9)", "oklch(26% 0.140 79.9)", "oklch(38% 0.140 79.9)", "oklch(49% 0.140 79.9)", "oklch(61% 0.140 79.9)", "oklch(72% 0.140 79.9)", "oklch(84% 0.140 79.9)", "oklch(95% 0.140 79.9)"] },
-      "ok-green": { "role": "status", "displayName": "OK Green", "canonical": "oklch(62.2% 0.166 146.2)", "tonalRamp": ["oklch(15% 0.166 146.2)", "oklch(26% 0.166 146.2)", "oklch(38% 0.166 146.2)", "oklch(49% 0.166 146.2)", "oklch(61% 0.166 146.2)", "oklch(72% 0.166 146.2)", "oklch(84% 0.166 146.2)", "oklch(95% 0.166 146.2)"] },
-      "needs-auth-purple": { "role": "status", "displayName": "Needs-Auth Purple", "canonical": "oklch(66.1% 0.193 298.1)", "tonalRamp": ["oklch(15% 0.193 298.1)", "oklch(26% 0.193 298.1)", "oklch(38% 0.193 298.1)", "oklch(49% 0.193 298.1)", "oklch(61% 0.193 298.1)", "oklch(72% 0.193 298.1)", "oklch(84% 0.193 298.1)", "oklch(95% 0.193 298.1)"] }
+      "chassis-black": {
+        "role": "neutral",
+        "displayName": "Chassis Black",
+        "canonical": "oklch(17% 0.008 260)",
+        "tonalRamp": ["#0a0b0d", "#0c0d10", "#101216", "#131519", "#15171c", "#16181d", "#191c21", "#1e2127"]
+      },
+      "chassis-panel": {
+        "role": "surface",
+        "displayName": "Chassis Panel",
+        "canonical": "oklch(19% 0.009 260)",
+        "tonalRamp": ["#101216", "#131519", "#16181d", "#191c21", "#1c1f25", "#1f2228", "#23262c", "#282c33"]
+      },
+      "chassis-raised": {
+        "role": "surface",
+        "displayName": "Chassis Raised",
+        "canonical": "oklch(22% 0.01 258)",
+        "tonalRamp": ["#16181d", "#191c21", "#1c1f25", "#1f2228", "#23262c", "#24272d", "#2a2d33", "#2e323a"]
+      },
+      "gunmetal": {
+        "role": "surface",
+        "displayName": "Gunmetal",
+        "canonical": "oklch(34% 0.008 250)",
+        "tonalRamp": ["#23262c", "#2a2d33", "#2b2e35", "#343943", "#3e4146", "#4a4e54", "#5a5e65", "#6b7077"]
+      },
+      "bezel-line": {
+        "role": "border",
+        "displayName": "Bezel Line",
+        "canonical": "oklch(26% 0.01 255)",
+        "tonalRamp": ["#131519", "#1f2228", "#23262c", "#282c33", "#2e323a", "#343943", "#3c414b", "#454b56"]
+      },
+      "screen-well": {
+        "role": "surface",
+        "displayName": "Screen Well",
+        "canonical": "oklch(13% 0.005 260)",
+        "tonalRamp": ["#050607", "#08090b", "#0a0b0d", "#0c0d10", "#0e1013", "#101216", "#131519", "#16181d"]
+      },
+      "bone": {
+        "role": "on-surface",
+        "displayName": "Bone",
+        "canonical": "oklch(91% 0.01 90)",
+        "tonalRamp": ["#8a8577", "#9b9587", "#aaa496", "#b9b4a6", "#c8c3b5", "#d7d2c5", "#e6e2da", "#f2efe9"]
+      },
+      "putty": {
+        "role": "on-surface",
+        "displayName": "Putty",
+        "canonical": "oklch(76% 0.015 95)",
+        "tonalRamp": ["#5d594e", "#6b6659", "#7a7568", "#8a8577", "#9b9587", "#aaa496", "#b9b4a6", "#c8c3b5"]
+      },
+      "legend-dim": {
+        "role": "on-surface-variant",
+        "displayName": "Legend Dim",
+        "canonical": "oklch(60% 0.02 95)",
+        "tonalRamp": ["#3f3c34", "#4e4a40", "#5d594e", "#6b6659", "#7a7568", "#8a8577", "#9b9587", "#aaa496"]
+      },
+      "amber": {
+        "role": "accent",
+        "displayName": "Amber (Alive)",
+        "canonical": "oklch(80% 0.17 80)",
+        "tonalRamp": ["#5c3f00", "#7a5400", "#996a00", "#b87f00", "#e09600", "#ffb000", "#ffc133", "#ffd166"]
+      },
+      "amber-deep": {
+        "role": "accent-edge",
+        "displayName": "Amber Deep",
+        "canonical": "oklch(70% 0.16 78)",
+        "tonalRamp": ["#4a3300", "#5c3f00", "#7a5400", "#996a00", "#b87f00", "#e09600", "#f0a500", "#ffb000"]
+      },
+      "safety-orange": {
+        "role": "primary",
+        "displayName": "Safety Orange (Commit)",
+        "canonical": "oklch(68% 0.2 45)",
+        "tonalRamp": ["#7a2f06", "#8f3708", "#c94f0e", "#f56413", "#ff6a1a", "#ff7d38", "#ff8a4d", "#fb6c1a"]
+      },
+      "led-green": {
+        "role": "status-ok",
+        "displayName": "LED Green",
+        "canonical": "oklch(75% 0.17 155)",
+        "tonalRamp": ["#124a28", "#1a6b3a", "#23904e", "#2eb35f", "#3ecf6e", "#5cd985", "#7ee39d", "#a3edb8"]
+      },
+      "led-red": {
+        "role": "status-crit",
+        "displayName": "LED Red",
+        "canonical": "oklch(68% 0.19 30)",
+        "tonalRamp": ["#661d13", "#8a2719", "#b03422", "#d84732", "#ff5c47", "#ff7a67", "#ff9788", "#ffb0a6"]
+      },
+      "led-violet": {
+        "role": "status-auth",
+        "displayName": "LED Violet",
+        "canonical": "oklch(72% 0.13 295)",
+        "tonalRamp": ["#3d2f66", "#524086", "#6852a6", "#7f66c6", "#977ae6", "#a98bff", "#bba3ff", "#cebcff"]
+      },
+      "ink-on-orange": {
+        "role": "on-primary",
+        "displayName": "Ink on Orange",
+        "canonical": "oklch(15% 0.02 60)",
+        "tonalRamp": ["#1a0e05", "#2b180a", "#3d2310", "#4f2e16", "#61391c", "#734422", "#855028", "#975c2e"]
+      },
+      "phosphor-moss": {
+        "role": "content",
+        "displayName": "Phosphor Moss (syntax)",
+        "canonical": "oklch(78% 0.09 130)",
+        "tonalRamp": ["#4a5c39", "#5c7048", "#6e8457", "#809866", "#94ac76", "#a8c987", "#bcd79e", "#d0e5b5"]
+      },
+      "phosphor-peach": {
+        "role": "content",
+        "displayName": "Phosphor Peach (syntax)",
+        "canonical": "oklch(78% 0.12 55)",
+        "tonalRamp": ["#8f4f22", "#a85e2e", "#c16e3b", "#da7e48", "#f38e54", "#ff9d5c", "#ffb075", "#ffc38e"]
+      }
     },
     "typographyMeta": {
-      "display": { "displayName": "Display (Terminal Voice)", "purpose": "The empty-stage prompt glyphs only — the product's own monospace at hero scale." },
-      "headline": { "displayName": "Headline", "purpose": "The login h1; the one large sans moment." },
-      "title": { "displayName": "Title", "purpose": "Modal and hub headings (h2)." },
-      "body": { "displayName": "Body", "purpose": "Controls, rows, copy at fleet density; meta lines drop to 11px in Dimmed Readout." },
-      "label": { "displayName": "Label (HUD Register)", "purpose": "Eyebrows and HUD buttons: uppercase, 600, ~0.09em tracking." },
-      "mono": { "displayName": "Mono (Machine Text)", "purpose": "Terminal cells, logs, commands, fingerprints, session names — never chrome." }
+      "display": { "displayName": "Display Standby", "purpose": "The empty-stage standby prompt only — 42px/400, the terminal's own vocabulary, not a headline." },
+      "nameplate": { "displayName": "Nameplate Engraving", "purpose": "The login h1 — 26px/700, lowercase (brand commitment), 0.22em tracking, standby lamp beside it." },
+      "title": { "displayName": "Title Legend", "purpose": "Modal and hub headings; uppercase, tracked 0.1em." },
+      "legend": { "displayName": "Key Legend", "purpose": "Key labels, engraved section labels, tabs, chips; 700, uppercase, 0.12–0.16em tracking." },
+      "body": { "displayName": "Body", "purpose": "Rows, prose, hints; regular case Meslo at 12.5px." },
+      "field": { "displayName": "Field", "purpose": "Text inputs and selects — typing in the glass at 14px." },
+      "glyph": { "displayName": "Icon Glyph", "purpose": "Icon keys and closes at 14–16px; geometry, not copy." },
+      "readout": { "displayName": "Readout", "purpose": "Meta figures, timestamps, event times at 11px; tabular-nums. JuliaMono serves as the unicode-range symbol fallback (U+2000–2BFF) behind Meslo." }
     },
     "shadows": [
-      { "name": "floating-chrome", "value": "0 24px 80px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.04)", "purpose": "The login card — the only large ambient shadow; shadow means altitude." },
-      { "name": "toast-lift", "value": "0 8px 28px rgba(0,0,0,0.45)", "purpose": "Transient toasts floating over everything." },
-      { "name": "identity-glow", "value": "0 0 14px rgba(36,211,232,0.28)", "purpose": "Brand logo and nameplate aura — glow means identity." },
-      { "name": "hover-bloom", "value": "0 0 10px rgba(36,211,232,0.12), inset 0 0 8px rgba(36,211,232,0.05)", "purpose": "HUD buttons on hover — glow means attention." },
-      { "name": "engaged-aura", "value": "0 0 14px rgba(36,211,232,0.26), inset 0 0 10px rgba(36,211,232,0.12)", "purpose": "Fleet Command while active (pulses 2.4s) — the glow ceiling; nothing shines brighter." },
-      { "name": "focus-ring", "value": "outline: 2px solid rgba(36,211,232,0.65); outline-offset: 2px", "purpose": "Keyboard focus via :focus-visible; an outline, not a shadow, so it never shifts layout." },
-      { "name": "inset-beacon", "value": "inset 3px 0 0 #24d3e8", "purpose": "Selection: the 3px cyan bar on a selected row's left edge, paired with a 0.12-alpha cyan wash." }
+      { "name": "key-edge", "value": "0 2px 0 rgba(0,0,0,0.55), 0 3px 6px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05)", "purpose": "Keycap extrusion at rest: hard machined edge plus soft contact shadow." },
+      { "name": "key-edge-down", "value": "0 1px 0 rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.03)", "purpose": "Pressed key travel (paired with translateY(1px))." },
+      { "name": "key-edge-mini", "value": "0 1px 0 rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)", "purpose": "Small inline keys (row action pads, hub row buttons)." },
+      { "name": "commit-edge", "value": "0 2px 0 #7a2f06, 0 4px 10px rgba(255,106,26,0.22), inset 0 1px 0 rgba(255,255,255,0.28)", "purpose": "The safety-orange commit key's extrusion." },
+      { "name": "recess", "value": "inset 0 2px 5px rgba(0,0,0,0.5)", "purpose": "Recessed screen glass: inputs, logs, the stage grid." },
+      { "name": "stage-recess", "value": "inset 0 2px 5px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3)", "purpose": "The screen bay's deeper mount." },
+      { "name": "lift", "value": "0 16px 48px rgba(0,0,0,0.55)", "purpose": "True overlays only: modals, toasts." },
+      { "name": "drawer-lift", "value": "-12px 0 40px rgba(0,0,0,0.45)", "purpose": "Right-side service drawers." },
+      { "name": "panel-mount", "value": "inset 0 1px 0 rgba(255,255,255,0.04), 0 2px 8px rgba(0,0,0,0.3)", "purpose": "Mounted panels (sidebar) sitting on the bench." },
+      { "name": "logo-mount", "value": "0 2px 0 rgba(0,0,0,0.5), 0 6px 16px rgba(0,0,0,0.4)", "purpose": "The login logo badge's physical mount." },
+      { "name": "lamp-glow-ok", "value": "inset 0 0 2px rgba(0,0,0,0.25), 0 0 6px rgba(62,207,110,0.5)", "purpose": "Lit green LED." },
+      { "name": "lamp-glow-warn", "value": "inset 0 0 2px rgba(0,0,0,0.25), 0 0 6px rgba(255,176,0,0.5)", "purpose": "Lit amber LED." },
+      { "name": "lamp-glow-crit", "value": "inset 0 0 2px rgba(0,0,0,0.25), 0 0 6px rgba(255,92,71,0.55)", "purpose": "Lit red LED." },
+      { "name": "lamp-glow-auth", "value": "inset 0 0 2px rgba(0,0,0,0.25), 0 0 6px rgba(169,139,255,0.55)", "purpose": "Lit violet LED." },
+      { "name": "lamp-off", "value": "inset 0 0 0 1px rgba(255,255,255,0.07), inset 0 1px 2px rgba(0,0,0,0.6)", "purpose": "Unlit LED: ring + dark fill so a dark lamp still reads as a lamp." },
+      { "name": "engrave", "value": "0 1px 0 rgba(0,0,0,0.7)", "purpose": "Text-shadow for engraved nameplates (cut into metal, not lit)." },
+      { "name": "amber-focus", "value": "0 0 0 2px rgba(255,176,0,0.12), 0 0 14px rgba(255,176,0,0.1)", "purpose": "Input power-on focus glow, layered over recess." },
+      { "name": "amber-engaged", "value": "0 0 12px rgba(255,176,0,0.14), inset 0 0 8px rgba(255,176,0,0.06)", "purpose": "Engaged mode key glow (Fleet Command armed); pulse peaks at 0 0 18px rgba(255,176,0,0.28)." }
     ],
     "motion": [
-      { "name": "state-transition", "value": "0.2s (color, border-color, background, box-shadow)", "purpose": "Default easing for hover/engage state changes on buttons and rows." },
-      { "name": "slide-chrome", "value": "transform 0.25s ease", "purpose": "Drawers and panels sliding in from the right; the sidebar rail collapse (0.25s on grid columns)." },
-      { "name": "sheen-sweep", "value": "transform 0.6s ease", "purpose": "Fleet Command's diagonal sheen crossing on hover." },
-      { "name": "engaged-pulse", "value": "2.4s ease-in-out infinite", "purpose": "The active Fleet Command aura breathing." },
-      { "name": "cursor-blink", "value": "1.25s steps(1, end) infinite", "purpose": "The empty-stage block cursor; holds solid under prefers-reduced-motion." },
-      { "name": "toast-enter", "value": "opacity 0.2s ease, translate 0.2s ease", "purpose": "Toast fades in while rising 16px." }
+      { "name": "ease-mechanical", "value": "ease", "purpose": "Panel/drawer transforms, 0.22–0.25s: mechanical directness, no bounce." },
+      { "name": "key-travel", "value": "0.15s (color, box-shadow, transform)", "purpose": "Key press/hover response." },
+      { "name": "standby-blink", "value": "empty-cursor-blink 1.25s steps(1, end) infinite", "purpose": "The standby cursor; reduced motion holds it solid." },
+      { "name": "standby-breathe", "value": "standby-breathe 3s ease-in-out infinite", "purpose": "The login nameplate's standby lamp; reduced motion holds it lit." },
+      { "name": "armed-pulse", "value": "fleet-cmd-pulse 2.6s ease-in-out infinite", "purpose": "Fleet Command engaged; reduced motion holds the steady glow." }
     ],
     "breakpoints": [
-      { "name": "modal-stack", "value": "620px", "purpose": "Modal field/tools grids collapse to one column." },
-      { "name": "hub-stack", "value": "720px", "purpose": "Proxmox hub goes 92vw; master-detail and container rows stack." }
+      { "name": "modal-1col", "value": "620px" },
+      { "name": "hub-reflow", "value": "720px" }
     ]
   },
   "components": [
     {
-      "name": "Primary Button",
+      "name": "Commit Key",
       "kind": "button",
-      "refersTo": "button-primary",
-      "description": "The one action a screen exists for — Unlock, Run on N boxes. Phosphor cyan→green gradient.",
-      "html": "<button class=\"ds-btn-primary\">Unlock</button>",
-      "css": ".ds-btn-primary { padding: 10px; border-radius: 8px; border: 1px solid rgba(36,211,232,0.38); background: linear-gradient(135deg, rgba(36,211,232,0.22), rgba(88,229,140,0.16)); color: var(--text, #d8e1ea); font-weight: 700; font-size: 14px; cursor: pointer; transition: border-color 0.2s, box-shadow 0.2s; } .ds-btn-primary:hover { border-color: rgba(36,211,232,0.6); } .ds-btn-primary:focus-visible { outline: 2px solid rgba(36,211,232,0.65); outline-offset: 2px; } .ds-btn-primary:disabled { opacity: 0.5; cursor: default; }"
+      "refersTo": "key-commit",
+      "description": "The one safety-orange committing action per view (Unlock, Run on N boxes, Create).",
+      "html": "<button class=\"ds-key-commit\">RUN ON 4 BOXES</button>",
+      "css": ".ds-key-commit { padding: 11px 16px; border-radius: 6px; border: 1px solid #c94f0e; border-bottom-color: #8f3708; background: linear-gradient(180deg, #ff7d38, #f56413); color: #1a0e05; font-family: 'MesloLGMDZ Nerd Font', ui-monospace, monospace; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.14em; box-shadow: 0 2px 0 #7a2f06, 0 4px 10px rgba(255,106,26,0.2), inset 0 1px 0 rgba(255,255,255,0.28); cursor: pointer; } .ds-key-commit:hover { background: linear-gradient(180deg, #ff8a4d, #fb6c1a); } .ds-key-commit:active { transform: translateY(1px); box-shadow: 0 1px 0 #7a2f06, inset 0 1px 0 rgba(255,255,255,0.2); } .ds-key-commit:focus-visible { outline: 2px solid rgba(255,176,0,0.6); outline-offset: 2px; }"
     },
     {
-      "name": "HUD Button",
+      "name": "Function Key",
       "kind": "button",
-      "refersTo": "button-hud",
-      "description": "The fleet console voice: uppercase tracked label on raised glass, lighting cyan on hover.",
-      "html": "<button class=\"ds-btn-hud\">Fleet Command</button>",
-      "css": ".ds-btn-hud { padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(36,211,232,0.3); background: linear-gradient(180deg, rgba(36,211,232,0.07), rgba(36,211,232,0) 65%), var(--panel-2, #111824); color: #c2eaf1; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.2px; cursor: pointer; transition: color 0.2s, border-color 0.2s, box-shadow 0.2s; } .ds-btn-hud:hover { border-color: rgba(36,211,232,0.6); color: var(--cyan, #24d3e8); box-shadow: 0 0 10px rgba(36,211,232,0.12), inset 0 0 8px rgba(36,211,232,0.05); } .ds-btn-hud:focus-visible { outline: 2px solid rgba(36,211,232,0.65); outline-offset: 2px; }"
+      "refersTo": "key-function",
+      "description": "Neutral extruded keycap for secondary actions; legend brightens on hover, travels on press.",
+      "html": "<button class=\"ds-key-fn\">FLEET COMMAND</button>",
+      "css": ".ds-key-fn { padding: 10px 14px; border-radius: 6px; border: 1px solid #282c33; border-bottom-color: #101216; background: linear-gradient(180deg, #1e2127, #191c21); color: #b9b4a6; font-family: 'MesloLGMDZ Nerd Font', ui-monospace, monospace; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.13em; box-shadow: 0 2px 0 rgba(0,0,0,0.55), 0 3px 6px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05); cursor: pointer; transition: color 0.15s, box-shadow 0.15s, transform 0.15s; } .ds-key-fn:hover { color: #e6e2da; } .ds-key-fn:active { transform: translateY(1px); box-shadow: 0 1px 0 rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.03); } .ds-key-fn:focus-visible { outline: 2px solid rgba(255,176,0,0.6); outline-offset: 2px; }"
     },
     {
-      "name": "Secondary Button",
-      "kind": "button",
-      "refersTo": "button-secondary",
-      "description": "Quiet bordered action — Inspect, Cancel. Hairline at rest, warms on hover.",
-      "html": "<button class=\"ds-btn-secondary\">Inspect</button>",
-      "css": ".ds-btn-secondary { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border, #202938); background: var(--panel-2, #111824); color: var(--text, #d8e1ea); font-size: 13px; cursor: pointer; transition: border-color 0.2s; } .ds-btn-secondary:hover { border-color: rgba(36,211,232,0.45); } .ds-btn-secondary:focus-visible { outline: 2px solid rgba(36,211,232,0.65); outline-offset: 2px; }"
-    },
-    {
-      "name": "Search Input",
+      "name": "Recessed Input",
       "kind": "input",
       "refersTo": "input-field",
-      "description": "Raised-glass field that glows awake on focus instead of jumping.",
-      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Search…\" aria-label=\"Search boxes\" />",
-      "css": ".ds-input { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border, #202938); background: var(--panel-2, #111824); color: var(--text, #d8e1ea); font-size: 13px; outline: none; width: 100%; box-sizing: border-box; transition: border-color 0.2s, box-shadow 0.2s; } .ds-input::placeholder { color: var(--muted, #7f8b9a); } .ds-input:focus { border-color: rgba(36,211,232,0.45); box-shadow: 0 0 0 2px rgba(36,211,232,0.12); }"
-    },
-    {
-      "name": "Session Chip",
-      "kind": "chip",
-      "refersTo": "chip-session",
-      "description": "Pill picker for tmux session names; selection speaks cyan.",
-      "html": "<span><button class=\"ds-chip\">web</button> <button class=\"ds-chip ds-chip-selected\">agents</button></span>",
-      "css": ".ds-chip { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border, #202938); background: var(--panel-2, #111824); color: var(--text, #d8e1ea); cursor: pointer; font-size: 12px; line-height: 1.4; transition: border-color 0.2s, color 0.2s; } .ds-chip:hover { border-color: rgba(36,211,232,0.45); } .ds-chip-selected { border-color: var(--cyan, #24d3e8); color: var(--cyan, #24d3e8); } .ds-chip:focus-visible { outline: 2px solid rgba(36,211,232,0.65); outline-offset: 2px; }"
-    },
-    {
-      "name": "Status Badge",
-      "kind": "chip",
-      "refersTo": "badge-status",
-      "description": "Semantic status pills — info in cyan, warnings in amber; never decorative.",
-      "html": "<span><span class=\"ds-badge ds-badge-info\">seeded</span> <span class=\"ds-badge ds-badge-warn\">3 events</span></span>",
-      "css": ".ds-badge { display: inline-block; font-size: 10px; line-height: 1.5; padding: 0 6px; border-radius: 999px; border: 1px solid; white-space: nowrap; } .ds-badge-info { color: var(--cyan, #24d3e8); border-color: rgba(36,211,232,0.4); background: rgba(36,211,232,0.1); } .ds-badge-warn { color: #d29922; border-color: rgba(210,153,34,0.4); background: rgba(210,153,34,0.12); }"
+      "description": "Typing happens in the glass: recessed screen-well field that powers on amber when focused.",
+      "html": "<input class=\"ds-input\" placeholder=\"Filter boxes\" />",
+      "css": ".ds-input { padding: 9px 10px; border-radius: 6px; border: 1px solid #282c33; border-top-color: #1f2228; background: #0a0b0d; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); color: #e6e2da; font-family: 'MesloLGMDZ Nerd Font', ui-monospace, monospace; font-size: 12.5px; } .ds-input::placeholder { color: #8a8577; } .ds-input:focus { outline: none; border-color: rgba(255,176,0,0.45); box-shadow: inset 0 2px 5px rgba(0,0,0,0.5), 0 0 0 2px rgba(255,176,0,0.12); }"
     },
     {
       "name": "Box Row",
       "kind": "nav",
-      "refersTo": "tab",
-      "description": "The signature instrument: status dot, name, dimmed meta readout, and the Inset Beacon when attached.",
-      "html": "<ul class=\"ds-boxes\"><li class=\"ds-box ds-box-active\"><span class=\"ds-dot ds-dot-green\"></span><span class=\"ds-box-main\"><button class=\"ds-box-name\">build01</button><span class=\"ds-box-meta\">cpu 12% · mem 38% · disk 41%</span></span></li><li class=\"ds-box\"><span class=\"ds-dot ds-dot-auth\"></span><span class=\"ds-box-main\"><button class=\"ds-box-name\">agent02</button><span class=\"ds-box-meta\">needs login</span></span></li></ul>",
-      "css": ".ds-boxes { list-style: none; margin: 0; padding: 0; width: 260px; background: #090d13; } .ds-box { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; } .ds-box:hover { background: var(--panel-2, #111824); } .ds-box-active { background: rgba(36,211,232,0.12); box-shadow: inset 3px 0 0 var(--cyan, #24d3e8); } .ds-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted, #7f8b9a); flex: 0 0 auto; } .ds-dot-green { background: #2ea043; } .ds-dot-auth { background: #a371f7; box-shadow: 0 0 0 2px rgba(163,113,247,0.25); } .ds-box-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; } .ds-box-name { background: none; border: 0; padding: 0; font-size: 13px; color: var(--text, #d8e1ea); text-align: left; cursor: pointer; font-family: inherit; } .ds-box-name:focus-visible { outline: 2px solid rgba(36,211,232,0.65); outline-offset: -2px; } .ds-box-meta { font-size: 11px; color: var(--muted, #7f8b9a); }"
+      "refersTo": "chip-mode",
+      "description": "A fleet-cluster key: status lamp, name legend, readout meta line; attached rows carry the amber Lamp-and-Beacon.",
+      "html": "<div class=\"ds-box ds-active\"><span class=\"ds-lamp ds-lamp-ok\"></span><span class=\"ds-box-main\"><span class=\"ds-box-name\">builder01</span><span class=\"ds-box-meta\">cpu 12% · mem 41% · disk 63%</span></span></div>",
+      "css": ".ds-box { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-family: 'MesloLGMDZ Nerd Font', ui-monospace, monospace; background: #16181d; } .ds-box:hover { background: #1c1f25; border-color: #282c33; } .ds-box.ds-active { background: #1c1f25; border-color: #282c33; box-shadow: inset 2px 0 0 #ffb000, inset 0 1px 0 rgba(255,255,255,0.04); } .ds-box-main { display: flex; flex-direction: column; gap: 1px; } .ds-box-name { color: #e6e2da; font-size: 12.5px; } .ds-box-meta { color: #8a8577; font-size: 11px; font-variant-numeric: tabular-nums; } .ds-lamp { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; } .ds-lamp-ok { background: #3ecf6e; box-shadow: inset 0 0 2px rgba(0,0,0,0.25), 0 0 6px rgba(62,207,110,0.5); }"
     },
     {
-      "name": "Toast",
+      "name": "Mode Chip",
+      "kind": "chip",
+      "refersTo": "chip-mode",
+      "description": "Machined state tag, lit or dark: amber = alive (working), orange = operator action (waiting).",
+      "html": "<span class=\"ds-chip ds-chip-working\">AGENT WORKING</span> <span class=\"ds-chip ds-chip-waiting\">AGENT WAITING</span> <span class=\"ds-chip\">DETACHED</span>",
+      "css": ".ds-chip { display: inline-block; padding: 1px 7px; border-radius: 4px; border: 1px solid #282c33; background: #1c1f25; color: #b9b4a6; font-family: 'MesloLGMDZ Nerd Font', ui-monospace, monospace; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; line-height: 1.7; } .ds-chip-working { color: #ffb000; border-color: rgba(255,176,0,0.35); background: rgba(255,176,0,0.07); } .ds-chip-waiting { color: #ff6a1a; border-color: rgba(255,106,26,0.5); background: rgba(255,106,26,0.1); }"
+    },
+    {
+      "name": "Status Lamp Set",
       "kind": "custom",
-      "refersTo": "badge-status",
-      "description": "Bottom-center transient notice; rises 16px while fading in, role=status.",
-      "html": "<div class=\"ds-toast\">Box added</div>",
-      "css": ".ds-toast { display: inline-block; background: var(--panel-2, #111824); color: var(--text, #d8e1ea); border: 1px solid var(--border, #202938); padding: 10px 16px; border-radius: 8px; font-size: 13px; box-shadow: 0 8px 28px rgba(0,0,0,0.45); }"
+      "refersTo": "chip-mode",
+      "description": "The LED vocabulary: off, ok, warn, crit, needs-auth. An off lamp still reads as a lamp.",
+      "html": "<span class=\"ds-lamp2\"></span><span class=\"ds-lamp2 ds-on-ok\"></span><span class=\"ds-lamp2 ds-on-warn\"></span><span class=\"ds-lamp2 ds-on-crit\"></span><span class=\"ds-lamp2 ds-on-auth\"></span>",
+      "css": ".ds-lamp2 { display: inline-block; width: 9px; height: 9px; margin-right: 8px; border-radius: 50%; background: #23262c; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07), inset 0 1px 2px rgba(0,0,0,0.6); } .ds-on-ok { background: #3ecf6e; box-shadow: inset 0 0 2px rgba(0,0,0,0.25), 0 0 6px rgba(62,207,110,0.5); } .ds-on-warn { background: #ffb000; box-shadow: inset 0 0 2px rgba(0,0,0,0.25), 0 0 6px rgba(255,176,0,0.5); } .ds-on-crit { background: #ff5c47; box-shadow: inset 0 0 2px rgba(0,0,0,0.25), 0 0 6px rgba(255,92,71,0.55); } .ds-on-auth { background: #a98bff; box-shadow: inset 0 0 2px rgba(0,0,0,0.25), 0 0 6px rgba(169,139,255,0.55); }"
+    },
+    {
+      "name": "Tab Legend",
+      "kind": "nav",
+      "refersTo": "tab",
+      "description": "Engraved tab legends over a seam; the active tab lights amber.",
+      "html": "<div class=\"ds-tabs\"><button class=\"ds-tab ds-tab-active\">CONTAINERS</button><button class=\"ds-tab\">PRESETS</button><button class=\"ds-tab\">ACTIVITY</button></div>",
+      "css": ".ds-tabs { display: flex; gap: 4px; border-bottom: 1px solid #282c33; } .ds-tab { padding: 7px 12px; background: none; border: 0; border-bottom: 2px solid transparent; color: #8a8577; cursor: pointer; font-family: 'MesloLGMDZ Nerd Font', ui-monospace, monospace; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; } .ds-tab:hover { color: #b9b4a6; } .ds-tab-active { color: #ffb000; border-bottom-color: #ffb000; text-shadow: 0 0 10px rgba(255,176,0,0.3); }"
     }
   ],
   "narrative": {
-    "northStar": "The Fleet Bridge",
-    "overview": "Tmuxifier looks like the bridge of a ship on night watch: a near-black blue field, a handful of phosphor-lit instruments, and one operator with calm authority over many vessels. Everything on screen is an instrument — box rows are berth listings, the fleet buttons are a command console, the terminal is the main viewport — and instruments are quiet at rest, lit when touched, unmistakable when active. The personality is calm, precise, quietly lit: glow is rationed, severity colors carry meaning, and density serves scanning a fleet at a glance. Two confirmed anti-references bound the world on both sides: not neon cyberpunk overload, and not a generic SaaS dashboard.",
+    "northStar": "The Bench Instrument",
+    "overview": "Tmuxifier is a desk instrument for operating a fleet: a machined charcoal chassis holding a control cluster on the left and a screen bay on the right. Every control is a physical part — box rows are keys with status lamps, buttons have key travel, section labels are engraved legends, and live values glow amber like an OLED readout. The terminal is the device's display: the brightest, most alive thing on the bench, recessed into the chassis rather than floating above it. The personality is tactile, deliberate, warm-lit: matte surfaces, small honest shadows, one saturated action color, and glow that only ever means \"powered and live.\" Anti-references bound the world on both sides: not 2010 skeuomorphism (no gloss gradients, no leather, no oversized bevels), and not the neon terminal dashboard the category always ships (the previous cyan-phosphor world is retired evidence, not a precedent).",
     "keyCharacteristics": [
-      "One accent hue (Phosphor Cyan) doing all identity, focus, and selection work",
-      "Near-black blue depths layered tonally: hull, rail, panel, raised panel, terminal well",
-      "Tracked-out uppercase micro-labels as the HUD voice; terminal monospace as the display voice",
-      "Severity colors (red/amber/green/purple) reserved strictly for status semantics",
-      "Flat surfaces with 1px hairlines; glow signals state, shadow signals altitude",
-      "Dense, scannable rows built for dozens of boxes, not marketing whitespace"
+      "One legend face: the bundled Meslo mono is the entire product's voice — engraved chassis legends, key labels, readouts, and the terminal itself share it",
+      "Chassis neutrals (charcoal, gunmetal, bone, putty) with two functional accents: amber = live, safety orange = operator action needed",
+      "Depth by machining: keys extrude 1–2px and travel down when pressed; screens recess with an inset lip; nothing floats except true overlays",
+      "Status is hardware vocabulary: LED lamps (green/red/amber/violet) and lit-vs-dark chips",
+      "Density serves supervision: dense keycap rows for the fleet, one glowing display at a time"
     ],
     "rules": [
-      { "name": "The One Voice Rule", "body": "Phosphor Cyan is the only accent. No foreign blues — the GitHub-blue literals (#1f6feb, #2f6feb) still present on some modal submits and tab underlines are legacy drift scheduled for retirement, never a precedent.", "section": "colors" },
-      { "name": "The Signal Rule", "body": "Red, amber, green, and purple appear only as status semantics tied to a real machine state. Never decorate with them.", "section": "colors" },
-      { "name": "The Wash Ladder Rule", "body": "Interactive cyan comes as alpha washes on the documented ladder (0.05 / 0.12 / 0.22 / 0.45 / 0.65); don't invent intermediate opacities per surface.", "section": "colors" },
-      { "name": "The Mono Means Machine Rule", "body": "Monospace appears only where content is machine text — commands, logs, paths, fingerprints, prompt glyphs. UI chrome never wears it for style.", "section": "typography" },
-      { "name": "The Tracked Caps Rule", "body": "Uppercase + tracking is the HUD register, reserved for micro-labels (≤13px). Never track body copy or headlines beyond 1px.", "section": "typography" },
-      { "name": "The Glow Is State Rule", "body": "Cyan light means identity, attention, or engagement — never altitude. Black shadow means altitude — never decoration. A surface at rest is flat with a hairline.", "section": "elevation" },
-      { "name": "The Inset Beacon Rule", "body": "Selection is a 3px cyan bar inset on the left edge of the selected row (inset 3px 0 0) plus a 0.12-alpha cyan wash — boxes, groups, the Host Shell all signal \"attached here\" the same way. Never a filled row, never an outline.", "section": "shapes" }
+      { "name": "The Orange Means You Rule", "body": "Safety orange appears only where the operator's press is the point: primary commits and states waiting on the operator. Never decoration, never headers, never more than one solid-orange key per view.", "section": "colors" },
+      { "name": "The Amber Means Alive Rule", "body": "Amber glow marks something currently powered/working — readouts, live values, engaged modes, focus. A resting surface never glows.", "section": "colors" },
+      { "name": "The LED Rule", "body": "Green/red/violet appear only as machine-state semantics (lamps, chips, status text). Never decorate with them.", "section": "colors" },
+      { "name": "The One Legend Face Rule", "body": "MesloLGMDZ Nerd Font (bundled, with MesloLGSDZ and JuliaMono fallbacks) is the only face in the product. No sans-serif anywhere.", "section": "typography" },
+      { "name": "The Glow Is Power Rule", "body": "Amber emission appears only on live/engaged elements. Glow never signals altitude; shadow never decorates.", "section": "elevation" },
+      { "name": "The Lamp-and-Beacon Rule", "body": "Selection/attachment is a lamp turned on plus a 2px amber inset bar on the part's left edge; the row lifts one chassis step. Keyboard focus is the shared amber ring.", "section": "elevation" }
     ],
     "dos": [
-      "Do pull every color from the frontmatter tokens; the :root custom properties (--bg, --panel, --panel-2, --border, --text, --muted, --cyan, --green) are the same system in code.",
-      "Do use the cyan wash ladder (0.05 / 0.12 / 0.22 / 0.45 / 0.65) for interactive states, and the Inset Beacon (3px inset bar + 0.12 wash) for selection.",
-      "Do give every animation a prefers-reduced-motion alternative that holds the element in a meaningful resting state (the cursor stays solid, the pulse stays lit) — never delete the element.",
-      "Do keep machine text in the bundled Meslo mono and put logs/terminals in the Terminal Well, one tonal step below the chrome around them.",
-      "Do write micro-labels in the HUD register: 10.5–12px, 600, uppercase, ~0.09em tracking."
+      "Do pull every color from the frontmatter tokens; the :root custom properties in style.css are the same system in code.",
+      "Do give every part its material: extrude interactive parts, recess content glass, keep the chassis visible between mounted panels.",
+      "Do keep one solid-orange commit per view and let everything else stay neutral.",
+      "Do give every animation a prefers-reduced-motion alternative that holds a meaningful resting state (cursor solid, glow steady, key un-pressed).",
+      "Do write legends uppercase, bold, tracked (0.12–0.16em) at 10–11px."
     ],
     "donts": [
-      "Don't introduce foreign accent hues. The GitHub blues (#1f6feb, #2f6feb) on modal submits and tab underlines are known drift being retired — match new work to Phosphor Cyan, and prefer replacing a blue you touch.",
-      "Don't reach for the legacy near-duplicate grays (#c9d1d9, #8b949e, #6e7681, #232a36, #131722, #0f131c, #3fb950) — use Instrument White, Dimmed Readout, Hairline, Glass Panel, and OK Green. The duplicates fragment contrast (some fail AA where the token passes).",
-      "Don't use severity colors decoratively, and never repurpose Needs-Auth Purple.",
-      "Don't exceed the Engaged Aura glow ceiling or add large ambient shadows to resting surfaces — no SaaS card-grid look, no neon flood.",
-      "Don't let chrome outdress the terminal: no display-size sans headlines inside the app, no ornament on the stage beyond the empty-state prompt."
+      "Don't reintroduce the retired cyan/blue-glass world or any foreign accent hue; the GitHub blues are gone, not resting.",
+      "Don't gloss: no glass highlights taller than 1px, no gradients steeper than 6% L across a surface, no drop shadows on resting inline parts.",
+      "Don't let amber and orange trade jobs: amber never commits, orange never merely glows.",
+      "Don't use LED colors decoratively or repurpose violet away from needs-auth.",
+      "Don't put a sans-serif anywhere; if a glyph is missing, it comes from the bundled fallback monos, not a system sans."
     ]
   }
 }

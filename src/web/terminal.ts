@@ -260,6 +260,17 @@ interface ProvisionOptions {
   tools?: string[];
 }
 
+// The display glass (Bench Instrument world): screen-well background, bone
+// foreground, amber cursor. ANSI colors stay at xterm defaults — terminal
+// content belongs to the programs running in it, not to the chrome.
+const SCREEN_THEME = {
+  background: '#0a0b0d',
+  foreground: '#e6e2da',
+  cursor: '#ffb000',
+  cursorAccent: '#0a0b0d',
+  selectionBackground: 'rgba(255, 176, 0, 0.25)',
+};
+
 export function openTerminal(
   parent: HTMLElement,
   boxId: string,
@@ -270,7 +281,7 @@ export function openTerminal(
     cursorBlink: true,
     fontSize: termFontSize,
     fontFamily: termFontFamily(),
-    theme: { background: '#0b0e14' },
+    theme: SCREEN_THEME,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -375,7 +386,7 @@ export function openProvisionTerminal(
     cursorBlink: true,
     fontSize: termFontSize,
     fontFamily: termFontFamily(),
-    theme: { background: '#0b0e14' },
+    theme: SCREEN_THEME,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);

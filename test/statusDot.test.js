@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest';
 import {
-  dotClassFor, dotTitleFor, classifyError, metaSegmentsFor, CPU_ICON,
+  dotClassFor, dotTitleFor, classifyError, metaSegmentsFor, CPU_ICON, MEM_ICON, DISK_ICON,
   cpuLoadPct, cpuLevel,
 } from '../src/web/statusDot.ts';
 
@@ -74,7 +74,7 @@ test('classifyError: an unrecognized error passes through trimmed; empty is gene
 
 test('meta line: formats present metrics as load · mem% · disk% (raw load when cpus unknown)', () => {
   const st = { reachable: true, tmux: true, metrics: { load1: 0.42, memTotalKb: 1000, memAvailKb: 620, diskPct: 61 } };
-  expect(metaLine(st)).toBe(`0.42 ${CPU_ICON} · 38% 🧠 · 61% 💾`);
+  expect(metaLine(st)).toBe(`0.42 ${CPU_ICON} · 38% ${MEM_ICON} · 61% ${DISK_ICON}`);
 });
 
 test('cpuLoadPct: normalizes load by core count to a percent', () => {
@@ -95,14 +95,14 @@ test('cpuLevel: <70 ok, 70..100 warn, >100 crit', () => {
 
 test('meta line: shows "% cpu" (load ÷ cores) when the core count is known', () => {
   const st = { reachable: true, tmux: true, metrics: { load1: 4.25, cpus: 4, memTotalKb: 1000, memAvailKb: 920, diskPct: 58 } };
-  expect(metaLine(st)).toBe(`106% ${CPU_ICON} · 8% 🧠 · 58% 💾`);
+  expect(metaLine(st)).toBe(`106% ${CPU_ICON} · 8% ${MEM_ICON} · 58% ${DISK_ICON}`);
 });
 
 test('metaSegmentsFor: colors only the cpu segment by severity, leaves mem/disk plain', () => {
   const st = { reachable: true, tmux: true, metrics: { load1: 4.25, cpus: 4, memTotalKb: 1000, memAvailKb: 920, diskPct: 58 } };
   const segs = metaSegmentsFor(st);
   expect(segs.map((s) => s.text)).toEqual(['106%', '8%', '58%']);
-  expect(segs.map((s) => s.icon)).toEqual([CPU_ICON, '🧠', '💾']);
+  expect(segs.map((s) => s.icon)).toEqual([CPU_ICON, MEM_ICON, DISK_ICON]);
   expect(segs[0].iconClass).toBe('nf');          // CPU icon renders in the Nerd Font
   expect(segs[0].level).toBe('crit');
   expect(segs[0].title).toMatch(/4\.25.*4 core/);
@@ -123,7 +123,7 @@ test('metaSegmentsFor: cgroup host still warming up (counter but no rate yet) om
   const st = { reachable: true, tmux: true, metrics: { cpuUsageUsec: 123, cpus: 4, load1: 4.25, memTotalKb: 1000, memAvailKb: 900 } };
   const segs = metaSegmentsFor(st);
   expect(segs.map((s) => s.text)).toEqual(['10%']);      // no cpu segment; load is NOT shown
-  expect(segs[0].icon).toBe('🧠');
+  expect(segs[0].icon).toBe(MEM_ICON);
 });
 
 test('metaSegmentsFor: falls back to load-normalized only when there is no cgroup counter at all', () => {
@@ -140,7 +140,7 @@ test('metaSegmentsFor: a down box is a single crit segment with the reason', () 
 });
 
 test('meta line: omits segments whose metric is missing', () => {
-  expect(metaLine({ reachable: true, tmux: true, metrics: { diskPct: 9 } })).toBe('9% 💾');
+  expect(metaLine({ reachable: true, tmux: true, metrics: { diskPct: 9 } })).toBe(`9% ${DISK_ICON}`);
 });
 
 test('meta line: reachable with no metrics is empty (row shows just the name)', () => {

@@ -50,51 +50,54 @@ export function buildCompletions(recent: string[]): Completion[] {
 }
 
 // Dark highlight + chrome theme tuned to the app's palette (style.css :root vars).
+// The editor is display content on recessed screen glass (Bench Instrument
+// world): warm phosphor syntax, amber caret/focus, Meslo like every screen.
 const HIGHLIGHT = HighlightStyle.define([
-  { tag: [t.keyword, t.controlKeyword, t.operatorKeyword], color: '#24d3e8' },
-  { tag: [t.string, t.special(t.string)], color: '#58e58c' },
-  { tag: [t.comment, t.lineComment, t.blockComment], color: '#7f8b9a', fontStyle: 'italic' },
-  { tag: [t.number, t.bool, t.null], color: '#f0a868' },
-  { tag: [t.variableName, t.propertyName], color: '#d8e1ea' },
-  { tag: [t.definitionKeyword, t.function(t.variableName)], color: '#9fb4ff' },
-  { tag: [t.operator, t.punctuation], color: '#9aa7b6' },
-  { tag: t.atom, color: '#f0a868' },
+  { tag: [t.keyword, t.controlKeyword, t.operatorKeyword], color: '#ffb000' },
+  { tag: [t.string, t.special(t.string)], color: '#a8c987' },
+  { tag: [t.comment, t.lineComment, t.blockComment], color: '#8a8577', fontStyle: 'italic' },
+  { tag: [t.number, t.bool, t.null], color: '#ff9d5c' },
+  { tag: [t.variableName, t.propertyName], color: '#e6e2da' },
+  { tag: [t.definitionKeyword, t.function(t.variableName)], color: '#ffd166' },
+  { tag: [t.operator, t.punctuation], color: '#b9b4a6' },
+  { tag: t.atom, color: '#ff9d5c' },
 ]);
 
 const THEME = EditorView.theme({
   '&': {
-    color: 'var(--text)', backgroundColor: 'var(--panel-2)',
+    color: 'var(--text)', backgroundColor: 'var(--screen)',
     border: '1px solid var(--border)', borderRadius: '8px',
-    fontSize: '13px', maxHeight: '60vh',
+    boxShadow: 'inset 0 2px 5px rgba(0, 0, 0, 0.5)',
+    fontSize: '12.5px', maxHeight: '60vh',
   },
   '&.cm-focused': {
-    outline: 'none', borderColor: 'rgba(36, 211, 232, 0.45)',
-    boxShadow: '0 0 0 2px rgba(36, 211, 232, 0.12)',
+    outline: 'none', borderColor: 'rgba(255, 176, 0, 0.45)',
+    boxShadow: 'inset 0 2px 5px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(255, 176, 0, 0.12)',
   },
   '.cm-scroller': {
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    fontFamily: "'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', ui-monospace, SFMono-Regular, Menlo, monospace",
     lineHeight: '1.5', minHeight: '220px',
   },
-  '.cm-content': { padding: '8px 0', caretColor: 'var(--cyan)' },
-  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--cyan)' },
+  '.cm-content': { padding: '8px 0', caretColor: 'var(--amber)' },
+  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--amber)' },
   '.cm-gutters': {
-    backgroundColor: 'transparent', color: '#4a5568', border: 'none',
+    backgroundColor: 'transparent', color: '#5d594e', border: 'none',
   },
-  '.cm-activeLine': { backgroundColor: 'rgba(36, 211, 232, 0.05)' },
+  '.cm-activeLine': { backgroundColor: 'rgba(255, 176, 0, 0.04)' },
   '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--muted)' },
   '&.cm-focused .cm-matchingBracket': {
-    backgroundColor: 'rgba(36, 211, 232, 0.18)', color: 'inherit',
+    backgroundColor: 'rgba(255, 176, 0, 0.16)', color: 'inherit',
   },
   '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': {
-    backgroundColor: 'rgba(36, 211, 232, 0.22)',
+    backgroundColor: 'rgba(255, 176, 0, 0.2)',
   },
-  '.cm-placeholder': { color: '#4a5568' },
+  '.cm-placeholder': { color: '#8a8577' },
   '.cm-tooltip.cm-tooltip-autocomplete': {
     backgroundColor: 'var(--panel)', border: '1px solid var(--border)',
     borderRadius: '8px', overflow: 'hidden',
   },
   '.cm-tooltip-autocomplete ul li[aria-selected]': {
-    backgroundColor: 'rgba(36, 211, 232, 0.16)', color: 'var(--text)',
+    backgroundColor: 'rgba(255, 176, 0, 0.14)', color: 'var(--text)',
   },
   '.cm-completionDetail': { color: 'var(--muted)', fontStyle: 'normal' },
 }, { dark: true });
