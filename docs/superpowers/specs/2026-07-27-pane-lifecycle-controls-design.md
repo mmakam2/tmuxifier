@@ -82,9 +82,11 @@ The chip is driven by `createSetupJobPoller` — already generic over its job ty
 it is reused verbatim with `fetchJob: () => pve.lifecycleJob(id)` — at roughly 1.5s:
 
 - `running` → keep the chip, poll again.
-- `done` → clear the chip and call the injected `onSettled`, which triggers an immediate
-  status poll so the pane flips to its stopped panel (or back to a terminal) instead of
-  waiting out the 30s tick.
+- `done` → clear the chip and call the injected `onSettled`, which starts a temporary faster
+  poll of `/api/status` until this pane's state actually moves, so the pane flips to its
+  stopped panel (or back to a terminal) without waiting out the browser's 30s tick. See
+  *Status freshness* below — an earlier draft of this spec assumed a single client-side
+  status fetch would be enough here, and it is not.
 - `error` / `interrupted` → the chip turns LED red reading `shutdown failed` (etc.), with
   the job's error text as its `title`. Clicking it opens the Proxmox hub straight to that
   job's log. A red chip is settled, not in flight: it clears when clicked, or when the next
@@ -100,6 +102,43 @@ act on a wrong assumption — it produces a job that fails with `shutdown requir
 which lands in the red chip. Likewise a second action fired while another job is in flight
 is refused by `assertTargetIdle` with a 409 (`container already has an active lifecycle
 job`) and surfaces the same way.
+
+## Status freshness
+
+This section was added after the first build of the feature was validated on the live app:
+starting a container worked, but the pane went on showing it as stopped for roughly a
+minute. The lifecycle job itself was never the delay — it finished in 3.1s. Three separate
+causes compounded:
+
+1. **`/api/status` is a pure cache read** (`return statusPoller.getSnapshot()`; there is no
+   on-demand probing path). A client-side status fetch after the job settles therefore
+   re-reads a stale snapshot — it cannot make the server probe anything. The original design
+   assumed otherwise, and that assumption was the main defect.
+2. **Two independent 30s cycles stack** — the server's sweep (`statusPollMs`) and the
+   browser's own poll (`POLL_MS`).
+3. **PVE reporting `running` does not mean the box answers SSH.** A container is unreachable
+   for tens of seconds after its start task completes, so even a correctly forced refresh at
+   job-done would capture "still down". Any fix has to keep looking, not look once.
+
+The resolution, in three parts:
+
+- **PVE state gates the probe cycle.** `statusPoller.pollOnce` now awaits the enricher's
+  collect *before* probing rather than running it alongside, and skips the SSH probe for any
+  box PVE reports `stopped`. This reverses the earlier "collect in parallel so it adds no
+  latency" choice deliberately: one `/cluster/resources` call per host costs far less than a
+  full `ConnectTimeout` spent on a container known to be off — and because the snapshot swaps
+  wholesale, those dead probes were delaying every *other* box's freshness too. It fails
+  open: an unreadable PVE state probes everything, exactly as before.
+- **`statusPoller.refreshUntil(boxId)`** re-sweeps on a short cadence (5s, capped at 3min)
+  until that box is reachable, then stops. One loop per box; a second caller joins the first.
+  Safe by construction because `pollOnce` already coalesces.
+- **The lifecycle manager fires it** via an injected `onContainerUp`, once PVE confirms a
+  `start`/`reboot` left the container running. Fire-and-forget and never allowed to throw —
+  the lifecycle action has already succeeded, and this is only a freshness optimisation.
+  Because the trigger is server-side, this also covers actions started from the Proxmox hub.
+
+What this cannot buy: the container's own boot time. The measured case took ~50s before sshd
+answered. The change removes *polling* latency so that boot time is the only remaining wait.
 
 ## Modules and data flow
 
@@ -124,7 +163,11 @@ job`) and surfaces the same way.
   `paneHeaders`. `updatePaneHeaders()` pushes the latest `paneState`/`proxmoxState` on every
   status poll. `repaintStage()` calls `destroy()` on the controls whose DOM is about to die,
   then clears the map — without that, an orphaned control's poller and arm timer outlive its
-  pane. `onOpenJobLog` opens the hub; `onSettled` calls the existing status poll.
+  pane. `onOpenJobLog` opens the hub; `onSettled` starts the bounded fast status poll
+  described under *Status freshness*. Also holds `stopFastStatusPoll`, called on logout.
+- **`src/server/statusPoller.js`, `src/server/proxmoxLifecycle.js`, `src/server/index.js`** —
+  the PVE-gated probe cycle, `refreshUntil`, and the `onContainerUp` wiring between them.
+  See *Status freshness*.
 - **`src/web/proxmoxUi.ts`** — `HubInitial` gains `lifecycleJobId?: string`, and
   `openProxmoxHub` calls its existing internal `showLifecycleJob` for it after mount. This
   is what the red chip clicks through to.
@@ -157,6 +200,13 @@ live interaction:
   change dropping the arm, and start never entering the armed state.
 - `chipFor`: text and class per action for `running`, `done`, `error`, and `interrupted`.
 
+`test/statusPoller.test.js` covers the gating (a PVE-stopped box is not probed, an unlinked
+box always is, a failed PVE read fails open, and probing resumes the moment PVE reports the
+box running) and `refreshUntil` (stops when the box answers, gives up at the deadline, and
+does not stack a second loop for the same box). `test/proxmoxLifecycle.test.js` covers the
+`onContainerUp` trigger: fired for `start` and `reboot`, not for `shutdown`/`stop`, and a
+throwing hook never failing the job it rode along with.
+
 The DOM layer stays thin and is exercised by the existing split e2e the way
 `buildPaneHeader`'s is. A true end-to-end lifecycle test would need a live Proxmox cluster,
 so it is out of scope; the server-side lifecycle manager already has its own tests.
@@ -165,5 +215,7 @@ so it is out of scope; the server-side lifecycle manager already has its own tes
 
 - Deprovision from the pane header.
 - A chip for jobs started outside this pane (the hub, another browser tab). Rejected above;
-  revisit by adding `activeJob` to `/api/status` if it proves annoying in use.
+  revisit by adding `activeJob` to `/api/status` if it proves annoying in use. Note that the
+  *freshness* half of this gap did get closed — `onContainerUp` fires server-side, so a
+  hub-started action refreshes status just as promptly. Only the chip is pane-local.
 - Any change to the Proxmox hub's Containers tab, which remains the full-control surface.
