@@ -331,8 +331,10 @@ enables or disables blocking. Pi-hole v5 (`admin/api.php`) is not supported.
 
 A service tile whose check is **TrueNAS** reads your NAS over its JSON-RPC WebSocket API and
 renders a double-width card with one row per ZFS pool — name, used percentage, free space —
-under a chip showing the worst pool health and the active alert count, with the TrueNAS version
-and host uptime beneath.
+under a chip showing the worst pool health and the active alerts by severity (`healthy ·
+1 critical, 2 warnings`), with the TrueNAS version and host uptime beneath. The chip names the
+severity rather than giving a bare total, so it explains the lamp colour rather than leaving you
+to guess which reading caused it.
 
 The lamp is a glance signal, not just a reachability light:
 
