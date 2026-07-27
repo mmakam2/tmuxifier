@@ -5,8 +5,11 @@ import { readJson, writeJson } from './jsonFile.js';
 // CRUD for the standby dashboard's service tiles (data/services.json), in the
 // mold of store.js: normalize+validate inside, mutations serialized so two
 // concurrent read-modify-write cycles can't drop each other's change.
-const KINDS = ['http', 'tcp', 'none', 'pihole'];
+const KINDS = ['http', 'tcp', 'none', 'pihole', 'truenas'];
 const SECTIONS = ['services', 'infrastructure'];
+// Kinds whose record can carry a sealed credential; changing to any other kind
+// drops it.
+const SECRET_KINDS = new Set(['pihole', 'truenas']);
 const SAFE_TCP_HOST = /^[A-Za-z0-9_.-]+$/; // same family as sshCommand.js SAFE_HOST
 
 function assertHttpUrl(value, label) {
@@ -15,10 +18,22 @@ function assertHttpUrl(value, label) {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error(`${label} must be http(s)`);
 }
 
+// TrueNAS permanently revokes any user-linked API key presented over plain HTTP,
+// so an http target is refused outright rather than offered as an opt-out: the
+// failure mode destroys the operator's credential, not merely the connection.
+function assertHttpsUrl(value, label) {
+  let u;
+  try { u = new URL(value); } catch { throw new Error(`${label} must be a valid URL`); }
+  if (u.protocol === 'http:') {
+    throw new Error(`${label} must be https — TrueNAS permanently revokes any API key sent over plain HTTP`);
+  }
+  if (u.protocol !== 'https:') throw new Error(`${label} must be https`);
+}
+
 function normalizeCheck(raw, base) {
   const merged = { ...(base || {}), ...(raw || {}) };
   const kind = merged.kind ?? 'http';
-  if (!KINDS.includes(kind)) throw new Error('check.kind must be http, tcp, pihole, or none');
+  if (!KINDS.includes(kind)) throw new Error('check.kind must be http, tcp, pihole, truenas, or none');
   const target = typeof merged.target === 'string' ? merged.target.trim() : '';
   if (kind === 'http') {
     if (!target) return { kind };
@@ -41,6 +56,21 @@ function normalizeCheck(raw, base) {
     if (target) { assertHttpUrl(target, 'check.target'); out.target = target; }
     // Verified TLS is the default; this is the per-service opt-out, because
     // unlike the http/tcp checks this one sends a password.
+    if (merged.insecure === true) out.insecure = true;
+    return out;
+  }
+  if (kind === 'truenas') {
+    const out = { kind };
+    // The JSON-RPC API base. Empty means "use the tile's own url", which is the
+    // common case: the link and the API live on the same host.
+    if (target) { assertHttpsUrl(target, 'check.target'); out.target = target; }
+    // API keys are user-linked from TrueNAS 25.04, and auth.login_ex needs the
+    // account name alongside the key. Not a secret — stored in the clear.
+    const username = String(merged.username ?? '').trim();
+    if (!username || username.length > 64) throw new Error('truenas check requires a username (1-64 characters)');
+    out.username = username;
+    // Verified TLS is the default; this is the per-service opt-out for a NAS
+    // with a self-signed certificate. It never downgrades the scheme.
     if (merged.insecure === true) out.insecure = true;
     return out;
   }
@@ -80,11 +110,11 @@ export function createServicesStore({ dataDir, secretBox = null }) {
   }
 
   function sealPassword(spec, base) {
-    // Only a pihole check has anywhere to use one; changing kind drops it.
-    if ((spec.check?.kind ?? base.check?.kind) !== 'pihole') return undefined;
+    // Only a pihole or truenas check has anywhere to use one; changing kind drops it.
+    if (!SECRET_KINDS.has(spec.check?.kind ?? base.check?.kind)) return undefined;
     if (spec.password === undefined) return base.secret;
     if (spec.password === null || String(spec.password) === '') return undefined;
-    if (!secretBox) throw new Error('cannot store an app password: no secret box configured');
+    if (!secretBox) throw new Error('cannot store a credential: no secret box configured');
     return secretBox.seal(String(spec.password));
   }
 
@@ -97,12 +127,16 @@ export function createServicesStore({ dataDir, secretBox = null }) {
     // the category within it (e.g. infrastructure -> "DNS Filtering").
     const section = spec.section ?? base.section ?? 'services';
     if (!SECTIONS.includes(section)) throw new Error('section must be services or infrastructure');
+    const check = normalizeCheck(spec.check, base.check);
+    // A truenas check with no explicit target dials the tile's own url, so that
+    // url has to clear the same https bar the target does.
+    if (check.kind === 'truenas' && !check.target) assertHttpsUrl(url, 'service url');
     const out = {
       id: base.id || `svc-${randomUUID()}`,
       name,
       url,
       section,
-      check: normalizeCheck(spec.check, base.check),
+      check,
       createdAt: base.createdAt || new Date().toISOString(),
     };
     const glyph = optionalString(spec.glyph, base.glyph, { label: 'glyph', max: 4 });
