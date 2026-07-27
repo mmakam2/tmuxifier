@@ -46,9 +46,38 @@ export function checkTcp(target, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   });
 }
 
+// A Pi-hole check reports numbers, not just reachability. The `auth` state is
+// deliberately distinct from `down`: a rotated app password means the Pi-hole is
+// answering perfectly well, and painting it red would cry wolf. It maps onto the
+// violet `.dot.auth` lamp boxes already use for failed SSH credentials.
+export async function checkPihole(service, { registry } = {}) {
+  if (!registry) return { state: 'down', error: 'pi-hole client unavailable' };
+  const started = Date.now();
+  let client;
+  try {
+    client = await registry.clientFor(service);
+  } catch (err) {
+    return { state: 'down', error: err?.message || 'pi-hole client setup failed' };
+  }
+  const res = await client.fetchSummary();
+  const latencyMs = Date.now() - started;
+  if (res.ok) return { state: 'up', latencyMs, metrics: res.metrics };
+  if (res.kind === 'auth') {
+    // A Pi-hole with no password configured authenticates on an empty one, so
+    // the empty-password attempt is made first and only its failure is reported
+    // as the missing credential.
+    const error = service.hasPassword === false
+      ? 'no app password configured — add one in Settings → Services'
+      : res.error;
+    return { state: 'auth', latencyMs, error };
+  }
+  return { state: 'down', latencyMs, error: res.error };
+}
+
 export async function checkService(service, opts = {}) {
   const kind = service?.check?.kind || 'http';
   if (kind === 'none') return null;
+  if (kind === 'pihole') return checkPihole(service, opts);
   if (kind === 'tcp') return checkTcp(service.check?.target, opts);
   return checkHttp(service.check?.target || service.url, opts);
 }
