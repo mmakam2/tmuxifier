@@ -2,7 +2,7 @@
 // Master-detail scaled down: the list on top, one add/edit form below it.
 import { el, field, makeRadio, openModal } from './dom';
 import { registerModal } from './modalRegistry';
-import { api, type Service, type ServiceCheckKind, type ServiceSection, type ServiceSpec } from './api';
+import { api, type Service, type ServiceCheck, type ServiceCheckKind, type ServiceSection, type ServiceSpec } from './api';
 
 // Starter palette of Nerd Font glyphs (the bundled Meslo NF renders these);
 // free-form entry stays open for anything not listed.
@@ -21,11 +21,23 @@ const GLYPHS: { glyph: string; label: string }[] = [
 
 // Pure so it can be tested without a DOM (the repo's web-test convention).
 // null (not undefined) for cleared optionals: the server's PATCH merge treats
-// null as "clear this field".
-export function buildServicePayload(f: { name: string; url: string; glyph: string; group: string; kind: ServiceCheckKind; target: string; section: ServiceSection }): ServiceSpec {
+// null as "clear this field", while an absent key means "leave it alone" —
+// which is exactly what an untouched password field must send.
+export function buildServicePayload(f: {
+  name: string; url: string; glyph: string; group: string;
+  kind: ServiceCheckKind; target: string; section: ServiceSection;
+  password?: string; clearPassword?: boolean; insecure?: boolean;
+}): ServiceSpec {
   const target = f.target.trim();
-  const check = f.kind === 'none' || !target ? { kind: f.kind } : { kind: f.kind, target };
-  return {
+  let check: ServiceCheck;
+  if (f.kind === 'pihole') {
+    check = { kind: 'pihole', ...(target ? { target } : {}), ...(f.insecure ? { insecure: true } : {}) };
+  } else if (f.kind === 'none' || !target) {
+    check = { kind: f.kind };
+  } else {
+    check = { kind: f.kind, target };
+  }
+  const payload: ServiceSpec = {
     name: f.name.trim(),
     url: f.url.trim(),
     glyph: f.glyph.trim() || null,
@@ -33,6 +45,11 @@ export function buildServicePayload(f: { name: string; url: string; glyph: strin
     section: f.section,
     check,
   };
+  if (f.kind === 'pihole') {
+    if (f.clearPassword) payload.password = null;
+    else if (f.password?.trim()) payload.password = f.password;
+  }
+  return payload;
 }
 
 export async function renderServicesSection(content: HTMLElement): Promise<void> {
@@ -57,13 +74,19 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
   const glyphIn = el('input', { type: 'text', class: 'svc-glyph-input', autocomplete: 'off' }) as HTMLInputElement;
   const groupIn = el('input', { type: 'text', placeholder: 'e.g. Monitoring', autocomplete: 'off' }) as HTMLInputElement;
   const targetIn = el('input', { type: 'text', autocomplete: 'off' }) as HTMLInputElement;
+  const passwordIn = el('input', { type: 'password', autocomplete: 'new-password' }) as HTMLInputElement;
+  const insecureIn = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  const clearPwBtn = el('button', { type: 'button', class: 'pve-btn' }, ['Clear']);
+  const testBtn = el('button', { type: 'button', class: 'pve-btn' }, ['Test connection']);
+  let clearPassword = false;
 
   const palette = el('div', { class: 'svc-glyph-palette' }, GLYPHS.map(({ glyph, label }) =>
     el('button', { type: 'button', class: 'svc-glyph-key', title: label, onclick: () => { glyphIn.value = glyph; } }, [glyph])));
 
-  const radios: Record<Exclude<ServiceCheckKind, never>, { wrap: HTMLElement; input: HTMLInputElement }> = {
+  const radios: Record<ServiceCheckKind, { wrap: HTMLElement; input: HTMLInputElement }> = {
     http: makeRadio('svc-check', 'http', 'HTTP', true),
     tcp: makeRadio('svc-check', 'tcp', 'TCP', false),
+    pihole: makeRadio('svc-check', 'pihole', 'Pi-hole', false),
     none: makeRadio('svc-check', 'none', 'None (link only)', false),
   };
   const kind = (): ServiceCheckKind =>
@@ -79,15 +102,54 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
   const section = (): ServiceSection =>
     (Object.entries(sectionRadios).find(([, r]) => r.input.checked)?.[0] as ServiceSection) ?? 'services';
 
+  // Pi-hole v6 reads its stats over an authenticated REST API, so this check
+  // needs a credential the others don't — and, because it sends one, it verifies
+  // TLS by default rather than tolerating any certificate the way http/tcp do.
+  const passwordField = field('App password', el('div', { class: 'pve-inline' }, [passwordIn, clearPwBtn]));
+  const insecureField = field('TLS', el('label', { class: 'svc-inline-check' }, [insecureIn, ' Allow a self-signed certificate']));
+  const piholeHelp = el('p', { class: 'pve-sub' }, [
+    'Pi-hole v6 only. Create the credential on the Pi-hole under Settings → Web interface / API → Configure app password; an app password works even when two-factor is enabled, the web login password does not.',
+  ]);
+  const piholeGroup = el('div', {}, [piholeHelp, passwordField, insecureField, el('div', { class: 'pve-inline' }, [testBtn])]);
+
   const targetField = field('Probe URL (optional)', targetIn);
   const syncTarget = () => {
     const k = kind();
     targetField.hidden = k === 'none';
+    piholeGroup.hidden = k !== 'pihole';
     (targetField.querySelector('span') as HTMLElement).textContent =
-      k === 'tcp' ? 'Host:port' : 'Probe URL (optional — defaults to the link URL)';
-    targetIn.placeholder = k === 'tcp' ? '192.168.1.10:53' : 'https://192.168.1.10:3000/health';
+      k === 'tcp' ? 'Host:port'
+        : k === 'pihole' ? 'API base URL (optional — defaults to the link URL)'
+          : 'Probe URL (optional — defaults to the link URL)';
+    targetIn.placeholder = k === 'tcp' ? '192.168.1.10:53'
+      : k === 'pihole' ? 'https://pihole.example.com'
+        : 'https://192.168.1.10:3000/health';
   };
   for (const r of Object.values(radios)) r.input.addEventListener('change', syncTarget);
+
+  // Typing re-arms "replace"; Clear is the only way to send an explicit null.
+  passwordIn.addEventListener('input', () => { clearPassword = false; });
+  clearPwBtn.addEventListener('click', () => {
+    clearPassword = true;
+    passwordIn.value = '';
+    passwordIn.placeholder = 'will be cleared on save';
+  });
+
+  testBtn.addEventListener('click', async () => {
+    setStatus('Testing…');
+    try {
+      const res = await api.testPihole({
+        url: targetIn.value.trim() || urlIn.value.trim(),
+        password: passwordIn.value,
+        insecure: insecureIn.checked,
+        id: editing?.id,
+      });
+      if (res.ok) setStatus(`Connected — Pi-hole ${res.version ?? 'v6'}`);
+      else setStatus(res.error || 'Connection failed', true);
+    } catch (e) {
+      setStatus((e as Error).message, true);
+    }
+  });
 
   const formTitle = el('h4', {}, ['Add service']);
   const saveBtn = el('button', { type: 'button', class: 'pve-primary' }, ['Add service']);
@@ -106,6 +168,12 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     for (const [key, r] of Object.entries(radios)) r.input.checked = key === k;
     const sec = svc?.section ?? 'services';
     for (const [key, r] of Object.entries(sectionRadios)) r.input.checked = key === sec;
+    // A blank field on an existing Pi-hole must not read as "no password set",
+    // so the placeholder carries the stored-credential state instead.
+    clearPassword = false;
+    passwordIn.value = '';
+    passwordIn.placeholder = svc?.hasPassword ? '•••••••• (leave blank to keep)' : '';
+    insecureIn.checked = svc?.check.insecure === true;
     syncTarget();
   }
 
@@ -113,6 +181,7 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     const payload = buildServicePayload({
       name: nameIn.value, url: urlIn.value, glyph: glyphIn.value,
       group: groupIn.value, kind: kind(), target: targetIn.value, section: section(),
+      password: passwordIn.value, clearPassword, insecure: insecureIn.checked,
     });
     try {
       if (editing) await api.updateService(editing.id, payload);
@@ -166,8 +235,9 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
       palette,
       el('div', { class: 'svc-check-radios' }, [sectionRadios.services.wrap, sectionRadios.infrastructure.wrap]),
       field('Category (optional — e.g. DNS Filtering; under Infrastructure, "Proxmox" and "IPAM" join the built-in groups)', groupIn),
-      el('div', { class: 'svc-check-radios' }, [radios.http.wrap, radios.tcp.wrap, radios.none.wrap]),
+      el('div', { class: 'svc-check-radios' }, [radios.http.wrap, radios.tcp.wrap, radios.pihole.wrap, radios.none.wrap]),
       targetField,
+      piholeGroup,
       el('div', { class: 'pve-inline' }, [saveBtn, cancelBtn]),
     ]),
     status,

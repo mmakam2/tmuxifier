@@ -77,6 +77,29 @@ test('overlapping pollOnce calls coalesce', async () => {
   expect(s1).toBe(s2);
 });
 
+test('a sweep carries pihole metrics into the snapshot and retains live clients', async () => {
+  const retained = [];
+  const store = {
+    listServices: async () => [
+      { id: 'p1', name: 'pihole', url: 'http://127.0.0.1/', check: { kind: 'pihole' }, hasPassword: true },
+      { id: 'h1', name: 'web', url: 'http://127.0.0.1/', check: { kind: 'http' } },
+      { id: 'n1', name: 'link', url: 'http://127.0.0.1/', check: { kind: 'none' } },
+    ],
+  };
+  const checker = createServiceChecker({
+    store,
+    piholeRegistry: { clientFor: async () => ({}), retain: async (ids) => { retained.push(ids); }, closeAll: async () => {} },
+    check: async (svc) => (svc.check.kind === 'pihole'
+      ? { state: 'up', latencyMs: 3, metrics: { queriesTotal: 7 } }
+      : { state: 'up', latencyMs: 1 }),
+  });
+  const snap = await checker.pollOnce();
+  expect(snap.results.p1.metrics).toEqual({ queriesTotal: 7 });
+  expect(snap.results.h1.metrics).toBeUndefined();
+  expect(snap.results.n1).toBeUndefined();
+  expect(retained).toEqual([['p1']]);
+});
+
 test('start polls immediately then schedules; stop clears; interval clamps to 5000', async () => {
   let calls = 0; const scheduled = []; let cleared = null;
   const checker = createServiceChecker({

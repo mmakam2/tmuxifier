@@ -8,6 +8,8 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { checkHttp, checkTcp, checkService } from '../src/server/serviceCheck.js';
+import { createPiholeClient } from '../src/server/piholeApi.js';
+import { startFakePihole } from './helpers/fakePihole.js';
 
 function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
@@ -107,4 +109,68 @@ test('checkService dispatches by kind and skips none', async () => {
   expect(up.state).toBe('up');
   expect(viaTarget.state).toBe('up');
   expect(await checkService({ url: 'http://x.example.com/', check: { kind: 'none' } })).toBeNull();
+});
+
+// A minimal registry over one real client — the same interface serviceChecker
+// hands in, without needing a store on disk for a check-level test.
+function oneClientRegistry(client) {
+  return { clientFor: async () => client, retain: async () => {}, closeAll: async () => client.close() };
+}
+
+test('checkService: pihole kind returns metrics and an up state', async () => {
+  const pi = await startFakePihole();
+  const client = createPiholeClient({ baseUrl: pi.baseUrl, password: 'app-pw' });
+  const r = await checkService(
+    { id: 'a', url: pi.baseUrl, hasPassword: true, check: { kind: 'pihole' } },
+    { registry: oneClientRegistry(client) },
+  );
+  await client.close();
+  await pi.stop();
+  expect(r.state).toBe('up');
+  expect(r.latencyMs).toBeGreaterThanOrEqual(0);
+  expect(r.metrics.queriesTotal).toBe(48132);
+});
+
+test('checkService: a rejected password is the auth state, not down', async () => {
+  const pi = await startFakePihole({ password: 'right' });
+  const client = createPiholeClient({ baseUrl: pi.baseUrl, password: 'wrong' });
+  const r = await checkService(
+    { id: 'a', url: pi.baseUrl, hasPassword: true, check: { kind: 'pihole' } },
+    { registry: oneClientRegistry(client) },
+  );
+  await client.close();
+  await pi.stop();
+  expect(r.state).toBe('auth');
+  expect(r.error).toMatch(/app password/i);
+  expect(r.metrics).toBeUndefined();
+});
+
+test('checkService: no stored password names that as the problem', async () => {
+  const pi = await startFakePihole({ password: 'right' });
+  const client = createPiholeClient({ baseUrl: pi.baseUrl, password: '' });
+  const r = await checkService(
+    { id: 'a', url: pi.baseUrl, hasPassword: false, check: { kind: 'pihole' } },
+    { registry: oneClientRegistry(client) },
+  );
+  await client.close();
+  await pi.stop();
+  expect(r.state).toBe('auth');
+  expect(r.error).toMatch(/no app password/i);
+});
+
+test('checkService: an unreachable pihole is down', async () => {
+  const pi = await startFakePihole();
+  const { baseUrl } = pi;
+  await pi.stop();
+  const client = createPiholeClient({ baseUrl, password: 'app-pw', timeoutMs: 500 });
+  const r = await checkService(
+    { id: 'a', url: baseUrl, hasPassword: true, check: { kind: 'pihole' } },
+    { registry: oneClientRegistry(client) },
+  );
+  expect(r.state).toBe('down');
+});
+
+test('checkService: a pihole service with no registry is down, not a throw', async () => {
+  const r = await checkService({ id: 'a', url: 'http://127.0.0.1:1/', hasPassword: true, check: { kind: 'pihole' } }, {});
+  expect(r.state).toBe('down');
 });

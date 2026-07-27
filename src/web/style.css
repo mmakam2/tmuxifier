@@ -686,6 +686,29 @@ button.empty-kbd:hover { color: var(--text); }
 .dash-tile-bottom { display: flex; align-items: center; gap: 8px; min-height: 16px; }
 .dash-glyph { font-size: 16px; line-height: 1; color: var(--muted); }
 .dash-latency { margin-left: auto; font-size: 11px; color: var(--amber); font-variant-numeric: tabular-nums; }
+/* Pi-hole card: a tile that reports numbers instead of a status line. Two grid
+   columns wide, degrading to one on a narrow bay so it never forces a
+   horizontal scroll. */
+.dash-tile-wide { grid-column: span 2; }
+@media (max-width: 640px) { .dash-tile-wide { grid-column: span 1; } }
+.dash-card-chip {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--amber);
+  white-space: nowrap;
+}
+.dash-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 18px;
+  margin-top: 10px;
+}
+.dash-card-cell { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
+.dash-card-label { font-size: 10px; letter-spacing: 0.12em; color: var(--dim); }
+.dash-card-value { font-size: 13px; color: var(--amber); font-variant-numeric: tabular-nums; }
+.dash-card-error { margin-top: 10px; font-size: 12px; color: var(--orange); }
 .dash-infra-groups { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
 .dash-infra-extra { display: flex; flex-direction: column; gap: 12px; }
 .dash-infra-extra:empty { display: none; }

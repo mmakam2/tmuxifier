@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createServicesStore } from '../src/server/servicesStore.js';
+import { createSecretBox } from '../src/server/secretBox.js';
 
 let dir, store;
 beforeEach(async () => {
@@ -87,4 +88,74 @@ test('section defaults to services, accepts infrastructure, rejects junk, surviv
   await expect(store.addService({ ...spec, section: 'chassis' })).rejects.toThrow(/section/);
   const upd = await store.updateService(infra.id, { name: 'AdGuard' });
   expect(upd.section).toBe('infrastructure'); // merge keeps the stored section
+});
+
+const piSpec = {
+  name: 'pihole', url: 'https://pihole.example.com', group: 'DNS Filtering',
+  check: { kind: 'pihole' }, password: 'app-pw',
+};
+
+test('pihole check accepts an optional target and insecure flag', async () => {
+  const s = createServicesStore({ dataDir: dir, secretBox: createSecretBox('k') });
+  const a = await s.addService(piSpec);
+  expect(a.check).toEqual({ kind: 'pihole' });
+  const b = await s.addService({ ...piSpec, name: 'pihole2', check: { kind: 'pihole', target: 'http://192.168.1.5/', insecure: true } });
+  expect(b.check).toEqual({ kind: 'pihole', target: 'http://192.168.1.5/', insecure: true });
+  await expect(s.addService({ ...piSpec, name: 'bad', check: { kind: 'pihole', target: 'nonsense' } })).rejects.toThrow(/URL|http/);
+});
+
+test('the app password is sealed on disk, redacted on read, and openable by the store', async () => {
+  const s = createServicesStore({ dataDir: dir, secretBox: createSecretBox('k') });
+  const svc = await s.addService(piSpec);
+  expect(svc.hasPassword).toBe(true);
+  expect(svc.secret).toBeUndefined();
+  expect(JSON.stringify(await s.listServices())).not.toContain('app-pw');
+
+  const raw = await fs.readFile(path.join(dir, 'services.json'), 'utf8');
+  expect(raw).not.toContain('app-pw');
+  expect(raw).toContain('pvebox.v1');
+
+  expect(await s.getServiceSecret(svc.id)).toBe('app-pw');
+});
+
+test('updating without a password keeps it; null clears it', async () => {
+  const s = createServicesStore({ dataDir: dir, secretBox: createSecretBox('k') });
+  const svc = await s.addService(piSpec);
+
+  const renamed = await s.updateService(svc.id, { name: 'pihole-renamed' });
+  expect(renamed.hasPassword).toBe(true);
+  expect(await s.getServiceSecret(svc.id)).toBe('app-pw');
+
+  const rotated = await s.updateService(svc.id, { password: 'new-pw' });
+  expect(rotated.hasPassword).toBe(true);
+  expect(await s.getServiceSecret(svc.id)).toBe('new-pw');
+
+  const cleared = await s.updateService(svc.id, { password: null });
+  expect(cleared.hasPassword).toBe(false);
+  expect(await s.getServiceSecret(svc.id)).toBe(null);
+});
+
+test('switching a service away from the pihole kind drops the stored password', async () => {
+  const s = createServicesStore({ dataDir: dir, secretBox: createSecretBox('k') });
+  const svc = await s.addService(piSpec);
+  const plain = await s.updateService(svc.id, { check: { kind: 'http' } });
+  expect(plain.hasPassword).toBe(false);
+  expect(await s.getServiceSecret(svc.id)).toBe(null);
+  expect(await fs.readFile(path.join(dir, 'services.json'), 'utf8')).not.toContain('pvebox.v1');
+});
+
+test('a legacy record with no secret loads and reports hasPassword false', async () => {
+  await fs.writeFile(path.join(dir, 'services.json'), JSON.stringify({
+    version: 1,
+    services: [{ id: 'svc-legacy', name: 'Grafana', url: 'https://192.168.1.20:3000/', section: 'services', check: { kind: 'http' }, createdAt: '2026-01-01T00:00:00.000Z' }],
+  }));
+  const s = createServicesStore({ dataDir: dir, secretBox: createSecretBox('k') });
+  const [svc] = await s.listServices();
+  expect(svc.hasPassword).toBe(false);
+  expect(await s.getServiceSecret('svc-legacy')).toBe(null);
+});
+
+test('a password without a configured secretBox is refused rather than stored in the clear', async () => {
+  const s = createServicesStore({ dataDir: dir });
+  await expect(s.addService(piSpec)).rejects.toThrow(/secret/i);
 });

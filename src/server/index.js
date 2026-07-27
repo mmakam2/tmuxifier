@@ -8,6 +8,7 @@ import { createStatusChecker } from './status.js';
 import { createStatusPoller } from './statusPoller.js';
 import { createServicesStore } from './servicesStore.js';
 import { createServiceChecker } from './serviceChecker.js';
+import { createPiholeRegistry } from './piholeRegistry.js';
 import { createSessionManager } from './sessions.js';
 import { sshRun, sshRunStdin, sshStream } from './sshRun.js';
 import { createBoxActions, buildEnsureSessionRemote } from './boxActions.js';
@@ -261,8 +262,10 @@ const statusPoller = createStatusPoller({
 
 // The standby dashboard's service tiles: one sweep loop, same rationale as the
 // status poller — check volume is independent of open tab count.
-const servicesStore = createServicesStore({ dataDir: config.dataDir });
-const serviceChecker = createServiceChecker({ store: servicesStore, intervalMs: config.servicePollMs });
+// The store takes secretBox because a pihole tile carries a sealed app password.
+const servicesStore = createServicesStore({ dataDir: config.dataDir, secretBox });
+const piholeRegistry = createPiholeRegistry({ store: servicesStore });
+const serviceChecker = createServiceChecker({ store: servicesStore, piholeRegistry, intervalMs: config.servicePollMs });
 
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
@@ -289,7 +292,12 @@ app.listen({ host: config.bindAddress, port: config.port })
     // restart cannot lose a just-finished job's final save (which would make it
     // reload as 'interrupted').
     registerShutdownFlush({
-      flush: [fleetStore, setupStore, provisionStore, lifecycleStore].map((s) => () => s.whenIdle()),
+      flush: [
+        ...[fleetStore, setupStore, provisionStore, lifecycleStore].map((s) => () => s.whenIdle()),
+        // Revoke Pi-hole sessions rather than leak one per configured Pi-hole
+        // across every restart — v6 caps how many can be live at once.
+        () => piholeRegistry.closeAll(),
+      ],
       voiceEngine: { stop: async () => { if (voiceEngine) await voiceEngine.stop(); } },
     });
     statusPoller.start().catch((err) => console.error('status poll failed to start:', err));

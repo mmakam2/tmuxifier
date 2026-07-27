@@ -33,18 +33,39 @@ export interface Sample {
   // latest sample's `agent` for its working/waiting chip (paneHeader.ts).
   agent?: 'working' | 'waiting' | 'unknown'; agentAttached?: boolean;
 }
-export type ServiceCheckKind = 'http' | 'tcp' | 'none';
+export type ServiceCheckKind = 'http' | 'tcp' | 'none' | 'pihole';
 export type ServiceSection = 'services' | 'infrastructure';
-export interface ServiceCheck { kind: ServiceCheckKind; target?: string }
+export interface ServiceCheck { kind: ServiceCheckKind; target?: string; insecure?: boolean }
 export interface Service {
   id: string; name: string; url: string; glyph?: string; group?: string;
   // Absent on records written before sections existed — read as 'services'.
   section?: ServiceSection;
   check: ServiceCheck; createdAt: string;
+  // pihole only. The app password itself never reaches the browser.
+  hasPassword?: boolean;
 }
-// glyph/group accept null: the server's PATCH merge treats null as "clear".
-export type ServiceSpec = Partial<Omit<Service, 'id' | 'createdAt' | 'glyph' | 'group'>> & { glyph?: string | null; group?: string | null };
-export interface ServiceResult { state: 'up' | 'down'; latencyMs?: number; error?: string }
+// glyph/group/password accept null: the server's PATCH merge treats null as
+// "clear", while an absent key means "leave it alone" — which is what an
+// untouched password field must send.
+export type ServiceSpec =
+  Partial<Omit<Service, 'id' | 'createdAt' | 'glyph' | 'group' | 'hasPassword'>>
+  & { glyph?: string | null; group?: string | null; password?: string | null };
+export interface PiholeMetrics {
+  blocking: 'enabled' | 'disabled';
+  blockingTimer: number | null;
+  queriesTotal: number | null;
+  queriesBlocked: number | null;
+  percentBlocked: number | null;
+  clientsActive: number | null;
+  clientsTotal: number | null;
+  gravityDomains: number | null;
+  versionCore: string | null;
+  versionWeb: string | null;
+  versionFtl: string | null;
+  updateAvailable: boolean;
+  uptimeSec: number | null;
+}
+export interface ServiceResult { state: 'up' | 'down' | 'auth'; latencyMs?: number; error?: string; metrics?: PiholeMetrics }
 export interface ServiceStatusSnapshot { checkedAt: string | null; results: Record<string, ServiceResult> }
 export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'key-changed' | 'threshold' | 'threshold-clear' | 'agent-input' | 'agent-done';
 export interface HealthEvent {
@@ -144,6 +165,11 @@ export const api = {
   },
   async removeService(id: string) { return j(await fetch(`/api/services/${id}`, { method: 'DELETE' })); },
   async servicesStatus() { return j<ServiceStatusSnapshot>(await fetch(`/api/services/status?t=${Date.now()}`)); },
+  async testPihole(body: { url: string; password?: string; insecure?: boolean; id?: string }) {
+    return j<{ ok: boolean; version?: string | null; error?: string }>(
+      await fetch('/api/services/pihole/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    );
+  },
   async status() { return j<Record<string, Status>>(await fetch(`/api/status?t=${Date.now()}`)); },
   async healthSeries() { return j<Record<string, Sample[]>>(await fetch(`/api/health/series?t=${Date.now()}`)); },
   async healthEvents() { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?t=${Date.now()}`)); },

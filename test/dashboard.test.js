@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { groupServices, fmtLatency, serviceLamp, dashboardMode, pveHostRollup, nodeModules, partitionInfraGroups, sectionServices } from '../src/web/dashboard.ts';
+import { groupServices, fmtLatency, serviceLamp, dashboardMode, pveHostRollup, nodeModules, partitionInfraGroups, sectionServices, fmtCount, fmtCompact, fmtUptime, piholeCardModel } from '../src/web/dashboard.ts';
 
 const svc = (id, group, kind = 'http') => ({ id, name: id, url: 'http://x.example.com/', group, check: { kind }, createdAt: '' });
 
@@ -78,4 +78,77 @@ test('partitionInfraGroups: proxmox/ipam categories merge into the built-ins, ot
 test('sectionServices keeps only the services section, defaulting legacy records in', () => {
   const s = (id, section) => ({ ...svc(id, undefined), section });
   expect(sectionServices([s('a', 'services'), s('b', 'infrastructure'), s('c', undefined)]).map((x) => x.id)).toEqual(['a', 'c']);
+});
+
+const piSvc = { id: 'p', name: 'pihole', url: 'http://x.example.com/', check: { kind: 'pihole' }, createdAt: '' };
+const metrics = {
+  blocking: 'enabled', blockingTimer: null,
+  queriesTotal: 48132, queriesBlocked: 10780, percentBlocked: 22.396,
+  clientsActive: 31, clientsTotal: 54, gravityDomains: 1284933,
+  versionCore: 'v6.2.1', versionWeb: 'v6.2', versionFtl: 'v6.2.3',
+  updateAvailable: false, uptimeSec: 1220400,
+};
+const snap = (result) => ({ checkedAt: '2026-07-27T00:00:00.000Z', results: { p: result } });
+
+test('fmtCount groups thousands and dashes a missing number', () => {
+  expect(fmtCount(48132)).toBe('48,132');
+  expect(fmtCount(0)).toBe('0');
+  expect(fmtCount(null)).toBe('—');
+});
+
+test('fmtCompact abbreviates millions and thousands', () => {
+  expect(fmtCompact(1284933)).toBe('1.28M');
+  expect(fmtCompact(250000)).toBe('250.0k');
+  expect(fmtCompact(9999)).toBe('9,999');
+  expect(fmtCompact(null)).toBe('—');
+});
+
+test('fmtUptime reads in the largest two units', () => {
+  expect(fmtUptime(1220400)).toBe('14d 3h');
+  expect(fmtUptime(11520)).toBe('3h 12m');
+  expect(fmtUptime(480)).toBe('8m');
+  expect(fmtUptime(0)).toBe('0m');
+  expect(fmtUptime(null)).toBe('—');
+});
+
+test('piholeCardModel lays out all six readings', () => {
+  const card = piholeCardModel(piSvc, snap({ state: 'up', latencyMs: 40, metrics }));
+  expect(card.lamp).toBe('green');
+  expect(card.chip).toBe('blocking on');
+  expect(card.error).toBe('');
+  expect(card.rows).toEqual([
+    { label: 'QUERIES', value: '48,132' },
+    { label: 'BLOCKED', value: '22.4%' },
+    { label: 'CLIENTS', value: '31/54' },
+    { label: 'DOMAINS', value: '1.28M' },
+    { label: 'VERSION', value: 'v6.2.1' },
+    { label: 'UPTIME', value: '14d 3h' },
+  ]);
+});
+
+test('piholeCardModel marks an available update on the version row', () => {
+  const card = piholeCardModel(piSvc, snap({ state: 'up', metrics: { ...metrics, updateAvailable: true } }));
+  expect(card.rows.find((r) => r.label === 'VERSION').value).toBe('v6.2.1 ↑');
+});
+
+test('piholeCardModel shows the remaining timer while blocking is disabled', () => {
+  const off = piholeCardModel(piSvc, snap({ state: 'up', metrics: { ...metrics, blocking: 'disabled', blockingTimer: 1680 } }));
+  expect(off.chip).toBe('blocking off · 28m left');
+  const indefinite = piholeCardModel(piSvc, snap({ state: 'up', metrics: { ...metrics, blocking: 'disabled', blockingTimer: null } }));
+  expect(indefinite.chip).toBe('blocking off');
+});
+
+test('piholeCardModel renders the three degraded states instead of numbers', () => {
+  const auth = piholeCardModel(piSvc, snap({ state: 'auth', error: 'app password rejected' }));
+  expect(auth).toMatchObject({ lamp: 'auth', rows: [], chip: '', error: 'app password rejected' });
+
+  const down = piholeCardModel(piSvc, snap({ state: 'down', error: 'timeout' }));
+  expect(down).toMatchObject({ lamp: 'red', rows: [], error: 'timeout' });
+
+  const pending = piholeCardModel(piSvc, null);
+  expect(pending).toMatchObject({ lamp: '', rows: [], error: '' });
+});
+
+test('serviceLamp surfaces the auth state', () => {
+  expect(serviceLamp(piSvc, snap({ state: 'auth', error: 'x' }))).toBe('auth');
 });

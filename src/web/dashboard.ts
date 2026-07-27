@@ -47,10 +47,69 @@ export function fmtLatency(ms?: number): string {
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function serviceLamp(svc: Service, snap: ServiceStatusSnapshot | null): 'up' | 'down' | 'unknown' | 'none' {
+export function serviceLamp(svc: Service, snap: ServiceStatusSnapshot | null): 'up' | 'down' | 'auth' | 'unknown' | 'none' {
   if (svc.check.kind === 'none') return 'none';
   const r = snap?.results[svc.id];
   return r ? r.state : 'unknown';
+}
+
+export function fmtCount(n: number | null | undefined): string {
+  if (n == null) return '—';
+  return Math.round(n).toLocaleString('en-US');
+}
+
+// Gravity lists run to millions; a raw digit run is unreadable at tile size.
+export function fmtCompact(n: number | null | undefined): string {
+  if (n == null) return '—';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 10_000) return `${(n / 1_000).toFixed(1)}k`;
+  return fmtCount(n);
+}
+
+export function fmtUptime(sec: number | null | undefined): string {
+  if (sec == null) return '—';
+  const s = Math.max(0, Math.floor(sec));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+export interface PiholeCard {
+  lamp: 'green' | 'red' | 'auth' | '';
+  chip: string;
+  rows: { label: string; value: string }[];
+  error: string;
+}
+
+// The card's whole layout decision, kept pure: the DOM layer only writes these
+// strings into slots. A degraded Pi-hole shows one error line rather than a grid
+// of dashes — six blank readings say less than one sentence does.
+export function piholeCardModel(svc: Service, snap: ServiceStatusSnapshot | null): PiholeCard {
+  const r = snap?.results[svc.id];
+  if (!r) return { lamp: '', chip: '', rows: [], error: '' };
+  if (r.state === 'auth') return { lamp: 'auth', chip: '', rows: [], error: r.error || 'authentication failed' };
+  if (r.state === 'down' || !r.metrics) return { lamp: 'red', chip: '', rows: [], error: r.error || 'unreachable' };
+
+  const m = r.metrics;
+  const timer = m.blocking === 'disabled' && m.blockingTimer != null
+    ? ` · ${fmtUptime(m.blockingTimer)} left`
+    : '';
+  return {
+    lamp: 'green',
+    chip: `blocking ${m.blocking === 'disabled' ? 'off' : 'on'}${timer}`,
+    error: '',
+    rows: [
+      { label: 'QUERIES', value: fmtCount(m.queriesTotal) },
+      { label: 'BLOCKED', value: m.percentBlocked == null ? '—' : `${m.percentBlocked.toFixed(1)}%` },
+      { label: 'CLIENTS', value: `${fmtCount(m.clientsActive)}/${fmtCount(m.clientsTotal)}` },
+      { label: 'DOMAINS', value: fmtCompact(m.gravityDomains) },
+      { label: 'VERSION', value: `${m.versionCore ?? '—'}${m.updateAvailable ? ' ↑' : ''}` },
+      { label: 'UPTIME', value: fmtUptime(m.uptimeSec) },
+    ],
+  };
 }
 
 export function dashboardMode(boxCount: number, serviceCount: number): 'standby' | 'dash' {
@@ -165,6 +224,12 @@ interface Tile {
   lamp: HTMLElement; latency: HTMLElement;
 }
 
+// A Pi-hole reports numbers, so it renders as a wide card rather than a lamp.
+interface Card {
+  root: HTMLAnchorElement; name: HTMLElement; lamp: HTMLElement; chip: HTMLElement;
+  grid: HTMLElement; error: HTMLElement;
+}
+
 export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; update(patch: Partial<DashboardData>): void; destroy(): void } {
   const data: DashboardData = { boxes: [], status: {}, series: {}, services: [], serviceStatus: null, containers: null, nodes: null, netbox: null };
   let stale = false; // a failed services poll dims the section, keeps the paint
@@ -238,6 +303,7 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
   // reorders without recreating), so hover and focus survive poll repaints.
   const boxEls = new Map<string, FleetRow>();
   const tileEls = new Map<string, Tile>();
+  const cardEls = new Map<string, Card>();
   const groupEls = new Map<string | null, { root: HTMLElement; legendEl: HTMLElement | null; grid: HTMLElement }>();
   const infraGroupEls = new Map<string | null, { root: HTMLElement; grid: HTMLElement }>();
   // Tiles render across two sections (Services + Infrastructure categories);
@@ -322,8 +388,61 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
   // Create-or-update one tile and record the sighting; the caller appends the
   // returned element into whichever grid the tile belongs to this repaint
   // (appendChild moves an existing node, so hover survives regrouping too).
+  function makeCard(): Card {
+    const root = document.createElement('a');
+    root.className = 'dash-tile dash-tile-wide';
+    root.target = '_blank';
+    root.rel = 'noopener';
+    const lamp = document.createElement('span');
+    lamp.className = 'dot';
+    const name = div('dash-tile-name');
+    const chip = document.createElement('span');
+    chip.className = 'dash-card-chip';
+    const top = div('dash-tile-top');
+    top.append(lamp, name, chip);
+    const grid = div('dash-card-grid');
+    const error = div('dash-card-error');
+    root.append(top, grid, error);
+    return { root, name, lamp, chip, grid, error };
+  }
+
+  function paintPiholeCard(svc: Service): HTMLElement {
+    let card = cardEls.get(svc.id);
+    if (!card) { card = makeCard(); cardEls.set(svc.id, card); }
+    const model = piholeCardModel(svc, data.serviceStatus);
+    card.root.href = svc.url;
+    card.name.textContent = svc.name;
+    card.lamp.className = `dot ${model.lamp}`.trim();
+    card.chip.textContent = model.chip;
+    card.chip.hidden = !model.chip;
+    card.error.textContent = model.error;
+    card.error.hidden = !model.error;
+    card.root.title = model.error;
+
+    // Rebuild only when the row count changes; otherwise write in place so the
+    // poll never disturbs hover or text selection (the tile contract).
+    if (card.grid.children.length !== model.rows.length) {
+      card.grid.replaceChildren(...model.rows.map(() => {
+        const cell = div('dash-card-cell');
+        cell.append(div('dash-card-label'), div('dash-card-value'));
+        return cell;
+      }));
+    }
+    const grid = card.grid;
+    model.rows.forEach((row, i) => {
+      const cell = grid.children[i] as HTMLElement;
+      (cell.firstChild as HTMLElement).textContent = row.label;
+      (cell.lastChild as HTMLElement).textContent = row.value;
+    });
+    grid.hidden = model.rows.length === 0;
+    return card.root;
+  }
+
   function paintTile(svc: Service): HTMLElement {
     tilesSeen.add(svc.id);
+    // A Pi-hole reports numbers, so it renders as a card rather than a lamp;
+    // everything downstream (grouping, ordering, cleanup) treats it as a tile.
+    if (svc.check.kind === 'pihole') return paintPiholeCard(svc);
     let tile = tileEls.get(svc.id);
     if (!tile) { tile = makeTile(); tileEls.set(svc.id, tile); }
     tile.root.href = svc.url;
@@ -332,7 +451,7 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     tile.glyph.hidden = !svc.glyph;
     const lampState = serviceLamp(svc, data.serviceStatus);
     tile.lamp.hidden = lampState === 'none';
-    tile.lamp.className = `dot${lampState === 'up' ? ' green' : lampState === 'down' ? ' red' : ''}`;
+    tile.lamp.className = `dot${lampState === 'up' ? ' green' : lampState === 'down' ? ' red' : lampState === 'auth' ? ' auth' : ''}`;
     const result = data.serviceStatus?.results[svc.id];
     tile.latency.textContent = lampState === 'none' ? '' : fmtLatency(result?.latencyMs);
     tile.root.title = result?.state === 'down' && result.error ? result.error : '';
@@ -454,6 +573,9 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     for (const [id, tile] of tileEls) {
       if (!tilesSeen.has(id)) { tile.root.remove(); tileEls.delete(id); }
     }
+    for (const [id, card] of cardEls) {
+      if (!tilesSeen.has(id)) { card.root.remove(); cardEls.delete(id); }
+    }
     fleet.hidden = mode === 'standby' || data.boxes.length === 0;
     services.hidden = mode === 'standby';
     if (mode === 'standby') infra.hidden = true;
@@ -479,6 +601,7 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     el.remove();
     boxEls.clear();
     tileEls.clear();
+    cardEls.clear();
     groupEls.clear();
     infraGroupEls.clear();
   }

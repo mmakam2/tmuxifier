@@ -15,6 +15,7 @@ import { readJsonSync, writeJsonSync } from './jsonFile.js';
 import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
 import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js';
 import { testNetbox, createNetboxClient, netboxSummary } from './netboxApi.js';
+import { createPiholeClient } from './piholeApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
 import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault } from './tmuxInject.js';
 import { normalizeTranscript } from './voiceText.js';
@@ -88,7 +89,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -798,6 +799,31 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
   // Served purely from the sweep cache — a dashboard poll never triggers checks.
   app.get('/api/services/status', { preHandler: requireAuth }, async () => serviceChecker.getSnapshot());
+
+  // Save-and-pray is a poor way to discover that Pi-hole v6 wants an *app*
+  // password rather than the web login password, so the form can probe first.
+  // The probe revokes its own session — v6 caps concurrent sessions.
+  app.post('/api/services/pihole/test', { preHandler: requireAuth }, async (req) => {
+    const { url, password, insecure, id } = req.body || {};
+    const base = typeof url === 'string' ? url.trim() : '';
+    try {
+      const u = new URL(base);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('must be http(s)');
+    } catch {
+      return { ok: false, error: 'enter a valid http(s) URL for the Pi-hole' };
+    }
+    // A blank password on an existing service means "use the one already stored",
+    // so Test works while editing without retyping the secret.
+    let secret = typeof password === 'string' ? password : '';
+    if (!secret && id) secret = (await servicesStore.getServiceSecret(id)) || '';
+    const client = makePiholeClient({ baseUrl: base, password: secret, insecure: insecure === true });
+    try {
+      const res = await client.fetchVersion();
+      return res.ok ? { ok: true, version: res.version } : { ok: false, error: res.error };
+    } finally {
+      await client.close();
+    }
+  });
 
   app.post('/api/fleet/jobs', { preHandler: requireAuth }, async (req, reply) => {
     const { boxIds, command } = req.body || {};

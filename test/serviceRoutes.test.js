@@ -7,12 +7,14 @@ import { createStore } from '../src/server/store.js';
 import { createServicesStore } from '../src/server/servicesStore.js';
 import { createServiceChecker } from '../src/server/serviceChecker.js';
 import { hashPassword } from '../src/server/auth.js';
+import { createSecretBox } from '../src/server/secretBox.js';
+import { startFakePihole } from './helpers/fakePihole.js';
 
 let app, dir, servicesStore, serviceChecker;
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-svcr-'));
-  servicesStore = createServicesStore({ dataDir: dir });
+  servicesStore = createServicesStore({ dataDir: dir, secretBox: createSecretBox('test-secret') });
   serviceChecker = createServiceChecker({
     store: servicesStore,
     check: async () => ({ state: 'up', latencyMs: 7 }),
@@ -72,4 +74,67 @@ test('status route serves the cached snapshot without triggering checks', async 
   await serviceChecker.pollOnce();
   const after = await app.inject({ method: 'GET', url: '/api/services/status', headers: h });
   expect(Object.values(after.json().results)).toEqual([{ state: 'up', latencyMs: 7 }]);
+});
+
+test('GET /api/services never leaks the sealed password', async () => {
+  const h = await headers();
+  const pi = await startFakePihole();
+  await app.inject({
+    method: 'POST', url: '/api/services', headers: h,
+    payload: { name: 'pihole', url: pi.baseUrl, check: { kind: 'pihole' }, password: 'app-pw' },
+  });
+  const res = await app.inject({ method: 'GET', url: '/api/services', headers: h });
+  await pi.stop();
+  expect(res.statusCode).toBe(200);
+  expect(res.body).not.toContain('app-pw');
+  expect(res.body).not.toContain('pvebox.v1');
+  expect(res.json()[0].hasPassword).toBe(true);
+});
+
+test('POST /api/services/pihole/test reports a good password with the version', async () => {
+  const h = await headers();
+  const pi = await startFakePihole();
+  const res = await app.inject({
+    method: 'POST', url: '/api/services/pihole/test', headers: h,
+    payload: { url: pi.baseUrl, password: 'app-pw' },
+  });
+  await pi.stop();
+  expect(res.json()).toEqual({ ok: true, version: 'v6.2.1' });
+  expect(pi.counts.delete).toBe(1); // the probe revokes its own session
+});
+
+test('POST /api/services/pihole/test reports a bad password without echoing it', async () => {
+  const h = await headers();
+  const pi = await startFakePihole({ password: 'right' });
+  const res = await app.inject({
+    method: 'POST', url: '/api/services/pihole/test', headers: h,
+    payload: { url: pi.baseUrl, password: 'wrong' },
+  });
+  await pi.stop();
+  const body = res.json();
+  expect(body.ok).toBe(false);
+  expect(body.error).toMatch(/app password/i);
+  expect(res.body).not.toContain('wrong');
+});
+
+test('POST /api/services/pihole/test falls back to the stored password when none is typed', async () => {
+  const h = await headers();
+  const pi = await startFakePihole();
+  const created = await app.inject({
+    method: 'POST', url: '/api/services', headers: h,
+    payload: { name: 'pihole', url: pi.baseUrl, check: { kind: 'pihole' }, password: 'app-pw' },
+  });
+  const res = await app.inject({
+    method: 'POST', url: '/api/services/pihole/test', headers: h,
+    payload: { id: created.json().id, url: pi.baseUrl, password: '' },
+  });
+  await pi.stop();
+  expect(res.json().ok).toBe(true);
+});
+
+test('POST /api/services/pihole/test requires authentication and a url', async () => {
+  const h = await headers();
+  expect((await app.inject({ method: 'POST', url: '/api/services/pihole/test', payload: { url: 'http://127.0.0.1/' } })).statusCode).toBe(401);
+  const bad = await app.inject({ method: 'POST', url: '/api/services/pihole/test', headers: h, payload: { url: 'nonsense' } });
+  expect(bad.json().ok).toBe(false);
 });
