@@ -221,8 +221,17 @@ pattern for new modules.
   shell frameworks + tool catalog from `buildEnsureTmuxRemote`) as a persisted, pollable, resumable
   server-side job over the shared ControlMaster, streaming into a rolling capped log; statuses
   `running`/`done`/`error`/`needs-interactive`/`interrupted`/`superseded` (a stale
-  needs-interactive job replaced by a newer run for the same box) — a sudo-password stderr signature
-  flips a job to `needs-interactive` for an on-demand interactive finish, and `running` jobs
+  needs-interactive job replaced by a newer run for the same box) — two stderr signatures flip a job
+  to `needs-interactive` for an on-demand interactive finish, recording which credential it stalled
+  on in `job.needs`: a sudo-password prompt (`needs: 'sudo'`) and ssh's own auth failure against a
+  box whose sshd offers an interactive method, i.e. `Permission denied (publickey,password)`
+  (`needs: 'ssh'`). The setup run is `BatchMode`, so it can never answer either prompt, but the
+  interactive finish (`buildProvisionArgv`: `-tt`, no BatchMode) can. Matching the server-offered
+  method list is deliberate: a key-only `Permission denied (publickey).` has no interactive method to
+  fall back on and stays a hard `error`, so key-auth boxes keep their existing path. A password-only
+  box is usable but second-class — every background caller (status poller, Fleet, uploads, seeding)
+  is `BatchMode`, so it authenticates only while a ControlMaster is alive and reads unreachable
+  after `controlPersist` expires. `running` jobs
   reconcile to `interrupted` on restart. Never removes a box on failure (keep-box + retry).
   On reaching `done` — from either the non-interactive run or an interactive finish — a job whose
   options asked for it seeds the box's AI CLI auth (injected `seed`/`getBox`) under a `seeding`

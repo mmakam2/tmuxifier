@@ -1,6 +1,6 @@
 import type { SeedResult, SetupJob, SetupStatus } from './api';
 
-export function setupStatusText(job: Pick<SetupJob, 'status' | 'phase' | 'error'>): string {
+export function setupStatusText(job: Pick<SetupJob, 'status' | 'phase' | 'error' | 'needs'>): string {
   switch (job.status) {
     case 'running':
       return job.phase === 'waiting-ssh' ? 'Waiting for SSH…'
@@ -9,7 +9,13 @@ export function setupStatusText(job: Pick<SetupJob, 'status' | 'phase' | 'error'
         : 'Running setup…';
     case 'done': return 'Setup complete ✓';
     case 'error': return `Setup failed${job.error ? ` — ${job.error}` : ''}`;
-    case 'needs-interactive': return 'Needs sudo password — finish interactively';
+    // `needs` records which credential the run stalled on. It defaults to the
+    // sudo wording because jobs persisted before that field existed could only
+    // ever have parked for sudo.
+    case 'needs-interactive':
+      return job.needs === 'ssh'
+        ? 'Needs an SSH password — finish interactively'
+        : 'Needs sudo password — finish interactively';
     case 'interrupted': return 'Setup interrupted (server restarted) — retry';
     default: return String(job.status);
   }
@@ -27,12 +33,13 @@ export function setupActions(status: SetupStatus): SetupAction[] {
   }
 }
 
-export function setupBadge(status: SetupStatus): { text: string; cls: string } | null {
+export function setupBadge(status: SetupStatus, needs?: SetupJob['needs']): { text: string; cls: string } | null {
   switch (status) {
     case 'running': return { text: 'setting up', cls: 'badge-info' };
     case 'error':
     case 'interrupted': return { text: 'setup failed', cls: 'badge-warn' };
-    case 'needs-interactive': return { text: 'needs sudo', cls: 'badge-warn' };
+    case 'needs-interactive':
+      return { text: needs === 'ssh' ? 'needs password' : 'needs sudo', cls: 'badge-warn' };
     default: return null;
   }
 }
