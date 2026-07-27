@@ -19,6 +19,9 @@ const GLYPHS: { glyph: string; label: string }[] = [
   { glyph: '', label: 'code' },
 ];
 
+// Check kinds that authenticate, and so carry a stored credential.
+const CREDENTIAL_KINDS: ServiceCheckKind[] = ['pihole', 'truenas'];
+
 // Pure so it can be tested without a DOM (the repo's web-test convention).
 // null (not undefined) for cleared optionals: the server's PATCH merge treats
 // null as "clear this field", while an absent key means "leave it alone" —
@@ -26,12 +29,19 @@ const GLYPHS: { glyph: string; label: string }[] = [
 export function buildServicePayload(f: {
   name: string; url: string; glyph: string; group: string;
   kind: ServiceCheckKind; target: string; section: ServiceSection;
-  password?: string; clearPassword?: boolean; insecure?: boolean;
+  username?: string; password?: string; clearPassword?: boolean; insecure?: boolean;
 }): ServiceSpec {
   const target = f.target.trim();
   let check: ServiceCheck;
   if (f.kind === 'pihole') {
     check = { kind: 'pihole', ...(target ? { target } : {}), ...(f.insecure ? { insecure: true } : {}) };
+  } else if (f.kind === 'truenas') {
+    check = {
+      kind: 'truenas',
+      username: (f.username ?? '').trim(),
+      ...(target ? { target } : {}),
+      ...(f.insecure ? { insecure: true } : {}),
+    };
   } else if (f.kind === 'none' || !target) {
     check = { kind: f.kind };
   } else {
@@ -45,7 +55,7 @@ export function buildServicePayload(f: {
     section: f.section,
     check,
   };
-  if (f.kind === 'pihole') {
+  if (CREDENTIAL_KINDS.includes(f.kind)) {
     if (f.clearPassword) payload.password = null;
     else if (f.password?.trim()) payload.password = f.password;
   }
@@ -74,6 +84,7 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
   const glyphIn = el('input', { type: 'text', class: 'svc-glyph-input', autocomplete: 'off' }) as HTMLInputElement;
   const groupIn = el('input', { type: 'text', placeholder: 'e.g. Monitoring', autocomplete: 'off' }) as HTMLInputElement;
   const targetIn = el('input', { type: 'text', autocomplete: 'off' }) as HTMLInputElement;
+  const usernameIn = el('input', { type: 'text', autocomplete: 'off', placeholder: 'truenas_admin' }) as HTMLInputElement;
   const passwordIn = el('input', { type: 'password', autocomplete: 'new-password' }) as HTMLInputElement;
   const insecureIn = el('input', { type: 'checkbox' }) as HTMLInputElement;
   const clearPwBtn = el('button', { type: 'button', class: 'pve-btn' }, ['Clear']);
@@ -103,28 +114,41 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
   const section = (): ServiceSection =>
     (Object.entries(sectionRadios).find(([, r]) => r.input.checked)?.[0] as ServiceSection) ?? 'services';
 
-  // Pi-hole v6 reads its stats over an authenticated REST API, so this check
-  // needs a credential the others don't — and, because it sends one, it verifies
-  // TLS by default rather than tolerating any certificate the way http/tcp do.
+  // Pi-hole v6 and TrueNAS both read their stats over an authenticated API, so
+  // these checks need a credential the others don't — and, because they send
+  // one, they verify TLS by default rather than tolerating any certificate the
+  // way http/tcp do. Only one kind is active at a time, so the widgets are
+  // shared and only their wording swaps.
   const passwordField = field('App password', el('div', { class: 'pve-inline' }, [passwordIn, clearPwBtn]));
+  const credentialLabel = passwordField.querySelector('span') as HTMLElement;
+  const usernameField = field('Username the API key belongs to', usernameIn);
   const insecureField = field('TLS', el('label', { class: 'svc-inline-check' }, [insecureIn, ' Allow a self-signed certificate']));
-  const piholeHelp = el('p', { class: 'pve-sub' }, [
-    'Pi-hole v6 only. Create the credential on the Pi-hole under Settings → Web interface / API → Configure app password; an app password works even when two-factor is enabled, the web login password does not.',
+  const credentialHelp = el('p', { class: 'pve-sub' }, ['']);
+  const credentialGroup = el('div', {}, [
+    credentialHelp, usernameField, passwordField, insecureField,
+    el('div', { class: 'pve-inline' }, [testBtn]),
   ]);
-  const piholeGroup = el('div', {}, [piholeHelp, passwordField, insecureField, el('div', { class: 'pve-inline' }, [testBtn])]);
+
+  const PIHOLE_HELP = 'Pi-hole v6 only. Create the credential on the Pi-hole under Settings → Web interface / API → Configure app password; an app password works even when two-factor is enabled, the web login password does not.';
+  const TRUENAS_HELP = 'TrueNAS 25.04 or later (it speaks JSON-RPC over WebSocket; the old REST API is gone in TrueNAS 26). Create a user-linked key under Credentials → Users → API Keys and give it the READONLY_ADMIN role. The URL must be https — TrueNAS permanently revokes any API key sent over plain HTTP.';
 
   const targetField = field('Probe URL (optional)', targetIn);
   const syncTarget = () => {
     const k = kind();
+    const needsCredential = k === 'pihole' || k === 'truenas';
     targetField.hidden = k === 'none';
-    piholeGroup.hidden = k !== 'pihole';
+    credentialGroup.hidden = !needsCredential;
+    usernameField.hidden = k !== 'truenas';
+    credentialLabel.textContent = k === 'truenas' ? 'API key' : 'App password';
+    credentialHelp.textContent = k === 'truenas' ? TRUENAS_HELP : PIHOLE_HELP;
     (targetField.querySelector('span') as HTMLElement).textContent =
       k === 'tcp' ? 'Host:port'
-        : k === 'pihole' ? 'API base URL (optional — defaults to the link URL)'
+        : needsCredential ? 'API base URL (optional — defaults to the link URL)'
           : 'Probe URL (optional — defaults to the link URL)';
     targetIn.placeholder = k === 'tcp' ? '192.168.1.10:53'
       : k === 'pihole' ? 'https://pihole.example.com'
-        : 'https://192.168.1.10:3000/health';
+        : k === 'truenas' ? 'https://nas.example.com'
+          : 'https://192.168.1.10:3000/health';
   };
   for (const r of Object.values(radios)) r.input.addEventListener('change', syncTarget);
 
@@ -138,15 +162,20 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
 
   testBtn.addEventListener('click', async () => {
     setStatus('Testing…');
+    const url = targetIn.value.trim() || urlIn.value.trim();
     try {
+      if (kind() === 'truenas') {
+        const res = await api.testTruenas({
+          url, username: usernameIn.value.trim(), apiKey: passwordIn.value,
+          insecure: insecureIn.checked, id: editing?.id,
+        });
+        setStatus(res.ok ? `Connected — TrueNAS ${res.version ?? ''}`.trim() : (res.error || 'Connection failed'), !res.ok);
+        return;
+      }
       const res = await api.testPihole({
-        url: targetIn.value.trim() || urlIn.value.trim(),
-        password: passwordIn.value,
-        insecure: insecureIn.checked,
-        id: editing?.id,
+        url, password: passwordIn.value, insecure: insecureIn.checked, id: editing?.id,
       });
-      if (res.ok) setStatus(`Connected — Pi-hole ${res.version ?? 'v6'}`);
-      else setStatus(res.error || 'Connection failed', true);
+      setStatus(res.ok ? `Connected — Pi-hole ${res.version ?? 'v6'}` : (res.error || 'Connection failed'), !res.ok);
     } catch (e) {
       setStatus((e as Error).message, true);
     }
@@ -165,6 +194,7 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     glyphIn.value = svc?.glyph ?? '';
     groupIn.value = svc?.group ?? '';
     targetIn.value = svc?.check.target ?? '';
+    usernameIn.value = svc?.check.username ?? '';
     const k = svc?.check.kind ?? 'http';
     for (const [key, r] of Object.entries(radios)) r.input.checked = key === k;
     const sec = svc?.section ?? 'services';
@@ -182,7 +212,7 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     const payload = buildServicePayload({
       name: nameIn.value, url: urlIn.value, glyph: glyphIn.value,
       group: groupIn.value, kind: kind(), target: targetIn.value, section: section(),
-      password: passwordIn.value, clearPassword, insecure: insecureIn.checked,
+      username: usernameIn.value, password: passwordIn.value, clearPassword, insecure: insecureIn.checked,
     });
     try {
       if (editing) await api.updateService(editing.id, payload);
@@ -238,7 +268,7 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
       field('Category (optional — e.g. DNS Filtering; under Infrastructure, "Proxmox" and "IPAM" join the built-in groups)', groupIn),
       el('div', { class: 'svc-check-radios' }, [radios.http.wrap, radios.tcp.wrap, radios.pihole.wrap, radios.truenas.wrap, radios.none.wrap]),
       targetField,
-      piholeGroup,
+      credentialGroup,
       el('div', { class: 'pve-inline' }, [saveBtn, cancelBtn]),
     ]),
     status,
