@@ -209,7 +209,7 @@ pattern for new modules.
 - `servicesStore.js` / `serviceCheck.js` / `serviceChecker.js` — the standby dashboard's
   service tiles: validated CRUD over `data/services.json` (each tile carries a `section` —
   services|infrastructure — plus a free-text `group` category within it, and a check kind of
-  http|tcp|pihole|none), the dependency-free HTTP/TCP
+  http|tcp|pihole|truenas|none), the dependency-free HTTP/TCP
   liveness engine (TLS errors tolerated — reachability probe, not a security boundary),
   and the interval sweep (`TMUXIFIER_SERVICE_POLL_MS`, min 5s) whose cached snapshot
   `GET /api/services/status` serves — check volume is independent of open tabs.
@@ -218,6 +218,11 @@ pattern for new modules.
   stat card rather than a lamp. A Pi-hole that answers but rejects the password resolves to a
   distinct `auth` state on the violet `.dot.auth` lamp, not `down` — a rotated password is not
   an outage.
+  A `truenas` tile carries a sealed API key and a plaintext `username` (TrueNAS API keys are
+  user-linked from 25.04, and `auth.login_ex` needs the account name), and renders as a
+  pool-row card. Its URL must be **https**: TrueNAS permanently revokes any user-linked API key
+  presented over plain HTTP, so an `http:` target is refused at validation time rather than
+  offered as an opt-out.
 - `piholeApi.js` / `piholeRegistry.js` — the `pihole` service check, in the mold of
   `netboxApi.js`: a dependency-free Pi-hole **v6** REST client (`POST /api/auth` trades an app
   password for a session id carried in `X-FTL-SID`) reading `stats/summary`, `info/version`,
@@ -228,6 +233,21 @@ pattern for new modules.
   shutdown. `piholeRegistry.js` owns one client per service id, rebuilding it when the API base,
   app password, or TLS mode changes and closing the sessions of services that have gone away.
   Read-only: no write endpoint is ever called.
+- `truenasApi.js` / `truenasRegistry.js` — the `truenas` service check. TrueNAS deprecated its
+  REST API in 25.04 and removed it in 26, so this is a JSON-RPC 2.0 client over a single
+  persistent WebSocket to `wss://<host>/api/current` (the one place the repo uses `ws` outside
+  Fastify). It authenticates with `auth.login_ex` / `API_KEY_PLAIN` — never
+  `auth.login_with_api_key`, removed in v27 — and never negotiates the mechanism, because the
+  server's advertised list is unauthenticated and a downgrade would be strippable. One sweep is
+  three concurrent calls on the open socket (`pool.query`, `system.info`, `alert.list`),
+  correlated by JSON-RPC id; an expired session re-logs-in exactly once and replays, and a
+  stale socket's late `close` cannot tear down its replacement (teardown is guarded by socket
+  identity). `close()` calls `auth.logout`. Read-only: no mutating method is ever called.
+- `serviceClientRegistry.js` — the shared per-service API-client cache behind
+  `piholeRegistry.js` and `truenasRegistry.js`: one client per service id, rebuilt when the
+  options that define it change (the fingerprint is taken over the whole options object, so a
+  new option participates automatically), `retain` closing departed services, and a best-effort
+  `closeAll` that a dead service cannot stall.
   `GET /api/netbox/summary` (60s in-process cache) feeds the dashboard's NetBox
   utilization readout — every IPv4 prefix NetBox knows (first 100), one row each.
 - `fleet.js` / `fleetStore.js` — `createFleetManager` runs one command across many boxes as a single
@@ -366,7 +386,13 @@ layer whose `update()` rewrites in place, so the voice button (mounted into the 
 view-model helpers (grouping, latency/lamp/mode, PVE rollup) plus an in-place-updating DOM
 layer; mounted by `main.ts` whenever no pane is docked, with a 10s services poll and 60s
 infra poll that run only while mounted; the sidebar nameplate `#home` returns to it,
-undocking — not killing — any docked terminals), `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
+undocking — not killing — any docked terminals), `fmt.ts` (the shared display formatters —
+`fmtCount`/`fmtCompact`/`fmtUptime`/`fmtLatency`/`fmtBytes` — factored out of `dashboard.ts`,
+which re-exports them, so a card module can use them without importing the dashboard back),
+`truenasCard.ts` (the TrueNAS card: the pure model plus the pure `truenasLamp` severity
+function whose 80/90 capacity thresholds are named exported constants, and an
+in-place-updating DOM layer; it lives outside `dashboard.ts` rather than growing it further),
+`reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
 history: pure SVG-path builder and event-line formatters), `notifyPrefs.ts` (per-kind
 browser-notification preferences, localStorage-backed, defaults all-on except `up`/
 `threshold-clear`), `setupOptions.ts` (the shared post-create setup form — Terminal/Tools/AI-auth sections —
@@ -559,6 +585,14 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   in memory only, never on disk, and is revoked on shutdown. Use a Pi-hole **app password**
   (Settings → Web interface / API), not the web login password: an app password is unaffected
   by two-factor authentication and is scoped to the API.
+- A TrueNAS tile's API key is sealed the same way (AES-256-GCM in `data/services.json`, key from
+  `cookieSecret`, file `0o600`) and is never returned to the browser (`hasPassword` only). TLS is
+  verified by default with an explicit per-service `insecure` opt-out, as with Pi-hole — but
+  unlike Pi-hole there is **no** plain-HTTP path at all: TrueNAS permanently revokes any
+  user-linked API key presented over insecure transport, so `http:` is rejected by both
+  `servicesStore.js` validation and the `POST /api/services/truenas/test` route before a client
+  is constructed. Use a **user-linked API key** (Credentials → Users → API Keys) with the
+  READONLY_ADMIN role; the integration is read-only and calls no mutating method.
 - A changed SSH host key is treated as a possible MITM, not a nuisance: Tmuxifier never clears a
   `known_hosts` entry merely because a connection failed. It is removed only when Tmuxifier can
   prove the old identity is gone or new (verified Proxmox deprovision; provisioning a fresh

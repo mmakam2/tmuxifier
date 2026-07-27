@@ -159,3 +159,65 @@ test('a password without a configured secretBox is refused rather than stored in
   const s = createServicesStore({ dataDir: dir });
   await expect(s.addService(piSpec)).rejects.toThrow(/secret/i);
 });
+
+// --- truenas ---------------------------------------------------------------
+// Like the pihole cases above, these need a store with a secretBox: the shared
+// `store` from beforeEach has none.
+const sealed = () => createServicesStore({ dataDir: dir, secretBox: createSecretBox('k') });
+const nasSpec = {
+  name: 'nas',
+  url: 'https://nas.example.com',
+  section: 'infrastructure',
+  check: { kind: 'truenas', username: 'truenas_admin' },
+  password: '1-testkey',
+};
+
+test('truenas: a valid tile stores the username in the clear and seals the key', async () => {
+  const s = sealed();
+  const svc = await s.addService(nasSpec);
+  expect(svc.check).toEqual({ kind: 'truenas', username: 'truenas_admin' });
+  expect(svc.hasPassword).toBe(true);
+  expect(svc.secret).toBeUndefined();
+  expect(await s.getServiceSecret(svc.id)).toBe('1-testkey');
+});
+
+test('truenas: a plain-http url is refused, naming the key revocation', async () => {
+  await expect(sealed().addService({ ...nasSpec, url: 'http://192.168.1.20' }))
+    .rejects.toThrow(/revokes/i);
+});
+
+test('truenas: a plain-http check target is refused even when the tile url is https', async () => {
+  await expect(sealed().addService({
+    ...nasSpec, check: { kind: 'truenas', username: 'truenas_admin', target: 'http://192.168.1.20' },
+  })).rejects.toThrow(/revokes/i);
+});
+
+test('truenas: an http tile url is still fine for an http check kind', async () => {
+  const svc = await sealed().addService({ name: 'app', url: 'http://192.168.1.30:8080', check: { kind: 'http' } });
+  expect(svc.url).toBe('http://192.168.1.30:8080');
+});
+
+test('truenas: a missing username is refused', async () => {
+  await expect(sealed().addService({ ...nasSpec, check: { kind: 'truenas' } }))
+    .rejects.toThrow(/username/i);
+});
+
+test('truenas: an untouched key survives an unrelated edit, and null clears it', async () => {
+  const s = sealed();
+  const svc = await s.addService(nasSpec);
+  const renamed = await s.updateService(svc.id, { name: 'storage' });
+  expect(renamed.hasPassword).toBe(true);
+  expect(await s.getServiceSecret(svc.id)).toBe('1-testkey');
+
+  const cleared = await s.updateService(svc.id, { password: null });
+  expect(cleared.hasPassword).toBe(false);
+  expect(await s.getServiceSecret(svc.id)).toBe(null);
+});
+
+test('truenas: switching the tile to another kind drops the stored key', async () => {
+  const s = sealed();
+  const svc = await s.addService(nasSpec);
+  const switched = await s.updateService(svc.id, { check: { kind: 'http' } });
+  expect(switched.hasPassword).toBe(false);
+  expect(await s.getServiceSecret(svc.id)).toBe(null);
+});

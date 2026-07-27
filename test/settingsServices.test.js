@@ -51,3 +51,38 @@ test('buildServicePayload never attaches a password to a non-pihole check', () =
   });
   expect('password' in payload).toBe(false);
 });
+
+// --- truenas ---------------------------------------------------------------
+const nasBase = {
+  name: 'nas', url: 'https://nas.example.com', glyph: '', group: 'Storage',
+  section: 'infrastructure', target: '',
+};
+
+test('truenas: the username rides in the check and the key rides as password', () => {
+  const p = buildServicePayload({ ...nasBase, kind: 'truenas', username: 'truenas_admin', password: '1-key' });
+  expect(p.check).toEqual({ kind: 'truenas', username: 'truenas_admin' });
+  expect(p.password).toBe('1-key');
+});
+
+test('truenas: an untouched key sends no password key at all', () => {
+  const p = buildServicePayload({ ...nasBase, kind: 'truenas', username: 'truenas_admin', password: '' });
+  expect('password' in p).toBe(false);
+});
+
+test('truenas: Clear sends an explicit null', () => {
+  const p = buildServicePayload({ ...nasBase, kind: 'truenas', username: 'truenas_admin', password: '', clearPassword: true });
+  expect(p.password).toBe(null);
+});
+
+test('truenas: target and insecure are carried only when set', () => {
+  const bare = buildServicePayload({ ...nasBase, kind: 'truenas', username: 'u' });
+  expect(bare.check).toEqual({ kind: 'truenas', username: 'u' });
+  const full = buildServicePayload({ ...nasBase, kind: 'truenas', username: 'u', target: 'https://192.168.1.20', insecure: true });
+  expect(full.check).toEqual({ kind: 'truenas', username: 'u', target: 'https://192.168.1.20', insecure: true });
+});
+
+test('an http tile still builds a plain check with no credential fields', () => {
+  const p = buildServicePayload({ ...nasBase, kind: 'http', target: '' });
+  expect(p.check).toEqual({ kind: 'http' });
+  expect('password' in p).toBe(false);
+});

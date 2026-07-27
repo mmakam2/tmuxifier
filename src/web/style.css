@@ -1326,3 +1326,23 @@ button.empty-kbd:hover { color: var(--text); }
   .pve-container-row { grid-template-columns: minmax(0, 1fr) auto; }
   .pve-container-row .pve-row-actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
+
+/* TrueNAS card: one row per pool under the summary chip. Three columns so the
+   percentages and free-space figures line up down the card regardless of pool
+   name length. */
+.dash-pool-rows { display: flex; flex-direction: column; gap: 3px; margin-top: 10px; }
+.dash-pool-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: baseline;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.dash-pool-name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-pool-used { color: var(--amber); min-width: 3.5ch; text-align: right; }
+.dash-pool-free { color: var(--dim); min-width: 9ch; text-align: right; }
+.dash-pool-row.warn .dash-pool-used { color: var(--warn); }
+.dash-pool-row.crit .dash-pool-used { color: var(--crit); }
+.dash-pool-more { margin-top: 4px; font-size: 11px; color: var(--dim); }
+.dash-card-footer { margin-top: 10px; font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }

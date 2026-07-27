@@ -9,6 +9,7 @@ import { createStatusPoller } from './statusPoller.js';
 import { createServicesStore } from './servicesStore.js';
 import { createServiceChecker } from './serviceChecker.js';
 import { createPiholeRegistry } from './piholeRegistry.js';
+import { createTruenasRegistry } from './truenasRegistry.js';
 import { createSessionManager } from './sessions.js';
 import { sshRun, sshRunStdin, sshStream } from './sshRun.js';
 import { createBoxActions, buildEnsureSessionRemote } from './boxActions.js';
@@ -265,7 +266,8 @@ const statusPoller = createStatusPoller({
 // The store takes secretBox because a pihole tile carries a sealed app password.
 const servicesStore = createServicesStore({ dataDir: config.dataDir, secretBox });
 const piholeRegistry = createPiholeRegistry({ store: servicesStore });
-const serviceChecker = createServiceChecker({ store: servicesStore, piholeRegistry, intervalMs: config.servicePollMs });
+const truenasRegistry = createTruenasRegistry({ store: servicesStore });
+const serviceChecker = createServiceChecker({ store: servicesStore, piholeRegistry, truenasRegistry, intervalMs: config.servicePollMs });
 
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
@@ -294,9 +296,11 @@ app.listen({ host: config.bindAddress, port: config.port })
     registerShutdownFlush({
       flush: [
         ...[fleetStore, setupStore, provisionStore, lifecycleStore].map((s) => () => s.whenIdle()),
-        // Revoke Pi-hole sessions rather than leak one per configured Pi-hole
-        // across every restart — v6 caps how many can be live at once.
+        // Revoke Pi-hole and TrueNAS sessions rather than leak one per configured
+        // service across every restart — Pi-hole v6 caps how many can be live at
+        // once, and a TrueNAS socket left open is a session left authenticated.
         () => piholeRegistry.closeAll(),
+        () => truenasRegistry.closeAll(),
       ],
       voiceEngine: { stop: async () => { if (voiceEngine) await voiceEngine.stop(); } },
     });
