@@ -453,6 +453,27 @@ const POLL_MS = 30000;
 let pollInterval: any;
 let polling = false;
 
+// After a lifecycle action the server fast-tracks its own probing of that box
+// (statusPoller.refreshUntil), but this tab still reads the snapshot on the
+// relaxed interval above — so it would sit on a stale answer long after the
+// server knew better. Poll faster until this box's pane state actually moves,
+// then stop. Bounded: a box that never comes back must not leave a loop running.
+let fastStatusTimer: number | null = null;
+function stopFastStatusPoll() {
+  if (fastStatusTimer != null) { window.clearTimeout(fastStatusTimer); fastStatusTimer = null; }
+}
+function fastStatusPoll(id: string, everyMs = 3000, timeoutMs = 180000) {
+  stopFastStatusPoll();
+  const deadline = Date.now() + timeoutMs;
+  const before = paneState(id);
+  const tick = async () => {
+    await pollStatus();
+    if (paneState(id) !== before || Date.now() >= deadline) { fastStatusTimer = null; return; }
+    fastStatusTimer = window.setTimeout(() => { void tick(); }, everyMs);
+  };
+  void tick();
+}
+
 async function pollStatus() {
   if (polling) return;
   polling = true;
@@ -751,7 +772,7 @@ function paneHooks(): PaneHooks {
             openEditBox: (boxId) => { const target = allBoxes.find((item) => item.id === boxId); if (target) openBoxDialog(target); },
             onBoxLinked: () => { void refresh(); },
           }, jobId ? { lifecycleJobId: jobId } : { tab: 'Containers', focusBoxId: id }),
-          onSettled: () => { void pollStatus(); },
+          onSettled: () => { fastStatusPoll(id); },
         });
         ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState });
         built.lifecycleSlot.append(ctl.el);
@@ -874,6 +895,7 @@ async function renderDashboard() {
     for (const [, t] of tabs) { t.term.dispose(); t.el.remove(); }
     tabs.clear();
     destroyPaneLifecycles(); // #app is about to be replaced; nothing repaints the stage on this path
+    stopFastStatusPoll();
     updateLocalDot();
     for (const id of [...settingUpPollers.keys()]) clearSettingUpPanel(id);
     stageRoot = null;
