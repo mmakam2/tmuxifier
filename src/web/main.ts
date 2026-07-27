@@ -1218,7 +1218,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   // (both the sync and async-status repaints in refresh()) so a badge can never
   // be wiped by a later repaint racing a post-hoc DOM patch.
   const setup = latestSetups.find((s) => s.boxId === b.id);
-  const badge = setup ? setupBadge(setup.status) : null;
+  const badge = setup ? setupBadge(setup.status, setup.needs) : null;
   if (badge) {
     const badgeEl = document.createElement('span');
     badgeEl.className = `badge ${badge.cls}`;

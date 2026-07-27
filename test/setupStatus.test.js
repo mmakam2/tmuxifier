@@ -10,6 +10,27 @@ test('status text covers each state', () => {
   expect(setupStatusText({ status: 'interrupted' })).toMatch(/interrupted/i);
 });
 
+// A box whose sshd only offers password auth cannot be set up by the BatchMode
+// run, but the interactive finish can log in. Wording it "sudo" would send the
+// user looking for the wrong credential.
+test('needs-interactive names the credential it is waiting on', () => {
+  expect(setupStatusText({ status: 'needs-interactive', needs: 'ssh' })).toMatch(/ssh password/i);
+  expect(setupStatusText({ status: 'needs-interactive', needs: 'ssh' })).not.toMatch(/sudo/i);
+  expect(setupStatusText({ status: 'needs-interactive', needs: 'sudo' })).toMatch(/sudo/i);
+});
+
+// Jobs persisted before `needs` existed could only ever have parked on sudo,
+// so that is the right reading for a missing field.
+test('needs-interactive without a recorded need reads as sudo', () => {
+  expect(setupStatusText({ status: 'needs-interactive' })).toMatch(/sudo/i);
+});
+
+test('badge distinguishes the two interactive needs', () => {
+  expect(setupBadge('needs-interactive', 'ssh')?.text).toMatch(/password/i);
+  expect(setupBadge('needs-interactive', 'sudo')?.text).toMatch(/sudo/i);
+  expect(setupBadge('needs-interactive', 'ssh')?.cls).toContain('warn');
+});
+
 test('actions per state', () => {
   expect(setupActions('running')).toEqual(['close']);
   expect(setupActions('done')).toEqual(['close']);

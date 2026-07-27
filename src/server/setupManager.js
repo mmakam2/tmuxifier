@@ -8,6 +8,20 @@ import { newestFirst } from './jobOrder.js';
 // is converted to `interrupted` on load.
 const SUDO_PW_RE = /a terminal is required to read the password|sudo:[^\n]*password is required|askpass/i;
 
+// ssh's own auth failure, for a box whose sshd actually offers an interactive
+// method. The setup run is BatchMode (see buildSetupArgv), so ssh may not
+// prompt and gives up the moment publickey fails — but the interactive finish
+// (buildProvisionArgv: -tt, no BatchMode) CAN answer that prompt, so such a job
+// is parked for the user rather than failed.
+//
+// The parenthesised list is the set of methods the SERVER offers, and matching
+// on it is what keeps key-auth boxes on their existing path: a plain
+// `Permission denied (publickey).` has no interactive method to fall back to,
+// so it stays a hard error exactly as before. Anchored on the literal ssh
+// wording rather than a bare /password/ so unrelated script output that happens
+// to mention a password cannot park a job.
+const SSH_PW_RE = /Permission denied \([^)]*(?:password|keyboard-interactive)[^)]*\)/i;
+
 // Statuses that will never change again on their own — used by prune() to
 // decide what is safe to evict from the in-memory jobs map. 'superseded' is a
 // stale needs-interactive job replaced by a newer run for the same box.
@@ -83,7 +97,7 @@ export function createSetupManager({
   }
   function persist() { prune(); save(ordered()); }
   function summary(j) {
-    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, seed: j.seed ?? null, statusline: j.statusline ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
+    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, needs: j.needs ?? null, seed: j.seed ?? null, statusline: j.statusline ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
   }
   function appendLog(j, text) { if (text) j.log = (j.log + text).slice(-maxLogBytes); }
   function normalizeOptions(o = {}) {
@@ -165,6 +179,7 @@ export function createSetupManager({
       const script = buildScript(box, j.options);
       const argv = buildSetupArgv(box, script, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
       let sawSudoPw = false;
+      let sawSshPw = false;
       let stderrTail = '';
       // Coalesced log persistence: a chatty install emits thousands of chunks,
       // and a full-history save per chunk is a multi-MB stringify each time.
@@ -181,6 +196,7 @@ export function createSetupManager({
             // still detected, without matching sudo text that appeared on stdout.
             stderrTail = (stderrTail + chunk).slice(-4096);
             if (!sawSudoPw && SUDO_PW_RE.test(stderrTail)) sawSudoPw = true;
+            if (!sawSshPw && SSH_PW_RE.test(stderrTail)) sawSshPw = true;
           }
           pendingLogBytes += chunk.length;
           const t = nowMs();
@@ -196,7 +212,12 @@ export function createSetupManager({
       runningHandles.delete(j.id);
 
       if (code === 0) await completeDone(j, box);
-      else if (sawSudoPw) finish(j, 'needs-interactive');
+      // sudo wins when both are somehow set: sudo text can only appear once the
+      // script is already running, which means ssh auth had succeeded.
+      else if (sawSudoPw || sawSshPw) {
+        j.needs = sawSudoPw ? 'sudo' : 'ssh';
+        finish(j, 'needs-interactive');
+      }
       else if (code === 124) { j.error = 'setup timed out'; finish(j, 'error'); }
       else { j.error = `setup exited ${code}`; finish(j, 'error'); }
     } catch (e) {
@@ -224,6 +245,10 @@ export function createSetupManager({
       id: makeId(), boxId: box.id, boxLabel: box.label,
       status: 'running', phase: waitForSsh ? 'waiting-ssh' : 'running',
       options: normalizeOptions(options), log: '', error: null,
+      // Which credential a `needs-interactive` job is waiting on: 'sudo' (the
+      // script reached sudo) or 'ssh' (ssh itself could not authenticate).
+      // Null in every other status.
+      needs: null,
       createdAt: now(), finishedAt: null,
     };
     jobs.set(j.id, j);

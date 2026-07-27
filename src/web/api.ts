@@ -79,6 +79,11 @@ export interface SetupSummary {
   seed?: SeedResult[] | null;
   // Present once a job that asked for the statusline push has attempted it.
   statusline?: SeedResult | null;
+  // Which credential a `needs-interactive` job stalled on: 'sudo' (the script
+  // reached sudo) or 'ssh' (ssh itself could not authenticate, so only the
+  // non-BatchMode interactive finish can get in). Null in every other status,
+  // and absent on jobs persisted before this field existed.
+  needs?: 'sudo' | 'ssh' | null;
   createdAt: string; finishedAt: string | null;
 }
 export interface SetupJob extends SetupSummary { log: string; }

@@ -68,7 +68,55 @@ test('sudo-password stderr -> needs-interactive', async () => {
   const m = make({ sshStream: sudoSsh('sudo: a terminal is required to read the password; see below\n', 1) });
   const s = m.start(BOX, { tools: [] });
   await m._settled(s.id);
-  expect(m.getJob(s.id).status).toBe('needs-interactive');
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('needs-interactive');
+  expect(job.needs).toBe('sudo');
+});
+
+// The setup run is BatchMode, so ssh can never answer a password prompt itself.
+// When the box's sshd actually offers password auth, the interactive PTY finish
+// (buildProvisionArgv: -tt, no BatchMode) CAN answer it — so park the job for
+// the user instead of failing it.
+test('ssh password denial -> needs-interactive (needs: ssh)', async () => {
+  const m = make({ sshStream: sudoSsh('root@192.168.1.10: Permission denied (publickey,password).\n', 255) });
+  const s = m.start(BOX, { tools: [] });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('needs-interactive');
+  expect(job.needs).toBe('ssh');
+});
+
+test('ssh keyboard-interactive denial -> needs-interactive (needs: ssh)', async () => {
+  const m = make({ sshStream: sudoSsh('root@192.168.1.10: Permission denied (publickey,keyboard-interactive).\n', 255) });
+  const s = m.start(BOX, { tools: [] });
+  await m._settled(s.id);
+  expect(m.getJob(s.id).needs).toBe('ssh');
+});
+
+// The guard that protects key-auth boxes: sshd offering ONLY publickey means
+// there is no password for the user to type, so an interactive terminal cannot
+// rescue it. That stays a hard error exactly as before this change.
+test('key-only denial stays error — interactive cannot help', async () => {
+  const m = make({ sshStream: sudoSsh('root@192.168.1.10: Permission denied (publickey).\n', 255) });
+  const s = m.start(BOX, { tools: [] });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('error');
+  expect(job.error).toContain('255');
+});
+
+test('needs is surfaced on the summary the API serves', async () => {
+  const m = make({ sshStream: sudoSsh('root@192.168.1.10: Permission denied (publickey,password).\n', 255) });
+  const s = m.start(BOX, { tools: [] });
+  await m._settled(s.id);
+  expect(m.listJobs().find((x) => x.id === s.id).needs).toBe('ssh');
+});
+
+test('a successful run reports no interactive need', async () => {
+  const m = make();
+  const s = m.start(BOX, { tools: [] });
+  await m._settled(s.id);
+  expect(m.getJob(s.id).needs).toBe(null);
 });
 
 test('hard non-zero exit -> error (box never touched by manager)', async () => {
