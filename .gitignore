@@ -39,7 +39,8 @@ CLAUDE.local.md
 # whisper.cpp source, build output and models (npm run setup-voice)
 vendor/
 
-# Impeccable (design tooling): per-machine consent + session cache stay local;
-# design.json (the design-token record alongside DESIGN.md) is committed.
-.impeccable/config.local.json
-.impeccable/hook.cache.json
+# Impeccable (design tooling): the whole working directory is agent scaffolding
+# — per-machine consent, session cache, surface briefs, and the design.json
+# sidecar the skill regenerates. DESIGN.md itself stays committed: it is the
+# project's visual authority and contains nothing machine-specific.
+.impeccable/

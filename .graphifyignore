@@ -19,3 +19,7 @@ docs/screenshots/
 .agents/
 .superpowers/
 .codex/
+# Impeccable's working directory (design.json sidecar, surface briefs, config,
+# cache) is the same class of thing. DESIGN.md at the repo root is NOT excluded:
+# it is living documentation of the visual system, maintained alongside the code.
+.impeccable/
