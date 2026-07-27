@@ -220,6 +220,13 @@ lit standby lamp beside it.
 - **Field** (400, 14px): text inputs and selects — typing in the glass.
 - **Readout** (400, 11px, tabular-nums): meta figures, timestamps, event times.
 - **Glyph** (14–16px): icon keys (✎ ↻ ✕ ⚷, closes); geometry, not copy.
+  The size is the *drawn* mark, not the font-size. Unicode geometry ink varies
+  wildly at one font-size (the power mark ⏻ inks 0.96em, the reboot arrow ↺ only
+  0.50em), so a key whose glyph is drawn small carries a compensating font-size
+  outside this step (e.g. `.pane-life-reboot` at 21px) to land on the same drawn
+  height. Those keys must be fixed-size boxes, so the compensation moves the
+  glyph and never the layout. Pick glyphs the bundled face actually has — a
+  missing one falls through to a system face and lands at the wrong size.
 
 ## Layout
 

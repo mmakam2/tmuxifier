@@ -751,8 +751,20 @@ button.empty-kbd:hover { color: var(--text); }
 .svc-row-group { color: var(--dim); font-size: 11px; }
 .svc-row-check { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; }
 .svc-glyph-palette { display: flex; gap: 4px; flex-wrap: wrap; margin: 4px 0 8px; }
+/* Fixed-size caps with the glyph centred by flexbox, not by text flow: the
+   bundled face's large line gap parked the icons high in the cap, and its
+   per-glyph advances left each one at a different horizontal offset.
+   The asymmetric padding is an optical correction, not a typo: these Nerd Font
+   PUA icons ink ~13px wide but advance only 8px, overhanging to the right, so
+   centring the advance box still leaves the visible glyph ~2.5px right of
+   centre. Pulling the content box in on the right re-centres the ink. */
 .svc-glyph-key {
-  padding: 2px 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  padding: 0 5px 0 0;
   background: var(--key-face);
   border: 1px solid var(--key-border);
   border-bottom-color: #101216;
@@ -761,6 +773,7 @@ button.empty-kbd:hover { color: var(--text); }
   color: var(--muted);
   font-family: var(--face);
   font-size: 14px;
+  line-height: 1;
   cursor: pointer;
 }
 .svc-glyph-key:hover { color: var(--text); }
@@ -830,21 +843,36 @@ button.empty-kbd:hover { color: var(--text); }
    of every unlinked box's header. It must take no part at all. */
 .pane-lifecycle-slot:empty { display: none; }
 .pane-header .pane-life {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
   font-family: var(--face); font-size: 12px; line-height: 1;
-  padding: 2px 4px; border: 1px solid transparent; border-radius: 4px;
+  padding: 0; border: 1px solid transparent; border-radius: 4px;
   background: none; color: var(--dim); opacity: 0.75;
   text-transform: none; letter-spacing: normal; cursor: pointer;
 }
-/* Optical sizing: same font-size, very different drawn heights. The reboot
-   arrow renders roughly half the em the power and stop marks fill, so it sits
-   on the glyph step to be level with them rather than looking half-size. */
-.pane-header .pane-life-reboot { font-size: 16px; }
+/* Optical sizing. One font-size cannot serve these four: at the same size the
+   power mark inks 0.96em, the play triangle and stop square 0.60em, and the
+   reboot arrow only 0.50em — which is why they read as four different weights
+   in one row. Each size below is chosen to land the drawn glyph on a common
+   ~10.5px ink height, with the two solid marks held slightly smaller since
+   filled geometry reads heavier than an outline at equal height. The cap is a
+   fixed 20px box, so none of this moves the header.
+   The translate is the second half of the same correction: the glyphs also sit
+   at different heights above the baseline (0.25em for the reboot arrow, 0.35em
+   for the power mark), and flexbox centres the line box, not the ink — so
+   without it the reboot arrow rides ~2.5px lower than its neighbours. */
+.pane-header .pane-life-shutdown { font-size: 11px; }
+.pane-header .pane-life-reboot { font-size: 21px; transform: translateY(-1.7px); }
+.pane-header .pane-life-start { font-size: 16px; transform: translateY(-1px); }
+.pane-header .pane-life-stop { font-size: 15px; transform: translateY(-1px); }
 .pane-header .pane-life:hover, .pane-header .pane-life:focus-visible {
   opacity: 1; color: var(--text); background: var(--panel-2); border-color: var(--border);
 }
 .pane-header .pane-life.danger:hover, .pane-header .pane-life.danger:focus-visible { color: var(--crit); }
-/* Armed: the key states its own consequence and waits for a second click. */
+/* Armed: the key states its own consequence and waits for a second click. The
+   cap stops being an icon box here — it holds a legend, so it sizes to it. */
 .pane-header .pane-life.armed {
+  width: auto; height: auto;
   opacity: 1; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; padding: 1px 6px;
   color: var(--crit); border-color: rgba(255, 92, 71, 0.55); background: rgba(255, 92, 71, 0.12);
 }

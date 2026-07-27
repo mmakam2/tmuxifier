@@ -22,7 +22,11 @@ const START: LifecycleKey = { action: 'start', glyph: '▶', label: 'Start conta
 const RUNNING_KEYS: LifecycleKey[] = [
   { action: 'shutdown', glyph: '⏻', label: 'Shut down container', armLegend: 'SHUTDOWN?', danger: false },
   { action: 'reboot', glyph: '↺', label: 'Reboot container', armLegend: 'REBOOT?', danger: false },
-  { action: 'stop', glyph: '⏹', label: 'Force stop container', armLegend: 'STOP?', danger: true },
+  // '■' (U+25A0) rather than the more literal '⏹' (U+23F9): the bundled Meslo
+  // Nerd Font has no U+23F9, so that one fell through to a system face and drew
+  // at half the size of its neighbours. U+25A0 is in the bundled face and shares
+  // the play triangle's ink box exactly.
+  { action: 'stop', glyph: '■', label: 'Force stop container', armLegend: 'STOP?', danger: true },
 ];
 
 // Driven by the pane's derived state first, the raw PVE read second: paneState
@@ -159,9 +163,10 @@ export function buildPaneLifecycle(deps: PaneLifecycleDeps): {
       const btn = document.createElement('button');
       btn.type = 'button';
       // The action class exists for optical sizing: these glyphs are drawn at
-      // very different sizes for the same font-size (the power and stop marks
-      // fill the em, the reboot arrow is much smaller), so matching them by eye
-      // needs per-glyph compensation in CSS.
+      // very different sizes for the same font-size (the power mark inks 0.96em,
+      // the reboot arrow only 0.50em), so matching them by eye needs a per-glyph
+      // font-size in CSS. The cap itself is fixed-size, so those sizes change
+      // only the drawn glyph, never the header's geometry.
       btn.className = `pane-life pane-life-${key.action}${key.danger ? ' danger' : ''}${armed ? ' armed' : ''}`;
       btn.textContent = armed ? key.armLegend! : key.glyph;
       btn.title = armed ? `Click again to ${key.action}` : key.label;
