@@ -8,6 +8,12 @@ import type { NetboxSummary } from './netbox';
 import type { PveLinkedContainer, PveClusterNode } from './proxmox';
 import { sparkline } from './sparkline';
 import { dotClassFor, dotTitleFor } from './statusDot';
+import { fmtLatency, fmtCount, fmtCompact, fmtUptime } from './fmt';
+import { buildTruenasCard, type TruenasCardEls } from './truenasCard';
+
+// Re-exported so existing importers (and the dashboard tests) keep reaching for
+// them here, while card modules import them from ./fmt without a cycle.
+export { fmtLatency, fmtCount, fmtCompact, fmtUptime } from './fmt';
 
 export interface DashboardData {
   boxes: Box[];
@@ -42,10 +48,6 @@ export function groupServices(services: Service[]): { name: string | null; servi
     .map((name) => ({ name, services: byName.get(name)! }));
 }
 
-export function fmtLatency(ms?: number): string {
-  if (ms == null) return '—';
-  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
-}
 
 export function serviceLamp(svc: Service, snap: ServiceStatusSnapshot | null): 'up' | 'down' | 'auth' | 'unknown' | 'none' {
   if (svc.check.kind === 'none') return 'none';
@@ -53,29 +55,8 @@ export function serviceLamp(svc: Service, snap: ServiceStatusSnapshot | null): '
   return r ? r.state : 'unknown';
 }
 
-export function fmtCount(n: number | null | undefined): string {
-  if (n == null) return '—';
-  return Math.round(n).toLocaleString('en-US');
-}
 
-// Gravity lists run to millions; a raw digit run is unreadable at tile size.
-export function fmtCompact(n: number | null | undefined): string {
-  if (n == null) return '—';
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 10_000) return `${(n / 1_000).toFixed(1)}k`;
-  return fmtCount(n);
-}
 
-export function fmtUptime(sec: number | null | undefined): string {
-  if (sec == null) return '—';
-  const s = Math.max(0, Math.floor(sec));
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
 
 export interface PiholeCard {
   lamp: 'green' | 'red' | 'auth' | '';
@@ -304,6 +285,7 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
   const boxEls = new Map<string, FleetRow>();
   const tileEls = new Map<string, Tile>();
   const cardEls = new Map<string, Card>();
+  const truenasEls = new Map<string, TruenasCardEls>();
   const groupEls = new Map<string | null, { root: HTMLElement; legendEl: HTMLElement | null; grid: HTMLElement }>();
   const infraGroupEls = new Map<string | null, { root: HTMLElement; grid: HTMLElement }>();
   // Tiles render across two sections (Services + Infrastructure categories);
@@ -440,9 +422,16 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
 
   function paintTile(svc: Service): HTMLElement {
     tilesSeen.add(svc.id);
-    // A Pi-hole reports numbers, so it renders as a card rather than a lamp;
-    // everything downstream (grouping, ordering, cleanup) treats it as a tile.
+    // A Pi-hole reports numbers and a TrueNAS reports storage, so both render as
+    // cards rather than lamps; everything downstream (grouping, ordering,
+    // cleanup) treats them as tiles.
     if (svc.check.kind === 'pihole') return paintPiholeCard(svc);
+    if (svc.check.kind === 'truenas') {
+      let card = truenasEls.get(svc.id);
+      if (!card) { card = buildTruenasCard(); truenasEls.set(svc.id, card); }
+      card.update(svc, data.serviceStatus);
+      return card.root;
+    }
     let tile = tileEls.get(svc.id);
     if (!tile) { tile = makeTile(); tileEls.set(svc.id, tile); }
     tile.root.href = svc.url;
@@ -576,6 +565,9 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     for (const [id, card] of cardEls) {
       if (!tilesSeen.has(id)) { card.root.remove(); cardEls.delete(id); }
     }
+    for (const [id, card] of truenasEls) {
+      if (!tilesSeen.has(id)) { card.root.remove(); truenasEls.delete(id); }
+    }
     fleet.hidden = mode === 'standby' || data.boxes.length === 0;
     services.hidden = mode === 'standby';
     if (mode === 'standby') infra.hidden = true;
@@ -602,6 +594,7 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     boxEls.clear();
     tileEls.clear();
     cardEls.clear();
+    truenasEls.clear();
     groupEls.clear();
     infraGroupEls.clear();
   }
