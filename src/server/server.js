@@ -16,6 +16,7 @@ import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
 import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js';
 import { testNetbox, createNetboxClient, netboxSummary } from './netboxApi.js';
 import { createPiholeClient } from './piholeApi.js';
+import { createTruenasClient } from './truenasApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
 import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault } from './tmuxInject.js';
 import { normalizeTranscript } from './voiceText.js';
@@ -89,7 +90,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -820,6 +821,35 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     try {
       const res = await client.fetchVersion();
       return res.ok ? { ok: true, version: res.version } : { ok: false, error: res.error };
+    } finally {
+      await client.close();
+    }
+  });
+
+  // Same rationale as the Pi-hole probe: save-and-pray is a poor way to discover
+  // that the key belongs to a different account or lacks READONLY_ADMIN. The
+  // probe logs out, so it never leaves a session behind.
+  app.post('/api/services/truenas/test', { preHandler: requireAuth }, async (req) => {
+    const { url, username, apiKey, insecure, id } = req.body || {};
+    const base = typeof url === 'string' ? url.trim() : '';
+    let u;
+    try { u = new URL(base); } catch { return { ok: false, error: 'enter a valid https URL for the TrueNAS' }; }
+    // Refused, not merely discouraged: TrueNAS permanently revokes any API key
+    // presented over plain HTTP, so probing over http would destroy the key.
+    if (u.protocol === 'http:') {
+      return { ok: false, error: 'TrueNAS must be reached over https — it permanently revokes any API key sent over plain HTTP' };
+    }
+    if (u.protocol !== 'https:') return { ok: false, error: 'enter a valid https URL for the TrueNAS' };
+    const user = typeof username === 'string' ? username.trim() : '';
+    if (!user) return { ok: false, error: 'enter the username the API key belongs to' };
+    // A blank key on an existing service means "use the one already stored", so
+    // Test works while editing without retyping the secret.
+    let key = typeof apiKey === 'string' ? apiKey : '';
+    if (!key && id) key = (await servicesStore.getServiceSecret(id)) || '';
+    const client = makeTruenasClient({ baseUrl: base, username: user, apiKey: key, insecure: insecure === true });
+    try {
+      const res = await client.fetchVersion();
+      return res.ok ? { ok: true, version: res.version, hostname: res.hostname } : { ok: false, error: res.error };
     } finally {
       await client.close();
     }

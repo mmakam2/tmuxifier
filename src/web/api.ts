@@ -33,9 +33,15 @@ export interface Sample {
   // latest sample's `agent` for its working/waiting chip (paneHeader.ts).
   agent?: 'working' | 'waiting' | 'unknown'; agentAttached?: boolean;
 }
-export type ServiceCheckKind = 'http' | 'tcp' | 'none' | 'pihole';
+export type ServiceCheckKind = 'http' | 'tcp' | 'none' | 'pihole' | 'truenas';
 export type ServiceSection = 'services' | 'infrastructure';
-export interface ServiceCheck { kind: ServiceCheckKind; target?: string; insecure?: boolean }
+export interface ServiceCheck {
+  kind: ServiceCheckKind;
+  target?: string;
+  insecure?: boolean;
+  // truenas only: the account the user-linked API key belongs to. Not a secret.
+  username?: string;
+}
 export interface Service {
   id: string; name: string; url: string; glyph?: string; group?: string;
   // Absent on records written before sections existed — read as 'services'.
@@ -65,6 +71,23 @@ export interface PiholeMetrics {
   updateAvailable: boolean;
   uptimeSec: number | null;
 }
+export interface TruenasPool {
+  name: string;
+  size: number | null;
+  allocated: number | null;
+  free: number | null;
+  usedPct: number | null;
+  healthy: boolean;
+  status: string;
+  scanning: boolean;
+}
+export interface TruenasMetrics {
+  pools: TruenasPool[];
+  alerts: { critical: number; warning: number };
+  version: string | null;
+  hostname: string | null;
+  uptimeSec: number | null;
+}
 // One field per integration rather than a single `metrics` union: each card
 // model reads its own without narrowing, and the asymmetry a generically-named
 // Pi-hole-shaped payload would create never appears.
@@ -73,6 +96,7 @@ export interface ServiceResult {
   latencyMs?: number;
   error?: string;
   pihole?: PiholeMetrics;
+  truenas?: TruenasMetrics;
 }
 export interface ServiceStatusSnapshot { checkedAt: string | null; results: Record<string, ServiceResult> }
 export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'key-changed' | 'threshold' | 'threshold-clear' | 'agent-input' | 'agent-done';
@@ -176,6 +200,11 @@ export const api = {
   async testPihole(body: { url: string; password?: string; insecure?: boolean; id?: string }) {
     return j<{ ok: boolean; version?: string | null; error?: string }>(
       await fetch('/api/services/pihole/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    );
+  },
+  async testTruenas(body: { url: string; username: string; apiKey?: string; insecure?: boolean; id?: string }) {
+    return j<{ ok: boolean; version?: string | null; hostname?: string | null; error?: string }>(
+      await fetch('/api/services/truenas/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
     );
   },
   async status() { return j<Record<string, Status>>(await fetch(`/api/status?t=${Date.now()}`)); },

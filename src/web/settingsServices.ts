@@ -87,6 +87,7 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     http: makeRadio('svc-check', 'http', 'HTTP', true),
     tcp: makeRadio('svc-check', 'tcp', 'TCP', false),
     pihole: makeRadio('svc-check', 'pihole', 'Pi-hole', false),
+    truenas: makeRadio('svc-check', 'truenas', 'TrueNAS', false),
     none: makeRadio('svc-check', 'none', 'None (link only)', false),
   };
   const kind = (): ServiceCheckKind =>
@@ -235,7 +236,7 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
       palette,
       el('div', { class: 'svc-check-radios' }, [sectionRadios.services.wrap, sectionRadios.infrastructure.wrap]),
       field('Category (optional — e.g. DNS Filtering; under Infrastructure, "Proxmox" and "IPAM" join the built-in groups)', groupIn),
-      el('div', { class: 'svc-check-radios' }, [radios.http.wrap, radios.tcp.wrap, radios.pihole.wrap, radios.none.wrap]),
+      el('div', { class: 'svc-check-radios' }, [radios.http.wrap, radios.tcp.wrap, radios.pihole.wrap, radios.truenas.wrap, radios.none.wrap]),
       targetField,
       piholeGroup,
       el('div', { class: 'pve-inline' }, [saveBtn, cancelBtn]),

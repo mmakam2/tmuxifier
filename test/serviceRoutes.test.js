@@ -26,7 +26,19 @@ beforeEach(async () => {
   };
   const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
   const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
-  app = buildServer({ config, store: createStore({ dataDir: dir }), sessions, statusChecker, servicesStore, serviceChecker });
+  app = buildServer({
+    config, store: createStore({ dataDir: dir }), sessions, statusChecker, servicesStore, serviceChecker,
+    // The truenas test route refuses http:, so a fake server on loopback cannot
+    // be probed through it — the client seam is the injection point instead.
+    makeTruenasClient: ({ apiKey }) => ({
+      async fetchVersion() {
+        return apiKey === '1-secretkey'
+          ? { ok: true, version: '25.10.5', hostname: 'nas' }
+          : { ok: false, kind: 'auth', error: 'API key rejected' };
+      },
+      async close() {},
+    }),
+  });
 });
 
 async function headers() {
@@ -137,4 +149,54 @@ test('POST /api/services/pihole/test requires authentication and a url', async (
   expect((await app.inject({ method: 'POST', url: '/api/services/pihole/test', payload: { url: 'http://127.0.0.1/' } })).statusCode).toBe(401);
   const bad = await app.inject({ method: 'POST', url: '/api/services/pihole/test', headers: h, payload: { url: 'nonsense' } });
   expect(bad.json().ok).toBe(false);
+});
+
+test('POST /api/services/truenas/test refuses a plain-http url before building a client', async () => {
+  const h = await headers();
+  const res = await app.inject({
+    method: 'POST', url: '/api/services/truenas/test', headers: h,
+    payload: { url: 'http://192.168.1.20', username: 'truenas_admin', apiKey: '1-k' },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(res.json().ok).toBe(false);
+  expect(res.json().error).toMatch(/revokes/i);
+});
+
+test('POST /api/services/truenas/test requires a username', async () => {
+  const h = await headers();
+  const res = await app.inject({
+    method: 'POST', url: '/api/services/truenas/test', headers: h,
+    payload: { url: 'https://nas.example.com', apiKey: '1-k' },
+  });
+  expect(res.json().ok).toBe(false);
+  expect(res.json().error).toMatch(/username/i);
+});
+
+test('POST /api/services/truenas/test reports the version and never echoes the key', async () => {
+  const h = await headers();
+  const res = await app.inject({
+    method: 'POST', url: '/api/services/truenas/test', headers: h,
+    payload: { url: 'https://nas.example.com', username: 'truenas_admin', apiKey: '1-secretkey' },
+  });
+  expect(res.json()).toMatchObject({ ok: true, version: '25.10.5' });
+  expect(res.payload).not.toContain('1-secretkey');
+});
+
+test('POST /api/services/truenas/test reports a rejected key without echoing it', async () => {
+  const h = await headers();
+  const res = await app.inject({
+    method: 'POST', url: '/api/services/truenas/test', headers: h,
+    payload: { url: 'https://nas.example.com', username: 'truenas_admin', apiKey: '1-wrongkey' },
+  });
+  expect(res.json()).toMatchObject({ ok: false });
+  expect(res.json().error).toMatch(/rejected/i);
+  expect(res.payload).not.toContain('1-wrongkey');
+});
+
+test('POST /api/services/truenas/test requires authentication', async () => {
+  const res = await app.inject({
+    method: 'POST', url: '/api/services/truenas/test',
+    payload: { url: 'https://nas.example.com', username: 'u', apiKey: '1-k' },
+  });
+  expect(res.statusCode).toBe(401);
 });
