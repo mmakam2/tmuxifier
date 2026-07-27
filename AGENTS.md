@@ -24,8 +24,8 @@ Configuration, secrets, and runtime state all live **inside the repo**:
   password — all AES-256-GCM sealed — plus container presets), `netbox.json` (NetBox integration
   settings with an **encrypted** API token), `provision-jobs.json` (provision history),
   `setup-jobs.json` (server-side box setup job history), `proxmox-lifecycle-jobs.json` (LXC
-  power/deprovision job history), `services.json` (standby-dashboard service tiles — no
-  secrets), `health-events.json` (in-app health event log),
+  power/deprovision job history), `services.json` (standby-dashboard service tiles; a `pihole` tile's app
+  password is **encrypted**, so unlike the rest of the file it never appears in the clear), `health-events.json` (in-app health event log),
   `auth-state.json` (the logout session-revocation watermark), `passkeys.json` (enrolled WebAuthn
   credentials, the pinned relying party id, and the passkey-only flag — public keys only, so
   unlike `proxmox.json`/`netbox.json` nothing in it is encrypted, though it's still written
@@ -208,10 +208,26 @@ pattern for new modules.
   independent of how many dashboard tabs are open.
 - `servicesStore.js` / `serviceCheck.js` / `serviceChecker.js` — the standby dashboard's
   service tiles: validated CRUD over `data/services.json` (each tile carries a `section` —
-  services|infrastructure — plus a free-text `group` category within it), the dependency-free HTTP/TCP
+  services|infrastructure — plus a free-text `group` category within it, and a check kind of
+  http|tcp|pihole|none), the dependency-free HTTP/TCP
   liveness engine (TLS errors tolerated — reachability probe, not a security boundary),
   and the interval sweep (`TMUXIFIER_SERVICE_POLL_MS`, min 5s) whose cached snapshot
   `GET /api/services/status` serves — check volume is independent of open tabs.
+  A `pihole` tile also carries an AES-256-GCM-sealed app password (redacted to `hasPassword`
+  on every read; `getServiceSecret` is the sole decrypting path) and renders as a double-width
+  stat card rather than a lamp. A Pi-hole that answers but rejects the password resolves to a
+  distinct `auth` state on the violet `.dot.auth` lamp, not `down` — a rotated password is not
+  an outage.
+- `piholeApi.js` / `piholeRegistry.js` — the `pihole` service check, in the mold of
+  `netboxApi.js`: a dependency-free Pi-hole **v6** REST client (`POST /api/auth` trades an app
+  password for a session id carried in `X-FTL-SID`) reading `stats/summary`, `info/version`,
+  `info/system` and `dns/blocking` in one pass. v6 caps concurrent sessions, so the client holds
+  exactly one and reuses it until 80% of its advertised validity — minting one per 30-second
+  sweep would exhaust the pool within the hour — single-flighting the authentication,
+  re-authenticating exactly once on a mid-flight `401`, and revoking with `DELETE /api/auth` on
+  shutdown. `piholeRegistry.js` owns one client per service id, rebuilding it when the API base,
+  app password, or TLS mode changes and closing the sessions of services that have gone away.
+  Read-only: no write endpoint is ever called.
   `GET /api/netbox/summary` (60s in-process cache) feeds the dashboard's NetBox
   utilization readout — every IPv4 prefix NetBox knows (first 100), one row each.
 - `fleet.js` / `fleetStore.js` — `createFleetManager` runs one command across many boxes as a single
@@ -535,6 +551,14 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 - The NetBox API token is sealed the same way in `data/netbox.json` (`0o600`) and never returned
   to the browser (`hasToken` only). NetBox TLS supports CA verification, TOFU fingerprint pinning
   (shared `tlsPin.js` helpers), or an explicit insecure mode — off by default.
+- A Pi-hole tile's app password is sealed the same way (AES-256-GCM in `data/services.json`,
+  key from `cookieSecret`, file `0o600`) and is never returned to the browser (`hasPassword`
+  only). Unlike the `http`/`tcp` liveness checks — which always set `rejectUnauthorized: false`
+  because they send no credentials — the Pi-hole check sends a password, so its TLS is
+  **verified by default** with an explicit per-service `insecure` opt-in. The session id lives
+  in memory only, never on disk, and is revoked on shutdown. Use a Pi-hole **app password**
+  (Settings → Web interface / API), not the web login password: an app password is unaffected
+  by two-factor authentication and is scoped to the API.
 - A changed SSH host key is treated as a possible MITM, not a nuisance: Tmuxifier never clears a
   `known_hosts` entry merely because a connection failed. It is removed only when Tmuxifier can
   prove the old identity is gone or new (verified Proxmox deprovision; provisioning a fresh

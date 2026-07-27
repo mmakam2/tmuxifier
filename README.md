@@ -294,7 +294,8 @@ When no terminal is docked, the stage shows a standby dashboard instead of a bla
   **server-side** on one shared sweep (`TMUXIFIER_SERVICE_POLL_MS`, default 30s, min 5s) and
   the dashboard reads a cached snapshot, so check volume doesn't scale with open tabs. HTTPS
   checks tolerate self-signed certificates — they answer "is it up", not "is it authentic".
-  Tiles persist in `data/services.json` (no secrets).
+  Tiles persist in `data/services.json`; the only secret it can hold is a Pi-hole app password,
+  which is encrypted (see below).
 - **Fleet overview** — one cell per box: status lamp, agent working/waiting chip, session
   count, and the CPU sparkline. Clicking a cell opens that box's terminal.
 - **Infrastructure readout** — a Proxmox group showing each physical cluster node's health
@@ -306,6 +307,25 @@ prompt with the `+ Add box` hint.
 
 The tmuxifier nameplate in the sidebar's top-left is the home key: clicking it returns to the
 dashboard. Docked terminals undock but keep running — clicking a box re-docks it.
+
+### Pi-hole tiles
+
+A service tile whose check is **Pi-hole** reads the Pi-hole v6 API and renders a double-width
+card with blocking status, queries today, blocked share, active/total clients, gravity domain
+count, version, and uptime instead of a plain up/down lamp.
+
+1. On the Pi-hole, go to **Settings → Web interface / API → Configure app password** and create
+   an app password. (The web login password also authenticates, but an app password is scoped to
+   the API and keeps working when two-factor authentication is enabled.)
+2. In Tmuxifier, open **Settings (⚙) → Services**, add or edit the tile, choose the **Pi-hole**
+   check, and paste the app password. Leave the API base URL blank unless the API lives somewhere
+   other than the tile's link URL.
+3. Press **Test connection** to confirm the credential before saving.
+
+The password is encrypted at rest (AES-256-GCM, key derived from the cookie secret) and is never
+sent back to the browser. Unlike the plain HTTP/TCP checks, TLS is **verified** — tick "Allow a
+self-signed certificate" if your Pi-hole serves one. The integration is read-only: it never
+enables or disables blocking. Pi-hole v5 (`admin/api.php`) is not supported.
 
 ## Split terminals
 
