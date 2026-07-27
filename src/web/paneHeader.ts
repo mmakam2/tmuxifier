@@ -61,7 +61,7 @@ export interface PaneHeaderActions {
 // recording. Action buttons are fixed at build time: refresh/undock
 // availability changes only on a full stage repaint, never mid-poll.
 export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActions = {}): {
-  el: HTMLElement; voiceSlot: HTMLElement; update(m: PaneHeaderModel): void;
+  el: HTMLElement; voiceSlot: HTMLElement; lifecycleSlot: HTMLElement; update(m: PaneHeaderModel): void;
 } {
   const el = document.createElement('div');
   el.className = 'pane-header';
@@ -71,9 +71,15 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
   title.className = 'pane-title';
   const target = document.createElement('span');
   target.className = 'pane-target';
+  // Mount point for the Proxmox lifecycle keys (paneLifecycle.ts), filled by
+  // main.ts for linked boxes only — the same seam as voiceSlot, and for the
+  // same reason: its contents own their own update cycle, so update() below
+  // must never rebuild them.
+  const lifecycleSlot = document.createElement('span');
+  lifecycleSlot.className = 'pane-lifecycle-slot';
   const identity = document.createElement('div');
   identity.className = 'pane-header-id';
-  identity.append(dot, title, target);
+  identity.append(dot, title, target, lifecycleSlot);
 
   const chip = document.createElement('span');
   const voiceSlot = document.createElement('span');
@@ -121,5 +127,5 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
     }
   };
   update(model);
-  return { el, voiceSlot, update };
+  return { el, voiceSlot, lifecycleSlot, update };
 }

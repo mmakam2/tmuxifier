@@ -215,6 +215,9 @@ const lifecycleManager = createProxmoxLifecycleManager({
   taskTimeoutMs: config.pveProvisionTimeoutMs,
   shutdownTimeoutMs: config.pveProvisionTimeoutMs,
   maxJobs: config.pveMaxJobs,
+  // Late-bound on purpose: statusPoller is constructed below, and this only
+  // ever runs once a lifecycle job has reached its verify phase.
+  onContainerUp: (boxId) => statusPoller.refreshUntil(boxId),
 });
 // A drift write (auto-follow) must not race a lifecycle job's own snapshot of
 // the link it's operating on — the job would abort when resolveTarget sees a

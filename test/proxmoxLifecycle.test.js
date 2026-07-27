@@ -607,3 +607,43 @@ test('a link with a netboxIpId but no NetBox settings logs the skip instead of f
   expect(done.log).toContain('could not release NetBox ip 99: NetBox integration not configured');
   expect(touched).toBe(0);
 });
+
+// --- post-action status fast-track ------------------------------------------
+// PVE reporting "running" does not mean the container answers SSH yet, and the
+// status snapshot is only refreshed on its own interval — so without this the
+// UI keeps showing a just-started box as stopped for up to a full poll cycle
+// after it is actually usable.
+
+test('a start job fast-tracks the status poller for that box once PVE reports it running', async () => {
+  const tracked = [];
+  const { manager } = fixture('stopped', { onContainerUp: (boxId) => { tracked.push(boxId); } });
+  const summary = await manager.createJob({ boxId: 'B1', action: 'start' });
+  await manager._settled(summary.id);
+  expect(manager.getJob(summary.id)).toMatchObject({ status: 'done' });
+  expect(tracked).toEqual(['B1']);
+});
+
+test('a reboot job fast-tracks too — the box goes away and comes back', async () => {
+  const tracked = [];
+  const { manager } = fixture('running', { onContainerUp: (boxId) => { tracked.push(boxId); } });
+  const summary = await manager.createJob({ boxId: 'B1', action: 'reboot' });
+  await manager._settled(summary.id);
+  expect(tracked).toEqual(['B1']);
+});
+
+test('actions that leave the container down do not fast-track', async () => {
+  for (const action of ['shutdown', 'stop']) {
+    const tracked = [];
+    const { manager } = fixture('running', { onContainerUp: (boxId) => { tracked.push(boxId); } });
+    const summary = await manager.createJob({ boxId: 'B1', action });
+    await manager._settled(summary.id);
+    expect(tracked).toEqual([]);
+  }
+});
+
+test('a throwing fast-track never fails the job it rode along with', async () => {
+  const { manager } = fixture('stopped', { onContainerUp: () => { throw new Error('poller exploded'); } });
+  const summary = await manager.createJob({ boxId: 'B1', action: 'start' });
+  await manager._settled(summary.id);
+  expect(manager.getJob(summary.id)).toMatchObject({ status: 'done', error: null });
+});

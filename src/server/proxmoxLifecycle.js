@@ -17,6 +17,10 @@ export function createProxmoxLifecycleManager({
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), pollMs = 1500,
   taskTimeoutMs = 600_000, shutdownTimeoutMs = taskTimeoutMs, maxPollFailures = 5,
   maxJobs = 50, maxLogBytes = 65_536,
+  // Fired once PVE confirms a container is running again, so the status layer
+  // can start looking for it instead of waiting out its own poll interval.
+  // Best-effort and fire-and-forget: see runRoutine.
+  onContainerUp = null,
 }) {
   const jobs = new Map();
   const settles = new Map();
@@ -80,8 +84,17 @@ export function createProxmoxLifecycleManager({
     appendLog(job, `# ${job.action} ${upid}\n`); persist();
     await pollTask(client, job, upid);
     job.phase = 'verify'; persist();
-    const expected = job.action === 'start' || job.action === 'reboot' ? 'running' : 'stopped';
+    const backUp = job.action === 'start' || job.action === 'reboot';
+    const expected = backUp ? 'running' : 'stopped';
     await waitForState(job, expected);
+    // PVE says running, but sshd is still coming up — the box will not answer a
+    // probe for tens of seconds yet. Hand the box off to the status layer so it
+    // can watch for the box itself rather than leaving the UI to discover it on
+    // the next scheduled sweep. Never awaited and never allowed to throw: this
+    // is a freshness optimisation, and the lifecycle action already succeeded.
+    if (backUp && onContainerUp) {
+      try { Promise.resolve(onContainerUp(job.boxId)).catch(() => {}); } catch { /* best-effort */ }
+    }
   }
 
   // Best-effort IPAM cleanup: release the auto-static allocation by its

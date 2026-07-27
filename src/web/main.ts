@@ -25,11 +25,16 @@ import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from 
 import { type PaneNode, type Edge, type DropSpec, panesOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
 import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks, type PaneRect } from './stagePanes';
 import { paneHeaderModel, buildPaneHeader, type PaneConn, type PaneHeaderModel } from './paneHeader';
+import { buildPaneLifecycle } from './paneLifecycle';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal>; voiceMount: HTMLElement }>();
 const connStates = new Map<string, PaneConn>();
 const paneHeaders = new Map<string, (m: PaneHeaderModel) => void>();
+// Lifecycle controls live alongside the header updaters and share their
+// lifetime: each owns a poll loop and an arm timer, so an orphan would keep
+// running after its pane's DOM died. Destroyed in repaintStage and on logout.
+const paneLifecycles = new Map<string, ReturnType<typeof buildPaneLifecycle>>();
 const SIDEBAR_COLLAPSED_KEY = 'tmuxifier.sidebarCollapsed';
 const GROUP_COLLAPSED_KEY = 'tmuxifier.collapsedTagGroups';
 const UNTAGGED_LABEL = 'Untagged';
@@ -448,6 +453,27 @@ const POLL_MS = 30000;
 let pollInterval: any;
 let polling = false;
 
+// After a lifecycle action the server fast-tracks its own probing of that box
+// (statusPoller.refreshUntil), but this tab still reads the snapshot on the
+// relaxed interval above — so it would sit on a stale answer long after the
+// server knew better. Poll faster until this box's pane state actually moves,
+// then stop. Bounded: a box that never comes back must not leave a loop running.
+let fastStatusTimer: number | null = null;
+function stopFastStatusPoll() {
+  if (fastStatusTimer != null) { window.clearTimeout(fastStatusTimer); fastStatusTimer = null; }
+}
+function fastStatusPoll(id: string, everyMs = 3000, timeoutMs = 180000) {
+  stopFastStatusPoll();
+  const deadline = Date.now() + timeoutMs;
+  const before = paneState(id);
+  const tick = async () => {
+    await pollStatus();
+    if (paneState(id) !== before || Date.now() >= deadline) { fastStatusTimer = null; return; }
+    fastStatusTimer = window.setTimeout(() => { void tick(); }, everyMs);
+  };
+  void tick();
+}
+
 async function pollStatus() {
   if (polling) return;
   polling = true;
@@ -704,6 +730,7 @@ function paneHeaderModelFor(id: string): PaneHeaderModel {
 
 function updatePaneHeaders() {
   for (const [id, update] of paneHeaders) update(paneHeaderModelFor(id));
+  for (const [id, ctl] of paneLifecycles) ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState });
 }
 
 function paneHooks(): PaneHooks {
@@ -734,6 +761,23 @@ function paneHooks(): PaneHooks {
         built.voiceSlot.append(tabs.get(id)!.voiceMount);
       }
       paneHeaders.set(id, built.update);
+      // Proxmox-linked boxes only: the local shell has no container, and an
+      // unlinked box has nothing for these keys to act on.
+      const linked = allBoxes.find((b) => b.id === id)?.proxmox;
+      if (id !== '__local__' && linked) {
+        const ctl = buildPaneLifecycle({
+          boxId: id,
+          onOpenJobLog: (jobId) => openProxmoxHub({
+            openBox,
+            openEditBox: (boxId) => { const target = allBoxes.find((item) => item.id === boxId); if (target) openBoxDialog(target); },
+            onBoxLinked: () => { void refresh(); },
+          }, jobId ? { lifecycleJobId: jobId } : { tab: 'Containers', focusBoxId: id }),
+          onSettled: () => { fastStatusPoll(id); },
+        });
+        ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState });
+        built.lifecycleSlot.append(ctl.el);
+        paneLifecycles.set(id, ctl);
+      }
       return built.el;
     },
     onFocus: (id) => { if (focusedBoxId !== id) { focusedBoxId = id; syncPaneFocus(); persistStage(); } },
@@ -756,8 +800,14 @@ function syncPaneFocus() {
   highlightStage();
 }
 
+function destroyPaneLifecycles() {
+  for (const [, ctl] of paneLifecycles) ctl.destroy();
+  paneLifecycles.clear();
+}
+
 function repaintStage() {
   paneHeaders.clear(); // stale update closures die with their DOM; headerFor re-registers survivors
+  destroyPaneLifecycles(); // their pollers and arm timers would outlive the DOM otherwise
   const grid = stageGrid();
   // Panels that lost their pane (or whose box left setup) must stop polling.
   for (const [id] of settingUpPollers) {
@@ -844,6 +894,8 @@ async function renderDashboard() {
     // survives logout and re-login restores it.
     for (const [, t] of tabs) { t.term.dispose(); t.el.remove(); }
     tabs.clear();
+    destroyPaneLifecycles(); // #app is about to be replaced; nothing repaints the stage on this path
+    stopFastStatusPoll();
     updateLocalDot();
     for (const id of [...settingUpPollers.keys()]) clearSettingUpPanel(id);
     stageRoot = null;
