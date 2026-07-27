@@ -91,9 +91,9 @@ export function piholeCardModel(svc: Service, snap: ServiceStatusSnapshot | null
   const r = snap?.results[svc.id];
   if (!r) return { lamp: '', chip: '', rows: [], error: '' };
   if (r.state === 'auth') return { lamp: 'auth', chip: '', rows: [], error: r.error || 'authentication failed' };
-  if (r.state === 'down' || !r.metrics) return { lamp: 'red', chip: '', rows: [], error: r.error || 'unreachable' };
+  if (r.state === 'down' || !r.pihole) return { lamp: 'red', chip: '', rows: [], error: r.error || 'unreachable' };
 
-  const m = r.metrics;
+  const m = r.pihole;
   const timer = m.blocking === 'disabled' && m.blockingTimer != null
     ? ` · ${fmtUptime(m.blockingTimer)} left`
     : '';

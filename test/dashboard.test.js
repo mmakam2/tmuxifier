@@ -112,7 +112,7 @@ test('fmtUptime reads in the largest two units', () => {
 });
 
 test('piholeCardModel lays out all six readings', () => {
-  const card = piholeCardModel(piSvc, snap({ state: 'up', latencyMs: 40, metrics }));
+  const card = piholeCardModel(piSvc, snap({ state: 'up', latencyMs: 40, pihole: metrics }));
   expect(card.lamp).toBe('green');
   expect(card.chip).toBe('blocking on');
   expect(card.error).toBe('');
@@ -127,14 +127,14 @@ test('piholeCardModel lays out all six readings', () => {
 });
 
 test('piholeCardModel marks an available update on the version row', () => {
-  const card = piholeCardModel(piSvc, snap({ state: 'up', metrics: { ...metrics, updateAvailable: true } }));
+  const card = piholeCardModel(piSvc, snap({ state: 'up', pihole: { ...metrics, updateAvailable: true } }));
   expect(card.rows.find((r) => r.label === 'VERSION').value).toBe('v6.2.1 ↑');
 });
 
 test('piholeCardModel shows the remaining timer while blocking is disabled', () => {
-  const off = piholeCardModel(piSvc, snap({ state: 'up', metrics: { ...metrics, blocking: 'disabled', blockingTimer: 1680 } }));
+  const off = piholeCardModel(piSvc, snap({ state: 'up', pihole: { ...metrics, blocking: 'disabled', blockingTimer: 1680 } }));
   expect(off.chip).toBe('blocking off · 28m left');
-  const indefinite = piholeCardModel(piSvc, snap({ state: 'up', metrics: { ...metrics, blocking: 'disabled', blockingTimer: null } }));
+  const indefinite = piholeCardModel(piSvc, snap({ state: 'up', pihole: { ...metrics, blocking: 'disabled', blockingTimer: null } }));
   expect(indefinite.chip).toBe('blocking off');
 });
 

@@ -65,7 +65,15 @@ export interface PiholeMetrics {
   updateAvailable: boolean;
   uptimeSec: number | null;
 }
-export interface ServiceResult { state: 'up' | 'down' | 'auth'; latencyMs?: number; error?: string; metrics?: PiholeMetrics }
+// One field per integration rather than a single `metrics` union: each card
+// model reads its own without narrowing, and the asymmetry a generically-named
+// Pi-hole-shaped payload would create never appears.
+export interface ServiceResult {
+  state: 'up' | 'down' | 'auth';
+  latencyMs?: number;
+  error?: string;
+  pihole?: PiholeMetrics;
+}
 export interface ServiceStatusSnapshot { checkedAt: string | null; results: Record<string, ServiceResult> }
 export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'key-changed' | 'threshold' | 'threshold-clear' | 'agent-input' | 'agent-done';
 export interface HealthEvent {

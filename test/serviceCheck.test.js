@@ -122,13 +122,13 @@ test('checkService: pihole kind returns metrics and an up state', async () => {
   const client = createPiholeClient({ baseUrl: pi.baseUrl, password: 'app-pw' });
   const r = await checkService(
     { id: 'a', url: pi.baseUrl, hasPassword: true, check: { kind: 'pihole' } },
-    { registry: oneClientRegistry(client) },
+    { piholeRegistry: oneClientRegistry(client) },
   );
   await client.close();
   await pi.stop();
   expect(r.state).toBe('up');
   expect(r.latencyMs).toBeGreaterThanOrEqual(0);
-  expect(r.metrics.queriesTotal).toBe(48132);
+  expect(r.pihole.queriesTotal).toBe(48132);
 });
 
 test('checkService: a rejected password is the auth state, not down', async () => {
@@ -136,13 +136,13 @@ test('checkService: a rejected password is the auth state, not down', async () =
   const client = createPiholeClient({ baseUrl: pi.baseUrl, password: 'wrong' });
   const r = await checkService(
     { id: 'a', url: pi.baseUrl, hasPassword: true, check: { kind: 'pihole' } },
-    { registry: oneClientRegistry(client) },
+    { piholeRegistry: oneClientRegistry(client) },
   );
   await client.close();
   await pi.stop();
   expect(r.state).toBe('auth');
   expect(r.error).toMatch(/app password/i);
-  expect(r.metrics).toBeUndefined();
+  expect(r.pihole).toBeUndefined();
 });
 
 test('checkService: no stored password names that as the problem', async () => {
@@ -150,7 +150,7 @@ test('checkService: no stored password names that as the problem', async () => {
   const client = createPiholeClient({ baseUrl: pi.baseUrl, password: '' });
   const r = await checkService(
     { id: 'a', url: pi.baseUrl, hasPassword: false, check: { kind: 'pihole' } },
-    { registry: oneClientRegistry(client) },
+    { piholeRegistry: oneClientRegistry(client) },
   );
   await client.close();
   await pi.stop();
@@ -165,7 +165,7 @@ test('checkService: an unreachable pihole is down', async () => {
   const client = createPiholeClient({ baseUrl, password: 'app-pw', timeoutMs: 500 });
   const r = await checkService(
     { id: 'a', url: baseUrl, hasPassword: true, check: { kind: 'pihole' } },
-    { registry: oneClientRegistry(client) },
+    { piholeRegistry: oneClientRegistry(client) },
   );
   expect(r.state).toBe('down');
 });
@@ -173,4 +173,47 @@ test('checkService: an unreachable pihole is down', async () => {
 test('checkService: a pihole service with no registry is down, not a throw', async () => {
   const r = await checkService({ id: 'a', url: 'http://127.0.0.1:1/', hasPassword: true, check: { kind: 'pihole' } }, {});
   expect(r.state).toBe('down');
+});
+
+// --- truenas ---------------------------------------------------------------
+// A registry stand-in: real code on both sides, no mocking library.
+const registryReturning = (result) => ({ async clientFor() { return { async fetchMetrics() { return result; } }; } });
+
+const nas = { id: 'svc-1', url: 'https://nas.example.com', check: { kind: 'truenas', username: 'truenas_admin' }, hasPassword: true };
+
+test('truenas: a successful read is up and carries the metrics under `truenas`', async () => {
+  const metrics = { pools: [], alerts: { critical: 0, warning: 0 }, version: '25.10.5', hostname: 'nas', uptimeSec: 10 };
+  const res = await checkService(nas, { truenasRegistry: registryReturning({ ok: true, metrics }) });
+  expect(res.state).toBe('up');
+  expect(res.truenas).toBe(metrics);
+  expect(typeof res.latencyMs).toBe('number');
+});
+
+test('truenas: a rejected key is auth, not down', async () => {
+  const res = await checkService(nas, {
+    truenasRegistry: registryReturning({ ok: false, kind: 'auth', error: 'API key rejected' }),
+  });
+  expect(res.state).toBe('auth');
+  expect(res.error).toMatch(/rejected/);
+});
+
+test('truenas: a tile with no stored key says so instead of repeating the API message', async () => {
+  const res = await checkService({ ...nas, hasPassword: false }, {
+    truenasRegistry: registryReturning({ ok: false, kind: 'auth', error: 'API key rejected' }),
+  });
+  expect(res.state).toBe('auth');
+  expect(res.error).toMatch(/no API key configured/i);
+});
+
+test('truenas: an unreachable NAS is down', async () => {
+  const res = await checkService(nas, {
+    truenasRegistry: registryReturning({ ok: false, kind: 'unreachable', error: 'connection refused' }),
+  });
+  expect(res.state).toBe('down');
+  expect(res.error).toBe('connection refused');
+});
+
+test('truenas: a missing registry degrades to down rather than throwing', async () => {
+  const res = await checkService(nas, {});
+  expect(res.state).toBe('down');
 });

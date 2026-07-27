@@ -90,12 +90,12 @@ test('a sweep carries pihole metrics into the snapshot and retains live clients'
     store,
     piholeRegistry: { clientFor: async () => ({}), retain: async (ids) => { retained.push(ids); }, closeAll: async () => {} },
     check: async (svc) => (svc.check.kind === 'pihole'
-      ? { state: 'up', latencyMs: 3, metrics: { queriesTotal: 7 } }
+      ? { state: 'up', latencyMs: 3, pihole: { queriesTotal: 7 } }
       : { state: 'up', latencyMs: 1 }),
   });
   const snap = await checker.pollOnce();
-  expect(snap.results.p1.metrics).toEqual({ queriesTotal: 7 });
-  expect(snap.results.h1.metrics).toBeUndefined();
+  expect(snap.results.p1.pihole).toEqual({ queriesTotal: 7 });
+  expect(snap.results.h1.pihole).toBeUndefined();
   expect(snap.results.n1).toBeUndefined();
   expect(retained).toEqual([['p1']]);
 });
