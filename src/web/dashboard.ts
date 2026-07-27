@@ -47,7 +47,7 @@ export function fmtLatency(ms?: number): string {
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function serviceLamp(svc: Service, snap: ServiceStatusSnapshot | null): 'up' | 'down' | 'unknown' | 'none' {
+export function serviceLamp(svc: Service, snap: ServiceStatusSnapshot | null): 'up' | 'down' | 'auth' | 'unknown' | 'none' {
   if (svc.check.kind === 'none') return 'none';
   const r = snap?.results[svc.id];
   return r ? r.state : 'unknown';
