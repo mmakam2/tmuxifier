@@ -800,6 +800,28 @@ button.empty-kbd:hover { color: var(--text); }
   cursor: pointer; opacity: 0.6;
 }
 .pane-header .pane-act:hover, .pane-header .pane-act:focus-visible { opacity: 1; color: var(--text); }
+/* Proxmox lifecycle keys: icon keys per DESIGN.md — flat legend-dim glyphs on
+   small hit pads, hover raises a step and brightens, destructive hover LED red. */
+.pane-lifecycle-slot, .pane-lifecycle { display: inline-flex; align-items: center; gap: 2px; }
+/* .pane-header-id has an 8px gap, so an empty slot would still push the layout
+   of every unlinked box's header. It must take no part at all. */
+.pane-lifecycle-slot:empty { display: none; }
+.pane-header .pane-life {
+  font-family: var(--face); font-size: 12px; line-height: 1;
+  padding: 2px 4px; border: 1px solid transparent; border-radius: 4px;
+  background: none; color: var(--dim); opacity: 0.75;
+  text-transform: none; letter-spacing: normal; cursor: pointer;
+}
+.pane-header .pane-life:hover, .pane-header .pane-life:focus-visible {
+  opacity: 1; color: var(--text); background: var(--panel-2); border-color: var(--border);
+}
+.pane-header .pane-life.danger:hover, .pane-header .pane-life.danger:focus-visible { color: var(--crit); }
+/* Armed: the key states its own consequence and waits for a second click. */
+.pane-header .pane-life.armed {
+  opacity: 1; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; padding: 1px 6px;
+  color: var(--crit); border-color: rgba(255, 92, 71, 0.55); background: rgba(255, 92, 71, 0.12);
+}
+.pane-chip.chip-error { color: var(--crit); border-color: rgba(255, 92, 71, 0.5); background: rgba(255, 92, 71, 0.1); cursor: pointer; }
 /* Docked in the bar, the voice button loses its floating-over-canvas geometry. */
 .pane-header .voice-btn { position: static; top: auto; right: auto; }
 /* Dividers: chassis seams between mounted displays. */
