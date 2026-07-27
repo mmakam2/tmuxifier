@@ -812,13 +812,17 @@ button.empty-kbd:hover { color: var(--text); }
   background: none; color: var(--dim); opacity: 0.75;
   text-transform: none; letter-spacing: normal; cursor: pointer;
 }
+/* Optical sizing: same font-size, very different drawn heights. The reboot
+   arrow renders roughly half the em the power and stop marks fill, so it sits
+   on the glyph step to be level with them rather than looking half-size. */
+.pane-header .pane-life-reboot { font-size: 16px; }
 .pane-header .pane-life:hover, .pane-header .pane-life:focus-visible {
   opacity: 1; color: var(--text); background: var(--panel-2); border-color: var(--border);
 }
 .pane-header .pane-life.danger:hover, .pane-header .pane-life.danger:focus-visible { color: var(--crit); }
 /* Armed: the key states its own consequence and waits for a second click. */
 .pane-header .pane-life.armed {
-  opacity: 1; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; padding: 1px 6px;
+  opacity: 1; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; padding: 1px 6px;
   color: var(--crit); border-color: rgba(255, 92, 71, 0.55); background: rgba(255, 92, 71, 0.12);
 }
 .pane-chip.chip-error { color: var(--crit); border-color: rgba(255, 92, 71, 0.5); background: rgba(255, 92, 71, 0.1); cursor: pointer; }

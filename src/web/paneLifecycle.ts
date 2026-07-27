@@ -158,7 +158,11 @@ export function buildPaneLifecycle(deps: PaneLifecycleDeps): {
       const armed = arm.armed === key.action;
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = `pane-life${key.danger ? ' danger' : ''}${armed ? ' armed' : ''}`;
+      // The action class exists for optical sizing: these glyphs are drawn at
+      // very different sizes for the same font-size (the power and stop marks
+      // fill the em, the reboot arrow is much smaller), so matching them by eye
+      // needs per-glyph compensation in CSS.
+      btn.className = `pane-life pane-life-${key.action}${key.danger ? ' danger' : ''}${armed ? ' armed' : ''}`;
       btn.textContent = armed ? key.armLegend! : key.glyph;
       btn.title = armed ? `Click again to ${key.action}` : key.label;
       btn.setAttribute('aria-label', armed ? `Confirm ${key.action}` : key.label);
