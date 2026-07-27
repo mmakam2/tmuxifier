@@ -327,6 +327,42 @@ sent back to the browser. Unlike the plain HTTP/TCP checks, TLS is **verified** 
 self-signed certificate" if your Pi-hole serves one. The integration is read-only: it never
 enables or disables blocking. Pi-hole v5 (`admin/api.php`) is not supported.
 
+### TrueNAS tiles
+
+A service tile whose check is **TrueNAS** reads your NAS over its JSON-RPC WebSocket API and
+renders a double-width card with one row per ZFS pool — name, used percentage, free space —
+under a chip showing the worst pool health and the active alert count, with the TrueNAS version
+and host uptime beneath.
+
+The lamp is a glance signal, not just a reachability light:
+
+| Lamp | Meaning |
+|---|---|
+| green | every pool online and healthy, no active alert, every pool under 80% used |
+| amber | a pool is degraded, a warning-level alert is outstanding, or a pool has passed 80% |
+| red | unreachable, a pool is faulted, an error-level alert is outstanding, or a pool has passed 90% |
+| violet | the API key was rejected, has expired, or the account requires a one-time password |
+
+Onboarding needs three things — the NAS URL, the username the API key belongs to, and the key:
+
+1. On the TrueNAS, go to **Credentials → Users → API Keys** and create a user-linked key with the
+   **READONLY_ADMIN** role. Note which account it belongs to; the login call needs the username
+   alongside the key.
+2. In Tmuxifier, open **Settings (⚙) → Services**, add or edit the tile, choose the **TrueNAS**
+   check, and fill in the username and key. Leave the API base URL blank unless the API lives
+   somewhere other than the tile's link URL.
+3. Press **Test connection** to confirm the credential before saving.
+
+The URL must be `https://`. TrueNAS **permanently revokes** any user-linked API key presented
+over plain HTTP, so Tmuxifier refuses an `http://` TrueNAS URL outright rather than risk your
+credential — this is not something you can opt out of. A self-signed certificate is fine: tick
+"Allow a self-signed certificate". The key is encrypted at rest (AES-256-GCM, key derived from
+the cookie secret) and is never sent back to the browser.
+
+Requires TrueNAS 25.04 or later, which is where the JSON-RPC WebSocket API replaced the REST API
+(removed outright in TrueNAS 26). The integration is read-only and never changes anything on the
+NAS — not even dismissing an alert.
+
 ## Split terminals
 
 Up to four boxes can share the stage, and splits nest. Drag a box row onto the stage:
