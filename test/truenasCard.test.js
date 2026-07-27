@@ -74,11 +74,30 @@ test('model: rows are capped and the overflow is counted, not dropped silently',
 
 test('model: the chip carries the worst pool state and the active alert count', () => {
   expect(truenasCardModel(svc, snap(up())).chip).toBe('healthy');
-  expect(truenasCardModel(svc, snap(up({ alerts: { critical: 1, warning: 1 } }))).chip).toBe('healthy · 2 alerts');
   expect(truenasCardModel(svc, snap(up({
     pools: [pool(), pool({ name: 'b', healthy: false, status: 'DEGRADED' })],
   }))).chip).toBe('degraded');
-  expect(truenasCardModel(svc, snap(up({ alerts: { critical: 0, warning: 1 } }))).chip).toBe('healthy · 1 alert');
+});
+
+// The lamp encodes alert severity; before this the chip did not, so a red lamp
+// beside "healthy · 1 alert" left the reader guessing which of the two the
+// colour came from. Naming the severity is what makes the chip explain the lamp.
+test('model: the chip names alert severity rather than lumping them into a count', () => {
+  const chip = (alerts) => truenasCardModel(svc, snap(up({ alerts }))).chip;
+  expect(chip({ critical: 1, warning: 0 })).toBe('healthy · 1 critical');
+  expect(chip({ critical: 2, warning: 0 })).toBe('healthy · 2 critical');
+  expect(chip({ critical: 0, warning: 1 })).toBe('healthy · 1 warning');
+  expect(chip({ critical: 0, warning: 3 })).toBe('healthy · 3 warnings');
+  // Critical first: it is the one driving the colour.
+  expect(chip({ critical: 1, warning: 2 })).toBe('healthy · 1 critical, 2 warnings');
+  expect(chip({ critical: 0, warning: 0 })).toBe('healthy');
+});
+
+test('model: a degraded pool with a critical alert reports both, pool state first', () => {
+  expect(truenasCardModel(svc, snap(up({
+    pools: [pool({ healthy: false, status: 'DEGRADED' })],
+    alerts: { critical: 1, warning: 0 },
+  }))).chip).toBe('degraded · 1 critical');
 });
 
 test('model: a scrubbing pool is marked on its own row, not in the chip', () => {

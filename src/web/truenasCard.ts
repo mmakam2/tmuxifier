@@ -51,11 +51,22 @@ export interface TruenasCard {
   error: string;
 }
 
+// The lamp already encodes alert severity, so the chip names it too: a red lamp
+// beside a bare "1 alert" leaves the reader guessing whether the colour came
+// from the alert or from a pool. Critical leads, because it is the one driving
+// the colour.
+function alertPhrase({ critical, warning }: TruenasMetrics['alerts']): string {
+  const parts: string[] = [];
+  if (critical) parts.push(`${critical} critical`);
+  if (warning) parts.push(`${warning} warning${warning === 1 ? '' : 's'}`);
+  return parts.join(', ');
+}
+
 function chipFor(m: TruenasMetrics): string {
   const worst = m.pools.find(faulted) ?? m.pools.find(degraded);
   const health = worst ? worst.status.toLowerCase() : 'healthy';
-  const n = m.alerts.critical + m.alerts.warning;
-  return n ? `${health} · ${n} alert${n === 1 ? '' : 's'}` : health;
+  const alerts = alertPhrase(m.alerts);
+  return alerts ? `${health} · ${alerts}` : health;
 }
 
 function rowFor(p: TruenasPool): TruenasRow {
