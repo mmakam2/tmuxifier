@@ -21,7 +21,7 @@ type HubOpts = {
   openEditBox: (boxId: string) => void;
   onBoxLinked: () => void;
 };
-type HubInitial = { tab?: Tab; focusBoxId?: string };
+type HubInitial = { tab?: Tab; focusBoxId?: string; lifecycleJobId?: string };
 const TABS = ['Containers', 'Presets', 'Provision', 'Activity'] as const;
 type Tab = typeof TABS[number];
 
@@ -62,7 +62,15 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
     el('div', { class: 'pve-head' }, [el('h2', {}, ['Proxmox']), el('button', { type: 'button', class: 'pve-close', title: 'Close', 'aria-label': 'Close Proxmox hub', onclick: close }, ['✕'])]),
     tabStrip, content,
   );
-  selectTab(active);
+  // Opening straight to a job's log replaces the initial tab render rather than
+  // racing it: renderers are async and would clobber the log when they resolve.
+  if (initial.lifecycleJobId) {
+    active = 'Activity';
+    syncTabSelection(tabStrip, active);
+    showLifecycleJob(initial.lifecycleJobId);
+  } else {
+    selectTab(active);
+  }
 
   function setContent(...nodes: (Node | string)[]) { content.replaceChildren(...nodes); }
 
