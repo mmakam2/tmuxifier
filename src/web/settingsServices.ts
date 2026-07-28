@@ -2,22 +2,8 @@
 // Master-detail scaled down: the list on top, one add/edit form below it.
 import { el, field, makeRadio, openModal } from './dom';
 import { registerModal } from './modalRegistry';
+import { buildServiceIcon } from './serviceIcon';
 import { api, type Service, type ServiceCheck, type ServiceCheckKind, type ServiceSection, type ServiceSpec, type UnifiTlsMode } from './api';
-
-// Starter palette of Nerd Font glyphs (the bundled Meslo NF renders these);
-// free-form entry stays open for anything not listed.
-const GLYPHS: { glyph: string; label: string }[] = [
-  { glyph: '', label: 'server' },
-  { glyph: '', label: 'database' },
-  { glyph: '', label: 'globe' },
-  { glyph: '', label: 'home' },
-  { glyph: '', label: 'cloud' },
-  { glyph: '', label: 'film' },
-  { glyph: '', label: 'music' },
-  { glyph: '', label: 'key' },
-  { glyph: '', label: 'chart' },
-  { glyph: '', label: 'code' },
-];
 
 // Check kinds that authenticate, and so carry a stored credential.
 const CREDENTIAL_KINDS: ServiceCheckKind[] = ['pihole', 'truenas', 'unifi'];
@@ -27,7 +13,7 @@ const CREDENTIAL_KINDS: ServiceCheckKind[] = ['pihole', 'truenas', 'unifi'];
 // null as "clear this field", while an absent key means "leave it alone" —
 // which is exactly what an untouched password field must send.
 export function buildServicePayload(f: {
-  name: string; url: string; glyph: string; group: string;
+  name: string; url: string; icon?: string; group: string;
   kind: ServiceCheckKind; target: string; section: ServiceSection;
   username?: string; password?: string; clearPassword?: boolean; insecure?: boolean;
   site?: string; tls?: UnifiTlsMode; fingerprint?: string;
@@ -64,7 +50,10 @@ export function buildServicePayload(f: {
   const payload: ServiceSpec = {
     name: f.name.trim(),
     url: f.url.trim(),
-    glyph: f.glyph.trim() || null,
+    // undefined (Auto) sends null, which the server's PATCH merge reads as
+    // "clear this field" — and a cleared icon is exactly what resolve-
+    // automatically is stored as.
+    icon: f.icon ?? null,
     group: f.group.trim() || null,
     section: f.section,
     check,
@@ -95,7 +84,6 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
   let editing: Service | null = null;
   const nameIn = el('input', { type: 'text', autocomplete: 'off' }) as HTMLInputElement;
   const urlIn = el('input', { type: 'text', placeholder: 'http://192.168.1.10:3000/', autocomplete: 'off' }) as HTMLInputElement;
-  const glyphIn = el('input', { type: 'text', class: 'svc-glyph-input', autocomplete: 'off' }) as HTMLInputElement;
   const groupIn = el('input', { type: 'text', placeholder: 'e.g. Monitoring', autocomplete: 'off' }) as HTMLInputElement;
   const targetIn = el('input', { type: 'text', autocomplete: 'off' }) as HTMLInputElement;
   const usernameIn = el('input', { type: 'text', autocomplete: 'off', placeholder: 'truenas_admin' }) as HTMLInputElement;
@@ -107,8 +95,62 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
   const testBtn = el('button', { type: 'button', class: 'pve-btn' }, ['Test connection']);
   let clearPassword = false;
 
-  const palette = el('div', { class: 'svc-glyph-palette' }, GLYPHS.map(({ glyph, label }) =>
-    el('button', { type: 'button', class: 'svc-glyph-key', title: label, onclick: () => { glyphIn.value = glyph; } }, [glyph])));
+  // Three states rather than a free-form field: Auto is the default and covers
+  // the fleet without typing, Choose is the escape hatch when the guess is
+  // wrong, and None suppresses. The catalog is fetched once per render.
+  const iconRadios: Record<'auto' | 'pick' | 'none', { wrap: HTMLElement; input: HTMLInputElement }> = {
+    auto: makeRadio('svc-icon', 'auto', 'Auto', true),
+    pick: makeRadio('svc-icon', 'pick', 'Choose', false),
+    none: makeRadio('svc-icon', 'none', 'None', false),
+  };
+  const iconMode = (): 'auto' | 'pick' | 'none' =>
+    (Object.entries(iconRadios).find(([, r]) => r.input.checked)?.[0] as 'auto' | 'pick' | 'none') ?? 'auto';
+
+  const iconFilter = el('input', { type: 'text', class: 'svc-icon-filter', placeholder: 'filter icons', autocomplete: 'off' }) as HTMLInputElement;
+  const iconGrid = el('div', { class: 'svc-icon-grid' });
+  const iconPicker = el('div', { class: 'svc-icon-picker' }, [iconFilter, iconGrid]);
+  const refreshBtn = el('button', { type: 'button', class: 'pve-btn' }, ['Refresh icon']);
+  let picked = '';
+  let catalog: string[] = [];
+
+  function paintIconGrid() {
+    if (!catalog.length) {
+      iconGrid.replaceChildren(el('div', { class: 'svc-icon-empty' }, ['No icon catalog on disk — run npm run fetch-icons to download it.']));
+      return;
+    }
+    const q = iconFilter.value.trim().toLowerCase();
+    const shown = catalog.filter((s) => !q || s.includes(q)).slice(0, 200);
+    if (!shown.length) {
+      iconGrid.replaceChildren(el('div', { class: 'svc-icon-empty' }, [`No catalog icon matches “${iconFilter.value.trim()}”.`]));
+      return;
+    }
+    iconGrid.replaceChildren(...shown.map((slug) => el('button', {
+      type: 'button',
+      class: `svc-icon-key${slug === picked ? ' selected' : ''}`,
+      title: slug,
+      onclick: () => { picked = slug; paintIconGrid(); },
+    }, [el('img', { src: `/api/icons/${encodeURIComponent(slug)}`, alt: '', class: 'svc-icon-img' })])));
+  }
+  iconFilter.addEventListener('input', paintIconGrid);
+
+  const syncIcon = () => { iconPicker.hidden = iconMode() !== 'pick'; };
+  for (const r of Object.values(iconRadios)) r.input.addEventListener('change', syncIcon);
+
+  refreshBtn.addEventListener('click', async () => {
+    if (!editing) { setStatus('Save the service first, then refresh its icon.', true); return; }
+    setStatus('Fetching the favicon…');
+    try {
+      const r = await api.refreshServiceIcon(editing.id);
+      setStatus(r.ok ? 'Icon updated.' : `No icon found: ${r.reason ?? 'unknown reason'}`, !r.ok);
+      changed();
+    } catch (e) {
+      setStatus((e as Error).message, true);
+    }
+  });
+
+  // An empty catalog is a picker that explains itself, not an error: a fresh
+  // clone that has never run fetch-icons still resolves favicons.
+  try { catalog = (await api.icons()).slugs; } catch { catalog = []; }
 
   const radios: Record<ServiceCheckKind, { wrap: HTMLElement; input: HTMLInputElement }> = {
     http: makeRadio('svc-check', 'http', 'HTTP', true),
@@ -250,7 +292,12 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     saveBtn.textContent = svc ? 'Save changes' : 'Add service';
     nameIn.value = svc?.name ?? '';
     urlIn.value = svc?.url ?? '';
-    glyphIn.value = svc?.glyph ?? '';
+    picked = svc?.icon && svc.icon !== 'none' ? svc.icon : '';
+    const iconSaved = svc?.icon === 'none' ? 'none' : svc?.icon ? 'pick' : 'auto';
+    for (const [key, r] of Object.entries(iconRadios)) r.input.checked = key === iconSaved;
+    iconFilter.value = '';
+    paintIconGrid();
+    syncIcon();
     groupIn.value = svc?.group ?? '';
     targetIn.value = svc?.check.target ?? '';
     usernameIn.value = svc?.check.username ?? '';
@@ -273,7 +320,8 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
 
   saveBtn.addEventListener('click', async () => {
     const payload = buildServicePayload({
-      name: nameIn.value, url: urlIn.value, glyph: glyphIn.value,
+      name: nameIn.value, url: urlIn.value,
+      icon: iconMode() === 'none' ? 'none' : iconMode() === 'pick' && picked ? picked : undefined,
       group: groupIn.value, kind: kind(), target: targetIn.value, section: section(),
       username: usernameIn.value, password: passwordIn.value, clearPassword, insecure: insecureIn.checked,
       site: siteIn.value, tls: tlsMode(), fingerprint: fingerprintIn.value,
@@ -308,15 +356,22 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
   }
 
   // --- list ----------------------------------------------------------------
-  const rows = services.map((svc) => el('div', { class: 'svc-row' }, [
-    el('span', { class: 'svc-row-name' }, [svc.glyph ? `${svc.glyph}  ${svc.name}` : svc.name]),
-    el('span', { class: 'svc-row-group' }, [
-      `${svc.section === 'infrastructure' ? 'Infrastructure' : 'Services'}${svc.group ? ` → ${svc.group}` : ''}`,
-    ]),
-    el('span', { class: 'svc-row-check' }, [svc.check.kind]),
-    el('button', { type: 'button', class: 'pve-btn', onclick: () => fillForm(svc) }, ['Edit']),
-    el('button', { type: 'button', class: 'pve-btn danger', onclick: () => confirmRemove(svc) }, ['Remove']),
-  ]));
+  const rows = services.map((svc) => {
+    // The same element the dashboard uses, so the list previews exactly what
+    // the tile will render — including nothing, when nothing resolves.
+    const icon = buildServiceIcon();
+    icon.update(svc);
+    return el('div', { class: 'svc-row' }, [
+      icon.root,
+      el('span', { class: 'svc-row-name' }, [svc.name]),
+      el('span', { class: 'svc-row-group' }, [
+        `${svc.section === 'infrastructure' ? 'Infrastructure' : 'Services'}${svc.group ? ` → ${svc.group}` : ''}`,
+      ]),
+      el('span', { class: 'svc-row-check' }, [svc.check.kind]),
+      el('button', { type: 'button', class: 'pve-btn', onclick: () => fillForm(svc) }, ['Edit']),
+      el('button', { type: 'button', class: 'pve-btn danger', onclick: () => confirmRemove(svc) }, ['Remove']),
+    ]);
+  });
 
   content.replaceChildren(
     el('h3', {}, ['Services']),
@@ -326,8 +381,9 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
       formTitle,
       field('Name', nameIn),
       field('URL (opens in a new tab)', urlIn),
-      field('Glyph (optional)', glyphIn),
-      palette,
+      field('Icon', el('div', { class: 'svc-check-radios' }, [iconRadios.auto.wrap, iconRadios.pick.wrap, iconRadios.none.wrap])),
+      iconPicker,
+      el('div', { class: 'pve-inline' }, [refreshBtn]),
       el('div', { class: 'svc-check-radios' }, [sectionRadios.services.wrap, sectionRadios.infrastructure.wrap]),
       field('Category (optional — e.g. DNS Filtering; under Infrastructure, "Proxmox" and "IPAM" join the built-in groups)', groupIn),
       el('div', { class: 'svc-check-radios' }, [radios.http.wrap, radios.tcp.wrap, radios.pihole.wrap, radios.truenas.wrap, radios.unifi.wrap, radios.none.wrap]),
