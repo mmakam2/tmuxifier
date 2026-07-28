@@ -33,7 +33,7 @@ export interface Sample {
   // latest sample's `agent` for its working/waiting chip (paneHeader.ts).
   agent?: 'working' | 'waiting' | 'unknown'; agentAttached?: boolean;
 }
-export type ServiceCheckKind = 'http' | 'tcp' | 'none' | 'pihole' | 'truenas' | 'unifi';
+export type ServiceCheckKind = 'http' | 'tcp' | 'none' | 'pihole' | 'truenas' | 'unifi' | 'immich';
 export type ServiceSection = 'services' | 'infrastructure';
 export type UnifiTlsMode = 'verify' | 'pin' | 'insecure';
 export interface ServiceCheck {
@@ -111,6 +111,28 @@ export interface UnifiMetrics {
   aps: UnifiDeviceClass & { clients: number };
   offline: { name: string; model: string }[];
 }
+export interface ImmichJobs { active: number; waiting: number; failed: number; paused: string[] }
+export interface ImmichMetrics {
+  version: string | null;
+  releaseVersion: string | null;
+  updateAvailable: boolean;
+  checkedAt: string | null;
+  photos: number | null;
+  videos: number | null;
+  libraryBytes: number | null;
+  users: number | null;
+  topUser: { name: string; bytes: number | null } | null;
+  diskUsedBytes: number | null;
+  diskSizeBytes: number | null;
+  diskFreeBytes: number | null;
+  diskUsedPct: number | null;
+  // null means the key may not read the queues, which is a different statement
+  // from a rollup of zeroes meaning the queues are idle.
+  jobs: ImmichJobs | null;
+  maintenanceMode: boolean;
+  // Immich permissions the key lacks, e.g. 'server.statistics'.
+  denied: string[];
+}
 // One field per integration rather than a single `metrics` union: each card
 // model reads its own without narrowing, and the asymmetry a generically-named
 // Pi-hole-shaped payload would create never appears.
@@ -121,6 +143,7 @@ export interface ServiceResult {
   pihole?: PiholeMetrics;
   truenas?: TruenasMetrics;
   unifi?: UnifiMetrics;
+  immich?: ImmichMetrics;
 }
 export interface ServiceStatusSnapshot { checkedAt: string | null; results: Record<string, ServiceResult> }
 export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'key-changed' | 'threshold' | 'threshold-clear' | 'agent-input' | 'agent-done';
@@ -238,6 +261,11 @@ export const api = {
   async testUnifi(body: { url: string; apiKey?: string; site?: string; tls?: string; fingerprint?: string; id?: string }) {
     return j<{ ok: boolean; error?: string; fingerprint256?: string | null; sites?: { id: string; name: string; reference: string }[] }>(
       await fetch('/api/services/unifi/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    );
+  },
+  async testImmich(body: { url: string; apiKey?: string; insecure?: boolean; id?: string }) {
+    return j<{ ok: boolean; version?: string | null; denied?: string[]; error?: string }>(
+      await fetch('/api/services/immich/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
     );
   },
   async status() { return j<Record<string, Status>>(await fetch(`/api/status?t=${Date.now()}`)); },

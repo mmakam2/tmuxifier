@@ -164,6 +164,7 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     pihole: makeRadio('svc-check', 'pihole', 'Pi-hole', false),
     truenas: makeRadio('svc-check', 'truenas', 'TrueNAS', false),
     unifi: makeRadio('svc-check', 'unifi', 'UniFi', false),
+    immich: makeRadio('svc-check', 'immich', 'Immich', false),
     none: makeRadio('svc-check', 'none', 'None (link only)', false),
   };
   const kind = (): ServiceCheckKind =>
@@ -392,7 +393,7 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
       el('div', { class: 'pve-inline' }, [refreshBtn]),
       el('div', { class: 'svc-check-radios' }, [sectionRadios.services.wrap, sectionRadios.infrastructure.wrap]),
       field('Category (optional — e.g. DNS Filtering; under Infrastructure, "Proxmox" and "IPAM" join the built-in groups)', groupIn),
-      el('div', { class: 'svc-check-radios' }, [radios.http.wrap, radios.tcp.wrap, radios.pihole.wrap, radios.truenas.wrap, radios.unifi.wrap, radios.none.wrap]),
+      el('div', { class: 'svc-check-radios' }, [radios.http.wrap, radios.tcp.wrap, radios.pihole.wrap, radios.truenas.wrap, radios.unifi.wrap, radios.immich.wrap, radios.none.wrap]),
       targetField,
       credentialGroup,
       el('div', { class: 'pve-inline' }, [saveBtn, cancelBtn]),

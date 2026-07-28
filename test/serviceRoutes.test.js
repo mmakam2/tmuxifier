@@ -10,6 +10,7 @@ import { hashPassword } from '../src/server/auth.js';
 import { createSecretBox } from '../src/server/secretBox.js';
 import { createIconStore } from '../src/server/iconStore.js';
 import { startFakePihole } from './helpers/fakePihole.js';
+import { startFakeImmich } from './helpers/fakeImmich.js';
 
 let app, dir, servicesStore, serviceChecker, iconStore;
 // Steered per test: the unifi route refuses http:, so a loopback fixture cannot
@@ -359,4 +360,55 @@ test('the icon cache-control exemption does not leak to data-bearing routes', as
     const res = await app.inject({ method, url, headers: h });
     expect(res.headers['cache-control']).toBe('no-store');
   }
+});
+
+// Unlike the unifi and truenas routes, the immich route permits http:, so a
+// loopback fixture can be probed end-to-end through the real client.
+test('POST /api/services/immich/test probes a real server and reports missing permissions', async () => {
+  const h = await headers();
+  const fake = await startFakeImmich({ deny: ['/api/server/statistics'] });
+  try {
+    const res = await app.inject({
+      method: 'POST', url: '/api/services/immich/test', headers: h,
+      payload: { url: fake.baseUrl, apiKey: 'test-key' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(true);
+    expect(body.version).toBe('v3.0.3');
+    expect(body.denied).toEqual(['server.statistics']);
+  } finally {
+    await fake.stop();
+  }
+});
+
+test('POST /api/services/immich/test rejects a non-http(s) url before building a client', async () => {
+  const h = await headers();
+  const res = await app.inject({
+    method: 'POST', url: '/api/services/immich/test', headers: h,
+    payload: { url: 'ftp://immich.example.com', apiKey: 'k' },
+  });
+  expect(res.json()).toEqual({ ok: false, error: expect.stringMatching(/valid http\(s\) URL/) });
+});
+
+test('POST /api/services/immich/test falls back to the stored key when none is posted', async () => {
+  const h = await headers();
+  const fake = await startFakeImmich();
+  try {
+    const svc = await servicesStore.addService({
+      name: 'Photos', url: fake.baseUrl, check: { kind: 'immich' }, password: 'test-key',
+    });
+    const res = await app.inject({
+      method: 'POST', url: '/api/services/immich/test', headers: h,
+      payload: { url: fake.baseUrl, id: svc.id },
+    });
+    expect(res.json().ok).toBe(true);
+  } finally {
+    await fake.stop();
+  }
+});
+
+test('POST /api/services/immich/test requires authentication', async () => {
+  const res = await app.inject({ method: 'POST', url: '/api/services/immich/test', payload: { url: 'http://x' } });
+  expect(res.statusCode).toBe(401);
 });

@@ -18,6 +18,7 @@ import { testNetbox, createNetboxClient, netboxSummary } from './netboxApi.js';
 import { createPiholeClient } from './piholeApi.js';
 import { createTruenasClient } from './truenasApi.js';
 import { createUnifiClient } from './unifiApi.js';
+import { createImmichClient } from './immichApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
 import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault } from './tmuxInject.js';
 import { normalizeTranscript } from './voiceText.js';
@@ -102,7 +103,7 @@ const NO_ICONS = {
   forget: async () => {},
 };
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -950,6 +951,28 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return res.ok
       ? { ok: true, sites: res.sites, fingerprint256: res.fingerprint256 ?? null }
       : { ok: false, error: res.error, ...(res.fingerprint256 ? { fingerprint256: res.fingerprint256 } : {}) };
+  });
+
+  // Same rationale as the other probes: save-and-pray is a poor way to discover
+  // the key is wrong. This one also reports which permissions the key is
+  // missing, so a deliberately least-privilege key can be fixed before saving
+  // rather than producing a card full of dashes afterwards.
+  app.post('/api/services/immich/test', { preHandler: requireAuth }, async (req) => {
+    const { url, apiKey, insecure, id } = req.body || {};
+    const value = typeof url === 'string' ? url.trim() : '';
+    try {
+      const u = new URL(value);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('must be http(s)');
+    } catch {
+      return { ok: false, error: 'enter a valid http(s) URL for the Immich server' };
+    }
+    // A blank key on an existing service means "use the one already stored", so
+    // Test works while editing without retyping the secret.
+    let key = typeof apiKey === 'string' ? apiKey : '';
+    if (!key && id) key = (await servicesStore.getServiceSecret(id)) || '';
+    const client = makeImmichClient({ baseUrl: value, apiKey: key, insecure: insecure === true });
+    const res = await client.probe();
+    return res.ok ? { ok: true, version: res.version, denied: res.denied } : { ok: false, error: res.error };
   });
 
   app.post('/api/fleet/jobs', { preHandler: requireAuth }, async (req, reply) => {
