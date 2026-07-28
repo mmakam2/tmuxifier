@@ -98,11 +98,38 @@ export async function checkTruenas(service, { truenasRegistry } = {}) {
   return { state: 'down', latencyMs, error: res.error };
 }
 
+// A UniFi check reports the network, not just reachability. As with Pi-hole and
+// TrueNAS the `auth` state is deliberately distinct from `down`: a rotated or
+// revoked API key means the controller is answering perfectly well, and painting
+// it red would cry wolf. A TLS failure is deliberately NOT auth — it is a
+// transport the operator has to decide about, so it stays `down`.
+export async function checkUnifi(service, { unifiRegistry } = {}) {
+  if (!unifiRegistry) return { state: 'down', error: 'unifi client unavailable' };
+  const started = Date.now();
+  let client;
+  try {
+    client = await unifiRegistry.clientFor(service);
+  } catch (err) {
+    return { state: 'down', error: err?.message || 'unifi client setup failed' };
+  }
+  const res = await client.snapshot();
+  const latencyMs = Date.now() - started;
+  if (res.ok) return { state: 'up', latencyMs, unifi: res.metrics };
+  if (res.kind === 'auth') {
+    const error = service.hasPassword === false
+      ? 'no API key configured — add one in Settings → Services'
+      : res.error;
+    return { state: 'auth', latencyMs, error };
+  }
+  return { state: 'down', latencyMs, error: res.error };
+}
+
 export async function checkService(service, opts = {}) {
   const kind = service?.check?.kind || 'http';
   if (kind === 'none') return null;
   if (kind === 'pihole') return checkPihole(service, opts);
   if (kind === 'truenas') return checkTruenas(service, opts);
+  if (kind === 'unifi') return checkUnifi(service, opts);
   if (kind === 'tcp') return checkTcp(service.check?.target, opts);
   return checkHttp(service.check?.target || service.url, opts);
 }

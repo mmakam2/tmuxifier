@@ -294,8 +294,8 @@ When no terminal is docked, the stage shows a standby dashboard instead of a bla
   **server-side** on one shared sweep (`TMUXIFIER_SERVICE_POLL_MS`, default 30s, min 5s) and
   the dashboard reads a cached snapshot, so check volume doesn't scale with open tabs. HTTPS
   checks tolerate self-signed certificates — they answer "is it up", not "is it authentic".
-  Tiles persist in `data/services.json`; the only secret it can hold is a Pi-hole app password,
-  which is encrypted (see below).
+  Tiles persist in `data/services.json`; the secrets it can hold — a Pi-hole app password, a
+  TrueNAS API key, a UniFi API key — are all encrypted (see below).
 - **Fleet overview** — one cell per box: status lamp, agent working/waiting chip, session
   count, and the CPU sparkline. Clicking a cell opens that box's terminal.
 - **Infrastructure readout** — a Proxmox group showing each physical cluster node's health
@@ -364,6 +364,41 @@ the cookie secret) and is never sent back to the browser.
 Requires TrueNAS 25.04 or later, which is where the JSON-RPC WebSocket API replaced the REST API
 (removed outright in TrueNAS 26). The integration is read-only and never changes anything on the
 NAS — not even dismissing an alert.
+
+### UniFi tiles
+
+A service tile whose check is **UniFi** reads your controller's Network Integration API and
+renders a double-width card: a six-cell census (clients, wired, wireless, networks, WAN
+throughput, gateway uptime) over one row per device class — the gateway named with its own CPU
+and memory, switches and access points tallied. The chip summarises WAN state and how many
+adopted devices are online; a device that goes offline is **named** on its own line rather than
+being reduced to a smaller count.
+
+1. In the UniFi Network application, go to **Control Plane → Integrations** and create an API
+   key. A UniFi local API key inherits the role of the admin account that created it, and the
+   local API has **no read-only key scope**, so create it under a **View Only** admin. Tmuxifier's
+   client only ever issues `GET` — it can adopt nothing, restart nothing, and change no rule —
+   but the key itself is only as limited as the account behind it.
+2. In Tmuxifier, open **Settings (⚙) → Services**, add or edit the tile, choose the **UniFi**
+   check, and paste the key. Leave **Site** blank unless your controller hosts more than one.
+3. Press **Test connection**. It confirms the key, lists the sites it can see, and — in pin mode
+   — captures the certificate fingerprint for you.
+
+The URL must be `https://`; an `http://` controller URL is refused, because the key can write to
+your network. Because a controller serves a self-signed certificate by default, this tile offers
+three TLS choices rather than the single "allow a self-signed certificate" checkbox the other
+tiles use:
+
+- **Verify certificate** — the default. Right if your controller presents a CA-trusted cert.
+- **Pin this certificate** — trust on first use, like `ssh accept-new`. Test connection captures
+  the fingerprint, you save it, and every later request checks it on its own connection. This is
+  the recommended setting for a default self-signed controller: it works without ever trusting an
+  unverified connection, and a swapped certificate fails loudly instead of silently. Tmuxifier
+  never re-pins by itself — if the fingerprint changes you must Test and accept the new one.
+- **Accept any certificate** — no verification at all. Available, explicit, and off by default.
+
+The key is encrypted at rest (AES-256-GCM, key derived from the cookie secret) and is never sent
+back to the browser. Requires UniFi Network 9.0 or later, where the Integration API landed.
 
 ## Split terminals
 

@@ -11,6 +11,9 @@ import { createSecretBox } from '../src/server/secretBox.js';
 import { startFakePihole } from './helpers/fakePihole.js';
 
 let app, dir, servicesStore, serviceChecker;
+// Steered per test: the unifi route refuses http:, so a loopback fixture cannot
+// be probed through it — the client seam is the injection point instead.
+let unifiSeen, unifiProbeResult;
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-svcr-'));
@@ -38,7 +41,12 @@ beforeEach(async () => {
       },
       async close() {},
     }),
+    makeUnifiClient: (options) => ({
+      probe: async () => { unifiSeen = options; return unifiProbeResult; },
+    }),
   });
+  unifiSeen = null;
+  unifiProbeResult = { ok: true, sites: [], fingerprint256: null };
 });
 
 async function headers() {
@@ -197,6 +205,57 @@ test('POST /api/services/truenas/test requires authentication', async () => {
   const res = await app.inject({
     method: 'POST', url: '/api/services/truenas/test',
     payload: { url: 'https://nas.example.com', username: 'u', apiKey: '1-k' },
+  });
+  expect(res.statusCode).toBe(401);
+});
+
+test('POST /api/services/unifi/test refuses a plain-http url before building a client', async () => {
+  const h = await headers();
+  const res = await app.inject({
+    method: 'POST', url: '/api/services/unifi/test', headers: h,
+    payload: { url: 'http://unifi.example.com', apiKey: 'k' },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(res.json().ok).toBe(false);
+  expect(res.json().error).toMatch(/https/);
+  expect(unifiSeen).toBeNull(); // never constructed, so the key was never used
+});
+
+test('POST /api/services/unifi/test returns the site list and served fingerprint', async () => {
+  const h = await headers();
+  unifiProbeResult = { ok: true, sites: [{ id: 's1', name: 'Default', reference: 'default' }], fingerprint256: 'AA:BB' };
+  const res = await app.inject({
+    method: 'POST', url: '/api/services/unifi/test', headers: h,
+    payload: { url: 'https://unifi.example.com', apiKey: 'k', site: 'default', tls: 'pin', fingerprint: 'AA:BB' },
+  });
+  expect(res.json()).toEqual({ ok: true, sites: [{ id: 's1', name: 'Default', reference: 'default' }], fingerprint256: 'AA:BB' });
+  expect(unifiSeen).toMatchObject({ baseUrl: 'https://unifi.example.com', apiKey: 'k', site: 'default', tls: 'pin' });
+});
+
+test('POST /api/services/unifi/test never echoes the api key back', async () => {
+  const h = await headers();
+  unifiProbeResult = { ok: false, kind: 'auth', error: 'the controller rejected the API key (HTTP 401)' };
+  const res = await app.inject({
+    method: 'POST', url: '/api/services/unifi/test', headers: h,
+    payload: { url: 'https://unifi.example.com', apiKey: 'super-secret' },
+  });
+  expect(res.payload).not.toContain('super-secret');
+  expect(res.json().ok).toBe(false);
+});
+
+test('POST /api/services/unifi/test falls back to an unknown tls mode as verify', async () => {
+  const h = await headers();
+  await app.inject({
+    method: 'POST', url: '/api/services/unifi/test', headers: h,
+    payload: { url: 'https://unifi.example.com', apiKey: 'k', tls: 'nonsense' },
+  });
+  expect(unifiSeen.tls).toBe('verify');
+});
+
+test('POST /api/services/unifi/test requires auth', async () => {
+  const res = await app.inject({
+    method: 'POST', url: '/api/services/unifi/test',
+    payload: { url: 'https://unifi.example.com' },
   });
   expect(res.statusCode).toBe(401);
 });

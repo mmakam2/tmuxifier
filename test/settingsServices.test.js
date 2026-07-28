@@ -86,3 +86,29 @@ test('an http tile still builds a plain check with no credential fields', () => 
   expect(p.check).toEqual({ kind: 'http' });
   expect('password' in p).toBe(false);
 });
+
+const unifiBase = {
+  name: 'UniFi', url: 'https://unifi.example.com', glyph: '', group: 'Network',
+  kind: 'unifi', target: '', section: 'infrastructure',
+};
+
+test('buildServicePayload defaults a unifi tls mode to verify and omits an empty site', () => {
+  expect(buildServicePayload({ ...unifiBase }).check).toEqual({ kind: 'unifi', tls: 'verify' });
+});
+
+test('buildServicePayload carries the unifi site and probe target when set', () => {
+  expect(buildServicePayload({ ...unifiBase, target: ' https://192.168.1.1 ', site: ' default ' }).check)
+    .toEqual({ kind: 'unifi', target: 'https://192.168.1.1', site: 'default', tls: 'verify' });
+});
+
+test('buildServicePayload sends a unifi fingerprint only in pin mode', () => {
+  expect(buildServicePayload({ ...unifiBase, tls: 'pin', fingerprint: 'AA:BB' }).check)
+    .toEqual({ kind: 'unifi', tls: 'pin', fingerprint: 'AA:BB' });
+  expect(buildServicePayload({ ...unifiBase, tls: 'insecure', fingerprint: 'AA:BB' }).check)
+    .toEqual({ kind: 'unifi', tls: 'insecure' });
+});
+
+test('buildServicePayload sends the unifi api key through the shared password field', () => {
+  expect(buildServicePayload({ ...unifiBase, password: 'the-key' }).password).toBe('the-key');
+  expect(buildServicePayload({ ...unifiBase, clearPassword: true }).password).toBeNull();
+});

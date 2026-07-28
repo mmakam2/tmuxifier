@@ -221,3 +221,76 @@ test('truenas: switching the tile to another kind drops the stored key', async (
   expect(switched.hasPassword).toBe(false);
   expect(await s.getServiceSecret(svc.id)).toBe(null);
 });
+
+// --- unifi -----------------------------------------------------------------
+const unifiSpec = {
+  name: 'UniFi',
+  url: 'https://unifi.example.com',
+  section: 'infrastructure',
+  check: { kind: 'unifi' },
+  password: 'api-key',
+};
+
+test('unifi: a valid tile defaults tls to verify and seals the key', async () => {
+  const s = sealed();
+  const svc = await s.addService(unifiSpec);
+  expect(svc.check).toEqual({ kind: 'unifi', tls: 'verify' });
+  expect(svc.hasPassword).toBe(true);
+  expect(svc.secret).toBeUndefined();
+  expect(await s.getServiceSecret(svc.id)).toBe('api-key');
+});
+
+test('unifi: a plain-http url is refused', async () => {
+  await expect(sealed().addService({ ...unifiSpec, url: 'http://unifi.example.com' }))
+    .rejects.toThrow(/must be https/);
+});
+
+test('unifi: a plain-http check target is refused even when the tile url is https', async () => {
+  await expect(sealed().addService({
+    ...unifiSpec, check: { kind: 'unifi', target: 'http://192.168.1.1' },
+  })).rejects.toThrow(/must be https/);
+});
+
+test('unifi: the https refusal names its own reason, never TrueNAS key revocation', async () => {
+  await expect(sealed().addService({ ...unifiSpec, url: 'http://unifi.example.com' }))
+    .rejects.toThrow(/write-capable/);
+  await expect(sealed().addService({ ...unifiSpec, url: 'http://unifi.example.com' }))
+    .rejects.not.toThrow(/TrueNAS/);
+});
+
+test('unifi: an unknown tls mode is rejected rather than coerced', async () => {
+  await expect(sealed().addService({ ...unifiSpec, check: { kind: 'unifi', tls: 'whatever' } }))
+    .rejects.toThrow(/tls must be verify, pin, or insecure/);
+});
+
+test('unifi: pin mode requires a fingerprint and normalizes it', async () => {
+  await expect(sealed().addService({ ...unifiSpec, check: { kind: 'unifi', tls: 'pin' } }))
+    .rejects.toThrow(/requires a certificate fingerprint/);
+  const svc = await sealed().addService({
+    ...unifiSpec, check: { kind: 'unifi', tls: 'pin', fingerprint: 'ab:cd:ef:01' },
+  });
+  expect(svc.check.fingerprint).toBe('ABCDEF01');
+});
+
+test('unifi: leaving pin mode drops the stored fingerprint', async () => {
+  const s = sealed();
+  const svc = await s.addService({ ...unifiSpec, check: { kind: 'unifi', tls: 'pin', fingerprint: 'ab:cd' } });
+  const updated = await s.updateService(svc.id, { check: { kind: 'unifi', tls: 'insecure' } });
+  expect(updated.check.tls).toBe('insecure');
+  expect(updated.check.fingerprint).toBeUndefined();
+});
+
+test('unifi: an optional site is kept and capped at 64 chars', async () => {
+  const svc = await sealed().addService({ ...unifiSpec, check: { kind: 'unifi', site: '  default  ' } });
+  expect(svc.check.site).toBe('default');
+  await expect(sealed().addService({ ...unifiSpec, check: { kind: 'unifi', site: 'x'.repeat(65) } }))
+    .rejects.toThrow(/at most 64 characters/);
+});
+
+test('unifi: switching the tile to another kind drops the stored key', async () => {
+  const s = sealed();
+  const svc = await s.addService(unifiSpec);
+  const switched = await s.updateService(svc.id, { check: { kind: 'http' } });
+  expect(switched.hasPassword).toBe(false);
+  expect(await s.getServiceSecret(svc.id)).toBe(null);
+});

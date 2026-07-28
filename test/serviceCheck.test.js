@@ -217,3 +217,41 @@ test('truenas: a missing registry degrades to down rather than throwing', async 
   const res = await checkService(nas, {});
   expect(res.state).toBe('down');
 });
+
+// --- unifi -----------------------------------------------------------------
+const unifiService = {
+  id: 'svc-1', url: 'https://unifi.example.com',
+  check: { kind: 'unifi', tls: 'verify' }, hasPassword: true,
+};
+const unifiRegistryReturning = (result) => ({ clientFor: async () => ({ snapshot: async () => result }) });
+
+test('checkService unifi: a good snapshot is up with the metrics attached', async () => {
+  const metrics = { clientsTotal: 5 };
+  const res = await checkService(unifiService, { unifiRegistry: unifiRegistryReturning({ ok: true, metrics }) });
+  expect(res.state).toBe('up');
+  expect(res.unifi).toBe(metrics);
+  expect(typeof res.latencyMs).toBe('number');
+});
+
+test('checkService unifi: a rejected key is auth, not down', async () => {
+  const reg = unifiRegistryReturning({ ok: false, kind: 'auth', error: 'rejected' });
+  expect((await checkService(unifiService, { unifiRegistry: reg })).state).toBe('auth');
+});
+
+test('checkService unifi: a missing stored key is named in the error', async () => {
+  const reg = unifiRegistryReturning({ ok: false, kind: 'auth', error: 'rejected' });
+  const res = await checkService({ ...unifiService, hasPassword: false }, { unifiRegistry: reg });
+  expect(res.state).toBe('auth');
+  expect(res.error).toMatch(/no API key configured/);
+});
+
+test('checkService unifi: a tls failure is down, not auth', async () => {
+  const reg = unifiRegistryReturning({ ok: false, kind: 'tls', error: 'TLS fingerprint mismatch' });
+  const res = await checkService(unifiService, { unifiRegistry: reg });
+  expect(res.state).toBe('down');
+  expect(res.error).toMatch(/fingerprint mismatch/);
+});
+
+test('checkService unifi: no registry wired is down, not a throw', async () => {
+  expect((await checkService(unifiService, {})).state).toBe('down');
+});
