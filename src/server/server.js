@@ -91,7 +91,18 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
+// Defaulted rather than required: a caller without an icon store (older tests,
+// embedders) gets a server whose icon routes honestly 404 instead of one that
+// throws.
+const NO_ICONS = {
+  resolve: async () => null,
+  listCatalog: async () => [],
+  readCatalogIcon: async () => null,
+  refreshFavicon: async () => ({ ok: false, reason: 'icons are not configured' }),
+  forget: async () => {},
+};
+
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -517,7 +528,15 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (config.secureCookie || String(config.publicUrl || '').toLowerCase().startsWith('https://')) {
       reply.header('strict-transport-security', 'max-age=31536000; includeSubDomains');
     }
-    if (req.raw.url?.startsWith('/api/')) reply.header('cache-control', 'no-store');
+    // API responses are uncacheable by default. The `hasHeader` guard is the
+    // same "the route already decided" rule the headers above use, and exists
+    // for one caller: the icon routes, which serve static image bytes rather
+    // than account data and set `private, no-cache` so a browser can revalidate
+    // with an ETag instead of re-downloading every logo on each dashboard
+    // mount. `private` still bars shared caches, and the routes stay auth-gated.
+    if (req.raw.url?.startsWith('/api/') && !reply.hasHeader('cache-control')) {
+      reply.header('cache-control', 'no-store');
+    }
     return payload;
   });
 
@@ -786,18 +805,65 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
 
   // --- Standby dashboard services (tiles + cached liveness snapshot) ---
+
+  // One sender for all three icon reads. Cache-Control is `no-cache`, which is
+  // revalidate-every-load rather than don't-cache: the URL is stable while its
+  // content is not — an icon changes under it when a favicon is refreshed or
+  // the catalog is fetched — so a max-age would strand a stale logo for its
+  // duration. Paired with the ETag, revalidation costs a 304.
+  function sendIcon(req, reply, hit) {
+    if (!hit) { reply.code(404); return { error: 'no icon' }; }
+    reply.header('Cache-Control', 'private, no-cache');
+    reply.header('ETag', hit.etag);
+    if (req.headers['if-none-match'] === hit.etag) { reply.code(304); return null; }
+    reply.type(hit.contentType);
+    return hit.bytes;
+  }
+
+  // Scrape only when the catalog misses. A UniFi service already has a real
+  // logo, and scraping the controller for a favicon nothing will render is
+  // pure waste. Fire-and-forget with a swallowed rejection: the save has
+  // already succeeded and an icon is not worth failing it over.
+  function maybeScrapeIcon(svc) {
+    void (async () => {
+      if (await iconStore.resolve(svc)) return;
+      await iconStore.refreshFavicon(svc);
+    })().catch(() => {});
+  }
+
+  app.get('/api/icons', { preHandler: requireAuth }, async () => ({ slugs: await iconStore.listCatalog() }));
+  app.get('/api/icons/:slug', { preHandler: requireAuth }, async (req, reply) =>
+    sendIcon(req, reply, await iconStore.readCatalogIcon(req.params.slug)));
+
   app.get('/api/services', { preHandler: requireAuth }, async () => servicesStore.listServices());
   app.post('/api/services', { preHandler: requireAuth }, async (req, reply) => {
-    try { return await servicesStore.addService(req.body || {}); }
-    catch (e) { reply.code(400); return { error: e.message }; }
+    try {
+      const svc = await servicesStore.addService(req.body || {});
+      maybeScrapeIcon(svc);
+      return svc;
+    } catch (e) { reply.code(400); return { error: e.message }; }
   });
   app.patch('/api/services/:id', { preHandler: requireAuth }, async (req, reply) => {
-    try { return await servicesStore.updateService(req.params.id, req.body || {}); }
-    catch (e) { reply.code(/not found/.test(e.message) ? 404 : 400); return { error: e.message }; }
+    try {
+      const svc = await servicesStore.updateService(req.params.id, req.body || {});
+      maybeScrapeIcon(svc);
+      return svc;
+    } catch (e) { reply.code(/not found/.test(e.message) ? 404 : 400); return { error: e.message }; }
   });
   app.delete('/api/services/:id', { preHandler: requireAuth }, async (req) => {
     await servicesStore.removeService(req.params.id);
+    await iconStore.forget(req.params.id);
     return { ok: true };
+  });
+  app.get('/api/services/:id/icon', { preHandler: requireAuth }, async (req, reply) => {
+    const svc = await servicesStore.getService(req.params.id);
+    if (!svc) { reply.code(404); return { error: 'not found' }; }
+    return sendIcon(req, reply, await iconStore.resolve(svc));
+  });
+  app.post('/api/services/:id/icon/refresh', { preHandler: requireAuth }, async (req, reply) => {
+    const svc = await servicesStore.getService(req.params.id);
+    if (!svc) { reply.code(404); return { error: 'not found' }; }
+    return iconStore.refreshFavicon(svc);
   });
   // Served purely from the sweep cache — a dashboard poll never triggers checks.
   app.get('/api/services/status', { preHandler: requireAuth }, async () => serviceChecker.getSnapshot());

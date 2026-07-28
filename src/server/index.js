@@ -8,6 +8,7 @@ import { createStatusChecker } from './status.js';
 import { createStatusPoller } from './statusPoller.js';
 import { createServicesStore } from './servicesStore.js';
 import { createServiceChecker } from './serviceChecker.js';
+import { createIconStore } from './iconStore.js';
 import { createPiholeRegistry } from './piholeRegistry.js';
 import { createTruenasRegistry } from './truenasRegistry.js';
 import { createUnifiRegistry } from './unifiRegistry.js';
@@ -271,10 +272,20 @@ const truenasRegistry = createTruenasRegistry({ store: servicesStore });
 const unifiRegistry = createUnifiRegistry({ store: servicesStore });
 const serviceChecker = createServiceChecker({ store: servicesStore, piholeRegistry, truenasRegistry, unifiRegistry, intervalMs: config.servicePollMs });
 
+// vendor/icons/ is written once by `npm run fetch-icons`; data/icons/ is the
+// per-service favicon cache the server fills itself. Separate directories so a
+// catalog re-fetch and a favicon scrape can never disturb each other. repoRoot
+// is the same process.cwd() the voice vendor paths resolve from, so both
+// vendor/ lookups answer to one convention.
+const iconStore = createIconStore({
+  catalogDir: path.join(repoRoot, 'vendor', 'icons'),
+  cacheDir: path.join(config.dataDir, 'icons'),
+});
+
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
 const voiceEnabledInitial = (await resolveVoice()).enabled;
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore, serviceChecker, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });

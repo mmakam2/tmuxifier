@@ -8,9 +8,10 @@ import { createServicesStore } from '../src/server/servicesStore.js';
 import { createServiceChecker } from '../src/server/serviceChecker.js';
 import { hashPassword } from '../src/server/auth.js';
 import { createSecretBox } from '../src/server/secretBox.js';
+import { createIconStore } from '../src/server/iconStore.js';
 import { startFakePihole } from './helpers/fakePihole.js';
 
-let app, dir, servicesStore, serviceChecker;
+let app, dir, servicesStore, serviceChecker, iconStore;
 // Steered per test: the unifi route refuses http:, so a loopback fixture cannot
 // be probed through it — the client seam is the injection point instead.
 let unifiSeen, unifiProbeResult;
@@ -27,10 +28,14 @@ beforeEach(async () => {
     passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir,
     localShell: 'none', configPath: path.join(dir, 'config.json'),
   };
+  const catalogDir = path.join(dir, 'catalog');
+  await fs.mkdir(catalogDir, { recursive: true });
+  await fs.writeFile(path.join(catalogDir, 'unifi.svg'), '<svg id="unifi"/>');
+  iconStore = createIconStore({ catalogDir, cacheDir: path.join(dir, 'icons') });
   const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
   const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
   app = buildServer({
-    config, store: createStore({ dataDir: dir }), sessions, statusChecker, servicesStore, serviceChecker,
+    config, store: createStore({ dataDir: dir }), sessions, statusChecker, servicesStore, serviceChecker, iconStore,
     // The truenas test route refuses http:, so a fake server on loopback cannot
     // be probed through it — the client seam is the injection point instead.
     makeTruenasClient: ({ apiKey }) => ({
@@ -258,4 +263,100 @@ test('POST /api/services/unifi/test requires auth', async () => {
     payload: { url: 'https://unifi.example.com' },
   });
   expect(res.statusCode).toBe(401);
+});
+
+test('icon routes require auth', async () => {
+  expect((await app.inject({ method: 'GET', url: '/api/icons' })).statusCode).toBe(401);
+  expect((await app.inject({ method: 'GET', url: '/api/icons/unifi' })).statusCode).toBe(401);
+  expect((await app.inject({ method: 'GET', url: '/api/services/svc-x/icon' })).statusCode).toBe(401);
+  expect((await app.inject({ method: 'POST', url: '/api/services/svc-x/icon/refresh' })).statusCode).toBe(401);
+});
+
+test('GET /api/icons lists the catalog slugs', async () => {
+  const res = await app.inject({ method: 'GET', url: '/api/icons', headers: await headers() });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ slugs: ['unifi'] });
+});
+
+test('GET /api/icons/:slug serves a catalog icon and refuses a traversal', async () => {
+  const h = await headers();
+  const ok = await app.inject({ method: 'GET', url: '/api/icons/unifi', headers: h });
+  expect(ok.statusCode).toBe(200);
+  expect(ok.headers['content-type']).toMatch(/image\/svg\+xml/);
+  expect(ok.body).toBe('<svg id="unifi"/>');
+  expect((await app.inject({ method: 'GET', url: '/api/icons/grafana', headers: h })).statusCode).toBe(404);
+  expect((await app.inject({ method: 'GET', url: '/api/icons/..%2Funifi', headers: h })).statusCode).toBe(404);
+});
+
+test('a service icon resolves from the catalog, revalidates, and 304s on a matching ETag', async () => {
+  const h = await headers();
+  const svc = (await app.inject({
+    method: 'POST', url: '/api/services', headers: h,
+    payload: { name: 'Controller', url: 'https://unifi.example.com/', check: { kind: 'unifi', tls: 'verify' } },
+  })).json();
+
+  const res = await app.inject({ method: 'GET', url: `/api/services/${svc.id}/icon`, headers: h });
+  expect(res.statusCode).toBe(200);
+  expect(res.headers['content-type']).toMatch(/image\/svg\+xml/);
+  expect(res.headers['cache-control']).toBe('private, no-cache');
+  expect(res.body).toBe('<svg id="unifi"/>');
+
+  const again = await app.inject({
+    method: 'GET', url: `/api/services/${svc.id}/icon`,
+    headers: { ...h, 'if-none-match': res.headers.etag },
+  });
+  expect(again.statusCode).toBe(304);
+});
+
+test('a service with no resolvable icon 404s, and an unknown service 404s', async () => {
+  const h = await headers();
+  const svc = (await app.inject({
+    method: 'POST', url: '/api/services', headers: h,
+    // A port that refuses immediately, so the fire-and-forget favicon scrape
+    // this POST kicks off cannot outlive the test on a 5s connect timeout.
+    payload: { name: 'Notes', url: 'http://127.0.0.1:1/', check: { kind: 'none' } },
+  })).json();
+  expect((await app.inject({ method: 'GET', url: `/api/services/${svc.id}/icon`, headers: h })).statusCode).toBe(404);
+  expect((await app.inject({ method: 'GET', url: '/api/services/svc-nope/icon', headers: h })).statusCode).toBe(404);
+});
+
+test('creating a service succeeds even when its favicon host is unreachable', async () => {
+  const h = await headers();
+  const res = await app.inject({
+    method: 'POST', url: '/api/services', headers: h,
+    payload: { name: 'Dead', url: 'http://127.0.0.1:1/', check: { kind: 'none' } },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(res.json().name).toBe('Dead');
+});
+
+test('removing a service forgets its cached icon', async () => {
+  const h = await headers();
+  const svc = (await app.inject({
+    method: 'POST', url: '/api/services', headers: h,
+    payload: { name: 'Notes', url: 'http://127.0.0.1:1/', check: { kind: 'none' } },
+  })).json();
+  await fs.mkdir(path.join(dir, 'icons'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'icons', `${svc.id}.png`), 'PNGDATA');
+  expect((await app.inject({ method: 'GET', url: `/api/services/${svc.id}/icon`, headers: h })).statusCode).toBe(200);
+
+  await app.inject({ method: 'DELETE', url: `/api/services/${svc.id}`, headers: h });
+  expect(await fs.readdir(path.join(dir, 'icons'))).toEqual([]);
+});
+
+// The icon routes are the only /api/ responses allowed to set their own cache
+// policy (server.js's onSend hook yields to a route that already decided). This
+// pins that exemption as narrow: every data-bearing service route stays
+// no-store, so the widening cannot drift into one that carries account data.
+test('the icon cache-control exemption does not leak to data-bearing routes', async () => {
+  const h = await headers();
+  const svc = (await app.inject({
+    method: 'POST', url: '/api/services', headers: h,
+    payload: { name: 'Notes', url: 'http://127.0.0.1:1/', check: { kind: 'none' } },
+  })).json();
+  for (const url of ['/api/services', '/api/services/status', `/api/services/${svc.id}/icon/refresh`]) {
+    const method = url.endsWith('/refresh') ? 'POST' : 'GET';
+    const res = await app.inject({ method, url, headers: h });
+    expect(res.headers['cache-control']).toBe('no-store');
+  }
 });
