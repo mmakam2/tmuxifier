@@ -1,16 +1,25 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readJson, writeJson } from './jsonFile.js';
+import { normFp } from './tlsPin.js';
 
 // CRUD for the standby dashboard's service tiles (data/services.json), in the
 // mold of store.js: normalize+validate inside, mutations serialized so two
 // concurrent read-modify-write cycles can't drop each other's change.
-const KINDS = ['http', 'tcp', 'none', 'pihole', 'truenas'];
+const KINDS = ['http', 'tcp', 'none', 'pihole', 'truenas', 'unifi'];
 const SECTIONS = ['services', 'infrastructure'];
 // Kinds whose record can carry a sealed credential; changing to any other kind
 // drops it.
-const SECRET_KINDS = new Set(['pihole', 'truenas']);
+const SECRET_KINDS = new Set(['pihole', 'truenas', 'unifi']);
 const SAFE_TCP_HOST = /^[A-Za-z0-9_.-]+$/; // same family as sshCommand.js SAFE_HOST
+// A UniFi controller's certificate is self-signed by default and the key it
+// guards can write, so this kind gets the full three-way choice rather than the
+// verified/insecure pair pihole and truenas share.
+const UNIFI_TLS_MODES = ['verify', 'pin', 'insecure'];
+// Both kinds refuse plain HTTP, for different reasons — so the reason travels
+// with the call rather than being baked into the helper.
+const TRUENAS_HTTPS_REASON = 'TrueNAS permanently revokes any API key sent over plain HTTP';
+const UNIFI_HTTPS_REASON = 'the API key is write-capable and UniFi controllers always serve TLS';
 
 function assertHttpUrl(value, label) {
   let u;
@@ -18,14 +27,16 @@ function assertHttpUrl(value, label) {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error(`${label} must be http(s)`);
 }
 
-// TrueNAS permanently revokes any user-linked API key presented over plain HTTP,
-// so an http target is refused outright rather than offered as an opt-out: the
-// failure mode destroys the operator's credential, not merely the connection.
-function assertHttpsUrl(value, label) {
+// Some kinds refuse an http target outright rather than offering it as an
+// opt-out. TrueNAS does so because the failure mode destroys the operator's
+// credential (it permanently revokes any key sent in the clear); UniFi does so
+// because the key can write to the network. The reason is a parameter so each
+// kind explains its own refusal instead of inheriting another product's.
+function assertHttpsUrl(value, label, reason = '') {
   let u;
   try { u = new URL(value); } catch { throw new Error(`${label} must be a valid URL`); }
   if (u.protocol === 'http:') {
-    throw new Error(`${label} must be https — TrueNAS permanently revokes any API key sent over plain HTTP`);
+    throw new Error(`${label} must be https${reason ? ` — ${reason}` : ''}`);
   }
   if (u.protocol !== 'https:') throw new Error(`${label} must be https`);
 }
@@ -33,7 +44,7 @@ function assertHttpsUrl(value, label) {
 function normalizeCheck(raw, base) {
   const merged = { ...(base || {}), ...(raw || {}) };
   const kind = merged.kind ?? 'http';
-  if (!KINDS.includes(kind)) throw new Error('check.kind must be http, tcp, pihole, truenas, or none');
+  if (!KINDS.includes(kind)) throw new Error('check.kind must be http, tcp, pihole, truenas, unifi, or none');
   const target = typeof merged.target === 'string' ? merged.target.trim() : '';
   if (kind === 'http') {
     if (!target) return { kind };
@@ -63,7 +74,7 @@ function normalizeCheck(raw, base) {
     const out = { kind };
     // The JSON-RPC API base. Empty means "use the tile's own url", which is the
     // common case: the link and the API live on the same host.
-    if (target) { assertHttpsUrl(target, 'check.target'); out.target = target; }
+    if (target) { assertHttpsUrl(target, 'check.target', TRUENAS_HTTPS_REASON); out.target = target; }
     // API keys are user-linked from TrueNAS 25.04, and auth.login_ex needs the
     // account name alongside the key. Not a secret — stored in the clear.
     const username = String(merged.username ?? '').trim();
@@ -72,6 +83,31 @@ function normalizeCheck(raw, base) {
     // Verified TLS is the default; this is the per-service opt-out for a NAS
     // with a self-signed certificate. It never downgrades the scheme.
     if (merged.insecure === true) out.insecure = true;
+    return out;
+  }
+  if (kind === 'unifi') {
+    const out = { kind };
+    // The Network Integration API base. Empty means "use the tile's own url",
+    // which is the common case: the link and the API live on the same controller.
+    if (target) { assertHttpsUrl(target, 'check.target', UNIFI_HTTPS_REASON); out.target = target; }
+    // Optional site selector, matched against the controller's own
+    // internalReference/name/id. Empty means the first site it reports, which is
+    // right for the single-site case that dominates.
+    const site = String(merged.site ?? '').trim();
+    if (site) {
+      if (site.length > 64) throw new Error('unifi site must be at most 64 characters');
+      out.site = site;
+    }
+    const tls = merged.tls ?? 'verify';
+    if (!UNIFI_TLS_MODES.includes(tls)) throw new Error('unifi check tls must be verify, pin, or insecure');
+    out.tls = tls;
+    // The pin is meaningless outside pin mode, so leaving that mode drops it
+    // rather than carrying a stale fingerprint into a later read.
+    if (tls === 'pin') {
+      const fp = normFp(merged.fingerprint);
+      if (!fp) throw new Error('unifi check with tls "pin" requires a certificate fingerprint');
+      out.fingerprint = fp;
+    }
     return out;
   }
   if (target) throw new Error("check.target must be absent for kind 'none'");
@@ -128,9 +164,10 @@ export function createServicesStore({ dataDir, secretBox = null }) {
     const section = spec.section ?? base.section ?? 'services';
     if (!SECTIONS.includes(section)) throw new Error('section must be services or infrastructure');
     const check = normalizeCheck(spec.check, base.check);
-    // A truenas check with no explicit target dials the tile's own url, so that
-    // url has to clear the same https bar the target does.
-    if (check.kind === 'truenas' && !check.target) assertHttpsUrl(url, 'service url');
+    // A truenas or unifi check with no explicit target dials the tile's own url,
+    // so that url has to clear the same https bar the target does.
+    if (check.kind === 'truenas' && !check.target) assertHttpsUrl(url, 'service url', TRUENAS_HTTPS_REASON);
+    if (check.kind === 'unifi' && !check.target) assertHttpsUrl(url, 'service url', UNIFI_HTTPS_REASON);
     const out = {
       id: base.id || `svc-${randomUUID()}`,
       name,
