@@ -11,6 +11,7 @@ import { dotClassFor, dotTitleFor } from './statusDot';
 import { fmtLatency, fmtCount, fmtCompact, fmtUptime } from './fmt';
 import { buildTruenasCard, type TruenasCardEls } from './truenasCard';
 import { buildUnifiCard, type UnifiCardEls } from './unifiCard';
+import { buildImmichCard, type ImmichCardEls } from './immichCard';
 import { buildCatalogIcon, buildServiceIcon, type ServiceIconEls } from './serviceIcon';
 
 // Re-exported so existing importers (and the dashboard tests) keep reaching for
@@ -295,6 +296,7 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
   const cardEls = new Map<string, Card>();
   const truenasEls = new Map<string, TruenasCardEls>();
   const unifiEls = new Map<string, UnifiCardEls>();
+  const immichEls = new Map<string, ImmichCardEls>();
   const groupEls = new Map<string | null, { root: HTMLElement; legendEl: HTMLElement | null; grid: HTMLElement }>();
   const infraGroupEls = new Map<string | null, { root: HTMLElement; grid: HTMLElement }>();
   // Tiles render across two sections (Services + Infrastructure categories);
@@ -431,9 +433,10 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
 
   function paintTile(svc: Service): HTMLElement {
     tilesSeen.add(svc.id);
-    // A Pi-hole reports numbers, a TrueNAS reports storage, and a UniFi reports
-    // the network, so all three render as cards rather than lamps; everything
-    // downstream (grouping, ordering, cleanup) treats them as tiles.
+    // A Pi-hole reports numbers, a TrueNAS reports storage, a UniFi reports the
+    // network and an Immich reports its library, so all four render as cards
+    // rather than lamps; everything downstream (grouping, ordering, cleanup)
+    // treats them as tiles.
     if (svc.check.kind === 'pihole') return paintPiholeCard(svc);
     if (svc.check.kind === 'truenas') {
       let card = truenasEls.get(svc.id);
@@ -444,6 +447,12 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     if (svc.check.kind === 'unifi') {
       let card = unifiEls.get(svc.id);
       if (!card) { card = buildUnifiCard(); unifiEls.set(svc.id, card); }
+      card.update(svc, data.serviceStatus);
+      return card.root;
+    }
+    if (svc.check.kind === 'immich') {
+      let card = immichEls.get(svc.id);
+      if (!card) { card = buildImmichCard(); immichEls.set(svc.id, card); }
       card.update(svc, data.serviceStatus);
       return card.root;
     }
@@ -585,6 +594,9 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     for (const [id, card] of unifiEls) {
       if (!tilesSeen.has(id)) { card.root.remove(); unifiEls.delete(id); }
     }
+    for (const [id, card] of immichEls) {
+      if (!tilesSeen.has(id)) { card.root.remove(); immichEls.delete(id); }
+    }
     fleet.hidden = mode === 'standby' || data.boxes.length === 0;
     services.hidden = mode === 'standby';
     if (mode === 'standby') infra.hidden = true;
@@ -613,6 +625,7 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     cardEls.clear();
     truenasEls.clear();
     unifiEls.clear();
+    immichEls.clear();
     groupEls.clear();
     infraGroupEls.clear();
   }

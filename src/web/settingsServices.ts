@@ -6,7 +6,7 @@ import { buildServiceIcon } from './serviceIcon';
 import { api, type Service, type ServiceCheck, type ServiceCheckKind, type ServiceSection, type ServiceSpec, type UnifiTlsMode } from './api';
 
 // Check kinds that authenticate, and so carry a stored credential.
-const CREDENTIAL_KINDS: ServiceCheckKind[] = ['pihole', 'truenas', 'unifi'];
+const CREDENTIAL_KINDS: ServiceCheckKind[] = ['pihole', 'truenas', 'unifi', 'immich'];
 
 // Pure so it can be tested without a DOM (the repo's web-test convention).
 // null (not undefined) for cleared optionals: the server's PATCH merge treats
@@ -28,6 +28,8 @@ export function buildServicePayload(f: {
   // in these same objects; this makes the rest consistent with it.
   if (f.kind === 'pihole') {
     check = { kind: 'pihole', ...(target ? { target } : {}), insecure: f.insecure === true };
+  } else if (f.kind === 'immich') {
+    check = { kind: 'immich', ...(target ? { target } : {}), insecure: f.insecure === true };
   } else if (f.kind === 'unifi') {
     const tls: UnifiTlsMode = f.tls ?? 'verify';
     const site = (f.site ?? '').trim();
@@ -212,13 +214,14 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
 
   const PIHOLE_HELP = 'Pi-hole v6 only. Create the credential on the Pi-hole under Settings → Web interface / API → Configure app password; an app password works even when two-factor is enabled, the web login password does not.';
   const TRUENAS_HELP = 'TrueNAS 25.04 or later (it speaks JSON-RPC over WebSocket; the old REST API is gone in TrueNAS 26). Create a user-linked key under Credentials → Users → API Keys and give it the READONLY_ADMIN role. The URL must be https — TrueNAS permanently revokes any API key sent over plain HTTP.';
+  const IMMICH_HELP = 'Immich v1.118 or later. Create an API key under Account Settings → API Keys and grant it these read-only permissions: server.about, server.storage, server.statistics, server.versionCheck, job.read, systemConfig.read. Library counts and job state come from admin-scoped endpoints — a key without them still reports storage and version, and the card says which are missing.';
   const UNIFI_HELP = 'UniFi Network 9.0 or later. Create an API key under Control Plane → Integrations. The key inherits its admin account’s role and the local API has no read-only key scope, so create it under a View Only admin — this integration only ever reads. The URL must be https.';
 
   const targetField = field('Probe URL (optional)', targetIn);
   const syncTarget = () => {
     const k = kind();
     const isUnifi = k === 'unifi';
-    const needsCredential = k === 'pihole' || k === 'truenas' || isUnifi;
+    const needsCredential = k === 'pihole' || k === 'truenas' || k === 'immich' || isUnifi;
     targetField.hidden = k === 'none';
     credentialGroup.hidden = !needsCredential;
     usernameField.hidden = k !== 'truenas';
@@ -229,7 +232,10 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     fingerprintField.hidden = !isUnifi || tlsMode() !== 'pin';
     insecureField.hidden = isUnifi;
     credentialLabel.textContent = k === 'pihole' ? 'App password' : 'API key';
-    credentialHelp.textContent = isUnifi ? UNIFI_HELP : k === 'truenas' ? TRUENAS_HELP : PIHOLE_HELP;
+    credentialHelp.textContent = isUnifi ? UNIFI_HELP
+      : k === 'truenas' ? TRUENAS_HELP
+        : k === 'immich' ? IMMICH_HELP
+          : PIHOLE_HELP;
     (targetField.querySelector('span') as HTMLElement).textContent =
       k === 'tcp' ? 'Host:port'
         : needsCredential ? 'API base URL (optional — defaults to the link URL)'
@@ -237,8 +243,9 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     targetIn.placeholder = k === 'tcp' ? '192.168.1.10:53'
       : k === 'pihole' ? 'https://pihole.example.com'
         : k === 'truenas' ? 'https://nas.example.com'
-          : isUnifi ? 'https://192.168.1.1'
-            : 'https://192.168.1.10:3000/health';
+          : k === 'immich' ? 'https://immich.example.com'
+            : isUnifi ? 'https://192.168.1.1'
+              : 'https://192.168.1.10:3000/health';
   };
   for (const r of Object.values(radios)) r.input.addEventListener('change', syncTarget);
   // Switching to pin mode is what reveals the fingerprint field.
@@ -278,6 +285,20 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
           insecure: insecureIn.checked, id: editing?.id,
         });
         setStatus(res.ok ? `Connected — TrueNAS ${res.version ?? ''}`.trim() : (res.error || 'Connection failed'), !res.ok);
+        return;
+      }
+      if (kind() === 'immich') {
+        const res = await api.testImmich({
+          url, apiKey: passwordIn.value, insecure: insecureIn.checked, id: editing?.id,
+        });
+        // Naming the missing permissions here is the point of the probe: a
+        // scoped key gets fixed before saving rather than producing a card full
+        // of dashes afterwards.
+        const missing = res.denied?.length ? ` — missing ${res.denied.join(', ')}` : '';
+        setStatus(
+          res.ok ? `Connected — Immich ${res.version ?? ''}${missing}`.trim() : (res.error || 'Connection failed'),
+          !res.ok,
+        );
         return;
       }
       const res = await api.testPihole({

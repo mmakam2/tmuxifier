@@ -65,3 +65,12 @@ test('parseIconLinks ignores non-icon links and non-http schemes', () => {
   const html = `<link rel="canonical" href="/x"><link rel="icon" href="javascript:alert(1)"><link rel="icon" href="data:image/png;base64,AA">`;
   expect(parseIconLinks(html, 'https://app.example.com/')).toEqual([]);
 });
+
+// The kind declares the slug rather than the name guessing it, and an IP
+// literal contributes no candidate — an address is not a product.
+test('slugCandidates leads with immich for an immich check', () => {
+  expect(slugCandidates({ name: 'Photos', url: 'https://192.168.1.10:2283', check: { kind: 'immich' } }))
+    .toEqual(['immich', 'photos']);
+  expect(slugCandidates({ name: 'Photos', url: 'https://photos.example.com/', check: { kind: 'immich' } }))
+    .toEqual(['immich', 'photos']);
+});

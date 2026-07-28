@@ -15,7 +15,7 @@ export function isSafeSlug(value) {
 
 // The check kind is the one identification that is declared rather than
 // guessed: the user chose the software when they chose the check.
-const KIND_SLUGS = { unifi: 'unifi', truenas: 'truenas', pihole: 'pi-hole' };
+const KIND_SLUGS = { unifi: 'unifi', truenas: 'truenas', pihole: 'pi-hole', immich: 'immich' };
 
 export function normalizeSlug(raw) {
   if (typeof raw !== 'string') return '';

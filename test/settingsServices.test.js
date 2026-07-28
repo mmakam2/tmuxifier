@@ -141,3 +141,38 @@ test('buildServicePayload always states the unifi site, so clearing it reverts t
   expect(buildServicePayload({ ...unifi, site: 'Office' }).check).toEqual({ kind: 'unifi', site: 'Office', tls: 'verify' });
   expect(buildServicePayload({ ...unifi, site: '  ' }).check).toEqual({ kind: 'unifi', site: '', tls: 'verify' });
 });
+
+test('buildServicePayload builds an immich check', () => {
+  const p = buildServicePayload({
+    name: 'Photos', url: 'https://immich.example.com', group: 'Media',
+    kind: 'immich', target: '', section: 'services', password: 'key-1',
+  });
+  expect(p.check).toEqual({ kind: 'immich', insecure: false });
+  expect(p.password).toBe('key-1');
+});
+
+test('buildServicePayload carries an immich probe target when given one', () => {
+  const p = buildServicePayload({
+    name: 'Photos', url: 'https://immich.example.com', group: '',
+    kind: 'immich', target: 'http://192.168.1.10:2283', section: 'services',
+  });
+  expect(p.check).toEqual({ kind: 'immich', target: 'http://192.168.1.10:2283', insecure: false });
+});
+
+// The PATCH-merge trap from the spec: `insecure` must be stated outright, never
+// omitted when false, or an unchecked box can never turn a stored true off.
+test('buildServicePayload states an unchecked immich insecure box outright', () => {
+  const p = buildServicePayload({
+    name: 'Photos', url: 'https://immich.example.com', group: '',
+    kind: 'immich', target: '', section: 'services', insecure: false,
+  });
+  expect(p.check).toHaveProperty('insecure', false);
+});
+
+test('buildServicePayload sends an explicit null to clear an immich key', () => {
+  const p = buildServicePayload({
+    name: 'Photos', url: 'https://immich.example.com', group: '',
+    kind: 'immich', target: '', section: 'services', clearPassword: true,
+  });
+  expect(p.password).toBeNull();
+});
