@@ -285,7 +285,7 @@ only boxes you trust the way you'd trust anyone holding your own login.**
 When no terminal is docked, the stage shows a standby dashboard instead of a blank screen:
 
 - **Service tiles** — your homelab's web services (Grafana, a NAS UI, anything with a URL),
-  managed under Settings (⚙) → Services. Each tile is a name, an optional Nerd Font glyph, a
+  managed under Settings (⚙) → Services. Each tile is a name, an automatically resolved logo, a
   parent section (Services or Infrastructure) with an optional category within it (e.g.
   Services → DNS Filtering; under Infrastructure, the categories "Proxmox" and "IPAM" merge
   the tile into those built-in groups), a link that opens in a new tab, and an optional
@@ -296,6 +296,26 @@ When no terminal is docked, the stage shows a standby dashboard instead of a bla
   checks tolerate self-signed certificates — they answer "is it up", not "is it authentic".
   Tiles persist in `data/services.json`; the secrets it can hold — a Pi-hole app password, a
   TrueNAS API key, a UniFi API key — are all encrypted (see below).
+
+### Tile icons
+
+Tiles find their own logos. A tile's icon is resolved from its check kind first (a UniFi,
+TrueNAS or Pi-hole check identifies the software outright), then from the service name, then
+from the first label of its URL — so a service called "Grafana", or one living at
+`https://grafana.example.com/`, gets the Grafana logo without being told.
+
+```bash
+npm run fetch-icons   # one-time; downloads the logo catalog into vendor/icons/
+```
+
+The catalog is a pinned list of common self-hosted apps, fetched once. **The running server
+never contacts the internet for icons** — it reads the directory this leaves behind. Skipping
+the command costs the catalog, not the feature: anything unmatched falls back to a favicon
+scraped from the service's own URL, which is LAN traffic to a host you already configured.
+
+Settings → Services can override the guess per tile — **Auto**, **Choose** (a filterable grid
+of the catalog), or **None** to suppress the icon — and **Refresh icon** re-scrapes the
+service's favicon on demand.
 - **Fleet overview** — one cell per box: status lamp, agent working/waiting chip, session
   count, and the CPU sparkline. Clicking a cell opens that box's terminal.
 - **Infrastructure readout** — a Proxmox group showing each physical cluster node's health
