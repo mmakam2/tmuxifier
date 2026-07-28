@@ -391,21 +391,27 @@ const build = (over = {}) => buildMetrics({
 });
 
 describe('classifyDevice', () => {
-  it('calls a device with both gateway and switching features a gateway', () => {
-    expect(classifyDevice({ features: ['gateway', 'switching'], model: 'UCGMAX' })).toBe('gateway');
+  // The regression this exists to catch: a real UCG Max advertises exactly the
+  // same feature list as a switch, so features alone cannot identify it.
+  it('identifies a gateway whose only feature is switching, by model', () => {
+    expect(classifyDevice({ features: ['switching'], model: 'UCG Max' })).toBe('gateway');
   });
 
   it('classifies switches and access points from their features', () => {
-    expect(classifyDevice({ features: ['switching'], model: 'USWED37' })).toBe('switch');
-    expect(classifyDevice({ features: ['accessPoint'], model: 'U7PROMAX' })).toBe('ap');
+    expect(classifyDevice({ features: ['switching'], model: 'USW Flex 2.5G 8 PoE' })).toBe('switch');
+    expect(classifyDevice({ features: ['accessPoint'], model: 'U7 Pro Max' })).toBe('ap');
   });
 
   it('falls back to the model prefix when features are absent', () => {
-    expect(classifyDevice({ model: 'UDMPRO' })).toBe('gateway');
+    expect(classifyDevice({ model: 'UDM Pro' })).toBe('gateway');
     expect(classifyDevice({ model: 'USW-24' })).toBe('switch');
-    expect(classifyDevice({ model: 'UAPA6AE' })).toBe('ap');
+    expect(classifyDevice({ model: 'UAP AC Pro' })).toBe('ap');
     expect(classifyDevice({ model: 'WHAT' })).toBe('other');
     expect(classifyDevice(null)).toBe('other');
+  });
+
+  it('still honours an explicit gateway feature if firmware ever reports one', () => {
+    expect(classifyDevice({ features: ['gateway'], model: 'MYSTERY' })).toBe('gateway');
   });
 });
 
@@ -489,25 +495,37 @@ Create `src/server/unifiMetrics.js`:
 // depends on is testable without a controller — the same model/DOM split
 // truenasCard.ts uses on the web side.
 
-// A UniFi gateway also switches and often has a radio, so the feature checks
-// are ordered rather than exclusive: the most specific role wins.
+// Model first, features second — deliberately, and the ordering is load-bearing.
+// A UniFi gateway advertises `features: ["switching"]` and nothing else: it is
+// indistinguishable from a USW switch by feature alone (verified against a live
+// UCG Max — see the plan's Probe Findings). Classifying it as a switch would
+// cost the WAN row, the uptime cell, and the gateway load row at once, so the
+// model prefix decides the gateway case before features are consulted.
+const GATEWAY_MODEL = /^(UCG|UDM|UXG|UGW|UDR|UDW)/;
+const SWITCH_MODEL = /^(USW|USL|USF)/;
+const AP_MODEL = /^(UAP|U6|U7|UWB)/;
+
 export function classifyDevice(device) {
+  const model = String(device?.model || '').toUpperCase();
+  if (GATEWAY_MODEL.test(model)) return 'gateway';
   const features = Array.isArray(device?.features)
     ? device.features.map((f) => String(f).toLowerCase())
     : [];
+  // Kept for firmware that grows an explicit value; today none reports one.
   if (features.includes('gateway') || features.includes('routing')) return 'gateway';
   if (features.includes('switching')) return 'switch';
   if (features.includes('accesspoint')) return 'ap';
   // Firmware that omits `features` still names its hardware.
-  const model = String(device?.model || '').toUpperCase();
-  if (/^(UCG|UDM|UXG|UGW|UDR)/.test(model)) return 'gateway';
-  if (/^(USW|USL|USF)/.test(model)) return 'switch';
-  if (/^(UAP|U6|U7|UWB)/.test(model)) return 'ap';
+  if (SWITCH_MODEL.test(model)) return 'switch';
+  if (AP_MODEL.test(model)) return 'ap';
   return 'other';
 }
 
 const isOnline = (d) => String(d?.state || '').toUpperCase() === 'ONLINE';
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+// The controller reports utilization as a float (21.6, 80.7); a dashboard row
+// has no use for the decimal.
+const pct = (v) => (num(v) == null ? null : Math.round(v));
 const typeOf = (c) => String(c?.type || '').toUpperCase();
 
 export function buildMetrics({
@@ -551,8 +569,8 @@ export function buildMetrics({
     gateway: gatewayEntry
       ? {
         name: String(gatewayEntry.device?.name || gatewayEntry.device?.model || 'gateway'),
-        cpuPct: num(gatewayEntry.stats?.cpuUtilizationPct),
-        memPct: num(gatewayEntry.stats?.memoryUtilizationPct),
+        cpuPct: pct(gatewayEntry.stats?.cpuUtilizationPct),
+        memPct: pct(gatewayEntry.stats?.memoryUtilizationPct),
         uptimeSec: num(gatewayEntry.stats?.uptimeSec),
       }
       : null,
@@ -2270,18 +2288,26 @@ Per the repo's shipping rule, a server-side feature is validated from a branch c
 
 ## Probe Findings
 
-**Filled in by Task 1. Do not implement Tasks 3–4 before this section is complete.**
+Probed 2026-07-28 against UniFi Network 9.x on a UCG Max. **All five endpoints answer 200 — the two the spec flagged as unverified both exist, so no cell is permanently `—`.**
 
 | Endpoint | Status | Envelope keys | Notes |
 |---|---|---|---|
-| `GET /sites` | | | |
-| `GET /sites/{id}/devices` | | | |
-| `GET /sites/{id}/devices/{id}/statistics/latest` | | | |
-| `GET /sites/{id}/clients` | | | |
-| `GET /sites/{id}/networks` | | | |
+| `GET /sites` | 200 | `offset, limit, count, totalCount, data` | 1 site, `internalReference: "default"` |
+| `GET /sites/{id}/devices` | 200 | same envelope | 7 devices, `totalCount: 7` |
+| `GET /sites/{id}/devices/{id}/statistics/latest` | 200 | flat object, no envelope | **exists** |
+| `GET /sites/{id}/clients` | 200 | same envelope | `totalCount: 96` (57 WIRED / 39 WIRELESS) |
+| `GET /sites/{id}/networks` | 200 | same envelope | **exists**, `totalCount: 10` |
 
-Device object — confirmed field names:
+**Device object:** `id`, `macAddress`, `ipAddress`, `name`, `model`, `state`, `supported`, `firmwareVersion`, `firmwareUpdatable`, `features[]`, `interfaces[]`.
 
-Client object — confirmed field names:
+**⚠ The finding that changes the code:** `features` on this firmware only ever contains `"switching"` or `"accessPoint"`. **There is no `"gateway"` value.** The UCG Max reports `features: ["switching"]`, identical to a USW switch — it is distinguishable *only* by its `model` prefix. A classifier that consults `features` before `model` files the gateway as a switch, and the card then reports "no gateway adopted", losing the WAN row, the uptime cell, and the gateway load row all at once. `classifyDevice` therefore leads with the model prefix for the gateway case and only then falls back to features.
 
-Statistics object — confirmed field names:
+Observed across the fleet: `UCG Max` → `["switching"]`; `USW Flex 2.5G 8 PoE`, `USW Flex 2.5G 8`, `USW Flex 2.5G 5` → `["switching"]`; `U7 Pro Max`, `U7 Pro XG`, `U7 Pro Outdoor` → `["accessPoint"]`. Note models contain spaces (`"UCG Max"`), so prefix matching must be case-insensitive and must not assume a contiguous token.
+
+**Client object:** `type` (`WIRED`|`WIRELESS`), `id`, `name`, `connectedAt`, `ipAddress`, `macAddress`, `uplinkDeviceId`, `access: { type }`. No VLAN or network name — per-VLAN client tallies are not available from this endpoint, which is why the card counts networks rather than breaking clients down by them.
+
+**Statistics object:** `uptimeSec`, `lastHeartbeatAt`, `nextHeartbeatAt`, `loadAverage1Min/5Min/15Min`, `cpuUtilizationPct`, `memoryUtilizationPct`, `uplink: { txRateBps, rxRateBps }`, `interfaces: {}`. **Utilization values are floats** (`21.6`, `80.7`), so the card rounds them.
+
+**Network object:** `management`, `id`, `name`, `enabled`, `vlanId`, `metadata`, `zoneId`, `default`.
+
+**PII note:** the gateway's `ipAddress` is the WAN public address, and device `name` values are operator-chosen. Neither may enter a fixture, a test, or a doc.
