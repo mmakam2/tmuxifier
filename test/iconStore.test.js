@@ -1,5 +1,6 @@
 import { test, expect, beforeEach } from 'vitest';
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createIconStore } from '../src/server/iconStore.js';
@@ -100,4 +101,103 @@ test('forget removes a cached favicon and tolerates one that is not there', asyn
   expect(await store.resolve(svc())).toBe(null);
   await expect(store.forget('svc-1')).resolves.toBeUndefined();
   await expect(store.forget('../escape')).resolves.toBeUndefined();
+});
+
+// A real loopback server rather than a mocked fetch: the repo's convention is
+// real code, and the size cap and redirect limit are only meaningful against
+// an actual response stream.
+function serve(handler) {
+  const server = http.createServer(handler);
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      resolve({ url: `http://127.0.0.1:${port}`, close: () => new Promise((r) => server.close(r)) });
+    });
+  });
+}
+
+test('refreshFavicon follows a declared <link rel=icon> and caches the bytes', async () => {
+  const site = await serve((req, res) => {
+    if (req.url === '/') {
+      res.setHeader('content-type', 'text/html');
+      res.end('<html><head><link rel="icon" type="image/svg+xml" href="/logo.svg"></head></html>');
+    } else if (req.url === '/logo.svg') {
+      res.setHeader('content-type', 'image/svg+xml');
+      res.end('<svg id="scraped"/>');
+    } else { res.statusCode = 404; res.end(); }
+  });
+  try {
+    expect(await store.refreshFavicon(svc({ url: `${site.url}/` }))).toEqual({ ok: true });
+    const hit = await store.resolve(svc({ url: `${site.url}/` }));
+    expect(hit.contentType).toBe('image/svg+xml');
+    expect(hit.bytes.toString()).toBe('<svg id="scraped"/>');
+  } finally { await site.close(); }
+});
+
+test('refreshFavicon falls back to /favicon.ico when the page declares nothing', async () => {
+  const site = await serve((req, res) => {
+    if (req.url === '/favicon.ico') {
+      res.setHeader('content-type', 'image/x-icon');
+      res.end('ICODATA');
+    } else { res.setHeader('content-type', 'text/html'); res.end('<html><head></head></html>'); }
+  });
+  try {
+    expect(await store.refreshFavicon(svc({ url: `${site.url}/` }))).toEqual({ ok: true });
+    expect((await store.resolve(svc({ url: `${site.url}/` }))).contentType).toBe('image/x-icon');
+  } finally { await site.close(); }
+});
+
+test('refreshFavicon refuses a non-image content type and leaves no partial file', async () => {
+  const site = await serve((req, res) => {
+    res.setHeader('content-type', 'text/html');
+    res.end('<html><head></head></html>');
+  });
+  try {
+    const r = await store.refreshFavicon(svc({ url: `${site.url}/` }));
+    expect(r.ok).toBe(false);
+    expect(await store.readCached('svc-1')).toBe(null);
+    expect(await fs.readdir(cacheDir)).toEqual([]);
+  } finally { await site.close(); }
+});
+
+test('refreshFavicon aborts an oversized body and leaves no partial file', async () => {
+  const site = await serve((req, res) => {
+    if (req.url === '/favicon.ico') {
+      res.setHeader('content-type', 'image/png');
+      res.end(Buffer.alloc(300 * 1024, 0x41));
+    } else { res.setHeader('content-type', 'text/html'); res.end('<html></html>'); }
+  });
+  try {
+    const r = await store.refreshFavicon(svc({ url: `${site.url}/` }));
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/too large/i);
+    expect(await fs.readdir(cacheDir)).toEqual([]);
+  } finally { await site.close(); }
+});
+
+test('refreshFavicon gives up rather than following a redirect loop', async () => {
+  const site = await serve((req, res) => { res.statusCode = 302; res.setHeader('location', '/again'); res.end(); });
+  try {
+    const r = await store.refreshFavicon(svc({ url: `${site.url}/` }));
+    expect(r.ok).toBe(false);
+  } finally { await site.close(); }
+});
+
+test('refreshFavicon replaces a cached icon of a different extension rather than stacking', async () => {
+  await putCache('svc-1', 'png', 'STALE');
+  const site = await serve((req, res) => {
+    if (req.url === '/favicon.ico') { res.setHeader('content-type', 'image/x-icon'); res.end('FRESH'); }
+    else { res.setHeader('content-type', 'text/html'); res.end('<html></html>'); }
+  });
+  try {
+    expect(await store.refreshFavicon(svc({ url: `${site.url}/` }))).toEqual({ ok: true });
+    expect(await fs.readdir(cacheDir)).toEqual(['svc-1.ico']);
+    expect((await store.readCached('svc-1')).bytes.toString()).toBe('FRESH');
+  } finally { await site.close(); }
+});
+
+test('refreshFavicon reports a failure rather than throwing when the host is unreachable', async () => {
+  const r = await store.refreshFavicon(svc({ url: 'http://127.0.0.1:1/' }));
+  expect(r.ok).toBe(false);
+  expect(typeof r.reason).toBe('string');
 });
