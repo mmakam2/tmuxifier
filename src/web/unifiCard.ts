@@ -163,7 +163,7 @@ export function buildUnifiCard(): UnifiCardEls {
   top.append(icon.root, lamp, name, chip);
   const exception = div('dash-card-warn');
   const grid = div('dash-card-grid');
-  const rows = div('dash-unifi-rows');
+  const rows = div('dash-card-rows');
   const error = div('dash-card-error');
   root.append(top, exception, grid, rows, error);
 
@@ -197,8 +197,8 @@ export function buildUnifiCard(): UnifiCardEls {
 
     if (rows.children.length !== model.rows.length) {
       rows.replaceChildren(...model.rows.map(() => {
-        const row = div('dash-unifi-row');
-        row.append(div('dash-unifi-label'), div('dash-unifi-value'));
+        const row = div('dash-card-row');
+        row.append(div('dash-card-rowlabel'), div('dash-card-rowvalue'));
         return row;
       }));
     }
