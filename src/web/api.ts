@@ -50,19 +50,21 @@ export interface ServiceCheck {
   fingerprint?: string;
 }
 export interface Service {
-  id: string; name: string; url: string; glyph?: string; group?: string;
+  // icon: a catalog slug, or 'none' to suppress. Absent means resolve
+  // automatically from the check kind, the name, then the URL hostname.
+  id: string; name: string; url: string; icon?: string; group?: string;
   // Absent on records written before sections existed — read as 'services'.
   section?: ServiceSection;
   check: ServiceCheck; createdAt: string;
   // pihole only. The app password itself never reaches the browser.
   hasPassword?: boolean;
 }
-// glyph/group/password accept null: the server's PATCH merge treats null as
+// icon/group/password accept null: the server's PATCH merge treats null as
 // "clear", while an absent key means "leave it alone" — which is what an
 // untouched password field must send.
 export type ServiceSpec =
-  Partial<Omit<Service, 'id' | 'createdAt' | 'glyph' | 'group' | 'hasPassword'>>
-  & { glyph?: string | null; group?: string | null; password?: string | null };
+  Partial<Omit<Service, 'id' | 'createdAt' | 'icon' | 'group' | 'hasPassword'>>
+  & { icon?: string | null; group?: string | null; password?: string | null };
 export interface PiholeMetrics {
   blocking: 'enabled' | 'disabled';
   blockingTimer: number | null;
@@ -218,6 +220,10 @@ export const api = {
     return j<Service>(await fetch(`/api/services/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }));
   },
   async removeService(id: string) { return j(await fetch(`/api/services/${id}`, { method: 'DELETE' })); },
+  async icons() { return j<{ slugs: string[] }>(await fetch('/api/icons')); },
+  async refreshServiceIcon(id: string) {
+    return j<{ ok: boolean; reason?: string }>(await fetch(`/api/services/${id}/icon/refresh`, { method: 'POST' }));
+  },
   async servicesStatus() { return j<ServiceStatusSnapshot>(await fetch(`/api/services/status?t=${Date.now()}`)); },
   async testPihole(body: { url: string; password?: string; insecure?: boolean; id?: string }) {
     return j<{ ok: boolean; version?: string | null; error?: string }>(

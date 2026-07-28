@@ -11,6 +11,7 @@ import { dotClassFor, dotTitleFor } from './statusDot';
 import { fmtLatency, fmtCount, fmtCompact, fmtUptime } from './fmt';
 import { buildTruenasCard, type TruenasCardEls } from './truenasCard';
 import { buildUnifiCard, type UnifiCardEls } from './unifiCard';
+import { buildCatalogIcon, buildServiceIcon, type ServiceIconEls } from './serviceIcon';
 
 // Re-exported so existing importers (and the dashboard tests) keep reaching for
 // them here, while card modules import them from ./fmt without a cycle.
@@ -202,14 +203,14 @@ interface FleetRow {
 }
 
 interface Tile {
-  root: HTMLAnchorElement; glyph: HTMLElement; name: HTMLElement;
+  root: HTMLAnchorElement; icon: ServiceIconEls; name: HTMLElement;
   lamp: HTMLElement; latency: HTMLElement;
 }
 
 // A Pi-hole reports numbers, so it renders as a wide card rather than a lamp.
 interface Card {
-  root: HTMLAnchorElement; name: HTMLElement; lamp: HTMLElement; chip: HTMLElement;
-  grid: HTMLElement; error: HTMLElement;
+  root: HTMLAnchorElement; icon: ServiceIconEls; name: HTMLElement;
+  lamp: HTMLElement; chip: HTMLElement; grid: HTMLElement; error: HTMLElement;
 }
 
 export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; update(patch: Partial<DashboardData>): void; destroy(): void } {
@@ -261,19 +262,25 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
 
   const infra = document.createElement('section');
   infra.className = 'dash-infra';
-  const sublegend = (text: string) => {
+  // The optional slug draws the product's own logo from the icon catalog, so
+  // the built-in readouts are badged the same way service tiles are. It stays
+  // hidden if the catalog was never fetched — the label carries the meaning.
+  const sublegend = (text: string, slug?: string) => {
     const l = legend(text);
     l.classList.add('dash-sublegend');
+    if (slug) l.prepend(buildCatalogIcon(slug));
     return l;
   };
   const pveGroup = div('dash-infra-group');
   const pveRow = div('dash-infra-row');
   const pveTiles = div('dash-grid');
-  pveGroup.append(sublegend('PROXMOX'), pveRow, pveTiles);
+  pveGroup.append(sublegend('PROXMOX', 'proxmox'), pveRow, pveTiles);
   const ipamGroup = div('dash-infra-group');
   const ipamRow = div('dash-infra-row');
   const ipamTiles = div('dash-grid');
-  ipamGroup.append(sublegend('IPAM'), ipamRow, ipamTiles);
+  // NetBox is the only IPAM this dashboard integrates, and the built-in rows
+  // under this legend are its prefixes, so its logo is the honest badge.
+  ipamGroup.append(sublegend('IPAM', 'netbox'), ipamRow, ipamTiles);
   const infraExtra = div('dash-infra-extra');
   const infraGroups = div('dash-infra-groups');
   infraGroups.append(pveGroup, ipamGroup, infraExtra);
@@ -353,20 +360,18 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     root.className = 'dash-tile';
     root.target = '_blank';
     root.rel = 'noopener';
-    const glyph = document.createElement('span');
-    glyph.className = 'dash-glyph';
-    glyph.setAttribute('aria-hidden', 'true');
+    const icon = buildServiceIcon();
     const name = div('dash-tile-name');
     const lamp = document.createElement('span');
     lamp.className = 'dot';
     const latency = document.createElement('span');
     latency.className = 'dash-latency';
     const top = div('dash-tile-top');
-    top.append(lamp, name);
+    top.append(icon.root, lamp, name);
     const bottom = div('dash-tile-bottom');
-    bottom.append(glyph, latency);
+    bottom.append(latency);
     root.append(top, bottom);
-    return { root, glyph, name, lamp, latency };
+    return { root, icon, name, lamp, latency };
   }
 
   // Create-or-update one tile and record the sighting; the caller appends the
@@ -377,17 +382,18 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     root.className = 'dash-tile dash-tile-wide';
     root.target = '_blank';
     root.rel = 'noopener';
+    const icon = buildServiceIcon();
     const lamp = document.createElement('span');
     lamp.className = 'dot';
     const name = div('dash-tile-name');
     const chip = document.createElement('span');
     chip.className = 'dash-card-chip';
     const top = div('dash-tile-top');
-    top.append(lamp, name, chip);
+    top.append(icon.root, lamp, name, chip);
     const grid = div('dash-card-grid');
     const error = div('dash-card-error');
     root.append(top, grid, error);
-    return { root, name, lamp, chip, grid, error };
+    return { root, icon, name, lamp, chip, grid, error };
   }
 
   function paintPiholeCard(svc: Service): HTMLElement {
@@ -395,6 +401,7 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     if (!card) { card = makeCard(); cardEls.set(svc.id, card); }
     const model = piholeCardModel(svc, data.serviceStatus);
     card.root.href = svc.url;
+    card.icon.update(svc);
     card.name.textContent = svc.name;
     card.lamp.className = `dot ${model.lamp}`.trim();
     card.chip.textContent = model.chip;
@@ -443,9 +450,8 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     let tile = tileEls.get(svc.id);
     if (!tile) { tile = makeTile(); tileEls.set(svc.id, tile); }
     tile.root.href = svc.url;
+    tile.icon.update(svc);
     tile.name.textContent = svc.name;
-    tile.glyph.textContent = svc.glyph ?? '';
-    tile.glyph.hidden = !svc.glyph;
     const lampState = serviceLamp(svc, data.serviceStatus);
     tile.lamp.hidden = lampState === 'none';
     tile.lamp.className = `dot${lampState === 'up' ? ' green' : lampState === 'down' ? ' red' : lampState === 'auth' ? ' auth' : ''}`;

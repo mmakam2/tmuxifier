@@ -18,7 +18,8 @@
     "test:e2e": "playwright test",
     "set-password": "node scripts/hash-password.js",
     "gen-secret": "node scripts/gen-secret.js",
-    "setup-voice": "node scripts/setup-voice.mjs"
+    "setup-voice": "node scripts/setup-voice.mjs",
+    "fetch-icons": "node scripts/fetch-icons.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

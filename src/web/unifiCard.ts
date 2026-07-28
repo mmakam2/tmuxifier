@@ -3,6 +3,7 @@
 // the reason this lives in its own file rather than growing dashboard.ts.
 import type { Service, ServiceResult, ServiceStatusSnapshot, UnifiMetrics } from './api';
 import { fmtCount, fmtUptime } from './fmt';
+import { buildServiceIcon } from './serviceIcon';
 
 // A controller pegged this hard is worth amber before anything has actually
 // failed — the same surface-it-early posture the pool thresholds take.
@@ -152,13 +153,14 @@ export function buildUnifiCard(): UnifiCardEls {
   root.className = 'dash-tile dash-tile-wide';
   root.target = '_blank';
   root.rel = 'noopener';
+  const icon = buildServiceIcon();
   const lamp = document.createElement('span');
   lamp.className = 'dot';
   const name = div('dash-tile-name');
   const chip = document.createElement('span');
   chip.className = 'dash-card-chip';
   const top = div('dash-tile-top');
-  top.append(lamp, name, chip);
+  top.append(icon.root, lamp, name, chip);
   const exception = div('dash-card-warn');
   const grid = div('dash-card-grid');
   const rows = div('dash-unifi-rows');
@@ -168,6 +170,7 @@ export function buildUnifiCard(): UnifiCardEls {
   function update(svc: Service, snap: ServiceStatusSnapshot | null): void {
     const model = unifiCardModel(svc, snap);
     root.href = svc.url;
+    icon.update(svc);
     name.textContent = svc.name;
     lamp.className = `dot ${model.lamp}`.trim();
     chip.textContent = model.chip;

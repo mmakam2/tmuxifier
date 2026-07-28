@@ -11,7 +11,7 @@ beforeEach(async () => {
   store = createServicesStore({ dataDir: dir });
 });
 
-const spec = { name: 'Grafana', url: 'https://192.168.1.20:3000/', glyph: '', group: 'Monitoring' };
+const spec = { name: 'Grafana', url: 'https://192.168.1.20:3000/', group: 'Monitoring' };
 
 test('addService normalizes, defaults check to http, and round-trips', async () => {
   const svc = await store.addService(spec);
@@ -34,8 +34,7 @@ test('url must be http(s)', async () => {
   await expect(store.addService({ ...spec, url: 'nonsense' })).rejects.toThrow(/URL/);
 });
 
-test('glyph is capped at 4 UTF-16 units; group at 32 chars', async () => {
-  await expect(store.addService({ ...spec, glyph: 'abcde' })).rejects.toThrow(/glyph/);
+test('group is capped at 32 chars', async () => {
   await expect(store.addService({ ...spec, group: 'g'.repeat(33) })).rejects.toThrow(/group/);
 });
 
@@ -63,11 +62,41 @@ test('updateService merges the patch and re-validates the whole result', async (
   await expect(store.updateService('svc-missing', { name: 'x' })).rejects.toThrow(/not found/);
 });
 
-test('null clears glyph and group', async () => {
-  const svc = await store.addService(spec);
-  const upd = await store.updateService(svc.id, { glyph: null, group: null });
-  expect(upd.glyph).toBeUndefined();
+test('null clears icon and group', async () => {
+  const svc = await store.addService({ ...spec, icon: 'grafana' });
+  const upd = await store.updateService(svc.id, { icon: null, group: null });
+  expect(upd.icon).toBeUndefined();
   expect(upd.group).toBeUndefined();
+});
+
+test('icon accepts a slug, clears with null, and refuses anything that is not one', async () => {
+  const svc = await store.addService({ ...spec, icon: 'grafana' });
+  expect(svc.icon).toBe('grafana');
+  const cleared = await store.updateService(svc.id, { icon: null });
+  expect(cleared.icon).toBeUndefined();
+  await expect(store.addService({ ...spec, icon: '../etc/passwd' })).rejects.toThrow(/icon/);
+  await expect(store.addService({ ...spec, icon: 'Grafana' })).rejects.toThrow(/icon/);
+  await expect(store.addService({ ...spec, icon: 'a'.repeat(65) })).rejects.toThrow(/icon/);
+});
+
+test('icon "none" is a storable value — it means suppress, not clear', async () => {
+  const svc = await store.addService({ ...spec, icon: 'none' });
+  expect(svc.icon).toBe('none');
+});
+
+test('glyph is neither accepted nor returned, and a legacy stored glyph is hidden', async () => {
+  const svc = await store.addService({ ...spec, glyph: '' });
+  expect(svc.glyph).toBeUndefined();
+
+  // Simulate a record written before this change by editing the file directly.
+  const file = path.join(dir, 'services.json');
+  const raw = JSON.parse(await fs.readFile(file, 'utf8'));
+  raw.services[0].glyph = '';
+  await fs.writeFile(file, JSON.stringify(raw));
+
+  const [listed] = await store.listServices();
+  expect(listed.glyph).toBeUndefined();
+  expect(listed.name).toBe('Grafana');
 });
 
 test('removeService deletes; a corrupt file quarantines and reads as empty', async () => {
@@ -293,4 +322,22 @@ test('unifi: switching the tile to another kind drops the stored key', async () 
   const switched = await s.updateService(svc.id, { check: { kind: 'http' } });
   expect(switched.hasPassword).toBe(false);
   expect(await s.getServiceSecret(svc.id)).toBe(null);
+});
+
+// The trap the settings form fell into: normalizeCheck merges {...base, ...raw},
+// so an omitted key means "keep what is stored", not "false". A UI that dropped
+// `insecure` when its checkbox was unchecked could therefore never turn the
+// setting off. The store is right — a partial patch must be able to leave a
+// field alone — so the contract is that the caller states what it means.
+test('a check field clears only when the patch states it, not when it omits it', async () => {
+  const svc = await store.addService({
+    ...spec, url: 'https://pihole.example.com', check: { kind: 'pihole', insecure: true },
+  });
+  expect(svc.check.insecure).toBe(true);
+
+  const omitted = await store.updateService(svc.id, { check: { kind: 'pihole' } });
+  expect(omitted.check.insecure).toBe(true); // absent = leave alone
+
+  const stated = await store.updateService(svc.id, { check: { kind: 'pihole', insecure: false } });
+  expect(stated.check.insecure).toBeUndefined(); // explicit false = cleared
 });

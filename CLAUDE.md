@@ -29,10 +29,13 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   `auth-state.json` (the logout session-revocation watermark), `passkeys.json` (enrolled WebAuthn
   credentials, the pinned relying party id, and the passkey-only flag — public keys only, so
   unlike `proxmox.json`/`netbox.json` nothing in it is encrypted, though it's still written
-  `0o600`), and SSH ControlMaster sockets under `data/cm/`.
+  `0o600`), scraped service favicons under `data/icons/`, and SSH ControlMaster sockets
+  under `data/cm/`.
 - `vendor/` (gitignored) — the whisper.cpp checkout, its build output, and the downloaded speech
   model, all created by `npm run setup-voice`. Together they take up roughly 1.2 GB;
-  `rm -rf vendor/whisper` reclaims it.
+  `rm -rf vendor/whisper` reclaims it. Also `vendor/icons/`, the service-logo catalog written
+  by `npm run fetch-icons` (a few hundred KB); deleting it costs the catalog, not the feature —
+  services fall back to their own scraped favicons.
 
 When adding a new config knob or persisted file, keep it under the repo folder by default.
 Don't introduce dependencies on `$HOME`-level state other than the user's existing SSH setup.
@@ -57,6 +60,7 @@ npm run typecheck    # tsc --noEmit over src/web (the TS client; vite/vitest str
 npm test             # typecheck + vitest run (unit + integration)
 npm run test:e2e     # playwright (spins up a local sshd-backed box; see test/helpers)
 npm run setup-voice  # headless equivalent of Settings -> Voice: builds whisper.cpp + downloads a pinned model into vendor/, records the choice in data/voice.json
+npm run fetch-icons  # downloads the pinned service-logo catalog into vendor/icons/ (one-time; the running server never contacts the CDN)
 ```
 
 ## Configuration model
@@ -208,8 +212,8 @@ pattern for new modules.
   independent of how many dashboard tabs are open.
 - `servicesStore.js` / `serviceCheck.js` / `serviceChecker.js` — the standby dashboard's
   service tiles: validated CRUD over `data/services.json` (each tile carries a `section` —
-  services|infrastructure — plus a free-text `group` category within it, and a check kind of
-  http|tcp|pihole|truenas|unifi|none), the dependency-free HTTP/TCP
+  services|infrastructure — plus a free-text `group` category within it, a check kind of
+  http|tcp|pihole|truenas|unifi|none, and an optional `icon` slug — see `iconResolve.js`), the dependency-free HTTP/TCP
   liveness engine (TLS errors tolerated — reachability probe, not a security boundary),
   and the interval sweep (`TMUXIFIER_SERVICE_POLL_MS`, min 5s) whose cached snapshot
   `GET /api/services/status` serves — check volume is independent of open tabs.
@@ -257,6 +261,26 @@ pattern for new modules.
   rather than the feature list, because a UCG Max advertises `features: ["switching"]` and is
   otherwise indistinguishable from a switch. The `/networks` endpoint carries no per-client VLAN,
   so the card counts networks rather than breaking clients down by them.
+- `iconResolve.js` / `iconCatalog.js` / `iconStore.js` — service tile icons, replacing the
+  removed free-form Nerd Font `glyph` field. `iconResolve.js` is the pure half: the ordered
+  slug candidates for a service (check kind first — `unifi`/`truenas`/`pihole` are declared
+  rather than guessed — then the name, then the URL hostname, with IP literals dropped since an
+  address is not a product) and the favicon `<link>` scan. `iconCatalog.js` is the pinned slug
+  list and the chokepoint that keeps no user-supplied string from reaching a download, in the
+  mold of `voiceCatalog.js` — both halves of the CDN path, slug and extension, are closed
+  allowlists. Deliberately **no** pinned digests, unlike `voiceDownload.js`: a logo is redesigned
+  by its vendor from time to time, and pinning would turn every upstream refresh into a failed
+  run. The catalog carries SVG **and** PNG because a fifth of upstream has no vector.
+  `iconStore.js` is the only half that touches disk or the network: it walks the candidates
+  against `vendor/icons/` (the catalog) then `data/icons/` (the per-service favicon cache), and
+  scrapes a favicon best-effort on save **only when the catalog misses**. Every slug is
+  re-checked against `ICON_SLUG` and the resolved path verified to stay inside its directory
+  before any read. Served by the authenticated `GET /api/services/:id/icon` and
+  `GET /api/icons/:slug` — dynamic routes, not a second static mount, because `wildcard: false`
+  registers static assets at boot and a favicon scraped afterwards would be unservable until
+  restart. They are also the only `/api/` responses that set their own `Cache-Control`
+  (`private, no-cache` + ETag); `server.js`'s blanket `no-store` yields to a route that already
+  decided, exactly as the security headers beside it do.
 - `serviceClientRegistry.js` — the shared per-service API-client cache behind
   `piholeRegistry.js`, `truenasRegistry.js` and `unifiRegistry.js`: one client per service id, rebuilt when the
   options that define it change (the fingerprint is taken over the whole options object, so a
@@ -403,6 +427,10 @@ infra poll that run only while mounted; the sidebar nameplate `#home` returns to
 undocking — not killing — any docked terminals), `fmt.ts` (the shared display formatters —
 `fmtCount`/`fmtCompact`/`fmtUptime`/`fmtLatency`/`fmtBytes` — factored out of `dashboard.ts`,
 which re-exports them, so a card module can use them without importing the dashboard back),
+`serviceIcon.ts` (the one `<img>` builder shared by the plain tiles, all three cards and the
+settings list; it hides itself on `error`, so a service with no resolvable icon degrades silently
+to no icon with no pre-flight request — and it is always an `<img>`, never inlined SVG, which is
+what makes the content inert regardless of its source),
 `truenasCard.ts` (the TrueNAS card: the pure model plus the pure `truenasLamp` severity
 function whose 80/90 capacity thresholds are named exported constants, and an
 in-place-updating DOM layer; it lives outside `dashboard.ts` rather than growing it further),
@@ -444,8 +472,10 @@ boxes), `settingsUi.ts` (the ⚙ settings
 modal's tabbed shell — the `SECTIONS` object's key order builds the tab strip — with Boxes
 (`settingsBoxes.ts`: the leftmost tab, box-list JSON export/import moved out of the sidebar brand
 actions, which stay reserved for the routinely used controls; pure `importSummary`),
-Services (`settingsServices.ts`: the standby dashboard's service-tile CRUD — name/URL/glyph/
-group/check form with a Nerd Font starter glyph palette; pure `buildServicePayload`),
+Services (`settingsServices.ts`: the standby dashboard's service-tile CRUD — name/URL/icon/
+group/check form whose icon control is Auto (resolve from check kind, then name, then hostname) /
+Choose (a filterable grid of the `vendor/icons/` catalog) / None, plus a Refresh icon button that
+re-scrapes the service's own favicon; pure `buildServicePayload`),
 NetBox (`settingsNetbox.ts`), Proxmox host/secret
 (`settingsProxmox.ts`), Passkeys (`settingsPasskeys.ts`: readiness row, enrolled-credential list
 with remove — confirm-gated by one modal; removing the last credential while "require a passkey"
@@ -620,6 +650,15 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   read-only and issues no verb but `GET`. An `http:` target is refused outright. A pinned
   fingerprint that stops matching is a hard failure — Tmuxifier never re-pins automatically, the
   same posture it takes toward a changed SSH host key.
+- Service icons are served from two directories the operator controls: `vendor/icons/` (written
+  only by `npm run fetch-icons` from a pinned slug list) and `data/icons/` (favicons scraped from
+  the LAN services the user configured). The slug is a path component, so it is validated against
+  `ICON_SLUG` at the store and re-checked before every read, with the resolved path verified to
+  stay inside its directory. Icons are always rendered through `<img>` and never inlined: a
+  browser loads SVG in an `<img>` with scripting and external references disabled, which makes
+  the content inert regardless of its source. The favicon scrape uses `rejectUnauthorized: false`,
+  matching the `http`/`tcp` liveness checks and for the same reason — it sends no credential;
+  the credentialed integrations keep verified TLS.
 - A changed SSH host key is treated as a possible MITM, not a nuisance: Tmuxifier never clears a
   `known_hosts` entry merely because a connection failed. It is removed only when Tmuxifier can
   prove the old identity is gone or new (verified Proxmox deprovision; provisioning a fresh
