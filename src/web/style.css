@@ -684,7 +684,10 @@ button.empty-kbd:hover { color: var(--text); }
 .dash-chip-working { background: rgba(255, 176, 0, 0.14); color: var(--amber); }
 .dash-chip-waiting { background: rgba(255, 106, 26, 0.16); color: var(--orange); }
 .dash-tile-bottom { display: flex; align-items: center; gap: 8px; min-height: 16px; }
-.dash-glyph { font-size: 16px; line-height: 1; color: var(--muted); }
+/* Service logo. Fixed square so a tall or wide source cannot shift the row,
+   and object-fit keeps the aspect ratio inside it. Hidden by serviceIcon.ts
+   until it loads, so an unresolvable icon collapses to nothing. */
+.dash-icon { width: 18px; height: 18px; flex: none; object-fit: contain; }
 .dash-latency { margin-left: auto; font-size: 11px; color: var(--amber); font-variant-numeric: tabular-nums; }
 /* Pi-hole card: a tile that reports numbers instead of a status line. Two grid
    columns wide, degrading to one on a narrow bay so it never forces a
@@ -750,34 +753,43 @@ button.empty-kbd:hover { color: var(--text); }
 .svc-row-name { flex: 1; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .svc-row-group { color: var(--dim); font-size: 11px; }
 .svc-row-check { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; }
-.svc-glyph-palette { display: flex; gap: 4px; flex-wrap: wrap; margin: 4px 0 8px; }
-/* Fixed-size caps with the glyph centred by flexbox, not by text flow: the
-   bundled face's large line gap parked the icons high in the cap, and its
-   per-glyph advances left each one at a different horizontal offset.
-   The asymmetric padding is an optical correction, not a typo: these Nerd Font
-   PUA icons ink ~13px wide but advance only 8px, overhanging to the right, so
-   centring the advance box still leaves the visible glyph ~2.5px right of
-   centre. Pulling the content box in on the right re-centres the ink. */
-.svc-glyph-key {
+/* Icon picker: catalog logos in a recessed well, each on its own key cap. The
+   well is capped in height and scrolls, so a catalog of any size cannot turn
+   the settings form into a page-long scroll of icons. */
+.svc-icon-picker { margin: 4px 0 8px; }
+.svc-icon-filter { margin-bottom: 6px; }
+.svc-icon-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 168px;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--screen);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: var(--recess);
+}
+.svc-icon-key {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 26px;
-  padding: 0 5px 0 0;
+  width: 34px;
+  height: 32px;
+  padding: 0;
   background: var(--key-face);
   border: 1px solid var(--key-border);
   border-bottom-color: #101216;
   border-radius: 4px;
   box-shadow: 0 2px 0 rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  color: var(--muted);
-  font-family: var(--face);
-  font-size: 14px;
-  line-height: 1;
   cursor: pointer;
 }
-.svc-glyph-key:hover { color: var(--text); }
-.svc-glyph-key:active { transform: translateY(1px); box-shadow: 0 1px 0 rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.03); }
+.svc-icon-key:hover { border-color: var(--amber-deep); }
+.svc-icon-key.selected { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber), var(--key-edge-down); }
+.svc-icon-key:active { transform: translateY(1px); box-shadow: var(--key-edge-down); }
+.svc-icon-img { width: 22px; height: 22px; object-fit: contain; }
+.svc-icon-empty { color: var(--dim); font-size: 11px; padding: 4px; }
+.svc-row .dash-icon { margin-right: 2px; }
 .svc-check-radios { display: flex; gap: 12px; margin: 8px 0; }
 
 /* --- Stage panes (split terminals) ---------------------------------------- */

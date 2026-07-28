@@ -3,6 +3,7 @@
 // reason this lives in its own file rather than growing dashboard.ts further.
 import type { Service, ServiceResult, ServiceStatusSnapshot, TruenasMetrics, TruenasPool } from './api';
 import { fmtBytes, fmtUptime } from './fmt';
+import { buildServiceIcon } from './serviceIcon';
 
 // A pool this full is the thing a storage tile exists to surface, so capacity
 // drives the lamp rather than waiting for TrueNAS to raise its own alert.
@@ -121,13 +122,14 @@ export function buildTruenasCard(): TruenasCardEls {
   root.className = 'dash-tile dash-tile-wide';
   root.target = '_blank';
   root.rel = 'noopener';
+  const icon = buildServiceIcon();
   const lamp = document.createElement('span');
   lamp.className = 'dot';
   const name = div('dash-tile-name');
   const chip = document.createElement('span');
   chip.className = 'dash-card-chip';
   const top = div('dash-tile-top');
-  top.append(lamp, name, chip);
+  top.append(icon.root, lamp, name, chip);
   const pools = div('dash-pool-rows');
   const more = div('dash-pool-more');
   const footer = div('dash-card-footer');
@@ -137,6 +139,7 @@ export function buildTruenasCard(): TruenasCardEls {
   function update(svc: Service, snap: ServiceStatusSnapshot | null): void {
     const model = truenasCardModel(svc, snap);
     root.href = svc.url;
+    icon.update(svc);
     name.textContent = svc.name;
     lamp.className = `dot ${model.lamp}`.trim();
     chip.textContent = model.chip;
