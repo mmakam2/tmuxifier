@@ -323,3 +323,21 @@ test('unifi: switching the tile to another kind drops the stored key', async () 
   expect(switched.hasPassword).toBe(false);
   expect(await s.getServiceSecret(svc.id)).toBe(null);
 });
+
+// The trap the settings form fell into: normalizeCheck merges {...base, ...raw},
+// so an omitted key means "keep what is stored", not "false". A UI that dropped
+// `insecure` when its checkbox was unchecked could therefore never turn the
+// setting off. The store is right — a partial patch must be able to leave a
+// field alone — so the contract is that the caller states what it means.
+test('a check field clears only when the patch states it, not when it omits it', async () => {
+  const svc = await store.addService({
+    ...spec, url: 'https://pihole.example.com', check: { kind: 'pihole', insecure: true },
+  });
+  expect(svc.check.insecure).toBe(true);
+
+  const omitted = await store.updateService(svc.id, { check: { kind: 'pihole' } });
+  expect(omitted.check.insecure).toBe(true); // absent = leave alone
+
+  const stated = await store.updateService(svc.id, { check: { kind: 'pihole', insecure: false } });
+  expect(stated.check.insecure).toBeUndefined(); // explicit false = cleared
+});

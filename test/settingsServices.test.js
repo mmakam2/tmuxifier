@@ -21,7 +21,7 @@ test('buildServicePayload builds a pihole check with its optional target and ins
     kind: 'pihole', target: '', section: 'infrastructure', password: 'app-pw',
   })).toEqual({
     name: 'pihole', url: 'https://pihole.example.com', icon: null, group: 'DNS Filtering',
-    section: 'infrastructure', check: { kind: 'pihole' }, password: 'app-pw',
+    section: 'infrastructure', check: { kind: 'pihole', insecure: false }, password: 'app-pw',
   });
 
   expect(buildServicePayload({
@@ -60,7 +60,7 @@ const nasBase = {
 
 test('truenas: the username rides in the check and the key rides as password', () => {
   const p = buildServicePayload({ ...nasBase, kind: 'truenas', username: 'truenas_admin', password: '1-key' });
-  expect(p.check).toEqual({ kind: 'truenas', username: 'truenas_admin' });
+  expect(p.check).toEqual({ kind: 'truenas', username: 'truenas_admin', insecure: false });
   expect(p.password).toBe('1-key');
 });
 
@@ -74,9 +74,9 @@ test('truenas: Clear sends an explicit null', () => {
   expect(p.password).toBe(null);
 });
 
-test('truenas: target and insecure are carried only when set', () => {
+test('truenas: the target is carried only when set, but insecure is always stated', () => {
   const bare = buildServicePayload({ ...nasBase, kind: 'truenas', username: 'u' });
-  expect(bare.check).toEqual({ kind: 'truenas', username: 'u' });
+  expect(bare.check).toEqual({ kind: 'truenas', username: 'u', insecure: false });
   const full = buildServicePayload({ ...nasBase, kind: 'truenas', username: 'u', target: 'https://192.168.1.20', insecure: true });
   expect(full.check).toEqual({ kind: 'truenas', username: 'u', target: 'https://192.168.1.20', insecure: true });
 });
@@ -92,8 +92,8 @@ const unifiBase = {
   kind: 'unifi', target: '', section: 'infrastructure',
 };
 
-test('buildServicePayload defaults a unifi tls mode to verify and omits an empty site', () => {
-  expect(buildServicePayload({ ...unifiBase }).check).toEqual({ kind: 'unifi', tls: 'verify' });
+test('buildServicePayload defaults a unifi tls mode to verify and states an empty site', () => {
+  expect(buildServicePayload({ ...unifiBase }).check).toEqual({ kind: 'unifi', site: '', tls: 'verify' });
 });
 
 test('buildServicePayload carries the unifi site and probe target when set', () => {
@@ -103,9 +103,9 @@ test('buildServicePayload carries the unifi site and probe target when set', () 
 
 test('buildServicePayload sends a unifi fingerprint only in pin mode', () => {
   expect(buildServicePayload({ ...unifiBase, tls: 'pin', fingerprint: 'AA:BB' }).check)
-    .toEqual({ kind: 'unifi', tls: 'pin', fingerprint: 'AA:BB' });
+    .toEqual({ kind: 'unifi', site: '', tls: 'pin', fingerprint: 'AA:BB' });
   expect(buildServicePayload({ ...unifiBase, tls: 'insecure', fingerprint: 'AA:BB' }).check)
-    .toEqual({ kind: 'unifi', tls: 'insecure' });
+    .toEqual({ kind: 'unifi', site: '', tls: 'insecure' });
 });
 
 test('buildServicePayload sends the unifi api key through the shared password field', () => {
@@ -120,4 +120,24 @@ test('buildServicePayload maps the three icon states', () => {
   expect(buildServicePayload(base).icon).toBe(null);
   expect(buildServicePayload({ ...base, icon: 'none' }).icon).toBe('none');
   expect(buildServicePayload({ ...base, icon: 'grafana' }).icon).toBe('grafana');
+});
+
+// Unchecking a box must send `false`, not omit the key. The server's PATCH
+// merge is {...base, ...raw}, so an omitted key means "keep what is stored" —
+// which made unchecking "allow self-signed certificates" silently revert. The
+// same applies to clearing a UniFi site override back to the first site.
+test('buildServicePayload always states insecure, so unchecking it actually clears', () => {
+  const pihole = { name: 'P', url: 'https://pihole.example.com', group: '', kind: 'pihole', target: '', section: 'services' };
+  expect(buildServicePayload({ ...pihole, insecure: true }).check).toEqual({ kind: 'pihole', insecure: true });
+  expect(buildServicePayload({ ...pihole, insecure: false }).check).toEqual({ kind: 'pihole', insecure: false });
+  expect(buildServicePayload(pihole).check).toEqual({ kind: 'pihole', insecure: false });
+
+  const truenas = { name: 'N', url: 'https://nas.example.com', group: '', kind: 'truenas', target: '', section: 'services', username: 'admin' };
+  expect(buildServicePayload({ ...truenas, insecure: false }).check).toEqual({ kind: 'truenas', username: 'admin', insecure: false });
+});
+
+test('buildServicePayload always states the unifi site, so clearing it reverts to the first site', () => {
+  const unifi = { name: 'U', url: 'https://unifi.example.com', group: '', kind: 'unifi', target: '', section: 'services', tls: 'verify' };
+  expect(buildServicePayload({ ...unifi, site: 'Office' }).check).toEqual({ kind: 'unifi', site: 'Office', tls: 'verify' });
+  expect(buildServicePayload({ ...unifi, site: '  ' }).check).toEqual({ kind: 'unifi', site: '', tls: 'verify' });
 });

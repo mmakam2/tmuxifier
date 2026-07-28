@@ -20,8 +20,14 @@ export function buildServicePayload(f: {
 }): ServiceSpec {
   const target = f.target.trim();
   let check: ServiceCheck;
+  // Every optional field a form control owns is stated outright, never omitted
+  // when falsy. The server's PATCH merge is {...base, ...raw}, so an absent key
+  // means "keep what is stored" — omitting `insecure` when the box was
+  // unchecked made the setting silently revert to its saved value, and the same
+  // held for clearing a UniFi site override. `target` was already sent this way
+  // in these same objects; this makes the rest consistent with it.
   if (f.kind === 'pihole') {
-    check = { kind: 'pihole', ...(target ? { target } : {}), ...(f.insecure ? { insecure: true } : {}) };
+    check = { kind: 'pihole', ...(target ? { target } : {}), insecure: f.insecure === true };
   } else if (f.kind === 'unifi') {
     const tls: UnifiTlsMode = f.tls ?? 'verify';
     const site = (f.site ?? '').trim();
@@ -29,7 +35,7 @@ export function buildServicePayload(f: {
     check = {
       kind: 'unifi',
       ...(target ? { target } : {}),
-      ...(site ? { site } : {}),
+      site,
       tls,
       // The pin is meaningless outside pin mode, so it is dropped rather than
       // carried along to confuse a later read of the record.
@@ -40,7 +46,7 @@ export function buildServicePayload(f: {
       kind: 'truenas',
       username: (f.username ?? '').trim(),
       ...(target ? { target } : {}),
-      ...(f.insecure ? { insecure: true } : {}),
+      insecure: f.insecure === true,
     };
   } else if (f.kind === 'none' || !target) {
     check = { kind: f.kind };
