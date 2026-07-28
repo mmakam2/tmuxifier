@@ -124,12 +124,38 @@ export async function checkUnifi(service, { unifiRegistry } = {}) {
   return { state: 'down', latencyMs, error: res.error };
 }
 
+// An Immich check reports the photo library, not just reachability. As with the
+// other credentialed kinds the `auth` state is deliberately distinct from
+// `down`. A 403 is not auth: the key is valid and the server answered, so the
+// client degrades those readings and the tile stays up (see immichApi.js).
+export async function checkImmich(service, { immichRegistry } = {}) {
+  if (!immichRegistry) return { state: 'down', error: 'immich client unavailable' };
+  const started = Date.now();
+  let client;
+  try {
+    client = await immichRegistry.clientFor(service);
+  } catch (err) {
+    return { state: 'down', error: err?.message || 'immich client setup failed' };
+  }
+  const res = await client.snapshot();
+  const latencyMs = Date.now() - started;
+  if (res.ok) return { state: 'up', latencyMs, immich: res.metrics };
+  if (res.kind === 'auth') {
+    const error = service.hasPassword === false
+      ? 'no API key configured — add one in Settings → Services'
+      : res.error;
+    return { state: 'auth', latencyMs, error };
+  }
+  return { state: 'down', latencyMs, error: res.error };
+}
+
 export async function checkService(service, opts = {}) {
   const kind = service?.check?.kind || 'http';
   if (kind === 'none') return null;
   if (kind === 'pihole') return checkPihole(service, opts);
   if (kind === 'truenas') return checkTruenas(service, opts);
   if (kind === 'unifi') return checkUnifi(service, opts);
+  if (kind === 'immich') return checkImmich(service, opts);
   if (kind === 'tcp') return checkTcp(service.check?.target, opts);
   return checkHttp(service.check?.target || service.url, opts);
 }

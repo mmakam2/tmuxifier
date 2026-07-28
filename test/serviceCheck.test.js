@@ -255,3 +255,48 @@ test('checkService unifi: a tls failure is down, not auth', async () => {
 test('checkService unifi: no registry wired is down, not a throw', async () => {
   expect((await checkService(unifiService, {})).state).toBe('down');
 });
+
+test('checkImmich reports metrics when the snapshot succeeds', async () => {
+  const metrics = { version: 'v3.0.3', photos: 10, denied: [] };
+  const immichRegistry = { clientFor: async () => ({ snapshot: async () => ({ ok: true, metrics }) }) };
+  const res = await checkService({ id: 's', check: { kind: 'immich' } }, { immichRegistry });
+  expect(res.state).toBe('up');
+  expect(res.immich).toBe(metrics);
+  expect(typeof res.latencyMs).toBe('number');
+});
+
+// auth is deliberately distinct from down: a rotated key means the server is
+// answering perfectly well, and painting it red would cry wolf.
+test('checkImmich reports auth rather than down when the key is rejected', async () => {
+  const immichRegistry = {
+    clientFor: async () => ({ snapshot: async () => ({ ok: false, kind: 'auth', error: 'nope' }) }),
+  };
+  const res = await checkService({ id: 's', check: { kind: 'immich' } }, { immichRegistry });
+  expect(res.state).toBe('auth');
+  expect(res.error).toBe('nope');
+});
+
+test('checkImmich names the missing credential when none is stored', async () => {
+  const immichRegistry = {
+    clientFor: async () => ({ snapshot: async () => ({ ok: false, kind: 'auth', error: 'nope' }) }),
+  };
+  const res = await checkService(
+    { id: 's', hasPassword: false, check: { kind: 'immich' } },
+    { immichRegistry },
+  );
+  expect(res.state).toBe('auth');
+  expect(res.error).toMatch(/no API key configured/);
+});
+
+test('checkImmich reports down when the server is unreachable', async () => {
+  const immichRegistry = {
+    clientFor: async () => ({ snapshot: async () => ({ ok: false, kind: 'unreachable', error: 'refused' }) }),
+  };
+  const res = await checkService({ id: 's', check: { kind: 'immich' } }, { immichRegistry });
+  expect(res.state).toBe('down');
+});
+
+test('checkImmich reports down when no registry is wired', async () => {
+  const res = await checkService({ id: 's', check: { kind: 'immich' } }, {});
+  expect(res.state).toBe('down');
+});
