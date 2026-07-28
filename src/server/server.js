@@ -17,6 +17,7 @@ import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js
 import { testNetbox, createNetboxClient, netboxSummary } from './netboxApi.js';
 import { createPiholeClient } from './piholeApi.js';
 import { createTruenasClient } from './truenasApi.js';
+import { createUnifiClient } from './unifiApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
 import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault } from './tmuxInject.js';
 import { normalizeTranscript } from './voiceText.js';
@@ -90,7 +91,7 @@ async function killTmuxSession(sessionName) {
   await execFileAsync('tmux', killSessionArgs(sessionName), { timeout: 5000 });
 }
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -853,6 +854,36 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     } finally {
       await client.close();
     }
+  });
+
+  // Same rationale as the Pi-hole and TrueNAS probes: save-and-pray is a poor
+  // way to discover the key is wrong. This one also hands back the site list and
+  // the served certificate fingerprint, which is how pin mode gets armed.
+  app.post('/api/services/unifi/test', { preHandler: requireAuth }, async (req) => {
+    const { url, apiKey, site, tls, fingerprint, id } = req.body || {};
+    const value = typeof url === 'string' ? url.trim() : '';
+    let u;
+    try { u = new URL(value); } catch { return { ok: false, error: 'enter a valid https URL for the controller' }; }
+    // The API key inherits its admin account's role, so it is never sent over a
+    // cleartext connection — refused here as well as in the store's validation.
+    if (u.protocol !== 'https:') {
+      return { ok: false, error: 'the controller must be reached over https — a UniFi API key can write to your network' };
+    }
+    // A blank key on an existing service means "use the one already stored", so
+    // Test works while editing without retyping the secret.
+    let key = typeof apiKey === 'string' ? apiKey : '';
+    if (!key && id) key = (await servicesStore.getServiceSecret(id)) || '';
+    const client = makeUnifiClient({
+      baseUrl: value,
+      apiKey: key,
+      site: typeof site === 'string' ? site.trim() : '',
+      tls: tls === 'pin' || tls === 'insecure' ? tls : 'verify',
+      fingerprint: typeof fingerprint === 'string' ? fingerprint : '',
+    });
+    const res = await client.probe();
+    return res.ok
+      ? { ok: true, sites: res.sites, fingerprint256: res.fingerprint256 ?? null }
+      : { ok: false, error: res.error, ...(res.fingerprint256 ? { fingerprint256: res.fingerprint256 } : {}) };
   });
 
   app.post('/api/fleet/jobs', { preHandler: requireAuth }, async (req, reply) => {

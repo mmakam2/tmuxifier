@@ -207,6 +207,11 @@ export const api = {
       await fetch('/api/services/truenas/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
     );
   },
+  async testUnifi(body: { url: string; apiKey?: string; site?: string; tls?: string; fingerprint?: string; id?: string }) {
+    return j<{ ok: boolean; error?: string; fingerprint256?: string | null; sites?: { id: string; name: string; reference: string }[] }>(
+      await fetch('/api/services/unifi/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    );
+  },
   async status() { return j<Record<string, Status>>(await fetch(`/api/status?t=${Date.now()}`)); },
   async healthSeries() { return j<Record<string, Sample[]>>(await fetch(`/api/health/series?t=${Date.now()}`)); },
   async healthEvents() { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?t=${Date.now()}`)); },
