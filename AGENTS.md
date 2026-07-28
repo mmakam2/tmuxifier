@@ -209,7 +209,7 @@ pattern for new modules.
 - `servicesStore.js` / `serviceCheck.js` / `serviceChecker.js` — the standby dashboard's
   service tiles: validated CRUD over `data/services.json` (each tile carries a `section` —
   services|infrastructure — plus a free-text `group` category within it, and a check kind of
-  http|tcp|pihole|truenas|none), the dependency-free HTTP/TCP
+  http|tcp|pihole|truenas|unifi|none), the dependency-free HTTP/TCP
   liveness engine (TLS errors tolerated — reachability probe, not a security boundary),
   and the interval sweep (`TMUXIFIER_SERVICE_POLL_MS`, min 5s) whose cached snapshot
   `GET /api/services/status` serves — check volume is independent of open tabs.
@@ -243,8 +243,22 @@ pattern for new modules.
   correlated by JSON-RPC id; an expired session re-logs-in exactly once and replays, and a
   stale socket's late `close` cannot tear down its replacement (teardown is guarded by socket
   identity). `close()` calls `auth.logout`. Read-only: no mutating method is ever called.
+- `unifiApi.js` / `unifiRegistry.js` / `unifiMetrics.js` — the `unifi` service check: a
+  dependency-free client for the UniFi Network **Integration API v1**
+  (`/proxy/network/integration/v1`, `X-API-KEY`) over `node:https`, in the mold of
+  `netboxApi.js`. **GET only** — no code path issues another verb, so the key's blast radius
+  stays at reads even though UniFi's local keys inherit their admin account's role. One refresh
+  is ten requests (devices, clients, networks, plus statistics per device), so the client holds
+  its own 30s snapshot TTL and serves the cache in between: the cost of a tile is bounded by the
+  client rather than by however the operator has tuned `TMUXIFIER_SERVICE_POLL_MS`. TLS is
+  three-way (`verify`/`pin`/`insecure`) via the shared `tlsPin.js` helpers, and pin mode verifies
+  before the key is written, so a mismatch never puts the credential on the wire.
+  `unifiMetrics.js` is the pure shaping half — `classifyDevice` leads with the **model prefix**
+  rather than the feature list, because a UCG Max advertises `features: ["switching"]` and is
+  otherwise indistinguishable from a switch. The `/networks` endpoint carries no per-client VLAN,
+  so the card counts networks rather than breaking clients down by them.
 - `serviceClientRegistry.js` — the shared per-service API-client cache behind
-  `piholeRegistry.js` and `truenasRegistry.js`: one client per service id, rebuilt when the
+  `piholeRegistry.js`, `truenasRegistry.js` and `unifiRegistry.js`: one client per service id, rebuilt when the
   options that define it change (the fingerprint is taken over the whole options object, so a
   new option participates automatically), `retain` closing departed services, and a best-effort
   `closeAll` that a dead service cannot stall.
@@ -392,6 +406,9 @@ which re-exports them, so a card module can use them without importing the dashb
 `truenasCard.ts` (the TrueNAS card: the pure model plus the pure `truenasLamp` severity
 function whose 80/90 capacity thresholds are named exported constants, and an
 in-place-updating DOM layer; it lives outside `dashboard.ts` rather than growing it further),
+`unifiCard.ts` (the UniFi card: the pure model — a six-cell client/WAN census over
+per-device-class rollup rows — plus `unifiLamp` and the local `fmtBitrate`, since UniFi reports
+bit rates and `fmtBytes` would render them in the wrong unit and base),
 `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
 history: pure SVG-path builder and event-line formatters), `notifyPrefs.ts` (per-kind
 browser-notification preferences, localStorage-backed, defaults all-on except `up`/
@@ -593,6 +610,16 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   `servicesStore.js` validation and the `POST /api/services/truenas/test` route before a client
   is constructed. Use a **user-linked API key** (Credentials → Users → API Keys) with the
   READONLY_ADMIN role; the integration is read-only and calls no mutating method.
+- A UniFi tile's API key is sealed the same way (AES-256-GCM in `data/services.json`, key from
+  `cookieSecret`, file `0o600`) and is never returned to the browser (`hasPassword` only). Unlike
+  Pi-hole and TrueNAS it offers **three** TLS modes rather than a verified/insecure pair —
+  CA-verified, TOFU fingerprint pinning via `tlsPin.js`, or explicit insecure — because a
+  controller's certificate is self-signed by default and, unlike an app password, **a UniFi local
+  API key inherits its admin account's role and can write to the network**. There is no read-only
+  key scope on the local API, so create the key under a **View Only** admin; the integration is
+  read-only and issues no verb but `GET`. An `http:` target is refused outright. A pinned
+  fingerprint that stops matching is a hard failure — Tmuxifier never re-pins automatically, the
+  same posture it takes toward a changed SSH host key.
 - A changed SSH host key is treated as a possible MITM, not a nuisance: Tmuxifier never clears a
   `known_hosts` entry merely because a connection failed. It is removed only when Tmuxifier can
   prove the old identity is gone or new (verified Proxmox deprovision; provisioning a fresh

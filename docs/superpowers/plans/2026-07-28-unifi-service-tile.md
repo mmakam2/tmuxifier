@@ -146,7 +146,7 @@ export const NETWORKS = {
 - [ ] **Step 5: Verify no PII and commit**
 
 ```bash
-grep -nE '155\.|Stuxnet|IPVanish|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' test/helpers/unifiSamples.js
+grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' test/helpers/unifiSamples.js | sort -u
 ```
 
 Every address printed must be RFC1918 (`192.168.x.x`, `10.x.x.x`, `172.16–31.x.x`). Then:
@@ -2263,7 +2263,9 @@ Expected: typecheck clean, every test passing. Fix anything that broke — parti
 
 ```bash
 git diff --cached
-grep -rnE '155\.116|Stuxnet|IPVanish|X-API-KEY: [A-Za-z0-9]{20,}' src/ test/ docs/ *.md
+# Substitute your own controller's WAN address, device names, and key prefix —
+# do not commit the literal values into this plan.
+grep -rnE '<your-wan-ip>|<your-device-name>|X-API-KEY: [A-Za-z0-9]{20,}' src/ test/ docs/ *.md
 ```
 
 Expected: no hits. Then:
