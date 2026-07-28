@@ -195,3 +195,39 @@ test('stale-zone regression: a second drag builds zones from the current layout'
   expect(zoneCount).toBe(4 + 2 * 5); // 4 stage edges + 2 panes × (4 edges + replace)
   await page.mouse.up();
 });
+
+// Regression: the last terminal row must be fully visible, never clipped.
+//
+// `.term` is `inset: 0` with a padded gutter under the global `* { box-sizing:
+// border-box }`, so getComputedStyle('.term').height used to report the BORDER
+// box — gutters included. FitAddon subtracts padding only from the `.xterm`
+// element (which has none), never from its parent, so it handed out one row
+// more than fits and the last row hung past `.pane-body`'s clip edge. The fix
+// is `box-sizing: content-box` on `.term` — see the comment there.
+//
+// The overflow was `verticalPadding - (paneBodyHeight % 16)`, so it only bit for
+// half of all pane heights — a single viewport size would pass or fail by luck.
+// Sweeping 16 consecutive heights covers every residue of the 16px cell and
+// makes the failure deterministic.
+test('the last terminal row is never clipped, at any pane height', async ({ page }) => {
+  await login(page);
+  await page.locator('.box .name', { hasText: 'localhost' }).click();
+  await expect(page.locator('.stage-pane')).toHaveCount(1);
+  const pane = page.locator('.stage-pane').first();
+  await expect(pane.locator('.xterm-rows')).toContainText(/[#$%>]/, { timeout: 15000 });
+
+  const width = page.viewportSize()!.width;
+  const clipped: Array<{ viewport: number; overflowPx: number }> = [];
+  for (let h = 700; h < 716; h++) {
+    await page.setViewportSize({ width, height: h });
+    await page.waitForTimeout(80); // let the resize listener re-fit and repaint
+    const overflowPx = await pane.evaluate((el) => {
+      const body = el.querySelector('.pane-body')!;
+      const rows = el.querySelector('.xterm-rows')!;
+      const last = rows.children[rows.children.length - 1];
+      return +(last.getBoundingClientRect().bottom - body.getBoundingClientRect().bottom).toFixed(2);
+    });
+    if (overflowPx > 0) clipped.push({ viewport: h, overflowPx });
+  }
+  expect(clipped).toEqual([]);
+});
