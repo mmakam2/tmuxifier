@@ -341,3 +341,58 @@ test('a check field clears only when the patch states it, not when it omits it',
   const stated = await store.updateService(svc.id, { check: { kind: 'pihole', insecure: false } });
   expect(stated.check.insecure).toBeUndefined(); // explicit false = cleared
 });
+
+test('accepts an immich check with an http target', async () => {
+  const s = createServicesStore({ dataDir: dir, secretBox: createSecretBox('s') });
+  const svc = await s.addService({
+    name: 'Photos', url: 'http://192.168.1.10:2283',
+    check: { kind: 'immich', target: 'http://192.168.1.10:2283' }, password: 'key-1',
+  });
+  expect(svc.check.kind).toBe('immich');
+  expect(svc.check.target).toBe('http://192.168.1.10:2283');
+  // The key never comes back out of a read.
+  expect(svc.hasPassword).toBe(true);
+  expect(svc).not.toHaveProperty('secret');
+  expect(await s.getServiceSecret(svc.id)).toBe('key-1');
+});
+
+test('an immich check needs no target — it defaults to the tile url', async () => {
+  const s = createServicesStore({ dataDir: dir, secretBox: createSecretBox('s') });
+  const svc = await s.addService({
+    name: 'Photos', url: 'https://immich.example.com', check: { kind: 'immich' },
+  });
+  expect(svc.check).toEqual({ kind: 'immich' });
+});
+
+test('rejects an immich target that is not http(s)', async () => {
+  const s = createServicesStore({ dataDir: dir, secretBox: createSecretBox('s') });
+  await expect(s.addService({
+    name: 'Photos', url: 'https://immich.example.com',
+    check: { kind: 'immich', target: 'ftp://immich.example.com' },
+  })).rejects.toThrow(/http\(s\)/);
+});
+
+// The PATCH-merge trap: normalizeCheck spreads {...base, ...raw}, so a form that
+// omits `insecure` can never turn it off. The form states it outright; this
+// locks that in from the store's side.
+test('an immich insecure flag can be cleared, not only set', async () => {
+  const s = createServicesStore({ dataDir: dir, secretBox: createSecretBox('s') });
+  const svc = await s.addService({
+    name: 'Photos', url: 'https://immich.example.com',
+    check: { kind: 'immich', insecure: true },
+  });
+  expect(svc.check.insecure).toBe(true);
+  const updated = await s.updateService(svc.id, { check: { kind: 'immich', insecure: false } });
+  expect(updated.check.insecure).toBeUndefined();
+});
+
+test('changing an immich record to a kind with no credential drops the sealed key', async () => {
+  const s = createServicesStore({ dataDir: dir, secretBox: createSecretBox('s') });
+  const svc = await s.addService({
+    name: 'Photos', url: 'https://immich.example.com',
+    check: { kind: 'immich' }, password: 'key-1',
+  });
+  const updated = await s.updateService(svc.id, { check: { kind: 'http' } });
+  expect(updated.hasPassword).toBe(false);
+  expect(await s.getServiceSecret(svc.id)).toBeNull();
+});

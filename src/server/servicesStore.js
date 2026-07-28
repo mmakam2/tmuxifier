@@ -7,11 +7,11 @@ import { isSafeSlug } from './iconResolve.js';
 // CRUD for the standby dashboard's service tiles (data/services.json), in the
 // mold of store.js: normalize+validate inside, mutations serialized so two
 // concurrent read-modify-write cycles can't drop each other's change.
-const KINDS = ['http', 'tcp', 'none', 'pihole', 'truenas', 'unifi'];
+const KINDS = ['http', 'tcp', 'none', 'pihole', 'truenas', 'unifi', 'immich'];
 const SECTIONS = ['services', 'infrastructure'];
 // Kinds whose record can carry a sealed credential; changing to any other kind
 // drops it.
-const SECRET_KINDS = new Set(['pihole', 'truenas', 'unifi']);
+const SECRET_KINDS = new Set(['pihole', 'truenas', 'unifi', 'immich']);
 const SAFE_TCP_HOST = /^[A-Za-z0-9_.-]+$/; // same family as sshCommand.js SAFE_HOST
 // A UniFi controller's certificate is self-signed by default and the key it
 // guards can write, so this kind gets the full three-way choice rather than the
@@ -45,7 +45,7 @@ function assertHttpsUrl(value, label, reason = '') {
 function normalizeCheck(raw, base) {
   const merged = { ...(base || {}), ...(raw || {}) };
   const kind = merged.kind ?? 'http';
-  if (!KINDS.includes(kind)) throw new Error('check.kind must be http, tcp, pihole, truenas, unifi, or none');
+  if (!KINDS.includes(kind)) throw new Error('check.kind must be http, tcp, pihole, truenas, unifi, immich, or none');
   const target = typeof merged.target === 'string' ? merged.target.trim() : '';
   if (kind === 'http') {
     if (!target) return { kind };
@@ -68,6 +68,18 @@ function normalizeCheck(raw, base) {
     if (target) { assertHttpUrl(target, 'check.target'); out.target = target; }
     // Verified TLS is the default; this is the per-service opt-out, because
     // unlike the http/tcp checks this one sends a password.
+    if (merged.insecure === true) out.insecure = true;
+    return out;
+  }
+  if (kind === 'immich') {
+    // The Immich REST API base. Empty means "use the tile's own url", which is
+    // the common case: the link and the API live on the same host.
+    const out = { kind };
+    if (target) { assertHttpUrl(target, 'check.target'); out.target = target; }
+    // Plain http is allowed, unlike truenas and unifi — an Immich key survives
+    // plaintext use and can be scoped to reads, and the standard self-hosted
+    // deployment is http on a LAN. On https, verified TLS is the default and
+    // this is the per-service opt-out.
     if (merged.insecure === true) out.insecure = true;
     return out;
   }
