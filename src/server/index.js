@@ -10,6 +10,7 @@ import { createServicesStore } from './servicesStore.js';
 import { createServiceChecker } from './serviceChecker.js';
 import { createPiholeRegistry } from './piholeRegistry.js';
 import { createTruenasRegistry } from './truenasRegistry.js';
+import { createUnifiRegistry } from './unifiRegistry.js';
 import { createSessionManager } from './sessions.js';
 import { sshRun, sshRunStdin, sshStream } from './sshRun.js';
 import { createBoxActions, buildEnsureSessionRemote } from './boxActions.js';
@@ -267,7 +268,8 @@ const statusPoller = createStatusPoller({
 const servicesStore = createServicesStore({ dataDir: config.dataDir, secretBox });
 const piholeRegistry = createPiholeRegistry({ store: servicesStore });
 const truenasRegistry = createTruenasRegistry({ store: servicesStore });
-const serviceChecker = createServiceChecker({ store: servicesStore, piholeRegistry, truenasRegistry, intervalMs: config.servicePollMs });
+const unifiRegistry = createUnifiRegistry({ store: servicesStore });
+const serviceChecker = createServiceChecker({ store: servicesStore, piholeRegistry, truenasRegistry, unifiRegistry, intervalMs: config.servicePollMs });
 
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
@@ -301,6 +303,9 @@ app.listen({ host: config.bindAddress, port: config.port })
         // once, and a TrueNAS socket left open is a session left authenticated.
         () => piholeRegistry.closeAll(),
         () => truenasRegistry.closeAll(),
+        // The UniFi client holds no server-side session, but retiring it here
+        // keeps every registry on one shutdown path rather than two rules.
+        () => unifiRegistry.closeAll(),
       ],
       voiceEngine: { stop: async () => { if (voiceEngine) await voiceEngine.stop(); } },
     });

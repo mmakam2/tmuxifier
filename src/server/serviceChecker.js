@@ -6,7 +6,7 @@ import { checkService } from './serviceCheck.js';
 // is independent of how many dashboard tabs are open. Nothing is persisted —
 // the dashboard is current-state-only by design.
 export function createServiceChecker({
-  store, check = checkService, piholeRegistry = null, truenasRegistry = null,
+  store, check = checkService, piholeRegistry = null, truenasRegistry = null, unifiRegistry = null,
   intervalMs = 30000, concurrency = 8,
   setIntervalFn = setInterval, clearIntervalFn = clearInterval,
 }) {
@@ -21,7 +21,7 @@ export function createServiceChecker({
       const services = (await store.listServices()).filter((s) => s?.check?.kind !== 'none');
       const next = {};
       await mapWithConcurrency(services, concurrency, async (s) => {
-        next[s.id] = await check(s, { piholeRegistry, truenasRegistry });
+        next[s.id] = await check(s, { piholeRegistry, truenasRegistry, unifiRegistry });
       });
       // Close sessions belonging to services that have been deleted or switched
       // to another check kind; a leaked session outlives the tile.
@@ -30,6 +30,9 @@ export function createServiceChecker({
       }
       if (truenasRegistry) {
         await truenasRegistry.retain(services.filter((s) => s.check?.kind === 'truenas').map((s) => s.id));
+      }
+      if (unifiRegistry) {
+        await unifiRegistry.retain(services.filter((s) => s.check?.kind === 'unifi').map((s) => s.id));
       }
       snapshot = { checkedAt: new Date().toISOString(), results: next };
       return snapshot;
