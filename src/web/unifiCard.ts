@@ -132,3 +132,80 @@ export function unifiCardModel(svc: Service, snap: ServiceStatusSnapshot | null)
     error: '',
   };
 }
+
+// --- DOM layer -------------------------------------------------------------
+
+export interface UnifiCardEls {
+  root: HTMLAnchorElement;
+  update(svc: Service, snap: ServiceStatusSnapshot | null): void;
+}
+
+// Rebuilt only when the cell or row count changes; otherwise written in place,
+// so a poll never disturbs hover or text selection (the tile contract).
+export function buildUnifiCard(): UnifiCardEls {
+  const div = (cls: string) => {
+    const d = document.createElement('div');
+    d.className = cls;
+    return d;
+  };
+  const root = document.createElement('a');
+  root.className = 'dash-tile dash-tile-wide';
+  root.target = '_blank';
+  root.rel = 'noopener';
+  const lamp = document.createElement('span');
+  lamp.className = 'dot';
+  const name = div('dash-tile-name');
+  const chip = document.createElement('span');
+  chip.className = 'dash-card-chip';
+  const top = div('dash-tile-top');
+  top.append(lamp, name, chip);
+  const exception = div('dash-card-warn');
+  const grid = div('dash-card-grid');
+  const rows = div('dash-unifi-rows');
+  const error = div('dash-card-error');
+  root.append(top, exception, grid, rows, error);
+
+  function update(svc: Service, snap: ServiceStatusSnapshot | null): void {
+    const model = unifiCardModel(svc, snap);
+    root.href = svc.url;
+    name.textContent = svc.name;
+    lamp.className = `dot ${model.lamp}`.trim();
+    chip.textContent = model.chip;
+    chip.hidden = !model.chip;
+    exception.textContent = model.exception;
+    exception.hidden = !model.exception;
+    error.textContent = model.error;
+    error.hidden = !model.error;
+    root.title = model.error;
+
+    if (grid.children.length !== model.cells.length) {
+      grid.replaceChildren(...model.cells.map(() => {
+        const cell = div('dash-card-cell');
+        cell.append(div('dash-card-label'), div('dash-card-value'));
+        return cell;
+      }));
+    }
+    model.cells.forEach((cell, i) => {
+      const el = grid.children[i] as HTMLElement;
+      (el.firstChild as HTMLElement).textContent = cell.label;
+      (el.lastChild as HTMLElement).textContent = cell.value;
+    });
+    grid.hidden = model.cells.length === 0;
+
+    if (rows.children.length !== model.rows.length) {
+      rows.replaceChildren(...model.rows.map(() => {
+        const row = div('dash-unifi-row');
+        row.append(div('dash-unifi-label'), div('dash-unifi-value'));
+        return row;
+      }));
+    }
+    model.rows.forEach((row, i) => {
+      const el = rows.children[i] as HTMLElement;
+      (el.firstChild as HTMLElement).textContent = row.label;
+      (el.lastChild as HTMLElement).textContent = row.value;
+    });
+    rows.hidden = model.rows.length === 0;
+  }
+
+  return { root, update };
+}
