@@ -717,7 +717,11 @@ button.empty-kbd:hover { color: var(--text); }
 .dash-infra-extra:empty { display: none; }
 /* Category engravings inside the section (PROXMOX / IPAM): same legend type,
    subordinated by opacity rather than a new type step. */
-.dash-sublegend { opacity: 0.7; }
+/* Flex so an optional product logo sits on the label's baseline row. The icon
+   is smaller than a tile's and inherits the legend's dimming, keeping it a
+   badge on the label rather than competing with the tiles below. */
+.dash-sublegend { opacity: 0.7; display: flex; align-items: center; gap: 6px; }
+.dash-sublegend .dash-icon { width: 13px; height: 13px; }
 .dash-infra-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .dash-mod {
   display: flex;

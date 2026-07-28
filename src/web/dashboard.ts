@@ -11,7 +11,7 @@ import { dotClassFor, dotTitleFor } from './statusDot';
 import { fmtLatency, fmtCount, fmtCompact, fmtUptime } from './fmt';
 import { buildTruenasCard, type TruenasCardEls } from './truenasCard';
 import { buildUnifiCard, type UnifiCardEls } from './unifiCard';
-import { buildServiceIcon, type ServiceIconEls } from './serviceIcon';
+import { buildCatalogIcon, buildServiceIcon, type ServiceIconEls } from './serviceIcon';
 
 // Re-exported so existing importers (and the dashboard tests) keep reaching for
 // them here, while card modules import them from ./fmt without a cycle.
@@ -262,19 +262,25 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
 
   const infra = document.createElement('section');
   infra.className = 'dash-infra';
-  const sublegend = (text: string) => {
+  // The optional slug draws the product's own logo from the icon catalog, so
+  // the built-in readouts are badged the same way service tiles are. It stays
+  // hidden if the catalog was never fetched — the label carries the meaning.
+  const sublegend = (text: string, slug?: string) => {
     const l = legend(text);
     l.classList.add('dash-sublegend');
+    if (slug) l.prepend(buildCatalogIcon(slug));
     return l;
   };
   const pveGroup = div('dash-infra-group');
   const pveRow = div('dash-infra-row');
   const pveTiles = div('dash-grid');
-  pveGroup.append(sublegend('PROXMOX'), pveRow, pveTiles);
+  pveGroup.append(sublegend('PROXMOX', 'proxmox'), pveRow, pveTiles);
   const ipamGroup = div('dash-infra-group');
   const ipamRow = div('dash-infra-row');
   const ipamTiles = div('dash-grid');
-  ipamGroup.append(sublegend('IPAM'), ipamRow, ipamTiles);
+  // NetBox is the only IPAM this dashboard integrates, and the built-in rows
+  // under this legend are its prefixes, so its logo is the honest badge.
+  ipamGroup.append(sublegend('IPAM', 'netbox'), ipamRow, ipamTiles);
   const infraExtra = div('dash-infra-extra');
   const infraGroups = div('dash-infra-groups');
   infraGroups.append(pveGroup, ipamGroup, infraExtra);

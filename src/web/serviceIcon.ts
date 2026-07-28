@@ -10,6 +10,23 @@ export interface ServiceIconEls {
   update(svc: Service): void;
 }
 
+// A catalog logo addressed by slug rather than by service. The built-in
+// infrastructure readouts (Proxmox nodes, NetBox prefixes) are not service
+// records — they have no id to resolve against — but they are the same
+// products, so they draw from the same catalog.
+export function buildCatalogIcon(slug: string): HTMLImageElement {
+  const img = document.createElement('img');
+  img.className = 'dash-icon';
+  img.alt = '';
+  // Same hidden-until-load contract as buildServiceIcon, and the same reason
+  // for no loading="lazy": the two together never load at all.
+  img.hidden = true;
+  img.addEventListener('load', () => { img.hidden = false; });
+  img.addEventListener('error', () => { img.hidden = true; });
+  img.src = `/api/icons/${encodeURIComponent(slug)}`;
+  return img;
+}
+
 export function buildServiceIcon(): ServiceIconEls {
   const root = document.createElement('img');
   root.className = 'dash-icon';
