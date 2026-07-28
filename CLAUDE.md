@@ -213,7 +213,7 @@ pattern for new modules.
 - `servicesStore.js` / `serviceCheck.js` / `serviceChecker.js` — the standby dashboard's
   service tiles: validated CRUD over `data/services.json` (each tile carries a `section` —
   services|infrastructure — plus a free-text `group` category within it, a check kind of
-  http|tcp|pihole|truenas|unifi|none, and an optional `icon` slug — see `iconResolve.js`), the dependency-free HTTP/TCP
+  http|tcp|pihole|truenas|unifi|immich|none, and an optional `icon` slug — see `iconResolve.js`), the dependency-free HTTP/TCP
   liveness engine (TLS errors tolerated — reachability probe, not a security boundary),
   and the interval sweep (`TMUXIFIER_SERVICE_POLL_MS`, min 5s) whose cached snapshot
   `GET /api/services/status` serves — check volume is independent of open tabs.
@@ -281,8 +281,24 @@ pattern for new modules.
   restart. They are also the only `/api/` responses that set their own `Cache-Control`
   (`private, no-cache` + ETag); `server.js`'s blanket `no-store` yields to a route that already
   decided, exactly as the security headers beside it do.
+- `immichApi.js` / `immichMetrics.js` / `immichRegistry.js` — the `immich` service check: a
+  dependency-free **GET-only** client for the Immich REST API (`/api/server/*`, `x-api-key`)
+  over `node:https`, in the mold of `netboxApi.js`. One refresh is six concurrent GETs —
+  about, storage, statistics, jobs, version-check and config — behind a 30s snapshot TTL, so
+  a tile's cost is bounded by the client rather than by `TMUXIFIER_SERVICE_POLL_MS`. The
+  load-bearing rule is that a **`403` is proof the server answered**: it degrades only that
+  endpoint's readings (recorded in `metrics.denied` so the card can name the missing
+  permission) and never fails the tile, while a `401` is `auth` and only a total transport
+  failure is `down`. That is also why there is no `/api/server/ping` call — any HTTP response
+  already establishes liveness. This is what makes a least-privilege scoped key a first-class
+  configuration rather than a broken one. `immichMetrics.js` is the pure shaping half — it
+  rolls fifteen job queues into one verdict, **names** paused queues rather than counting them,
+  and keeps `statistics.usage` (the library) distinct from `storage.diskUseRaw` (the volume),
+  which are different numbers that a single "size" figure would conflate. `/api/users` is
+  deliberately never called: it returns email addresses, and `statistics.usageByUser` already
+  carries the names the user row needs.
 - `serviceClientRegistry.js` — the shared per-service API-client cache behind
-  `piholeRegistry.js`, `truenasRegistry.js` and `unifiRegistry.js`: one client per service id, rebuilt when the
+  `piholeRegistry.js`, `truenasRegistry.js`, `unifiRegistry.js` and `immichRegistry.js`: one client per service id, rebuilt when the
   options that define it change (the fingerprint is taken over the whole options object, so a
   new option participates automatically), `retain` closing departed services, and a best-effort
   `closeAll` that a dead service cannot stall.
@@ -650,6 +666,17 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   read-only and issues no verb but `GET`. An `http:` target is refused outright. A pinned
   fingerprint that stops matching is a hard failure — Tmuxifier never re-pins automatically, the
   same posture it takes toward a changed SSH host key.
+- An Immich tile's API key is sealed the same way (AES-256-GCM in `data/services.json`, key
+  from `cookieSecret`, file `0o600`) and is never returned to the browser (`hasPassword`
+  only). Unlike TrueNAS and UniFi, plain `http` is **allowed**, with verified TLS on `https`
+  and an explicit per-service `insecure` opt-out — Pi-hole's posture. Neither refusal
+  rationale transfers: an Immich key survives plaintext use (TrueNAS revokes one outright)
+  and can be scoped read-only (a UniFi local key cannot), while the standard self-hosted
+  deployment is plain http on a LAN. Create the key under Account Settings → API Keys with
+  only `server.about`, `server.storage`, `server.statistics`, `server.versionCheck`,
+  `job.read` and `systemConfig.read`; the integration is read-only and issues no verb but
+  `GET`. A key lacking the admin-scoped `server.statistics`/`job.read` still produces a
+  working tile — those readings are dropped and named, not treated as an auth failure.
 - Service icons are served from two directories the operator controls: `vendor/icons/` (written
   only by `npm run fetch-icons` from a pinned slug list) and `data/icons/` (favicons scraped from
   the LAN services the user configured). The slug is a path component, so it is validated against

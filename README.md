@@ -295,12 +295,12 @@ When no terminal is docked, the stage shows a standby dashboard instead of a bla
   the dashboard reads a cached snapshot, so check volume doesn't scale with open tabs. HTTPS
   checks tolerate self-signed certificates — they answer "is it up", not "is it authentic".
   Tiles persist in `data/services.json`; the secrets it can hold — a Pi-hole app password, a
-  TrueNAS API key, a UniFi API key — are all encrypted (see below).
+  TrueNAS API key, a UniFi API key, an Immich API key — are all encrypted (see below).
 
 ### Tile icons
 
 Tiles find their own logos. A tile's icon is resolved from its check kind first (a UniFi,
-TrueNAS or Pi-hole check identifies the software outright), then from the service name, then
+TrueNAS, Pi-hole or Immich check identifies the software outright), then from the service name, then
 from the first label of its URL — so a service called "Grafana", or one living at
 `https://grafana.example.com/`, gets the Grafana logo without being told.
 
@@ -419,6 +419,35 @@ tiles use:
 
 The key is encrypted at rest (AES-256-GCM, key derived from the cookie secret) and is never sent
 back to the browser. Requires UniFi Network 9.0 or later, where the Integration API landed.
+
+### Immich tiles
+
+A service tile whose check is **Immich** reads your photo server's REST API and renders a
+double-width card: photos, videos, library size, disk used, disk free and server version across
+six cells, with rows for the job queues, the user census, and an available update when there is
+one. The chip reports library size and job state.
+
+1. In Immich, go to **Account Settings → API Keys** and create a key. Immich supports granular
+   permissions, so grant only what the card reads: `server.about`, `server.storage`,
+   `server.statistics`, `server.versionCheck`, `job.read` and `systemConfig.read`.
+2. In Tmuxifier, open **Settings (⚙) → Services**, add or edit the tile, choose the **Immich**
+   check, and paste the key. Leave the probe URL blank to reuse the tile's own link.
+3. Press **Test connection**. It confirms the key and names any permission it could not use.
+
+`server.statistics` and `job.read` are admin-scoped. A key without them still produces a working
+tile — the library and job readings are dropped and the card says which permission is missing,
+rather than the tile going red. A wrong or revoked key is different: that shows the violet
+"needs auth" lamp, the same as the other credentialed tiles.
+
+Plain `http://` is allowed here, unlike the TrueNAS and UniFi tiles. Neither of their reasons for
+refusing it applies: an Immich key is not revoked by being sent in the clear, and it can be scoped
+read-only, while the usual self-hosted Immich sits on a LAN at `http://host:2283`. Over `https://`
+the certificate is verified by default, with the same "allow a self-signed certificate" checkbox
+the Pi-hole tile uses.
+
+The key is encrypted at rest (AES-256-GCM, key derived from the cookie secret) and is never sent
+back to the browser. The integration is read-only and issues no HTTP verb but `GET`. Requires
+Immich v1.118 or later, where the API moved to `/api/server/*`.
 
 ## Split terminals
 
