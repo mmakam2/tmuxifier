@@ -910,7 +910,29 @@ button.empty-kbd:hover { color: var(--text); }
 .drop-zone-replace { position: absolute; z-index: 33; }
 .stopped-box-state, .setting-up-state { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--dim); }
 .stopped-box-state strong, .setting-up-state strong { color: var(--text); font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
-.term { position: absolute; inset: 0; padding: 8px; }
+/* Two properties here are load-bearing, both about how xterm sizes itself.
+   1. box-sizing deliberately overrides the global border-box reset. FitAddon
+      sizes the terminal from `getComputedStyle(.term).height`, and subtracts
+      padding only from the `.xterm` element it owns — never from this parent.
+      Under border-box that read returns the full pane height when the padding
+      makes less usable, so it granted one row more than fits and the last row
+      (a tmux status line, in practice) hung `padding - (paneBodyHeight % 16)`
+      pixels past .pane-body's clip edge — visible for half of all pane heights.
+      content-box makes the reported height exclude these gutters. The rendered
+      box is identical either way: with `height: auto` between `top: 0` and
+      `bottom: 0`, the used height comes from the constraint equation, which
+      box-sizing does not participate in.
+   2. Centred rather than top-aligned. Rows quantise to whole cells, so `floor()`
+      always leaves 0-15px over. Top-aligned, all of it pools under the last row;
+      centring splits it across both edges, halving the worst case and reading as
+      deliberate margin instead of a void. Vertical padding is 4px against the
+      horizontal 8px for the same reason — the leftover already supplies most of
+      the vertical breathing room, and only the sides get none of it.
+   Regression test: "the last terminal row is never clipped" in split.spec.ts. */
+.term {
+  box-sizing: content-box; position: absolute; inset: 0; padding: 4px 8px;
+  display: flex; flex-direction: column; justify-content: center;
+}
 /* The button is appended to the terminal's own parent (there is no toolbar
    element), so it floats over the top-right corner of the xterm canvas.
    .term is already `position: absolute` (see above), which is itself a
