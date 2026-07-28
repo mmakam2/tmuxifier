@@ -14,12 +14,16 @@ export function buildServiceIcon(): ServiceIconEls {
   const root = document.createElement('img');
   root.className = 'dash-icon';
   root.alt = '';
-  root.loading = 'lazy';
   // Hidden until it actually loads, so a service with no resolvable icon shows
   // nothing rather than a broken-image glyph. The server's 404 is the whole
   // signal — the client needs no pre-flight request and holds no copy of the
   // resolution state.
   root.hidden = true;
+  // Deliberately NOT loading="lazy". Combined with `hidden` it deadlocks: a
+  // display:none element has no layout box, so the browser never decides it is
+  // near the viewport, never fetches, never fires `load`, and the handler below
+  // never unhides it. Nothing is gained either way — these are a handful of
+  // tiny same-origin images, all above the fold on the standby dashboard.
   root.addEventListener('load', () => { root.hidden = false; });
   root.addEventListener('error', () => { root.hidden = true; });
 
