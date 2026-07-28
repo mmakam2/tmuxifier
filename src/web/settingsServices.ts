@@ -99,6 +99,7 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     tcp: makeRadio('svc-check', 'tcp', 'TCP', false),
     pihole: makeRadio('svc-check', 'pihole', 'Pi-hole', false),
     truenas: makeRadio('svc-check', 'truenas', 'TrueNAS', false),
+    unifi: makeRadio('svc-check', 'unifi', 'UniFi', false),
     none: makeRadio('svc-check', 'none', 'None (link only)', false),
   };
   const kind = (): ServiceCheckKind =>

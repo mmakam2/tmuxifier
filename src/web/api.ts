@@ -33,14 +33,21 @@ export interface Sample {
   // latest sample's `agent` for its working/waiting chip (paneHeader.ts).
   agent?: 'working' | 'waiting' | 'unknown'; agentAttached?: boolean;
 }
-export type ServiceCheckKind = 'http' | 'tcp' | 'none' | 'pihole' | 'truenas';
+export type ServiceCheckKind = 'http' | 'tcp' | 'none' | 'pihole' | 'truenas' | 'unifi';
 export type ServiceSection = 'services' | 'infrastructure';
+export type UnifiTlsMode = 'verify' | 'pin' | 'insecure';
 export interface ServiceCheck {
   kind: ServiceCheckKind;
   target?: string;
   insecure?: boolean;
   // truenas only: the account the user-linked API key belongs to. Not a secret.
   username?: string;
+  // unifi only: the site to read, plus the three-way TLS choice and its pin. A
+  // controller is self-signed by default and its key can write, so this kind
+  // gets pinning rather than the verified/insecure pair the others share.
+  site?: string;
+  tls?: UnifiTlsMode;
+  fingerprint?: string;
 }
 export interface Service {
   id: string; name: string; url: string; glyph?: string; group?: string;
@@ -88,6 +95,20 @@ export interface TruenasMetrics {
   hostname: string | null;
   uptimeSec: number | null;
 }
+export interface UnifiDeviceClass { online: number; total: number; cpuPct: number | null }
+export interface UnifiMetrics {
+  clientsTotal: number;
+  clientsWired: number;
+  clientsWireless: number;
+  networks: number | null;
+  wanState: 'up' | 'down' | 'unknown';
+  wanTxBps: number | null;
+  wanRxBps: number | null;
+  gateway: { name: string; cpuPct: number | null; memPct: number | null; uptimeSec: number | null } | null;
+  switches: UnifiDeviceClass;
+  aps: UnifiDeviceClass & { clients: number };
+  offline: { name: string; model: string }[];
+}
 // One field per integration rather than a single `metrics` union: each card
 // model reads its own without narrowing, and the asymmetry a generically-named
 // Pi-hole-shaped payload would create never appears.
@@ -97,6 +118,7 @@ export interface ServiceResult {
   error?: string;
   pihole?: PiholeMetrics;
   truenas?: TruenasMetrics;
+  unifi?: UnifiMetrics;
 }
 export interface ServiceStatusSnapshot { checkedAt: string | null; results: Record<string, ServiceResult> }
 export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'key-changed' | 'threshold' | 'threshold-clear' | 'agent-input' | 'agent-done';
