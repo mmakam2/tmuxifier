@@ -2,7 +2,7 @@
 // Master-detail scaled down: the list on top, one add/edit form below it.
 import { el, field, makeRadio, openModal } from './dom';
 import { registerModal } from './modalRegistry';
-import { api, type Service, type ServiceCheck, type ServiceCheckKind, type ServiceSection, type ServiceSpec } from './api';
+import { api, type Service, type ServiceCheck, type ServiceCheckKind, type ServiceSection, type ServiceSpec, type UnifiTlsMode } from './api';
 
 // Starter palette of Nerd Font glyphs (the bundled Meslo NF renders these);
 // free-form entry stays open for anything not listed.
@@ -20,7 +20,7 @@ const GLYPHS: { glyph: string; label: string }[] = [
 ];
 
 // Check kinds that authenticate, and so carry a stored credential.
-const CREDENTIAL_KINDS: ServiceCheckKind[] = ['pihole', 'truenas'];
+const CREDENTIAL_KINDS: ServiceCheckKind[] = ['pihole', 'truenas', 'unifi'];
 
 // Pure so it can be tested without a DOM (the repo's web-test convention).
 // null (not undefined) for cleared optionals: the server's PATCH merge treats
@@ -30,11 +30,25 @@ export function buildServicePayload(f: {
   name: string; url: string; glyph: string; group: string;
   kind: ServiceCheckKind; target: string; section: ServiceSection;
   username?: string; password?: string; clearPassword?: boolean; insecure?: boolean;
+  site?: string; tls?: UnifiTlsMode; fingerprint?: string;
 }): ServiceSpec {
   const target = f.target.trim();
   let check: ServiceCheck;
   if (f.kind === 'pihole') {
     check = { kind: 'pihole', ...(target ? { target } : {}), ...(f.insecure ? { insecure: true } : {}) };
+  } else if (f.kind === 'unifi') {
+    const tls: UnifiTlsMode = f.tls ?? 'verify';
+    const site = (f.site ?? '').trim();
+    const fingerprint = (f.fingerprint ?? '').trim();
+    check = {
+      kind: 'unifi',
+      ...(target ? { target } : {}),
+      ...(site ? { site } : {}),
+      tls,
+      // The pin is meaningless outside pin mode, so it is dropped rather than
+      // carried along to confuse a later read of the record.
+      ...(tls === 'pin' && fingerprint ? { fingerprint } : {}),
+    };
   } else if (f.kind === 'truenas') {
     check = {
       kind: 'truenas',
@@ -87,6 +101,8 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
   const usernameIn = el('input', { type: 'text', autocomplete: 'off', placeholder: 'truenas_admin' }) as HTMLInputElement;
   const passwordIn = el('input', { type: 'password', autocomplete: 'new-password' }) as HTMLInputElement;
   const insecureIn = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  const siteIn = el('input', { type: 'text', autocomplete: 'off', placeholder: 'leave blank for the first site' }) as HTMLInputElement;
+  const fingerprintIn = el('input', { type: 'text', autocomplete: 'off', placeholder: 'run Test connection to capture it' }) as HTMLInputElement;
   const clearPwBtn = el('button', { type: 'button', class: 'pve-btn' }, ['Clear']);
   const testBtn = el('button', { type: 'button', class: 'pve-btn' }, ['Test connection']);
   let clearPassword = false;
@@ -115,6 +131,18 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
   const section = (): ServiceSection =>
     (Object.entries(sectionRadios).find(([, r]) => r.input.checked)?.[0] as ServiceSection) ?? 'services';
 
+  // UniFi gets a three-way TLS choice rather than the shared insecure checkbox:
+  // a controller's certificate is self-signed by default, so the checkbox path
+  // would have almost everyone sending a write-capable key over an
+  // unauthenticated connection. Pinning makes the common case safe.
+  const tlsRadios: Record<UnifiTlsMode, { wrap: HTMLElement; input: HTMLInputElement }> = {
+    verify: makeRadio('svc-tls', 'verify', 'Verify certificate', true),
+    pin: makeRadio('svc-tls', 'pin', 'Pin this certificate', false),
+    insecure: makeRadio('svc-tls', 'insecure', 'Accept any certificate', false),
+  };
+  const tlsMode = (): UnifiTlsMode =>
+    (Object.entries(tlsRadios).find(([, r]) => r.input.checked)?.[0] as UnifiTlsMode) ?? 'verify';
+
   // Pi-hole v6 and TrueNAS both read their stats over an authenticated API, so
   // these checks need a credential the others don't — and, because they send
   // one, they verify TLS by default rather than tolerating any certificate the
@@ -125,23 +153,34 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
   const usernameField = field('Username the API key belongs to', usernameIn);
   const insecureField = field('TLS', el('label', { class: 'svc-inline-check' }, [insecureIn, ' Allow a self-signed certificate']));
   const credentialHelp = el('p', { class: 'pve-sub' }, ['']);
+  const siteField = field('Site (optional)', siteIn);
+  const tlsModeField = field('TLS', el('div', { class: 'svc-check-radios' }, [tlsRadios.verify.wrap, tlsRadios.pin.wrap, tlsRadios.insecure.wrap]));
+  const fingerprintField = field('Certificate fingerprint (SHA-256)', fingerprintIn);
   const credentialGroup = el('div', {}, [
-    credentialHelp, usernameField, passwordField, insecureField,
+    credentialHelp, usernameField, passwordField, siteField, insecureField, tlsModeField, fingerprintField,
     el('div', { class: 'pve-inline' }, [testBtn]),
   ]);
 
   const PIHOLE_HELP = 'Pi-hole v6 only. Create the credential on the Pi-hole under Settings → Web interface / API → Configure app password; an app password works even when two-factor is enabled, the web login password does not.';
   const TRUENAS_HELP = 'TrueNAS 25.04 or later (it speaks JSON-RPC over WebSocket; the old REST API is gone in TrueNAS 26). Create a user-linked key under Credentials → Users → API Keys and give it the READONLY_ADMIN role. The URL must be https — TrueNAS permanently revokes any API key sent over plain HTTP.';
+  const UNIFI_HELP = 'UniFi Network 9.0 or later. Create an API key under Control Plane → Integrations. The key inherits its admin account’s role and the local API has no read-only key scope, so create it under a View Only admin — this integration only ever reads. The URL must be https.';
 
   const targetField = field('Probe URL (optional)', targetIn);
   const syncTarget = () => {
     const k = kind();
-    const needsCredential = k === 'pihole' || k === 'truenas';
+    const isUnifi = k === 'unifi';
+    const needsCredential = k === 'pihole' || k === 'truenas' || isUnifi;
     targetField.hidden = k === 'none';
     credentialGroup.hidden = !needsCredential;
     usernameField.hidden = k !== 'truenas';
-    credentialLabel.textContent = k === 'truenas' ? 'API key' : 'App password';
-    credentialHelp.textContent = k === 'truenas' ? TRUENAS_HELP : PIHOLE_HELP;
+    // The three-way TLS control and the shared insecure checkbox are mutually
+    // exclusive: whichever the active kind uses, the other stays hidden.
+    siteField.hidden = !isUnifi;
+    tlsModeField.hidden = !isUnifi;
+    fingerprintField.hidden = !isUnifi || tlsMode() !== 'pin';
+    insecureField.hidden = isUnifi;
+    credentialLabel.textContent = k === 'pihole' ? 'App password' : 'API key';
+    credentialHelp.textContent = isUnifi ? UNIFI_HELP : k === 'truenas' ? TRUENAS_HELP : PIHOLE_HELP;
     (targetField.querySelector('span') as HTMLElement).textContent =
       k === 'tcp' ? 'Host:port'
         : needsCredential ? 'API base URL (optional — defaults to the link URL)'
@@ -149,9 +188,12 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     targetIn.placeholder = k === 'tcp' ? '192.168.1.10:53'
       : k === 'pihole' ? 'https://pihole.example.com'
         : k === 'truenas' ? 'https://nas.example.com'
-          : 'https://192.168.1.10:3000/health';
+          : isUnifi ? 'https://192.168.1.1'
+            : 'https://192.168.1.10:3000/health';
   };
   for (const r of Object.values(radios)) r.input.addEventListener('change', syncTarget);
+  // Switching to pin mode is what reveals the fingerprint field.
+  for (const r of Object.values(tlsRadios)) r.input.addEventListener('change', syncTarget);
 
   // Typing re-arms "replace"; Clear is the only way to send an explicit null.
   passwordIn.addEventListener('input', () => { clearPassword = false; });
@@ -165,6 +207,22 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     setStatus('Testing…');
     const url = targetIn.value.trim() || urlIn.value.trim();
     try {
+      if (kind() === 'unifi') {
+        const res = await api.testUnifi({
+          url, apiKey: passwordIn.value, site: siteIn.value.trim(),
+          tls: tlsMode(), fingerprint: fingerprintIn.value.trim(), id: editing?.id,
+        });
+        // Arming pin mode means accepting a fingerprint, so a probe that saw one
+        // fills the field rather than making the operator copy it by hand. An
+        // already-filled field is never overwritten: replacing a pin silently is
+        // exactly the trust-on-first-use failure pinning exists to prevent.
+        if (res.fingerprint256 && tlsMode() === 'pin' && !fingerprintIn.value.trim()) {
+          fingerprintIn.value = res.fingerprint256;
+        }
+        const names = (res.sites ?? []).map((s) => s.reference || s.name).filter(Boolean).join(', ');
+        setStatus(res.ok ? `Connected — sites: ${names || 'none reported'}` : (res.error || 'Connection failed'), !res.ok);
+        return;
+      }
       if (kind() === 'truenas') {
         const res = await api.testTruenas({
           url, username: usernameIn.value.trim(), apiKey: passwordIn.value,
@@ -206,6 +264,10 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
     passwordIn.value = '';
     passwordIn.placeholder = svc?.hasPassword ? '•••••••• (leave blank to keep)' : '';
     insecureIn.checked = svc?.check.insecure === true;
+    siteIn.value = svc?.check.site ?? '';
+    fingerprintIn.value = svc?.check.fingerprint ?? '';
+    const tlsSaved = svc?.check.tls ?? 'verify';
+    for (const [key, r] of Object.entries(tlsRadios)) r.input.checked = key === tlsSaved;
     syncTarget();
   }
 
@@ -214,6 +276,7 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
       name: nameIn.value, url: urlIn.value, glyph: glyphIn.value,
       group: groupIn.value, kind: kind(), target: targetIn.value, section: section(),
       username: usernameIn.value, password: passwordIn.value, clearPassword, insecure: insecureIn.checked,
+      site: siteIn.value, tls: tlsMode(), fingerprint: fingerprintIn.value,
     });
     try {
       if (editing) await api.updateService(editing.id, payload);
@@ -267,7 +330,7 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
       palette,
       el('div', { class: 'svc-check-radios' }, [sectionRadios.services.wrap, sectionRadios.infrastructure.wrap]),
       field('Category (optional — e.g. DNS Filtering; under Infrastructure, "Proxmox" and "IPAM" join the built-in groups)', groupIn),
-      el('div', { class: 'svc-check-radios' }, [radios.http.wrap, radios.tcp.wrap, radios.pihole.wrap, radios.truenas.wrap, radios.none.wrap]),
+      el('div', { class: 'svc-check-radios' }, [radios.http.wrap, radios.tcp.wrap, radios.pihole.wrap, radios.truenas.wrap, radios.unifi.wrap, radios.none.wrap]),
       targetField,
       credentialGroup,
       el('div', { class: 'pve-inline' }, [saveBtn, cancelBtn]),
