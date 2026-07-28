@@ -2,6 +2,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readJson, writeJson } from './jsonFile.js';
 import { normFp } from './tlsPin.js';
+import { isSafeSlug } from './iconResolve.js';
 
 // CRUD for the standby dashboard's service tiles (data/services.json), in the
 // mold of store.js: normalize+validate inside, mutations serialized so two
@@ -140,8 +141,12 @@ export function createServicesStore({ dataDir, secretBox = null }) {
   // before it touches disk (AES-256-GCM, key from cookieSecret) and redacted on
   // every read — getServiceSecret is the sole decrypting path, mirroring
   // netboxStore.getSettings({ withSecret: true }).
+  // `glyph` is the removed Nerd Font field. Dropping it here rather than
+  // migrating the file means no rewrite pass: normalize() already builds its
+  // output fresh, so a legacy key disappears from disk on that record's next
+  // update, and never reaches the browser in the meantime.
   function redact(svc) {
-    const { secret, ...rest } = svc;
+    const { secret, glyph, ...rest } = svc;
     return { ...rest, hasPassword: !!secret };
   }
 
@@ -176,8 +181,14 @@ export function createServicesStore({ dataDir, secretBox = null }) {
       check,
       createdAt: base.createdAt || new Date().toISOString(),
     };
-    const glyph = optionalString(spec.glyph, base.glyph, { label: 'glyph', max: 4 });
-    if (glyph !== undefined) out.glyph = glyph;
+    // A catalog slug, or the reserved value 'none' meaning "render no icon".
+    // Absent means resolve automatically. The slug becomes a path component in
+    // iconStore, so it is constrained here rather than at the point of use.
+    const icon = optionalString(spec.icon, base.icon, { label: 'icon', max: 64 });
+    if (icon !== undefined) {
+      if (!isSafeSlug(icon)) throw new Error('icon must be a lowercase slug (a-z, 0-9 and hyphens)');
+      out.icon = icon;
+    }
     const group = optionalString(spec.group, base.group, { label: 'group', max: 32 });
     if (group !== undefined) out.group = group;
     const secret = sealPassword(spec, base);
