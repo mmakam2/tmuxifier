@@ -7,12 +7,20 @@ import { renderServicesSection } from './settingsServices';
 import { renderNetboxSection } from './settingsNetbox';
 import { renderProxmoxSection } from './settingsProxmox';
 import { renderPasskeysSection } from './settingsPasskeys';
-import { renderVoiceSection } from './settingsVoice';
+import { renderVoiceSection, stopVoiceWatch } from './settingsVoice';
 import { renderNotificationsSection } from './settingsNotifications';
 
 export type SettingsTab = 'boxes' | 'services' | 'netbox' | 'proxmox' | 'passkeys' | 'voice' | 'notifications';
 
-type Section = { label: string; render: (content: HTMLElement, close: () => void) => void | Promise<void> };
+// `dispose` tears down anything a section leaves running after its content is
+// replaced. Sections are otherwise stateless: only Voice owns a background job
+// watch, and without a seam to stop it, it repainted whichever tab was open when
+// the install finished and kept polling after the modal closed.
+type Section = {
+  label: string;
+  render: (content: HTMLElement, close: () => void) => void | Promise<void>;
+  dispose?: () => void;
+};
 
 const SECTIONS: Record<SettingsTab, Section> = {
   // Object.entries order builds the tab strip, so this is the leftmost tab.
@@ -23,7 +31,7 @@ const SECTIONS: Record<SettingsTab, Section> = {
   passkeys: { label: 'Passkeys', render: (content) => renderPasskeysSection(content) },
   // renderVoiceSection resolves with the status it painted (the install-settle
   // loop checks it); the tab shell only cares that it finished.
-  voice: { label: 'Voice', render: async (content) => { await renderVoiceSection(content); } },
+  voice: { label: 'Voice', render: async (content) => { await renderVoiceSection(content); }, dispose: stopVoiceWatch },
   notifications: { label: 'Notifications', render: (content) => renderNotificationsSection(content) },
 };
 
@@ -32,11 +40,21 @@ export function openSettingsModal(tab: SettingsTab = 'netbox', onClose?: () => v
   const tabStrip = el('div', { class: 'pve-tabs' });
   const content = el('div', { class: 'pve-content' });
 
-  const { close } = openModal({ modal, onClose: () => { unregister(); onClose?.(); } });
+  let current: SettingsTab | null = null;
+  const disposeCurrent = () => {
+    if (current) SECTIONS[current].dispose?.();
+    current = null;
+  };
+
+  const { close } = openModal({ modal, onClose: () => { disposeCurrent(); unregister(); onClose?.(); } });
   // Body-mounted: logout/session-expiry teardown closes it via the registry.
   const unregister = registerModal(close);
 
   function selectTab(t: SettingsTab) {
+    // Leaving a tab stops whatever it left running, before the next section
+    // paints over its content.
+    disposeCurrent();
+    current = t;
     syncTabSelection(tabStrip, t);
     void SECTIONS[t].render(content, close);
   }

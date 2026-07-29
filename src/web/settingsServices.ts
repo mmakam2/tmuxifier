@@ -24,19 +24,22 @@ export function buildServicePayload(f: {
   // when falsy. The server's PATCH merge is {...base, ...raw}, so an absent key
   // means "keep what is stored" — omitting `insecure` when the box was
   // unchecked made the setting silently revert to its saved value, and the same
-  // held for clearing a UniFi site override. `target` was already sent this way
-  // in these same objects; this makes the rest consistent with it.
+  // held for clearing a UniFi site override. `target` is stated the same way: it
+  // was the last field still sent on omit, which meant emptying the Probe URL
+  // could never clear a stored one (the server kept probing the old address).
+  // An empty string is the clear; only kind 'none', which has no target field at
+  // all, omits it — sending one there is a contradiction the server refuses.
   if (f.kind === 'pihole') {
-    check = { kind: 'pihole', ...(target ? { target } : {}), insecure: f.insecure === true };
+    check = { kind: 'pihole', target, insecure: f.insecure === true };
   } else if (f.kind === 'immich') {
-    check = { kind: 'immich', ...(target ? { target } : {}), insecure: f.insecure === true };
+    check = { kind: 'immich', target, insecure: f.insecure === true };
   } else if (f.kind === 'unifi') {
     const tls: UnifiTlsMode = f.tls ?? 'verify';
     const site = (f.site ?? '').trim();
     const fingerprint = (f.fingerprint ?? '').trim();
     check = {
       kind: 'unifi',
-      ...(target ? { target } : {}),
+      target,
       site,
       tls,
       // The pin is meaningless outside pin mode, so it is dropped rather than
@@ -47,11 +50,11 @@ export function buildServicePayload(f: {
     check = {
       kind: 'truenas',
       username: (f.username ?? '').trim(),
-      ...(target ? { target } : {}),
+      target,
       insecure: f.insecure === true,
     };
-  } else if (f.kind === 'none' || !target) {
-    check = { kind: f.kind };
+  } else if (f.kind === 'none') {
+    check = { kind: 'none' };
   } else {
     check = { kind: f.kind, target };
   }
@@ -272,10 +275,16 @@ export async function renderServicesSection(content: HTMLElement): Promise<void>
         // fills the field rather than making the operator copy it by hand. An
         // already-filled field is never overwritten: replacing a pin silently is
         // exactly the trust-on-first-use failure pinning exists to prevent.
-        if (res.fingerprint256 && tlsMode() === 'pin' && !fingerprintIn.value.trim()) {
-          fingerprintIn.value = res.fingerprint256;
-        }
+        const armed = !!res.fingerprint256 && tlsMode() === 'pin' && !fingerprintIn.value.trim();
+        if (armed) fingerprintIn.value = res.fingerprint256!;
         const names = (res.sites ?? []).map((s) => s.reference || s.name).filter(Boolean).join(', ');
+        // A first-time pin refusal that captured the certificate is progress, not
+        // a failure: the field is now filled and saving completes the arming. Say
+        // so rather than reporting the refusal the operator can no longer act on.
+        if (!res.ok && armed) {
+          setStatus('Certificate captured — review the fingerprint and save to pin it.');
+          return;
+        }
         setStatus(res.ok ? `Connected — sites: ${names || 'none reported'}` : (res.error || 'Connection failed'), !res.ok);
         return;
       }

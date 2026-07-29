@@ -92,3 +92,20 @@ test('setup route defaults seedAiAuth to false', async () => {
   await app.inject({ method: 'POST', url: `/api/boxes/${BOX.id}/setup`, headers: h, payload: { ohMyTmux: true } });
   expect(sm._started[0].options.seedAiAuth).toBe(false);
 });
+
+// B1 (2026-07-29 review): the box modal's "Push Claude Code statusline"
+// checkbox posts claudeStatusline, but the route never forwarded it, so
+// normalizeOptions coerced the missing key to false and the statusline phase
+// never ran — the checkbox had been a no-op since it shipped in v1.13.2.
+test('setup route forwards claudeStatusline', async () => {
+  const h = await headers();
+  const res = await app.inject({ method: 'POST', url: `/api/boxes/${BOX.id}/setup`, headers: h, payload: { claudeStatusline: true } });
+  expect(res.statusCode).toBe(201);
+  expect(sm._started[0].options.claudeStatusline).toBe(true);
+});
+
+test('setup route defaults claudeStatusline to false', async () => {
+  const h = await headers();
+  await app.inject({ method: 'POST', url: `/api/boxes/${BOX.id}/setup`, headers: h, payload: { ohMyTmux: true } });
+  expect(sm._started[0].options.claudeStatusline).toBe(false);
+});

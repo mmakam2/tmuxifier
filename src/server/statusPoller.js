@@ -77,6 +77,14 @@ export function createStatusPoller({
     const deadline = now() + timeoutMs;
     const loop = (async () => {
       for (;;) {
+        // Clear this box's failure backoff first. The sweep goes through
+        // checkBox, which inside a backoff window returns the last-known
+        // failure without touching SSH — and the first probe after a lifecycle
+        // start always fails (sshd isn't up yet), opening a 30s window that
+        // escalates to 60s and 90s. Without this reset the 5s cadence below is
+        // decorative: the box is re-probed on the backoff schedule instead of
+        // its own boot time, and a ~100s boot never lands inside the deadline.
+        statusChecker.resetBackoff?.(boxId);
         await pollOnce().catch(() => {});
         if (snapshot[boxId]?.reachable) return true;
         if (now() >= deadline) return false;

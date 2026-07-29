@@ -180,3 +180,36 @@ test('tls: pin mode with no fingerprint stored refuses rather than trusting', as
   expect(res.kind).toBe('tls');
   expect(calls).toHaveLength(0);
 });
+
+// B2 (2026-07-29 review): pin-mode arming was a dead loop. probe() calls
+// listSites() first, so resolveTls() threw "no fingerprint pinned yet — run
+// Test connection" *before* attaching the fingerprint it had just observed, and
+// asResult dropped everything but { ok, kind, error }. The route's error-path
+// spread therefore never fired and the operator had no way to obtain the pin,
+// which pushed self-signed controllers to `insecure` — the outcome pinning
+// exists to prevent. The TOFU moment must hand back what it saw.
+test('tls: pin mode with no fingerprint stored hands back the served fingerprint to arm with', async () => {
+  const { calls, request } = capture();
+  const connect = async () => ({ fingerprint256: 'AA:BB:CC' });
+  const res = await createUnifiClient({
+    baseUrl: 'https://unifi.example.com', apiKey: 'k', tls: 'pin', fingerprint: '', request, connect,
+  }).probe();
+  expect(res.ok).toBe(false);
+  expect(res.kind).toBe('tls');
+  expect(res.fingerprint256).toBe('AA:BB:CC');
+  expect(calls).toHaveLength(0); // still never on the wire
+});
+
+// The mismatch case is deliberately NOT offered for re-pinning: Tmuxifier never
+// re-pins automatically, the same posture it takes toward a changed SSH host key.
+test('tls: a fingerprint mismatch never hands back the new fingerprint', async () => {
+  const { calls, request } = capture();
+  const connect = async () => ({ fingerprint256: 'DD:EE:FF' });
+  const res = await createUnifiClient({
+    baseUrl: 'https://unifi.example.com', apiKey: 'k', tls: 'pin', fingerprint: 'aabbcc', request, connect,
+  }).probe();
+  expect(res.ok).toBe(false);
+  expect(res.kind).toBe('tls');
+  expect(res.fingerprint256).toBeUndefined();
+  expect(calls).toHaveLength(0);
+});

@@ -1,6 +1,7 @@
 // Settings → Passkeys: a readiness row, the enrolled-credential list, and the
 // passkey-only ("require a passkey") sign-in policy toggle.
 import { el, input, field, err, openModal } from './dom';
+import { registerModal } from './modalRegistry';
 import { pk, evaluateOrigin, createPasskey, serializeRegistration, getPasskey, serializeAssertion, hasWebAuthn, type PasskeyState } from './passkeys';
 
 const when = (t: number | null) => (t ? new Date(t).toLocaleString() : 'never');
@@ -118,7 +119,11 @@ function addPasskey(reload: () => void): void {
   const nameField = input('', { placeholder: 'Laptop Touch ID', maxlength: 32 }) as HTMLInputElement;
   const errLine = el('div', { class: 'pve-err' });
   const modal = el('div', { class: 'modal' });
-  const { close } = openModal({ modal });
+  // Registered so logout / session-expiry teardown closes it: this modal mounts
+  // on document.body, outside #app, so replacing #app leaves it floating over
+  // the login screen with live controls otherwise.
+  const { close } = openModal({ modal, onClose: () => unregister() });
+  const unregister = registerModal(close);
   const save = el('button', { type: 'button', class: 'pve-primary' }, ['Create']) as HTMLButtonElement;
   save.onclick = async () => {
     save.disabled = true;
@@ -152,7 +157,8 @@ function addPasskey(reload: () => void): void {
 function confirmRemove(id: string, label: string, state: PasskeyState, reload: (notice?: string) => void, fail: (e: unknown) => void): void {
   const last = state.credentials.length === 1;
   const modal = el('div', { class: 'modal' });
-  const { close } = openModal({ modal });
+  const { close } = openModal({ modal, onClose: () => unregister() });
+  const unregister = registerModal(close);
   modal.append(
     el('h2', {}, ['Remove passkey']),
     el('p', {}, [`Remove “${label}”? The passkey stays on your device but will no longer sign you in here.`]),
@@ -179,7 +185,8 @@ function confirmRemove(id: string, label: string, state: PasskeyState, reload: (
 function confirmArm(onConfirm: () => void, onCancel: () => void): void {
   let confirmed = false;
   const modal = el('div', { class: 'modal' });
-  const { close } = openModal({ modal, onClose: () => { if (!confirmed) onCancel(); } });
+  const { close } = openModal({ modal, onClose: () => { unregister(); if (!confirmed) onCancel(); } });
+  const unregister = registerModal(close);
   modal.append(
     el('h2', {}, ['Require a passkey?']),
     el('p', {}, ['Password and Google sign-in will be refused. Only an enrolled passkey will get you in.']),

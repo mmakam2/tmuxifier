@@ -25,6 +25,10 @@ export function createProxmoxLifecycleManager({
   const jobs = new Map();
   const settles = new Map();
   for (const job of load() || []) {
+    // One bad history row must never keep the server from booting: the store
+    // validates only Array.isArray, so a `[null]` file parses, is never
+    // quarantined, and would throw a TypeError right here — at module top level.
+    if (!job || typeof job !== 'object' || typeof job.id !== 'string') continue;
     if (!TERMINAL.has(job.status)) {
       job.status = 'interrupted';
       job.finishedAt = job.finishedAt || now();

@@ -44,7 +44,15 @@ function jsonRequest({ url, headers = {}, timeoutMs = 10000, tls: tlsOpts = {} }
 // A thrown ApiError carries the classification serviceCheck.js needs; every
 // public method converts it into a result object rather than letting it escape.
 class ApiError extends Error {
-  constructor(kind, message) { super(message); this.kind = kind; }
+  // `fingerprint256` is set only for the trust-on-first-use refusal, where the
+  // served certificate is what the operator needs in order to arm pin mode. A
+  // mismatch deliberately leaves it unset: Tmuxifier never offers to re-pin
+  // automatically, the same posture it takes toward a changed SSH host key.
+  constructor(kind, message, { fingerprint256 = null } = {}) {
+    super(message);
+    this.kind = kind;
+    if (fingerprint256) this.fingerprint256 = fingerprint256;
+  }
 }
 
 const rows = (body) => (Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : null);
@@ -71,7 +79,13 @@ export function createUnifiClient({
       let probe;
       try { probe = await connect({ host: u.hostname, port: Number(u.port) || 443, timeoutMs }); }
       catch (e) { throw new ApiError('unreachable', e?.message || 'TLS probe failed'); }
-      if (!normFp(fingerprint)) throw new ApiError('tls', 'no fingerprint pinned yet — run Test connection and accept the certificate');
+      // Nothing pinned yet: refuse, but carry the fingerprint the probe above
+      // just observed so Test connection can offer it. Without this the
+      // instruction in the message ("run Test connection") named the very call
+      // that was failing, and pin mode could never be armed at all.
+      if (!normFp(fingerprint)) {
+        throw new ApiError('tls', 'no fingerprint pinned yet — accept the certificate below to pin it', { fingerprint256: probe?.fingerprint256 });
+      }
       if (normFp(probe.fingerprint256) !== normFp(fingerprint)) {
         throw new ApiError('tls', 'TLS fingerprint mismatch — the controller certificate changed; re-pin to accept the new one');
       }
@@ -160,7 +174,9 @@ export function createUnifiClient({
   const asResult = async (fn) => {
     try { return await fn(); }
     catch (e) {
-      if (e instanceof ApiError) return { ok: false, kind: e.kind, error: e.message };
+      if (e instanceof ApiError) {
+        return { ok: false, kind: e.kind, error: e.message, ...(e.fingerprint256 ? { fingerprint256: e.fingerprint256 } : {}) };
+      }
       return { ok: false, kind: 'unexpected', error: e?.message || 'unifi request failed' };
     }
   };

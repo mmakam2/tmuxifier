@@ -396,3 +396,37 @@ test('changing an immich record to a kind with no credential drops the sealed ke
   expect(updated.hasPassword).toBe(false);
   expect(await s.getServiceSecret(svc.id)).toBeNull();
 });
+
+// B4 (2026-07-29 review): normalizeCheck merges {...base, ...raw} and read
+// `target` off the merged object, so an empty-string target — the wire shape a
+// cleared Probe URL field produces — was indistinguishable from an omitted one
+// and the stored value survived. The tile kept probing an address the operator
+// had just deleted from the form.
+test('an explicit empty target clears a stored one', async () => {
+  const a = await store.addService({ ...spec, check: { kind: 'http', target: 'https://192.168.1.20/health' } });
+  expect(a.check).toEqual({ kind: 'http', target: 'https://192.168.1.20/health' });
+  const b = await store.updateService(a.id, { check: { kind: 'http', target: '' } });
+  expect(b.check).toEqual({ kind: 'http' }); // falls back to the tile's own url
+});
+
+test('an omitted target still keeps the stored one (PATCH semantics preserved)', async () => {
+  const a = await store.addService({ ...spec, check: { kind: 'http', target: 'https://192.168.1.20/health' } });
+  const b = await store.updateService(a.id, { name: 'Renamed' });
+  expect(b.check).toEqual({ kind: 'http', target: 'https://192.168.1.20/health' });
+});
+
+// Switching a target-bearing tile to "None (link only)" used to 400 on the
+// inherited target, with no way to clear it from the form — the kind change is
+// itself the instruction to drop it.
+test("switching a tile with a stored target to kind 'none' drops the target instead of refusing", async () => {
+  const a = await store.addService({ ...spec, check: { kind: 'http', target: 'https://192.168.1.20/health' } });
+  const b = await store.updateService(a.id, { check: { kind: 'none' } });
+  expect(b.check).toEqual({ kind: 'none' });
+});
+
+// A target explicitly sent alongside kind 'none' is still a contradiction.
+test("an explicit target sent with kind 'none' is still refused", async () => {
+  const a = await store.addService(spec);
+  await expect(store.updateService(a.id, { check: { kind: 'none', target: 'https://192.168.1.20/health' } }))
+    .rejects.toThrow(/must be absent/);
+});

@@ -508,3 +508,85 @@ test('a NetBox settings read/decrypt error surfaces as itself, not as "not confi
   await expect(mgr.createProvision({ presetId: 'p3', hostname: 'dev-02' }))
     .rejects.not.toThrow(/configure it in Settings/);
 });
+
+// B10 (2026-07-29 review): the load loop dereferenced j.status with no shape
+// guard, and debouncedJsonStore.load() validates only Array.isArray — so a
+// provision-jobs.json of `[null]` parses, passes the shape check, is never
+// quarantined, and throws a TypeError at module top level. One bad history row
+// must never keep the server from booting (fleet.js and setupManager.js both
+// carry this guard; the provision manager predated it).
+test('a malformed persisted job row is dropped instead of crashing boot', () => {
+  const rows = [null, 'nope', 42, { noId: true }, { id: 'p9', status: 'running', createdAt: 'now' }];
+  let m;
+  expect(() => {
+    m = createProvisionManager({
+      proxmoxStore: makeStore(PRESET_AUTO), boxStore: fakeBoxStore(), makeClient: () => okClient(),
+      load: () => rows, save: () => {},
+    });
+  }).not.toThrow();
+  const kept = m.listProvisions();
+  expect(kept.map((j) => j.id)).toEqual(['p9']);
+  expect(kept[0].status).toBe('interrupted'); // still reconciled
+});
+
+// B3 (2026-07-29 review): the release logic lived only in run()'s catch, so a
+// restart between allocate-ip and completion left the address reserved forever —
+// no box was linked (deprovision can never reclaim it) and nothing in the UI
+// references a leaked netboxIpId. CLAUDE.md promises the reservation is
+// "released again on failure or deprovision"; an interrupted job is a failure.
+test('startup reconciliation releases the NetBox ip of an interrupted job that never linked a box', async () => {
+  const released = [];
+  const netbox = { releaseIp: async (id) => { released.push(id); } };
+  const nbStore = { getSettings: async () => ({ url: 'https://netbox.example.com', token: 't', tlsMode: 'ca' }) };
+  const rows = [{ id: 'p1', status: 'running', createdAt: 'now', netboxIpId: 99, log: '', hostname: 'dev-01' }];
+
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(PRESET_AUTO), boxStore: fakeBoxStore(), makeClient: () => okClient(),
+    netboxStore: nbStore, makeNetboxClient: () => netbox,
+    load: () => rows, save: () => {},
+  });
+  await m._reconciled();
+
+  expect(released).toEqual([99]);
+  const j = m.getProvision('p1');
+  expect(j.status).toBe('interrupted');
+  expect(j.netboxIpId).toBe(null);
+  expect(j.log).toMatch(/released NetBox ip 99/);
+});
+
+// A job that got as far as linking a box owns its address through the box: the
+// deprovision path releases it, so reconciliation must not pull it out from under
+// a container that is now using it.
+test('startup reconciliation keeps the NetBox ip of an interrupted job that did link a box', async () => {
+  const released = [];
+  const netbox = { releaseIp: async (id) => { released.push(id); } };
+  const nbStore = { getSettings: async () => ({ url: 'https://netbox.example.com', token: 't', tlsMode: 'ca' }) };
+  const rows = [{ id: 'p2', status: 'running', createdAt: 'now', netboxIpId: 77, boxId: 'B1', log: '' }];
+
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(PRESET_AUTO), boxStore: fakeBoxStore(), makeClient: () => okClient(),
+    netboxStore: nbStore, makeNetboxClient: () => netbox,
+    load: () => rows, save: () => {},
+  });
+  await m._reconciled();
+
+  expect(released).toEqual([]);
+  expect(m.getProvision('p2').netboxIpId).toBe(77);
+});
+
+// A NetBox that is unreachable at boot must not keep the server from starting.
+test('a failing release at reconciliation is logged, never thrown', async () => {
+  const netbox = { releaseIp: async () => { throw new Error('netbox down'); } };
+  const nbStore = { getSettings: async () => ({ url: 'https://netbox.example.com', token: 't', tlsMode: 'ca' }) };
+  const rows = [{ id: 'p3', status: 'running', createdAt: 'now', netboxIpId: 55, log: '' }];
+
+  const m = createProvisionManager({
+    proxmoxStore: makeStore(PRESET_AUTO), boxStore: fakeBoxStore(), makeClient: () => okClient(),
+    netboxStore: nbStore, makeNetboxClient: () => netbox,
+    load: () => rows, save: () => {},
+  });
+  await expect(m._reconciled()).resolves.toBeUndefined();
+  const j = m.getProvision('p3');
+  expect(j.netboxIpId).toBe(55); // still recorded, so it can be chased manually
+  expect(j.log).toMatch(/could not release NetBox ip 55/);
+});

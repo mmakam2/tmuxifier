@@ -884,26 +884,7 @@ async function renderDashboard() {
   const savedStage = localStorage.getItem(STAGE_LAYOUT_KEY);
   repaintStage();
   app.querySelector('#logout')!.addEventListener('click', async () => {
-    if (pollInterval) clearInterval(pollInterval);
-    stopFleetPoll();
-    teardownDash();
-    // Dispose every terminal before the login screen replaces the dashboard:
-    // the tabs map is module-level, so surviving entries would keep detached
-    // elements (unopenable boxes after re-login) and live reconnect loops.
-    // Torn down directly — NOT via closeTab/undock — so the persisted layout
-    // survives logout and re-login restores it.
-    for (const [, t] of tabs) { t.term.dispose(); t.el.remove(); }
-    tabs.clear();
-    destroyPaneLifecycles(); // #app is about to be replaced; nothing repaints the stage on this path
-    stopFastStatusPoll();
-    updateLocalDot();
-    for (const id of [...settingUpPollers.keys()]) clearSettingUpPanel(id);
-    stageRoot = null;
-    focusedBoxId = null;
-    closeFleetJobsPanel();
-    closeEventsPanel();
-    closeProvisionPanel();
-    closeAllModals(); // body-mounted modals (Proxmox hub, settings) survive the #app re-render
+    teardownWorkspace();
     await api.logout(); await renderLogin();
   });
   app.querySelector('#sidebar-toggle')!.addEventListener('click', () => {
@@ -2453,18 +2434,42 @@ window.addEventListener('tmuxifier:services-changed', () => {
   if (dashTimer) { stopDashPolling(); startDashPolling(); }
 });
 
-onUnauthorized(() => {
-  if (!app.querySelector('.layout')) return;
+// Leaving the workspace — by logout or by an expired session. Every timer,
+// terminal and panel #app owns is torn down here, in one place: the two callers
+// having hand-rolled their own versions is how they drifted apart.
+//
+// Terminals are disposed DIRECTLY rather than through closeTab/undockBox, because
+// those repaint and persist the stage: the persisted layout must survive leaving
+// and be restored on the way back in.
+function teardownWorkspace(): void {
   if (pollInterval) clearInterval(pollInterval);
   stopFleetPoll();
   teardownDash();
-  for (const id of [...tabs.keys()]) closeTab(id);
+  // The tabs map is module-level, so surviving entries would keep detached
+  // elements (unopenable boxes after re-login) and live reconnect loops.
+  for (const [, t] of tabs) { t.term.dispose(); t.el.remove(); }
+  tabs.clear();
+  destroyPaneLifecycles(); // #app is about to be replaced; nothing repaints the stage on this path
+  stopFastStatusPoll();
+  updateLocalDot();
+  for (const id of [...settingUpPollers.keys()]) clearSettingUpPanel(id);
+  stageRoot = null;
+  focusedBoxId = null;
   closeFleetJobsPanel();
   closeEventsPanel();
   closeProvisionPanel();
-  // Body-mounted modals (Proxmox hub, settings) are outside #app: without an
-  // explicit close they would overlay the login screen with pollers running.
-  closeAllModals();
+  closeAllModals(); // body-mounted modals (Proxmox hub, settings) survive the #app re-render
+}
+
+onUnauthorized(() => {
+  if (!app.querySelector('.layout')) return;
+  // The same teardown logout performs. This used to close each tab via
+  // closeTab(), which reaches undockBox -> repaintStage -> persistStage() and so
+  // overwrote the saved split that logout deliberately preserves; removing the
+  // last tab also re-entered repaintStage's empty-stage branch, remounting the
+  // dashboard and restarting its 10s poll AFTER teardownDash() — 401s firing on
+  // the login screen until re-login.
+  teardownWorkspace();
   void renderLogin();
   showToast('Session expired — please log in again.', 'error');
 });

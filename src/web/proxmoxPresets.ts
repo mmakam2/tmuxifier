@@ -1,5 +1,6 @@
 import { pve, type PveHost, type PveMount, type PvePreset } from './proxmox';
 import { el, err, field, group, input, openModal } from './dom';
+import { registerModal } from './modalRegistry';
 import { nbx } from './netbox';
 
 export type PresetsDeps = { openSettingsModal: (tab: 'proxmox') => void };
@@ -36,7 +37,8 @@ function openAddDiskModal(opts: { id: string; storages: string[]; onAdd: (mount:
   const modal = el('div', { class: 'modal pve-disk-modal' });
   // openModal also gives this dialog Escape-to-close, which its hand-rolled
   // scaffold had drifted away from.
-  const { close } = openModal({ modal });
+  const { close } = openModal({ modal, onClose: () => unregister() });
+  const unregister = registerModal(close);
 
   const storage = el('select', {}, opts.storages.map((name) =>
     el('option', { value: name }, [name]))) as HTMLSelectElement;
