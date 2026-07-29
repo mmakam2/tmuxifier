@@ -17,8 +17,8 @@ Items from `codebase-review-2026-07-04.md` and `codebase-review-2026-07-18.md` a
 resolved; two residuals of previously-fixed items are re-reported below and marked
 `(deferred)` after independent confirmation that they are still real.
 
-> This is a point-in-time review captured for triage; **nothing in it has been fixed yet**. Line
-> numbers reference the reviewed commit and will drift as fixes land.
+> This is a point-in-time review captured for triage. Line numbers reference the reviewed commit
+> (774c50c) and have drifted where fixes have landed — see the status notes below.
 >
 > **The Status column in the tables below is the live fix ledger.** When a fix ships, change its
 > entry from `Open` to `✅ vX.Y.Z` (or `Won't fix` with a reason), and add a dated status note
@@ -32,6 +32,37 @@ guarantees of all four service integrations were each reviewed end-to-end and ar
 The two High findings are both *silently non-functional shipped features*, not breakage:
 a checkbox that has never done anything, and a documented setup flow that cannot complete.
 
+**Status note, 2026-07-29 (batch 1, v1.22.4): every High and Medium bug is
+resolved — the Bugs table is clear down to its Low rows.** Test-first, 28 new
+tests. B1 (the setup route forwards `claudeStatusline`, so the box modal's
+checkbox works for the first time since v1.13.2) and B2 (the trust-on-first-use
+refusal carries the fingerprint the probe observed, so pin mode can be armed; a
+mismatch still refuses to hand one back, and a test locks that asymmetry) were
+the two High findings. B3 (startup reconciliation releases an interrupted job's
+orphaned NetBox reservation; a job that linked a box keeps its address). B4
+(`target` is stated outright, so emptying the Probe URL clears it; kind `none`
+drops an inherited target instead of refusing it — nine existing assertions moved
+to the new contract). B5 (401 teardown and logout share one `teardownWorkspace()`;
+the drifted hand-rolled copies were the bug). B6 (the install watch has one owner,
+bounded retries, and a `dispose` seam in `settingsUi`'s Section type). B7
+(`refreshUntil` clears the target's backoff each sweep). B8 (`provisionKey` is
+shared and `hasLiveSessionForBox` covers both keys). B9 (an *inactivity* timeout
+on the download — a slow 540 MB model is legitimate, a stall is not — plus a
+20-minute step timeout on `execFile`). B10 (the shape guard reaches the provision,
+lifecycle and voice-install managers). B11 (five modals registered).
+
+**S4 is closed as a side effect:** B9's harness needed `voiceDownload.js` under
+test, so the digest-verified-before-rename properties went from zero direct
+coverage to seven tests, including that a mismatched digest leaves nothing at the
+real path and that a mid-stream error cleans up the `.part` file.
+
+B5 and B11 carry no unit tests — they are DOM teardown paths, which this suite
+cannot exercise (`environment: 'node'`). Note for future batches that voice
+rendering *is* covered, by `test/voiceSettingsRender.test.js` against a
+hand-rolled DOM stand-in: a defensive `content.isConnected` check added during
+this batch broke it, since the stand-in has no such property. Suites: unit
+1812/1812 across 137 files (baseline 1784/136); e2e 25/25; typecheck clean.
+
 ---
 
 ## Findings and fix tracking
@@ -44,17 +75,17 @@ detailed explanation in the sections after the tables; Lows are described fully 
 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
-| B1 | setup | `POST /api/boxes/:id/setup` never forwards `claudeStatusline`, so the box modal's "Push Claude Code statusline" checkbox has been a no-op since it shipped (v1.13.2) | **High** | S | Add `claudeStatusline: !!b.claudeStatusline` to the options literal, plus a route test | Open |
-| B2 | unifi | UniFi pin-mode arming is a dead loop: Test connection cannot return a fingerprint in the one mode that needs it, so self-signed controllers get pushed to `insecure` | **High** | S | Attach the probed `fingerprint256` to the pin-mode `ApiError` and return it through `asResult`/the route | Open |
-| B3 | provision | A restart between `allocate-ip` and completion permanently leaks the NetBox reservation — reconciliation only flips status, never releases | Med | S | Best-effort release `j.netboxIpId` for non-terminal jobs during startup reconciliation | Open |
-| B4 | services | Emptying the Probe URL field can never clear a stored `check.target`; switching a target-bearing tile to "None" 400s with no way out | Med | S | Always state `target` (empty string clears); let the `none` branch ignore rather than refuse an inherited target | Open |
-| B5 | web | Session-expiry (401) teardown routes through `closeTab`/`undock`, destroying the persisted stage layout that explicit logout deliberately preserves — and restarts the dashboard poll on the login screen | Med | S | Mirror the logout handler's direct teardown: dispose tabs, clear maps, null `stageRoot` without repaint/persist | Open |
-| B6 | voice | The install-watch poller has no owner: it repaints whichever settings tab is open when the install finishes, survives modal close, and 401-polls forever after logout | Med | M | One poller handle per section render, stopped on tab switch/modal close; guard `settle` on `content.isConnected` | Open |
-| B7 | status | `refreshUntil`'s 5s fast-track is silently throttled by the status checker's own failure backoff, so a just-started container recovers on the 30/60/90s schedule instead of its boot time | Med | S | Reset backoff before each fast-track sweep (or add an ignore-backoff option to `checkBox`) | Open |
-| B8 | status | The "don't probe a box with a live interactive login" guard misses provision PTYs (keyed `provision:<id>`), so probes collide with the password prompt during an interactive setup finish | Med | S | Have the adapters also consult `sessions.hasLiveSession('provision:' + box.id)` | Open |
-| B9 | voice | No timeout anywhere in the install pipeline: a stalled download or clone wedges the single-flight job `running` forever, with no cancel route and a ship checklist that gates restarts on exactly that state | Med | S | `AbortSignal.timeout` on the fetch and a timeout on `defaultRun`/per-phase deadline | Open |
-| B10 | jobs | A malformed row (e.g. `null`) in `provision-jobs.json`, `proxmox-lifecycle-jobs.json`, or `voice-jobs.json` crashes the server at boot — the bug class fixed as B5 in the 2026-07-18 review, never retrofitted to these three managers | Med | S | Copy `setupManager`'s `if (!j \|\| typeof j !== 'object' \|\| typeof j.id !== 'string') continue;` | Open |
-| B11 | web | Five body-mounted modals never call `registerModal`, so teardown misses them — a deprovision confirm can float over the login screen with a live, 401-ing Deprovision button | Med | S | Register each, mirroring `settingsServices`' `confirmRemove` | Open |
+| B1 | setup | `POST /api/boxes/:id/setup` never forwards `claudeStatusline`, so the box modal's "Push Claude Code statusline" checkbox has been a no-op since it shipped (v1.13.2) | **High** | S | Add `claudeStatusline: !!b.claudeStatusline` to the options literal, plus a route test | ✅ v1.22.4 |
+| B2 | unifi | UniFi pin-mode arming is a dead loop: Test connection cannot return a fingerprint in the one mode that needs it, so self-signed controllers get pushed to `insecure` | **High** | S | Attach the probed `fingerprint256` to the pin-mode `ApiError` and return it through `asResult`/the route | ✅ v1.22.4 |
+| B3 | provision | A restart between `allocate-ip` and completion permanently leaks the NetBox reservation — reconciliation only flips status, never releases | Med | S | Best-effort release `j.netboxIpId` for non-terminal jobs during startup reconciliation | ✅ v1.22.4 |
+| B4 | services | Emptying the Probe URL field can never clear a stored `check.target`; switching a target-bearing tile to "None" 400s with no way out | Med | S | Always state `target` (empty string clears); let the `none` branch ignore rather than refuse an inherited target | ✅ v1.22.4 |
+| B5 | web | Session-expiry (401) teardown routes through `closeTab`/`undock`, destroying the persisted stage layout that explicit logout deliberately preserves — and restarts the dashboard poll on the login screen | Med | S | Mirror the logout handler's direct teardown: dispose tabs, clear maps, null `stageRoot` without repaint/persist | ✅ v1.22.4 |
+| B6 | voice | The install-watch poller has no owner: it repaints whichever settings tab is open when the install finishes, survives modal close, and 401-polls forever after logout | Med | M | One poller handle per section render, stopped on tab switch/modal close; guard `settle` on `content.isConnected` | ✅ v1.22.4 |
+| B7 | status | `refreshUntil`'s 5s fast-track is silently throttled by the status checker's own failure backoff, so a just-started container recovers on the 30/60/90s schedule instead of its boot time | Med | S | Reset backoff before each fast-track sweep (or add an ignore-backoff option to `checkBox`) | ✅ v1.22.4 |
+| B8 | status | The "don't probe a box with a live interactive login" guard misses provision PTYs (keyed `provision:<id>`), so probes collide with the password prompt during an interactive setup finish | Med | S | Have the adapters also consult `sessions.hasLiveSession('provision:' + box.id)` | ✅ v1.22.4 |
+| B9 | voice | No timeout anywhere in the install pipeline: a stalled download or clone wedges the single-flight job `running` forever, with no cancel route and a ship checklist that gates restarts on exactly that state | Med | S | `AbortSignal.timeout` on the fetch and a timeout on `defaultRun`/per-phase deadline | ✅ v1.22.4 |
+| B10 | jobs | A malformed row (e.g. `null`) in `provision-jobs.json`, `proxmox-lifecycle-jobs.json`, or `voice-jobs.json` crashes the server at boot — the bug class fixed as B5 in the 2026-07-18 review, never retrofitted to these three managers | Med | S | Copy `setupManager`'s `if (!j \|\| typeof j !== 'object' \|\| typeof j.id !== 'string') continue;` | ✅ v1.22.4 |
+| B11 | web | Five body-mounted modals never call `registerModal`, so teardown misses them — a deprovision confirm can float over the login screen with a live, 401-ing Deprovision button | Med | S | Register each, mirroring `settingsServices`' `confirmRemove` | ✅ v1.22.4 |
 | B12 | services | A rejected first sweep permanently kills the service polling loop: the interval is scheduled only after `await pollOnce()` succeeds | Low | S | Schedule the interval before (or regardless of) the first sweep's outcome | Open |
 | B13 | stores | `voice-jobs.json` is the only debounced job store excluded from the shutdown flush, so SIGTERM during its final write reloads a finished install as `interrupted` | Low | S | Hoist the store to a named binding and add its `whenIdle()` to the flush array | Open |
 | B14 | stores | After a failed write with a newer payload queued, `debouncedJsonStore` never retries and `whenIdle()` dangles — shutdown burns the full 5s flush timeout and loses the state | Low | S | On the error path, re-run the loop when `pending !== null` before resolving idle waiters | Open |
@@ -83,7 +114,7 @@ detailed explanation in the sections after the tables; Lows are described fully 
 | S1 | auth | `POST /api/logout` is unauthenticated, so any network client can loop it to advance the revocation watermark and keep the operator locked out of their own fleet | Med | S | Advance the watermark only for a request carrying a valid session; clear the cookie unconditionally | Open |
 | S2 | proxmox | Preset `features`, `dns.*`, `node`, and `boxDefaults` bypass validation, contradicting "all provision input is validated" — a crafted `features` key composes into PVE syntax enabling mount/keyctl the UI never offers | Med | S | Allowlist feature keys, validate `dns`, apply `SAFE_NODE` to preset `node`, run `boxDefaults` through the box validators at preset save | Open |
 | S3 | services | A sealed secret survives a switch between credential kinds, so a Pi-hole app password is replayed as another product's API key — over plain http if the new kind is Immich | Med | S | Drop the secret whenever the kind changes at all, and test it | Open |
-| S4 | voice | The stream-hash-verify-rename chokepoint (`downloadVerified`) has **zero** direct test coverage — its security-critical properties are enforced only by unexecuted code | Med | S | Test good-digest rename, bad-digest unlink + throw, and mid-stream error cleanup against a local fixture | Open |
+| S4 | voice | The stream-hash-verify-rename chokepoint (`downloadVerified`) has **zero** direct test coverage — its security-critical properties are enforced only by unexecuted code | Med | S | Test good-digest rename, bad-digest unlink + throw, and mid-stream error cleanup against a local fixture | ✅ v1.22.4 |
 | S5 | boxes | The unconfirmed "Reconnect" (↻) button kills the on-box tmux session, so one misclick destroys a running agent — contradicting the project's headline "the work survives" premise | Med | S | Drop `killSession` from the route (exitMaster + closeKey suffice), or confirm-gate and relabel it as a hard reset | Open |
 | S6 | web | CSP `connect-src 'self' ws: wss:` whitelists the entire ws/wss schemes — the one hole in an otherwise tight `script-src 'self'` policy | Low | S | Drop `ws: wss:` (`'self'` covers same-origin upgrades in all evergreen browsers) and verify the terminal still connects | Open |
 | S7 | services | The four test routes are a credential-forwarding oracle: `{id, url:<arbitrary>}` sends the stored decrypted secret to any URL, with no requirement that it match the stored service | Low | S | When falling back to the stored secret, use (or require a host match with) the stored service's own URL | Open |
