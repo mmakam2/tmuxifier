@@ -45,6 +45,22 @@ test('parseMeta returns null when the line carries no numeric fields and ignores
   expect(parseMeta('__META__ load1=NaN cpus= junk notakey=5\n')).toBeNull();
 });
 
+test('parseMeta keeps the OS identity fields as strings (the only non-numeric keys)', () => {
+  expect(parseMeta('__META__ osId=debian osVer=12 cpus=4\nweb:1:0:1\n')).toEqual({
+    osId: 'debian', osVer: '12', cpus: 4,
+  });
+});
+
+test('parseMeta drops an OS field that is not a bare token (spaces split it; junk is refused)', () => {
+  // A crafted /etc/os-release could carry anything; the value is a display
+  // string, so it is allowlisted here rather than trusted from the box.
+  expect(parseMeta('__META__ osId=deb<script> osVer=' + 'x'.repeat(33) + '\n')).toBeNull();
+});
+
+test('parseMeta accepts an OS line on its own (a box that reports nothing numeric)', () => {
+  expect(parseMeta('__META__ osId=alpine osVer=3.19\n')).toEqual({ osId: 'alpine', osVer: '3.19' });
+});
+
 test('checkBox: unreachable when ssh fails with no stdout', async () => {
   const run = async () => ({ code: 255, stdout: '', stderr: 'timeout' });
   const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
@@ -191,6 +207,16 @@ test('PROBE_REMOTE: emits a leading __META__ health line (best-effort, never blo
   expect(meta).toBeDefined();
   // On Linux /proc/loadavg is readable even with a bare PATH, so at least load1 is present.
   expect(parseMeta(raw)).toMatchObject({ load1: expect.any(Number) });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('PROBE_REMOTE: reports the distro id/version using shell built-ins only (bare PATH, no awk)', () => {
+  // The probe runs with a bare PATH in this test, so an /etc/os-release reader
+  // built on awk would silently yield nothing — hence the `read`/`case` loop.
+  if (!fs.existsSync('/etc/os-release')) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-os-'));
+  const raw = execFileSync('/bin/sh', ['-c', PROBE_REMOTE], { env: { PATH: dir }, encoding: 'utf8' });
+  expect(parseMeta(raw)).toMatchObject({ osId: expect.stringMatching(/^[a-z0-9._-]+$/) });
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

@@ -11,6 +11,9 @@ export interface BoxMetrics {
   cpuUsageUsec?: number;  // cumulative cgroup CPU counter; presence = a cgroup host (still warming up if no cpuPct)
   memTotalKb?: number; memAvailKb?: number;
   diskTotalKb?: number; diskUsedKb?: number; diskPct?: number; uptimeSec?: number;
+  // Distro identity from the box's /etc/os-release (`ID`/`VERSION_ID`), or
+  // `uname -s` where that file is absent. Server-allowlisted to a bare token.
+  osId?: string; osVer?: string;
 }
 export type ProxmoxBoxState = 'running' | 'stopped' | 'missing' | 'unknown';
 export interface Status {

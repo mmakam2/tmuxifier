@@ -3,12 +3,11 @@
 // place on poll ticks — the sidebar's "the poll never rebuilds whole rows"
 // contract, so hover states and tooltips survive repaints. main.ts owns all
 // polling and calls update(); this module never fetches.
-import type { Box, Status, Sample, Service, ServiceStatusSnapshot } from './api';
+import type { Box, BoxMetrics, Status, Sample, Service, ServiceStatusSnapshot } from './api';
 import type { NetboxSummary } from './netbox';
 import type { PveLinkedContainer, PveClusterNode } from './proxmox';
-import { sparkline } from './sparkline';
 import { dotClassFor, dotTitleFor } from './statusDot';
-import { fmtLatency, fmtCount, fmtCompact, fmtUptime } from './fmt';
+import { fmtLatency, fmtCount, fmtCompact, fmtUptime, fmtBytes } from './fmt';
 import { buildTruenasCard, type TruenasCardEls } from './truenasCard';
 import { buildUnifiCard, type UnifiCardEls } from './unifiCard';
 import { buildImmichCard, type ImmichCardEls } from './immichCard';
@@ -96,6 +95,68 @@ export function piholeCardModel(svc: Service, snap: ServiceStatusSnapshot | null
   };
 }
 
+// Display names for the distro ids that carry casing the generic rule would get
+// wrong ('almalinux' → 'Almalinux', 'nixos' → 'Nixos'). Anything not listed falls
+// back to capitalizing the id, which is right for most of the long tail.
+const OS_NAMES: Record<string, string> = {
+  almalinux: 'AlmaLinux', alpine: 'Alpine', arch: 'Arch', centos: 'CentOS',
+  debian: 'Debian', devuan: 'Devuan', fedora: 'Fedora', gentoo: 'Gentoo',
+  linuxmint: 'Linux Mint', nixos: 'NixOS', ol: 'Oracle Linux',
+  opensuse: 'openSUSE', 'opensuse-leap': 'openSUSE Leap',
+  'opensuse-tumbleweed': 'openSUSE Tumbleweed', raspbian: 'Raspberry Pi OS',
+  rhel: 'RHEL', rocky: 'Rocky', sles: 'SLES', ubuntu: 'Ubuntu',
+};
+
+// "Debian 12" from the probe's `ID`/`VERSION_ID`. A rolling distro reports no
+// VERSION_ID, so the version is appended only when it exists rather than being
+// faked with a dash — a name alone is a complete answer there.
+export function osLabel(m: BoxMetrics | undefined): string | null {
+  const id = m?.osId?.trim();
+  if (!id) return null;
+  const name = OS_NAMES[id.toLowerCase()] ?? id.charAt(0).toUpperCase() + id.slice(1);
+  const ver = m?.osVer?.trim();
+  return ver ? `${name} ${ver}` : name;
+}
+
+// fmtBytes holds one decimal below 100 so a card's numeric column stays aligned.
+// A spec line has no column to align to, and an exact capacity is a round number:
+// "16.0 GB RAM" reads as a measurement where "16 GB RAM" reads as the spec it is.
+// Only a trailing `.0` goes — 29.8 GB of disk really is 29.8.
+function fmtSpecBytes(bytes: number): string {
+  return fmtBytes(bytes).replace(/\.0 /, ' ');
+}
+
+// Used-of-total disk. When both land in the same unit the unit is printed once
+// ("29.8/49.1 GB") — the pair reads as one measurement, which is the point;
+// across units each keeps its own, since "879/49.1 GB" would be a lie.
+export function fmtDiskPair(usedKb: number | undefined, totalKb: number | undefined): string | null {
+  if (!totalKb) return null;
+  const total = fmtSpecBytes(totalKb * 1024);
+  if (usedKb == null) return total;
+  const used = fmtSpecBytes(usedKb * 1024);
+  const [usedNum, usedUnit] = used.split(' ');
+  return usedUnit === total.split(' ')[1] ? `${usedNum}/${total}` : `${used} / ${total}`;
+}
+
+// A fleet card's two-line spec sheet: what the box *is* (distro, cores) over
+// what it *has* (memory, disk). Deliberately not the cpu/mem/disk percentages —
+// the sidebar rows already carry those, and repeating a live gauge here told the
+// operator nothing the row beside it didn't. A line with nothing known is
+// dropped rather than rendered as a row of dashes.
+export function boxSpecLines(st: Status | undefined): string[] {
+  const m = st?.metrics;
+  if (!m) return [];
+  const identity: string[] = [];
+  const os = osLabel(m);
+  if (os) identity.push(os);
+  if (m.cpus) identity.push(`${m.cpus} ${m.cpus === 1 ? 'core' : 'cores'}`);
+  const capacity: string[] = [];
+  if (m.memTotalKb) capacity.push(`${fmtSpecBytes(m.memTotalKb * 1024)} RAM`);
+  const disk = fmtDiskPair(m.diskUsedKb, m.diskTotalKb);
+  if (disk) capacity.push(`${disk} disk`);
+  return [identity.join(' · '), capacity.join(' · ')].filter(Boolean);
+}
+
 export function dashboardMode(boxCount: number, serviceCount: number): 'standby' | 'dash' {
   return boxCount === 0 && serviceCount === 0 ? 'standby' : 'dash';
 }
@@ -165,10 +226,6 @@ export function pveHostRollup(containers: PveLinkedContainer[]): { hostName: str
 
 // --- DOM layer -------------------------------------------------------------
 
-const SPARK_W = 64;
-const SPARK_H = 16;
-const SVG_NS = 'http://www.w3.org/2000/svg';
-
 function div(className: string): HTMLElement {
   const el = document.createElement('div');
   el.className = className;
@@ -200,7 +257,7 @@ function prompt(): HTMLElement {
 
 interface FleetRow {
   root: HTMLButtonElement; lamp: HTMLElement; name: HTMLElement;
-  chip: HTMLElement; meta: HTMLElement; path: SVGPathElement;
+  chip: HTMLElement; spec: HTMLElement[];
 }
 
 interface Tile {
@@ -315,17 +372,16 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     const chip = document.createElement('span');
     chip.className = 'dash-chip';
     chip.hidden = true;
-    const meta = div('dash-box-meta');
-    const svg = document.createElementNS(SVG_NS, 'svg');
-    svg.classList.add('dash-spark');
-    svg.setAttribute('viewBox', `0 0 ${SPARK_W} ${SPARK_H}`);
-    svg.setAttribute('aria-hidden', 'true');
-    const path = document.createElementNS(SVG_NS, 'path');
-    svg.append(path);
+    // Two fixed slots rather than a rebuilt list: boxSpecLines returns at most
+    // two, and writing in place keeps the tile contract (a poll never disturbs
+    // hover or text selection).
+    const spec = [div('dash-box-meta'), div('dash-box-meta')];
+    const specBox = div('dash-box-spec');
+    specBox.append(...spec);
     const top = div('dash-box-top');
     top.append(lamp, name, chip);
-    root.append(top, meta, svg);
-    return { root, lamp, name, chip, meta, path };
+    root.append(top, specBox);
+    return { root, lamp, name, chip, spec };
   }
 
   function paintFleet() {
@@ -346,9 +402,15 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
         row.chip.textContent = chipState.toUpperCase();
         row.chip.className = `dash-chip dash-chip-${chipState}`;
       }
-      const sessions = st?.sessions?.length ?? 0;
-      row.meta.textContent = sessions === 1 ? '1 session' : `${sessions} sessions`;
-      row.path.setAttribute('d', sparkline(samples, 'cpuPct', { w: SPARK_W, h: SPARK_H }));
+      // An em dash in the first slot when the box reported no metrics at all
+      // (unreachable, mid-setup, or a host the probe can't read) — the lamp and
+      // its title carry the reason, so the card only has to not look broken.
+      const lines = boxSpecLines(st);
+      row.spec.forEach((slot, i) => {
+        const text = lines[i] ?? (i === 0 && lines.length === 0 ? '—' : '');
+        slot.textContent = text;
+        slot.hidden = text === '';
+      });
       fleetGrid.appendChild(row.root); // moves into stored order
     }
     for (const [id, row] of boxEls) {

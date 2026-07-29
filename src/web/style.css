@@ -670,9 +670,17 @@ button.empty-kbd:hover { color: var(--text); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.dash-box-meta { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
-.dash-spark { width: 64px; height: 16px; display: block; opacity: 0.7; }
-.dash-spark path { fill: none; stroke: var(--amber); stroke-width: 1; }
+/* The fleet card's spec sheet: identity over capacity, read as one block, so the
+   two lines sit tighter to each other than to the name above them. */
+.dash-box-spec { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dash-box-meta {
+  font-size: 11px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .dash-chip {
   padding: 1px 7px;
   border-radius: 4px;

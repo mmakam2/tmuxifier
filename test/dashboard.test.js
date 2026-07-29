@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { groupServices, fmtLatency, serviceLamp, dashboardMode, pveHostRollup, nodeModules, partitionInfraGroups, sectionServices, fmtCount, fmtCompact, fmtUptime, piholeCardModel } from '../src/web/dashboard.ts';
+import { groupServices, fmtLatency, serviceLamp, dashboardMode, pveHostRollup, nodeModules, partitionInfraGroups, sectionServices, fmtCount, fmtCompact, fmtUptime, piholeCardModel, osLabel, fmtDiskPair, boxSpecLines } from '../src/web/dashboard.ts';
 
 const svc = (id, group, kind = 'http') => ({ id, name: id, url: 'http://x.example.com/', group, check: { kind }, createdAt: '' });
 
@@ -28,6 +28,44 @@ test('dashboardMode: standby only when there is nothing at all to show', () => {
   expect(dashboardMode(0, 0)).toBe('standby');
   expect(dashboardMode(1, 0)).toBe('dash');
   expect(dashboardMode(0, 1)).toBe('dash');
+});
+
+test('osLabel: known ids get their real casing, unknown ones are capitalized, version appended', () => {
+  expect(osLabel({ osId: 'debian', osVer: '12' })).toBe('Debian 12');
+  expect(osLabel({ osId: 'almalinux', osVer: '9.4' })).toBe('AlmaLinux 9.4');
+  expect(osLabel({ osId: 'voidlinux' })).toBe('Voidlinux');
+  expect(osLabel({ osId: 'arch' })).toBe('Arch');
+});
+
+test('osLabel: null when the probe reported no OS (non-Linux, locked-down, or unreachable)', () => {
+  expect(osLabel(undefined)).toBeNull();
+  expect(osLabel({})).toBeNull();
+  expect(osLabel({ osVer: '12' })).toBeNull();
+});
+
+test('fmtDiskPair: a shared unit is printed once, a split unit keeps both', () => {
+  expect(fmtDiskPair(31200000, 51474912)).toBe('29.8/49.1 GB');
+  expect(fmtDiskPair(900000, 51474912)).toBe('879 MB / 49.1 GB');
+  expect(fmtDiskPair(undefined, 51474912)).toBe('49.1 GB');
+  expect(fmtDiskPair(31200000, undefined)).toBeNull();
+});
+
+test('boxSpecLines: identity line then capacity line', () => {
+  expect(boxSpecLines({
+    reachable: true,
+    metrics: { osId: 'debian', osVer: '12', cpus: 8, memTotalKb: 16 * 1024 * 1024, diskTotalKb: 51474912, diskUsedKb: 31200000 },
+  })).toEqual(['Debian 12 · 8 cores', '16 GB RAM · 29.8/49.1 GB disk']);
+});
+
+test('boxSpecLines: one core is singular', () => {
+  expect(boxSpecLines({ reachable: true, metrics: { cpus: 1 } })).toEqual(['1 core']);
+});
+
+test('boxSpecLines: a line with nothing known is dropped rather than printed empty', () => {
+  expect(boxSpecLines({ reachable: true, metrics: { memTotalKb: 2 * 1024 * 1024 } })).toEqual(['2 GB RAM']);
+  expect(boxSpecLines({ reachable: true, metrics: {} })).toEqual([]);
+  expect(boxSpecLines({ reachable: false })).toEqual([]);
+  expect(boxSpecLines(undefined)).toEqual([]);
 });
 
 test('pveHostRollup groups containers per host with running/stopped counts', () => {

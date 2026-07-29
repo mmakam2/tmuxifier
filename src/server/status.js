@@ -26,6 +26,13 @@ const META_PROBE =
   `elif [ -r /sys/fs/cgroup/cpu,cpuacct/cpuacct.usage ]; then printf ' cpuUsageUsec=%s' "$(( $(cat /sys/fs/cgroup/cpu,cpuacct/cpuacct.usage) / 1000 ))"; fi; ` +
   `awk '/^MemTotal:/{printf " memTotalKb=%s",$2} /^MemAvailable:/{printf " memAvailKb=%s",$2}' /proc/meminfo; ` +
   `df -P / | awk 'NR==2{sub(/%/,"",$5); printf " diskTotalKb=%s diskUsedKb=%s diskPct=%s",$2,$3,$5}'; ` +
+  // Distro identity, read with shell built-ins rather than awk/sed: this line is
+  // best-effort under whatever PATH the box's non-interactive shell hands us, and
+  // `read`/`case` are guaranteed to be there. /etc/os-release is *read*, never
+  // sourced — sourcing would execute whatever the file contains. Only the two
+  // space-free fields are taken (PRETTY_NAME has spaces and would split the
+  // KEY=VALUE stream); the surrounding quotes come off with parameter expansion.
+  `if [ -r /etc/os-release ]; then while IFS='=' read -r k v; do v=\${v#\\"}; v=\${v%\\"}; case "$k" in ID) printf ' osId=%s' "$v";; VERSION_ID) printf ' osVer=%s' "$v";; esac; done < /etc/os-release; else printf ' osId=%s' "$(uname -s)"; fi; ` +
   `u=$(awk '{printf "%d",$1}' /proc/uptime) && printf ' uptimeSec=%s' "$u"; ` +
   `printf ' boxNowSec=%s' "$(date +%s)"; ` +
   `echo; } 2>/dev/null;`;
@@ -38,11 +45,18 @@ const META_KEYS = new Set([
   'memTotalKb', 'memAvailKb', 'diskTotalKb', 'diskUsedKb', 'diskPct', 'uptimeSec', 'boxNowSec',
 ]);
 
-// Pull the `__META__` health line out of probe stdout into a numbers-only object.
+// The only non-numeric fields: the distro identity, which the dashboard's fleet
+// cards render as a name. `/etc/os-release` is a file on the *box*, so its
+// contents are input — allowlisted to a short bare token here rather than
+// trusted, since this string ends up in the UI.
+const META_STR_KEYS = new Set(['osId', 'osVer']);
+const META_STR_RE = /^[A-Za-z0-9._-]{1,32}$/;
+
+// Pull the `__META__` health line out of probe stdout into a metrics object.
 // Positional parsing is avoided on purpose: a missing source omits its token
 // rather than shifting columns. Empty (`cpus=`) and non-numeric (`load1=NaN`)
 // values are dropped — note Number('') === 0, which is why the empty guard
-// matters. Returns null when the line is absent or yields no numeric fields.
+// matters. Returns null when the line is absent or yields no usable fields.
 export function parseMeta(stdout) {
   const line = String(stdout).split(/\r?\n/).find((l) => l.startsWith('__META__'));
   if (!line) return null;
@@ -52,7 +66,12 @@ export function parseMeta(stdout) {
     if (eq <= 0) continue;
     const key = tok.slice(0, eq);
     const raw = tok.slice(eq + 1);
-    if (raw === '' || !META_KEYS.has(key)) continue;
+    if (raw === '') continue;
+    if (META_STR_KEYS.has(key)) {
+      if (META_STR_RE.test(raw)) out[key] = raw;
+      continue;
+    }
+    if (!META_KEYS.has(key)) continue;
     const val = Number(raw);
     if (Number.isFinite(val)) out[key] = val;
   }

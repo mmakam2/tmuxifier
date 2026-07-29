@@ -206,7 +206,12 @@ pattern for new modules.
   (in-flight de-dup) so multiple pollers don't fan out duplicate SSH connections. Each probe also
   reports every tmux session's active-pane command and last-activity time, plus the box's own
   clock, which `healthHistory.js` uses to derive per-session agent idle state without any extra
-  SSH round trip.
+  SSH round trip. The `__META__` health line carries the box's distro identity
+  (`osId`/`osVer`) alongside the numeric metrics — read out of `/etc/os-release` with `read`/`case`
+  shell built-ins rather than awk, because the probe runs under whatever PATH the box's
+  non-interactive shell provides, and the file is **read, never sourced**. These are the only
+  non-numeric `parseMeta` fields, so they carry their own allowlist (a bare token, ≤32 chars):
+  `/etc/os-release` is content from the box and the value reaches the UI.
 - `statusPoller.js` — single server-side poll loop: probes every box on an interval
   (`statusPollMs`) and caches the snapshot `/api/status` serves, so status SSH volume is
   independent of how many dashboard tabs are open.
@@ -440,7 +445,12 @@ layer whose `update()` rewrites in place, so the voice button (mounted into the 
 view-model helpers (grouping, latency/lamp/mode, PVE rollup) plus an in-place-updating DOM
 layer; mounted by `main.ts` whenever no pane is docked, with a 10s services poll and 60s
 infra poll that run only while mounted; the sidebar nameplate `#home` returns to it,
-undocking — not killing — any docked terminals), `fmt.ts` (the shared display formatters —
+undocking — not killing — any docked terminals. A fleet card is a two-line **spec sheet** —
+`boxSpecLines`: what the box is (`osLabel` distro + core count) over what it has (RAM,
+`fmtDiskPair` used-of-total) — deliberately *not* the live cpu/mem/disk percentages, which
+the sidebar rows beside it already carry; repeating a gauge told the operator nothing. Spec
+figures drop `fmtBytes`'s trailing `.0`, since a capacity is a round number and the cards
+have no numeric column to align to, unlike the TrueNAS/Immich ones), `fmt.ts` (the shared display formatters —
 `fmtCount`/`fmtCompact`/`fmtUptime`/`fmtLatency`/`fmtBytes` — factored out of `dashboard.ts`,
 which re-exports them, so a card module can use them without importing the dashboard back),
 `serviceIcon.ts` (the one `<img>` builder shared by the plain tiles, all three cards and the
