@@ -17,10 +17,27 @@ import { downloadVerified } from './voiceDownload.js';
 const APT_PACKAGE = 'cmake';
 const BUILD_OVERHEAD_BYTES = 700 * 1024 * 1024; // source + build output, on top of the model
 
-function defaultRun(cmd, args, { cwd, env } = {}) {
+// Every step gets a deadline. Without one a hung apt lock, a git clone against
+// an unresponsive mirror, or a wedged compiler left the single-flight job
+// `running` with no way to clear it but a process restart — which the ship
+// checklist forbids while a job is running. Generous (20 min) because a
+// whisper.cpp build on a small box is genuinely slow; killed rather than
+// infinite is the point, not the exact bound.
+const STEP_TIMEOUT_MS = 20 * 60 * 1000;
+
+function defaultRun(cmd, args, { cwd, env, timeoutMs = STEP_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { cwd, env, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) { reject(new Error(`${cmd} failed: ${String(stderr || err.message).slice(0, 400)}`)); return; }
+    execFile(cmd, args, { cwd, env, maxBuffer: 8 * 1024 * 1024, timeout: timeoutMs, killSignal: 'SIGKILL' }, (err, stdout, stderr) => {
+      if (err) {
+        // execFile reports a timeout kill as ETIMEDOUT / a null exit code; say so
+        // plainly rather than surfacing an empty stderr as an unexplained failure.
+        const timedOut = err.killed || err.code === 'ETIMEDOUT' || err.signal === 'SIGKILL';
+        const detail = timedOut
+          ? `timed out after ${Math.round(timeoutMs / 60000)} min`
+          : String(stderr || err.message).slice(0, 400);
+        reject(new Error(`${cmd} failed: ${detail}`));
+        return;
+      }
       resolve({ code: 0, stdout: String(stdout || '') + String(stderr || '') });
     });
   });
@@ -45,7 +62,13 @@ export function createVoiceInstallManager({
   // Restart reconciliation: a job the process was running when it died can
   // never resume, so it must not sit as 'running' forever blocking new
   // installs. Same treatment setupManager gives its own jobs.
-  const jobs = (store.load() || []).map((j) => (j.status === 'running' ? { ...j, status: 'interrupted' } : j));
+  // The shape filter comes first: the store validates only Array.isArray, so a
+  // `[null]` voice-jobs.json parses, is never quarantined, and dereferencing
+  // j.status would throw a TypeError here — at index.js module top level, i.e.
+  // one bad history row would keep the whole dashboard from booting.
+  const jobs = (store.load() || [])
+    .filter((j) => j && typeof j === 'object' && typeof j.id === 'string')
+    .map((j) => (j.status === 'running' ? { ...j, status: 'interrupted' } : j));
   store.save(jobs);
 
   const settled = new Map();

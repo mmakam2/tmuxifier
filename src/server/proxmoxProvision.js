@@ -22,12 +22,29 @@ export function createProvisionManager({
   const jobs = new Map();
   const settles = new Map();
 
+  const orphaned = []; // interrupted jobs holding a NetBox reservation nothing else can reclaim
   // Startup reconciliation: a job still 'running' lost its poller when the process died.
   for (const j of load() || []) {
-    if (!TERMINAL.has(j.status)) { j.status = 'interrupted'; j.finishedAt = j.finishedAt || now(); }
+    // One bad history row must never keep the server from booting: the store
+    // validates only Array.isArray, so a `[null]` file parses, is never
+    // quarantined, and would throw a TypeError right here — at module top level.
+    if (!j || typeof j !== 'object' || typeof j.id !== 'string') continue;
+    const wasActive = !TERMINAL.has(j.status);
+    if (wasActive) { j.status = 'interrupted'; j.finishedAt = j.finishedAt || now(); }
     jobs.set(j.id, j);
+    // An auto-static job interrupted mid-flight holds a NetBox reservation that
+    // nothing else can reclaim: no box was linked, so deprovision will never see
+    // it, and no route or view exposes a leaked netboxIpId. A job that DID link a
+    // box is left alone — the address belongs to that box now, and its
+    // deprovision releases it.
+    if (wasActive && j.netboxIpId && !j.boxId) orphaned.push(j);
   }
   persist();
+  // Fire-and-forget so a slow or unreachable NetBox cannot delay boot; awaited by
+  // _reconciled() in tests.
+  const reconciled = orphaned.length
+    ? (async () => { for (const j of orphaned) await releaseNetboxIp(j); persist(); })()
+    : Promise.resolve();
 
   function ordered() { return [...jobs.values()].sort(newestFirst); }
   // Terminal-only pruning (the lifecycle manager's rule): active jobs are
@@ -43,6 +60,23 @@ export function createProvisionManager({
     return { id: j.id, presetName: j.presetName, hostname: j.hostname, vmid: j.vmid, status: j.status, phase: j.phase, createdAt: j.createdAt, finishedAt: j.finishedAt, boxId: j.boxId, needsHost: j.needsHost };
   }
   function appendLog(j, text) { if (text) j.log = (j.log + text).slice(-maxLogBytes); }
+
+  // Releasing a reservation is best-effort in both callers (a failed run and a
+  // job interrupted by a restart), and never allowed to throw: NetBox being
+  // unreachable must not fail a job any further, nor keep the server from
+  // booting. The id is cleared only on a confirmed release, so a failure leaves
+  // it recorded and chaseable rather than silently forgotten.
+  async function releaseNetboxIp(j) {
+    if (!j.netboxIpId) return;
+    try {
+      const netbox = makeNetboxClient(await requireNetboxSettings());
+      await netbox.releaseIp(j.netboxIpId);
+      appendLog(j, `# released NetBox ip ${j.netboxIpId}\n`);
+      j.netboxIpId = null;
+    } catch (releaseError) {
+      appendLog(j, `# could not release NetBox ip ${j.netboxIpId}: ${releaseError.message}\n`);
+    }
+  }
 
   async function requireNetboxSettings() {
     if (!netboxStore) throw new Error('auto-static requires the NetBox integration — configure it in Settings (⚙)');
@@ -151,19 +185,10 @@ export function createProvisionManager({
       }
       j.phase = 'done'; j.status = 'done'; j.finishedAt = now(); persist();
     } catch (e) {
-      if (j.netboxIpId) {
-        // Best-effort: the reservation must not leak when the container never
-        // materialized. (Documented trade-off: a create-then-start failure
-        // releases the address even though a half-built container may exist.)
-        try {
-          const netbox = makeNetboxClient(await requireNetboxSettings());
-          await netbox.releaseIp(j.netboxIpId);
-          appendLog(j, `# released NetBox ip ${j.netboxIpId}\n`);
-          j.netboxIpId = null;
-        } catch (releaseError) {
-          appendLog(j, `# could not release NetBox ip ${j.netboxIpId}: ${releaseError.message}\n`);
-        }
-      }
+      // The reservation must not leak when the container never materialized.
+      // (Documented trade-off: a create-then-start failure releases the address
+      // even though a half-built container may exist.)
+      await releaseNetboxIp(j);
       j.status = 'error';
       j.error = e.message;
       j.finishedAt = now();
@@ -208,5 +233,6 @@ export function createProvisionManager({
     getProvision(id) { return jobs.get(id); },
     listProvisions() { return ordered().map(summary); },
     _settled(id) { return settles.get(id) || Promise.resolve(); },
+    _reconciled() { return reconciled; },
   };
 }

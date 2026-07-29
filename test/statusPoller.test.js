@@ -280,3 +280,33 @@ test('refreshUntil does not stack a second loop for the same box', async () => {
   expect(b).toBe(true);
   expect(sweeps).toBe(4); // one loop, not two racing each other
 });
+
+// B7 (2026-07-29 review): every fast-track sweep went through checkBox, whose
+// failure backoff (30/60/90s) returns the cached failure without touching SSH.
+// A container whose sshd answers at t=35s therefore stayed "down" until t=90s,
+// and a ~100s boot exhausted the 180s deadline — the fast track tracked the
+// backoff schedule, not the box's boot time.
+test('refreshUntil clears the target backoff so the fast track is not throttled', async () => {
+  const reset = [];
+  let sweeps = 0;
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'b1', host: '192.168.1.10' }]),
+    statusChecker: {
+      checkBox: async () => ({ reachable: ++sweeps >= 3 }),
+      resetBackoff: (key) => reset.push(key),
+    },
+    sleep: async () => {},
+  });
+  await expect(poller.refreshUntil('b1', { intervalMs: 1, timeoutMs: 10_000 })).resolves.toBe(true);
+  expect(reset).toEqual(['b1', 'b1', 'b1']); // once per sweep, not once per loop
+});
+
+test('refreshUntil still works against a checker with no resetBackoff', async () => {
+  let sweeps = 0;
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'b1', host: '192.168.1.10' }]),
+    statusChecker: { checkBox: async () => ({ reachable: ++sweeps >= 2 }) },
+    sleep: async () => {},
+  });
+  await expect(poller.refreshUntil('b1', { intervalMs: 1, timeoutMs: 10_000 })).resolves.toBe(true);
+});

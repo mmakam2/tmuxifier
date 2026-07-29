@@ -10,6 +10,7 @@ import { createLoginRateLimiter } from './rateLimit.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
 import { buildEnsureTmuxRemote, resolveTools } from './boxActions.js';
 import { assertBoxSafe } from './sshCommand.js';
+import { provisionKey } from './sessions.js';
 import { upsertConfigFile } from './configFile.js';
 import { readJsonSync, writeJsonSync } from './jsonFile.js';
 import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
@@ -734,7 +735,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     }
     if (sessions?.closeKey) {
       sessions.closeKey(box.id);
-      sessions.closeKey(`provision:${box.id}`);
+      sessions.closeKey(provisionKey(box.id));
     }
     if (boxActions?.killSession) {
       try { void Promise.resolve(boxActions.killSession(box)).catch(() => {}); } catch {}
@@ -1101,7 +1102,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     let tools;
     try { tools = resolveTools(Array.isArray(b.tools) ? b.tools.join(',') : (typeof b.tools === 'string' ? b.tools : '')); }
     catch { return reply.code(400).send({ error: 'invalid tools' }); }
-    const options = { ohMyTmux: !!b.ohMyTmux, ohMyZsh: !!b.ohMyZsh, ohMyBash: !!b.ohMyBash, tools, seedAiAuth: !!b.seedAiAuth };
+    const options = { ohMyTmux: !!b.ohMyTmux, ohMyZsh: !!b.ohMyZsh, ohMyBash: !!b.ohMyBash, tools, seedAiAuth: !!b.seedAiAuth, claudeStatusline: !!b.claudeStatusline };
     return reply.code(201).send(setupManager.start(box, options));
   });
   app.get('/api/setup', { preHandler: requireAuth }, async () => setupManager.listJobs());
@@ -1558,7 +1559,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
         let entry;
         try {
-          entry = sessions.provision({ key: `provision:${boxId}`, box, script });
+          entry = sessions.provision({ key: provisionKey(boxId), box, script });
         } catch (err) {
           const msg = err?.message || 'provision error';
           try { socket.send(msg); } catch {}

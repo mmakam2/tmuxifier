@@ -647,3 +647,14 @@ test('a throwing fast-track never fails the job it rode along with', async () =>
   await manager._settled(summary.id);
   expect(manager.getJob(summary.id)).toMatchObject({ status: 'done', error: null });
 });
+
+// B10 (2026-07-29 review): same missing shape guard as the provision manager —
+// `[null]` in proxmox-lifecycle-jobs.json crashed the server at boot.
+test('a malformed persisted job row is dropped instead of crashing boot', () => {
+  const rows = [null, 'nope', 42, { noId: true }, { id: 'l9', status: 'running', createdAt: 'now' }];
+  let manager;
+  expect(() => { manager = fixture('stopped', { load: () => rows }).manager; }).not.toThrow();
+  const kept = manager.listJobs();
+  expect(kept.map((j) => j.id)).toEqual(['l9']);
+  expect(kept[0].status).toBe('interrupted'); // still reconciled
+});

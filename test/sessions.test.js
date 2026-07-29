@@ -1,5 +1,5 @@
 import { test, expect, vi } from 'vitest';
-import { createSessionManager } from '../src/server/sessions.js';
+import { createSessionManager, provisionKey } from '../src/server/sessions.js';
 
 // Minimal fake PTY so we can drive output without a real ssh/tmux process.
 function fakePty() {
@@ -177,4 +177,29 @@ test('attach resize jiggle restores the original width (node-pty cols mutates on
   mgr.attach(entry, () => {});
   expect(pty.resizes).toEqual([[119, 30], [120, 30]]);
   expect(pty.cols).toBe(120);
+});
+
+// B8 (2026-07-29 review): the interactive-finish PTY is keyed
+// `provision:<boxId>`, so a plain hasLiveSession(box.id) reported "no live
+// session" while the user was typing an SSH password at the -tt prompt. The
+// status checker and Fleet then fired BatchMode probes into that prompt — the
+// exact collision their guard exists to prevent — and stamped a 5-minute
+// needsAuth backoff mid-finish. The guard has to cover both keys.
+test('hasLiveSessionForBox sees a provision PTY, not just a terminal session', () => {
+  const mgr = createSessionManager({ spawn: () => fakePty() });
+  mgr.provision({ key: provisionKey('b1'), box: { host: 'h', user: 'me' }, script: 'true' });
+
+  expect(mgr.hasLiveSession('b1')).toBe(false);       // no ordinary terminal
+  expect(mgr.hasLiveSessionForBox('b1')).toBe(true);  // but a live interactive login
+});
+
+test('hasLiveSessionForBox sees an ordinary terminal session too', () => {
+  const mgr = createSessionManager({ spawn: () => fakePty() });
+  mgr.open({ key: 'b1', box: { host: 'h', user: 'me' }, session: 'web', size: { cols: 80, rows: 24 } });
+  expect(mgr.hasLiveSessionForBox('b1')).toBe(true);
+});
+
+test('hasLiveSessionForBox is false for a box with neither', () => {
+  const mgr = createSessionManager({ spawn: () => fakePty() });
+  expect(mgr.hasLiveSessionForBox('b1')).toBe(false);
 });

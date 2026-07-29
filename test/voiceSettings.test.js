@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { voiceStatusLine, installPollDelay, micTestMessage } from '../src/web/settingsVoice';
+import { voiceStatusLine, installPollDelay, micTestMessage, INSTALL_POLL_MAX_FAILURES } from '../src/web/settingsVoice';
 
 test('describes an uninstalled server', () => {
   const s = voiceStatusLine({ installed: false, enabled: false, model: 'small.en', pinned: { bin: null, model: null } });
@@ -76,4 +76,22 @@ test('an unknown error still yields a usable message rather than undefined', () 
   expect(typeof m).toBe('string');
   expect(m.length).toBeGreaterThan(0);
   expect(m).toMatch(/something odd|WeirdError/);
+});
+
+// B6 (2026-07-29 review): installPollDelay(null) returned a retry delay
+// unconditionally, and voice.ts's fetch layer never reaches the central 401
+// seam — so logging out mid-install left the watcher 401-polling every 2s for
+// the life of the page. Transient failures must still be tolerated, but not
+// forever.
+test('installPollDelay tolerates dropped polls but eventually gives up', () => {
+  // A live build survives a few dropped polls.
+  expect(installPollDelay(null, 0)).toBeGreaterThan(0);
+  expect(installPollDelay(null, 1)).toBeGreaterThan(0);
+  // A source that never answers again (logged out, server gone) is abandoned.
+  expect(installPollDelay(null, INSTALL_POLL_MAX_FAILURES)).toBe(null);
+  expect(installPollDelay(null, INSTALL_POLL_MAX_FAILURES + 5)).toBe(null);
+  // A successful poll is unaffected by an earlier failure streak.
+  expect(installPollDelay({ status: 'running' }, INSTALL_POLL_MAX_FAILURES)).toBeGreaterThan(0);
+  // Backwards compatible: the count is optional.
+  expect(installPollDelay(null)).toBeGreaterThan(0);
 });

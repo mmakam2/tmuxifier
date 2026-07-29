@@ -1,9 +1,9 @@
 import { test, expect } from 'vitest';
 import { buildServicePayload } from '../src/web/settingsServices.ts';
 
-test('buildServicePayload trims fields, omits empties, and carries the section', () => {
+test('buildServicePayload trims fields, states an empty target, and carries the section', () => {
   expect(buildServicePayload({ name: ' Grafana ', url: ' http://192.168.1.20:3000/ ', group: '  ', kind: 'http', target: '', section: 'services' }))
-    .toEqual({ name: 'Grafana', url: 'http://192.168.1.20:3000/', icon: null, group: null, check: { kind: 'http' }, section: 'services' });
+    .toEqual({ name: 'Grafana', url: 'http://192.168.1.20:3000/', icon: null, group: null, check: { kind: 'http', target: '' }, section: 'services' });
   expect(buildServicePayload({ name: 'AdGuard', url: 'http://192.168.1.5/', group: 'DNS Filtering', kind: 'http', target: '', section: 'infrastructure' }).section)
     .toBe('infrastructure');
 });
@@ -21,7 +21,7 @@ test('buildServicePayload builds a pihole check with its optional target and ins
     kind: 'pihole', target: '', section: 'infrastructure', password: 'app-pw',
   })).toEqual({
     name: 'pihole', url: 'https://pihole.example.com', icon: null, group: 'DNS Filtering',
-    section: 'infrastructure', check: { kind: 'pihole', insecure: false }, password: 'app-pw',
+    section: 'infrastructure', check: { kind: 'pihole', target: '', insecure: false }, password: 'app-pw',
   });
 
   expect(buildServicePayload({
@@ -60,7 +60,7 @@ const nasBase = {
 
 test('truenas: the username rides in the check and the key rides as password', () => {
   const p = buildServicePayload({ ...nasBase, kind: 'truenas', username: 'truenas_admin', password: '1-key' });
-  expect(p.check).toEqual({ kind: 'truenas', username: 'truenas_admin', insecure: false });
+  expect(p.check).toEqual({ kind: 'truenas', username: 'truenas_admin', target: '', insecure: false });
   expect(p.password).toBe('1-key');
 });
 
@@ -74,16 +74,16 @@ test('truenas: Clear sends an explicit null', () => {
   expect(p.password).toBe(null);
 });
 
-test('truenas: the target is carried only when set, but insecure is always stated', () => {
+test('truenas: the target is always stated, so emptying it clears the stored one', () => {
   const bare = buildServicePayload({ ...nasBase, kind: 'truenas', username: 'u' });
-  expect(bare.check).toEqual({ kind: 'truenas', username: 'u', insecure: false });
+  expect(bare.check).toEqual({ kind: 'truenas', username: 'u', target: '', insecure: false });
   const full = buildServicePayload({ ...nasBase, kind: 'truenas', username: 'u', target: 'https://192.168.1.20', insecure: true });
   expect(full.check).toEqual({ kind: 'truenas', username: 'u', target: 'https://192.168.1.20', insecure: true });
 });
 
 test('an http tile still builds a plain check with no credential fields', () => {
   const p = buildServicePayload({ ...nasBase, kind: 'http', target: '' });
-  expect(p.check).toEqual({ kind: 'http' });
+  expect(p.check).toEqual({ kind: 'http', target: '' });
   expect('password' in p).toBe(false);
 });
 
@@ -93,7 +93,7 @@ const unifiBase = {
 };
 
 test('buildServicePayload defaults a unifi tls mode to verify and states an empty site', () => {
-  expect(buildServicePayload({ ...unifiBase }).check).toEqual({ kind: 'unifi', site: '', tls: 'verify' });
+  expect(buildServicePayload({ ...unifiBase }).check).toEqual({ kind: 'unifi', target: '', site: '', tls: 'verify' });
 });
 
 test('buildServicePayload carries the unifi site and probe target when set', () => {
@@ -103,9 +103,9 @@ test('buildServicePayload carries the unifi site and probe target when set', () 
 
 test('buildServicePayload sends a unifi fingerprint only in pin mode', () => {
   expect(buildServicePayload({ ...unifiBase, tls: 'pin', fingerprint: 'AA:BB' }).check)
-    .toEqual({ kind: 'unifi', site: '', tls: 'pin', fingerprint: 'AA:BB' });
+    .toEqual({ kind: 'unifi', target: '', site: '', tls: 'pin', fingerprint: 'AA:BB' });
   expect(buildServicePayload({ ...unifiBase, tls: 'insecure', fingerprint: 'AA:BB' }).check)
-    .toEqual({ kind: 'unifi', site: '', tls: 'insecure' });
+    .toEqual({ kind: 'unifi', target: '', site: '', tls: 'insecure' });
 });
 
 test('buildServicePayload sends the unifi api key through the shared password field', () => {
@@ -128,18 +128,18 @@ test('buildServicePayload maps the three icon states', () => {
 // same applies to clearing a UniFi site override back to the first site.
 test('buildServicePayload always states insecure, so unchecking it actually clears', () => {
   const pihole = { name: 'P', url: 'https://pihole.example.com', group: '', kind: 'pihole', target: '', section: 'services' };
-  expect(buildServicePayload({ ...pihole, insecure: true }).check).toEqual({ kind: 'pihole', insecure: true });
-  expect(buildServicePayload({ ...pihole, insecure: false }).check).toEqual({ kind: 'pihole', insecure: false });
-  expect(buildServicePayload(pihole).check).toEqual({ kind: 'pihole', insecure: false });
+  expect(buildServicePayload({ ...pihole, insecure: true }).check).toEqual({ kind: 'pihole', target: '', insecure: true });
+  expect(buildServicePayload({ ...pihole, insecure: false }).check).toEqual({ kind: 'pihole', target: '', insecure: false });
+  expect(buildServicePayload(pihole).check).toEqual({ kind: 'pihole', target: '', insecure: false });
 
   const truenas = { name: 'N', url: 'https://nas.example.com', group: '', kind: 'truenas', target: '', section: 'services', username: 'admin' };
-  expect(buildServicePayload({ ...truenas, insecure: false }).check).toEqual({ kind: 'truenas', username: 'admin', insecure: false });
+  expect(buildServicePayload({ ...truenas, insecure: false }).check).toEqual({ kind: 'truenas', username: 'admin', target: '', insecure: false });
 });
 
 test('buildServicePayload always states the unifi site, so clearing it reverts to the first site', () => {
   const unifi = { name: 'U', url: 'https://unifi.example.com', group: '', kind: 'unifi', target: '', section: 'services', tls: 'verify' };
-  expect(buildServicePayload({ ...unifi, site: 'Office' }).check).toEqual({ kind: 'unifi', site: 'Office', tls: 'verify' });
-  expect(buildServicePayload({ ...unifi, site: '  ' }).check).toEqual({ kind: 'unifi', site: '', tls: 'verify' });
+  expect(buildServicePayload({ ...unifi, site: 'Office' }).check).toEqual({ kind: 'unifi', target: '', site: 'Office', tls: 'verify' });
+  expect(buildServicePayload({ ...unifi, site: '  ' }).check).toEqual({ kind: 'unifi', target: '', site: '', tls: 'verify' });
 });
 
 test('buildServicePayload builds an immich check', () => {
@@ -147,7 +147,7 @@ test('buildServicePayload builds an immich check', () => {
     name: 'Photos', url: 'https://immich.example.com', group: 'Media',
     kind: 'immich', target: '', section: 'services', password: 'key-1',
   });
-  expect(p.check).toEqual({ kind: 'immich', insecure: false });
+  expect(p.check).toEqual({ kind: 'immich', target: '', insecure: false });
   expect(p.password).toBe('key-1');
 });
 
@@ -175,4 +175,17 @@ test('buildServicePayload sends an explicit null to clear an immich key', () => 
     kind: 'immich', target: '', section: 'services', clearPassword: true,
   });
   expect(p.password).toBeNull();
+});
+
+// B4 (2026-07-29 review): `target` was the last field still omitted when empty,
+// so emptying the Probe URL field could never clear a stored one — the server's
+// PATCH merge kept probing the old address. Only kind 'none', which has no
+// target field at all, omits it.
+test('buildServicePayload states an empty target for every probing kind, so clearing it works', () => {
+  const base = { name: 'S', url: 'https://s.example.com', group: '', target: '', section: 'services' };
+  for (const kind of ['http', 'pihole', 'immich', 'unifi', 'truenas']) {
+    const check = buildServicePayload({ ...base, kind, username: 'u' }).check;
+    expect(check).toHaveProperty('target', '');
+  }
+  expect(buildServicePayload({ ...base, kind: 'none' }).check).toEqual({ kind: 'none' });
 });

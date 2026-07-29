@@ -200,3 +200,27 @@ test('a job left running by a restart reconciles to interrupted', async () => {
   // An interrupted job must not block a fresh install.
   await expect(mgr.start('base.en')).resolves.toMatchObject({ status: 'running' });
 });
+
+// B10 (2026-07-29 review): the reconciliation map dereferenced j.status with no
+// shape guard, so a `[null]` row in voice-jobs.json threw a TypeError inside
+// createVoiceInstallManager — at index.js module top level, i.e. the whole
+// dashboard failed to boot. fleet.js and setupManager.js both guard this.
+test('a malformed persisted job row is dropped instead of crashing boot', async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-vi-bad-'));
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-vi-badrepo-'));
+  const store = createVoiceInstallStore({ dataDir });
+  store.save([null, 'nope', 42, { noId: true }, { id: 'j1', model: 'base.en', status: 'running', createdAt: 1, log: '', error: null }]);
+  await store.whenIdle();
+
+  let mgr;
+  expect(() => {
+    mgr = createVoiceInstallManager({
+      repoRoot, store, voiceStore: createVoiceStore({ dataDir }),
+      run: async () => ({ code: 0, stdout: '', stderr: '' }),
+      download: async () => ({ ok: true }),
+      freeBytes: async () => 50 * 1024 ** 3, totalMem: () => 16 * 1024 ** 3,
+    });
+  }).not.toThrow();
+  expect(mgr.listJobs().map((j) => j.id)).toEqual(['j1']);
+  expect(mgr.getJob('j1').status).toBe('interrupted');
+});

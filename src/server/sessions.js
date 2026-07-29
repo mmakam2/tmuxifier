@@ -1,6 +1,11 @@
 import nodePty from 'node-pty';
 import { buildAttachArgv, buildProvisionArgv } from './sshCommand.js';
 
+// The PTY key an interactive setup finish runs under. Shared rather than spelled
+// out at each call site: the probe/Fleet guards have to recognise this key, and a
+// second spelling of it is how they came to miss it (B8, 2026-07-29 review).
+export const provisionKey = (boxId) => `provision:${boxId}`;
+
 export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSeconds = 45, spawnEnv = process.env, sshConfigFile, controlDir, controlPersist, localSession = 'local', spawn = nodePty.spawn } = {}) {
   const entries = new Map(); // key -> entry
 
@@ -172,5 +177,13 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     return !!(entry && !entry.exited);
   }
 
-  return { open, openLocal, provision, attach, onExit, write, resize, detach, close, closeIfUnwatched, closeKey, hasLiveSession, _count: () => entries.size };
+  // "Is any interactive login live for this box?" — the question the probe and
+  // Fleet guards actually mean. A box's interactive setup finish runs under the
+  // provision key, not the box id, so asking hasLiveSession(box.id) alone
+  // reports no session while the user is sitting at an ssh password prompt.
+  function hasLiveSessionForBox(boxId) {
+    return hasLiveSession(boxId) || hasLiveSession(provisionKey(boxId));
+  }
+
+  return { open, openLocal, provision, attach, onExit, write, resize, detach, close, closeIfUnwatched, closeKey, hasLiveSession, hasLiveSessionForBox, _count: () => entries.size };
 }

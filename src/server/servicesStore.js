@@ -123,7 +123,12 @@ function normalizeCheck(raw, base) {
     }
     return out;
   }
-  if (target) throw new Error("check.target must be absent for kind 'none'");
+  // kind 'none' has nothing to probe. A target *inherited* from the stored check
+  // is dropped rather than refused: switching a tile to "link only" is itself the
+  // instruction to stop probing, and refusing left the form with no way out. A
+  // target sent explicitly alongside kind 'none' is still a contradiction.
+  const explicitTarget = typeof raw?.target === 'string' ? raw.target.trim() : '';
+  if (explicitTarget) throw new Error("check.target must be absent for kind 'none'");
   return { kind };
 }
 

@@ -53,11 +53,32 @@ export function micTestMessage(
   }
 }
 
+// How many consecutive unanswered polls to tolerate before abandoning the watch.
+// A dropped poll must not abandon a live build, but an endlessly failing source
+// must not be retried forever: voice.ts's fetch layer does not route through the
+// central 401 seam, so after logout every poll 401s and the loop would otherwise
+// run for the life of the page.
+export const INSTALL_POLL_MAX_FAILURES = 5;
+
 // Pure: poll policy for the install job. Milliseconds until the next poll, or
-// null to stop.
-export function installPollDelay(job: VoiceJob | null): number | null {
-  if (!job) return 2000;            // transient fetch failure — keep trying
+// null to stop. `failures` is the current run of consecutive unanswered polls.
+export function installPollDelay(job: VoiceJob | null, failures = 0): number | null {
+  if (!job) return failures >= INSTALL_POLL_MAX_FAILURES ? null : 2000;
   return job.status === 'running' ? 1000 : null;
+}
+
+// The install watch outlives a single render — it has to survive the re-render
+// that paints progress — so exactly one may exist at a time, owned here rather
+// than by whichever render happened to start it. The settings shell disposes it
+// when the tab changes or the modal closes; without an owner it repainted the
+// Voice UI over whatever tab was open when the install finished.
+let activeWatch: { stop: () => void } | null = null;
+let watchGen = 0;
+
+export function stopVoiceWatch(): void {
+  activeWatch?.stop();
+  activeWatch = null;
+  watchGen += 1;
 }
 
 export async function renderVoiceSection(content: HTMLElement): Promise<VoiceStatus | null> {
@@ -79,18 +100,30 @@ export async function renderVoiceSection(content: HTMLElement): Promise<VoiceSta
 
   function watch(id: string): void {
     logBox.style.display = '';
+    // Re-opening the tab during an install must adopt the watch, not stack a
+    // second one onto the same job.
+    stopVoiceWatch();
+    const my = watchGen;
+    let failures = 0;
     const poller = createSetupJobPoller<VoiceJob>({
       fetchJob: () => voiceApi.job(id).catch(() => null),
       onJob: (job) => {
+        // A watch the shell has disposed (tab switched, modal closed) must not
+        // paint: `logBox` belongs to a render that is no longer on screen.
+        if (my !== watchGen) return null;
         if (job) {
+          failures = 0;
           logBox.textContent = job.log || '(no output yet)';
           if (job.status === 'error') logBox.textContent += `\n\nFAILED: ${job.error}`;
           logBox.scrollTop = logBox.scrollHeight;
-          if (job.status !== 'running') void settle(job);
+          if (job.status !== 'running') void settle(job, my);
+        } else {
+          failures += 1;
         }
-        return installPollDelay(job);
+        return installPollDelay(job, failures);
       },
     });
+    activeWatch = poller;
     poller.start();
   }
 
@@ -101,8 +134,15 @@ export async function renderVoiceSection(content: HTMLElement): Promise<VoiceSta
   // reading "will download" until the modal was reopened, even though the
   // model was installed. Verifying what was painted, and retrying briefly,
   // makes the final state self-healing instead of depending on one event.
-  async function settle(job: VoiceJob): Promise<void> {
+  async function settle(job: VoiceJob, my = watchGen): Promise<void> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      // Re-checked each round: the operator may switch tabs or close the modal
+      // between attempts, and repainting then would replace their current tab
+      // with the Voice UI. The generation is the plumbed signal (the settings
+      // shell disposes this watch on both); a detached node is a defensive
+      // backstop, compared against false explicitly because the lightweight DOM
+      // stand-in the render tests use has no isConnected at all.
+      if (my !== watchGen || content.isConnected === false) return;
       const painted = await refresh();
       if (!painted || job.status !== 'done') return;
       if (painted.models.some((m) => m.id === job.model && m.installed)) return;

@@ -148,7 +148,8 @@ const statusChecker = createStatusChecker({
   // Don't probe a box that has a live interactive session — the probe would
   // collide with the login on the shared ControlMaster socket. Instead report
   // its real state from the ControlMaster: alive = connected, absent = needs auth.
-  hasLiveSession: (box) => sessions.hasLiveSession(box.id),
+  // Covers the interactive setup finish too, which runs under the provision key.
+  hasLiveSession: (box) => sessions.hasLiveSessionForBox(box.id),
   masterAlive: (box) => boxActions.isMasterAlive(box),
 });
 const removeBox = createBoxRemoval({ store, sessions, boxActions, statusChecker });
@@ -165,7 +166,7 @@ const fleetManager = createFleetManager({
   maxOutputBytes: config.fleetMaxOutputBytes,
   // Same mid-login guard as the status checker: don't fire a BatchMode exec
   // over a box's shared ControlMaster while its interactive login is live.
-  hasLiveSession: (box) => sessions.hasLiveSession(box.id),
+  hasLiveSession: (box) => sessions.hasLiveSessionForBox(box.id),
   masterAlive: (box) => boxActions.isMasterAlive(box),
 });
 const secretBox = createSecretBox(config.cookieSecret);

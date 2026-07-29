@@ -1,5 +1,6 @@
 import { pve, type LifecycleAction, type PveContainerState, type PveLinkedContainer } from './proxmox';
 import { el, err, input, openModal } from './dom';
+import { registerModal } from './modalRegistry';
 
 export function actionsForState(state: PveContainerState): LifecycleAction[] {
   if (state === 'running') return ['shutdown', 'stop', 'reboot', 'deprovision'];
@@ -22,7 +23,10 @@ function openDeprovisionDialog(container: PveLinkedContainer, onConfirm: (name: 
   const typed = input('', { autocomplete: 'off' });
   const submit = el('button', { type: 'submit', class: 'pve-primary', disabled: true }, ['Deprovision']);
   const errorLine = el('div', { class: 'pve-err' });
-  const { close } = openModal({ modal });
+  // Body-mounted, so teardown must be able to reach it: an expiring session
+  // otherwise leaves a live Deprovision button over the login screen.
+  const { close } = openModal({ modal, onClose: () => unregister() });
+  const unregister = registerModal(close);
   typed.addEventListener('input', () => { submit.disabled = typed.value !== container.boxLabel; });
   modal.addEventListener('submit', async (event) => {
     event.preventDefault(); submit.disabled = true; errorLine.textContent = '';
