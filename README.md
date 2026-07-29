@@ -65,7 +65,7 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | health events retained | `TMUXIFIER_HEALTH_EVENTS_MAX` | `200` |
 | health cpu/mem/disk warn % | `TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT` | `90` |
 | health threshold hysteresis % | `TMUXIFIER_HEALTH_HYSTERESIS_PCT` | `5` |
-| agent idle threshold (s) | `TMUXIFIER_AGENT_IDLE_SEC` | `45` |
+| agent idle threshold (s) | `TMUXIFIER_AGENT_IDLE_SEC` | `20` |
 | Proxmox task poll interval (ms) | `TMUXIFIER_PVE_POLL_MS` | `1500` |
 | Proxmox per-request timeout (ms) | `TMUXIFIER_PVE_TIMEOUT_MS` | `15000` |
 | Proxmox provision timeout (ms) | `TMUXIFIER_PVE_PROVISION_TIMEOUT_MS` | `600000` |
@@ -626,7 +626,9 @@ only. Tune with `TMUXIFIER_HEALTH_HISTORY_MAX`, `TMUXIFIER_HEALTH_EVENTS_MAX`,
 `TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT`, and `TMUXIFIER_HEALTH_HYSTERESIS_PCT`.
 
 Tmuxifier also watches each box's configured tmux session for Claude Code and raises **claude is
-waiting for input** (idle past `TMUXIFIER_AGENT_IDLE_SEC`, default 45s) / **claude finished**
+waiting for input** (the pane has produced no output for longer than
+`TMUXIFIER_AGENT_IDLE_SEC`, default 20s — Claude Code repaints its spinner about once a second
+while it works, and stops repainting once it is sitting at a prompt) / **claude finished**
 (the pane is no longer running Claude Code) events into the same timeline — suppressed while
 you're actively attached to that session, since watching it is its own notification. Browser
 notifications for these agent events and for the box-health events above can be toggled per kind

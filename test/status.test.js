@@ -13,6 +13,18 @@ test('parseTmuxSessions maps fields', () => {
   ]);
 });
 
+test('the probe reads the active window last-output time, not the session key-input time', () => {
+  // `#{session_activity}` is bumped by KEY INPUT and attach, not by pane output:
+  // a claude that has been thinking for minutes without a keystroke reads as
+  // idle, and merely attaching fabricates a fresh "active" reading. Verified on
+  // a live box: session_activity froze 109s behind while the pane was repainting
+  // its spinner every second. `#{window_activity}` is the output clock — it
+  // tracks the repaint and stays frozen at an idle claude prompt, which is
+  // exactly the working-vs-waiting distinction healthHistory needs.
+  expect(PROBE_REMOTE).toContain('#{window_activity}');
+  expect(PROBE_REMOTE).not.toContain('#{session_activity}');
+});
+
 test('parseTmuxSessions ignores the __META__ health line and still parses sessions after it', () => {
   const out = '__META__ load1=0.42 cpus=4 diskPct=61\nweb:2:1:1718000000\n';
   expect(parseTmuxSessions(out)).toEqual([

@@ -204,9 +204,13 @@ pattern for new modules.
   session keeps running.
 - `status.js` — per-box reachability/status probes; coalesces concurrent probes of the same box
   (in-flight de-dup) so multiple pollers don't fan out duplicate SSH connections. Each probe also
-  reports every tmux session's active-pane command and last-activity time, plus the box's own
+  reports every tmux session's active-pane command and last-output time, plus the box's own
   clock, which `healthHistory.js` uses to derive per-session agent idle state without any extra
-  SSH round trip. The `__META__` health line carries the box's distro identity
+  SSH round trip. That timestamp is `#{window_activity}` and deliberately **not**
+  `#{session_activity}`: tmux bumps the session one on key input and on attach but never on
+  output alone, so a claude thinking for minutes without a keystroke read as idle while it was
+  busy, and a bare attach fabricated an active reading that later decayed into a false
+  agent-input. The `__META__` health line carries the box's distro identity
   (`osId`/`osVer`) alongside the numeric metrics — read out of `/etc/os-release` with `read`/`case`
   shell built-ins rather than awk, because the probe runs under whatever PATH the box's
   non-interactive shell provides, and the file is **read, never sourced**. These are the only
@@ -344,9 +348,10 @@ pattern for new modules.
   sample series per box (fed by the status poller after each snapshot swap) and derives an
   edge-triggered events log (down/up/needs-auth/threshold, persisted to `data/health-events.json`
   by `createHealthEventsStore`); served by `GET /api/health/series|events`. It also derives a
-  per-box agent state (`working`/`waiting`, or `unknown` when the box clock is unavailable) for
-  the box's configured session from the status probe's active-pane command and idle time
-  (`agentIdleSec` / `TMUXIFIER_AGENT_IDLE_SEC`, default 45s), and emits edge-triggered
+  per-box agent state (`working`/`waiting`, or `unknown` when the box clock or the activity
+  timestamp is unavailable) for the box's configured session from the status probe's active-pane
+  command and time since the pane last produced output
+  (`agentIdleSec` / `TMUXIFIER_AGENT_IDLE_SEC`, default 20s), and emits edge-triggered
   `agent-input`/`agent-done` events — suppressed while that session is attached, since watching
   the terminal is its own notification. `onEvent(cb)` is the deferred server-push delivery seam —
   nothing subscribes to it; browser notifications are instead delivered client-side, by `main.ts`

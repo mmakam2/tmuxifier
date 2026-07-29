@@ -36,8 +36,10 @@ export function sampleOf(status, at, opts = {}) {
     if (disk != null) sample.diskPct = disk;
   }
   // Agent state for the box's configured session only (opts.sessionName).
-  // PRESENCE comes from the pane command alone; the box clock only decides
-  // working vs waiting. A poll whose __META__ line failed (no boxNowSec) must
+  // PRESENCE comes from the pane command alone; the two timestamps (the box
+  // clock and the pane's last output) only decide working vs waiting, and
+  // either one missing yields 'unknown' rather than a guess. A poll whose
+  // __META__ line failed (no boxNowSec) must
   // neither erase the agent (false agent-done) nor fabricate an observed idle
   // state: a fabricated 'working' would make the recovery poll look like a
   // genuine working->waiting edge and fire a false agent-input one poll after
@@ -52,9 +54,15 @@ export function sampleOf(status, at, opts = {}) {
     if (sess) {
       sample.agentAttached = !!sess.attached;
       if (/^claude(-|$)/.test(String(sess.paneCmd || ''))) {
-        if (m && m.boxNowSec != null) {
-          const idleSec = m.boxNowSec - Number(sess.activity || 0);
-          sample.agent = idleSec >= Number(agentIdleSec ?? 45) ? 'waiting' : 'working';
+        // `sess.activity` is the pane's last-OUTPUT time (status.js probes
+        // #{window_activity}, not #{session_activity} — see the note there).
+        // An absent or unparseable timestamp gets the same 'unknown' treatment
+        // as a missing clock: reading it as 0 would make the idle interval
+        // enormous and report a confident 'waiting' for a working agent.
+        const activity = Number(sess.activity);
+        if (m && m.boxNowSec != null && Number.isFinite(activity) && activity > 0) {
+          const idleSec = m.boxNowSec - activity;
+          sample.agent = idleSec >= Number(agentIdleSec ?? 20) ? 'waiting' : 'working';
         } else {
           sample.agent = 'unknown';
         }
@@ -165,7 +173,7 @@ export function createHealthHistory({
   maxSamples = 120,
   maxEvents = 200,
   thresholds = { cpu: 90, mem: 90, disk: 90, hysteresis: 5 },
-  agentIdleSec = 45,
+  agentIdleSec = 20,
   load = () => [],
   save = () => {},
   now = () => Date.now(),

@@ -199,6 +199,18 @@ test('sampleOf without a box clock reports presence with UNKNOWN idleness (never
   expect(sampleOf(noMeta, 5, AGENT).agent).toBe('unknown');
 });
 
+test('sampleOf reports UNKNOWN idleness when the activity timestamp is missing or unusable', () => {
+  // The activity field comes from a tmux format var. A tmux too old to know it
+  // (or any parse hiccup) renders it empty, and treating that as timestamp 0
+  // would compute an enormous idle interval and report a confident 'waiting'
+  // for a claude that is actually working — the same false reading the
+  // session_activity signal used to produce. Absent evidence is 'unknown'.
+  for (const activity of [undefined, 0, '', NaN, 'x']) {
+    const bad = withAgent({ sessions: [{ name: 'web', attached: false, activity, paneCmd: 'claude' }] });
+    expect(sampleOf(bad, 5, AGENT).agent).toBe('unknown');
+  }
+});
+
 test('a __META__ gap in the middle of a continuous wait fires no agent-input on recovery', () => {
   // waiting -> (clock missing: unknown) -> waiting must be silent end to end;
   // agent-done must still fire THROUGH an unknown sample (presence is

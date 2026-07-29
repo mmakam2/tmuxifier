@@ -51,7 +51,7 @@ const DEFAULTS = {
   healthThresholdHysteresisPct: 5,
   // Seconds a claude pane's tmux session must be idle (no output) before it is
   // read as "waiting for input" — see docs/superpowers/specs/2026-07-19-agent-notifications-design.md
-  agentIdleSec: 45,
+  agentIdleSec: 20,
   // Proxmox LXC provisioning (Phase 1). Poll cadence for PVE task progress, per-request
   // and overall-provision timeouts, DHCP-lease discovery window, and retained job history.
   pvePollMs: 1500,

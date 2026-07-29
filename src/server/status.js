@@ -1,6 +1,17 @@
 import { buildProbeArgv } from './sshCommand.js';
 
-const STATUS_FMT = '#{session_name}:#{session_windows}:#{session_attached}:#{session_activity}:#{pane_current_command}';
+// The activity field is `#{window_activity}` — the last time the session's
+// current window produced OUTPUT — and deliberately not `#{session_activity}`,
+// which tmux bumps on key input and on attach but never on output alone. That
+// distinction is the whole basis of healthHistory's agent working/waiting
+// derivation: a claude thinking for minutes without a keystroke kept reporting
+// the timestamp of the user's last key, so it read as idle while it was busy,
+// and a bare attach fabricated a fresh "active" reading that later decayed into
+// a false agent-input. Window vars resolve against the session's current window
+// here, matching `#{pane_current_command}` beside it, so both describe the same
+// pane. Verified against a live claude: window_activity tracks the spinner
+// repaint every second while working and stays frozen at an idle prompt.
+const STATUS_FMT = '#{session_name}:#{session_windows}:#{session_attached}:#{window_activity}:#{pane_current_command}';
 
 // A compact host-health line emitted *before* the tmux output on the SSH probe
 // we already run every poll, so load/mem/disk cost no extra connection. Format is
