@@ -14,18 +14,13 @@ export type NetboxSummary =
   | { configured: false }
   | { configured: true; ok: boolean; error?: string; prefixes: NetboxPrefixSummary[] };
 
-async function jr<T>(p: Promise<Response>): Promise<T> {
-  const res = await p;
-  if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || res.statusText);
-  return res.json() as Promise<T>;
-}
-const jsonBody = (method: string, v: unknown) => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(v) });
+import { jsonFetch, jsonBody } from './http';
 
 export const nbx = {
-  get() { return jr<{ settings: NetboxSettings | null }>(fetch('/api/netbox/settings')); },
-  save(spec: NetboxSettingsInput) { return jr<{ settings: NetboxSettings }>(fetch('/api/netbox/settings', jsonBody('PUT', spec))); },
-  clear() { return jr<{ ok: boolean }>(fetch('/api/netbox/settings', { method: 'DELETE' })); },
-  test(spec: Partial<NetboxSettingsInput>) { return jr<NetboxTestResult>(fetch('/api/netbox/test', jsonBody('POST', spec))); },
-  nextIp(vlan: number) { return jr<NetboxNextIp>(fetch(`/api/netbox/next-ip?vlan=${vlan}`)); },
-  summary() { return jr<NetboxSummary>(fetch(`/api/netbox/summary?t=${Date.now()}`)); },
+  get() { return jsonFetch<{ settings: NetboxSettings | null }>('/api/netbox/settings'); },
+  save(spec: NetboxSettingsInput) { return jsonFetch<{ settings: NetboxSettings }>('/api/netbox/settings', jsonBody('PUT', spec)); },
+  clear() { return jsonFetch<{ ok: boolean }>('/api/netbox/settings', { method: 'DELETE' }); },
+  test(spec: Partial<NetboxSettingsInput>) { return jsonFetch<NetboxTestResult>('/api/netbox/test', jsonBody('POST', spec)); },
+  nextIp(vlan: number) { return jsonFetch<NetboxNextIp>(`/api/netbox/next-ip?vlan=${vlan}`); },
+  summary() { return jsonFetch<NetboxSummary>(`/api/netbox/summary?t=${Date.now()}`); },
 };

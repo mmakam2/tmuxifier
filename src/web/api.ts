@@ -195,22 +195,11 @@ export interface SeedResult { target: 'claude' | 'codex' | 'all' | 'statusline';
 export interface AiAuthCliStatus { ready: boolean; reason?: string }
 export interface AiAuthStatus { claude: AiAuthCliStatus; codex: AiAuthCliStatus }
 
-// Central 401 seam. When the session cookie expires (or the server restarts
-// with a new secret) every poller and action starts failing with 401s; without
-// one place to notice, the dashboard silently freezes at its last-painted
-// state. main.ts registers a handler that tears the dashboard down and routes
-// back to the login screen. The handler must tolerate firing for /api/login's
-// own wrong-password 401 (main.ts no-ops when the login screen is already up).
-let unauthorizedHandler: (() => void) | null = null;
-export function onUnauthorized(fn: (() => void) | null) { unauthorizedHandler = fn; }
-
-async function j<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    if (res.status === 401) unauthorizedHandler?.();
-    throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-  }
-  return res.json();
-}
+// The 401 seam moved to http.ts so the other four fetch layers reach it too
+// (C2). Re-exported here because main.ts and every existing caller register
+// through api.ts — it is the same handler slot, not a second one.
+export { onUnauthorized } from './http';
+import { jsonOf as j } from './http';
 export const api = {
   async me() { return (await fetch('/api/me')).ok; },
   async authInfo() {
@@ -302,9 +291,10 @@ export const api = {
   async getSetup(id: string) { return j<SetupJob>(await fetch(`/api/setup/${id}?t=${Date.now()}`)); },
   async getBoxSetup(boxId: string): Promise<SetupJob | null> {
     const res = await fetch(`/api/boxes/${boxId}/setup?t=${Date.now()}`);
+    // 204 means "no setup job for this box", not an error — the one case that
+    // cannot go through jsonOf, which would try to parse an empty body.
     if (res.status === 204) return null;
-    if (!res.ok) throw new Error(`setup lookup failed (${res.status})`);
-    return res.json() as Promise<SetupJob>;
+    return j<SetupJob>(res);
   },
   async listSetups() { return j<SetupSummary[]>(await fetch('/api/setup')); },
 };

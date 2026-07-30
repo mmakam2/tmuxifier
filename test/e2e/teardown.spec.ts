@@ -71,6 +71,46 @@ test('an expired session preserves the persisted split and stops polling', async
   await expect(page.locator('.stage-pane')).toHaveCount(2, { timeout: 20000 });
 });
 
+// C2. The four settings-tab fetch layers (proxmox, netbox, passkeys, voice) each
+// hand-rolled their own throw-on-not-ok pair and never reached api.ts's 401 seam,
+// so an expired session hit them and the app went on believing it was signed in:
+// a generic error toast, the dashboard frozen at its last paint, and — for the
+// voice install poller — a 401 every 2s forever (B6).
+//
+// The unit tests prove the seam fires; this proves the whole chain, because the
+// symptom was never the throw. It was that nothing downstream reacted to it.
+// NetBox is the tab under test: it loads through nbx.get() on open, needs no
+// fixture, and is one of the four layers that was bypassing the seam.
+// The background pollers all go through api.ts, which HAS had the seam all
+// along — so with them running this test passes even when netbox.ts bypasses it,
+// just 10s later instead of 300ms (the dashboard tick). Verified by mutation:
+// restoring the hand-rolled bypass kept it green until these were silenced.
+// They are answered with healthy bodies rather than aborted, so the only 401 the
+// page can possibly observe is the one the settings tab makes.
+async function silenceBackgroundPolls(page) {
+  await page.route('**/api/status**', (r) => r.fulfill({ json: {} }));
+  await page.route('**/api/services', (r) => r.fulfill({ json: [] }));
+  await page.route('**/api/services/status**', (r) => r.fulfill({ json: {} }));
+}
+
+test('an expired session detected by a settings tab tears the workspace down', async ({ page }) => {
+  await login(page);
+  await silenceBackgroundPolls(page);
+  await expireSession(page);
+
+  // The gear opens on the NetBox tab, so nbx.get() fires on open — no tab click
+  // (which would race the teardown this test is waiting for).
+  await page.click('#settings');
+
+  // The 401 from nbx.get() must route to the login screen, and take the
+  // body-mounted settings modal with it — a modal left floating over the login
+  // screen with live controls is the B11 shape. The timeout is well inside the
+  // 30s status poll, the only seam-wired caller left: nothing but the settings
+  // tab can produce this within the window.
+  await expect(page.locator('#pw')).toBeVisible({ timeout: 8000 });
+  await expect(page.locator('.settings-modal')).toHaveCount(0);
+});
+
 // B11 is NOT covered here, deliberately. Every one of the five modals needs a
 // fixture this suite does not have: the passkey dialogs are disabled because
 // passkeys pin to `localhost` while the e2e origin is `127.0.0.1`, and the

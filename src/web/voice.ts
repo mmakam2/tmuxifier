@@ -22,22 +22,16 @@ export interface VoiceStatus {
   job: VoiceJob | null;
 }
 
-async function j<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({} as { error?: string }));
-    throw new Error(body.error || `HTTP ${res.status}`);
-  }
-  return res.json() as Promise<T>;
-}
+// The install poller runs for the length of a whisper.cpp build. Before this
+// went through the shared seam (C2) a logout mid-install left it 401ing every
+// 2s forever, because nothing here could tell the app the session was gone.
+import { jsonFetch, jsonBody } from './http';
 
 export const voiceApi = {
-  status: () => fetch('/api/voice/status').then((r) => j<VoiceStatus>(r)),
-  install: (model: string) => fetch('/api/voice/install', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model }),
-  }).then((r) => j<VoiceJob>(r)),
+  status: () => jsonFetch<VoiceStatus>('/api/voice/status'),
+  install: (model: string) => jsonFetch<VoiceJob>('/api/voice/install', jsonBody('POST', { model })),
   // Cache-busted: a poll that reads a stale job would freeze the log mid-build.
-  job: (id: string) => fetch(`/api/voice/install/${encodeURIComponent(id)}?t=${Date.now()}`).then((r) => j<VoiceJob>(r)),
-  saveSettings: (patch: { enabled?: boolean; model?: string }) => fetch('/api/voice/settings', {
-    method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch),
-  }).then((r) => j<{ enabled: boolean; model: string }>(r)),
+  job: (id: string) => jsonFetch<VoiceJob>(`/api/voice/install/${encodeURIComponent(id)}?t=${Date.now()}`),
+  saveSettings: (patch: { enabled?: boolean; model?: string }) =>
+    jsonFetch<{ enabled: boolean; model: string }>('/api/voice/settings', jsonBody('PATCH', patch)),
 };

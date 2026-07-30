@@ -143,12 +143,10 @@ export function serializeAssertion(c: PublicKeyCredential) {
   };
 }
 
-async function jr<T>(p: Promise<Response>): Promise<T> {
-  const res = await p;
-  if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || res.statusText);
-  return res.json() as Promise<T>;
-}
-const jsonBody = (method: string, v: unknown) => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(v) });
+// The login endpoints below return a 401 for a bad credential, which now reaches
+// the shared seam. That is the same tolerated case as /api/login's wrong-password
+// 401: main.ts's handler no-ops while the login screen is up.
+import { jsonFetch as jr, jsonBody } from './http';
 
 interface SerializedRegistration {
   id: string;
@@ -172,27 +170,27 @@ interface SerializedAssertion {
 }
 
 export const pk = {
-  state() { return jr<PasskeyState>(fetch('/api/passkeys')); },
-  registerBegin() { return jr<CreationOptionsJson>(fetch('/api/passkeys/register/begin', { method: 'POST' })); },
+  state() { return jr<PasskeyState>('/api/passkeys'); },
+  registerBegin() { return jr<CreationOptionsJson>('/api/passkeys/register/begin', { method: 'POST' }); },
   /** registerFinish accepts the full serialized credential from serializeRegistration and sends it to the server. */
   registerFinish(label: string, credential: SerializedRegistration) {
-    return jr<{ credential: PasskeyCredential }>(fetch('/api/passkeys/register/finish', jsonBody('POST', { label, response: credential.response })));
+    return jr<{ credential: PasskeyCredential }>('/api/passkeys/register/finish', jsonBody('POST', { label, response: credential.response }));
   },
-  remove(id: string) { return jr<{ ok: boolean; disarmed: boolean }>(fetch(`/api/passkeys/${encodeURIComponent(id)}`, { method: 'DELETE' })); },
+  remove(id: string) { return jr<{ ok: boolean; disarmed: boolean }>(`/api/passkeys/${encodeURIComponent(id)}`, { method: 'DELETE' }); },
   setOnly(enabled: boolean, assertion?: SerializedAssertion) {
-    return jr<{ passkeyOnly: boolean }>(fetch('/api/passkeys/only', jsonBody('POST',
-      assertion ? { enabled, id: assertion.id, response: assertion.response } : { enabled })));
+    return jr<{ passkeyOnly: boolean }>('/api/passkeys/only', jsonBody('POST',
+      assertion ? { enabled, id: assertion.id, response: assertion.response } : { enabled }));
   },
   onlyBegin() {
     return jr<{ challenge: string; rpId: string; timeout: number; userVerification: string }>(
-      fetch('/api/passkeys/only/begin', { method: 'POST' }));
+      '/api/passkeys/only/begin', { method: 'POST' });
   },
   loginBegin() {
     return jr<{ challenge: string; rpId: string; timeout: number; userVerification: string }>(
-      fetch('/api/auth/passkey/login/begin', { method: 'POST' }));
+      '/api/auth/passkey/login/begin', { method: 'POST' });
   },
   /** loginFinish accepts the full serialized assertion from serializeAssertion and sends it to the server. */
-  loginFinish(assertion: SerializedAssertion) { return jr<{ ok: boolean }>(fetch('/api/auth/passkey/login/finish', jsonBody('POST', assertion))); },
+  loginFinish(assertion: SerializedAssertion) { return jr<{ ok: boolean }>('/api/auth/passkey/login/finish', jsonBody('POST', assertion)); },
 };
 
 // Thin wrappers so callers never touch navigator.credentials directly.

@@ -35,44 +35,38 @@ export interface PveClusterNode {
 export interface LifecycleJobSummary { id: string; action: LifecycleAction; boxId: string; boxLabel: string; hostId: string; hostName: string; node: string; vmid: number; status: LifecycleStatus; phase: string; error: string | null; createdAt: string; finishedAt: string | null; }
 export interface LifecycleJob extends LifecycleJobSummary { log: string; }
 
-async function jr<T>(p: Promise<Response>): Promise<T> {
-  const res = await p;
-  if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || res.statusText);
-  return res.json() as Promise<T>;
-}
-const json = (method: 'POST' | 'PUT', value: unknown) => ({
-  method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(value),
-});
+import { jsonFetch as jr, jsonBody as json } from './http';
+
 const post = (value: unknown) => json('POST', value);
 
 export const pve = {
-  hosts() { return jr<PveHost[]>(fetch('/api/proxmox/hosts')); },
-  inspect(endpoint: string) { return jr<InspectResult>(fetch('/api/proxmox/inspect', post({ endpoint }))); },
-  addHost(spec: Partial<PveHost> & { tokenSecret: string }) { return jr<PveHost>(fetch('/api/proxmox/hosts', post(spec))); },
-  removeHost(id: string) { return jr(fetch(`/api/proxmox/hosts/${id}`, { method: 'DELETE' })); },
-  testHost(id: string) { return jr<{ ok: boolean; version?: unknown }>(fetch(`/api/proxmox/hosts/${id}/test`, { method: 'POST' })); },
-  nodes(id: string) { return jr<{ node: string }[]>(fetch(`/api/proxmox/hosts/${id}/nodes`)); },
-  storage(id: string, node: string) { return jr<StorageGroups>(fetch(`/api/proxmox/hosts/${id}/nodes/${node}/storage`)); },
-  templates(id: string, node: string, storage: string) { return jr<{ volid: string }[]>(fetch(`/api/proxmox/hosts/${id}/nodes/${node}/templates?storage=${encodeURIComponent(storage)}`)); },
-  bridges(id: string, node: string) { return jr<{ iface: string }[]>(fetch(`/api/proxmox/hosts/${id}/nodes/${node}/bridges`)); },
-  keys() { return jr<PveKey[]>(fetch('/api/proxmox/keys')); },
-  addKey(spec: { name: string; publicKey: string }) { return jr<PveKey>(fetch('/api/proxmox/keys', post(spec))); },
-  removeKey(id: string) { return jr(fetch(`/api/proxmox/keys/${id}`, { method: 'DELETE' })); },
-  defaultKey() { return jr<{ publicKey: string | null }>(fetch('/api/proxmox/default-key')); },
-  rootPasswordStatus() { return jr<{ set: boolean }>(fetch('/api/proxmox/root-password')); },
-  setRootPassword(password: string) { return jr<{ set: boolean }>(fetch('/api/proxmox/root-password', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })); },
-  clearRootPassword() { return jr<{ set: boolean }>(fetch('/api/proxmox/root-password', { method: 'DELETE' })); },
-  presets() { return jr<PvePreset[]>(fetch('/api/proxmox/presets')); },
-  addPreset(spec: unknown) { return jr<PvePreset>(fetch('/api/proxmox/presets', post(spec))); },
-  updatePreset(id: string, spec: unknown) { return jr<PvePreset>(fetch(`/api/proxmox/presets/${id}`, json('PUT', spec))); },
-  removePreset(id: string) { return jr(fetch(`/api/proxmox/presets/${id}`, { method: 'DELETE' })); },
-  createProvision(spec: { presetId: string; hostname: string; vmid?: number; ip?: string; tags?: string[]; setupOptions?: SetupOptions }) { return jr<ProvisionSummary>(fetch('/api/proxmox/provisions', post(spec))); },
-  provisions() { return jr<ProvisionSummary[]>(fetch('/api/proxmox/provisions')); },
-  provision(id: string) { return jr<ProvisionJob>(fetch(`/api/proxmox/provisions/${id}?t=${Date.now()}`)); },
-  linkedContainers() { return jr<PveLinkedContainer[]>(fetch('/api/proxmox/containers')); },
-  clusterNodes() { return jr<PveClusterNode[]>(fetch('/api/proxmox/nodes')); },
-  nodeContainers(hostId: string, node: string) { return jr<PveNodeContainer[]>(fetch(`/api/proxmox/hosts/${hostId}/nodes/${encodeURIComponent(node)}/containers`)); },
-  createLifecycleJob(spec: { boxId: string; action: LifecycleAction; confirmName?: string }) { return jr<LifecycleJobSummary>(fetch('/api/proxmox/lifecycle-jobs', post(spec))); },
-  lifecycleJobs() { return jr<LifecycleJobSummary[]>(fetch('/api/proxmox/lifecycle-jobs')); },
-  lifecycleJob(id: string) { return jr<LifecycleJob>(fetch(`/api/proxmox/lifecycle-jobs/${id}?t=${Date.now()}`)); },
+  hosts() { return jr<PveHost[]>('/api/proxmox/hosts'); },
+  inspect(endpoint: string) { return jr<InspectResult>('/api/proxmox/inspect', post({ endpoint })); },
+  addHost(spec: Partial<PveHost> & { tokenSecret: string }) { return jr<PveHost>('/api/proxmox/hosts', post(spec)); },
+  removeHost(id: string) { return jr(`/api/proxmox/hosts/${id}`, { method: 'DELETE' }); },
+  testHost(id: string) { return jr<{ ok: boolean; version?: unknown }>(`/api/proxmox/hosts/${id}/test`, { method: 'POST' }); },
+  nodes(id: string) { return jr<{ node: string }[]>(`/api/proxmox/hosts/${id}/nodes`); },
+  storage(id: string, node: string) { return jr<StorageGroups>(`/api/proxmox/hosts/${id}/nodes/${node}/storage`); },
+  templates(id: string, node: string, storage: string) { return jr<{ volid: string }[]>(`/api/proxmox/hosts/${id}/nodes/${node}/templates?storage=${encodeURIComponent(storage)}`); },
+  bridges(id: string, node: string) { return jr<{ iface: string }[]>(`/api/proxmox/hosts/${id}/nodes/${node}/bridges`); },
+  keys() { return jr<PveKey[]>('/api/proxmox/keys'); },
+  addKey(spec: { name: string; publicKey: string }) { return jr<PveKey>('/api/proxmox/keys', post(spec)); },
+  removeKey(id: string) { return jr(`/api/proxmox/keys/${id}`, { method: 'DELETE' }); },
+  defaultKey() { return jr<{ publicKey: string | null }>('/api/proxmox/default-key'); },
+  rootPasswordStatus() { return jr<{ set: boolean }>('/api/proxmox/root-password'); },
+  setRootPassword(password: string) { return jr<{ set: boolean }>('/api/proxmox/root-password', json('PUT', { password })); },
+  clearRootPassword() { return jr<{ set: boolean }>('/api/proxmox/root-password', { method: 'DELETE' }); },
+  presets() { return jr<PvePreset[]>('/api/proxmox/presets'); },
+  addPreset(spec: unknown) { return jr<PvePreset>('/api/proxmox/presets', post(spec)); },
+  updatePreset(id: string, spec: unknown) { return jr<PvePreset>(`/api/proxmox/presets/${id}`, json('PUT', spec)); },
+  removePreset(id: string) { return jr(`/api/proxmox/presets/${id}`, { method: 'DELETE' }); },
+  createProvision(spec: { presetId: string; hostname: string; vmid?: number; ip?: string; tags?: string[]; setupOptions?: SetupOptions }) { return jr<ProvisionSummary>('/api/proxmox/provisions', post(spec)); },
+  provisions() { return jr<ProvisionSummary[]>('/api/proxmox/provisions'); },
+  provision(id: string) { return jr<ProvisionJob>(`/api/proxmox/provisions/${id}?t=${Date.now()}`); },
+  linkedContainers() { return jr<PveLinkedContainer[]>('/api/proxmox/containers'); },
+  clusterNodes() { return jr<PveClusterNode[]>('/api/proxmox/nodes'); },
+  nodeContainers(hostId: string, node: string) { return jr<PveNodeContainer[]>(`/api/proxmox/hosts/${hostId}/nodes/${encodeURIComponent(node)}/containers`); },
+  createLifecycleJob(spec: { boxId: string; action: LifecycleAction; confirmName?: string }) { return jr<LifecycleJobSummary>('/api/proxmox/lifecycle-jobs', post(spec)); },
+  lifecycleJobs() { return jr<LifecycleJobSummary[]>('/api/proxmox/lifecycle-jobs'); },
+  lifecycleJob(id: string) { return jr<LifecycleJob>(`/api/proxmox/lifecycle-jobs/${id}?t=${Date.now()}`); },
 };

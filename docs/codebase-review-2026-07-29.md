@@ -130,6 +130,30 @@ quotes the buffering call it replaced, which would otherwise satisfy them.
 
 Suites: unit 1847/1847 across 140 files.
 
+**Status note, 2026-07-30 (batch 6, v1.23.7): C2 closed, and B28 with it.** The 401 seam moved
+out of `api.ts` into a new `src/web/http.ts`, and all five fetch layers now route through its
+`jsonFetch`/`jsonOf`/`jsonBody`; `api.ts` re-exports `onUnauthorized` so `main.ts`'s single
+registration keeps working against the same handler slot. B28's `getBoxSetup` was the fifth
+hand-rolled copy and went with it, keeping only its genuine special case (204 means "no setup
+job for this box", which cannot go through a JSON parse). The unified error message gained a
+last-resort `HTTP <status>`: `statusText` is `''` over HTTP/2, which carries no reason phrase,
+so three of the four old copies would have thrown an empty message there — `voice.ts`'s
+fallback was the one right answer and is now everyone's.
+
+Two things are worth recording about the verification, because the first attempt was wrong.
+`test/webHttp.test.js` asserts the seam fires from each of the five layers and that no module
+outside `http.ts` hand-rolls an `if (!res.ok)` check — the mechanism by which the seam got
+bypassed four times over. The e2e test added to `teardown.spec.ts` (an expired session detected
+by opening the settings modal, which loads NetBox) initially **passed with the bug deliberately
+reintroduced**, because the dashboard's own 10s poll goes through `api.ts`, which has had the
+seam all along, and tore the workspace down anyway — 10.7s instead of 355ms. It only became
+proof once `/api/status` and the two `/api/services` endpoints were stubbed healthy, leaving the
+settings tab as the only possible source of a 401 inside the assertion window. Re-verified by
+mutation: with the hand-rolled bypass restored, the test fails; with the fix in place it passes
+in ~365ms.
+
+Suites: unit 1866/1866 across 142 files, e2e 31/31.
+
 **Status note, 2026-07-30 (batch 3, v1.23.5): the documentation tier is clear — every DOC row
 is resolved.** DOC1 (README described a rollback that has not happened since v1.7.2; it now
 describes the server-side setup job, Retry, the needs-interactive path, the terminal gate while
@@ -229,7 +253,7 @@ detailed explanation in the sections after the tables; Lows are described fully 
 | B25 | web | On a plain-http origin the passkey verdict says "This browser does not support passkeys" instead of naming the HTTPS requirement (`PublicKeyCredential` is `[SecureContext]`-exposed) | Low | S | Check `!isSecureContext` before the `hasWebAuthn` branch, as `evaluateVoice` already orders it | Open |
 | B26 | web | A saved vmid missing from the container list silently re-drafts the association to the first listed container, so Save Box can commit a link the user never chose | Low | S | Keep the draft at the saved values when `selected` matches no option, or insert an "unavailable (saved)" placeholder | Open |
 | B27 | web | Settings and hub tab switches have no generation guard, so a slow section's render paints over the newer tab | Low | S | A render generation counter checked before each section's final `replaceChildren` | Open |
-| B28 | web | `getBoxSetup` hand-rolls its response check and bypasses the central 401 seam, so an expired session churns 401s at 1.5s instead of triggering teardown | Low | S | Call `unauthorizedHandler` on 401 inside `getBoxSetup` | Open |
+| B28 | web | `getBoxSetup` hand-rolls its response check and bypasses the central 401 seam, so an expired session churns 401s at 1.5s instead of triggering teardown | Low | S | Call `unauthorizedHandler` on 401 inside `getBoxSetup` | ✅ v1.23.7 |
 | B29 | web | The hub's setup viewer renders seed results but drops the statusline outcome the provision panel shows, so a failed push is invisible in the panel being watched | Low | S | Append the statusline line beside the seed line | Open |
 | B30 | voice | Voice control error paths leave the UI contradicting the server: a failed save leaves the checkbox flipped (unhandled rejection); a failed install start leaves the radio selected and the button disabled | Low | S | Catch and repaint via `refresh()` on failure | Open |
 | B31 | scripts | Pasting a password into `hash-password`'s hidden prompt embeds the terminating newline into the hash, so every later login 401s with no clue why | Low | S | Iterate the chunk character-by-character inside `onData` | Open |
@@ -263,7 +287,7 @@ detailed explanation in the sections after the tables; Lows are described fully 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
 | C1 | services | `checkPihole`/`checkTruenas`/`checkUnifi`/`checkImmich` are four structurally identical wrappers (~80 lines) differing only in registry, method, metrics key and message; the `fail()` kind-mappers duplicate too | Low | M | One parameterized helper, so the next integration inherits `auth`-vs-`down` semantics rather than re-transcribing them | Open |
-| C2 | web | Four fetch layers (`proxmox`, `netbox`, `passkeys`, `voice`) re-implement the same `jr()`/`jsonBody()` pair, and none is wired to `onUnauthorized` — the root cause behind B6 and B28 | Low | M | One shared `jsonFetch` with the 401 hook, reused by all five layers | Open |
+| C2 | web | Four fetch layers (`proxmox`, `netbox`, `passkeys`, `voice`) re-implement the same `jr()`/`jsonBody()` pair, and none is wired to `onUnauthorized` — the root cause behind B6 and B28 | Low | M | One shared `jsonFetch` with the 401 hook, reused by all five layers | ✅ v1.23.7 |
 | C3 | ssh | `gitBootstrap` is a verbatim inline copy of `installPackagesBlock('git', samePkg('git'), 'git')` — the six-package-manager ladder now exists twice | Low | S | `const gitBootstrap = needsGit ? installPackagesBlock(...) : []` | Open |
 | C4 | voice | `voiceInstall.js` reimplements `newestFirst` instead of importing the shared `jobOrder.js` comparator its header says is shared by the persisted job managers | Low | S | Import it | Open |
 
