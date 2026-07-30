@@ -58,7 +58,7 @@ npm start            # node src/server/index.js
 npm run dev          # vite + node --watch, proxies /api and /term to the backend
 npm run typecheck    # tsc --noEmit over src/web (the TS client; vite/vitest strip types unchecked)
 npm test             # typecheck + vitest run (unit + integration)
-npm run test:e2e     # playwright (spins up a local sshd-backed box; see test/helpers)
+npm run test:e2e     # playwright (spins up an isolated sshd-backed box; see test/helpers/localBox.js)
 npm run setup-voice  # headless equivalent of Settings -> Voice: builds whisper.cpp + downloads a pinned model into vendor/, records the choice in data/voice.json
 npm run fetch-icons  # downloads the pinned service-logo catalog into vendor/icons/ (one-time; the running server never contacts the CDN)
 ```
@@ -561,6 +561,18 @@ specifically so the Content-Security-Policy can stay `script-src 'self'`).
 - ESM everywhere (`"type": "module"`); Node 20+.
 - TDD: write the failing test first (see `test/`). Tests use **real code, not mocks** — enabled by
   the dependency-injection factories above.
+- The integration and e2e suites run against an **isolated** box, not the developer's account:
+  `test/helpers/localBox.js` spawns its own `sshd` on an ephemeral port with a temp host key, a temp
+  `AuthorizedKeysFile`, and `SetEnv HOME/ZDOTDIR/TMUX_TMPDIR` pointed at a fixture home holding
+  minimal rc files. It therefore reads none of the operator's shell config, never touches
+  `~/.ssh/authorized_keys`, and gets its own tmux server. Each of those was once false and each
+  cost a debugging session — an oh-my-zsh update prompt in the operator's `.zshrc` turned nine
+  tests red, and a stray `PATH` let `chsh` repoint the account's login shell at a temp directory
+  that no longer existed. `TMUX_TMPDIR` is load-bearing: with a shared socket, `tmux new-session`
+  attaches to the operator's running server and inherits its environment (the real `HOME`),
+  which looks green while testing the wrong thing. The guarantees are pinned by
+  `test/localBox.integration.test.js`; a missing `sshd` fails loudly rather than falling back to
+  the system one, since a silent fallback would restore the coupling invisibly.
 - Server is plain `.js`; web client is `.ts`.
 - Conventional-commit style messages (`fix(pty): …`, `feat(ui): …`).
 

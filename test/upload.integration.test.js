@@ -8,6 +8,7 @@ import { createBoxActions } from '../src/server/boxActions.js';
 import { UPLOAD_DIR_NAME } from '../src/server/uploads.js';
 
 let teardown;
+let boxHome;
 const created = [];
 afterEach(async () => {
   for (const p of created.splice(0)) { try { await fs.unlink(p); } catch {} }
@@ -18,13 +19,14 @@ afterEach(async () => {
 async function harness() {
   const lb = await setupLocalBox();
   teardown = lb.cleanup;
+  boxHome = lb.home;
   const box = { id: 'b1', label: 'local', host: lb.box.host, sessionName: lb.session };
   const boxActions = createBoxActions({
     run: (argv, opts) => sshRun(argv, { ...opts, env: lb.env }),
     runStdin: (argv, input, opts) => sshRunStdin(argv, input, { ...opts, env: lb.env }),
     sshConfigFile: lb.sshConfigFile,
   });
-  return { box, boxActions };
+  return { box, boxActions, home: lb.home };
 }
 
 test('uploadFile lands the bytes on the box and returns the absolute path', async () => {
@@ -40,8 +42,12 @@ test('uploadFile lands the bytes on the box and returns the absolute path', asyn
 });
 
 test('uploadFile prunes uploads older than 24h', async () => {
-  const { box, boxActions } = await harness();
-  const dir = path.join(os.homedir(), UPLOAD_DIR_NAME);
+  const { box, boxActions, home } = await harness();
+  // The fixture home the isolated box logs into — NOT os.homedir(). Using the
+  // real home here meant this test wrote into the developer's own
+  // ~/.tmuxifier-uploads and then relied on the box pruning it, which only
+  // worked because the "box" was the developer's account.
+  const dir = path.join(home, UPLOAD_DIR_NAME);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const oldFile = path.join(dir, 'stale-test-upload.txt');
   await fs.writeFile(oldFile, 'old');
