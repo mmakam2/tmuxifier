@@ -130,6 +130,35 @@ quotes the buffering call it replaced, which would otherwise satisfy them.
 
 Suites: unit 1847/1847 across 140 files.
 
+**Status note, 2026-07-30 (batch 7, v1.23.8): C1's first half done, its second half was a
+misread.** The four credentialed check wrappers are one `CREDENTIALED_CHECKS` table plus a single
+`checkCredentialed`, and `checkService` dispatches by table lookup. The four named exports are
+gone — nothing outside the module ever imported them, so the module's real surface was always
+`checkHttp`/`checkTcp`/`checkService`. What the table makes explicit is the semantics the four
+copies each re-stated: `auth` is distinct from `down` (a rotated credential means the service is
+answering, and red would cry wolf), a missing stored credential is named rather than echoing the
+API's message, TLS failures stay `down` because a transport is not an authentication problem, and
+a missing registry degrades instead of throwing.
+
+The tests moved the same way and this is where the row actually paid. Fifteen hand-written
+per-kind tests became one loop over the table, so a fifth integration inherits all six assertions
+instead of re-transcribing five of them. That loop is strictly stronger than what it replaced: the
+`tls`-is-down rule was previously asserted for UniFi alone though it binds every kind, and a
+registry that throws during `clientFor` was covered for none of them. The Pi-hole block was kept
+as-is — it drives a real client against a fake Pi-hole server, so it is an integration test rather
+than a fourth copy.
+
+**The `fail()` half of this row is withdrawn, not deferred.** The finding claimed four duplicated
+kind-mappers; there are two. `piholeApi.js` and `truenasApi.js` each have one, and `unifiApi.js`
+and `immichApi.js` have none — they build their results inline (UniFi propagates `e.kind` plus a
+fingerprint and defaults to `unexpected`; Immich derives its kinds from settled promises). The two
+that do exist differ in a load-bearing way: Pi-hole substitutes `AUTH_REJECTED` for an `expired`
+session where TrueNAS reports the raw message. Sharing them would mean a parameterized helper
+spanning an HTTPS client and a WebSocket JSON-RPC client — two modules with nothing else in
+common — to save roughly six lines. Left alone deliberately.
+
+Suites: unit 1880/1880 across 142 files. Net −60 lines of source and test.
+
 **Status note, 2026-07-30 (batch 6, v1.23.7): C2 closed, and B28 with it.** The 401 seam moved
 out of `api.ts` into a new `src/web/http.ts`, and all five fetch layers now route through its
 `jsonFetch`/`jsonOf`/`jsonBody`; `api.ts` re-exports `onUnauthorized` so `main.ts`'s single
@@ -286,7 +315,7 @@ detailed explanation in the sections after the tables; Lows are described fully 
 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
-| C1 | services | `checkPihole`/`checkTruenas`/`checkUnifi`/`checkImmich` are four structurally identical wrappers (~80 lines) differing only in registry, method, metrics key and message; the `fail()` kind-mappers duplicate too | Low | M | One parameterized helper, so the next integration inherits `auth`-vs-`down` semantics rather than re-transcribing them | Open |
+| C1 | services | `checkPihole`/`checkTruenas`/`checkUnifi`/`checkImmich` are four structurally identical wrappers (~80 lines) differing only in registry, method, metrics key and message; the `fail()` kind-mappers duplicate too | Low | M | One parameterized helper, so the next integration inherits `auth`-vs-`down` semantics rather than re-transcribing them | ✅ v1.23.8 (wrappers; `fail()` claim corrected below) |
 | C2 | web | Four fetch layers (`proxmox`, `netbox`, `passkeys`, `voice`) re-implement the same `jr()`/`jsonBody()` pair, and none is wired to `onUnauthorized` — the root cause behind B6 and B28 | Low | M | One shared `jsonFetch` with the 401 hook, reused by all five layers | ✅ v1.23.7 |
 | C3 | ssh | `gitBootstrap` is a verbatim inline copy of `installPackagesBlock('git', samePkg('git'), 'git')` — the six-package-manager ladder now exists twice | Low | S | `const gitBootstrap = needsGit ? installPackagesBlock(...) : []` | Open |
 | C4 | voice | `voiceInstall.js` reimplements `newestFirst` instead of importing the shared `jobOrder.js` comparator its header says is shared by the persisted job managers | Low | S | Import it | Open |

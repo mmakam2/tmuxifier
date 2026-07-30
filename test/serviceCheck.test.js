@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { checkHttp, checkTcp, checkService } from '../src/server/serviceCheck.js';
+import { checkHttp, checkTcp, checkService, CREDENTIALED_CHECKS } from '../src/server/serviceCheck.js';
 import { createPiholeClient } from '../src/server/piholeApi.js';
 import { startFakePihole } from './helpers/fakePihole.js';
 
@@ -175,128 +175,96 @@ test('checkService: a pihole service with no registry is down, not a throw', asy
   expect(r.state).toBe('down');
 });
 
-// --- truenas ---------------------------------------------------------------
-// A registry stand-in: real code on both sides, no mocking library.
-const registryReturning = (result) => ({ async clientFor() { return { async fetchMetrics() { return result; } }; } });
+// The truenas, unifi and immich blocks that stood here were stub-driven copies
+// of the same five assertions, one set per kind. They are the table-driven loop
+// at the bottom of this file now (C1) — which also covers the `tls`-is-down rule
+// that only unifi used to assert, and a registry that throws during setup, which
+// none of them did. The pihole block above stays: it drives a real client against
+// a fake Pi-hole, so it is an integration test, not a fourth copy.
 
-const nas = { id: 'svc-1', url: 'https://nas.example.com', check: { kind: 'truenas', username: 'truenas_admin' }, hasPassword: true };
-
-test('truenas: a successful read is up and carries the metrics under `truenas`', async () => {
-  const metrics = { pools: [], alerts: { critical: 0, warning: 0 }, version: '25.10.5', hostname: 'nas', uptimeSec: 10 };
-  const res = await checkService(nas, { truenasRegistry: registryReturning({ ok: true, metrics }) });
-  expect(res.state).toBe('up');
-  expect(res.truenas).toBe(metrics);
-  expect(typeof res.latencyMs).toBe('number');
+// C1 (2026-07-29 review). The four credentialed checks above were four
+// structurally identical wrappers, ~80 lines differing only in registry name,
+// client method, metrics key and message. The tests were four hand-written
+// copies to match — which meant a fifth integration had to re-transcribe both,
+// and could get the auth-vs-down distinction subtly wrong without any test
+// noticing.
+//
+// They are one table now, and this covers whatever is in it. Adding a kind to
+// CREDENTIALED_CHECKS gets these five semantics for free; getting one wrong
+// fails here rather than shipping a tile that cries wolf on a rotated key.
+const stubRegistry = (spec, result) => ({
+  [spec.registry]: { clientFor: async () => ({ [spec.method]: async () => result }) },
 });
 
-test('truenas: a rejected key is auth, not down', async () => {
-  const res = await checkService(nas, {
-    truenasRegistry: registryReturning({ ok: false, kind: 'auth', error: 'API key rejected' }),
+for (const [kind, spec] of Object.entries(CREDENTIALED_CHECKS)) {
+  const service = { id: 's', check: { kind } };
+
+  test(`${kind}: a successful read is up, with the metrics under its own key`, async () => {
+    const metrics = { marker: kind };
+    const res = await checkService(service, stubRegistry(spec, { ok: true, metrics }));
+    expect(res.state).toBe('up');
+    expect(res[spec.metricsKey], `metrics must land under \`${spec.metricsKey}\``).toBe(metrics);
+    expect(typeof res.latencyMs).toBe('number');
   });
-  expect(res.state).toBe('auth');
-  expect(res.error).toMatch(/rejected/);
-});
 
-test('truenas: a tile with no stored key says so instead of repeating the API message', async () => {
-  const res = await checkService({ ...nas, hasPassword: false }, {
-    truenasRegistry: registryReturning({ ok: false, kind: 'auth', error: 'API key rejected' }),
+  // The load-bearing one. A rotated credential means the service is answering
+  // perfectly well; painting it red would cry wolf, so auth is its own state
+  // and its own violet lamp.
+  test(`${kind}: a rejected credential is auth, not down`, async () => {
+    const res = await checkService(service, stubRegistry(spec, { ok: false, kind: 'auth', error: 'rejected' }));
+    expect(res.state).toBe('auth');
+    expect(res.error).toBe('rejected');
   });
-  expect(res.state).toBe('auth');
-  expect(res.error).toMatch(/no API key configured/i);
-});
 
-test('truenas: an unreachable NAS is down', async () => {
-  const res = await checkService(nas, {
-    truenasRegistry: registryReturning({ ok: false, kind: 'unreachable', error: 'connection refused' }),
+  test(`${kind}: no stored credential is named instead of repeating the API message`, async () => {
+    const res = await checkService(
+      { ...service, hasPassword: false },
+      stubRegistry(spec, { ok: false, kind: 'auth', error: 'rejected' }),
+    );
+    expect(res.state).toBe('auth');
+    expect(res.error).toContain(spec.credential);
+    expect(res.error).toMatch(/Settings → Services/);
   });
-  expect(res.state).toBe('down');
-  expect(res.error).toBe('connection refused');
-});
 
-test('truenas: a missing registry degrades to down rather than throwing', async () => {
-  const res = await checkService(nas, {});
-  expect(res.state).toBe('down');
-});
+  test(`${kind}: an unreachable service is down`, async () => {
+    const res = await checkService(service, stubRegistry(spec, { ok: false, kind: 'unreachable', error: 'refused' }));
+    expect(res.state).toBe('down');
+    expect(res.error).toBe('refused');
+  });
 
-// --- unifi -----------------------------------------------------------------
-const unifiService = {
-  id: 'svc-1', url: 'https://unifi.example.com',
-  check: { kind: 'unifi', tls: 'verify' }, hasPassword: true,
-};
-const unifiRegistryReturning = (result) => ({ clientFor: async () => ({ snapshot: async () => result }) });
+  // A TLS failure is deliberately NOT auth: it is a transport the operator has
+  // to decide about. This was only ever asserted for unifi, but it is the
+  // shared rule — a pinned fingerprint that stops matching must not be reported
+  // as a credential problem for any kind.
+  test(`${kind}: a tls failure is down, not auth`, async () => {
+    const res = await checkService(service, stubRegistry(spec, { ok: false, kind: 'tls', error: 'fingerprint mismatch' }));
+    expect(res.state).toBe('down');
+    expect(res.error).toMatch(/fingerprint mismatch/);
+  });
 
-test('checkService unifi: a good snapshot is up with the metrics attached', async () => {
-  const metrics = { clientsTotal: 5 };
-  const res = await checkService(unifiService, { unifiRegistry: unifiRegistryReturning({ ok: true, metrics }) });
-  expect(res.state).toBe('up');
-  expect(res.unifi).toBe(metrics);
-  expect(typeof res.latencyMs).toBe('number');
-});
+  test(`${kind}: a missing registry is down, not a throw`, async () => {
+    const res = await checkService(service, {});
+    expect(res.state).toBe('down');
+    expect(res.error).toContain(spec.label);
+  });
 
-test('checkService unifi: a rejected key is auth, not down', async () => {
-  const reg = unifiRegistryReturning({ ok: false, kind: 'auth', error: 'rejected' });
-  expect((await checkService(unifiService, { unifiRegistry: reg })).state).toBe('auth');
-});
+  test(`${kind}: a registry that throws during setup is down, not a throw`, async () => {
+    const registry = { [spec.registry]: { clientFor: async () => { throw new Error('boom'); } } };
+    const res = await checkService(service, registry);
+    expect(res.state).toBe('down');
+    expect(res.error).toBe('boom');
+  });
+}
 
-test('checkService unifi: a missing stored key is named in the error', async () => {
-  const reg = unifiRegistryReturning({ ok: false, kind: 'auth', error: 'rejected' });
-  const res = await checkService({ ...unifiService, hasPassword: false }, { unifiRegistry: reg });
-  expect(res.state).toBe('auth');
-  expect(res.error).toMatch(/no API key configured/);
-});
-
-test('checkService unifi: a tls failure is down, not auth', async () => {
-  const reg = unifiRegistryReturning({ ok: false, kind: 'tls', error: 'TLS fingerprint mismatch' });
-  const res = await checkService(unifiService, { unifiRegistry: reg });
-  expect(res.state).toBe('down');
-  expect(res.error).toMatch(/fingerprint mismatch/);
-});
-
-test('checkService unifi: no registry wired is down, not a throw', async () => {
-  expect((await checkService(unifiService, {})).state).toBe('down');
-});
-
-test('checkImmich reports metrics when the snapshot succeeds', async () => {
-  const metrics = { version: 'v3.0.3', photos: 10, denied: [] };
-  const immichRegistry = { clientFor: async () => ({ snapshot: async () => ({ ok: true, metrics }) }) };
-  const res = await checkService({ id: 's', check: { kind: 'immich' } }, { immichRegistry });
-  expect(res.state).toBe('up');
-  expect(res.immich).toBe(metrics);
-  expect(typeof res.latencyMs).toBe('number');
-});
-
-// auth is deliberately distinct from down: a rotated key means the server is
-// answering perfectly well, and painting it red would cry wolf.
-test('checkImmich reports auth rather than down when the key is rejected', async () => {
-  const immichRegistry = {
-    clientFor: async () => ({ snapshot: async () => ({ ok: false, kind: 'auth', error: 'nope' }) }),
-  };
-  const res = await checkService({ id: 's', check: { kind: 'immich' } }, { immichRegistry });
-  expect(res.state).toBe('auth');
-  expect(res.error).toBe('nope');
-});
-
-test('checkImmich names the missing credential when none is stored', async () => {
-  const immichRegistry = {
-    clientFor: async () => ({ snapshot: async () => ({ ok: false, kind: 'auth', error: 'nope' }) }),
-  };
-  const res = await checkService(
-    { id: 's', hasPassword: false, check: { kind: 'immich' } },
-    { immichRegistry },
-  );
-  expect(res.state).toBe('auth');
-  expect(res.error).toMatch(/no API key configured/);
-});
-
-test('checkImmich reports down when the server is unreachable', async () => {
-  const immichRegistry = {
-    clientFor: async () => ({ snapshot: async () => ({ ok: false, kind: 'unreachable', error: 'refused' }) }),
-  };
-  const res = await checkService({ id: 's', check: { kind: 'immich' } }, { immichRegistry });
-  expect(res.state).toBe('down');
-});
-
-test('checkImmich reports down when no registry is wired', async () => {
-  const res = await checkService({ id: 's', check: { kind: 'immich' } }, {});
-  expect(res.state).toBe('down');
+// A table-driven suite that silently covers nothing is worse than no suite:
+// this repo has shipped a UI feature that rendered nothing while every test
+// stayed green.
+test('the credentialed-check table covers every kind checkService dispatches', () => {
+  const kinds = Object.keys(CREDENTIALED_CHECKS);
+  expect(kinds.sort()).toEqual(['immich', 'pihole', 'truenas', 'unifi']);
+  for (const [kind, spec] of Object.entries(CREDENTIALED_CHECKS)) {
+    for (const field of ['registry', 'method', 'metricsKey', 'label', 'credential']) {
+      expect(spec[field], `${kind}.${field}`).toBeTruthy();
+    }
+  }
 });

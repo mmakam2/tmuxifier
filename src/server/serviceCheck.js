@@ -46,103 +46,55 @@ export function checkTcp(target, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   });
 }
 
-// A Pi-hole check reports numbers, not just reachability. The `auth` state is
-// deliberately distinct from `down`: a rotated app password means the Pi-hole is
-// answering perfectly well, and painting it red would cry wolf. It maps onto the
-// violet `.dot.auth` lamp boxes already use for failed SSH credentials.
-export async function checkPihole(service, { piholeRegistry } = {}) {
-  if (!piholeRegistry) return { state: 'down', error: 'pi-hole client unavailable' };
-  const started = Date.now();
-  let client;
-  try {
-    client = await piholeRegistry.clientFor(service);
-  } catch (err) {
-    return { state: 'down', error: err?.message || 'pi-hole client setup failed' };
-  }
-  const res = await client.fetchSummary();
-  const latencyMs = Date.now() - started;
-  if (res.ok) return { state: 'up', latencyMs, pihole: res.metrics };
-  if (res.kind === 'auth') {
-    // A Pi-hole with no password configured authenticates on an empty one, so
-    // the empty-password attempt is made first and only its failure is reported
-    // as the missing credential.
-    const error = service.hasPassword === false
-      ? 'no app password configured — add one in Settings → Services'
-      : res.error;
-    return { state: 'auth', latencyMs, error };
-  }
-  return { state: 'down', latencyMs, error: res.error };
-}
+// The credentialed checks. Unlike http/tcp these report numbers, not just
+// reachability, and they all share one semantics that took four integrations to
+// settle:
+//
+//   - `auth` is deliberately distinct from `down`. A rotated or revoked
+//     credential means the service is answering perfectly well, and painting it
+//     red would cry wolf. It maps onto the violet `.dot.auth` lamp boxes already
+//     use for failed SSH credentials.
+//   - A missing stored credential is named as such rather than repeating
+//     whatever the API said, because "unauthorized" is unhelpful when the real
+//     answer is that the tile was never given a key.
+//   - Everything else is `down`, including TLS failures: a transport the
+//     operator has to decide about is not an authentication problem.
+//   - A missing registry or a client that throws during setup degrades to
+//     `down`, never a throw — one bad service must not poison a sweep.
+//
+// Each kind differs only in registry, client method, metrics key, and what its
+// credential is called, so those are data. This was four near-identical
+// wrappers (C1 in the 2026-07-29 review); the point of the table is that the
+// fifth integration inherits the rules above rather than re-transcribing them
+// and getting the auth-vs-down distinction subtly wrong.
+export const CREDENTIALED_CHECKS = {
+  // A Pi-hole with no password configured authenticates on an empty one, so the
+  // empty-password attempt is made first and only its failure is reported as
+  // the missing credential.
+  pihole: { registry: 'piholeRegistry', method: 'fetchSummary', metricsKey: 'pihole', label: 'pi-hole', credential: 'app password' },
+  truenas: { registry: 'truenasRegistry', method: 'fetchMetrics', metricsKey: 'truenas', label: 'truenas', credential: 'API key' },
+  unifi: { registry: 'unifiRegistry', method: 'snapshot', metricsKey: 'unifi', label: 'unifi', credential: 'API key' },
+  // A 403 is not auth here: the key is valid and the server answered, so the
+  // client degrades those readings and the tile stays up (see immichApi.js).
+  immich: { registry: 'immichRegistry', method: 'snapshot', metricsKey: 'immich', label: 'immich', credential: 'API key' },
+};
 
-// A TrueNAS check reports storage, not just reachability. As with Pi-hole the
-// `auth` state is deliberately distinct from `down`: a rotated or expired API key
-// means the NAS is answering perfectly well, and painting it red would cry wolf.
-export async function checkTruenas(service, { truenasRegistry } = {}) {
-  if (!truenasRegistry) return { state: 'down', error: 'truenas client unavailable' };
+async function checkCredentialed(service, opts, spec) {
+  const registry = opts?.[spec.registry];
+  if (!registry) return { state: 'down', error: `${spec.label} client unavailable` };
   const started = Date.now();
   let client;
   try {
-    client = await truenasRegistry.clientFor(service);
+    client = await registry.clientFor(service);
   } catch (err) {
-    return { state: 'down', error: err?.message || 'truenas client setup failed' };
+    return { state: 'down', error: err?.message || `${spec.label} client setup failed` };
   }
-  const res = await client.fetchMetrics();
+  const res = await client[spec.method]();
   const latencyMs = Date.now() - started;
-  if (res.ok) return { state: 'up', latencyMs, truenas: res.metrics };
+  if (res.ok) return { state: 'up', latencyMs, [spec.metricsKey]: res.metrics };
   if (res.kind === 'auth') {
     const error = service.hasPassword === false
-      ? 'no API key configured — add one in Settings → Services'
-      : res.error;
-    return { state: 'auth', latencyMs, error };
-  }
-  return { state: 'down', latencyMs, error: res.error };
-}
-
-// A UniFi check reports the network, not just reachability. As with Pi-hole and
-// TrueNAS the `auth` state is deliberately distinct from `down`: a rotated or
-// revoked API key means the controller is answering perfectly well, and painting
-// it red would cry wolf. A TLS failure is deliberately NOT auth — it is a
-// transport the operator has to decide about, so it stays `down`.
-export async function checkUnifi(service, { unifiRegistry } = {}) {
-  if (!unifiRegistry) return { state: 'down', error: 'unifi client unavailable' };
-  const started = Date.now();
-  let client;
-  try {
-    client = await unifiRegistry.clientFor(service);
-  } catch (err) {
-    return { state: 'down', error: err?.message || 'unifi client setup failed' };
-  }
-  const res = await client.snapshot();
-  const latencyMs = Date.now() - started;
-  if (res.ok) return { state: 'up', latencyMs, unifi: res.metrics };
-  if (res.kind === 'auth') {
-    const error = service.hasPassword === false
-      ? 'no API key configured — add one in Settings → Services'
-      : res.error;
-    return { state: 'auth', latencyMs, error };
-  }
-  return { state: 'down', latencyMs, error: res.error };
-}
-
-// An Immich check reports the photo library, not just reachability. As with the
-// other credentialed kinds the `auth` state is deliberately distinct from
-// `down`. A 403 is not auth: the key is valid and the server answered, so the
-// client degrades those readings and the tile stays up (see immichApi.js).
-export async function checkImmich(service, { immichRegistry } = {}) {
-  if (!immichRegistry) return { state: 'down', error: 'immich client unavailable' };
-  const started = Date.now();
-  let client;
-  try {
-    client = await immichRegistry.clientFor(service);
-  } catch (err) {
-    return { state: 'down', error: err?.message || 'immich client setup failed' };
-  }
-  const res = await client.snapshot();
-  const latencyMs = Date.now() - started;
-  if (res.ok) return { state: 'up', latencyMs, immich: res.metrics };
-  if (res.kind === 'auth') {
-    const error = service.hasPassword === false
-      ? 'no API key configured — add one in Settings → Services'
+      ? `no ${spec.credential} configured — add one in Settings → Services`
       : res.error;
     return { state: 'auth', latencyMs, error };
   }
@@ -152,10 +104,8 @@ export async function checkImmich(service, { immichRegistry } = {}) {
 export async function checkService(service, opts = {}) {
   const kind = service?.check?.kind || 'http';
   if (kind === 'none') return null;
-  if (kind === 'pihole') return checkPihole(service, opts);
-  if (kind === 'truenas') return checkTruenas(service, opts);
-  if (kind === 'unifi') return checkUnifi(service, opts);
-  if (kind === 'immich') return checkImmich(service, opts);
+  const credentialed = CREDENTIALED_CHECKS[kind];
+  if (credentialed) return checkCredentialed(service, opts, credentialed);
   if (kind === 'tcp') return checkTcp(service.check?.target, opts);
   return checkHttp(service.check?.target || service.url, opts);
 }
