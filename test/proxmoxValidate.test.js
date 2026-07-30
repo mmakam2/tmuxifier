@@ -111,3 +111,63 @@ test('auto-static requires only a vlan; gateway and cidr are inferred/ignored', 
   expect(() => assertPresetInput(auto({ gateway: '192.168.30.1' }), { hostIds: ['h1'] })).toThrow(/vlan/);
   expect(() => assertPresetInput({ ...PRESET, net: { bridge: 'vmbr0', ipMode: 'yolo' } }, { hostIds: ['h1'] })).toThrow(/ipMode must be dhcp, static, or auto-static/);
 });
+
+// S2 (2026-07-29 review): assertPresetInput never checked spec.features,
+// spec.dns, spec.node or spec.boxDefaults, and normalizePreset stored them raw —
+// contradicting the documented invariant that all provision input is validated
+// before reaching the API.
+const ctx2 = { hostIds: ['h1'] };
+
+// buildCreateParams composes features as `map(([k]) => `${k}=1`).join(',')`, so a
+// crafted KEY becomes PVE syntax. `mount=nfs;cifs,keyctl` as a key composes to
+// `features=mount=nfs;cifs,keyctl=1`, enabling mount and keyctl — capabilities the
+// UI never offers, on a container the operator believes is plain nesting.
+test('assertPresetInput allowlists feature keys', () => {
+  for (const key of ['nesting', 'keyctl', 'fuse', 'mknod']) {
+    expect(() => assertPresetInput({ ...PRESET, features: { [key]: true } }, ctx2)).not.toThrow();
+  }
+  expect(() => assertPresetInput({ ...PRESET, features: {} }, ctx2)).not.toThrow();
+  expect(() => assertPresetInput({ ...PRESET, features: undefined }, ctx2)).not.toThrow();
+
+  for (const bad of ['mount=nfs;cifs,keyctl', 'nesting=1,mount=nfs', 'nesting ', 'NESTING', 'mount', '', 'a,b']) {
+    expect(() => assertPresetInput({ ...PRESET, features: { [bad]: true } }, ctx2)).toThrow(/feature/i);
+  }
+  expect(() => assertPresetInput({ ...PRESET, features: 'nesting' }, ctx2)).toThrow(/feature/i);
+  expect(() => assertPresetInput({ ...PRESET, features: [] }, ctx2)).toThrow(/feature/i);
+});
+
+test('assertPresetInput validates dns nameserver and searchdomain', () => {
+  expect(() => assertPresetInput({ ...PRESET, dns: { nameserver: '192.168.1.1' } }, ctx2)).not.toThrow();
+  // PVE accepts several, space separated.
+  expect(() => assertPresetInput({ ...PRESET, dns: { nameserver: '192.168.1.1 1.1.1.1' } }, ctx2)).not.toThrow();
+  expect(() => assertPresetInput({ ...PRESET, dns: { searchdomain: 'lan.example.com' } }, ctx2)).not.toThrow();
+  expect(() => assertPresetInput({ ...PRESET, dns: { nameserver: null, searchdomain: null } }, ctx2)).not.toThrow();
+
+  expect(() => assertPresetInput({ ...PRESET, dns: { nameserver: 'not-an-ip' } }, ctx2)).toThrow(/nameserver/i);
+  expect(() => assertPresetInput({ ...PRESET, dns: { nameserver: '192.168.1.1,evil' } }, ctx2)).toThrow(/nameserver/i);
+  expect(() => assertPresetInput({ ...PRESET, dns: { searchdomain: 'bad domain' } }, ctx2)).toThrow(/searchdomain/i);
+  expect(() => assertPresetInput({ ...PRESET, dns: { searchdomain: 'a..b' } }, ctx2)).toThrow(/searchdomain/i);
+});
+
+test('assertPresetInput validates the optional node', () => {
+  expect(() => assertPresetInput({ ...PRESET, node: 'pve1' }, ctx2)).not.toThrow();
+  expect(() => assertPresetInput({ ...PRESET, node: null }, ctx2)).not.toThrow();
+  expect(() => assertPresetInput({ ...PRESET, node: '' }, ctx2)).not.toThrow();
+  expect(() => assertPresetInput({ ...PRESET, node: 'pve 1' }, ctx2)).toThrow(/node/i);
+  expect(() => assertPresetInput({ ...PRESET, node: 'pve;reboot' }, ctx2)).toThrow(/node/i);
+});
+
+// boxDefaults.user reaches assertBoxSafe at the LINK phase — after the container
+// exists. Validating at save time turns a late job failure (which also released a
+// NetBox address a live container was using) into an immediate form error.
+test('assertPresetInput validates boxDefaults', () => {
+  expect(() => assertPresetInput({ ...PRESET, boxDefaults: { user: 'root' } }, ctx2)).not.toThrow();
+  expect(() => assertPresetInput({ ...PRESET, boxDefaults: {} }, ctx2)).not.toThrow();
+  expect(() => assertPresetInput({ ...PRESET, boxDefaults: undefined }, ctx2)).not.toThrow();
+  expect(() => assertPresetInput({ ...PRESET, boxDefaults: { user: 'dev-1', sessionName: 'web', tags: ['Prod'] } }, ctx2)).not.toThrow();
+
+  expect(() => assertPresetInput({ ...PRESET, boxDefaults: { user: 'ro ot' } }, ctx2)).toThrow(/user/i);
+  expect(() => assertPresetInput({ ...PRESET, boxDefaults: { user: '-oProxyCommand=x' } }, ctx2)).toThrow(/user/i);
+  expect(() => assertPresetInput({ ...PRESET, boxDefaults: { tags: 'Prod' } }, ctx2)).toThrow(/tags/i);
+  expect(() => assertPresetInput({ ...PRESET, boxDefaults: { tags: [1] } }, ctx2)).toThrow(/tags/i);
+});

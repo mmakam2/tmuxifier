@@ -59,7 +59,8 @@ export interface Service {
   // Absent on records written before sections existed — read as 'services'.
   section?: ServiceSection;
   check: ServiceCheck; createdAt: string;
-  // pihole only. The app password itself never reaches the browser.
+  // Credentialed kinds only (pihole/truenas/unifi/immich). The secret itself
+  // never reaches the browser; switching kinds clears it server-side.
   hasPassword?: boolean;
 }
 // icon/group/password accept null: the server's PATCH merge treats null as

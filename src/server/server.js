@@ -656,12 +656,21 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   }
 
   app.post('/api/logout', async (req, reply) => {
-    // Advance the revocation watermark so every previously issued cookie is
-    // dead server-side, not just cleared in this browser. Best-effort persist
-    // — a write failure still leaves the in-memory watermark active.
+    // Clearing the caller's OWN cookie needs no proof — it harms nobody, and a
+    // browser holding an expired or malformed cookie should still be able to tidy
+    // up. So this route stays reachable without auth, and always answers 200.
+    reply.clearCookie(COOKIE_NAME, { path: '/' });
+    // Advancing the watermark is different: it revokes every session issued
+    // before now, fleet-wide. Only a caller that actually holds a valid session
+    // may do that. Unauthenticated, it was a lockout lever — the route has no
+    // Origin requirement it can enforce against curl, so anyone could loop it and
+    // kill the operator's cookie within a second of each login, one atomic
+    // auth-state.json write per request.
+    if (!isAuthed(req)) return { ok: true };
+    // Best-effort persist — a write failure still leaves the in-memory watermark
+    // active, so the revocation holds for this process either way.
     sessionsInvalidBeforeMs = Date.now();
     try { writeJsonSync(authStateFile, { sessionsInvalidBeforeMs }); } catch { /* keep in-memory watermark */ }
-    reply.clearCookie(COOKIE_NAME, { path: '/' });
     return { ok: true };
   });
 

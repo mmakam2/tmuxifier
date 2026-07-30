@@ -430,3 +430,50 @@ test("an explicit target sent with kind 'none' is still refused", async () => {
   await expect(store.updateService(a.id, { check: { kind: 'none', target: 'https://192.168.1.20/health' } }))
     .rejects.toThrow(/must be absent/);
 });
+
+// S3 (2026-07-29 review): sealPassword returned `base.secret` whenever the NEW
+// kind was also a secret kind, so switching pihole -> immich/truenas/unifi
+// without typing a new credential kept the old one. On the next 30s sweep the
+// Pi-hole app password was sent as another product's API key — over plain http if
+// the new kind was immich. A credential is scoped to the product that issued it;
+// a kind change invalidates it.
+test('switching between credential kinds drops the stored secret', async () => {
+  for (const to of ['immich', 'truenas', 'unifi']) {
+    const s = createServicesStore({ dataDir: dir, secretBox: createSecretBox('k') });
+    const svc = await s.addService({ ...piSpec, name: `pihole-to-${to}` });
+    expect(svc.hasPassword).toBe(true);
+
+    const check = to === 'unifi' ? { kind: to, tls: 'verify' } : { kind: to };
+    const switched = await s.updateService(svc.id, {
+      check,
+      ...(to === 'truenas' ? { check: { kind: to, username: 'admin' } } : {}),
+      ...(to === 'truenas' || to === 'unifi' ? { url: 'https://nas.example.com' } : {}),
+    });
+    expect(switched.check.kind).toBe(to);
+    expect(switched.hasPassword).toBe(false);
+    expect(await s.getServiceSecret(svc.id)).toBe(null);
+    // And the sealed blob is really gone from disk, not merely hidden on read.
+    expect(await fs.readFile(path.join(dir, 'services.json'), 'utf8')).not.toContain('pvebox.v1');
+  }
+});
+
+test('switching credential kinds WITH a new credential stores the new one', async () => {
+  const s = createServicesStore({ dataDir: dir, secretBox: createSecretBox('k') });
+  const svc = await s.addService(piSpec);
+  const switched = await s.updateService(svc.id, { check: { kind: 'immich' }, password: 'immich-key' });
+  expect(switched.hasPassword).toBe(true);
+  expect(await s.getServiceSecret(svc.id)).toBe('immich-key');
+});
+
+test('an update that does not change the kind still keeps the secret', async () => {
+  const s = createServicesStore({ dataDir: dir, secretBox: createSecretBox('k') });
+  const svc = await s.addService(piSpec);
+  // Restating the same kind is not a change.
+  const same = await s.updateService(svc.id, { check: { kind: 'pihole', insecure: true } });
+  expect(same.hasPassword).toBe(true);
+  expect(await s.getServiceSecret(svc.id)).toBe('app-pw');
+  // ...nor is an update that omits `check` entirely.
+  const renamed = await s.updateService(svc.id, { name: 'still-pihole' });
+  expect(renamed.hasPassword).toBe(true);
+  expect(await s.getServiceSecret(svc.id)).toBe('app-pw');
+});

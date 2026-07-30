@@ -24,8 +24,10 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   password — all AES-256-GCM sealed — plus container presets), `netbox.json` (NetBox integration
   settings with an **encrypted** API token), `provision-jobs.json` (provision history),
   `setup-jobs.json` (server-side box setup job history), `proxmox-lifecycle-jobs.json` (LXC
-  power/deprovision job history), `services.json` (standby-dashboard service tiles; a `pihole` tile's app
-  password is **encrypted**, so unlike the rest of the file it never appears in the clear), `health-events.json` (in-app health event log),
+  power/deprovision job history), `services.json` (standby-dashboard service tiles; a credentialed tile's
+  secret — a Pi-hole app password or a TrueNAS/UniFi/Immich API key — is **encrypted**, so unlike
+  the rest of the file it never appears in the clear, and switching a tile between credential
+  kinds drops it rather than replaying one product's credential at another), `health-events.json` (in-app health event log),
   `auth-state.json` (the logout session-revocation watermark), `passkeys.json` (enrolled WebAuthn
   credentials, the pinned relying party id, and the passkey-only flag — public keys only, so
   unlike `proxmox.json`/`netbox.json` nothing in it is encrypted, though it's still written

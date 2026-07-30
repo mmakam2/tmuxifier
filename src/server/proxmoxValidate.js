@@ -1,4 +1,5 @@
 const SAFE_HOST = /^[A-Za-z0-9_.-]+$/;
+const SAFE_USER = /^[A-Za-z0-9_.-]+$/; // mirrors sshCommand.js, which enforces it on the box
 const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
 const TOKEN_ID = /^[A-Za-z0-9_.+-]+@[A-Za-z0-9_.-]+![A-Za-z0-9_.-]+$/; // user@realm!name
 const SAFE_ID = /^[A-Za-z0-9_.:/+-]+$/;                                // storage / bridge / template volid
@@ -7,6 +8,13 @@ const ABS_PATH = /^\/[A-Za-z0-9._/-]+$/;                               // absolu
 const FINGERPRINT = /^[0-9A-Fa-f:]+$/;
 const PUBKEY = /^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-[A-Za-z0-9-]+|sk-(ssh-ed25519|ecdsa-sha2-[A-Za-z0-9-]+)@openssh\.com)\s+[A-Za-z0-9+/=]+(\s+\S+)?$/;
 const VERIFY_MODES = ['pin', 'ca', 'insecure'];
+// LXC feature flags, allowlisted because buildCreateParams composes them as
+// `${key}=1` joined by commas — so the KEY is PVE syntax, and an unvalidated one
+// such as `mount=nfs;cifs,keyctl` composes into `features=mount=nfs;cifs,keyctl=1`,
+// enabling capabilities the UI never offers. `mount` is deliberately absent: it
+// takes a filesystem list rather than a boolean, so it cannot be expressed in the
+// `key=1` shape this preset model emits.
+const FEATURE_KEYS = new Set(['nesting', 'keyctl', 'fuse', 'mknod']);
 
 export function isIp(s) {
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(s));
@@ -87,6 +95,55 @@ export function assertPresetInput(spec, { hostIds = [] } = {}) {
       if (!SAFE_ID.test(String(m.storage || ''))) throw new Error('invalid mount storage');
       if (!intInRange(m.sizeGiB, 1, 8192)) throw new Error('mount disk size must be 1..8192 GiB');
       if (!ABS_PATH.test(String(m.path || ''))) throw new Error('mount path must be an absolute path like /data');
+    }
+  }
+  // Everything below reaches the PVE create call or the box record, and none of
+  // it used to be checked here.
+  if (spec.features != null) {
+    if (typeof spec.features !== 'object' || Array.isArray(spec.features)) throw new Error('features must be an object');
+    for (const key of Object.keys(spec.features)) {
+      if (!FEATURE_KEYS.has(key)) throw new Error(`unknown container feature: ${JSON.stringify(key)}`);
+    }
+  }
+  if (spec.dns != null) {
+    if (typeof spec.dns !== 'object' || Array.isArray(spec.dns)) throw new Error('dns must be an object');
+    const ns = spec.dns.nameserver;
+    if (ns != null && String(ns).trim() !== '') {
+      // PVE takes one or more nameservers, space separated.
+      const parts = String(ns).trim().split(/\s+/);
+      if (!parts.every(isIp)) throw new Error('dns nameserver must be one or more space-separated IPv4 addresses');
+    }
+    const sd = spec.dns.searchdomain;
+    if (sd != null && String(sd).trim() !== '') {
+      const labels = String(sd).trim().split('.');
+      if (!labels.every((l) => DNS_LABEL.test(l))) throw new Error('dns searchdomain must be a valid domain name');
+    }
+  }
+  // Optional: null/'' means "let the host pick". Same rule the box-level proxmox
+  // link applies to a node name.
+  if (spec.node != null && String(spec.node) !== '' && !SAFE_HOST.test(String(spec.node))) {
+    throw new Error(`invalid proxmox node: ${JSON.stringify(spec.node)}`);
+  }
+  if (spec.boxDefaults != null) {
+    const bd = spec.boxDefaults;
+    if (typeof bd !== 'object' || Array.isArray(bd)) throw new Error('boxDefaults must be an object');
+    // `user` ends up in ssh argv, where assertBoxSafe rejects it — but that check
+    // runs at the LINK phase, i.e. after the container has been built. Rejecting
+    // it here turns a failed job (which, for an auto-static preset, also released
+    // a NetBox address the new container was already using) into a form error.
+    if (bd.user != null && String(bd.user) !== '' && !SAFE_USER.test(String(bd.user))) {
+      throw new Error(`invalid boxDefaults user: ${JSON.stringify(bd.user)}`);
+    }
+    // sessionName needs no rejection — store.js sanitizes it — but a bounded
+    // length keeps a nonsense value out of the record.
+    if (bd.sessionName != null && String(bd.sessionName).length > 64) {
+      throw new Error('boxDefaults sessionName must be at most 64 characters');
+    }
+    if (bd.tags != null) {
+      if (!Array.isArray(bd.tags)) throw new Error('boxDefaults tags must be an array');
+      if (!bd.tags.every((t) => typeof t === 'string' && t.length <= 64)) {
+        throw new Error('boxDefaults tags must be strings of at most 64 characters');
+      }
     }
   }
 }

@@ -154,7 +154,8 @@ export function createServicesStore({ dataDir, secretBox = null }) {
     await writeJson(file, { version: 1, services }, { mode: 0o600 });
   }
 
-  // The app password is the only secret a service record can hold. It is sealed
+  // A credentialed tile's secret — a Pi-hole app password, or a TrueNAS/UniFi/
+  // Immich API key — is the only secret a service record can hold. It is sealed
   // before it touches disk (AES-256-GCM, key from cookieSecret) and redacted on
   // every read — getServiceSecret is the sole decrypting path, mirroring
   // netboxStore.getSettings({ withSecret: true }).
@@ -168,9 +169,20 @@ export function createServicesStore({ dataDir, secretBox = null }) {
   }
 
   function sealPassword(spec, base) {
-    // Only a pihole or truenas check has anywhere to use one; changing kind drops it.
-    if (!SECRET_KINDS.has(spec.check?.kind ?? base.check?.kind)) return undefined;
-    if (spec.password === undefined) return base.secret;
+    const nextKind = spec.check?.kind ?? base.check?.kind;
+    const priorKind = base.check?.kind;
+    // Only a credentialed check has anywhere to use one, so moving to http/tcp/
+    // none drops it.
+    if (!SECRET_KINDS.has(nextKind)) return undefined;
+    if (spec.password === undefined) {
+      // A change BETWEEN credential kinds drops it too. A credential is scoped to
+      // the product that issued it: a Pi-hole app password is not an Immich API
+      // key, and carrying it over meant the next 30-second sweep sent it to a
+      // different product's endpoint — in plaintext when the new kind allows
+      // http. Retyping is the only safe reading of a kind change.
+      if (priorKind !== undefined && nextKind !== priorKind) return undefined;
+      return base.secret;
+    }
     if (spec.password === null || String(spec.password) === '') return undefined;
     if (!secretBox) throw new Error('cannot store a credential: no secret box configured');
     return secretBox.seal(String(spec.password));

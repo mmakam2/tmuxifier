@@ -86,6 +86,31 @@ blocks on an `[oh-my-zsh] Would you like to update?` prompt, so the 9 tests that
 shell prompt time out. Verified to reproduce on the pre-change tree. Insulating the e2e boxes
 from the host's interactive rc files is unfiled work.
 
+**Status note, 2026-07-30 (batch 2, v1.23.3): the Medium security tier is clear.**
+Test-first, 10 new tests. S3 (a sealed secret no longer survives a change between
+credential kinds — `sealPassword` returned `base.secret` whenever the *new* kind was also
+a secret kind, so pihole→immich without retyping sent the Pi-hole app password to Immich as
+`x-api-key`, in plaintext when the target is http; a kind change now invalidates the
+credential, while an update that leaves the kind alone still keeps it). S1 (`/api/logout`
+stays reachable unauthenticated and still clears the caller's own cookie — that harms nobody —
+but only a caller holding a valid session may advance the fleet-wide revocation watermark;
+unauthenticated it was a lockout lever, since the route can enforce no Origin against curl).
+S2 (`assertPresetInput` now covers `features`, `dns`, `node` and `boxDefaults`: feature keys
+are allowlisted, because `buildCreateParams` composes them as `${key}=1` so the KEY is PVE
+syntax and `mount=nfs;cifs,keyctl` composed into real capabilities the UI never offers;
+`mount` is deliberately excluded from the allowlist as it takes a filesystem list, not a
+boolean; and validating `boxDefaults.user` at save turns a link-phase job failure — which for
+an auto-static preset also released a NetBox address the new container was already using —
+into a form error).
+
+DOC8 closes with it: all three stale "only the app password is sealed" claims
+(`servicesStore.js`, `api.ts`, the CLAUDE.md/AGENTS.md data/ bullet) now name the four
+credential kinds, and the data/ bullet records the new drop-on-kind-change behaviour.
+
+Suites: unit 1843/1843 across 139 files; e2e 28/28. One flake observed: `split.spec.ts:15`
+failed once in a full run and passed both in isolation and on a full re-run — order- or
+timing-dependent, unrelated to this batch, and not yet filed.
+
 ---
 
 ## Findings and fix tracking
@@ -134,9 +159,9 @@ detailed explanation in the sections after the tables; Lows are described fully 
 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
-| S1 | auth | `POST /api/logout` is unauthenticated, so any network client can loop it to advance the revocation watermark and keep the operator locked out of their own fleet | Med | S | Advance the watermark only for a request carrying a valid session; clear the cookie unconditionally | Open |
-| S2 | proxmox | Preset `features`, `dns.*`, `node`, and `boxDefaults` bypass validation, contradicting "all provision input is validated" — a crafted `features` key composes into PVE syntax enabling mount/keyctl the UI never offers | Med | S | Allowlist feature keys, validate `dns`, apply `SAFE_NODE` to preset `node`, run `boxDefaults` through the box validators at preset save | Open |
-| S3 | services | A sealed secret survives a switch between credential kinds, so a Pi-hole app password is replayed as another product's API key — over plain http if the new kind is Immich | Med | S | Drop the secret whenever the kind changes at all, and test it | Open |
+| S1 | auth | `POST /api/logout` is unauthenticated, so any network client can loop it to advance the revocation watermark and keep the operator locked out of their own fleet | Med | S | Advance the watermark only for a request carrying a valid session; clear the cookie unconditionally | ✅ v1.23.3 |
+| S2 | proxmox | Preset `features`, `dns.*`, `node`, and `boxDefaults` bypass validation, contradicting "all provision input is validated" — a crafted `features` key composes into PVE syntax enabling mount/keyctl the UI never offers | Med | S | Allowlist feature keys, validate `dns`, apply `SAFE_NODE` to preset `node`, run `boxDefaults` through the box validators at preset save | ✅ v1.23.3 |
+| S3 | services | A sealed secret survives a switch between credential kinds, so a Pi-hole app password is replayed as another product's API key — over plain http if the new kind is Immich | Med | S | Drop the secret whenever the kind changes at all, and test it | ✅ v1.23.3 |
 | S4 | voice | The stream-hash-verify-rename chokepoint (`downloadVerified`) has **zero** direct test coverage — its security-critical properties are enforced only by unexecuted code | Med | S | Test good-digest rename, bad-digest unlink + throw, and mid-stream error cleanup against a local fixture | ✅ v1.22.4 |
 | S5 | boxes | The "Reconnect" (↻) button kills the on-box tmux session on a single unguarded click, so one misclick destroys a running agent — while the adjacent and *less* destructive ⚷ is confirm-gated | Med | S | Arm-then-fire (two clicks), matching the pane-header lifecycle keys. **Not** removal: killing the session is used deliberately to get a fresh one when a shell or config is wedged | ✅ v1.23.0 |
 | S6 | web | CSP `connect-src 'self' ws: wss:` whitelists the entire ws/wss schemes — the one hole in an otherwise tight `script-src 'self'` policy | Low | S | Drop `ws: wss:` (`'self'` covers same-origin upgrades in all evergreen browsers) and verify the terminal still connects | Open |
@@ -189,7 +214,7 @@ detailed explanation in the sections after the tables; Lows are described fully 
 | DOC5 | README | The settings modal is described as "six tabs", omitting Services — which four later sections direct users to | Low | S | "Seven tabs", and add Services to the list | Open |
 | DOC6 | .env.example | The `TMUXIFIER_AGENT_IDLE_SEC` comment says "Default 45"; the real default is 20 (config.js and the README table agree on 20) | Low | S | Correct the comment | Open |
 | DOC7 | README | The `config.json` camelCase key list reads as complete but omits eight accepted keys (`uploadMaxMb`, `claudeOauthToken`, the five voice knobs, `voiceOff`) | Low | S | Complete the list, or state it as a sample | Open |
-| DOC8 | CLAUDE/code | Three stale claims that only a Pi-hole password is sealed — CLAUDE.md's data/ bullet, `servicesStore.js:152/166`, and `api.ts:62` — contradicted by the same files' own security notes since v1.21.2 | Low | S | Generalize all three to the credential kinds | Open |
+| DOC8 | CLAUDE/code | Three stale claims that only a Pi-hole password is sealed — CLAUDE.md's data/ bullet, `servicesStore.js:152/166`, and `api.ts:62` — contradicted by the same files' own security notes since v1.21.2 | Low | S | Generalize all three to the credential kinds | ✅ v1.23.3 |
 | DOC9 | CLAUDE/AGENTS | The Docs index lists neither `DESIGN.md` (the declared visual authority) nor `PRODUCT.md`, so agents following the index never learn the visual authority exists | Low | S | Add both lines to both files | Open |
 | DOC10 | CLAUDE/AGENTS | The `serviceClientRegistry.js` bullet ends with a sentence about `GET /api/netbox/summary` that belongs to the NetBox bullet; `debouncedJsonStore.js` still says "four persisted job managers" (there are five) | Low | S | Move the stray sentence; correct the count | Open |
 
