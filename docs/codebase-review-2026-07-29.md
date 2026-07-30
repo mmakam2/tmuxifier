@@ -130,6 +130,40 @@ quotes the buffering call it replaced, which would otherwise satisfy them.
 
 Suites: unit 1847/1847 across 140 files.
 
+**Status note, 2026-07-30 (batch 8, v1.23.9): the dead-code tier is clear — but only two of the
+three were dead.**
+
+D1 was exactly as described. `provisionPanelGen` had a generation counter's shape — initialised
+once, bumped on panel open and on run teardown — but nothing ever read it. Its consumer was a
+fire-and-forget seed-AI-auth callback that went away when seeding moved into the setup job, and
+the comment above it still explained a race that no longer had two sides. Variable, both
+increments and the comment are gone.
+
+D3 was an inverted dependency rather than an unused function. `seedStatusLine` was exported from
+production code, and the only callers were in `test/setupOptions.test.js`; production renders the
+row from `seedStatusParts` so the dot alone can be coloured. The export is removed and the tests
+compose the line locally, which keeps every wording assertion while leaving one source of truth.
+It also retires an assertion that could not fail: the suite checked `before + dot + after ===
+seedStatusLine(...)`, which was that function's definition.
+
+**D2 is annotated, not deleted, and that is the finding's second option taken on purpose.** The
+`throw` after the retry loop in `piholeApi.js` and `truenasApi.js` is unreachable *by
+construction* — every path inside the loop returns or throws — which is precisely what makes it
+worth keeping. It backstops the loop bound and the `attempt === 1` guard drifting apart: raise the
+bound without raising the guard and the last attempt falls out of the loop. With the throw, that
+edit still reports an auth failure. Without it, the function returns `undefined`, the caller's
+`res.ok` read throws a TypeError, and `fail()` reports it as `unreachable` — a rotated session
+silently downgraded from "your credential expired" to "the service is down", which is the exact
+auth-vs-down distinction four integrations were built around. Both sites now say so.
+
+Both D1 and D3 were confirmed dead by the strongest available evidence: building the tree with and
+without the two deletions produces a **byte-identical** bundle (`index-DEgGtlur.js` either way).
+Vite had already dropped them — a module-scope variable that is only ever written is removed by the
+minifier, and an export nothing imports is tree-shaken — so the shipped artifact never contained
+either one. The deletions are provably behaviour-neutral, and v1.23.9 changes source hygiene only.
+
+Suites: unit 1880/1880 across 142 files, e2e 31/31.
+
 **Status note, 2026-07-30 (batch 7, v1.23.8): C1's first half done, its second half was a
 misread.** The four credentialed check wrappers are one `CREDENTIALED_CHECKS` table plus a single
 `checkCredentialed`, and `checkService` dispatches by table lookup. The four named exports are
@@ -324,9 +358,9 @@ detailed explanation in the sections after the tables; Lows are described fully 
 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
-| D1 | web | `provisionPanelGen` is written twice and read never — its consumer was removed when seeding moved server-side, as the adjacent comment already admits | Low | S | Delete the variable, both increments, and the stale rationale comment | Open |
-| D2 | services | The terminal `throw` after the retry loop in `piholeApi`/`truenasApi` is unreachable (attempt 1's catch always throws) | Low | S | Delete, or annotate as intentionally unreachable so a future loop edit can't silently change auth semantics | Open |
-| D3 | web | `seedStatusLine` is exported but only tests call it; production uses `seedStatusParts` directly | Low | S | Fold the test onto `seedStatusParts`, or keep deliberately | Open |
+| D1 | web | `provisionPanelGen` is written twice and read never — its consumer was removed when seeding moved server-side, as the adjacent comment already admits | Low | S | Delete the variable, both increments, and the stale rationale comment | ✅ v1.23.9 |
+| D2 | services | The terminal `throw` after the retry loop in `piholeApi`/`truenasApi` is unreachable (attempt 1's catch always throws) | Low | S | Delete, or annotate as intentionally unreachable so a future loop edit can't silently change auth semantics | ✅ v1.23.9 (annotated, deliberately not deleted) |
+| D3 | web | `seedStatusLine` is exported but only tests call it; production uses `seedStatusParts` directly | Low | S | Fold the test onto `seedStatusParts`, or keep deliberately | ✅ v1.23.9 |
 
 ### Hygiene
 

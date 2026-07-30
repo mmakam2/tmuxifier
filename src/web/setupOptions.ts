@@ -20,13 +20,6 @@ export function seedStatusParts(cli: 'claude' | 'codex', s: AiAuthCliStatus | nu
   return { tone: 'bad', before: `${cli}: `, dot: '○', after: ` not set up — ${fix}` };
 }
 
-// Pure text for one CLI's readiness row — exported for node-env tests, so it
-// must stay DOM-free.
-export function seedStatusLine(cli: 'claude' | 'codex', s: AiAuthCliStatus | null): string {
-  const { before, dot, after } = seedStatusParts(cli, s);
-  return before + dot + after;
-}
-
 // Two forms can be open at once (hub tab + box modal); a per-instance radio
 // name keeps their shell selections independent.
 let shellRadioSeq = 0;

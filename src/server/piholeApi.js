@@ -135,6 +135,14 @@ export function createPiholeClient({
         renewAt = 0;
       }
     }
+    // Unreachable today and deliberately kept (D2 in the 2026-07-29 review):
+    // every path above either returns or throws, so the loop cannot complete.
+    // It is a backstop against the loop bound and the `attempt === 1` guard
+    // drifting apart — raise the bound without raising the guard and the last
+    // attempt falls out here. Deleting this would make that edit return
+    // `undefined` instead, which the caller's `res.ok` read turns into a
+    // TypeError, which `fail()` then reports as `unreachable` — a rotated
+    // session silently downgraded from an auth failure to an outage.
     throw Object.assign(new Error(AUTH_REJECTED), { kind: 'auth' });
   }
 

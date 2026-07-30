@@ -190,6 +190,10 @@ export function createTruenasClient({
         teardown();
       }
     }
+    // Unreachable today and deliberately kept — see the twin in piholeApi.js
+    // (D2 in the 2026-07-29 review). It guards against the loop bound and the
+    // `attempt === 1` guard drifting apart; without it that edit would return
+    // `undefined` and downgrade an auth failure into a reported outage.
     throw Object.assign(new Error(AUTH_MESSAGES.AUTH_ERR), { kind: 'auth' });
   }
 
