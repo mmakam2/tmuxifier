@@ -160,6 +160,36 @@ same reason the other four have none.
 
 Suites: unit 1847/1847 across 140 files.
 
+**Status note, 2026-07-30 (v1.23.6): the verification debt is closed — and it found a live
+bug.** B5, B11 and the four-pane header width were all shipped without a browser pass. Verified
+now, as tests rather than an eyeball.
+
+B5 holds: an expired session preserves the split and its ratios, polls nothing from the login
+screen, and restores the layout on re-login (`test/e2e/teardown.spec.ts`). The first assertion
+was too strict — it compared the whole persisted blob, including `focusedId`, which legitimately
+changed because the click that triggered the 401 focused that pane; the layout is the invariant.
+
+B11 is pinned at the source level instead (`test/modalRegistration.test.js`): every `openModal`
+call site must either pass an explicit `mount:` (living inside `#app`, dying with it) or register
+its `close()` nearby. No e2e path exists — the passkey dialogs are disabled in the fixture
+because passkeys pin to `localhost` while the e2e origin is `127.0.0.1`, and the deprovision and
+add-disk dialogs need a Proxmox host profile with a linked container. Covering every call site
+suits the bug better anyway: it was five sites forgetting the same line. Mutation-tested by
+reintroducing the bug in `proxmoxContainers.ts`, which the detector named by file and line.
+
+**The header width was genuinely broken, and v1.23.0 shipped it.** At three panes on a 1440px
+window the word caps printed over the state chip and the mic button — `SHUTD[RECONNECTING]S TOP`,
+with `STOP` clipped to `OP`. Cause: `.pane-life` had no `flex: 0 0 auto`, so flexbox squeezed the
+caps below their text width, and a nowrap flex item under its content spills rather than clips.
+`.pane-title` had neither a shrink floor nor an ellipsis either, so the identity group already
+overflowed by 12-19px before the words existed — the caps only made a latent bug visible. Fixed
+three ways: caps never shrink; the header is a `container-type: inline-size` query context so the
+lifecycle slot drops out below 400px (operator's choice — power actions stay in the Proxmox hub)
+rather than overlapping; and the host address hides below 520px so the label stays whole, because
+shrinking both produced "L… tm…", two stubs instead of one usable identity.
+
+Suites: unit 1850/1850 across 141 files; e2e 30/30.
+
 ---
 
 ## Findings and fix tracking

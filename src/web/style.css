@@ -828,6 +828,11 @@ button.empty-kbd:hover { color: var(--text); }
 .pane-header {
   display: flex; align-items: center; gap: 8px;
   padding: 0 8px 0 12px; min-width: 0;
+  /* Queried below to drop the lifecycle keys out of a header too narrow to hold
+     them. The container is the HEADER, not the pane: inline-size containment on
+     the pane would sit between the grid and the terminal, and the terminal's own
+     sizing is not worth risking for a label. */
+  container-type: inline-size;
   background: linear-gradient(180deg, #15171c, #101216);
   border-bottom: 1px solid var(--border);
   font-family: var(--face);
@@ -841,7 +846,10 @@ button.empty-kbd:hover { color: var(--text); }
    value always on screen while a terminal is up (Amber Means Alive). */
 .stage-pane.focused .pane-header .pane-target { color: var(--amber); opacity: 1; text-shadow: 0 0 8px rgba(255, 176, 0, 0.25); }
 .pane-header-id { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
-.pane-header .pane-title { white-space: nowrap; }
+/* The label gives way before anything collides. It had neither a shrink floor nor
+   an ellipsis, so the identity group overflowed its own box by 12-19px even before
+   the lifecycle keys were words — the keys only made a latent bug visible. */
+.pane-header .pane-title { white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
 .pane-header .pane-target {
   text-transform: none; letter-spacing: 0.02em; font-weight: 400; opacity: 0.75;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -862,7 +870,28 @@ button.empty-kbd:hover { color: var(--text); }
 .pane-header .pane-act:hover, .pane-header .pane-act:focus-visible { opacity: 1; color: var(--text); }
 /* Proxmox lifecycle keys: icon keys per DESIGN.md — flat legend-dim glyphs on
    small hit pads, hover raises a step and brightens, destructive hover LED red. */
-.pane-lifecycle-slot, .pane-lifecycle { display: inline-flex; align-items: center; gap: 2px; }
+/* flex: 0 0 auto is load-bearing. Without it flexbox shrinks the caps below their
+   text width, and a nowrap flex item squeezed under its content SPILLS rather than
+   clipping — which is how STOP came to render as "OP" on top of the mic button.
+   The keys keep their intrinsic size; text shrinks instead, and past the container
+   query below the keys leave entirely. */
+.pane-lifecycle-slot, .pane-lifecycle { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.pane-header .pane-life { flex: 0 0 auto; }
+/* Too narrow to hold three words plus an identity: the keys drop out rather than
+   overlap, and the container query means it follows the PANE's width, so the same
+   box shows them full-stage and hides them in a four-way split. Power actions
+   remain available from the Proxmox hub's Containers tab. */
+@container (max-width: 400px) {
+  .pane-header .pane-lifecycle-slot { display: none; }
+}
+/* Give up the host address before the label. Shrinking both together produced the
+   worst of both — "L… tm…", two stubs instead of one complete identity — and the
+   label is what you navigate by, while the sidebar row shows the host for every box
+   anyway. Below this the label gets the space and stays whole; its own ellipsis is
+   the last resort after the chip appears. */
+@container (max-width: 520px) {
+  .pane-header .pane-target { display: none; }
+}
 /* .pane-header-id has an 8px gap, so an empty slot would still push the layout
    of every unlinked box's header. It must take no part at all. */
 .pane-lifecycle-slot:empty { display: none; }
