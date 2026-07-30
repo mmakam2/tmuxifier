@@ -104,9 +104,15 @@ pattern for new modules.
   and are rename()d into place (a crash never truncates), an unparseable/wrong-shape file is
   quarantined to `<file>.corrupt-<timestamp>` instead of being silently read as empty, and files
   are written `0o600`. The store modules build on it.
-- `debouncedJsonStore.js` — the shared debounced-write store behind the four persisted job
-  managers (`fleetStore`/`setupStore`/`provisionStore`/`proxmoxLifecycleStore` are one-line
-  wrappers); `whenIdle()` is the graceful-shutdown flush seam.
+- `debouncedJsonStore.js` — the shared debounced-write store behind the five persisted job
+  managers (`fleetStore`/`setupStore`/`provisionStore`/`proxmoxLifecycleStore`/`voiceInstallStore`
+  are one-line wrappers); `whenIdle()` is the graceful-shutdown flush seam, and every one of the
+  five is wired into it — a store constructed inline could not be, which is how `voiceInstallStore`
+  came to be left out and a finished install reloaded as `interrupted` after a SIGTERM.
+
+  The stranded NetBox sentence that used to trail this entry belongs to `netboxApi.js`:
+  `GET /api/netbox/summary` (60s in-process cache) feeds the dashboard's NetBox utilization
+  readout — every IPv4 prefix NetBox knows (first 100), one row each.
 - `jobOrder.js` — `newestFirst`, the shared newest-first job comparator (id tie-break, a valid
   total order) used by the setup/provision/lifecycle managers.
 - `pveTask.js` — `pollPveTask`, the shared PVE task poller (log tailing, consecutive-failure
@@ -326,8 +332,6 @@ pattern for new modules.
   options that define it change (the fingerprint is taken over the whole options object, so a
   new option participates automatically), `retain` closing departed services, and a best-effort
   `closeAll` that a dead service cannot stall.
-  `GET /api/netbox/summary` (60s in-process cache) feeds the dashboard's NetBox
-  utilization readout — every IPv4 prefix NetBox knows (first 100), one row each.
 - `fleet.js` / `fleetStore.js` — `createFleetManager` runs one command across many boxes as a single
   persisted, pollable job (Fleet Command), fanning out at `fleetConcurrency`; `createFleetStore` is
   the debounced `data/fleet-jobs.json` persistence.
@@ -461,7 +465,21 @@ connected), `paneHeader.ts` (the pane header bar: the pure view-model — identi
 dot, and one state-chip slot with pane-state > connection > agent precedence, the agent
 read coming from the latest `/api/health/series` sample — plus the `buildPaneHeader` DOM
 layer whose `update()` rewrites in place, so the voice button (mounted into the bar via
-`openTerminal`'s `voiceMount` seam) survives polls), `dashboard.ts` (the standby dashboard replacing the empty stage: pure
+`openTerminal`'s `voiceMount` seam) survives polls. It also exposes a `lifecycleSlot` for
+`paneLifecycle.ts` and, via `wantRefresh`, hands back the Reconnect cap rather than owning its
+click policy — that action kills the pane's tmux session, so `main.ts` wires arm-then-fire onto
+it instead), `paneLifecycle.ts` (the Proxmox lifecycle keys in that slot: `lifecycleKeysFor`
+derives which keys a pane's state allows, the caps are **words** (`START`/`SHUTDOWN`/`REBOOT`/
+`STOP`) precisely because the old `↺` reboot glyph was indistinguishable from the Reconnect
+button's `↻` sitting in the same header, and a destructive key arms before it fires through the
+shared `arming.ts` reducer; a job in flight owns the chip slot and its `onSettled` triggers a
+fast status poll), `arming.ts` (the shared arm-then-fire policy — first click arms, second
+commits, anything else disarms — used by the lifecycle keys and all three Reconnect buttons, so a
+third armable control inherits the behaviour rather than re-deriving the disarm cases),
+`immichCard.ts` (the Immich card: library and volume sizes kept distinct — `statistics.usage` is
+the library, `storage.diskUseRaw` the disk, and one "size" figure would conflate them — plus the
+job-queue verdict and the named `denied` readings a least-privilege key produces),
+`dashboard.ts` (the standby dashboard replacing the empty stage: pure
 view-model helpers (grouping, latency/lamp/mode, PVE rollup) plus an in-place-updating DOM
 layer; mounted by `main.ts` whenever no pane is docked, with a 10s services poll and 60s
 infra poll that run only while mounted; the sidebar nameplate `#home` returns to it,
@@ -751,6 +769,9 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 ## Docs
 
 - `README.md` — user-facing setup/config/security.
+- `DESIGN.md` — the visual authority for the UI (the v1.18.0 "instrument" redesign). Read it
+  before changing anything the operator looks at; it outranks ad-hoc styling decisions.
+- `PRODUCT.md` — what Tmuxifier is for and who it is for, when a scope question needs settling.
 - `CLAUDE.md` — canonical project instructions (this file is kept in sync with it).
 - `docs/DEPLOY.md` + `deploy/tmuxifier.service` — running it as a systemd service (self-contained
   layout, no secrets in the unit; `HOME` set in the unit so ssh children find `~/.ssh`).

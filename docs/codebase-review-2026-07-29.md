@@ -130,6 +130,36 @@ quotes the buffering call it replaced, which would otherwise satisfy them.
 
 Suites: unit 1847/1847 across 140 files.
 
+**Status note, 2026-07-30 (batch 3, v1.23.5): the documentation tier is clear — every DOC row
+is resolved.** DOC1 (README described a rollback that has not happened since v1.7.2; it now
+describes the server-side setup job, Retry, the needs-interactive path, the terminal gate while
+running, and that removal does not forget a host key). DOC2 (DEPLOY.md's inventory was missing
+`services.json` — the file holding all four sealed service credentials — plus `voice.json`,
+`voice-jobs.json` and `data/icons/`; a paragraph now states outright that three `data/` files
+plus `.env` hold secrets and that rotating `TMUXIFIER_COOKIE_SECRET` makes all three
+undecryptable, which a file list left to be inferred). DOC3 (`paneLifecycle.ts`, `arming.ts` and
+`immichCard.ts` were absent from the web inventory and `paneHeader.ts` predated its
+`lifecycleSlot`/`wantRefresh` seams — and rather than patch the two known gaps, both inventories
+were audited against the actual file lists: every module in `src/server` and `src/web` is now
+named). DOC4 (the fleet-overview bullet still described the pre-v1.22.2 card). DOC5 (six tabs →
+seven, Services added). DOC6 (`.env.example` said the default was 45 and described the signal as
+session silence; it is 20, and since v1.22.3 the clock is pane OUTPUT — a pane thinking silently
+is working). DOC7 (the camelCase list omitted eight real keys and read as exhaustive; it now
+notes `config.json` is merged wholesale rather than allowlisted). DOC9 (`DESIGN.md` and
+`PRODUCT.md` added to the Docs index — an agent following that index could not previously learn
+the visual authority existed). DOC10 (the stray NetBox sentence moved off the
+`serviceClientRegistry` bullet; the debounced-store count corrected).
+
+**B13 came along with DOC10, out of its Low tier**, because the honest fix for "four persisted
+job managers" was to stop the count being a lie: `voiceInstallStore` was a genuine fifth wrapper
+that the shutdown flush could not await, since it was constructed inline rather than held in a
+named binding. Hoisted and flushed, so a SIGTERM during a finished install's final write no
+longer reloads it as `interrupted`. Documenting a known gap was the alternative and the worse
+one. No test: the flush list is entrypoint wiring in `index.js`, which has no unit harness — the
+same reason the other four have none.
+
+Suites: unit 1847/1847 across 140 files.
+
 ---
 
 ## Findings and fix tracking
@@ -154,7 +184,7 @@ detailed explanation in the sections after the tables; Lows are described fully 
 | B10 | jobs | A malformed row (e.g. `null`) in `provision-jobs.json`, `proxmox-lifecycle-jobs.json`, or `voice-jobs.json` crashes the server at boot — the bug class fixed as B5 in the 2026-07-18 review, never retrofitted to these three managers | Med | S | Copy `setupManager`'s `if (!j \|\| typeof j !== 'object' \|\| typeof j.id !== 'string') continue;` | ✅ v1.22.4 |
 | B11 | web | Five body-mounted modals never call `registerModal`, so teardown misses them — a deprovision confirm can float over the login screen with a live, 401-ing Deprovision button | Med | S | Register each, mirroring `settingsServices`' `confirmRemove` | ✅ v1.22.4 |
 | B12 | services | A rejected first sweep permanently kills the service polling loop: the interval is scheduled only after `await pollOnce()` succeeds | Low | S | Schedule the interval before (or regardless of) the first sweep's outcome | Open |
-| B13 | stores | `voice-jobs.json` is the only debounced job store excluded from the shutdown flush, so SIGTERM during its final write reloads a finished install as `interrupted` | Low | S | Hoist the store to a named binding and add its `whenIdle()` to the flush array | Open |
+| B13 | stores | `voice-jobs.json` is the only debounced job store excluded from the shutdown flush, so SIGTERM during its final write reloads a finished install as `interrupted` | Low | S | Hoist the store to a named binding and add its `whenIdle()` to the flush array | ✅ v1.23.5 |
 | B14 | stores | After a failed write with a newer payload queued, `debouncedJsonStore` never retries and `whenIdle()` dangles — shutdown burns the full 5s flush timeout and loses the state | Low | S | On the error path, re-run the loop when `pending !== null` before resolving idle waiters | Open |
 | B15 | voice | Two concurrent `POST /api/voice` calls across a model change can each build an engine; the loser is returned to its caller but is unreachable by the shutdown hook (~0.85 GB RSS until its idle timer reaps it) | Low | S | Cache the in-flight rebuild promise, as `createDefaultKeyProvider` already does | Open |
 | B16 | setup | Removing a box whose setup job is parked `needs-interactive` leaks that job and its ≤64 KB log forever — it can never be resolved or superseded once the box is gone | Low | S | Have `cancelForBox` flip a non-running current job to `superseded` | Open |
@@ -226,16 +256,16 @@ detailed explanation in the sections after the tables; Lows are described fully 
 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
-| DOC1 | README | Still claims a failed box setup rolls the new box back from the list — pre-v1.7.2 behavior; setup now keeps the box (Retry / explicit Remove) | Med | S | Rewrite the add-a-box paragraph around the server-side setup job, its actions, and the terminal gate while `running` | Open |
-| DOC2 | DEPLOY | The "What lives where" data inventory omits `services.json` — which holds four kinds of sealed API credentials — plus `voice.json`, `voice-jobs.json`, and `data/icons/` | Med | S | Sync the row with CLAUDE.md's data/ list | Open |
-| DOC3 | CLAUDE/AGENTS | The `src/web` module inventory omits `immichCard.ts` and `paneLifecycle.ts` entirely; the `paneHeader.ts` entry predates the lifecycle-slot seam | Med | S | Add both modules and the slot note to both files | Open |
-| DOC4 | README | The fleet-overview bullet still describes the pre-v1.22.2 card ("session count, and the CPU sparkline") rather than the spec sheet that replaced it | Med | S | Update to the spec-sheet content; the sidebar-row sparkline prose stays correct | Open |
-| DOC5 | README | The settings modal is described as "six tabs", omitting Services — which four later sections direct users to | Low | S | "Seven tabs", and add Services to the list | Open |
-| DOC6 | .env.example | The `TMUXIFIER_AGENT_IDLE_SEC` comment says "Default 45"; the real default is 20 (config.js and the README table agree on 20) | Low | S | Correct the comment | Open |
-| DOC7 | README | The `config.json` camelCase key list reads as complete but omits eight accepted keys (`uploadMaxMb`, `claudeOauthToken`, the five voice knobs, `voiceOff`) | Low | S | Complete the list, or state it as a sample | Open |
+| DOC1 | README | Still claims a failed box setup rolls the new box back from the list — pre-v1.7.2 behavior; setup now keeps the box (Retry / explicit Remove) | Med | S | Rewrite the add-a-box paragraph around the server-side setup job, its actions, and the terminal gate while `running` | ✅ v1.23.5 |
+| DOC2 | DEPLOY | The "What lives where" data inventory omits `services.json` — which holds four kinds of sealed API credentials — plus `voice.json`, `voice-jobs.json`, and `data/icons/` | Med | S | Sync the row with CLAUDE.md's data/ list | ✅ v1.23.5 |
+| DOC3 | CLAUDE/AGENTS | The `src/web` module inventory omits `immichCard.ts` and `paneLifecycle.ts` entirely; the `paneHeader.ts` entry predates the lifecycle-slot seam | Med | S | Add both modules and the slot note to both files | ✅ v1.23.5 |
+| DOC4 | README | The fleet-overview bullet still describes the pre-v1.22.2 card ("session count, and the CPU sparkline") rather than the spec sheet that replaced it | Med | S | Update to the spec-sheet content; the sidebar-row sparkline prose stays correct | ✅ v1.23.5 |
+| DOC5 | README | The settings modal is described as "six tabs", omitting Services — which four later sections direct users to | Low | S | "Seven tabs", and add Services to the list | ✅ v1.23.5 |
+| DOC6 | .env.example | The `TMUXIFIER_AGENT_IDLE_SEC` comment says "Default 45"; the real default is 20 (config.js and the README table agree on 20) | Low | S | Correct the comment | ✅ v1.23.5 |
+| DOC7 | README | The `config.json` camelCase key list reads as complete but omits eight accepted keys (`uploadMaxMb`, `claudeOauthToken`, the five voice knobs, `voiceOff`) | Low | S | Complete the list, or state it as a sample | ✅ v1.23.5 |
 | DOC8 | CLAUDE/code | Three stale claims that only a Pi-hole password is sealed — CLAUDE.md's data/ bullet, `servicesStore.js:152/166`, and `api.ts:62` — contradicted by the same files' own security notes since v1.21.2 | Low | S | Generalize all three to the credential kinds | ✅ v1.23.3 |
-| DOC9 | CLAUDE/AGENTS | The Docs index lists neither `DESIGN.md` (the declared visual authority) nor `PRODUCT.md`, so agents following the index never learn the visual authority exists | Low | S | Add both lines to both files | Open |
-| DOC10 | CLAUDE/AGENTS | The `serviceClientRegistry.js` bullet ends with a sentence about `GET /api/netbox/summary` that belongs to the NetBox bullet; `debouncedJsonStore.js` still says "four persisted job managers" (there are five) | Low | S | Move the stray sentence; correct the count | Open |
+| DOC9 | CLAUDE/AGENTS | The Docs index lists neither `DESIGN.md` (the declared visual authority) nor `PRODUCT.md`, so agents following the index never learn the visual authority exists | Low | S | Add both lines to both files | ✅ v1.23.5 |
+| DOC10 | CLAUDE/AGENTS | The `serviceClientRegistry.js` bullet ends with a sentence about `GET /api/netbox/summary` that belongs to the NetBox bullet; `debouncedJsonStore.js` still says "four persisted job managers" (there are five) | Low | S | Move the stray sentence; correct the count | ✅ v1.23.5 |
 
 ---
 

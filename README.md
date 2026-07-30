@@ -112,7 +112,10 @@ As an alternative to `.env`, a `config.json` in the repo root works too, using c
 `healthMemWarnPct`, `healthDiskWarnPct`, `healthThresholdHysteresisPct`, `agentIdleSec`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
 `pveLeaseTimeoutMs`, `pveMaxJobs`, `pveDefaultPubKeyPath`, `authMode`, `publicUrl`, `rpId`,
 `passkeyOnlyKillSwitch`, `googleClientId`, `googleClientSecret`, `allowedEmails`, `dataDir`,
-`controlDir`, `sshConfigFile`, `tlsCert`, `tlsKey`). The UI also persists `localShell` in
+`controlDir`, `sshConfigFile`, `tlsCert`, `tlsKey`, `uploadMaxMb`, `claudeOauthToken`,
+`whisperBin`, `whisperModel`, `voiceIdleMs`, `voiceMaxMb`, `voiceMaxSeconds`, `voiceOff`).
+`config.json` is merged wholesale rather than filtered through an allowlist, so any documented
+setting works there under its camelCase name. The UI also persists `localShell` in
 `config.json`; it does not have an env key.
 `TMUXIFIER_SSH_CONFIG`/`sshConfigFile` is passed to `ssh` as `-F`, so it is an alternate config
 file for Tmuxifier's SSH commands, not an extra file merged with `~/.ssh/config`.
@@ -135,8 +138,9 @@ It carries no SSH secrets; boxes still rely on your keys/agent/`~/.ssh/config` a
 The sidebar itself and each tag group can be collapsed (‹ next to the brand, click a group
 header); both states persist across reloads.
 
-A ⚙ **settings** modal (top of the sidebar) has six tabs: **Boxes** (box-list export/import,
-above), **NetBox** (an http/https selector +
+A ⚙ **settings** modal (top of the sidebar) has seven tabs: **Boxes** (box-list export/import,
+above), **Services** (the standby dashboard's service tiles — name, URL, icon, group, and the
+liveness check, including the credentialed Pi-hole/TrueNAS/UniFi/Immich kinds), **NetBox** (an http/https selector +
 host and token — the TLS options, including fingerprint pinning for self-signed certs, appear
 only for https — plus a connection test; also powers `auto-static` IP allocation during
 provisioning), **Proxmox** (host profiles and LXC secrets), **Passkeys** (enroll, remove, and the
@@ -241,12 +245,25 @@ live sessions), defaulting to `web`. Because tmux runs on the box, the session a
 survive disconnects. A 45s server-side grace window makes brief reconnects seamless; after that
 the local ssh process is dropped while the on-box session keeps running.
 
-When a box is added, Tmuxifier persists the box immediately and opens a live provisioning
-panel. That provisioning flow checks for `tmux`, installs it through a known package manager
-when possible (`apt-get`, `dnf`, `yum`, `pacman`, `apk`, or `zypper`), applies any selected
-shell/theme options, and creates the configured tmux session. If provisioning exits non-zero,
-the new box is rolled back from the list. Removing a box closes any local terminal process for
-that box and best-effort kills the configured remote tmux session before deleting the box.
+When a box is added, Tmuxifier persists the box immediately and starts a **server-side setup
+job**. The job checks for `tmux`, installs it through a known package manager when possible
+(`apt-get`, `dnf`, `yum`, `pacman`, `apk`, or `zypper`), applies any selected shell/theme
+options and tools, and creates the configured tmux session last. Because the job runs on the
+server rather than in the page, closing the panel — or the tab, or losing the network — does not
+interrupt it; reopening shows the same job still running.
+
+A failed setup **keeps the box**. The panel offers **Retry**, and removal is a separate,
+explicit action, so a box is never silently withdrawn from your list. Two cases surface their own
+button instead of a plain error: a sudo-password prompt or a password-authenticating box stalls
+the job as *needs interactive*, with **Finish interactively** opening a real terminal to answer
+it. While a box's setup job is still running, clicking that box shows the live setup panel rather
+than a terminal — a shell started mid-setup would hold an environment predating the tools and
+credentials being installed.
+
+Removing a box closes any local terminal process for that box and best-effort kills the
+configured remote tmux session before deleting the box. It does **not** forget the host's
+`known_hosts` entry: the machine still exists, and that file is shared with your ordinary ssh
+usage.
 
 The Add/Edit Box modal (and the Proxmox Provision form below) also offer an **"Additional
 tools"** checklist that runs in the same provisioning step — a full system update/upgrade,
@@ -316,8 +333,11 @@ scraped from the service's own URL, which is LAN traffic to a host you already c
 Settings → Services can override the guess per tile — **Auto**, **Choose** (a filterable grid
 of the catalog), or **None** to suppress the icon — and **Refresh icon** re-scrapes the
 service's favicon on demand.
-- **Fleet overview** — one cell per box: status lamp, agent working/waiting chip, session
-  count, and the CPU sparkline. Clicking a cell opens that box's terminal.
+- **Fleet overview** — one card per box: status lamp, agent working/waiting chip, and a two-line
+  spec sheet — what the box *is* (distro and core count) over what it *has* (RAM, and disk used
+  of total). Deliberately not the live cpu/mem/disk percentages: the sidebar rows beside these
+  cards already carry those, and repeating a gauge told you nothing. Clicking a card opens that
+  box's terminal.
 - **Infrastructure readout** — a Proxmox group showing each physical cluster node's health
   (online lamp, cpu/mem/disk, linked-container tally) and, when NetBox is configured, an
   IPAM group with utilization for each IPv4 prefix NetBox knows (first 100).

@@ -73,9 +73,14 @@ const boxActions = createBoxActions({
 // precedence rules and the .env escape hatches).
 const repoRoot = process.cwd();
 const voiceStore = createVoiceStore({ dataDir: config.dataDir });
+// Held in a named binding rather than constructed inline: it is a debounced store
+// like the four job stores, so the shutdown flush below has to be able to await
+// its whenIdle(). Inline, it could not be — and a SIGTERM landing during a
+// finished install's final write reloaded that install as `interrupted`.
+const voiceInstallStore = createVoiceInstallStore({ dataDir: config.dataDir });
 const voiceInstallManager = createVoiceInstallManager({
   repoRoot,
-  store: createVoiceInstallStore({ dataDir: config.dataDir }),
+  store: voiceInstallStore,
   voiceStore,
 });
 const resolveVoice = async () =>
@@ -311,7 +316,7 @@ app.listen({ host: config.bindAddress, port: config.port })
     // reload as 'interrupted').
     registerShutdownFlush({
       flush: [
-        ...[fleetStore, setupStore, provisionStore, lifecycleStore].map((s) => () => s.whenIdle()),
+        ...[fleetStore, setupStore, provisionStore, lifecycleStore, voiceInstallStore].map((s) => () => s.whenIdle()),
         // Revoke Pi-hole and TrueNAS sessions rather than leak one per configured
         // service across every restart — Pi-hole v6 caps how many can be live at
         // once, and a TrueNAS socket left open is a session left authenticated.

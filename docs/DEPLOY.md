@@ -14,9 +14,16 @@ unit); adjust paths if you install elsewhere.
 | `.env` | no (gitignored) | All `TMUXIFIER_*` config, incl. password hash + cookie secret (mode `0600`) |
 | `config.json` | no (gitignored) | Optional camelCase alternative to `.env`; also where the UI persists `localShell` |
 | `tls/` | no (gitignored) | `cert.pem` / `key.pem` for HTTPS (private key stays out of git) |
-| `data/` | no (gitignored) | `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json` (encrypted Proxmox host/key/preset profiles), `netbox.json` (NetBox settings with an encrypted API token), `provision-jobs.json` (provision history), `setup-jobs.json` (server-side box setup job history), `proxmox-lifecycle-jobs.json` (LXC power/deprovision job history), `health-events.json` (in-app health event log), `auth-state.json` (the logout session-revocation watermark), `passkeys.json` (enrolled WebAuthn credentials and the passkey-only flag — public keys only, so unlike the files above nothing in it is encrypted, though it's still `0600`), and SSH ControlMaster sockets (`data/cm/`) |
+| `data/` | no (gitignored) | `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json` (encrypted Proxmox host/key/preset profiles), `netbox.json` (NetBox settings with an encrypted API token), **`services.json`** (standby-dashboard service tiles — a credentialed tile's secret, i.e. a Pi-hole app password or a TrueNAS/UniFi/Immich API key, is encrypted), `provision-jobs.json` (provision history), `setup-jobs.json` (server-side box setup job history), `proxmox-lifecycle-jobs.json` (LXC power/deprovision job history), `voice.json` (voice enable flag + selected model), `voice-jobs.json` (whisper install job history), `health-events.json` (in-app health event log), `auth-state.json` (the logout session-revocation watermark), `passkeys.json` (enrolled WebAuthn credentials and the passkey-only flag — public keys only, so unlike the encrypted files above nothing in it is sealed, though it's still `0600`), scraped service favicons (`data/icons/`), and SSH ControlMaster sockets (`data/cm/`) |
 | `deploy/tmuxifier.service` | yes | Sample systemd unit (no secrets) |
 | `.env.example` | yes | Template for `.env` |
+
+**Secrets at rest live in `.env` (password hash, cookie secret, Claude OAuth token) and in three
+`data/` files sealed with AES-256-GCM: `proxmox.json`, `netbox.json`, and `services.json`.** All
+three derive their key from `TMUXIFIER_COOKIE_SECRET`, so rotating that secret makes every one of
+them undecryptable — you must re-enter the Proxmox token/keys/root password, the NetBox token, and
+each credentialed service tile's key afterward. Back up `.env` alongside `data/`, or the backup
+cannot be read.
 
 ## First-time setup
 
