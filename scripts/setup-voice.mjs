@@ -7,12 +7,12 @@
 // folder, nothing in $HOME.
 
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { resolveModel, MODEL_IDS, DEFAULT_MODEL_ID, WHISPER_REPO, WHISPER_REF } from '../src/server/voiceCatalog.js';
+import { downloadVerified } from '../src/server/voiceDownload.js';
 import { createVoiceStore } from '../src/server/voiceStore.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -74,25 +74,26 @@ if (!fs.existsSync(binPath)) {
   process.exit(1);
 }
 
-// Download to a temp path, verify, and only then rename into place: a killed
-// download must never leave a truncated file that the server would later mmap.
+// Shared with the Settings-tab installer rather than hand-rolled here. This used
+// to buffer the whole model: `Buffer.from(await res.arrayBuffer())` holds the
+// arrayBuffer AND its copy, about 2x 540 MB for the largest catalog entry, which
+// is precisely the peak voiceDownload.js exists to avoid on a 4 GB host. It
+// streams, verifies the pinned digest before renaming into place, cleans up its
+// .part file on failure, and aborts a stalled transfer instead of hanging — all
+// of it covered by test/voiceDownload.test.js, which this file had no equivalent
+// of.
 fs.mkdirSync(modelsDir, { recursive: true });
 const finalModel = path.join(modelsDir, model.file);
 if (!fs.existsSync(finalModel)) {
-  const tmp = `${finalModel}.part`;
   console.error(`+ downloading ${model.file} (${(model.bytes / 1024 ** 2).toFixed(0)} MB)`);
-  const res = await fetch(model.url);
-  if (!res.ok) { console.error(`Download failed: HTTP ${res.status}`); process.exit(1); }
-  const bytes = Buffer.from(await res.arrayBuffer());
-  const digest = createHash('sha256').update(bytes).digest('hex');
-  if (digest !== model.sha256) {
-    console.error(`Integrity check failed for ${model.file}.`);
-    console.error(`  expected ${model.sha256}`);
-    console.error(`  got      ${digest}`);
+  try {
+    await downloadVerified({ url: model.url, dest: finalModel, sha256: model.sha256 });
+  } catch (e) {
+    // The thrown message already names the expected and actual digest on a
+    // mismatch, which is the diagnostic worth keeping from the old block.
+    console.error(`Download failed for ${model.file}: ${e.message}`);
     process.exit(1);
   }
-  fs.writeFileSync(tmp, bytes, { mode: 0o600 });
-  fs.renameSync(tmp, finalModel);
 }
 
 // data/voice.json is authoritative, and is read per request — so this applies

@@ -111,6 +111,25 @@ Suites: unit 1843/1843 across 139 files; e2e 28/28. One flake observed: `split.s
 failed once in a full run and passed both in isolation and on a full re-run — order- or
 timing-dependent, unrelated to this batch, and not yet filed.
 
+**Status note, 2026-07-30 (v1.23.4): E1.** `scripts/setup-voice.mjs` now calls the shared
+`downloadVerified` instead of hand-rolling its own download, so the CLI no longer holds the
+whole model in memory — `Buffer.from(await res.arrayBuffer())` kept the arrayBuffer *and* its
+copy, roughly 2x 540 MB for the largest catalog entry, which is the ~1 GB peak on a 4 GB host
+that `voiceDownload.js` was written to avoid. The script had always been able to call it: it
+already imported `voiceCatalog` and `voiceStore` from `src/server/`. It also inherits the
+properties the hand-rolled copy lacked — a stall timeout (added in v1.22.4) and `.part` cleanup
+on mid-stream failure — and the duplicated digest check is gone, so verification lives at one
+tested chokepoint.
+
+The script is a CLI with no functional coverage (running it builds whisper.cpp), so
+`test/setupVoiceScript.test.js` pins the wiring in the mold of `claudeStatuslineAsset.test.js`:
+the downloader is imported and called with a digest, nothing buffers, no second digest
+implementation, and a failure is still a clean CLI error rather than an unhandled rejection.
+Those negative assertions run against the file with comments stripped — the retained comment
+quotes the buffering call it replaced, which would otherwise satisfy them.
+
+Suites: unit 1847/1847 across 140 files.
+
 ---
 
 ## Findings and fix tracking
@@ -174,7 +193,7 @@ detailed explanation in the sections after the tables; Lows are described fully 
 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
-| E1 | voice | `setup-voice.mjs` buffers the whole model in RAM (~1.1 GB peak for `medium.en-q5_0`) instead of reusing `downloadVerified` — the exact failure that module's header warns about | Med | S | `await downloadVerified({ url, dest, sha256 })` and drop the hand-rolled block | Open |
+| E1 | voice | `setup-voice.mjs` buffers the whole model in RAM (~1.1 GB peak for `medium.en-q5_0`) instead of reusing `downloadVerified` — the exact failure that module's header warns about | Med | S | `await downloadVerified({ url, dest, sha256 })` and drop the hand-rolled block | ✅ v1.23.4 |
 | E2 | unifi | Per-device statistics are fetched serially with no aggregate deadline — up to 200 sequential requests, and one slow controller stales every other tile's readings | Low | S | Fetch stats concurrently (bounded), and/or give `refresh()` an overall deadline | Open |
 | E3 | status | The post-lifecycle fast-track re-sweeps the entire fleet every 5s for up to 3 minutes when only one box's recovery matters (~300 extra probes per container start on a 10-box fleet) | Low | S | Probe only the target and patch that snapshot entry — composes with the B7 fix | Open |
 | E4 | web | `showLifecycleJob` cannot distinguish 404 from a transient failure, so a pruned job id polls forever behind an empty log | Low | S | Give up with a message after N consecutive nulls, or treat 404 distinctly | Open |
