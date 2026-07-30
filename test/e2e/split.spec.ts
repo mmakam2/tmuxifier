@@ -83,11 +83,66 @@ test('header bar: identity on a single pane, chip slot, and bar-refresh', async 
   // (no agent runs in the e2e sshd session).
   await expect(header.locator('.pane-chip')).toBeHidden({ timeout: 15000 });
 
-  // Bar refresh rebuilds the terminal in place — pane count is unchanged and
-  // the terminal reconnects (a live prompt appears again).
-  await page.getByRole('button', { name: 'Reconnect localhost terminal' }).click();
+  // Bar refresh kills the pane's tmux session and rebuilds the terminal, so it
+  // arms on the first click and only fires on the second.
+  const cap = page.locator('.pane-header .pane-refresh');
+  await cap.click();
+  await expect(cap).toHaveClass(/armed/);
+  await expect(cap).toHaveText('⚠');
+  await expect(cap).toHaveAccessibleName(/kills the tmux session/i);
+  // Still one pane, and nothing has been torn down yet.
+  await expect(page.locator('.stage-pane')).toHaveCount(1);
+
+  // The second click commits: pane count is unchanged and the terminal
+  // reconnects (a live prompt appears again).
+  await cap.click();
+  await expect(cap).not.toHaveClass(/armed/);
   await expect(page.locator('.stage-pane')).toHaveCount(1);
   await expect(page.locator('.stage-pane .xterm-rows')).toContainText(/[#$%>]/, { timeout: 15000 });
+});
+
+test('an armed Reconnect disarms instead of firing when you click elsewhere', async ({ page }) => {
+  await login(page);
+  await page.locator('.box .name', { hasText: 'localhost' }).click();
+  await expect(page.locator('.pane-header .pane-chip')).toBeHidden({ timeout: 15000 });
+
+  const cap = page.locator('.pane-header .pane-refresh');
+  await cap.click();
+  await expect(cap).toHaveClass(/armed/);
+
+  // A click anywhere else is the "anything else disarms" half of arm-then-fire.
+  await page.locator('.pane-header .pane-title').click();
+  await expect(cap).not.toHaveClass(/armed/);
+  await expect(cap).toHaveText('↻');
+  await expect(cap).toHaveAccessibleName('Reconnect localhost terminal');
+});
+
+test('Escape disarms an armed Reconnect', async ({ page }) => {
+  await login(page);
+  await page.locator('.box .name', { hasText: 'localhost' }).click();
+  await expect(page.locator('.pane-header .pane-chip')).toBeHidden({ timeout: 15000 });
+
+  const cap = page.locator('.pane-header .pane-refresh');
+  await cap.click();
+  await expect(cap).toHaveClass(/armed/);
+  await page.keyboard.press('Escape');
+  await expect(cap).not.toHaveClass(/armed/);
+});
+
+test('the sidebar Reconnect arms independently of the pane header cap', async ({ page }) => {
+  await login(page);
+  await page.locator('.box .name', { hasText: 'localhost' }).click();
+  await expect(page.locator('.pane-header .pane-chip')).toBeHidden({ timeout: 15000 });
+
+  const rowCap = page.locator('.box', { hasText: 'localhost' }).locator('.refresh').first();
+  const headerCap = page.locator('.pane-header .pane-refresh');
+
+  await rowCap.click();
+  await expect(rowCap).toHaveClass(/armed/);
+  // One armed control at a time: arming the header's cap moves the arm.
+  await headerCap.click();
+  await expect(headerCap).toHaveClass(/armed/);
+  await expect(rowCap).not.toHaveClass(/armed/);
 });
 
 test('plain-clicking a third box replaces the focused pane', async ({ page }) => {

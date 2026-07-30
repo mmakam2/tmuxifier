@@ -63,6 +63,29 @@ hand-rolled DOM stand-in: a defensive `content.isConnected` check added during
 this batch broke it, since the stand-in has no such property. Suites: unit
 1812/1812 across 137 files (baseline 1784/136); e2e 25/25; typecheck clean.
 
+**Status note, 2026-07-30 (v1.23.0): S5, reframed.** The original row proposed removing
+`killSession`; triage with the operator established that the destructive behaviour is
+deliberately used (a wedged shell or config is fixed by getting a fresh session), so the fix
+is a guard rather than a removal — the row and its detail paragraph are corrected in place
+rather than silently reinterpreted. Reconnect now arms on the first click and fires on the
+second at all three sites (sidebar row, host shell, pane header), reusing the arm-then-fire
+policy the pane-header lifecycle keys already had, now shared as `arming.ts`.
+
+The same pass fixed a defect this review had missed: the pane header renders the lifecycle
+`↺` (reboot container) beside the actions `↻` (reconnect terminal) — mirror-image glyphs, one
+power-cycling an LXC and the other destroying a tmux session, both dim and unbordered. The
+lifecycle keys are now words (`START`/`SHUTDOWN`/`REBOOT`/`STOP`, armed adding `?`), which also
+retired a font-fallback workaround (U+25A0 standing in for U+23F9, absent from the bundled Meslo
+face) and four per-glyph optical-size corrections in `style.css`. Not back-filled as a numbered
+finding: it was found after the audit, and the audit is a point-in-time record.
+
+Suites: unit 1824/1824 across 138 files (+7). E2e carries four tests for the guard
+(arm-then-fire, disarm on outside click, Escape, one-armed-control-at-a-time), all passing —
+but the suite as a whole is **red for an unrelated environmental reason**: this host's root zsh
+blocks on an `[oh-my-zsh] Would you like to update?` prompt, so the 9 tests that wait for a live
+shell prompt time out. Verified to reproduce on the pre-change tree. Insulating the e2e boxes
+from the host's interactive rc files is unfiled work.
+
 ---
 
 ## Findings and fix tracking
@@ -115,7 +138,7 @@ detailed explanation in the sections after the tables; Lows are described fully 
 | S2 | proxmox | Preset `features`, `dns.*`, `node`, and `boxDefaults` bypass validation, contradicting "all provision input is validated" — a crafted `features` key composes into PVE syntax enabling mount/keyctl the UI never offers | Med | S | Allowlist feature keys, validate `dns`, apply `SAFE_NODE` to preset `node`, run `boxDefaults` through the box validators at preset save | Open |
 | S3 | services | A sealed secret survives a switch between credential kinds, so a Pi-hole app password is replayed as another product's API key — over plain http if the new kind is Immich | Med | S | Drop the secret whenever the kind changes at all, and test it | Open |
 | S4 | voice | The stream-hash-verify-rename chokepoint (`downloadVerified`) has **zero** direct test coverage — its security-critical properties are enforced only by unexecuted code | Med | S | Test good-digest rename, bad-digest unlink + throw, and mid-stream error cleanup against a local fixture | ✅ v1.22.4 |
-| S5 | boxes | The unconfirmed "Reconnect" (↻) button kills the on-box tmux session, so one misclick destroys a running agent — contradicting the project's headline "the work survives" premise | Med | S | Drop `killSession` from the route (exitMaster + closeKey suffice), or confirm-gate and relabel it as a hard reset | Open |
+| S5 | boxes | The "Reconnect" (↻) button kills the on-box tmux session on a single unguarded click, so one misclick destroys a running agent — while the adjacent and *less* destructive ⚷ is confirm-gated | Med | S | Arm-then-fire (two clicks), matching the pane-header lifecycle keys. **Not** removal: killing the session is used deliberately to get a fresh one when a shell or config is wedged | ✅ v1.23.0 |
 | S6 | web | CSP `connect-src 'self' ws: wss:` whitelists the entire ws/wss schemes — the one hole in an otherwise tight `script-src 'self'` policy | Low | S | Drop `ws: wss:` (`'self'` covers same-origin upgrades in all evergreen browsers) and verify the terminal still connects | Open |
 | S7 | services | The four test routes are a credential-forwarding oracle: `{id, url:<arbitrary>}` sends the stored decrypted secret to any URL, with no requirement that it match the stored service | Low | S | When falling back to the stored secret, use (or require a host match with) the stored service's own URL | Open |
 | S8 | statusline | `printf '%b'` expands backslash escapes from `VERSION`/`BASE`, so a cloned repo with a crafted `package.json` version emits arbitrary terminal escapes into the operator's statusline | Low | S | Strip control chars/backslashes from both, or assemble untrusted segments with `%s` | Open |
@@ -285,9 +308,16 @@ reordered without a single test failing.
 **S5 — Reconnect kills the session.** `POST /api/boxes/:id/reconnect` runs
 `boxActions.killSession(box)` after `exitMaster`/`closeKey`. It is deliberate and test-locked, but
 both UI buttons are labeled only "Reconnect" with no confirm, while the adjacent and *less*
-destructive ⚷ forget-hostkey action is confirm-gated. One misclick kills a claude mid-task —
-against the premise in CLAUDE.md's opening paragraph that the work survives and reconnecting
-reattaches.
+destructive ⚷ forget-hostkey action is confirm-gated. One misclick kills a claude mid-task.
+
+*Corrected on triage (2026-07-30).* This row originally proposed dropping `killSession`, reasoning
+from CLAUDE.md's "the work survives" premise. That was wrong about how the button is used: killing
+the session is the point — it is how the operator gets a fresh session when a shell or config is
+wedged, and `exitMaster`/`closeKey` alone would not deliver that. The defect is only the missing
+guard, so the fix is arming, not removal. Resolved in v1.23.0 together with a second problem the
+finding missed entirely: the pane header renders `↺` (reboot container) and `↻` (reconnect
+terminal) side by side — mirror-image glyphs with very different blast radius — which is why the
+lifecycle keys became words in the same change.
 
 **E1 — the voice CLI buffers what the server streams.** `setup-voice.mjs:86` does
 `Buffer.from(await res.arrayBuffer())`, holding both the arrayBuffer and its copy (~2× 540 MB).

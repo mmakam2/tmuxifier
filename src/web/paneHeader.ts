@@ -50,8 +50,11 @@ export function paneHeaderModel(i: PaneHeaderInput): PaneHeaderModel {
 }
 
 export interface PaneHeaderActions {
-  onRefresh?: () => void;
-  refreshLabel?: string;
+  // Ask for the Reconnect cap. Deliberately not a callback: the action is
+  // destructive (it kills the pane's tmux session), so the caller wires the
+  // arm-then-fire policy onto the returned `refreshBtn` instead of getting a
+  // handler that fires on the first click.
+  wantRefresh?: boolean;
   onUndock?: () => void;
   undockLabel?: string;
 }
@@ -61,7 +64,7 @@ export interface PaneHeaderActions {
 // recording. Action buttons are fixed at build time: refresh/undock
 // availability changes only on a full stage repaint, never mid-poll.
 export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActions = {}): {
-  el: HTMLElement; voiceSlot: HTMLElement; lifecycleSlot: HTMLElement; update(m: PaneHeaderModel): void;
+  el: HTMLElement; voiceSlot: HTMLElement; lifecycleSlot: HTMLElement; refreshBtn: HTMLButtonElement | null; update(m: PaneHeaderModel): void;
 } {
   const el = document.createElement('div');
   el.className = 'pane-header';
@@ -88,15 +91,17 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
   acts.className = 'pane-header-actions';
   acts.append(chip, voiceSlot);
 
-  if (actions.onRefresh) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'pane-act pane-refresh';
-    btn.textContent = '↻';
-    btn.title = 'Reconnect terminal';
-    btn.setAttribute('aria-label', actions.refreshLabel ?? 'Reconnect terminal');
-    btn.addEventListener('click', (e) => { e.stopPropagation(); actions.onRefresh!(); });
-    acts.append(btn);
+  // Reconnect kills the pane's tmux session, so its click policy is arm-then-fire
+  // and lives with the caller (main.ts owns the armed id, which has to survive a
+  // header rebuild). This only builds the cap and hands it back: no listener is
+  // attached here, and `wantRefresh` is the request for the button, not for a
+  // behaviour. The glyph and labels are set by whoever wires it.
+  let refreshBtn: HTMLButtonElement | null = null;
+  if (actions.wantRefresh) {
+    refreshBtn = document.createElement('button');
+    refreshBtn.type = 'button';
+    refreshBtn.className = 'pane-act pane-refresh';
+    acts.append(refreshBtn);
   }
   if (actions.onUndock) {
     const btn = document.createElement('button');
@@ -127,5 +132,5 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
     }
   };
   update(model);
-  return { el, voiceSlot, lifecycleSlot, update };
+  return { el, voiceSlot, lifecycleSlot, refreshBtn, update };
 }

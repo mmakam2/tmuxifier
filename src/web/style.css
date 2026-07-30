@@ -866,39 +866,41 @@ button.empty-kbd:hover { color: var(--text); }
 /* .pane-header-id has an 8px gap, so an empty slot would still push the layout
    of every unlinked box's header. It must take no part at all. */
 .pane-lifecycle-slot:empty { display: none; }
+/* The keys are words, not marks. A bordered cap in micro-type reads as a control
+   rather than as a continuation of the hostname beside it, which is how three
+   dim unbordered glyphs read before. Sized in the header's existing small
+   register, so an idle key and its armed form differ by one '?' and the colour —
+   the cap barely changes width when it arms.
+   Words also retired the optical-sizing block that used to live here: four
+   per-glyph font-sizes and two vertical nudges, needed because ⏻ ↺ ■ ▶ ink at
+   0.96em / 0.50em / 0.60em / 0.60em for one font-size and sit at different
+   heights above the baseline. Text has none of those problems. */
 .pane-header .pane-life {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px;
-  font-family: var(--face); font-size: 12px; line-height: 1;
-  padding: 0; border: 1px solid transparent; border-radius: 4px;
-  background: none; color: var(--dim); opacity: 0.75;
-  text-transform: none; letter-spacing: normal; cursor: pointer;
+  height: 20px; padding: 1px 5px;
+  font-family: var(--face); font-size: 10px; font-weight: 700; line-height: 1;
+  letter-spacing: 0.08em; text-transform: none;
+  border: 1px solid transparent; border-radius: 4px;
+  background: none; color: var(--dim); opacity: 0.75; cursor: pointer;
 }
-/* Optical sizing. One font-size cannot serve these four: at the same size the
-   power mark inks 0.96em, the play triangle and stop square 0.60em, and the
-   reboot arrow only 0.50em — which is why they read as four different weights
-   in one row. Each size below is chosen to land the drawn glyph on a common
-   ~10.5px ink height, with the two solid marks held slightly smaller since
-   filled geometry reads heavier than an outline at equal height. The cap is a
-   fixed 20px box, so none of this moves the header.
-   The translate is the second half of the same correction: the glyphs also sit
-   at different heights above the baseline (0.25em for the reboot arrow, 0.35em
-   for the power mark), and flexbox centres the line box, not the ink — so
-   without it the reboot arrow rides ~2.5px lower than its neighbours. */
-.pane-header .pane-life-shutdown { font-size: 11px; }
-.pane-header .pane-life-reboot { font-size: 21px; transform: translateY(-1.7px); }
-.pane-header .pane-life-start { font-size: 16px; transform: translateY(-1px); }
-.pane-header .pane-life-stop { font-size: 15px; transform: translateY(-1px); }
 .pane-header .pane-life:hover, .pane-header .pane-life:focus-visible {
   opacity: 1; color: var(--text); background: var(--panel-2); border-color: var(--border);
 }
 .pane-header .pane-life.danger:hover, .pane-header .pane-life.danger:focus-visible { color: var(--crit); }
-/* Armed: the key states its own consequence and waits for a second click. The
-   cap stops being an icon box here — it holds a legend, so it sizes to it. */
+/* Armed: the key states its own consequence and waits for a second click. */
 .pane-header .pane-life.armed {
-  width: auto; height: auto;
-  opacity: 1; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; padding: 1px 6px;
+  opacity: 1;
   color: var(--crit); border-color: rgba(255, 92, 71, 0.55); background: rgba(255, 92, 71, 0.12);
+}
+/* Armed Reconnect. Same visual language as an armed lifecycle key, but the cap
+   keeps its fixed icon box: these buttons sit in tight clusters (five in a
+   sidebar row, wedged between the mic and undock in a pane header), and a cap
+   that grew would shove its neighbours sideways mid-interaction. The glyph
+   carries the state change instead — ↻ becomes ⚠. */
+.box .refresh.armed, .pane-header .pane-act.pane-refresh.armed {
+  opacity: 1;
+  color: var(--crit); background: rgba(255, 92, 71, 0.12);
+  border: 1px solid rgba(255, 92, 71, 0.55); border-radius: 4px;
 }
 .pane-chip.chip-error { color: var(--crit); border-color: rgba(255, 92, 71, 0.5); background: rgba(255, 92, 71, 0.1); cursor: pointer; }
 /* Docked in the bar, the voice button loses its floating-over-canvas geometry. */

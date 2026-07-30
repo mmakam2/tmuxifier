@@ -3,6 +3,7 @@
 // House pattern: a pure, unit-tested core here, the DOM control below it.
 import { pve, type LifecycleStatus, type PveContainerState } from './proxmox';
 import { createSetupJobPoller } from './setupPoller';
+import { armReduce as armReduceBase, ARM_MS, type ArmState as BaseArmState } from './arming';
 
 export type PaneState = 'terminal' | 'stopped' | 'setup';
 export type ArmableAction = 'shutdown' | 'reboot' | 'stop';
@@ -10,7 +11,14 @@ export type PaneLifecycleAction = 'start' | ArmableAction;
 
 export interface LifecycleKey {
   action: PaneLifecycleAction;
-  glyph: string;
+  // The word drawn on the cap. These were glyphs (⏻ ↺ ■ ▶) until the reboot
+  // arrow '↺' proved indistinguishable from the Reconnect button's '↻' sitting
+  // in the same header — mirror images, one power-cycling a container and the
+  // other destroying a tmux session. A word cannot be mistaken for its mirror.
+  // It also retired two workarounds: a font-fallback dodge here (U+25A0 stood in
+  // for U+23F9, absent from the bundled Meslo face) and four per-glyph optical
+  // size corrections in style.css.
+  face: string;
   label: string;
   // null = fires on the first click. Non-null is the legend the key shows
   // while armed, and the marker that it needs arming at all.
@@ -18,15 +26,11 @@ export interface LifecycleKey {
   danger: boolean;
 }
 
-const START: LifecycleKey = { action: 'start', glyph: '▶', label: 'Start container', armLegend: null, danger: false };
+const START: LifecycleKey = { action: 'start', face: 'START', label: 'Start container', armLegend: null, danger: false };
 const RUNNING_KEYS: LifecycleKey[] = [
-  { action: 'shutdown', glyph: '⏻', label: 'Shut down container', armLegend: 'SHUTDOWN?', danger: false },
-  { action: 'reboot', glyph: '↺', label: 'Reboot container', armLegend: 'REBOOT?', danger: false },
-  // '■' (U+25A0) rather than the more literal '⏹' (U+23F9): the bundled Meslo
-  // Nerd Font has no U+23F9, so that one fell through to a system face and drew
-  // at half the size of its neighbours. U+25A0 is in the bundled face and shares
-  // the play triangle's ink box exactly.
-  { action: 'stop', glyph: '■', label: 'Force stop container', armLegend: 'STOP?', danger: true },
+  { action: 'shutdown', face: 'SHUTDOWN', label: 'Shut down container', armLegend: 'SHUTDOWN?', danger: false },
+  { action: 'reboot', face: 'REBOOT', label: 'Reboot container', armLegend: 'REBOOT?', danger: false },
+  { action: 'stop', face: 'STOP', label: 'Force stop container', armLegend: 'STOP?', danger: true },
 ];
 
 // Driven by the pane's derived state first, the raw PVE read second: paneState
@@ -54,12 +58,17 @@ export interface ArmOutcome { state: ArmState; fire: PaneLifecycleAction | null 
 
 // Arm-then-fire: a destructive key must be clicked twice, anything else
 // disarms. Start is never armable — starting a stopped container loses nothing.
+// The policy itself lives in arming.ts, shared with the Reconnect buttons; this
+// wrapper only maps a LifecycleKey onto it and re-narrows the action types.
 export function armReduce(state: ArmState, event: ArmEvent): ArmOutcome {
-  if (event.type !== 'click') return { state: IDLE, fire: null };
-  const { key } = event;
-  if (key.armLegend == null) return { state: IDLE, fire: key.action };
-  if (state.armed === key.action) return { state: IDLE, fire: key.action };
-  return { state: { armed: key.action as ArmableAction }, fire: null };
+  const base: BaseArmState = { armed: state.armed };
+  const outcome = event.type === 'click'
+    ? armReduceBase(base, { type: 'click', id: event.key.action, armable: event.key.armLegend != null })
+    : armReduceBase(base, { type: 'dismiss' });
+  return {
+    state: { armed: (outcome.state.armed as ArmableAction | null) ?? null },
+    fire: (outcome.fire as PaneLifecycleAction | null) ?? null,
+  };
 }
 
 export type ChipStatus = LifecycleStatus | 'lost';
@@ -94,7 +103,6 @@ export interface PaneLifecycleDeps {
 }
 
 const POLL_MS = 1500;
-const ARM_MS = 3000;
 const MAX_MISSES = 3;
 
 export function buildPaneLifecycle(deps: PaneLifecycleDeps): {
@@ -162,13 +170,11 @@ export function buildPaneLifecycle(deps: PaneLifecycleDeps): {
       const armed = arm.armed === key.action;
       const btn = document.createElement('button');
       btn.type = 'button';
-      // The action class exists for optical sizing: these glyphs are drawn at
-      // very different sizes for the same font-size (the power mark inks 0.96em,
-      // the reboot arrow only 0.50em), so matching them by eye needs a per-glyph
-      // font-size in CSS. The cap itself is fixed-size, so those sizes change
-      // only the drawn glyph, never the header's geometry.
+      // The action class is now only a styling hook (the per-glyph optical size
+      // corrections it used to carry died with the glyphs). Armed differs from
+      // idle by one '?' and the colour, so the cap barely changes width.
       btn.className = `pane-life pane-life-${key.action}${key.danger ? ' danger' : ''}${armed ? ' armed' : ''}`;
-      btn.textContent = armed ? key.armLegend! : key.glyph;
+      btn.textContent = armed ? key.armLegend! : key.face;
       btn.title = armed ? `Click again to ${key.action}` : key.label;
       btn.setAttribute('aria-label', armed ? `Confirm ${key.action}` : key.label);
       btn.addEventListener('click', (e) => { e.stopPropagation(); onKeyClick(key); });

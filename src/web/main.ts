@@ -12,6 +12,7 @@ import { createFleetPoller } from './fleetPoll';
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { closeAllModals } from './modalRegistry';
 import { openModal, makeRadio } from './dom';
+import { armReduce, ARM_MS, IDLE as ARM_IDLE, type ArmState } from './arming';
 import { createSetupJobPoller } from './setupPoller';
 import logoUrl from './assets/tmuxifier-logo.png';
 import { openProxmoxHub } from './proxmoxUi';
@@ -745,17 +746,19 @@ function paneHooks(): PaneHooks {
         // remain removable from a split. The refresh aria-label deliberately
         // differs from the sidebar row's `Reconnect ${label}` — an identical
         // accessible name would trip Playwright strict mode.
-        ...(terminalPane ? {
-          onRefresh: async () => {
-            if (id === '__local__') await api.reconnectLocalShell();
-            else await api.reconnectBox(id);
-            closeTab(id, { keepPane: true });
-            repaintStage();
-          },
-          refreshLabel: `Reconnect ${model.title} terminal`,
-        } : {}),
+        ...(terminalPane ? { wantRefresh: true } : {}),
         ...(split ? { onUndock: () => undockBox(id), undockLabel: `Undock ${model.title}` } : {}),
       });
+      // The header's Reconnect cap gets the same two-click guard as the sidebar
+      // rows. Keyed per pane, so arming one pane's cap does not arm another's.
+      if (built.refreshBtn) {
+        wireReconnectButton(built.refreshBtn, `pane:${id}`, `${model.title} terminal`, async () => {
+          if (id === '__local__') await api.reconnectLocalShell();
+          else await api.reconnectBox(id);
+          closeTab(id, { keepPane: true });
+          repaintStage();
+        });
+      }
       if (terminalPane) {
         ensureTab(id);
         built.voiceSlot.append(tabs.get(id)!.voiceMount);
@@ -1095,14 +1098,19 @@ async function renderDashboard() {
     });
   }
 
-  // Local shell — refresh (keeps the pane; repaint rebuilds the terminal in place)
-  app.querySelector('.local-refresh')!.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    await api.reconnectLocalShell();
-    const wasDocked = panesOf(stageRoot).includes('__local__');
-    closeTab('__local__', { keepPane: wasDocked });
-    if (wasDocked) repaintStage();
-  });
+  // Local shell — refresh (keeps the pane; repaint rebuilds the terminal in
+  // place). Armed like the box rows: this one kills the tmux session on the
+  // Tmuxifier host itself.
+  wireReconnectButton(
+    app.querySelector('.local-refresh') as HTMLButtonElement,
+    'local', 'host shell',
+    async () => {
+      await api.reconnectLocalShell();
+      const wasDocked = panesOf(stageRoot).includes('__local__');
+      closeTab('__local__', { keepPane: wasDocked });
+      if (wasDocked) repaintStage();
+    },
+  );
 
   // Local shell — edit
   app.querySelector('.local-edit')!.addEventListener('click', (e) => {
@@ -1157,6 +1165,85 @@ async function refresh() {
   api.status().then((s) => { latestStatus = s; filterAndPaint(); }).catch(() => {});
   api.listSetups().then((s) => { latestSetups = s; filterAndPaint(); }).catch(() => {});
   filterAndPaint();
+}
+
+// --- Reconnect arming ------------------------------------------------------
+// Reconnect kills the box's tmux session and rebuilds the connection. That is
+// deliberate — it is how you get a fresh session when a shell or config is
+// wedged — but it also destroys whatever was running in the old one, so it asks
+// twice. Same policy as the pane-header lifecycle keys (arming.ts).
+//
+// The armed id lives HERE, at module scope, rather than in each button's
+// closure: a sidebar row is rebuilt on search input, on add/edit/remove/import,
+// on dock/undock, and every 30s while a setup job is running, so a closure-held
+// flag would silently disarm mid-interaction. (Routine status polls update rows
+// in place and are safe; the rebuild paths are not.)
+let armedReconnect: string | null = null;
+let armedReconnectTimer: number | null = null;
+type ReconnectBtn = { btn: HTMLButtonElement; id: string; label: string };
+const reconnectBtns = new Set<ReconnectBtn>();
+
+function paintReconnectBtn(entry: ReconnectBtn): void {
+  const armed = armedReconnect === entry.id;
+  entry.btn.textContent = armed ? '⚠' : '↻';
+  entry.btn.classList.toggle('armed', armed);
+  entry.btn.title = armed
+    ? 'Click again to kill the tmux session and reconnect'
+    : 'Reconnect — kills the tmux session and starts a fresh one';
+  entry.btn.setAttribute('aria-label', armed
+    ? `Confirm reconnect ${entry.label} — this kills the tmux session`
+    : `Reconnect ${entry.label}`);
+}
+
+function paintAllReconnectBtns(): void {
+  for (const entry of [...reconnectBtns]) {
+    // Drop buttons whose row or header has since been rebuilt, so the set does
+    // not grow for the life of the page.
+    if (!entry.btn.isConnected) { reconnectBtns.delete(entry); continue; }
+    paintReconnectBtn(entry);
+  }
+}
+
+function disarmReconnect(): void {
+  if (armedReconnectTimer != null) { window.clearTimeout(armedReconnectTimer); armedReconnectTimer = null; }
+  if (armedReconnect == null) return;
+  armedReconnect = null;
+  paintAllReconnectBtns();
+}
+
+// A click anywhere else disarms — the "anything else" half of arm-then-fire.
+// Capture phase, so it lands before the row's own click handlers. A mousedown on
+// any registered Reconnect button is NOT "anywhere else": it either confirms
+// that button or moves the arm to it, both handled by the click below.
+document.addEventListener('mousedown', (e) => {
+  const target = e.target as Node;
+  for (const entry of reconnectBtns) if (entry.btn.contains(target)) return;
+  disarmReconnect();
+}, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') disarmReconnect(); }, true);
+
+// `fire` runs only on the confirming click.
+function wireReconnectButton(btn: HTMLButtonElement, id: string, label: string, fire: () => void | Promise<void>): void {
+  const entry: ReconnectBtn = { btn, id, label };
+  reconnectBtns.add(entry);
+  paintReconnectBtn(entry);
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const state: ArmState = { armed: armedReconnect };
+    const outcome = armReduce(state, { type: 'click', id, armable: true });
+    if (armedReconnectTimer != null) { window.clearTimeout(armedReconnectTimer); armedReconnectTimer = null; }
+    armedReconnect = outcome.state.armed;
+    paintAllReconnectBtns();
+    if (outcome.fire) { void fire(); return; }
+    armedReconnectTimer = window.setTimeout(() => {
+      armedReconnectTimer = null;
+      armedReconnect = armReduce({ armed: armedReconnect }, { type: 'timeout' }).state.armed;
+      paintAllReconnectBtns();
+    }, ARM_MS);
+    // The armed button is the one that was just clicked, so it still holds
+    // focus — a keyboard user confirms with a second Enter without moving.
+    btn.focus();
+  });
 }
 
 function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
@@ -1245,11 +1332,8 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
 
   const refreshBtn = document.createElement('button');
   refreshBtn.className = 'refresh';
-  refreshBtn.title = 'Reconnect';
-  refreshBtn.setAttribute('aria-label', `Reconnect ${b.label}`);
-  refreshBtn.textContent = '↻';
-  refreshBtn.addEventListener('click', async (e) => {
-    e.stopPropagation();
+  // Title/label/glyph and the two-click guard are owned by wireReconnectButton.
+  wireReconnectButton(refreshBtn, `box:${b.id}`, b.label, async () => {
     await api.reconnectBox(b.id);
     const wasDocked = panesOf(stageRoot).includes(b.id);
     closeTab(b.id, { keepPane: wasDocked });
