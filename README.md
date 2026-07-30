@@ -699,10 +699,52 @@ linked containers don't leave stale IPAM entries behind. An optional **DNS suffi
 hostname** (optionally a tag, oh-my-tmux/zsh/bash, and the same "Additional tools" checklist as the
 Add/Edit Box modal). Watch the live task log; once the container is up Tmuxifier installs tmux
 (and any selected frameworks/tools) over SSH, then an **Open terminal** button drops you into it.
-Installed shell frameworks come with their auto-updater disabled (`zstyle ':omz:update' mode
-disabled` / `DISABLE_AUTO_UPDATE="true"`): unattended boxes shouldn't self-update at random
-shell starts — update them deliberately with a Fleet Command run (`omz update` / `bash
-~/.oh-my-bash/tools/upgrade.sh`) when you choose to.
+Shell-framework auto-updaters are disabled on every box setup — not only when Tmuxifier
+installs the framework, so a hand-installed one is covered too. Unattended boxes shouldn't
+self-update at a random shell start: that puts a network round trip in front of your session,
+bumps versions nobody asked for, and oh-my-zsh's reminder mode blocks the shell outright waiting
+for a `Y/n`. Each clamp is applied only where the framework is actually present, so an rc file
+that doesn't use one is left alone:
+
+| Framework | What is set | Where |
+|---|---|---|
+| Oh My Zsh | `zstyle ':omz:update' mode disabled` | `~/.zshrc`, immediately before the `oh-my-zsh.sh` source line |
+| Oh My Bash | `DISABLE_AUTO_UPDATE="true"` | `~/.bashrc`, before the `oh-my-bash.sh` source line |
+| Oh My Tmux | `tmux_conf_update_plugins_on_launch=false` and `..._on_reload=false` | `~/.tmux.conf.local` |
+
+That last one matters more than it looks: oh-my-tmux ships both flags as `true`, so an unclamped
+box runs `git fetch` for tpm and every plugin on **each** tmux server launch and **each** config
+reload.
+
+The same clamps are applied to the Tmuxifier host's own shell whenever its local-shell
+framework is provisioned (the ✎ host-shell choice, persisted as `localShell` in
+`config.json`) — so the host stops prompting too.
+
+**Update deliberately, when you choose to.** Both shell-framework updaters are shell *functions*,
+so a non-interactive Fleet Command run has to call the underlying scripts:
+
+```sh
+sh ~/.oh-my-zsh/tools/upgrade.sh     # Oh My Zsh  (interactively: omz update)
+bash ~/.oh-my-bash/tools/upgrade.sh  # Oh My Bash (interactively: upgrade_oh_my_bash)
+git -C ~/.tmux pull                  # Oh My Tmux (plugins: tpm's prefix + U)
+```
+
+**Boxes added before this shipped** need one sweep, since the clamps are applied at setup time.
+Select every box in Fleet Command and run:
+
+```sh
+[ -f ~/.zshrc ] && ! grep -q "^zstyle ':omz:update' mode disabled" ~/.zshrc \
+  && sed -i "/oh-my-zsh\.sh/i zstyle ':omz:update' mode disabled" ~/.zshrc
+[ -f ~/.bashrc ] && ! grep -q '^DISABLE_AUTO_UPDATE=' ~/.bashrc \
+  && sed -i '/oh-my-bash\.sh/i DISABLE_AUTO_UPDATE="true"' ~/.bashrc
+[ -f ~/.tmux.conf.local ] \
+  && sed -i 's/^tmux_conf_update_plugins_on_launch=true/tmux_conf_update_plugins_on_launch=false/' ~/.tmux.conf.local \
+  && sed -i 's/^tmux_conf_update_plugins_on_reload=true/tmux_conf_update_plugins_on_reload=false/' ~/.tmux.conf.local
+true
+```
+
+The trailing `true` keeps the exit status zero on a box that simply has no oh-my-tmux, so Fleet
+Command doesn't report a failure. Re-running is harmless.
 
 **Security.** The API token, any added SSH keys, and the optional root password are **encrypted at
 rest** (AES-256-GCM; key derived from your cookie secret) in the gitignored `data/proxmox.json`

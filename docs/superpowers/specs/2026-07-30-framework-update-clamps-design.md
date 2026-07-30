@@ -1,7 +1,7 @@
 # Design: clamp shell-framework auto-updates on every box and the host shell
 
 **Date:** 2026-07-30
-**Status:** approved, not yet implemented
+**Status:** implemented in v1.23.1
 **Origin:** the e2e suite went red because this host's root zsh began blocking on
 `[oh-my-zsh] Would you like to update? [Y/n]`, so every test waiting for a live shell prompt
 timed out. Investigating that turned up a clamp that has never worked and a second framework

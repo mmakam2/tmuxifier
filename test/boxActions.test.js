@@ -3,7 +3,33 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildKillTmuxRemote, createBoxActions, resolveTools, TOOL_IDS } from '../src/server/boxActions.js';
+import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildKillTmuxRemote, buildFrameworkUpdateClamps, createBoxActions, resolveTools, TOOL_IDS } from '../src/server/boxActions.js';
+
+// The generated script uses sed and grep (framework rc edits, and the always-on
+// update clamps). The fake-PATH harnesses below are deliberately hermetic — no
+// real curl, apt-get or git — so link in only those two rather than widening
+// PATH to the system directories.
+//
+// Inert `chsh` and `sudo` stubs are a SAFETY NET, not a fixture: the script this
+// runs calls `chsh -s "$ZSH_BIN" root`, so any future change that lets chsh
+// resolve would set the developer's own login shell to a fake zsh inside a temp
+// directory — which breaks every login on the machine once that directory is
+// gone. Learned the hard way. The script tolerates a missing chsh (`|| true`),
+// so stubbing it changes no assertion.
+async function linkCoreutils(dir) {
+  for (const bin of ['sed', 'grep']) {
+    for (const candidate of [`/usr/bin/${bin}`, `/bin/${bin}`]) {
+      try {
+        await fs.access(candidate);
+        await fs.symlink(candidate, path.join(dir, bin));
+        break;
+      } catch { /* try the next location */ }
+    }
+  }
+  for (const bin of ['chsh', 'sudo']) {
+    await fs.writeFile(path.join(dir, bin), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  }
+}
 
 function runShell(script, env) {
   return new Promise((resolve) => {
@@ -66,6 +92,7 @@ test('buildEnsureTmuxRemote skips package managers when tmux is already installe
   await fs.writeFile(path.join(dir, 'apt-get'), '#!/bin/sh\necho "$*" >> "$TMUXIFIER_APT_LOG"\nexit 88\n', { mode: 0o755 });
 
   await fs.writeFile(path.join(dir, 'git'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  await linkCoreutils(dir);
 
   const res = await runShell(buildEnsureTmuxRemote('web'), {
     PATH: dir,
@@ -109,6 +136,7 @@ test('buildEnsureTmuxRemote skips Oh My Zsh clone when .oh-my-zsh exists', async
   await fs.writeFile(path.join(dir, 'zsh'), '#!/bin/sh\necho "$*" >> "$TMUXIFIER_ZSH_LOG"\nexit 0\n', { mode: 0o755 });
   await fs.writeFile(path.join(dir, 'tmux'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   await fs.writeFile(path.join(dir, 'git'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  await linkCoreutils(dir);
   await fs.writeFile(path.join(dir, 'curl'), '#!/bin/sh\necho curled >> "$TMUXIFIER_CURL_LOG"\nexit 0\n', { mode: 0o755 });
   const curlLog = path.join(dir, 'curl.log');
 
@@ -154,6 +182,7 @@ test('buildEnsureTmuxRemote skips Oh My Bash clone when .oh-my-bash exists', asy
   await fs.writeFile(path.join(dir, 'bash'), '#!/bin/sh\necho "$*" >> "$TMUXIFIER_BASH_LOG"\nexit 0\n', { mode: 0o755 });
   await fs.writeFile(path.join(dir, 'tmux'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   await fs.writeFile(path.join(dir, 'git'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  await linkCoreutils(dir);
   await fs.writeFile(path.join(dir, 'curl'), '#!/bin/sh\necho curled >> "$TMUXIFIER_CURL_LOG"\nexit 0\n', { mode: 0o755 });
   const curlLog = path.join(dir, 'curl.log');
 
@@ -173,6 +202,7 @@ test('buildEnsureTmuxRemote skips Oh My Tmux clone when config exists', async ()
   await fs.writeFile(path.join(dir, '.tmux', '.tmux.conf'), '# existing\n');
   await fs.writeFile(path.join(dir, 'tmux'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   await fs.writeFile(path.join(dir, 'git'), '#!/bin/sh\necho cloned > "$TMUXIFIER_GIT_LOG"\nexit 0\n', { mode: 0o755 });
+  await linkCoreutils(dir);
   const gitLog = path.join(dir, 'git.log');
 
   const res = await runShell(`cd ${JSON.stringify(dir)}
@@ -376,6 +406,7 @@ test('omz ensure without oh-my-tmux does not create a stray .tmux.conf.local', a
     await fs.writeFile(path.join(dir, bin), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   }
   await fs.mkdir(path.join(dir, '.oh-my-zsh'));
+  await linkCoreutils(dir);
 
   const res = await runShell(`cd ${JSON.stringify(dir)}
 ${buildEnsureTmuxRemote('web', undefined, { installOhMyZsh: true })}`, { PATH: dir });
@@ -633,14 +664,97 @@ test('execScriptStdin reports failure without throwing', async () => {
   expect(res).toEqual({ ok: false, code: 1, stdout: '', stderr: 'boom', error: 'boom' });
 });
 
-test('framework installs disable the auto-updater in the generated rc (updates happen deliberately, via Fleet Command)', () => {
-  const zsh = String(buildEnsureTmuxRemote('web', null, { installOhMyZsh: true }));
-  expect(zsh).toContain("zstyle ':omz:update' mode disabled");
-  const bash = String(buildEnsureTmuxRemote('web', null, { installOhMyBash: true }));
-  expect(bash).toContain('DISABLE_AUTO_UPDATE="true"');
-  const bare = String(buildEnsureTmuxRemote('web', null, {}));
-  expect(bare).not.toContain('omz:update');
-  expect(bare).not.toContain('DISABLE_AUTO_UPDATE');
+// Auto-updates are clamped on EVERY setup, not only when Tmuxifier installs the
+// framework: a box carrying a hand-installed oh-my-* is exactly the box that
+// never ticks a framework checkbox, and it was never reached before. The two
+// `bare` assertions here used to be negative — they encoded the older "a bare
+// setup touches nothing" policy, and were inverted deliberately, not repaired.
+// See docs/superpowers/specs/2026-07-30-framework-update-clamps-design.md.
+test('framework auto-update clamps apply on every setup, bare included (updates happen deliberately, via Fleet Command)', () => {
+  for (const options of [{}, { installOhMyZsh: true }, { installOhMyBash: true }, { installOhMyTmux: true }]) {
+    const script = String(buildEnsureTmuxRemote('web', null, options));
+    expect(script).toContain("zstyle ':omz:update' mode disabled");
+    expect(script).toContain('DISABLE_AUTO_UPDATE="true"');
+    expect(script).toContain('tmux_conf_update_plugins_on_launch=false');
+    expect(script).toContain('tmux_conf_update_plugins_on_reload=false');
+  }
+});
+
+test('the clamps appear once, not once per framework', () => {
+  const all = String(buildEnsureTmuxRemote('web', null, {
+    installOhMyZsh: true, installOhMyBash: true, installOhMyTmux: true,
+  }));
+  const count = (needle) => all.split(needle).length - 1;
+  expect(count("i zstyle ':omz:update' mode disabled")).toBe(1);
+  expect(count('i DISABLE_AUTO_UPDATE="true"')).toBe(1);
+  expect(count('tmux_conf_update_plugins_on_launch=false')).toBe(1);
+});
+
+// The clamps must land AFTER the framework installers, which replace .zshrc and
+// .bashrc wholesale — clamping first would be overwritten.
+test('the clamps run after the framework installers that rewrite rc files', () => {
+  const s = String(buildEnsureTmuxRemote('web', null, { installOhMyZsh: true }));
+  expect(s.indexOf('oh-my-zsh/master/tools/install.sh')).toBeLessThan(s.indexOf("i zstyle ':omz:update' mode disabled"));
+});
+
+// --- the regression test for the bug this work exists to fix -----------------
+// oh-my-zsh's installer writes a .zshrc carrying its own commented template:
+//   # zstyle ':omz:update' mode disabled  # disable automatic updates
+// The old guard was `grep -q "zstyle ':omz:update' mode disabled"` — unanchored,
+// so it matched that COMMENT, concluded the clamp was already applied, and never
+// inserted the real line. The clamp therefore never fired on any box or host.
+test('the omz clamp is not satisfied by oh-my-zsh\'s commented template line', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-clamp-'));
+  // A faithful stock .zshrc: the commented template block, then the source line.
+  await fs.writeFile(path.join(home, '.zshrc'), [
+    'ZSH=$HOME/.oh-my-zsh',
+    "# zstyle ':omz:update' mode disabled  # disable automatic updates",
+    "# zstyle ':omz:update' mode auto      # update automatically without asking",
+    "# zstyle ':omz:update' mode reminder  # just remind me to update when it's time",
+    'source $ZSH/oh-my-zsh.sh',
+  ].join('\n') + '\n');
+  await fs.writeFile(path.join(home, '.bashrc'), 'source $OSH/oh-my-bash.sh\n');
+  await fs.writeFile(path.join(home, '.tmux.conf.local'), [
+    'tmux_conf_update_plugins_on_launch=true',
+    'tmux_conf_update_plugins_on_reload=true',
+  ].join('\n') + '\n');
+
+  const clamps = buildFrameworkUpdateClamps();
+  const res = await runShell(`cd ${JSON.stringify(home)}\nset -eu\n${clamps}`);
+  expect(res.code).toBe(0);
+
+  const zshrc = await fs.readFile(path.join(home, '.zshrc'), 'utf8');
+  // The real, uncommented setting is now present...
+  expect(zshrc).toMatch(/^zstyle ':omz:update' mode disabled$/m);
+  // ...and it precedes the source line, which is what makes zsh honour it.
+  expect(zshrc.indexOf("\nzstyle ':omz:update' mode disabled")).toBeLessThan(zshrc.indexOf('source $ZSH/oh-my-zsh.sh'));
+
+  const bashrc = await fs.readFile(path.join(home, '.bashrc'), 'utf8');
+  expect(bashrc).toMatch(/^DISABLE_AUTO_UPDATE="true"$/m);
+
+  const tmuxLocal = await fs.readFile(path.join(home, '.tmux.conf.local'), 'utf8');
+  expect(tmuxLocal).toContain('tmux_conf_update_plugins_on_launch=false');
+  expect(tmuxLocal).toContain('tmux_conf_update_plugins_on_reload=false');
+  expect(tmuxLocal).not.toContain('=true');
+
+  // Idempotent: a second run must not add a second line.
+  const again = await runShell(`cd ${JSON.stringify(home)}\nset -eu\n${clamps}`);
+  expect(again.code).toBe(0);
+  const zshrc2 = await fs.readFile(path.join(home, '.zshrc'), 'utf8');
+  expect(zshrc2.split("\nzstyle ':omz:update' mode disabled").length - 1).toBe(1);
+  expect(zshrc2).toEqual(zshrc);
+});
+
+test('the clamps leave an rc file that does not use the framework untouched', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-clamp-none-'));
+  // A hand-rolled .zshrc with no oh-my-zsh source line: the insert matches
+  // nothing, so the file must come back byte-identical.
+  const original = 'export PATH="$HOME/bin:$PATH"\nautoload -Uz compinit && compinit\n';
+  await fs.writeFile(path.join(home, '.zshrc'), original);
+
+  const res = await runShell(`cd ${JSON.stringify(home)}\nset -eu\n${buildFrameworkUpdateClamps()}`);
+  expect(res.code).toBe(0); // absent .bashrc/.tmux.conf.local must not fail the run
+  expect(await fs.readFile(path.join(home, '.zshrc'), 'utf8')).toEqual(original);
 });
 
 test('buildEnsureTmuxRemote can omit session creation, deferring it past the seed', () => {

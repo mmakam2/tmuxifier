@@ -180,6 +180,57 @@ const LOCAL_BIN_PATH_BLOCK = [
   'done',
 ];
 
+// Clamp every shell framework's self-updater. Unattended fleet boxes must not
+// update their shell framework at a random shell start — that puts a network
+// round trip (and a version bump nobody asked for) in front of a session, and
+// oh-my-zsh's reminder mode blocks the shell outright waiting for Y/n. Updates
+// happen deliberately instead, via Fleet Command; README documents the commands.
+//
+// Applied on EVERY setup, not only when Tmuxifier installs the framework: the box
+// carrying a hand-installed oh-my-* is exactly the one that never ticks a
+// framework checkbox, and it used to be missed. Each clamp is guarded by evidence
+// the framework is really there, so an rc file that does not use it is untouched.
+//
+// Exported for its own test: the assertions run this block against fixture rc
+// files rather than string-matching the generated script, because the bug it
+// fixes was a guard that LOOKED right.
+export function buildFrameworkUpdateClamps() {
+  // No `cd` here, deliberately: every path is relative, matching the rc edits
+  // these clamps replaced. A real run's cwd is already the target home (ssh lands
+  // there; localShellActions passes os.homedir()), and a bare `cd` would instead
+  // pin the block to $HOME — which in a test harness that cd'd into a fixture
+  // directory means editing the developer's own rc files.
+  return [
+    // oh-my-zsh. The guard is ANCHORED, and that anchor is the whole fix: every
+    // stock install writes a .zshrc carrying oh-my-zsh's own commented template
+    //   # zstyle ':omz:update' mode disabled  # disable automatic updates
+    // and an unanchored grep matched that comment, decided the clamp was already
+    // in place, and never inserted the real line — on any box, ever.
+    // Inserting immediately before the source line also settles precedence: zsh
+    // honours the last zstyle evaluated before oh-my-zsh.sh runs, so this wins
+    // over an operator's earlier `mode auto` without having to find and delete it.
+    'if [ -f .zshrc ] && ! grep -q "^zstyle \':omz:update\' mode disabled" .zshrc; then',
+    '  sed -i "/oh-my-zsh\\.sh/i zstyle \':omz:update\' mode disabled" .zshrc',
+    'fi',
+    // oh-my-bash. This guard was already anchored and correct; it is the pattern
+    // the omz one above should have followed. omb's check_for_upgrade is also
+    // known to strand a stale update.lock when first-start shells race it.
+    'if [ -f .bashrc ] && ! grep -q \'^DISABLE_AUTO_UPDATE=\' .bashrc; then',
+    '  sed -i \'/oh-my-bash\\.sh/i DISABLE_AUTO_UPDATE="true"\' .bashrc',
+    'fi',
+    // oh-my-tmux ships BOTH of these as `true` in the .tmux.conf.local it hands
+    // out, so an unclamped box git-fetches tpm and every plugin on each tmux
+    // server launch AND each config reload. Two plain expressions rather than one
+    // with `\|` alternation: busybox sed on Alpine is unreliable with BRE
+    // alternation, and Alpine/musl is a supported-with-caveats target. Same
+    // anchored-sed shape as the mouse clamp in the oh-my-tmux block.
+    'if [ -f .tmux.conf.local ]; then',
+    "  sed -i 's/^tmux_conf_update_plugins_on_launch=true/tmux_conf_update_plugins_on_launch=false/' .tmux.conf.local",
+    "  sed -i 's/^tmux_conf_update_plugins_on_reload=true/tmux_conf_update_plugins_on_reload=false/' .tmux.conf.local",
+    'fi',
+  ].join('\n');
+}
+
 export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
   const sess = shSingleQuote(sanitizeSession(session));
   const startup = startupCommand ? ` ${shSingleQuote(startupCommand)}` : '';
@@ -252,14 +303,6 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     // '#…#d' sed script is a COMMENT: the old form deleted nothing, so every
     // ensure run appended another line).
     'if [ -f .tmux.conf.local ]; then sed -i \'/^set-option -g default-shell/d\' .tmux.conf.local 2>/dev/null || true; echo "set-option -g default-shell \"$ZSH_BIN\"" >> .tmux.conf.local; fi',
-    // Unattended fleet boxes must not self-update their shell framework at
-    // random shell starts — updates happen deliberately, via Fleet Command.
-    // The line must precede the oh-my-zsh source line to take effect; the grep
-    // guard keeps re-runs idempotent, and a custom .zshrc without the source
-    // line is left untouched (insert matches nothing).
-    'if [ -f .zshrc ] && ! grep -q "zstyle \':omz:update\' mode disabled" .zshrc; then',
-    '  sed -i "/oh-my-zsh\\.sh/i zstyle \':omz:update\' mode disabled" .zshrc',
-    'fi',
   ] : [];
   const ohMyBash = options.installOhMyBash ? [
     'BASH_BIN="$(command -v bash || true)"',
@@ -285,11 +328,6 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     'fi',
     // Same guarded delete-then-append as the omz branch above.
     'if [ -f .tmux.conf.local ]; then sed -i \'/^set-option -g default-shell/d\' .tmux.conf.local 2>/dev/null || true; echo "set-option -g default-shell \"$BASH_BIN\"" >> .tmux.conf.local; fi',
-    // Same rationale as the omz branch — and omb\'s check_for_upgrade is also
-    // known to strand a stale update.lock when first-start shells race it.
-    'if [ -f .bashrc ] && ! grep -q \'^DISABLE_AUTO_UPDATE=\' .bashrc; then',
-    '  sed -i \'/oh-my-bash\\.sh/i DISABLE_AUTO_UPDATE="true"\' .bashrc',
-    'fi',
   ] : [];
   // git is only a prerequisite of the oh-my-* framework installs (their
   // installers clone). A bare setup must not mutate the box's packages, and
@@ -361,6 +399,9 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     ...ohMyTmux,
     ...ohMyZsh,
     ...ohMyBash,
+    // Strictly after the framework blocks: the omz/omb installers replace
+    // .zshrc/.bashrc wholesale, so a clamp written before them would be erased.
+    buildFrameworkUpdateClamps(),
     // After the framework blocks: the omz/omb installers replace .zshrc/.bashrc,
     // which would wipe (or predate) the ~/.local/bin line the claude/agy
     // installers rely on.

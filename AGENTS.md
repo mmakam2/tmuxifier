@@ -167,6 +167,19 @@ pattern for new modules.
   Codex/Claude/Antigravity CLIs — ids validated server-side, nothing user-typed reaches the
   script), the non-interactive `execCommand` that Fleet Command runs, and ControlMaster
   liveness/stale-socket reaping (`isMasterAlive`/`reapStaleMaster`).
+  `buildFrameworkUpdateClamps` disables every shell framework's self-updater and runs on **every**
+  setup, not just when a framework is installed — the box carrying a hand-installed oh-my-* is
+  exactly the one that never ticks a checkbox. Each clamp is guarded by evidence the framework is
+  present, so a bare setup edits only rc files that actually source one (a deliberate widening of
+  "a bare setup mutates nothing"). The oh-my-zsh guard is **anchored** (`^zstyle`) and that anchor
+  is load-bearing: every stock install writes a `.zshrc` containing oh-my-zsh's own *commented*
+  `# zstyle ':omz:update' mode disabled` template line, and the original unanchored guard matched
+  that comment, concluded the clamp was already applied, and never inserted the real setting — so
+  the clamp never fired on any box. oh-my-tmux needs it most: it ships
+  `tmux_conf_update_plugins_on_launch`/`_on_reload` as `true`, i.e. a `git fetch` per tmux launch
+  and per config reload. Inserting before the source line also settles precedence over an
+  operator's own `mode auto`. Deliberate updates are documented in README (both shell updaters are
+  shell functions, so Fleet Command must call `tools/upgrade.sh` directly).
 - `uploads.js` — terminal file uploads (paste/drag-drop): filename allowlist,
   stored-name uniquifier, the remote `cat > ~/.tmuxifier-uploads/…` script builder
   (24h self-prune), and the local-shell file writer. `boxActions.uploadFile` pipes
