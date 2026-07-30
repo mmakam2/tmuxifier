@@ -80,6 +80,15 @@ export function initThresholdState() {
   return { cpu: false, cpuStreak: 0, cpuSeeded: true, mem: false, disk: false };
 }
 
+// Consecutive 'working' samples required before going quiet counts as the agent
+// handing control back. A parked Claude Code pane emits a brief periodic blip of
+// output (observed live: every 30 minutes, one poll wide), and since the agent
+// signal became pane OUTPUT in v1.22.3 that blip looked exactly like a task
+// starting and finishing — firing "claude is waiting for your input" on a loop
+// for agents that were doing nothing. Same shape as the cpu streak below: a
+// spiky signal needs confirmation before it is believed.
+const AGENT_WORK_MIN_SAMPLES = 2;
+
 // Pure edge detector. Reachability/auth edges compare prev↔next (stateless).
 // Metric-threshold edges use `state` + hysteresis so a box that stays hot fires
 // once; cpu additionally needs two consecutive over-samples (it is spiky). A
@@ -98,6 +107,7 @@ export function classifyTransitions(prev, next, thresholds, state) {
     st.cpu = !!(next.up && next.cpuPct != null && next.cpuPct >= warn.cpu);
     st.cpuStreak = st.cpu ? 2 : 0;
     st.cpuSeeded = !!(next.up && next.cpuPct != null);
+    st.agentWorkStreak = next.agent === 'working' ? AGENT_WORK_MIN_SAMPLES : 0;
     return { events, state: st };
   }
 
@@ -126,12 +136,24 @@ export function classifyTransitions(prev, next, thresholds, state) {
   // is a stopped container, not a live probe's observation, so it must not
   // read as the agent finishing.
   if (prev) {
-    if (prev.agent === 'working' && next.agent === 'waiting' && !next.agentAttached) {
+    // A nullish streak means the run behind `prev` was never observed — the
+    // series starts here (a restart, or a caller threading fresh state). Trust
+    // prev's own reading in that case: dropping a real "waiting for input" is
+    // worse than one unconfirmed ping. Only an actually-observed short run is
+    // treated as the periodic blip it is.
+    const observedRun = st.agentWorkStreak == null ? AGENT_WORK_MIN_SAMPLES : st.agentWorkStreak;
+    if (prev.agent === 'working' && next.agent === 'waiting' && !next.agentAttached
+        && observedRun >= AGENT_WORK_MIN_SAMPLES) {
       events.push({ kind: 'agent-input' });
     } else if (prev.agent && !next.agent && next.up && !next.stopped && !prev.agentAttached && !next.agentAttached) {
       events.push({ kind: 'agent-done' });
     }
   }
+  // Updated AFTER the edge check, so the value read above describes the run
+  // ending at `prev`. Capped so a long task cannot grow it without bound.
+  st.agentWorkStreak = next.agent === 'working'
+    ? Math.min(AGENT_WORK_MIN_SAMPLES, (st.agentWorkStreak ?? 0) + 1)
+    : 0;
 
   // mem / disk: immediate crossing with hysteresis clear
   for (const metric of ['mem', 'disk']) {

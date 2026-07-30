@@ -276,3 +276,83 @@ test('agent kinds never fire on the first sample (no prev)', () => {
   const idle = { up: true, agent: 'waiting', agentAttached: false };
   expect(classifyTransitions(null, idle, TH, initThresholdState()).events).toEqual([]);
 });
+
+// A parked Claude Code pane emits a brief blip of output on a periodic timer
+// (observed live: every 30 minutes, one poll wide, on three separate boxes each
+// with its own phase). Since v1.22.3 the agent signal is pane OUTPUT, so that
+// blip reads as one 'working' sample and the return to quiet reads as a
+// working->waiting edge: "claude is waiting for your input", every 30 minutes,
+// forever, on every box with a parked agent. The agent did no work and asked for
+// nothing. Work has to be OBSERVED across more than one poll before going quiet
+// counts as handing back control — the same two-consecutive-samples rule the
+// spiky cpu metric already uses.
+test('a one-sample output blip on a parked agent fires no agent-input', () => {
+  const waiting = { up: true, agent: 'waiting', agentAttached: false };
+  const working = { up: true, agent: 'working', agentAttached: false };
+
+  let st = initThresholdState();
+  // Establish that the agent is parked and quiet.
+  st = classifyTransitions(waiting, waiting, TH, st).state;
+  // The periodic repaint: exactly one poll sees fresh output.
+  const blip = classifyTransitions(waiting, working, TH, st);
+  expect(blip.events).not.toContainEqual({ kind: 'agent-input' });
+  // Back to quiet on the next poll — this is the edge that used to fire.
+  const back = classifyTransitions(working, waiting, TH, blip.state);
+  expect(back.events).not.toContainEqual({ kind: 'agent-input' });
+});
+
+test('the blip suppression does not accumulate: repeated blips stay silent', () => {
+  const waiting = { up: true, agent: 'waiting', agentAttached: false };
+  const working = { up: true, agent: 'working', agentAttached: false };
+  let st = classifyTransitions(waiting, waiting, TH, initThresholdState()).state;
+  for (let cycle = 0; cycle < 4; cycle += 1) {
+    const r1 = classifyTransitions(waiting, working, TH, st);
+    const r2 = classifyTransitions(working, waiting, TH, r1.state);
+    st = classifyTransitions(waiting, waiting, TH, r2.state).state;
+    expect(r1.events).not.toContainEqual({ kind: 'agent-input' });
+    expect(r2.events).not.toContainEqual({ kind: 'agent-input' });
+  }
+});
+
+test('sustained work followed by quiet still fires agent-input exactly once', () => {
+  const waiting = { up: true, agent: 'waiting', agentAttached: false };
+  const working = { up: true, agent: 'working', agentAttached: false };
+
+  let st = classifyTransitions(waiting, waiting, TH, initThresholdState()).state;
+  // A real task: output observed across consecutive polls.
+  st = classifyTransitions(waiting, working, TH, st).state;
+  const second = classifyTransitions(working, working, TH, st);
+  expect(second.events).not.toContainEqual({ kind: 'agent-input' });
+  // Now it goes quiet — the agent genuinely handed control back.
+  const done = classifyTransitions(working, waiting, TH, second.state);
+  expect(done.events).toContainEqual({ kind: 'agent-input' });
+  // ...and does not repeat while it stays quiet.
+  const still = classifyTransitions(waiting, waiting, TH, done.state);
+  expect(still.events).not.toContainEqual({ kind: 'agent-input' });
+});
+
+test('a long task fires once, not once per poll', () => {
+  const waiting = { up: true, agent: 'waiting', agentAttached: false };
+  const working = { up: true, agent: 'working', agentAttached: false };
+  let st = classifyTransitions(waiting, working, TH, initThresholdState()).state;
+  let fired = 0;
+  for (let poll = 0; poll < 10; poll += 1) {
+    const r = classifyTransitions(working, working, TH, st);
+    st = r.state;
+    fired += r.events.filter((e) => e.kind === 'agent-input').length;
+  }
+  const end = classifyTransitions(working, waiting, TH, st);
+  fired += end.events.filter((e) => e.kind === 'agent-input').length;
+  expect(fired).toBe(1);
+});
+
+// A restart loses the sample series, so the first edge after it has no observed
+// run behind it. That must still notify: dropping a real "waiting for input"
+// is worse than one unconfirmed ping, and it is what the pre-existing
+// fresh-state edge test relies on.
+test('a working->waiting edge with no prior history still fires (restart tolerance)', () => {
+  const working = { up: true, agent: 'working', agentAttached: false };
+  const waiting = { up: true, agent: 'waiting', agentAttached: false };
+  expect(classifyTransitions(working, waiting, TH, initThresholdState()).events)
+    .toContainEqual({ kind: 'agent-input' });
+});
