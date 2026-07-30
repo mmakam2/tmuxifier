@@ -21,13 +21,26 @@
 let unauthorizedHandler: (() => void) | null = null;
 export function onUnauthorized(fn: (() => void) | null) { unauthorizedHandler = fn; }
 
+/** An Error that remembers the HTTP status that produced it. */
+export interface HttpError extends Error { status: number }
+
 /** Notify the seam and build the error for a non-ok response. */
-export async function httpError(res: Response): Promise<Error> {
+export async function httpError(res: Response): Promise<HttpError> {
   if (res.status === 401) unauthorizedHandler?.();
   const body = (await res.json().catch(() => ({}))) as { error?: string };
   // statusText is '' over HTTP/2, which carries no reason phrase — so the bare
   // status is the last resort rather than an empty message.
-  return new Error(body.error || res.statusText || `HTTP ${res.status}`);
+  const err = new Error(body.error || res.statusText || `HTTP ${res.status}`) as HttpError;
+  // Carried so a caller can tell "this is gone" from "this failed once". Set
+  // here rather than at each call site: a poller that cannot distinguish a 404
+  // from a transient failure retries forever (E4).
+  err.status = res.status;
+  return err;
+}
+
+/** The status of a thrown http error, or 0 for anything else (network, abort). */
+export function statusOf(err: unknown): number {
+  return typeof (err as HttpError)?.status === 'number' ? (err as HttpError).status : 0;
 }
 
 /** Parse an already-awaited Response, routing 401 through the seam. */

@@ -1,6 +1,8 @@
 import { api, type Box } from './api';
 import { nbx } from './netbox';
-import { pve, type PvePreset, type ProvisionStatus } from './proxmox';
+import { pve, type PvePreset, type ProvisionStatus, type LifecycleJob } from './proxmox';
+import { statusOf } from './http';
+import { lifecyclePollStep } from './lifecyclePoll';
 import { openProvisionTerminal } from './terminal';
 import { el, input, field, err, openModal, syncTabSelection, wireTabStrip } from './dom';
 import { openSettingsModal } from './settingsUi';
@@ -245,13 +247,23 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
     const log = el('pre', { class: 'pve-log' });
     const footer = el('div', { class: 'modal-actions' });
     setContent(el('h3', {}, ['Lifecycle job']), phase, log, footer);
+    let failures = 0;
     async function tick() {
-      const job = await pve.lifecycleJob(id).catch(() => null);
+      let job: LifecycleJob | null = null;
+      let errorStatus = 0;
+      try { job = await pve.lifecycleJob(id); }
+      catch (e) { errorStatus = statusOf(e); }
       if (generation !== pollGen) return;
-      if (!job) { pollTimer = window.setTimeout(tick, 1500); return; }
+
+      const step = lifecyclePollStep({ job, errorStatus, failures });
+      if (step.action === 'give-up') { phase.textContent = step.message; return; }
+      if (step.action === 'retry') { failures += 1; pollTimer = window.setTimeout(tick, 1500); return; }
+
+      failures = 0;
+      job = job!;
       phase.textContent = `${job.action.toUpperCase()} | ${job.status.toUpperCase()} | ${job.phase}${job.error ? ` | ${job.error}` : ''}`;
       log.textContent = job.log || '';
-      if (job.status === 'running') { pollTimer = window.setTimeout(tick, 1500); return; }
+      if (!step.done) { pollTimer = window.setTimeout(tick, 1500); return; }
       opts.onBoxLinked();
       await pve.linkedContainers().catch(() => []);
       if (generation !== pollGen) return;

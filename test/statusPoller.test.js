@@ -310,3 +310,101 @@ test('refreshUntil still works against a checker with no resetBackoff', async ()
   });
   await expect(poller.refreshUntil('b1', { intervalMs: 1, timeoutMs: 10_000 })).resolves.toBe(true);
 });
+
+// E3 (2026-07-29 review). The fast track called pollOnce, which sweeps the whole
+// fleet. Pressing START on one container therefore re-probed every box every 5s
+// for up to 3 minutes — roughly 300 extra SSH probes on a 10-box fleet to learn
+// one container's boot state, and each sweep's slowest box delayed the answer
+// about the one box the caller actually asked about.
+test('the fast track probes only its target, not the whole fleet', async () => {
+  const probed = [];
+  const poller = createStatusPoller({
+    store: fakeStore([
+      { id: 'b1', host: '192.168.1.10' },
+      { id: 'b2', host: '192.168.1.11' },
+      { id: 'b3', host: '192.168.1.12' },
+    ]),
+    statusChecker: { checkBox: async (b) => { probed.push(b.id); return { reachable: probed.filter((x) => x === 'b1').length >= 3 }; } },
+    sleep: async () => {},
+  });
+  await expect(poller.refreshUntil('b1', { intervalMs: 1, timeoutMs: 10_000 })).resolves.toBe(true);
+  expect(new Set(probed)).toEqual(new Set(['b1']));
+  expect(probed).toHaveLength(3);
+});
+
+test('the fast track patches its box into the snapshot without disturbing the others', async () => {
+  const boxes = [{ id: 'b1', host: '192.168.1.10' }, { id: 'b2', host: '192.168.1.11' }];
+  let b1Up = false;
+  const poller = createStatusPoller({
+    store: fakeStore(boxes),
+    statusChecker: { checkBox: async (b) => (b.id === 'b1' ? { reachable: b1Up } : { reachable: true, host: b.host }) },
+    sleep: async () => {},
+  });
+  await poller.pollOnce();
+  const before = poller.getSnapshot();
+  expect(before.b2).toEqual({ reachable: true, host: '192.168.1.11' });
+
+  b1Up = true;
+  await poller.refreshUntil('b1', { intervalMs: 1, timeoutMs: 10_000 });
+  const after = poller.getSnapshot();
+  expect(after.b1).toEqual({ reachable: true });
+  expect(after.b2).toEqual(before.b2);
+  // A new object, not a mutation of the one readers already hold — the same
+  // invariant the wholesale swap keeps.
+  expect(after).not.toBe(before);
+});
+
+// history.record() deletes the series of every box absent from its `boxes`
+// argument, so a single-box record would wipe the rest of the fleet's history.
+// The fast track therefore records nothing and leaves the series to the regular
+// sweep, which is also the honest cadence: a lifecycle action on one box should
+// not densify another's health series.
+test('the fast track does not record history', async () => {
+  const recorded = [];
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'b1', host: '192.168.1.10' }, { id: 'b2', host: '192.168.1.11' }]),
+    statusChecker: { checkBox: async () => ({ reachable: true }) },
+    history: { record: (snap, boxes) => recorded.push(boxes.map((b) => b.id)) },
+    sleep: async () => {},
+  });
+  await poller.refreshUntil('b1', { intervalMs: 1, timeoutMs: 10_000 });
+  expect(recorded).toEqual([]);
+  // The regular sweep still records the whole fleet.
+  await poller.pollOnce();
+  expect(recorded).toEqual([['b1', 'b2']]);
+});
+
+// The PVE gate is the reason a stopped container does not cost a full
+// ConnectTimeout per attempt. Losing it in the targeted path would have made
+// the fast track spend the entire 3-minute deadline waiting on a box with no
+// sshd — the exact cost the gate was added to avoid.
+test('the fast track still skips SSH while PVE reports the container stopped', async () => {
+  let sshProbes = 0;
+  let pveState = 'stopped';
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'b1', host: '192.168.1.10' }]),
+    statusChecker: { checkBox: async () => { sshProbes++; return { reachable: true }; } },
+    statusEnricher: {
+      collect: async () => [{ boxId: 'b1', state: pveState }],
+      merge: (snap, boxes, recs) => {
+        const out = { ...snap };
+        for (const r of recs) if (out[r.boxId]) out[r.boxId] = { ...out[r.boxId], proxmoxState: r.state };
+        return out;
+      },
+    },
+    sleep: async () => { pveState = 'running'; },
+  });
+  await expect(poller.refreshUntil('b1', { intervalMs: 1, timeoutMs: 10_000 })).resolves.toBe(true);
+  expect(sshProbes).toBe(1); // the stopped attempt cost no SSH at all
+  expect(poller.getSnapshot().b1.proxmoxState).toBe('running');
+});
+
+test('the fast track resolves false for a box that no longer exists', async () => {
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'b1', host: '192.168.1.10' }]),
+    statusChecker: { checkBox: async () => ({ reachable: true }) },
+    sleep: async () => {},
+    now: (() => { let t = 0; return () => (t += 60_000); })(),
+  });
+  await expect(poller.refreshUntil('gone', { intervalMs: 1, timeoutMs: 1 })).resolves.toBe(false);
+});

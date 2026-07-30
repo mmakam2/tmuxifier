@@ -130,6 +130,57 @@ quotes the buffering call it replaced, which would otherwise satisfy them.
 
 Suites: unit 1847/1847 across 140 files.
 
+**Status note, 2026-07-30 (batch 9, v1.24.0): the efficiency tier is clear.**
+
+**E2** — per-device UniFi statistics now go through `mapWithConcurrency` at a bound of 6 rather
+than a serial `for` loop with an await inside. `mapWithConcurrency` returns in input order, so the
+zip back onto device ids stays positional and a slow device cannot end up wearing another's
+readings. The bound is deliberate and small: a controller is often a consumer gateway, and 200
+simultaneous sockets is a burst rather than a read — the same reasoning that put SSH probes behind
+that helper. A request *count* cannot tell a serial loop from a parallel one, so `fakeUnifi.js`
+grew a `maxConcurrentStats` high-water mark and a `statsDelayMs` option, and the test asserts on
+that instead.
+
+Measured honestly, this changes nothing on the operator's own fleet: that controller reports seven
+devices (one gateway, three switches, three APs), and serial versus concurrent snapshots came out
+at 245–310ms versus 216–494ms across three runs each — entirely inside the noise. The finding's
+premise was a site with up to 200 devices, where serial means 200 sequential round trips in front
+of the snapshot every tile waits on. The fix is right at that scale and free at this one; it is
+not a speedup anyone here will see.
+
+The row's `and/or` second half — an aggregate `refresh()` deadline — was **not** done. Per-request
+timeouts already bound each call, the client's own 30s snapshot TTL already bounds how often the
+work happens, and an overall deadline would mean deciding what a half-collected snapshot renders
+as. That is a design question, not a cleanup, and it belongs in its own change if a slow
+controller ever actually stales a tile.
+
+**E3** — the fast track probes one box instead of sweeping the fleet. `probeOne` keeps everything
+`pollOnce` does per box: the PVE gate first, so a container PVE reports stopped still costs no
+SSH at all rather than a full ConnectTimeout per 5s attempt, and the enricher's merge after, so
+the patched entry still carries its proxmox fields. The snapshot is replaced with a new object
+rather than mutated, preserving the invariant that a reader holding the previous one never sees it
+change underneath.
+
+History is deliberately not recorded on the fast path, and that is the load-bearing detail:
+`history.record(snapshot, boxes)` **deletes the series of every box absent from `boxes`**, so
+recording a single box would have wiped the rest of the fleet's health history. Leaving it to the
+regular sweep is also the more honest cadence — a lifecycle action on one box has no business
+densifying another's series. The cost is that the box's own up-event now lands on the next 30s
+poll rather than within 5s; the snapshot the UI reads is still patched immediately, which is what
+made the fast track worth having.
+
+**E4** — the viewer did `.catch(() => null)` and rescheduled on every null, collapsing "this job
+was pruned" and "this request failed" into one answer: poll forever behind an empty log. The fix
+starts in `http.ts`, which now stamps the HTTP status onto the thrown error — one place, so every
+fetch layer gets it, which is a dividend of C2's consolidation rather than a fifth hand-rolled
+special case. The decision itself is `lifecyclePoll.ts`, pure so it is testable in the node
+environment the suite runs in: a 404 gives up at once with a message naming pruning, a 401 gives
+up because the shared seam is already tearing the workspace down, and anything else retries but
+is capped at five consecutive failures.
+
+Suites: unit 1898/1898 across 143 files, e2e 31/31. Verified live: a real UniFi snapshot returns
+ok in ~419ms with 95 clients and 10 networks across 7 devices.
+
 **Status note, 2026-07-30 (batch 8, v1.23.9): the dead-code tier is clear — but only two of the
 three were dead.**
 
@@ -341,9 +392,9 @@ detailed explanation in the sections after the tables; Lows are described fully 
 | ID | Area | Finding | Severity | Effort | Proposed fix | Status |
 |----|------|---------|----------|--------|--------------|--------|
 | E1 | voice | `setup-voice.mjs` buffers the whole model in RAM (~1.1 GB peak for `medium.en-q5_0`) instead of reusing `downloadVerified` — the exact failure that module's header warns about | Med | S | `await downloadVerified({ url, dest, sha256 })` and drop the hand-rolled block | ✅ v1.23.4 |
-| E2 | unifi | Per-device statistics are fetched serially with no aggregate deadline — up to 200 sequential requests, and one slow controller stales every other tile's readings | Low | S | Fetch stats concurrently (bounded), and/or give `refresh()` an overall deadline | Open |
-| E3 | status | The post-lifecycle fast-track re-sweeps the entire fleet every 5s for up to 3 minutes when only one box's recovery matters (~300 extra probes per container start on a 10-box fleet) | Low | S | Probe only the target and patch that snapshot entry — composes with the B7 fix | Open |
-| E4 | web | `showLifecycleJob` cannot distinguish 404 from a transient failure, so a pruned job id polls forever behind an empty log | Low | S | Give up with a message after N consecutive nulls, or treat 404 distinctly | Open |
+| E2 | unifi | Per-device statistics are fetched serially with no aggregate deadline — up to 200 sequential requests, and one slow controller stales every other tile's readings | Low | S | Fetch stats concurrently (bounded), and/or give `refresh()` an overall deadline | ✅ v1.24.0 (concurrency; no deadline) |
+| E3 | status | The post-lifecycle fast-track re-sweeps the entire fleet every 5s for up to 3 minutes when only one box's recovery matters (~300 extra probes per container start on a 10-box fleet) | Low | S | Probe only the target and patch that snapshot entry — composes with the B7 fix | ✅ v1.24.0 |
+| E4 | web | `showLifecycleJob` cannot distinguish 404 from a transient failure, so a pruned job id polls forever behind an empty log | Low | S | Give up with a message after N consecutive nulls, or treat 404 distinctly | ✅ v1.24.0 |
 
 ### Consolidation
 

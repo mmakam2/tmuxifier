@@ -15,11 +15,16 @@ export async function startFakeUnifi({
   statsStatus = 200,         // 404 => simulate firmware without /statistics/latest
   unauthorized = false,
   malformed = false,
+  // Held-open statistics replies. Per-device stats used to be fetched in a
+  // serial loop, so `maxConcurrentStats` below is what distinguishes a fixed
+  // sequence of requests from a bounded-parallel one — a plain count cannot.
+  statsDelayMs = 0,
 } = {}) {
   // Per-endpoint counters are incremented past the auth gate, so they measure
   // work actually served. `requests` counts every arrival, which is what a test
   // asserting "the client retried at all" needs when every reply is a 401.
-  const counts = { requests: 0, sites: 0, devices: 0, stats: 0, clients: 0, networks: 0 };
+  const counts = { requests: 0, sites: 0, devices: 0, stats: 0, clients: 0, networks: 0, maxConcurrentStats: 0 };
+  let statsInFlight = 0;
   const P = '/proxy/network/integration/v1';
 
   const send = (res, status, body) => {
@@ -42,8 +47,14 @@ export async function startFakeUnifi({
     const stats = /^\/proxy\/network\/integration\/v1\/sites\/([^/]+)\/devices\/([^/]+)\/statistics\/latest$/.exec(path);
     if (stats) {
       counts.stats++;
-      if (statsStatus !== 200) { send(res, statsStatus, { error: 'not found' }); return; }
-      send(res, 200, deviceStats[stats[2]] ?? {});
+      statsInFlight += 1;
+      counts.maxConcurrentStats = Math.max(counts.maxConcurrentStats, statsInFlight);
+      const reply = () => {
+        statsInFlight -= 1;
+        if (statsStatus !== 200) { send(res, statsStatus, { error: 'not found' }); return; }
+        send(res, 200, deviceStats[stats[2]] ?? {});
+      };
+      if (statsDelayMs) setTimeout(reply, statsDelayMs); else reply();
       return;
     }
 

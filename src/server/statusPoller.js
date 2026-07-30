@@ -64,12 +64,44 @@ export function createStatusPoller({
     return inFlight;
   }
 
+  // Probe exactly one box and patch it into the snapshot. This is the fast
+  // track's unit of work: the caller asked about one container's boot, and
+  // sweeping the fleet to answer that cost ~300 extra probes per container
+  // start on a 10-box fleet, with every sweep's slowest box delaying the one
+  // answer actually wanted (E3).
+  //
+  // Everything pollOnce does per box is preserved: the PVE gate first (a
+  // stopped container has no sshd, so probing it burns a full ConnectTimeout on
+  // a foregone conclusion) and the enricher's merge after, so the entry still
+  // carries its proxmox fields.
+  //
+  // History is deliberately NOT recorded here. `history.record(snapshot, boxes)`
+  // deletes the series of every box absent from `boxes`, so recording a single
+  // box would wipe the rest of the fleet's history; and the regular sweep is
+  // the honest cadence anyway — a lifecycle action on one box should not
+  // densify another's series.
+  async function probeOne(boxId) {
+    const box = (await store.listBoxes()).find((b) => b.id === boxId);
+    if (!box) return null;
+    const pve = statusEnricher
+      ? await Promise.resolve().then(() => statusEnricher.collect([box])).catch(() => null)
+      : null;
+    const stopped = new Set((pve || []).filter((r) => r && r.state === 'stopped').map((r) => r.boxId));
+    const one = { [box.id]: stopped.has(box.id) ? { reachable: false } : await statusChecker.checkBox(box) };
+    const merged = pve && statusEnricher ? statusEnricher.merge(one, [box], pve) : one;
+    // A new object rather than a mutation, so a reader holding the previous
+    // snapshot never observes it change underneath — the same invariant the
+    // wholesale swap in pollOnce keeps.
+    snapshot = { ...snapshot, [box.id]: merged[box.id] };
+    return snapshot[box.id];
+  }
+
   // Fast-track after a lifecycle action. A container is not reachable the
   // instant its PVE start task completes — sshd is still coming up — so a
-  // single refresh would only capture "still down". Re-sweep on a short cadence
+  // single refresh would only capture "still down". Re-probe on a short cadence
   // until this box answers, so the UI tracks the box's own boot time instead of
   // the poll interval. Bounded by timeoutMs: a box that never comes back must
-  // not leave a sweep loop running forever. One loop per box — a second caller
+  // not leave a probe loop running forever. One loop per box — a second caller
   // for the same box joins the first rather than racing it.
   function refreshUntil(boxId, { intervalMs: everyMs = 5000, timeoutMs = 180000 } = {}) {
     const existing = fastTracking.get(boxId);
@@ -77,7 +109,7 @@ export function createStatusPoller({
     const deadline = now() + timeoutMs;
     const loop = (async () => {
       for (;;) {
-        // Clear this box's failure backoff first. The sweep goes through
+        // Clear this box's failure backoff first. The probe goes through
         // checkBox, which inside a backoff window returns the last-known
         // failure without touching SSH — and the first probe after a lifecycle
         // start always fails (sshd isn't up yet), opening a 30s window that
@@ -85,8 +117,8 @@ export function createStatusPoller({
         // decorative: the box is re-probed on the backoff schedule instead of
         // its own boot time, and a ~100s boot never lands inside the deadline.
         statusChecker.resetBackoff?.(boxId);
-        await pollOnce().catch(() => {});
-        if (snapshot[boxId]?.reachable) return true;
+        const entry = await probeOne(boxId).catch(() => null);
+        if (entry?.reachable) return true;
         if (now() >= deadline) return false;
         await sleep(everyMs);
       }

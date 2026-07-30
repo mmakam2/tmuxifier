@@ -122,3 +122,23 @@ test('no fetch layer hand-rolls its own response check', async () => {
   }
   expect(offenders, 'these bypass http.ts and so bypass the 401 seam').toEqual([]);
 });
+
+// E4 needs to tell a 404 from a transient failure, and the thrown Error carried
+// only a message. The status rides on the error now — one place, so every layer
+// gets it rather than the caller re-fetching to find out what happened.
+test('a thrown http error carries its status code', async () => {
+  stubFetch({ ok: false, status: 404, statusText: 'Not Found', json: async () => ({ error: 'gone' }) });
+  const err = await jsonFetch('/x').catch((e) => e);
+  expect(err).toBeInstanceOf(Error);
+  expect(err.status).toBe(404);
+  expect(err.message).toBe('gone');
+});
+
+test('the status rides along on a 401 too, without disturbing the seam', async () => {
+  let fired = 0;
+  onUnauthorized(() => { fired += 1; });
+  stubFetch(unauthorized);
+  const err = await jsonFetch('/x').catch((e) => e);
+  expect(err.status).toBe(401);
+  expect(fired).toBe(1);
+});

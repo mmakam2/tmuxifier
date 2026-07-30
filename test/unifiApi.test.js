@@ -213,3 +213,40 @@ test('tls: a fingerprint mismatch never hands back the new fingerprint', async (
   expect(res.fingerprint256).toBeUndefined();
   expect(calls).toHaveLength(0);
 });
+
+// E2 (2026-07-29 review). Per-device statistics were fetched in a serial `for`
+// loop with an await inside, so a refresh cost one round trip per device in
+// sequence — up to 200 on a large site, and every one of them holding up the
+// snapshot that the whole tile (and, through the shared sweep, every other
+// tile's freshness) waits on.
+//
+// A request count cannot tell a serial loop from a parallel one; the fake
+// records the high-water mark of concurrent statistics requests instead, which
+// is the actual property under test.
+test('device statistics are fetched concurrently, not one after another', async () => {
+  fake = await startFakeUnifi({ statsDelayMs: 40 });
+  const res = await client().snapshot();
+  expect(res.ok).toBe(true);
+  // Four devices in the fixture: serial would peak at 1.
+  expect(fake.counts.stats).toBe(4);
+  expect(fake.counts.maxConcurrentStats).toBeGreaterThan(1);
+});
+
+// Concurrency is bounded on purpose rather than unleashed: a site with 200
+// devices would otherwise open 200 sockets at once against a controller that is
+// often a consumer gateway, which is the same burst-avoidance reasoning behind
+// mapWithConcurrency's use for SSH probes.
+test('device statistics concurrency is bounded, not unbounded', async () => {
+  fake = await startFakeUnifi({ statsDelayMs: 40 });
+  await client().snapshot();
+  expect(fake.counts.maxConcurrentStats).toBeLessThanOrEqual(6);
+});
+
+// Serial-to-parallel must not change what the card reads.
+test('concurrent statistics still land against the right device', async () => {
+  fake = await startFakeUnifi({ statsDelayMs: 5 });
+  const res = await client().snapshot();
+  expect(res.ok).toBe(true);
+  expect(res.metrics.gateway.name).toBe('Border Gateway');
+  expect(res.metrics.clientsTotal).toBe(5);
+});

@@ -2,6 +2,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { tlsProbe, pinnedConnectionFactory, normFp } from './tlsPin.js';
 import { buildMetrics } from './unifiMetrics.js';
+import { mapWithConcurrency } from './concurrency.js';
 
 // Dependency-free client for the UniFi Network Integration API v1, in the mold
 // of netboxApi.js. GET only: there is deliberately no code path here that
@@ -13,6 +14,11 @@ const PAGE = 200;
 // the envelope's totalCount, so only the wired/wireless split is approximate
 // past this many clients.
 const MAX_CLIENT_PAGES = 5;
+// How many per-device statistics requests are in flight at once. Small on
+// purpose: the ceiling exists to keep a large site from opening a socket per
+// device against what is often a consumer gateway, not to extract maximum
+// throughput.
+const STATS_CONCURRENCY = 6;
 const DEFAULT_TTL_MS = 30000;
 
 function jsonRequest({ url, headers = {}, timeoutMs = 10000, tls: tlsOpts = {} }) {
@@ -158,12 +164,20 @@ export function createUnifiClient({
     const { clients, total } = await listClients(siteId);
     const networksBody = await get(`/sites/${encodeURIComponent(siteId)}/networks?limit=${PAGE}`, { optional: true });
 
-    const statsById = new Map();
-    for (const d of devices) {
-      if (!d?.id) continue;
-      const stats = await get(`/sites/${encodeURIComponent(siteId)}/devices/${encodeURIComponent(d.id)}/statistics/latest`, { optional: true });
-      statsById.set(d.id, stats);
-    }
+    // One request per device, bounded rather than serial (E2). Serially this
+    // cost a full round trip per device — up to 200 on a large site, all of it
+    // in front of the snapshot every tile waits on. Bounded rather than
+    // unleashed for the same reason mapWithConcurrency exists for SSH probes: a
+    // controller is often a consumer gateway, and 200 simultaneous sockets is a
+    // burst, not a read.
+    const withIds = devices.filter((d) => d?.id);
+    const stats = await mapWithConcurrency(withIds, STATS_CONCURRENCY, (d) => get(
+      `/sites/${encodeURIComponent(siteId)}/devices/${encodeURIComponent(d.id)}/statistics/latest`,
+      { optional: true },
+    ));
+    // mapWithConcurrency returns in input order, so the zip is positional and
+    // a slow device cannot end up wearing another's readings.
+    const statsById = new Map(withIds.map((d, i) => [d.id, stats[i]]));
 
     return buildMetrics({
       devices, statsById, clients, clientsTotal: total,
