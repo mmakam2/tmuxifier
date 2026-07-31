@@ -67,8 +67,42 @@ test('a finished fleet job is findable from the Jobs button after a reload', asy
   await page.getByRole('button', { name: 'Fleet Jobs', exact: true }).click();
   const history = page.locator('#fleet-panel .fleet-history');
   await expect(history).toContainText('echo SECOND_RUN_MARKER', { timeout: 10000 });
-  await history.locator('.fleet-history-item', { hasText: 'SECOND_RUN_MARKER' }).first().click();
+  const row = history.locator('.fleet-job-row', { hasText: 'SECOND_RUN_MARKER' }).first();
+  await row.click();
   await expect(page.locator('#fleet-panel .fleet-detail')).toContainText('SECOND_RUN_MARKER');
+  // Clicking a row must visibly select it — the drawer used to repaint only the
+  // detail, which at any real history depth was off screen, so a click looked
+  // like it had done nothing at all.
+  await expect(row).toHaveAttribute('aria-selected', 'true');
+  // A settled job belongs to the archive, and the archive alone.
+  await expect(page.locator('#fleet-panel .fleet-active')).toBeHidden();
+});
+
+test('a running job is listed apart from history, and Escape closes the drawer', async ({ page }) => {
+  await loginAndWait(page);
+  await page.getByRole('button', { name: 'Fleet Command', exact: true }).click();
+  await page.locator('.box', { hasText: 'localhost' }).locator('input.box-check').check();
+  // Long enough to still be running when the drawer paints.
+  await page.locator('.fleet-input').fill('sleep 6; echo ACTIVE_RUN_MARKER');
+  await page.locator('#fleet-run').click();
+  await page.getByRole('button', { name: /^Run on 1 box$/ }).click();
+
+  // In flight: the ACTIVE section carries it, the archive does not, and the
+  // sidebar key shows the running count even before the job settles.
+  const active = page.locator('#fleet-panel .fleet-active');
+  await expect(active).toBeVisible();
+  await expect(active.locator('.fleet-job-row')).toContainText('ACTIVE_RUN_MARKER');
+  await expect(active.locator('.fj-lamp.amber')).toBeVisible();
+  await expect(page.locator('#fleet-panel .fleet-history')).not.toContainText('ACTIVE_RUN_MARKER');
+  await expect(page.locator('#fleet-jobs .events-badge')).toHaveText('1');
+
+  // It moves to the archive on its own once it lands — the list polls itself
+  // now, so this needs no click and no reload.
+  await expect(page.locator('#fleet-panel .fleet-history')).toContainText('ACTIVE_RUN_MARKER', { timeout: 20000 });
+  await expect(active).toBeHidden();
+
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#fleet-panel')).not.toHaveClass(/open/);
 });
 
 test('Ctrl+Enter inside the script editor triggers Run instead of inserting a newline', async ({ page }) => {

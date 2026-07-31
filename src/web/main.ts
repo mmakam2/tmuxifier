@@ -12,6 +12,7 @@ import { fleetScripts, isDirty, sortScripts, validateName, type FleetScript } fr
 import { buildFleetScriptRail } from './fleetScriptRail';
 import { statusOf } from './http';
 import { createFleetPoller } from './fleetPoll';
+import { partitionJobs, jobLamp, jobReadout, jobClock, runningCount } from './fleetJobs';
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { closeAllModals } from './modalRegistry';
 import { openModal, makeRadio } from './dom';
@@ -481,6 +482,8 @@ function fastStatusPoll(id: string, everyMs = 3000, timeoutMs = 180000) {
 async function pollStatus() {
   if (polling) return;
   polling = true;
+  // Only while the drawer is shut — an open drawer runs its own faster loop.
+  if (!document.getElementById('fleet-panel')?.classList.contains('open')) void pollFleetBadge();
   try {
     try {
       const status = await api.status();
@@ -1171,6 +1174,17 @@ async function renderDashboard() {
   }
   pollInterval = setInterval(pollStatus, POLL_MS);
   void pollHealth(); // seed sparklines + events badge without waiting a tick
+  void pollFleetBadge(); // and the running-jobs count on the Fleet Jobs key
+
+  // Escape closes whichever drawer is open. Both used to be inescapable while
+  // the script-editor modal beside them handled it correctly through the shared
+  // openModal scaffold; a drawer is not a modal, so it needs its own listener.
+  // Modals are checked first: one is always above a drawer and owns the key.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || document.querySelector('.modal-backdrop')) return;
+    if (document.getElementById('fleet-panel')?.classList.contains('open')) closeFleetJobsPanel();
+    else if (document.getElementById('events-panel')?.classList.contains('open')) closeEventsPanel();
+  });
 }
 
 async function refresh() {
@@ -2251,7 +2265,9 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
   nameInput.className = 'fs-name';
   nameInput.type = 'text';
   nameInput.maxLength = 80;
-  nameInput.placeholder = 'name (save to keep this script)';
+  // Short enough to survive the 40% column the field sits in — the old
+  // "name (save to keep this script)" clipped mid-word at every modal width.
+  nameInput.placeholder = 'name';
   nameInput.setAttribute('aria-label', 'Script name');
   nameInput.autocomplete = 'off';
 
@@ -2550,10 +2566,71 @@ const fleetPoller = createFleetPoller<import('./api').FleetJob>({
 
 function stopFleetPoll() { fleetPoller.stop(); }
 
+// --- Fleet Jobs drawer ------------------------------------------------------
+// The drawer answers one question far more often than any other: "how is the
+// thing I just started going". It used to answer "here is everything you have
+// ever run" — one flat recency-ordered list where a job in flight was
+// byte-identical to one that finished last week, with the selected job's
+// results below the fold past ~27 rows. It is now three regions: ACTIVE (live
+// processes), HISTORY (records), and a detail pane that is always on screen.
+
+// Which job the detail pane is showing. Drives the Lamp-and-Beacon mark on its
+// row, which has to survive a list repaint — so it lives beside the list, not
+// in it.
+let fleetSelectedJob: string | null = null;
+// Summaries from the last successful list fetch. The clock tick re-reads these
+// rather than re-fetching, so a running job's elapsed time advances every
+// second at the cost of one list request every 2.5s.
+let fleetSummaries: import('./api').FleetJobSummary[] = [];
+let fleetListTimer: ReturnType<typeof setInterval> | null = null;
+let fleetClockTimer: ReturnType<typeof setInterval> | null = null;
+// Cancel is armed before it fires (arming.ts): a mid-flight cancel leaves boxes
+// in mixed states. Kept outside the render so a poll tick cannot silently
+// retract the arm — or, as before, re-enable a Cancel already in flight.
+let fleetCancelArm: ArmState = ARM_IDLE;
+let fleetCancelArmTimer: ReturnType<typeof setTimeout> | null = null;
+let fleetCancelled = new Set<string>();
+
+const FLEET_LIST_MS = 2500;
+
+function stopFleetListPoll() {
+  if (fleetListTimer) { clearInterval(fleetListTimer); fleetListTimer = null; }
+  if (fleetClockTimer) { clearInterval(fleetClockTimer); fleetClockTimer = null; }
+}
+
+// Poll the list only while something is actually running. A frozen counter was
+// the strongest false signal the old panel gave: stillness reads as finished,
+// so a job nobody had selected looked complete the moment the drawer opened.
+function syncFleetListPoll() {
+  const live = runningCount(fleetSummaries) > 0;
+  const open = document.getElementById('fleet-panel')?.classList.contains('open');
+  if (!live || !open) { stopFleetListPoll(); return; }
+  if (fleetListTimer) return;
+  fleetListTimer = setInterval(() => { void renderFleetHistory(); }, FLEET_LIST_MS);
+  // A clock that advanced in 2.5s jumps would read as a stutter, so the elapsed
+  // figures tick locally between fetches.
+  fleetClockTimer = setInterval(tickFleetClocks, 1000);
+}
+
+function tickFleetClocks() {
+  const now = Date.now();
+  for (const s of fleetSummaries) {
+    if (s.status !== 'running') continue;
+    const clock = document.querySelector(`#fleet-panel .fleet-job-row[data-id="${CSS.escape(s.id)}"] .fj-clock`);
+    if (clock) clock.textContent = jobClock(s, now);
+  }
+}
+
 function closeFleetJobsPanel() {
   stopFleetPoll();
-  document.getElementById('fleet-panel')!.classList.remove('open');
+  stopFleetListPoll();
+  const panel = document.getElementById('fleet-panel')!;
+  const hadFocus = panel.contains(document.activeElement);
+  panel.classList.remove('open');
   document.getElementById('fleet-jobs')?.classList.remove('active');
+  // Focus would otherwise be stranded on a control that just became
+  // visibility:hidden, which drops it to <body>.
+  if (hadFocus) (document.getElementById('fleet-jobs') as HTMLElement | null)?.focus();
 }
 
 function openFleetJobsPanel(jobId?: string) {
@@ -2563,98 +2640,378 @@ function openFleetJobsPanel(jobId?: string) {
   document.getElementById('fleet-jobs')?.classList.add('active');
   const closeBtn = panel.querySelector('.fleet-panel-close') as HTMLElement;
   closeBtn.onclick = () => closeFleetJobsPanel();
-  renderFleetHistory();
+  fleetSelectedJob = jobId ?? null;
+  void renderFleetHistory();
   if (jobId) showFleetJob(jobId);
-  else (panel.querySelector('.fleet-detail') as HTMLElement).innerHTML = '<p class="fleet-empty">Select a job to see results.</p>';
+  else renderFleetDetailPlaceholder();
+}
+
+function renderFleetDetailPlaceholder() {
+  const detail = document.querySelector('#fleet-panel .fleet-detail') as HTMLElement | null;
+  if (!detail) return;
+  fleetDetailView = null;
+  detail.textContent = '';
+  const p = document.createElement('p');
+  p.className = fleetSummaries.length ? 'fleet-empty' : 'fleet-empty fleet-empty-first';
+  p.textContent = fleetSummaries.length
+    ? 'Select a job to see what it did on each box.'
+    : 'No fleet jobs yet. Select boxes in the sidebar, engage Fleet Command, and run a command or script.';
+  detail.appendChild(p);
 }
 
 async function renderFleetHistory() {
-  const list = document.querySelector('#fleet-panel .fleet-history') as HTMLElement | null;
-  if (!list) return;
-  let jobs: import('./api').FleetJobSummary[] = [];
-  try { jobs = await api.listFleetJobs(); } catch {}
-  list.innerHTML = '';
-  for (const s of jobs) {
-    const li = document.createElement('li');
-    li.className = 'fleet-history-item';
-    li.dataset.id = s.id;
-    // Keyboard-operable row: no nested controls here, so role=button on the li
-    // itself is safe (unlike the box rows, which hold their own buttons).
-    li.setAttribute('role', 'button');
-    li.tabIndex = 0;
-    li.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter' && e.key !== ' ') return;
-      e.preventDefault();
-      showFleetJob(s.id);
-    });
-    const cmdSpan = document.createElement('span');
-    cmdSpan.className = 'fh-cmd';
-    // A named script reads better than its first line; the raw command stays
-    // available on hover.
-    cmdSpan.textContent = s.scriptName || s.command;
-    if (s.scriptName) cmdSpan.title = s.command;
-    const metaSpan = document.createElement('span');
-    metaSpan.className = 'fh-meta';
-    metaSpan.textContent = `${s.okCount}/${s.targetCount} ok · ${s.status}`;
-    li.appendChild(cmdSpan);
-    li.appendChild(metaSpan);
-    li.addEventListener('click', () => showFleetJob(s.id));
-    list.appendChild(li);
+  const panel = document.getElementById('fleet-panel');
+  const activeSection = panel?.querySelector('.fleet-active') as HTMLElement | null;
+  const activeList = panel?.querySelector('.fleet-active-list') as HTMLElement | null;
+  const historyList = panel?.querySelector('.fleet-history') as HTMLElement | null;
+  if (!panel || !activeSection || !activeList || !historyList) return;
+
+  let jobs: import('./api').FleetJobSummary[];
+  try {
+    jobs = await api.listFleetJobs();
+  } catch {
+    // An empty list and a failed fetch used to render identically — the old
+    // `catch {}` swallowed the difference and left the operator reading "no
+    // jobs" during an outage.
+    renderFleetListError(historyList);
+    return;
   }
+  fleetSummaries = jobs;
+  updateFleetBadge();
+
+  const { active, history } = partitionJobs(jobs);
+  activeSection.hidden = active.length === 0;
+  setSeamCount(activeSection, active.length);
+  const archive = panel.querySelector('.fleet-archive') as HTMLElement;
+  setSeamCount(archive, history.length);
+
+  const now = Date.now();
+  reconcileJobRows(activeList, active, now, true);
+  reconcileJobRows(historyList, history, now, false);
+
+  // Only when something IS running — a wholly empty drawer says it once, in the
+  // detail pane, rather than twice in two different voices.
+  if (!history.length && active.length) {
+    const empty = document.createElement('li');
+    empty.className = 'fleet-list-empty';
+    empty.textContent = 'Nothing has finished yet.';
+    historyList.appendChild(empty);
+  }
+  // The first-run copy names the whole path to a first job, so it has to
+  // repaint once the list arrives — the drawer can open before this fetch does.
+  if (!jobs.length && !fleetSelectedJob) renderFleetDetailPlaceholder();
+  syncFleetListPoll();
+}
+
+function setSeamCount(section: HTMLElement, n: number) {
+  const el = section.querySelector('.fleet-seam-count') as HTMLElement | null;
+  if (el) el.textContent = n ? String(n) : '';
+}
+
+function renderFleetListError(list: HTMLElement) {
+  list.textContent = '';
+  const li = document.createElement('li');
+  li.className = 'fleet-list-error';
+  const msg = document.createElement('span');
+  msg.textContent = 'Could not load fleet jobs.';
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.className = 'fleet-retry';
+  retry.textContent = 'Retry';
+  retry.addEventListener('click', () => { void renderFleetHistory(); });
+  li.append(msg, retry);
+  list.appendChild(li);
+}
+
+// In-place update keyed by job id. Rebuilding the <ul> dropped keyboard focus
+// to <body> every time a job settled, and threw away the hovered row.
+function reconcileJobRows(
+  list: HTMLElement,
+  jobs: import('./api').FleetJobSummary[],
+  now: number,
+  live: boolean,
+) {
+  const existing = new Map<string, HTMLElement>();
+  for (const node of Array.from(list.children)) {
+    const id = (node as HTMLElement).dataset?.id;
+    if (id) existing.set(id, node as HTMLElement);
+    else node.remove(); // the empty/error placeholder
+  }
+  let prev: HTMLElement | null = null;
+  for (const s of jobs) {
+    let row = existing.get(s.id);
+    if (row) existing.delete(s.id);
+    else row = buildJobRow(s);
+    paintJobRow(row, s, now, live);
+    // Insert in server order without touching rows already in the right place.
+    const shouldFollow: Element | null = prev ? prev.nextElementSibling : list.firstElementChild;
+    if (shouldFollow !== row) list.insertBefore(row, shouldFollow);
+    prev = row;
+  }
+  for (const stale of existing.values()) stale.remove();
+  syncRovingTabindex(list);
+}
+
+function buildJobRow(s: import('./api').FleetJobSummary): HTMLElement {
+  const li = document.createElement('li');
+  li.dataset.id = s.id;
+  // A selectable set is a listbox, not a pile of buttons: role=button on every
+  // <li> overrode the list semantics, so AT never announced how many jobs there
+  // were, and it gave no way to express which one is selected.
+  li.setAttribute('role', 'option');
+  li.addEventListener('click', () => showFleetJob(s.id));
+  li.addEventListener('keydown', (e) => onJobRowKey(e, li));
+  const lamp = document.createElement('span');
+  lamp.className = 'dot fj-lamp';
+  const name = document.createElement('span');
+  name.className = 'fj-name';
+  const read = document.createElement('span');
+  read.className = 'fj-read';
+  const clock = document.createElement('span');
+  clock.className = 'fj-clock';
+  li.append(lamp, name, read, clock);
+  return li;
+}
+
+const LAMP_CLASS = { running: 'amber', ok: 'green', error: 'red', idle: '' } as const;
+
+function paintJobRow(
+  row: HTMLElement,
+  s: import('./api').FleetJobSummary,
+  now: number,
+  live: boolean,
+) {
+  row.className = `fleet-job-row${live ? ' live' : ''}`;
+  const selected = fleetSelectedJob === s.id;
+  row.setAttribute('aria-selected', selected ? 'true' : 'false');
+  (row.querySelector('.fj-lamp') as HTMLElement).className = `dot fj-lamp ${LAMP_CLASS[jobLamp(s)]}`.trimEnd();
+
+  const name = row.querySelector('.fj-name') as HTMLElement;
+  const label = s.scriptName || s.command;
+  if (name.textContent !== label) name.textContent = label;
+  // Always titled, not only for named scripts: 8 of 14 commands ellipsize at
+  // phone width, and an ellipsized raw command had no way to be read at all.
+  name.title = s.scriptName ? `${s.scriptName}\n${s.command}` : s.command;
+
+  const read = row.querySelector('.fj-read') as HTMLElement;
+  read.textContent = '';
+  for (const seg of jobReadout(s)) {
+    const b = document.createElement('b');
+    b.className = `seg ${seg.tone}`;
+    b.textContent = seg.text;
+    read.appendChild(b);
+  }
+  const clock = row.querySelector('.fj-clock') as HTMLElement;
+  clock.textContent = jobClock(s, now);
+}
+
+// Roving tabindex: the list is one tab stop and arrows move within it. Fifty
+// jobs used to be fifty tab stops.
+function syncRovingTabindex(list: HTMLElement) {
+  const rows = Array.from(list.querySelectorAll<HTMLElement>('.fleet-job-row'));
+  const focusIdx = Math.max(0, rows.findIndex((r) => r.getAttribute('aria-selected') === 'true'));
+  rows.forEach((r, i) => { r.tabIndex = i === focusIdx ? 0 : -1; });
+}
+
+function onJobRowKey(e: KeyboardEvent, row: HTMLElement) {
+  const id = row.dataset.id;
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    if (id) showFleetJob(id);
+    return;
+  }
+  const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+  if (!step) return;
+  e.preventDefault();
+  const rows = Array.from(row.parentElement?.querySelectorAll<HTMLElement>('.fleet-job-row') || []);
+  const next = rows[rows.indexOf(row) + step];
+  if (!next) return;
+  rows.forEach((r) => { r.tabIndex = -1; });
+  next.tabIndex = 0;
+  next.focus();
 }
 
 function showFleetJob(id: string) {
+  fleetSelectedJob = id;
+  // Repaint the beacon immediately rather than waiting for the next list poll:
+  // clicking a row used to produce no visible change at all.
+  for (const row of document.querySelectorAll<HTMLElement>('#fleet-panel .fleet-job-row')) {
+    row.setAttribute('aria-selected', row.dataset.id === id ? 'true' : 'false');
+  }
   void fleetPoller.show(id);
 }
 
-function renderFleetJob(detail: HTMLElement, job: import('./api').FleetJob) {
-  detail.innerHTML = '';
+// The running count on the sidebar key. Close the drawer and a twelve-box run
+// used to leave no trace anywhere in the UI — PRODUCT.md's operator is
+// expected to start a job and walk away.
+function updateFleetBadge() {
+  const btn = document.getElementById('fleet-jobs');
+  if (!btn) return;
+  let badge = btn.querySelector('.events-badge') as HTMLElement | null;
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'events-badge';
+    btn.appendChild(badge);
+  }
+  const n = runningCount(fleetSummaries);
+  badge.textContent = n ? String(n) : '';
+  badge.hidden = n === 0;
+  btn.title = n ? `Fleet job history — ${n} running` : 'Fleet job history';
+}
 
+// Keeps the badge honest while the drawer is shut, on the existing status tick.
+async function pollFleetBadge() {
+  if (!document.getElementById('fleet-jobs')) return;
+  try { fleetSummaries = await api.listFleetJobs(); } catch { return; }
+  updateFleetBadge();
+}
+
+function targetBadge(t: import('./api').FleetTarget): string {
+  return t.status === 'ok' ? 'exit 0'
+    : t.status === 'error' ? (t.code != null ? `exit ${t.code}` : (t.error || 'error'))
+    : t.status === 'skipped' ? (t.error || 'skipped')
+    : t.status; // running | pending | cancelled | interrupted
+}
+
+// Element refs for the job currently painted in the detail pane, so a poll tick
+// can mutate rather than rebuild. `detail.innerHTML = ''` every 1.5s reset each
+// `.fr-output`'s scroll position, which made reading a failing box's stderr on
+// a LIVE job impossible — the one moment it matters most — and destroyed
+// keyboard focus on the same cadence.
+interface FleetDetailView {
+  jobId: string;
+  status: HTMLElement;
+  cmd: HTMLElement;
+  cancel: HTMLButtonElement;
+  rows: Map<string, { row: HTMLElement; badge: HTMLElement; out: HTMLElement | null }>;
+}
+let fleetDetailView: FleetDetailView | null = null;
+
+function renderFleetJob(detail: HTMLElement, job: import('./api').FleetJob) {
+  if (!fleetDetailView || fleetDetailView.jobId !== job.id) {
+    fleetDetailView = buildFleetDetail(detail, job);
+  }
+  const v = fleetDetailView;
+
+  const cmdText = `$ ${job.command}`;
+  if (v.cmd.textContent !== cmdText) v.cmd.textContent = cmdText;
+  v.status.className = `fleet-job-status ${job.status}`;
+  if (v.status.textContent !== job.status) v.status.textContent = job.status;
+
+  v.cancel.hidden = job.status !== 'running';
+  // The arm and the in-flight state both live outside this function, so a tick
+  // can no longer retract an acknowledged cancel and invite a double-click.
+  const requested = fleetCancelled.has(job.id);
+  v.cancel.disabled = requested;
+  const armed = fleetCancelArm.armed === job.id;
+  v.cancel.classList.toggle('armed', armed);
+  v.cancel.textContent = requested ? 'Cancelling…' : armed ? 'Confirm' : 'Cancel';
+  v.cancel.title = armed ? 'Click again to stop the run — boxes already started will be left mid-command' : '';
+
+  const seen = new Set<string>();
+  for (const t of job.targets) {
+    seen.add(t.boxId);
+    let entry = v.rows.get(t.boxId);
+    if (!entry) {
+      entry = buildTargetRow(t);
+      v.rows.set(t.boxId, entry);
+      detail.appendChild(entry.row);
+    }
+    entry.row.className = `fleet-result ${t.status}`;
+    const badgeText = targetBadge(t);
+    if (entry.badge.textContent !== badgeText) entry.badge.textContent = badgeText;
+
+    const body = (t.stdout || '') + (t.stderr ? `\n${t.stderr}` : '');
+    const text = body.trim() ? body + (t.truncated ? '\n… (truncated)' : '') : '';
+    if (text && !entry.out) {
+      entry.out = document.createElement('pre');
+      entry.out.className = 'fr-output';
+      entry.row.appendChild(entry.out);
+    }
+    if (entry.out && entry.out.textContent !== text) {
+      // Follow the tail only if the reader was already at it; otherwise hold
+      // the scroll where they left it.
+      const pre = entry.out;
+      const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 4;
+      const prev = pre.scrollTop;
+      pre.textContent = text;
+      pre.scrollTop = atBottom ? pre.scrollHeight : prev;
+    }
+  }
+  for (const [boxId, entry] of v.rows) {
+    if (seen.has(boxId)) continue;
+    entry.row.remove();
+    v.rows.delete(boxId);
+  }
+}
+
+function buildFleetDetail(detail: HTMLElement, job: import('./api').FleetJob): FleetDetailView {
+  detail.textContent = '';
   const head = document.createElement('div');
   head.className = 'fleet-detail-head';
   const cmd = document.createElement('pre');
   cmd.className = 'fleet-confirm-cmd';
-  cmd.textContent = `$ ${job.command}`;
+  const keys = document.createElement('div');
+  keys.className = 'fleet-detail-keys';
   const status = document.createElement('span');
-  status.className = `fleet-job-status ${job.status}`;
-  status.textContent = job.status;
-  head.append(cmd, status);
+  status.className = 'fleet-job-status';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'fleet-cancel';
+  cancel.addEventListener('click', () => armFleetCancel(job.id));
+  cancel.addEventListener('blur', () => { if (fleetCancelArm.armed) disarmFleetCancel(); });
+  keys.append(status, cancel);
+  head.append(cmd, keys);
   detail.appendChild(head);
+  return { jobId: job.id, status, cmd, cancel, rows: new Map() };
+}
 
-  if (job.status === 'running') {
-    const cancel = document.createElement('button');
-    cancel.className = 'fleet-cancel';
-    cancel.textContent = 'Cancel';
-    cancel.addEventListener('click', async () => { cancel.disabled = true; try { await api.cancelFleetJob(job.id); } catch {} });
-    detail.appendChild(cancel);
+function buildTargetRow(t: import('./api').FleetTarget) {
+  const row = document.createElement('div');
+  const top = document.createElement('div');
+  top.className = 'fleet-result-top';
+  const name = document.createElement('span');
+  name.className = 'fr-label';
+  name.textContent = t.label;
+  name.title = `${t.label} (${t.host})`;
+  const badge = document.createElement('span');
+  badge.className = 'fr-badge';
+  top.append(name, badge);
+  row.appendChild(top);
+  return { row, badge, out: null as HTMLElement | null };
+}
+
+function disarmFleetCancel() {
+  if (fleetCancelArmTimer) { clearTimeout(fleetCancelArmTimer); fleetCancelArmTimer = null; }
+  fleetCancelArm = armReduce(fleetCancelArm, { type: 'dismiss' }).state;
+  if (fleetDetailView) {
+    fleetDetailView.cancel.classList.remove('armed');
+    if (!fleetCancelled.has(fleetDetailView.jobId)) fleetDetailView.cancel.textContent = 'Cancel';
   }
+}
 
-  for (const t of job.targets) {
-    const row = document.createElement('div');
-    row.className = `fleet-result ${t.status}`;
-    const top = document.createElement('div');
-    top.className = 'fleet-result-top';
-    const name = document.createElement('span');
-    name.className = 'fr-label';
-    name.textContent = t.label;
-    const badge = document.createElement('span');
-    badge.className = 'fr-badge';
-    badge.textContent = t.status === 'ok' ? 'exit 0'
-      : t.status === 'error' ? (t.code != null ? `exit ${t.code}` : (t.error || 'error'))
-      : t.status === 'skipped' ? (t.error || 'skipped')
-      : t.status; // running | pending | cancelled | interrupted
-    top.append(name, badge);
-    row.appendChild(top);
-
-    const body = (t.stdout || '') + (t.stderr ? `\n${t.stderr}` : '');
-    if (body.trim()) {
-      const out = document.createElement('pre');
-      out.className = 'fr-output';
-      out.textContent = body + (t.truncated ? '\n… (truncated)' : '');
-      row.appendChild(out);
+// Arm-then-fire, the same reducer the pane lifecycle keys and Reconnect use.
+// Cancelling a fleet run mid-flight leaves boxes in mixed states, so it states
+// its consequence and waits for a second, deliberate click.
+function armFleetCancel(jobId: string) {
+  const { state, fire } = armReduce(fleetCancelArm, { type: 'click', id: jobId, armable: true });
+  fleetCancelArm = state;
+  if (fleetCancelArmTimer) { clearTimeout(fleetCancelArmTimer); fleetCancelArmTimer = null; }
+  if (fire) {
+    fleetCancelled.add(jobId);
+    if (fleetDetailView?.jobId === jobId) {
+      fleetDetailView.cancel.disabled = true;
+      fleetDetailView.cancel.classList.remove('armed');
+      fleetDetailView.cancel.textContent = 'Cancelling…';
     }
-    detail.appendChild(row);
+    void api.cancelFleetJob(jobId).catch(() => { fleetCancelled.delete(jobId); });
+    return;
   }
+  if (fleetDetailView?.jobId === jobId) {
+    fleetDetailView.cancel.classList.add('armed');
+    fleetDetailView.cancel.textContent = 'Confirm';
+  }
+  fleetCancelArmTimer = setTimeout(disarmFleetCancel, ARM_MS);
 }
 
 // Session expiry (or a server restart with a new cookie secret) surfaces as
@@ -2686,6 +3043,14 @@ window.addEventListener('tmuxifier:services-changed', () => {
 function teardownWorkspace(): void {
   if (pollInterval) clearInterval(pollInterval);
   stopFleetPoll();
+  stopFleetListPoll();
+  // #app is about to be replaced, so the drawer's cached element refs and the
+  // selection they mark would dangle across a re-login.
+  fleetDetailView = null;
+  fleetSelectedJob = null;
+  fleetSummaries = [];
+  disarmFleetCancel();
+  fleetCancelled = new Set();
   teardownDash();
   // The tabs map is module-level, so surviving entries would keep detached
   // elements (unopenable boxes after re-login) and live reconnect loops.

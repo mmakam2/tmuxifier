@@ -17,19 +17,30 @@
       </div>
       <div class="provision-term"></div>
     </div>
-    <div id="fleet-panel" class="fleet-panel">
+    <!-- Three stacked regions, each with its own scroller: what is running now,
+         what has run before, and the selected job's results. This was one column
+         in one shared scroller, which pushed the detail below the fold past ~27
+         jobs and left a live job interleaved among archived ones. -->
+    <div id="fleet-panel" class="fleet-panel" role="dialog" aria-label="Fleet jobs">
       <div class="fleet-panel-header">
         <span class="fleet-panel-title">Fleet jobs</span>
         <button class="fleet-panel-close" title="Close" aria-label="Close fleet jobs">&#x2715;</button>
       </div>
       <div class="fleet-panel-body">
-        <ul class="fleet-history"></ul>
-        <div class="fleet-detail"></div>
+        <section class="fleet-active" hidden>
+          <div class="fleet-seam"><span class="fleet-seam-label">Active</span><span class="fleet-seam-count"></span></div>
+          <ul class="fleet-active-list" role="listbox" aria-label="Running fleet jobs"></ul>
+        </section>
+        <section class="fleet-archive">
+          <div class="fleet-seam"><span class="fleet-seam-label">History</span><span class="fleet-seam-count"></span></div>
+          <ul class="fleet-history" role="listbox" aria-label="Fleet job history"></ul>
+        </section>
+        <div class="fleet-detail" aria-live="polite"></div>
       </div>
     </div>
     <!-- In-app health events timeline (down/up/needs-login/threshold). Reuses the
-         fleet-panel drawer layout; display only — no notifications are sent. -->
-    <div id="events-panel" class="fleet-panel events-panel">
+         fleet-panel drawer chrome; display only — no notifications are sent. -->
+    <div id="events-panel" class="fleet-panel events-panel" role="dialog" aria-label="Events">
       <div class="fleet-panel-header">
         <span class="fleet-panel-title">Events</span>
         <button class="fleet-panel-close" title="Close" aria-label="Close events">&#x2715;</button>
