@@ -529,7 +529,15 @@ text/actions/badge helpers shared by the provision panel and the Proxmox hub),
 `fleetSelection.ts`/`fleetHistory.ts`/`fleetEditor.ts` (Fleet
 Command selection, recent-command history, and the CodeMirror bash-script editor),
 `fleetPoll.ts` (the generation-guarded fleet job-detail poll loop — a stale response can
-neither paint over nor stop the newer selection's polling), `fleetScripts.ts`/`fleetScriptRail.ts`
+neither paint over nor stop the newer selection's polling; note that `show(B)` stops A's watch,
+which is why the Fleet Jobs list needs its own poll rather than relying on the detail poller),
+`fleetJobs.ts` (the Fleet Jobs drawer's pure view-model: `partitionJobs` splits the server's single
+newest-first list into the two things it actually holds — processes you can still cancel, and
+records you read — plus `jobLamp`, `jobReadout`, `jobClock` and the `sameJobShape` predicate the
+in-place row reconcile keys on. `jobReadout` emits `errorCount`, which the old meta line discarded:
+`okCount/targetCount` alone rendered 3 ok + 9 failed identically to 3 ok + 9 still pending. A
+running job always reports "changed" from `sameJobShape` because its clock ticks),
+`fleetScripts.ts`/`fleetScriptRail.ts`
 (saved fleet scripts: the fetch layer plus the pure `sortScripts`/`isDirty`/`validateName` helpers,
 and the script modal's left rail — an in-place-updating DOM layer whose delete key arms through the
 shared `arming.ts` reducer. The unnamed buffer stays a first-class `Draft` row, so selecting a saved
