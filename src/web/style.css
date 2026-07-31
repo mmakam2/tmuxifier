@@ -1213,6 +1213,37 @@ button.empty-kbd:hover { color: var(--text); }
   box-shadow: 0 2px 0 #7a2f06, inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 .modal-actions .fleet-script-run:hover { background: linear-gradient(180deg, #ff8a4d, #fb6c1a); color: #1a0e05; }
+/* Saved-script rail and the editor share the modal body. */
+.fleet-script-body { display: flex; gap: 12px; align-items: stretch; }
+.fleet-script-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.fleet-script-rail { flex: 0 0 180px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fs-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+.fs-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; max-height: 46vh; display: flex; flex-direction: column; gap: 2px; }
+.fs-row { display: flex; align-items: stretch; gap: 4px; border-radius: 6px; }
+/* Amber marks the engaged row, matching the editor's own active-line glow. */
+.fs-row.selected { background: rgba(255, 176, 0, 0.1); }
+.fs-open { flex: 1; min-width: 0; text-align: left; background: none; border: none; color: var(--dim); cursor: pointer; padding: 6px 8px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-row.selected .fs-open { color: var(--text); }
+.fs-open:hover { color: var(--text); }
+.fs-dot { color: var(--amber); margin-left: 6px; }
+.fs-del { flex: 0 0 auto; background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 6px; font-size: 11px; }
+.fs-del:hover { color: var(--text); }
+/* Armed: an LED-red destructive affordance, per the LED rule. */
+.fs-del.armed { color: var(--crit); font-weight: 700; }
+.fs-empty { color: var(--muted); font-size: 11px; padding: 6px 8px; }
+.fs-new { align-self: flex-start; background: var(--key-face); border: 1px solid var(--key-border); box-shadow: var(--key-edge); border-radius: 6px; color: var(--dim); cursor: pointer; font-size: 11px; padding: 4px 8px; }
+.fs-new:hover { color: var(--text); }
+.fs-meta-row { display: flex; gap: 6px; }
+.fs-meta-row .fs-name { flex: 0 0 40%; min-width: 0; }
+.fs-meta-row .fs-note { flex: 1; min-width: 0; }
+/* `.danger` is only ever scoped in this file, so the discard dialog needs its
+   own rule rather than inheriting a global one that does not exist. */
+.fs-discard .danger { color: var(--crit); }
+@media (max-width: 720px) {
+  .fleet-script-body { flex-direction: column; }
+  .fleet-script-rail { flex: 1 1 auto; }
+  .fs-list { max-height: 22vh; }
+}
 .fleet-panel { position: fixed; top: 0; right: 0; width: min(560px, 92vw); height: 100vh; background: var(--panel); border-left: 1px solid var(--border); box-shadow: -12px 0 40px rgba(0, 0, 0, 0.45); transform: translateX(100%); transition: transform 0.22s ease; z-index: 50; display: flex; flex-direction: column; }
 .fleet-panel.open { transform: translateX(0); }
 .fleet-panel-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--bg); }

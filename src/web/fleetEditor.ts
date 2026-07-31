@@ -105,6 +105,7 @@ const THEME = EditorView.theme({
 export interface FleetScriptEditor {
   readonly dom: HTMLElement;
   getValue(): string;
+  setValue(text: string): void;
   focus(): void;
   destroy(): void;
 }
@@ -115,6 +116,7 @@ export interface FleetScriptEditorOptions {
   placeholder?: string;
   onChange?: (value: string) => void;
   onRun?: () => void;     // ⌘/Ctrl+Enter while the editor is focused
+  onSave?: () => void;    // ⌘/Ctrl+S while the editor is focused
   onEscape?: () => void;  // Escape with no completion popup open
 }
 
@@ -128,6 +130,9 @@ export function createFleetScriptEditor(opts: FleetScriptEditorOptions): FleetSc
   // completionKeymap consumes it first while the popup is open.
   const runKeymap = Prec.high(keymap.of([
     { key: 'Mod-Enter', preventDefault: true, run: () => { opts.onRun?.(); return true; } },
+    // preventDefault matters here too: without it the browser's own save dialog
+    // opens over the modal.
+    { key: 'Mod-s', preventDefault: true, run: () => { opts.onSave?.(); return true; } },
   ]));
   const escapeKeymap = keymap.of([
     { key: 'Escape', run: () => { opts.onEscape?.(); return true; } },
@@ -169,6 +174,9 @@ export function createFleetScriptEditor(opts: FleetScriptEditorOptions): FleetSc
   return {
     dom: view.dom,
     getValue: () => view.state.doc.toString(),
+    setValue: (text: string) => {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+    },
     focus: () => view.focus(),
     destroy: () => view.destroy(),
   };

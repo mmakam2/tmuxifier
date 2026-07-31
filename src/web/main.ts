@@ -8,6 +8,9 @@ import { loadNotifyPrefs, enabledKinds } from './notifyPrefs';
 import { toggleBox, setBoxes, groupState } from './fleetSelection';
 import { addRecent, parseRecent } from './fleetHistory';
 import { createFleetScriptEditor } from './fleetEditor';
+import { fleetScripts, isDirty, sortScripts, validateName, type FleetScript } from './fleetScripts';
+import { buildFleetScriptRail } from './fleetScriptRail';
+import { statusOf } from './http';
 import { createFleetPoller } from './fleetPoll';
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { closeAllModals } from './modalRegistry';
@@ -2228,10 +2231,37 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
 
   const hint = document.createElement('p');
   hint.className = 'fleet-script-hint';
-  hint.textContent = 'Runs on each selected box via its login shell. Newlines are honored — write a full bash script. ⌘/Ctrl+Enter to run.';
+  hint.textContent = 'Runs on each selected box via its login shell. Newlines are honored — write a full bash script. ⌘/Ctrl+Enter to run, ⌘/Ctrl+S to save.';
+
+  const nameInput = document.createElement('input');
+  nameInput.className = 'fs-name';
+  nameInput.type = 'text';
+  nameInput.maxLength = 80;
+  nameInput.placeholder = 'name (save to keep this script)';
+  nameInput.setAttribute('aria-label', 'Script name');
+  nameInput.autocomplete = 'off';
+
+  const noteInput = document.createElement('input');
+  noteInput.className = 'fs-note';
+  noteInput.type = 'text';
+  noteInput.maxLength = 200;
+  noteInput.placeholder = 'note (optional)';
+  noteInput.setAttribute('aria-label', 'Script note');
+  noteInput.autocomplete = 'off';
+
+  const metaRow = document.createElement('div');
+  metaRow.className = 'fs-meta-row';
+  metaRow.append(nameInput, noteInput);
 
   const editorHost = document.createElement('div');
   editorHost.className = 'fleet-script';
+
+  const main = document.createElement('div');
+  main.className = 'fleet-script-main';
+  main.append(metaRow, editorHost);
+
+  const body = document.createElement('div');
+  body.className = 'fleet-script-body';
 
   const targetList = document.createElement('div');
   targetList.className = 'fleet-confirm-targets';
@@ -2248,43 +2278,156 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
   const cancel = document.createElement('button');
   cancel.type = 'button';
   cancel.textContent = 'Cancel';
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'fs-save';
+  saveBtn.textContent = 'Save';
   const runBtn = document.createElement('button');
   runBtn.type = 'submit';
   runBtn.className = 'fleet-script-run';
   runBtn.textContent = `Run on ${targets.length} box${targets.length === 1 ? '' : 'es'}`;
   runBtn.disabled = targets.length === 0;
-  actions.append(cancel, runBtn);
+  actions.append(cancel, saveBtn, runBtn);
 
-  form.append(title, hint, editorHost, targetList, err, actions);
+  // --- saved-script state ---------------------------------------------------
+  let scripts: FleetScript[] = [];
+  let selected: FleetScript | null = null;
+
+  const dirty = () => isDirty(selected, cm.getValue(), nameInput.value, noteInput.value);
+
+  function refreshRail() {
+    rail.update({ scripts, selectedId: selected?.id ?? null, dirty: dirty() });
+  }
+
+  // Load into the editor. Called only once the dirty gate below has cleared.
+  function load(script: FleetScript | null) {
+    selected = script;
+    nameInput.value = script?.name || '';
+    noteInput.value = script?.description || '';
+    cm.setValue(script ? script.script : fleetScriptDraft);
+    err.textContent = '';
+    refreshRail();
+    cm.focus();
+  }
+
+  const rail = buildFleetScriptRail({
+    onSelect: (script) => {
+      if ((script?.id ?? null) === (selected?.id ?? null)) return;
+      if (!dirty()) { load(script); return; }
+      confirmDiscard(() => load(script));
+    },
+    onDelete: async (script) => {
+      try {
+        await fleetScripts.remove(script.id);
+        scripts = scripts.filter((s) => s.id !== script.id);
+        if (selected?.id === script.id) selected = null;
+        refreshRail();
+      } catch (ex: any) {
+        err.textContent = ex?.message || 'Could not delete the script';
+      }
+    },
+  });
+
+  body.append(rail.dom, main);
+  form.append(title, hint, body, targetList, err, actions);
   // closeOnEscape off: while the editor has focus its own keymap owns Escape
   // (so an open completion popup's Escape doesn't also tear down the modal);
   // the fallback handler below covers Escape/Mod-Enter when focus is elsewhere.
   const { close } = openModal({
     modal: form, mount: app, closeOnEscape: false,
-    onClose: () => { document.removeEventListener('keydown', onKey); cm.destroy(); },
+    onClose: () => { document.removeEventListener('keydown', onKey); rail.destroy(); cm.destroy(); },
   });
 
-  // CodeMirror handles its own Mod-Enter (run) / Escape (close) while focused;
-  // onChange persists the in-progress script so reopening restores it (cleared
-  // only on a successful run or on leaving fleet mode).
+  // CodeMirror handles its own Mod-Enter (run) / Mod-S (save) / Escape (close)
+  // while focused; onChange persists the in-progress script so reopening
+  // restores it — but only while the unnamed draft is the buffer, since a
+  // selected script's edits belong to that script, not to the draft.
   const cm = createFleetScriptEditor({
     initial: fleetScriptDraft || initial || '',
     recent: readFleetRecent(),
     placeholder: '#!/usr/bin/env bash\nset -euo pipefail\n…',
-    onChange: (v) => { fleetScriptDraft = v; },
+    onChange: (v) => { if (!selected) fleetScriptDraft = v; refreshRail(); },
     onRun: () => form.requestSubmit(),
+    onSave: () => void save(),
     onEscape: () => close(),
   });
   editorHost.appendChild(cm.dom);
   cm.focus();
+  nameInput.addEventListener('input', refreshRail);
+  noteInput.addEventListener('input', refreshRail);
+  refreshRail();
 
-  // Fallback for keys pressed while focus is on a button (the editor's own keymap
-  // owns these while it is focused — defer to it so an open completion popup's
-  // Escape doesn't also tear down the modal).
+  // Load the saved list; a failure leaves the editor fully usable.
+  fleetScripts.list()
+    .then((list) => { scripts = sortScripts(list); refreshRail(); })
+    .catch(() => { err.textContent = 'Could not load saved scripts'; });
+
+  // A second, nested modal: the only gate in this flow, and only on a real
+  // conflict (switching away from unsaved work).
+  function confirmDiscard(proceed: () => void) {
+    const dlg = document.createElement('div');
+    dlg.className = 'modal fs-discard';
+    const h = document.createElement('h2');
+    h.textContent = 'Discard unsaved changes?';
+    const p = document.createElement('p');
+    p.textContent = 'The edits in the editor have not been saved to a script.';
+    const row = document.createElement('div');
+    row.className = 'modal-actions';
+    const keep = document.createElement('button');
+    keep.type = 'button';
+    keep.textContent = 'Cancel';
+    const discard = document.createElement('button');
+    discard.type = 'button';
+    discard.className = 'danger';
+    discard.textContent = 'Discard';
+    row.append(keep, discard);
+    dlg.append(h, p, row);
+    const { close: closeDlg } = openModal({ modal: dlg, mount: app });
+    keep.addEventListener('click', closeDlg);
+    discard.addEventListener('click', () => { closeDlg(); proceed(); });
+  }
+
+  async function save() {
+    const script = cm.getValue();
+    if (!script.trim()) { err.textContent = 'Script is empty'; return; }
+    const nameError = validateName(nameInput.value, scripts, selected?.id ?? null);
+    if (nameError) { err.textContent = nameError; nameInput.focus(); return; }
+    saveBtn.disabled = true;
+    try {
+      const spec = { name: nameInput.value.trim(), description: noteInput.value.trim(), script };
+      const saved = selected
+        ? await fleetScripts.update(selected.id, spec)
+        : await fleetScripts.create(spec);
+      scripts = sortScripts([...scripts.filter((s) => s.id !== saved.id), saved]);
+      selected = saved;
+      // The buffer now belongs to a saved script, so the unnamed draft is spent.
+      fleetScriptDraft = '';
+      err.textContent = '';
+      refreshRail();
+    } catch (ex: any) {
+      // Someone else deleted it: demote to the unnamed draft rather than
+      // discarding the operator's text.
+      if (statusOf(ex) === 404) {
+        selected = null;
+        err.textContent = 'That script no longer exists — saving will create a new one.';
+        refreshRail();
+      } else {
+        err.textContent = ex?.message || 'Could not save the script';
+      }
+    } finally {
+      saveBtn.disabled = false;
+    }
+  }
+  saveBtn.addEventListener('click', () => void save());
+
+  // Fallback for keys pressed while focus is on a button or the name fields
+  // (the editor's own keymap owns these while it is focused — defer to it so an
+  // open completion popup's Escape doesn't also tear down the modal).
   function onKey(e: KeyboardEvent) {
     if (cm.dom.contains(document.activeElement)) return;
     if (e.key === 'Escape') close();
     else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); form.requestSubmit(); }
+    else if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); void save(); }
   }
   document.addEventListener('keydown', onKey);
   cancel.addEventListener('click', close);
@@ -2296,7 +2439,10 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
     if (targets.length === 0) { err.textContent = 'Select at least one box'; return; }
     runBtn.disabled = true;
     try {
-      const job = await api.createFleetJob(targets.map((t) => t.id), command);
+      // Name the run only when the buffer IS the saved script. A dirty buffer
+      // runs nameless rather than claiming to be a script it no longer is.
+      const scriptName = selected && !dirty() ? selected.name : undefined;
+      const job = await api.createFleetJob(targets.map((t) => t.id), command, scriptName);
       // Only single-line commands belong in the one-liner autocomplete/datalist.
       if (!command.includes('\n')) pushFleetRecent(command);
       fleetScriptDraft = '';
