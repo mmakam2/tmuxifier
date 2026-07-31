@@ -8,7 +8,7 @@ test('container actions are state-gated', () => {
   expect(actionsForState('unknown')).toEqual([]);
 });
 
-const C = { boxId: 'B1', boxLabel: 'datumworks01', hostId: 'H1', hostName: 'lab', node: 'proxmox02', vmid: 160, state: 'running' };
+const C = { boxId: 'B1', boxLabel: 'client01', hostId: 'H1', hostName: 'lab', node: 'pve-n02', vmid: 160, state: 'running' };
 
 test('containerMatches: empty or blank term matches everything', () => {
   expect(containerMatches(C, '')).toBe(true);
@@ -16,9 +16,9 @@ test('containerMatches: empty or blank term matches everything', () => {
 });
 
 test('containerMatches: label, host name, node, vmid, and state — case-insensitive substrings', () => {
-  expect(containerMatches(C, 'DATUM')).toBe(true);
+  expect(containerMatches(C, 'CLIENT')).toBe(true);
   expect(containerMatches(C, 'lab')).toBe(true);
-  expect(containerMatches(C, 'proxmox02')).toBe(true);
+  expect(containerMatches(C, 'pve-n02')).toBe(true);
   expect(containerMatches(C, '160')).toBe(true);
   expect(containerMatches(C, 'RUN')).toBe(true);
   expect(containerMatches(C, 'nomatch')).toBe(false);

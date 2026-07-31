@@ -43,27 +43,27 @@ test('a migrated container stays healthy, reports its new node, and the link aut
   const writes = [];
   const boxStore = {
     setProxmoxLink: async (id, link) => writes.push([id, link]),
-    getBox: async () => linked('b1', 'proxmox02', 165), // CAS re-check: fresh link still matches the observed one
+    getBox: async () => linked('b1', 'pve-n02', 165), // CAS re-check: fresh link still matches the observed one
   };
   const { inventory } = setup({
-    cluster: [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }],
+    cluster: [{ vmid: 165, node: 'pve-n03', type: 'lxc', status: 'running', name: 'dev' }],
     boxStore,
   });
-  const [record] = await inventory.refreshLinked([linked('b1', 'proxmox02', 165)]);
+  const [record] = await inventory.refreshLinked([linked('b1', 'pve-n02', 165)]);
   expect(record.state).toBe('running');
-  expect(record.node).toBe('proxmox03');
-  expect(writes).toEqual([['b1', { hostId: 'H1', node: 'proxmox03', vmid: 165, endpoint: HOST.endpoint }]]);
+  expect(record.node).toBe('pve-n03');
+  expect(writes).toEqual([['b1', { hostId: 'H1', node: 'pve-n03', vmid: 165, endpoint: HOST.endpoint }]]);
 });
 
 test('the drift write is skipped while a lifecycle job is active on the box', async () => {
   const writes = [];
   const { inventory } = setup({
-    cluster: [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }],
+    cluster: [{ vmid: 165, node: 'pve-n03', type: 'lxc', status: 'running', name: 'dev' }],
     boxStore: { setProxmoxLink: async (id, link) => writes.push([id, link]) },
     guard: (boxId) => boxId === 'b1',
   });
-  const [record] = await inventory.refreshLinked([linked('b1', 'proxmox02', 165)]);
-  expect(record.node).toBe('proxmox03'); // display still follows
+  const [record] = await inventory.refreshLinked([linked('b1', 'pve-n02', 165)]);
+  expect(record.node).toBe('pve-n03'); // display still follows
   expect(writes).toEqual([]);            // store write deferred to a later poll
 });
 
@@ -71,14 +71,14 @@ test('a failing drift write is best-effort: logged, record still healthy', async
   const logged = [];
   const inventory = createProxmoxInventory({
     proxmoxStore: { getHost: async () => HOST },
-    makeClient: () => ({ clusterResources: async () => [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }] }),
+    makeClient: () => ({ clusterResources: async () => [{ vmid: 165, node: 'pve-n03', type: 'lxc', status: 'running', name: 'dev' }] }),
     boxStore: {
       setProxmoxLink: async () => { throw new Error('disk full'); },
-      getBox: async () => linked('b1', 'proxmox02', 165), // CAS re-check passes so the write is attempted (and fails)
+      getBox: async () => linked('b1', 'pve-n02', 165), // CAS re-check passes so the write is attempted (and fails)
     },
     now: () => 1000, log: (...a) => logged.push(a.join(' ')),
   });
-  const [record] = await inventory.refreshLinked([linked('b1', 'proxmox02', 165)]);
+  const [record] = await inventory.refreshLinked([linked('b1', 'pve-n02', 165)]);
   expect(record.state).toBe('running');
   expect(logged.some((line) => line.includes('disk full'))).toBe(true);
 });
@@ -86,7 +86,7 @@ test('a failing drift write is best-effort: logged, record still healthy', async
 test('a malformed node (empty string) from cluster resources is ignored: no write, stored node kept, logged', async () => {
   const writes = [];
   const logged = [];
-  const box = linked('b1', 'proxmox02', 165);
+  const box = linked('b1', 'pve-n02', 165);
   const inventory = createProxmoxInventory({
     proxmoxStore: { getHost: async () => HOST },
     makeClient: () => ({ clusterResources: async () => [{ vmid: 165, node: '', type: 'lxc', status: 'running', name: 'dev' }] }),
@@ -95,7 +95,7 @@ test('a malformed node (empty string) from cluster resources is ignored: no writ
   });
   const [record] = await inventory.refreshLinked([box]);
   expect(record.state).toBe('running');
-  expect(record.node).toBe('proxmox02'); // stored node kept, not the malformed value
+  expect(record.node).toBe('pve-n02'); // stored node kept, not the malformed value
   expect(writes).toEqual([]);
   expect(logged.some((line) => line.includes('malformed'))).toBe(true);
 });
@@ -103,7 +103,7 @@ test('a malformed node (empty string) from cluster resources is ignored: no writ
 test('a missing node field from cluster resources is ignored the same way', async () => {
   const writes = [];
   const logged = [];
-  const box = linked('b1', 'proxmox02', 165);
+  const box = linked('b1', 'pve-n02', 165);
   const inventory = createProxmoxInventory({
     proxmoxStore: { getHost: async () => HOST },
     makeClient: () => ({ clusterResources: async () => [{ vmid: 165, type: 'lxc', status: 'running', name: 'dev' }] }),
@@ -111,39 +111,39 @@ test('a missing node field from cluster resources is ignored the same way', asyn
     now: () => 1000, log: (...a) => logged.push(a.join(' ')),
   });
   const [record] = await inventory.refreshLinked([box]);
-  expect(record.node).toBe('proxmox02');
+  expect(record.node).toBe('pve-n02');
   expect(writes).toEqual([]);
   expect(logged.some((line) => line.includes('malformed'))).toBe(true);
 });
 
 test('the drift write is skipped if the link was cleared mid-poll (stale-link re-check)', async () => {
   const writes = [];
-  const box = linked('b1', 'proxmox02', 165);
+  const box = linked('b1', 'pve-n02', 165);
   const { inventory } = setup({
-    cluster: [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }],
+    cluster: [{ vmid: 165, node: 'pve-n03', type: 'lxc', status: 'running', name: 'dev' }],
     boxStore: {
       setProxmoxLink: async (id, link) => writes.push([id, link]),
       getBox: async () => ({ ...box, proxmox: null }), // user cleared the link between snapshot and write
     },
   });
   const [record] = await inventory.refreshLinked([box]);
-  expect(record.node).toBe('proxmox03'); // display still follows the live cluster value
+  expect(record.node).toBe('pve-n03'); // display still follows the live cluster value
   expect(writes).toEqual([]);
 });
 
 test('the drift write proceeds when the fresh link still matches the observed one (control)', async () => {
   const writes = [];
-  const box = linked('b1', 'proxmox02', 165);
+  const box = linked('b1', 'pve-n02', 165);
   const { inventory } = setup({
-    cluster: [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }],
+    cluster: [{ vmid: 165, node: 'pve-n03', type: 'lxc', status: 'running', name: 'dev' }],
     boxStore: {
       setProxmoxLink: async (id, link) => writes.push([id, link]),
-      getBox: async () => linked('b1', 'proxmox02', 165), // different object, same field values
+      getBox: async () => linked('b1', 'pve-n02', 165), // different object, same field values
     },
   });
   const [record] = await inventory.refreshLinked([box]);
-  expect(record.node).toBe('proxmox03');
-  expect(writes).toEqual([['b1', { hostId: 'H1', node: 'proxmox03', vmid: 165, endpoint: HOST.endpoint }]]);
+  expect(record.node).toBe('pve-n03');
+  expect(writes).toEqual([['b1', { hostId: 'H1', node: 'pve-n03', vmid: 165, endpoint: HOST.endpoint }]]);
 });
 
 test('missing means absent from the whole cluster; qemu entries never match', async () => {
@@ -334,10 +334,10 @@ test('without a boxStore the orphan is only reported, never healed', async () =>
 
 test('the drift write preserves netboxIpId on the link', async () => {
   const writes = [];
-  const box = linked('b1', 'proxmox02', 165);
+  const box = linked('b1', 'pve-n02', 165);
   box.proxmox.netboxIpId = 99;
   const { inventory } = setup({
-    cluster: [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }],
+    cluster: [{ vmid: 165, node: 'pve-n03', type: 'lxc', status: 'running', name: 'dev' }],
     boxStore: { getBox: async () => box, setProxmoxLink: async (id, link) => writes.push([id, link]) },
   });
   await inventory.refreshLinked([box]);
