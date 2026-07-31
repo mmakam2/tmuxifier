@@ -106,11 +106,16 @@ test('sidebar groups boxes by tag and remembers collapsed groups during search',
   await expect(page.getByRole('button', { name: /Prod\s+2/ })).toBeVisible();
   await expect(prodGroup.locator('.group-body')).toBeHidden();
 
+  await expect(page.locator('#search-clear')).toBeHidden();
   await page.fill('#search', 'prod');
   await expect(prodGroup.locator('.group-body')).toBeVisible();
   await expect(prodGroup.locator('.box .name')).toHaveText(['db-primary', 'localhost']);
 
-  await page.fill('#search', '');
+  // The clear key empties the field and restores the unfiltered sidebar.
+  await expect(page.locator('#search-clear')).toBeVisible();
+  await page.click('#search-clear');
+  await expect(page.locator('#search')).toHaveValue('');
+  await expect(page.locator('#search-clear')).toBeHidden();
   await expect(prodGroup.locator('.group-body')).toBeHidden();
 });
 

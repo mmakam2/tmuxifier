@@ -873,7 +873,10 @@ async function renderDashboard() {
         <div class="actions"><button id="add">+ Add box</button></div>
         <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button><button id="proxmox" type="button" class="proxmox-btn" title="Provision Proxmox LXC containers" hidden>Proxmox</button><button id="events" type="button" class="events-btn" title="Box health events (down/up/needs login/thresholds)">Events<span id="events-badge" class="events-badge" hidden></span></button></div>
         <div id="fleet-bar" class="fleet-bar" hidden></div>
-        <input id="search" class="search" type="text" placeholder="Search…" aria-label="Search boxes" autocomplete="off" />
+        <div class="search-wrap">
+          <input id="search" class="search" type="text" placeholder="Search…" aria-label="Search boxes" autocomplete="off" />
+          <button id="search-clear" class="search-clear" type="button" title="Clear search" aria-label="Clear search" hidden>✕</button>
+        </div>
         <ul id="boxes" class="boxes"></ul>
         <div class="local-shell">
           <span class="local-dot"></span>
@@ -916,7 +919,18 @@ async function renderDashboard() {
     focusedBoxId = null;
     repaintStage();
   });
-  app.querySelector('#search')!.addEventListener('input', () => filterAndPaint());
+  const searchInput = app.querySelector('#search') as HTMLInputElement;
+  const searchClear = app.querySelector('#search-clear') as HTMLButtonElement;
+  // The clear key only exists while there is something to clear, so an empty
+  // field keeps the plain recessed strip it has always been.
+  const syncSearchClear = () => { searchClear.hidden = searchInput.value === ''; };
+  searchInput.addEventListener('input', () => { syncSearchClear(); filterAndPaint(); });
+  searchClear.addEventListener('click', () => {
+    searchInput.value = '';
+    syncSearchClear();
+    searchInput.focus();
+    filterAndPaint();
+  });
   app.querySelector('#fleet-toggle')!.addEventListener('click', () => {
     fleetMode = !fleetMode;
     if (!fleetMode) { fleetSelected = new Set(); fleetScriptDraft = ''; }
