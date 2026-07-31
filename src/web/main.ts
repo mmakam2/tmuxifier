@@ -2429,7 +2429,10 @@ async function renderFleetHistory() {
     });
     const cmdSpan = document.createElement('span');
     cmdSpan.className = 'fh-cmd';
-    cmdSpan.textContent = s.command;
+    // A named script reads better than its first line; the raw command stays
+    // available on hover.
+    cmdSpan.textContent = s.scriptName || s.command;
+    if (s.scriptName) cmdSpan.title = s.command;
     const metaSpan = document.createElement('span');
     metaSpan.className = 'fh-meta';
     metaSpan.textContent = `${s.okCount}/${s.targetCount} ok · ${s.status}`;

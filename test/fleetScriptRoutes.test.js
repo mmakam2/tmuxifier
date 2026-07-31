@@ -5,6 +5,7 @@ import path from 'node:path';
 import { buildServer } from '../src/server/server.js';
 import { createStore } from '../src/server/store.js';
 import { createFleetScriptsStore } from '../src/server/fleetScriptsStore.js';
+import { createFleetManager } from '../src/server/fleet.js';
 import { hashPassword } from '../src/server/auth.js';
 
 let app, dir;
@@ -18,8 +19,13 @@ beforeEach(async () => {
   };
   const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
   const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
+  const boxStore = createStore({ dataDir: dir });
+  const fleetManager = createFleetManager({
+    store: boxStore,
+    execCommand: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+  });
   app = buildServer({
-    config, store: createStore({ dataDir: dir }), sessions, statusChecker,
+    config, store: boxStore, sessions, statusChecker, fleetManager,
     fleetScriptsStore: createFleetScriptsStore({ dataDir: dir }),
   });
 });
@@ -78,4 +84,19 @@ test('an invalid body is 400 and an unknown id is 404', async () => {
   expect(dup.statusCode).toBe(400);
   expect(dup.json().error).toMatch(/already exists/);
   expect(created.statusCode).toBe(201);
+});
+
+test('POST /api/fleet/jobs carries scriptName through to the job summary', async () => {
+  const cookie = await login();
+  const box = await app.inject({
+    method: 'POST', url: '/api/boxes', headers: { cookie },
+    payload: { label: 'web-01', host: '192.168.1.10', user: 'deploy' },
+  });
+  expect(box.statusCode).toBe(201);
+  const created = await app.inject({
+    method: 'POST', url: '/api/fleet/jobs', headers: { cookie },
+    payload: { boxIds: [box.json().id], command: 'uptime', scriptName: 'apt upgrade' },
+  });
+  expect(created.statusCode).toBe(201);
+  expect(created.json().scriptName).toBe('apt upgrade');
 });

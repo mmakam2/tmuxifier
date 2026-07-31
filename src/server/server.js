@@ -996,12 +996,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
 
   app.post('/api/fleet/jobs', { preHandler: requireAuth }, async (req, reply) => {
-    const { boxIds, command } = req.body || {};
+    const { boxIds, command, scriptName } = req.body || {};
     if (typeof command !== 'string' || !command.trim()) return reply.code(400).send({ error: 'command is required' });
     if (command.length > 65536) return reply.code(400).send({ error: 'command too long' });
     if (!Array.isArray(boxIds) || boxIds.length === 0) return reply.code(400).send({ error: 'select at least one box' });
     try {
-      const job = await fleetManager.createJob({ boxIds, command });
+      const job = await fleetManager.createJob({ boxIds, command, scriptName });
       return reply.code(201).send(job);
     } catch (e) {
       return reply.code(400).send({ error: e.message });

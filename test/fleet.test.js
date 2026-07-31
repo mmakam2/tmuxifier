@@ -298,3 +298,27 @@ test('an exec that timed out is labeled timed out, not exited 124', async () => 
   expect(job.targets[0].status).toBe('error');
   expect(job.targets[0].error).toBe('timed out');
 });
+
+test('a job records the saved-script name it was launched from', async () => {
+  const mgr = createFleetManager({
+    store: makeStore(BOXES),
+    execCommand: async () => ({ code: 0, stdout: '', stderr: '' }),
+  });
+  const job = await mgr.createJob({ boxIds: ['b1'], command: 'uptime', scriptName: 'apt upgrade' });
+  expect(job.scriptName).toBe('apt upgrade');
+  await mgr._settled(job.id);
+  expect(mgr.listJobs()[0].scriptName).toBe('apt upgrade');
+});
+
+test('a blank, oversized or non-string script name is ignored, never an error', async () => {
+  const mgr = createFleetManager({
+    store: makeStore(BOXES),
+    execCommand: async () => ({ code: 0, stdout: '', stderr: '' }),
+  });
+  for (const scriptName of ['   ', 'x'.repeat(81), 42, null, undefined]) {
+    const job = await mgr.createJob({ boxIds: ['b1'], command: 'uptime', scriptName });
+    expect(job.scriptName, String(scriptName)).toBeUndefined();
+    expect(mgr.listJobs()[0].scriptName).toBeNull();
+    await mgr._settled(job.id);
+  }
+});

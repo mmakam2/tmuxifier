@@ -74,7 +74,7 @@ export function createFleetManager({
       else if (t.status === 'error' || t.status === 'interrupted') errorCount++;
     }
     return {
-      id: job.id, command: job.command, status: job.status,
+      id: job.id, command: job.command, scriptName: job.scriptName ?? null, status: job.status,
       createdAt: job.createdAt, startedAt: job.startedAt, finishedAt: job.finishedAt,
       targetCount: job.targets.length, okCount, errorCount,
     };
@@ -153,9 +153,16 @@ export function createFleetManager({
   }
 
   return {
-    async createJob({ boxIds, command }) {
+    async createJob({ boxIds, command, scriptName }) {
       if (typeof command !== 'string' || !command.trim()) throw new Error('command is required');
       if (!Array.isArray(boxIds) || boxIds.length === 0) throw new Error('select at least one box');
+      // The saved-script name this run came from, kept as a display label only:
+      // never resolved back against the script store, so renaming or deleting a
+      // script cannot change what a past job says it ran (the same reason a
+      // target's label and host are frozen at creation). A blank or oversized
+      // value is dropped rather than rejected — provenance is a convenience and
+      // must never be able to fail a run.
+      const label = typeof scriptName === 'string' ? scriptName.trim() : '';
       boxIds = [...new Set(boxIds)]; // a duplicated id must not run the command twice on one box
       const boxById = new Map();
       for (const id of boxIds) {
@@ -182,6 +189,7 @@ export function createFleetManager({
           };
         }),
       };
+      if (label && label.length <= 80) job.scriptName = label;
       jobs.push(job);
       prune();
       save(jobs);

@@ -166,11 +166,15 @@ export interface FleetJob {
   id: string; command: string; status: FleetJobStatus;
   createdAt: string; startedAt: string; finishedAt: string | null;
   concurrency: number; timeoutMs: number; targets: FleetTarget[];
+  /** The saved-script name this run came from, when it came from one. A frozen
+   *  label: the server never resolves it back against the script store. */
+  scriptName?: string | null;
 }
 export interface FleetJobSummary {
   id: string; command: string; status: FleetJobStatus;
   createdAt: string; startedAt: string; finishedAt: string | null;
   targetCount: number; okCount: number; errorCount: number;
+  scriptName?: string | null;
 }
 export type SetupStatus = 'running' | 'done' | 'error' | 'needs-interactive' | 'interrupted' | 'superseded';
 export interface SetupOptions { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth?: boolean; claudeStatusline?: boolean }
@@ -279,8 +283,8 @@ export const api = {
   async getLocalShell() { return j<{ shell: string }>(await fetch('/api/local-shell')); },
   async updateLocalShell(shell: string) { return j<{ ok: boolean }>(await fetch('/api/local-shell', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shell }) })); },
   async reconnectLocalShell() { return j<{ ok: boolean }>(await fetch('/api/local-shell/reconnect', { method: 'POST' })); },
-  async createFleetJob(boxIds: string[], command: string) {
-    return j<FleetJob>(await fetch('/api/fleet/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ boxIds, command }) }));
+  async createFleetJob(boxIds: string[], command: string, scriptName?: string) {
+    return j<FleetJob>(await fetch('/api/fleet/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ boxIds, command, scriptName }) }));
   },
   async listFleetJobs() { return j<FleetJobSummary[]>(await fetch('/api/fleet/jobs')); },
   async getFleetJob(id: string) { return j<FleetJob>(await fetch(`/api/fleet/jobs/${id}?t=${Date.now()}`)); },
