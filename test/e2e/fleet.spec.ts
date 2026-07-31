@@ -89,3 +89,43 @@ test('Ctrl+Enter inside the script editor triggers Run instead of inserting a ne
   const detail = page.locator('#fleet-panel .fleet-detail');
   await expect(detail).toContainText('CM_RUN_MARKER', { timeout: 20000 });
 });
+
+test('a saved script survives a reload and loads back into the editor', async ({ page }) => {
+  await loginAndWait(page);
+  await page.getByRole('button', { name: 'Fleet Command', exact: true }).click();
+  await page.locator('.box', { hasText: 'localhost' }).locator('input.box-check').check();
+
+  await page.locator('.fleet-expand').click();
+  await expect(page.locator('.fleet-script-modal .cm-content')).toBeVisible();
+  await page.keyboard.type('echo SAVED_SCRIPT_MARKER');
+  await page.locator('.fleet-script-modal .fs-name').fill('marker script');
+  await page.locator('.fleet-script-modal .fs-save').click();
+
+  // The row is really painted, not merely present in the DOM.
+  const row = page.locator('.fleet-script-rail .fs-row', { hasText: 'marker script' });
+  await expect(row).toBeVisible();
+
+  await page.reload();
+  await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
+  await page.getByRole('button', { name: 'Fleet Command', exact: true }).click();
+  await page.locator('.fleet-expand').click();
+  await page.locator('.fleet-script-rail .fs-row', { hasText: 'marker script' }).locator('.fs-open').click();
+  await expect(page.locator('.fleet-script-modal .cm-content')).toContainText('echo SAVED_SCRIPT_MARKER');
+});
+
+test('running a saved script labels the job with the script name', async ({ page }) => {
+  await loginAndWait(page);
+  await page.getByRole('button', { name: 'Fleet Command', exact: true }).click();
+  await page.locator('.box', { hasText: 'localhost' }).locator('input.box-check').check();
+
+  await page.locator('.fleet-expand').click();
+  await page.keyboard.type('echo NAMED_RUN_MARKER');
+  await page.locator('.fleet-script-modal .fs-name').fill('named run');
+  await page.locator('.fleet-script-modal .fs-save').click();
+  await expect(page.locator('.fleet-script-rail .fs-row.selected', { hasText: 'named run' })).toBeVisible();
+
+  await page.locator('.fleet-script-modal .fleet-script-run').click();
+  await expect(page.locator('#fleet-panel .fleet-detail')).toContainText('NAMED_RUN_MARKER', { timeout: 20000 });
+  // The history row shows the script's name rather than the raw command.
+  await expect(page.locator('#fleet-panel .fleet-history')).toContainText('named run');
+});
