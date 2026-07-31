@@ -104,7 +104,17 @@ const NO_ICONS = {
   forget: async () => {},
 };
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
+// Same reasoning for the saved-script store: a caller that wires no store gets
+// routes that answer honestly rather than a server that throws on the first
+// request.
+const NO_FLEET_SCRIPTS = {
+  listScripts: async () => [],
+  addScript: async () => { throw new Error('saved scripts are unavailable'); },
+  updateScript: async () => { throw new Error('saved scripts are unavailable'); },
+  removeScript: async () => {},
+};
+
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -1007,6 +1017,28 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const job = fleetManager.cancelJob(req.params.id);
     if (!job) return reply.code(404).send({ error: 'job not found' });
     return job;
+  });
+
+  // --- Fleet Command saved scripts ---
+  app.get('/api/fleet/scripts', { preHandler: requireAuth }, async () => fleetScriptsStore.listScripts());
+  app.post('/api/fleet/scripts', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      return reply.code(201).send(await fleetScriptsStore.addScript(req.body || {}));
+    } catch (e) {
+      return reply.code(400).send({ error: e.message });
+    }
+  });
+  app.patch('/api/fleet/scripts/:id', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      return await fleetScriptsStore.updateScript(req.params.id, req.body || {});
+    } catch (e) {
+      // The store is the validation authority; only "gone" becomes a 404.
+      return reply.code(e.message === 'script not found' ? 404 : 400).send({ error: e.message });
+    }
+  });
+  app.delete('/api/fleet/scripts/:id', { preHandler: requireAuth }, async (req) => {
+    await fleetScriptsStore.removeScript(req.params.id);
+    return { ok: true };
   });
 
   // --- Proxmox LXC provisioning ---

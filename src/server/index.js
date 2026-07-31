@@ -21,6 +21,7 @@ import { createSetupStore } from './setupStore.js';
 import { createSetupManager } from './setupManager.js';
 import { createFleetStore } from './fleetStore.js';
 import { createFleetManager } from './fleet.js';
+import { createFleetScriptsStore } from './fleetScriptsStore.js';
 import { createHealthEventsStore } from './healthEventsStore.js';
 import { createHealthHistory } from './healthHistory.js';
 import { createLocalShellActions } from './localShellActions.js';
@@ -174,6 +175,7 @@ const fleetManager = createFleetManager({
   hasLiveSession: (box) => sessions.hasLiveSessionForBox(box.id),
   masterAlive: (box) => boxActions.isMasterAlive(box),
 });
+const fleetScriptsStore = createFleetScriptsStore({ dataDir: config.dataDir });
 const secretBox = createSecretBox(config.cookieSecret);
 const proxmoxStore = createProxmoxStore({ dataDir: config.dataDir, secretBox });
 const netboxStore = createNetboxStore({ dataDir: config.dataDir, secretBox });
@@ -293,7 +295,7 @@ const iconStore = createIconStore({
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
 const voiceEnabledInitial = (await resolveVoice()).enabled;
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial });
+const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
