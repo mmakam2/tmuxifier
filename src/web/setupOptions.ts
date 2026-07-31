@@ -6,6 +6,18 @@ export interface SetupOptionsValues { ohMyTmux: boolean; ohMyZsh: boolean; ohMyB
 
 export type SeedTone = 'ok' | 'bad' | 'unknown';
 
+// The `POST /api/boxes/:id/setup` body for a form's values. A spread, not a
+// field list: `openProvisionPanel` used to rebuild this object by hand and
+// named every option except `claudeStatusline`, so the Add/Edit Box modal's
+// "Push Claude Code statusline" checkbox opened a setup panel, ran a job, and
+// never told the server to push anything. The Proxmox hub's Provision tab
+// forwards `values()` whole and was unaffected. Spreading means the next
+// option the form collects reaches the server without a second edit at the
+// call site — the omission that caused this bug becomes unexpressible.
+export function setupStartPayload(values: SetupOptionsValues): SetupOptionsValues {
+  return { ...values, tools: values.tools ? [...values.tools] : [] };
+}
+
 // One CLI's readiness row, split around its status dot so the dot alone can be
 // coloured (the row text stays muted). Pure — exported for node-env tests, so
 // it must stay DOM-free. `before + dot + after` is the whole line.

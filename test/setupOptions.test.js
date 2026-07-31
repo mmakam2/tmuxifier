@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { seedStatusParts } from '../src/web/setupOptions.ts';
+import { seedStatusParts, setupStartPayload } from '../src/web/setupOptions.ts';
 
 // These used to call a `seedStatusLine` export that production never used —
 // it existed only so this file could assert on a whole string (D3 in the
@@ -53,4 +53,44 @@ test('parts tag the dot with a tone so it can be coloured', () => {
   const unknown = seedStatusParts('claude', null);
   expect(unknown.tone).toBe('unknown');
   expect(unknown.dot).toBe('');
+});
+
+// The setup POST body. `openProvisionPanel` used to rebuild it field by field
+// and listed every option except `claudeStatusline`, so the Add/Edit Box
+// modal's "Push Claude Code statusline" checkbox was read, gated the panel
+// open, started a setup job — and never reached the server. The Proxmox hub's
+// Provision tab forwards `values()` whole and was unaffected, which is why the
+// feature looked like it worked.
+//
+// The fix is a spread rather than a longer list: the next option the form
+// learns to collect travels without a second edit at the call site. These
+// tests assert that property, not the current field set.
+const VALUES = {
+  ohMyTmux: true,
+  ohMyZsh: false,
+  ohMyBash: false,
+  tools: ['git', 'gh'],
+  seedAiAuth: true,
+  claudeStatusline: true,
+};
+
+test('payload carries the statusline flag the panel used to drop', () => {
+  expect(setupStartPayload(VALUES).claudeStatusline).toBe(true);
+  expect(setupStartPayload({ ...VALUES, claudeStatusline: false }).claudeStatusline).toBe(false);
+});
+
+test('payload carries every field the form collected', () => {
+  expect(setupStartPayload(VALUES)).toEqual(VALUES);
+});
+
+test('a field the form gains later travels without editing the call site', () => {
+  const next = { ...VALUES, somethingNew: 'x' };
+  expect(setupStartPayload(next).somethingNew).toBe('x');
+});
+
+test('tools defaults to an empty list and is copied, not aliased', () => {
+  expect(setupStartPayload({ ...VALUES, tools: undefined }).tools).toEqual([]);
+  const payload = setupStartPayload(VALUES);
+  payload.tools.push('curl');
+  expect(VALUES.tools).toEqual(['git', 'gh']);
 });

@@ -21,7 +21,7 @@ import { nbx } from './netbox';
 import { createDashboard } from './dashboard';
 import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
-import { createSetupOptionsForm } from './setupOptions';
+import { createSetupOptionsForm, setupStartPayload, type SetupOptionsValues } from './setupOptions';
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
 import { type PaneNode, type Edge, type DropSpec, panesOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
 import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks, type PaneRect } from './stagePanes';
@@ -1697,7 +1697,7 @@ function closeProvisionPanel() {
 // existing WS PTY (openProvisionTerminal) so the user can type it in; the
 // server marks the job's outcome from that session (markInteractiveResult),
 // so polling simply keeps going until the status changes.
-function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools?: string[]; seedAiAuth?: boolean }) {
+function openProvisionPanel(box: Box, options: SetupOptionsValues) {
   const panel = document.getElementById('provision-panel')!;
   const title = panel.querySelector('.provision-title')!;
   const status = panel.querySelector('.provision-status')!;
@@ -1713,9 +1713,13 @@ function openProvisionPanel(box: Box, options: { ohMyTmux: boolean; ohMyZsh: boo
   container.innerHTML = '';
   panel.classList.add('open');
 
-  // seedAiAuth rides along to the server: it is what makes the setup job seed
-  // itself on completion, so dropping it here silently disables the feature.
-  const opts = { ohMyTmux: options.ohMyTmux, ohMyZsh: options.ohMyZsh, ohMyBash: options.ohMyBash, tools: options.tools || [], seedAiAuth: !!options.seedAiAuth };
+  // Every option the form collected rides along to the server: seedAiAuth is
+  // what makes the setup job seed itself on completion, claudeStatusline what
+  // makes it push the statusline, so a field named here but not forwarded
+  // silently disables that feature. Hence the shared spread rather than a
+  // hand-written list — the list predated the statusline checkbox and was
+  // never extended, so that option never once reached the server from here.
+  const opts = setupStartPayload(options);
   const log = document.createElement('pre');
   log.className = 'provision-log';
   const actions = document.createElement('div');
