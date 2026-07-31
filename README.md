@@ -669,6 +669,19 @@ connections. Password-only boxes with no live connection come back as a per-box 
 non-interactive path can't answer a password prompt) — open that box's terminal once to establish
 the connection, then re-run.
 
+The **⤢** button beside the command box opens a full bash-script editor: newlines are honored, so
+you can write a real script rather than a one-liner (⌘/Ctrl+Enter runs it).
+
+Scripts you expect to run again can be **saved**. Give the script a name — and an optional note —
+in the editor and press **Save** (⌘/Ctrl+S), and it joins the rail on the left of the modal, ready
+to load, edit, rename or delete. Saved scripts live in `data/fleet-scripts.json` on the Tmuxifier
+host, so they survive a browser change, a different device, and a restart; the job history labels
+each run with the name of the script it came from.
+
+A saved script's body is stored as plain text — the file is owner-only (`0o600`) but not
+encrypted, and the same text is persisted again in the fleet job history along with its output.
+Don't paste credentials into one.
+
 ## Proxmox LXC provisioning
 
 Tmuxifier can provision a "canned" LXC container on a Proxmox VE host over the PVE HTTP API and

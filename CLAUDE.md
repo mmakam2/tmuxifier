@@ -19,7 +19,8 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   `.env.example`.
 - `config.json` (gitignored, optional) — camelCase alternative to `.env`.
 - `tls/` (gitignored) — `cert.pem`/`key.pem` for HTTPS; the private key never enters git.
-- `data/` (gitignored) — `boxes.json`, `fleet-jobs.json` (Fleet Command history), `proxmox.json`
+- `data/` (gitignored) — `boxes.json`, `fleet-jobs.json` (Fleet Command history),
+  `fleet-scripts.json` (Fleet Command's saved scripts — plain text, not encrypted), `proxmox.json`
   (Proxmox host profiles with **encrypted** API tokens, SSH management keys, and an optional root
   password — all AES-256-GCM sealed — plus container presets), `netbox.json` (NetBox integration
   settings with an **encrypted** API token), `provision-jobs.json` (provision history),
@@ -334,7 +335,18 @@ pattern for new modules.
   `closeAll` that a dead service cannot stall.
 - `fleet.js` / `fleetStore.js` — `createFleetManager` runs one command across many boxes as a single
   persisted, pollable job (Fleet Command), fanning out at `fleetConcurrency`; `createFleetStore` is
-  the debounced `data/fleet-jobs.json` persistence.
+  the debounced `data/fleet-jobs.json` persistence. A job also carries the optional `scriptName` it
+  was launched from — a **frozen display label**, never resolved back against `fleetScriptsStore.js`,
+  so renaming or deleting a saved script cannot rewrite what a past job says it ran (the same reason
+  a target's `label`/`host` are frozen at creation). A blank or oversized value is dropped rather
+  than rejected: provenance is a convenience and must never be able to fail a run.
+- `fleetScriptsStore.js` — `data/fleet-scripts.json` CRUD for Fleet Command's saved scripts (name,
+  optional note, body), in the mold of `servicesStore.js`: validation inside, mutations serialized,
+  names unique case-insensitively, written `0o600`. Nothing here is sealed, unlike `proxmox.json`/
+  `netbox.json` — a script body holds no credential class Tmuxifier manages, and encrypting it would
+  imply a guarantee the feature cannot make, since the same text is persisted again in the job
+  history. The body cap is deliberately the same 65536 the `/api/fleet/jobs` route enforces on
+  `command`, so a script that can be saved can always be run.
 - `setupManager.js` / `setupStore.js` — `createSetupManager` runs the on-box setup script (tmux +
   shell frameworks + tool catalog from `buildEnsureTmuxRemote`) as a persisted, pollable, resumable
   server-side job over the shared ControlMaster, streaming into a rolling capped log; statuses
@@ -517,7 +529,15 @@ text/actions/badge helpers shared by the provision panel and the Proxmox hub),
 `fleetSelection.ts`/`fleetHistory.ts`/`fleetEditor.ts` (Fleet
 Command selection, recent-command history, and the CodeMirror bash-script editor),
 `fleetPoll.ts` (the generation-guarded fleet job-detail poll loop — a stale response can
-neither paint over nor stop the newer selection's polling), `interactiveLauncher.ts`
+neither paint over nor stop the newer selection's polling), `fleetScripts.ts`/`fleetScriptRail.ts`
+(saved fleet scripts: the fetch layer plus the pure `sortScripts`/`isDirty`/`validateName` helpers,
+and the script modal's left rail — an in-place-updating DOM layer whose delete key arms through the
+shared `arming.ts` reducer. The unnamed buffer stays a first-class `Draft` row, so selecting a saved
+script can never orphan typed work; switching away from a dirty buffer is the one gated action. The
+name/note fields are bound to the selection, so one mechanism covers both naming a new script and
+renaming an existing one, and a run carries `scriptName` only while the buffer still equals the
+saved body — a dirty buffer runs nameless rather than claiming to be a script it no longer is),
+`interactiveLauncher.ts`
 (at-most-one live "Finish interactively" setup terminal, shared by the provision panel and the
 hub), `modalRegistry.ts` (body-mounted modals register their close() so logout/session-expiry
 teardown reaches them), `setupPoller.ts` (the generation-guarded setup-job poll loop shared by
