@@ -279,6 +279,25 @@ test('linkKey ignores kind, so one vmid cannot be linked twice under different k
   await expect(store.setProxmoxLink(second.id, { ...link, kind: 'qemu' })).rejects.toThrow(/already linked/);
 });
 
+test('a legacy link with no kind on disk reads back as lxc, with no write in between', async () => {
+  // Written directly to the file, bypassing addBox/normalize entirely — this is
+  // what every box linked before kind existed actually looks like on disk.
+  const legacyBox = {
+    id: 'legacy-1',
+    host: '192.168.1.45',
+    label: '192.168.1.45',
+    sessionName: 'web',
+    tags: [],
+    source: 'proxmox',
+    proxmox: { hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' },
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+  await fs.writeFile(path.join(dir, 'boxes.json'), JSON.stringify([legacyBox]));
+  const store = createStore({ dataDir: dir });
+  expect((await store.listBoxes())[0].proxmox.kind).toBe('lxc');
+  expect((await store.getBox('legacy-1')).proxmox.kind).toBe('lxc');
+});
+
 test('an explicit null label clears back to the host default', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-store-lbl-'));
   const store = createStore({ dataDir: dir });

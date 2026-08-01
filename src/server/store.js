@@ -35,7 +35,16 @@ export function createStore({ dataDir }) {
   const file = path.join(dataDir, 'boxes.json');
 
   async function readAll() {
-    return readJson(file, { fallback: [], validate: Array.isArray });
+    const boxes = await readJson(file, { fallback: [], validate: Array.isArray });
+    // Every reader (listBoxes/getBox/exportBoxes, plus the read half of every
+    // mutation below) goes through readAll, so this is the one place that must
+    // apply the same 'lxc' default normalize() applies on write — otherwise a
+    // box linked before kind existed reports proxmox.kind === undefined until
+    // it next happens to pass through a write. This never rewrites boxes.json;
+    // the default is re-derived on every read, same as normalize()'s.
+    return boxes.map((box) => (box.proxmox
+      ? { ...box, proxmox: { ...box.proxmox, kind: box.proxmox.kind === 'qemu' ? 'qemu' : 'lxc' } }
+      : box));
   }
   async function writeAll(boxes) {
     await writeJson(file, boxes);
