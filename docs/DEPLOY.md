@@ -182,7 +182,7 @@ the rest. (The only import Tmuxifier has is the box-list JSON produced by the ex
 
 Tmuxifier can provision **and manage the lifecycle of** Proxmox LXC containers over the PVE HTTP API.
 Create a **privilege-separated** API token (full walkthrough in
-[../README.md](../README.md#proxmox-lxc-provisioning)) and grant it enough to cover both:
+[proxmox.md](proxmox.md#proxmox-lxc-provisioning)) and grant it enough to cover both:
 
 - **Provisioning:** `Datastore.AllocateSpace` / `Datastore.Audit` (container create) plus `Sys.Audit`
   so the node/storage/bridge pickers populate.
@@ -203,6 +203,30 @@ the local box; lifecycle and provision jobs are recorded in the hub's **Activity
 are encrypted at rest in `data/proxmox.json` and never sent to the browser.
 
 ## Install the service
+
+The repo ships a ready-to-use unit at `deploy/tmuxifier.service`, which assumes the repo is at
+`/root/tmuxifier` running as `root`:
+
+```ini
+[Unit]
+Description=Tmuxifier - web dashboard for managing SSH/tmux boxes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/tmuxifier
+# HOME must be set so the ssh children find ~/.ssh (keys, config, known_hosts)
+Environment=HOME=/root
+ExecStart=/usr/bin/node /root/tmuxifier/src/server/index.js
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+```
 
 ```bash
 sudo cp deploy/tmuxifier.service /etc/systemd/system/tmuxifier.service
@@ -276,4 +300,5 @@ sudo systemctl restart tmuxifier
 ```
 
 Keeping the cookie secret stable means existing logins survive a password change. See
-[../README.md](../README.md) for the full configuration reference and security model.
+[configuration.md](configuration.md) for the full configuration reference and the
+[README's Security section](../README.md#security) for the security model.

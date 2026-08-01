@@ -870,7 +870,13 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 
 ## Docs
 
-- `README.md` — user-facing setup/config/security.
+- `README.md` — user-facing overview + quickstart: setup, essential config, the architecture
+  diagram, and a short section per feature area linking into `docs/`.
+- `docs/configuration.md`, `docs/authentication.md`, `docs/boxes-and-setup.md`,
+  `docs/terminal.md`, `docs/dashboard.md`, `docs/fleet-and-health.md`, `docs/proxmox.md` —
+  the user-facing deep dives the README links to. Living documentation, maintained alongside
+  the code (unlike the point-in-time records below); a feature change that used to update a
+  README section now updates the matching guide.
 - `DESIGN.md` — the visual authority for the UI (the v1.18.0 "instrument" redesign). Read it
   before changing anything the operator looks at; it outranks ad-hoc styling decisions.
 - `PRODUCT.md` — what Tmuxifier is for and who it is for, when a scope question needs settling.
