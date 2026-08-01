@@ -40,6 +40,7 @@ import { createProxmoxLifecycleManager } from './proxmoxLifecycle.js';
 import { createKnownHosts } from './knownHosts.js';
 import { createAiAuthSeeder } from './aiAuthSeed.js';
 import { createStatuslinePusher } from './claudeStatusline.js';
+import { createAgentHooksPusher } from './claudeAgentHooks.js';
 import { readDefaultPublicKey, createDefaultKeyProvider } from './defaultKey.js';
 import os from 'node:os';
 import { registerShutdownFlush } from './shutdown.js';
@@ -115,6 +116,10 @@ const statuslinePusher = createStatuslinePusher({
   runStdin: (box, script, input) => boxActions.execScriptStdin(box, script, input),
   readAsset: () => fs.promises.readFile(new URL('./assets/claude-statusline.sh', import.meta.url)),
 });
+const agentHooksPusher = createAgentHooksPusher({
+  runStdin: (box, script, input) => boxActions.execScriptStdin(box, script, input),
+  readAsset: () => fs.promises.readFile(new URL('./assets/tmuxifier-agent-hook.sh', import.meta.url)),
+});
 const setupStore = createSetupStore({ dataDir: config.dataDir });
 const setupManager = createSetupManager({
   sshStream: (argv, opts) => sshStream(argv, opts),
@@ -141,6 +146,7 @@ const setupManager = createSetupManager({
     }),
   ),
   pushStatusline: (box) => statuslinePusher.push(box),
+  pushAgentHooks: (box) => agentHooksPusher.push(box),
 });
 const statusChecker = createStatusChecker({
   run: (argv) => sshRun(argv),

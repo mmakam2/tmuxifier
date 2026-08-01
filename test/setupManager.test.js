@@ -416,6 +416,39 @@ test('statusline runs before ensureSession', async () => {
   expect(order).toEqual(['statusline', 'ensureSession']);
 });
 
+test('agent-hooks push runs on done with NO option gate, and lands in the summary', async () => {
+  const seen = [];
+  const m = make({ pushAgentHooks: async (box) => { seen.push(box.id); return { target: 'agent-hooks', ok: true }; } });
+  const s = m.start(BOX, {}); // empty options: the push must still run
+  await m._settled(s.id);
+  expect(seen).toEqual([BOX.id]);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(job.agentHooks).toEqual({ target: 'agent-hooks', ok: true });
+  expect(m.listJobs()[0].agentHooks).toEqual({ target: 'agent-hooks', ok: true });
+});
+
+test('agent-hooks push failure is recorded, never promoted to a job failure', async () => {
+  const m = make({ pushAgentHooks: async () => { throw new Error('boom'); } });
+  const s = m.start(BOX, {});
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(job.agentHooks).toEqual({ target: 'agent-hooks', ok: false, error: 'agent hooks push failed' });
+});
+
+test('agent-hooks runs after statusline and before ensureSession', async () => {
+  const order = [];
+  const m = make({
+    pushStatusline: async () => { order.push('statusline'); return { target: 'statusline', ok: true }; },
+    pushAgentHooks: async () => { order.push('agent-hooks'); return { target: 'agent-hooks', ok: true }; },
+    ensureSession: async () => { order.push('session'); },
+  });
+  const s = m.start(BOX, { tools: [], claudeStatusline: true });
+  await m._settled(s.id);
+  expect(order).toEqual(['statusline', 'agent-hooks', 'session']);
+});
+
 const SUDO = 'sudo: a terminal is required to read the password; see below\n';
 
 test('interactive finish seeds via getBox, then reaches done', async () => {
