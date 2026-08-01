@@ -143,21 +143,26 @@ export function createSetupManager({
         j.seed = [{ target: 'all', ok: false, error: 'seed failed' }];
       }
     }
-    // Push the Claude statusline (opt-in). The box itself decides via a
-    // command -v claude check whether to apply, so this yields "nothing
-    // happens" for a box without Claude and "apply" for one that has it — no
-    // add-vs-edit branching. A skip/failure is recorded, never promoted: setup
-    // succeeded, and a box without Claude Code must not turn red.
-    if (pushStatusline && j.options.claudeStatusline && box && !j.cancelled) {
+    // The Claude stack (statusline + agent-state hooks) is ONE knob: the
+    // `claude` tool selection. Strict consolidation — an unchecked box means
+    // touch nothing claude-related, even on a box that already has Claude
+    // (this deliberately replaced v1.24.10's always-on hooks push). The
+    // legacy `claudeStatusline` flag from a stale browser bundle still counts
+    // as asking for the stack, so old clients gain the hooks rather than
+    // falling into a compat hole. The box itself still decides via a
+    // command -v claude check, so a claude-less box records a skip — and the
+    // CLI install step ran earlier in this same job, so a freshly ticked box
+    // has its claude by the time these run. Skips/failures are recorded,
+    // never promoted: setup succeeded, and a box without Claude Code must
+    // not turn red.
+    const wantsClaudeStack = (j.options.tools || []).includes('claude') || !!j.options.claudeStatusline;
+    if (pushStatusline && wantsClaudeStack && box && !j.cancelled) {
       j.phase = 'statusline';
       persist();
       try { j.statusline = await pushStatusline(box); }
       catch { j.statusline = { target: 'statusline', ok: false, error: 'statusline push failed' }; }
     }
-    // Push the agent-state hooks (always-on; see claudeAgentHooks.js). The
-    // box decides via a command -v claude check, so a box without Claude
-    // yields a recorded skip. A skip/failure is recorded, never promoted.
-    if (pushAgentHooks && box && !j.cancelled) {
+    if (pushAgentHooks && wantsClaudeStack && box && !j.cancelled) {
       j.phase = 'agent-hooks';
       persist();
       try { j.agentHooks = await pushAgentHooks(box); }

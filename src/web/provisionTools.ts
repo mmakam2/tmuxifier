@@ -9,7 +9,7 @@ export const PROVISION_TOOLS: { id: string; label: string }[] = [
   { id: 'node', label: 'Node.js + npm' },
   { id: 'bubblewrap', label: 'Bubblewrap' },
   { id: 'codex', label: 'Codex CLI' },
-  { id: 'claude', label: 'Claude Code' },
+  { id: 'claude', label: 'Claude Code (CLI + statusline + agent hooks)' },
   { id: 'agy', label: 'Antigravity CLI (agy)' },
 ];
 

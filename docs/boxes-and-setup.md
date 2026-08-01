@@ -41,31 +41,30 @@ curl, git, the GitHub CLI, Node.js + npm, Bubblewrap, and the Codex, Claude Code
 Antigravity CLIs — using the same idempotent multi-distro install script, so re-running
 provisioning skips anything already installed.
 
-## Push Claude Code statusline
+## The Claude Code checkbox
 
-Below that checklist sits **"Push Claude Code statusline"** (unchecked by default). Ticking it
-copies *this host's own* Claude Code statusline script to the box and merges a `statusLine` block
-into the box's `~/.claude/settings.json`, preserving every other key in that file. The box decides
-whether it applies: with no Claude Code installed there the push is a recorded no-op, so ticking it
-for a box that gets Claude Code later takes effect the next time setup runs. It runs after the
-setup job's other work, and a skip or failure is recorded on the job without failing it.
+The **Claude Code** entry in that tools checklist is one knob for the whole Claude stack.
+Ticking it makes the setup run do three things, each skipping cleanly when already present:
 
-## Agent-state hooks
+- **Install the CLI** if the box doesn't have it (an existing install is left untouched).
+- **Push this host's statusline**: merges a `statusLine` block into the box's
+  `~/.claude/settings.json`, preserving every other key in that file.
+- **Install the agent-state hook**: a small Claude Code hook that records whether the agent
+  is working or waiting for you — the **only** source the dashboard's agent chip, the sidebar
+  badge, and the "claude is waiting for input" notifications read. There is no guessing from
+  terminal output. The hook never blocks or modifies the agent: it only writes a one-line
+  state file under `~/.tmuxifier-agent/`, and its settings.json entries are merged
+  alongside any hooks you already have, never over them.
 
-Every setup run also installs a small Claude Code hook on the box (skipped automatically when
-Claude Code is not installed — there is no checkbox for this one). The hook records whether the
-agent is working or waiting for you, and it is the **only** source the dashboard's agent chip
-and the "claude is waiting for input" notifications read — there is no guessing from terminal
-output. A box without the hook (or a claude started before the hook landed and not yet
-restarted) simply shows no agent state: if the chip is missing for a running claude, rerun
-setup on that box and restart claude in its session. The hook never blocks or modifies the
-agent: it only writes a one-line state file under `~/.tmuxifier-agent/` on the box. Saving
-the Edit Box dialog always starts a setup run — even with every checkbox clear — so a plain
-Edit → Save is all it takes to (re)install the hook.
+On a box with a pre-existing Claude install, ticking the checkbox simply adds whatever is
+missing. Unchecked means setup touches nothing Claude-related — no install, no statusline,
+no hook refresh. So if the agent chip or badge is missing for a running claude: open the
+box's Edit dialog, tick **Claude Code**, save, and once the setup job reports done, restart
+claude in that session (Claude Code reads its hooks at startup).
 
-To remove it from a box: delete the five `tmuxifier-agent-hook` entries from the box's
-`~/.claude/settings.json` and `rm -rf ~/.tmuxifier-agent`. The next setup run reinstalls it —
-and with it removed, that box reports no agent state at all.
+To remove the hook from a box: delete the five `tmuxifier-agent-hook` entries from the box's
+`~/.claude/settings.json` and `rm -rf ~/.tmuxifier-agent`. With it removed, that box reports
+no agent state at all; the next setup run with Claude Code ticked reinstalls it.
 
 ## Seeding AI CLI auth
 

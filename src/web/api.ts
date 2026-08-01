@@ -186,6 +186,8 @@ export interface FleetJobSummary {
   scriptName?: string | null;
 }
 export type SetupStatus = 'running' | 'done' | 'error' | 'needs-interactive' | 'interrupted' | 'superseded';
+// claudeStatusline is legacy-only: the statusline (and agent hooks) now ride
+// the `claude` tools entry; old persisted jobs still carry the flag.
 export interface SetupOptions { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth?: boolean; claudeStatusline?: boolean }
 export interface SetupSummary {
   id: string; boxId: string; boxLabel: string; status: SetupStatus;

@@ -2,7 +2,10 @@ import { el, makeRadio } from './dom';
 import { toolsCheckboxGroup } from './provisionTools';
 import { api, type AiAuthStatus, type AiAuthCliStatus } from './api';
 
-export interface SetupOptionsValues { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth: boolean; claudeStatusline: boolean }
+// No claudeStatusline field: the statusline (and the agent-state hooks) ride
+// the `claude` TOOLS entry — one knob for the whole Claude stack. The server
+// still accepts the legacy flag from stale bundles.
+export interface SetupOptionsValues { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth: boolean }
 
 export type SeedTone = 'ok' | 'bad' | 'unknown';
 
@@ -64,17 +67,12 @@ export function createSetupOptionsForm(initial: { ohMyTmux?: boolean } = {}): {
   const tools = toolsCheckboxGroup();
   tools.element.classList.add('setup-section');
 
-  // Claude Code statusline push. Lives visually under Additional tools but is
-  // read as its own boolean — NOT a TOOL_IDS entry, so resolveTools (the
-  // command-injection chokepoint) is untouched. The box decides at push time
-  // whether Claude Code is present, so no coupling to the claude checkbox here.
-  const statuslineInput = el('input', { type: 'checkbox' }) as HTMLInputElement;
-  const statuslineField = el('label', {
-    class: 'check-field',
-    title: 'Copies this host’s custom Claude Code statusline to the box — applied only when Claude Code is installed there',
-  }, [statuslineInput, el('span', {}, ['Push Claude Code statusline'])]);
-  const statuslineHint = el('div', { class: 'seed-status' }, ['Applied only when Claude Code is installed on the box.']);
-  tools.element.append(statuslineField, statuslineHint);
+  // One knob for the Claude stack: the `claude` TOOLS entry means CLI install
+  // (skipped when already present) + statusline push + agent-state hooks. The
+  // hint names all three so the checkbox says what it does; the old separate
+  // "Push Claude Code statusline" checkbox is gone.
+  const claudeHint = el('div', { class: 'seed-status' }, ['Claude Code also pushes this host’s statusline and the agent-state hooks; an existing install only gains what is missing.']);
+  tools.element.append(claudeHint);
 
   const seedInput = el('input', { type: 'checkbox' }) as HTMLInputElement;
   const seedField = el('label', {
@@ -117,7 +115,6 @@ export function createSetupOptionsForm(initial: { ohMyTmux?: boolean } = {}): {
       ohMyBash: shBash.input.checked,
       tools: tools.selected(),
       seedAiAuth: seedInput.checked,
-      claudeStatusline: statuslineInput.checked,
     }),
     applySeedStatus,
   };

@@ -402,11 +402,12 @@ pattern for new modules.
   On reaching `done` — from either the non-interactive run or an interactive finish — a job whose
   options asked for it seeds the box's AI CLI auth (injected `seed`/`getBox`) under a `seeding`
   phase, records the redacted per-target result on `job.seed`, and only then flips to `done`; a
-  failed seed is recorded, never promoted to a job failure. An opt-in `statusline` phase
-  (injected `pushStatusline`, see `claudeStatusline.js`) runs next on the same terms — recorded on
-  `job.statusline`, never promoted — followed by the **always-on** `agent-hooks` phase (injected
-  `pushAgentHooks`, see `claudeAgentHooks.js`; no option gate, the box decides), recorded on
-  `job.agentHooks` on the same never-promoted terms. The box's tmux session is created
+  failed seed is recorded, never promoted to a job failure. The `statusline` and `agent-hooks`
+  phases (injected `pushStatusline`/`pushAgentHooks`, see `claudeStatusline.js`/
+  `claudeAgentHooks.js`) run next on the same terms — recorded on `job.statusline`/
+  `job.agentHooks`, never promoted — both gated by ONE knob: the `claude` tools selection
+  (strict consolidation, 2026-08-01; the legacy `claudeStatusline` flag from a stale bundle
+  still counts, gaining old clients the hooks too). The box's tmux session is created
   **last**, by the injected `ensureSession` step (`buildEnsureSessionRemote`), strictly after the
   seed — a shell reads its rc files once at startup, so a session created earlier (as the setup
   script used to do) holds an environment with no seeded token in it. The setup script therefore
@@ -422,7 +423,8 @@ pattern for new modules.
   `claudeAgentHooks.js`) — the old output-idle heuristic, its `'unknown'` state, the
   `agentIdleSec`/`TMUXIFIER_AGENT_IDLE_SEC` knob, and the anti-blip working-streak are all
   removed (2026-08-01), so a claude pane with no marker carries no agent state at all; the
-  silent chip is the deliberate cue that the box needs a setup rerun. Presence stays pane-based
+  silent chip is the deliberate cue that the box needs a setup run with the Claude Code tool
+  ticked (plus a claude restart). Presence stays pane-based
   as `agentPresent`, whose sole consumer is the agent-done edge — it keeps a one-poll marker gap
   (a claude restarting in place between SessionEnd and SessionStart) from reading as an exit.
   Emits edge-triggered `agent-input`/`agent-done` events — suppressed while that session is
@@ -506,28 +508,29 @@ pattern for new modules.
   The trigger is the setup job itself (see `setupManager.js`), not the browser; `POST
   /api/boxes/:id/seed-ai-auth` remains as the manual re-seed path with no UI caller.
 - `claudeStatusline.js` — `buildStatuslineInstallScript` (pure) + `createStatuslinePusher`: the
-  opt-in push of this host's own Claude Code statusline (`src/server/assets/claude-statusline.sh`,
+  push of this host's own Claude Code statusline (`src/server/assets/claude-statusline.sh`,
   read through the injected `readAsset`) to a box. Structural twin of `aiAuthSeed.js`: the script
   text interpolates **nothing** and the statusline file arrives on stdin. The apply-or-skip
   decision is made **on the box** by a `command -v claude` check, so one rule covers both a fresh
   box without Claude Code (skipped) and an edit of a box that already has it (applied) — no
   add-vs-edit branching. The box's `settings.json` is merged in place, never overwritten (jq →
   node → python3 fallback chain, atomic temp+rename; a box with none of the three reports
-  `error-no-json-tool`). Run by `setupManager.js` as the post-seed `statusline` phase.
+  `error-no-json-tool`). Run by `setupManager.js` as the post-seed `statusline` phase, gated
+  (with the agent-hooks push) by the `claude` tools selection — one knob for the Claude stack.
 - `claudeAgentHooks.js` — `buildAgentHooksInstallScript` (pure) + `createAgentHooksPusher`: the
-  always-on push of the agent-state hook (`src/server/assets/tmuxifier-agent-hook.sh`) to a box.
-  Structural twin of `claudeStatusline.js` — script text interpolates nothing, the hook file
-  arrives on stdin, the box decides via `command -v claude` — but with no option gate (the
-  framework-clamps precedent) and an array-aware settings.json merge: `hooks` entries are
-  arrays, so the merge is remove-then-append per event (drop entries mentioning
-  `tmuxifier-agent-hook`, append ours), idempotent across reruns and blind to the operator's
-  own hooks. The hook writes `<session>:<state>:<epoch>` markers under `~/.tmuxifier-agent/`
-  on UserPromptSubmit/Stop/Notification/SessionStart and deletes on SessionEnd; the status
-  probe reads them back (`parseAgentMarks` in `status.js`) and `sampleOf` prefers a marker
-  over the output-idle heuristic (`agentSrc: 'hook'`, no 'unknown' path), which also lets
-  `classifyTransitions` skip the anti-blip streak for hook-sourced edges. Run by
-  `setupManager.js` as the post-statusline `agent-hooks` phase, recorded on `job.agentHooks`,
-  never promoted to a job failure.
+  push of the agent-state hook (`src/server/assets/tmuxifier-agent-hook.sh`) to a box, gated by
+  the same `claude` tools selection as the statusline (strict one-knob consolidation; it was
+  briefly always-on in v1.24.10–12). Structural twin of `claudeStatusline.js` — script text
+  interpolates nothing, the hook file arrives on stdin, the box decides via `command -v
+  claude` — with an array-aware settings.json merge: `hooks` entries are arrays, so the merge
+  is remove-then-append per event (drop entries mentioning `tmuxifier-agent-hook`, append
+  ours), idempotent across reruns and blind to the operator's own hooks. The hook writes
+  `<session>:<state>:<epoch>` markers under `~/.tmuxifier-agent/` on
+  UserPromptSubmit/Stop/Notification/SessionStart and deletes on SessionEnd; the status probe
+  reads them back (`parseAgentMarks` in `status.js`) and they are the SOLE source of
+  `sampleOf`'s agent state (hook-only, see `healthHistory.js`). Run by `setupManager.js` as
+  the post-statusline `agent-hooks` phase, recorded on `job.agentHooks`, never promoted to a
+  job failure.
 - `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`pinnedSocket`/`normFp`) used
   by both the Proxmox and NetBox API clients. Pin mode verifies the pinned fingerprint on each
   request's own connection (`pinnedSocket` via `createConnection`) instead of OpenSSL chain

@@ -1780,11 +1780,11 @@ function openProvisionPanel(box: Box, options: SetupOptionsValues) {
   panel.classList.add('open');
 
   // Every option the form collected rides along to the server: seedAiAuth is
-  // what makes the setup job seed itself on completion, claudeStatusline what
-  // makes it push the statusline, so a field named here but not forwarded
-  // silently disables that feature. Hence the shared spread rather than a
-  // hand-written list — the list predated the statusline checkbox and was
-  // never extended, so that option never once reached the server from here.
+  // what makes the setup job seed itself on completion, the `claude` tools
+  // entry what makes it push the statusline + agent hooks, so a field named
+  // here but not forwarded silently disables that feature. Hence the shared
+  // spread rather than a hand-written list — a hand-written list once dropped
+  // the (since-removed) statusline checkbox's flag exactly that way.
   const opts = setupStartPayload(options);
   const log = document.createElement('pre');
   log.className = 'provision-log';

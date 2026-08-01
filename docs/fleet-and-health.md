@@ -72,7 +72,8 @@ reads that record — so the "waiting" alert fires on the next poll and never fa
 a parked session. There is no output-based fallback: a claude on a box whose setup has not been
 rerun since the hook was introduced (or a claude started before the hook landed and not yet
 restarted) shows **no** working/waiting chip and raises no agent events — that silence means
-"rerun setup on this box", not "the agent is fine". Browser
+"tick the Claude Code checkbox in the box's Edit dialog, save, then restart claude in the
+session", not "the agent is fine". Browser
 notifications for these agent events and for the box-health events above can be toggled per kind
 in **Settings → Notifications**: per-browser, and they only fire once you grant the browser's
 notification permission (which itself requires an HTTPS dashboard). All events always appear in

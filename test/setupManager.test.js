@@ -366,85 +366,94 @@ test('seed survives save -> load into a fresh manager', async () => {
   expect(m2.getJob(s.id).seed).toEqual([{ target: 'claude', ok: true }]);
 });
 
-test('claudeStatusline on + pusher wired: runs, records result, reaches done', async () => {
+test('claude tool selected: statusline and agent-hooks both run and land in the summary', async () => {
   const seen = [];
-  const m = make({ pushStatusline: async (box) => { seen.push(box.id); return { target: 'statusline', ok: true }; } });
-  const s = m.start(BOX, { tools: [], claudeStatusline: true });
+  const m = make({
+    pushStatusline: async (box) => { seen.push(`sl:${box.id}`); return { target: 'statusline', ok: true }; },
+    pushAgentHooks: async (box) => { seen.push(`ah:${box.id}`); return { target: 'agent-hooks', ok: true }; },
+  });
+  const s = m.start(BOX, { tools: ['claude'] });
   await m._settled(s.id);
   const job = m.getJob(s.id);
   expect(job.status).toBe('done');
-  expect(seen).toEqual([BOX.id]);
+  expect(seen).toEqual([`sl:${BOX.id}`, `ah:${BOX.id}`]);
   expect(job.statusline).toEqual({ target: 'statusline', ok: true });
-  expect(m.listJobs()[0].statusline).toEqual({ target: 'statusline', ok: true });
+  expect(job.agentHooks).toEqual({ target: 'agent-hooks', ok: true });
+  expect(m.listJobs()[0].agentHooks).toEqual({ target: 'agent-hooks', ok: true });
 });
 
-test('claudeStatusline off: the push never runs', async () => {
+test('claude tool NOT selected: neither statusline nor agent-hooks runs (strict one-knob)', async () => {
   let calls = 0;
-  const m = make({ pushStatusline: async () => { calls += 1; return { target: 'statusline', ok: true }; } });
-  const s = m.start(BOX, { tools: [], claudeStatusline: false });
+  const m = make({
+    pushStatusline: async () => { calls += 1; return { target: 'statusline', ok: true }; },
+    pushAgentHooks: async () => { calls += 1; return { target: 'agent-hooks', ok: true }; },
+  });
+  const s = m.start(BOX, { tools: ['git', 'node'] });
   await m._settled(s.id);
   expect(calls).toBe(0);
   expect(m.getJob(s.id).statusline).toBeUndefined();
+  expect(m.getJob(s.id).agentHooks).toBeUndefined();
   expect(m.getJob(s.id).status).toBe('done');
 });
 
-test('no pusher wired: claudeStatusline is skipped rather than failing', async () => {
-  const m = make();
+test('empty options run neither push — unchecked touches nothing claude-related', async () => {
+  let calls = 0;
+  const m = make({
+    pushStatusline: async () => { calls += 1; return { target: 'statusline', ok: true }; },
+    pushAgentHooks: async () => { calls += 1; return { target: 'agent-hooks', ok: true }; },
+  });
+  const s = m.start(BOX, {});
+  await m._settled(s.id);
+  expect(calls).toBe(0);
+  expect(m.getJob(s.id).status).toBe('done');
+});
+
+test('legacy claudeStatusline flag from a stale bundle still runs the whole claude stack', async () => {
+  const order = [];
+  const m = make({
+    pushStatusline: async () => { order.push('statusline'); return { target: 'statusline', ok: true }; },
+    pushAgentHooks: async () => { order.push('agent-hooks'); return { target: 'agent-hooks', ok: true }; },
+  });
   const s = m.start(BOX, { tools: [], claudeStatusline: true });
+  await m._settled(s.id);
+  expect(order).toEqual(['statusline', 'agent-hooks']);
+});
+
+test('no pushers wired: the claude selection is skipped rather than failing', async () => {
+  const m = make();
+  const s = m.start(BOX, { tools: ['claude'] });
   await m._settled(s.id);
   expect(m.getJob(s.id).status).toBe('done');
   expect(m.getJob(s.id).statusline).toBeUndefined();
+  expect(m.getJob(s.id).agentHooks).toBeUndefined();
 });
 
 test('statusline push failure is recorded, never promoted to a job failure', async () => {
   const m = make({ pushStatusline: async () => { throw new Error('boom'); } });
-  const s = m.start(BOX, { tools: [], claudeStatusline: true });
+  const s = m.start(BOX, { tools: ['claude'] });
   await m._settled(s.id);
   const job = m.getJob(s.id);
   expect(job.status).toBe('done');
   expect(job.statusline).toEqual({ target: 'statusline', ok: false, error: 'statusline push failed' });
 });
 
-test('statusline runs before ensureSession', async () => {
-  const order = [];
-  const m = make({
-    pushStatusline: async () => { order.push('statusline'); return { target: 'statusline', ok: true }; },
-    ensureSession: async () => { order.push('ensureSession'); },
-  });
-  const s = m.start(BOX, { tools: [], claudeStatusline: true });
-  await m._settled(s.id);
-  expect(order).toEqual(['statusline', 'ensureSession']);
-});
-
-test('agent-hooks push runs on done with NO option gate, and lands in the summary', async () => {
-  const seen = [];
-  const m = make({ pushAgentHooks: async (box) => { seen.push(box.id); return { target: 'agent-hooks', ok: true }; } });
-  const s = m.start(BOX, {}); // empty options: the push must still run
-  await m._settled(s.id);
-  expect(seen).toEqual([BOX.id]);
-  const job = m.getJob(s.id);
-  expect(job.status).toBe('done');
-  expect(job.agentHooks).toEqual({ target: 'agent-hooks', ok: true });
-  expect(m.listJobs()[0].agentHooks).toEqual({ target: 'agent-hooks', ok: true });
-});
-
 test('agent-hooks push failure is recorded, never promoted to a job failure', async () => {
   const m = make({ pushAgentHooks: async () => { throw new Error('boom'); } });
-  const s = m.start(BOX, {});
+  const s = m.start(BOX, { tools: ['claude'] });
   await m._settled(s.id);
   const job = m.getJob(s.id);
   expect(job.status).toBe('done');
   expect(job.agentHooks).toEqual({ target: 'agent-hooks', ok: false, error: 'agent hooks push failed' });
 });
 
-test('agent-hooks runs after statusline and before ensureSession', async () => {
+test('claude stack order: statusline, then agent-hooks, then ensureSession', async () => {
   const order = [];
   const m = make({
     pushStatusline: async () => { order.push('statusline'); return { target: 'statusline', ok: true }; },
     pushAgentHooks: async () => { order.push('agent-hooks'); return { target: 'agent-hooks', ok: true }; },
     ensureSession: async () => { order.push('session'); },
   });
-  const s = m.start(BOX, { tools: [], claudeStatusline: true });
+  const s = m.start(BOX, { tools: ['claude'] });
   await m._settled(s.id);
   expect(order).toEqual(['statusline', 'agent-hooks', 'session']);
 });

@@ -69,18 +69,13 @@ const VALUES = {
   ohMyTmux: true,
   ohMyZsh: false,
   ohMyBash: false,
-  tools: ['git', 'gh'],
+  tools: ['git', 'gh', 'claude'],
   seedAiAuth: true,
-  claudeStatusline: true,
 };
 
-test('payload carries the statusline flag the panel used to drop', () => {
-  expect(setupStartPayload(VALUES).claudeStatusline).toBe(true);
-  expect(setupStartPayload({ ...VALUES, claudeStatusline: false }).claudeStatusline).toBe(false);
-});
-
-test('payload carries every field the form collected', () => {
+test('payload carries every field the form collected, including the claude tool selection', () => {
   expect(setupStartPayload(VALUES)).toEqual(VALUES);
+  expect(setupStartPayload(VALUES).tools).toContain('claude'); // the one knob for the claude stack
 });
 
 test('a field the form gains later travels without editing the call site', () => {
@@ -92,5 +87,5 @@ test('tools defaults to an empty list and is copied, not aliased', () => {
   expect(setupStartPayload({ ...VALUES, tools: undefined }).tools).toEqual([]);
   const payload = setupStartPayload(VALUES);
   payload.tools.push('curl');
-  expect(VALUES.tools).toEqual(['git', 'gh']);
+  expect(VALUES.tools).toEqual(['git', 'gh', 'claude']);
 });
