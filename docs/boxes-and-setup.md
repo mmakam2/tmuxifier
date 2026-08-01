@@ -50,6 +50,18 @@ whether it applies: with no Claude Code installed there the push is a recorded n
 for a box that gets Claude Code later takes effect the next time setup runs. It runs after the
 setup job's other work, and a skip or failure is recorded on the job without failing it.
 
+## Agent-state hooks
+
+Every setup run also installs a small Claude Code hook on the box (skipped automatically when
+Claude Code is not installed — there is no checkbox for this one). The hook records whether the
+agent is working or waiting for you — the dashboard's agent chip and the "claude is waiting for
+input" notifications read this instead of guessing from terminal output, so they react faster
+and never false-positive on an idle session. It never blocks or modifies the agent: it only
+writes a one-line state file under `~/.tmuxifier-agent/` on the box.
+
+To remove it from a box: delete the five `tmuxifier-agent-hook` entries from the box's
+`~/.claude/settings.json` and `rm -rf ~/.tmuxifier-agent`. The next setup run reinstalls it.
+
 ## Seeding AI CLI auth
 
 Both surfaces also offer a **"Seed AI CLI auth (claude/codex) from this host"** checkbox
