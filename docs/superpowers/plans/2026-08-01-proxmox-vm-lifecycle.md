@@ -989,11 +989,20 @@ move. The web client follows in the next commit."
 
 ---
 
-### Task 6: Web types and fetch layer
+### Task 6: Web client — types, Guests tab, picker, and badges
+
+Renaming the web types breaks every consumer at once, so this task carries all
+four parts and lands as **one commit**. Splitting it would put three
+non-typechecking commits in history, contradicting the Global Constraint that
+`npm test` passes before every commit. Work Parts A→D in order; commit once at
+the end, after Part D's verification gates.
 
 **Files:**
-- Modify: `src/web/proxmox.ts:24-28`, `:35`, `:66-69`
-- Test: `test/proxmoxWebClient.test.js`
+- Modify: `src/web/proxmox.ts:24-28`, `:35`, `:66-69`; `src/web/api.ts`
+- Rename: `src/web/proxmoxContainers.ts` → `src/web/proxmoxGuests.ts`
+- Rename: `test/proxmoxContainers.test.js` → `test/proxmoxGuests.test.js`
+- Modify: `src/web/proxmoxUi.ts:10`, `src/web/proxmoxAssociation.ts`, `src/web/dashboard.ts`, `src/web/main.ts`, `src/web/paneLifecycle.ts`, `src/web/style.css`
+- Test: `test/proxmoxWebClient.test.js`, `test/proxmoxAssociation.test.js`
 
 **Interfaces:**
 - Consumes: the routes from Task 5 and the record shapes from Tasks 3-4.
@@ -1005,6 +1014,10 @@ move. The web client follows in the next commit."
   - `LifecycleJobSummary` + `kind: PveGuestKind`
   - `pve.linkedGuests()`, `pve.nodeGuests(hostId, node)`
   - `PveBoxLink` (in `api.ts`) + `kind: PveGuestKind`
+  - `renderGuestsTab(content, deps)`, `actionsForState(state: PveGuestState): LifecycleAction[]`, `guestMatches(guest: PveLinkedGuest, term: string): boolean`, `kindLabel(kind: PveGuestKind): 'CT' | 'VM'` — all from `src/web/proxmoxGuests.ts`
+  - `associationMutation(current, draft)` where `Draft` is `{ mode: 'unlinked' } | { mode: 'linked'; hostId: string; node: string; vmid: number; kind: PveGuestKind }`
+
+#### Part A — types and fetch layer
 
 - [ ] **Step 1: Rewrite the type block**
 
@@ -1034,50 +1047,27 @@ Replace the two fetchers (lines 66, 68):
 
 In `src/web/api.ts`, find `PveBoxLink` and add `kind: PveGuestKind;`, importing the type from `./proxmox` (or declaring it locally if `api.ts` must not import from `proxmox.ts` — check the existing import direction first and follow it).
 
-- [ ] **Step 3: Run the typechecker and let it list the breakages**
+- [ ] **Step 3: Run the typechecker and save the breakage list**
 
 Run: `npm run typecheck`
-Expected: FAIL, with errors in `proxmoxContainers.ts`, `proxmoxAssociation.ts`, `proxmoxUi.ts`, `dashboard.ts`, `main.ts`, `paneLifecycle.ts`. That error list is the worklist for Tasks 7-9 — save it.
+Expected: FAIL, with errors in `proxmoxContainers.ts`, `proxmoxAssociation.ts`, `proxmoxUi.ts`, `dashboard.ts`, `main.ts`, `paneLifecycle.ts`. This failure is expected and temporary — Parts B-D close it before the single commit at the end. Save the error list; it is Part D's worklist.
 
 - [ ] **Step 4: Update the web-client fetch test**
 
 In `test/proxmoxWebClient.test.js`, rename any `linkedContainers` / `nodeContainers` call and update asserted URLs to `/api/proxmox/guests` and `…/guests`.
 
-- [ ] **Step 5: Commit (typecheck still failing is expected here)**
+**Do not commit yet** — the tree does not typecheck until Part D. Continue to Part B.
 
-This commit intentionally leaves the tree not type-clean; Tasks 7-9 close it. If you prefer a green tree at every commit, defer this commit and fold it into Task 7.
+#### Part B — the Guests tab
 
-```bash
-git add src/web/proxmox.ts src/web/api.ts test/proxmoxWebClient.test.js
-git commit -m "refactor(pve): guest-named web types carrying the kind
-
-PveContainerState -> PveGuestState (gaining 'mismatch'), PveLinkedContainer ->
-PveLinkedGuest, PveNodeContainer -> PveNodeGuest, all carrying kind. Consumers
-follow in the next three commits."
-```
-
----
-
-### Task 7: The Guests tab
-
-**Files:**
-- Rename: `src/web/proxmoxContainers.ts` → `src/web/proxmoxGuests.ts`
-- Rename: `test/proxmoxContainers.test.js` → `test/proxmoxGuests.test.js`
-- Modify: `src/web/proxmoxUi.ts:10` (import + tab label)
-- Modify: `src/web/style.css`
-
-**Interfaces:**
-- Consumes: `PveLinkedGuest`, `PveGuestState`, `pve.linkedGuests()` (Task 6).
-- Produces: `renderGuestsTab(content, deps)`, `actionsForState(state: PveGuestState): LifecycleAction[]`, `guestMatches(guest: PveLinkedGuest, term: string): boolean`, `kindLabel(kind: PveGuestKind): 'CT' | 'VM'`.
-
-- [ ] **Step 1: Move the files**
+- [ ] **Step 5: Move the files**
 
 ```bash
 git mv src/web/proxmoxContainers.ts src/web/proxmoxGuests.ts
 git mv test/proxmoxContainers.test.js test/proxmoxGuests.test.js
 ```
 
-- [ ] **Step 2: Write the failing pure-helper tests**
+- [ ] **Step 6: Write the failing pure-helper tests**
 
 Replace the body of `test/proxmoxGuests.test.js` imports and append:
 
@@ -1109,12 +1099,12 @@ test('the filter matches the kind label the row displays', () => {
 
 Keep every pre-existing test in the file, renaming `containerMatches` to `guestMatches` in each.
 
-- [ ] **Step 3: Run and watch it fail**
+- [ ] **Step 7: Run and watch it fail**
 
 Run: `npx vitest run test/proxmoxGuests.test.js`
 Expected: FAIL — `kindLabel` is not exported and `guestMatches` does not exist.
 
-- [ ] **Step 4: Update the module**
+- [ ] **Step 8: Update the module**
 
 In `src/web/proxmoxGuests.ts`:
 
@@ -1173,48 +1163,29 @@ Update the deprovision dialog copy:
       : `Tmuxifier will ask Proxmox to shut the guest down gracefully, force it off if it has not stopped within the grace period, then destroy it and its ${guest.kind === 'qemu' ? 'disks' : 'volumes'}, keep independent backups, and remove the linked box.`]),
 ```
 
-- [ ] **Step 5: Update the hub**
+- [ ] **Step 9: Update the hub**
 
 In `src/web/proxmoxUi.ts`, change the import to `import { renderGuestsTab } from './proxmoxGuests';`, the call site, and the tab label from `Containers` to `Guests`.
 
-- [ ] **Step 6: Rename the CSS**
+- [ ] **Step 10: Rename the CSS**
 
 In `src/web/style.css`, rename `.pve-container-row` → `.pve-guest-row`, `.pve-container-toolbar` → `.pve-guest-toolbar`, `.pve-container-search` → `.pve-guest-search`, `.pve-container-list` → `.pve-guest-list`. Add a rule for the kind badge next to the existing `.pve-badge` rules, following whatever DESIGN.md specifies for secondary badges — read `DESIGN.md` before choosing colors rather than inventing them.
 
-- [ ] **Step 7: Verify no orphaned class hooks remain**
+- [ ] **Step 11: Verify no orphaned class hooks remain**
 
 ```bash
 grep -rn "pve-container" src/ test/
 ```
 Expected: **zero hits.** A class hook no stylesheet matches fails silently rather than at the typechecker — this grep is the only thing that catches it.
 
-- [ ] **Step 8: Run and commit**
+- [ ] **Step 12: Check the tab's own tests**
 
-Run: `npx vitest run test/proxmoxGuests.test.js && npm run typecheck`
-Expected: tests PASS; typecheck errors now confined to `proxmoxAssociation.ts`, `dashboard.ts`, `main.ts`, `paneLifecycle.ts` (Tasks 8-9).
+Run: `npx vitest run test/proxmoxGuests.test.js`
+Expected: PASS. Typecheck still fails in `proxmoxAssociation.ts`, `dashboard.ts`, `main.ts`, `paneLifecycle.ts` — Parts C and D close those. **Do not commit yet.**
 
-```bash
-git add -A src/web test/proxmoxGuests.test.js
-git commit -m "feat(ui): the Containers tab becomes the Guests tab
+#### Part C — association picker offers both kinds
 
-Rows carry a CT/VM badge, the filter matches it, and a 'mismatch' row explains
-itself and offers Edit link instead of a dead end. Deprovision copy now names
-the grace period and says disks for a VM, volumes for a container."
-```
-
----
-
-### Task 8: Association picker offers both kinds
-
-**Files:**
-- Modify: `src/web/proxmoxAssociation.ts`
-- Test: `test/proxmoxAssociation.test.js`
-
-**Interfaces:**
-- Consumes: `PveNodeGuest`, `pve.nodeGuests()`, `kindLabel` (Tasks 6-7).
-- Produces: `associationMutation(current, draft)` where `Draft` is `{ mode: 'unlinked' } | { mode: 'linked'; hostId: string; node: string; vmid: number; kind: PveGuestKind }`.
-
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 13: Write the failing test**
 
 Append to `test/proxmoxAssociation.test.js`:
 
@@ -1233,12 +1204,12 @@ test('changing only the kind is a real mutation, not a no-op', () => {
 
 Note the outer `kind: 'link'` (the mutation discriminator) and the inner `link.kind` (the guest kind) are different fields that happen to share a name. Do not conflate them.
 
-- [ ] **Step 2: Run and watch it fail**
+- [ ] **Step 14: Run and watch it fail**
 
 Run: `npx vitest run test/proxmoxAssociation.test.js -t 'kind'`
 Expected: FAIL — returns `null` for the qemu case.
 
-- [ ] **Step 3: Update the module**
+- [ ] **Step 15: Update the module**
 
 In `src/web/proxmoxAssociation.ts`:
 
@@ -1281,43 +1252,28 @@ Rename the `container` select variable to `guest`, `loadContainers` to `loadGues
 
 In the two places that rebuild the draft on `host`/`node` change (lines 61, 66), the draft literal needs a kind — use `'lxc'` as the placeholder, since `vmid: 0` already marks the draft incomplete and `syncDraft` overwrites both as soon as options load.
 
-- [ ] **Step 4: Run and commit**
+- [ ] **Step 16: Check the picker's own tests**
 
-Run: `npx vitest run test/proxmoxAssociation.test.js && npm run typecheck`
-Expected: tests PASS; typecheck errors now only in `dashboard.ts` / `main.ts` / `paneLifecycle.ts`.
+Run: `npx vitest run test/proxmoxAssociation.test.js`
+Expected: PASS. Typecheck still fails in `dashboard.ts` / `main.ts` / `paneLifecycle.ts` — Part D closes them. **Do not commit yet.**
 
-```bash
-git add src/web/proxmoxAssociation.ts test/proxmoxAssociation.test.js
-git commit -m "feat(ui): the association picker offers VMs as well as containers
+#### Part D — dashboard, sidebar and pane badges
 
-Options are keyed kind:vmid, because vmid alone no longer identifies a draft.
-A kind-only change now counts as a mutation — without that, re-linking a box to
-a vmid that changed type would compare equal and silently do nothing, leaving
-the operator stuck in the mismatch state with a Save button that appears to work."
-```
+Touches `src/web/dashboard.ts`, `src/web/main.ts`, `src/web/paneLifecycle.ts`. Check
+whether either of `test/dashboard.test.js` / `test/paneLifecycle.test.js` exists with
+`ls test/ | grep -i "dashboard\|paneLifecycle"`; extend whichever does. This part closes
+the remaining typecheck errors and produces no new exports.
 
----
-
-### Task 9: Dashboard, sidebar and pane badges
-
-**Files:**
-- Modify: `src/web/dashboard.ts`, `src/web/main.ts`, `src/web/paneLifecycle.ts`
-- Test: whichever of `test/dashboard.test.js` / `test/paneLifecycle.test.js` exist — check first with `ls test/ | grep -i "dashboard\|paneLifecycle"`
-
-**Interfaces:**
-- Consumes: `proxmoxKind` on status entries (Task 3), `kindLabel` (Task 7), `PveGuestState` (Task 6).
-- Produces: no new exports; this task closes the remaining typecheck errors.
-
-- [ ] **Step 1: Get the exact worklist**
+- [ ] **Step 17: Get the exact worklist**
 
 Run: `npm run typecheck`
 Every remaining error is a site where a renamed type or the new `'mismatch'` state is unhandled. Work the list top to bottom.
 
-- [ ] **Step 2: Handle the new state wherever states are mapped**
+- [ ] **Step 18: Handle the new state wherever states are mapped**
 
 Any `switch`/lookup over a guest state — in `dashboard.ts`'s lamp/mode helpers and `paneLifecycle.ts`'s `lifecycleKeysFor` — needs a `'mismatch'` arm. Treat it exactly as `'unknown'`: no lifecycle keys, and a neutral (not green) lamp. `paneLifecycle.ts`'s `lifecycleKeysFor` must return `[]`, matching Task 7's `actionsForState`.
 
-- [ ] **Step 3: Render the CT/VM badge**
+- [ ] **Step 19: Render the CT/VM badge**
 
 Wherever a box's Proxmox state is already shown from the status snapshot, add the kind label from `proxmoxKind`, guarding for absence (a box with no Proxmox link has none):
 
@@ -1328,32 +1284,50 @@ const kind = status?.proxmoxKind;
 
 Read `DESIGN.md` before styling it — that document outranks ad-hoc styling decisions.
 
-- [ ] **Step 4: Verify clean**
+- [ ] **Step 20: Verify clean**
 
 Run: `npm test`
 Expected: PASS, including `npm run typecheck` which `npm test` runs first.
 
-- [ ] **Step 5: Verify the rename left nothing behind**
+- [ ] **Step 21: Verify the rename left nothing behind**
 
 ```bash
 grep -rn "linkedContainers\|nodeContainers\|listNodeContainers\|getLinkedContainers\|PveContainerState\|PveLinkedContainer\|PveNodeContainer\|renderContainersTab\|containerMatches\|pve-container\|proxmox/containers" src/ test/
 ```
 Expected: **zero hits.**
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 22: Commit — one commit for the whole web client**
+
+Only now, with `npm test` green, does anything get committed. This is deliberately a
+single commit: the type rename breaks every consumer at once, so any split would put
+non-typechecking commits in history.
 
 ```bash
-git add src/web
-git commit -m "feat(ui): badge linked boxes CT or VM and handle the mismatch state
+git add -A src/web test/proxmoxGuests.test.js test/proxmoxWebClient.test.js test/proxmoxAssociation.test.js
+git status --short   # confirm the rename registered as R, not D+A
+git commit -m "feat(ui): the Containers tab becomes the Guests tab
 
-Closes the rename: no 'container' spelling remains in the Proxmox subsystem.
-'mismatch' is treated as 'unknown' everywhere a state is mapped — no lifecycle
-keys, neutral lamp."
+Web types take the guest spelling and carry the kind: PveContainerState ->
+PveGuestState (gaining 'mismatch'), PveLinkedContainer -> PveLinkedGuest,
+PveNodeContainer -> PveNodeGuest.
+
+Rows carry a CT/VM badge, the filter matches it, and a 'mismatch' row explains
+itself and offers Edit link instead of a dead end. Deprovision copy names the
+grace period and says disks for a VM, volumes for a container.
+
+The picker's options are keyed kind:vmid, because vmid alone no longer
+identifies a draft, and a kind-only change now counts as a mutation — without
+that, re-linking a box to a vmid that changed type would compare equal and
+silently do nothing, leaving the operator stuck in the mismatch state with a
+Save button that appears to work.
+
+One commit rather than four: renaming the types breaks every consumer at once,
+so a split would put three non-typechecking commits in history."
 ```
 
 ---
 
-### Task 10: Documentation and live validation
+### Task 7: Documentation and live validation
 
 **Files:**
 - Modify: `CLAUDE.md`, `AGENTS.md`, `README.md`
@@ -1454,10 +1428,10 @@ Only after validation passes, follow the release checklist in `CLAUDE.md`: `npm 
 
 ## Self-Review
 
-**Spec coverage.** Every section of the design maps to a task: data model → Task 1; API client → Task 2; inventory (all six changes) → Task 3; lifecycle manager → Task 4; routes → Task 5; web types → Task 6; guests tab → Task 7; association picker → Task 8; badges and mismatch handling → Task 9; docs, the CSS zero-hits grep, browser verification, and the deprovision safety rule → Tasks 7 and 10.
+**Spec coverage.** Every section of the design maps to a task: data model → Task 1; API client → Task 2; inventory (all six changes) → Task 3; lifecycle manager → Task 4; routes → Task 5; web types, guests tab, association picker, badges and mismatch handling, plus the CSS zero-hits grep → Task 6 (Parts A-D); docs, browser verification, and the deprovision safety rule → Task 7.
 
-**Placeholder scan.** No "TBD", no "add error handling", no "similar to Task N". Three steps deliberately defer to inspection rather than prescribing content — Task 1 Step 5 (match the file's existing store helper name), Task 9 Step 1 (work the typecheck error list), and Task 7 Step 6 / Task 9 Step 3 (read `DESIGN.md` before choosing badge styling). Each names exactly what to inspect and what rule governs the choice; inventing colors here would contradict `DESIGN.md`'s authority.
+**Placeholder scan.** No "TBD", no "add error handling", no "similar to Task N". Three steps deliberately defer to inspection rather than prescribing content — Task 1 Step 5 (match the file's existing store helper name), Task 6 Step 17 (work the typecheck error list), and Task 6 Steps 10 and 19 (read `DESIGN.md` before choosing badge styling). Each names exactly what to inspect and what rule governs the choice; inventing colors here would contradict `DESIGN.md`'s authority.
 
-**Type consistency.** `kindLabel` is defined in Task 7 and consumed in Tasks 8-9 under that name. `linkKind` (inventory, Task 3) and `jobKind` (lifecycle, Task 4) are separate module-local helpers with the same logic — deliberately not shared, since neither module imports the other today and a shared import would be the only coupling between them. `PveGuestKind` / `PveGuestState` / `PveLinkedGuest` / `PveNodeGuest` are defined in Task 6 and used consistently after. The mutation discriminator `{ kind: 'link' }` and the guest kind `link.kind` in Task 8 are flagged inline as distinct fields.
+**Type consistency.** `kindLabel` is defined in Task 6 Part B and consumed in Parts C-D under that name. `linkKind` (inventory, Task 3) and `jobKind` (lifecycle, Task 4) are separate module-local helpers with the same logic — deliberately not shared, since neither module imports the other today and a shared import would be the only coupling between them. `PveGuestKind` / `PveGuestState` / `PveLinkedGuest` / `PveNodeGuest` are defined in Task 6 and used consistently after. The mutation discriminator `{ kind: 'link' }` and the guest kind `link.kind` in Task 8 are flagged inline as distinct fields.
 
-**One risk the plan does not eliminate.** Task 6 deliberately leaves the tree type-unclean across three commits, with a stated alternative for anyone who wants every commit green. That is the trade for keeping the rename reviewable in layers rather than one enormous commit.
+**One risk the plan does not eliminate.** Task 6 is large — four parts and one commit — because renaming the web types breaks every consumer simultaneously. The operator chose this over three non-typechecking commits. Its four parts each end in a green test gate, so a failure localizes even though the commit does not.
