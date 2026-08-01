@@ -5,22 +5,24 @@ type DotClass = 'gray' | 'green' | 'amber' | 'red' | 'auth';
 // Single source of truth for the box status dot. A confirmed Proxmox `stopped`
 // state wins over everything else — SSH is expected to fail against a container
 // you intentionally stopped, so that must render as the calm grey "Stopped", not
-// red. `mismatch` also wins over everything below it, for the opposite reason:
-// it is a CONFIRMED fault (the linked vmid is not our guest — a different guest
-// reused the number), not a stale read, so it must never be masked by a
-// same-colored "Connected"/"Unreachable" verdict. `unknown` PVE state is
-// deliberately NOT handled here: it means the PVE read failed or is stale, and
-// must never grant display authority over a real SSH result — an unreachable
-// box with unknown PVE state still falls through to red. Below that, `needsAuth`
-// wins over a plain unreachable result: a password-auth box whose SSH master
-// expired is not dead, it just needs the user to re-open the terminal and enter
-// the password.
+// red. `unknown` PVE state is deliberately NOT handled here: it means the PVE
+// read failed or is stale, and must never grant display authority over a real
+// SSH result — an unreachable box with unknown PVE state still falls through to
+// red. Below that, `needsAuth` wins over a plain unreachable result: a
+// password-auth box whose SSH master expired is not dead, it just needs the user
+// to re-open the terminal and enter the password. `mismatch` (a different guest
+// now wears this vmid) ranks BELOW both `needsAuth` and `!reachable` — the
+// opposite of `stopped`'s precedence, and deliberately so: `stopped` is
+// *expected* to be unreachable, so gray-before-red is correct for it, but a
+// mismatch says nothing about whether the host answers, so it must never mask
+// a real outage or a needs-login state. It only adds its own amber warning once
+// those are ruled out.
 export function dotClassFor(st: Status | undefined): DotClass {
   if (!st) return 'gray';
   if (st.proxmoxState === 'stopped') return 'gray';
-  if (st.proxmoxState === 'mismatch') return 'amber';
   if (st.needsAuth) return 'auth';
   if (!st.reachable) return 'red';
+  if (st.proxmoxState === 'mismatch') return 'amber';
   return st.tmux === false ? 'amber' : 'green';
 }
 
@@ -45,7 +47,6 @@ export function classifyError(error?: string): string {
 export function dotTitleFor(st: Status | undefined): string {
   if (!st) return 'Status unknown';
   if (st.proxmoxState === 'stopped') return 'Stopped on Proxmox';
-  if (st.proxmoxState === 'mismatch') return 'Proxmox link mismatched — re-link the box';
   if (st.proxmoxState === 'missing' && !st.reachable) return 'Proxmox guest missing';
   if (st.needsAuth) return 'Needs login — click the box (or ↻) to reconnect and enter your password';
   if (!st.reachable) {
@@ -53,6 +54,7 @@ export function dotTitleFor(st: Status | undefined): string {
     const base = reason && reason !== 'Unreachable' ? `Unreachable — ${reason}` : 'Unreachable';
     return st.paused ? `${base}; retrying every 5m, click the box or ↻ to retry now` : base;
   }
+  if (st.proxmoxState === 'mismatch') return 'Proxmox link mismatched — re-link the box';
   return st.tmux === false ? 'Reachable (tmux not running)' : 'Connected';
 }
 
@@ -128,22 +130,28 @@ function metricSegments(m: BoxMetrics | undefined): MetaSegment[] {
 }
 
 // The always-visible second line under a box label, as styled segments.
-// Precedence mirrors dotClassFor/dotTitleFor: a confirmed Proxmox `stopped` box
-// reports its managed state instead of the (expected) SSH failure; `missing`
-// (linked but PVE can't find the guest) is folded in mid-stack so it stays
-// a warning alongside live metrics while still reachable, and only escalates to
-// the crit "Guest missing" once SSH also fails. `mismatch` (a different guest
-// now wears this vmid) gets the same mid-stack warning treatment as `missing`
-// while reachable — unlike `missing`, it does not get its own crit escalation
-// when unreachable, since an unreachable+mismatched box is already fully
-// explained by the plain SSH-failure segment below. `unknown` PVE state is not
-// checked here — it must never suppress the plain reachable/unreachable read
-// below. Reachable (no special PVE state) → `[cpu, mem, disk]` from the metrics
-// piggybacked on the status probe; only the cpu segment is colored (by load
-// severity). Empty when no metrics were collected (a box you have a terminal
-// open to, or a non-Linux host). Unreachable → a single crit (red) segment with
-// the classified reason; needsAuth → a single auth (purple, matching the dot)
-// "Needs login" segment, so it reads as an action, not an error.
+// Precedence mirrors dotClassFor/dotTitleFor, including the asymmetry between
+// `stopped` and `mismatch`: a confirmed Proxmox `stopped` box reports its
+// managed state instead of the (expected) SSH failure, ranking above
+// needsAuth/unreachable, because `stopped` predicts unreachability. `missing`
+// (linked but PVE can't find the guest) is folded in mid-stack — a warning
+// alongside live metrics while still reachable, escalating to the crit "Guest
+// missing" once SSH also fails, both still ahead of needsAuth/unreachable
+// since a genuinely missing guest is itself the more relevant fact. `mismatch`
+// (a different guest now wears this vmid) instead ranks BELOW needsAuth and
+// unreachable — it predicts nothing about reachability, so a mismatched box
+// that also can't be reached shows the ordinary crit SSH-failure segment with
+// no mention of mismatch, and a mismatched box needing login shows the
+// ordinary auth segment; only once both are ruled out does the reachable
+// mid-stack "Proxmox link mismatch" warning (with live metrics) appear.
+// `unknown` PVE state is not checked here — it must never suppress the plain
+// reachable/unreachable read below. Reachable (no special PVE state) →
+// `[cpu, mem, disk]` from the metrics piggybacked on the status probe; only
+// the cpu segment is colored (by load severity). Empty when no metrics were
+// collected (a box you have a terminal open to, or a non-Linux host).
+// Unreachable → a single crit (red) segment with the classified reason;
+// needsAuth → a single auth (purple, matching the dot) "Needs login" segment,
+// so it reads as an action, not an error.
 export function metaSegmentsFor(st: Status | undefined): MetaSegment[] {
   if (!st) return [];
   if (st.proxmoxState === 'stopped') return [{ text: `Stopped | ${st.proxmoxNode ?? 'PVE'} / ${st.proxmoxVmid ?? '?'}` }];
