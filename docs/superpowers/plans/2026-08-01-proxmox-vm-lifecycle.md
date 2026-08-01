@@ -926,15 +926,23 @@ the existing 'shutdown failure never escalates' invariant is untouched."
 
 ---
 
-### Task 5: Rename the routes to /guests
+### Task 5: Rename the routes to /guests, and persist the kind on manual link
 
 **Files:**
-- Modify: `src/server/server.js:1164`, `:1169`, `:1186`, `:1202`
+- Modify: `src/server/server.js:1164`, `:1169`, `:1186`, `:1202`, `:1217`
 - Test: `test/server.test.js`, `test/proxmoxRoutes.test.js`
 
 **Interfaces:**
 - Consumes: `getLinkedGuests` / `listNodeGuests` (Task 3), already wired in Task 3 Step 6.
-- Produces: `GET /api/proxmox/guests` and `GET /api/proxmox/hosts/:id/nodes/:node/guests`. `POST /api/proxmox/lifecycle-jobs` is unchanged — it was already kind-neutral.
+- Produces: `GET /api/proxmox/guests` and `GET /api/proxmox/hosts/:id/nodes/:node/guests`. `POST /api/proxmox/lifecycle-jobs` is unchanged — it was already kind-neutral. `PUT /api/boxes/:id/proxmox` persists the guest kind.
+
+> **Added during execution.** The Task 3 review surfaced a defect in this plan:
+> `PUT /api/boxes/:id/proxmox` builds its `setProxmoxLink` write from
+> `{ hostId, node, vmid, endpoint }` and never persists a kind, so `normalize()`
+> defaults it to `'lxc'`. Manually linking a box to a VM would therefore store it
+> as a container and the next inventory refresh would report `'mismatch'`,
+> refusing every lifecycle action — breaking the feature's primary use case.
+> Steps 6-8 below fix it. No other task touches this route's body handling.
 
 - [ ] **Step 1: Point the existing route tests at the new paths**
 
@@ -976,7 +984,66 @@ If any test asserts that exact 409 string, update it to match.
 Run: `npx vitest run test/server.test.js test/proxmoxRoutes.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Write the failing manual-link test**
+
+Append to `test/server.test.js`, matching that file's existing helper for building an
+app instance and an authenticated request — read a nearby route test and follow it
+rather than inventing a new harness:
+
+```js
+test('manually linking a box to a VM persists the discovered guest kind', async () => {
+  // The inventory reports vmid 200 on this node as a qemu guest. Linking must
+  // store kind 'qemu' — storing the 'lxc' default would make the very next
+  // inventory refresh report a mismatch and refuse every lifecycle action.
+  const res = await authedPut(app, `/api/boxes/${box.id}/proxmox`, { hostId: 'H1', node: 'pve', vmid: 200 });
+  expect(res.statusCode).toBe(200);
+  const stored = await store.getBox(box.id);
+  expect(stored.proxmox).toMatchObject({ vmid: 200, kind: 'qemu' });
+});
+```
+
+Wire the test's fake `proxmoxInventory.listNodeGuests` to return both a `lxc` guest and
+a `qemu` guest so the assertion distinguishes the discovered kind from the default. If
+the file's existing Proxmox-route tests already share such a fake, extend it rather than
+adding a second one.
+
+- [ ] **Step 7: Run it and watch it fail**
+
+Run: `npx vitest run test/server.test.js -t 'persists the discovered guest kind'`
+Expected: FAIL — `stored.proxmox.kind` is `'lxc'`, because the route never writes one.
+
+- [ ] **Step 8: Persist the kind from the discovered target**
+
+`src/server/server.js:1217` currently reads:
+
+```js
+      return await store.setProxmoxLink(box.id, { hostId: host.id, node: req.body.node, vmid: Number(req.body.vmid), endpoint: host.endpoint });
+```
+
+Change it to carry the kind from `target` — the guest the route already looked up and
+verified at line 1213:
+
+```js
+      // The kind comes from the guest the inventory actually found, never from
+      // req.body: the client cannot be trusted to say what type a vmid is, and
+      // the route has already proven this vmid exists on this node.
+      return await store.setProxmoxLink(box.id, { hostId: host.id, node: req.body.node, vmid: Number(req.body.vmid), kind: target.kind, endpoint: host.endpoint });
+```
+
+Leave the `assertProxmoxLinkInput(req.body, …)` call at line 1208 as it is. It still
+guards a client-supplied `kind` against the allowlist, which is correct defence in
+depth even though the value written no longer comes from the body.
+
+While here, the two remaining "container" strings in this route's error messages
+(lines 1214, 1215: `'proxmox container not found'`, `'proxmox container is already
+linked'`) should become "guest". Update any test asserting those exact strings.
+
+- [ ] **Step 9: Run and watch it pass**
+
+Run: `npx vitest run test/server.test.js test/proxmoxRoutes.test.js`
+Expected: PASS.
+
+- [ ] **Step 10: Commit**
 
 ```bash
 git add src/server/server.js test/server.test.js test/proxmoxRoutes.test.js
@@ -984,7 +1051,15 @@ git commit -m "refactor(pve): rename the container routes to /guests
 
 /api/proxmox/containers -> /api/proxmox/guests, and the per-node listing
 likewise. /api/proxmox/lifecycle-jobs was already kind-neutral and does not
-move. The web client follows in the next commit."
+move.
+
+Also fixes a defect the Task 3 review surfaced: PUT /api/boxes/:id/proxmox
+never persisted a guest kind, so normalize() defaulted every manual link to
+'lxc'. Linking a box to a VM therefore stored it as a container and the next
+inventory refresh reported a mismatch, refusing every lifecycle action. The
+kind now comes from the guest the inventory already found and verified —
+never from the request body, which cannot be trusted to say what type a
+vmid is."
 ```
 
 ---
