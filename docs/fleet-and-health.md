@@ -64,7 +64,9 @@ only. Tune with `TMUXIFIER_HEALTH_HISTORY_MAX`, `TMUXIFIER_HEALTH_EVENTS_MAX`,
 Tmuxifier also watches each box's configured tmux session for Claude Code and raises **claude is
 waiting for input** / **claude finished** (the pane is no longer running Claude Code) events into
 the same timeline — suppressed while you're actively attached to that session, since watching it
-is its own notification. This is ground truth, and it is the **only** source: a small Claude
+is its own notification. The state shows in three places: the pane header chip, the standby
+dashboard's fleet strip, and a small working/waiting badge next to the box label in the
+sidebar. This is ground truth, and it is the **only** source: a small Claude
 Code hook on the box records working/waiting at the moment it changes, and the status probe
 reads that record — so the "waiting" alert fires on the next poll and never false-positives on
 a parked session. There is no output-based fallback: a claude on a box whose setup has not been

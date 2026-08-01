@@ -59,7 +59,9 @@ and the "claude is waiting for input" notifications read — there is no guessin
 output. A box without the hook (or a claude started before the hook landed and not yet
 restarted) simply shows no agent state: if the chip is missing for a running claude, rerun
 setup on that box and restart claude in its session. The hook never blocks or modifies the
-agent: it only writes a one-line state file under `~/.tmuxifier-agent/` on the box.
+agent: it only writes a one-line state file under `~/.tmuxifier-agent/` on the box. Saving
+the Edit Box dialog always starts a setup run — even with every checkbox clear — so a plain
+Edit → Save is all it takes to (re)install the hook.
 
 To remove it from a box: delete the five `tmuxifier-agent-hook` entries from the box's
 `~/.claude/settings.json` and `rm -rf ~/.tmuxifier-agent`. The next setup run reinstalls it —
