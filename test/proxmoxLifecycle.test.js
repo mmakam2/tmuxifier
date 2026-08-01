@@ -702,6 +702,22 @@ test('a kind mismatch refuses every action with a message naming the problem', a
   expect(manager.listJobs()).toEqual([]);
 });
 
+// A template is checked before the deprovision/REQUIRED branches (same spot
+// as the mismatch check above), so it refuses deprovision too — destroying a
+// template destroys every future clone's source.
+test('a template guest refuses every action, including deprovision', async () => {
+  const { manager } = fixture('stopped', {
+    inventory: { refreshBox: async () => ({
+      boxId: 'B1', state: 'stopped', node: 'pve', vmid: 131, kind: 'lxc', template: true,
+    }) },
+  });
+  await expect(manager.createJob({ boxId: 'B1', action: 'start' }))
+    .rejects.toMatchObject({ statusCode: 409, message: /template/ });
+  await expect(manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' }))
+    .rejects.toMatchObject({ statusCode: 409, message: /template/ });
+  expect(manager.listJobs()).toEqual([]);
+});
+
 test('deprovision hands PVE the grace period and the force-stop flag', async () => {
   let state = 'running';
   const shutdowns = [];

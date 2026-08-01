@@ -27,6 +27,7 @@ export interface Status {
   nextProbeAt?: number; sessions?: { name: string; windows: number; attached?: boolean; activity?: number; paneCmd?: string }[];
   metrics?: BoxMetrics; error?: string;
   proxmoxState?: ProxmoxBoxState; proxmoxNode?: string; proxmoxVmid?: number; proxmoxKind?: PveGuestKind;
+  proxmoxTemplate?: boolean;
 }
 // One point of a box's rolling health series (a status poll projected server-side
 // in healthHistory.js). A missing metric is omitted — the sparkline draws a gap.

@@ -481,6 +481,17 @@ test('mergeProxmoxStatus carries the guest kind into the status snapshot', () =>
   expect(merged.b1).toMatchObject({ reachable: true, proxmoxState: 'running', proxmoxKind: 'qemu', proxmoxVmid: 200 });
 });
 
+// The client-side template guard (the picker, the Guests tab) is not
+// sufficient on its own — a second UI surface (paneLifecycle.ts) needs the
+// same flag to refuse a lifecycle action, so it must survive the status
+// snapshot too, not just the inventory record.
+test('mergeProxmoxStatus carries the template flag into the status snapshot', () => {
+  const boxes = [linked('b1', 'pve', 300, 'qemu')];
+  const records = [{ boxId: 'b1', state: 'stopped', node: 'pve', vmid: 300, kind: 'qemu', template: true }];
+  const merged = mergeProxmoxStatus({ b1: { reachable: true } }, boxes, records);
+  expect(merged.b1).toMatchObject({ reachable: true, proxmoxState: 'stopped', proxmoxTemplate: true });
+});
+
 // F1: a qemu template must never look like an ordinary stopped VM in the
 // picker — PVE marks it template: 1 on both the qemu and lxc index rows.
 test('listNodeGuests carries the template flag, defaulting false when PVE omits it', async () => {

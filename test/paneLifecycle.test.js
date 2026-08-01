@@ -43,6 +43,13 @@ test('a setting-up pane offers nothing even while the guest runs', () => {
   expect(lifecycleKeysFor('setup', 'running')).toEqual([]);
 });
 
+// mergeProxmoxStatus (proxmoxInventory.js) now carries the template flag into
+// the status snapshot specifically so this can be enforced here too: a
+// template must never offer Start just because paneState reads 'stopped'.
+test('a template guest offers no lifecycle key even for an otherwise-startable stopped pane', () => {
+  expect(lifecycleKeysFor('stopped', 'stopped', true)).toEqual([]);
+});
+
 test('deprovision is never offered', () => {
   const everyKey = ['terminal', 'stopped', 'setup'].flatMap((pane) =>
     ['running', 'stopped', 'missing', 'unknown', 'mismatch'].flatMap((pve) => lifecycleKeysFor(pane, pve)));

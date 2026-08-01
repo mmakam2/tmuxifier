@@ -21,6 +21,7 @@ export function mergeProxmoxStatus(snapshot, boxes, records) {
       proxmoxNode: record.node,
       proxmoxVmid: record.vmid,
       proxmoxKind: record.kind,
+      proxmoxTemplate: record.template,
     };
   }
   return next;

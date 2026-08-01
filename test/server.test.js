@@ -1131,6 +1131,26 @@ test('manually linking a box to a VM persists the discovered guest kind', async 
   expect(stored.proxmox).toMatchObject({ vmid: 200, kind: 'qemu' });
 });
 
+// The association picker already disables a template client-side, but that
+// guard does not hold on its own — the route must refuse it independently,
+// since destroying a linked-then-deprovisioned template destroys every
+// future clone's source.
+test('linking a box to a template guest is refused', async () => {
+  const stubs = proxmoxStubs();
+  stubs.proxmoxInventory.listNodeGuests = async () => [
+    { hostId: 'H1', node: 'pve', kind: 'qemu', vmid: 300, name: 'vm-template', state: 'stopped', linkedBoxId: null, template: true },
+  ];
+  const store = createStore({ dataDir: dir });
+  const box = await store.addBox({ host: '192.168.1.10', label: 'dev-03' });
+  app = await makeApp({ ...stubs, store });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'PUT', url: `/api/boxes/${box.id}/proxmox`, headers, payload: { hostId: 'H1', node: 'pve', vmid: 300 } });
+  expect(res.statusCode).toBe(409);
+  expect(res.json()).toEqual({ error: 'proxmox guest is a template' });
+  expect((await store.getBox(box.id)).proxmox).toBeUndefined();
+});
+
 test.each([400, 404, 409, 502])('lifecycle service statusCode %s is preserved', async (statusCode) => {
   const stubs = proxmoxStubs();
   app = await makeApp({ ...stubs, lifecycleManager: {

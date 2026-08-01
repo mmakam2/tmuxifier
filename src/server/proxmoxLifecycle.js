@@ -228,6 +228,10 @@ export function createProxmoxLifecycleManager({
     // "start requires stopped" would send the operator debugging the wrong thing
     // when the real problem is that this vmid is not the guest they linked.
     if (current.state === 'mismatch') throw serviceError(409, current.error || 'proxmox guest kind mismatch');
+    // Checked before the deprovision/REQUIRED branches, same spot as the
+    // mismatch refusal above, so it covers deprovision too — destroying a
+    // template destroys every future clone's source.
+    if (current.template) throw serviceError(409, 'proxmox guest is a template');
     if (action === 'deprovision') {
       if (input.confirmName !== box.label) throw serviceError(409, 'confirmation name does not match');
       if (!['running', 'stopped', 'missing'].includes(current.state)) throw serviceError(409, `deprovision cannot run from ${current.state}`);

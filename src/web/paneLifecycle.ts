@@ -40,7 +40,11 @@ const RUNNING_KEYS: LifecycleKey[] = [
 // here would interrupt the job that just provisioned it. 'missing', 'unknown'
 // and 'mismatch' all fall through to no keys: the last of those because the
 // guest at this vmid may not be ours, matching proxmoxGuests.ts's actionsForState.
-export function lifecycleKeysFor(paneState: PaneState, pveState: PveGuestState | undefined): LifecycleKey[] {
+// template overrides paneState too — same treatment as 'mismatch' — because
+// paneState alone reads a stopped template exactly like a stopped ordinary
+// guest and would otherwise still offer Start on it.
+export function lifecycleKeysFor(paneState: PaneState, pveState: PveGuestState | undefined, template?: boolean): LifecycleKey[] {
+  if (template) return [];
   if (paneState === 'setup') return [];
   if (paneState === 'stopped') return [START];
   if (pveState === 'running') return RUNNING_KEYS;
@@ -92,7 +96,7 @@ export function chipFor(action: PaneLifecycleAction, status: ChipStatus): Lifecy
   return { text: FAILED[action], cls: 'chip-error', settled: true };
 }
 
-export interface PaneLifecycleInput { paneState: PaneState; pveState: PveGuestState | undefined }
+export interface PaneLifecycleInput { paneState: PaneState; pveState: PveGuestState | undefined; template?: boolean }
 
 export interface PaneLifecycleDeps {
   boxId: string;
@@ -244,7 +248,7 @@ export function buildPaneLifecycle(deps: PaneLifecycleDeps): {
   }
 
   function update(i: PaneLifecycleInput) {
-    const next = lifecycleKeysFor(i.paneState, i.pveState);
+    const next = lifecycleKeysFor(i.paneState, i.pveState, i.template);
     const signature = next.map((k) => k.action).join(',');
     if (chip && !chip.settled) return; // an in-flight job owns the slot
     if (signature === rendered) return; // no change; a settled chip stays put

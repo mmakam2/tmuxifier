@@ -1213,6 +1213,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const target = containers.find((item) => item.vmid === Number(req.body.vmid));
     if (!target) return reply.code(404).send({ error: 'proxmox guest not found' });
     if (target.linkedBoxId && target.linkedBoxId !== box.id) return reply.code(409).send({ error: 'proxmox guest is already linked' });
+    if (target.template) return reply.code(409).send({ error: 'proxmox guest is a template' });
     try {
       // The kind comes from the guest the inventory actually found, never from
       // req.body: the client cannot be trusted to say what type a vmid is, and

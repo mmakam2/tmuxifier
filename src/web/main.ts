@@ -738,7 +738,7 @@ function paneHeaderModelFor(id: string): PaneHeaderModel {
 
 function updatePaneHeaders() {
   for (const [id, update] of paneHeaders) update(paneHeaderModelFor(id));
-  for (const [id, ctl] of paneLifecycles) ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState });
+  for (const [id, ctl] of paneLifecycles) ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState, template: latestStatus[id]?.proxmoxTemplate });
 }
 
 function paneHooks(): PaneHooks {
@@ -784,7 +784,7 @@ function paneHooks(): PaneHooks {
           }, jobId ? { lifecycleJobId: jobId } : { tab: 'Guests', focusBoxId: id }),
           onSettled: () => { fastStatusPoll(id); },
         });
-        ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState });
+        ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState, template: latestStatus[id]?.proxmoxTemplate });
         built.lifecycleSlot.append(ctl.el);
         paneLifecycles.set(id, ctl);
       }
