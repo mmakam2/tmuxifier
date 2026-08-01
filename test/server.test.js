@@ -455,7 +455,7 @@ test('reconnect closes local sessions and best-effort kills remote session', asy
   const calls = [];
   const sessions = {
     open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {},
-    closeKey(id) { calls.push(['closeKey', id]); },
+    closeGroup(group, kind) { calls.push(['closeGroup', group, ...(kind ? [kind] : [])]); },
   };
   const boxActions = {
     async killSession(box) { calls.push(['killSession', box.host, box.sessionName]); },
@@ -476,8 +476,7 @@ test('reconnect closes local sessions and best-effort kills remote session', asy
   expect(res.statusCode).toBe(200);
   expect(res.json()).toEqual({ ok: true });
   expect(calls).toEqual([
-    ['closeKey', box.id],
-    ['closeKey', `provision:${box.id}`],
+    ['closeGroup', box.id],
     ['killSession', 'h1', 'work'],
   ]);
   // Box should still exist (not removed)
@@ -489,7 +488,7 @@ test('reconnect shuts the ssh ControlMaster down before killing the PTY', async 
   const calls = [];
   const sessions = {
     open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {},
-    closeKey(id) { calls.push(['closeKey', id]); },
+    closeGroup(group, kind) { calls.push(['closeGroup', group, ...(kind ? [kind] : [])]); },
   };
   const boxActions = {
     async exitMaster(box) { calls.push(['exitMaster', box.host]); },
@@ -509,7 +508,7 @@ test('reconnect shuts the ssh ControlMaster down before killing the PTY', async 
   // exitMaster must run first: -O exit can only remove the socket while the
   // master is still alive. Killing the PTY first would leave a stale socket.
   expect(calls[0]).toEqual(['exitMaster', 'h1']);
-  expect(calls).toContainEqual(['closeKey', box.id]);
+  expect(calls).toContainEqual(['closeGroup', box.id]);
 });
 
 test('reconnect returns 404 for unknown box', async () => {
@@ -740,7 +739,7 @@ test('POST /api/local-shell/reconnect closes local PTY and kills configured tmux
   const calls = [];
   const sessions = {
     openLocal() {}, open() {}, provision() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {},
-    closeKey(id) { calls.push(['closeKey', id]); },
+    closeGroup(group, kind) { calls.push(['closeGroup', group, ...(kind ? [kind] : [])]); },
   };
   app = await makeApp({
     sessions,
@@ -753,7 +752,7 @@ test('POST /api/local-shell/reconnect closes local PTY and kills configured tmux
   const res = await app.inject({ method: 'POST', url: '/api/local-shell/reconnect', headers });
   expect(res.statusCode).toBe(200);
   expect(res.json()).toEqual({ ok: true });
-  expect(calls).toEqual([['closeKey', '__local__'], ['killLocalSession', 'local-test-reconnect']]);
+  expect(calls).toEqual([['closeGroup', '__local__'], ['killLocalSession', 'local-test-reconnect']]);
 });
 
 test('POST /api/local-shell/reconnect requires auth', async () => {
@@ -812,7 +811,7 @@ test('editing sessionName persists through PATCH', async () => {
 
 test('changing sessionName drops the live PTY so the terminal reattaches to the new session', async () => {
   const closed = [];
-  const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {}, closeKey: (k) => closed.push(k) };
+  const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {}, closeGroup: (g) => closed.push(g) };
   const localApp = await makeApp({ sessions });
   const loginRes = await localApp.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
   const cookie = loginRes.cookies.find((c) => c.name === 'tmuxifier_session');
@@ -1240,7 +1239,7 @@ test('behind a trusted proxy, rate limiting buckets by the forwarded client ip, 
 
 test('changing a connection field (user/port/proxyJump) drops the live PTY like a session change', async () => {
   const closed = [];
-  const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {}, closeKey: (k) => closed.push(k) };
+  const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {}, closeGroup: (g) => closed.push(g) };
   const localApp = await makeApp({ sessions });
   const loginRes = await localApp.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
   const cookie = loginRes.cookies.find((c) => c.name === 'tmuxifier_session');

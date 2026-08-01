@@ -2,8 +2,9 @@ export function createBoxRemoval({ store, sessions, boxActions, statusChecker = 
   return async function removeBox(id) {
     const box = await store.getBox(id);
     if (!box) return { ok: true };
-    sessions?.closeKey?.(box.id);
-    sessions?.closeKey?.(`provision:${box.id}`);
+    // The box's terminals — one per viewer, so there is no fixed set of keys to
+    // name — together with any provision PTY, in one group close.
+    sessions?.closeGroup?.(box.id);
     await store.removeBox(box.id);
     // Drop the checker's per-box backoff/cpu state — ids are UUIDs, so a
     // removed box's entries would otherwise sit in those maps forever.

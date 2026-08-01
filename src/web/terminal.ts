@@ -32,6 +32,36 @@ function execCommandCopy(text: string): boolean {
   }
 }
 
+// Identifies THIS browser tab to the server, which gives it its own ssh and its
+// own `tmux attach` for whatever box it opens. Without it every viewer shared a
+// single screen drawn at a single size — whoever resized last won, and any
+// viewer with a smaller window then received cursor moves past its own last row
+// and column, which renders as smeared and duplicated text.
+//
+// sessionStorage is the right lifetime: it survives a reload (so the reload
+// reattaches to this tab's existing PTY through the grace window, instead of
+// stranding one ssh per refresh) and dies with the tab. A second tab, window or
+// machine gets its own id and therefore its own attach, which is the point.
+const CLIENT_ID_KEY = 'tmuxifier.clientId';
+const CLIENT_ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
+let cachedClientId = '';
+function clientId(): string {
+  if (cachedClientId) return cachedClientId;
+  let id = '';
+  try { id = sessionStorage.getItem(CLIENT_ID_KEY) || ''; } catch { /* storage blocked */ }
+  if (!CLIENT_ID_OK.test(id)) {
+    const raw = typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random()}`;
+    id = raw.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
+    try { sessionStorage.setItem(CLIENT_ID_KEY, id); } catch { /* storage blocked */ }
+  }
+  // Held in memory too, so a tab with storage disabled still keeps ONE id for
+  // its lifetime rather than minting a fresh PTY on every reconnect.
+  cachedClientId = id;
+  return id;
+}
+
 function isMacPlatform(): boolean {
   if (typeof navigator === 'undefined') return false;
   const p = (navigator as unknown as { userAgentData?: { platform?: string } }).userAgentData?.platform
@@ -328,7 +358,7 @@ export function openTerminal(
     // Immediate feedback so opening a box is never a mystery blank cursor — the
     // user knows it's connecting (and that a password prompt may be coming).
     term.write(`\x1b[2m[connecting to ${name}…]\x1b[0m\r\n`);
-    ws = new WebSocket(`${proto}://${location.host}/term?box=${encodeURIComponent(boxId)}&cols=${cols}&rows=${rows}`);
+    ws = new WebSocket(`${proto}://${location.host}/term?box=${encodeURIComponent(boxId)}&cols=${cols}&rows=${rows}&client=${clientId()}`);
     ws.onopen = () => {
       emitConn({ kind: 'open' });
       sendResize();

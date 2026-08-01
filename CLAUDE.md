@@ -221,16 +221,33 @@ pattern for new modules.
   the pane via the same `injectVia` guard uploads use. Audio never leaves the host.
 - `localShellActions.js` — `createLocalShellActions`: provisions the optional local shell
   (`localShell` = `none`/`omz`/`omb`) that backs a terminal on the Tmuxifier host itself.
-- `sessions.js` — PTY lifecycle: PTYs keyed by `boxId`, listeners refcounted, a `graceSeconds`
-  window keeps a dropped PTY alive for seamless reconnects, then it's killed while the on-box tmux
-  session keeps running. `attach` replays the last 64KB of output so a reattaching client isn't
-  looking at a blank screen, and that replay is **prefixed with a reset+clear** (`REPLAY_CLEAR`):
-  a reconnecting client is the common case and its emulator was never cleared, so writing the
-  buffer straight onto the screen it already holds re-runs that window's scrolls and absolute
-  cursor moves over the cells they produced — duplicated lines, characters in the wrong columns.
-  The SGR reset leads because `CSI 2J` fills with the *current* background colour. Do not rely on
-  the attach size-nudge to clean this up: it only makes tmux repaint cells tmux thinks changed,
-  which is why the client's own `[disconnected…]` notice could survive a reattach.
+- `sessions.js` — PTY lifecycle. A PTY is keyed **per viewer**, not per box (`terminalKey(boxId,
+  clientId)` / `localKey(clientId)`), so every browser gets its own ssh and its own `tmux attach`.
+  Keying by box id alone made Tmuxifier a *mirror* rather than a multiplexer: one screen drawn at
+  one size fanned out to every browser, with whichever client resized last deciding that size, so
+  any viewer with a smaller window received cursor moves past its own last row/column and rendered
+  smeared, duplicated text. Sizing across clients is tmux's own `window-size` (default `latest` —
+  most recently used client wins), which is why `buildAttachArgv` must **not** pass `-D` and why
+  Tmuxifier never writes that option into the operator's tmux config.
+  The client id comes from the browser (`sessionStorage`, so it survives a reload but not a new
+  tab) and is charset/length-checked by `safeClientId`, falling back to one `shared` id — which is
+  exactly the old behaviour, so a stale cached bundle keeps working. Because one box now spans
+  many keys, callers act on **groups**: `entry.group` is the box id (`LOCAL_GROUP` for the host
+  shell) and `closeGroup(group, kind?)` replaces the old per-key closes — `kind: 'terminal'`
+  narrows it so editing a box's connection fields can't abort an interactive setup finish on the
+  same box. `hasLiveSessionForBox` asks the group, covering every viewer plus the provision PTY.
+  `maxViewersPerBox` (default 8) bounds browser-minted ids; an unwatched PTY sitting in its grace
+  window yields its slot rather than refusing a real viewer, or a few opened-and-closed tabs would
+  lock a box out for the whole `graceSeconds`.
+  Listeners are refcounted and a `graceSeconds` window keeps a dropped PTY alive for seamless
+  reconnects, then it's killed while the on-box tmux session keeps running. `attach` replays the
+  last 64KB of output so a reattaching client isn't looking at a blank screen, and that replay is
+  **prefixed with a reset+clear** (`REPLAY_CLEAR`): a reconnecting client's emulator was never
+  cleared, so writing the buffer straight onto the screen it already holds re-runs that window's
+  scrolls and absolute cursor moves over the cells they produced. The SGR reset leads because
+  `CSI 2J` fills with the *current* background colour. Do not rely on the attach size-nudge to
+  clean this up: it only makes tmux repaint cells tmux thinks changed, which is why the client's
+  own `[disconnected…]` notice could survive a reattach.
 - `status.js` — per-box reachability/status probes; coalesces concurrent probes of the same box
   (in-flight de-dup) so multiple pollers don't fan out duplicate SSH connections. Each probe also
   reports every tmux session's active-pane command and last-output time, plus the box's own

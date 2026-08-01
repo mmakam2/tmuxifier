@@ -10,7 +10,7 @@ import { createLoginRateLimiter } from './rateLimit.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
 import { buildEnsureTmuxRemote, resolveTools } from './boxActions.js';
 import { assertBoxSafe } from './sshCommand.js';
-import { provisionKey } from './sessions.js';
+import { provisionKey, terminalKey, localKey, LOCAL_GROUP } from './sessions.js';
 import { upsertConfigFile } from './configFile.js';
 import { readJsonSync, writeJsonSync } from './jsonFile.js';
 import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
@@ -711,8 +711,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       // left alone, so the reattach multiplexes over it with no re-auth; a
       // connection-field change makes the old master irrelevant anyway.
       const connectionFields = ['sessionName', 'host', 'user', 'port', 'proxyJump'];
-      if (before && sessions?.closeKey && connectionFields.some((f) => updated[f] !== before[f])) {
-        sessions.closeKey(req.params.id);
+      // Terminals only: an interactive setup finish on this box is someone
+      // part-way through typing an ssh password, and dropping it would abort
+      // the run. Every viewer's terminal goes, since they all connect with the
+      // fields that just changed.
+      if (before && sessions?.closeGroup && connectionFields.some((f) => updated[f] !== before[f])) {
+        sessions.closeGroup(req.params.id, 'terminal');
       }
       return updated;
     }
@@ -752,10 +756,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (boxActions?.exitMaster) {
       try { await boxActions.exitMaster(box); } catch {}
     }
-    if (sessions?.closeKey) {
-      sessions.closeKey(box.id);
-      sessions.closeKey(provisionKey(box.id));
-    }
+    // Every viewer's terminal plus any provision PTY — one call, because a box
+    // no longer has a fixed set of session keys to enumerate.
+    if (sessions?.closeGroup) sessions.closeGroup(box.id);
     if (boxActions?.killSession) {
       try { void Promise.resolve(boxActions.killSession(box)).catch(() => {}); } catch {}
     }
@@ -1509,7 +1512,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
 
   app.post('/api/local-shell/reconnect', { preHandler: requireAuth }, async () => {
-    if (sessions?.closeKey) sessions.closeKey('__local__');
+    if (sessions?.closeGroup) sessions.closeGroup(LOCAL_GROUP);
     // Kill the underlying tmux session so the next openLocal() creates a fresh
     // session with the current shell framework, not reattach to the old one.
     try { await killLocalSession(localSession); } catch {}
@@ -1532,7 +1535,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
         let entry;
         try {
-          entry = sessions.openLocal({ key: '__local__', shell: config.localShell, size });
+          entry = sessions.openLocal({ key: localKey(req.query.client), shell: config.localShell, size });
         } catch (err) {
           const msg = err?.message || 'session error';
           try { socket.send(msg); } catch {}
@@ -1651,7 +1654,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
       let entry;
       try {
-        entry = sessions.open({ key: boxId, box, session: box.sessionName, size });
+        // Keyed per viewer, not per box: each browser gets its own ssh and its
+        // own `tmux attach`, so tmux sizes each client's screen itself instead
+        // of Tmuxifier mirroring one screen at one size to all of them. The
+        // client id is stable across that browser's reconnects, so the grace
+        // window still hands the same PTY back.
+        entry = sessions.open({ key: terminalKey(boxId, req.query.client), box, session: box.sessionName, size });
       } catch (err) {
         const msg = err?.message || 'session error';
         try { socket.send(msg); } catch {}

@@ -19,8 +19,21 @@ test('buildAttachArgv: alias-only box', () => {
     '-o', 'ServerAliveInterval=15',
     '-o', 'ServerAliveCountMax=3',
     'prod',
-    'tmux -u new-session -A -D -s web',
+    'tmux -u new-session -A -s web',
   ]);
+});
+
+// `-D` (detach every other client) was correct while Tmuxifier mirrored ONE
+// `tmux attach` to every browser: there was only ever one client, and the flag
+// stopped a stale one from holding the session. Now each viewer gets its own
+// attach so tmux can size each client's screen independently, and `-D` would
+// make every newly opened browser kick off the machine you just walked away
+// from. Sizing across clients is tmux's own `window-size` option, whose default
+// (`latest`, tmux 3.1+) is exactly "the most recently used client wins".
+test('buildAttachArgv: no -D, so a second viewer does not detach the first', () => {
+  const remote = buildAttachArgv({ host: 'prod' }, 'web').at(-1);
+  expect(remote).toBe('tmux -u new-session -A -s web');
+  expect(remote).not.toContain('-D');
 });
 
 test('buildAttachArgv: tmux is launched with -u so glyphs survive a C/POSIX box locale', () => {
@@ -52,7 +65,7 @@ test('buildAttachArgv: user/port/proxyJump and policy override', () => {
 
 test('buildAttachArgv: startupCommand is single-quoted for the remote shell', () => {
   const argv = buildAttachArgv({ host: 'h', startupCommand: "echo 'hi'" }, 'web');
-  expect(argv[argv.length - 1]).toBe("tmux -u new-session -A -D -s web 'echo '\\''hi'\\'''");
+  expect(argv[argv.length - 1]).toBe("tmux -u new-session -A -s web 'echo '\\''hi'\\'''");
 });
 
 test('buildProbeArgv: batch mode, no PTY, carries remote cmd', () => {
