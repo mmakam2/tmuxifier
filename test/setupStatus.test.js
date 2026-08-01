@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { setupStatusText, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, blocksTerminal } from '../src/web/setupStatus.ts';
+import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, blocksTerminal } from '../src/web/setupStatus.ts';
 
 test('status text covers each state', () => {
   expect(setupStatusText({ status: 'running', phase: 'waiting-ssh' })).toMatch(/waiting/i);
@@ -29,6 +29,22 @@ test('badge distinguishes the two interactive needs', () => {
   expect(setupBadge('needs-interactive', 'ssh')?.text).toMatch(/password/i);
   expect(setupBadge('needs-interactive', 'sudo')?.text).toMatch(/sudo/i);
   expect(setupBadge('needs-interactive', 'ssh')?.cls).toContain('warn');
+});
+
+// The tone is what colours the panel's status line. `needs-interactive` is a
+// job waiting on the operator, not a failed one — DESIGN.md gives that state to
+// Safety Orange, and painting it LED Red made an onboarding pause read as an
+// error the user could only close.
+test('needs-interactive is an attention tone, never an error tone', () => {
+  expect(setupStatusTone('needs-interactive')).toBe('attention');
+});
+
+test('tone per state', () => {
+  expect(setupStatusTone('running')).toBe('');
+  expect(setupStatusTone('done')).toBe('success');
+  expect(setupStatusTone('error')).toBe('error');
+  expect(setupStatusTone('interrupted')).toBe('error');
+  expect(setupStatusTone('superseded')).toBe('');
 });
 
 test('actions per state', () => {

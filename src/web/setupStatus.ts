@@ -21,6 +21,23 @@ export function setupStatusText(job: Pick<SetupJob, 'status' | 'phase' | 'error'
   }
 }
 
+// How a status line for this job should read at a glance. `attention` is the
+// load-bearing one: a `needs-interactive` job has not failed, it is parked
+// waiting for the operator to type a credential. DESIGN.md gives that state to
+// Safety Orange ("operator action needed"), not LED Red ("down, error"), and
+// the panel used to paint it with the same class a failed run got — so an
+// onboarding pause looked like a dead end rather than a prompt.
+export type SetupTone = '' | 'success' | 'error' | 'attention';
+export function setupStatusTone(status: SetupStatus): SetupTone {
+  switch (status) {
+    case 'done': return 'success';
+    case 'needs-interactive': return 'attention';
+    case 'error':
+    case 'interrupted': return 'error';
+    default: return '';
+  }
+}
+
 export type SetupAction = 'finish-interactive' | 'retry' | 'remove' | 'close';
 export function setupActions(status: SetupStatus): SetupAction[] {
   switch (status) {

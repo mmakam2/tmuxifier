@@ -1075,6 +1075,9 @@ button.empty-kbd:hover { color: var(--text); }
 }
 .provision-status.success { color: var(--ok); }
 .provision-status.error { color: var(--crit); }
+/* Parked on the operator, not failed — Safety Orange per the Orange Means You
+   Rule. LED Red here made an onboarding prompt read as a dead end. */
+.provision-status.attention { color: var(--orange); }
 .provision-close {
   background: none;
   border: none;
@@ -1503,6 +1506,25 @@ button.empty-kbd:hover { color: var(--text); }
 }
 .pve-primary:hover { background: linear-gradient(180deg, #ff8a4d, #fb6c1a); }
 .pve-primary:active { transform: translateY(1px); box-shadow: 0 1px 0 #7a2f06, inset 0 1px 0 rgba(255, 255, 255, 0.2); }
+/* A setup job parked on the operator haloes its commit key, so the eye lands on
+   the one press that unblocks onboarding. Outer glow only: the face, border and
+   legend are untouched, so it stays the same commit key rather than becoming a
+   second object. Dropped while the key is disabled — see main.ts/proxmoxUi.ts. */
+.pve-primary.awaiting { animation: commit-key-halo 2.6s ease-in-out infinite; }
+/* An animation outranks :active's own shadow, so stand down for the press and
+   let the key read as pushed. */
+.pve-primary.awaiting:active { animation: none; }
+@keyframes commit-key-halo {
+  0%, 100% { box-shadow: 0 2px 0 #7a2f06, inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 0 10px rgba(255, 106, 26, 0.18); }
+  50%      { box-shadow: 0 2px 0 #7a2f06, inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 0 22px rgba(255, 106, 26, 0.45); }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Still marked, just not moving: the halo holds at its midpoint. */
+  .pve-primary.awaiting {
+    animation: none;
+    box-shadow: 0 2px 0 #7a2f06, inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 0 16px rgba(255, 106, 26, 0.32);
+  }
+}
 /* Secondary button (Inspect, etc.) — a function key. */
 .pve-btn { padding: 7px 12px; border-radius: 6px; border: 1px solid var(--key-border); border-bottom-color: #101216; background: var(--key-face); box-shadow: var(--key-edge); color: var(--muted); cursor: pointer; font-family: var(--face); font-size: 12.5px; }
 .pve-btn:hover { color: var(--text); }

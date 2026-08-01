@@ -1,6 +1,6 @@
 import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent, type SetupJob, type SetupSummary } from './api';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
-import { setupStatusText, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, blocksTerminal } from './setupStatus';
+import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, blocksTerminal } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
 import { sparkline } from './sparkline';
 import { formatEvent, relTime, unseenCountFiltered, notificationsToFire } from './healthEvents';
@@ -1771,7 +1771,8 @@ function openProvisionPanel(box: Box, options: SetupOptionsValues) {
     onJob: (job) => {
       if (!job) return 1500; // transient fetch error — keep trying
       status.textContent = setupStatusText(job);
-      status.className = 'provision-status' + (job.status === 'done' ? ' success' : (job.status === 'error' || job.status === 'interrupted' || job.status === 'needs-interactive') ? ' error' : '');
+      const tone = setupStatusTone(job.status);
+      status.className = 'provision-status' + (tone ? ` ${tone}` : '');
       log.textContent = job.log || '';
       log.scrollTop = log.scrollHeight;
       renderActions(job.status);
@@ -1818,10 +1819,15 @@ function openProvisionPanel(box: Box, options: SetupOptionsValues) {
         refresh();
       }, 'danger'));
       else if (a === 'finish-interactive') {
-        const b = btn('Finish interactively', () => { finishInteractive(); b.disabled = true; }, 'pve-primary');
+        const b = btn('Finish interactively', () => { finishInteractive(); b.disabled = true; pulse(); }, 'pve-primary');
+        // The halo marks the one key the operator has to press — this panel's
+        // whole reason for still being on screen. It drops the moment the key
+        // goes dead, since a pulsing disabled key is a lie.
+        const pulse = () => b.classList.toggle('awaiting', !b.disabled);
         // The poll re-renders these actions while the job stays
         // needs-interactive — keep the button disabled while a session is live.
         b.disabled = interactive.active();
+        pulse();
         actions.append(b);
       }
     }

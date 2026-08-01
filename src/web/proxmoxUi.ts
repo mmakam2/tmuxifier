@@ -200,9 +200,13 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
           if (job.status === 'needs-interactive') {
             const finishBtn = el('button', { type: 'button', class: 'pve-primary' }, ['Finish interactively']) as HTMLButtonElement;
             finishBtn.disabled = setupLauncher.active();
+            // Same halo the provision panel uses: this key is what the paused
+            // job is waiting on. Dropped while the key is dead (live session).
+            finishBtn.classList.toggle('awaiting', !finishBtn.disabled);
             finishBtn.onclick = () => {
               if (setupLauncher.active()) return;
               finishBtn.disabled = true;
+              finishBtn.classList.remove('awaiting');
               const term = el('div', {}); (term as HTMLElement).style.height = '320px'; setupArea.append(term);
               setupLauncher.launch(() => openProvisionTerminal(term as HTMLElement, boxId, job.options, () => { setupLauncher.done(); poller.start(); }));
             };
