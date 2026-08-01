@@ -6,6 +6,7 @@ export function setupStatusText(job: Pick<SetupJob, 'status' | 'phase' | 'error'
       return job.phase === 'waiting-ssh' ? 'Waiting for SSH…'
         : job.phase === 'seeding' ? 'Seeding AI credentials…'
         : job.phase === 'statusline' ? 'Configuring statusline…'
+        : job.phase === 'agent-hooks' ? 'Installing agent hooks…'
         : 'Running setup…';
     case 'done': return 'Setup complete ✓';
     case 'error': return `Setup failed${job.error ? ` — ${job.error}` : ''}`;
@@ -72,10 +73,10 @@ export function formatSeedResults(seed: SeedResult[] | null | undefined): string
     .join(' · ');
 }
 
-// One-line summary of a job's statusline-push outcome, e.g.
-// "statusline ✓" / "statusline skipped (no Claude on the box)".
-// Empty string when nothing was pushed, so callers test it for truthiness and
-// old jobs without a statusline field render nothing.
+// One-line summary of a single push outcome — statusline or agent-hooks, the
+// shape is target-generic — e.g. "statusline ✓" / "agent-hooks skipped (no
+// Claude on the box)". Empty string when nothing was pushed, so callers test
+// it for truthiness and old jobs without the field render nothing.
 export function formatStatuslineResult(statusline: SeedResult | null | undefined): string {
   if (!statusline) return '';
   const r = statusline;

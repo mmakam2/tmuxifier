@@ -87,6 +87,16 @@ test('the statusline phase has its own status text', () => {
   expect(setupStatusText({ status: 'running', phase: 'statusline' })).toBe('Configuring statusline…');
 });
 
+test('running job in the agent-hooks phase reads as installing agent hooks', () => {
+  expect(setupStatusText({ status: 'running', phase: 'agent-hooks', error: null, needs: null }))
+    .toBe('Installing agent hooks…');
+});
+
+test('the agent-hooks result renders through the shared push formatter', () => {
+  expect(formatStatuslineResult({ target: 'agent-hooks', ok: true })).toBe('agent-hooks ✓');
+  expect(formatStatuslineResult({ target: 'agent-hooks', ok: false, skipped: 'no Claude on the box' })).toBe('agent-hooks skipped (no Claude on the box)');
+});
+
 test('statusline result renders applied / skipped / failed / empty', () => {
   expect(formatStatuslineResult({ target: 'statusline', ok: true })).toBe('statusline ✓');
   expect(formatStatuslineResult({ target: 'statusline', ok: false, skipped: 'no Claude on the box' })).toBe('statusline skipped (no Claude on the box)');

@@ -270,7 +270,10 @@ pattern for new modules.
   shell built-ins rather than awk, because the probe runs under whatever PATH the box's
   non-interactive shell provides, and the file is **read, never sourced**. These are the only
   non-numeric `parseMeta` fields, so they carry their own allowlist (a bare token, ≤32 chars):
-  `/etc/os-release` is content from the box and the value reaches the UI.
+  `/etc/os-release` is content from the box and the value reaches the UI. The probe also emits
+  one `__AGENT__` line per `~/.tmuxifier-agent/` marker file (written by the Claude Code hook
+  `claudeAgentHooks.js` pushes), allowlisted by `parseAgentMarks` with the same input distrust —
+  a closed `working`/`waiting` state set and a numeric timestamp, capped at 200 bytes on the box.
 - `statusPoller.js` — single server-side poll loop: probes every box on an interval
   (`statusPollMs`) and caches the snapshot `/api/status` serves, so status SSH volume is
   independent of how many dashboard tabs are open.
@@ -401,7 +404,9 @@ pattern for new modules.
   phase, records the redacted per-target result on `job.seed`, and only then flips to `done`; a
   failed seed is recorded, never promoted to a job failure. An opt-in `statusline` phase
   (injected `pushStatusline`, see `claudeStatusline.js`) runs next on the same terms — recorded on
-  `job.statusline`, never promoted. The box's tmux session is created
+  `job.statusline`, never promoted — followed by the **always-on** `agent-hooks` phase (injected
+  `pushAgentHooks`, see `claudeAgentHooks.js`; no option gate, the box decides), recorded on
+  `job.agentHooks` on the same never-promoted terms. The box's tmux session is created
   **last**, by the injected `ensureSession` step (`buildEnsureSessionRemote`), strictly after the
   seed — a shell reads its rc files once at startup, so a session created earlier (as the setup
   script used to do) holds an environment with no seeded token in it. The setup script therefore
@@ -417,7 +422,10 @@ pattern for new modules.
   command and time since the pane last produced output
   (`agentIdleSec` / `TMUXIFIER_AGENT_IDLE_SEC`, default 20s), and emits edge-triggered
   `agent-input`/`agent-done` events — suppressed while that session is attached, since watching
-  the terminal is its own notification. `onEvent(cb)` is the deferred server-push delivery seam —
+  the terminal is its own notification. When the probe carries a `~/.tmuxifier-agent/` marker for
+  the session (see `claudeAgentHooks.js`) the state is hook-sourced ground truth instead — no
+  clock math, no `unknown`, and the anti-blip working-streak guard is skipped for those edges.
+  `onEvent(cb)` is the deferred server-push delivery seam —
   nothing subscribes to it; browser notifications are instead delivered client-side, by `main.ts`
   polling `GET /api/health/events` and filtering by the kinds enabled in Settings → Notifications
   (`notifyPrefs.ts`).
@@ -504,6 +512,20 @@ pattern for new modules.
   add-vs-edit branching. The box's `settings.json` is merged in place, never overwritten (jq →
   node → python3 fallback chain, atomic temp+rename; a box with none of the three reports
   `error-no-json-tool`). Run by `setupManager.js` as the post-seed `statusline` phase.
+- `claudeAgentHooks.js` — `buildAgentHooksInstallScript` (pure) + `createAgentHooksPusher`: the
+  always-on push of the agent-state hook (`src/server/assets/tmuxifier-agent-hook.sh`) to a box.
+  Structural twin of `claudeStatusline.js` — script text interpolates nothing, the hook file
+  arrives on stdin, the box decides via `command -v claude` — but with no option gate (the
+  framework-clamps precedent) and an array-aware settings.json merge: `hooks` entries are
+  arrays, so the merge is remove-then-append per event (drop entries mentioning
+  `tmuxifier-agent-hook`, append ours), idempotent across reruns and blind to the operator's
+  own hooks. The hook writes `<session>:<state>:<epoch>` markers under `~/.tmuxifier-agent/`
+  on UserPromptSubmit/Stop/Notification/SessionStart and deletes on SessionEnd; the status
+  probe reads them back (`parseAgentMarks` in `status.js`) and `sampleOf` prefers a marker
+  over the output-idle heuristic (`agentSrc: 'hook'`, no 'unknown' path), which also lets
+  `classifyTransitions` skip the anti-blip streak for hook-sourced edges. Run by
+  `setupManager.js` as the post-statusline `agent-hooks` phase, recorded on `job.agentHooks`,
+  never promoted to a job failure.
 - `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`pinnedSocket`/`normFp`) used
   by both the Proxmox and NetBox API clients. Pin mode verifies the pinned fingerprint on each
   request's own connection (`pinnedSocket` via `createConnection`) instead of OpenSSL chain

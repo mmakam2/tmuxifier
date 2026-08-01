@@ -48,8 +48,18 @@ const META_PROBE =
   `printf ' boxNowSec=%s' "$(date +%s)"; ` +
   `echo; } 2>/dev/null;`;
 
+// Marker files written by the on-box Claude Code hook (claudeAgentHooks.js):
+// one `__AGENT__ <session>:<state>:<epoch>` line each. Static and
+// non-interpolated like META_PROBE — no box field reaches it — and fully
+// stderr-silenced so a missing dir or unreadable file can't disturb the
+// reachability classifier. head caps a corrupted marker before it can flood
+// probe stdout; tr strips the trailing newline so each marker is one line.
+const AGENT_PROBE =
+  `if [ -d "$HOME/.tmuxifier-agent" ]; then for f in "$HOME"/.tmuxifier-agent/*; do ` +
+  `[ -f "$f" ] && { printf '__AGENT__ '; head -c 200 "$f" | tr -d '\\n'; echo; }; done; fi 2>/dev/null; `;
+
 export const PROBE_REMOTE =
-  `${META_PROBE} if command -v tmux >/dev/null 2>&1; then tmux ls -F '${STATUS_FMT}' 2>/dev/null || true; else echo __NO_TMUX__; fi`;
+  `${META_PROBE} ${AGENT_PROBE}if command -v tmux >/dev/null 2>&1; then tmux ls -F '${STATUS_FMT}' 2>/dev/null || true; else echo __NO_TMUX__; fi`;
 
 const META_KEYS = new Set([
   'load1', 'load5', 'load15', 'cpus', 'cpuUsageUsec',
@@ -89,6 +99,25 @@ export function parseMeta(stdout) {
   return Object.keys(out).length ? out : null;
 }
 
+// Pull `__AGENT__` marker lines into { session: { state, ts } }. Marker
+// content is a file on the box, so it is input — state is a closed two-value
+// allowlist and ts must be a finite positive number; anything else drops.
+// Colons cannot appear in tmux session names (the invariant STATUS_FMT
+// already relies on), so the split is unambiguous.
+export function parseAgentMarks(stdout) {
+  const out = {};
+  for (const line of String(stdout).split(/\r?\n/)) {
+    if (!line.startsWith('__AGENT__ ')) continue;
+    const parts = line.slice('__AGENT__ '.length).split(':');
+    if (parts.length !== 3) continue;
+    const [session, state, tsRaw] = parts;
+    const ts = Number(tsRaw);
+    if (!session || (state !== 'working' && state !== 'waiting') || !Number.isFinite(ts) || ts <= 0) continue;
+    out[session] = { state, ts };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 // A probe runs with BatchMode=yes, so it can never type a password. When a
 // password-auth box's ControlMaster has expired the probe fails with an auth
 // error rather than a connection error. Surfacing that distinctly lets the UI
@@ -114,7 +143,7 @@ const MUX_STALE_RE = /disabling multiplexing|ControlSocket .* already exists/i;
 export function parseTmuxSessions(stdout) {
   return String(stdout)
     .split(/\r?\n/)
-    .filter((l) => l.trim() && !l.includes('__NO_TMUX__') && !l.startsWith('__META__'))
+    .filter((l) => l.trim() && !l.includes('__NO_TMUX__') && !l.startsWith('__META__') && !l.startsWith('__AGENT__'))
     .map((line) => {
       const [name, windows, attached, activity, paneCmd] = line.split(':');
       return { name, windows: Number(windows), attached: attached === '1', activity: Number(activity), paneCmd: paneCmd || '' };
@@ -179,10 +208,12 @@ export function createStatusChecker({
       }
       const metrics = parseMeta(res.stdout);
       deriveCpuPct(box, metrics);
+      const agentMarks = parseAgentMarks(res.stdout);
       const base = String(res.stdout).includes('__NO_TMUX__')
         ? { reachable: true, tmux: false, sessions: [] }
         : { reachable: true, tmux: true, sessions: parseTmuxSessions(res.stdout) };
-      return metrics ? { ...base, metrics } : base;
+      const withMeta = metrics ? { ...base, metrics } : base;
+      return agentMarks ? { ...withMeta, agentMarks } : withMeta;
     } catch (e) {
       return { reachable: false, error: String((e && e.message) || e) };
     }

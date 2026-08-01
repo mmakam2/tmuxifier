@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseTmuxSessions, parseMeta, createStatusChecker, PROBE_REMOTE } from '../src/server/status.js';
+import { parseTmuxSessions, parseMeta, parseAgentMarks, createStatusChecker, PROBE_REMOTE } from '../src/server/status.js';
 
 test('parseTmuxSessions maps fields', () => {
   const out = 'web:3:1:1718000000\nbuild:1:0:1718000100\n';
@@ -590,4 +590,44 @@ test('parseTmuxSessions tolerates a missing pane command (older format / no pane
 
 test('parseMeta reads boxNowSec (the box clock) when present', () => {
   expect(parseMeta('__META__ boxNowSec=1721350123 memTotalKb=100 memAvailKb=40\n').boxNowSec).toBe(1721350123);
+});
+
+test('PROBE_REMOTE emits __AGENT__ lines from the marker dir, statically', () => {
+  expect(PROBE_REMOTE).toContain('.tmuxifier-agent');
+  expect(PROBE_REMOTE).toContain('__AGENT__');
+  expect(PROBE_REMOTE).toContain('head -c 200');
+});
+
+test('parseAgentMarks extracts allowlisted marker lines', () => {
+  const out = '__META__ cpus=2\n__AGENT__ web:working:1718000000\n__AGENT__ ops:waiting:1718000001\nweb:2:1:1718000000:claude\n';
+  expect(parseAgentMarks(out)).toEqual({
+    web: { state: 'working', ts: 1718000000 },
+    ops: { state: 'waiting', ts: 1718000001 },
+  });
+});
+
+test('parseAgentMarks drops bad state, bad ts, malformed lines, and returns null when nothing survives', () => {
+  expect(parseAgentMarks('__AGENT__ web:running:1718000000\n')).toBeNull();   // state not in allowlist
+  expect(parseAgentMarks('__AGENT__ web:working:soon\n')).toBeNull();          // non-numeric ts
+  expect(parseAgentMarks('__AGENT__ web:working:0\n')).toBeNull();             // non-positive ts
+  expect(parseAgentMarks('__AGENT__ web:working\n')).toBeNull();               // missing field
+  expect(parseAgentMarks('__AGENT__ :working:5\n')).toBeNull();                // empty session
+  expect(parseAgentMarks('web:2:1:1718000000:claude\n')).toBeNull();           // no marker line at all
+});
+
+test('parseTmuxSessions ignores __AGENT__ lines', () => {
+  const out = '__AGENT__ web:working:1718000000\nweb:2:1:1718000000:claude\n';
+  expect(parseTmuxSessions(out)).toEqual([
+    { name: 'web', windows: 2, attached: true, activity: 1718000000, paneCmd: 'claude' },
+  ]);
+});
+
+test('checkBox: attaches agentMarks when the probe carries __AGENT__ lines, omits them otherwise', async () => {
+  const withMark = async () => ({ code: 0, stdout: '__AGENT__ web:waiting:1718000000\nweb:1:0:1718000000:claude\n', stderr: '' });
+  const st = await createStatusChecker({ run: withMark }).checkBox({ host: 'h' });
+  expect(st.agentMarks).toEqual({ web: { state: 'waiting', ts: 1718000000 } });
+  expect(st.sessions).toEqual([{ name: 'web', windows: 1, attached: false, activity: 1718000000, paneCmd: 'claude' }]);
+  const without = async () => ({ code: 0, stdout: 'web:1:0:1718000000:claude\n', stderr: '' });
+  const st2 = await createStatusChecker({ run: without }).checkBox({ host: 'h' });
+  expect(st2.agentMarks).toBeUndefined();
 });

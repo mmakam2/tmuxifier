@@ -51,6 +51,11 @@ export function createSetupManager({
   // Post-setup Claude statusline push. Default null: an unwired manager skips
   // the step, which is what existing tests construct.
   pushStatusline = null,
+  // Post-setup agent-state hooks push (claudeAgentHooks.js). Default null:
+  // an unwired manager skips the step, which is what existing tests
+  // construct. Unlike seed/statusline there is NO options gate — the push is
+  // always-on and the box decides via its own command -v claude check.
+  pushAgentHooks = null,
   load, save,
   hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist,
   now = () => new Date().toISOString(),
@@ -97,7 +102,7 @@ export function createSetupManager({
   }
   function persist() { prune(); save(ordered()); }
   function summary(j) {
-    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, needs: j.needs ?? null, seed: j.seed ?? null, statusline: j.statusline ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
+    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, needs: j.needs ?? null, seed: j.seed ?? null, statusline: j.statusline ?? null, agentHooks: j.agentHooks ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
   }
   function appendLog(j, text) { if (text) j.log = (j.log + text).slice(-maxLogBytes); }
   function normalizeOptions(o = {}) {
@@ -148,6 +153,15 @@ export function createSetupManager({
       persist();
       try { j.statusline = await pushStatusline(box); }
       catch { j.statusline = { target: 'statusline', ok: false, error: 'statusline push failed' }; }
+    }
+    // Push the agent-state hooks (always-on; see claudeAgentHooks.js). The
+    // box decides via a command -v claude check, so a box without Claude
+    // yields a recorded skip. A skip/failure is recorded, never promoted.
+    if (pushAgentHooks && box && !j.cancelled) {
+      j.phase = 'agent-hooks';
+      persist();
+      try { j.agentHooks = await pushAgentHooks(box); }
+      catch { j.agentHooks = { target: 'agent-hooks', ok: false, error: 'agent hooks push failed' }; }
     }
     // Strictly after the seed, so the session's first shell reads rc files that
     // already carry the token. Failure is swallowed: attaching creates the

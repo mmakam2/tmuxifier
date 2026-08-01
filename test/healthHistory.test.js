@@ -356,3 +356,58 @@ test('a working->waiting edge with no prior history still fires (restart toleran
   expect(classifyTransitions(working, waiting, TH, initThresholdState()).events)
     .toContainEqual({ kind: 'agent-input' });
 });
+
+test('sampleOf: a hook marker wins over the idle heuristic in both directions', () => {
+  // Marker says waiting although output is fresh (the parked-pane blip shape).
+  const busy = withAgent({ agentMarks: { web: { state: 'waiting', ts: 990 } } });
+  const s1 = sampleOf(busy, 5, AGENT);
+  expect(s1.agent).toBe('waiting');
+  expect(s1.agentSrc).toBe('hook');
+  // Marker says working although output has been idle past the threshold.
+  const quiet = withAgent({
+    sessions: [{ name: 'web', attached: false, activity: 100, paneCmd: 'claude' }],
+    agentMarks: { web: { state: 'working', ts: 90 } },
+  });
+  const s2 = sampleOf(quiet, 5, AGENT);
+  expect(s2.agent).toBe('working');
+  expect(s2.agentSrc).toBe('hook');
+});
+
+test('sampleOf: hook marker needs no box clock (no unknown on the hook path)', () => {
+  const noClock = withAgent({ metrics: undefined, agentMarks: { web: { state: 'working', ts: 990 } } });
+  expect(sampleOf(noClock, 5, AGENT).agent).toBe('working');
+});
+
+test('sampleOf: marker for another session is ignored, and no claude pane means no agent at all', () => {
+  const otherSession = withAgent({ agentMarks: { ops: { state: 'waiting', ts: 990 } } });
+  const s = sampleOf(otherSession, 5, AGENT);
+  expect(s.agent).toBe('working');          // falls back to the heuristic
+  expect(s.agentSrc).toBeUndefined();       // heuristic samples carry no source tag
+  const noClaude = withAgent({
+    sessions: [{ name: 'web', attached: false, activity: 100, paneCmd: 'bash' }],
+    agentMarks: { web: { state: 'working', ts: 90 } },
+  });
+  expect(sampleOf(noClaude, 5, AGENT).agent).toBeUndefined(); // stale marker for an exited claude is inert
+});
+
+test('classifyTransitions: hook-sourced working→waiting fires agent-input without the streak', () => {
+  const st = initThresholdState();
+  st.agentWorkStreak = 1; // below AGENT_WORK_MIN_SAMPLES
+  const r = classifyTransitions(
+    { up: true, agent: 'working', agentSrc: 'hook', agentAttached: false },
+    { up: true, agent: 'waiting', agentAttached: false },
+    TH, st,
+  );
+  expect(r.events).toEqual([{ kind: 'agent-input' }]);
+});
+
+test('classifyTransitions: heuristic-sourced short run still needs the streak (blip guard intact)', () => {
+  const st = initThresholdState();
+  st.agentWorkStreak = 1;
+  const r = classifyTransitions(
+    { up: true, agent: 'working', agentAttached: false },
+    { up: true, agent: 'waiting', agentAttached: false },
+    TH, st,
+  );
+  expect(r.events).toEqual([]);
+});
