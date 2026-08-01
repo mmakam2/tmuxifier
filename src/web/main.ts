@@ -1,7 +1,7 @@
 import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent, type SetupJob, type SetupSummary } from './api';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
 import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, blocksTerminal } from './setupStatus';
-import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
+import { dotClassFor, dotTitleFor, metaSegmentsFor, agentBadgeFor } from './statusDot';
 import { sparkline } from './sparkline';
 import { formatEvent, relTime, unseenCountFiltered, notificationsToFire } from './healthEvents';
 import { loadNotifyPrefs, enabledKinds } from './notifyPrefs';
@@ -101,6 +101,35 @@ function repaintSparklines() {
   app.querySelectorAll('.box').forEach((li) => {
     const id = (li as HTMLElement).dataset.id;
     if (id) applySparkline(li as HTMLElement, id);
+  });
+}
+
+// In-place agent-badge refresh, the repaintSparklines twin: rows render the
+// badge at build time (createBoxRow) from latestSeries, but health data
+// arrives on its own cadence between row rebuilds, so pollHealth repaints
+// here. The data-agent-badge marker keeps this pass from ever touching the
+// setup badge sharing the same .box-badges slot.
+function applyAgentBadge(badges: Element, id: string) {
+  const existing = badges.querySelector('[data-agent-badge]');
+  const b = agentBadgeFor(latestSeries[id]);
+  if (!b) { existing?.remove(); return; }
+  if (existing) {
+    existing.className = `badge ${b.cls}`;
+    existing.textContent = b.text;
+    return;
+  }
+  const el = document.createElement('span');
+  el.className = `badge ${b.cls}`;
+  el.dataset.agentBadge = '1';
+  el.textContent = b.text;
+  badges.append(el);
+}
+
+function repaintAgentBadges() {
+  app.querySelectorAll('.box').forEach((li) => {
+    const id = (li as HTMLElement).dataset.id;
+    const badges = li.querySelector('.box-badges');
+    if (id && badges) applyAgentBadge(badges, id);
   });
 }
 
@@ -533,6 +562,7 @@ async function pollHealth() {
   try {
     latestSeries = await api.healthSeries();
     repaintSparklines();
+    repaintAgentBadges();
     updatePaneHeaders(); // the agent chip's read arrives with the series
     if (dashTimer) dash?.update({ series: latestSeries });
   } catch {}
@@ -1325,6 +1355,9 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
     badgeEl.textContent = badge.text;
     badgesEl.append(badgeEl);
   }
+  // Agent state rides the same build-time rule as the setup badge above;
+  // pollHealth's repaintAgentBadges() keeps it live between row rebuilds.
+  applyAgentBadge(badgesEl, b.id);
   const metaEl = document.createElement('span');
   metaEl.className = 'box-meta';
   // A real button (sibling of the name button, so valid HTML): native keyboard
@@ -2082,9 +2115,13 @@ function openBoxDialog(box?: Box) {
         close();
         await refresh();
         const so = setupForm.values();
-        if (so.ohMyTmux || so.ohMyZsh || so.ohMyBash || so.tools.length || so.seedAiAuth || so.claudeStatusline) {
-          openProvisionPanel(updatedBox, so);
-        }
+        // Always run setup on edit-save — even with every checkbox clear. The
+        // option-gated guard that used to live here predates the always-on
+        // setup phases (framework-update clamps, the agent-state hooks push):
+        // an all-unchecked run now does real work, and skipping it silently
+        // was exactly how a box missed the hook while its operator believed
+        // Edit → Save had installed it.
+        openProvisionPanel(updatedBox, so);
       } else {
         const host = fields.host.value.trim();
         if (!host) { err.textContent = 'Host is required'; submit.disabled = false; return; }
