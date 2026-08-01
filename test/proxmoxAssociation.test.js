@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { associationMutation, associationSectionVisible } from '../src/web/proxmoxAssociation.ts';
+import { associationMutation, associationSectionVisible, guestOptionValue, parseGuestOption } from '../src/web/proxmoxAssociation.ts';
 
 const current = { hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' };
 
@@ -39,4 +39,28 @@ test('changing only the kind is a real mutation, not a no-op', () => {
     .toEqual({ kind: 'link', link: { hostId: 'H1', node: 'pve', vmid: 131, kind: 'qemu' } });
   expect(associationMutation(current, { mode: 'linked', hostId: 'H1', node: 'pve', vmid: 131, kind: 'lxc' }))
     .toBeNull();
+});
+
+test('guestOptionValue/parseGuestOption round-trip both kinds', () => {
+  expect(guestOptionValue({ kind: 'qemu', vmid: 131 })).toBe('qemu:131');
+  expect(guestOptionValue({ kind: 'lxc', vmid: 200 })).toBe('lxc:200');
+  expect(parseGuestOption('qemu:131')).toEqual({ kind: 'qemu', vmid: 131 });
+  expect(parseGuestOption('lxc:200')).toEqual({ kind: 'lxc', vmid: 200 });
+  // Round trip: decode(encode(x)) === x for both kinds.
+  for (const item of [{ kind: 'qemu', vmid: 131 }, { kind: 'lxc', vmid: 200 }]) {
+    expect(parseGuestOption(guestOptionValue(item))).toEqual(item);
+  }
+});
+
+test('parseGuestOption: an unrecognized kind token defaults to lxc, never qemu', () => {
+  expect(parseGuestOption('bogus:5').kind).toBe('lxc');
+});
+
+// The empty string is what a select's value becomes when nothing is assigned
+// to it (or it is explicitly cleared) — Finding 2's fail-closed fix depends on
+// this producing a vmid that associationMutation's Number.isInteger guard
+// rejects, not a number that happens to collide with a real guest.
+test('parseGuestOption: the empty string (no selection) yields an unusable, non-integer vmid', () => {
+  const parsed = parseGuestOption('');
+  expect(Number.isInteger(parsed.vmid)).toBe(false);
 });

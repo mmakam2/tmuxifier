@@ -184,3 +184,18 @@ test('missing PVE target stays green when SSH works and is red when SSH fails', 
   expect(dotClassFor({ reachable: false, proxmoxState: 'missing' })).toBe('red');
   expect(metaLine({ reachable: false, proxmoxState: 'missing' })).toContain('Guest missing');
 });
+
+// A mismatch is a CONFIRMED fault (the linked vmid is not our guest), unlike
+// 'unknown' (a stale/failed read that must defer to the real SSH result). It
+// must never render as an indistinguishable green "Connected" box — the
+// lifecycle keys are already gone (lifecycleKeysFor), so a green dot here
+// would hide the one signal explaining why they vanished.
+test('a kind mismatch is amber regardless of reachability, names itself, and never swallows live metrics', () => {
+  expect(dotClassFor({ reachable: true, tmux: true, proxmoxState: 'mismatch' })).toBe('amber');
+  expect(dotClassFor({ reachable: false, proxmoxState: 'mismatch' })).toBe('amber');
+  expect(dotTitleFor({ reachable: true, tmux: true, proxmoxState: 'mismatch' })).toMatch(/mismatch/i);
+  const segs = metaSegmentsFor({ reachable: true, tmux: true, proxmoxState: 'mismatch', metrics: { diskPct: 40 } });
+  expect(segs[0]).toMatchObject({ level: 'warn' });
+  expect(segs[0].text).toMatch(/mismatch/i);
+  expect(segs.map((s) => s.text)).toContain('40%'); // metrics still ride alongside the warning
+});

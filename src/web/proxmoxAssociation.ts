@@ -5,6 +5,22 @@ import { el, field } from './dom';
 
 type Draft = { mode: 'unlinked' } | { mode: 'linked'; hostId: string; node: string; vmid: number; kind: PveGuestKind };
 
+// The <select>'s option value/draft round-trip, pulled out as pure functions so
+// the riskiest new mechanism in this module — encoding/decoding kind alongside
+// vmid, since vmid alone no longer identifies a guest — is testable outside a
+// DOM closure. An unrecognized (or absent) kind token decodes to 'lxc' rather
+// than throwing: the only caller that can produce one is parseGuestOption('')
+// (no option selected), and that must fail closed downstream via an unusable
+// vmid, not via an exception here.
+export function guestOptionValue(item: { kind: PveGuestKind; vmid: number }): string {
+  return `${item.kind}:${item.vmid}`;
+}
+
+export function parseGuestOption(value: string): { kind: PveGuestKind; vmid: number } {
+  const [kind, vmid] = value.split(':');
+  return { kind: kind === 'qemu' ? 'qemu' : 'lxc', vmid: Number(vmid) };
+}
+
 export function associationMutation(current: PveBoxLink | undefined, draft: Draft) {
   if (draft.mode === 'unlinked') return current ? { kind: 'unlink' as const } : null;
   if (!draft.hostId || !draft.node || !Number.isInteger(draft.vmid) || draft.vmid < 100) throw new Error('select a Proxmox guest');
@@ -51,18 +67,24 @@ export function createProxmoxAssociationEditor(box: Box | null) {
   async function loadGuests(selected = 0) {
     const rows = await pve.nodeGuests(host.value, node.value);
     guest.replaceChildren(...rows.map((item: PveNodeGuest) => el('option', {
-      value: `${item.kind}:${item.vmid}`,
+      value: guestOptionValue(item),
       disabled: !!item.linkedBoxId && item.linkedBoxId !== box?.id,
     }, [`${item.vmid} | ${kindLabel(item.kind)} | ${item.name} | ${item.state}${item.linkedBoxId && item.linkedBoxId !== box?.id ? ' | linked' : ''}`])));
     if (selected) {
+      // Fail closed: when the stored vmid is no longer among the fetched rows
+      // (the guest was destroyed/recreated — exactly the mismatch case that
+      // routes an operator here via "Edit link"), explicitly clear the value
+      // rather than leaving the browser's default first-option selection in
+      // place. Leaving it would let syncDraft silently build a draft pointing
+      // at an arbitrary, unrelated guest, and Save would re-link to it.
       const match = rows.find((item) => item.vmid === selected);
-      if (match) guest.value = `${match.kind}:${match.vmid}`;
+      guest.value = match ? guestOptionValue(match) : '';
     }
     syncDraft();
   }
   const syncDraft = () => {
-    const [kind, vmid] = guest.value.split(':');
-    draft = { mode: 'linked', hostId: host.value, node: node.value, vmid: Number(vmid), kind: kind === 'qemu' ? 'qemu' : 'lxc' };
+    const parsed = parseGuestOption(guest.value);
+    draft = { mode: 'linked', hostId: host.value, node: node.value, vmid: parsed.vmid, kind: parsed.kind };
   };
   host.addEventListener('change', () => {
     draft = { mode: 'linked', hostId: host.value, node: '', vmid: 0, kind: 'lxc' };
