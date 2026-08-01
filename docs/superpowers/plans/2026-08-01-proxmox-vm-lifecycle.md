@@ -1375,10 +1375,31 @@ Expected: PASS, including `npm run typecheck` which `npm test` runs first.
 
 - [ ] **Step 21: Verify the rename left nothing behind**
 
+Identifiers first:
+
 ```bash
 grep -rn "linkedContainers\|nodeContainers\|listNodeContainers\|getLinkedContainers\|PveContainerState\|PveLinkedContainer\|PveNodeContainer\|renderContainersTab\|containerMatches\|pve-container\|proxmox/containers" src/ test/
 ```
 Expected: **zero hits.**
+
+Then operator-visible English, which the identifier grep cannot see. This gate exists
+because two such strings already slipped through earlier tasks and had to be folded in
+after review caught them:
+
+```bash
+grep -rn "container" src/server/*.js src/web/*.ts | grep -E "'[^']*container|\"[^\"]*container|`[^`]*container"
+```
+
+Every hit that is a **message, label, or copy string an operator can read** must become
+"guest". Comments and internal variable names may keep "container" where they genuinely
+mean an LXC container. One hit is known and must be fixed here:
+
+- `src/server/store.js:140` — `throw new Error('proxmox container is already linked')`.
+  It is operator-visible: `server.js` maps `/already linked/i` to a 409 and forwards
+  `error.message` to the browser, so linking an already-linked **VM** would report
+  "container". Renaming it to `'proxmox guest is already linked'` is safe — the 409
+  mapping regex matches on `already linked` and does not depend on the preceding word.
+  Update any test asserting that exact string.
 
 - [ ] **Step 22: Commit — one commit for the whole web client**
 
