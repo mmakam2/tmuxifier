@@ -116,7 +116,7 @@
 }
 * { box-sizing: border-box; }
 /* The hidden attribute must always win: a class display rule (flex/grid) otherwise
-   beats the UA [hidden] rule — this trap bit .pve-container-row, .radio-group,
+   beats the UA [hidden] rule — this trap bit .pve-guest-row, .radio-group,
    .box-pve-association, and .fleet-bar before this global override. */
 [hidden] { display: none !important; }
 /* Visually hidden but present for assistive tech (the dashboard's h1). */
@@ -1527,21 +1527,36 @@ button.empty-kbd:hover { color: var(--text); }
 }
 .proxmox-btn { padding: 6px 10px; border-radius: 6px; border: 1px solid var(--key-border); border-bottom-color: #101216; background: var(--key-face); box-shadow: 0 1px 0 rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.04); color: var(--muted); cursor: pointer; font-family: var(--face); font-size: 12.5px; }
 .proxmox-btn:hover { color: var(--text); }
-.pve-container-toolbar { min-height: 32px; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
-.pve-container-list { display: flex; flex-direction: column; gap: 6px; }
-.pve-container-row { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(240px, auto); align-items: center; }
-.pve-container-row.focused { border-color: rgba(255, 176, 0, 0.5); }
-.pve-container-row .pve-row-actions { justify-content: flex-end; flex-wrap: wrap; }
-.pve-container-row button.warn { color: var(--warn); }
-.pve-container-search { flex: 1; max-width: 240px; min-width: 0; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border); border-top-color: #1f2228; background: var(--screen); box-shadow: var(--recess); color: var(--text); font-family: var(--face); font-size: 12.5px; }
-.pve-container-search::placeholder { color: var(--dim); }
+.pve-guest-toolbar { min-height: 32px; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+.pve-guest-list { display: flex; flex-direction: column; gap: 6px; }
+.pve-guest-row { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto minmax(240px, auto); align-items: center; }
+.pve-guest-row.focused { border-color: rgba(255, 176, 0, 0.5); }
+.pve-guest-row .pve-row-actions { justify-content: flex-end; flex-wrap: wrap; }
+.pve-guest-row button.warn { color: var(--warn); }
+.pve-guest-search { flex: 1; max-width: 240px; min-width: 0; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border); border-top-color: #1f2228; background: var(--screen); box-shadow: var(--recess); color: var(--text); font-family: var(--face); font-size: 12.5px; }
+.pve-guest-search::placeholder { color: var(--dim); }
 .pve-badge.stopped, .pve-badge.unknown { color: var(--dim); }
 .pve-badge.missing { color: var(--crit); }
+/* mismatch is the state most needing a signal — the guest a row shows may not
+   even be the operator's — so unlike the merely-dim kind/template badges it
+   gets the same amber treatment as 'running', matching dotClassFor's 'amber'
+   verdict for this state (statusDot.ts). */
+.pve-badge.mismatch { color: var(--warn); border-color: rgba(255, 176, 0, 0.4); background: rgba(255, 176, 0, 0.08); }
+/* The CT/VM kind badge sits beside the state badge — a secondary, less
+   emphatic mark (dim legend, no LED color) since kind is identity, not
+   machine state; DESIGN.md reserves LED colors for state semantics only. */
+.pve-badge.kind { color: var(--dim); border-color: var(--border); background: transparent; }
+/* Template is identity too (a guest attribute, not a machine state), so it
+   gets the same dim/transparent treatment as .kind rather than a new color —
+   the marker text itself ("TEMPLATE") is what carries the warning. */
+.pve-badge.template { color: var(--dim); border-color: var(--border); background: transparent; }
+.pve-guest-row .pve-badge-group { display: flex; align-items: center; gap: 4px; }
+.pve-guest-row .pve-err { grid-column: 1 / -1; }
 .pve-deprovision-modal { width: 460px; }
 .pve-warning { margin: 0; color: #ffb0a6; font-size: 12.5px; line-height: 1.5; }
 @media (max-width: 720px) {
-  .pve-container-row { grid-template-columns: minmax(0, 1fr) auto; }
-  .pve-container-row .pve-row-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .pve-guest-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .pve-guest-row .pve-row-actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
 
 /* TrueNAS card: one row per pool under the summary chip. Three columns so the

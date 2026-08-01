@@ -252,7 +252,50 @@ test('setProxmoxLink can move an existing link to a new node, preserving vmid/ho
   const box = await store.addBox({ host: '192.168.1.40', proxmox: { hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' } }, { trustedProxmox: true });
   await store.setProxmoxLink(box.id, { hostId: 'H1', node: 'pve2', vmid: 131, endpoint: 'pve.example.com:8006' });
   const reloaded = (await createStore({ dataDir: dir }).getBox(box.id));
-  expect(reloaded.proxmox).toEqual({ hostId: 'H1', node: 'pve2', vmid: 131, endpoint: 'pve.example.com:8006' });
+  expect(reloaded.proxmox).toEqual({ hostId: 'H1', node: 'pve2', vmid: 131, endpoint: 'pve.example.com:8006', kind: 'lxc' });
+});
+
+test('a link without a kind normalizes to lxc, and an explicit kind is preserved', async () => {
+  const store = createStore({ dataDir: dir });
+  const legacy = await store.addBox(
+    { host: '192.168.1.41', proxmox: { hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' } },
+    { trustedProxmox: true },
+  );
+  expect(legacy.proxmox.kind).toBe('lxc');
+
+  const vm = await store.addBox(
+    { host: '192.168.1.42', proxmox: { hostId: 'H1', node: 'pve', vmid: 132, endpoint: 'pve.example.com:8006', kind: 'qemu' } },
+    { trustedProxmox: true },
+  );
+  expect(vm.proxmox.kind).toBe('qemu');
+});
+
+test('linkKey ignores kind, so one vmid cannot be linked twice under different kinds', async () => {
+  const store = createStore({ dataDir: dir });
+  const first = await store.addBox({ host: '192.168.1.43' });
+  const second = await store.addBox({ host: '192.168.1.44' });
+  const link = { hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' };
+  await store.setProxmoxLink(first.id, { ...link, kind: 'lxc' });
+  await expect(store.setProxmoxLink(second.id, { ...link, kind: 'qemu' })).rejects.toThrow(/already linked/);
+});
+
+test('a legacy link with no kind on disk reads back as lxc, with no write in between', async () => {
+  // Written directly to the file, bypassing addBox/normalize entirely — this is
+  // what every box linked before kind existed actually looks like on disk.
+  const legacyBox = {
+    id: 'legacy-1',
+    host: '192.168.1.45',
+    label: '192.168.1.45',
+    sessionName: 'web',
+    tags: [],
+    source: 'proxmox',
+    proxmox: { hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' },
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+  await fs.writeFile(path.join(dir, 'boxes.json'), JSON.stringify([legacyBox]));
+  const store = createStore({ dataDir: dir });
+  expect((await store.listBoxes())[0].proxmox.kind).toBe('lxc');
+  expect((await store.getBox('legacy-1')).proxmox.kind).toBe('lxc');
 });
 
 test('an explicit null label clears back to the host default', async () => {

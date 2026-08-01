@@ -2,23 +2,23 @@ import { test, expect } from 'vitest';
 import { createProxmoxLifecycleManager } from '../src/server/proxmoxLifecycle.js';
 
 const HOST = { id: 'H1', name: 'lab', endpoint: 'pve.example.com:8006', tokenSecret: 'sek' };
-const BOX = { id: 'B1', label: 'dev-01', host: '192.168.1.10', proxmox: { hostId: 'H1', node: 'pve', vmid: 131, endpoint: HOST.endpoint } };
+const BOX = { id: 'B1', label: 'dev-01', host: '192.168.1.10', proxmox: { hostId: 'H1', node: 'pve', vmid: 131, kind: 'lxc', endpoint: HOST.endpoint } };
 
 function fixture(initialState = 'stopped', overrides = {}) {
   let state = initialState;
   const calls = [];
   const client = {
-    startLxc: async () => { calls.push('start'); state = 'running'; return 'UPID:start'; },
-    shutdownLxc: async () => { calls.push('shutdown'); state = 'stopped'; return 'UPID:shutdown'; },
-    stopLxc: async () => { calls.push('stop'); state = 'stopped'; return 'UPID:stop'; },
-    rebootLxc: async () => { calls.push('reboot'); state = 'running'; return 'UPID:reboot'; },
+    startGuest: async (kind) => { calls.push(`start:${kind}`); state = 'running'; return 'UPID:start'; },
+    shutdownGuest: async (kind, node, vmid, opts) => { calls.push(`shutdown:${kind}`, opts); state = 'stopped'; return 'UPID:shutdown'; },
+    stopGuest: async (kind) => { calls.push(`stop:${kind}`); state = 'stopped'; return 'UPID:stop'; },
+    rebootGuest: async (kind) => { calls.push(`reboot:${kind}`); state = 'running'; return 'UPID:reboot'; },
     taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
     taskLog: async () => [{ n: 1, t: 'task output' }],
   };
   const manager = createProxmoxLifecycleManager({
     boxStore: { getBox: async (id) => id === 'B1' ? BOX : undefined },
     proxmoxStore: { getHost: async () => HOST },
-    inventory: { refreshBox: async () => ({ boxId: 'B1', state, node: 'pve', vmid: 131 }) },
+    inventory: { refreshBox: async () => ({ boxId: 'B1', state, node: 'pve', vmid: 131, kind: 'lxc' }) },
     makeClient: () => client,
     load: () => [], save: () => {}, sleep: async () => {}, pollMs: 0,
     now: () => '2026-07-11T00:00:00.000Z', makeId: () => 'J1',
@@ -39,7 +39,7 @@ test.each([
   expect(summary).toMatchObject({ id: 'J1', action, status: 'running', boxId: 'B1', vmid: 131 });
   await manager._settled(summary.id);
   expect(manager.getJob(summary.id)).toMatchObject({ status: 'done', phase: 'done', error: null });
-  expect(calls).toContain(action);
+  expect(calls).toContain(`${action}:lxc`);
   expect(getState()).toBe(final);
 });
 
@@ -65,7 +65,7 @@ test('one active target rejects a concurrent lifecycle job', async () => {
   const { manager } = fixture('stopped', {
     inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
     makeClient: () => ({
-      startLxc: async () => { state = 'running'; return 'UPID:start'; },
+      startGuest: async () => { state = 'running'; return 'UPID:start'; },
       taskStatus: async () => { await gate; return { status: 'stopped', exitstatus: 'OK' }; },
       taskLog: async () => [],
     }),
@@ -84,7 +84,7 @@ test('overlapping createJob calls admit only one job per target', async () => {
   const { manager } = fixture('stopped', {
     inventory: { refreshBox: async () => { await gate; return { boxId: 'B1', state, node: 'pve', vmid: 131 }; } },
     makeClient: () => ({
-      startLxc: async () => { state = 'running'; return 'UPID:start'; },
+      startGuest: async () => { state = 'running'; return 'UPID:start'; },
       taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
       taskLog: async () => [],
     }),
@@ -105,7 +105,7 @@ test('overlapping createJob calls admit only one job per target', async () => {
 test('task failure is terminal immediately and task logs stay bounded', async () => {
   const { manager } = fixture('stopped', {
     makeClient: () => ({
-      startLxc: async () => 'UPID:start',
+      startGuest: async () => 'UPID:start',
       taskStatus: async () => ({ status: 'stopped', exitstatus: 'permission denied' }),
       taskLog: async () => [{ n: 1, t: '0123456789abcdef' }],
     }),
@@ -123,7 +123,7 @@ test('task polling tolerates a transient status failure', async () => {
   const { manager } = fixture('stopped', {
     inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
     makeClient: () => ({
-      startLxc: async () => { state = 'running'; return 'UPID:start'; },
+      startGuest: async () => { state = 'running'; return 'UPID:start'; },
       taskStatus: async () => { if (++attempts === 1) throw new Error('pveproxy restart'); return { status: 'stopped', exitstatus: 'OK' }; },
       taskLog: async () => [],
     }),
@@ -139,7 +139,7 @@ test('routine action revalidates the stored target before mutating PVE', async (
   const calls = [];
   const { manager } = fixture('stopped', {
     boxStore: { getBox: async () => ++reads === 1 ? BOX : { ...BOX, proxmox: { ...BOX.proxmox, vmid: 999 } } },
-    makeClient: () => ({ startLxc: async () => calls.push('start') }),
+    makeClient: () => ({ startGuest: async () => calls.push('start') }),
   });
   const job = await manager.createJob({ boxId: 'B1', action: 'start' });
   await manager._settled(job.id);
@@ -175,8 +175,8 @@ test('deprovision running container gracefully shuts down, destroys, verifies mi
   const { manager } = fixture('running', {
     inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
     makeClient: () => ({
-      shutdownLxc: async () => { calls.push('shutdown'); state = 'stopped'; return 'UPID:shutdown'; },
-      destroyLxc: async () => { calls.push('destroy'); state = 'missing'; return 'UPID:destroy'; },
+      shutdownGuest: async () => { calls.push('shutdown'); state = 'stopped'; return 'UPID:shutdown'; },
+      destroyGuest: async () => { calls.push('destroy'); state = 'missing'; return 'UPID:destroy'; },
       taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
       taskLog: async () => [],
     }),
@@ -194,7 +194,7 @@ test('deprovision already-stopped skips shutdown', async () => {
   const { manager } = fixture('stopped', {
     inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
     makeClient: () => ({
-      destroyLxc: async () => { calls.push('destroy'); state = 'missing'; return 'UPID:destroy'; },
+      destroyGuest: async () => { calls.push('destroy'); state = 'missing'; return 'UPID:destroy'; },
       taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
       taskLog: async () => [],
     }),
@@ -210,8 +210,8 @@ test('deprovision shutdown failure never escalates to stop or removes the box', 
   const calls = [];
   const { manager } = fixture('running', {
     makeClient: () => ({
-      shutdownLxc: async () => { calls.push('shutdown'); throw new Error('guest did not stop'); },
-      stopLxc: async () => calls.push('stop'), destroyLxc: async () => calls.push('destroy'),
+      shutdownGuest: async () => { calls.push('shutdown'); throw new Error('guest did not stop'); },
+      stopGuest: async () => calls.push('stop'), destroyGuest: async () => calls.push('destroy'),
     }),
     removeLinkedBox: async () => calls.push('remove'),
   });
@@ -240,7 +240,7 @@ test('confirmation mismatch creates no destructive job', async () => {
 test('destroy failure preserves the linked box', async () => {
   const calls = [];
   const { manager } = fixture('stopped', {
-    makeClient: () => ({ destroyLxc: async () => { calls.push('destroy'); throw new Error('storage busy'); } }),
+    makeClient: () => ({ destroyGuest: async () => { calls.push('destroy'); throw new Error('storage busy'); } }),
     removeLinkedBox: async () => calls.push('remove'),
   });
   const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
@@ -256,7 +256,7 @@ test('deprovision forgets the box host key after destroying the container', asyn
   const { manager } = fixture('stopped', {
     inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
     makeClient: () => ({
-      destroyLxc: async () => { calls.push('destroy'); state = 'missing'; return 'UPID:destroy'; },
+      destroyGuest: async () => { calls.push('destroy'); state = 'missing'; return 'UPID:destroy'; },
       taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
       taskLog: async () => [],
     }),
@@ -289,7 +289,7 @@ test('deprovision succeeds even when forgetting the host key rejects', async () 
   const { manager } = fixture('stopped', {
     inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
     makeClient: () => ({
-      destroyLxc: async () => { state = 'missing'; return 'UPID:destroy'; },
+      destroyGuest: async () => { state = 'missing'; return 'UPID:destroy'; },
       taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
       taskLog: async () => [],
     }),
@@ -304,11 +304,11 @@ test('graceful task timeout never calls force stop, destroy, or local removal', 
   const calls = [];
   const { manager } = fixture('running', {
     makeClient: () => ({
-      shutdownLxc: async () => { calls.push('shutdown'); return 'UPID:shutdown'; },
+      shutdownGuest: async () => { calls.push('shutdown'); return 'UPID:shutdown'; },
       taskStatus: async () => ({ status: 'running' }),
       taskLog: async () => [],
-      stopLxc: async () => calls.push('stop'),
-      destroyLxc: async () => calls.push('destroy'),
+      stopGuest: async () => calls.push('stop'),
+      destroyGuest: async () => calls.push('destroy'),
     }),
     removeLinkedBox: async () => calls.push('remove'),
     taskTimeoutMs: -1,
@@ -339,7 +339,7 @@ test('createJob after an unfollowed migration snapshots the drift-followed node 
       },
     },
     makeClient: () => ({
-      startLxc: async (node) => { nodesUsed.push(node); state = 'running'; return 'UPID:start'; },
+      startGuest: async (kind, node) => { nodesUsed.push(node); state = 'running'; return 'UPID:start'; },
       taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
       taskLog: async () => [],
     }),
@@ -368,7 +368,7 @@ test('overlapping createJob calls after a migration still admit only one job per
       return { boxId: 'B1', state, node: 'pve2', vmid: 131 };
     } },
     makeClient: () => ({
-      startLxc: async () => { state = 'running'; return 'UPID:start'; },
+      startGuest: async () => { state = 'running'; return 'UPID:start'; },
       taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
       taskLog: async () => [],
     }),
@@ -412,8 +412,8 @@ test('deprovision releases the NetBox IP after destroy and logs it', async () =>
     boxStore: { getBox: async (id) => id === 'B1' ? BOX_WITH_IP : undefined },
     inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
     makeClient: () => ({
-      shutdownLxc: async () => { state = 'stopped'; return 'UPID:shutdown'; },
-      destroyLxc: async () => { state = 'missing'; return 'UPID:destroy'; },
+      shutdownGuest: async () => { state = 'stopped'; return 'UPID:shutdown'; },
+      destroyGuest: async () => { state = 'missing'; return 'UPID:destroy'; },
       taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
       taskLog: async () => [],
     }),
@@ -447,8 +447,8 @@ test('a failing release never fails the deprovision job', async () => {
     boxStore: { getBox: async (id) => id === 'B1' ? BOX_WITH_IP : undefined },
     inventory: { refreshBox: async () => ({ state, node: 'pve', vmid: 131 }) },
     makeClient: () => ({
-      shutdownLxc: async () => { state = 'stopped'; return 'UPID:shutdown'; },
-      destroyLxc: async () => { state = 'missing'; return 'UPID:destroy'; },
+      shutdownGuest: async () => { state = 'stopped'; return 'UPID:shutdown'; },
+      destroyGuest: async () => { state = 'missing'; return 'UPID:destroy'; },
       taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
       taskLog: async () => [],
     }),
@@ -657,4 +657,119 @@ test('a malformed persisted job row is dropped instead of crashing boot', () => 
   const kept = manager.listJobs();
   expect(kept.map((j) => j.id)).toEqual(['l9']);
   expect(kept[0].status).toBe('interrupted'); // still reconciled
+});
+
+const VM_BOX = { id: 'B1', label: 'vm-01', host: '192.168.1.20', proxmox: { hostId: 'H1', node: 'pve', vmid: 200, kind: 'qemu', endpoint: HOST.endpoint } };
+
+test.each([
+  ['start', 'stopped', 'running'],
+  ['shutdown', 'running', 'stopped'],
+  ['stop', 'running', 'stopped'],
+  ['reboot', 'running', 'running'],
+])('%s runs against a qemu guest and records the kind on the job', async (action, initial, final) => {
+  let state = initial;
+  const { manager, calls } = fixture(initial, {
+    boxStore: { getBox: async (id) => id === 'B1' ? VM_BOX : undefined },
+    inventory: { refreshBox: async () => ({ boxId: 'B1', state, node: 'pve', vmid: 200, kind: 'qemu' }) },
+    makeClient: () => ({
+      startGuest: async (kind) => { calls.push(`start:${kind}`); state = 'running'; return 'UPID:start'; },
+      shutdownGuest: async (kind) => { calls.push(`shutdown:${kind}`); state = 'stopped'; return 'UPID:shutdown'; },
+      stopGuest: async (kind) => { calls.push(`stop:${kind}`); state = 'stopped'; return 'UPID:stop'; },
+      rebootGuest: async (kind) => { calls.push(`reboot:${kind}`); state = 'running'; return 'UPID:reboot'; },
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+      taskLog: async () => [],
+    }),
+  });
+  const summary = await manager.createJob({ boxId: 'B1', action });
+  expect(summary).toMatchObject({ action, kind: 'qemu', vmid: 200 });
+  await manager._settled(summary.id);
+  expect(manager.getJob(summary.id)).toMatchObject({ status: 'done', error: null });
+  expect(calls).toContain(`${action}:qemu`);
+  expect(state).toBe(final);
+});
+
+test('a kind mismatch refuses every action with a message naming the problem', async () => {
+  const { manager } = fixture('running', {
+    inventory: { refreshBox: async () => ({
+      boxId: 'B1', state: 'mismatch', node: 'pve', vmid: 131, kind: 'qemu',
+      error: 'vmid 131 is a qemu guest on this cluster, but this box is linked to a lxc — re-link the box',
+    }) },
+  });
+  await expect(manager.createJob({ boxId: 'B1', action: 'shutdown' }))
+    .rejects.toMatchObject({ statusCode: 409, message: /re-link the box/ });
+  await expect(manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' }))
+    .rejects.toMatchObject({ statusCode: 409, message: /re-link the box/ });
+  expect(manager.listJobs()).toEqual([]);
+});
+
+// A template is checked before the deprovision/REQUIRED branches (same spot
+// as the mismatch check above), so it refuses deprovision too — destroying a
+// template destroys every future clone's source.
+test('a template guest refuses every action, including deprovision', async () => {
+  const { manager } = fixture('stopped', {
+    inventory: { refreshBox: async () => ({
+      boxId: 'B1', state: 'stopped', node: 'pve', vmid: 131, kind: 'lxc', template: true,
+    }) },
+  });
+  await expect(manager.createJob({ boxId: 'B1', action: 'start' }))
+    .rejects.toMatchObject({ statusCode: 409, message: /template/ });
+  await expect(manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' }))
+    .rejects.toMatchObject({ statusCode: 409, message: /template/ });
+  expect(manager.listJobs()).toEqual([]);
+});
+
+test('deprovision hands PVE the grace period and the force-stop flag', async () => {
+  let state = 'running';
+  const shutdowns = [];
+  const calls = [];
+  const { manager } = fixture('running', {
+    deprovisionGraceSec: 90,
+    inventory: { refreshBox: async () => ({ boxId: 'B1', state, node: 'pve', vmid: 131, kind: 'lxc' }) },
+    makeClient: () => ({
+      shutdownGuest: async (kind, node, vmid, opts) => { shutdowns.push([kind, opts]); state = 'stopped'; return 'UPID:shutdown'; },
+      stopGuest: async () => { calls.push('stop'); return 'UPID:stop'; },
+      destroyGuest: async (kind) => { calls.push(`destroy:${kind}`); state = 'missing'; return 'UPID:destroy'; },
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+      taskLog: async () => [],
+    }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id)).toMatchObject({ status: 'done' });
+  expect(shutdowns).toEqual([['lxc', { forceStop: true, timeout: 90 }]]);
+  // The escalation is PVE's, not ours: we never issue a separate stop.
+  expect(calls).toEqual(['destroy:lxc']);
+});
+
+test('a job loaded from history without a kind reads as lxc', async () => {
+  const { manager } = fixture('stopped', {
+    load: () => [{ id: 'OLD', action: 'start', boxId: 'B1', status: 'done', phase: 'done', createdAt: '2026-01-01T00:00:00.000Z', finishedAt: '2026-01-01T00:00:01.000Z', log: '', error: null }],
+  });
+  expect(manager.listJobs()[0]).toMatchObject({ id: 'OLD', kind: 'lxc' });
+});
+
+test("job.kind is pinned to the link, not the refreshed inventory record", async () => {
+  // The link says qemu; the refreshed record disagrees and says lxc, while
+  // still reporting an ordinary actionable state ('stopped'). Mismatch
+  // *detection* is the inventory's job (the 'mismatch' state, covered
+  // elsewhere) — this record is a legal input to the manager, which must
+  // still dispatch on the link's kind, not the record's. A "tidy" refactor
+  // that sourced kind from `current` alongside `node` would dispatch
+  // start:lxc here instead and this test would catch it.
+  const calls = [];
+  let state = 'stopped';
+  const { manager } = fixture('stopped', {
+    boxStore: { getBox: async (id) => id === 'B1' ? VM_BOX : undefined },
+    inventory: { refreshBox: async () => ({ boxId: 'B1', state, node: 'pve', vmid: 200, kind: 'lxc' }) },
+    makeClient: () => ({
+      startGuest: async (kind) => { calls.push(`start:${kind}`); state = 'running'; return 'UPID:start'; },
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+      taskLog: async () => [],
+    }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'start' });
+  expect(job.kind).toBe('qemu');
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id)).toMatchObject({ status: 'done', error: null });
+  expect(calls).toEqual(['start:qemu']);
 });

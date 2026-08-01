@@ -21,6 +21,7 @@ import { createSetupJobPoller } from './setupPoller';
 import logoUrl from './assets/tmuxifier-logo.png';
 import { openProxmoxHub } from './proxmoxUi';
 import { pve } from './proxmox';
+import { kindLabel } from './proxmoxGuests';
 import { nbx } from './netbox';
 import { createDashboard } from './dashboard';
 import { openSettingsModal } from './settingsUi';
@@ -623,9 +624,9 @@ function startDashPolling() {
         if (!hosts.length) {
           dash?.update({ containers: null, nodes: null });
         } else {
-          // Independent fetches: node health still paints when the container
+          // Independent fetches: node health still paints when the guest
           // rollup fails, and vice versa (the paint falls back per side).
-          const [ctr, nds] = await Promise.allSettled([pve.linkedContainers(), pve.clusterNodes()]);
+          const [ctr, nds] = await Promise.allSettled([pve.linkedGuests(), pve.clusterNodes()]);
           dash?.update({
             containers: ctr.status === 'fulfilled' ? ctr.value : null,
             nodes: nds.status === 'fulfilled' ? nds.value : null,
@@ -682,7 +683,7 @@ function ensureTab(id: string) {
 
 // Content states a pane can show instead of a terminal. 'unknown' PVE state is
 // sticky for a pane already showing its stopped panel — a failed/stale PVE read
-// must never be read as "the container started" (see pollStatus).
+// must never be read as "the guest started" (see pollStatus).
 const stoppedShown = new Set<string>();
 
 function paneState(id: string): 'terminal' | 'stopped' | 'setup' {
@@ -737,7 +738,7 @@ function paneHeaderModelFor(id: string): PaneHeaderModel {
 
 function updatePaneHeaders() {
   for (const [id, update] of paneHeaders) update(paneHeaderModelFor(id));
-  for (const [id, ctl] of paneLifecycles) ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState });
+  for (const [id, ctl] of paneLifecycles) ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState, template: latestStatus[id]?.proxmoxTemplate });
 }
 
 function paneHooks(): PaneHooks {
@@ -780,10 +781,10 @@ function paneHooks(): PaneHooks {
             openBox,
             openEditBox: (boxId) => { const target = allBoxes.find((item) => item.id === boxId); if (target) openBoxDialog(target); },
             onBoxLinked: () => { void refresh(); },
-          }, jobId ? { lifecycleJobId: jobId } : { tab: 'Containers', focusBoxId: id }),
+          }, jobId ? { lifecycleJobId: jobId } : { tab: 'Guests', focusBoxId: id }),
           onSettled: () => { fastStatusPoll(id); },
         });
-        ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState });
+        ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState, template: latestStatus[id]?.proxmoxTemplate });
         built.lifecycleSlot.append(ctl.el);
         paneLifecycles.set(id, ctl);
       }
@@ -1596,16 +1597,17 @@ function buildSettingUpPanel(box: Box): HTMLElement {
 }
 
 // A Proxmox-linked box confirmed stopped has no reachable tmux, so instead of
-// a dead terminal its pane shows a static panel with the container's identity
-// and a shortcut into the Proxmox Containers tab (Start / Deprovision live there).
+// a dead terminal its pane shows a static panel with the guest's identity
+// and a shortcut into the Proxmox Guests tab (Start / Deprovision live there).
 function buildStoppedPanel(box: Box): HTMLElement {
   const state = latestStatus[box.id];
+  const kind = state?.proxmoxKind;
   const panel = document.createElement('div');
   panel.className = 'stopped-box-state';
   const title = document.createElement('strong');
   title.textContent = `${box.label} is stopped`;
   const detail = document.createElement('span');
-  detail.textContent = `${state?.proxmoxNode ?? 'Proxmox'} | VMID ${state?.proxmoxVmid ?? box.proxmox?.vmid ?? '-'}`;
+  detail.textContent = `${kind ? `${kindLabel(kind)} | ` : ''}${state?.proxmoxNode ?? 'Proxmox'} | VMID ${state?.proxmoxVmid ?? box.proxmox?.vmid ?? '-'}`;
   const manage = document.createElement('button');
   manage.type = 'button';
   manage.className = 'pve-btn';
@@ -1614,7 +1616,7 @@ function buildStoppedPanel(box: Box): HTMLElement {
     openBox,
     openEditBox: (id) => { const target = allBoxes.find((item) => item.id === id); if (target) openBoxDialog(target); },
     onBoxLinked: () => { void refresh(); },
-  }, { tab: 'Containers', focusBoxId: box.id }));
+  }, { tab: 'Guests', focusBoxId: box.id }));
   panel.append(title, detail, manage);
   return panel;
 }

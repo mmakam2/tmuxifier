@@ -139,7 +139,7 @@ export function createProvisionManager({
 
       if (preset.startAfterCreate) {
         j.phase = 'start'; persist();
-        const sup = await client.startLxc(j.node, j.vmid);
+        const sup = await client.startGuest('lxc', j.node, j.vmid);
         appendLog(j, `# start ${sup}\n`); persist();
         await pollTask(client, j.node, sup, j);
       }
@@ -171,7 +171,7 @@ export function createProvisionManager({
           label: j.hostname, host: boxHost, user: bd.user || 'root',
           sessionName: bd.sessionName || 'web', tags: (j.tags && j.tags.length) ? j.tags : (bd.tags || []),
           source: 'proxmox',
-          proxmox: { hostId: host.id, node: j.node, vmid: j.vmid, endpoint: host.endpoint, ...(j.netboxIpId ? { netboxIpId: j.netboxIpId } : {}) },
+          proxmox: { hostId: host.id, node: j.node, vmid: j.vmid, kind: 'lxc', endpoint: host.endpoint, ...(j.netboxIpId ? { netboxIpId: j.netboxIpId } : {}) },
         }, { trustedProxmox: true });
         j.boxId = box.id;
         if (startSetup && j.setupOptions) {

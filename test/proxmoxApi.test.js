@@ -87,19 +87,19 @@ test('inspectEndpoint returns the cert fingerprint and caValid; unreachable on t
   expect(bad.error).toMatch(/ECONNREFUSED/);
 });
 
-test('listLxc and lifecycle methods encode node/vmid into exact PVE paths', async () => {
+test('listGuests and lifecycle methods encode node/vmid into exact PVE paths', async () => {
   const request = fakeRequest((opts, index) => ({
     status: 200,
     json: { data: index === 0 ? [{ vmid: 131, name: 'dev-01', status: 'running' }] : `UPID:${index}` },
   }));
   const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
 
-  expect(await client.listLxc('pve/a')).toEqual([{ vmid: 131, name: 'dev-01', status: 'running' }]);
-  await client.startLxc('pve/a', 131);
-  await client.shutdownLxc('pve/a', 131);
-  await client.stopLxc('pve/a', 131);
-  await client.rebootLxc('pve/a', 131);
-  await client.destroyLxc('pve/a', 131);
+  expect(await client.listGuests('lxc', 'pve/a')).toEqual([{ vmid: 131, name: 'dev-01', status: 'running' }]);
+  await client.startGuest('lxc', 'pve/a', 131);
+  await client.shutdownGuest('lxc', 'pve/a', 131);
+  await client.stopGuest('lxc', 'pve/a', 131);
+  await client.rebootGuest('lxc', 'pve/a', 131);
+  await client.destroyGuest('lxc', 'pve/a', 131);
 
   expect(request.calls.map((call) => [call.method, new URL(call.url).pathname])).toEqual([
     ['GET', '/api2/json/nodes/pve%2Fa/lxc'],
@@ -132,10 +132,10 @@ test('clusterResources lists cluster-wide guests with their current node', async
   expect(list[0]).toMatchObject({ vmid: 165, node: 'pve-n03', type: 'lxc' });
 });
 
-test('destroyLxc puts purge params in the query string — pveproxy 501s any DELETE with a body', async () => {
+test('destroyGuest puts purge params in the query string — pveproxy 501s any DELETE with a body', async () => {
   const request = fakeRequest(() => ({ status: 200, json: { data: 'UPID:pve:002' } }));
   const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
-  const upid = await client.destroyLxc('pve', 132);
+  const upid = await client.destroyGuest('lxc', 'pve', 132);
   expect(upid).toBe('UPID:pve:002');
   const call = request.calls[0];
   expect(call.method).toBe('DELETE');
@@ -153,4 +153,55 @@ test('clusterNodes lists physical nodes with their health fields', async () => {
   expect(request.calls[0].url).toBe('https://pve.example.com:8006/api2/json/cluster/resources?type=node');
   expect(request.calls[0].method).toBe('GET');
   expect(list).toEqual([{ node: 'pve1', type: 'node', status: 'online', cpu: 0.12, maxcpu: 8, mem: 4, maxmem: 8, uptime: 3600 }]);
+});
+
+test.each(['lxc', 'qemu'])('%s guest actions hit the kind-specific status paths', async (kind) => {
+  const request = fakeRequest(() => ({ status: 200, json: { data: 'UPID:x' } }));
+  const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
+  const base = `https://pve.example.com:8006/api2/json/nodes/pve/${kind}/131`;
+
+  await client.startGuest(kind, 'pve', 131);
+  expect(request.calls[0]).toMatchObject({ method: 'POST', url: `${base}/status/start` });
+
+  await client.stopGuest(kind, 'pve', 131);
+  expect(request.calls[1]).toMatchObject({ method: 'POST', url: `${base}/status/stop` });
+
+  await client.rebootGuest(kind, 'pve', 131);
+  expect(request.calls[2]).toMatchObject({ method: 'POST', url: `${base}/status/reboot` });
+
+  await client.listGuests(kind, 'pve');
+  expect(request.calls[3]).toMatchObject({ method: 'GET', url: `https://pve.example.com:8006/api2/json/nodes/pve/${kind}` });
+});
+
+test('graceful shutdown sends forceStop=0 and no timeout; deprovision escalates via PVE', async () => {
+  const request = fakeRequest(() => ({ status: 200, json: { data: 'UPID:x' } }));
+  const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
+
+  await client.shutdownGuest('qemu', 'pve', 131);
+  expect(request.calls[0].body).toBe('forceStop=0');
+
+  await client.shutdownGuest('qemu', 'pve', 131, { forceStop: true, timeout: 120 });
+  expect(request.calls[1].body).toContain('forceStop=1');
+  expect(request.calls[1].body).toContain('timeout=120');
+});
+
+test('destroyGuest purges disks over DELETE with query params, for both kinds', async () => {
+  const request = fakeRequest(() => ({ status: 200, json: { data: 'UPID:x' } }));
+  const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
+  await client.destroyGuest('qemu', 'pve', 131);
+  const call = request.calls[0];
+  expect(call.method).toBe('DELETE');
+  // pveproxy rejects a DELETE carrying a body, so these ride the query string.
+  expect(call.body).toBeUndefined();
+  expect(call.url).toContain('/nodes/pve/qemu/131?');
+  expect(call.url).toContain('purge=1');
+  expect(call.url).toContain('destroy-unreferenced-disks=1');
+});
+
+test('an unknown guest kind is refused before it can become a path segment', async () => {
+  const request = fakeRequest(() => ({ status: 200, json: { data: 'UPID:x' } }));
+  const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
+  await expect(client.startGuest('../nodes', 'pve', 131)).rejects.toThrow(/guest kind/);
+  await expect(client.destroyGuest(undefined, 'pve', 131)).rejects.toThrow(/guest kind/);
+  expect(request.calls).toHaveLength(0); // nothing reached the wire
 });

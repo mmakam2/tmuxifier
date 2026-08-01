@@ -35,14 +35,28 @@ export function createStore({ dataDir }) {
   const file = path.join(dataDir, 'boxes.json');
 
   async function readAll() {
-    return readJson(file, { fallback: [], validate: Array.isArray });
+    const boxes = await readJson(file, { fallback: [], validate: Array.isArray });
+    // Every reader (listBoxes/getBox/exportBoxes, plus the read half of every
+    // mutation below) goes through readAll, so this is the one place that must
+    // apply the same 'lxc' default normalize() applies on write — otherwise a
+    // box linked before kind existed reports proxmox.kind === undefined until
+    // it next happens to pass through a write. This never rewrites boxes.json;
+    // the default is re-derived on every read, same as normalize()'s.
+    return boxes.map((box) => (box.proxmox
+      ? { ...box, proxmox: { ...box.proxmox, kind: box.proxmox.kind === 'qemu' ? 'qemu' : 'lxc' } }
+      : box));
   }
   async function writeAll(boxes) {
     await writeJson(file, boxes);
   }
   function normalize(spec, base = {}, { trustedProxmox = false } = {}) {
     if (!spec.host || typeof spec.host !== 'string') throw new Error('box requires a host');
-    const link = trustedProxmox ? spec.proxmox : base.proxmox;
+    const raw = trustedProxmox ? spec.proxmox : base.proxmox;
+    // A link written before VM support has no kind, and every one of those is a
+    // container — so defaulting to 'lxc' migrates the whole file by asserting
+    // what is already true. Nothing rewrites boxes.json; the default applies on
+    // read, and an older build simply ignores the extra field.
+    const link = raw ? { ...raw, kind: raw.kind === 'qemu' ? 'qemu' : 'lxc' } : raw;
     return {
       id: base.id || randomUUID(),
       label: spec.label || base.label || spec.host,
@@ -123,7 +137,7 @@ export function createStore({ dataDir }) {
         if (index === -1) throw new Error('box not found');
         const key = linkKey(link);
         if (boxes.some((box) => box.id !== id && box.proxmox && linkKey(box.proxmox) === key)) {
-          throw new Error('proxmox container is already linked');
+          throw new Error('proxmox guest is already linked');
         }
         boxes[index] = normalize(
           { ...boxes[index], proxmox: link },

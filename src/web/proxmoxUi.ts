@@ -7,7 +7,7 @@ import { openProvisionTerminal } from './terminal';
 import { el, input, field, err, openModal, syncTabSelection, wireTabStrip } from './dom';
 import { openSettingsModal } from './settingsUi';
 import { renderPresetsTab } from './proxmoxPresets';
-import { renderContainersTab } from './proxmoxContainers';
+import { renderGuestsTab } from './proxmoxGuests';
 import { renderActivityTab } from './proxmoxActivity';
 import { setupStatusText, formatSeedResults } from './setupStatus';
 import { createInteractiveLauncher } from './interactiveLauncher';
@@ -24,7 +24,7 @@ type HubOpts = {
   onBoxLinked: () => void;
 };
 type HubInitial = { tab?: Tab; focusBoxId?: string; lifecycleJobId?: string };
-const TABS = ['Containers', 'Presets', 'Provision', 'Activity'] as const;
+const TABS = ['Guests', 'Presets', 'Provision', 'Activity'] as const;
 type Tab = typeof TABS[number];
 
 export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
@@ -45,9 +45,9 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
   // (it survives the #app re-render and its pollers would run forever).
   const unregister = registerModal(close);
 
-  let active: Tab = initial.tab ?? 'Containers';
+  let active: Tab = initial.tab ?? 'Guests';
   const renderers: Record<Tab, () => Promise<void> | void> = {
-    Containers: () => renderContainersTab(content, { focusBoxId: initial.focusBoxId, showLifecycleJob, openEditBox: opts.openEditBox }),
+    Guests: () => renderGuestsTab(content, { focusBoxId: initial.focusBoxId, showLifecycleJob, openEditBox: opts.openEditBox }),
     Presets: () => renderPresetsTab(content, { openSettingsModal }),
     Provision: renderProvision,
     Activity: () => renderActivityTab(content, { showProvisionJob: showJob, showLifecycleJob }),
@@ -239,7 +239,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
     void tick();
   }
 
-  // --- Lifecycle job panel (Containers tab) ---
+  // --- Lifecycle job panel (Guests tab) ---
   function showLifecycleJob(id: string) {
     stopPoll();
     const generation = pollGen;
@@ -265,9 +265,9 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
       log.textContent = job.log || '';
       if (!step.done) { pollTimer = window.setTimeout(tick, 1500); return; }
       opts.onBoxLinked();
-      await pve.linkedContainers().catch(() => []);
+      await pve.linkedGuests().catch(() => []);
       if (generation !== pollGen) return;
-      footer.replaceChildren(el('button', { type: 'button', onclick: () => selectTab('Containers') }, ['Back to Containers']));
+      footer.replaceChildren(el('button', { type: 'button', onclick: () => selectTab('Guests') }, ['Back to Guests']));
     }
     void tick();
   }

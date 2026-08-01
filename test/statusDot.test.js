@@ -182,5 +182,41 @@ test('missing PVE target stays green when SSH works and is red when SSH fails', 
   expect(dotClassFor({ reachable: true, tmux: true, proxmoxState: 'missing' })).toBe('green');
   expect(metaLine({ reachable: true, tmux: true, proxmoxState: 'missing' })).toContain('PVE link missing');
   expect(dotClassFor({ reachable: false, proxmoxState: 'missing' })).toBe('red');
-  expect(metaLine({ reachable: false, proxmoxState: 'missing' })).toContain('Container missing');
+  expect(metaLine({ reachable: false, proxmoxState: 'missing' })).toContain('Guest missing');
+});
+
+// A mismatch is a CONFIRMED fault (the linked vmid is not our guest), unlike
+// 'unknown' (a stale/failed read that must defer to the real SSH result). It
+// must never render as an indistinguishable green "Connected" box — the
+// lifecycle keys are already gone (lifecycleKeysFor), so a green dot here
+// would hide the one signal explaining why they vanished. But mismatch says
+// nothing about whether the host actually answers, so — unlike 'stopped',
+// which IS expected to be unreachable — it must rank BELOW needsAuth and
+// !reachable in all three functions: it must never mask a real outage or a
+// needs-login state, only add its own warning once those are ruled out.
+test('reachable + mismatch: amber, names itself, live metrics ride alongside the warning', () => {
+  expect(dotClassFor({ reachable: true, tmux: true, proxmoxState: 'mismatch' })).toBe('amber');
+  expect(dotTitleFor({ reachable: true, tmux: true, proxmoxState: 'mismatch' })).toMatch(/mismatch/i);
+  const segs = metaSegmentsFor({ reachable: true, tmux: true, proxmoxState: 'mismatch', metrics: { diskPct: 40 } });
+  expect(segs[0]).toMatchObject({ level: 'warn' });
+  expect(segs[0].text).toMatch(/mismatch/i);
+  expect(segs.map((s) => s.text)).toContain('40%'); // metrics still ride alongside the warning
+});
+
+test('unreachable + mismatch: the real outage wins — red, offline title, offline segment, no mismatch text', () => {
+  const st = { reachable: false, error: 'Connection refused', proxmoxState: 'mismatch' };
+  expect(dotClassFor(st)).toBe('red');
+  expect(dotTitleFor(st)).not.toMatch(/mismatch/i);
+  const segs = metaSegmentsFor(st);
+  expect(segs).toHaveLength(1);
+  expect(segs[0].level).toBe('crit');
+  expect(segs[0].text).not.toMatch(/mismatch/i);
+});
+
+test('needsAuth + mismatch: the login prompt wins — auth dot, auth title, needs-login segment', () => {
+  const st = { reachable: false, needsAuth: true, proxmoxState: 'mismatch' };
+  expect(dotClassFor(st)).toBe('auth');
+  expect(dotTitleFor(st)).toMatch(/reconnect/i);
+  expect(metaLine(st)).toMatch(/login/i);
+  expect(metaLine(st)).not.toMatch(/mismatch/i);
 });

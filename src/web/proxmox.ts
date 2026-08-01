@@ -21,18 +21,21 @@ export interface ProvisionSummary { id: string; presetName: string; hostname: st
 export interface ProvisionJob extends ProvisionSummary { log: string; error: string | null; }
 export interface StorageGroups { rootdir: { storage: string }[]; vztmpl: { storage: string }[]; }
 
-export type PveContainerState = 'running' | 'stopped' | 'missing' | 'unknown';
+export type PveGuestKind = 'lxc' | 'qemu';
+// 'mismatch': the vmid's observed type disagrees with the stored link — a
+// different guest wearing the same number. No lifecycle action is offered.
+export type PveGuestState = 'running' | 'stopped' | 'missing' | 'unknown' | 'mismatch';
 export type LifecycleAction = 'start' | 'shutdown' | 'stop' | 'reboot' | 'deprovision';
 export type LifecycleStatus = 'running' | 'done' | 'error' | 'interrupted';
-export interface PveLinkedContainer { boxId: string; boxLabel: string; hostId: string; hostName: string | null; node: string; vmid: number; containerName: string | null; state: PveContainerState; fetchedAt: number; error: string | null; activeJob: LifecycleJobSummary | null; }
-export interface PveNodeContainer { hostId: string; node: string; vmid: number; name: string; state: PveContainerState; linkedBoxId: string | null; }
+export interface PveLinkedGuest { boxId: string; boxLabel: string; hostId: string; hostName: string | null; node: string; vmid: number; kind: PveGuestKind; containerName: string | null; state: PveGuestState; fetchedAt: number; error: string | null; activeJob: LifecycleJobSummary | null; template: boolean; }
+export interface PveNodeGuest { hostId: string; node: string; kind: PveGuestKind; vmid: number; name: string; state: PveGuestState; linkedBoxId: string | null; template: boolean; }
 export interface PveClusterNode {
   hostId: string; hostName: string | null; node: string | null;
   status: 'online' | 'offline' | 'unknown' | 'error';
   cpuPct: number | null; memPct: number | null; diskPct: number | null;
   uptimeSec: number | null; error: string | null;
 }
-export interface LifecycleJobSummary { id: string; action: LifecycleAction; boxId: string; boxLabel: string; hostId: string; hostName: string; node: string; vmid: number; status: LifecycleStatus; phase: string; error: string | null; createdAt: string; finishedAt: string | null; }
+export interface LifecycleJobSummary { id: string; action: LifecycleAction; boxId: string; boxLabel: string; hostId: string; hostName: string; node: string; vmid: number; kind: PveGuestKind; status: LifecycleStatus; phase: string; error: string | null; createdAt: string; finishedAt: string | null; }
 export interface LifecycleJob extends LifecycleJobSummary { log: string; }
 
 import { jsonFetch as jr, jsonBody as json } from './http';
@@ -63,9 +66,9 @@ export const pve = {
   createProvision(spec: { presetId: string; hostname: string; vmid?: number; ip?: string; tags?: string[]; setupOptions?: SetupOptions }) { return jr<ProvisionSummary>('/api/proxmox/provisions', post(spec)); },
   provisions() { return jr<ProvisionSummary[]>('/api/proxmox/provisions'); },
   provision(id: string) { return jr<ProvisionJob>(`/api/proxmox/provisions/${id}?t=${Date.now()}`); },
-  linkedContainers() { return jr<PveLinkedContainer[]>('/api/proxmox/containers'); },
+  linkedGuests() { return jr<PveLinkedGuest[]>('/api/proxmox/guests'); },
   clusterNodes() { return jr<PveClusterNode[]>('/api/proxmox/nodes'); },
-  nodeContainers(hostId: string, node: string) { return jr<PveNodeContainer[]>(`/api/proxmox/hosts/${hostId}/nodes/${encodeURIComponent(node)}/containers`); },
+  nodeGuests(hostId: string, node: string) { return jr<PveNodeGuest[]>(`/api/proxmox/hosts/${hostId}/nodes/${encodeURIComponent(node)}/guests`); },
   createLifecycleJob(spec: { boxId: string; action: LifecycleAction; confirmName?: string }) { return jr<LifecycleJobSummary>('/api/proxmox/lifecycle-jobs', post(spec)); },
   lifecycleJobs() { return jr<LifecycleJobSummary[]>('/api/proxmox/lifecycle-jobs'); },
   lifecycleJob(id: string) { return jr<LifecycleJob>(`/api/proxmox/lifecycle-jobs/${id}?t=${Date.now()}`); },

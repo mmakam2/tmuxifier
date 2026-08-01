@@ -38,6 +38,17 @@ test('assertKeyInput requires a name and a single valid public-key line', () => 
   expect(() => assertKeyInput({ name: 'k', publicKey: 'ssh-ed25519 AAAA\nssh-ed25519 BBBB' })).toThrow(/single/);
 });
 
+test('link kind is optional but must be a known guest kind when present', () => {
+  const opts = { hostIds: ['H1'] };
+  const base = { hostId: 'H1', node: 'pve', vmid: 131 };
+  // Absent kind is accepted — every link written before VM support omits it.
+  expect(() => assertProxmoxLinkInput(base, opts)).not.toThrow();
+  expect(() => assertProxmoxLinkInput({ ...base, kind: 'lxc' }, opts)).not.toThrow();
+  expect(() => assertProxmoxLinkInput({ ...base, kind: 'qemu' }, opts)).not.toThrow();
+  expect(() => assertProxmoxLinkInput({ ...base, kind: 'vm' }, opts)).toThrow(/guest kind/);
+  expect(() => assertProxmoxLinkInput({ ...base, kind: '../qemu' }, opts)).toThrow(/guest kind/);
+});
+
 const PRESET = {
   name: 'dev', hostId: 'h1', template: 'local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst',
   storage: 'local-lvm', diskGiB: 8, cores: 2, memoryMiB: 2048, swapMiB: 512,

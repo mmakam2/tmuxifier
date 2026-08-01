@@ -1,7 +1,7 @@
 // Proxmox lifecycle controls for a pane header (spec:
 // docs/superpowers/specs/2026-07-27-pane-lifecycle-controls-design.md).
 // House pattern: a pure, unit-tested core here, the DOM control below it.
-import { pve, type LifecycleStatus, type PveContainerState } from './proxmox';
+import { pve, type LifecycleStatus, type PveGuestState } from './proxmox';
 import { createSetupJobPoller } from './setupPoller';
 import { armReduce as armReduceBase, ARM_MS, type ArmState as BaseArmState } from './arming';
 
@@ -26,19 +26,25 @@ export interface LifecycleKey {
   danger: boolean;
 }
 
-const START: LifecycleKey = { action: 'start', face: 'START', label: 'Start container', armLegend: null, danger: false };
+const START: LifecycleKey = { action: 'start', face: 'START', label: 'Start guest', armLegend: null, danger: false };
 const RUNNING_KEYS: LifecycleKey[] = [
-  { action: 'shutdown', face: 'SHUTDOWN', label: 'Shut down container', armLegend: 'SHUTDOWN?', danger: false },
-  { action: 'reboot', face: 'REBOOT', label: 'Reboot container', armLegend: 'REBOOT?', danger: false },
-  { action: 'stop', face: 'STOP', label: 'Force stop container', armLegend: 'STOP?', danger: true },
+  { action: 'shutdown', face: 'SHUTDOWN', label: 'Shut down guest', armLegend: 'SHUTDOWN?', danger: false },
+  { action: 'reboot', face: 'REBOOT', label: 'Reboot guest', armLegend: 'REBOOT?', danger: false },
+  { action: 'stop', face: 'STOP', label: 'Force stop guest', armLegend: 'STOP?', danger: true },
 ];
 
 // Driven by the pane's derived state first, the raw PVE read second: paneState
 // (main.ts) already treats an 'unknown' read as sticky for a pane showing its
 // stopped panel, so a blind probe cannot strip the Start key off a stopped box.
 // Setup wins over everything — a box mid-setup is running, and every action
-// here would interrupt the job that just provisioned it.
-export function lifecycleKeysFor(paneState: PaneState, pveState: PveContainerState | undefined): LifecycleKey[] {
+// here would interrupt the job that just provisioned it. 'missing', 'unknown'
+// and 'mismatch' all fall through to no keys: the last of those because the
+// guest at this vmid may not be ours, matching proxmoxGuests.ts's actionsForState.
+// template overrides paneState too — same treatment as 'mismatch' — because
+// paneState alone reads a stopped template exactly like a stopped ordinary
+// guest and would otherwise still offer Start on it.
+export function lifecycleKeysFor(paneState: PaneState, pveState: PveGuestState | undefined, template?: boolean): LifecycleKey[] {
+  if (template) return [];
   if (paneState === 'setup') return [];
   if (paneState === 'stopped') return [START];
   if (pveState === 'running') return RUNNING_KEYS;
@@ -90,7 +96,7 @@ export function chipFor(action: PaneLifecycleAction, status: ChipStatus): Lifecy
   return { text: FAILED[action], cls: 'chip-error', settled: true };
 }
 
-export interface PaneLifecycleInput { paneState: PaneState; pveState: PveContainerState | undefined }
+export interface PaneLifecycleInput { paneState: PaneState; pveState: PveGuestState | undefined; template?: boolean }
 
 export interface PaneLifecycleDeps {
   boxId: string;
@@ -242,7 +248,7 @@ export function buildPaneLifecycle(deps: PaneLifecycleDeps): {
   }
 
   function update(i: PaneLifecycleInput) {
-    const next = lifecycleKeysFor(i.paneState, i.pveState);
+    const next = lifecycleKeysFor(i.paneState, i.pveState, i.template);
     const signature = next.map((k) => k.action).join(',');
     if (chip && !chip.settled) return; // an in-flight job owns the slot
     if (signature === rendered) return; // no change; a settled chip stays put

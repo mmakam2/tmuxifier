@@ -34,7 +34,7 @@ function okClient({ ifaces = [{ name: 'eth0', inet: '192.168.1.77/24' }] } = {})
   return {
     nextId: async () => '131',
     createLxc: async () => 'UPID:create',
-    startLxc: async () => 'UPID:start',
+    startGuest: async () => 'UPID:start',
     taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
     taskLog: async () => [{ n: 1, t: 'creating...' }],
     lxcInterfaces: async () => ifaces,

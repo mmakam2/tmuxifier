@@ -69,8 +69,11 @@ function proxmoxStubs(calls = []) {
   const inspectEndpoint = async () => ({ reachable: true, fingerprint256: 'AB:CD', subject: 'pve', issuer: 'pve', validTo: 'x', caValid: false });
   const defaultPublicKey = () => 'ssh-ed25519 HOSTKEY tmuxifier@host';
   const proxmoxInventory = {
-    getLinkedContainers: async () => [{ boxId: 'B1', boxLabel: 'dev-01', hostId: 'H1', hostName: 'lab', node: 'pve', vmid: 131, state: 'stopped' }],
-    listNodeContainers: async () => [{ hostId: 'H1', node: 'pve', vmid: 131, name: 'dev-01', state: 'stopped', linkedBoxId: null }],
+    getLinkedGuests: async () => [{ boxId: 'B1', boxLabel: 'dev-01', hostId: 'H1', hostName: 'lab', node: 'pve', vmid: 131, kind: 'lxc', state: 'stopped' }],
+    listNodeGuests: async () => [
+      { hostId: 'H1', node: 'pve', kind: 'lxc', vmid: 131, name: 'dev-01', state: 'stopped', linkedBoxId: null },
+      { hostId: 'H1', node: 'pve', kind: 'qemu', vmid: 200, name: 'dev-02', state: 'stopped', linkedBoxId: null },
+    ],
   };
   const lifecycleManager = {
     createJob: async (body) => { calls.push(['createLifecycleJob', body]); return { id: 'L1', ...body, status: 'running' }; },
@@ -1080,14 +1083,14 @@ test('add-host: token verify failure returns 400 and never persists the host', a
 test('linked-container browse and lifecycle routes are auth-gated and redacted', async () => {
   const calls = [];
   app = await makeApp(proxmoxStubs(calls));
-  expect((await app.inject({ method: 'GET', url: '/api/proxmox/containers' })).statusCode).toBe(401);
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/guests' })).statusCode).toBe(401);
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
-  const linked = await app.inject({ method: 'GET', url: '/api/proxmox/containers', headers });
+  const linked = await app.inject({ method: 'GET', url: '/api/proxmox/guests', headers });
   expect(linked.statusCode).toBe(200);
   expect(linked.payload).not.toContain('tokenSecret');
   expect(linked.json()[0]).toMatchObject({ boxId: 'B1', vmid: 131, state: 'stopped', activeJob: { id: 'L1', action: 'start' } });
-  const browse = await app.inject({ method: 'GET', url: '/api/proxmox/hosts/H1/nodes/pve/containers', headers });
+  const browse = await app.inject({ method: 'GET', url: '/api/proxmox/hosts/H1/nodes/pve/guests', headers });
   expect(browse.json()[0]).toMatchObject({ vmid: 131, linkedBoxId: null });
   const created = await app.inject({ method: 'POST', url: '/api/proxmox/lifecycle-jobs', headers, payload: { boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' } });
   expect(created.statusCode).toBe(201);
@@ -1106,10 +1109,46 @@ test('manual association verifies the live target, prevents duplicates, and unli
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
   const linked = await app.inject({ method: 'PUT', url: `/api/boxes/${box.id}/proxmox`, headers, payload: { hostId: 'H1', node: 'pve', vmid: 131 } });
   expect(linked.statusCode).toBe(200);
-  expect(linked.json().proxmox).toEqual({ hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' });
+  expect(linked.json().proxmox).toEqual({ hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006', kind: 'lxc' });
   const unlinked = await app.inject({ method: 'DELETE', url: `/api/boxes/${box.id}/proxmox`, headers });
   expect(unlinked.statusCode).toBe(200);
   expect(unlinked.json().proxmox).toBeUndefined();
+});
+
+test('manually linking a box to a VM persists the discovered guest kind', async () => {
+  // The inventory reports vmid 200 on this node as a qemu guest. Linking must
+  // store kind 'qemu' — storing the 'lxc' default would make the very next
+  // inventory refresh report a mismatch and refuse every lifecycle action.
+  const stubs = proxmoxStubs();
+  const store = createStore({ dataDir: dir });
+  const box = await store.addBox({ host: '192.168.1.10', label: 'dev-02' });
+  app = await makeApp({ ...stubs, store });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'PUT', url: `/api/boxes/${box.id}/proxmox`, headers, payload: { hostId: 'H1', node: 'pve', vmid: 200 } });
+  expect(res.statusCode).toBe(200);
+  const stored = await store.getBox(box.id);
+  expect(stored.proxmox).toMatchObject({ vmid: 200, kind: 'qemu' });
+});
+
+// The association picker already disables a template client-side, but that
+// guard does not hold on its own — the route must refuse it independently,
+// since destroying a linked-then-deprovisioned template destroys every
+// future clone's source.
+test('linking a box to a template guest is refused', async () => {
+  const stubs = proxmoxStubs();
+  stubs.proxmoxInventory.listNodeGuests = async () => [
+    { hostId: 'H1', node: 'pve', kind: 'qemu', vmid: 300, name: 'vm-template', state: 'stopped', linkedBoxId: null, template: true },
+  ];
+  const store = createStore({ dataDir: dir });
+  const box = await store.addBox({ host: '192.168.1.10', label: 'dev-03' });
+  app = await makeApp({ ...stubs, store });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'PUT', url: `/api/boxes/${box.id}/proxmox`, headers, payload: { hostId: 'H1', node: 'pve', vmid: 300 } });
+  expect(res.statusCode).toBe(409);
+  expect(res.json()).toEqual({ error: 'proxmox guest is a template' });
+  expect((await store.getBox(box.id)).proxmox).toBeUndefined();
 });
 
 test.each([400, 404, 409, 502])('lifecycle service statusCode %s is preserved', async (statusCode) => {
@@ -1149,7 +1188,7 @@ test('lifecycle and association mutations reject an untrusted Origin', async () 
 test('target coordinates, browse failures, and malformed links map to safe errors', async () => {
   const calls = [];
   const stubs = proxmoxStubs(calls);
-  stubs.proxmoxInventory.listNodeContainers = async () => { throw new Error('PVE unavailable'); };
+  stubs.proxmoxInventory.listNodeGuests = async () => { throw new Error('PVE unavailable'); };
   const store = createStore({ dataDir: dir });
   const box = await store.addBox({ host: '192.168.1.10' });
   app = await makeApp({ ...stubs, store });
@@ -1159,8 +1198,8 @@ test('target coordinates, browse failures, and malformed links map to safe error
   const coordinates = await app.inject({ method: 'POST', url: '/api/proxmox/lifecycle-jobs', headers, payload: { boxId: box.id, action: 'start', vmid: 999 } });
   expect(coordinates.statusCode).toBe(400);
   expect(calls.some(([name]) => name === 'createLifecycleJob')).toBe(false);
-  expect((await app.inject({ method: 'GET', url: '/api/proxmox/hosts/NOPE/nodes/pve/containers', headers })).statusCode).toBe(404);
-  expect((await app.inject({ method: 'GET', url: '/api/proxmox/hosts/H1/nodes/pve/containers', headers })).statusCode).toBe(502);
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/hosts/NOPE/nodes/pve/guests', headers })).statusCode).toBe(404);
+  expect((await app.inject({ method: 'GET', url: '/api/proxmox/hosts/H1/nodes/pve/guests', headers })).statusCode).toBe(502);
   expect((await app.inject({ method: 'PUT', url: `/api/boxes/${box.id}/proxmox`, headers, payload: { hostId: 'H1', node: '../pve', vmid: 99 } })).statusCode).toBe(400);
 });
 

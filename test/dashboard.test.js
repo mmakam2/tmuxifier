@@ -69,11 +69,18 @@ test('boxSpecLines: a line with nothing known is dropped rather than printed emp
 });
 
 test('pveHostRollup groups containers per host with running/stopped counts', () => {
-  const c = (hostName, state) => ({ hostName, state, boxId: 'b', boxLabel: 'b', hostId: 'h', node: 'n', vmid: 1, containerName: null, fetchedAt: 0, error: null, activeJob: null });
+  const c = (hostName, state) => ({ hostName, state, boxId: 'b', boxLabel: 'b', hostId: 'h', node: 'n', vmid: 1, kind: 'lxc', containerName: null, fetchedAt: 0, error: null, activeJob: null });
   expect(pveHostRollup([c('pve1', 'running'), c('pve1', 'stopped'), c('pve2', 'running'), c('pve1', 'unknown')])).toEqual([
     { hostName: 'pve1', running: 1, stopped: 1, other: 1 },
     { hostName: 'pve2', running: 1, stopped: 0, other: 0 },
   ]);
+});
+
+// A mismatched guest is not confidently ours, so it must never inflate the
+// running count — it falls into 'other' alongside 'unknown' and 'missing'.
+test('pveHostRollup buckets a kind mismatch under other, not running', () => {
+  const c = (hostName, state) => ({ hostName, state, boxId: 'b', boxLabel: 'b', hostId: 'h', node: 'n', vmid: 1, kind: 'qemu', containerName: null, fetchedAt: 0, error: 'kind mismatch', activeJob: null });
+  expect(pveHostRollup([c('pve1', 'mismatch')])).toEqual([{ hostName: 'pve1', running: 0, stopped: 0, other: 1 }]);
 });
 
 test('nodeModules: per-node health readout with linked-container counts merged', () => {
@@ -84,15 +91,24 @@ test('nodeModules: per-node health readout with linked-container counts merged',
   ];
   const c = (node, state) => ({ node, state, hostName: 'lab', boxId: 'b', boxLabel: 'b', hostId: 'H1', vmid: 1, containerName: null, fetchedAt: 0, error: null, activeJob: null });
   expect(nodeModules(nodes, [c('pve1', 'running'), c('pve1', 'stopped'), c('pve1', 'running')])).toEqual([
-    { name: 'pve1', lamp: 'green', readout: 'cpu 12% · mem 48% · disk 61% · 2/3 ctr' },
+    { name: 'pve1', lamp: 'green', readout: 'cpu 12% · mem 48% · disk 61% · 2/3 guests' },
     { name: 'pve2', lamp: 'red', readout: '—' },
     { name: 'lab2', lamp: 'red', readout: 'connect ECONNREFUSED' },
   ]);
 });
 
-test('nodeModules: unknown status gets a dark lamp; no containers, no ctr segment', () => {
+test('nodeModules: unknown status gets a dark lamp; no containers, no guests segment', () => {
   const nodes = [{ hostId: 'H1', hostName: 'lab', node: 'pve1', status: 'unknown', cpuPct: 5, memPct: null, diskPct: null, uptimeSec: null, error: null }];
   expect(nodeModules(nodes, null)).toEqual([{ name: 'pve1', lamp: '', readout: 'cpu 5%' }]);
+});
+
+// A node that's otherwise healthy but whose only linked guest is a kind
+// mismatch must not read as having anything running — the lamp stays off
+// PVE's own online/offline status, and the guests tally reports 0/1.
+test('nodeModules: a mismatched guest counts toward the tally but never toward running', () => {
+  const nodes = [{ hostId: 'H1', hostName: 'lab', node: 'pve1', status: 'online', cpuPct: 10, memPct: null, diskPct: null, uptimeSec: null, error: null }];
+  const c = { node: 'pve1', state: 'mismatch', hostName: 'lab', boxId: 'b', boxLabel: 'b', hostId: 'H1', vmid: 1, kind: 'qemu', containerName: null, fetchedAt: 0, error: 'kind mismatch', activeJob: null };
+  expect(nodeModules(nodes, [c])).toEqual([{ name: 'pve1', lamp: 'green', readout: 'cpu 10% · 0/1 guests' }]);
 });
 
 test('partitionInfraGroups: proxmox/ipam categories merge into the built-ins, others become extra groups', () => {

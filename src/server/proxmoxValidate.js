@@ -8,6 +8,9 @@ const ABS_PATH = /^\/[A-Za-z0-9._/-]+$/;                               // absolu
 const FINGERPRINT = /^[0-9A-Fa-f:]+$/;
 const PUBKEY = /^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-[A-Za-z0-9-]+|sk-(ssh-ed25519|ecdsa-sha2-[A-Za-z0-9-]+)@openssh\.com)\s+[A-Za-z0-9+/=]+(\s+\S+)?$/;
 const VERIFY_MODES = ['pin', 'ca', 'insecure'];
+// The only two guest types PVE has. Closed allowlist: this value becomes a URL
+// path segment in proxmoxApi.js, so nothing outside this list may ever reach it.
+export const GUEST_KINDS = Object.freeze(['lxc', 'qemu']);
 // LXC feature flags, allowlisted because buildCreateParams composes them as
 // `${key}=1` joined by commas — so the KEY is PVE syntax, and an unvalidated one
 // such as `mount=nfs;cifs,keyctl` composes into `features=mount=nfs;cifs,keyctl=1`,
@@ -158,6 +161,11 @@ export function assertProxmoxLinkInput(spec, { hostIds = [] } = {}) {
   if (!hostIds.includes(spec.hostId)) throw new Error('proxmox host is unknown');
   if (!/^[A-Za-z0-9_.-]+$/.test(String(spec.node || ''))) throw new Error('invalid proxmox node');
   if (!intInRange(spec.vmid, 100, 999999999)) throw new Error('vmid must be 100..999999999');
+  // Absent is accepted and defaults to 'lxc' in store.js — every link written
+  // before VM support omits it, and every one of those is a container.
+  if (spec.kind != null && !GUEST_KINDS.includes(spec.kind)) {
+    throw new Error(`invalid proxmox guest kind: ${JSON.stringify(spec.kind)}`);
+  }
 }
 
 export function assertProvisionInput(spec) {

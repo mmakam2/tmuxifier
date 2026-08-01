@@ -5,7 +5,7 @@
 // polling and calls update(); this module never fetches.
 import type { Box, BoxMetrics, Status, Sample, Service, ServiceStatusSnapshot } from './api';
 import type { NetboxSummary } from './netbox';
-import type { PveLinkedContainer, PveClusterNode } from './proxmox';
+import type { PveLinkedGuest, PveClusterNode } from './proxmox';
 import { dotClassFor, dotTitleFor } from './statusDot';
 import { fmtLatency, fmtCount, fmtCompact, fmtUptime, fmtBytes } from './fmt';
 import { buildTruenasCard, type TruenasCardEls } from './truenasCard';
@@ -23,7 +23,7 @@ export interface DashboardData {
   series: Record<string, Sample[]>;
   services: Service[];
   serviceStatus: ServiceStatusSnapshot | null;
-  containers: PveLinkedContainer[] | null; // null = Proxmox not configured (module hidden)
+  containers: PveLinkedGuest[] | null; // null = Proxmox not configured (module hidden)
   nodes: PveClusterNode[] | null;          // null = not configured / nodes fetch failed
   netbox: NetboxSummary | null;            // null = not fetched yet
 }
@@ -185,12 +185,12 @@ export function partitionInfraGroups(services: Service[]): { proxmox: Service[];
 }
 
 // One module per physical cluster node: online lamp + cpu/mem/disk readout,
-// with this node's linked-container tally appended when any exist. An error
+// with this node's linked-guest tally appended when any exist. An error
 // record (node: null — the whole cluster unreachable) renders as the host
 // profile's name with a red lamp.
 export function nodeModules(
   nodes: PveClusterNode[],
-  containers: PveLinkedContainer[] | null,
+  containers: PveLinkedGuest[] | null,
 ): { name: string; lamp: '' | 'green' | 'red'; readout: string }[] {
   return nodes.map((n) => {
     if (n.node === null) {
@@ -201,7 +201,7 @@ export function nodeModules(
     if (n.memPct != null) parts.push(`mem ${n.memPct}%`);
     if (n.diskPct != null) parts.push(`disk ${n.diskPct}%`);
     const linked = (containers ?? []).filter((c) => c.node === n.node);
-    if (linked.length) parts.push(`${linked.filter((c) => c.state === 'running').length}/${linked.length} ctr`);
+    if (linked.length) parts.push(`${linked.filter((c) => c.state === 'running').length}/${linked.length} guests`);
     return {
       name: n.node,
       lamp: n.status === 'online' ? 'green' as const : n.status === 'unknown' ? '' as const : 'red' as const,
@@ -210,7 +210,7 @@ export function nodeModules(
   });
 }
 
-export function pveHostRollup(containers: PveLinkedContainer[]): { hostName: string; running: number; stopped: number; other: number }[] {
+export function pveHostRollup(containers: PveLinkedGuest[]): { hostName: string; running: number; stopped: number; other: number }[] {
   const order: string[] = [];
   const acc = new Map<string, { hostName: string; running: number; stopped: number; other: number }>();
   for (const c of containers) {
@@ -582,7 +582,7 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
       // Fallback when the nodes fetch failed: the old per-host container rollup.
       const rollup = pveHostRollup(data.containers);
       if (rollup.length === 0) {
-        pveMods.push(infraModule('', 'PROXMOX', 'no linked containers'));
+        pveMods.push(infraModule('', 'PROXMOX', 'no linked guests'));
       }
       for (const host of rollup) {
         const extra = host.other > 0 ? ` · ${host.other} other` : '';

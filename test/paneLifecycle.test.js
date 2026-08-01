@@ -30,15 +30,29 @@ test('missing, unknown and absent PVE state offer nothing', () => {
   expect(lifecycleKeysFor('terminal', undefined)).toEqual([]);
 });
 
+// A mismatch means the guest at this vmid may not be ours (a different guest
+// reused the number), so it offers nothing — same treatment as 'unknown',
+// matching proxmoxGuests.ts's actionsForState('mismatch').
+test('a kind mismatch offers no lifecycle key even for an otherwise-running pane', () => {
+  expect(lifecycleKeysFor('terminal', 'mismatch')).toEqual([]);
+});
+
 // A box mid-setup is running, but every one of these actions would interrupt
 // the setup job that just provisioned it.
-test('a setting-up pane offers nothing even while the container runs', () => {
+test('a setting-up pane offers nothing even while the guest runs', () => {
   expect(lifecycleKeysFor('setup', 'running')).toEqual([]);
+});
+
+// mergeProxmoxStatus (proxmoxInventory.js) now carries the template flag into
+// the status snapshot specifically so this can be enforced here too: a
+// template must never offer Start just because paneState reads 'stopped'.
+test('a template guest offers no lifecycle key even for an otherwise-startable stopped pane', () => {
+  expect(lifecycleKeysFor('stopped', 'stopped', true)).toEqual([]);
 });
 
 test('deprovision is never offered', () => {
   const everyKey = ['terminal', 'stopped', 'setup'].flatMap((pane) =>
-    ['running', 'stopped', 'missing', 'unknown'].flatMap((pve) => lifecycleKeysFor(pane, pve)));
+    ['running', 'stopped', 'missing', 'unknown', 'mismatch'].flatMap((pve) => lifecycleKeysFor(pane, pve)));
   expect(everyKey.some((k) => k.action === 'deprovision')).toBe(false);
 });
 
