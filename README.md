@@ -7,6 +7,36 @@ browser terminal backed by a tmux session that lives **on the box**, so closing 
 losing the network, or restarting Tmuxifier leaves your work running — reconnecting drops you
 back into the same state.
 
+## Contents
+
+- [Screenshots](#screenshots)
+- [Requirements](#requirements)
+- [Setup](#setup)
+- [Configuration](#configuration)
+- [Authentication](#authentication)
+  - [Passkeys](#passkeys)
+- [Architecture](#architecture)
+- [How persistence works](#how-persistence-works)
+- [Standby dashboard](#standby-dashboard)
+  - [Tile icons](#tile-icons)
+  - [Pi-hole tiles](#pi-hole-tiles)
+  - [TrueNAS tiles](#truenas-tiles)
+  - [UniFi tiles](#unifi-tiles)
+  - [Immich tiles](#immich-tiles)
+- [Split terminals](#split-terminals)
+- [Pasting images & files](#pasting-images--files)
+- [Voice dictation](#voice-dictation)
+- [Host Shell & per-box Reconnect](#host-shell--per-box-reconnect)
+- [Status, multiplexing & rate-limit safety](#status-multiplexing--rate-limit-safety)
+  - [Box health history & events](#box-health-history--events)
+  - [Fleet Command](#fleet-command)
+- [Proxmox LXC provisioning](#proxmox-lxc-provisioning)
+- [Proxmox guest lifecycle](#proxmox-guest-lifecycle)
+- [Security](#security)
+- [Deployment](#deployment)
+- [Attributions](#attributions)
+- [Development](#development)
+
 ## Screenshots
 
 | Persistent remote terminals | Fleet standby dashboard |
