@@ -22,6 +22,15 @@ function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 150
 }
 function cleanParams(params) { const out = {}; for (const [k, v] of Object.entries(params || {})) { if (v === undefined || v === null) continue; out[k] = typeof v === 'boolean' ? (v ? 1 : 0) : v; } return out; }
 
+// PVE has exactly two guest types. This value becomes a URL path segment, so it
+// is re-checked here rather than trusting that every caller validated it — the
+// same chokepoint discipline voiceCatalog.js and iconCatalog.js apply.
+const GUEST_KINDS = new Set(['lxc', 'qemu']);
+const guestKind = (kind) => {
+  if (!GUEST_KINDS.has(kind)) throw new Error(`invalid proxmox guest kind: ${JSON.stringify(kind)}`);
+  return kind;
+};
+
 export function createProxmoxClient({ host, request = httpsRequest, connect = tlsProbe, timeoutMs = 15000 }) {
   const base = `https://${host.endpoint}/api2/json`;
   const { host: hostName, port } = parseEndpoint(host.endpoint);
@@ -83,12 +92,24 @@ export function createProxmoxClient({ host, request = httpsRequest, connect = tl
     clusterResources: () => call('GET', '/cluster/resources?type=vm'),
     clusterNodes: () => call('GET', '/cluster/resources?type=node'),
     createLxc: (node, params) => call('POST', `/nodes/${enc(node)}/lxc`, params),
-    startLxc: (node, vmid) => call('POST', `/nodes/${enc(node)}/lxc/${enc(vmid)}/status/start`, {}),
-    listLxc: (node) => call('GET', `/nodes/${enc(node)}/lxc`),
-    shutdownLxc: (node, vmid) => call('POST', `/nodes/${enc(node)}/lxc/${enc(vmid)}/status/shutdown`, { forceStop: false }),
-    stopLxc: (node, vmid) => call('POST', `/nodes/${enc(node)}/lxc/${enc(vmid)}/status/stop`, {}),
-    rebootLxc: (node, vmid) => call('POST', `/nodes/${enc(node)}/lxc/${enc(vmid)}/status/reboot`, {}),
-    destroyLxc: (node, vmid) => call('DELETE', `/nodes/${enc(node)}/lxc/${enc(vmid)}`, {
+    // These six are `async` (unlike every other method here) so that an invalid
+    // kind — checked synchronously by guestKind() before call() ever runs —
+    // surfaces as a rejected promise instead of a synchronous throw. Callers
+    // otherwise always await a guest action; a throw at call time rather than
+    // at await time would be a surprising exception to the calling convention.
+    startGuest: async (kind, node, vmid) => call('POST', `/nodes/${enc(node)}/${guestKind(kind)}/${enc(vmid)}/status/start`, {}),
+    listGuests: async (kind, node) => call('GET', `/nodes/${enc(node)}/${guestKind(kind)}`),
+    // forceStop + timeout let PVE do the escalation server-side: one task, no
+    // window where we and PVE disagree about what is running, and the escalation
+    // lands in the task log the operator already reads. Graceful shutdown passes
+    // neither, so a graceful shutdown that fails, fails.
+    shutdownGuest: async (kind, node, vmid, { forceStop = false, timeout = null } = {}) => call(
+      'POST', `/nodes/${enc(node)}/${guestKind(kind)}/${enc(vmid)}/status/shutdown`,
+      { forceStop, ...(timeout == null ? {} : { timeout }) },
+    ),
+    stopGuest: async (kind, node, vmid) => call('POST', `/nodes/${enc(node)}/${guestKind(kind)}/${enc(vmid)}/status/stop`, {}),
+    rebootGuest: async (kind, node, vmid) => call('POST', `/nodes/${enc(node)}/${guestKind(kind)}/${enc(vmid)}/status/reboot`, {}),
+    destroyGuest: async (kind, node, vmid) => call('DELETE', `/nodes/${enc(node)}/${guestKind(kind)}/${enc(vmid)}`, {
       purge: true,
       'destroy-unreferenced-disks': true,
     }),
