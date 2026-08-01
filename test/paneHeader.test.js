@@ -42,12 +42,12 @@ test('chip precedence: pane state beats connection beats agent', () => {
     .toEqual({ kind: 'conn', text: 'setting up…', cls: 'chip-conn' });
 });
 
-test('agent chip only when the connection is quiet, never for unknown', () => {
+test('agent chip only when the connection is quiet, and only for a hook-sourced state', () => {
   expect(paneHeaderChip(box({ conn: { kind: 'open' }, agent: 'working' })))
     .toEqual({ kind: 'agent', text: 'working', cls: 'chip-agent-working' });
   expect(paneHeaderChip(box({ conn: { kind: 'open' }, agent: 'waiting' })))
     .toEqual({ kind: 'agent', text: 'waiting', cls: 'chip-agent-waiting' });
-  expect(paneHeaderChip(box({ conn: { kind: 'open' }, agent: 'unknown' }))).toBeNull();
+  // No marker → no `agent` on the sample → no chip (the un-hooked-box cue).
   expect(paneHeaderChip(box({ conn: { kind: 'open' } }))).toBeNull();
 });
 

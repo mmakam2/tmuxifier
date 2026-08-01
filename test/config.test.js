@@ -394,14 +394,12 @@ test('claudeOauthToken defaults to null and empty string stays null', () => {
   expect(loadConfig({}, { env: { TMUXIFIER_CLAUDE_OAUTH_TOKEN: '   ' }, cwd: '/nonexistent' }).claudeOauthToken).toBe(null);
 });
 
-test('agentIdleSec defaults to 20 and is read from TMUXIFIER_AGENT_IDLE_SEC', () => {
-  expect(loadConfig({}, { env: {}, cwd: '/nonexistent' }).agentIdleSec).toBe(20);
-  expect(loadConfig({}, { env: { TMUXIFIER_AGENT_IDLE_SEC: '90' }, cwd: '/nonexistent' }).agentIdleSec).toBe(90);
-});
-
-test('agentIdleSec clamps out-of-range and non-numeric values to the default', () => {
-  expect(loadConfig({}, { env: { TMUXIFIER_AGENT_IDLE_SEC: '2' }, cwd: '/nonexistent' }).agentIdleSec).toBe(20);
-  expect(loadConfig({}, { env: { TMUXIFIER_AGENT_IDLE_SEC: 'abc' }, cwd: '/nonexistent' }).agentIdleSec).toBe(20);
+test('the removed agentIdleSec knob is gone: env var is ignored, no key in the config', () => {
+  // Hook-only agent state (2026-08-01): the output-idle heuristic and its
+  // threshold are removed; a leftover TMUXIFIER_AGENT_IDLE_SEC in an operator's
+  // .env must be silently inert, not an error and not a resurrected key.
+  expect(loadConfig({}, { env: {}, cwd: '/nonexistent' }).agentIdleSec).toBeUndefined();
+  expect(loadConfig({}, { env: { TMUXIFIER_AGENT_IDLE_SEC: '90' }, cwd: '/nonexistent' }).agentIdleSec).toBeUndefined();
 });
 
 test('rpId derives from the base external URL hostname', () => {

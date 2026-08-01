@@ -416,15 +416,17 @@ pattern for new modules.
 - `healthHistory.js` / `healthEventsStore.js` — `createHealthHistory` keeps a rolling in-memory
   sample series per box (fed by the status poller after each snapshot swap) and derives an
   edge-triggered events log (down/up/needs-auth/threshold, persisted to `data/health-events.json`
-  by `createHealthEventsStore`); served by `GET /api/health/series|events`. It also derives a
-  per-box agent state (`working`/`waiting`, or `unknown` when the box clock or the activity
-  timestamp is unavailable) for the box's configured session from the status probe's active-pane
-  command and time since the pane last produced output
-  (`agentIdleSec` / `TMUXIFIER_AGENT_IDLE_SEC`, default 20s), and emits edge-triggered
-  `agent-input`/`agent-done` events — suppressed while that session is attached, since watching
-  the terminal is its own notification. When the probe carries a `~/.tmuxifier-agent/` marker for
-  the session (see `claudeAgentHooks.js`) the state is hook-sourced ground truth instead — no
-  clock math, no `unknown`, and the anti-blip working-streak guard is skipped for those edges. `onEvent(cb)` is the deferred server-push delivery seam —
+  by `createHealthEventsStore`); served by `GET /api/health/series|events`. Agent state
+  (`working`/`waiting`) for the box's configured session is **hook-only**: it comes exclusively
+  from the `~/.tmuxifier-agent/` marker the on-box Claude Code hook writes (see
+  `claudeAgentHooks.js`) — the old output-idle heuristic, its `'unknown'` state, the
+  `agentIdleSec`/`TMUXIFIER_AGENT_IDLE_SEC` knob, and the anti-blip working-streak are all
+  removed (2026-08-01), so a claude pane with no marker carries no agent state at all; the
+  silent chip is the deliberate cue that the box needs a setup rerun. Presence stays pane-based
+  as `agentPresent`, whose sole consumer is the agent-done edge — it keeps a one-poll marker gap
+  (a claude restarting in place between SessionEnd and SessionStart) from reading as an exit.
+  Emits edge-triggered `agent-input`/`agent-done` events — suppressed while that session is
+  attached, since watching the terminal is its own notification. `onEvent(cb)` is the deferred server-push delivery seam —
   nothing subscribes to it; browser notifications are instead delivered client-side, by `main.ts`
   polling `GET /api/health/events` and filtering by the kinds enabled in Settings → Notifications
   (`notifyPrefs.ts`).

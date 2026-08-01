@@ -13,7 +13,7 @@ export interface PaneHeaderInput {
   user?: string;
   host?: string;
   status?: Status;
-  agent?: 'working' | 'waiting' | 'unknown';
+  agent?: 'working' | 'waiting';
   conn?: PaneConn;
   state: 'terminal' | 'stopped' | 'setup';
 }
@@ -23,8 +23,9 @@ export interface PaneHeaderModel { title: string; target: string; dotClass: stri
 
 // One slot, strict precedence: a pane-level state (stopped container, box
 // mid-setup) outranks connection churn, which outranks the agent read — a
-// disconnected pane has no live agent worth reporting on. 'unknown' agent
-// (box clock unavailable) renders nothing rather than a lying chip.
+// disconnected pane has no live agent worth reporting on. A claude with no
+// hook marker carries no `agent` at all, so it renders no chip: the silence
+// is the cue that the box needs a setup rerun, not a state to invent.
 export function paneHeaderChip(i: PaneHeaderInput): PaneChip | null {
   if (i.state === 'stopped') return { kind: 'state', text: 'stopped', cls: 'chip-state' };
   if (i.state === 'setup') return { kind: 'state', text: 'setting up', cls: 'chip-state' };

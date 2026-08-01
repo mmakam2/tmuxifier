@@ -29,7 +29,6 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | health events retained | `TMUXIFIER_HEALTH_EVENTS_MAX` | `200` |
 | health cpu/mem/disk warn % | `TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT` | `90` |
 | health threshold hysteresis % | `TMUXIFIER_HEALTH_HYSTERESIS_PCT` | `5` |
-| agent idle threshold (s) | `TMUXIFIER_AGENT_IDLE_SEC` | `20` |
 | Proxmox task poll interval (ms) | `TMUXIFIER_PVE_POLL_MS` | `1500` |
 | Proxmox per-request timeout (ms) | `TMUXIFIER_PVE_TIMEOUT_MS` | `15000` |
 | Proxmox provision timeout (ms) | `TMUXIFIER_PVE_PROVISION_TIMEOUT_MS` | `600000` |
@@ -77,7 +76,7 @@ As an alternative to `.env`, a `config.json` in the repo root works too, using c
 (`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`, `trustProxy`,
 `statusConcurrency`, `statusPollMs`, `servicePollMs`, `controlPersist`, `termFont`, `termFontSize`, `fleetConcurrency`, `fleetTimeoutMs`,
 `fleetMaxJobs`, `fleetMaxOutputBytes`, `healthHistoryMax`, `healthEventsMax`, `healthCpuWarnPct`,
-`healthMemWarnPct`, `healthDiskWarnPct`, `healthThresholdHysteresisPct`, `agentIdleSec`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
+`healthMemWarnPct`, `healthDiskWarnPct`, `healthThresholdHysteresisPct`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
 `pveLeaseTimeoutMs`, `pveMaxJobs`, `pveDefaultPubKeyPath`, `authMode`, `publicUrl`, `rpId`,
 `passkeyOnlyKillSwitch`, `googleClientId`, `googleClientSecret`, `allowedEmails`, `dataDir`,
 `controlDir`, `sshConfigFile`, `tlsCert`, `tlsKey`, `uploadMaxMb`, `claudeOauthToken`,

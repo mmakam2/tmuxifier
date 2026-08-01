@@ -37,10 +37,13 @@ export interface Status {
 export interface Sample {
   t: number; up: boolean; stopped?: boolean; tmux?: boolean; needsAuth?: boolean; keyChanged?: boolean;
   cpuPct?: number; memPct?: number; diskPct?: number;
-  // Agent presence/idleness for the box's configured session (see healthHistory.js
-  // sampleOf) and whether that session is attached. The pane header bar reads the
-  // latest sample's `agent` for its working/waiting chip (paneHeader.ts).
-  agent?: 'working' | 'waiting' | 'unknown'; agentAttached?: boolean;
+  // Agent state for the box's configured session (see healthHistory.js
+  // sampleOf): `agent` is hook-sourced ground truth only — a claude pane with
+  // no marker carries no agent at all. `agentPresent` is the pane-based
+  // presence flag (drives the agent-done edge server-side, never a chip), and
+  // agentAttached whether that session is attached. The pane header bar reads
+  // the latest sample's `agent` for its working/waiting chip (paneHeader.ts).
+  agent?: 'working' | 'waiting'; agentPresent?: boolean; agentAttached?: boolean;
 }
 export type ServiceCheckKind = 'http' | 'tcp' | 'none' | 'pihole' | 'truenas' | 'unifi' | 'immich';
 export type ServiceSection = 'services' | 'infrastructure';

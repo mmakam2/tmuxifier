@@ -54,13 +54,16 @@ setup job's other work, and a skip or failure is recorded on the job without fai
 
 Every setup run also installs a small Claude Code hook on the box (skipped automatically when
 Claude Code is not installed — there is no checkbox for this one). The hook records whether the
-agent is working or waiting for you — the dashboard's agent chip and the "claude is waiting for
-input" notifications read this instead of guessing from terminal output, so they react faster
-and never false-positive on an idle session. It never blocks or modifies the agent: it only
-writes a one-line state file under `~/.tmuxifier-agent/` on the box.
+agent is working or waiting for you, and it is the **only** source the dashboard's agent chip
+and the "claude is waiting for input" notifications read — there is no guessing from terminal
+output. A box without the hook (or a claude started before the hook landed and not yet
+restarted) simply shows no agent state: if the chip is missing for a running claude, rerun
+setup on that box and restart claude in its session. The hook never blocks or modifies the
+agent: it only writes a one-line state file under `~/.tmuxifier-agent/` on the box.
 
 To remove it from a box: delete the five `tmuxifier-agent-hook` entries from the box's
-`~/.claude/settings.json` and `rm -rf ~/.tmuxifier-agent`. The next setup run reinstalls it.
+`~/.claude/settings.json` and `rm -rf ~/.tmuxifier-agent`. The next setup run reinstalls it —
+and with it removed, that box reports no agent state at all.
 
 ## Seeding AI CLI auth
 

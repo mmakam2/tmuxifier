@@ -64,14 +64,13 @@ only. Tune with `TMUXIFIER_HEALTH_HISTORY_MAX`, `TMUXIFIER_HEALTH_EVENTS_MAX`,
 Tmuxifier also watches each box's configured tmux session for Claude Code and raises **claude is
 waiting for input** / **claude finished** (the pane is no longer running Claude Code) events into
 the same timeline — suppressed while you're actively attached to that session, since watching it
-is its own notification. On boxes whose setup has run since the agent-state hook was introduced,
-this is ground truth: a small Claude Code hook on the box records working/waiting at the moment
-it changes, and the status probe reads that record — so the "waiting" alert fires on the next
-poll instead of after an idle timeout, and never false-positives on a parked session. Boxes
-without the hook (and non-Claude agents) keep the output-idle heuristic: the pane has produced
-no output for longer than `TMUXIFIER_AGENT_IDLE_SEC` (default 20s — Claude Code repaints its
-spinner about once a second while it works, and stops repainting once it is sitting at a
-prompt), confirmed across two polls. Browser
+is its own notification. This is ground truth, and it is the **only** source: a small Claude
+Code hook on the box records working/waiting at the moment it changes, and the status probe
+reads that record — so the "waiting" alert fires on the next poll and never false-positives on
+a parked session. There is no output-based fallback: a claude on a box whose setup has not been
+rerun since the hook was introduced (or a claude started before the hook landed and not yet
+restarted) shows **no** working/waiting chip and raises no agent events — that silence means
+"rerun setup on this box", not "the agent is fine". Browser
 notifications for these agent events and for the box-health events above can be toggled per kind
 in **Settings → Notifications**: per-browser, and they only fire once you grant the browser's
 notification permission (which itself requires an HTTPS dashboard). All events always appear in
