@@ -51,7 +51,7 @@ export function createProxmoxLifecycleManager({
   const persist = () => { prune(); save(ordered()); };
   const appendLog = (job, text) => { if (text) job.log = `${job.log}${text}`.slice(-maxLogBytes); };
   const summary = (job) => ({ id: job.id, action: job.action, boxId: job.boxId, boxLabel: job.boxLabel, hostId: job.hostId, hostName: job.hostName, node: job.node, vmid: job.vmid, kind: job.kind, status: job.status, phase: job.phase, error: job.error, createdAt: job.createdAt, finishedAt: job.finishedAt });
-  const assertTargetIdle = (key) => { if ([...jobs.values()].some((job) => job.status === 'running' && targetKey(job) === key)) throw serviceError(409, 'container already has an active lifecycle job'); };
+  const assertTargetIdle = (key) => { if ([...jobs.values()].some((job) => job.status === 'running' && targetKey(job) === key)) throw serviceError(409, 'guest already has an active lifecycle job'); };
   persist();
 
   function pollTask(client, job, upid) {

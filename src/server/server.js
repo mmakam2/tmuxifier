@@ -1161,12 +1161,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return job;
   });
 
-  // --- Proxmox linked-container inventory and lifecycle jobs ---
+  // --- Proxmox linked-guest inventory and lifecycle jobs ---
   const serviceFailure = (reply, error, fallback = 400) => reply
     .code(Number.isInteger(error?.statusCode) ? error.statusCode : fallback)
     .send({ error: error?.message || 'request failed' });
 
-  app.get('/api/proxmox/containers', { preHandler: requireAuth }, async (_req, reply) => {
+  app.get('/api/proxmox/guests', { preHandler: requireAuth }, async (_req, reply) => {
     try {
       const records = await proxmoxInventory.getLinkedGuests(await store.listBoxes());
       const active = new Map(lifecycleManager.listJobs()
@@ -1183,7 +1183,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     catch (error) { return serviceFailure(reply, error, 502); }
   });
 
-  app.get('/api/proxmox/hosts/:id/nodes/:node/containers', { preHandler: requireAuth }, async (req, reply) => {
+  app.get('/api/proxmox/hosts/:id/nodes/:node/guests', { preHandler: requireAuth }, async (req, reply) => {
     const host = await proxmoxStore.getHost(req.params.id);
     if (!host) return reply.code(404).send({ error: 'proxmox host not found' });
     try {
@@ -1199,7 +1199,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   app.put('/api/boxes/:id/proxmox', { preHandler: requireAuth }, async (req, reply) => {
     const box = await store.getBox(req.params.id);
     if (!box) return reply.code(404).send({ error: 'box not found' });
-    if (box.proxmox && lifecycleManager.hasActiveTarget(box.proxmox)) return reply.code(409).send({ error: 'container has an active lifecycle job' });
+    if (box.proxmox && lifecycleManager.hasActiveTarget(box.proxmox)) return reply.code(409).send({ error: 'guest has an active lifecycle job' });
     if (!req.body || typeof req.body.hostId !== 'string' || !req.body.hostId.trim()) {
       return reply.code(400).send({ error: 'proxmox host is required' });
     }
@@ -1211,10 +1211,13 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     try { containers = await proxmoxInventory.listNodeGuests(host.id, req.body.node, await store.listBoxes()); }
     catch (error) { return serviceFailure(reply, error, 502); }
     const target = containers.find((item) => item.vmid === Number(req.body.vmid));
-    if (!target) return reply.code(404).send({ error: 'proxmox container not found' });
-    if (target.linkedBoxId && target.linkedBoxId !== box.id) return reply.code(409).send({ error: 'proxmox container is already linked' });
+    if (!target) return reply.code(404).send({ error: 'proxmox guest not found' });
+    if (target.linkedBoxId && target.linkedBoxId !== box.id) return reply.code(409).send({ error: 'proxmox guest is already linked' });
     try {
-      return await store.setProxmoxLink(box.id, { hostId: host.id, node: req.body.node, vmid: Number(req.body.vmid), endpoint: host.endpoint });
+      // The kind comes from the guest the inventory actually found, never from
+      // req.body: the client cannot be trusted to say what type a vmid is, and
+      // the route has already proven this vmid exists on this node.
+      return await store.setProxmoxLink(box.id, { hostId: host.id, node: req.body.node, vmid: Number(req.body.vmid), kind: target.kind, endpoint: host.endpoint });
     } catch (error) {
       return serviceFailure(reply, error, /already linked/i.test(error?.message || '') ? 409 : 400);
     }
@@ -1224,7 +1227,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     try {
       const box = await store.getBox(req.params.id);
       if (!box) return reply.code(404).send({ error: 'box not found' });
-      if (box.proxmox && lifecycleManager.hasActiveTarget(box.proxmox)) return reply.code(409).send({ error: 'container has an active lifecycle job' });
+      if (box.proxmox && lifecycleManager.hasActiveTarget(box.proxmox)) return reply.code(409).send({ error: 'guest has an active lifecycle job' });
       return await store.clearProxmoxLink(box.id);
     } catch (error) { return serviceFailure(reply, error); }
   });
