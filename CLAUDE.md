@@ -223,7 +223,14 @@ pattern for new modules.
   (`localShell` = `none`/`omz`/`omb`) that backs a terminal on the Tmuxifier host itself.
 - `sessions.js` — PTY lifecycle: PTYs keyed by `boxId`, listeners refcounted, a `graceSeconds`
   window keeps a dropped PTY alive for seamless reconnects, then it's killed while the on-box tmux
-  session keeps running.
+  session keeps running. `attach` replays the last 64KB of output so a reattaching client isn't
+  looking at a blank screen, and that replay is **prefixed with a reset+clear** (`REPLAY_CLEAR`):
+  a reconnecting client is the common case and its emulator was never cleared, so writing the
+  buffer straight onto the screen it already holds re-runs that window's scrolls and absolute
+  cursor moves over the cells they produced — duplicated lines, characters in the wrong columns.
+  The SGR reset leads because `CSI 2J` fills with the *current* background colour. Do not rely on
+  the attach size-nudge to clean this up: it only makes tmux repaint cells tmux thinks changed,
+  which is why the client's own `[disconnected…]` notice could survive a reattach.
 - `status.js` — per-box reachability/status probes; coalesces concurrent probes of the same box
   (in-flight de-dup) so multiple pollers don't fan out duplicate SSH connections. Each probe also
   reports every tmux session's active-pane command and last-output time, plus the box's own

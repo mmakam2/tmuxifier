@@ -203,3 +203,38 @@ test('hasLiveSessionForBox is false for a box with neither', () => {
   const mgr = createSessionManager({ spawn: () => fakePty() });
   expect(mgr.hasLiveSessionForBox('b1')).toBe(false);
 });
+
+// The replay lands on a client whose emulator was NEVER cleared. On a reconnect
+// inside the PTY grace window that client still holds the screen it drew, so
+// writing the buffer on top of it re-runs the window's scrolls and absolute
+// cursor moves over the cells they already produced — the duplicated, smeared,
+// misplaced characters that only a full browser restart cleared, because only a
+// restart outlives the grace window and forces a fresh tmux attach.
+//
+// So the replay clears the screen it is about to rebuild. The SGR reset leads
+// and is load-bearing: CSI 2J fills with the CURRENT background colour, so
+// clearing while the client still carries a full-screen program's background
+// would flood the terminal with it instead of blanking it.
+test('attach clears the screen before replaying so the replay cannot paint over what is already there', () => {
+  const pty = fakePty();
+  const mgr = createSessionManager({ spawn: () => pty });
+  const entry = mgr.open({ key: 'box1', box: { host: 'h', user: 'me' }, session: 'web', size: { cols: 80, rows: 24 } });
+  pty.emit('screen-the-client-already-drew');
+
+  let got = '';
+  mgr.attach(entry, (d) => { got += d; });
+  expect(got).toBe('\x1b[0m\x1b[H\x1b[2Jscreen-the-client-already-drew');
+});
+
+// The clear rides along with a replay; it is not an unconditional write. A
+// session that has produced nothing has no screen to rebuild, and clearing
+// anyway would wipe whatever the client legitimately had.
+test('attach sends nothing when there is no output to replay', () => {
+  const pty = fakePty();
+  const mgr = createSessionManager({ spawn: () => pty });
+  const entry = mgr.open({ key: 'box1', box: { host: 'h' }, session: 'web', size: { cols: 80, rows: 24 } });
+
+  let got = '';
+  mgr.attach(entry, (d) => { got += d; });
+  expect(got).toBe('');
+});

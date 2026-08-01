@@ -18,6 +18,18 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
   // (e.g. "\x1b[>0;276;0c") and that answer gets injected as keystrokes into the
   // shell. Live output keeps its queries so the asking program still gets a reply.
   const QUERY_RE = /\x1b\[[?>=]?[0-9;]*[cn]/g;
+  // Prefixed to the replay so it rebuilds a BLANK screen. A reattaching client
+  // is usually a dropped WebSocket coming back inside the grace window, and its
+  // emulator was never cleared — it still holds the screen it drew. Writing the
+  // buffer over that re-runs the window's scrolls and absolute cursor moves on
+  // top of the cells they already produced, which is duplicated lines and
+  // characters landing in the wrong columns. It also strands the client's own
+  // "[disconnected…]"/"[connecting…]" notices in the pane, which tmux's redraw
+  // does not reliably paint over (it only repaints cells tmux thinks changed).
+  // The SGR reset leads and is load-bearing: CSI 2J fills with the CURRENT
+  // background colour, so clearing while the client still carries a full-screen
+  // program's background would flood the terminal instead of blanking it.
+  const REPLAY_CLEAR = '\x1b[0m\x1b[H\x1b[2J';
   function pipeOutput(entry) {
     entry.pty.onData((d) => {
       entry.buffer = (entry.buffer + d).slice(-REPLAY_MAX);
@@ -117,7 +129,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     // instead of a blank terminal until the next keystroke.
     if (entry.buffer) {
       const replay = entry.buffer.replace(QUERY_RE, '');
-      if (replay) { try { onData(replay); } catch { /* ignore */ } }
+      if (replay) { try { onData(REPLAY_CLEAR + replay); } catch { /* ignore */ } }
     }
     entry.listeners.add(onData);
     if (!entry.exited) {
