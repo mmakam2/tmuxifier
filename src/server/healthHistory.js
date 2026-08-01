@@ -36,47 +36,28 @@ export function sampleOf(status, at, opts = {}) {
     if (disk != null) sample.diskPct = disk;
   }
   // Agent state for the box's configured session only (opts.sessionName).
-  // PRESENCE comes from the pane command alone; the two timestamps (the box
-  // clock and the pane's last output) only decide working vs waiting, and
-  // either one missing yields 'unknown' rather than a guess. A poll whose
-  // __META__ line failed (no boxNowSec) must
-  // neither erase the agent (false agent-done) nor fabricate an observed idle
-  // state: a fabricated 'working' would make the recovery poll look like a
-  // genuine working->waiting edge and fire a false agent-input one poll after
-  // the gap. So no clock => 'unknown', which sits on neither side of the
-  // input edge (at worst a real transition inside the gap is missed once).
+  // Hook-only statusing: `agent` (working/waiting) comes exclusively from the
+  // on-box Claude Code hook's marker (claudeAgentHooks.js) — pane output
+  // timing is never consulted, so a claude pane with no marker carries no
+  // agent state at all (the deliberate cue that the box needs a setup rerun).
+  // PRESENCE stays pane-based: `agentPresent` is set whenever the pane runs
+  // claude, marker or not. It drives nothing visible; its sole consumer is
+  // the agent-done edge, where it keeps a one-poll marker gap (a claude
+  // restarting in place — SessionEnd deleted the marker, SessionStart hasn't
+  // rewritten it yet) from reading as the agent exiting. A stale marker for
+  // an exited claude stays inert behind the same paneCmd gate.
   // agentAttached is a SESSION property, set whenever the configured session
   // exists, so suppression still sees attachment on the sample where claude
   // has already exited.
-  const { sessionName, agentIdleSec } = opts;
+  const { sessionName } = opts;
   if (sessionName && Array.isArray(s.sessions)) {
     const sess = s.sessions.find((x) => x.name === sessionName);
     if (sess) {
       sample.agentAttached = !!sess.attached;
       if (/^claude(-|$)/.test(String(sess.paneCmd || ''))) {
+        sample.agentPresent = true;
         const mark = s.agentMarks && s.agentMarks[sessionName];
-        if (mark) {
-          // Hook-sourced ground truth (claudeAgentHooks.js): the on-box hook
-          // recorded the last lifecycle edge, so no clock math and no
-          // 'unknown' path. Presence still comes from paneCmd above — a
-          // stale marker for an exited claude is inert. The source tag is
-          // only set here so heuristic samples keep their exact shape.
-          sample.agent = mark.state;
-          sample.agentSrc = 'hook';
-        } else {
-          // `sess.activity` is the pane's last-OUTPUT time (status.js probes
-          // #{window_activity}, not #{session_activity} — see the note there).
-          // An absent or unparseable timestamp gets the same 'unknown' treatment
-          // as a missing clock: reading it as 0 would make the idle interval
-          // enormous and report a confident 'waiting' for a working agent.
-          const activity = Number(sess.activity);
-          if (m && m.boxNowSec != null && Number.isFinite(activity) && activity > 0) {
-            const idleSec = m.boxNowSec - activity;
-            sample.agent = idleSec >= Number(agentIdleSec ?? 20) ? 'waiting' : 'working';
-          } else {
-            sample.agent = 'unknown';
-          }
-        }
+        if (mark) sample.agent = mark.state;
       }
     }
   }
@@ -90,15 +71,6 @@ export function initThresholdState() {
   // fresh crossing and replay a threshold event on every restart.
   return { cpu: false, cpuStreak: 0, cpuSeeded: true, mem: false, disk: false };
 }
-
-// Consecutive 'working' samples required before going quiet counts as the agent
-// handing control back. A parked Claude Code pane emits a brief periodic blip of
-// output (observed live: every 30 minutes, one poll wide), and since the agent
-// signal became pane OUTPUT in v1.22.3 that blip looked exactly like a task
-// starting and finishing — firing "claude is waiting for your input" on a loop
-// for agents that were doing nothing. Same shape as the cpu streak below: a
-// spiky signal needs confirmation before it is believed.
-const AGENT_WORK_MIN_SAMPLES = 2;
 
 // Pure edge detector. Reachability/auth edges compare prev↔next (stateless).
 // Metric-threshold edges use `state` + hysteresis so a box that stays hot fires
@@ -118,7 +90,6 @@ export function classifyTransitions(prev, next, thresholds, state) {
     st.cpu = !!(next.up && next.cpuPct != null && next.cpuPct >= warn.cpu);
     st.cpuStreak = st.cpu ? 2 : 0;
     st.cpuSeeded = !!(next.up && next.cpuPct != null);
-    st.agentWorkStreak = next.agent === 'working' ? AGENT_WORK_MIN_SAMPLES : 0;
     return { events, state: st };
   }
 
@@ -136,37 +107,26 @@ export function classifyTransitions(prev, next, thresholds, state) {
     events.push({ kind: 'down' });
   }
 
-  // Agent edges (box's configured session only). Suppressed while that session
-  // is attached — watching the terminal is its own notification; agent-done
-  // checks BOTH ends of the edge, since the user may attach in the final poll
-  // interval. 'unknown' (clock unavailable) matches neither side of the input
-  // edge but still counts as presence for agent-done. Edge-triggered like the
-  // others: no emission without a prev sample. agent-done additionally
-  // requires !next.stopped: a Proxmox-stopped box carries no `sessions` (see
-  // sampleOf), so it always looks like "agent disappeared" — but that absence
-  // is a stopped container, not a live probe's observation, so it must not
-  // read as the agent finishing.
+  // Agent edges (box's configured session only). Both sides of an agent-input
+  // edge are hook-sourced (sampleOf sets `agent` only from a marker), so a
+  // single-sample working→waiting is always a real turn ending — the old
+  // anti-blip streak guarded a heuristic that no longer exists. Suppressed
+  // while that session is attached — watching the terminal is its own
+  // notification; agent-done checks BOTH ends of the edge, since the user may
+  // attach in the final poll interval. agent-done additionally requires
+  // !next.agentPresent — a claude pane still running with no marker is a
+  // restart gap (SessionEnd deleted the marker before the new SessionStart
+  // rewrote it), not an exit — and !next.stopped: a Proxmox-stopped box
+  // carries no `sessions` (see sampleOf), so it always looks like "agent
+  // disappeared" — but that absence is a stopped container, not a live
+  // probe's observation, so it must not read as the agent finishing.
   if (prev) {
-    // A nullish streak means the run behind `prev` was never observed — the
-    // series starts here (a restart, or a caller threading fresh state). Trust
-    // prev's own reading in that case: dropping a real "waiting for input" is
-    // worse than one unconfirmed ping. Only an actually-observed short run is
-    // treated as the periodic blip it is. Hook-sourced samples skip the streak
-    // entirely: the blip false-positive is a heuristic-only artifact (output
-    // alone never changes a marker), so their single-sample edge is real.
-    const observedRun = st.agentWorkStreak == null ? AGENT_WORK_MIN_SAMPLES : st.agentWorkStreak;
-    if (prev.agent === 'working' && next.agent === 'waiting' && !next.agentAttached
-        && (prev.agentSrc === 'hook' || observedRun >= AGENT_WORK_MIN_SAMPLES)) {
+    if (prev.agent === 'working' && next.agent === 'waiting' && !next.agentAttached) {
       events.push({ kind: 'agent-input' });
-    } else if (prev.agent && !next.agent && next.up && !next.stopped && !prev.agentAttached && !next.agentAttached) {
+    } else if (prev.agent && !next.agent && !next.agentPresent && next.up && !next.stopped && !prev.agentAttached && !next.agentAttached) {
       events.push({ kind: 'agent-done' });
     }
   }
-  // Updated AFTER the edge check, so the value read above describes the run
-  // ending at `prev`. Capped so a long task cannot grow it without bound.
-  st.agentWorkStreak = next.agent === 'working'
-    ? Math.min(AGENT_WORK_MIN_SAMPLES, (st.agentWorkStreak ?? 0) + 1)
-    : 0;
 
   // mem / disk: immediate crossing with hysteresis clear
   for (const metric of ['mem', 'disk']) {
@@ -208,7 +168,6 @@ export function createHealthHistory({
   maxSamples = 120,
   maxEvents = 200,
   thresholds = { cpu: 90, mem: 90, disk: 90, hysteresis: 5 },
-  agentIdleSec = 20,
   load = () => [],
   save = () => {},
   now = () => Date.now(),
@@ -244,7 +203,7 @@ export function createHealthHistory({
         present.add(box.id);
         const status = snapshot[box.id];
         if (!status) continue;
-        const sample = sampleOf(status, at, { sessionName: box.sessionName, agentIdleSec });
+        const sample = sampleOf(status, at, { sessionName: box.sessionName });
         const ring = series.get(box.id) || [];
         ring.push(sample);
         while (ring.length > maxSamples) ring.shift();

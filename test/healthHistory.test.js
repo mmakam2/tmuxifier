@@ -178,55 +178,33 @@ test('one record() pass saves the events log once, not once per event', () => {
   expect(saves - before).toBe(1);
 });
 
-const AGENT = { agentIdleSec: 45, sessionName: 'web' };
+const AGENT = { sessionName: 'web' };
 const withAgent = (over) => ({ reachable: true, metrics: { boxNowSec: 1000 }, sessions: [{ name: 'web', attached: false, activity: 1000, paneCmd: 'claude' }], ...over });
 
-test('sampleOf marks a busy claude session working, an idle one waiting', () => {
-  // active now → working
-  expect(sampleOf(withAgent(), 5, AGENT).agent).toBe('working');
-  // idle 60s (>= 45) → waiting
+test('sampleOf: a claude pane with no marker carries NO agent state, only presence', () => {
+  // Hook-only statusing: pane output timing is never consulted, so a fresh
+  // pane and a long-quiet pane read identically — no working/waiting guess.
+  const busy = sampleOf(withAgent(), 5, AGENT);
+  expect(busy.agent).toBeUndefined();
+  expect(busy.agentPresent).toBe(true);
   const idle = withAgent({ sessions: [{ name: 'web', attached: false, activity: 940, paneCmd: 'claude' }] });
-  expect(sampleOf(idle, 5, AGENT).agent).toBe('waiting');
+  const s = sampleOf(idle, 5, AGENT);
+  expect(s.agent).toBeUndefined();
+  expect(s.agentPresent).toBe(true);
 });
 
-test('sampleOf without a box clock reports presence with UNKNOWN idleness (never waiting, working, or absent)', () => {
-  // A failed __META__ line must not erase the agent (a false agent-done) and
-  // must not fabricate an observed idle state either: a fabricated 'working'
-  // would make the recovery poll look like a genuine working->waiting edge and
-  // fire a false agent-input one poll later. 'unknown' sits on neither side of
-  // the input edge.
+test('sampleOf: no box clock changes nothing — the marker is the only source either way', () => {
   const noMeta = withAgent({ metrics: undefined });
-  expect(sampleOf(noMeta, 5, AGENT).agent).toBe('unknown');
-});
-
-test('sampleOf reports UNKNOWN idleness when the activity timestamp is missing or unusable', () => {
-  // The activity field comes from a tmux format var. A tmux too old to know it
-  // (or any parse hiccup) renders it empty, and treating that as timestamp 0
-  // would compute an enormous idle interval and report a confident 'waiting'
-  // for a claude that is actually working — the same false reading the
-  // session_activity signal used to produce. Absent evidence is 'unknown'.
-  for (const activity of [undefined, 0, '', NaN, 'x']) {
-    const bad = withAgent({ sessions: [{ name: 'web', attached: false, activity, paneCmd: 'claude' }] });
-    expect(sampleOf(bad, 5, AGENT).agent).toBe('unknown');
-  }
-});
-
-test('a __META__ gap in the middle of a continuous wait fires no agent-input on recovery', () => {
-  // waiting -> (clock missing: unknown) -> waiting must be silent end to end;
-  // agent-done must still fire THROUGH an unknown sample (presence is
-  // pane-based, not clock-based).
-  const waiting = { up: true, agent: 'waiting', agentAttached: false };
-  const unknown = { up: true, agent: 'unknown', agentAttached: false };
-  const st0 = initThresholdState();
-  const r1 = classifyTransitions(waiting, unknown, TH, st0);
-  const r2 = classifyTransitions(unknown, waiting, TH, r1.state);
-  expect([...r1.events, ...r2.events].filter((e) => e.kind.startsWith('agent-'))).toEqual([]);
-  const gone = { up: true, agentAttached: false };
-  expect(classifyTransitions(unknown, gone, TH, initThresholdState()).events).toContainEqual({ kind: 'agent-done' });
+  expect(sampleOf(noMeta, 5, AGENT).agent).toBeUndefined();
+  expect(sampleOf(noMeta, 5, AGENT).agentPresent).toBe(true);
+  const marked = withAgent({ metrics: undefined, agentMarks: { web: { state: 'working', ts: 990 } } });
+  expect(sampleOf(marked, 5, AGENT).agent).toBe('working');
 });
 
 test('sampleOf ignores non-claude panes and the wrong session', () => {
-  expect(sampleOf(withAgent({ sessions: [{ name: 'web', attached: false, activity: 1000, paneCmd: 'zsh' }] }), 5, AGENT).agent).toBeUndefined();
+  const zsh = sampleOf(withAgent({ sessions: [{ name: 'web', attached: false, activity: 1000, paneCmd: 'zsh' }] }), 5, AGENT);
+  expect(zsh.agent).toBeUndefined();
+  expect(zsh.agentPresent).toBeUndefined();
   expect(sampleOf(withAgent({ sessions: [{ name: 'other', attached: false, activity: 940, paneCmd: 'claude' }] }), 5, AGENT).agent).toBeUndefined();
   expect(sampleOf(withAgent(), 5, {}).agent).toBeUndefined(); // no sessionName → no agent state
 });
@@ -277,41 +255,29 @@ test('agent kinds never fire on the first sample (no prev)', () => {
   expect(classifyTransitions(null, idle, TH, initThresholdState()).events).toEqual([]);
 });
 
-// A parked Claude Code pane emits a brief blip of output on a periodic timer
-// (observed live: every 30 minutes, one poll wide, on three separate boxes each
-// with its own phase). Since v1.22.3 the agent signal is pane OUTPUT, so that
-// blip reads as one 'working' sample and the return to quiet reads as a
-// working->waiting edge: "claude is waiting for your input", every 30 minutes,
-// forever, on every box with a parked agent. The agent did no work and asked for
-// nothing. Work has to be OBSERVED across more than one poll before going quiet
-// counts as handing back control — the same two-consecutive-samples rule the
-// spiky cpu metric already uses.
-test('a one-sample output blip on a parked agent fires no agent-input', () => {
-  const waiting = { up: true, agent: 'waiting', agentAttached: false };
-  const working = { up: true, agent: 'working', agentAttached: false };
-
-  let st = initThresholdState();
-  // Establish that the agent is parked and quiet.
-  st = classifyTransitions(waiting, waiting, TH, st).state;
-  // The periodic repaint: exactly one poll sees fresh output.
-  const blip = classifyTransitions(waiting, working, TH, st);
-  expect(blip.events).not.toContainEqual({ kind: 'agent-input' });
-  // Back to quiet on the next poll — this is the edge that used to fire.
-  const back = classifyTransitions(working, waiting, TH, blip.state);
-  expect(back.events).not.toContainEqual({ kind: 'agent-input' });
-});
-
-test('the blip suppression does not accumulate: repeated blips stay silent', () => {
+// The old anti-blip streak (AGENT_WORK_MIN_SAMPLES) is gone with the output
+// heuristic: only a hook marker can produce 'working' now, so a single-poll
+// working->waiting edge is always a real turn ending and must fire at once.
+test('a single-poll working sample followed by waiting fires agent-input immediately', () => {
   const waiting = { up: true, agent: 'waiting', agentAttached: false };
   const working = { up: true, agent: 'working', agentAttached: false };
   let st = classifyTransitions(waiting, waiting, TH, initThresholdState()).state;
-  for (let cycle = 0; cycle < 4; cycle += 1) {
-    const r1 = classifyTransitions(waiting, working, TH, st);
-    const r2 = classifyTransitions(working, waiting, TH, r1.state);
-    st = classifyTransitions(waiting, waiting, TH, r2.state).state;
-    expect(r1.events).not.toContainEqual({ kind: 'agent-input' });
-    expect(r2.events).not.toContainEqual({ kind: 'agent-input' });
-  }
+  st = classifyTransitions(waiting, working, TH, st).state;
+  const end = classifyTransitions(working, waiting, TH, st);
+  expect(end.events).toContainEqual({ kind: 'agent-input' });
+});
+
+// A hooked claude restarting in place: SessionEnd deletes the marker before
+// the new claude's SessionStart rewrites it, so one poll can see the pane
+// still running claude with no marker. Presence (agentPresent) gates
+// agent-done so that gap stays silent; the claude actually exiting (no pane,
+// no agentPresent) still fires.
+test('a marker gap while the claude pane is still present fires no agent-done', () => {
+  const marked = { up: true, agent: 'waiting', agentAttached: false, agentPresent: true };
+  const gapped = { up: true, agentAttached: false, agentPresent: true };
+  expect(classifyTransitions(marked, gapped, TH, initThresholdState()).events).toEqual([]);
+  const gone = { up: true, agentAttached: false };
+  expect(classifyTransitions(marked, gone, TH, initThresholdState()).events).toContainEqual({ kind: 'agent-done' });
 });
 
 test('sustained work followed by quiet still fires agent-input exactly once', () => {
@@ -357,57 +323,30 @@ test('a working->waiting edge with no prior history still fires (restart toleran
     .toContainEqual({ kind: 'agent-input' });
 });
 
-test('sampleOf: a hook marker wins over the idle heuristic in both directions', () => {
+test('sampleOf: the marker is the sole source of working/waiting, regardless of output timing', () => {
   // Marker says waiting although output is fresh (the parked-pane blip shape).
   const busy = withAgent({ agentMarks: { web: { state: 'waiting', ts: 990 } } });
   const s1 = sampleOf(busy, 5, AGENT);
   expect(s1.agent).toBe('waiting');
-  expect(s1.agentSrc).toBe('hook');
-  // Marker says working although output has been idle past the threshold.
+  expect(s1.agentPresent).toBe(true);
+  // Marker says working although output has been quiet for ages.
   const quiet = withAgent({
     sessions: [{ name: 'web', attached: false, activity: 100, paneCmd: 'claude' }],
     agentMarks: { web: { state: 'working', ts: 90 } },
   });
-  const s2 = sampleOf(quiet, 5, AGENT);
-  expect(s2.agent).toBe('working');
-  expect(s2.agentSrc).toBe('hook');
+  expect(sampleOf(quiet, 5, AGENT).agent).toBe('working');
 });
 
-test('sampleOf: hook marker needs no box clock (no unknown on the hook path)', () => {
-  const noClock = withAgent({ metrics: undefined, agentMarks: { web: { state: 'working', ts: 990 } } });
-  expect(sampleOf(noClock, 5, AGENT).agent).toBe('working');
-});
-
-test('sampleOf: marker for another session is ignored, and no claude pane means no agent at all', () => {
+test('sampleOf: a marker for another session is ignored, and a stale marker for an exited claude is inert', () => {
   const otherSession = withAgent({ agentMarks: { ops: { state: 'waiting', ts: 990 } } });
   const s = sampleOf(otherSession, 5, AGENT);
-  expect(s.agent).toBe('working');          // falls back to the heuristic
-  expect(s.agentSrc).toBeUndefined();       // heuristic samples carry no source tag
+  expect(s.agent).toBeUndefined();          // no marker for THIS session → no state
+  expect(s.agentPresent).toBe(true);
   const noClaude = withAgent({
     sessions: [{ name: 'web', attached: false, activity: 100, paneCmd: 'bash' }],
     agentMarks: { web: { state: 'working', ts: 90 } },
   });
-  expect(sampleOf(noClaude, 5, AGENT).agent).toBeUndefined(); // stale marker for an exited claude is inert
-});
-
-test('classifyTransitions: hook-sourced working→waiting fires agent-input without the streak', () => {
-  const st = initThresholdState();
-  st.agentWorkStreak = 1; // below AGENT_WORK_MIN_SAMPLES
-  const r = classifyTransitions(
-    { up: true, agent: 'working', agentSrc: 'hook', agentAttached: false },
-    { up: true, agent: 'waiting', agentAttached: false },
-    TH, st,
-  );
-  expect(r.events).toEqual([{ kind: 'agent-input' }]);
-});
-
-test('classifyTransitions: heuristic-sourced short run still needs the streak (blip guard intact)', () => {
-  const st = initThresholdState();
-  st.agentWorkStreak = 1;
-  const r = classifyTransitions(
-    { up: true, agent: 'working', agentAttached: false },
-    { up: true, agent: 'waiting', agentAttached: false },
-    TH, st,
-  );
-  expect(r.events).toEqual([]);
+  const dead = sampleOf(noClaude, 5, AGENT);
+  expect(dead.agent).toBeUndefined();       // paneCmd gate: marker without a claude pane is inert
+  expect(dead.agentPresent).toBeUndefined();
 });
