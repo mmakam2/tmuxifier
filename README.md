@@ -236,6 +236,55 @@ Two more things worth knowing about the security model:
   deny sign-in — under **Require a passkey** that would deny everyone, and the break-glass above
   is the remedy.
 
+## Architecture
+
+One Node process serves everything: a Fastify server hosts the REST API, the `/term`
+WebSocket, and the static web bundle. The browser side is a single-page TypeScript app;
+each terminal is an xterm.js pane fed by its own per-viewer PTY on the server, which
+shells out to **your** OpenSSH client — Tmuxifier stores no SSH secrets — and attaches a
+tmux session that lives on the box.
+
+```mermaid
+flowchart LR
+  subgraph browser["Your browser"]
+    SPA["Single-page app — xterm.js terminals,<br/>standby dashboard, Fleet Command,<br/>Proxmox hub, settings"]
+  end
+
+  subgraph host["Tmuxifier host (self-contained in the repo folder)"]
+    subgraph fastify["Fastify server"]
+      AUTH["Auth gate<br/>password / Google / passkeys"]
+      TERM["Per-viewer terminal PTYs"]
+      JOBS["Persisted job managers<br/>box setup · Fleet Command ·<br/>provision · lifecycle · voice install"]
+      POLL["Status poller · health events ·<br/>service checks (HTTP/TCP, Pi-hole,<br/>TrueNAS, UniFi, Immich)"]
+      PROX["Proxmox + NetBox API clients<br/>(TLS pinned, tokens sealed)"]
+      VOICE["Voice dictation<br/>local whisper.cpp — audio<br/>never leaves the host"]
+    end
+    SSHC["OpenSSH client<br/>your keys/agent/~/.ssh/config,<br/>ControlMaster multiplexing"]
+    DATA["Repo-local state<br/>data/*.json · .env · tls/ · vendor/<br/>secrets AES-256-GCM sealed"]
+  end
+
+  subgraph net["Your network"]
+    BOX["Headless boxes<br/>tmux sessions live here"]
+    PVE["Proxmox VE"]
+    NBX["NetBox"]
+    LAN["LAN services"]
+  end
+
+  SPA -->|"REST /api/* · WebSocket /term"| AUTH
+  AUTH --> TERM & JOBS & POLL & PROX & VOICE
+  TERM & JOBS & POLL -->|"ssh"| SSHC
+  SSHC --> BOX
+  PROX --> PVE & NBX
+  POLL --> LAN
+  fastify --- DATA
+```
+
+Long-running work — box setup, Fleet Command runs, Proxmox provisioning and lifecycle,
+the voice install — runs as persisted server-side jobs, so it survives the tab (and the
+network) that started it. Status probes and service checks likewise run on a server-side
+interval and serve a cached snapshot, so SSH and API traffic stays flat no matter how many
+dashboard tabs are open. The full per-module map lives in [AGENTS.md](AGENTS.md).
+
 ## How persistence works
 Each terminal runs `ssh -tt <box> "tmux -u new-session -A -D -s <session>"` (`-u` forces UTF-8
 output so glyphs survive a C/POSIX locale; `-D` detaches any
