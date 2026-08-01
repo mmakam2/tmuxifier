@@ -1,5 +1,5 @@
 import { test, expect, vi } from 'vitest';
-import { createSessionManager, provisionKey } from '../src/server/sessions.js';
+import { createSessionManager, provisionKey, terminalKey, localKey, safeClientId } from '../src/server/sessions.js';
 
 // Minimal fake PTY so we can drive output without a real ssh/tmux process.
 function fakePty() {
@@ -187,7 +187,7 @@ test('attach resize jiggle restores the original width (node-pty cols mutates on
 // needsAuth backoff mid-finish. The guard has to cover both keys.
 test('hasLiveSessionForBox sees a provision PTY, not just a terminal session', () => {
   const mgr = createSessionManager({ spawn: () => fakePty() });
-  mgr.provision({ key: provisionKey('b1'), box: { host: 'h', user: 'me' }, script: 'true' });
+  mgr.provision({ key: provisionKey('b1'), box: { id: 'b1', host: 'h', user: 'me' }, script: 'true' });
 
   expect(mgr.hasLiveSession('b1')).toBe(false);       // no ordinary terminal
   expect(mgr.hasLiveSessionForBox('b1')).toBe(true);  // but a live interactive login
@@ -195,7 +195,7 @@ test('hasLiveSessionForBox sees a provision PTY, not just a terminal session', (
 
 test('hasLiveSessionForBox sees an ordinary terminal session too', () => {
   const mgr = createSessionManager({ spawn: () => fakePty() });
-  mgr.open({ key: 'b1', box: { host: 'h', user: 'me' }, session: 'web', size: { cols: 80, rows: 24 } });
+  mgr.open({ key: terminalKey('b1', 'viewer'), box: { id: 'b1', host: 'h', user: 'me' }, session: 'web', size: { cols: 80, rows: 24 } });
   expect(mgr.hasLiveSessionForBox('b1')).toBe(true);
 });
 
@@ -237,4 +237,145 @@ test('attach sends nothing when there is no output to replay', () => {
   let got = '';
   mgr.attach(entry, (d) => { got += d; });
   expect(got).toBe('');
+});
+
+// --- one attach per viewer -------------------------------------------------
+//
+// Tmuxifier used to key a box's PTY by box id alone, so every browser watching
+// a box shared ONE ssh and ONE `tmux attach`. That is mirroring, not
+// multiplexing: there is a single screen, drawn at a single size, and whichever
+// client resized last won. Any viewer whose window was SMALLER than that size
+// then received cursor moves past its own last row/column — the smeared,
+// misplaced characters reported from a multi-machine setup. (A viewer larger
+// than the stream is fine; it just shows unused margin.)
+//
+// Now the key carries a per-viewer client id, so each browser gets its own
+// attach and tmux — the actual multiplexer — sizes each client's screen itself.
+
+test('terminalKey isolates viewers by client id but is stable for one viewer', () => {
+  expect(terminalKey('box1', 'aaa')).toBe(terminalKey('box1', 'aaa')); // reconnect reuses its PTY
+  expect(terminalKey('box1', 'aaa')).not.toBe(terminalKey('box1', 'bbb'));
+  expect(terminalKey('box1', 'aaa')).not.toBe(terminalKey('box2', 'aaa'));
+});
+
+// A client id only ever becomes a Map key, never shell text — but it arrives
+// from the browser, so it is bounded and charset-checked anyway. Anything
+// unusable collapses to one shared id, which is exactly the old behaviour: a
+// stale cached bundle that sends no id keeps working, sharing a PTY as before,
+// instead of minting a fresh ssh on every reconnect.
+test('safeClientId falls back to a shared id for a missing or unusable one', () => {
+  expect(safeClientId('AbC-123_x')).toBe('AbC-123_x');
+  expect(safeClientId(undefined)).toBe('shared');
+  expect(safeClientId('')).toBe('shared');
+  expect(safeClientId('has spaces')).toBe('shared');
+  expect(safeClientId('a:b')).toBe('shared');
+  expect(safeClientId('x'.repeat(65))).toBe('shared');
+  expect(localKey(undefined)).toBe(localKey('shared'));
+});
+
+test('two viewers of one box get their own PTY instead of sharing a screen', () => {
+  const spawned = [];
+  const mgr = createSessionManager({ spawn: () => { const p = fakePty(); spawned.push(p); return p; } });
+  const box = { id: 'box1', host: 'h', user: 'me' };
+
+  const a = mgr.open({ key: terminalKey('box1', 'laptop'), box, session: 'web', size: { cols: 100, rows: 30 } });
+  const b = mgr.open({ key: terminalKey('box1', 'desktop'), box, session: 'web', size: { cols: 200, rows: 50 } });
+
+  expect(a).not.toBe(b);
+  expect(spawned).toHaveLength(2); // two ssh/tmux clients, not one shared one
+  expect(mgr._count()).toBe(2);
+});
+
+test('one viewer reconnecting reuses its own PTY rather than spawning another', () => {
+  const spawned = [];
+  const mgr = createSessionManager({ spawn: () => { const p = fakePty(); spawned.push(p); return p; } });
+  const box = { id: 'box1', host: 'h' };
+  const key = terminalKey('box1', 'laptop');
+
+  const first = mgr.open({ key, box, session: 'web', size: { cols: 80, rows: 24 } });
+  const again = mgr.open({ key, box, session: 'web', size: { cols: 80, rows: 24 } });
+
+  expect(again).toBe(first);
+  expect(spawned).toHaveLength(1);
+});
+
+// The probe and Fleet guards ask "is any interactive login live for this box?"
+// so they never fire a BatchMode ssh into a live password prompt. They used to
+// answer it by testing two literal keys; with a viewer id in the key that no
+// longer works, so entries carry the box as a group instead.
+test('hasLiveSessionForBox sees a terminal opened under any viewer id', () => {
+  const mgr = createSessionManager({ spawn: () => fakePty() });
+  mgr.open({ key: terminalKey('box1', 'some-viewer'), box: { id: 'box1', host: 'h' }, session: 'web', size: { cols: 80, rows: 24 } });
+
+  expect(mgr.hasLiveSessionForBox('box1')).toBe(true);
+  expect(mgr.hasLiveSessionForBox('box2')).toBe(false);
+});
+
+test('closeGroup drops every viewer of a box, not just the one that asked', () => {
+  const killed = [];
+  const mgr = createSessionManager({ spawn: () => { const p = fakePty(); p.kill = () => killed.push(p); return p; } });
+  const box = { id: 'box1', host: 'h' };
+  mgr.open({ key: terminalKey('box1', 'laptop'), box, session: 'web', size: { cols: 80, rows: 24 } });
+  mgr.open({ key: terminalKey('box1', 'desktop'), box, session: 'web', size: { cols: 80, rows: 24 } });
+  mgr.open({ key: terminalKey('box2', 'laptop'), box: { id: 'box2', host: 'h2' }, session: 'web', size: { cols: 80, rows: 24 } });
+
+  mgr.closeGroup('box1');
+
+  expect(killed).toHaveLength(2);
+  expect(mgr.hasLiveSessionForBox('box1')).toBe(false);
+  expect(mgr.hasLiveSessionForBox('box2')).toBe(true); // untouched
+});
+
+// Editing a box's connection fields drops its terminals so they reconnect with
+// the new settings. It must NOT abort an interactive setup finish running on
+// the same box — that PTY is someone typing an ssh password.
+test('closeGroup can drop a box terminals while leaving its provision PTY alive', () => {
+  const mgr = createSessionManager({ spawn: () => fakePty() });
+  const box = { id: 'box1', host: 'h' };
+  mgr.open({ key: terminalKey('box1', 'laptop'), box, session: 'web', size: { cols: 80, rows: 24 } });
+  mgr.provision({ key: provisionKey('box1'), box, script: 'true' });
+
+  mgr.closeGroup('box1', 'terminal');
+
+  expect(mgr.hasLiveSession(terminalKey('box1', 'laptop'))).toBe(false);
+  expect(mgr.hasLiveSession(provisionKey('box1'))).toBe(true);
+});
+
+// A viewer id comes from the browser, and each new one costs a real ssh process
+// and a real tmux client. Bounded so a buggy or hostile client cannot mint them
+// without limit.
+test('opening more viewers than the cap throws instead of spawning without limit', () => {
+  const mgr = createSessionManager({ spawn: () => fakePty(), maxViewersPerBox: 2 });
+  const box = { id: 'box1', host: 'h' };
+  // Attached, i.e. genuinely being watched — an unwatched PTY yields its slot.
+  mgr.attach(mgr.open({ key: terminalKey('box1', 'v1'), box, session: 'web', size: { cols: 80, rows: 24 } }), () => {});
+  mgr.attach(mgr.open({ key: terminalKey('box1', 'v2'), box, session: 'web', size: { cols: 80, rows: 24 } }), () => {});
+
+  expect(() => mgr.open({ key: terminalKey('box1', 'v3'), box, session: 'web', size: { cols: 80, rows: 24 } }))
+    .toThrow(/too many viewers/i);
+  // An already-open viewer still reconnects once the cap is reached.
+  expect(() => mgr.open({ key: terminalKey('box1', 'v1'), box, session: 'web', size: { cols: 80, rows: 24 } }))
+    .not.toThrow();
+});
+
+// The cap counts LIVE viewers, and a browser tab that has gone away is not one.
+// Its PTY lingers only so a reconnect can reclaim it, and holding a slot for
+// the full grace window would let a handful of opened-and-closed tabs lock a
+// box out of new viewers for 45 seconds.
+test('an abandoned viewer in its grace window yields its slot to a new one', () => {
+  const mgr = createSessionManager({ spawn: () => fakePty(), maxViewersPerBox: 2 });
+  const box = { id: 'box1', host: 'h' };
+  const size = { cols: 80, rows: 24 };
+
+  const a = mgr.open({ key: terminalKey('box1', 'v1'), box, session: 'web', size });
+  const offA = mgr.attach(a, () => {});
+  const b = mgr.open({ key: terminalKey('box1', 'v2'), box, session: 'web', size });
+  mgr.attach(b, () => {});
+
+  offA();          // v1's tab closed: its listener is gone…
+  mgr.detach(a);   // …and its PTY is only held for the grace window
+
+  expect(() => mgr.open({ key: terminalKey('box1', 'v3'), box, session: 'web', size })).not.toThrow();
+  expect(mgr.hasLiveSession(terminalKey('box1', 'v1'))).toBe(false); // reclaimed, not merely ignored
+  expect(mgr.hasLiveSession(terminalKey('box1', 'v2'))).toBe(true);  // a watched viewer is untouched
 });

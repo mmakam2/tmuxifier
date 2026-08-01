@@ -77,7 +77,16 @@ export function buildAttachArgv(box, session, opts = {}) {
   // and todo checkboxes arrive in the browser as underscores no matter what font
   // the terminal uses. tmux stores the pane as UTF-8 either way, so `-u` on attach
   // fixes already-running sessions on the next reconnect (no box-side cleanup).
-  let remote = `tmux -u new-session -A -D -s ${sess}`;
+  // No `-D`. It was right while Tmuxifier mirrored ONE `tmux attach` to every
+  // browser — only one client ever existed, and the flag evicted a stale one.
+  // Each viewer now gets its own attach so tmux can size each client's screen
+  // independently, and `-D` would make every browser you open kick off the
+  // machine you just walked away from. Cross-client sizing is tmux's own
+  // `window-size`, whose default (`latest`, tmux 3.1+) already means "the most
+  // recently used client wins"; older tmux sizes to the smallest client, which
+  // is equally safe here. Neither is set from Tmuxifier — that would mean
+  // writing to the operator's tmux config on every attach.
+  let remote = `tmux -u new-session -A -s ${sess}`;
   if (box.startupCommand) remote += ` ${shSingleQuote(box.startupCommand)}`;
   argv.push(remote);
   if (opts.sshConfigFile) argv.unshift('-F', opts.sshConfigFile);

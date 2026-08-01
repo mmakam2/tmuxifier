@@ -6,7 +6,31 @@ import { buildAttachArgv, buildProvisionArgv } from './sshCommand.js';
 // second spelling of it is how they came to miss it (B8, 2026-07-29 review).
 export const provisionKey = (boxId) => `provision:${boxId}`;
 
-export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSeconds = 45, spawnEnv = process.env, sshConfigFile, controlDir, controlPersist, localSession = 'local', spawn = nodePty.spawn } = {}) {
+// Every viewer of a box gets its OWN key, and therefore its own ssh and its own
+// `tmux attach`. Keying by box id alone made Tmuxifier a mirror rather than a
+// multiplexer: one screen drawn at one size, fanned out to every browser, with
+// whichever client resized last deciding that size. A viewer whose window was
+// smaller than it then received cursor moves past its own last row and column,
+// which is the smeared and duplicated text a multi-machine setup reports. (The
+// other direction is harmless — a viewer wider than the stream shows margin.)
+// With one attach per viewer, tmux itself does the sizing, per client.
+const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+// The id only ever becomes a Map key — it never reaches a shell — but it comes
+// from the browser, so it is bounded and charset-checked all the same. Anything
+// unusable collapses onto one shared id, which is exactly the old behaviour: a
+// stale cached bundle that sends no id keeps working (sharing a PTY, as before)
+// instead of minting a fresh ssh on every reconnect.
+export const safeClientId = (raw) => (CLIENT_ID.test(String(raw ?? '')) ? String(raw) : 'shared');
+export const terminalKey = (boxId, clientId) => `term:${boxId}:${safeClientId(clientId)}`;
+export const localKey = (clientId) => `local:${safeClientId(clientId)}`;
+
+// The group a PTY belongs to: a box id for terminals and provisions, this
+// constant for the host's own shell. Callers act on groups ("drop this box's
+// terminals", "is any login live for this box?") because a single box now spans
+// several keys.
+export const LOCAL_GROUP = '__local__';
+
+export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSeconds = 45, spawnEnv = process.env, sshConfigFile, controlDir, controlPersist, localSession = 'local', maxViewersPerBox = 8, spawn = nodePty.spawn } = {}) {
   const entries = new Map(); // key -> entry
 
   // Bytes of recent PTY output kept per session so a reattaching client gets the
@@ -45,6 +69,15 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       if (existing.graceTimer) { clearTimeout(existing.graceTimer); existing.graceTimer = null; }
       return existing;
     }
+    // `|| key` keeps a caller that has no box id (only tests) grouped under its
+    // own key, so a missing id can never silently merge two boxes into one
+    // group. Every real caller passes a stored box, which always has an id.
+    const group = box?.id || key;
+    // A viewer id is browser-supplied and each new one costs a real ssh process
+    // and a real tmux client, so the count is bounded. Checked only past the
+    // reuse branch above: a viewer already holding a PTY must always be able to
+    // reconnect, even once the cap is reached.
+    assertViewerRoom(group);
     const argv = buildAttachArgv(box, session, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
     const pty = spawn('ssh', argv, {
       name: 'xterm-256color',
@@ -53,7 +86,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       cwd: process.cwd(),
       env: spawnEnv,
     });
-    const entry = { key, pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false, buffer: '' };
+    const entry = { key, group, kind: 'terminal', pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false, buffer: '' };
     pipeOutput(entry);
     pty.onExit(() => {
       entry.exited = true;
@@ -73,7 +106,9 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     }
     // `-u` forces UTF-8 client output so glyphs survive a C/POSIX locale (see the
     // same flag and rationale in buildAttachArgv).
-    const args = ['-u', 'new-session', '-A', '-D', '-s', localSession];
+    // No `-D` — see buildAttachArgv. The host's own shell is viewable from
+    // several machines too, and it has the same one-screen-per-viewer need.
+    const args = ['-u', 'new-session', '-A', '-s', localSession];
     if (shell === 'omz') args.push('exec zsh');
     else if (shell === 'omb') args.push('exec bash');
     const pty = spawn('tmux', args, {
@@ -83,7 +118,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       cwd: process.cwd(),
       env: spawnEnv,
     });
-    const entry = { key, pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false, buffer: '' };
+    const entry = { key, group: LOCAL_GROUP, kind: 'local', pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false, buffer: '' };
     pipeOutput(entry);
     pty.onExit(() => {
       entry.exited = true;
@@ -109,7 +144,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       cwd: process.cwd(),
       env: spawnEnv,
     });
-    const entry = { key, pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false, exitCode: null, buffer: '' };
+    const entry = { key, group: box?.id || key, kind: 'provision', pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false, exitCode: null, buffer: '' };
     pipeOutput(entry);
     pty.onExit(({ exitCode }) => {
       entry.exited = true;
@@ -181,6 +216,43 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     const entry = entries.get(key);
     if (entry) close(entry);
   }
+  function liveInGroup(group, kind) {
+    const out = [];
+    for (const entry of entries.values()) {
+      if (entry.exited || entry.group !== group) continue;
+      if (kind && entry.kind !== kind) continue;
+      out.push(entry);
+    }
+    return out;
+  }
+  function assertViewerRoom(group) {
+    if (!(maxViewersPerBox > 0)) return;
+    const live = liveInGroup(group, 'terminal');
+    let room = live.length;
+    if (room < maxViewersPerBox) return;
+    // A PTY with no listener is a browser tab that has gone away; its ssh is
+    // held only so a reconnect inside the grace window can reclaim it. That
+    // reservation yields to a real viewer rather than refusing one — otherwise
+    // a handful of opened-and-closed tabs would lock a box out of new viewers
+    // for the whole grace window. Oldest first: Map preserves insertion order.
+    for (const entry of live) {
+      if (room < maxViewersPerBox) break;
+      if (entry.listeners.size > 0) continue;
+      close(entry);
+      room -= 1;
+    }
+    if (room >= maxViewersPerBox) {
+      throw new Error(`too many viewers for this box (max ${maxViewersPerBox})`);
+    }
+  }
+  // Act on every PTY a box owns, since one box now spans a key per viewer.
+  // Passing `kind` narrows it: editing a box's connection fields drops its
+  // terminals so they reconnect with the new settings, and must NOT abort an
+  // interactive setup finish on the same box — that PTY is someone part-way
+  // through typing an ssh password.
+  function closeGroup(group, kind) {
+    for (const entry of liveInGroup(group, kind)) close(entry);
+  }
   // True while a box's ssh/PTY is alive (connecting, attached, or in its grace
   // window). The status checker uses this to avoid probing a box that has an
   // active interactive session on the shared ControlMaster socket.
@@ -190,12 +262,13 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
   }
 
   // "Is any interactive login live for this box?" — the question the probe and
-  // Fleet guards actually mean. A box's interactive setup finish runs under the
-  // provision key, not the box id, so asking hasLiveSession(box.id) alone
-  // reports no session while the user is sitting at an ssh password prompt.
+  // Fleet guards actually mean, so they never fire a BatchMode ssh into a live
+  // password prompt. It used to test two literal keys (the box id and the
+  // provision key); with a viewer id in a terminal's key that no longer finds
+  // anything, so it asks the group instead and covers every viewer at once.
   function hasLiveSessionForBox(boxId) {
-    return hasLiveSession(boxId) || hasLiveSession(provisionKey(boxId));
+    return liveInGroup(boxId).length > 0;
   }
 
-  return { open, openLocal, provision, attach, onExit, write, resize, detach, close, closeIfUnwatched, closeKey, hasLiveSession, hasLiveSessionForBox, _count: () => entries.size };
+  return { open, openLocal, provision, attach, onExit, write, resize, detach, close, closeIfUnwatched, closeKey, closeGroup, hasLiveSession, hasLiveSessionForBox, _count: () => entries.size };
 }

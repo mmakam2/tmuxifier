@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildServer } from '../src/server/server.js';
 import { createStore } from '../src/server/store.js';
-import { createSessionManager } from '../src/server/sessions.js';
+import { createSessionManager, terminalKey, localKey } from '../src/server/sessions.js';
 import { hashPassword, COOKIE_NAME } from '../src/server/auth.js';
 import { resolveTools, buildEnsureTmuxRemote } from '../src/server/boxActions.js';
 import { setupLocalBox } from './helpers/localBox.js';
@@ -514,9 +514,10 @@ async function gateFixture(status) {
   };
   const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
   const saved = await store.addBox({ host: '192.168.1.10', sessionName: 'web' });
-  const state = { opened: false, provisioned: false };
+  const state = { opened: false, provisioned: false, openKeys: [], localKeys: [] };
   const sessions = {
-    open() { state.opened = true; return {}; },
+    open({ key }) { state.opened = true; state.openKeys.push(key); return {}; },
+    openLocal({ key }) { state.localKeys.push(key); return {}; },
     provision() { state.provisioned = true; return {}; },
     attach() {}, write() {}, resize() {}, detach() {}, close() {}, closeIfUnwatched() {}, onExit() {},
   };
@@ -581,4 +582,44 @@ test('/term is ungated when no setupManager is wired', async () => {
   const res = await raceOpenClose(`ws://127.0.0.1:${port}/term?box=${boxId}&cols=80&rows=24`, cookie);
   expect(res.open).toBe(true);
   expect(state.opened).toBe(true);
+}, 10000);
+
+// One attach per viewer: the `client` param is what stops two machines from
+// sharing a single screen at a single size, where whoever resized last won and
+// every smaller viewer rendered cursor moves past its own last row/column.
+test('/term opens a separate session per viewer id', async () => {
+  const { port, boxId, cookie, state } = await gateFixture(null);
+  await raceOpenClose(`ws://127.0.0.1:${port}/term?box=${boxId}&cols=80&rows=24&client=laptop`, cookie, 50);
+  await raceOpenClose(`ws://127.0.0.1:${port}/term?box=${boxId}&cols=200&rows=50&client=desktop`, cookie, 50);
+
+  expect(state.openKeys).toEqual([terminalKey(boxId, 'laptop'), terminalKey(boxId, 'desktop')]);
+  expect(state.openKeys[0]).not.toBe(state.openKeys[1]);
+}, 10000);
+
+// One viewer reconnecting must land on its OWN key so the grace window hands
+// back the same PTY rather than spawning a second ssh for the same browser.
+test('/term reuses one viewer id across reconnects', async () => {
+  const { port, boxId, cookie, state } = await gateFixture(null);
+  await raceOpenClose(`ws://127.0.0.1:${port}/term?box=${boxId}&cols=80&rows=24&client=laptop`, cookie, 50);
+  await raceOpenClose(`ws://127.0.0.1:${port}/term?box=${boxId}&cols=80&rows=24&client=laptop`, cookie, 50);
+
+  expect(state.openKeys).toEqual([terminalKey(boxId, 'laptop'), terminalKey(boxId, 'laptop')]);
+}, 10000);
+
+// A cached bundle predating this sends no id. It must keep working, sharing one
+// PTY exactly as it did before, rather than minting a fresh ssh per reconnect.
+test('/term without a viewer id falls back to one shared session', async () => {
+  const { port, boxId, cookie, state } = await gateFixture(null);
+  await raceOpenClose(`ws://127.0.0.1:${port}/term?box=${boxId}&cols=80&rows=24`, cookie, 50);
+  await raceOpenClose(`ws://127.0.0.1:${port}/term?box=${boxId}&cols=80&rows=24&client=has%20spaces`, cookie, 50);
+
+  expect(state.openKeys).toEqual([terminalKey(boxId, 'shared'), terminalKey(boxId, 'shared')]);
+}, 10000);
+
+test('/term gives the host shell a session per viewer too', async () => {
+  const { port, cookie, state } = await gateFixture(null);
+  await raceOpenClose(`ws://127.0.0.1:${port}/term?box=__local__&cols=80&rows=24&client=laptop`, cookie, 50);
+  await raceOpenClose(`ws://127.0.0.1:${port}/term?box=__local__&cols=80&rows=24&client=desktop`, cookie, 50);
+
+  expect(state.localKeys).toEqual([localKey('laptop'), localKey('desktop')]);
 }, 10000);

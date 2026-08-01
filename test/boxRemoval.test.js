@@ -3,12 +3,16 @@ import { createBoxRemoval } from '../src/server/boxRemoval.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-test('removeBox closes both session keys and removes persistence before the remote cleanup runs', async () => {
+// One group close covers the box's terminals — one per viewer now, so there is
+// no fixed set of keys to enumerate — and its provision PTY together. Naming
+// the two keys individually, as this did, would silently leave every viewer's
+// ssh alive after the box was deleted.
+test('removeBox closes the box session group and removes persistence before the remote cleanup runs', async () => {
   const calls = [];
   const box = { id: 'B1', host: '192.168.1.10' };
   const removeBox = createBoxRemoval({
     store: { getBox: async () => box, removeBox: async (id) => calls.push(['store', id]) },
-    sessions: { closeKey: (key) => calls.push(['session', key]) },
+    sessions: { closeGroup: (group) => calls.push(['session', group]) },
     boxActions: {
       killSession: async () => { calls.push(['kill']); throw new Error('already down'); },
       exitMaster: async () => calls.push(['master']),
@@ -16,11 +20,11 @@ test('removeBox closes both session keys and removes persistence before the remo
   });
   await expect(removeBox('B1')).resolves.toEqual({ ok: true });
   // The user-visible removal has already happened…
-  expect(calls.slice(0, 3)).toEqual([['session', 'B1'], ['session', 'provision:B1'], ['store', 'B1']]);
+  expect(calls.slice(0, 2)).toEqual([['session', 'B1'], ['store', 'B1']]);
   // …and the best-effort SSH cleanup still runs (kill error swallowed), in order.
   await tick(); await tick();
   expect(calls).toEqual([
-    ['session', 'B1'], ['session', 'provision:B1'], ['store', 'B1'], ['kill'], ['master'],
+    ['session', 'B1'], ['store', 'B1'], ['kill'], ['master'],
   ]);
 });
 
@@ -29,7 +33,7 @@ test('removeBox resolves without waiting for slow cleanup of an unreachable host
   const box = { id: 'B1', host: '192.168.250.250' };
   const removeBox = createBoxRemoval({
     store: { getBox: async () => box, removeBox: async (id) => calls.push(['store', id]) },
-    sessions: { closeKey: () => {} },
+    sessions: { closeGroup: () => {} },
     boxActions: {
       // Models the ssh ConnectTimeout wait on an unreachable host.
       killSession: () => new Promise((r) => setTimeout(() => { calls.push(['kill']); r({ ok: true }); }, 300)),
@@ -59,7 +63,7 @@ test('ordinary box removal never touches known_hosts', async () => {
   const box = { id: 'B1', host: '192.168.1.10' };
   const removeBox = createBoxRemoval({
     store: { getBox: async () => box, removeBox: async () => {} },
-    sessions: { closeKey: () => {} },
+    sessions: { closeGroup: () => {} },
     boxActions: {
       killSession: async () => { calls.push('kill'); },
       exitMaster: async () => { calls.push('master'); },
@@ -80,7 +84,7 @@ test('the background master teardown is skipped when an identical box was re-add
       removeBox: async () => {},
       listBoxes: async () => [{ id: 'B2', host: 'h', user: 'u', port: 22 }],
     },
-    sessions: { closeKey: () => {} },
+    sessions: { closeGroup: () => {} },
     boxActions: { killSession: async () => calls.push('kill'), exitMaster: async () => calls.push('master') },
   });
   await removeBox('B1');
@@ -92,7 +96,7 @@ test('removal forgets the box in the status checker (backoff/cpu maps)', async (
   const forgotten = [];
   const removeBox = createBoxRemoval({
     store: { getBox: async () => ({ id: 'B1', host: 'h' }), removeBox: async () => {} },
-    sessions: { closeKey: () => {} },
+    sessions: { closeGroup: () => {} },
     boxActions: {},
     statusChecker: { forgetBox: (id) => forgotten.push(id) },
   });
