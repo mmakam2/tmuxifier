@@ -4,6 +4,9 @@ const normalizeState = (status) => status === 'running' ? 'running' : status ===
 // proxmoxValidate.js:97) — the cluster payload is untrusted input too, so a malformed/garbage
 // node from it must never reach the stored link or the display.
 const SAFE_NODE = /^[A-Za-z0-9_.-]+$/;
+const GUEST_TYPES = new Set(['lxc', 'qemu']);
+// A link written before VM support has no kind and is a container by definition.
+const linkKind = (box) => (box.proxmox && box.proxmox.kind === 'qemu' ? 'qemu' : 'lxc');
 
 export function mergeProxmoxStatus(snapshot, boxes, records) {
   const next = { ...snapshot };
@@ -17,6 +20,7 @@ export function mergeProxmoxStatus(snapshot, boxes, records) {
       proxmoxState: record.state,
       proxmoxNode: record.node,
       proxmoxVmid: record.vmid,
+      proxmoxKind: record.kind,
     };
   }
   return next;
@@ -39,7 +43,7 @@ export function createProxmoxInventory({
 
   const record = (box, fields) => ({
     boxId: box.id, boxLabel: box.label, hostId: box.proxmox.hostId, hostName: null,
-    node: box.proxmox.node, vmid: Number(box.proxmox.vmid), containerName: null,
+    node: box.proxmox.node, vmid: Number(box.proxmox.vmid), kind: linkKind(box), containerName: null,
     state: 'unknown', fetchedAt: now(), error: null, ...fields,
   });
 
@@ -72,10 +76,12 @@ export function createProxmoxInventory({
         guests = host ? await makeClient(host).clusterResources() : null;
       } catch { guests = null; }
       if (!guests) { results.push(...candidateBoxes.map(orphan)); continue; }
-      const present = new Set(guests.filter((g) => g.type === 'lxc').map((g) => Number(g.vmid)));
+      const present = new Map(guests.filter((g) => GUEST_TYPES.has(g.type)).map((g) => [Number(g.vmid), g.type]));
       const healed = [];
       for (const box of candidateBoxes) {
-        if (!present.has(Number(box.proxmox.vmid))) { results.push(orphan(box)); continue; }
+        // Same "never guess" rule the endpoint match already follows: a vmid
+        // that came back as the other type is a different guest, not ours.
+        if (present.get(Number(box.proxmox.vmid)) !== linkKind(box)) { results.push(orphan(box)); continue; }
         try {
           const fresh = await boxStore.getBox(box.id);
           const freshLink = fresh && fresh.proxmox;
@@ -111,13 +117,25 @@ export function createProxmoxInventory({
     } catch (error) {
       return hostBoxes.map((box) => record(box, { hostName: host.name, error: error.message }));
     }
-    const byVmid = new Map((guests || []).filter((g) => g.type === 'lxc').map((g) => [Number(g.vmid), g]));
+    const byVmid = new Map((guests || []).filter((g) => GUEST_TYPES.has(g.type)).map((g) => [Number(g.vmid), g]));
     return Promise.all(hostBoxes.map(async (box) => {
       const item = byVmid.get(Number(box.proxmox.vmid));
       if (!item) return record(box, { hostName: host.name, state: 'missing' });
-      // The cluster payload is untrusted: a malformed/missing node must never be written to
-      // the link nor shown in the display — fall back to the stored node for both.
       const nodeValid = typeof item.node === 'string' && SAFE_NODE.test(item.node);
+      const want = linkKind(box);
+      // A vmid that changed type is a DIFFERENT guest wearing the same number —
+      // unlike a migration, which is the same guest on a new node. Refuse and
+      // make the operator re-link; write nothing back, not even the node, since
+      // this container may belong to someone else entirely.
+      if (item.type !== want) {
+        return record(box, {
+          hostName: host.name, kind: item.type,
+          node: nodeValid ? item.node : box.proxmox.node,
+          containerName: item.name || null,
+          state: 'mismatch',
+          error: `vmid ${Number(box.proxmox.vmid)} is a ${item.type} guest on this cluster, but this box is linked to a ${want} — re-link the box`,
+        });
+      }
       if (!nodeValid) {
         log(`[tmuxifier] box ${box.label}: ignoring malformed node from cluster resources: ${item.node}`);
       } else if (item.node !== box.proxmox.node && boxStore && !activeJobGuard(box.id)) {
@@ -144,7 +162,7 @@ export function createProxmoxInventory({
       }
       return record(box, {
         hostName: host.name, node: nodeValid ? item.node : box.proxmox.node,
-        containerName: item.name || null, state: normalizeState(item.status),
+        kind: item.type, containerName: item.name || null, state: normalizeState(item.status),
       });
     }));
   }
@@ -213,16 +231,24 @@ export function createProxmoxInventory({
     listClusterNodes,
     setActiveJobGuard(fn) { activeJobGuard = fn; },
     async refreshBox(box) { return (await doRefresh([box]))[0]; },
-    async getLinkedContainers(boxes) { return refreshLinked(boxes); },
-    async listNodeContainers(hostId, node, boxes) {
+    async getLinkedGuests(boxes) { return refreshLinked(boxes); },
+    async listNodeGuests(hostId, node, boxes) {
       const host = await proxmoxStore.getHost(hostId, { withSecret: true });
       if (!host) throw new Error('proxmox host not found');
       const linked = new Map(boxes.filter((box) => box.proxmox).map((box) => [targetKey(box.proxmox), box.id]));
-      return (await makeClient(host).listLxc(node)).map((item) => ({
-        hostId, node, vmid: Number(item.vmid), name: item.name || String(item.vmid),
+      const client = makeClient(host);
+      // Both must succeed. PVE permissions are path-based on /vms/<vmid> and do
+      // not distinguish guest type, so "can list containers but not VMs" is not
+      // a real token; silently omitting VMs would be worse than a visible error.
+      const [lxc, qemu] = await Promise.all([client.listGuests('lxc', node), client.listGuests('qemu', node)]);
+      return [
+        ...(lxc || []).map((item) => ({ item, kind: 'lxc' })),
+        ...(qemu || []).map((item) => ({ item, kind: 'qemu' })),
+      ].map(({ item, kind }) => ({
+        hostId, node, kind, vmid: Number(item.vmid), name: item.name || String(item.vmid),
         state: normalizeState(item.status),
         linkedBoxId: linked.get(targetKey({ hostId, node, vmid: item.vmid })) || null,
-      }));
+      })).sort((a, b) => a.vmid - b.vmid);
     },
     stateFor(box) {
       const record = box.proxmox ? cache.get(box.id) : undefined;

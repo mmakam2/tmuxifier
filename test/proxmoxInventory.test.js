@@ -2,9 +2,9 @@ import { test, expect } from 'vitest';
 import { createProxmoxInventory, mergeProxmoxStatus } from '../src/server/proxmoxInventory.js';
 
 const HOST = { id: 'H1', name: 'lab', endpoint: 'pve.example.com:8006', tokenSecret: 'sek' };
-const linked = (id, node, vmid) => ({
+const linked = (id, node, vmid, kind = 'lxc') => ({
   id, label: id, host: `192.168.1.${vmid - 100}`,
-  proxmox: { hostId: 'H1', node, vmid, endpoint: HOST.endpoint },
+  proxmox: { hostId: 'H1', node, vmid, kind, endpoint: HOST.endpoint },
 });
 
 function setup({ cluster = [], listByNode = {}, boxStore = null, guard } = {}) {
@@ -13,7 +13,7 @@ function setup({ cluster = [], listByNode = {}, boxStore = null, guard } = {}) {
     proxmoxStore: { getHost: async (id) => id === 'H1' ? HOST : undefined },
     makeClient: () => ({
       clusterResources: async () => { calls.cluster += 1; return cluster; },
-      listLxc: async (node) => { calls.nodes.push(node); return listByNode[node] || []; },
+      listGuests: async (kind, node) => { calls.nodes.push(`${kind}:${node}`); return (listByNode[node] || []).filter((g) => (g.type || 'lxc') === kind); },
     }),
     boxStore,
     now: () => 1000,
@@ -52,7 +52,7 @@ test('a migrated container stays healthy, reports its new node, and the link aut
   const [record] = await inventory.refreshLinked([linked('b1', 'pve-n02', 165)]);
   expect(record.state).toBe('running');
   expect(record.node).toBe('pve-n03');
-  expect(writes).toEqual([['b1', { hostId: 'H1', node: 'pve-n03', vmid: 165, endpoint: HOST.endpoint }]]);
+  expect(writes).toEqual([['b1', { hostId: 'H1', node: 'pve-n03', vmid: 165, kind: 'lxc', endpoint: HOST.endpoint }]]);
 });
 
 test('the drift write is skipped while a lifecycle job is active on the box', async () => {
@@ -143,16 +143,32 @@ test('the drift write proceeds when the fresh link still matches the observed on
   });
   const [record] = await inventory.refreshLinked([box]);
   expect(record.node).toBe('pve-n03');
-  expect(writes).toEqual([['b1', { hostId: 'H1', node: 'pve-n03', vmid: 165, endpoint: HOST.endpoint }]]);
+  expect(writes).toEqual([['b1', { hostId: 'H1', node: 'pve-n03', vmid: 165, kind: 'lxc', endpoint: HOST.endpoint }]]);
 });
 
-test('missing means absent from the whole cluster; qemu entries never match', async () => {
+test('missing means the vmid is absent from the whole cluster', async () => {
   const { inventory } = setup({ cluster: [
-    { vmid: 131, node: 'pve2', type: 'qemu', status: 'running', name: 'a-vm' }, // same vmid, wrong type
+    { vmid: 999, node: 'pve2', type: 'lxc', status: 'running', name: 'someone-else' }, // different vmid entirely
   ] });
   const [record] = await inventory.refreshLinked([linked('b1', 'pve', 131)]);
   expect(record.state).toBe('missing');
   expect(record.node).toBe('pve'); // stored node kept for display when missing
+});
+
+// A same-vmid entry of the OTHER type used to be filtered out entirely (the old
+// lxc-only query never saw it), so this vmid read as plain 'missing'. Now that
+// both guest types are discovered, that same entry is visible and reported as
+// 'mismatch' instead — see the dedicated mismatch tests below for the full
+// assertion set (error text, no drift-follow write, etc).
+test('a same-vmid entry of the other type is no longer silently invisible — it reports mismatch, not missing', async () => {
+  const { inventory } = setup({ cluster: [
+    { vmid: 131, node: 'pve2', type: 'qemu', status: 'running', name: 'a-vm' }, // same vmid, wrong type
+  ] });
+  const [record] = await inventory.refreshLinked([linked('b1', 'pve', 131)]);
+  expect(record.state).toBe('mismatch');
+  // Unlike the drift-follow STORE WRITE (suppressed on mismatch), the DISPLAYED
+  // node reports what the cluster actually shows for this vmid, same as kind.
+  expect(record.node).toBe('pve2');
 });
 
 test('one host failing leaves another host healthy (per-host isolation)', async () => {
@@ -214,11 +230,11 @@ test('stateFor expires cached display authority', async () => {
   expect(inventory.stateFor(box)).toBeUndefined();
 });
 
-test('listNodeContainers annotates existing links', async () => {
+test('listNodeGuests annotates existing links', async () => {
   const { inventory } = setup({ listByNode: { pve: [{ vmid: 131, name: 'dev-01', status: 'running' }, { vmid: 132, name: 'free', status: 'stopped' }] } });
-  expect(await inventory.listNodeContainers('H1', 'pve', [linked('b1', 'pve', 131)])).toEqual([
-    { hostId: 'H1', node: 'pve', vmid: 131, name: 'dev-01', state: 'running', linkedBoxId: 'b1' },
-    { hostId: 'H1', node: 'pve', vmid: 132, name: 'free', state: 'stopped', linkedBoxId: null },
+  expect(await inventory.listNodeGuests('H1', 'pve', [linked('b1', 'pve', 131)])).toEqual([
+    { hostId: 'H1', node: 'pve', kind: 'lxc', vmid: 131, name: 'dev-01', state: 'running', linkedBoxId: 'b1' },
+    { hostId: 'H1', node: 'pve', kind: 'lxc', vmid: 132, name: 'free', state: 'stopped', linkedBoxId: null },
   ]);
 });
 
@@ -278,7 +294,7 @@ test('an orphaned link re-homes to the unique host with the same endpoint (netbo
   box.proxmox.netboxIpId = 99;
   const { inventory, writes, logged } = healSetup({ boxStore: { getBox: async () => box } });
   const [record] = await inventory.refreshLinked([box]);
-  expect(writes).toEqual([['b1', { hostId: 'H9', node: 'pve', vmid: 131, endpoint: HOST.endpoint, netboxIpId: 99 }]]);
+  expect(writes).toEqual([['b1', { hostId: 'H9', node: 'pve', vmid: 131, kind: 'lxc', endpoint: HOST.endpoint, netboxIpId: 99 }]]);
   expect(record).toMatchObject({ state: 'running', hostId: 'H9', hostName: 'lab-readded', containerName: 'dev-01', error: null });
   expect(logged.some((line) => line.includes('re-homed'))).toBe(true);
 });
@@ -390,4 +406,77 @@ test('listClusterNodes degrades a failing host to one error record and dedupes s
     { hostId: 'H1', hostName: 'lab', node: 'pve1', status: 'online', cpuPct: null, memPct: null, diskPct: null, uptimeSec: null, error: null },
     { hostId: 'H3', hostName: 'lab2', node: null, status: 'error', cpuPct: null, memPct: null, diskPct: null, uptimeSec: null, error: 'connect ECONNREFUSED' },
   ]);
+});
+
+test('a linked VM is discovered from the same cluster payload containers come from', async () => {
+  const { inventory } = setup({ cluster: [
+    { vmid: 131, node: 'pve', type: 'lxc', status: 'running', name: 'ct-01' },
+    { vmid: 200, node: 'pve', type: 'qemu', status: 'running', name: 'vm-01' },
+  ] });
+  const records = await inventory.refreshLinked([linked('b1', 'pve', 131), linked('b2', 'pve', 200, 'qemu')]);
+  expect(records.map((r) => [r.boxId, r.kind, r.state])).toEqual([
+    ['b1', 'lxc', 'running'], ['b2', 'qemu', 'running'],
+  ]);
+});
+
+test('a vmid whose type disagrees with the link reports mismatch and never writes the link', async () => {
+  const writes = [];
+  const { inventory } = setup({
+    // vmid 165 was destroyed as a container and recreated as a VM on another node.
+    cluster: [{ vmid: 165, node: 'pve-n03', type: 'qemu', status: 'running', name: 'someone-elses-vm' }],
+    boxStore: {
+      setProxmoxLink: async (id, link) => writes.push([id, link]),
+      getBox: async () => linked('b1', 'pve-n02', 165),
+    },
+  });
+  const [record] = await inventory.refreshLinked([linked('b1', 'pve-n02', 165, 'lxc')]);
+  expect(record.state).toBe('mismatch');
+  expect(record.kind).toBe('qemu');           // report what is actually there
+  expect(record.error).toMatch(/165/);
+  expect(record.error).toMatch(/re-link/);
+  // Load-bearing: a mismatched vmid may not be our guest at all, so the node
+  // drift-follow must not write anything back for it.
+  expect(writes).toEqual([]);
+});
+
+test('re-homing an orphaned link requires the vmid to still be the same kind', async () => {
+  const writes = [];
+  const hosts = [{ id: 'H2', name: 'lab-readded', endpoint: HOST.endpoint }];
+  const inventory = createProxmoxInventory({
+    proxmoxStore: {
+      listHosts: async () => hosts,
+      getHost: async (id) => id === 'H2' ? { ...hosts[0], tokenSecret: 'sek' } : undefined,
+    },
+    makeClient: () => ({
+      clusterResources: async () => [{ vmid: 165, node: 'pve', type: 'qemu', status: 'running', name: 'vm' }],
+    }),
+    boxStore: { setProxmoxLink: async (id, link) => writes.push([id, link]), getBox: async (id) => box },
+    now: () => 1000, log: () => {},
+  });
+  // The link points at the old host id H1 and says lxc; the re-added profile H2
+  // has the right endpoint, but vmid 165 is now a VM.
+  const box = { id: 'b1', label: 'b1', host: '192.168.1.65', proxmox: { hostId: 'H1', node: 'pve', vmid: 165, kind: 'lxc', endpoint: HOST.endpoint } };
+  const [record] = await inventory.refreshLinked([box]);
+  expect(record.error).toBe('host profile missing');
+  expect(writes).toEqual([]);
+});
+
+test('listNodeGuests merges both kinds, tags each, and sorts by vmid', async () => {
+  const { inventory, calls } = setup({ listByNode: { pve: [
+    { vmid: 300, type: 'qemu', status: 'running', name: 'vm-hi' },
+    { vmid: 131, type: 'lxc', status: 'stopped', name: 'ct-lo' },
+    { vmid: 200, type: 'qemu', status: 'stopped', name: 'vm-mid' },
+  ] } });
+  const rows = await inventory.listNodeGuests('H1', 'pve', [linked('b1', 'pve', 131)]);
+  expect(rows.map((r) => [r.vmid, r.kind])).toEqual([[131, 'lxc'], [200, 'qemu'], [300, 'qemu']]);
+  expect(rows[0].linkedBoxId).toBe('b1');
+  expect(rows[1].linkedBoxId).toBeNull();
+  expect(calls.nodes.sort()).toEqual(['lxc:pve', 'qemu:pve']);
+});
+
+test('mergeProxmoxStatus carries the guest kind into the status snapshot', () => {
+  const boxes = [linked('b1', 'pve', 200, 'qemu')];
+  const records = [{ boxId: 'b1', state: 'running', node: 'pve', vmid: 200, kind: 'qemu' }];
+  const merged = mergeProxmoxStatus({ b1: { reachable: true } }, boxes, records);
+  expect(merged.b1).toMatchObject({ reachable: true, proxmoxState: 'running', proxmoxKind: 'qemu', proxmoxVmid: 200 });
 });

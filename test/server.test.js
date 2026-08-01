@@ -69,8 +69,8 @@ function proxmoxStubs(calls = []) {
   const inspectEndpoint = async () => ({ reachable: true, fingerprint256: 'AB:CD', subject: 'pve', issuer: 'pve', validTo: 'x', caValid: false });
   const defaultPublicKey = () => 'ssh-ed25519 HOSTKEY tmuxifier@host';
   const proxmoxInventory = {
-    getLinkedContainers: async () => [{ boxId: 'B1', boxLabel: 'dev-01', hostId: 'H1', hostName: 'lab', node: 'pve', vmid: 131, state: 'stopped' }],
-    listNodeContainers: async () => [{ hostId: 'H1', node: 'pve', vmid: 131, name: 'dev-01', state: 'stopped', linkedBoxId: null }],
+    getLinkedGuests: async () => [{ boxId: 'B1', boxLabel: 'dev-01', hostId: 'H1', hostName: 'lab', node: 'pve', vmid: 131, kind: 'lxc', state: 'stopped' }],
+    listNodeGuests: async () => [{ hostId: 'H1', node: 'pve', kind: 'lxc', vmid: 131, name: 'dev-01', state: 'stopped', linkedBoxId: null }],
   };
   const lifecycleManager = {
     createJob: async (body) => { calls.push(['createLifecycleJob', body]); return { id: 'L1', ...body, status: 'running' }; },
@@ -1149,7 +1149,7 @@ test('lifecycle and association mutations reject an untrusted Origin', async () 
 test('target coordinates, browse failures, and malformed links map to safe errors', async () => {
   const calls = [];
   const stubs = proxmoxStubs(calls);
-  stubs.proxmoxInventory.listNodeContainers = async () => { throw new Error('PVE unavailable'); };
+  stubs.proxmoxInventory.listNodeGuests = async () => { throw new Error('PVE unavailable'); };
   const store = createStore({ dataDir: dir });
   const box = await store.addBox({ host: '192.168.1.10' });
   app = await makeApp({ ...stubs, store });

@@ -1168,7 +1168,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
   app.get('/api/proxmox/containers', { preHandler: requireAuth }, async (_req, reply) => {
     try {
-      const records = await proxmoxInventory.getLinkedContainers(await store.listBoxes());
+      const records = await proxmoxInventory.getLinkedGuests(await store.listBoxes());
       const active = new Map(lifecycleManager.listJobs()
         .filter((job) => job.status === 'running')
         .map((job) => [job.boxId, job]));
@@ -1192,7 +1192,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         { hostIds: [host.id] },
       );
     } catch (error) { return serviceFailure(reply, error, 400); }
-    try { return await proxmoxInventory.listNodeContainers(req.params.id, req.params.node, await store.listBoxes()); }
+    try { return await proxmoxInventory.listNodeGuests(req.params.id, req.params.node, await store.listBoxes()); }
     catch (error) { return serviceFailure(reply, error, 502); }
   });
 
@@ -1208,7 +1208,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     try { assertProxmoxLinkInput(req.body, { hostIds: [host.id] }); }
     catch (error) { return serviceFailure(reply, error, 400); }
     let containers;
-    try { containers = await proxmoxInventory.listNodeContainers(host.id, req.body.node, await store.listBoxes()); }
+    try { containers = await proxmoxInventory.listNodeGuests(host.id, req.body.node, await store.listBoxes()); }
     catch (error) { return serviceFailure(reply, error, 502); }
     const target = containers.find((item) => item.vmid === Number(req.body.vmid));
     if (!target) return reply.code(404).send({ error: 'proxmox container not found' });
