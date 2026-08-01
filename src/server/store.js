@@ -42,7 +42,12 @@ export function createStore({ dataDir }) {
   }
   function normalize(spec, base = {}, { trustedProxmox = false } = {}) {
     if (!spec.host || typeof spec.host !== 'string') throw new Error('box requires a host');
-    const link = trustedProxmox ? spec.proxmox : base.proxmox;
+    const raw = trustedProxmox ? spec.proxmox : base.proxmox;
+    // A link written before VM support has no kind, and every one of those is a
+    // container — so defaulting to 'lxc' migrates the whole file by asserting
+    // what is already true. Nothing rewrites boxes.json; the default applies on
+    // read, and an older build simply ignores the extra field.
+    const link = raw ? { ...raw, kind: raw.kind === 'qemu' ? 'qemu' : 'lxc' } : raw;
     return {
       id: base.id || randomUUID(),
       label: spec.label || base.label || spec.host,

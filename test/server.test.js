@@ -1106,7 +1106,7 @@ test('manual association verifies the live target, prevents duplicates, and unli
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
   const linked = await app.inject({ method: 'PUT', url: `/api/boxes/${box.id}/proxmox`, headers, payload: { hostId: 'H1', node: 'pve', vmid: 131 } });
   expect(linked.statusCode).toBe(200);
-  expect(linked.json().proxmox).toEqual({ hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' });
+  expect(linked.json().proxmox).toEqual({ hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006', kind: 'lxc' });
   const unlinked = await app.inject({ method: 'DELETE', url: `/api/boxes/${box.id}/proxmox`, headers });
   expect(unlinked.statusCode).toBe(200);
   expect(unlinked.json().proxmox).toBeUndefined();
