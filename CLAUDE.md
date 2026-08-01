@@ -161,7 +161,11 @@ pattern for new modules.
   The `/term` WebSocket refuses a normal box terminal (close `1008 'setting up'`) while that
   box's setup job is `running`, so a shell can never start with an environment predating the
   seeded credentials and installed tools; `mode=provision` stays ungated so the interactive
-  finish still works.
+  finish still works. `PUT /api/boxes/:id/proxmox` writes the link's `kind` from the guest
+  `proxmoxInventory.listNodeGuests` actually found at that host/node/vmid, never from the request
+  body — a client cannot be trusted to declare what type a vmid is, and trusting it once was a
+  real mid-flight defect: a request that lied about `kind` would have stored a link that then read
+  every subsequent poll as a permanent kind `'mismatch'` against the cluster's own truth.
 - `store.js` — `data/boxes.json` CRUD; normalizes/validates boxes; exports/imports the box list as
   a versioned JSON file (`exportBoxes`/`importBoxes`; import re-mints ids and skips dup/unsafe entries).
   A Proxmox link carries a `kind` (`'lxc'` | `'qemu'`); an absent one defaults to `'lxc'` in
@@ -443,8 +447,14 @@ pattern for new modules.
   setup job (injected `startSetup`, `waitForSsh: true`) so the container is usable without the
   browser staying open.
 - `proxmoxInventory.js` — cluster-wide linked-guest (LXC **and** QEMU VM) inventory and status
-  authority (one `/cluster/resources` call per host, now read at `type=vm` to pick up both kinds);
-  auto-follows node migrations by updating the stored link's node (guarded against active lifecycle
+  authority (one `/cluster/resources?type=vm` call per host — that query already covered both
+  kinds before VM support; what changed is that the response's qemu rows are no longer discarded
+  by an LXC-only filter). Every row (`listNodeGuests` and the linked-guest record alike) also
+  carries `template: !!item.template`, PVE's own flag for a clone source — a qemu template
+  otherwise looks exactly like a shut-down VM, and linking to one only to Deprovision it destroys
+  the template every future clone depends on; the flag is re-read on every refresh so a guest
+  converted to a template *after* being linked stays recognisable, not just one linked as one.
+  Auto-follows node migrations by updating the stored link's node (guarded against active lifecycle
   jobs), and re-homes an orphaned link when a removed host profile is re-added with the same
   endpoint (new id, exact `host:port` match, vmid verified on that cluster, same CAS + job guards).
   A vmid whose observed type on the cluster disagrees with the link's stored `kind` reports
@@ -615,10 +625,16 @@ that badge (typing `vm` or `ct` narrows by kind, same field-substring match as e
 searches), state-gated lifecycle actions, and the deprovision confirm dialog; a `'mismatch'` row
 renders the server's explanation text and offers only "Edit link" — `actionsForState` returns no
 lifecycle actions for it, deliberately alongside `'unknown'`, since the guest Tmuxifier can see may
-not be the one the box is linked to), `proxmoxActivity.ts` (the Activity tab merging provision and
-lifecycle jobs newest-first), `proxmoxAssociation.ts` (the Add/Edit Box modals' manual Proxmox
-link/unlink picker — hidden until a Proxmox host profile exists, except for already-linked
-boxes), `settingsUi.ts` (the ⚙ settings
+not be the one the box is linked to. A template guest (PVE's `template: 1` flag, carried by
+`proxmoxInventory.js`) gets the same no-actions-plus-"Edit link" treatment via `actionsForGuest`,
+checked ahead of `actionsForState`, plus a `TEMPLATE` badge in its own grid cell alongside the
+CT/VM one — Deprovisioning a template destroys the source every future clone depends on, and PVE
+does not otherwise distinguish a template from an ordinary stopped guest), `proxmoxActivity.ts`
+(the Activity tab merging provision and lifecycle jobs newest-first), `proxmoxAssociation.ts` (the
+Add/Edit Box modals' manual Proxmox link/unlink picker — hidden until a Proxmox host profile
+exists, except for already-linked boxes; a template's option is `TEMPLATE`-marked and disabled,
+the same shown-but-unselectable treatment a guest already linked to another box gets, rather than
+vanishing from the list), `settingsUi.ts` (the ⚙ settings
 modal's tabbed shell — the `SECTIONS` object's key order builds the tab strip — with Boxes
 (`settingsBoxes.ts`: the leftmost tab, box-list JSON export/import moved out of the sidebar brand
 actions, which stay reserved for the routinely used controls; pure `importSummary`),

@@ -201,7 +201,7 @@ export function nodeModules(
     if (n.memPct != null) parts.push(`mem ${n.memPct}%`);
     if (n.diskPct != null) parts.push(`disk ${n.diskPct}%`);
     const linked = (containers ?? []).filter((c) => c.node === n.node);
-    if (linked.length) parts.push(`${linked.filter((c) => c.state === 'running').length}/${linked.length} ctr`);
+    if (linked.length) parts.push(`${linked.filter((c) => c.state === 'running').length}/${linked.length} guests`);
     return {
       name: n.node,
       lamp: n.status === 'online' ? 'green' as const : n.status === 'unknown' ? '' as const : 'red' as const,

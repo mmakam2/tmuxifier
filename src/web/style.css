@@ -1537,10 +1537,21 @@ button.empty-kbd:hover { color: var(--text); }
 .pve-guest-search::placeholder { color: var(--dim); }
 .pve-badge.stopped, .pve-badge.unknown { color: var(--dim); }
 .pve-badge.missing { color: var(--crit); }
+/* mismatch is the state most needing a signal — the guest a row shows may not
+   even be the operator's — so unlike the merely-dim kind/template badges it
+   gets the same amber treatment as 'running', matching dotClassFor's 'amber'
+   verdict for this state (statusDot.ts). */
+.pve-badge.mismatch { color: var(--warn); border-color: rgba(255, 176, 0, 0.4); background: rgba(255, 176, 0, 0.08); }
 /* The CT/VM kind badge sits beside the state badge — a secondary, less
    emphatic mark (dim legend, no LED color) since kind is identity, not
    machine state; DESIGN.md reserves LED colors for state semantics only. */
 .pve-badge.kind { color: var(--dim); border-color: var(--border); background: transparent; }
+/* Template is identity too (a guest attribute, not a machine state), so it
+   gets the same dim/transparent treatment as .kind rather than a new color —
+   the marker text itself ("TEMPLATE") is what carries the warning. */
+.pve-badge.template { color: var(--dim); border-color: var(--border); background: transparent; }
+.pve-guest-row .pve-badge-group { display: flex; align-items: center; gap: 4px; }
+.pve-guest-row .pve-err { grid-column: 1 / -1; }
 .pve-deprovision-modal { width: 460px; }
 .pve-warning { margin: 0; color: #ffb0a6; font-size: 12.5px; line-height: 1.5; }
 @media (max-width: 720px) {

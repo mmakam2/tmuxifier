@@ -826,7 +826,11 @@ local-only link cleanup. Each action runs as a pollable job.
 power-button event; any guest OS running `acpid` or a systemd equivalent handles that with no extra
 setup, and the QEMU guest agent (if installed in the guest) gives PVE a second, more reliable path.
 A VM with neither — for example one sitting at a boot menu or BIOS prompt with no OS loaded — cannot
-act on either signal, so **Shutdown** will run out its timeout and fail. Use **Stop** for an
+act on either signal, so **Shutdown** will run out **Tmuxifier's own** 10-minute job timeout and
+fail — Tmuxifier sends PVE no timeout of its own for a plain Shutdown, so PVE's underlying task
+keeps waiting even after Tmuxifier gives up on it. A container's Shutdown is on a shorter, PVE-owned
+clock: the LXC shutdown API defaults its own timeout to 60 seconds when none is given, so the same
+action fails much sooner for a container than for a VM. Use **Stop** for an
 immediate power-off, or **Deprovision**, which escalates to a forced stop on its own (see below) once
 its grace period passes.
 

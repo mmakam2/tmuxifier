@@ -233,8 +233,8 @@ test('stateFor expires cached display authority', async () => {
 test('listNodeGuests annotates existing links', async () => {
   const { inventory } = setup({ listByNode: { pve: [{ vmid: 131, name: 'dev-01', status: 'running' }, { vmid: 132, name: 'free', status: 'stopped' }] } });
   expect(await inventory.listNodeGuests('H1', 'pve', [linked('b1', 'pve', 131)])).toEqual([
-    { hostId: 'H1', node: 'pve', kind: 'lxc', vmid: 131, name: 'dev-01', state: 'running', linkedBoxId: 'b1' },
-    { hostId: 'H1', node: 'pve', kind: 'lxc', vmid: 132, name: 'free', state: 'stopped', linkedBoxId: null },
+    { hostId: 'H1', node: 'pve', kind: 'lxc', vmid: 131, name: 'dev-01', state: 'running', template: false, linkedBoxId: 'b1' },
+    { hostId: 'H1', node: 'pve', kind: 'lxc', vmid: 132, name: 'free', state: 'stopped', template: false, linkedBoxId: null },
   ]);
 });
 
@@ -479,4 +479,33 @@ test('mergeProxmoxStatus carries the guest kind into the status snapshot', () =>
   const records = [{ boxId: 'b1', state: 'running', node: 'pve', vmid: 200, kind: 'qemu' }];
   const merged = mergeProxmoxStatus({ b1: { reachable: true } }, boxes, records);
   expect(merged.b1).toMatchObject({ reachable: true, proxmoxState: 'running', proxmoxKind: 'qemu', proxmoxVmid: 200 });
+});
+
+// F1: a qemu template must never look like an ordinary stopped VM in the
+// picker — PVE marks it template: 1 on both the qemu and lxc index rows.
+test('listNodeGuests carries the template flag, defaulting false when PVE omits it', async () => {
+  const { inventory } = setup({ listByNode: { pve: [
+    { vmid: 300, type: 'qemu', status: 'stopped', name: 'vm-template', template: 1 },
+    { vmid: 131, type: 'lxc', status: 'stopped', name: 'ct-plain' },
+  ] } });
+  const rows = await inventory.listNodeGuests('H1', 'pve', []);
+  expect(rows.map((r) => [r.vmid, r.template])).toEqual([[131, false], [300, true]]);
+});
+
+// A linked guest that was later converted to a template must stay
+// recognisable as one, not just render as an ordinary stopped/running guest.
+test('a linked guest carries the template flag from the cluster payload', async () => {
+  const { inventory } = setup({ cluster: [
+    { vmid: 131, node: 'pve', type: 'qemu', status: 'stopped', name: 'was-a-vm', template: 1 },
+  ] });
+  const [record] = await inventory.refreshLinked([linked('b1', 'pve', 131, 'qemu')]);
+  expect(record.template).toBe(true);
+});
+
+test('an ordinary linked guest defaults template to false', async () => {
+  const { inventory } = setup({ cluster: [
+    { vmid: 131, node: 'pve', type: 'lxc', status: 'running', name: 'dev-01' },
+  ] });
+  const [record] = await inventory.refreshLinked([linked('b1', 'pve', 131)]);
+  expect(record.template).toBe(false);
 });

@@ -27,8 +27,8 @@ export type PveGuestKind = 'lxc' | 'qemu';
 export type PveGuestState = 'running' | 'stopped' | 'missing' | 'unknown' | 'mismatch';
 export type LifecycleAction = 'start' | 'shutdown' | 'stop' | 'reboot' | 'deprovision';
 export type LifecycleStatus = 'running' | 'done' | 'error' | 'interrupted';
-export interface PveLinkedGuest { boxId: string; boxLabel: string; hostId: string; hostName: string | null; node: string; vmid: number; kind: PveGuestKind; containerName: string | null; state: PveGuestState; fetchedAt: number; error: string | null; activeJob: LifecycleJobSummary | null; }
-export interface PveNodeGuest { hostId: string; node: string; kind: PveGuestKind; vmid: number; name: string; state: PveGuestState; linkedBoxId: string | null; }
+export interface PveLinkedGuest { boxId: string; boxLabel: string; hostId: string; hostName: string | null; node: string; vmid: number; kind: PveGuestKind; containerName: string | null; state: PveGuestState; fetchedAt: number; error: string | null; activeJob: LifecycleJobSummary | null; template: boolean; }
+export interface PveNodeGuest { hostId: string; node: string; kind: PveGuestKind; vmid: number; name: string; state: PveGuestState; linkedBoxId: string | null; template: boolean; }
 export interface PveClusterNode {
   hostId: string; hostName: string | null; node: string | null;
   status: 'online' | 'offline' | 'unknown' | 'error';

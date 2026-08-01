@@ -13,6 +13,15 @@ export function actionsForState(state: PveGuestState): LifecycleAction[] {
   return [];
 }
 
+// A template gets the same no-actions treatment as 'mismatch', regardless of
+// its reported state — Deprovisioning a template destroys the source every
+// future clone depends on, and Start is meaningless for one. Checked ahead of
+// actionsForState so a template can never fall through to a real action.
+export function actionsForGuest(guest: { state: PveGuestState; template: boolean }): LifecycleAction[] {
+  if (guest.template) return [];
+  return actionsForState(guest.state);
+}
+
 // Sidebar-style live filter: case-insensitive substring over the fields a row
 // displays, so "stopped" filters by state, a node name by node, a VMID by id,
 // and "vm"/"ct" filters by the kind badge the row shows.
@@ -94,7 +103,13 @@ export async function renderGuestsTab(content: HTMLElement, deps: {
     const actions = el('div', { class: 'pve-row-actions' });
     const row = el('div', { class: `pve-row pve-guest-row${deps.focusBoxId === guest.boxId ? ' focused' : ''}` }, [
       el('div', {}, [el('strong', {}, [guest.boxLabel]), el('div', { class: 'pve-sub' }, [`${guest.hostName ?? guest.hostId} | ${guest.node} | VMID ${guest.vmid}`])]),
-      el('span', { class: `pve-badge kind ${guest.kind}` }, [kindLabel(guest.kind)]),
+      // One grid cell for both badges — kind and (when present) TEMPLATE —
+      // so a template guest doesn't add a 5th child and shift the row's
+      // 4-column grid (see the F3-style wrap fix on .pve-guest-row .pve-err).
+      el('div', { class: 'pve-badge-group' }, [
+        el('span', { class: `pve-badge kind ${guest.kind}` }, [kindLabel(guest.kind)]),
+        ...(guest.template ? [el('span', { class: 'pve-badge template' }, ['TEMPLATE'])] : []),
+      ]),
       el('span', { class: `pve-badge ${guest.state}` }, [guest.state]),
       actions,
     ]);
@@ -105,7 +120,7 @@ export async function renderGuestsTab(content: HTMLElement, deps: {
         onclick: () => deps.showLifecycleJob(guest.activeJob!.id),
       }, [`View ${guest.activeJob.action}`]));
     } else {
-      for (const action of actionsForState(guest.state)) {
+      for (const action of actionsForGuest(guest)) {
         const label = action === 'deprovision' ? 'Deprovision' : action === 'stop' ? 'Stop now' : action[0].toUpperCase() + action.slice(1);
         const button = el('button', {
           type: 'button',
@@ -127,7 +142,7 @@ export async function renderGuestsTab(content: HTMLElement, deps: {
         actions.append(button);
       }
     }
-    if (guest.state === 'unknown' || guest.state === 'missing' || guest.state === 'mismatch') {
+    if (guest.state === 'unknown' || guest.state === 'missing' || guest.state === 'mismatch' || guest.template) {
       actions.append(el('button', { type: 'button', onclick: () => deps.openEditBox(guest.boxId) }, ['Edit link']));
     }
     list.append(row);

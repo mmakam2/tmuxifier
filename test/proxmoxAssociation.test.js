@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { associationMutation, associationSectionVisible, guestOptionValue, parseGuestOption } from '../src/web/proxmoxAssociation.ts';
+import { associationMutation, associationSectionVisible, guestOptionDisabled, guestOptionLabel, guestOptionValue, parseGuestOption } from '../src/web/proxmoxAssociation.ts';
 
 const current = { hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' };
 
@@ -63,4 +63,34 @@ test('parseGuestOption: an unrecognized kind token defaults to lxc, never qemu',
 test('parseGuestOption: the empty string (no selection) yields an unusable, non-integer vmid', () => {
   const parsed = parseGuestOption('');
   expect(Number.isInteger(parsed.vmid)).toBe(false);
+});
+
+// F1: a qemu template must never be selectable — linking to one and then
+// hitting Deprovision from the Guests tab would destroy the template every
+// future clone depends on. It gets the same shown-but-disabled treatment as
+// a guest already linked to a different box.
+test('guestOptionDisabled: a template is disabled regardless of link state', () => {
+  expect(guestOptionDisabled({ template: true, linkedBoxId: null })).toBe(true);
+  expect(guestOptionDisabled({ template: true, linkedBoxId: 'b1' }, 'b1')).toBe(true);
+});
+
+test('guestOptionDisabled: a plain guest is disabled only when linked to a different box', () => {
+  expect(guestOptionDisabled({ template: false, linkedBoxId: null })).toBe(false);
+  expect(guestOptionDisabled({ template: false, linkedBoxId: 'b1' }, 'b1')).toBe(false);
+  expect(guestOptionDisabled({ template: false, linkedBoxId: 'b1' }, 'b2')).toBe(true);
+});
+
+test('guestOptionLabel: a template is visibly marked, not silently hidden', () => {
+  const item = { hostId: 'H1', node: 'pve', kind: 'qemu', vmid: 300, name: 'vm-template', state: 'stopped', linkedBoxId: null, template: true };
+  expect(guestOptionLabel(item)).toBe('300 | VM | vm-template | stopped | TEMPLATE');
+});
+
+test('guestOptionLabel: a non-template guest carries no TEMPLATE marker', () => {
+  const item = { hostId: 'H1', node: 'pve', kind: 'lxc', vmid: 131, name: 'dev-01', state: 'running', linkedBoxId: null, template: false };
+  expect(guestOptionLabel(item)).toBe('131 | CT | dev-01 | running');
+});
+
+test('guestOptionLabel: template and linked-elsewhere markers combine', () => {
+  const item = { hostId: 'H1', node: 'pve', kind: 'qemu', vmid: 300, name: 'vm-template', state: 'stopped', linkedBoxId: 'other', template: true };
+  expect(guestOptionLabel(item, 'me')).toBe('300 | VM | vm-template | stopped | TEMPLATE | linked');
 });

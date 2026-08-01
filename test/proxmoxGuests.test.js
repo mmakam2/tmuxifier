@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { actionsForState, guestMatches, kindLabel } from '../src/web/proxmoxGuests.ts';
+import { actionsForGuest, actionsForState, guestMatches, kindLabel } from '../src/web/proxmoxGuests.ts';
 
 test('container actions are state-gated', () => {
   expect(actionsForState('running')).toEqual(['shutdown', 'stop', 'reboot', 'deprovision']);
@@ -36,6 +36,20 @@ const guest = (over = {}) => ({
 
 test('a kind mismatch offers no lifecycle action at all', () => {
   expect(actionsForState('mismatch')).toEqual([]);
+});
+
+// F1: a template must offer no lifecycle action regardless of its reported
+// state — linking to one and then hitting Deprovision would destroy the
+// template every future clone depends on, and Start is meaningless for one.
+test('actionsForGuest: a template offers nothing, in any state', () => {
+  expect(actionsForGuest({ state: 'stopped', template: true })).toEqual([]);
+  expect(actionsForGuest({ state: 'running', template: true })).toEqual([]);
+  expect(actionsForGuest({ state: 'missing', template: true })).toEqual([]);
+});
+
+test('actionsForGuest: a non-template guest falls through to actionsForState', () => {
+  expect(actionsForGuest({ state: 'stopped', template: false })).toEqual(['start', 'deprovision']);
+  expect(actionsForGuest({ state: 'running', template: false })).toEqual(['shutdown', 'stop', 'reboot', 'deprovision']);
 });
 
 test('kindLabel uses PVE shorthand', () => {

@@ -21,6 +21,21 @@ export function parseGuestOption(value: string): { kind: PveGuestKind; vmid: num
   return { kind: kind === 'qemu' ? 'qemu' : 'lxc', vmid: Number(vmid) };
 }
 
+// A template can be cloned from, never linked to: linking to one and then
+// hitting Deprovision from the Guests tab would destroy the template every
+// future clone depends on. It gets the same shown-but-unselectable treatment
+// a guest already linked to another box gets — hiding it outright would just
+// be a vmid that mysteriously vanished from the list.
+export function guestOptionDisabled(item: { template: boolean; linkedBoxId: string | null }, boxId?: string): boolean {
+  return item.template || (!!item.linkedBoxId && item.linkedBoxId !== boxId);
+}
+
+export function guestOptionLabel(item: PveNodeGuest, boxId?: string): string {
+  const templateSuffix = item.template ? ' | TEMPLATE' : '';
+  const linkedSuffix = item.linkedBoxId && item.linkedBoxId !== boxId ? ' | linked' : '';
+  return `${item.vmid} | ${kindLabel(item.kind)} | ${item.name} | ${item.state}${templateSuffix}${linkedSuffix}`;
+}
+
 export function associationMutation(current: PveBoxLink | undefined, draft: Draft) {
   if (draft.mode === 'unlinked') return current ? { kind: 'unlink' as const } : null;
   if (!draft.hostId || !draft.node || !Number.isInteger(draft.vmid) || draft.vmid < 100) throw new Error('select a Proxmox guest');
@@ -68,8 +83,8 @@ export function createProxmoxAssociationEditor(box: Box | null) {
     const rows = await pve.nodeGuests(host.value, node.value);
     guest.replaceChildren(...rows.map((item: PveNodeGuest) => el('option', {
       value: guestOptionValue(item),
-      disabled: !!item.linkedBoxId && item.linkedBoxId !== box?.id,
-    }, [`${item.vmid} | ${kindLabel(item.kind)} | ${item.name} | ${item.state}${item.linkedBoxId && item.linkedBoxId !== box?.id ? ' | linked' : ''}`])));
+      disabled: guestOptionDisabled(item, box?.id),
+    }, [guestOptionLabel(item, box?.id)])));
     if (selected) {
       // Fail closed: when the stored vmid is no longer among the fetched rows
       // (the guest was destroyed/recreated — exactly the mismatch case that

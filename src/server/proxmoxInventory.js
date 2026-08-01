@@ -44,7 +44,7 @@ export function createProxmoxInventory({
   const record = (box, fields) => ({
     boxId: box.id, boxLabel: box.label, hostId: box.proxmox.hostId, hostName: null,
     node: box.proxmox.node, vmid: Number(box.proxmox.vmid), kind: linkKind(box), containerName: null,
-    state: 'unknown', fetchedAt: now(), error: null, ...fields,
+    state: 'unknown', fetchedAt: now(), error: null, template: false, ...fields,
   });
 
   // A removed-then-re-added host profile gets a new id, stranding links on the
@@ -133,6 +133,7 @@ export function createProxmoxInventory({
           node: nodeValid ? item.node : box.proxmox.node,
           containerName: item.name || null,
           state: 'mismatch',
+          template: !!item.template,
           error: `vmid ${Number(box.proxmox.vmid)} is a ${item.type} guest on this cluster, but this box is linked to a ${want} — re-link the box`,
         });
       }
@@ -163,6 +164,10 @@ export function createProxmoxInventory({
       return record(box, {
         hostName: host.name, node: nodeValid ? item.node : box.proxmox.node,
         kind: item.type, containerName: item.name || null, state: normalizeState(item.status),
+        // Carried even for an already-linked guest: a container/VM can be
+        // converted to a template after linking, and a template must never
+        // stop being recognisable just because the link predates it.
+        template: !!item.template,
       });
     }));
   }
@@ -247,6 +252,12 @@ export function createProxmoxInventory({
       ].map(({ item, kind }) => ({
         hostId, node, kind, vmid: Number(item.vmid), name: item.name || String(item.vmid),
         state: normalizeState(item.status),
+        // PVE returns template: 1 on both qemu and lxc template rows. Carried
+        // through so the picker can refuse to select one and the Guests tab
+        // can refuse to offer lifecycle actions on one — a template linked
+        // and then deprovisioned destroys the source every future clone
+        // depends on.
+        template: !!item.template,
         linkedBoxId: linked.get(targetKey({ hostId, node, vmid: item.vmid })) || null,
       })).sort((a, b) => a.vmid - b.vmid);
     },
