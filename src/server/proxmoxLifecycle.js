@@ -7,6 +7,7 @@ import { pollPveTask } from './pveTask.js';
 const ACTIONS = new Set(['start', 'shutdown', 'stop', 'reboot', 'deprovision']);
 const TERMINAL = new Set(['done', 'error', 'interrupted']);
 const REQUIRED = { start: 'stopped', shutdown: 'running', stop: 'running', reboot: 'running' };
+const jobKind = (link) => (link && link.kind === 'qemu' ? 'qemu' : 'lxc');
 const targetKey = (link) => `${link.hostId}\u0000${link.node}\u0000${Number(link.vmid)}`;
 const serviceError = (statusCode, message) => Object.assign(new Error(message), { statusCode });
 
@@ -16,6 +17,7 @@ export function createProxmoxLifecycleManager({
   load = () => [], save = () => {}, now = () => new Date().toISOString(), makeId = randomUUID,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), pollMs = 1500,
   taskTimeoutMs = 600_000, shutdownTimeoutMs = taskTimeoutMs, maxPollFailures = 5,
+  deprovisionGraceSec = 120,
   maxJobs = 50, maxLogBytes = 65_536,
   // Fired once PVE confirms a container is running again, so the status layer
   // can start looking for it instead of waiting out its own poll interval.
@@ -29,6 +31,10 @@ export function createProxmoxLifecycleManager({
     // validates only Array.isArray, so a `[null]` file parses, is never
     // quarantined, and would throw a TypeError right here — at module top level.
     if (!job || typeof job !== 'object' || typeof job.id !== 'string') continue;
+    // Every job in an existing history file acted on a container, so this states
+    // a fact rather than guessing. Loaded jobs are forced terminal, so it is
+    // only ever read for display.
+    job.kind = jobKind(job);
     if (!TERMINAL.has(job.status)) {
       job.status = 'interrupted';
       job.finishedAt = job.finishedAt || now();
@@ -44,7 +50,7 @@ export function createProxmoxLifecycleManager({
   };
   const persist = () => { prune(); save(ordered()); };
   const appendLog = (job, text) => { if (text) job.log = `${job.log}${text}`.slice(-maxLogBytes); };
-  const summary = (job) => ({ id: job.id, action: job.action, boxId: job.boxId, boxLabel: job.boxLabel, hostId: job.hostId, hostName: job.hostName, node: job.node, vmid: job.vmid, status: job.status, phase: job.phase, error: job.error, createdAt: job.createdAt, finishedAt: job.finishedAt });
+  const summary = (job) => ({ id: job.id, action: job.action, boxId: job.boxId, boxLabel: job.boxLabel, hostId: job.hostId, hostName: job.hostName, node: job.node, vmid: job.vmid, kind: job.kind, status: job.status, phase: job.phase, error: job.error, createdAt: job.createdAt, finishedAt: job.finishedAt });
   const assertTargetIdle = (key) => { if ([...jobs.values()].some((job) => job.status === 'running' && targetKey(job) === key)) throw serviceError(409, 'container already has an active lifecycle job'); };
   persist();
 
@@ -57,7 +63,7 @@ export function createProxmoxLifecycleManager({
 
   async function resolveTarget(job) {
     const box = await boxStore.getBox(job.boxId);
-    if (!box || !box.proxmox || targetKey(box.proxmox) !== targetKey(job)) {
+    if (!box || !box.proxmox || targetKey(box.proxmox) !== targetKey(job) || jobKind(box.proxmox) !== job.kind) {
       throw new Error('box Proxmox link changed before lifecycle action');
     }
     const host = await proxmoxStore.getHost(job.hostId, { withSecret: true });
@@ -81,10 +87,11 @@ export function createProxmoxLifecycleManager({
     const { box, client } = await resolveTarget(job);
     const current = await inventory.refreshBox(box);
     if (current.state === 'unknown') throw new Error(current.error || 'Proxmox state unavailable');
+    if (current.state === 'mismatch') throw new Error(current.error || 'proxmox guest kind mismatch');
     if (current.state !== REQUIRED[job.action]) throw new Error(`${job.action} requires ${REQUIRED[job.action]}`);
     job.phase = 'request'; persist();
-    const method = `${job.action}Lxc`;
-    const upid = await client[method](job.node, job.vmid);
+    const method = `${job.action}Guest`;
+    const upid = await client[method](job.kind, job.node, job.vmid);
     appendLog(job, `# ${job.action} ${upid}\n`); persist();
     await pollTask(client, job, upid);
     job.phase = 'verify'; persist();
@@ -155,6 +162,7 @@ export function createProxmoxLifecycleManager({
     const { box, client } = await resolveTarget(job);
     let current = await inventory.refreshBox(box);
     if (current.state === 'unknown') throw new Error(current.error || 'Proxmox state unavailable');
+    if (current.state === 'mismatch') throw new Error(current.error || 'proxmox guest kind mismatch');
     if (current.state === 'missing') {
       job.phase = 'unlink'; persist();
       // The container is verifiably gone — its host key is dead by definition.
@@ -166,14 +174,18 @@ export function createProxmoxLifecycleManager({
     }
     if (current.state === 'running') {
       job.phase = 'shutdown'; persist();
-      const shutdown = await client.shutdownLxc(job.node, job.vmid);
+      // forceStop + timeout make PVE escalate server-side once the grace expires:
+      // one task rather than a poll loop plus a second request, and no window in
+      // which we and PVE disagree about what is running. The guest's disk is
+      // about to be purged, so a clean unmount is moot.
+      const shutdown = await client.shutdownGuest(job.kind, job.node, job.vmid, { forceStop: true, timeout: deprovisionGraceSec });
       appendLog(job, `# shutdown ${shutdown}\n`); persist();
       await pollTask(client, job, shutdown);
       current = await waitForState(job, 'stopped', shutdownTimeoutMs);
     }
     if (current.state !== 'stopped') throw new Error(`deprovision requires stopped, got ${current.state}`);
     job.phase = 'destroy'; persist();
-    const destroy = await client.destroyLxc(job.node, job.vmid);
+    const destroy = await client.destroyGuest(job.kind, job.node, job.vmid);
     appendLog(job, `# destroy ${destroy}\n`); persist();
     await pollTask(client, job, destroy);
     job.phase = 'verify'; persist();
@@ -212,6 +224,10 @@ export function createProxmoxLifecycleManager({
     if (!host) throw serviceError(404, 'proxmox host not found');
     const current = await inventory.refreshBox(box).catch((error) => { throw serviceError(502, error.message); });
     if (current.state === 'unknown') throw serviceError(502, current.error || 'Proxmox state unavailable');
+    // Checked explicitly rather than left to fall through to the REQUIRED test:
+    // "start requires stopped" would send the operator debugging the wrong thing
+    // when the real problem is that this vmid is not the guest they linked.
+    if (current.state === 'mismatch') throw serviceError(409, current.error || 'proxmox guest kind mismatch');
     if (action === 'deprovision') {
       if (input.confirmName !== box.label) throw serviceError(409, 'confirmation name does not match');
       if (!['running', 'stopped', 'missing'].includes(current.state)) throw serviceError(409, `deprovision cannot run from ${current.state}`);
@@ -226,6 +242,7 @@ export function createProxmoxLifecycleManager({
     const job = {
       id: makeId(), action, boxId: box.id, boxLabel: box.label,
       hostId: host.id, hostName: host.name, node: current.node, vmid: Number(box.proxmox.vmid),
+      kind: jobKind(box.proxmox),
       status: 'running', phase: 'resolve', log: '', error: null,
       createdAt: now(), finishedAt: null,
     };
