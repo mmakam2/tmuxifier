@@ -29,3 +29,14 @@ test('association section hides only for unlinked boxes with no Proxmox hosts', 
   expect(associationSectionVisible(0, true)).toBe(true); // a stale link must stay visible to unlink
   expect(associationSectionVisible(2, true)).toBe(true);
 });
+
+test('changing only the kind is a real mutation, not a no-op', () => {
+  const current = { hostId: 'H1', node: 'pve', vmid: 131, kind: 'lxc' };
+  // Same coordinates, different type: vmid 131 was recreated as a VM, and the
+  // operator is re-linking to clear the mismatch. Comparing only hostId/node/
+  // vmid would report "nothing changed" and silently skip the write.
+  expect(associationMutation(current, { mode: 'linked', hostId: 'H1', node: 'pve', vmid: 131, kind: 'qemu' }))
+    .toEqual({ kind: 'link', link: { hostId: 'H1', node: 'pve', vmid: 131, kind: 'qemu' } });
+  expect(associationMutation(current, { mode: 'linked', hostId: 'H1', node: 'pve', vmid: 131, kind: 'lxc' }))
+    .toBeNull();
+});

@@ -1,4 +1,6 @@
-export interface PveBoxLink { hostId: string; node: string; vmid: number; endpoint: string; }
+import type { PveGuestKind } from './proxmox';
+
+export interface PveBoxLink { hostId: string; node: string; vmid: number; kind: PveGuestKind; endpoint: string; }
 export interface Box {
   id: string; label: string; host: string; user?: string; port?: number;
   proxyJump?: string; sessionName: string; startupCommand?: string; tags: string[];
@@ -15,13 +17,16 @@ export interface BoxMetrics {
   // `uname -s` where that file is absent. Server-allowlisted to a bare token.
   osId?: string; osVer?: string;
 }
-export type ProxmoxBoxState = 'running' | 'stopped' | 'missing' | 'unknown';
+// 'mismatch' mirrors PveGuestState (proxmox.ts): the linked vmid's observed
+// type disagrees with the stored link, so the probe passes the guest
+// inventory's state through unchanged (see proxmoxInventory.js mergeProxmoxStatus).
+export type ProxmoxBoxState = 'running' | 'stopped' | 'missing' | 'unknown' | 'mismatch';
 export interface Status {
   reachable: boolean; tmux?: boolean; needsAuth?: boolean; inUse?: boolean; paused?: boolean;
   hostKeyChanged?: boolean;
   nextProbeAt?: number; sessions?: { name: string; windows: number; attached?: boolean; activity?: number; paneCmd?: string }[];
   metrics?: BoxMetrics; error?: string;
-  proxmoxState?: ProxmoxBoxState; proxmoxNode?: string; proxmoxVmid?: number;
+  proxmoxState?: ProxmoxBoxState; proxmoxNode?: string; proxmoxVmid?: number; proxmoxKind?: PveGuestKind;
 }
 // One point of a box's rolling health series (a status poll projected server-side
 // in healthHistory.js). A missing metric is omitted — the sparkline draws a gap.

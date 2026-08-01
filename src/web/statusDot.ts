@@ -40,7 +40,7 @@ export function classifyError(error?: string): string {
 export function dotTitleFor(st: Status | undefined): string {
   if (!st) return 'Status unknown';
   if (st.proxmoxState === 'stopped') return 'Stopped on Proxmox';
-  if (st.proxmoxState === 'missing' && !st.reachable) return 'Proxmox container missing';
+  if (st.proxmoxState === 'missing' && !st.reachable) return 'Proxmox guest missing';
   if (st.needsAuth) return 'Needs login — click the box (or ↻) to reconnect and enter your password';
   if (!st.reachable) {
     const reason = classifyError(st.error);
@@ -124,9 +124,9 @@ function metricSegments(m: BoxMetrics | undefined): MetaSegment[] {
 // The always-visible second line under a box label, as styled segments.
 // Precedence mirrors dotClassFor/dotTitleFor: a confirmed Proxmox `stopped` box
 // reports its managed state instead of the (expected) SSH failure; `missing`
-// (linked but PVE can't find the container) is folded in mid-stack so it stays
+// (linked but PVE can't find the guest) is folded in mid-stack so it stays
 // a warning alongside live metrics while still reachable, and only escalates to
-// the crit "Container missing" once SSH also fails. `unknown` PVE state is not
+// the crit "Guest missing" once SSH also fails. `unknown` PVE state is not
 // checked here — it must never suppress the plain reachable/unreachable read
 // below. Reachable (no special PVE state) → `[cpu, mem, disk]` from the metrics
 // piggybacked on the status probe; only the cpu segment is colored (by load
@@ -137,7 +137,7 @@ function metricSegments(m: BoxMetrics | undefined): MetaSegment[] {
 export function metaSegmentsFor(st: Status | undefined): MetaSegment[] {
   if (!st) return [];
   if (st.proxmoxState === 'stopped') return [{ text: `Stopped | ${st.proxmoxNode ?? 'PVE'} / ${st.proxmoxVmid ?? '?'}` }];
-  if (st.proxmoxState === 'missing' && !st.reachable) return [{ text: 'Container missing', level: 'crit' }];
+  if (st.proxmoxState === 'missing' && !st.reachable) return [{ text: 'Guest missing', level: 'crit' }];
   if (st.needsAuth) return [{ text: 'Needs login', level: 'auth' }];
   if (!st.reachable) return [{ text: classifyError(st.error), level: 'crit' }];
   if (st.proxmoxState === 'missing') return [{ text: 'PVE link missing', level: 'warn' }, ...metricSegments(st.metrics)];

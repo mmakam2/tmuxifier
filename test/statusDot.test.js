@@ -182,5 +182,5 @@ test('missing PVE target stays green when SSH works and is red when SSH fails', 
   expect(dotClassFor({ reachable: true, tmux: true, proxmoxState: 'missing' })).toBe('green');
   expect(metaLine({ reachable: true, tmux: true, proxmoxState: 'missing' })).toContain('PVE link missing');
   expect(dotClassFor({ reachable: false, proxmoxState: 'missing' })).toBe('red');
-  expect(metaLine({ reachable: false, proxmoxState: 'missing' })).toContain('Container missing');
+  expect(metaLine({ reachable: false, proxmoxState: 'missing' })).toContain('Guest missing');
 });

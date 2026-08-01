@@ -137,7 +137,7 @@ export function createStore({ dataDir }) {
         if (index === -1) throw new Error('box not found');
         const key = linkKey(link);
         if (boxes.some((box) => box.id !== id && box.proxmox && linkKey(box.proxmox) === key)) {
-          throw new Error('proxmox container is already linked');
+          throw new Error('proxmox guest is already linked');
         }
         boxes[index] = normalize(
           { ...boxes[index], proxmox: link },
