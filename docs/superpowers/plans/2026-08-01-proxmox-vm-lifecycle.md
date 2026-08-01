@@ -66,7 +66,7 @@
 - Consumes: nothing (first task).
 - Produces: `GUEST_KINDS` (a frozen `['lxc','qemu']` array) exported from `proxmoxValidate.js`. Every stored link is guaranteed to carry `kind: 'lxc' | 'qemu'` after passing through `store.js`'s `normalize`.
 
-- [ ] **Step 1: Write the failing validator tests**
+- [x] **Step 1: Write the failing validator tests**
 
 Append to `test/proxmoxValidate.test.js`:
 
@@ -85,12 +85,12 @@ test('link kind is optional but must be a known guest kind when present', () => 
 
 Confirm `assertProxmoxLinkInput` is already imported at the top of that file; add it to the import if not.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `npx vitest run test/proxmoxValidate.test.js -t 'guest kind'`
 Expected: FAIL — `'vm'` and `'../qemu'` are accepted, so the two `toThrow` assertions fail.
 
-- [ ] **Step 3: Add the allowlist to the validator**
+- [x] **Step 3: Add the allowlist to the validator**
 
 In `src/server/proxmoxValidate.js`, add the export near the other module-level constants:
 
@@ -117,12 +117,12 @@ export function assertProxmoxLinkInput(spec, { hostIds = [] } = {}) {
 }
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `npx vitest run test/proxmoxValidate.test.js`
 Expected: PASS, all tests in the file.
 
-- [ ] **Step 5: Write the failing store test**
+- [x] **Step 5: Write the failing store test**
 
 Append to `test/store.test.js`:
 
@@ -154,12 +154,12 @@ test('linkKey ignores kind, so one vmid cannot be linked twice under different k
 
 Use whatever this file's existing store-construction helper is named — read the top of `test/store.test.js` and match it rather than introducing `freshStore()` if a differently-named helper already exists.
 
-- [ ] **Step 6: Run it and watch it fail**
+- [x] **Step 6: Run it and watch it fail**
 
 Run: `npx vitest run test/store.test.js -t 'kind'`
 Expected: FAIL — `legacy.proxmox.kind` is `undefined`.
 
-- [ ] **Step 7: Normalize the kind in the store**
+- [x] **Step 7: Normalize the kind in the store**
 
 In `src/server/store.js`, change `normalize` (lines 43-60):
 
@@ -191,7 +191,7 @@ In `src/server/store.js`, change `normalize` (lines 43-60):
 
 Leave `linkKey` (line 64) alone — vmid is cluster-unique, so two links differing only in kind point at the same guest and one is wrong; keying on kind would let both exist.
 
-- [ ] **Step 8: Fix the existing strict-equality assertion**
+- [x] **Step 8: Fix the existing strict-equality assertion**
 
 `test/store.test.js:255` asserts the whole link with `toEqual`, which now fails on the added key. Update the expectation:
 
@@ -201,12 +201,12 @@ Leave `linkKey` (line 64) alone — vmid is cluster-unique, so two links differi
 
 Run `npx vitest run test/store.test.js` and fix any other assertion that compares a link with strict `toEqual`. `toMatchObject` assertions need no change — they tolerate the extra key.
 
-- [ ] **Step 9: Run the full suite**
+- [x] **Step 9: Run the full suite**
 
 Run: `npm test`
 Expected: PASS. If `test/proxmoxProvision.test.js` or `test/server.test.js` fail on a link comparison, add `kind: 'lxc'` to those expectations — the default is correct there, since provisioning creates containers.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add src/server/proxmoxValidate.js src/server/store.js test/proxmoxValidate.test.js test/store.test.js
@@ -239,7 +239,7 @@ differing only in kind point at the same guest and one of them is wrong."
   - Removed: `startLxc`, `shutdownLxc`, `stopLxc`, `rebootLxc`, `destroyLxc`, `listLxc`.
   - Unchanged: `createLxc`, `lxcInterfaces`, `clusterResources`, `clusterNodes`, `taskStatus`, `taskLog`, `nodes`, `storages`, `templates`, `bridges`, `nextId`, `version`.
 
-- [ ] **Step 1: Write the failing client tests**
+- [x] **Step 1: Write the failing client tests**
 
 Append to `test/proxmoxApi.test.js`:
 
@@ -296,12 +296,12 @@ test('an unknown guest kind is refused before it can become a path segment', asy
 });
 ```
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 Run: `npx vitest run test/proxmoxApi.test.js -t 'guest'`
 Expected: FAIL — `client.startGuest is not a function`.
 
-- [ ] **Step 3: Replace the six Lxc methods**
+- [x] **Step 3: Replace the six Lxc methods**
 
 In `src/server/proxmoxApi.js`, add above `createProxmoxClient`:
 
@@ -339,7 +339,7 @@ Then in the returned object, replace lines 86-94 (`startLxc`, `listLxc`, `shutdo
 
 `createLxc` and `lxcInterfaces` stay exactly as they are — provisioning is LXC-only and those names are honest.
 
-- [ ] **Step 4: Update the one provisioning caller**
+- [x] **Step 4: Update the one provisioning caller**
 
 `src/server/proxmoxProvision.js:142` currently reads `const sup = await client.startLxc(j.node, j.vmid);`. Change to:
 
@@ -355,17 +355,17 @@ Also make the link this module stamps explicit about its kind — line 174:
 
 Task 1's normalize would default this to `'lxc'` anyway, but stating it where we *know* the answer beats relying on a default.
 
-- [ ] **Step 5: Run and watch it pass**
+- [x] **Step 5: Run and watch it pass**
 
 Run: `npx vitest run test/proxmoxApi.test.js test/proxmoxProvision.test.js`
 Expected: PASS. Provision tests whose fake client defines `startLxc` must be updated to define `startGuest` — search the file for `startLxc` and rename, adding the leading `kind` argument to any assertion on its call arguments.
 
-- [ ] **Step 6: Check the integration suite**
+- [x] **Step 6: Check the integration suite**
 
 Run: `npx vitest run test/proxmoxApi.integration.test.js`
 If it exercises any renamed method against its fake HTTPS server, update the call sites. If it only covers `createLxc`, TLS, and error mapping, it needs no change.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/server/proxmoxApi.js src/server/proxmoxProvision.js test/proxmoxApi.test.js test/proxmoxApi.integration.test.js test/proxmoxProvision.test.js
@@ -394,7 +394,7 @@ the escalation server-side. createLxc and lxcInterfaces stay LXC-only."
   - `getLinkedContainers` → **`getLinkedGuests(boxes)`**, same return as before plus the new fields.
   - `mergeProxmoxStatus` adds `proxmoxKind` to each merged entry.
 
-- [ ] **Step 1: Extend the test fixture to carry kinds**
+- [x] **Step 1: Extend the test fixture to carry kinds**
 
 In `test/proxmoxInventory.test.js`, replace the `linked` helper (lines 5-8) and `setup` client (lines 14-17):
 
@@ -430,7 +430,7 @@ Then fix the existing drift-follow assertion at line 55, which compares the writ
 
 Run `npx vitest run test/proxmoxInventory.test.js` and fix any other assertion broken purely by the added field or the `listLxc` → `listGuests` rename. This step is preparation — the suite should be green again before you add new behavior.
 
-- [ ] **Step 2: Write the failing behavior tests**
+- [x] **Step 2: Write the failing behavior tests**
 
 Append to `test/proxmoxInventory.test.js`:
 
@@ -509,12 +509,12 @@ test('mergeProxmoxStatus carries the guest kind into the status snapshot', () =>
 });
 ```
 
-- [ ] **Step 3: Run and watch them fail**
+- [x] **Step 3: Run and watch them fail**
 
 Run: `npx vitest run test/proxmoxInventory.test.js`
 Expected: FAIL — VMs are filtered out (so the VM box reads `missing`), `listNodeGuests` is not a function, and `proxmoxKind` is absent.
 
-- [ ] **Step 4: Implement the inventory changes**
+- [x] **Step 4: Implement the inventory changes**
 
 In `src/server/proxmoxInventory.js`:
 
@@ -619,12 +619,12 @@ Finally rename the two exported readers:
     },
 ```
 
-- [ ] **Step 5: Run and watch them pass**
+- [x] **Step 5: Run and watch them pass**
 
 Run: `npx vitest run test/proxmoxInventory.test.js`
 Expected: PASS.
 
-- [ ] **Step 6: Fix the two server call sites so the suite builds**
+- [x] **Step 6: Fix the two server call sites so the suite builds**
 
 `src/server/server.js:1171` calls `getLinkedContainers`; `:1195` calls `listNodeContainers`. Rename both call sites now (the *route paths* move in Task 5):
 
@@ -635,7 +635,7 @@ Expected: PASS.
     try { return await proxmoxInventory.listNodeGuests(req.params.id, req.params.node, await store.listBoxes()); }
 ```
 
-- [ ] **Step 7: Run the full suite and commit**
+- [x] **Step 7: Run the full suite and commit**
 
 Run: `npm test`
 Expected: PASS.
@@ -665,7 +665,7 @@ Renames getLinkedContainers/listNodeContainers to the guest spelling."
 - Consumes: `startGuest`/`shutdownGuest`/`stopGuest`/`rebootGuest`/`destroyGuest` (Task 2); inventory records carrying `kind` and the `'mismatch'` state (Task 3).
 - Produces: job records and `summary()` output gain `kind: 'lxc' | 'qemu'`. New constructor option `deprovisionGraceSec` (default `120`).
 
-- [ ] **Step 1: Update the fixture to the guest API**
+- [x] **Step 1: Update the fixture to the guest API**
 
 In `test/proxmoxLifecycle.test.js`, change `BOX` (line 5) and the `fixture` client (lines 10-17):
 
@@ -701,12 +701,12 @@ The first `test.each` block asserts `expect(calls).toContain(action)`; change it
 
 Note `test/proxmoxLifecycle.test.js:209` ("deprovision shutdown failure never escalates to stop") asserts we never call the stop method ourselves. That assertion stays true and must be **kept**: our escalation is PVE-side via `forceStop`, not a second client call.
 
-- [ ] **Step 2: Run and watch the fixture rename fail**
+- [x] **Step 2: Run and watch the fixture rename fail**
 
 Run: `npx vitest run test/proxmoxLifecycle.test.js`
 Expected: FAIL — the manager still calls `startLxc`, which the fixture no longer defines.
 
-- [ ] **Step 3: Write the new failing behavior tests**
+- [x] **Step 3: Write the new failing behavior tests**
 
 Append to `test/proxmoxLifecycle.test.js`:
 
@@ -785,12 +785,12 @@ test('a job loaded from history without a kind reads as lxc', async () => {
 });
 ```
 
-- [ ] **Step 4: Run and watch them fail**
+- [x] **Step 4: Run and watch them fail**
 
 Run: `npx vitest run test/proxmoxLifecycle.test.js -t 'qemu'`
 Expected: FAIL — `summary` has no `kind`, and the manager calls `client.startLxc`.
 
-- [ ] **Step 5: Implement the lifecycle changes**
+- [x] **Step 5: Implement the lifecycle changes**
 
 In `src/server/proxmoxLifecycle.js`:
 
@@ -900,12 +900,12 @@ In `createJob`, add the mismatch refusal and record the kind:
 
 Note the asymmetry, and keep it: `node` comes from `current` because it drift-follows, while `kind` comes from the **link**, which is its authority. The refresh's role was only to prove the two agree.
 
-- [ ] **Step 6: Run and watch them pass**
+- [x] **Step 6: Run and watch them pass**
 
 Run: `npx vitest run test/proxmoxLifecycle.test.js`
 Expected: PASS, all tests in the file including the pre-existing ones.
 
-- [ ] **Step 7: Run the full suite and commit**
+- [x] **Step 7: Run the full suite and commit**
 
 Run: `npm test`
 Expected: PASS.
@@ -944,7 +944,7 @@ the existing 'shutdown failure never escalates' invariant is untouched."
 > refusing every lifecycle action — breaking the feature's primary use case.
 > Steps 6-8 below fix it. No other task touches this route's body handling.
 
-- [ ] **Step 1: Point the existing route tests at the new paths**
+- [x] **Step 1: Point the existing route tests at the new paths**
 
 In `test/server.test.js` and `test/proxmoxRoutes.test.js`, replace every occurrence of `/api/proxmox/containers` with `/api/proxmox/guests`, and every `/nodes/<node>/containers` with `/nodes/<node>/guests`. Find them with:
 
@@ -952,12 +952,12 @@ In `test/server.test.js` and `test/proxmoxRoutes.test.js`, replace every occurre
 grep -rn "proxmox/containers\|/containers'" test/
 ```
 
-- [ ] **Step 2: Run and watch them fail**
+- [x] **Step 2: Run and watch them fail**
 
 Run: `npx vitest run test/server.test.js test/proxmoxRoutes.test.js`
 Expected: FAIL with 404 — the routes still answer on the old paths.
 
-- [ ] **Step 3: Rename the routes**
+- [x] **Step 3: Rename the routes**
 
 In `src/server/server.js`:
 
@@ -979,12 +979,12 @@ And line 1202's message, which says "container" about something that may now be 
 
 If any test asserts that exact 409 string, update it to match.
 
-- [ ] **Step 4: Run and watch them pass**
+- [x] **Step 4: Run and watch them pass**
 
 Run: `npx vitest run test/server.test.js test/proxmoxRoutes.test.js`
 Expected: PASS.
 
-- [ ] **Step 6: Write the failing manual-link test**
+- [x] **Step 6: Write the failing manual-link test**
 
 Append to `test/server.test.js`, matching that file's existing helper for building an
 app instance and an authenticated request — read a nearby route test and follow it
@@ -1007,12 +1007,12 @@ a `qemu` guest so the assertion distinguishes the discovered kind from the defau
 the file's existing Proxmox-route tests already share such a fake, extend it rather than
 adding a second one.
 
-- [ ] **Step 7: Run it and watch it fail**
+- [x] **Step 7: Run it and watch it fail**
 
 Run: `npx vitest run test/server.test.js -t 'persists the discovered guest kind'`
 Expected: FAIL — `stored.proxmox.kind` is `'lxc'`, because the route never writes one.
 
-- [ ] **Step 8: Persist the kind from the discovered target**
+- [x] **Step 8: Persist the kind from the discovered target**
 
 `src/server/server.js:1217` currently reads:
 
@@ -1047,12 +1047,12 @@ have shipped as orphaned container-speak on a VM. Check `src/server/proxmoxLifec
 for any other operator-facing "container" wording in the same pass and update any test
 asserting those strings.
 
-- [ ] **Step 9: Run and watch it pass**
+- [x] **Step 9: Run and watch it pass**
 
 Run: `npx vitest run test/server.test.js test/proxmoxRoutes.test.js`
 Expected: PASS.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add src/server/server.js test/server.test.js test/proxmoxRoutes.test.js
@@ -1103,7 +1103,7 @@ the end, after Part D's verification gates.
 
 #### Part A — types and fetch layer
 
-- [ ] **Step 1: Rewrite the type block**
+- [x] **Step 1: Rewrite the type block**
 
 In `src/web/proxmox.ts`, replace lines 24-28:
 
@@ -1127,16 +1127,16 @@ Replace the two fetchers (lines 66, 68):
   nodeGuests(hostId: string, node: string) { return jr<PveNodeGuest[]>(`/api/proxmox/hosts/${hostId}/nodes/${encodeURIComponent(node)}/guests`); },
 ```
 
-- [ ] **Step 2: Add kind to the link type**
+- [x] **Step 2: Add kind to the link type**
 
 In `src/web/api.ts`, find `PveBoxLink` and add `kind: PveGuestKind;`, importing the type from `./proxmox` (or declaring it locally if `api.ts` must not import from `proxmox.ts` — check the existing import direction first and follow it).
 
-- [ ] **Step 3: Run the typechecker and save the breakage list**
+- [x] **Step 3: Run the typechecker and save the breakage list**
 
 Run: `npm run typecheck`
 Expected: FAIL, with errors in `proxmoxContainers.ts`, `proxmoxAssociation.ts`, `proxmoxUi.ts`, `dashboard.ts`, `main.ts`, `paneLifecycle.ts`. This failure is expected and temporary — Parts B-D close it before the single commit at the end. Save the error list; it is Part D's worklist.
 
-- [ ] **Step 4: Update the web-client fetch test**
+- [x] **Step 4: Update the web-client fetch test**
 
 In `test/proxmoxWebClient.test.js`, rename any `linkedContainers` / `nodeContainers` call and update asserted URLs to `/api/proxmox/guests` and `…/guests`.
 
@@ -1144,14 +1144,14 @@ In `test/proxmoxWebClient.test.js`, rename any `linkedContainers` / `nodeContain
 
 #### Part B — the Guests tab
 
-- [ ] **Step 5: Move the files**
+- [x] **Step 5: Move the files**
 
 ```bash
 git mv src/web/proxmoxContainers.ts src/web/proxmoxGuests.ts
 git mv test/proxmoxContainers.test.js test/proxmoxGuests.test.js
 ```
 
-- [ ] **Step 6: Write the failing pure-helper tests**
+- [x] **Step 6: Write the failing pure-helper tests**
 
 Replace the body of `test/proxmoxGuests.test.js` imports and append:
 
@@ -1183,12 +1183,12 @@ test('the filter matches the kind label the row displays', () => {
 
 Keep every pre-existing test in the file, renaming `containerMatches` to `guestMatches` in each.
 
-- [ ] **Step 7: Run and watch it fail**
+- [x] **Step 7: Run and watch it fail**
 
 Run: `npx vitest run test/proxmoxGuests.test.js`
 Expected: FAIL — `kindLabel` is not exported and `guestMatches` does not exist.
 
-- [ ] **Step 8: Update the module**
+- [x] **Step 8: Update the module**
 
 In `src/web/proxmoxGuests.ts`:
 
@@ -1247,29 +1247,29 @@ Update the deprovision dialog copy:
       : `Tmuxifier will ask Proxmox to shut the guest down gracefully, force it off if it has not stopped within the grace period, then destroy it and its ${guest.kind === 'qemu' ? 'disks' : 'volumes'}, keep independent backups, and remove the linked box.`]),
 ```
 
-- [ ] **Step 9: Update the hub**
+- [x] **Step 9: Update the hub**
 
 In `src/web/proxmoxUi.ts`, change the import to `import { renderGuestsTab } from './proxmoxGuests';`, the call site, and the tab label from `Containers` to `Guests`.
 
-- [ ] **Step 10: Rename the CSS**
+- [x] **Step 10: Rename the CSS**
 
 In `src/web/style.css`, rename `.pve-container-row` → `.pve-guest-row`, `.pve-container-toolbar` → `.pve-guest-toolbar`, `.pve-container-search` → `.pve-guest-search`, `.pve-container-list` → `.pve-guest-list`. Add a rule for the kind badge next to the existing `.pve-badge` rules, following whatever DESIGN.md specifies for secondary badges — read `DESIGN.md` before choosing colors rather than inventing them.
 
-- [ ] **Step 11: Verify no orphaned class hooks remain**
+- [x] **Step 11: Verify no orphaned class hooks remain**
 
 ```bash
 grep -rn "pve-container" src/ test/
 ```
 Expected: **zero hits.** A class hook no stylesheet matches fails silently rather than at the typechecker — this grep is the only thing that catches it.
 
-- [ ] **Step 12: Check the tab's own tests**
+- [x] **Step 12: Check the tab's own tests**
 
 Run: `npx vitest run test/proxmoxGuests.test.js`
 Expected: PASS. Typecheck still fails in `proxmoxAssociation.ts`, `dashboard.ts`, `main.ts`, `paneLifecycle.ts` — Parts C and D close those. **Do not commit yet.**
 
 #### Part C — association picker offers both kinds
 
-- [ ] **Step 13: Write the failing test**
+- [x] **Step 13: Write the failing test**
 
 Append to `test/proxmoxAssociation.test.js`:
 
@@ -1288,12 +1288,12 @@ test('changing only the kind is a real mutation, not a no-op', () => {
 
 Note the outer `kind: 'link'` (the mutation discriminator) and the inner `link.kind` (the guest kind) are different fields that happen to share a name. Do not conflate them.
 
-- [ ] **Step 14: Run and watch it fail**
+- [x] **Step 14: Run and watch it fail**
 
 Run: `npx vitest run test/proxmoxAssociation.test.js -t 'kind'`
 Expected: FAIL — returns `null` for the qemu case.
 
-- [ ] **Step 15: Update the module**
+- [x] **Step 15: Update the module**
 
 In `src/web/proxmoxAssociation.ts`:
 
@@ -1336,7 +1336,7 @@ Rename the `container` select variable to `guest`, `loadContainers` to `loadGues
 
 In the two places that rebuild the draft on `host`/`node` change (lines 61, 66), the draft literal needs a kind — use `'lxc'` as the placeholder, since `vmid: 0` already marks the draft incomplete and `syncDraft` overwrites both as soon as options load.
 
-- [ ] **Step 16: Check the picker's own tests**
+- [x] **Step 16: Check the picker's own tests**
 
 Run: `npx vitest run test/proxmoxAssociation.test.js`
 Expected: PASS. Typecheck still fails in `dashboard.ts` / `main.ts` / `paneLifecycle.ts` — Part D closes them. **Do not commit yet.**
@@ -1348,16 +1348,16 @@ whether either of `test/dashboard.test.js` / `test/paneLifecycle.test.js` exists
 `ls test/ | grep -i "dashboard\|paneLifecycle"`; extend whichever does. This part closes
 the remaining typecheck errors and produces no new exports.
 
-- [ ] **Step 17: Get the exact worklist**
+- [x] **Step 17: Get the exact worklist**
 
 Run: `npm run typecheck`
 Every remaining error is a site where a renamed type or the new `'mismatch'` state is unhandled. Work the list top to bottom.
 
-- [ ] **Step 18: Handle the new state wherever states are mapped**
+- [x] **Step 18: Handle the new state wherever states are mapped**
 
 Any `switch`/lookup over a guest state — in `dashboard.ts`'s lamp/mode helpers and `paneLifecycle.ts`'s `lifecycleKeysFor` — needs a `'mismatch'` arm. Treat it exactly as `'unknown'`: no lifecycle keys, and a neutral (not green) lamp. `paneLifecycle.ts`'s `lifecycleKeysFor` must return `[]`, matching Task 7's `actionsForState`.
 
-- [ ] **Step 19: Render the CT/VM badge**
+- [x] **Step 19: Render the CT/VM badge**
 
 Wherever a box's Proxmox state is already shown from the status snapshot, add the kind label from `proxmoxKind`, guarding for absence (a box with no Proxmox link has none):
 
@@ -1368,12 +1368,12 @@ const kind = status?.proxmoxKind;
 
 Read `DESIGN.md` before styling it — that document outranks ad-hoc styling decisions.
 
-- [ ] **Step 20: Verify clean**
+- [x] **Step 20: Verify clean**
 
 Run: `npm test`
 Expected: PASS, including `npm run typecheck` which `npm test` runs first.
 
-- [ ] **Step 21: Verify the rename left nothing behind**
+- [x] **Step 21: Verify the rename left nothing behind**
 
 Identifiers first:
 
@@ -1401,7 +1401,7 @@ mean an LXC container. One hit is known and must be fixed here:
   mapping regex matches on `already linked` and does not depend on the preceding word.
   Update any test asserting that exact string.
 
-- [ ] **Step 22: Commit — one commit for the whole web client**
+- [x] **Step 22: Commit — one commit for the whole web client**
 
 Only now, with `npm test` green, does anything get committed. This is deliberately a
 single commit: the type rename breaks every consumer at once, so any split would put
@@ -1442,7 +1442,7 @@ so a split would put three non-typechecking commits in history."
 - Consumes: everything above.
 - Produces: no code.
 
-- [ ] **Step 1: Update the architecture docs**
+- [x] **Step 1: Update the architecture docs**
 
 `CLAUDE.md` and `AGENTS.md` are kept in sync and both describe this subsystem. Update these entries:
 
@@ -1454,11 +1454,11 @@ so a split would put three non-typechecking commits in history."
 
 Keep the existing prose style: these files explain *why*, not just *what*.
 
-- [ ] **Step 2: Update the user-facing README**
+- [x] **Step 2: Update the user-facing README**
 
 Add VM support to whatever section describes Proxmox lifecycle actions. State plainly that provisioning remains LXC-only, and that a VM needs ACPI support or the QEMU guest agent for graceful shutdown to work — otherwise `shutdown` fails on timeout and only `stop` or deprovision will stop it. Use placeholder hostnames only.
 
-- [ ] **Step 3: Commit the docs**
+- [x] **Step 3: Commit the docs**
 
 ```bash
 git add CLAUDE.md AGENTS.md README.md docs/superpowers/plans/2026-08-01-proxmox-vm-lifecycle.md

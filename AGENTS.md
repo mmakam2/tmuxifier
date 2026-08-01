@@ -24,8 +24,8 @@ Configuration, secrets, and runtime state all live **inside the repo**:
   (Proxmox host profiles with **encrypted** API tokens, SSH management keys, and an optional root
   password — all AES-256-GCM sealed — plus container presets), `netbox.json` (NetBox integration
   settings with an **encrypted** API token), `provision-jobs.json` (provision history),
-  `setup-jobs.json` (server-side box setup job history), `proxmox-lifecycle-jobs.json` (LXC
-  power/deprovision job history), `services.json` (standby-dashboard service tiles; a credentialed tile's
+  `setup-jobs.json` (server-side box setup job history), `proxmox-lifecycle-jobs.json` (guest
+  power/deprovision job history, covering both LXC containers and QEMU VMs), `services.json` (standby-dashboard service tiles; a credentialed tile's
   secret — a Pi-hole app password or a TrueNAS/UniFi/Immich API key — is **encrypted**, so unlike
   the rest of the file it never appears in the clear, and switching a tile between credential
   kinds drops it rather than replaying one product's credential at another), `health-events.json` (in-app health event log),
@@ -164,6 +164,11 @@ pattern for new modules.
   finish still works.
 - `store.js` — `data/boxes.json` CRUD; normalizes/validates boxes; exports/imports the box list as
   a versioned JSON file (`exportBoxes`/`importBoxes`; import re-mints ids and skips dup/unsafe entries).
+  A Proxmox link carries a `kind` (`'lxc'` | `'qemu'`); an absent one defaults to `'lxc'` in
+  `readAll()`, the single chokepoint every reader (`listBoxes`/`getBox`/`exportBoxes`, plus every
+  mutation's own read half) goes through, so a link written before VM support migrates by asserting
+  what is already true rather than by rewriting the file — `boxes.json` itself is never touched, the
+  default is just re-derived on every read, same as `normalize()`'s own default on write.
 - `sshCommand.js` — builds `ssh` argv for attach/probe; **all box fields are validated by
   `assertBoxSafe` and never shell-interpolated unquoted**. Touch this carefully (command-injection
   surface). Includes ControlMaster multiplexing args. `buildSetupArgv` is the non-interactive
@@ -415,12 +420,20 @@ pattern for new modules.
 - `secretBox.js` — AES-256-GCM seal/open for secrets at rest; key derived from `cookieSecret` via
   HKDF. Encrypts the persisted Proxmox secrets: the API token, any added SSH management keys, and
   the optional root password.
-- `proxmoxValidate.js` — pure validators/parsers for Proxmox host/key/preset/provision input.
+- `proxmoxValidate.js` — pure validators/parsers for Proxmox host/key/preset/provision input,
+  including the link's `kind`: `assertProxmoxLinkInput` accepts it absent (defaulted downstream in
+  `store.js`) or exactly `'lxc'`/`'qemu'`, and rejects anything else.
 - `proxmoxStore.js` — `data/proxmox.json` CRUD for hosts, SSH keys, presets, and the optional root
   password; seals secrets on write and redacts them on read (`getHost(id,{withSecret})` is the only
   path that decrypts the token).
 - `proxmoxApi.js` — PVE HTTP client over `node:https` with TLS fingerprint pinning, plus
-  `inspectEndpoint`. The token never leaves the server.
+  `inspectEndpoint`. The token never leaves the server. `startGuest`/`shutdownGuest`/`stopGuest`/
+  `rebootGuest`/`destroyGuest`/`listGuests` are kind-parameterized — `kind` is their first argument
+  and becomes a URL path segment (`/nodes/<node>/<kind>/<vmid>/...`) — so each one re-validates it
+  against a closed two-value allowlist immediately before that interpolation, rather than trusting
+  that every caller already checked; the same chokepoint discipline `voiceCatalog.js` and
+  `iconCatalog.js` apply to their own allowlists. `createLxc` and `lxcInterfaces` stay LXC-only; VM
+  provisioning is out of scope.
 - `proxmoxParams.js` — pure preset → `pct`/LXC create-param mapping (`net0`, `ssh-public-keys`, …).
 - `defaultKey.js` — reads the Tmuxifier host's own SSH public key to inject as the default Proxmox
   management key so provisioned containers trust Tmuxifier (override with `TMUXIFIER_PVE_DEFAULT_PUBKEY`).
@@ -429,17 +442,33 @@ pattern for new modules.
   first for `auto-static` presets; the Fleet job pattern). On box-link it auto-starts a server-side
   setup job (injected `startSetup`, `waitForSsh: true`) so the container is usable without the
   browser staying open.
-- `proxmoxInventory.js` — cluster-wide linked-LXC inventory and status authority (one
-  `/cluster/resources` call per host); auto-follows node migrations by updating the stored
-  link's node (guarded against active lifecycle jobs), and re-homes an orphaned link when a
-  removed host profile is re-added with the same endpoint (new id, exact `host:port` match,
-  vmid verified on that cluster, same CAS + job guards). `listClusterNodes` (served by
-  `GET /api/proxmox/nodes`) reports each physical node's health from
-  `/cluster/resources?type=node` — one call per distinct endpoint — for the standby
-  dashboard's Proxmox readout.
-- `proxmoxLifecycle.js` / `proxmoxLifecycleStore.js` — persisted LXC power/deprovision jobs in
-  `data/proxmox-lifecycle-jobs.json`; deprovision releases the box's NetBox-allocated IP and
-  deletes any remaining NetBox records matching the box's current IP, so manually created
+- `proxmoxInventory.js` — cluster-wide linked-guest (LXC **and** QEMU VM) inventory and status
+  authority (one `/cluster/resources` call per host, now read at `type=vm` to pick up both kinds);
+  auto-follows node migrations by updating the stored link's node (guarded against active lifecycle
+  jobs), and re-homes an orphaned link when a removed host profile is re-added with the same
+  endpoint (new id, exact `host:port` match, vmid verified on that cluster, same CAS + job guards).
+  A vmid whose observed type on the cluster disagrees with the link's stored `kind` reports
+  `state: 'mismatch'` and — load-bearing — writes nothing back, not even the node: this deliberately
+  differs from the node auto-follow above. A migrated guest is still the same guest, just on a new
+  node, so following it is safe; a vmid that now reports the other type is a *different* guest
+  wearing a recycled number, and updating anything about the link would silently repoint the box at
+  a stranger's container or VM. The same posture `knownHosts.js` takes toward a changed SSH host
+  key: never auto-correct a possible identity change, only report it and let the operator re-link.
+  `listClusterNodes` (served by `GET /api/proxmox/nodes`) reports each physical node's health from
+  `/cluster/resources?type=node` — one call per distinct endpoint — for the standby dashboard's
+  Proxmox readout.
+- `proxmoxLifecycle.js` / `proxmoxLifecycleStore.js` — persisted power/deprovision jobs, now
+  covering both LXC containers and QEMU VMs, in `data/proxmox-lifecycle-jobs.json`; a job's `kind`
+  is dispatched to the matching `proxmoxApi.js` method. Note the asymmetry with `node`: `node` is
+  snapshotted from the freshly refreshed inventory record because it drift-follows a migration, but
+  `kind` is read from the stored **link**, because it must not — a job whose target turned out to be
+  a kind mismatch is refused outright (`createJob`, `runRoutine`, and `runDeprovision` all check for
+  `state: 'mismatch'` before doing anything). Deprovision stops the guest via PVE's own `forceStop`
+  + `timeout` (`deprovisionGraceSec`, default 120s) rather than a client-side stop-then-poll: one
+  task, so there is no window in which Tmuxifier and PVE disagree about what is running, and the
+  server-side escalation from graceful to forced shows up in the task log Tmuxifier already tails.
+  This changed LXC deprovision too, not only VMs. Deprovision releases the box's NetBox-allocated IP
+  and deletes any remaining NetBox records matching the box's current IP, so manually created
   records don't go stale (best-effort).
 - `boxRemoval.js` — shared session/tmux/store cleanup for ordinary removal and verified deprovision.
 - `knownHosts.js` — `createKnownHosts`: best-effort `ssh-keygen -R` wrapper (argv, no shell).
@@ -574,14 +603,19 @@ saved body — a dirty buffer runs nameless rather than claiming to be a script 
 hub), `modalRegistry.ts` (body-mounted modals register their close() so logout/session-expiry
 teardown reaches them), `setupPoller.ts` (the generation-guarded setup-job poll loop shared by
 the provision panel and the hub — the injected policy renders and returns the next delay),
-`proxmox.ts`/`proxmoxUi.ts` (the Proxmox fetch layer and operations-only hub shell: Containers,
+`proxmox.ts`/`proxmoxUi.ts` (the Proxmox fetch layer and operations-only hub shell: Guests,
 Presets, Provision, and Activity tabs — host/secret setup lives in the settings modal;
 `proxmoxUi.ts`'s Provision tab polls the server-side setup job once a box links),
 `proxmoxPresets.ts` (the Presets tab's master-detail create/edit/delete form, dependent Proxmox
 loaders, stale saved-option fallbacks, and additional-disk modal; the `auto-static` IP mode is
 offered only once NetBox is configured),
-`proxmoxContainers.ts` (the Containers tab's linked-LXC list with state-gated lifecycle actions and
-the deprovision confirm dialog), `proxmoxActivity.ts` (the Activity tab merging provision and
+`proxmoxGuests.ts` (formerly `proxmoxContainers.ts`; the Guests tab's linked-guest list — now both
+LXC containers and QEMU VMs — with a CT/VM `kindLabel` badge per row, a live filter that matches
+that badge (typing `vm` or `ct` narrows by kind, same field-substring match as everything else it
+searches), state-gated lifecycle actions, and the deprovision confirm dialog; a `'mismatch'` row
+renders the server's explanation text and offers only "Edit link" — `actionsForState` returns no
+lifecycle actions for it, deliberately alongside `'unknown'`, since the guest Tmuxifier can see may
+not be the one the box is linked to), `proxmoxActivity.ts` (the Activity tab merging provision and
 lifecycle jobs newest-first), `proxmoxAssociation.ts` (the Add/Edit Box modals' manual Proxmox
 link/unlink picker — hidden until a Proxmox host profile exists, except for already-linked
 boxes), `settingsUi.ts` (the ⚙ settings
