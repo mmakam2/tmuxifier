@@ -54,17 +54,28 @@ export function sampleOf(status, at, opts = {}) {
     if (sess) {
       sample.agentAttached = !!sess.attached;
       if (/^claude(-|$)/.test(String(sess.paneCmd || ''))) {
-        // `sess.activity` is the pane's last-OUTPUT time (status.js probes
-        // #{window_activity}, not #{session_activity} — see the note there).
-        // An absent or unparseable timestamp gets the same 'unknown' treatment
-        // as a missing clock: reading it as 0 would make the idle interval
-        // enormous and report a confident 'waiting' for a working agent.
-        const activity = Number(sess.activity);
-        if (m && m.boxNowSec != null && Number.isFinite(activity) && activity > 0) {
-          const idleSec = m.boxNowSec - activity;
-          sample.agent = idleSec >= Number(agentIdleSec ?? 20) ? 'waiting' : 'working';
+        const mark = s.agentMarks && s.agentMarks[sessionName];
+        if (mark) {
+          // Hook-sourced ground truth (claudeAgentHooks.js): the on-box hook
+          // recorded the last lifecycle edge, so no clock math and no
+          // 'unknown' path. Presence still comes from paneCmd above — a
+          // stale marker for an exited claude is inert. The source tag is
+          // only set here so heuristic samples keep their exact shape.
+          sample.agent = mark.state;
+          sample.agentSrc = 'hook';
         } else {
-          sample.agent = 'unknown';
+          // `sess.activity` is the pane's last-OUTPUT time (status.js probes
+          // #{window_activity}, not #{session_activity} — see the note there).
+          // An absent or unparseable timestamp gets the same 'unknown' treatment
+          // as a missing clock: reading it as 0 would make the idle interval
+          // enormous and report a confident 'waiting' for a working agent.
+          const activity = Number(sess.activity);
+          if (m && m.boxNowSec != null && Number.isFinite(activity) && activity > 0) {
+            const idleSec = m.boxNowSec - activity;
+            sample.agent = idleSec >= Number(agentIdleSec ?? 20) ? 'waiting' : 'working';
+          } else {
+            sample.agent = 'unknown';
+          }
         }
       }
     }
@@ -140,10 +151,12 @@ export function classifyTransitions(prev, next, thresholds, state) {
     // series starts here (a restart, or a caller threading fresh state). Trust
     // prev's own reading in that case: dropping a real "waiting for input" is
     // worse than one unconfirmed ping. Only an actually-observed short run is
-    // treated as the periodic blip it is.
+    // treated as the periodic blip it is. Hook-sourced samples skip the streak
+    // entirely: the blip false-positive is a heuristic-only artifact (output
+    // alone never changes a marker), so their single-sample edge is real.
     const observedRun = st.agentWorkStreak == null ? AGENT_WORK_MIN_SAMPLES : st.agentWorkStreak;
     if (prev.agent === 'working' && next.agent === 'waiting' && !next.agentAttached
-        && observedRun >= AGENT_WORK_MIN_SAMPLES) {
+        && (prev.agentSrc === 'hook' || observedRun >= AGENT_WORK_MIN_SAMPLES)) {
       events.push({ kind: 'agent-input' });
     } else if (prev.agent && !next.agent && next.up && !next.stopped && !prev.agentAttached && !next.agentAttached) {
       events.push({ kind: 'agent-done' });
