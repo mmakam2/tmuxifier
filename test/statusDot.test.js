@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import {
   dotClassFor, dotTitleFor, classifyError, metaSegmentsFor, CPU_ICON, MEM_ICON, DISK_ICON,
-  cpuLoadPct, cpuLevel,
+  cpuLoadPct, cpuLevel, agentBadgeFor,
 } from '../src/web/statusDot.ts';
 
 // Local plain-text join of the segments (value + icon, ' · ' separated) — the
@@ -219,4 +219,16 @@ test('needsAuth + mismatch: the login prompt wins — auth dot, auth title, need
   expect(dotTitleFor(st)).toMatch(/reconnect/i);
   expect(metaLine(st)).toMatch(/login/i);
   expect(metaLine(st)).not.toMatch(/mismatch/i);
+});
+
+test('agentBadgeFor: latest sample state maps to the badge, absence maps to null', () => {
+  expect(agentBadgeFor([{ t: 1, up: true, agent: 'waiting' }, { t: 2, up: true, agent: 'working' }]))
+    .toEqual({ text: 'working', cls: 'badge-agent-working' });
+  expect(agentBadgeFor([{ t: 1, up: true, agent: 'working' }, { t: 2, up: true, agent: 'waiting' }]))
+    .toEqual({ text: 'waiting', cls: 'badge-agent-waiting' });
+  // Hook-only rule: no agent on the latest sample (un-hooked box, no claude,
+  // or claude exited) renders nothing — even if an older sample had state.
+  expect(agentBadgeFor([{ t: 1, up: true, agent: 'working' }, { t: 2, up: true }])).toBeNull();
+  expect(agentBadgeFor([])).toBeNull();
+  expect(agentBadgeFor(undefined)).toBeNull();
 });

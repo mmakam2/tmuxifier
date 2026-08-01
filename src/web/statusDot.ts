@@ -1,4 +1,4 @@
-import type { Status, BoxMetrics } from './api';
+import type { Status, BoxMetrics, Sample } from './api';
 
 type DotClass = 'gray' | 'green' | 'amber' | 'red' | 'auth';
 
@@ -67,6 +67,19 @@ export function dotTitleFor(st: Status | undefined): string {
 export function cpuLoadPct(m: BoxMetrics | undefined): number | undefined {
   if (!m || m.load1 == null || !m.cpus) return undefined;
   return Math.round((m.load1 / m.cpus) * 100);
+}
+
+// Sidebar agent badge (the third agent-state surface, after the pane chip and
+// the standby fleet strip): the latest health sample's hook-sourced state, or
+// null when there is none. Only the NEWEST sample counts — an older sample's
+// state is history, and a box whose latest sample carries no `agent`
+// (un-hooked, no claude, or claude exited) renders nothing by design: under
+// the hook-only rule that silence means "rerun setup", not "invent a state".
+export interface AgentBadge { text: 'working' | 'waiting'; cls: string }
+export function agentBadgeFor(samples: Sample[] | undefined): AgentBadge | null {
+  const last = samples && samples.length ? samples[samples.length - 1] : undefined;
+  if (last?.agent !== 'working' && last?.agent !== 'waiting') return null;
+  return { text: last.agent, cls: `badge-agent-${last.agent}` };
 }
 
 // Color tier for a meta segment. 'auth' is not a severity — it's the dedicated
