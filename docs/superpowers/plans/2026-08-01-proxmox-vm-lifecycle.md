@@ -1038,6 +1038,15 @@ While here, the two remaining "container" strings in this route's error messages
 (lines 1214, 1215: `'proxmox container not found'`, `'proxmox container is already
 linked'`) should become "guest". Update any test asserting those exact strings.
 
+Also rename the operator-visible string in `src/server/proxmoxLifecycle.js:54`,
+`'container already has an active lifecycle job'` → `'guest already has an active
+lifecycle job'`. The Task 4 review flagged it: no task claimed it, and Task 6's
+rename-completeness grep searches for identifiers like `pve-container` and
+`linkedContainers`, not for the English word inside a message string — so it would
+have shipped as orphaned container-speak on a VM. Check `src/server/proxmoxLifecycle.js`
+for any other operator-facing "container" wording in the same pass and update any test
+asserting those strings.
+
 - [ ] **Step 9: Run and watch it pass**
 
 Run: `npx vitest run test/server.test.js test/proxmoxRoutes.test.js`
