@@ -186,13 +186,16 @@ export type SetupStatus = 'running' | 'done' | 'error' | 'needs-interactive' | '
 export interface SetupOptions { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth?: boolean; claudeStatusline?: boolean }
 export interface SetupSummary {
   id: string; boxId: string; boxLabel: string; status: SetupStatus;
-  phase: 'waiting-ssh' | 'running' | 'seeding' | 'statusline' | null; options: SetupOptions; error: string | null;
+  phase: 'waiting-ssh' | 'running' | 'seeding' | 'statusline' | 'agent-hooks' | null; options: SetupOptions; error: string | null;
   // Present once a job that asked for seeding has attempted it. Absent (or
   // null) on jobs that predate server-side seeding, and on jobs that never
   // asked for it.
   seed?: SeedResult[] | null;
   // Present once a job that asked for the statusline push has attempted it.
   statusline?: SeedResult | null;
+  // Present once the always-on agent-hooks push has attempted it (done jobs).
+  // Absent (or null) on jobs persisted before the push existed.
+  agentHooks?: SeedResult | null;
   // Which credential a `needs-interactive` job stalled on: 'sudo' (the script
   // reached sudo) or 'ssh' (ssh itself could not authenticate, so only the
   // non-BatchMode interactive finish can get in). Null in every other status,
@@ -201,7 +204,7 @@ export interface SetupSummary {
   createdAt: string; finishedAt: string | null;
 }
 export interface SetupJob extends SetupSummary { log: string; }
-export interface SeedResult { target: 'claude' | 'codex' | 'all' | 'statusline'; ok: boolean; skipped?: string; error?: string }
+export interface SeedResult { target: 'claude' | 'codex' | 'all' | 'statusline' | 'agent-hooks'; ok: boolean; skipped?: string; error?: string }
 export interface AiAuthCliStatus { ready: boolean; reason?: string }
 export interface AiAuthStatus { claude: AiAuthCliStatus; codex: AiAuthCliStatus }
 

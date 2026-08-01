@@ -1786,8 +1786,10 @@ function openProvisionPanel(box: Box, options: SetupOptionsValues) {
         if (seedTxt) status.textContent = `${status.textContent} · auth: ${seedTxt}`;
         const slTxt = formatStatuslineResult(job.statusline);
         if (slTxt) status.textContent = `${status.textContent} · ${slTxt}`;
+        const ahTxt = formatStatuslineResult(job.agentHooks);
+        if (ahTxt) status.textContent = `${status.textContent} · ${ahTxt}`;
         // An outcome deserves longer on screen than a bare success.
-        autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), (seedTxt || slTxt) ? 5000 : 2000);
+        autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), (seedTxt || slTxt || ahTxt) ? 5000 : 2000);
         return null;
       }
       if (job.status === 'needs-interactive') return 2500;
