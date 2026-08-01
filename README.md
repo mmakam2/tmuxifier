@@ -834,6 +834,15 @@ action fails much sooner for a container than for a VM. Use **Stop** for an
 immediate power-off, or **Deprovision**, which escalates to a forced stop on its own (see below) once
 its grace period passes.
 
+**A paused VM reads as unreachable, not as paused.** Pausing is a VM-only operation — a container
+can't be paused — so this is a state the rest of Tmuxifier has no vocabulary for. PVE reports
+`paused`, which Tmuxifier folds into `unknown` along with every other state that isn't exactly
+`running` or `stopped`; meanwhile the guest's CPU is frozen, so the SSH probe fails and the box
+paints red with a connection error. Nothing destructive can follow — an `unknown` guest offers no
+lifecycle actions at all — but the reading points at the network when PVE knows the real answer. If
+a linked VM goes unreachable for no apparent reason, check whether it is paused in Proxmox before
+you debug anything else. Resume it and it returns to normal on the next poll.
+
 **Deprovision** is the destructive path and stays disabled until you type the box's exact label to
 confirm. It asks PVE to shut the guest down gracefully, then — this now applies to containers as well
 as VMs — hands PVE a 120-second grace period and a force-stop flag on that same request, so PVE
