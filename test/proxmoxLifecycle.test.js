@@ -731,3 +731,29 @@ test('a job loaded from history without a kind reads as lxc', async () => {
   });
   expect(manager.listJobs()[0]).toMatchObject({ id: 'OLD', kind: 'lxc' });
 });
+
+test("job.kind is pinned to the link, not the refreshed inventory record", async () => {
+  // The link says qemu; the refreshed record disagrees and says lxc, while
+  // still reporting an ordinary actionable state ('stopped'). Mismatch
+  // *detection* is the inventory's job (the 'mismatch' state, covered
+  // elsewhere) — this record is a legal input to the manager, which must
+  // still dispatch on the link's kind, not the record's. A "tidy" refactor
+  // that sourced kind from `current` alongside `node` would dispatch
+  // start:lxc here instead and this test would catch it.
+  const calls = [];
+  let state = 'stopped';
+  const { manager } = fixture('stopped', {
+    boxStore: { getBox: async (id) => id === 'B1' ? VM_BOX : undefined },
+    inventory: { refreshBox: async () => ({ boxId: 'B1', state, node: 'pve', vmid: 200, kind: 'lxc' }) },
+    makeClient: () => ({
+      startGuest: async (kind) => { calls.push(`start:${kind}`); state = 'running'; return 'UPID:start'; },
+      taskStatus: async () => ({ status: 'stopped', exitstatus: 'OK' }),
+      taskLog: async () => [],
+    }),
+  });
+  const job = await manager.createJob({ boxId: 'B1', action: 'start' });
+  expect(job.kind).toBe('qemu');
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id)).toMatchObject({ status: 'done', error: null });
+  expect(calls).toEqual(['start:qemu']);
+});
