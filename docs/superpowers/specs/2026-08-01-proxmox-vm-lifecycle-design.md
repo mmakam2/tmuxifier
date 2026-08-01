@@ -258,7 +258,7 @@ new test infrastructure.
 | File | New coverage |
 |---|---|
 | `proxmoxValidate.test.js` | kind allowlist; absent kind accepted and defaulting |
-| `proxmoxStore.test.js` | normalize fills `kind`; pre-existing link reads as `lxc`; `linkKey` still collides on same vmid across kinds |
+| `store.test.js` | normalize fills `kind`; pre-existing link reads as `lxc`; `linkKey` still collides on same vmid across kinds. Note `store.test.js:255` asserts a link with a strict `toEqual` and will need `kind` added |
 | `proxmoxApi.test.js`, `proxmoxApi.integration.test.js` | both kinds' path construction; a kind outside the allowlist refused before it reaches a path; `forceStop`/`timeout` and destroy params encoded correctly |
 | `proxmoxInventory.test.js` | VM discovery; `mismatch` state; mismatch does not drift-follow the node; `healGroup` requires matching kind; `listNodeGuests` merge and vmid sort; `proxmoxKind` in the status merge |
 | `proxmoxLifecycle.test.js` | all four routine actions against a qemu guest; deprovision force-stop params; `createJob` mismatch refusal message; `resolveTarget` aborting on a kind change; history rows defaulting to `lxc` |
