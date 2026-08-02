@@ -264,6 +264,41 @@ test('stale-zone regression: a second drag builds zones from the current layout'
 // half of all pane heights — a single viewport size would pass or fail by luck.
 // Sweeping 16 consecutive heights covers every residue of the 16px cell and
 // makes the failure deterministic.
+// Regression: the terminal must not strand a wide dead margin on its right.
+//
+// Three losses used to stack there: FitAddon reserves the viewport scrollbar's
+// width whenever `scrollback !== 0` — and xterm's Viewport turns a measured 0
+// (overlay scrollbars) into FALLBACK_SCROLL_BAR_WIDTH = 15 — plus an 8px side
+// gutter on `.term`, plus the whole-cell quantisation remainder (up to one cell)
+// pooling entirely on the right of a left-aligned xterm. ~23-31px of dead glass.
+// The fix: `scrollback: 0` on the box terminal (tmux owns scrollback; the xterm
+// buffer never scrolls behind tmux's alternate screen), a 4px gutter, and
+// horizontal centring so the remainder splits across both edges.
+//
+// Width is swept so the cell remainder covers several residues — a single width
+// could land remainder ≈ 0 and hide a padding/centring regression by luck.
+test('the terminal leaves no wide dead margin on the right', async ({ page }) => {
+  await login(page);
+  await page.locator('.box .name', { hasText: 'localhost' }).click();
+  await expect(page.locator('.stage-pane')).toHaveCount(1);
+  const pane = page.locator('.stage-pane').first();
+  await expect(pane.locator('.xterm-rows')).toContainText(/[#$%>]/, { timeout: 15000 });
+
+  const height = page.viewportSize()!.height;
+  const wide: Array<{ viewport: number; gapPx: number }> = [];
+  for (let w = 1280; w < 1289; w++) {
+    await page.setViewportSize({ width: w, height });
+    await page.waitForTimeout(80); // let the resize listener re-fit and repaint
+    const gapPx = await pane.evaluate((el) => {
+      const body = el.querySelector('.pane-body')!;
+      const screen = el.querySelector('.xterm-screen')!;
+      return +(body.getBoundingClientRect().right - screen.getBoundingClientRect().right).toFixed(2);
+    });
+    if (gapPx > 16) wide.push({ viewport: w, gapPx });
+  }
+  expect(wide).toEqual([]);
+});
+
 test('the last terminal row is never clipped, at any pane height', async ({ page }) => {
   await login(page);
   await page.locator('.box .name', { hasText: 'localhost' }).click();

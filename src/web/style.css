@@ -1001,16 +1001,20 @@ button.empty-kbd:hover { color: var(--text); }
       box is identical either way: with `height: auto` between `top: 0` and
       `bottom: 0`, the used height comes from the constraint equation, which
       box-sizing does not participate in.
-   2. Centred rather than top-aligned. Rows quantise to whole cells, so `floor()`
-      always leaves 0-15px over. Top-aligned, all of it pools under the last row;
-      centring splits it across both edges, halving the worst case and reading as
-      deliberate margin instead of a void. Vertical padding is 4px against the
-      horizontal 8px for the same reason — the leftover already supplies most of
-      the vertical breathing room, and only the sides get none of it.
-   Regression test: "the last terminal row is never clipped" in split.spec.ts. */
+   2. Centred on both axes rather than top-left. Rows and cols quantise to whole
+      cells, so `floor()` always leaves a sub-cell remainder over (0-15px
+      vertically, 0-one-cell horizontally). Aligned top-left, all of it pools
+      after the last row and column; centring splits it across the edges,
+      halving the worst case and reading as deliberate margin instead of a void.
+      That remainder supplies most of the breathing room on all four sides,
+      which is why the padding is a uniform 4px. (The box terminal also runs
+      `scrollback: 0` — see openTerminal — so FitAddon stops reserving a 15px
+      scrollbar column that tmux's alternate screen can never use.)
+   Regression tests in split.spec.ts: "the last terminal row is never clipped"
+   and "the terminal leaves no wide dead margin on the right". */
 .term {
-  box-sizing: content-box; position: absolute; inset: 0; padding: 4px 8px;
-  display: flex; flex-direction: column; justify-content: center;
+  box-sizing: content-box; position: absolute; inset: 0; padding: 4px;
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
 }
 /* The button is appended to the terminal's own parent (there is no toolbar
    element), so it floats over the top-right corner of the xterm canvas.

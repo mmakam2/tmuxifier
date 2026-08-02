@@ -312,6 +312,15 @@ export function openTerminal(
     fontSize: termFontSize,
     fontFamily: termFontFamily(),
     theme: SCREEN_THEME,
+    // A box terminal is always a tmux attach, and tmux draws on the alternate
+    // screen — nothing ever lands in xterm's own scrollback (scroll history is
+    // tmux copy-mode). Zeroing it matters for width, not memory: FitAddon
+    // reserves the viewport scrollbar's width whenever scrollback !== 0, and
+    // xterm's Viewport reads overlay scrollbars (width 0) as its 15px fallback,
+    // so every browser lost a dead 15px column on the right of the glass.
+    // The provision terminal below keeps its scrollback — raw setup logs are
+    // exactly the content that needs browser-side scroll.
+    scrollback: 0,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
