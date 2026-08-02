@@ -1,6 +1,7 @@
 import { test, expect } from 'vitest';
 import os from 'node:os';
 import { buildEnsureLocalShellScript, createLocalShellActions } from '../src/server/localShellActions.js';
+import { buildAgentHooksInstallScript } from '../src/server/claudeAgentHooks.js';
 
 test('buildEnsureLocalShellScript enables Oh My Zsh in local tmux session', () => {
   const script = buildEnsureLocalShellScript('omz');
@@ -62,4 +63,42 @@ test('the ensure script targets the configured tmux session name, not a hardcode
   });
   await actions.ensureReady('omz');
   expect(scripts[0]).toContain('sess42');
+});
+
+test('installAgentHooks runs the standard install script locally with the hook bytes on stdin', async () => {
+  const calls = [];
+  const actions = createLocalShellActions({
+    runStdin: async (script, input, opts) => {
+      calls.push({ script, input, opts });
+      return { code: 0, stdout: 'AGENTHOOKS: applied\n', stderr: '' };
+    },
+    readHookAsset: async () => Buffer.from('#!/bin/sh\nhook-body\n'),
+  });
+
+  await expect(actions.installAgentHooks()).resolves.toEqual({ target: 'agent-hooks', ok: true });
+  expect(calls).toHaveLength(1);
+  // The exact same installer the SSH pusher sends — local transport, zero drift.
+  expect(calls[0].script).toBe(buildAgentHooksInstallScript());
+  expect(calls[0].input.toString()).toContain('hook-body');
+  expect(calls[0].opts.cwd).toBe(os.homedir());
+});
+
+test('installAgentHooks maps skipped-no-claude', async () => {
+  const actions = createLocalShellActions({
+    runStdin: async () => ({ code: 0, stdout: 'AGENTHOOKS: skipped-no-claude\n', stderr: '' }),
+    readHookAsset: async () => Buffer.from('x'),
+  });
+  const res = await actions.installAgentHooks();
+  expect(res.ok).toBe(false);
+  expect(res.skipped).toBeTruthy();
+});
+
+test('installAgentHooks reports a failed run as an error result, never a throw', async () => {
+  const actions = createLocalShellActions({
+    runStdin: async () => ({ code: 4, stdout: '', stderr: 'jq: not found' }),
+    readHookAsset: async () => Buffer.from('x'),
+  });
+  const res = await actions.installAgentHooks();
+  expect(res.ok).toBe(false);
+  expect(res.error).toBeTruthy();
 });
