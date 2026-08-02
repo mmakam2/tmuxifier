@@ -484,8 +484,13 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
   75%, 100% { transform: translateY(0) scaleY(0.85) scaleX(1.12); }
 }
 @keyframes clawd-big-feet { 0%, 24% { opacity: 1; } 25%, 69% { opacity: 0; } 70%, 100% { opacity: 1; } }
+/* Reduced motion rests every variant on a static frame. The child selectors are
+   deliberately descendant-qualified (.clawd .clawd-body, not .clawd-body): the
+   pace and big-hop rules above are two-class selectors, and a media query adds
+   nothing to specificity, so a bare .clawd-body would lose 0-1-0 to 0-2-0 and
+   big-hop would keep jumping here. Qualified, it ties and wins on source order. */
 @media (prefers-reduced-motion: reduce) {
-  .clawd, .clawd-body, .clawd-feet, .clawd-star-f { animation: none; }
+  .clawd, .clawd .clawd-body, .clawd .clawd-feet, .clawd .clawd-star-f { animation: none; }
   .clawd-star-f { opacity: 0; }
   .clawd-star-f:nth-child(5) { opacity: 1; }
 }
