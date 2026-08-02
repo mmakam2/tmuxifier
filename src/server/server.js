@@ -114,7 +114,7 @@ const NO_FLEET_SCRIPTS = {
   removeScript: async () => {},
 };
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -1543,6 +1543,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
           return;
         }
         const size = { cols: Number(cols) || 80, rows: Number(rows) || 24 };
+
+        // Ensure the tmux server lives in its own transient scope before the
+        // pty attaches: if the pty's new-session -A auto-starts the server, it
+        // lands in this service's cgroup and dies with the next restart.
+        // ensure() never rejects — a host without systemd-run just falls back.
+        if (localTmuxScope) await localTmuxScope.ensure(config.localShell);
 
         let entry;
         try {

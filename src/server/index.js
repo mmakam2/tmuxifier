@@ -15,6 +15,7 @@ import { createTruenasRegistry } from './truenasRegistry.js';
 import { createUnifiRegistry } from './unifiRegistry.js';
 import { createImmichRegistry } from './immichRegistry.js';
 import { createSessionManager } from './sessions.js';
+import { createLocalTmuxScope } from './localTmuxScope.js';
 import { sshRun, sshRunStdin, sshStream } from './sshRun.js';
 import { createBoxActions, buildEnsureSessionRemote } from './boxActions.js';
 import { buildSetupArgv } from './sshCommand.js';
@@ -63,6 +64,11 @@ fs.mkdirSync(config.controlDir, { recursive: true, mode: 0o700 });
 
 const store = createStore({ dataDir: config.dataDir });
 const sessions = createSessionManager({ hostKeyPolicy: config.hostKeyPolicy, graceSeconds: config.graceSeconds, sshConfigFile: config.sshConfigFile, controlDir: config.controlDir, controlPersist: config.controlPersist });
+// Host Shell restart-survival: the local tmux server is created detached in
+// its own transient systemd scope, outside this service's cgroup (see
+// localTmuxScope.js). Best-effort — without systemd-run the old auto-start
+// path still opens terminals, they just die with the next service restart.
+const localTmuxScope = createLocalTmuxScope();
 const boxActions = createBoxActions({
   run: (argv, opts) => sshRun(argv, opts),
   runStdin: (argv, input, opts) => sshRunStdin(argv, input, opts),
@@ -305,7 +311,7 @@ const iconStore = createIconStore({
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
 const voiceEnabledInitial = (await resolveVoice()).enabled;
-const app = buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial });
+const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });

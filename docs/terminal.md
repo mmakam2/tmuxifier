@@ -108,6 +108,14 @@ Tmuxifier installs locally when selected; the choice is persisted as `localShell
 `config.json` (set by the UI — there is no env key). Its ↻ button kills the local tmux session
 and starts a fresh one with the current framework.
 
+On hosts with systemd, the Host Shell's tmux server is started in its own transient scope
+(via `systemd-run --scope`), outside the Tmuxifier service's control group. That makes the
+`local` session survive a Tmuxifier restart — including the restart in the deploy recipe —
+exactly as a box's remote tmux survives its dropped SSH connection; the browser simply
+reattaches afterwards. Without `systemd-run` the terminal still works identically, but the
+session dies with the service, because a tmux server auto-started from inside the service
+inherits its control group and systemd kills the whole group on restart.
+
 The same ✎ dialog carries an **Install Claude Code hooks** checkbox. Ticking it and saving
 installs on the Tmuxifier host itself the same agent-state hook a box gets from its setup run:
 the hook script lands in the host account's `~/.claude/` (or `$CLAUDE_CONFIG_DIR`) and the

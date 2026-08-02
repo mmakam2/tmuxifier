@@ -250,6 +250,17 @@ pattern for new modules.
   a sampler failure must not disturb the poll loop. `LOCAL_BOX_ID` (`'__local__'`) is declared here
   rather than imported from its equal `LOCAL_GROUP` in `sessions.js`, to keep node-pty out of the
   poller's import chain.
+- `localTmuxScope.js` — `createLocalTmuxScope`: restart-survival for the Host Shell's tmux.
+  A tmux server auto-started by the attaching pty client stays in tmuxifier.service's cgroup
+  (daemonizing reparents to pid 1 but never leaves a cgroup), so systemd's default
+  `KillMode=control-group` killed it — and every pane in it — on each service restart.
+  `ensure(shell)` runs before `openLocal`'s attach (`server.js` awaits it in the `/term`
+  local branch): `tmux has-session -t =local` (exact match — a bare name prefix-matches),
+  else the session is created detached under `systemd-run --scope --collect`, landing the
+  server in its own transient scope that restarts never touch — the remote-box model, where
+  ssh dies and the box's tmux lives on. Best-effort and single-flighted: it never rejects,
+  a host without `systemd-run` (ENOENT, remembered) falls back to the old auto-start path,
+  costing restart-survival but never the terminal.
 - `sessions.js` — PTY lifecycle. A PTY is keyed **per viewer**, not per box (`terminalKey(boxId,
   clientId)` / `localKey(clientId)`), so every browser gets its own ssh and its own `tmux attach`.
   Keying by box id alone made Tmuxifier a *mirror* rather than a multiplexer: one screen drawn at

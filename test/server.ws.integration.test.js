@@ -505,12 +505,12 @@ test('WS drops non-string input frames instead of throwing; session keeps workin
 }, 10000);
 
 // Builds a server whose box has a setup job in the given status.
-async function gateFixture(status) {
+async function gateFixture(status, extra = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-gate-'));
   const config = {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
     passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
-    sshConfigPath: path.join(dir, 'nope'),
+    sshConfigPath: path.join(dir, 'nope'), localShell: 'omz',
   };
   const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
   const saved = await store.addBox({ host: '192.168.1.10', sessionName: 'web' });
@@ -527,6 +527,7 @@ async function gateFixture(status) {
   const app = buildServer({
     config, store, sessions, setupManager,
     statusChecker: { checkBox: async () => ({ reachable: true }) },
+    ...extra,
   });
   await app.listen({ host: '127.0.0.1', port: 0 });
   const { port } = app.server.address();
@@ -622,4 +623,23 @@ test('/term gives the host shell a session per viewer too', async () => {
   await raceOpenClose(`ws://127.0.0.1:${port}/term?box=__local__&cols=80&rows=24&client=desktop`, cookie, 50);
 
   expect(state.localKeys).toEqual([localKey('laptop'), localKey('desktop')]);
+}, 10000);
+
+// The host shell's tmux server must be ensured into its own transient scope
+// BEFORE the pty attaches — if the pty's new-session -A wins the race, the
+// auto-started server lands in tmuxifier.service's cgroup and dies with the
+// next restart (the very failure this seam exists to prevent).
+test('/term host shell awaits the scoped-server ensure before opening the pty', async () => {
+  const seq = [];
+  const ctx = {};
+  const localTmuxScope = {
+    ensure: async (shell) => { seq.push(['ensure', shell, ctx.state.localKeys.length]); return { created: true }; },
+  };
+  const fixture = await gateFixture(null, { localTmuxScope });
+  ctx.state = fixture.state;
+  await raceOpenClose(`ws://127.0.0.1:${fixture.port}/term?box=__local__&cols=80&rows=24&client=laptop`, fixture.cookie, 50);
+
+  // ensure ran once, saw the configured shell, and ran while no pty was open.
+  expect(seq).toEqual([['ensure', 'omz', 0]]);
+  expect(fixture.state.localKeys).toEqual([localKey('laptop')]);
 }, 10000);
