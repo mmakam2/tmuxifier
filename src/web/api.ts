@@ -304,7 +304,15 @@ export const api = {
       }));
   },
   async getLocalShell() { return j<{ shell: string }>(await fetch('/api/local-shell')); },
-  async updateLocalShell(shell: string) { return j<{ ok: boolean }>(await fetch('/api/local-shell', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shell }) })); },
+  async updateLocalShell(shell: string, claudeHooks = false) {
+    return j<{ ok: boolean; agentHooks?: { ok: boolean; skipped?: string; error?: string } }>(
+      await fetch('/api/local-shell', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(claudeHooks ? { shell, claudeHooks: true } : { shell }),
+      }),
+    );
+  },
   async reconnectLocalShell() { return j<{ ok: boolean }>(await fetch('/api/local-shell/reconnect', { method: 'POST' })); },
   async createFleetJob(boxIds: string[], command: string, scriptName?: string) {
     return j<FleetJob>(await fetch('/api/fleet/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ boxIds, command, scriptName }) }));

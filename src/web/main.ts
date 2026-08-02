@@ -131,6 +131,10 @@ function repaintAgentBadges() {
     const badges = li.querySelector('.box-badges');
     if (id && badges) applyAgentBadge(badges, id);
   });
+  // The Host Shell row is not a .box, but its badge reads the same series —
+  // the __local__ pseudo-box the poller feeds to health history.
+  const localBadges = app.querySelector('.local-shell .box-badges');
+  if (localBadges) applyAgentBadge(localBadges, '__local__');
 }
 
 // Paint a box row's metric sparkline from the cached series. Same in-place
@@ -915,6 +919,7 @@ async function renderDashboard() {
         <div class="local-shell">
           <span class="local-dot"></span>
           <button class="local-name" type="button">Host Shell</button>
+          <span class="box-badges"></span>
           <button class="local-refresh" title="Reconnect" aria-label="Reconnect host shell">↻</button>
           <button class="local-edit" title="Configure shell" aria-label="Configure host shell">✎</button>
         </div>
@@ -1709,6 +1714,16 @@ async function openLocalShellEditModal() {
   const shellBash = makeRadio('localShellFramework', 'omb', 'Oh My Bash', isShell('omb'));
   shellGroup.append(shellNone.wrap, shellZsh.wrap, shellBash.wrap);
 
+  // Fire-on-save action, not persisted state: unchecked on every open, so a
+  // reopened dialog never re-runs the install just because it ran once.
+  const hooksLine = document.createElement('label');
+  hooksLine.className = 'check-field';
+  const hooksCheck = document.createElement('input');
+  hooksCheck.type = 'checkbox';
+  const hooksText = document.createElement('span');
+  hooksText.textContent = 'Install Claude Code hooks (agent badge + notifications for this host)';
+  hooksLine.append(hooksCheck, hooksText);
+
   const err = document.createElement('p');
   err.className = 'err';
   err.setAttribute('role', 'alert');
@@ -1722,7 +1737,7 @@ async function openLocalShellEditModal() {
   submit.textContent = 'Save';
   actions.append(cancel, submit);
 
-  form.append(title, shellGroup, err, actions);
+  form.append(title, shellGroup, hooksLine, err, actions);
   const { close } = openModal({ modal: form, mount: app });
   cancel.addEventListener('click', close);
 
@@ -1732,7 +1747,17 @@ async function openLocalShellEditModal() {
     const selected = (form.querySelector('input[name="localShellFramework"]:checked') as HTMLInputElement)?.value;
     if (!selected) { submit.disabled = false; return; }
     try {
-      await api.updateLocalShell(selected);
+      const res = await api.updateLocalShell(selected, hooksCheck.checked);
+      if (res.agentHooks && !res.agentHooks.ok) {
+        // The shell change saved; only the hook install needs attention.
+        // Keep the dialog open so the message is actually seen.
+        err.textContent = res.agentHooks.skipped
+          ? `Shell saved; hooks skipped: ${res.agentHooks.skipped}`
+          : `Shell saved; hook install failed: ${res.agentHooks.error || 'unknown error'}`;
+        hooksCheck.checked = false;
+        submit.disabled = false;
+        return;
+      }
       close();
     } catch (ex: any) {
       err.textContent = ex?.message || 'Could not save shell setting';
