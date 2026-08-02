@@ -9,8 +9,9 @@ import { renderProxmoxSection } from './settingsProxmox';
 import { renderPasskeysSection } from './settingsPasskeys';
 import { renderVoiceSection, stopVoiceWatch } from './settingsVoice';
 import { renderNotificationsSection } from './settingsNotifications';
+import { renderAppearanceSection } from './settingsAppearance';
 
-export type SettingsTab = 'boxes' | 'services' | 'netbox' | 'proxmox' | 'passkeys' | 'voice' | 'notifications';
+export type SettingsTab = 'boxes' | 'services' | 'netbox' | 'proxmox' | 'passkeys' | 'voice' | 'notifications' | 'appearance';
 
 // `dispose` tears down anything a section leaves running after its content is
 // replaced. Sections are otherwise stateless: only Voice owns a background job
@@ -33,6 +34,7 @@ const SECTIONS: Record<SettingsTab, Section> = {
   // loop checks it); the tab shell only cares that it finished.
   voice: { label: 'Voice', render: async (content) => { await renderVoiceSection(content); }, dispose: stopVoiceWatch },
   notifications: { label: 'Notifications', render: (content) => renderNotificationsSection(content) },
+  appearance: { label: 'Appearance', render: (content) => renderAppearanceSection(content) },
 };
 
 export function openSettingsModal(tab: SettingsTab = 'boxes', onClose?: () => void): void {
