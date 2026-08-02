@@ -650,8 +650,12 @@ browser-notification preferences, localStorage-backed, defaults all-on except `u
 pane chip, dashboard fleet strip: the ordered variant catalog, the per-browser preference under
 `tmuxifier.clawdAnim` (localStorage, the `notifyPrefs.ts` pattern; an unknown stored value falls
 back to the default CLI star spinner rather than rendering nothing), and the variant DOM builder.
-The one catalog drives both the Appearance picker rows and the builder's switch, so the picker can
-never offer a variant the builder lacks. All motion is pure CSS `.clawd-v-*` classes in
+`off` means no indicator at all — the builder still returns an element (`.clawd-v-off` is
+`display: none` in `style.css`) so the render sites never branch on the variant — and `static` is
+the motionless sprite. The one catalog drives the Appearance picker rows, pref normalization, and
+the builder, so the picker can never offer a variant the builder lacks; a variant's *motion*,
+though, lives in a matching `.clawd-v-*` rule that nothing ties to the catalog — an entry without
+one renders silently static. All motion is pure CSS `.clawd-v-*` classes in
 `style.css` — no timers, so a fleet of working boxes costs nothing to animate — and
 `prefers-reduced-motion` rests every variant on one frame. Waiting chips deliberately carry no
 indicator: stillness is what makes that state read as the operator's turn),

@@ -1,11 +1,11 @@
 // Clawd: the Claude Code mascot beside WORKING agent chips (sidebar badge,
 // pane chip, dashboard fleet strip). The Appearance settings tab picks one of
-// five variants; the choice is a per-browser display preference (localStorage,
+// six variants; the choice is a per-browser display preference (localStorage,
 // the notifyPrefs pattern). Everything renders as currentColor glyphs from the
 // bundled mono stack — no new hue, no new font — and all motion is pure CSS
 // (.clawd-v-* in style.css); this module is just the catalog, the pref, and
-// the DOM.
-export type ClawdVariantId = 'off' | 'star' | 'wiggle' | 'pace' | 'big-hop';
+// the DOM. 'off' means no indicator at all, 'static' the motionless sprite.
+export type ClawdVariantId = 'off' | 'static' | 'star' | 'wiggle' | 'pace' | 'big-hop';
 
 export const CLAWD_BODY = '▐▛███▜▌';
 export const CLAWD_FEET = '▘▘ ▝▝';
@@ -20,7 +20,8 @@ export const DEFAULT_CLAWD_VARIANT: ClawdVariantId = 'star';
 // Ordered: this array drives both the Appearance picker rows and the build
 // switch, so the picker can never offer a variant the builder lacks.
 export const CLAWD_VARIANTS: { id: ClawdVariantId; label: string; description: string }[] = [
-  { id: 'off', label: 'Off — static Clawd', description: 'no motion' },
+  { id: 'off', label: 'Off', description: 'no indicator' },
+  { id: 'static', label: 'Static Clawd', description: 'no motion' },
   { id: 'star', label: 'CLI star', description: 'Claude Code spinner' },
   { id: 'wiggle', label: 'Wiggle', description: 'leans on a beat' },
   { id: 'pace', label: 'Pace', description: 'shuffles side to side' },
@@ -44,7 +45,7 @@ export function loadClawdVariant(storage?: PrefStorage): ClawdVariantId {
 }
 
 export function saveClawdVariant(id: ClawdVariantId, storage?: PrefStorage): void {
-  try { (storage ?? localStorage).setItem(KEY, id); } catch { /* private mode / quota — in-memory only */ }
+  try { (storage ?? localStorage).setItem(KEY, id); } catch { /* private mode / quota — the choice is simply lost */ }
 }
 
 // aria-hidden: the adjacent "working" text is the accessible label; the
@@ -53,6 +54,10 @@ export function buildClawdVariant(variant: ClawdVariantId): HTMLElement {
   const root = document.createElement('span');
   root.className = `clawd clawd-v-${variant}`;
   root.setAttribute('aria-hidden', 'true');
+  // 'off' still returns an element — .clawd-v-off is display:none in CSS — so
+  // buildClawd() keeps its always-an-element contract and the three render
+  // sites never branch on the variant.
+  if (variant === 'off') return root;
   if (variant === 'star') {
     for (const frame of STAR_FRAMES) {
       const f = document.createElement('span');

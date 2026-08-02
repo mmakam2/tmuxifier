@@ -29,8 +29,8 @@ function memStorage(init = {}) {
 }
 
 test('variant catalog: ordered ids, star default, labelled rows', () => {
-  expect(CLAWD_VARIANTS.map((v) => v.id)).toEqual(['off', 'star', 'wiggle', 'pace', 'big-hop']);
-  expect(new Set(CLAWD_VARIANTS.map((v) => v.id)).size).toBe(5);
+  expect(CLAWD_VARIANTS.map((v) => v.id)).toEqual(['off', 'static', 'star', 'wiggle', 'pace', 'big-hop']);
+  expect(new Set(CLAWD_VARIANTS.map((v) => v.id)).size).toBe(6);
   expect(DEFAULT_CLAWD_VARIANT).toBe('star');
   for (const v of CLAWD_VARIANTS) {
     expect(typeof v.label).toBe('string');
@@ -55,6 +55,8 @@ test('pref: round-trips, and every failure path falls back to the default', () =
   expect(loadClawdVariant(s)).toBe('star');            // empty storage
   saveClawdVariant('pace', s);
   expect(loadClawdVariant(s)).toBe('pace');            // round-trip
+  saveClawdVariant('static', s);
+  expect(loadClawdVariant(s)).toBe('static');          // the motionless-sprite id is a first-class value
   expect(loadClawdVariant(memStorage({ 'tmuxifier.clawdAnim': 'hop' }))).toBe('star'); // unknown stored value
   expect(normalizeClawdVariant(undefined)).toBe('star');
   expect(normalizeClawdVariant(42)).toBe('star');

@@ -76,9 +76,10 @@ restarted) shows **no** working/waiting chip and raises no agent events — that
 session", not "the agent is fine".
 
 The working chip carries a small animated indicator — Clawd, the Claude Code mascot, or the CLI's
-own star spinner. **Settings → Appearance** picks between five modes: Off (a static Clawd), CLI
-star (the default), Wiggle, Pace, and Big hop. The choice is per-browser, and the sidebar badge,
-pane chips, and dashboard fleet strip all pick it up on their next status refresh. Waiting chips
+own star spinner. **Settings → Appearance** picks between six modes: Off (no indicator at all),
+Static Clawd, CLI star (the default), Wiggle, Pace, and Big hop. The choice is per-browser, and
+the sidebar badge, pane chips, and dashboard fleet strip all pick it up on their next status
+refresh. Waiting chips
 stay still on purpose — stillness plus orange is what makes it read as your turn — and a browser
 asking for reduced motion holds every mode on a single frame.
 

@@ -444,13 +444,16 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .badge-agent-waiting { color: var(--orange); border-color: rgba(255, 106, 26, 0.5); background: rgba(255, 106, 26, 0.1); }
 /* Clawd: the working-agent indicator, in the variant the Appearance tab
    picked (clawd-v-<id> from clawd.ts). currentColor glyphs, pure CSS — a
-   fleet of working boxes costs no timers. clawd-v-off is the base rule with
-   no animation attached. */
+   fleet of working boxes costs no timers. clawd-v-static is the base rule
+   with no animation attached; clawd-v-off hides the element entirely (the
+   builder still returns one so the render sites never branch, and display:
+   none also swallows the base margin-right that an empty span would keep). */
 .clawd {
   display: inline-flex; flex-direction: column; align-items: center;
   font-size: 6px; line-height: 0.9; letter-spacing: normal;
   vertical-align: -2px; margin-right: 4px;
 }
+.clawd-v-off { display: none; }
 .clawd-body, .clawd-feet { display: block; }
 /* star: the Claude Code CLI spinner — ten stacked frames, staggered delays
    showing exactly one at a time. Rest frame is the fifth (the full star). */
@@ -491,6 +494,9 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
    big-hop would keep jumping here. Qualified, it ties and wins on source order. */
 @media (prefers-reduced-motion: reduce) {
   .clawd, .clawd .clawd-body, .clawd .clawd-feet, .clawd .clawd-star-f { animation: none; }
+  /* Every star frame's base state is opacity 0 — killing the animation alone
+     would leave nothing visible. These two rules pin the fifth frame (the
+     full star) on as the rest frame. */
   .clawd-star-f { opacity: 0; }
   .clawd-star-f:nth-child(5) { opacity: 1; }
 }
