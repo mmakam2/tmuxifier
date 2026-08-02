@@ -662,8 +662,11 @@ exists, except for already-linked boxes; a template's option is `TEMPLATE`-marke
 the same shown-but-unselectable treatment a guest already linked to another box gets, rather than
 vanishing from the list), `settingsUi.ts` (the ⚙ settings
 modal's tabbed shell — the `SECTIONS` object's key order builds the tab strip — with Boxes
-(`settingsBoxes.ts`: the leftmost tab, box-list JSON export/import moved out of the sidebar brand
-actions, which stay reserved for the routinely used controls; pure `importSummary`),
+(`settingsBoxes.ts`: the leftmost tab — box-list JSON export/import moved out of the sidebar brand
+actions, which stay reserved for the routinely used controls, fronted by an export preview that
+fetches `GET /api/export` itself so the stat grid and byte size describe the literal backup file,
+plus import caveats (ids re-minted, Proxmox links dropped) and a static not-in-this-backup note;
+pure `importSummary`/`exportStats`/`exportSizeBytes`/`exportFilename`),
 Services (`settingsServices.ts`: the standby dashboard's service-tile CRUD — name/URL/icon/
 group/check form whose icon control is Auto (resolve from check kind, then name, then hostname) /
 Choose (a filterable grid of the `vendor/icons/` catalog) / None, plus a Refresh icon button that

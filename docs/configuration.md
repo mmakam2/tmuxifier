@@ -102,9 +102,14 @@ as the fallback, so symbol glyphs (e.g. Claude Code's UI) keep rendering regardl
 ## The settings modal
 
 **Settings → Boxes** has **export** and **import** buttons that download and upload the full box
-list as a JSON file — a portable backup you can move between Tmuxifier instances. Import adds boxes
-from the file, re-minting each id and skipping any whose host/label already exists (so re-importing
-is safe).
+list as a JSON file — a portable backup you can move between Tmuxifier instances. The tab previews
+what the export contains before you download it: the file's name and true size, plus a stat grid
+(box count, manual vs Proxmox-linked, and how many boxes use tags, a proxy jump, a startup
+command, or a custom port/user). Import adds boxes from the file, re-minting each id and skipping
+any whose host/label already exists (so re-importing is safe); **Proxmox links are not restored** —
+re-link from the box's Edit dialog afterwards. The tab also lists what the backup does *not*
+cover: Proxmox host profiles & presets, service tiles, fleet scripts & job history, NetBox
+settings, passkeys, and voice configuration all live only in `data/` on the Tmuxifier host.
 It carries no SSH secrets; boxes still rely on your keys/agent/`~/.ssh/config` at connect time.
 The sidebar itself and each tag group can be collapsed (‹ next to the brand, click a group
 header); both states persist across reloads.
