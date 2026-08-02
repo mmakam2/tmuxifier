@@ -230,6 +230,26 @@ pattern for new modules.
   the pane via the same `injectVia` guard uploads use. Audio never leaves the host.
 - `localShellActions.js` — `createLocalShellActions`: provisions the optional local shell
   (`localShell` = `none`/`omz`/`omb`) that backs a terminal on the Tmuxifier host itself.
+  `installAgentHooks()` puts the same Claude Code agent-state hook a box gets onto this host by
+  handing `createAgentHooksPusher` (`claudeAgentHooks.js`) a local `/bin/sh` stdin transport
+  (`runLocalScriptStdin`) in place of its ssh one — installer script, hook asset, result shape and
+  skip/error mapping all stay the pusher's, so the SSH and local install paths cannot drift. It is
+  triggered by the optional `claudeHooks` flag on `PATCH /api/local-shell`, strictly `=== true`:
+  absent or `false` touches nothing, unchecking never uninstalls, the install runs only after the
+  shell choice has already persisted, and a failed install is reported on the response
+  (`{ ok: true, agentHooks }`) rather than failing the request.
+- `localAgent.js` — `createLocalAgentSampler`: the Host Shell's stand-in for the SSH status probe.
+  Reads this host's own tmux sessions (`tmux ls -F STATUS_FMT` via `execFile`) and its
+  `~/.tmuxifier-agent/` markers, shaping them exactly like a box probe result so
+  `healthHistory.sampleOf` and everything downstream — sidebar badge, pane chip,
+  `agent-input`/`agent-done` events — works unchanged. Both readings go through `status.js`'s own
+  allowlisting parsers (`parseTmuxSessions`/`parseAgentMarks`): a marker file is input, and being
+  written locally rather than fetched over ssh does not make it trusted. The sample is always
+  `reachable` and never carries metrics, so `classifyTransitions` can structurally only ever emit
+  the agent edges for it — never down/up/needs-auth/threshold — and `sample()` never rejects, since
+  a sampler failure must not disturb the poll loop. `LOCAL_BOX_ID` (`'__local__'`) is declared here
+  rather than imported from its equal `LOCAL_GROUP` in `sessions.js`, to keep node-pty out of the
+  poller's import chain.
 - `sessions.js` — PTY lifecycle. A PTY is keyed **per viewer**, not per box (`terminalKey(boxId,
   clientId)` / `localKey(clientId)`), so every browser gets its own ssh and its own `tmux attach`.
   Keying by box id alone made Tmuxifier a *mirror* rather than a multiplexer: one screen drawn at
@@ -276,7 +296,11 @@ pattern for new modules.
   a closed `working`/`waiting` state set and a numeric timestamp, capped at 200 bytes on the box.
 - `statusPoller.js` — single server-side poll loop: probes every box on an interval
   (`statusPollMs`) and caches the snapshot `/api/status` serves, so status SSH volume is
-  independent of how many dashboard tabs are open.
+  independent of how many dashboard tabs are open. An optional `localAgent` sampler
+  (`localAgent.js`) rides the same loop for the host shell: its reading is folded into
+  `history.record()` alone as a `__local__` pseudo-box labelled `Host Shell`, carrying the
+  `localSession` name as its `sessionName`. The record arguments are local copies built beside the
+  snapshot rather than in it, so `/api/status` never contains `__local__`.
 - `servicesStore.js` / `serviceCheck.js` / `serviceChecker.js` — the standby dashboard's
   service tiles: validated CRUD over `data/services.json` (each tile carries a `section` —
   services|infrastructure — plus a free-text `group` category within it, a check kind of

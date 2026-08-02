@@ -108,6 +108,24 @@ Tmuxifier installs locally when selected; the choice is persisted as `localShell
 `config.json` (set by the UI — there is no env key). Its ↻ button kills the local tmux session
 and starts a fresh one with the current framework.
 
+The same ✎ dialog carries an **Install Claude Code hooks** checkbox. Ticking it and saving
+installs on the Tmuxifier host itself the same agent-state hook a box gets from its setup run:
+the hook script lands in the host account's `~/.claude/` (or `$CLAUDE_CONFIG_DIR`) and the
+matching entries are merged into that account's `~/.claude/settings.json` alongside any hooks
+you already have. It requires Claude Code to be installed on the host — if it isn't, the dialog
+stays open and reports the install was skipped, and the shell choice is saved either way — and it
+takes effect only after you restart any `claude` that is already running, since Claude Code reads
+its settings at startup.
+
+Once a hook-aware claude runs **inside the Host Shell's own tmux session** (`local`), its
+working/waiting state shows as a badge next to the **Host Shell** button in the sidebar and as
+the usual chip in the pane header, exactly like a box. Only that session is tracked: a claude
+started outside tmux, or in a different tmux session on the same host, contributes nothing. The
+checkbox is an action rather than a stored setting — it starts unchecked every time the dialog
+opens, so reopening it won't silently reinstall, and unchecking it never uninstalls anything.
+To remove the hooks, delete the `tmuxifier-agent-hook` entries from `~/.claude/settings.json`
+yourself.
+
 Every box row also has a ↻ **Reconnect** action. It tears down the box's SSH plumbing — shuts
 the ControlMaster down cleanly (removing its socket), drops the local PTY, best-effort kills the
 configured remote tmux session, and clears the status-probe backoff — then reopens the terminal.

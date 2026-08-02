@@ -73,9 +73,18 @@ a parked session. There is no output-based fallback: a claude on a box whose set
 rerun since the hook was introduced (or a claude started before the hook landed and not yet
 restarted) shows **no** working/waiting chip and raises no agent events — that silence means
 "tick the Claude Code checkbox in the box's Edit dialog, save, then restart claude in the
-session", not "the agent is fine". Browser
-notifications for these agent events and for the box-health events above can be toggled per kind
-in **Settings → Notifications**: per-browser, and they only fire once you grant the browser's
+session", not "the agent is fine".
+
+The **Host Shell** takes part in this too, once you tick **Install Claude Code hooks** in its ✎
+dialog (see [Terminal features](terminal.md)). A claude running inside the host shell's tmux
+session raises the same two events, labelled "Host Shell", and they are suppressed the same way
+while you're attached to that terminal; the state shows as a badge beside the **Host Shell**
+button and as the usual pane header chip. Agent events are the *only* kind it can raise — the
+host shell isn't probed over SSH, so it never reports down/recovered or CPU/memory/disk
+thresholds and has no card on the standby dashboard's fleet strip.
+
+Browser notifications for these agent events and for the box-health events above can be toggled
+per kind in **Settings → Notifications**: per-browser, and they only fire once you grant the browser's
 notification permission (which itself requires an HTTPS dashboard). All events always appear in
 the events log regardless of which kinds have notifications enabled.
 
