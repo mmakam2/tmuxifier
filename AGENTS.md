@@ -646,7 +646,16 @@ bit rates and `fmtBytes` would render them in the wrong unit and base),
 `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
 history: pure SVG-path builder and event-line formatters), `notifyPrefs.ts` (per-kind
 browser-notification preferences, localStorage-backed, defaults all-on except `up`/
-`threshold-clear`), `setupOptions.ts` (the shared post-create setup form — Terminal/Tools/AI-auth sections —
+`threshold-clear`), `clawd.ts` (the indicator beside every **working** agent chip — sidebar badge,
+pane chip, dashboard fleet strip: the ordered variant catalog, the per-browser preference under
+`tmuxifier.clawdAnim` (localStorage, the `notifyPrefs.ts` pattern; an unknown stored value falls
+back to the default CLI star spinner rather than rendering nothing), and the variant DOM builder.
+The one catalog drives both the Appearance picker rows and the builder's switch, so the picker can
+never offer a variant the builder lacks. All motion is pure CSS `.clawd-v-*` classes in
+`style.css` — no timers, so a fleet of working boxes costs nothing to animate — and
+`prefers-reduced-motion` rests every variant on one frame. Waiting chips deliberately carry no
+indicator: stillness is what makes that state read as the operator's turn),
+`setupOptions.ts` (the shared post-create setup form — Terminal/Tools/AI-auth sections —
 used by the Add/Edit Box modal and the hub's Provision tab; fetches `GET /api/ai-auth/status`
 to show per-CLI seed readiness with fix-it commands, and disables the seed checkbox only when
 both CLIs are unready; the Tools section also carries the opt-in "Push Claude Code statusline"
@@ -720,9 +729,13 @@ sign-in policy toggle, where only *arming* is confirm-gated since disarming can 
 access), Voice (`settingsVoice.ts`: the enable toggle and pinned-model picker, the whisper.cpp
 install job started through `POST /api/voice/install` and watched with the shared `setupPoller`
 (re-reading the painted tab afterwards rather than trusting one fire-and-forget refresh), the mic
-test, and pure `voiceStatusLine`/`micTestMessage`/`installPollDelay` helpers), and Notifications
+test, and pure `voiceStatusLine`/`micTestMessage`/`installPollDelay` helpers), Notifications
 (`settingsNotifications.ts`:
-browser-notification permission flow plus per-kind toggles) tabs) with `settingsForm.ts` (pure
+browser-notification permission flow plus per-kind toggles), and Appearance
+(`settingsAppearance.ts`: the rightmost tab — the working-agent animation picker, radio rows whose
+live previews are built by `clawd.ts`'s own builder with the real `.clawd-v-*` classes, so a
+preview cannot drift from the chip it describes; selecting a row persists immediately, so there is
+no Save button) tabs) with `settingsForm.ts` (pure
 payload/result helpers), `netbox.ts` and `voice.ts` (fetch layers), `passkeys.ts` (passkey fetch layer,
 base64url↔bytes helpers, the pure WebAuthn option/credential converters, and `evaluateOrigin` —
 the ordered readiness check, browser support first, that both the login screen and Settings →
