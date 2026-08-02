@@ -408,3 +408,49 @@ test('the fast track resolves false for a box that no longer exists', async () =
   });
   await expect(poller.refreshUntil('gone', { intervalMs: 1, timeoutMs: 1 })).resolves.toBe(false);
 });
+
+// --- the __local__ pseudo-box (Host Shell) ----------------------------------
+// The Host Shell has no SSH probe, so its agent state rides the history rails
+// as a synthetic box. It must reach history.record() and never /api/status.
+// The tests above build their checker inline; these two share one, since what
+// they assert has nothing to do with the probe result.
+const statusChecker = { checkBox: async () => ({ reachable: true }) };
+
+test('pollOnce feeds a __local__ pseudo-box to history when a local sampler is present', async () => {
+  const calls = [];
+  const localAgent = {
+    sample: async () => ({
+      reachable: true,
+      sessions: [{ name: 'local', windows: 1, attached: false, activity: 1, paneCmd: 'claude' }],
+      agentMarks: { local: { state: 'working', ts: 1 } },
+    }),
+  };
+  const boxes = [{ id: 'b1', host: 'h1' }];
+  const poller = createStatusPoller({
+    store: fakeStore(boxes),
+    statusChecker,
+    history: { record: (snap, bx) => calls.push([snap, bx]) },
+    localAgent,
+  });
+  await poller.pollOnce();
+  const [snap, bx] = calls[0];
+  expect(snap.__local__.agentMarks.local.state).toBe('working');
+  expect(snap.b1).toBeDefined();
+  expect(bx.at(-1)).toEqual({ id: '__local__', label: 'Host Shell', host: 'localhost', sessionName: 'local' });
+  // The pseudo-box exists only in the history feed — never in /api/status.
+  expect(poller.getSnapshot().__local__).toBeUndefined();
+});
+
+test('a throwing local sampler still records the real boxes', async () => {
+  const calls = [];
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'b1', host: 'h1' }]),
+    statusChecker,
+    history: { record: (snap, bx) => calls.push([snap, bx]) },
+    localAgent: { sample: async () => { throw new Error('boom'); } },
+  });
+  await poller.pollOnce();
+  const [snap, bx] = calls[0];
+  expect(snap.__local__).toBeUndefined();
+  expect(bx.map((b) => b.id)).toEqual(['b1']);
+});

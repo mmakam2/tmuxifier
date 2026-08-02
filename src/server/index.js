@@ -6,6 +6,7 @@ import { loadConfig, requiredConfigError } from './config.js';
 import { createStore } from './store.js';
 import { createStatusChecker } from './status.js';
 import { createStatusPoller } from './statusPoller.js';
+import { createLocalAgentSampler } from './localAgent.js';
 import { createServicesStore } from './servicesStore.js';
 import { createServiceChecker } from './serviceChecker.js';
 import { createIconStore } from './iconStore.js';
@@ -268,6 +269,10 @@ const statusPoller = createStatusPoller({
   intervalMs: config.statusPollMs,
   concurrency: config.statusConcurrency,
   history,
+  // The Host Shell has no SSH probe of its own, so the sampler reads this
+  // host's tmux sessions and agent markers directly and rides the history
+  // rails as a `__local__` pseudo-box — history only, never /api/status.
+  localAgent: createLocalAgentSampler(),
   // Runs the PVE inventory refresh alongside each SSH probe cycle so linked
   // boxes get grey "Stopped" status instead of a red connection failure. See
   // mergeProxmoxStatus in proxmoxInventory.js for the merge truth table.

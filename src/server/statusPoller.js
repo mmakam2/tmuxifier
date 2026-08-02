@@ -1,4 +1,5 @@
 import { mapWithConcurrency } from './concurrency.js';
+import { LOCAL_BOX_ID } from './localAgent.js';
 
 // A single, server-side status poll loop. Status used to be probed on demand in
 // the /api/status handler, so every open dashboard tab drove its own SSH probe
@@ -10,6 +11,7 @@ export function createStatusPoller({
   store, statusChecker, intervalMs = 30000, concurrency = 4,
   setIntervalFn = setInterval, clearIntervalFn = clearInterval,
   history = null, statusEnricher = null,
+  localAgent = null, localSession = 'local',
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   now = () => Date.now(),
 }) {
@@ -57,7 +59,21 @@ export function createStatusPoller({
       if (history) {
         // History must never affect status availability: the snapshot is already
         // swapped, so a bug here can't blank /api/status.
-        try { history.record(snapshot, boxes); } catch { /* swallowed on purpose */ }
+        try {
+          let snap = snapshot;
+          let recorded = boxes;
+          if (localAgent) {
+            // The Host Shell rides the history rails as a pseudo-box (badge,
+            // pane chip, agent events) but must never leak into /api/status —
+            // hence the local copies rather than touching `snapshot`.
+            const local = await Promise.resolve().then(() => localAgent.sample()).catch(() => null);
+            if (local) {
+              snap = { ...snapshot, [LOCAL_BOX_ID]: local };
+              recorded = [...boxes, { id: LOCAL_BOX_ID, label: 'Host Shell', host: 'localhost', sessionName: localSession }];
+            }
+          }
+          history.record(snap, recorded);
+        } catch { /* swallowed on purpose */ }
       }
       return snapshot;
     })().finally(() => { inFlight = null; });
