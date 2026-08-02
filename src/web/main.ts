@@ -2,6 +2,7 @@ import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sampl
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
 import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, blocksTerminal } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor, agentBadgeFor } from './statusDot';
+import { buildClawd } from './clawd';
 import { sparkline } from './sparkline';
 import { formatEvent, relTime, unseenCountFiltered, notificationsToFire } from './healthEvents';
 import { loadNotifyPrefs, enabledKinds } from './notifyPrefs';
@@ -113,16 +114,15 @@ function applyAgentBadge(badges: Element, id: string) {
   const existing = badges.querySelector('[data-agent-badge]');
   const b = agentBadgeFor(latestSeries[id]);
   if (!b) { existing?.remove(); return; }
-  if (existing) {
-    existing.className = `badge ${b.cls}`;
-    existing.textContent = b.text;
-    return;
-  }
-  const el = document.createElement('span');
+  const el = (existing as HTMLElement | null) ?? document.createElement('span');
   el.className = `badge ${b.cls}`;
   el.dataset.agentBadge = '1';
-  el.textContent = b.text;
-  badges.append(el);
+  // Children rebuilt every pass: the badge holds only the sprite and the text,
+  // so a state flip can never strand a sprite beside the wrong label.
+  el.textContent = '';
+  if (b.sprite) el.append(buildClawd());
+  el.append(document.createTextNode(b.text));
+  if (!existing) badges.append(el);
 }
 
 function repaintAgentBadges() {

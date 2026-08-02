@@ -7,6 +7,7 @@ import type { Box, BoxMetrics, Status, Sample, Service, ServiceStatusSnapshot } 
 import type { NetboxSummary } from './netbox';
 import type { PveLinkedGuest, PveClusterNode } from './proxmox';
 import { dotClassFor, dotTitleFor } from './statusDot';
+import { buildClawd } from './clawd';
 import { fmtLatency, fmtCount, fmtCompact, fmtUptime, fmtBytes } from './fmt';
 import { buildTruenasCard, type TruenasCardEls } from './truenasCard';
 import { buildUnifiCard, type UnifiCardEls } from './unifiCard';
@@ -399,8 +400,10 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
       const chipState = agent === 'working' || agent === 'waiting' ? agent : null;
       row.chip.hidden = chipState === null;
       if (chipState) {
-        row.chip.textContent = chipState.toUpperCase();
         row.chip.className = `dash-chip dash-chip-${chipState}`;
+        row.chip.textContent = '';
+        if (chipState === 'working') row.chip.append(buildClawd()); // Clawd rides working only
+        row.chip.append(document.createTextNode(chipState.toUpperCase()));
       }
       // An em dash in the first slot when the box reported no metrics at all
       // (unreachable, mid-setup, or a host the probe can't read) — the lamp and
