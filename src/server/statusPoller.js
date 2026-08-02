@@ -11,7 +11,7 @@ export function createStatusPoller({
   store, statusChecker, intervalMs = 30000, concurrency = 4,
   setIntervalFn = setInterval, clearIntervalFn = clearInterval,
   history = null, statusEnricher = null,
-  localAgent = null, localSession = 'local',
+  localAgent = null, localSession = 'local', localSampleTimeoutMs = 5000,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   now = () => Date.now(),
 }) {
@@ -66,7 +66,16 @@ export function createStatusPoller({
             // The Host Shell rides the history rails as a pseudo-box (badge,
             // pane chip, agent events) but must never leak into /api/status —
             // hence the local copies rather than touching `snapshot`.
-            const local = await Promise.resolve().then(() => localAgent.sample()).catch(() => null);
+            // Deadline-raced, not merely try/caught. `inFlight` clears only in
+            // the .finally() below and every pollOnce coalesces onto it, so a
+            // sampler that never settles (a marker file that is a FIFO, a wedged
+            // tmux) would not just lose the Host Shell's own state — it would
+            // freeze status polling for the entire fleet. The Host Shell is a
+            // convenience riding these rails; it must never be able to stop them.
+            const local = await Promise.race([
+              Promise.resolve().then(() => localAgent.sample()),
+              new Promise((r) => { const t = setTimeout(() => r(null), localSampleTimeoutMs); t.unref?.(); }),
+            ]).catch(() => null);
             if (local) {
               snap = { ...snapshot, [LOCAL_BOX_ID]: local };
               recorded = [...boxes, { id: LOCAL_BOX_ID, label: 'Host Shell', host: 'localhost', sessionName: localSession }];

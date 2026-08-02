@@ -441,6 +441,28 @@ test('pollOnce feeds a __local__ pseudo-box to history when a local sampler is p
   expect(poller.getSnapshot().__local__).toBeUndefined();
 });
 
+// A rejecting sampler is caught; a sampler that never settles is not, unless
+// the await is raced against a deadline. pollOnce coalesces every caller onto
+// `inFlight`, which clears only when the cycle finishes — so a wedged sampler
+// would freeze status polling for the WHOLE fleet, not just the Host Shell.
+test('a hung local sampler cannot wedge the poll cycle', async () => {
+  const calls = [];
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'b1', host: 'h1' }]),
+    statusChecker,
+    history: { record: (snap, bx) => calls.push([snap, bx]) },
+    localAgent: { sample: () => new Promise(() => {}) }, // never settles
+    localSampleTimeoutMs: 10,
+  });
+  await expect(poller.pollOnce()).resolves.toBeTruthy();
+  const [snap, bx] = calls[0];
+  expect(snap.__local__).toBeUndefined();
+  expect(bx.map((b) => b.id)).toEqual(['b1']);
+  // inFlight was released, so the next interval tick is a real cycle again.
+  await poller.pollOnce();
+  expect(calls).toHaveLength(2);
+});
+
 test('a throwing local sampler still records the real boxes', async () => {
   const calls = [];
   const poller = createStatusPoller({

@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest';
 import os from 'node:os';
-import { buildEnsureLocalShellScript, createLocalShellActions } from '../src/server/localShellActions.js';
+import { buildEnsureLocalShellScript, createLocalShellActions, runLocalScriptStdin } from '../src/server/localShellActions.js';
 import { buildAgentHooksInstallScript } from '../src/server/claudeAgentHooks.js';
 
 test('buildEnsureLocalShellScript enables Oh My Zsh in local tmux session', () => {
@@ -101,4 +101,25 @@ test('installAgentHooks reports a failed run as an error result, never a throw',
   const res = await actions.installAgentHooks();
   expect(res.ok).toBe(false);
   expect(res.error).toBeTruthy();
+});
+
+// --- the default spawn transport --------------------------------------------
+// Every test above injects `runStdin`, so the real transport — the only
+// production I/O path in this module — was never executed by the suite. These
+// two run it against a real /bin/sh.
+
+test('runLocalScriptStdin feeds stdin to a real shell and collects its output', async () => {
+  const res = await runLocalScriptStdin('cat', Buffer.from('x'), { timeout: 5000 });
+  expect(res).toEqual({ code: 0, stdout: 'x', stderr: '' });
+});
+
+// The timer used to kill the child and then wait for 'close', which fires on
+// stdio EOF — not on exit. A grandchild holding the inherited stdout would
+// leave this promise (and the HTTP request awaiting it) pending forever, so
+// the timeout must settle the promise itself.
+test('runLocalScriptStdin settles on timeout instead of hanging', async () => {
+  const started = Date.now();
+  const res = await runLocalScriptStdin('sleep 30', Buffer.from(''), { timeout: 100 });
+  expect(res.code).not.toBe(0);
+  expect(Date.now() - started).toBeLessThan(5000);
 });

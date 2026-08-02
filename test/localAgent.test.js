@@ -38,6 +38,21 @@ test('readAgentMarks caps an oversized marker at 200 bytes (same as the on-box p
   expect(await readAgentMarks(home)).toBeNull();
 });
 
+// The 200-byte cap above is applied to the bytes AFTER the whole file has been
+// read, so it bounds what is parsed, not what is read. A stat() guard bounds
+// the read itself: only regular files, only small ones. It follows symlinks,
+// matching the on-box probe's `[ -f "$f" ]`, and keeps readFile away from
+// entries it would block on or slurp.
+test('readAgentMarks skips directory and oversized entries, keeping the valid marker', async () => {
+  const home = tmpHome();
+  const dir = path.join(home, '.tmuxifier-agent');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'local'), 'local:working:1722600000\n');
+  fs.writeFileSync(path.join(dir, 'huge'), 'x'.repeat(2000)); // past the read guard
+  fs.mkdirSync(path.join(dir, 'subdir'));                     // not a regular file
+  expect(await readAgentMarks(home)).toEqual({ local: { state: 'working', ts: 1722600000 } });
+});
+
 test('sample() reads tmux sessions via the shared STATUS_FMT parser', async () => {
   const home = tmpHome();
   const calls = [];

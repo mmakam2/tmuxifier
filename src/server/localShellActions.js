@@ -24,7 +24,10 @@ function runLocalShellScript(script, { cwd = os.homedir(), env = process.env, ti
 // Like runLocalShellScript, but the script reads bytes from stdin — the
 // script + stdin contract createAgentHooksPusher expects, over a local
 // transport instead of ssh. execFile can't feed stdin, hence spawn.
-function runLocalScriptStdin(script, input, { cwd = os.homedir(), env = process.env, timeout = SETUP_TIMEOUT_MS } = {}) {
+// Exported so the default transport — the only production I/O path here that
+// dependency injection otherwise hides from the tests — can be exercised
+// against a real /bin/sh.
+export function runLocalScriptStdin(script, input, { cwd = os.homedir(), env = process.env, timeout = SETUP_TIMEOUT_MS } = {}) {
   return new Promise((resolve) => {
     const child = spawn('/bin/sh', ['-c', script], { cwd, env });
     let stdout = '';
@@ -36,7 +39,14 @@ function runLocalScriptStdin(script, input, { cwd = os.homedir(), env = process.
       clearTimeout(timer);
       resolve({ code, stdout, stderr });
     };
-    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already gone */ } }, timeout);
+    // Kill AND settle. Waiting for 'close' after the kill is not enough: that
+    // event fires on stdio EOF, not on exit, so a grandchild holding the
+    // inherited stdout (a shell that forked rather than exec'd) would leave
+    // this promise — and the HTTP request awaiting it — pending forever.
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      finish(1);
+    }, timeout);
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stderr += d; });
     child.on('error', () => finish(1));

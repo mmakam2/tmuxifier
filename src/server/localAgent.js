@@ -44,6 +44,13 @@ export async function readAgentMarks(home) {
   const lines = [];
   for (const name of names) {
     try {
+      // Read regular files only, and only small ones. stat() follows symlinks,
+      // matching the on-box probe's `[ -f "$f" ]`; the size cap is what closes
+      // the read-it-all-then-truncate gap — readFile on a FIFO would block
+      // forever, and the 200-byte cap below is applied only after the whole
+      // file is already in memory.
+      const st = await fs.promises.stat(path.join(dir, name));
+      if (!st.isFile() || st.size > MARK_MAX_BYTES * 8) continue;
       const buf = await fs.promises.readFile(path.join(dir, name));
       lines.push('__AGENT__ ' + buf.subarray(0, MARK_MAX_BYTES).toString('utf8').replace(/\n/g, ''));
     } catch { /* unreadable marker: skip it, keep the rest */ }

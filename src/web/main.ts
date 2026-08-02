@@ -1751,8 +1751,12 @@ async function openLocalShellEditModal() {
       if (res.agentHooks && !res.agentHooks.ok) {
         // The shell change saved; only the hook install needs attention.
         // Keep the dialog open so the message is actually seen.
-        err.textContent = res.agentHooks.skipped
-          ? `Shell saved; hooks skipped: ${res.agentHooks.skipped}`
+        // The pusher is shared with the SSH path, so its skip reason says
+        // "on the box"; here the target is this host. Reworded at the seam
+        // rather than in the server string, which both paths read.
+        const skipped = res.agentHooks.skipped?.replace('on the box', 'on this host');
+        err.textContent = skipped
+          ? `Shell saved; hooks skipped: ${skipped}`
           : `Shell saved; hook install failed: ${res.agentHooks.error || 'unknown error'}`;
         hooksCheck.checked = false;
         submit.disabled = false;
