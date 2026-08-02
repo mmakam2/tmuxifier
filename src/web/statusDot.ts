@@ -75,11 +75,15 @@ export function cpuLoadPct(m: BoxMetrics | undefined): number | undefined {
 // state is history, and a box whose latest sample carries no `agent`
 // (un-hooked, no claude, or claude exited) renders nothing by design: under
 // the hook-only rule that silence means "rerun setup", not "invent a state".
-export interface AgentBadge { text: 'working' | 'waiting'; cls: string }
+export interface AgentBadge { text: 'working' | 'waiting'; cls: string; sprite?: boolean }
 export function agentBadgeFor(samples: Sample[] | undefined): AgentBadge | null {
   const last = samples && samples.length ? samples[samples.length - 1] : undefined;
   if (last?.agent !== 'working' && last?.agent !== 'waiting') return null;
-  return { text: last.agent, cls: `badge-agent-${last.agent}` };
+  const badge: AgentBadge = { text: last.agent, cls: `badge-agent-${last.agent}` };
+  // Clawd rides the working state only: motion means "agent busy", and its
+  // absence on waiting keeps the orange chip's stillness meaning "your turn".
+  if (last.agent === 'working') badge.sprite = true;
+  return badge;
 }
 
 // Color tier for a meta segment. 'auth' is not a severity — it's the dedicated
