@@ -1,8 +1,10 @@
-// Settings → Boxes: export/import the box list as a JSON file. Relocated out of
-// the sidebar brand actions, which are reserved for the routinely used controls
-// (collapse, settings, logout) — export/import is a rare admin action.
+// Settings → Boxes: export/import the box list as a JSON file, fronted by a
+// preview of what the export actually contains and a note on what it doesn't.
+// Relocated out of the sidebar brand actions, which are reserved for the
+// routinely used controls (collapse, settings, logout).
 import { el } from './dom';
 import { api, type Box } from './api';
+import { fmtBytes } from './fmt';
 
 // Pure so it can be tested without a DOM (the repo's web-test convention).
 export function importSummary(added: number, skipped: number): string {
@@ -59,6 +61,43 @@ export function renderBoxesSection(content: HTMLElement): void {
     status.textContent = msg;
   };
 
+  // Export preview: filename, true byte size, and a stat grid, filled async.
+  // The Export/Import buttons never depend on this fetch — backup and restore
+  // must keep working when the preview doesn't.
+  const previewHead = el('div', { class: 'boxes-stats-head' }, ['measuring…']);
+  const previewGrid = el('div', { class: 'boxes-stats-grid' });
+  const preview = el('div', { class: 'boxes-stats' }, [previewHead, previewGrid]);
+
+  const statCell = (label: string, value: string) =>
+    el('div', { class: 'boxes-stat' }, [
+      el('span', { class: 'boxes-stat-label' }, [label]),
+      el('span', { class: 'boxes-stat-value' }, [value]),
+    ]);
+
+  const loadPreview = async () => {
+    try {
+      const { payload, text } = await api.exportPreview();
+      const s = exportStats(payload);
+      previewHead.replaceChildren(
+        el('span', {}, [exportFilename(payload.exportedAt)]),
+        el('span', { class: 'boxes-stats-size' }, [fmtBytes(exportSizeBytes(text))]),
+      );
+      previewGrid.replaceChildren(
+        statCell('boxes', String(s.total)),
+        statCell('manual · pve', `${s.manual} · ${s.proxmox}`),
+        statCell('tagged', String(s.tagged)),
+        statCell('proxy jump', String(s.proxyJump)),
+        statCell('startup command', String(s.startupCommand)),
+        statCell('custom port', String(s.customPort)),
+        statCell('custom user', String(s.customUser)),
+      );
+    } catch {
+      previewHead.textContent = "Couldn't load export preview";
+      previewGrid.replaceChildren();
+    }
+  };
+  void loadPreview();
+
   const file = el('input', { type: 'file', accept: 'application/json,.json', hidden: true }) as HTMLInputElement;
   file.addEventListener('change', async () => {
     const picked = file.files?.[0];
@@ -70,6 +109,7 @@ export function renderBoxesSection(content: HTMLElement): void {
       // The dashboard owns the box list and repaints on this event (main.ts).
       window.dispatchEvent(new Event('tmuxifier:boxes-changed'));
       setStatus(importSummary(added.length, skipped));
+      void loadPreview(); // the figures should visibly reflect the new state
     } catch (e) {
       setStatus(`Import failed: ${(e as Error).message}`, true);
     }
@@ -92,8 +132,13 @@ export function renderBoxesSection(content: HTMLElement): void {
 
   content.replaceChildren(
     el('h3', {}, ['Boxes']),
-    el('p', { class: 'pve-sub' }, ['Export writes your box list to a JSON file. Import accepts a file produced by the export button — ids are re-minted, and duplicate or unsafe entries are skipped.']),
+    el('p', { class: 'pve-sub' }, ['Export writes your box list to a JSON file — a portable backup you can move between Tmuxifier instances. It carries no SSH secrets; boxes rely on your keys, agent, and ~/.ssh/config at connect time.']),
+    el('div', { class: 'boxes-legend' }, ['What gets exported']),
+    preview,
     el('div', { class: 'pve-inline' }, [exportBtn, importBtn]),
+    el('p', { class: 'pve-sub' }, ['Import re-mints each id and skips duplicates (same host or label). Proxmox links are not restored — re-link from the box\'s Edit dialog afterwards.']),
+    el('div', { class: 'boxes-legend' }, ['Not in this backup']),
+    el('p', { class: 'pve-sub' }, ['Proxmox host profiles & presets, service tiles, fleet scripts & job history, NetBox settings, passkeys, and voice configuration live only in the data/ directory on the Tmuxifier host.']),
     status,
     file,
   );

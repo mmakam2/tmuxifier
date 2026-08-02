@@ -1490,6 +1490,17 @@ button.empty-kbd:hover { color: var(--text); }
 .pve-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .pve-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
 .pve-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Settings → Boxes: the export preview. Same figure grammar as the dashboard
+   cards — engraved label, amber tabular value — scaled to the modal. */
+.boxes-legend { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); margin-top: 14px; }
+.boxes-stats { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-top: 6px; background: var(--panel-2); }
+.boxes-stats-head { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.boxes-stats-size { color: var(--amber); }
+.boxes-stats-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px; margin-top: 8px; }
+.boxes-stats-grid:empty { display: none; }
+.boxes-stat { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
+.boxes-stat-label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); }
+.boxes-stat-value { font-size: 13px; color: var(--amber); font-variant-numeric: tabular-nums; }
 .pve-textarea { padding: 9px 10px; border-radius: 6px; border: 1px solid var(--border); border-top-color: #1f2228; background: var(--screen); box-shadow: var(--recess); color: var(--text); font-family: var(--face); resize: vertical; }
 .pve-hub select, .pve-disk-modal select { padding: 9px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-family: var(--face); font-size: 14px; }
 .pve-err { color: var(--crit); font-size: 12.5px; }
