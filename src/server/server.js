@@ -1496,7 +1496,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
 
   app.patch('/api/local-shell', { preHandler: requireAuth }, async (req, reply) => {
-    const { shell } = req.body || {};
+    const { shell, claudeHooks } = req.body || {};
     if (!shell || !['none', 'omz', 'omb'].includes(shell)) {
       return reply.code(400).send({ error: 'invalid shell' });
     }
@@ -1511,6 +1511,13 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       config.localShell = shell;
     } catch (e) {
       return reply.code(500).send({ error: 'could not save config' });
+    }
+    // Opt-in Claude Code hook install on the host itself (spec 2026-08-02).
+    // Strictly === true: absent/false touches nothing. A failed install is
+    // reported, never promoted — the shell change above already persisted.
+    if (claudeHooks === true && localShellActions?.installAgentHooks) {
+      const agentHooks = await localShellActions.installAgentHooks();
+      return { ok: true, agentHooks };
     }
     return { ok: true };
   });

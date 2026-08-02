@@ -738,6 +738,49 @@ test('PATCH /api/local-shell rejects invalid shell values', async () => {
   expect(res3.statusCode).toBe(400);
 });
 
+test('PATCH /api/local-shell claudeHooks:true runs the local hook install and reports the result', async () => {
+  const localShellActions = {
+    async ensureReady() { return { ok: true }; },
+    async installAgentHooks() { return { target: 'agent-hooks', ok: true }; },
+  };
+  app = await makeApp({ localShellActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const res = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: 'none', claudeHooks: true } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true, agentHooks: { target: 'agent-hooks', ok: true } });
+});
+
+test('PATCH /api/local-shell without claudeHooks never touches the installer', async () => {
+  const localShellActions = {
+    async ensureReady() { return { ok: true }; },
+    async installAgentHooks() { throw new Error('must not be called'); },
+  };
+  app = await makeApp({ localShellActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const res = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: 'none' } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true });
+});
+
+test('PATCH /api/local-shell reports a failed hook install without failing the request', async () => {
+  const localShellActions = {
+    async ensureReady() { return { ok: true }; },
+    async installAgentHooks() { return { target: 'agent-hooks', ok: false, skipped: 'no Claude on the box' }; },
+  };
+  app = await makeApp({ localShellActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const res = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: 'none', claudeHooks: true } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json().ok).toBe(true);
+  expect(res.json().agentHooks.ok).toBe(false);
+});
+
 test('POST /api/local-shell/reconnect closes local PTY and kills configured tmux session', async () => {
   const calls = [];
   const sessions = {
