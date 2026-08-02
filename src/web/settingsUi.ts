@@ -35,7 +35,7 @@ const SECTIONS: Record<SettingsTab, Section> = {
   notifications: { label: 'Notifications', render: (content) => renderNotificationsSection(content) },
 };
 
-export function openSettingsModal(tab: SettingsTab = 'netbox', onClose?: () => void): void {
+export function openSettingsModal(tab: SettingsTab = 'boxes', onClose?: () => void): void {
   const modal = el('div', { class: 'modal settings-modal' });
   const tabStrip = el('div', { class: 'pve-tabs' });
   const content = el('div', { class: 'pve-content' });

@@ -942,7 +942,7 @@ async function renderDashboard() {
     button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     window.setTimeout(refitActiveTerminals, 260);
   });
-  app.querySelector('#settings')!.addEventListener('click', () => { openSettingsModal('netbox', () => { void syncProxmoxButton(); }); });
+  app.querySelector('#settings')!.addEventListener('click', () => { openSettingsModal('boxes', () => { void syncProxmoxButton(); }); });
   app.querySelector('#add')!.addEventListener('click', () => openBoxDialog());
   // The nameplate is the home key: back to the standby dashboard. Docked
   // terminals undock into parking — still connected, one click re-docks —
