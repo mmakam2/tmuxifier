@@ -7,6 +7,8 @@ export interface Box {
   source: string; proxmox?: PveBoxLink;
 }
 export type AddBoxSpec = Partial<Box>;
+// The wrapped shape GET /api/export returns (store.exportBoxes()).
+export interface BoxExportPayload { type: string; version: number; exportedAt: string; boxes: Box[] }
 export interface BoxMetrics {
   load1?: number; load5?: number; load15?: number; cpus?: number;
   cpuPct?: number;        // true cgroup CPU utilization % (server-derived); preferred over load
@@ -217,7 +219,7 @@ export interface AiAuthStatus { claude: AiAuthCliStatus; codex: AiAuthCliStatus 
 // (C2). Re-exported here because main.ts and every existing caller register
 // through api.ts — it is the same handler slot, not a second one.
 export { onUnauthorized } from './http';
-import { jsonOf as j } from './http';
+import { jsonOf as j, httpError } from './http';
 export const api = {
   async me() { return (await fetch('/api/me')).ok; },
   async authInfo() {
@@ -247,6 +249,15 @@ export const api = {
   },
   async importBoxes(payload: unknown) {
     return j<{ added: Box[]; skipped: number }>(await fetch('/api/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }));
+  },
+  // The export payload as text + parsed, for the Boxes tab's preview. Fetched
+  // as text (not j<T>) because the preview reports the file's true byte size;
+  // a non-ok response still routes through the shared 401 seam via httpError.
+  async exportPreview(): Promise<{ payload: BoxExportPayload; text: string }> {
+    const res = await fetch('/api/export');
+    if (!res.ok) throw await httpError(res);
+    const text = await res.text();
+    return { payload: JSON.parse(text) as BoxExportPayload, text };
   },
   async services() { return j<Service[]>(await fetch('/api/services')); },
   async addService(spec: ServiceSpec) { return j<Service>(await fetch('/api/services', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(spec) })); },
