@@ -1693,3 +1693,15 @@ button.empty-kbd:hover { color: var(--text); }
 /* A permission gap, not a fault — muted rather than the warn colour, so it
    reads as configuration rather than as something broken. */
 .dash-card-note { margin-top: 6px; font-size: 12px; color: var(--dim); }
+
+/* Settings → Appearance: variant rows with a live preview between the radio
+   and the label. Previews reuse the real .clawd-v-* classes, slightly
+   enlarged so the motion is readable at settings-modal distance. These rules
+   are deliberately capped at 0-2-0 and set no `animation`, so the
+   reduced-motion kill-switch above keeps winning on source order — a preview
+   that outran it would animate for exactly the operator who asked for stillness. */
+.appearance-row { display: flex; align-items: center; gap: 8px; }
+.appearance-prev { display: inline-flex; width: 26px; justify-content: center; color: var(--amber); }
+.appearance-prev .clawd { margin-right: 0; font-size: 8px; }
+.appearance-prev .clawd-v-star { font-size: 13px; }
+.appearance-desc { color: var(--dim); font-size: 11px; margin-left: auto; }
