@@ -2,6 +2,7 @@
 // (covered by the split e2e — same split as stagePanes.ts). Never imports
 // main.ts; everything arrives via PaneHeaderInput / PaneHeaderActions.
 import { dotClassFor, dotTitleFor } from './statusDot';
+import { buildClawd } from './clawd';
 import type { Status } from './api';
 
 export type ConnKind = 'connecting' | 'open' | 'retrying' | 'setup';
@@ -18,7 +19,7 @@ export interface PaneHeaderInput {
   state: 'terminal' | 'stopped' | 'setup';
 }
 
-export interface PaneChip { kind: 'state' | 'conn' | 'agent'; text: string; cls: string }
+export interface PaneChip { kind: 'state' | 'conn' | 'agent'; text: string; cls: string; sprite?: boolean }
 export interface PaneHeaderModel { title: string; target: string; dotClass: string; dotTitle: string; chip: PaneChip | null }
 
 // One slot, strict precedence: a pane-level state (stopped container, box
@@ -32,7 +33,11 @@ export function paneHeaderChip(i: PaneHeaderInput): PaneChip | null {
   if (i.conn?.kind === 'retrying') return { kind: 'conn', text: `reconnecting ×${i.conn.attempt ?? 1}`, cls: 'chip-conn' };
   if (i.conn?.kind === 'connecting') return { kind: 'conn', text: 'connecting…', cls: 'chip-conn' };
   if (i.conn?.kind === 'setup') return { kind: 'conn', text: 'setting up…', cls: 'chip-conn' };
-  if (i.agent === 'working' || i.agent === 'waiting') return { kind: 'agent', text: i.agent, cls: `chip-agent-${i.agent}` };
+  if (i.agent === 'working' || i.agent === 'waiting') {
+    const chip: PaneChip = { kind: 'agent', text: i.agent, cls: `chip-agent-${i.agent}` };
+    if (i.agent === 'working') chip.sprite = true; // Clawd rides working only
+    return chip;
+  }
   return null;
 }
 
@@ -124,8 +129,14 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
     target.textContent = m.target;
     if (m.chip) {
       chip.hidden = false;
-      chip.textContent = m.chip.text;
       chip.className = `pane-chip ${m.chip.cls}`;
+      // Rebuilding the chip's own children is safe: the voice button lives in
+      // voiceSlot and the lifecycle keys in lifecycleSlot, both outside this
+      // span — the "text/classes only" rule protects those slots, not these
+      // text nodes.
+      chip.textContent = '';
+      if (m.chip.sprite) chip.append(buildClawd());
+      chip.append(document.createTextNode(m.chip.text));
     } else {
       chip.hidden = true;
       chip.className = 'pane-chip';

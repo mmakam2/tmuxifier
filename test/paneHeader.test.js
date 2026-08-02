@@ -43,8 +43,9 @@ test('chip precedence: pane state beats connection beats agent', () => {
 });
 
 test('agent chip only when the connection is quiet, and only for a hook-sourced state', () => {
+  // working carries the Clawd sprite flag; waiting deliberately stays plain.
   expect(paneHeaderChip(box({ conn: { kind: 'open' }, agent: 'working' })))
-    .toEqual({ kind: 'agent', text: 'working', cls: 'chip-agent-working' });
+    .toEqual({ kind: 'agent', text: 'working', cls: 'chip-agent-working', sprite: true });
   expect(paneHeaderChip(box({ conn: { kind: 'open' }, agent: 'waiting' })))
     .toEqual({ kind: 'agent', text: 'waiting', cls: 'chip-agent-waiting' });
   // No marker → no `agent` on the sample → no chip (the un-hooked-box cue).
