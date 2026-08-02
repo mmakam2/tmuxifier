@@ -54,6 +54,15 @@ export async function jsonFetch<T>(input: string, init?: RequestInit): Promise<T
   return jsonOf<T>(await fetch(input, init));
 }
 
+/** fetch raw text, routing 401 through the seam. For a caller that needs the
+ *  response's literal bytes (the Boxes tab's export preview reports its true
+ *  size) rather than a parsed object. */
+export async function textFetch(input: string, init?: RequestInit): Promise<string> {
+  const res = await fetch(input, init);
+  if (!res.ok) throw await httpError(res);
+  return res.text();
+}
+
 /** The JSON request init these layers all repeat. */
 export const jsonBody = (method: string, value: unknown): RequestInit => ({
   method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(value),

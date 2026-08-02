@@ -219,7 +219,7 @@ export interface AiAuthStatus { claude: AiAuthCliStatus; codex: AiAuthCliStatus 
 // (C2). Re-exported here because main.ts and every existing caller register
 // through api.ts — it is the same handler slot, not a second one.
 export { onUnauthorized } from './http';
-import { jsonOf as j, httpError } from './http';
+import { jsonOf as j, textFetch } from './http';
 export const api = {
   async me() { return (await fetch('/api/me')).ok; },
   async authInfo() {
@@ -252,11 +252,9 @@ export const api = {
   },
   // The export payload as text + parsed, for the Boxes tab's preview. Fetched
   // as text (not j<T>) because the preview reports the file's true byte size;
-  // a non-ok response still routes through the shared 401 seam via httpError.
+  // textFetch keeps a non-ok response on the shared 401 seam.
   async exportPreview(): Promise<{ payload: BoxExportPayload; text: string }> {
-    const res = await fetch('/api/export');
-    if (!res.ok) throw await httpError(res);
-    const text = await res.text();
+    const text = await textFetch('/api/export');
     return { payload: JSON.parse(text) as BoxExportPayload, text };
   },
   async services() { return j<Service[]>(await fetch('/api/services')); },
