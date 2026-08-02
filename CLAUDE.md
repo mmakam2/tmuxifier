@@ -574,7 +574,12 @@ setup runs server-side; clicking a box whose setup job is still `running` render
 setting-up panel (`blocksTerminal` in `setupStatus.ts`) instead of a terminal, and opens the
 terminal itself once the job settles; the login screen also wires the passkey button through the same
 `evaluateOrigin` verdict, with a dead-end message when "require a passkey" is armed but this
-browser has no usable one), `api.ts`, `terminal.ts`, `index.html`, `style.css`, plus feature modules —
+browser has no usable one), `api.ts`, `http.ts` (the shared fetch helpers — `jsonOf`/`jsonFetch`/
+`textFetch`/`httpError`/`statusOf`/`jsonBody` — and the central 401 seam: `onUnauthorized` is
+registered by `main.ts` to tear the workspace down to the login screen when the session dies,
+and every fetch layer must route non-ok handling through here — `test/webHttp.test.js` forbids
+hand-rolled `res.ok` checks outside this file, so a new fetch layer inherits the seam rather
+than silently missing it), `terminal.ts`, `index.html`, `style.css`, plus feature modules —
 `stageLayout.ts` (the pure split-tree stage model — a node is a box-id leaf or a split
 (orientation/children/ratios) in canonical form (splits ≥2 children, no same-orientation
 nesting), with stage-edge/pane-edge dock, atomic move, undock-collapse, path-addressed
