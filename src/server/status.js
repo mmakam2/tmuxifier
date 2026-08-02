@@ -8,7 +8,7 @@ import { buildProbeArgv } from './sshCommand.js';
 // field remains as a general last-output reading for session listings and
 // diagnostics. Window vars resolve against the session's current window here,
 // matching `#{pane_current_command}` beside it, so both describe the same pane.
-const STATUS_FMT = '#{session_name}:#{session_windows}:#{session_attached}:#{window_activity}:#{pane_current_command}';
+export const STATUS_FMT = '#{session_name}:#{session_windows}:#{session_attached}:#{window_activity}:#{pane_current_command}';
 
 // A compact host-health line emitted *before* the tmux output on the SSH probe
 // we already run every poll, so load/mem/disk cost no extra connection. Format is
