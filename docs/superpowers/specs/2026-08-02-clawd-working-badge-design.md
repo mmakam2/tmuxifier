@@ -16,8 +16,9 @@ Surfaces:
   `main.ts` from `agentBadgeFor` in `statusDot.ts`).
 - Pane-header agent chip (`chip-agent-working`, built by `buildPaneHeader` in
   `paneHeader.ts` from `chipFor`).
-- The standby dashboard's fleet-strip agent chips reuse the badge class, so they inherit
-  the sprite with no dashboard change.
+- The standby dashboard's fleet-strip agent chips (`dash-chip dash-chip-working`,
+  rendered by `updateFleet` in `dashboard.ts`) — they use their own class, not the badge
+  class, so they get the same sprite via a small explicit change in `dashboard.ts`.
 
 ## Sprite
 
