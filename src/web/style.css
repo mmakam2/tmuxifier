@@ -442,6 +442,22 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
    (chip-agent-*): amber = working agent, orange = waiting on the operator. */
 .badge-agent-working { color: var(--amber); border-color: rgba(255, 176, 0, 0.35); background: rgba(255, 176, 0, 0.07); }
 .badge-agent-waiting { color: var(--orange); border-color: rgba(255, 106, 26, 0.5); background: rgba(255, 106, 26, 0.1); }
+/* Clawd: the working-agent sprite — two block-glyph rows in currentColor (the
+   chip's amber), hopping on a steps(2) beat. Frame A: body down, feet out.
+   Frame B: body 1px up, feet tucked. Pure CSS so a fleet of working boxes
+   costs no timers; reduced motion rests on frame A (the initial styles). */
+.clawd {
+  display: inline-flex; flex-direction: column; align-items: center;
+  font-size: 6px; line-height: 0.9; letter-spacing: normal;
+  vertical-align: -2px; margin-right: 4px;
+}
+.clawd-body { display: block; animation: clawd-hop 1.2s steps(2, jump-none) infinite; }
+.clawd-feet { display: block; animation: clawd-feet 1.2s steps(2, jump-none) infinite; }
+@keyframes clawd-hop { from { transform: translateY(0); } to { transform: translateY(-1px); } }
+@keyframes clawd-feet { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .clawd-body, .clawd-feet { animation: none; }
+}
 .box-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 3px; }
 .box .rm, .box .refresh { background: none; border: none; color: var(--dim); cursor: pointer; }
 .box-actions > button { padding: 1px 4px; border-radius: 4px; transition: background 0.12s, color 0.12s; }
