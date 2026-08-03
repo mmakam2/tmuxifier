@@ -363,12 +363,14 @@ export function openTerminal(
   const term = new Terminal({
     cursorBlink: true,
     // Math.min before the clamp, not after: clampFontSize falls back to the
-    // DEFAULT (12) for anything outside its 6-32 range, so a configured 31 or 32
-    // bumped to 33/34 came back as 12 — a phone rendering SMALLER than the
-    // desktop it is meant to enlarge. Saturating at the ceiling keeps the bump
-    // monotonic. 32 is that ceiling, a literal in clampFontSize (termFont.ts);
-    // it is not exported, so it is restated rather than imported.
-    fontSize: phoneCoarse() ? clampFontSize(Math.min(termFontSize + 2, 32)) : termFontSize,
+    // DEFAULT (12) for anything outside its 6-32 range, so a configured 32
+    // bumped past the ceiling would come back as 12 — a phone rendering
+    // SMALLER than the desktop it is meant to enlarge. Saturating at the
+    // ceiling keeps the bump monotonic. 32 is that ceiling, a literal in
+    // clampFontSize (termFont.ts); it is not exported, so it is restated
+    // rather than imported. +1 (was +2): validated on a real phone —
+    // one step reads comfortably, two costs too many columns.
+    fontSize: phoneCoarse() ? clampFontSize(Math.min(termFontSize + 1, 32)) : termFontSize,
     fontFamily: termFontFamily(),
     theme: SCREEN_THEME,
     // A box terminal is always a tmux attach, and tmux draws on the alternate
