@@ -263,7 +263,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
   display: grid;
   grid-template-columns: 320px 1fr;
   gap: 10px;
-  height: 100vh;
+  height: 100dvh;
   padding: 10px;
   transition: grid-template-columns 0.25s ease;
 }
@@ -1711,3 +1711,68 @@ button.empty-kbd:hover { color: var(--text); }
 .appearance-prev .clawd { margin-right: 0; font-size: 8px; }
 .appearance-prev .clawd-v-star { font-size: 13px; }
 .appearance-desc { color: var(--dim); font-size: 11px; margin-left: auto; }
+
+/* --- Phone mode (max-width: 720px): drawer sidebar, one full-screen pane --- */
+/* Desktop is untouched: everything here lives inside the media queries. The
+   phone bar exists in the DOM on desktop too but never displays. */
+.phone-bar { display: none; }
+.touch-keys { display: none; }
+@media (max-width: 720px) {
+  .layout { display: flex; flex-direction: column; height: 100dvh; padding: 0; gap: 0; }
+  .phone-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: calc(6px + env(safe-area-inset-top)) 10px 6px; /* clear any notch (viewport-fit=cover) */
+    border-bottom: 1px solid var(--border); background: var(--panel);
+    flex: 0 0 auto;
+  }
+  .phone-menu {
+    width: 40px; height: 40px; flex: 0 0 auto;
+    background: none; border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); font-size: 18px; cursor: pointer;
+  }
+  .phone-switch {
+    flex: 1; min-width: 0; padding: 9px 10px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel-2); color: var(--text); font-family: var(--face); font-size: 14px;
+  }
+  .phone-switch:disabled { opacity: 0.6; }
+  /* Sidebar becomes a left slide-over drawer — the .fleet-panel pattern:
+     transform for the slide, visibility so closed contents leave the tab
+     order (WCAG 2.4.3), matching transition delay on the way out. */
+  .sidebar {
+    position: fixed; top: 0; left: 0; height: 100dvh; width: min(340px, 88vw);
+    z-index: 60; border-radius: 0;
+    transform: translateX(-100%); visibility: hidden;
+    transition: transform 0.22s ease, visibility 0s linear 0.22s;
+  }
+  .layout.drawer-open .sidebar { transform: translateX(0); visibility: visible; transition: transform 0.22s ease; }
+  #sidebar-toggle { display: none; } /* collapse is a desktop concept */
+  .stage { flex: 1 1 auto; min-height: 0; border-radius: 0; }
+  /* Divider drag and dock affordances are desktop gestures. */
+  .stage-divider, .drop-zones, .box .dock { display: none !important; }
+  /* Touch targets: box rows and dashboard tiles reach 40px minimum; the
+     sparkline (64x16 on desktop) grows into a tappable strip. */
+  .box { min-height: 40px; }
+  .spark { padding: 4px 0; }
+  .spark-svg { width: 84px; height: 20px; }
+  /* iOS zooms the page when a focused input's font is under 16px; xterm's
+     hidden helper textarea is exactly that. */
+  .xterm-helper-textarea { font-size: 16px !important; }
+  body { touch-action: manipulation; } /* kill double-tap-zoom latency on taps */
+}
+@media (max-width: 720px) and (pointer: coarse) {
+  .touch-keys {
+    display: flex; gap: 6px; padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border); background: var(--panel);
+    flex: 0 0 auto; overflow-x: auto;
+  }
+  .touch-keys button {
+    min-width: 40px; height: 40px; padding: 0 10px; flex: 0 0 auto;
+    border: 1px solid var(--key-border); border-bottom-color: #101216; border-radius: 8px;
+    background: var(--key-face); color: var(--muted);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    font-family: var(--face); font-size: 14px; cursor: pointer;
+  }
+  .touch-keys button.armed { color: var(--amber); border-color: rgba(255, 176, 0, 0.5); }
+  .touch-keys .touch-mic-slot { margin-left: auto; display: flex; align-items: center; }
+}

@@ -33,6 +33,7 @@ import { type PaneNode, type Edge, type DropSpec, panesOf, movePane, undockPane,
 import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks, type PaneRect } from './stagePanes';
 import { paneHeaderModel, buildPaneHeader, type PaneConn, type PaneHeaderModel } from './paneHeader';
 import { buildPaneLifecycle } from './paneLifecycle';
+import { createPhoneMode, type PhoneMode } from './phoneMode';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal>; voiceMount: HTMLElement }>();
@@ -54,6 +55,10 @@ let chordWired = false; // renderDashboard re-runs on re-login; wire document on
 let dragSourceId: string | null = null;
 let stageRoot: PaneNode | null = null;
 let focusedBoxId: string | null = null; // the pane typing targets and plain clicks replace
+// The phone shell's drawer/media-query controller. Owned by renderDashboard (it
+// binds to elements inside #app) and disposed in teardownWorkspace, so a
+// re-login never leaves a listener bound to a detached layout.
+let phoneCtl: PhoneMode | null = null;
 let lastPaneStates = ''; // pollStatus repaints only when a docked box's derived state flips
 let allBoxes: Box[] = [];
 let latestStatus: Record<string, Status> = {};
@@ -924,12 +929,25 @@ async function renderDashboard() {
           <button class="local-edit" title="Configure shell" aria-label="Configure host shell">✎</button>
         </div>
       </aside>
+      <header class="phone-bar">
+        <button id="phone-menu" class="phone-menu" type="button" title="Boxes" aria-label="Open box list">☰</button>
+        <select id="phone-switch" class="phone-switch" aria-label="Switch pane" disabled></select>
+      </header>
       <main id="stage" class="stage"><div class="stage-grid"></div><div class="stage-parking"></div></main>
+      <div class="touch-keys" id="touch-keys"></div>
     </div>`;
   // Capture the persisted layout BEFORE the first repaint: repaintStage
   // persists on every call, so painting the initial empty stage would
   // otherwise clobber the saved split before restore ever reads it.
   const savedStage = localStorage.getItem(STAGE_LAYOUT_KEY);
+  // Before the first repaint: applyCollapse() may strip `sidebar-collapsed`,
+  // which the template just wrote from localStorage — on a phone the collapsed
+  // rail would hide the drawer's own contents.
+  phoneCtl?.dispose();
+  phoneCtl = createPhoneMode({
+    layout: app.querySelector('.layout') as HTMLElement,
+    onFlip: () => repaintStage(),
+  });
   repaintStage();
   app.querySelector('#logout')!.addEventListener('click', async () => {
     teardownWorkspace();
@@ -3138,6 +3156,8 @@ function teardownWorkspace(): void {
   for (const id of [...settingUpPollers.keys()]) clearSettingUpPanel(id);
   stageRoot = null;
   focusedBoxId = null;
+  phoneCtl?.dispose(); // bound to elements inside #app, which is about to be replaced
+  phoneCtl = null;
   closeFleetJobsPanel();
   closeEventsPanel();
   closeProvisionPanel();
