@@ -78,12 +78,23 @@ export function createPhoneMode(deps: {
   // keyboard still registers, and a keyboard opened WHILE zoomed still tracks
   // (which an early-return on scale > 1 would have missed).
   let vvTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastVvh: number | null = null;
   const vv = window.visualViewport;
   const onVv = () => {
     if (!mq.matches || !vv) return;
     clearTimeout(vvTimer);
     vvTimer = setTimeout(() => {
-      document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height * vv.scale)}px`);
+      // Height-change gate, and it is load-bearing for typing latency: with
+      // the soft keyboard open, every caret pan the browser makes to keep the
+      // insertion point visible fires a visualViewport scroll event with the
+      // height UNCHANGED. Acting on those — the scrollTo(0,0) fighting the
+      // browser's own pan, plus a refit and a {t:'r'} tmux resize per open
+      // terminal — turned ordinary typing into a yank-and-redraw storm. Only
+      // a real height move (keyboard open/close, rotation) does any work.
+      const h = Math.round(vv.height * vv.scale);
+      if (h === lastVvh) return;
+      lastVvh = h;
+      document.documentElement.style.setProperty('--vvh', `${h}px`);
       window.scrollTo(0, 0); // iOS scrolls the focused input into view by panning the page
       deps.onViewport();
     }, 50);
@@ -101,6 +112,7 @@ export function createPhoneMode(deps: {
     if (!mq.matches) {
       clearTimeout(vvTimer);
       document.documentElement.style.removeProperty('--vvh');
+      lastVvh = null; // property gone — a return to phone must re-apply, not skip
     }
     deps.onFlip();
   };

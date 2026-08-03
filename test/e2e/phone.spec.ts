@@ -273,3 +273,28 @@ test('touch drag on the terminal scrolls the pty instead of panning the page', a
     await page.keyboard.type('c');
   }
 });
+
+test('caret-pan visualViewport scrolls do not yank the page or refit', async ({ page }) => {
+  await login(page);
+  await openLocalhost(page);
+  // While the soft keyboard is open, every caret pan is a visualViewport
+  // scroll event with the height unchanged. Acting on those — scrollTo(0,0)
+  // plus a refit and a {t:'r'} resize per open terminal — is what made
+  // typing lag: the handler must be a no-op unless the height actually moved.
+  const scrollToCalls = await page.evaluate(async () => {
+    // Prime: the first event after mount is allowed to apply (initial
+    // measure) — the caret-pan case is every event AFTER that.
+    window.visualViewport!.dispatchEvent(new Event('resize'));
+    await new Promise((r) => setTimeout(r, 80));
+    let n = 0;
+    const orig = window.scrollTo.bind(window);
+    (window as unknown as { scrollTo: (...a: number[]) => void }).scrollTo = (...a: number[]) => { n++; orig(...(a as [number, number])); };
+    for (let i = 0; i < 3; i++) {
+      window.visualViewport!.dispatchEvent(new Event('scroll'));
+      await new Promise((r) => setTimeout(r, 80)); // past the 50ms debounce each time
+    }
+    (window as unknown as { scrollTo: typeof orig }).scrollTo = orig;
+    return n;
+  });
+  expect(scrollToCalls, 'unchanged-height viewport events must be no-ops').toBe(0);
+});
