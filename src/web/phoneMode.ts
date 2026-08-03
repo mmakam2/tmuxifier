@@ -5,11 +5,19 @@ const SIDEBAR_COLLAPSED_KEY = 'tmuxifier.sidebarCollapsed';
 // What dismisses the drawer: the whole box row (matching its own click handler,
 // which opens the box from anywhere on the row — not just the name button), the
 // Host Shell, and every sidebar control that opens an overlay or leaves the
-// workspace. Controls that operate INSIDE the drawer — the search field, group
-// headers, the fleet checkboxes — are deliberately absent, and every icon
-// control that must not close it (Reconnect's arm-then-fire, ✎, ✕, ⚷, the
-// sparkline cycle, the row checkbox) already calls stopPropagation on its own
-// click, so it never reaches this delegated listener at all.
+// workspace.
+//
+// Controls that operate INSIDE the drawer are deliberately absent — the search
+// field, the group headers, the fleet checkboxes, and `#fleet-toggle`, which
+// only reveals in-drawer chrome (it unhides `#fleet-bar` and the per-box and
+// per-group checkboxes via `.layout.fleet-mode`, all of it inside the aside).
+// Closing on that one would slide away everything the tap just revealed and
+// read as a dead button. `#fleet-run`, one step later in the same flow, DOES
+// close: it opens the body-mounted script editor.
+//
+// Every icon control that must not close it (Reconnect's arm-then-fire, ✎, ✕,
+// ⚷, the sparkline cycle, the row checkbox) already calls stopPropagation on
+// its own click, so it never reaches this delegated listener at all.
 const CLOSES_DRAWER = [
   '.box',
   '.local-name',
@@ -17,7 +25,6 @@ const CLOSES_DRAWER = [
   '#settings',
   '#logout',
   '#add',
-  '#fleet-toggle',
   '#fleet-jobs',
   '#events',
   '#proxmox',
