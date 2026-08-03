@@ -1755,8 +1755,14 @@ button.empty-kbd:hover { color: var(--text); }
   /* Sidebar becomes a left slide-over drawer — the .fleet-panel pattern:
      transform for the slide, visibility so closed contents leave the tab
      order (WCAG 2.4.3), matching transition delay on the way out. */
+  /* Same `--vvh` as `.layout`, and for a sharper reason: the drawer CONTAINS
+     `#search`, so open-drawer-plus-keyboard is a designed combination, not an
+     edge case. The aside is fixed with `overflow: hidden`, `.boxes` scrolls
+     inside it and `.local-shell` is pinned to its bottom — at 100dvh the tail
+     of the box list and the Host Shell row sit under the keyboard, unreachable
+     by scrolling. */
   .sidebar {
-    position: fixed; top: 0; left: 0; height: 100dvh; width: min(340px, 88vw);
+    position: fixed; top: 0; left: 0; height: var(--vvh, 100dvh); width: min(340px, 88vw);
     /* Under the modal backdrop (55) and the fleet/events panels (50): on a phone
        the drawer is the ONLY route to Settings, Add box, Fleet and Events, and at
        60 it painted over every overlay it launched — a 390px viewport left a 34px

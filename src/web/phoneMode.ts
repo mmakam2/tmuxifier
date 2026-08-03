@@ -61,13 +61,24 @@ export function createPhoneMode(deps: {
   // visual viewport is the truth. Track it into --vvh so the flex column (bar,
   // stage, key bar) always fits above the keyboard, then refit the terminal.
   // Both events are listened to because iOS fires either one alone.
+  //
+  // The `* vv.scale` is what keeps this about the keyboard and nothing else:
+  // `vv.height` shrinks under ANY zoom, and index.html deliberately sets no
+  // maximum-scale, so iOS auto-zooms on focusing any sub-16px field (the
+  // drawer's `.search` is 12.5px, modal inputs 14px — only the xterm helper
+  // textarea got the 16px bump). Without the multiply, tapping the search box
+  // would collapse `.layout` to about screenHeight/scale and refit every open
+  // terminal — a resize sent to every box — for a zoom that moved no keyboard.
+  // Multiplying converts back to layout-viewport CSS px: zoom cancels out, a
+  // keyboard still registers, and a keyboard opened WHILE zoomed still tracks
+  // (which an early-return on scale > 1 would have missed).
   let vvTimer: ReturnType<typeof setTimeout> | undefined;
   const vv = window.visualViewport;
   const onVv = () => {
     if (!mq.matches || !vv) return;
     clearTimeout(vvTimer);
     vvTimer = setTimeout(() => {
-      document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
+      document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height * vv.scale)}px`);
       window.scrollTo(0, 0); // iOS scrolls the focused input into view by panning the page
       deps.onViewport();
     }, 50);
