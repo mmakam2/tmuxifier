@@ -22,7 +22,11 @@ async function openBox(page: Page): Promise<void> {
 }
 
 test('two viewers of one box each get their own attach and their own size', async ({ browser }) => {
-  const small: BrowserContext = await browser.newContext({ viewport: { width: 640, height: 480 } });
+  // 800x600, not 640x480: this is a *desktop* test — the two viewers only have
+  // to differ in size — and 640 is under phone mode's 720px breakpoint, where
+  // the sidebar is a closed drawer and openBox() below can never reach the box
+  // row. Phone-width coverage lives in the phone project instead.
+  const small: BrowserContext = await browser.newContext({ viewport: { width: 800, height: 600 } });
   const large: BrowserContext = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
   const socketsSmall: string[] = [];
   const socketsLarge: string[] = [];
