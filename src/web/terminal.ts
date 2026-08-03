@@ -216,6 +216,50 @@ function wireUploads(parent: HTMLElement, term: Terminal, boxId: string): () => 
   };
 }
 
+// Touch drags become synthetic wheel events. xterm's own touch path only
+// scrolls its viewport, which at scrollback 0 (every box terminal — tmux owns
+// history) can never consume the drag; the unconsumed touchmove then bubbles
+// to the browser un-prevented, and a pan at page top is the browser's
+// pull-to-refresh gesture. The wheel path, by contrast, already handles every
+// case correctly — arrow-key fallback on a scrollback-0 buffer (DECCKM-aware),
+// SGR mouse reporting when the app enabled tracking — so a drag is translated
+// into the event that working path expects rather than reimplemented beside
+// it. Capture phase on the container so xterm's dead-end touch handlers never
+// run; single-touch only, so pinch gestures pass through untouched. The
+// provision terminal keeps xterm's native path — it has real scrollback.
+function wireTouchScroll(parent: HTMLElement): () => void {
+  let lastY: number | null = null;
+  const onStart = (ev: TouchEvent) => {
+    lastY = ev.touches.length === 1 ? ev.touches[0].clientY : null;
+  };
+  const onMove = (ev: TouchEvent) => {
+    if (lastY == null || ev.touches.length !== 1) return;
+    const y = ev.touches[0].clientY;
+    const deltaY = lastY - y; // finger up = positive = scroll down, wheel's sign convention
+    lastY = y;
+    if (deltaY === 0) return;
+    if (ev.cancelable) ev.preventDefault();
+    ev.stopPropagation();
+    (ev.target as HTMLElement | null)?.dispatchEvent(new WheelEvent('wheel', {
+      deltaY,
+      deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      bubbles: true,
+      cancelable: true,
+    }));
+  };
+  const onEnd = () => { lastY = null; };
+  parent.addEventListener('touchstart', onStart, { capture: true, passive: true });
+  parent.addEventListener('touchmove', onMove, { capture: true, passive: false });
+  parent.addEventListener('touchend', onEnd, true);
+  parent.addEventListener('touchcancel', onEnd, true);
+  return () => {
+    parent.removeEventListener('touchstart', onStart, true);
+    parent.removeEventListener('touchmove', onMove, true);
+    parent.removeEventListener('touchend', onEnd, true);
+    parent.removeEventListener('touchcancel', onEnd, true);
+  };
+}
+
 // A connection that survives this long counts as a real session, so we reset the
 // reconnect backoff. The WebSocket to the server always opens, so onopen itself
 // can't be the success signal — it must stay up past the box's ConnectTimeout (10s).
@@ -357,6 +401,7 @@ export function openTerminal(
   });
   wireClipboard(term, voice);
   const offUploads = wireUploads(parent, term, boxId);
+  const offTouchScroll = wireTouchScroll(parent);
 
   // Strip control chars so a box label can't inject escape sequences into the
   // terminal feedback line.
@@ -426,7 +471,7 @@ export function openTerminal(
 
   return {
     focus: () => term.focus(),
-    dispose: () => { offUploads(); voice.dispose(); closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
+    dispose: () => { offUploads(); offTouchScroll(); voice.dispose(); closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
     refit: onResize,
     input: sendInput,
     appCursor: () => term.modes.applicationCursorKeysMode,

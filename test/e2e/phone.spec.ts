@@ -238,3 +238,38 @@ test('phone chrome is media-query gated: invisible at desktop width', async ({ p
   await expect(page.locator('.phone-bar')).toBeHidden();
   await expect(page.locator('#touch-keys')).toBeHidden();
 });
+
+test('touch drag on the terminal scrolls the pty instead of panning the page', async ({ page }) => {
+  await login(page);
+  const pane = await openLocalhost(page);
+  // cat -v echoes control bytes: an upward drag must arrive as down-arrows
+  // (ESC [ B → ^[[B) — the same sequences a desktop wheel produces at
+  // scrollback 0 — and the touchmove must be cancelled, because an
+  // unconsumed pan at page top is the browser's pull-to-refresh gesture.
+  await pane.click();
+  await page.keyboard.type('cat -v');
+  await page.keyboard.press('Enter');
+  try {
+    const cancelled = await page.evaluate(() => {
+      const screen = document.querySelector('.stage-pane .xterm-screen') as HTMLElement;
+      const rect = screen.getBoundingClientRect();
+      const x = rect.x + rect.width / 2;
+      const mk = (type: string, y: number) => {
+        const touch = new Touch({ identifier: 1, target: screen, clientX: x, clientY: y, pageX: x, pageY: y });
+        return new TouchEvent(type, { touches: [touch], changedTouches: [touch], bubbles: true, cancelable: true });
+      };
+      const startY = rect.y + rect.height / 2;
+      screen.dispatchEvent(mk('touchstart', startY));
+      const move = mk('touchmove', startY - 60); // finger up = scroll down
+      screen.dispatchEvent(move);
+      return move.defaultPrevented;
+    });
+    await expect(page.locator('.stage-pane .xterm-rows')).toContainText('^[[B', { timeout: 10000 });
+    expect(cancelled, 'touchmove must be cancelled or the browser pans (pull-to-refresh)').toBe(true);
+  } finally {
+    // End cat so the shared session is at a prompt for whatever runs next.
+    await page.locator('.stage-pane').click();
+    await cap(page, 'ctrl').tap();
+    await page.keyboard.type('c');
+  }
+});

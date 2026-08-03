@@ -1802,6 +1802,11 @@ button.empty-kbd:hover { color: var(--text); }
      hidden helper textarea is exactly that. */
   .xterm-helper-textarea { font-size: 16px !important; }
   body { touch-action: manipulation; } /* kill double-tap-zoom latency on taps */
+  /* Defense in depth behind wireTouchScroll (terminal.ts): even a touch drag
+     that escapes to the browser (multi-touch edge, a miss in the JS layer)
+     must not chain into pull-to-refresh — a page refresh mid-session is the
+     costliest gesture a terminal app can misfire. */
+  html, body { overscroll-behavior: none; }
 }
 @media (max-width: 720px) and (pointer: coarse) {
   /* Two-child row: a scrollable cap strip and the mic pinned beside it. The
