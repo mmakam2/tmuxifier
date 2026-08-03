@@ -39,9 +39,13 @@ test('dictation types the transcript into the tmux pane', async ({ page }) => {
   await expect(mic).toBeVisible({ timeout: 10000 });
   await expect(mic).toBeEnabled();
 
-  await mic.dispatchEvent('mousedown');
+  // Pointer, not mouse: the gesture layer moved to pointer events so the mic
+  // works on touch (compatibility mouse events fire back-to-back after touchend,
+  // which recorded ~0ms). dispatchEvent constructs the literal event type, and a
+  // synthetic mousedown does not trigger a pointerdown handler.
+  await mic.dispatchEvent('pointerdown');
   await page.waitForTimeout(500);          // capture a little synthetic audio
-  await mic.dispatchEvent('mouseup');
+  await mic.dispatchEvent('pointerup');
 
   // The fixture always returns this text (padded with a leading space and
   // trailing newline, like the real whisper-server); seeing the normalized
@@ -82,9 +86,9 @@ test('the transcript is typed but never submitted', async ({ page }) => {
   const mic = page.locator('.voice-btn');
   await expect(mic).toBeVisible({ timeout: 10000 });
 
-  await mic.dispatchEvent('mousedown');
+  await mic.dispatchEvent('pointerdown');
   await page.waitForTimeout(300);
-  await mic.dispatchEvent('mouseup');
+  await mic.dispatchEvent('pointerup');
   await expect(page.locator('.xterm-rows').first())
     .toContainText('hello from the fixture', { timeout: 15000 });
 
@@ -92,4 +96,23 @@ test('the transcript is typed but never submitted', async ({ page }) => {
   // the shell would report a command-not-found for 'hello'.
   await page.waitForTimeout(1000);
   await expect(page.locator('.xterm-rows').first()).not.toContainText('command not found');
+});
+
+// The gesture layer is pointer-based so the mic works on touch; pointer events
+// fire for mouse too, but only REAL input proves that — dispatchEvent above
+// constructs the event directly and would pass even if the mouse path were
+// broken. This is the desktop hold-to-talk regression guard.
+test('a real mouse hold dictates (desktop hold-to-talk guard)', async ({ page }) => {
+  await openLocalhostBox(page);
+  const mic = page.locator('.voice-btn');
+  await expect(mic).toBeVisible({ timeout: 10000 });
+  await expect(mic).toBeEnabled();
+
+  await mic.hover();
+  await page.mouse.down();
+  await page.waitForTimeout(500);
+  await page.mouse.up();
+
+  await expect(page.locator('.xterm-rows').first())
+    .toContainText('hello from the fixture', { timeout: 15000 });
 });

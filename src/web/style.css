@@ -1093,6 +1093,13 @@ button.empty-kbd:hover { color: var(--text); }
   color: var(--muted);
   cursor: pointer;
   opacity: 0.75;
+  /* Hold-to-talk is a press the browser must not reinterpret: without this a
+     hold that drifts a pixel becomes a scroll, firing pointercancel and cutting
+     the recording. user-select/callout stop the long-press selection bubble. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 .voice-btn:hover { opacity: 1; }
 .voice-btn:disabled { opacity: 0.3; cursor: not-allowed; }
@@ -1794,4 +1801,12 @@ button.empty-kbd:hover { color: var(--text); }
   }
   .touch-keys button.armed { color: var(--amber); border-color: rgba(255, 176, 0, 0.5); }
   .touch-keys .touch-mic-slot { margin-left: auto; display: flex; align-items: center; }
+  /* Same reset the pane header applies: docked in a bar, the voice button loses
+     its floating-over-canvas geometry. Without it the button keeps
+     `position: absolute; top: 6px; right: 12px` and — with no positioned
+     ancestor anywhere in .touch-mic-slot / .touch-keys / .layout — paints
+     against the viewport, over the phone bar, leaving a zero-width slot. */
+  .touch-keys .touch-mic-slot .voice-btn { position: static; top: auto; right: auto; }
+  /* Grown to the bar's touch target; the caps beside it are 40px. */
+  .touch-keys .touch-mic-slot .voice-btn { min-width: 44px; height: 40px; padding: 0 12px; font-size: 13px; opacity: 1; }
 }

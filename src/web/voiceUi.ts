@@ -255,13 +255,27 @@ export function createVoiceController(
         button.title = `${verdict.reason} ${verdict.hint}`.trim();
         button.setAttribute('aria-label', button.title);
       } else {
+        // Pointer events, not mouse events: they fire for mouse exactly as the
+        // old handlers did (so desktop hold-to-talk is unchanged), but on touch
+        // the compatibility mouse events browsers synthesize arrive back-to-back
+        // AFTER touchend — mousedown and mouseup in the same tick — which began
+        // and finished a recording ~0ms long. The mic was simply non-functional
+        // on a touch device, which is exactly where the touch key bar puts it.
+        //
         // preventDefault() stops the button taking DOM focus on press, so the
         // terminal keeps it for the whole hold — you can dictate and then hit
-        // Enter without clicking back into the pane. mouseup/mouseleave still
-        // fire normally; only the focus/selection default is suppressed.
-        button.addEventListener('mousedown', (ev) => { ev.preventDefault(); void begin(); });
-        button.addEventListener('mouseup', () => { void finish(); });
-        button.addEventListener('mouseleave', () => { void finish(); });
+        // Enter without clicking back into the pane. It is also what suppresses
+        // those compatibility mouse events, so the handlers below can never run
+        // twice for one gesture. pointerup/pointerleave still fire normally.
+        button.addEventListener('pointerdown', (ev) => { ev.preventDefault(); void begin(); });
+        button.addEventListener('pointerup', () => { void finish(); });
+        button.addEventListener('pointerleave', () => { void finish(); });
+        // Touch-only: the browser fires pointercancel instead of pointerup when
+        // it takes the gesture over (a scroll started from the button). Without
+        // this the recorder would stay live with no second event ever coming.
+        // finish() rather than cancel(), matching the blur safety net below —
+        // transcribe what was captured rather than discarding it.
+        button.addEventListener('pointercancel', () => { void finish(); });
       }
       parent.appendChild(button);
     },

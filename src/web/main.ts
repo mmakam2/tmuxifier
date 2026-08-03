@@ -872,6 +872,17 @@ function destroyPaneLifecycles() {
   paneLifecycles.clear();
 }
 
+// Whether the touch key bar is actually on screen. Phone LAYOUT starts at
+// max-width 720px, but the key bar additionally requires `pointer: coarse` — so
+// a desktop window dragged narrow is in phone mode with NO bar. Adopting the mic
+// into a display:none bar there would hide it outright; the pane header (which
+// phone mode keeps) holds it instead. Asking the DOM rather than re-declaring the
+// media query in JS keeps style.css the single authority on that threshold.
+function touchBarShown(): boolean {
+  const bar = touchMicSlot?.parentElement;
+  return !!bar && getComputedStyle(bar).display !== 'none';
+}
+
 function repaintStage() {
   paneHeaders.clear(); // stale update closures die with their DOM; headerFor re-registers survivors
   destroyPaneLifecycles(); // their pollers and arm timers would outlive the DOM otherwise
@@ -912,7 +923,17 @@ function repaintStage() {
       // The mic moves out of the pane header into the key bar, where a thumb can
       // reach it. Desktop repaints re-adopt it into the header (headerFor), so
       // the element simply moves back when the media query flips.
-      if (touchMicSlot) { const vm = tabs.get(pid)?.voiceMount; if (vm) touchMicSlot.append(vm); }
+      //
+      // replaceChildren, never append: only the RENDERED pane's headerFor runs on
+      // phone, so a parked pane's mount is never reclaimed by its own header and
+      // would pile up here — three switches would stack three live mic buttons,
+      // and a tap could start recording into an invisible pane. Clearing when the
+      // focused pane has no tab covers the setup/stopped panels, whose
+      // paneContentFor already closeTab'd it.
+      if (touchMicSlot && touchBarShown()) {
+        const vm = tabs.get(pid)?.voiceMount;
+        if (vm) touchMicSlot.replaceChildren(vm); else touchMicSlot.replaceChildren();
+      }
     } else {
       renderStagePanes(grid, stageRoot, focusedBoxId, paneHooks());
     }
