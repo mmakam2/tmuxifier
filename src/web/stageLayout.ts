@@ -216,3 +216,12 @@ export function restore(raw: string | null, knownIds: string[]): { root: PaneNod
   const focusedId = typeof p.focusedId === 'string' && panes.includes(p.focusedId) ? p.focusedId : panes[0] ?? null;
   return { root, focusedId };
 }
+
+// Phone mode shows exactly one pane. The focused pane if it is still docked,
+// else the first pane in reading order, else nothing (dashboard). Pure so the
+// live-flip (rotate across the breakpoint) is testable without DOM.
+export function phonePaneOf(root: PaneNode | null, focusedId: string | null): string | null {
+  const panes = panesOf(root);
+  if (panes.length === 0) return null;
+  return focusedId != null && panes.includes(focusedId) ? focusedId : panes[0];
+}

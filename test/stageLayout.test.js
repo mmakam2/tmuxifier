@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import {
   panesOf, dockAtStageEdge, dockAtPaneEdge, movePane, undockPane, replacePane,
-  setRatio, toggleOrientation, splitAt, serialize, restore, MIN_RATIO,
+  setRatio, toggleOrientation, splitAt, serialize, restore, MIN_RATIO, phonePaneOf,
 } from '../src/web/stageLayout.ts';
 
 const row = (children, ratios) => ({ orientation: 'row', children, ratios: ratios ?? children.map(() => 1 / children.length) });
@@ -120,4 +120,19 @@ test('restore rejects garbage and insane ratios', () => {
   expect(restore(JSON.stringify({ v: 2, root: { orientation: 'row', children: ['a'], ratios: [1] } }), ['a']).root).toBe('a');
   const bad = JSON.stringify({ v: 2, root: { orientation: 'row', children: ['a', 'b'], ratios: [0.9, 0.9] }, focusedId: 'a' });
   expect(restore(bad, ['a', 'b']).root).toEqual(row(['a', 'b']));
+});
+
+test('phonePaneOf: empty stage yields null', () => {
+  expect(phonePaneOf(null, null)).toBe(null);
+  expect(phonePaneOf(null, 'a')).toBe(null);
+});
+test('phonePaneOf: focused pane wins when docked', () => {
+  expect(phonePaneOf(row(['a', 'b']), 'b')).toBe('b');
+});
+test('phonePaneOf: stale or unset focus falls back to the first pane', () => {
+  expect(phonePaneOf(row(['a', 'b']), 'gone')).toBe('a');
+  expect(phonePaneOf(row(['a', 'b']), null)).toBe('a');
+});
+test('phonePaneOf: single-leaf root', () => {
+  expect(phonePaneOf('a', null)).toBe('a');
 });
