@@ -264,7 +264,13 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
   grid-template-columns: 320px 1fr;
   gap: 10px;
   height: 100dvh;
-  padding: 10px;
+  /* `index.html` sets viewport-fit=cover globally, so the page paints under a
+     notch at EVERY width — not just under the phone breakpoint. A large phone in
+     landscape is wider than 720px and therefore gets this desktop grid, which put
+     the sidebar's left ~44px behind the cutout. env() resolves to 0px wherever
+     there is no inset (every desktop browser), so the 10px baseline is unchanged
+     there. Top stays a bare 10px: a landscape notch is a left/right inset. */
+  padding: 10px calc(10px + env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-left));
   transition: grid-template-columns 0.25s ease;
 }
 .layout.sidebar-collapsed { grid-template-columns: 56px 1fr; }
@@ -1835,5 +1841,16 @@ button.empty-kbd:hover { color: var(--text); }
      against the viewport, over the phone bar, leaving a zero-width slot. */
   .touch-keys .touch-mic-slot .voice-btn { position: static; top: auto; right: auto; }
   /* Grown to the bar's touch target; the caps beside it are 40px. */
-  .touch-keys .touch-mic-slot .voice-btn { min-width: 44px; height: 40px; padding: 0 12px; font-size: 13px; opacity: 1; }
+  .touch-keys .touch-mic-slot .voice-btn { min-width: 44px; height: 40px; padding: 0 12px; font-size: 13px; }
+  /* Docked in the bar the mic sits on a panel rather than over the glass, so it
+     is opaque — but only AT REST. This used to be a flat `opacity: 1` on the
+     rule above, whose 0-3-0 outranked `.voice-btn:disabled` (0.3) and
+     `[data-state='working']` (0.7) at 0-2-0: a mic disabled for an insecure
+     context looked live and did nothing when tapped, and a transcribing one
+     looked idle. Both states are restated here at matching specificity (0-4-0,
+     `:not()` taking its argument's), with working after disabled so the pair
+     resolves exactly as the desktop rules do. */
+  .touch-keys .touch-mic-slot .voice-btn:not(:disabled) { opacity: 1; }
+  .touch-keys .touch-mic-slot .voice-btn:disabled { opacity: 0.3; }
+  .touch-keys .touch-mic-slot .voice-btn[data-state='working'] { opacity: 0.7; }
 }

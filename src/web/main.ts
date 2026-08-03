@@ -3262,6 +3262,12 @@ function teardownWorkspace(): void {
   // rebuilds the bar and re-seats them on the way back in.
   touchMicSlot = null;
   touchSyncCap = null;
+  // The modifier itself is module-level and so OUTLIVES the bar. An armed Ctrl
+  // carried across a logout would mask the first character typed after the next
+  // login — `d` arriving as ^D, closing the shell — with no lit cap anywhere to
+  // explain it, since the rebuilt bar starts unlit. buildTouchKeyBar also paints
+  // true state on construction; disarming here is what makes that state idle.
+  stickyCtrl.disarm();
   closeFleetJobsPanel();
   closeEventsPanel();
   closeProvisionPanel();

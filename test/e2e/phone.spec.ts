@@ -24,6 +24,8 @@ async function openDrawer(page: Page) {
   await expect(layout).toHaveClass(/drawer-open/);
 }
 
+const cap = (page: Page, id: string) => page.locator(`#touch-keys button[aria-label="${id}"]`);
+
 async function openLocalhost(page: Page) {
   await openDrawer(page);
   await page.locator('.box .name', { hasText: 'localhost' }).click();
@@ -43,6 +45,11 @@ async function openLocalhost(page: Page) {
 test('drawer opens, box opens one full pane, drawer closes on pick', async ({ page }) => {
   await login(page);
   await expect(page.locator('.phone-bar')).toBeVisible();
+  // The rows have to EXIST before their invisibility means anything: toBeHidden()
+  // is satisfied by a locator matching nothing, and login() only waits for
+  // #phone-menu, so the box list may still be a fetch away. Without this gate the
+  // assertion below passes on an empty drawer — including one that never renders.
+  await expect(page.locator('.box')).toHaveCount(3);
   // Closed, the drawer is off-canvas and out of the tab order — the box list is
   // unreachable until the ☰ opens it.
   await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeHidden();
@@ -119,7 +126,6 @@ test('a desktop split renders as ONE pane; switcher swaps without reconnecting',
 test('key bar: esc reaches the pty, sticky ctrl+c interrupts', async ({ page }) => {
   await login(page);
   const pane = await openLocalhost(page);
-  const cap = (id: string) => page.locator(`#touch-keys button[aria-label="${id}"]`);
   // The bar's whole reason for using pointerdown + preventDefault is that a
   // normal click would move focus off xterm's hidden textarea and dismiss the
   // soft keyboard on every key press. Asserted directly, because the keyboard
@@ -136,18 +142,18 @@ test('key bar: esc reaches the pty, sticky ctrl+c interrupts', async ({ page }) 
     // handlers moved to 'click') without failing anything. A real tap runs the
     // browser's own touch → pointerdown → mousedown → focus sequence, which is
     // the thing the handler exists to interrupt.
-    await cap('esc').tap();
+    await cap(page, 'esc').tap();
     await expect.poll(focusInPane, { message: 'the esc cap stole focus from the terminal' }).toBe(true);
     await page.keyboard.press('Enter');
     await expect(pane).toContainText('^[', { timeout: 10000 });
 
     // Sticky ctrl: the cap arms, the next soft-keyboard character is masked into
     // its control byte, and the cap disarms on use (transformInput repaints it).
-    await cap('ctrl').tap();
-    await expect(cap('ctrl')).toHaveClass(/armed/);
+    await cap(page, 'ctrl').tap();
+    await expect(cap(page, 'ctrl')).toHaveClass(/armed/);
     await expect.poll(focusInPane, { message: 'the ctrl cap stole focus from the terminal' }).toBe(true);
     await page.keyboard.type('c');
-    await expect(cap('ctrl'), 'the modifier is spent by the character it masked').not.toHaveClass(/armed/);
+    await expect(cap(page, 'ctrl'), 'the modifier is spent by the character it masked').not.toHaveClass(/armed/);
 
     // The INTR byte reached the tty: ECHOCTL prints it. This is the only direct
     // evidence in the test that \x03 arrived rather than a plain 'c'.
@@ -169,6 +175,57 @@ test('key bar: esc reaches the pty, sticky ctrl+c interrupts', async ({ page }) 
     // bar's sticky one — this has to work even when the bar is what failed.
     await page.keyboard.press('Control+C').catch(() => {});
   }
+});
+
+test('a cap fires from the keyboard, not only from a finger', async ({ page }) => {
+  await login(page);
+  await openLocalhost(page);
+  try {
+    const ctrl = cap(page, 'ctrl');
+    await ctrl.focus();
+    // preventDefault() on pointerdown suppresses the click a POINTER gesture
+    // would synthesize — which also left these caps dead to Enter, Space and to
+    // any assistive technology that activates a control rather than pointing at
+    // it. A keyboard-originated click carries detail 0, which is what the bar
+    // discriminates on, so this must fire without double-firing a tap.
+    await page.keyboard.press('Enter');
+    await expect(ctrl, 'Enter on a focused cap must arm sticky ctrl').toHaveClass(/armed/);
+    await page.keyboard.press('Enter');
+    await expect(ctrl, 'and a second Enter must toggle it back off').not.toHaveClass(/armed/);
+  } finally {
+    await page.keyboard.press('Control+C').catch(() => {});
+  }
+});
+
+test('an armed ctrl does not survive a logout', async ({ page }) => {
+  await login(page);
+  // No pane docked, deliberately. With one docked, re-login reopens it and
+  // tmux's focus-in report (\x1b[I) reaches transformInput first — unmaskable,
+  // so it passes through untouched but SPENDS the modifier, hiding the very bug
+  // this asserts. The bare dashboard is both the honest path and the real one:
+  // the user logs back in, THEN opens a box, then types.
+  await page.evaluate(() => localStorage.removeItem('tmuxifier.stageLayout'));
+  await page.reload();
+  await expect(page.locator('#phone-menu')).toBeVisible({ timeout: 10000 });
+
+  await cap(page, 'ctrl').tap();
+  await expect(cap(page, 'ctrl')).toHaveClass(/armed/);
+
+  await openDrawer(page);
+  await page.click('#logout');
+  await expect(page.locator('#pw')).toBeVisible({ timeout: 10000 });
+  await login(page);
+
+  // The modifier is module-level in main.ts and outlives the bar #app drops, so
+  // without teardownWorkspace disarming it the next login's first typed
+  // character would be masked — `d` arriving as ^D and closing the shell — with
+  // a freshly built, unlit cap giving no clue why. Asserted BEFORE any keystroke,
+  // since sticky.transform spends the modifier on whatever arrives first.
+  await expect(
+    cap(page, 'ctrl'),
+    'an armed ctrl must not survive teardownWorkspace',
+  ).not.toHaveClass(/armed/);
+  await expect(cap(page, 'ctrl')).toHaveAttribute('aria-pressed', 'false');
 });
 
 test('phone chrome is media-query gated: invisible at desktop width', async ({ page }) => {

@@ -83,5 +83,35 @@ for (const width of [360, 390, 430]) {
       }));
       expect(bar.scrollWidth).toBeLessThanOrEqual(bar.clientWidth);
     });
+
+    // The bar's mic override once carried a flat `opacity: 1`, whose 0-3-0
+    // outranked `.voice-btn:disabled` (0-2-0) and `[data-state='working']`
+    // — so a mic disabled for an insecure context looked live and did nothing
+    // when tapped. Geometry tests cannot see that; only the cascade can. The
+    // buttons are synthesized because the states are otherwise unreachable
+    // here (the e2e server has voice ON and a secure enough context), and CSS
+    // does not care who created the element.
+    test('the mic dims for its disabled and working states', async ({ page }) => {
+      await openOnPhone(page);
+      await expect(page.locator('.touch-mic-slot')).toBeVisible({ timeout: 10000 });
+      const opacity = await page.locator('.touch-mic-slot').evaluate((slot) => {
+        const read = (f: (b: HTMLButtonElement) => void) => {
+          const b = document.createElement('button');
+          b.className = 'voice-btn';
+          f(b);
+          slot.appendChild(b);
+          const o = getComputedStyle(b).opacity;
+          b.remove();
+          return o;
+        };
+        return {
+          idle: read(() => {}),
+          disabled: read((b) => { b.disabled = true; }),
+          working: read((b) => { b.dataset.state = 'working'; }),
+          recording: read((b) => { b.dataset.state = 'recording'; }),
+        };
+      });
+      expect(opacity).toEqual({ idle: '1', disabled: '0.3', working: '0.7', recording: '1' });
+    });
   });
 }

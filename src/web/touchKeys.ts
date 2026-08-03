@@ -91,8 +91,7 @@ export function buildTouchKeyBar(
     b.textContent = k.label;
     b.setAttribute('aria-label', k.id);
     if (k.id === 'ctrl') { ctrlBtn = b; b.setAttribute('aria-pressed', 'false'); }
-    b.addEventListener('pointerdown', (ev) => {
-      ev.preventDefault(); // keep focus (and the soft keyboard) on the terminal
+    const fire = () => {
       if (k.id === 'ctrl') {
         if (deps.sticky.armed) deps.sticky.disarm(); else deps.sticky.arm();
         paint();
@@ -101,13 +100,32 @@ export function buildTouchKeyBar(
       if (deps.sticky.armed) { deps.sticky.disarm(); paint(); } // bar keys are never ctrl-modified
       const seq = seqFor(k.id, deps.appCursor());
       if (seq) deps.send(seq);
+    };
+    b.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault(); // keep focus (and the soft keyboard) on the terminal
+      fire();
     });
+    // Keyboard/AT path. preventDefault() above suppresses the click a pointer
+    // gesture would otherwise synthesize, so these caps were dead to Enter,
+    // Space and to any assistive technology that activates a control rather
+    // than pointing at it. `detail === 0` is the discriminator: a real pointer
+    // click carries its click count, a keyboard- or AT-synthesized one carries
+    // 0 — so this adds the missing path without touching the focus-retention
+    // one, and can never double-fire a tap.
+    b.addEventListener('click', (ev) => { if (ev.detail === 0) fire(); });
     caps.appendChild(b);
   }
   mount.appendChild(caps);
   const micSlot = document.createElement('span');
   micSlot.className = 'touch-mic-slot';
   mount.appendChild(micSlot); // outside the scroller — always on screen
+  // A fresh bar must render the modifier's TRUE state, not an assumed-idle one:
+  // `stickyCtrl` is module-level in main.ts and outlives the bar, so arming it
+  // and then logging out (or any other path that rebuilds #app) would otherwise
+  // seat a new, unlit cap over a still-armed modifier — and the first character
+  // typed after that would be masked silently. main.ts disarms on teardown too;
+  // this is the second, local layer, and it costs one class toggle.
+  paint();
   // The soft keyboard's own input flows through transformInput → sticky.transform,
   // which disarms on use — with no pointer event on this bar to notice it, so the
   // cap would stay lit over a spent modifier and the next tap would send a plain
