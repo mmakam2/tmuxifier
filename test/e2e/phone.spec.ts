@@ -298,3 +298,20 @@ test('caret-pan visualViewport scrolls do not yank the page or refit', async ({ 
   });
   expect(scrollToCalls, 'unchanged-height viewport events must be no-ops').toBe(0);
 });
+
+test('the dedicated ^C cap interrupts the foreground process', async ({ page }) => {
+  await login(page);
+  const pane = await openLocalhost(page);
+  // The sticky-ctrl path cannot work under a composing soft keyboard (the IME
+  // commits words, not characters), which is exactly why this cap exists: it
+  // sends ETX itself. cat -v proves delivery — ^C echoes and cat exits.
+  await pane.click();
+  await page.keyboard.type('cat -v');
+  await page.keyboard.press('Enter');
+  await cap(page, 'ctrl-c').tap();
+  await expect(pane.locator('.xterm-rows')).toContainText('^C', { timeout: 10000 });
+  await page.keyboard.type('echo CTRLC_CAP_DONE');
+  await page.keyboard.press('Enter');
+  // Only a live shell prompt (cat gone) executes the echo.
+  await expect(pane).toContainText('CTRLC_CAP_DONE', { timeout: 10000 });
+});

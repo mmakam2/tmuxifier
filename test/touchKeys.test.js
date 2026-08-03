@@ -100,3 +100,9 @@ test('sticky ctrl: the ASCII range still masks across the whole alphabet', () =>
     expect(s.transform(ch)).toBe(want);
   }
 });
+
+test('ctrl-c is a dedicated cap sending ETX regardless of cursor mode', () => {
+  expect(TOUCH_KEYS.some((k) => k.id === 'ctrl-c')).toBe(true);
+  expect(seqFor('ctrl-c', false)).toBe('\x03');
+  expect(seqFor('ctrl-c', true)).toBe('\x03');
+});

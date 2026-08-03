@@ -187,8 +187,9 @@ create a split; tapping a box that isn't docked replaces the focused pane, the s
 plain sidebar click does on the desktop.
 
 **The touch key bar.** On a touch device a key bar sits along the bottom of the screen carrying
-what a soft keyboard either lacks or types unreliably: `esc`, ⇥ (Tab), ⇤ (Shift+Tab), the four
-arrow keys, `ctrl`, and ⏎ (Enter). Those caps scroll sideways on a narrow screen; the **mic**
+what a soft keyboard either lacks or types unreliably: `esc`, ^C (a dedicated Ctrl+C — the
+interrupt, sitting beside `esc` because those two are how you interrupt Claude Code), ⇥ (Tab),
+⇤ (Shift+Tab), the four arrow keys, `ctrl`, and ⏎ (Enter). Those caps scroll sideways on a narrow screen; the **mic**
 button sits outside that scroller, pinned beside it so it is always on screen. On a phone the
 voice button moves out of the pane header and into this bar, and moves back to the header when
 the layout returns to desktop width. Press and hold it to dictate and release to transcribe,
@@ -213,8 +214,14 @@ the modifier releases itself. `ctrl` then space sends NUL. Tapping `ctrl` a seco
 it. Anything that can't be masked — an emoji, an autocorrect burst, a pasted string — passes
 through untouched and *also* releases the modifier, so an armed Ctrl can never quietly corrupt
 something you type later. The bar's own keys are never Ctrl-modified: `ctrl` followed by ↑
-sends a plain ↑ and clears the modifier. Use the bar for the combinations terminal work
-actually needs — Ctrl+C, Ctrl+D, Ctrl+R, Ctrl+Z.
+sends a plain ↑ and clears the modifier.
+
+One honest limit: a soft keyboard running autocorrect **composes** — it buffers letters into a
+word and hands the terminal the whole word at once, which is exactly the "can't be masked"
+case above. On such a keyboard, `ctrl` then `c` types a plain `c`. That is why ^C has its own
+cap: it sends the interrupt itself and owes the keyboard nothing. For other combinations
+(Ctrl+D, Ctrl+R, Ctrl+Z), sticky `ctrl` works when autocorrect is off or the keyboard sends
+single characters; otherwise a hardware keyboard is the reliable route.
 
 **The soft keyboard.** The layout is measured against the browser's visual viewport rather than
 the window, so the prompt and the key bar stay above the on-screen keyboard instead of being

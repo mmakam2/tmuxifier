@@ -4,10 +4,16 @@
 // builder below it is e2e-covered (vitest has no DOM by project convention).
 
 export type TouchKey =
-  | 'esc' | 'tab' | 'shift-tab' | 'up' | 'down' | 'left' | 'right' | 'enter' | 'ctrl';
+  | 'esc' | 'ctrl-c' | 'tab' | 'shift-tab' | 'up' | 'down' | 'left' | 'right' | 'enter' | 'ctrl';
 
 export const TOUCH_KEYS: { id: TouchKey; label: string }[] = [
   { id: 'esc', label: 'esc' },
+  // Dedicated ^C beside esc — the two Claude Code interrupts. Sticky Ctrl
+  // cannot cover this on a composing soft keyboard: an IME buffers letters
+  // into a word and commits them as a multi-character chunk, which the
+  // transform deliberately passes through, so armed-ctrl-then-tap-c types a
+  // plain c. A cap that sends ETX itself owes the IME nothing.
+  { id: 'ctrl-c', label: '^C' },
   { id: 'tab', label: '⇥' },
   { id: 'shift-tab', label: '⇤' },
   { id: 'up', label: '↑' },
@@ -22,7 +28,7 @@ export const TOUCH_KEYS: { id: TouchKey; label: string }[] = [
 // TUI switch the terminal into application mode, where arrows are ESC O x.
 // The caller reads the live mode off xterm (term.modes.applicationCursorKeysMode).
 const PLAIN: Record<string, string> = {
-  esc: '\x1b', tab: '\t', 'shift-tab': '\x1b[Z', enter: '\r',
+  esc: '\x1b', 'ctrl-c': '\x03', tab: '\t', 'shift-tab': '\x1b[Z', enter: '\r',
   up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D',
 };
 const APP: Record<string, string> = {
