@@ -25,6 +25,10 @@ async function openOnPhone(page: Page) {
   await expect(localhost).toBeVisible({ timeout: 10000 });
   await localhost.click();
   await expect(page.locator('.xterm-rows').first()).toContainText(/[#$%>]/, { timeout: 15000 });
+  // Every seeded box attaches the same tmux session, and tmux sizes a window to
+  // its most recent client — so a ~40-column phone attach re-wraps whatever the
+  // last desktop client left on the input line. Clear it.
+  await page.keyboard.press('Control+U');
 }
 
 // iPhone SE / 14 / 14 Pro Max logical widths — the narrow, common and wide ends.
@@ -46,6 +50,17 @@ for (const width of [360, 390, 430]) {
       expect(box!.x + box!.width).toBeLessThanOrEqual(width);
       // Still a thumb target, not the 11px floating chip.
       expect(box!.height).toBeGreaterThanOrEqual(36);
+
+      // In the bar, not merely on the screen. The round-1 defect kept the
+      // button's `position: absolute; top: 6px; right: 12px` and, with no
+      // positioned ancestor, painted it against the viewport — over the phone
+      // bar at the TOP of the screen. Every assertion above still passed.
+      const bar = await page.locator('#touch-keys').boundingBox();
+      expect(bar).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(bar!.x - 1);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(bar!.x + bar!.width + 1);
+      expect(box!.y).toBeGreaterThanOrEqual(bar!.y - 1);
+      expect(box!.y + box!.height).toBeLessThanOrEqual(bar!.y + bar!.height + 1);
     });
 
     test('the caps scroll inside their own strip, not the bar', async ({ page }) => {
