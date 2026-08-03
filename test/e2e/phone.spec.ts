@@ -84,10 +84,17 @@ test('a desktop split renders as ONE pane; switcher swaps without reconnecting',
 
   await page.reload();
   await expect(page.locator('.stage-pane')).toHaveCount(1);
+  // WHICH pane, not just how many. Every seeded box attaches the same tmux
+  // session, so screen content cannot tell the two apart — the pane's own id
+  // and the socket's `box=` parameter are the only exact signals available, and
+  // without them this test would pass on a switcher that rendered the same box
+  // twice.
+  await expect(page.locator(`.stage-pane[data-pane-id="${first}"]`)).toHaveCount(1);
   await expect(page.locator('.stage-pane .xterm-rows')).toContainText(/[#$%>]/, { timeout: 15000 });
   // The two-pane split survives in the model — only ONE pane is rendered, and
   // only that pane connects.
   expect(sockets).toHaveLength(1);
+  expect(new URL(sockets[0]).searchParams.get('box')).toBe(first);
 
   const sw = page.locator('#phone-switch');
   await expect(sw).toBeEnabled();
@@ -96,12 +103,15 @@ test('a desktop split renders as ONE pane; switcher swaps without reconnecting',
 
   await sw.selectOption({ index: 1 });
   await expect(page.locator('.stage-pane')).toHaveCount(1);
+  await expect(page.locator(`.stage-pane[data-pane-id="${second}"]`)).toHaveCount(1);
   await expect(page.locator('.stage-pane .xterm-rows')).toContainText(/[#$%>]/, { timeout: 15000 });
   expect(sockets, 'switching to the second pane connects it once').toHaveLength(2);
+  expect(new URL(sockets[1]).searchParams.get('box')).toBe(second);
 
   await sw.selectOption(first);
   // Back on the first pane with no new socket: it was parked, still attached.
   await expect(page.locator('.stage-pane')).toHaveCount(1);
+  await expect(page.locator(`.stage-pane[data-pane-id="${first}"]`)).toHaveCount(1);
   await expect(page.locator('.stage-pane .xterm-rows')).toContainText(/[#$%>]/, { timeout: 5000 });
   expect(sockets, 'switching back must reuse the parked terminal').toHaveLength(2);
 });
@@ -110,26 +120,55 @@ test('key bar: esc reaches the pty, sticky ctrl+c interrupts', async ({ page }) 
   await login(page);
   const pane = await openLocalhost(page);
   const cap = (id: string) => page.locator(`#touch-keys button[aria-label="${id}"]`);
+  // The bar's whole reason for using pointerdown + preventDefault is that a
+  // normal click would move focus off xterm's hidden textarea and dismiss the
+  // soft keyboard on every key press. Asserted directly, because the keyboard
+  // steps below only detect a steal indirectly.
+  const focusInPane = () => page.evaluate(() => !!document.activeElement?.closest('.stage-pane'));
 
-  // cat -v renders control bytes visibly, so a tap on the bar's esc key is
-  // observable as ^[ rather than as an invisible byte we have to take on faith.
-  await page.keyboard.type('cat -v');
-  await page.keyboard.press('Enter');
-  await cap('esc').dispatchEvent('pointerdown');
-  await page.keyboard.press('Enter');
-  await expect(pane).toContainText('^[', { timeout: 10000 });
+  try {
+    // cat -v renders control bytes visibly, so a tap on the bar's esc key is
+    // observable as ^[ rather than as an invisible byte we have to take on faith.
+    await page.keyboard.type('cat -v');
+    await page.keyboard.press('Enter');
+    // tap(), not dispatchEvent('pointerdown'): a synthetic dispatch has no
+    // default action to prevent, so preventDefault() could be deleted (or the
+    // handlers moved to 'click') without failing anything. A real tap runs the
+    // browser's own touch → pointerdown → mousedown → focus sequence, which is
+    // the thing the handler exists to interrupt.
+    await cap('esc').tap();
+    await expect.poll(focusInPane, { message: 'the esc cap stole focus from the terminal' }).toBe(true);
+    await page.keyboard.press('Enter');
+    await expect(pane).toContainText('^[', { timeout: 10000 });
 
-  // Sticky ctrl: the cap arms, the next soft-keyboard character is masked into
-  // its control byte, and the cap disarms on use (transformInput repaints it).
-  await cap('ctrl').dispatchEvent('pointerdown');
-  await expect(cap('ctrl')).toHaveClass(/armed/);
-  await page.keyboard.type('c');
-  await expect(cap('ctrl'), 'the modifier is spent by the character it masked').not.toHaveClass(/armed/);
+    // Sticky ctrl: the cap arms, the next soft-keyboard character is masked into
+    // its control byte, and the cap disarms on use (transformInput repaints it).
+    await cap('ctrl').tap();
+    await expect(cap('ctrl')).toHaveClass(/armed/);
+    await expect.poll(focusInPane, { message: 'the ctrl cap stole focus from the terminal' }).toBe(true);
+    await page.keyboard.type('c');
+    await expect(cap('ctrl'), 'the modifier is spent by the character it masked').not.toHaveClass(/armed/);
 
-  // ^C ended cat, so the shell is reading again.
-  await page.keyboard.type('echo PHONE_E2E_DONE');
-  await page.keyboard.press('Enter');
-  await expect(pane).toContainText('PHONE_E2E_DONE', { timeout: 10000 });
+    // The INTR byte reached the tty: ECHOCTL prints it. This is the only direct
+    // evidence in the test that \x03 arrived rather than a plain 'c'.
+    await expect(pane).toContainText('^C', { timeout: 10000 });
+
+    // And it was delivered as a SIGNAL, not merely echoed — cat is gone and the
+    // SHELL is reading again. The quotes are load-bearing: with cat -v still in
+    // the foreground the screen would show `echo PHONE''_DONE` twice (tty echo,
+    // then cat's own copy) and never the collapsed `PHONE_DONE`, which only the
+    // shell can produce. A plain `echo X` would have matched either way, since
+    // cat happily echoes the command line back.
+    await page.keyboard.type("echo PHONE''_DONE");
+    await page.keyboard.press('Enter');
+    await expect(pane).toContainText('PHONE_DONE', { timeout: 10000 });
+  } finally {
+    // Never leave `cat -v` holding the shared session's tty on a failure path:
+    // every other spec in both projects attaches this same tmux session, and a
+    // foreground reader there would swallow their input. A real Ctrl+C, not the
+    // bar's sticky one — this has to work even when the bar is what failed.
+    await page.keyboard.press('Control+C').catch(() => {});
+  }
 });
 
 test('phone chrome is media-query gated: invisible at desktop width', async ({ page }) => {
