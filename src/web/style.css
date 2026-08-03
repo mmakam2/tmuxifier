@@ -1787,11 +1787,24 @@ button.empty-kbd:hover { color: var(--text); }
   body { touch-action: manipulation; } /* kill double-tap-zoom latency on taps */
 }
 @media (max-width: 720px) and (pointer: coarse) {
+  /* Two-child row: a scrollable cap strip and the mic pinned beside it. The
+     scroll deliberately does NOT live here — the cap strip is a constant ~494px,
+     so a bar-level scroller pushed the mic past the right edge of every phone
+     viewport, reachable only by an undiscoverable horizontal swipe. */
   .touch-keys {
-    display: flex; gap: 6px; padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--border); background: var(--panel);
-    flex: 0 0 auto; overflow-x: auto;
+    flex: 0 0 auto;
   }
+  /* min-width: 0 is what lets this shrink below its content and actually scroll,
+     rather than forcing the flex line wider than the viewport. */
+  .touch-keys .touch-caps {
+    display: flex; align-items: center; gap: 6px;
+    flex: 1 1 auto; min-width: 0; overflow-x: auto;
+    scrollbar-width: none; /* the strip is short; a bar would eat touch-target height */
+  }
+  .touch-keys .touch-caps::-webkit-scrollbar { display: none; }
   .touch-keys button {
     min-width: 40px; height: 40px; padding: 0 10px; flex: 0 0 auto;
     border: 1px solid var(--key-border); border-bottom-color: #101216; border-radius: 8px;
@@ -1800,7 +1813,10 @@ button.empty-kbd:hover { color: var(--text); }
     font-family: var(--face); font-size: 14px; cursor: pointer;
   }
   .touch-keys button.armed { color: var(--amber); border-color: rgba(255, 176, 0, 0.5); }
-  .touch-keys .touch-mic-slot { margin-left: auto; display: flex; align-items: center; }
+  /* flex: 0 0 auto, not margin-left: auto — the auto margin was inert once the
+     row overflowed, which is exactly when the mic needed pinning. The cap strip
+     beside it takes the slack instead. */
+  .touch-keys .touch-mic-slot { flex: 0 0 auto; display: flex; align-items: center; }
   /* Same reset the pane header applies: docked in a bar, the voice button loses
      its floating-over-canvas geometry. Without it the button keeps
      `position: absolute; top: 6px; right: 12px` and — with no positioned

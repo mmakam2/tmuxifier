@@ -104,6 +104,12 @@ test('the transcript is typed but never submitted', async ({ page }) => {
 // broken. This is the desktop hold-to-talk regression guard.
 test('a real mouse hold dictates (desktop hold-to-talk guard)', async ({ page }) => {
   await openLocalhostBox(page);
+
+  // Clear the previous test's unsubmitted transcript (Ctrl+U, as the hotkey test
+  // does above) — without it this assertion is satisfied before the mouse is
+  // ever touched, and the guard passes even with the pointerdown handler dead.
+  await page.keyboard.press('Control+U');
+
   const mic = page.locator('.voice-btn');
   await expect(mic).toBeVisible({ timeout: 10000 });
   await expect(mic).toBeEnabled();

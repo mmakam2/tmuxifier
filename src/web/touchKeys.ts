@@ -78,6 +78,13 @@ export function buildTouchKeyBar(
     ctrlBtn?.classList.toggle('armed', deps.sticky.armed);
     ctrlBtn?.setAttribute('aria-pressed', String(deps.sticky.armed));
   };
+  // Two children, and the split is load-bearing: the caps scroll, the mic does
+  // not. The cap strip is a constant ~494px, so with the scroller on the bar
+  // itself the mic sat at x 442-486 — past the right edge of every phone
+  // viewport (360/390/430), reachable only by a horizontal swipe nothing
+  // advertises. A cap clipped inside the scroller is fine; the mic is not.
+  const caps = document.createElement('div');
+  caps.className = 'touch-caps';
   for (const k of TOUCH_KEYS) {
     const b = document.createElement('button');
     b.type = 'button';
@@ -95,11 +102,12 @@ export function buildTouchKeyBar(
       const seq = seqFor(k.id, deps.appCursor());
       if (seq) deps.send(seq);
     });
-    mount.appendChild(b);
+    caps.appendChild(b);
   }
+  mount.appendChild(caps);
   const micSlot = document.createElement('span');
   micSlot.className = 'touch-mic-slot';
-  mount.appendChild(micSlot);
+  mount.appendChild(micSlot); // outside the scroller — always on screen
   // The soft keyboard's own input flows through transformInput → sticky.transform,
   // which disarms on use — with no pointer event on this bar to notice it, so the
   // cap would stay lit over a spent modifier and the next tap would send a plain
