@@ -29,7 +29,7 @@ import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createSetupOptionsForm, setupStartPayload, type SetupOptionsValues } from './setupOptions';
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
-import { type PaneNode, type Edge, type DropSpec, panesOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
+import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
 import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks, type PaneRect } from './stagePanes';
 import { paneHeaderModel, buildPaneHeader, type PaneConn, type PaneHeaderModel } from './paneHeader';
 import { buildPaneLifecycle } from './paneLifecycle';
@@ -877,7 +877,15 @@ function repaintStage() {
     startDashPolling();
   } else {
     stopDashPolling();
-    renderStagePanes(grid, stageRoot, focusedBoxId, paneHooks());
+    if (phoneCtl?.matches()) {
+      // Phone: one pane, full screen. The split tree in stageRoot (and its
+      // persisted form) is untouched — this renders a one-leaf view of it.
+      const pid = phonePaneOf(stageRoot, focusedBoxId)!; // non-null: stageRoot != null here
+      focusedBoxId = pid;
+      renderStagePanes(grid, pid, pid, paneHooks());
+    } else {
+      renderStagePanes(grid, stageRoot, focusedBoxId, paneHooks());
+    }
   }
   lastPaneStates = panesOf(stageRoot).map((id) => `${id}:${paneState(id)}`).join('|');
   refitActiveTerminals();
@@ -885,6 +893,23 @@ function repaintStage() {
   persistStage();
   if (focusedBoxId) tabs.get(focusedBoxId)?.term.focus();
   filterAndPaint(); // dock-button visibility and row highlights track the layout
+  syncPhoneSwitch();
+}
+
+// Top-bar pane switcher: lists every docked pane; disabled when there is
+// nothing to switch. Desktop never sees it (CSS hides the bar).
+function syncPhoneSwitch() {
+  const sel = app.querySelector('#phone-switch') as HTMLSelectElement | null;
+  if (!sel) return;
+  const panes = panesOf(stageRoot);
+  sel.replaceChildren(...panes.map((id) => {
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = id === '__local__' ? 'Host Shell' : (allBoxes.find((b) => b.id === id)?.label ?? id);
+    return o;
+  }));
+  sel.disabled = panes.length < 2;
+  if (focusedBoxId) sel.value = focusedBoxId;
 }
 
 function dockBox(id: string, drop: DropSpec) {
@@ -965,6 +990,10 @@ async function renderDashboard() {
     button.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
     button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     window.setTimeout(refitActiveTerminals, 260);
+  });
+  (app.querySelector('#phone-switch') as HTMLSelectElement).addEventListener('change', (ev) => {
+    focusedBoxId = (ev.target as HTMLSelectElement).value;
+    repaintStage();
   });
   app.querySelector('#settings')!.addEventListener('click', () => { openSettingsModal('boxes', () => { void syncProxmoxButton(); }); });
   app.querySelector('#add')!.addEventListener('click', () => openBoxDialog());
@@ -1686,6 +1715,10 @@ function openBox(b: Box) { openPane(b.id); }
 function openPane(id: string) {
   if (panesOf(stageRoot).includes(id)) {
     focusedBoxId = id;
+    // On phone the focused pane is the ONLY rendered one, so changing focus is
+    // a re-render — the focus-paint shortcut below would leave the previous
+    // pane on screen while keystrokes went to this one, parked and invisible.
+    if (phoneCtl?.matches()) { repaintStage(); return; }
     syncPaneFocus();
     persistStage();
     tabs.get(id)?.term.focus();
