@@ -1717,6 +1717,9 @@ button.empty-kbd:hover { color: var(--text); }
    phone bar exists in the DOM on desktop too but never displays. */
 .phone-bar { display: none; }
 .touch-keys { display: none; }
+/* Before buildTouchKeyBar populates it, the bar would render as an empty strip
+   on a coarse-pointer phone (the media query below only sets display: flex). */
+.touch-keys:empty { display: none; }
 .drawer-scrim { display: none; }
 @media (max-width: 720px) {
   .layout { display: flex; flex-direction: column; height: 100dvh; padding: 0; gap: 0; }

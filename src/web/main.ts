@@ -34,6 +34,7 @@ import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks, 
 import { paneHeaderModel, buildPaneHeader, type PaneConn, type PaneHeaderModel } from './paneHeader';
 import { buildPaneLifecycle } from './paneLifecycle';
 import { createPhoneMode, type PhoneMode } from './phoneMode';
+import { buildTouchKeyBar, createStickyCtrl } from './touchKeys';
 
 const app = document.getElementById('app')!;
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal>; voiceMount: HTMLElement }>();
@@ -59,6 +60,13 @@ let focusedBoxId: string | null = null; // the pane typing targets and plain cli
 // binds to elements inside #app) and disposed in teardownWorkspace, so a
 // re-login never leaves a listener bound to a detached layout.
 let phoneCtl: PhoneMode | null = null;
+// One sticky-Ctrl state for the whole app: there is one key bar and one focused
+// pane, so arming on the bar and consuming in whichever terminal has focus is
+// the same modifier. The mic slot and cap repaint belong to the bar built by
+// renderDashboard, so both are re-seated on every re-login.
+const stickyCtrl = createStickyCtrl();
+let touchMicSlot: HTMLElement | null = null;
+let touchSyncCap: (() => void) | null = null;
 let lastPaneStates = ''; // pollStatus repaints only when a docked box's derived state flips
 let allBoxes: Box[] = [];
 let latestStatus: Record<string, Status> = {};
@@ -715,6 +723,16 @@ function ensureTab(id: string) {
   const term = openTerminal(el, id, id === '__local__' ? 'local shell' : box?.label, {
     voiceMount,
     onConnState: (s) => { connStates.set(id, s); updatePaneHeaders(); },
+    // Sticky Ctrl armed on the touch bar masks the next soft-keyboard character
+    // here, then disarms — so the cap has to be repainted from the input path.
+    // Only the armed→consumed transition can change it; repainting on every
+    // keystroke would touch the DOM once per character typed.
+    transformInput: (d) => {
+      const wasArmed = stickyCtrl.armed;
+      const out = stickyCtrl.transform(d);
+      if (wasArmed) touchSyncCap?.();
+      return out;
+    },
   });
   tabs.set(id, { el, term, voiceMount });
   if (id === '__local__') updateLocalDot();
@@ -858,12 +876,20 @@ function repaintStage() {
   paneHeaders.clear(); // stale update closures die with their DOM; headerFor re-registers survivors
   destroyPaneLifecycles(); // their pollers and arm timers would outlive the DOM otherwise
   const grid = stageGrid();
+  // What this repaint will actually put on screen. On phone that is the single
+  // focused pane, not every pane in the layout — keying the cleanups below on
+  // panesOf() there would leave a parked pane's setup poller running against DOM
+  // that was never rendered, and its stoppedShown entry stale. Desktop is
+  // unchanged: the two sets coincide when every pane is rendered.
+  const rendered = stageRoot != null && phoneCtl?.matches()
+    ? [phonePaneOf(stageRoot, focusedBoxId)!]
+    : panesOf(stageRoot);
   // Panels that lost their pane (or whose box left setup) must stop polling.
   for (const [id] of settingUpPollers) {
-    if (!panesOf(stageRoot).includes(id) || paneState(id) !== 'setup') clearSettingUpPanel(id);
+    if (!rendered.includes(id) || paneState(id) !== 'setup') clearSettingUpPanel(id);
   }
   for (const id of [...stoppedShown]) {
-    if (!panesOf(stageRoot).includes(id)) stoppedShown.delete(id);
+    if (!rendered.includes(id)) stoppedShown.delete(id);
   }
   // Park every tab first so replaceChildren() can't orphan a live terminal.
   for (const t of tabs.values()) stageParking().appendChild(t.el);
@@ -880,9 +906,13 @@ function repaintStage() {
     if (phoneCtl?.matches()) {
       // Phone: one pane, full screen. The split tree in stageRoot (and its
       // persisted form) is untouched — this renders a one-leaf view of it.
-      const pid = phonePaneOf(stageRoot, focusedBoxId)!; // non-null: stageRoot != null here
+      const pid = rendered[0]; // phonePaneOf, already computed above
       focusedBoxId = pid;
       renderStagePanes(grid, pid, pid, paneHooks());
+      // The mic moves out of the pane header into the key bar, where a thumb can
+      // reach it. Desktop repaints re-adopt it into the header (headerFor), so
+      // the element simply moves back when the media query flips.
+      if (touchMicSlot) { const vm = tabs.get(pid)?.voiceMount; if (vm) touchMicSlot.append(vm); }
     } else {
       renderStagePanes(grid, stageRoot, focusedBoxId, paneHooks());
     }
@@ -974,6 +1004,15 @@ async function renderDashboard() {
     layout: app.querySelector('.layout') as HTMLElement,
     onFlip: () => repaintStage(),
   });
+  // Built before the first repaint: the phone branch adopts the focused pane's
+  // mic into this bar's slot, which has to exist by then.
+  const bar = buildTouchKeyBar(app.querySelector('#touch-keys') as HTMLElement, {
+    send: (d) => { if (focusedBoxId) tabs.get(focusedBoxId)?.term.input(d); },
+    appCursor: () => (focusedBoxId ? tabs.get(focusedBoxId)?.term.appCursor() ?? false : false),
+    sticky: stickyCtrl,
+  });
+  touchMicSlot = bar.micSlot;
+  touchSyncCap = bar.syncCap;
   repaintStage();
   app.querySelector('#logout')!.addEventListener('click', async () => {
     teardownWorkspace();
@@ -1714,11 +1753,16 @@ function openBox(b: Box) { openPane(b.id); }
 // confirmed "C replaces the focused pane" semantics.
 function openPane(id: string) {
   if (panesOf(stageRoot).includes(id)) {
-    focusedBoxId = id;
     // On phone the focused pane is the ONLY rendered one, so changing focus is
     // a re-render — the focus-paint shortcut below would leave the previous
     // pane on screen while keystrokes went to this one, parked and invisible.
-    if (phoneCtl?.matches()) { repaintStage(); return; }
+    // Re-activating the pane already on screen is just a focus call, though:
+    // a full repaint would tear down and rebuild the DOM the user is looking at.
+    if (phoneCtl?.matches()) {
+      if (focusedBoxId !== id) { focusedBoxId = id; repaintStage(); } else tabs.get(id)?.term.focus();
+      return;
+    }
+    focusedBoxId = id;
     syncPaneFocus();
     persistStage();
     tabs.get(id)?.term.focus();
@@ -3192,6 +3236,10 @@ function teardownWorkspace(): void {
   focusedBoxId = null;
   phoneCtl?.dispose(); // bound to elements inside #app, which is about to be replaced
   phoneCtl = null;
+  // Same reason: both point into the key bar #app is about to drop. renderDashboard
+  // rebuilds the bar and re-seats them on the way back in.
+  touchMicSlot = null;
+  touchSyncCap = null;
   closeFleetJobsPanel();
   closeEventsPanel();
   closeProvisionPanel();

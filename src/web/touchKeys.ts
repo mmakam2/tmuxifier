@@ -53,10 +53,56 @@ export function createStickyCtrl(): {
       armed = false;
       if (d === ' ') return '\x00'; // Ctrl+Space
       if (d.length === 1) {
-        const code = d.toUpperCase().charCodeAt(0);
+        // Raw a–z fold, never toUpperCase(): 'ß'.toUpperCase() is 'SS', whose
+        // first code unit is 'S' — masking it would send \x13 (XOFF) and freeze
+        // the pane. 'ı' and 'ſ' fold to 'I'/'S' the same way. Only ASCII is
+        // maskable, so only ASCII is folded.
+        let code = d.charCodeAt(0);
+        if (code >= 0x61 && code <= 0x7a) code -= 0x20; // a–z → A–Z
         if (code >= 0x40 && code <= 0x5f) return String.fromCharCode(code & 0x1f);
       }
       return d;
     },
   };
+}
+
+// DOM half. pointerdown + preventDefault is load-bearing: a normal click would
+// move focus off xterm's hidden textarea and close the soft keyboard on every
+// key press. e2e-covered (vitest has no DOM).
+export function buildTouchKeyBar(
+  mount: HTMLElement,
+  deps: { send(d: string): void; appCursor(): boolean; sticky: ReturnType<typeof createStickyCtrl> },
+): { micSlot: HTMLElement; syncCap: () => void } {
+  let ctrlBtn: HTMLButtonElement | null = null;
+  const paint = () => {
+    ctrlBtn?.classList.toggle('armed', deps.sticky.armed);
+    ctrlBtn?.setAttribute('aria-pressed', String(deps.sticky.armed));
+  };
+  for (const k of TOUCH_KEYS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = k.label;
+    b.setAttribute('aria-label', k.id);
+    if (k.id === 'ctrl') { ctrlBtn = b; b.setAttribute('aria-pressed', 'false'); }
+    b.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault(); // keep focus (and the soft keyboard) on the terminal
+      if (k.id === 'ctrl') {
+        if (deps.sticky.armed) deps.sticky.disarm(); else deps.sticky.arm();
+        paint();
+        return;
+      }
+      if (deps.sticky.armed) { deps.sticky.disarm(); paint(); } // bar keys are never ctrl-modified
+      const seq = seqFor(k.id, deps.appCursor());
+      if (seq) deps.send(seq);
+    });
+    mount.appendChild(b);
+  }
+  const micSlot = document.createElement('span');
+  micSlot.className = 'touch-mic-slot';
+  mount.appendChild(micSlot);
+  // The soft keyboard's own input flows through transformInput → sticky.transform,
+  // which disarms on use — with no pointer event on this bar to notice it, so the
+  // cap would stay lit over a spent modifier and the next tap would send a plain
+  // character. `syncCap` is the repaint seam the input path calls instead.
+  return { micSlot, syncCap: paint };
 }
