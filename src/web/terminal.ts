@@ -9,6 +9,15 @@ import { filesFromDataTransfer, uploadName, sizeError, termSafe } from './upload
 import { wireVoice, createVoiceHotkeyHandler, type VoiceHotkeyTarget } from './voiceUi';
 import type { PaneConn } from './paneHeader';
 
+// Phone mode raises the terminal font two steps for touch legibility. Checked
+// once per openTerminal call: a mid-session flip across the breakpoint keeps
+// the open terminal's size (accepted in the phone-mode spec).
+function phoneCoarse(): boolean {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(max-width: 720px) and (pointer: coarse)').matches;
+}
+
 // Synchronous execCommand('copy') used when the async Clipboard API is missing
 // (insecure context) or rejects (document not focused). A hidden textarea is the
 // only portable way to drive execCommand.
@@ -305,11 +314,11 @@ export function openTerminal(
   parent: HTMLElement,
   boxId: string,
   label?: string,
-  opts?: { voiceMount?: HTMLElement; onConnState?: (s: PaneConn) => void },
+  opts?: { voiceMount?: HTMLElement; onConnState?: (s: PaneConn) => void; transformInput?: (d: string) => string },
 ) {
   const term = new Terminal({
     cursorBlink: true,
-    fontSize: termFontSize,
+    fontSize: phoneCoarse() ? clampFontSize(termFontSize + 2) : termFontSize,
     fontFamily: termFontFamily(),
     theme: SCREEN_THEME,
     // A box terminal is always a tmux attach, and tmux draws on the alternate
@@ -402,7 +411,8 @@ export function openTerminal(
   function sendResize() {
     if (ws?.readyState === 1) ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows }));
   }
-  term.onData((d) => { if (ws?.readyState === 1) ws.send(JSON.stringify({ t: 'i', d })); });
+  const sendInput = (d: string) => { if (ws?.readyState === 1) ws.send(JSON.stringify({ t: 'i', d })); };
+  term.onData((d) => sendInput(opts?.transformInput ? opts.transformInput(d) : d));
 
   const onResize = () => { fit.fit(); sendResize(); };
   window.addEventListener('resize', onResize);
@@ -412,6 +422,8 @@ export function openTerminal(
     focus: () => term.focus(),
     dispose: () => { offUploads(); voice.dispose(); closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
     refit: onResize,
+    input: sendInput,
+    appCursor: () => term.modes.applicationCursorKeysMode,
   };
 }
 
