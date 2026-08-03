@@ -157,8 +157,13 @@ At 720px wide or narrower — a phone held upright — Tmuxifier reflows into a 
 built for a thumb. It's a width test, not a device test: rotate a large phone into landscape and
 it's usually wider than 720px (a Pixel 5 is 851, an iPhone 14 is 844), so the desktop layout
 comes back. The switch is live either way — the stage re-renders on rotation, no reload needed.
-The layout rules all live inside that breakpoint, so a wider window is laid out exactly as it
-always was.
+Nearly all of it lives inside that breakpoint, so a wider window is laid out exactly as it
+always was. Three pieces are deliberately width-independent, and all three are no-ops on a
+desktop browser: the page is measured in dynamic viewport units (identical to the old fixed
+ones anywhere without a retracting browser chrome) and padded clear of a device's safe-area
+insets (zero where there is no notch — which is also what keeps the sidebar out of the cutout
+on a phone held in *landscape*, wide enough to get the desktop layout), and the mic button
+suppresses the browser's own touch handling of a press-and-hold, which a mouse never triggered.
 
 **The shell.** The sidebar becomes a left slide-over drawer and a slim top bar takes its place:
 a ☰ button that opens the drawer, and a dropdown that switches which pane the stage is showing.
@@ -193,7 +198,11 @@ phone layout but no key bar, and keeps its mic in the pane header: the bar is fo
 devices that are actually coarse.
 
 Keys are sent the moment you press them and never steal focus from the terminal, so the soft
-keyboard doesn't drop away under you each time you tap an arrow. The arrows follow the
+keyboard doesn't drop away under you each time you tap an arrow. That immediacy has one
+accepted cost: the nine caps are wider than any phone screen, and because a key fires on press
+rather than on release, a sideways swipe *begun on a cap* sends that cap's key before the strip
+scrolls — start the swipe on a gap between caps (or on the strip's ends) to scroll without
+typing. Firing on press is what keeps the keyboard up, so the two can't both be had. The arrows follow the
 terminal's current cursor-key mode, so they do the right thing both at a shell prompt and
 inside tmux, vim, or Claude Code's interface, all of which switch the terminal into
 application-cursor mode.
