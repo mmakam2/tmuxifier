@@ -33,6 +33,14 @@ prompt with the `+ Add box` hint.
 The tmuxifier nameplate in the sidebar's top-left is the home key: clicking it returns to the
 dashboard. Docked terminals undock but keep running — clicking a box re-docks it.
 
+On a phone (720px wide or narrower) the dashboard gets the whole screen under a slim top bar,
+because the sidebar collapses into a drawer behind that bar's ☰ button — which makes a phone a
+decent standby monitor: fleet lamps, agent chips and service tiles, and nothing else. Tapping a
+fleet card still opens that box's terminal, and the drawer is how you get back to the box list,
+the nameplate, Settings, Fleet Command and Events. The box rows in that drawer, and the
+sparklines on them, are sized up into proper touch targets. See
+[phone mode](terminal.md#phone-mode) for the rest of the phone layout.
+
 ## Tile icons
 
 Tiles find their own logos. A tile's icon is resolved from its check kind first (a UniFi,

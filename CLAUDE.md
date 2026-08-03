@@ -590,12 +590,20 @@ browser has no usable one), `api.ts`, `http.ts` (the shared fetch helpers — `j
 registered by `main.ts` to tear the workspace down to the login screen when the session dies,
 and every fetch layer must route non-ok handling through here — `test/webHttp.test.js` forbids
 hand-rolled `res.ok` checks outside this file, so a new fetch layer inherits the seam rather
-than silently missing it), `terminal.ts`, `index.html`, `style.css`, plus feature modules —
+than silently missing it), `terminal.ts` (the pane handle also exposes `input(d)` and
+`appCursor()` — what the touch key bar sends through and reads the live DECCKM mode from — plus
+a `transformInput` seam every keystroke passes through on its way to the socket, which is where
+sticky Ctrl masks, and a two-point font bump under `(max-width: 720px) and (pointer: coarse)`
+decided once per `openTerminal` call, so a mid-session flip leaves open terminals at the size
+they started with), `index.html`, `style.css`, plus feature modules —
 `stageLayout.ts` (the pure split-tree stage model — a node is a box-id leaf or a split
 (orientation/children/ratios) in canonical form (splits ≥2 children, no same-orientation
 nesting), with stage-edge/pane-edge dock, atomic move, undock-collapse, path-addressed
 setRatio/toggleOrientation, and v2 serialize/restore with v1 migration and vanished-box
-pruning; the four-pane cap is main.ts's `MAX_PANES`, not the model's), `stagePanes.ts`
+pruning; the four-pane cap is main.ts's `MAX_PANES`, not the model's. `phonePaneOf` is the pure
+one-pane selection phone mode renders through — the focused id if it is still docked, else the
+first pane — and it only *reads* the tree, so a phone session renders a one-leaf view of the
+desktop split rather than flattening the persisted layout), `stagePanes.ts`
 (pure grid/ARIA helpers plus the recursive `.stage-split` DOM renderer with path-addressed
 WAI-ARIA splitter dividers, typed drop targets — stage-edge/pane-edge/replace — and
 spatial `focusMove`;
@@ -617,6 +625,35 @@ shared `arming.ts` reducer; a job in flight owns the chip slot and its `onSettle
 fast status poll), `arming.ts` (the shared arm-then-fire policy — first click arms, second
 commits, anything else disarms — used by the lifecycle keys and all three Reconnect buttons, so a
 third armable control inherits the behaviour rather than re-deriving the disarm cases),
+`phoneMode.ts` (the phone shell controller: the `(max-width: 720px)` flag `main.ts` branches
+`repaintStage` on, the sidebar-as-drawer wiring (☰ toggle, scrim tap, Escape, delegated
+close-on-activation), and the `--vvh` visual-viewport tracker. Two rules are load-bearing. The
+drawer closes only on controls that change the stage or open an overlay (`CLOSES_DRAWER`),
+never on ones that operate *inside* it — `#fleet-toggle` reveals the fleet bar and the per-box
+checkboxes within the aside, so closing on it would slide away exactly what the tap just
+revealed; `#fleet-run`, one step later, does close, because it opens a body-mounted editor. And
+`--vvh` is `vv.height * vv.scale`, not `vv.height`: `index.html` sets no maximum-scale, so iOS
+auto-zooms on focusing any sub-16px field (the drawer's `.search` is 12.5px), and without
+multiplying the zoom back out, tapping the search box would collapse `.layout` to about
+screenHeight/scale and refit every open terminal for a keyboard that never appeared. It also
+strips `sidebar-collapsed` while the query matches — the collapsed rail hides the box list,
+fatal inside a drawer — and removes `--vvh` on both flip and `dispose()`, since
+`documentElement` outlives `#app` and a keyboard-squeezed height would otherwise still be
+styling `.layout` after the next login), `touchKeys.ts` (the phone touch key bar — gated
+additionally on `(pointer: coarse)`, so a narrow desktop window reflows but grows no bar, which
+is why `main.ts` asks the DOM (`touchBarShown`) rather than re-declaring that query in JS before
+adopting the pane's mic into it. The pure half is `TOUCH_KEYS`/`seqFor` — arrows honour DECCKM,
+the caller reading `term.modes.applicationCursorKeysMode` live — and `createStickyCtrl`, the
+arm → mask-one-character → disarm modifier whose case fold is a raw ASCII a–z fold and never
+`toUpperCase()` (`'ß'.toUpperCase()` is `'SS'`, and masking that `'S'` would send `\x13` XOFF
+and freeze the pane); space masks to NUL and anything unmaskable passes through untouched but
+still disarms, so an armed modifier can never silently corrupt later input. The DOM half sends
+on `pointerdown` + `preventDefault` — a click would move focus off xterm's hidden textarea and
+close the soft keyboard on every key press — splits the bar into a scrolling cap strip and a
+mic slot pinned outside it (the caps are a constant ~494px, so a bar-level scroller put the mic
+past the right edge of every phone viewport), never Ctrl-modifies its own keys, and returns
+`syncCap`, the repaint seam `transformInput` calls when the soft keyboard's own input spends
+the modifier with no pointer event on the bar to notice),
 `immichCard.ts` (the Immich card: library and volume sizes kept distinct — `statistics.usage` is
 the library, `storage.diskUseRaw` the disk, and one "size" figure would conflate them — plus the
 job-queue verdict and the named `denied` readings a least-privilege key produces),

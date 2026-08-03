@@ -1,7 +1,7 @@
 # Terminal features
 
-Split terminals, pasting images and files, voice dictation, the host shell, and per-box
-reconnect. Part of the [Tmuxifier docs](../README.md).
+Split terminals, pasting images and files, voice dictation, the host shell, per-box
+reconnect, and the phone layout. Part of the [Tmuxifier docs](../README.md).
 
 ## Split terminals
 
@@ -150,3 +150,71 @@ happens when Tmuxifier itself proves the old machine is gone (a verified Proxmox
 just created the new one (provisioning a container onto a freshly assigned address, e.g. a
 NetBox-recycled IP); ordinary box removal leaves `known_hosts` untouched since it's shared with
 your regular ssh usage.
+
+## Phone mode
+
+At 720px wide or narrower — a phone in either orientation — Tmuxifier reflows into a
+single-pane layout built for a thumb. Nothing wider than that changes: every phone rule lives
+inside that breakpoint, so a desktop window behaves exactly as it always has.
+
+**The shell.** The sidebar becomes a left slide-over drawer and a slim top bar takes its place:
+a ☰ button that opens the drawer, and a dropdown that switches which pane the stage is showing.
+An open drawer is dismissed by tapping the dimmed area beside it (or Escape, if you have a
+hardware keyboard), and by anything in it that changes the screen — opening a box or the Host
+Shell, the nameplate, Settings, Add box, Fleet Jobs, Proxmox, Events, and Run in the fleet
+script editor. Controls that act *inside* the drawer deliberately leave it open: the search
+field, the group headers, and the **Fleet Command** toggle, whose whole job is to reveal the
+fleet bar and the per-box checkboxes within the drawer itself. Modals and the Fleet/Events
+panels stack above the drawer, since on a phone the drawer is the only route to them.
+
+**One pane at a time.** The stage renders a single full-screen terminal: the focused pane if
+it's docked, otherwise the first one. The others aren't closed — they sit in the same
+background parking the desktop uses for undocked terminals, still connected and still running
+their tmux sessions — and the top-bar dropdown switches between them instantly (it's disabled
+while there's only one pane to show). Rendering one pane doesn't flatten the split you built:
+the saved arrangement is still there when you return to a wide screen. Divider drags, the drop
+zones and the ◫ **Dock** button are all hidden, so a phone can move between panes but never
+create a split; tapping a box that isn't docked replaces the focused pane, the same thing a
+plain sidebar click does on the desktop.
+
+**The touch key bar.** On a touch device a key bar sits along the bottom of the screen carrying
+what a soft keyboard either lacks or types unreliably: `esc`, ⇥ (Tab), ⇤ (Shift+Tab), the four
+arrow keys, `ctrl`, and ⏎ (Enter). Those caps scroll sideways on a narrow screen; the **mic**
+button sits outside that scroller, pinned beside it so it is always on screen. On a phone the
+voice button moves out of the pane header and into this bar, and moves back to the header when
+the layout returns to desktop width. Press and hold it to dictate and release to transcribe,
+exactly as on the desktop (see [Voice dictation](#voice-dictation)) — a hold that drifts under
+your finger stays a hold rather than turning into a scroll. A narrow *desktop* window gets the
+phone layout but no key bar, and keeps its mic in the pane header: the bar is for pointing
+devices that are actually coarse.
+
+Keys are sent the moment you press them and never steal focus from the terminal, so the soft
+keyboard doesn't drop away under you each time you tap an arrow. The arrows follow the
+terminal's current cursor-key mode, so they do the right thing both at a shell prompt and
+inside tmux, vim, or Claude Code's interface, all of which switch the terminal into
+application-cursor mode.
+
+`ctrl` is **sticky** rather than held: tap it, it lights amber, and the next single character
+you type — from the soft keyboard or anywhere else — is sent as its control code, after which
+the modifier releases itself. `ctrl` then space sends NUL. Tapping `ctrl` a second time cancels
+it. Anything that can't be masked — an emoji, an autocorrect burst, a pasted string — passes
+through untouched and *also* releases the modifier, so an armed Ctrl can never quietly corrupt
+something you type later. The bar's own keys are never Ctrl-modified: `ctrl` followed by ↑
+sends a plain ↑ and clears the modifier. Use the bar for the combinations terminal work
+actually needs — Ctrl+C, Ctrl+D, Ctrl+R, Ctrl+Z.
+
+**The soft keyboard.** The layout is measured against the browser's visual viewport rather than
+the window, so the prompt and the key bar stay above the on-screen keyboard instead of being
+buried under it — iOS Safari in particular doesn't shrink the page when the keyboard opens. The
+open drawer is measured the same way, so the end of the box list and the Host Shell row stay
+reachable while you're typing in its search field. Page zoom is factored out of that
+measurement, so a browser zooming in by itself (which iOS does when you focus any small field)
+doesn't resize your terminals. Terminal text is set two points larger on a touch phone for
+legibility, decided when each terminal opens — flipping across the breakpoint mid-session
+leaves already-open terminals at the size they started with.
+
+**Not yet.** Notifications still come from the dashboard tab itself, so a phone with the screen
+locked won't tell you Claude is waiting; doing that properly needs Web Push and an installed
+PWA, which is its own project. A multi-pane stage on tablets, and swipe gestures for switching
+panes, are deferred as well. The design record is
+`docs/superpowers/specs/2026-08-02-mobile-phone-mode-design.md`.
