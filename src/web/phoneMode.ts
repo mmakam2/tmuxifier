@@ -38,7 +38,11 @@ export interface PhoneMode {
   dispose(): void;
 }
 
-export function createPhoneMode(deps: { layout: HTMLElement; onFlip: () => void }): PhoneMode {
+export function createPhoneMode(deps: {
+  layout: HTMLElement;
+  onFlip: () => void;
+  onViewport: () => void;
+}): PhoneMode {
   const mq = window.matchMedia('(max-width: 720px)');
   const { layout } = deps;
 
@@ -53,7 +57,37 @@ export function createPhoneMode(deps: { layout: HTMLElement; onFlip: () => void 
   const closeDrawer = () => layout.classList.remove('drawer-open');
   const openDrawer = () => layout.classList.add('drawer-open');
 
-  const onChange = () => { closeDrawer(); applyCollapse(); deps.onFlip(); };
+  // iOS Safari does not shrink the layout viewport for the soft keyboard; the
+  // visual viewport is the truth. Track it into --vvh so the flex column (bar,
+  // stage, key bar) always fits above the keyboard, then refit the terminal.
+  // Both events are listened to because iOS fires either one alone.
+  let vvTimer: ReturnType<typeof setTimeout> | undefined;
+  const vv = window.visualViewport;
+  const onVv = () => {
+    if (!mq.matches || !vv) return;
+    clearTimeout(vvTimer);
+    vvTimer = setTimeout(() => {
+      document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
+      window.scrollTo(0, 0); // iOS scrolls the focused input into view by panning the page
+      deps.onViewport();
+    }, 50);
+  };
+  vv?.addEventListener('resize', onVv);
+  vv?.addEventListener('scroll', onVv);
+
+  // Flipping to desktop drops the property, so --vvh only ever exists while the
+  // phone query matches. A pending debounce is cancelled with it — it was
+  // scheduled under the old geometry and would otherwise write the property
+  // back 50ms after this cleared it.
+  const onChange = () => {
+    closeDrawer();
+    applyCollapse();
+    if (!mq.matches) {
+      clearTimeout(vvTimer);
+      document.documentElement.style.removeProperty('--vvh');
+    }
+    deps.onFlip();
+  };
   mq.addEventListener('change', onChange);
 
   const menuBtn = layout.querySelector('#phone-menu');
@@ -86,6 +120,13 @@ export function createPhoneMode(deps: { layout: HTMLElement; onFlip: () => void 
     openDrawer,
     closeDrawer,
     dispose: () => {
+      clearTimeout(vvTimer);
+      // documentElement outlives #app, so a keyboard-squeezed height set before
+      // a logout would still be styling `.layout` after the next login — with
+      // no listener left alive to correct it until the keyboard next opens.
+      document.documentElement.style.removeProperty('--vvh');
+      vv?.removeEventListener('resize', onVv);
+      vv?.removeEventListener('scroll', onVv);
       mq.removeEventListener('change', onChange);
       menuBtn?.removeEventListener('click', onMenu);
       scrim?.removeEventListener('click', onScrim);

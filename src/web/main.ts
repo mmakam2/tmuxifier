@@ -1024,6 +1024,7 @@ async function renderDashboard() {
   phoneCtl = createPhoneMode({
     layout: app.querySelector('.layout') as HTMLElement,
     onFlip: () => repaintStage(),
+    onViewport: () => refitActiveTerminals(),
   });
   // Built before the first repaint: the phone branch adopts the focused pane's
   // mic into this bar's slot, which has to exist by then.

@@ -1729,7 +1729,12 @@ button.empty-kbd:hover { color: var(--text); }
 .touch-keys:empty { display: none; }
 .drawer-scrim { display: none; }
 @media (max-width: 720px) {
-  .layout { display: flex; flex-direction: column; height: 100dvh; padding: 0; gap: 0; }
+  /* `--vvh` is the visual viewport height, written by phoneMode.ts while this
+     query matches: iOS Safari does not shrink the layout viewport for the soft
+     keyboard, so 100dvh would keep the key bar under it. The fallback keeps
+     this rule correct before the first visualViewport event and on any browser
+     that has no visualViewport at all. */
+  .layout { display: flex; flex-direction: column; height: var(--vvh, 100dvh); padding: 0; gap: 0; }
   .phone-bar {
     display: flex; align-items: center; gap: 8px;
     padding: calc(6px + env(safe-area-inset-top)) 10px 6px; /* clear any notch (viewport-fit=cover) */
