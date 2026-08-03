@@ -2,6 +2,28 @@
 // the desktop-collapse suppression. DOM-only module — e2e covered.
 const SIDEBAR_COLLAPSED_KEY = 'tmuxifier.sidebarCollapsed';
 
+// What dismisses the drawer: the whole box row (matching its own click handler,
+// which opens the box from anywhere on the row — not just the name button), the
+// Host Shell, and every sidebar control that opens an overlay or leaves the
+// workspace. Controls that operate INSIDE the drawer — the search field, group
+// headers, the fleet checkboxes — are deliberately absent, and every icon
+// control that must not close it (Reconnect's arm-then-fire, ✎, ✕, ⚷, the
+// sparkline cycle, the row checkbox) already calls stopPropagation on its own
+// click, so it never reaches this delegated listener at all.
+const CLOSES_DRAWER = [
+  '.box',
+  '.local-name',
+  '#home',
+  '#settings',
+  '#logout',
+  '#add',
+  '#fleet-toggle',
+  '#fleet-jobs',
+  '#events',
+  '#proxmox',
+  '#fleet-run',
+].join(', ');
+
 export interface PhoneMode {
   matches(): boolean;
   openDrawer(): void;
@@ -31,13 +53,20 @@ export function createPhoneMode(deps: { layout: HTMLElement; onFlip: () => void 
   const onMenu = () => layout.classList.toggle('drawer-open');
   menuBtn?.addEventListener('click', onMenu);
 
-  // Activating anything that changes the stage closes the drawer: box rows,
-  // the Host Shell, the nameplate. Delegated so rebuilt rows stay covered.
+  // The open drawer is fixed and opaque, so it covers the ☰ that opened it —
+  // leaving Escape (a hardware keyboard) as the only dismissal on a device that
+  // has none. The scrim is the touch-reachable way out.
+  const scrim = layout.querySelector('#drawer-scrim');
+  const onScrim = () => closeDrawer();
+  scrim?.addEventListener('click', onScrim);
+
+  // Activating anything that changes the stage or opens an overlay closes the
+  // drawer. Delegated so rebuilt rows stay covered.
   const sidebar = layout.querySelector('.sidebar');
   const onSidebarClick = (ev: Event) => {
     if (!mq.matches) return;
     const t = ev.target as HTMLElement;
-    if (t.closest('.box .name') || t.closest('.local-name') || t.closest('#home')) closeDrawer();
+    if (t.closest(CLOSES_DRAWER)) closeDrawer();
   };
   sidebar?.addEventListener('click', onSidebarClick);
 
@@ -52,6 +81,7 @@ export function createPhoneMode(deps: { layout: HTMLElement; onFlip: () => void 
     dispose: () => {
       mq.removeEventListener('change', onChange);
       menuBtn?.removeEventListener('click', onMenu);
+      scrim?.removeEventListener('click', onScrim);
       sidebar?.removeEventListener('click', onSidebarClick);
       document.removeEventListener('keydown', onKey);
     },

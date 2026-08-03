@@ -929,6 +929,7 @@ async function renderDashboard() {
           <button class="local-edit" title="Configure shell" aria-label="Configure host shell">✎</button>
         </div>
       </aside>
+      <div class="drawer-scrim" id="drawer-scrim" aria-hidden="true"></div>
       <header class="phone-bar">
         <button id="phone-menu" class="phone-menu" type="button" title="Boxes" aria-label="Open box list">☰</button>
         <select id="phone-switch" class="phone-switch" aria-label="Switch pane" disabled></select>
