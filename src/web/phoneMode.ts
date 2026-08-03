@@ -12,8 +12,13 @@ const SIDEBAR_COLLAPSED_KEY = 'tmuxifier.sidebarCollapsed';
 // only reveals in-drawer chrome (it unhides `#fleet-bar` and the per-box and
 // per-group checkboxes via `.layout.fleet-mode`, all of it inside the aside).
 // Closing on that one would slide away everything the tap just revealed and
-// read as a dead button. `#fleet-run`, one step later in the same flow, DOES
-// close: it opens the body-mounted script editor.
+// read as a dead button. `#fleet-run` — the fleet bar's own "Run on N" button,
+// one step later in the same flow — DOES close: it opens the fleet confirm
+// modal, which mounts into `#app` as a sibling of `.layout`, outside the aside.
+// (The ⤢ `.fleet-expand` beside the command input, which opens the script
+// editor, is not in this list either; that modal mounts the same way and its
+// backdrop sits at z-index 60 — clear of the drawer's 40 — so the drawer just
+// stays open behind it.)
 //
 // Every icon control that must not close it (Reconnect's arm-then-fire, ✎, ✕,
 // ⚷, the sparkline cycle, the row checkbox) already calls stopPropagation on

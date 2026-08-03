@@ -592,8 +592,10 @@ and every fetch layer must route non-ok handling through here — `test/webHttp.
 hand-rolled `res.ok` checks outside this file, so a new fetch layer inherits the seam rather
 than silently missing it), `terminal.ts` (the pane handle also exposes `input(d)` and
 `appCursor()` — what the touch key bar sends through and reads the live DECCKM mode from — plus
-a `transformInput` seam every keystroke passes through on its way to the socket, which is where
-sticky Ctrl masks, and a two-point font bump under `(max-width: 720px) and (pointer: coarse)`
+a `transformInput` seam on the `term.onData` path, where sticky Ctrl masks. `input(d)` sits
+*downstream* of that seam and never passes through it, so a bar key cannot be masked even in
+principle — the bar also disarms explicitly, so `ctrl` then an arrow spends the modifier rather
+than leaving it armed. Also a two-point font bump under `(max-width: 720px) and (pointer: coarse)`
 decided once per `openTerminal` call, so a mid-session flip leaves open terminals at the size
 they started with), `index.html`, `style.css`, plus feature modules —
 `stageLayout.ts` (the pure split-tree stage model — a node is a box-id leaf or a split
@@ -631,7 +633,11 @@ close-on-activation), and the `--vvh` visual-viewport tracker. Two rules are loa
 drawer closes only on controls that change the stage or open an overlay (`CLOSES_DRAWER`),
 never on ones that operate *inside* it — `#fleet-toggle` reveals the fleet bar and the per-box
 checkboxes within the aside, so closing on it would slide away exactly what the tap just
-revealed; `#fleet-run`, one step later, does close, because it opens a body-mounted editor. And
+revealed; `#fleet-run`, the fleet bar's own *Run on N* button one step later, does close,
+because it opens the fleet **confirm** modal, which mounts into `#app` beside `.layout` rather
+than inside the aside. The ⤢ `.fleet-expand` that opens the script editor is not in the list
+either — same mount, and its backdrop (z-index 60) clears the drawer's 40 regardless, so the
+drawer simply stays open behind it. Second,
 `--vvh` is `vv.height * vv.scale`, not `vv.height`: `index.html` sets no maximum-scale, so iOS
 auto-zooms on focusing any sub-16px field (the drawer's `.search` is 12.5px), and without
 multiplying the zoom back out, tapping the search box would collapse `.layout` to about

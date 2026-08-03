@@ -153,19 +153,23 @@ your regular ssh usage.
 
 ## Phone mode
 
-At 720px wide or narrower — a phone in either orientation — Tmuxifier reflows into a
-single-pane layout built for a thumb. Nothing wider than that changes: every phone rule lives
-inside that breakpoint, so a desktop window behaves exactly as it always has.
+At 720px wide or narrower — a phone held upright — Tmuxifier reflows into a single-pane layout
+built for a thumb. It's a width test, not a device test: rotate a large phone into landscape and
+it's usually wider than 720px (a Pixel 5 is 851, an iPhone 14 is 844), so the desktop layout
+comes back. The switch is live either way — the stage re-renders on rotation, no reload needed.
+The layout rules all live inside that breakpoint, so a wider window is laid out exactly as it
+always was.
 
 **The shell.** The sidebar becomes a left slide-over drawer and a slim top bar takes its place:
 a ☰ button that opens the drawer, and a dropdown that switches which pane the stage is showing.
 An open drawer is dismissed by tapping the dimmed area beside it (or Escape, if you have a
 hardware keyboard), and by anything in it that changes the screen — opening a box or the Host
-Shell, the nameplate, Settings, Add box, Fleet Jobs, Proxmox, Events, and Run in the fleet
-script editor. Controls that act *inside* the drawer deliberately leave it open: the search
-field, the group headers, and the **Fleet Command** toggle, whose whole job is to reveal the
-fleet bar and the per-box checkboxes within the drawer itself. Modals and the Fleet/Events
-panels stack above the drawer, since on a phone the drawer is the only route to them.
+Shell, the nameplate, Settings, Log out, Add box, Fleet Jobs, Proxmox, Events, and the fleet
+bar's **Run on N** button. Controls that act *inside* the drawer deliberately leave it open:
+the search field, the group headers, and the **Fleet Command** toggle, whose whole job is to
+reveal the fleet bar and the per-box checkboxes within the drawer itself. Modals and the
+Fleet/Events panels stack above the drawer, since on a phone the drawer is the only route to
+them.
 
 **One pane at a time.** The stage renders a single full-screen terminal: the focused pane if
 it's docked, otherwise the first one. The others aren't closed — they sit in the same
