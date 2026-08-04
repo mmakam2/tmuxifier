@@ -224,6 +224,21 @@ cap: it sends the interrupt itself and owes the keyboard nothing. For other comb
 (Ctrl+D, Ctrl+R, Ctrl+Z), sticky `ctrl` works when autocorrect is off or the keyboard sends
 single characters; otherwise a hardware keyboard is the reliable route.
 
+**The composer.** Composing goes further: the terminal can't be *edited into* — every byte the
+soft keyboard commits is already sent, so an autocorrect that rewrites a word mid-sentence
+garbles the line at the prompt. The ✏️ button in the top bar swaps the key bar's cap strip for
+a native text field and a ➤ **Send** button (the ✏️ that appears beside Send closes it again).
+Type — or dictate: while the composer is open the mic appends the transcript into the field —
+with the full soft keyboard: autocorrect, word suggestions and cursor edits all work normally
+here, because the terminal sees nothing until you tap Send. Send transmits the message plus
+Enter in one tap; newlines in the draft are collapsed to spaces (a raw newline would submit
+mid-text). The field then clears and stays focused for the next message, and Send on an
+*empty* field is a bare Enter — answering "press Enter to continue" without leaving the
+composer. Your draft survives closing the composer and switching panes; Send delivers to the
+focused pane, and keeps the draft if that pane has no live terminal behind it (a box still
+setting up, a stopped container). Tap the in-bar ✏️ to return to the caps and direct terminal
+input.
+
 **Touch and mouse-aware apps.** When the app in the pane takes mouse input (Claude Code's
 fullscreen interface, tmux with `mouse on`), a stray tap would otherwise *click* it —
 selecting and activating whatever option it happened to land on. So while mouse tracking is

@@ -680,7 +680,27 @@ pinned tail — the ⏎ cap (`pinned: true` in `TOUCH_KEYS`) and the mic slot �
 spacing-budgeted to fit a 344px viewport (Z Fold 6 cover screen) with nothing to scroll,
 pinned by the touchBar e2e, never Ctrl-modifies its own keys, and returns
 `syncCap`, the repaint seam `transformInput` calls when the soft keyboard's own input spends
-the modifier with no pointer event on the bar to notice),
+the modifier with no pointer event on the bar to notice. The bar's `send` seam is
+boolean-returning (a live pane accepted the bytes, or not), and its deps carry
+`focusTerminal` (composer close hands the keyboard back to xterm) and `onLayoutChange`
+(open terminals refit when the composer changes the bar's height)),
+`composer.ts` (the phone composer the top bar's ✏️ opens — the opener lives there, not in
+the key bar, because a fifth pinned cap re-overflows the 344px budget round 2 fixed; the
+in-bar ✏️ cap exists only while composing, as the closer, so the idle bar stays
+byte-identical: pure `sendTextOf` — whitespace runs collapse to single spaces because a raw
+newline reaching the pty IS Enter, remaining C0/C1 controls stripped, trimmed — plus the DOM
+row (textarea + ➤) that `buildTouchKeyBar` display-toggles in place of the cap strip, so the
+draft persists across toggles and pane switches. Send transmits `sendTextOf(draft) + '\r'`
+through the bar's `send` seam and clears the field only on `true`, so Send never destroys a
+draft a setup/stopped pane couldn't accept; an empty draft sends bare Enter. Opening focuses
+the field (the soft keyboard retargets to a real input the IME can safely word-replace in —
+the round-2 structural fix) and disarms an armed sticky Ctrl inside `setComposing`, not the
+cap's fire() branch, since the top-bar opener never taps the bar; closing refocuses the
+terminal, and flipping to desktop force-closes via `main.ts`'s onFlip. While open, the pane
+mic reroutes transcripts into the draft through `VoiceHost.sink` (evaluated at finish-time,
+and `voiceUi.ts`'s `finish()` skips its terminal refocus on that path — the field is holding
+focus deliberately) and `POST /api/voice?inject=off`, which returns the text without touching
+the pane),
 `immichCard.ts` (the Immich card: library and volume sizes kept distinct — `statistics.usage` is
 the library, `storage.diskUseRaw` the disk, and one "size" figure would conflate them — plus the
 job-queue verdict and the named `denied` readings a least-privilege key produces),
