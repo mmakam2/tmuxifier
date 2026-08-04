@@ -1758,6 +1758,12 @@ button.empty-kbd:hover { color: var(--text); }
     background: var(--panel-2); color: var(--text); font-family: var(--face); font-size: 14px;
   }
   .phone-switch:disabled { opacity: 0.6; }
+  /* While the soft keyboard is open (phoneMode.ts toggles kb-open off the same
+     visualViewport height gate that writes --vvh), the top bar's row goes to
+     the terminal — rows are scarcest exactly then, and ☰/pane-switch are not
+     reachable mid-typing anyway. Closing the keyboard restores it; there is
+     deliberately no other reveal gesture. */
+  .layout.kb-open .phone-bar { display: none; }
   /* Sidebar becomes a left slide-over drawer — the .fleet-panel pattern:
      transform for the slide, visibility so closed contents leave the tab
      order (WCAG 2.4.3), matching transition delay on the way out. */
