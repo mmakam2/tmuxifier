@@ -1868,5 +1868,27 @@ button.empty-kbd:hover { color: var(--text); }
      resolves exactly as the desktop rules do. */
   .touch-keys .touch-mic-slot .voice-btn:not(:disabled) { opacity: 1; }
   .touch-keys .touch-mic-slot .voice-btn:disabled { opacity: 0.3; }
+  /* Composer mode: the ✏️ cap swaps the cap strip for a native field + ➤.
+     The field is a real textarea, so the IME word-replaces against IT and the
+     pty sees nothing until Send (the round-2 structural fix). */
+  .touch-keys .composer-row { display: flex; flex: 1 1 auto; min-width: 0; gap: 5px; align-items: flex-end; }
+  .touch-keys:not(.composing) .composer-row { display: none; }
+  .touch-keys.composing .touch-caps { display: none; }
+  /* Send-on-empty covers bare Enter, and the field needs the width on 344px. */
+  .touch-keys.composing > button[aria-label='enter'] { display: none; }
+  /* The compose cap is the CLOSER: it appears only once the strip is hidden.
+     Idle, the bar is byte-identical to round 2 — a fifth pinned control would
+     re-overflow the 344px budget the touchBar e2e pins. */
+  .touch-keys:not(.composing) > button[aria-label='compose'] { display: none; }
+  /* 16px is load-bearing: iOS auto-zooms any focused field under 16px (the
+     drawer .search lesson — phoneMode multiplies the zoom back out, but not
+     needing to is better). Input styling matches .phone-switch. */
+  .touch-keys .composer-field {
+    flex: 1 1 auto; min-width: 0; resize: none;
+    min-height: 40px; max-height: 96px; /* COMPOSER_FIELD_MAX_PX */
+    padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel-2); color: var(--text);
+    font-family: var(--face); font-size: 16px; line-height: 20px;
+  }
   .touch-keys .touch-mic-slot .voice-btn[data-state='working'] { opacity: 0.7; }
 }

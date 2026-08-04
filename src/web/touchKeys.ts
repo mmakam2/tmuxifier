@@ -3,8 +3,10 @@
 // and the sticky-Ctrl state machine — lives here and is unit-tested; the DOM
 // builder below it is e2e-covered (vitest has no DOM by project convention).
 
+import { buildComposerRow } from './composer';
+
 export type TouchKey =
-  | 'esc' | 'ctrl-c' | 'tab' | 'shift-tab' | 'up' | 'down' | 'left' | 'right' | 'enter' | 'ctrl';
+  | 'esc' | 'ctrl-c' | 'tab' | 'shift-tab' | 'up' | 'down' | 'left' | 'right' | 'enter' | 'ctrl' | 'compose';
 
 export const TOUCH_KEYS: { id: TouchKey; label: string; pinned?: true }[] = [
   { id: 'esc', label: 'esc' },
@@ -24,6 +26,12 @@ export const TOUCH_KEYS: { id: TouchKey; label: string; pinned?: true }[] = [
   // catalog line each; drag-to-scroll already covers arrow needs at a prompt
   // (the wheel fallback), and long-press-click covers TUI option picking.
   { id: 'ctrl', label: 'ctrl' },
+  // Composer CLOSER — pinned, but display-gated to `.composing` (style.css):
+  // the idle bar has no room for another 40px cap at 344px (round-2 budget),
+  // so opening happens from the phone top bar (#phone-compose, main.ts) where
+  // slack exists, and this cap appears only once the strip is hidden. A mode
+  // switch, not a key: fire() special-cases it and seqFor maps it to null.
+  { id: 'compose', label: '✏️', pinned: true },
   // Pinned outside the scroller (a direct child of the bar, like the mic):
   // ⏎ is the most-used cap — submitting to Claude, confirming prompts — and
   // as the LAST item of a ~450px strip it sat past the right edge of every
@@ -43,7 +51,7 @@ const APP: Record<string, string> = {
 };
 
 export function seqFor(key: TouchKey, appCursor: boolean): string | null {
-  if (key === 'ctrl') return null; // modifier — handled by createStickyCtrl
+  if (key === 'ctrl' || key === 'compose') return null; // modifier / mode toggle — no bytes
   if (appCursor && APP[key]) return APP[key];
   return PLAIN[key] ?? null;
 }
@@ -84,8 +92,18 @@ export function createStickyCtrl(): {
 // key press. e2e-covered (vitest has no DOM).
 export function buildTouchKeyBar(
   mount: HTMLElement,
-  deps: { send(d: string): void; appCursor(): boolean; sticky: ReturnType<typeof createStickyCtrl> },
-): { micSlot: HTMLElement; syncCap: () => void } {
+  deps: {
+    send(d: string): boolean; // true = a live pane accepted the bytes (composer keeps its draft on false)
+    appCursor(): boolean;
+    sticky: ReturnType<typeof createStickyCtrl>;
+    focusTerminal?(): void;   // composer close hands the keyboard back to xterm
+    onLayoutChange?(): void;  // bar height changed (composer open/close/grow) — terminals must refit
+  },
+): {
+  micSlot: HTMLElement;
+  syncCap: () => void;
+  composer: { isOpen(): boolean; open(): void; close(): void; appendDraft(t: string): void };
+} {
   let ctrlBtn: HTMLButtonElement | null = null;
   const paint = () => {
     ctrlBtn?.classList.toggle('armed', deps.sticky.armed);
@@ -99,16 +117,44 @@ export function buildTouchKeyBar(
   const caps = document.createElement('div');
   caps.className = 'touch-caps';
   mount.appendChild(caps); // before the loop: a pinned cap appended to `mount` mid-loop must land AFTER the strip
+  // Between the cap strip and the pinned zone, hidden until `composing` is set
+  // on the mount (style.css). The row and its draft PERSIST across toggles —
+  // display-toggled, never rebuilt.
+  const row = buildComposerRow({ send: deps.send, onGrow: deps.onLayoutChange });
+  mount.appendChild(row.el);
+  let composeBtn: HTMLButtonElement | null = null;
+  let composing = false;
+  const setComposing = (on: boolean) => {
+    if (composing === on) return;
+    composing = on;
+    // The disarm lives HERE, not in the cap's fire() branch: the top-bar
+    // opener calls open() without any bar tap, and an armed modifier must not
+    // survive into field typing (or lie in wait for the first character after
+    // close) — same rule as every bar tap.
+    if (on && deps.sticky.armed) { deps.sticky.disarm(); paint(); }
+    mount.classList.toggle('composing', on);
+    composeBtn?.classList.toggle('armed', on);
+    composeBtn?.setAttribute('aria-pressed', String(on));
+    // Focus is the point of the toggle: open puts the soft keyboard on a real
+    // field the IME can safely word-replace in; close hands it back to xterm.
+    if (on) row.field.focus(); else deps.focusTerminal?.();
+    deps.onLayoutChange?.();
+  };
   for (const k of TOUCH_KEYS) {
     const b = document.createElement('button');
     b.type = 'button';
     b.textContent = k.label;
     b.setAttribute('aria-label', k.id);
     if (k.id === 'ctrl') { ctrlBtn = b; b.setAttribute('aria-pressed', 'false'); }
+    if (k.id === 'compose') { composeBtn = b; b.setAttribute('aria-pressed', 'false'); }
     const fire = () => {
       if (k.id === 'ctrl') {
         if (deps.sticky.armed) deps.sticky.disarm(); else deps.sticky.arm();
         paint();
+        return;
+      }
+      if (k.id === 'compose') {
+        setComposing(!composing); // setComposing handles the sticky-Ctrl disarm
         return;
       }
       if (deps.sticky.armed) { deps.sticky.disarm(); paint(); } // bar keys are never ctrl-modified
@@ -143,5 +189,14 @@ export function buildTouchKeyBar(
   // which disarms on use — with no pointer event on this bar to notice it, so the
   // cap would stay lit over a spent modifier and the next tap would send a plain
   // character. `syncCap` is the repaint seam the input path calls instead.
-  return { micSlot, syncCap: paint };
+  return {
+    micSlot,
+    syncCap: paint,
+    composer: {
+      isOpen: () => composing,
+      open: () => setComposing(true),   // the top-bar #phone-compose button's target
+      close: () => setComposing(false),
+      appendDraft: row.appendDraft,
+    },
+  };
 }

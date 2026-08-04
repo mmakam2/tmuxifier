@@ -23,9 +23,9 @@ test('seqFor: ctrl is a modifier, not a sequence', () => {
   expect(seqFor('ctrl', false)).toBe(null);
 });
 
-test('every catalog entry except ctrl resolves to bytes', () => {
+test('every catalog entry except the non-key controls resolves to bytes', () => {
   for (const k of TOUCH_KEYS) {
-    if (k.id === 'ctrl') continue;
+    if (k.id === 'ctrl' || k.id === 'compose') continue; // modifier / mode toggle
     expect(typeof seqFor(k.id, false)).toBe('string');
   }
 });
@@ -107,9 +107,12 @@ test('ctrl-c is a dedicated cap sending ETX regardless of cursor mode', () => {
   expect(seqFor('ctrl-c', true)).toBe('\x03');
 });
 
-test('enter is the only pinned cap — it must never ride the scroller off-screen', () => {
+test('enter and compose are the only pinned caps — nothing else may leave the scroller', () => {
+  // compose is pinned but display-gated to `.composing` (it is the composer
+  // CLOSER), so the idle bar still renders exactly one pinned cap and keeps
+  // the round-2 344px budget; the geometry itself is pinned by the e2e suites.
   for (const k of TOUCH_KEYS) {
-    expect(!!k.pinned).toBe(k.id === 'enter');
+    expect(!!k.pinned).toBe(k.id === 'enter' || k.id === 'compose');
   }
 });
 
@@ -117,4 +120,14 @@ test('no arrow caps in the catalog — a scroll begun on a cap fires it, and arr
   for (const k of TOUCH_KEYS) {
     expect(['up', 'down', 'left', 'right']).not.toContain(k.id);
   }
+});
+
+test('the compose cap is pinned, sits before enter, and maps to no sequence', () => {
+  const compose = TOUCH_KEYS.find((k) => k.id === 'compose');
+  expect(compose?.pinned).toBe(true);
+  const ids = TOUCH_KEYS.map((k) => k.id);
+  expect(ids.indexOf('compose')).toBeLessThan(ids.indexOf('enter'));
+  // A mode toggle, like ctrl: it must never send bytes itself.
+  expect(seqFor('compose', false)).toBeNull();
+  expect(seqFor('compose', true)).toBeNull();
 });
