@@ -297,9 +297,10 @@ export const api = {
       method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: blob,
     }));
   },
-  async postVoice(boxId: string, blob: Blob) {
-    return j<{ text: string; injected: boolean; mode: 'claude' | 'shell' | 'busy' | 'error' | 'empty' }>(
-      await fetch(`/api/voice?box=${encodeURIComponent(boxId)}`, {
+  async postVoice(boxId: string, blob: Blob, opts?: { inject?: boolean }) {
+    const q = opts?.inject === false ? '&inject=off' : '';
+    return j<{ text: string; injected: boolean; mode: 'claude' | 'shell' | 'busy' | 'error' | 'empty' | 'off' }>(
+      await fetch(`/api/voice?box=${encodeURIComponent(boxId)}${q}`, {
         method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: blob,
       }));
   },

@@ -127,6 +127,11 @@ export interface VoiceHost {
   write(text: string): void;      // echo status into the terminal
   copy(text: string): void;       // clipboard fallback when a pane is busy
   focus(): void;                  // return keyboard focus to the terminal
+  // Present while the phone composer is open: finish() reroutes the transcript
+  // here (inject=off server-side) instead of typing it into the pane, and
+  // skips the terminal refocus — the composer field is holding focus so the
+  // soft keyboard stays up for the edit-then-Send loop.
+  sink?(): ((text: string) => void) | null;
 }
 
 // Owns one recorder and the button element. Returned dispose() detaches it.
@@ -193,6 +198,10 @@ export function createVoiceController(
     recorder = null;
     busy = true;
     setState('working');
+    // Bound at finish-time, not delivery-time: if the composer closes during
+    // the transcription round trip, the text still lands in the (hidden,
+    // persistent) draft it was dictated for, not suddenly in the pane.
+    const sink = host.sink?.() ?? null;
     try {
       const wav = await r.stop();
       // A 44-byte WAV is header-only — no PCM samples were ever captured
@@ -201,8 +210,11 @@ export function createVoiceController(
       // than cold-spawning the whisper engine (up to 120s on a cold start) to
       // transcribe silence for a stray tap.
       if (wav.byteLength <= 44) return;
-      const res = await api.postVoice(boxId, new Blob([wav], { type: 'audio/wav' }));
-      if (!res.text) {
+      const res = await api.postVoice(boxId, new Blob([wav], { type: 'audio/wav' }), sink ? { inject: false } : undefined);
+      if (sink) {
+        if (res.text) sink(res.text);
+        else host.write('\r\n\x1b[2m[voice: nothing heard]\x1b[0m\r\n');
+      } else if (!res.text) {
         host.write('\r\n\x1b[2m[voice: nothing heard]\x1b[0m\r\n');
       } else if (!res.injected) {
         // A refused injection must never cost the user what they said, on
@@ -228,7 +240,10 @@ export function createVoiceController(
       // first place; this covers the paths that one cannot (focus already
       // elsewhere, the hotkey used while another element held focus).
       // Matches wireUploads, which likewise refocuses after an upload.
-      host.focus();
+      // Sink path: focus must STAY on the composer field — refocusing the
+      // terminal would close the soft keyboard mid-composition. The mic's own
+      // pointerdown preventDefault() already kept the field focused.
+      if (!sink) host.focus();
     }
   }
 
