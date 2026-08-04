@@ -189,8 +189,10 @@ plain sidebar click does on the desktop.
 **The touch key bar.** On a touch device a key bar sits along the bottom of the screen carrying
 what a soft keyboard either lacks or types unreliably: `esc`, ^C (a dedicated Ctrl+C — the
 interrupt, sitting beside `esc` because those two are how you interrupt Claude Code), ⇥ (Tab),
-⇤ (Shift+Tab), the four arrow keys, `ctrl`, and ⏎ (Enter). Those caps scroll sideways on a narrow screen; the **mic**
-button sits outside that scroller, pinned beside it so it is always on screen. On a phone the
+⇤ (Shift+Tab), the four arrow keys, `ctrl`, and ⏎ (Enter). Most caps scroll sideways on a
+narrow screen; ⏎ and the **mic** sit outside that scroller, pinned at the bar's right edge so
+they are always on screen — you can submit a line (answer a prompt, send a message to a running
+agent) without opening the soft keyboard at all. On a phone the
 voice button moves out of the pane header and into this bar, and moves back to the header when
 the layout returns to desktop width. Press and hold it to dictate and release to transcribe,
 exactly as on the desktop (see [Voice dictation](#voice-dictation)) — a hold that drifts under
@@ -223,15 +225,24 @@ cap: it sends the interrupt itself and owes the keyboard nothing. For other comb
 (Ctrl+D, Ctrl+R, Ctrl+Z), sticky `ctrl` works when autocorrect is off or the keyboard sends
 single characters; otherwise a hardware keyboard is the reliable route.
 
+**Touch and mouse-aware apps.** When the app in the pane takes mouse input (Claude Code's
+fullscreen interface, tmux with `mouse on`), a stray tap would otherwise *click* it —
+selecting and activating whatever option it happened to land on. So while mouse tracking is
+active, a tap only focuses the terminal; to deliberately tap a button or an option in such an
+app, press and hold for about half a second. Drag-to-scroll is unchanged, and apps that don't
+take mouse input (a plain shell prompt) see no difference at all.
+
 **The soft keyboard.** The layout is measured against the browser's visual viewport rather than
 the window, so the prompt and the key bar stay above the on-screen keyboard instead of being
 buried under it — iOS Safari in particular doesn't shrink the page when the keyboard opens. The
 open drawer is measured the same way, so the end of the box list and the Host Shell row stay
 reachable while you're typing in its search field. Page zoom is factored out of that
 measurement, so a browser zooming in by itself (which iOS does when you focus any small field)
-doesn't resize your terminals. Terminal text is set two points larger on a touch phone for
-legibility, decided when each terminal opens — flipping across the breakpoint mid-session
-leaves already-open terminals at the size they started with.
+doesn't resize your terminals. While the keyboard is open, the top bar (☰ and the pane
+switcher) hides to give its row to the terminal — rows are scarcest exactly then, and neither
+control is useful mid-typing; closing the keyboard brings it back. Terminal text is set one
+point larger on a touch phone for legibility, decided when each terminal opens — flipping
+across the breakpoint mid-session leaves already-open terminals at the size they started with.
 
 **Not yet.** Notifications still come from the dashboard tab itself, so a phone with the screen
 locked won't tell you Claude is waiting; doing that properly needs Web Push and an installed
