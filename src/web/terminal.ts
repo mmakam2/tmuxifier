@@ -7,7 +7,8 @@ import { buildFontFamily, clampFontSize, DEFAULT_TERM_FONT_SIZE } from './termFo
 import { api } from './api';
 import { filesFromDataTransfer, uploadName, sizeError, termSafe } from './upload';
 import { wireVoice, createVoiceHotkeyHandler, type VoiceHotkeyTarget } from './voiceUi';
-import { createTouchGesture, HOLD_MS, type GestureAction } from './touchGesture';
+import { createTouchGesture, holdKeepsFocus, HOLD_MS, type GestureAction } from './touchGesture';
+import { keyboardOpen } from './phoneMode';
 import type { PaneConn } from './paneHeader';
 
 // Phone mode raises the terminal font two steps for touch legibility. Checked
@@ -269,13 +270,19 @@ function wireTouchGestures(parent: HTMLElement, deps: { guard(): boolean; focus(
       case 'hold-press': {
         // A long-press is an option pick, not a typing intent. xterm's own
         // mouse-tracking mousedown handler calls this.focus() on the press we
-        // are about to dispatch, and on a phone focus IS the soft keyboard —
-        // so remember the pre-gesture state and put it back: an unfocused
-        // terminal is re-blurred in the same task (the keyboard never
-        // deploys), a focused one is left alone (the keyboard stays).
-        const hadFocus = parent.contains(document.activeElement);
+        // are about to dispatch, and on a phone focus IS the soft keyboard.
+        // The keep-or-blur decision keys on the keyboard's actual visibility
+        // (keyboardOpen over live visualViewport numbers), NOT on focus:
+        // Android's back gesture hides the keyboard without blurring, so a
+        // focused textarea proves nothing — preserving focus in that state
+        // made every long-press re-summon the keyboard. Blur runs in the
+        // same task as the dispatch, so a keyboard that isn't up never
+        // deploys; one that IS up (mid-typing) is left alone.
+        const vv = window.visualViewport;
+        const kbUp = vv ? keyboardOpen(window.innerHeight, Math.round(vv.height * vv.scale)) : false;
+        const keep = holdKeepsFocus(parent.contains(document.activeElement), phoneCoarse(), kbUp);
         mouse('mousedown', a.x, a.y);
-        if (!hadFocus) {
+        if (!keep) {
           const ae = document.activeElement;
           if (ae instanceof HTMLElement && parent.contains(ae)) ae.blur();
         }

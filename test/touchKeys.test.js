@@ -112,3 +112,9 @@ test('enter is the only pinned cap — it must never ride the scroller off-scree
     expect(!!k.pinned).toBe(k.id === 'enter');
   }
 });
+
+test('no arrow caps in the catalog — a scroll begun on a cap fires it, and arrows made the strip scroll on narrow screens', () => {
+  for (const k of TOUCH_KEYS) {
+    expect(['up', 'down', 'left', 'right']).not.toContain(k.id);
+  }
+});

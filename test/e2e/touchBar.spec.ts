@@ -31,8 +31,9 @@ async function openOnPhone(page: Page) {
   await page.keyboard.press('Control+U');
 }
 
-// iPhone SE / 14 / 14 Pro Max logical widths — the narrow, common and wide ends.
-for (const width of [360, 390, 430]) {
+// Z Fold 6 cover screen / iPhone SE / 14 / 14 Pro Max logical widths — the
+// narrowest real device in the fleet, then the narrow, common and wide ends.
+for (const width of [344, 360, 390, 430]) {
   test.describe(`touch key bar at ${width}px`, () => {
     test.use({ viewport: { width, height: 844 }, hasTouch: true, isMobile: true });
 
@@ -63,25 +64,32 @@ for (const width of [360, 390, 430]) {
       expect(box!.y + box!.height).toBeLessThanOrEqual(bar!.y + bar!.height + 1);
     });
 
-    test('the caps scroll inside their own strip, not the bar', async ({ page }) => {
+    test('every cap fits on screen — the strip must not need to scroll', async ({ page }) => {
       await openOnPhone(page);
       const caps = page.locator('.touch-caps');
       await expect(caps).toBeVisible({ timeout: 10000 });
 
-      // The cap strip is wider than the space it gets, and that overflow is
-      // confined to this child: if it were on .touch-keys the mic would ride
-      // off the right edge with it. Clipping a cap is fine — it scrolls.
+      // Caps fire on pointerdown, so a scroll BEGUN on a cap sends that
+      // cap's key — the only safe strip is one that never scrolls. Dropping
+      // the arrows is what made it fit; this pins that property so a future
+      // cap can't quietly reintroduce the overflow.
       const metrics = await caps.evaluate((el) => ({
         scrollWidth: el.scrollWidth,
         clientWidth: el.clientWidth,
       }));
-      expect(metrics.scrollWidth).toBeGreaterThan(metrics.clientWidth);
+      expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
 
       const bar = await page.locator('.touch-keys').evaluate((el) => ({
         scrollWidth: el.scrollWidth,
         clientWidth: el.clientWidth,
       }));
       expect(bar.scrollWidth).toBeLessThanOrEqual(bar.clientWidth);
+
+      // And in viewport coordinates: first and last cap wholly on screen.
+      const first = (await page.locator('.touch-caps button').first().boundingBox())!;
+      const last = (await page.locator('.touch-caps button').last().boundingBox())!;
+      expect(first.x).toBeGreaterThanOrEqual(0);
+      expect(last.x + last.width).toBeLessThanOrEqual(width);
     });
 
     // The bar's mic override once carried a flat `opacity: 1`, whose 0-3-0

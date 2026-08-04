@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { createTouchGesture, HOLD_MS, SLOP_PX } from '../src/web/touchGesture.ts';
+import { createTouchGesture, holdKeepsFocus, HOLD_MS, SLOP_PX } from '../src/web/touchGesture.ts';
 
 test("guard off: scroll from the first pixel, end is inert — today's behavior exactly", () => {
   const g = createTouchGesture();
@@ -70,4 +70,17 @@ test('moves after the hold press are ignored — a held finger drifting is not a
 test('constants match the spec', () => {
   expect(HOLD_MS).toBe(500);
   expect(SLOP_PX).toBe(10);
+});
+
+test('holdKeepsFocus: keyboard visibility decides, not focus alone — Android back-gesture leaves the textarea focused with the keyboard hidden', () => {
+  // phone, keyboard actually up, mid-typing → keep it up
+  expect(holdKeepsFocus(true, true, true)).toBe(true);
+  // phone, focused but keyboard HIDDEN (back-gesture) → must NOT re-summon
+  expect(holdKeepsFocus(true, true, false)).toBe(false);
+  // phone, unfocused → nothing to keep
+  expect(holdKeepsFocus(false, true, false)).toBe(false);
+  expect(holdKeepsFocus(false, true, true)).toBe(false);
+  // not a coarse phone: focus is the only evidence there is
+  expect(holdKeepsFocus(true, false, false)).toBe(true);
+  expect(holdKeepsFocus(false, false, false)).toBe(false);
 });

@@ -16,10 +16,13 @@ export const TOUCH_KEYS: { id: TouchKey; label: string; pinned?: true }[] = [
   { id: 'ctrl-c', label: '^C' },
   { id: 'tab', label: '⇥' },
   { id: 'shift-tab', label: '⇤' },
-  { id: 'up', label: '↑' },
-  { id: 'down', label: '↓' },
-  { id: 'left', label: '←' },
-  { id: 'right', label: '→' },
+  // No arrow caps, for now (2026-08-04, Z Fold cover-screen feedback): caps
+  // fire on pointerdown, so a horizontal scroll BEGUN on a cap sends that
+  // cap's key — and the arrows were what made the strip overflow narrow
+  // screens in the first place. Without them everything fits and the strip
+  // never scrolls. Arrows stay in seqFor/PLAIN/APP so restoring them is one
+  // catalog line each; drag-to-scroll already covers arrow needs at a prompt
+  // (the wheel fallback), and long-press-click covers TUI option picking.
   { id: 'ctrl', label: 'ctrl' },
   // Pinned outside the scroller (a direct child of the bar, like the mic):
   // ⏎ is the most-used cap — submitting to Claude, confirming prompts — and

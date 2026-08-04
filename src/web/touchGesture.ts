@@ -24,6 +24,17 @@ export interface TouchGesture {
   cancel(): GestureAction;
 }
 
+// Whether a hold-click should preserve the terminal's focus. Focus alone is
+// the WRONG evidence on Android: the back gesture hides the soft keyboard
+// without blurring, so "focused" can mean keyboard-up (mid-typing — keep it)
+// or keyboard-hidden (xterm's focus() call on our synthetic mousedown would
+// RE-SUMMON it — blur instead). On a coarse phone the keyboard's actual
+// visibility decides; elsewhere there is no soft keyboard and focus is the
+// only evidence there is.
+export function holdKeepsFocus(focused: boolean, coarsePhone: boolean, keyboardUp: boolean): boolean {
+  return focused && (!coarsePhone || keyboardUp);
+}
+
 export function createTouchGesture(): TouchGesture {
   // pending: guard on, within slop, timer not yet fired — could still become
   // any of tap/hold/drag. passive: guard off — the legacy scroll-only path.

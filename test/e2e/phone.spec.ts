@@ -365,19 +365,28 @@ test('tap guard: taps are inert to a mouse-tracking app, a long-press clicks', a
     expect(await page.evaluate(() => !!document.activeElement?.closest('.stage-pane')),
       'a long-press from unfocused must not focus (= must not open the soft keyboard)').toBe(false);
 
-    // …and focused stays focused: a long-press mid-typing must not yank the
-    // keyboard away either. (This still delivers a click; the shared session
-    // gets a fresh `clear` from the next run, and cat -v just prints it.)
+    // …and — the Z Fold repro — focused with NO soft keyboard visible must
+    // blur: Android's back gesture hides the keyboard without blurring, so a
+    // focused textarea proves nothing, and preserving focus in that state
+    // made xterm's focus() call re-summon the keyboard on every long-press.
+    // Playwright never has a soft keyboard (keyboardOpen is false), so this
+    // env IS that state. The keyboard-up keep-focus case is unit-covered by
+    // holdKeepsFocus — visualViewport height cannot be faked here.
     await pane.click();
     expect(await page.evaluate(() => !!document.activeElement?.closest('.stage-pane'))).toBe(true);
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
     await page.waitForTimeout(700);
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     expect(await page.evaluate(() => !!document.activeElement?.closest('.stage-pane')),
-      'a long-press while focused must keep focus').toBe(true);
+      'focused with the keyboard hidden must blur, or the click re-summons the keyboard').toBe(false);
   } finally {
     // Never leave cat -v holding the shared session's tty, and never leave
-    // mouse tracking on for the next spec: both outlive this page.
+    // mouse tracking on for the next spec: both outlive this page. The blur
+    // leg above ends with NOTHING focused — and keyboard events go to the
+    // focused element — so refocus the pane first, or this cleanup types
+    // into the void and every later spec inherits a wedged, tracking-on tty
+    // (that exact cascade failed 12 tests once).
+    await pane.click().catch(() => {});
     await page.keyboard.press('Control+C').catch(() => {});
     await page.keyboard.type("printf '\\033[?1002l\\033[?1006l'").catch(() => {});
     await page.keyboard.press('Enter').catch(() => {});
