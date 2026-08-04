@@ -1479,6 +1479,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const text = normalizeTranscript(raw);
     if (!text) return { text: '', injected: false, mode: 'empty' };
 
+    // Composer dictation (`inject=off`): the browser edits the transcript in
+    // a native field and sends it itself — nothing may touch the pane here.
+    if (String(req.query?.inject || '') === 'off') {
+      return { text, injected: false, mode: 'off' };
+    }
+
     const session = box ? box.sessionName : localSession;
     let inj = { injected: false, mode: 'error' };
     if (boxId === '__local__') {

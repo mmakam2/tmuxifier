@@ -240,3 +240,11 @@ test('the engine is taken from getVoiceEngine when supplied, so a model switch i
   expect(res.json().text).toBe('from the new engine');
   expect(handed).toBeGreaterThan(0);
 });
+
+test('inject=off returns the transcript without touching the pane', async () => {
+  const cookie = await login();
+  const res = await post(app, cookie, wav(), '/api/voice?box=b1&inject=off');
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ text: 'hello world', injected: false, mode: 'off' });
+  expect(injected).toEqual([]); // the composer path must never type into the pane
+});
