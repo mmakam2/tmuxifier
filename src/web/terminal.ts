@@ -266,7 +266,21 @@ function wireTouchGestures(parent: HTMLElement, deps: { guard(): boolean; focus(
         if (ev.cancelable) ev.preventDefault();
         deps.focus();
         break;
-      case 'hold-press': mouse('mousedown', a.x, a.y); break;
+      case 'hold-press': {
+        // A long-press is an option pick, not a typing intent. xterm's own
+        // mouse-tracking mousedown handler calls this.focus() on the press we
+        // are about to dispatch, and on a phone focus IS the soft keyboard —
+        // so remember the pre-gesture state and put it back: an unfocused
+        // terminal is re-blurred in the same task (the keyboard never
+        // deploys), a focused one is left alone (the keyboard stays).
+        const hadFocus = parent.contains(document.activeElement);
+        mouse('mousedown', a.x, a.y);
+        if (!hadFocus) {
+          const ae = document.activeElement;
+          if (ae instanceof HTMLElement && parent.contains(ae)) ae.blur();
+        }
+        break;
+      }
       case 'hold-release':
         if (ev.cancelable) ev.preventDefault();
         mouse('mouseup', a.x, a.y);

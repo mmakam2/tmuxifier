@@ -353,6 +353,28 @@ test('tap guard: taps are inert to a mouse-tracking app, a long-press clicks', a
     await page.waitForTimeout(700); // > HOLD_MS
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await expect(pane).toContainText('[<', { timeout: 10000 });
+
+    // A long-press is an option pick, not a typing intent — it must not deploy
+    // the soft keyboard. xterm's own mouse-tracking mousedown handler calls
+    // this.focus() on the synthetic press, so the guard restores the
+    // pre-gesture focus state: unfocused stays unfocused…
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await page.waitForTimeout(700);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    expect(await page.evaluate(() => !!document.activeElement?.closest('.stage-pane')),
+      'a long-press from unfocused must not focus (= must not open the soft keyboard)').toBe(false);
+
+    // …and focused stays focused: a long-press mid-typing must not yank the
+    // keyboard away either. (This still delivers a click; the shared session
+    // gets a fresh `clear` from the next run, and cat -v just prints it.)
+    await pane.click();
+    expect(await page.evaluate(() => !!document.activeElement?.closest('.stage-pane'))).toBe(true);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await page.waitForTimeout(700);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    expect(await page.evaluate(() => !!document.activeElement?.closest('.stage-pane')),
+      'a long-press while focused must keep focus').toBe(true);
   } finally {
     // Never leave cat -v holding the shared session's tty, and never leave
     // mouse tracking on for the next spec: both outlive this page.
