@@ -1729,6 +1729,7 @@ button.empty-kbd:hover { color: var(--text); }
 /* Desktop is untouched: everything here lives inside the media queries. The
    phone bar exists in the DOM on desktop too but never displays. */
 .phone-bar { display: none; }
+.phone-compose { display: none; }
 .touch-keys { display: none; }
 /* Before buildTouchKeyBar populates it, the bar would render as an empty strip
    on a coarse-pointer phone (the media query below only sets display: flex). */
@@ -1824,6 +1825,16 @@ button.empty-kbd:hover { color: var(--text); }
      scrolling, because caps fire on pointerdown and a scroll begun on a cap
      sends that cap's key. Touch targets stay 40px — the trim is all gaps and
      padding. Pinned by the 344px touchBar e2e. */
+  /* The composer opener. Lives in the top bar (the key bar has no 344px room
+     for a fifth pinned control) and is coarse-gated like the key bar itself:
+     a narrow desktop window shows the phone top bar but has NO key bar, and
+     an opener there would toggle an invisible composer. .phone-menu's
+     icon-button styling. */
+  .phone-compose {
+    display: block; width: 40px; height: 40px; flex: 0 0 auto;
+    background: none; border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); font-size: 16px; cursor: pointer;
+  }
   .touch-keys {
     display: flex; align-items: center; gap: 5px;
     padding: 6px 6px calc(6px + env(safe-area-inset-bottom));

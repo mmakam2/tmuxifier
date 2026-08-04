@@ -67,6 +67,7 @@ let phoneCtl: PhoneMode | null = null;
 const stickyCtrl = createStickyCtrl();
 let touchMicSlot: HTMLElement | null = null;
 let touchSyncCap: (() => void) | null = null;
+let touchComposer: { isOpen(): boolean; open(): void; close(): void; appendDraft(t: string): void } | null = null;
 let lastPaneStates = ''; // pollStatus repaints only when a docked box's derived state flips
 let allBoxes: Box[] = [];
 let latestStatus: Record<string, Status> = {};
@@ -733,6 +734,9 @@ function ensureTab(id: string) {
       if (wasArmed) touchSyncCap?.();
       return out;
     },
+    // While the composer is open, pane dictation lands in its draft instead
+    // (inject=off round trip) — the operator edits, then Sends.
+    voiceSink: () => (touchComposer?.isOpen() ? (t: string) => touchComposer?.appendDraft(t) : null),
   });
   tabs.set(id, { el, term, voiceMount });
   if (id === '__local__') updateLocalDot();
@@ -1009,6 +1013,7 @@ async function renderDashboard() {
       <header class="phone-bar">
         <button id="phone-menu" class="phone-menu" type="button" title="Boxes" aria-label="Open box list">☰</button>
         <select id="phone-switch" class="phone-switch" aria-label="Switch pane" disabled></select>
+        <button id="phone-compose" class="phone-compose" type="button" title="Compose message" aria-label="Compose message">✏️</button>
       </header>
       <main id="stage" class="stage"><div class="stage-grid"></div><div class="stage-parking"></div></main>
       <div class="touch-keys" id="touch-keys"></div>
@@ -1023,18 +1028,37 @@ async function renderDashboard() {
   phoneCtl?.dispose();
   phoneCtl = createPhoneMode({
     layout: app.querySelector('.layout') as HTMLElement,
-    onFlip: () => repaintStage(),
+    onFlip: () => {
+      // A composer left open in the (now display:none) bar would keep the
+      // voice sink active on desktop, silently rerouting pane dictation
+      // into an invisible draft.
+      if (!phoneCtl?.matches()) touchComposer?.close();
+      repaintStage();
+    },
     onViewport: () => refitActiveTerminals(),
   });
   // Built before the first repaint: the phone branch adopts the focused pane's
   // mic into this bar's slot, which has to exist by then.
   const bar = buildTouchKeyBar(app.querySelector('#touch-keys') as HTMLElement, {
-    send: (d) => { if (focusedBoxId) tabs.get(focusedBoxId)?.term.input(d); },
+    // Boolean-returning: the composer clears its draft only when a live pane
+    // accepted the bytes (setup/stopped panes have no terminal behind them).
+    send: (d) => {
+      const t = focusedBoxId ? tabs.get(focusedBoxId)?.term : undefined;
+      if (!t) return false;
+      t.input(d);
+      return true;
+    },
     appCursor: () => (focusedBoxId ? tabs.get(focusedBoxId)?.term.appCursor() ?? false : false),
     sticky: stickyCtrl,
+    focusTerminal: () => { if (focusedBoxId) tabs.get(focusedBoxId)?.term.focus(); },
+    // The bar changes height when the composer opens/closes/grows; open
+    // terminals must re-fit to the stage that remains.
+    onLayoutChange: () => refitActiveTerminals(),
   });
   touchMicSlot = bar.micSlot;
   touchSyncCap = bar.syncCap;
+  touchComposer = bar.composer;
+  app.querySelector('#phone-compose')!.addEventListener('click', () => touchComposer?.open());
   repaintStage();
   app.querySelector('#logout')!.addEventListener('click', async () => {
     teardownWorkspace();
@@ -3268,6 +3292,7 @@ function teardownWorkspace(): void {
   // explain it, since the rebuilt bar starts unlit. buildTouchKeyBar also paints
   // true state on construction; disarming here is what makes that state idle.
   stickyCtrl.disarm();
+  touchComposer = null;
   closeFleetJobsPanel();
   closeEventsPanel();
   closeProvisionPanel();
