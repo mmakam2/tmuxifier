@@ -1758,6 +1758,12 @@ button.empty-kbd:hover { color: var(--text); }
     background: var(--panel-2); color: var(--text); font-family: var(--face); font-size: 14px;
   }
   .phone-switch:disabled { opacity: 0.6; }
+  /* While the soft keyboard is open (phoneMode.ts toggles kb-open off the same
+     visualViewport height gate that writes --vvh), the top bar's row goes to
+     the terminal — rows are scarcest exactly then, and ☰/pane-switch are not
+     reachable mid-typing anyway. Closing the keyboard restores it; there is
+     deliberately no other reveal gesture. */
+  .layout.kb-open .phone-bar { display: none; }
   /* Sidebar becomes a left slide-over drawer — the .fleet-panel pattern:
      transform for the slide, visibility so closed contents leave the tab
      order (WCAG 2.4.3), matching transition delay on the way out. */
@@ -1813,22 +1819,27 @@ button.empty-kbd:hover { color: var(--text); }
      scroll deliberately does NOT live here — the cap strip is a constant ~494px,
      so a bar-level scroller pushed the mic past the right edge of every phone
      viewport, reachable only by an undiscoverable horizontal swipe. */
+  /* Spacing is budgeted for a 344px viewport (Z Fold 6 cover screen, the
+     narrowest device in the fleet): every control must fit WITHOUT the strip
+     scrolling, because caps fire on pointerdown and a scroll begun on a cap
+     sends that cap's key. Touch targets stay 40px — the trim is all gaps and
+     padding. Pinned by the 344px touchBar e2e. */
   .touch-keys {
-    display: flex; align-items: center; gap: 6px;
-    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    display: flex; align-items: center; gap: 5px;
+    padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--border); background: var(--panel);
     flex: 0 0 auto;
   }
   /* min-width: 0 is what lets this shrink below its content and actually scroll,
      rather than forcing the flex line wider than the viewport. */
   .touch-keys .touch-caps {
-    display: flex; align-items: center; gap: 6px;
+    display: flex; align-items: center; gap: 5px;
     flex: 1 1 auto; min-width: 0; overflow-x: auto;
     scrollbar-width: none; /* the strip is short; a bar would eat touch-target height */
   }
   .touch-keys .touch-caps::-webkit-scrollbar { display: none; }
   .touch-keys button {
-    min-width: 40px; height: 40px; padding: 0 10px; flex: 0 0 auto;
+    min-width: 40px; height: 40px; padding: 0 7px; flex: 0 0 auto;
     border: 1px solid var(--key-border); border-bottom-color: #101216; border-radius: 8px;
     background: var(--key-face); color: var(--muted);
     box-shadow: 0 1px 0 rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -1846,7 +1857,7 @@ button.empty-kbd:hover { color: var(--text); }
      against the viewport, over the phone bar, leaving a zero-width slot. */
   .touch-keys .touch-mic-slot .voice-btn { position: static; top: auto; right: auto; }
   /* Grown to the bar's touch target; the caps beside it are 40px. */
-  .touch-keys .touch-mic-slot .voice-btn { min-width: 44px; height: 40px; padding: 0 12px; font-size: 13px; }
+  .touch-keys .touch-mic-slot .voice-btn { min-width: 44px; height: 40px; padding: 0 10px; font-size: 13px; }
   /* Docked in the bar the mic sits on a panel rather than over the glass, so it
      is opaque — but only AT REST. This used to be a flat `opacity: 1` on the
      rule above, whose 0-3-0 outranked `.voice-btn:disabled` (0.3) and

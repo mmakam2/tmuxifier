@@ -106,3 +106,15 @@ test('ctrl-c is a dedicated cap sending ETX regardless of cursor mode', () => {
   expect(seqFor('ctrl-c', false)).toBe('\x03');
   expect(seqFor('ctrl-c', true)).toBe('\x03');
 });
+
+test('enter is the only pinned cap — it must never ride the scroller off-screen', () => {
+  for (const k of TOUCH_KEYS) {
+    expect(!!k.pinned).toBe(k.id === 'enter');
+  }
+});
+
+test('no arrow caps in the catalog — a scroll begun on a cap fires it, and arrows made the strip scroll on narrow screens', () => {
+  for (const k of TOUCH_KEYS) {
+    expect(['up', 'down', 'left', 'right']).not.toContain(k.id);
+  }
+});

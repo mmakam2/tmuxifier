@@ -596,11 +596,23 @@ than silently missing it), `terminal.ts` (the pane handle also exposes `input(d)
 a `transformInput` seam on the `term.onData` path, where sticky Ctrl masks. `input(d)` sits
 *downstream* of that seam and never passes through it, so a bar key cannot be masked even in
 principle — the bar also disarms explicitly, so `ctrl` then an arrow spends the modifier rather
-than leaving it armed. Also a two-point font bump under `(max-width: 720px) and (pointer: coarse)`
-decided once per `openTerminal` call, so a mid-session flip leaves open terminals at the size
-they started with; the bump saturates at 32 BEFORE `clampFontSize` sees it, because that clamp
-falls back to the default 12 for anything out of range — an unsaturated 31+2 came back smaller
-than the desktop it was meant to enlarge), `index.html`, `style.css`, plus feature modules —
+than leaving it armed. `wireTouchGestures` (formerly `wireTouchScroll`) owns all touch on the
+glass: drags still become synthetic wheels, and when the pane app has mouse tracking on
+(`term.modes.mouseTrackingMode`, read live per gesture) a tap is preventDefault-ed and
+explicitly refocused rather than forwarded as a click — a stray touch on a Claude Code option
+list was selecting and activating it — while a ~500ms hold dispatches the real
+mousedown/mouseup pair so deliberate touch activation survives. The hold decides keep-vs-blur
+focus by KEYBOARD evidence, not focus evidence (`holdKeepsFocus` fed by `keyboardOpen`):
+xterm's mouse-tracking handler calls focus() on any mousedown, and Android's back gesture
+hides the keyboard *without blurring*, so a focused textarea proves nothing — keying on focus
+made every hold re-summon the keyboard. The pure tap/hold/drag discriminator is
+`touchGesture.ts` (`HOLD_MS`/`SLOP_PX`), and with tracking off it reproduces the old
+scroll-only path exactly, so plain prompts see zero drift. Also a one-point font bump
+under `(max-width: 720px) and (pointer: coarse)` decided once per `openTerminal` call, so a
+mid-session flip leaves open terminals at the size they started with; the bump saturates at 32
+BEFORE `clampFontSize` sees it, because that clamp falls back to the default 12 for anything
+out of range — an unsaturated bump past the ceiling came back smaller than the desktop it was
+meant to enlarge), `index.html`, `style.css`, plus feature modules —
 `stageLayout.ts` (the pure split-tree stage model — a node is a box-id leaf or a split
 (orientation/children/ratios) in canonical form (splits ≥2 children, no same-orientation
 nesting), with stage-edge/pane-edge dock, atomic move, undock-collapse, path-addressed
@@ -648,20 +660,26 @@ screenHeight/scale and refit every open terminal for a keyboard that never appea
 strips `sidebar-collapsed` while the query matches — the collapsed rail hides the box list,
 fatal inside a drawer — and removes `--vvh` on both flip and `dispose()`, since
 `documentElement` outlives `#app` and a keyboard-squeezed height would otherwise still be
-styling `.layout` after the next login), `touchKeys.ts` (the phone touch key bar — gated
+styling `.layout` after the next login. `keyboardOpen`/`KB_OPEN_PX` (pure, exported) ride the
+same height-gated handler to toggle `kb-open` on `.layout` — CSS hides `.phone-bar` under it,
+handing its row to the stage while the soft keyboard is up — and the class is removed on flip
+and `dispose()` exactly like `--vvh`), `touchKeys.ts` (the phone touch key bar — gated
 additionally on `(pointer: coarse)`, so a narrow desktop window reflows but grows no bar, which
 is why `main.ts` asks the DOM (`touchBarShown`) rather than re-declaring that query in JS before
-adopting the pane's mic into it. The pure half is `TOUCH_KEYS`/`seqFor` — arrows honour DECCKM,
-the caller reading `term.modes.applicationCursorKeysMode` live — and `createStickyCtrl`, the
+adopting the pane's mic into it. The pure half is `TOUCH_KEYS`/`seqFor` (no arrow caps since
+2026-08-04 — they made the strip overflow narrow screens, and caps fire on pointerdown, so a
+scroll begun on a cap sent that cap's key; `seqFor` keeps the DECCKM-aware arrow map so
+restoring them is one catalog line each) — and `createStickyCtrl`, the
 arm → mask-one-character → disarm modifier whose case fold is a raw ASCII a–z fold and never
 `toUpperCase()` (`'ß'.toUpperCase()` is `'SS'`, and masking that `'S'` would send `\x13` XOFF
 and freeze the pane); space masks to NUL and anything unmaskable passes through untouched but
 still disarms, so an armed modifier can never silently corrupt later input. The DOM half sends
 on `pointerdown` + `preventDefault` — a click would move focus off xterm's hidden textarea and
 close the soft keyboard on every key press, with a `detail === 0` `click` handler beside it
-carrying the keyboard/AT activation path that same `preventDefault` would otherwise leave dead — splits the bar into a scrolling cap strip and a
-mic slot pinned outside it (the caps are a constant ~494px, so a bar-level scroller put the mic
-past the right edge of every phone viewport), never Ctrl-modifies its own keys, and returns
+carrying the keyboard/AT activation path that same `preventDefault` would otherwise leave dead — splits the bar into a cap strip and a
+pinned tail — the ⏎ cap (`pinned: true` in `TOUCH_KEYS`) and the mic slot — with the whole row
+spacing-budgeted to fit a 344px viewport (Z Fold 6 cover screen) with nothing to scroll,
+pinned by the touchBar e2e, never Ctrl-modifies its own keys, and returns
 `syncCap`, the repaint seam `transformInput` calls when the soft keyboard's own input spends
 the modifier with no pointer event on the bar to notice),
 `immichCard.ts` (the Immich card: library and volume sizes kept distinct — `statistics.usage` is

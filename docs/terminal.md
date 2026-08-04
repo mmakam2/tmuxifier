@@ -189,8 +189,10 @@ plain sidebar click does on the desktop.
 **The touch key bar.** On a touch device a key bar sits along the bottom of the screen carrying
 what a soft keyboard either lacks or types unreliably: `esc`, ^C (a dedicated Ctrl+C — the
 interrupt, sitting beside `esc` because those two are how you interrupt Claude Code), ⇥ (Tab),
-⇤ (Shift+Tab), the four arrow keys, `ctrl`, and ⏎ (Enter). Those caps scroll sideways on a narrow screen; the **mic**
-button sits outside that scroller, pinned beside it so it is always on screen. On a phone the
+⇤ (Shift+Tab), and `ctrl`, with ⏎ (Enter) and the **mic** pinned at the bar's right edge —
+you can submit a line (answer a prompt, send a message to a running agent) without opening the
+soft keyboard at all. Everything fits on one row with nothing to scroll, sized for screens as
+narrow as a foldable's cover display. On a phone the
 voice button moves out of the pane header and into this bar, and moves back to the header when
 the layout returns to desktop width. Press and hold it to dictate and release to transcribe,
 exactly as on the desktop (see [Voice dictation](#voice-dictation)) — a hold that drifts under
@@ -199,22 +201,21 @@ phone layout but no key bar, and keeps its mic in the pane header: the bar is fo
 devices that are actually coarse.
 
 Keys are sent the moment you press them and never steal focus from the terminal, so the soft
-keyboard doesn't drop away under you each time you tap an arrow. That immediacy has one
-accepted cost: the nine caps are wider than any phone screen, and because a key fires on press
-rather than on release, a sideways swipe *begun on a cap* sends that cap's key before the strip
-scrolls — start the swipe on a gap between caps (or on the strip's ends) to scroll without
-typing. Firing on press is what keeps the keyboard up, so the two can't both be had. The arrows follow the
-terminal's current cursor-key mode, so they do the right thing both at a shell prompt and
-inside tmux, vim, or Claude Code's interface, all of which switch the terminal into
-application-cursor mode.
+keyboard doesn't drop away under you each time you tap a cap. Firing on press is also why the
+bar deliberately holds few enough caps to never scroll: a sideways swipe begun on a cap of a
+scrolling strip would send that cap's key before the strip moved. The arrow caps were dropped
+for exactly that reason — they were what made the strip overflow narrow screens. You rarely
+miss them: dragging on the terminal already sends arrow keys at a prompt (the scroll fallback,
+which follows the terminal's cursor-key mode), and in Claude Code's interface a long-press
+picks options directly.
 
 `ctrl` is **sticky** rather than held: tap it, it lights amber, and the next single character
 you type — from the soft keyboard or anywhere else — is sent as its control code, after which
 the modifier releases itself. `ctrl` then space sends NUL. Tapping `ctrl` a second time cancels
 it. Anything that can't be masked — an emoji, an autocorrect burst, a pasted string — passes
 through untouched and *also* releases the modifier, so an armed Ctrl can never quietly corrupt
-something you type later. The bar's own keys are never Ctrl-modified: `ctrl` followed by ↑
-sends a plain ↑ and clears the modifier.
+something you type later. The bar's own keys are never Ctrl-modified: `ctrl` followed by ⏎
+sends a plain Enter and clears the modifier.
 
 One honest limit: a soft keyboard running autocorrect **composes** — it buffers letters into a
 word and hands the terminal the whole word at once, which is exactly the "can't be masked"
@@ -223,15 +224,26 @@ cap: it sends the interrupt itself and owes the keyboard nothing. For other comb
 (Ctrl+D, Ctrl+R, Ctrl+Z), sticky `ctrl` works when autocorrect is off or the keyboard sends
 single characters; otherwise a hardware keyboard is the reliable route.
 
+**Touch and mouse-aware apps.** When the app in the pane takes mouse input (Claude Code's
+fullscreen interface, tmux with `mouse on`), a stray tap would otherwise *click* it —
+selecting and activating whatever option it happened to land on. So while mouse tracking is
+active, a tap only focuses the terminal; to deliberately tap a button or an option in such an
+app, press and hold for about half a second. A long-press never summons the soft keyboard:
+if the keyboard was up it stays up, and if it was hidden it stays hidden — picking an option
+is not a typing intent. Drag-to-scroll is unchanged, and apps that don't take mouse input
+(a plain shell prompt) see no difference at all.
+
 **The soft keyboard.** The layout is measured against the browser's visual viewport rather than
 the window, so the prompt and the key bar stay above the on-screen keyboard instead of being
 buried under it — iOS Safari in particular doesn't shrink the page when the keyboard opens. The
 open drawer is measured the same way, so the end of the box list and the Host Shell row stay
 reachable while you're typing in its search field. Page zoom is factored out of that
 measurement, so a browser zooming in by itself (which iOS does when you focus any small field)
-doesn't resize your terminals. Terminal text is set two points larger on a touch phone for
-legibility, decided when each terminal opens — flipping across the breakpoint mid-session
-leaves already-open terminals at the size they started with.
+doesn't resize your terminals. While the keyboard is open, the top bar (☰ and the pane
+switcher) hides to give its row to the terminal — rows are scarcest exactly then, and neither
+control is useful mid-typing; closing the keyboard brings it back. Terminal text is set one
+point larger on a touch phone for legibility, decided when each terminal opens — flipping
+across the breakpoint mid-session leaves already-open terminals at the size they started with.
 
 **Not yet.** Notifications still come from the dashboard tab itself, so a phone with the screen
 locked won't tell you Claude is waiting; doing that properly needs Web Push and an installed

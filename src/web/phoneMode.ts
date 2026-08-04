@@ -36,6 +36,18 @@ const CLOSES_DRAWER = [
   '#fleet-run',
 ].join(', ');
 
+// The keyboard-open predicate behind the top bar's auto-hide. iOS never
+// shrinks the LAYOUT viewport for the soft keyboard (the premise --vvh already
+// stands on) and current Android Chrome's default likewise resizes only the
+// visual viewport — so a large innerHeight-vs-visual delta is the keyboard,
+// and nothing else on a phone produces one this big. `vvh` must be the
+// scale-corrected height (vv.height * vv.scale), which is what onVv already
+// computes: raw vv.height would read pinch-zoom as a keyboard.
+export const KB_OPEN_PX = 150;
+export function keyboardOpen(innerHeight: number, vvh: number): boolean {
+  return innerHeight - vvh > KB_OPEN_PX;
+}
+
 export interface PhoneMode {
   matches(): boolean;
   openDrawer(): void;
@@ -95,6 +107,10 @@ export function createPhoneMode(deps: {
       if (h === lastVvh) return;
       lastVvh = h;
       document.documentElement.style.setProperty('--vvh', `${h}px`);
+      // While the keyboard is up, terminal rows are scarcest and ☰/pane-switch
+      // are unreachable behind it anyway; hiding the bar hands its row to the
+      // stage. Toggled BEFORE onViewport() so the refit sees the new height.
+      layout.classList.toggle('kb-open', keyboardOpen(window.innerHeight, h));
       window.scrollTo(0, 0); // iOS scrolls the focused input into view by panning the page
       deps.onViewport();
     }, 50);
@@ -112,6 +128,7 @@ export function createPhoneMode(deps: {
     if (!mq.matches) {
       clearTimeout(vvTimer);
       document.documentElement.style.removeProperty('--vvh');
+      layout.classList.remove('kb-open'); // same lifetime as --vvh, same reason
       lastVvh = null; // property gone — a return to phone must re-apply, not skip
     }
     deps.onFlip();
@@ -153,6 +170,7 @@ export function createPhoneMode(deps: {
       // a logout would still be styling `.layout` after the next login — with
       // no listener left alive to correct it until the keyboard next opens.
       document.documentElement.style.removeProperty('--vvh');
+      layout.classList.remove('kb-open');
       vv?.removeEventListener('resize', onVv);
       vv?.removeEventListener('scroll', onVv);
       mq.removeEventListener('change', onChange);

@@ -315,3 +315,97 @@ test('the dedicated ^C cap interrupts the foreground process', async ({ page }) 
   // Only a live shell prompt (cat gone) executes the echo.
   await expect(pane).toContainText('CTRLC_CAP_DONE', { timeout: 10000 });
 });
+
+test('tap guard: taps are inert to a mouse-tracking app, a long-press clicks', async ({ page }) => {
+  await login(page);
+  const pane = await openLocalhost(page);
+  await pane.click(); // mouse focus, BEFORE tracking turns on — a click then would click the app
+  try {
+    // Enable mouse tracking (1002) + SGR encoding (1006) in the pane, exactly
+    // as a TUI would; tmux mirrors the pane's request out to xterm, so
+    // term.modes.mouseTrackingMode goes non-'none'. cat -v then renders any
+    // report the shell receives visibly as ^[[<… — the pty-effect signal.
+    // `clear` first is load-bearing: the seeded tmux session persists across
+    // runs and repeats, and a PREVIOUS run's long-press left its ^[[<…M pair
+    // on the visible screen — without the clear, the not.toContainText below
+    // reads someone else's evidence.
+    await page.keyboard.type("clear; printf '\\033[?1002h\\033[?1006h'; echo TRACKING''_ON; cat -v");
+    await page.keyboard.press('Enter');
+    await expect(pane).toContainText('TRACKING_ON', { timeout: 10000 });
+
+    const rect = (await pane.boundingBox())!;
+    const x = Math.round(rect.x + rect.width / 2);
+    const y = Math.round(rect.y + rect.height / 2);
+
+    // A tap must deliver NO mouse report — this is the accidental-selection
+    // bug. Give the round trip a beat, then assert the screen stayed clean.
+    await page.touchscreen.tap(x, y);
+    await page.waitForTimeout(750);
+    await expect(pane).not.toContainText('[<');
+    // …and the tap still focused the terminal (the guard preventDefaults the
+    // browser's own focus path, so it must refocus explicitly).
+    expect(await page.evaluate(() => !!document.activeElement?.closest('.stage-pane'))).toBe(true);
+
+    // The positive control that keeps the assertion above honest: the same
+    // spot held past HOLD_MS must deliver the SGR press/release pair.
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await page.waitForTimeout(700); // > HOLD_MS
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await expect(pane).toContainText('[<', { timeout: 10000 });
+
+    // A long-press is an option pick, not a typing intent — it must not deploy
+    // the soft keyboard. xterm's own mouse-tracking mousedown handler calls
+    // this.focus() on the synthetic press, so the guard restores the
+    // pre-gesture focus state: unfocused stays unfocused…
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await page.waitForTimeout(700);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    expect(await page.evaluate(() => !!document.activeElement?.closest('.stage-pane')),
+      'a long-press from unfocused must not focus (= must not open the soft keyboard)').toBe(false);
+
+    // Mid-hold, Android's native long-press fires `contextmenu`, and xterm's
+    // own handler responds by focusing the textarea for right-click paste —
+    // AFTER the guard's blur, which on a phone re-summons the soft keyboard
+    // (the close-then-reopen flap seen on device). During a guarded gesture
+    // the event must be swallowed before xterm ever sees it.
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await page.waitForTimeout(700); // > HOLD_MS — the press has been dispatched
+    const midHold = await page.evaluate(([cx, cy]) => {
+      const el = document.elementFromPoint(cx, cy)!;
+      const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: cx, clientY: cy });
+      el.dispatchEvent(ev);
+      return { prevented: ev.defaultPrevented, focused: !!document.activeElement?.closest('.stage-pane') };
+    }, [x, y] as [number, number]);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    expect(midHold.prevented, 'contextmenu during a guarded hold must be swallowed').toBe(true);
+    expect(midHold.focused, 'contextmenu during a guarded hold must not focus the terminal').toBe(false);
+
+    // …and — the Z Fold repro — focused with NO soft keyboard visible must
+    // blur: Android's back gesture hides the keyboard without blurring, so a
+    // focused textarea proves nothing, and preserving focus in that state
+    // made xterm's focus() call re-summon the keyboard on every long-press.
+    // Playwright never has a soft keyboard (keyboardOpen is false), so this
+    // env IS that state. The keyboard-up keep-focus case is unit-covered by
+    // holdKeepsFocus — visualViewport height cannot be faked here.
+    await pane.click();
+    expect(await page.evaluate(() => !!document.activeElement?.closest('.stage-pane'))).toBe(true);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await page.waitForTimeout(700);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    expect(await page.evaluate(() => !!document.activeElement?.closest('.stage-pane')),
+      'focused with the keyboard hidden must blur, or the click re-summons the keyboard').toBe(false);
+  } finally {
+    // Never leave cat -v holding the shared session's tty, and never leave
+    // mouse tracking on for the next spec: both outlive this page. The blur
+    // leg above ends with NOTHING focused — and keyboard events go to the
+    // focused element — so refocus the pane first, or this cleanup types
+    // into the void and every later spec inherits a wedged, tracking-on tty
+    // (that exact cascade failed 12 tests once).
+    await pane.click().catch(() => {});
+    await page.keyboard.press('Control+C').catch(() => {});
+    await page.keyboard.type("printf '\\033[?1002l\\033[?1006l'").catch(() => {});
+    await page.keyboard.press('Enter').catch(() => {});
+  }
+});
