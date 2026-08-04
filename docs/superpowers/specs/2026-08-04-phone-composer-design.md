@@ -19,11 +19,19 @@ because there the user has not authored the injected text.
 
 ## Decisions (brainstormed with operator, all four confirmed)
 
-1. **Placement — toggle swap.** A ✏️ cap in the bar's pinned zone toggles composer mode.
-   Open: the scrolling cap strip hides; a native textarea + ➤ Send button take its row;
-   the pinned zone shows [➤][✏️][🎤] (the ⏎ cap hides — Send-on-empty covers it, and the
-   field needs the width on a 344px cover screen). No extra row is ever spent; terminal
-   typing is untouched while the composer is closed.
+1. **Placement — toggle swap, opened from the top bar.** A ✏️ button in the phone top
+   bar (beside the pane switch, which has slack) opens composer mode: the scrolling cap
+   strip hides; a native textarea + ➤ Send button take its row; the pinned zone shows
+   [➤][✏️][🎤] (the ⏎ cap hides — Send-on-empty covers it, and the field needs the width
+   on a 344px cover screen). The ✏️ in the *key bar* exists only while composing and is
+   the closer. No extra row is ever spent; the idle key bar is byte-identical to today —
+   which is the point: a pinned ✏️ cap needs ~45px and the 344px bar has ~10px of slack
+   (trimming recovers ~22px at best), and the round-2 no-scroll invariant is load-bearing
+   because caps fire on pointerdown. (Amended from the originally approved
+   pinned-✏️-cap placement for exactly that arithmetic; operator approved the top-bar
+   opener.) Caveat, accepted: `kb-open` hides the top bar, so reaching the opener
+   mid-direct-typing means dismissing the soft keyboard first — the natural
+   start-of-compose state anyway.
 2. **Multi-line — collapse on Send.** Autogrowing textarea (~4 rows max). The keyboard's
    Enter inserts a newline while composing; on Send, newline runs collapse to single
    spaces — the `voiceText.js` rule, because a raw newline reaching the pty IS Enter and
@@ -52,10 +60,11 @@ because there the user has not authored the injected text.
 - Send routes through the bar's existing `send()` → `term.input()` — downstream of
   `transformInput`, so like all bar keys it can never be sticky-Ctrl-masked. Opening
   the composer disarms an armed sticky Ctrl (the existing bar-tap rule).
-- Focus: ✏️ open focuses the field (`pointerdown` + `preventDefault` + explicit
-  `field.focus()` — the bar convention, but here the focus move is the point); close
-  refocuses the terminal. The `detail === 0` click path covers keyboard/AT activation
-  on ✏️ and ➤, per the round-2 fix.
+- Focus: the top-bar opener is an ordinary click button — open ends with explicit
+  `field.focus()`, so the soft keyboard retargets to the field either way; close
+  refocuses the terminal. The in-bar ✏️ closer and ➤ keep the bar convention
+  (`pointerdown` + `preventDefault`, with the `detail === 0` click path for
+  keyboard/AT activation, per the round-2 fix).
 - Autogrow via scrollHeight on input, capped ~4 rows (CSS `field-sizing: content` is
   not universal). A taller bar reflows `.layout` and must refit open terminals —
   verify during implementation; wire to the existing refit path if not automatic.
@@ -77,7 +86,10 @@ the composer's `appendToDraft` while the composer is open.
   send is already a silent no-op there; clearing on top of that would eat the prompt.
 - Logout/teardown rebuilds `#app`; the draft dies with it (accepted — same lifetime as
   the rest of the bar).
-- A stale cached bundle renders no ✏️ cap (additive, no migration).
+- The top-bar opener is display-gated on `(pointer: coarse)` like the key bar itself: a
+  narrow desktop window shows the phone top bar but has no key bar, and an opener there
+  would toggle an invisible composer.
+- A stale cached bundle renders no ✏️ anywhere (additive, no migration).
 - 344px budget (Z Fold cover screen): field flex-1 beside ➤/✏️/🎤; pinned by geometry
   e2e like the round-2 bar.
 
