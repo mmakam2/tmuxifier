@@ -7,6 +7,7 @@ import { buildFontFamily, clampFontSize, DEFAULT_TERM_FONT_SIZE } from './termFo
 import { api } from './api';
 import { filesFromDataTransfer, uploadName, sizeError, termSafe } from './upload';
 import { wireVoice, createVoiceHotkeyHandler, type VoiceHotkeyTarget } from './voiceUi';
+import { createTouchGesture, HOLD_MS, type GestureAction } from './touchGesture';
 import type { PaneConn } from './paneHeader';
 
 // Phone mode raises the terminal font two steps for touch legibility. Checked
@@ -216,47 +217,86 @@ function wireUploads(parent: HTMLElement, term: Terminal, boxId: string): () => 
   };
 }
 
-// Touch drags become synthetic wheel events. xterm's own touch path only
-// scrolls its viewport, which at scrollback 0 (every box terminal — tmux owns
-// history) can never consume the drag; the unconsumed touchmove then bubbles
-// to the browser un-prevented, and a pan at page top is the browser's
-// pull-to-refresh gesture. The wheel path, by contrast, already handles every
-// case correctly — arrow-key fallback on a scrollback-0 buffer (DECCKM-aware),
-// SGR mouse reporting when the app enabled tracking — so a drag is translated
-// into the event that working path expects rather than reimplemented beside
-// it. Capture phase on the container so xterm's dead-end touch handlers never
-// run; single-touch only, so pinch gestures pass through untouched. The
-// provision terminal keeps xterm's native path — it has real scrollback.
-function wireTouchScroll(parent: HTMLElement): () => void {
-  let lastY: number | null = null;
-  const onStart = (ev: TouchEvent) => {
-    lastY = ev.touches.length === 1 ? ev.touches[0].clientY : null;
-  };
-  const onMove = (ev: TouchEvent) => {
-    if (lastY == null || ev.touches.length !== 1) return;
-    const y = ev.touches[0].clientY;
-    const deltaY = lastY - y; // finger up = positive = scroll down, wheel's sign convention
-    lastY = y;
-    if (deltaY === 0) return;
-    if (ev.cancelable) ev.preventDefault();
-    ev.stopPropagation();
-    (ev.target as HTMLElement | null)?.dispatchEvent(new WheelEvent('wheel', {
-      deltaY,
-      deltaMode: WheelEvent.DOM_DELTA_PIXEL,
-      bubbles: true,
-      cancelable: true,
+// Touch drags become synthetic wheel events (rationale below) — and, when the
+// app has MOUSE TRACKING on (Claude Code fullscreen, tmux `mouse on`), taps
+// become inert: xterm would forward a tap as a real SGR click, so a stray
+// touch on a TUI option list selected and activated it. A tap now suppresses
+// the browser's compatibility mouse events entirely and refocuses the
+// terminal itself; a deliberate ~500ms hold dispatches the synthetic
+// mousedown/mouseup pair so touch activation survives. With tracking off the
+// gesture machine (touchGesture.ts, the pure unit-tested half) reproduces the
+// old path exactly — plain prompts keep today's behavior byte-for-byte.
+//
+// The wheel rationale: xterm's own touch path only scrolls its viewport,
+// which at scrollback 0 (every box terminal — tmux owns history) can never
+// consume the drag; the unconsumed touchmove then bubbled to the browser as
+// pull-to-refresh. The wheel path already handles every case correctly —
+// arrow-key fallback on a scrollback-0 buffer (DECCKM-aware), SGR mouse
+// reporting when the app enabled tracking — so a drag is translated into the
+// event that working path expects rather than reimplemented beside it.
+// Capture phase on the container so xterm's dead-end touch handlers never
+// run; multi-touch cancels the gesture, so pinch passes through untouched.
+// The provision terminal keeps xterm's native path — it has real scrollback.
+function wireTouchGestures(parent: HTMLElement, deps: { guard(): boolean; focus(): void }): () => void {
+  const g = createTouchGesture();
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  let pressTarget: HTMLElement | null = null; // element under the finger at touchstart
+  const clearHold = () => { clearTimeout(holdTimer); holdTimer = undefined; };
+  const mouse = (type: 'mousedown' | 'mouseup', x: number, y: number) => {
+    pressTarget?.dispatchEvent(new MouseEvent(type, {
+      clientX: x, clientY: y, button: 0, buttons: type === 'mousedown' ? 1 : 0,
+      bubbles: true, cancelable: true,
     }));
   };
-  const onEnd = () => { lastY = null; };
+  const apply = (a: GestureAction, ev: TouchEvent) => {
+    switch (a.act) {
+      case 'scroll':
+        clearHold();
+        if (ev.cancelable) ev.preventDefault();
+        ev.stopPropagation();
+        (ev.target as HTMLElement | null)?.dispatchEvent(new WheelEvent('wheel', {
+          deltaY: a.deltaY, deltaMode: WheelEvent.DOM_DELTA_PIXEL, bubbles: true, cancelable: true,
+        }));
+        break;
+      case 'tap':
+        clearHold();
+        // Suppress the compatibility mousedown/mouseup/click the browser would
+        // synthesize — that suppression also kills its focus path, so refocus
+        // explicitly to keep tap-opens-keyboard working.
+        if (ev.cancelable) ev.preventDefault();
+        deps.focus();
+        break;
+      case 'hold-press': mouse('mousedown', a.x, a.y); break;
+      case 'hold-release':
+        if (ev.cancelable) ev.preventDefault();
+        mouse('mouseup', a.x, a.y);
+        break;
+      case 'cancelled': clearHold(); break;
+    }
+  };
+  const onStart = (ev: TouchEvent) => {
+    clearHold();
+    const t = ev.touches.length === 1 ? ev.touches[0] : null;
+    pressTarget = ev.target as HTMLElement | null;
+    g.start(t?.clientX ?? 0, t?.clientY ?? 0, ev.touches.length, deps.guard());
+    if (g.holdPending) holdTimer = setTimeout(() => apply(g.timerFired(), ev), HOLD_MS);
+  };
+  const onMove = (ev: TouchEvent) => {
+    const t = ev.touches.length === 1 ? ev.touches[0] : null;
+    apply(g.move(t?.clientX ?? 0, t?.clientY ?? 0, ev.touches.length), ev);
+  };
+  const onEnd = (ev: TouchEvent) => { apply(g.end(), ev); clearHold(); };
+  const onCancel = (ev: TouchEvent) => { apply(g.cancel(), ev); clearHold(); };
   parent.addEventListener('touchstart', onStart, { capture: true, passive: true });
   parent.addEventListener('touchmove', onMove, { capture: true, passive: false });
   parent.addEventListener('touchend', onEnd, true);
-  parent.addEventListener('touchcancel', onEnd, true);
+  parent.addEventListener('touchcancel', onCancel, true);
   return () => {
+    clearHold(); // a pane disposed mid-hold must not fire a stray mousedown
     parent.removeEventListener('touchstart', onStart, true);
     parent.removeEventListener('touchmove', onMove, true);
     parent.removeEventListener('touchend', onEnd, true);
-    parent.removeEventListener('touchcancel', onEnd, true);
+    parent.removeEventListener('touchcancel', onCancel, true);
   };
 }
 
@@ -403,7 +443,11 @@ export function openTerminal(
   });
   wireClipboard(term, voice);
   const offUploads = wireUploads(parent, term, boxId);
-  const offTouchScroll = wireTouchScroll(parent);
+  const offTouchScroll = wireTouchGestures(parent, {
+    // Read live per gesture, the same pattern as the bar's DECCKM-aware arrows.
+    guard: () => term.modes.mouseTrackingMode !== 'none',
+    focus: () => term.focus(),
+  });
 
   // Strip control chars so a box label can't inject escape sequences into the
   // terminal feedback line.

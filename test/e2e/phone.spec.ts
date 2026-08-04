@@ -315,3 +315,49 @@ test('the dedicated ^C cap interrupts the foreground process', async ({ page }) 
   // Only a live shell prompt (cat gone) executes the echo.
   await expect(pane).toContainText('CTRLC_CAP_DONE', { timeout: 10000 });
 });
+
+test('tap guard: taps are inert to a mouse-tracking app, a long-press clicks', async ({ page }) => {
+  await login(page);
+  const pane = await openLocalhost(page);
+  await pane.click(); // mouse focus, BEFORE tracking turns on — a click then would click the app
+  try {
+    // Enable mouse tracking (1002) + SGR encoding (1006) in the pane, exactly
+    // as a TUI would; tmux mirrors the pane's request out to xterm, so
+    // term.modes.mouseTrackingMode goes non-'none'. cat -v then renders any
+    // report the shell receives visibly as ^[[<… — the pty-effect signal.
+    // `clear` first is load-bearing: the seeded tmux session persists across
+    // runs and repeats, and a PREVIOUS run's long-press left its ^[[<…M pair
+    // on the visible screen — without the clear, the not.toContainText below
+    // reads someone else's evidence.
+    await page.keyboard.type("clear; printf '\\033[?1002h\\033[?1006h'; echo TRACKING''_ON; cat -v");
+    await page.keyboard.press('Enter');
+    await expect(pane).toContainText('TRACKING_ON', { timeout: 10000 });
+
+    const rect = (await pane.boundingBox())!;
+    const x = Math.round(rect.x + rect.width / 2);
+    const y = Math.round(rect.y + rect.height / 2);
+
+    // A tap must deliver NO mouse report — this is the accidental-selection
+    // bug. Give the round trip a beat, then assert the screen stayed clean.
+    await page.touchscreen.tap(x, y);
+    await page.waitForTimeout(750);
+    await expect(pane).not.toContainText('[<');
+    // …and the tap still focused the terminal (the guard preventDefaults the
+    // browser's own focus path, so it must refocus explicitly).
+    expect(await page.evaluate(() => !!document.activeElement?.closest('.stage-pane'))).toBe(true);
+
+    // The positive control that keeps the assertion above honest: the same
+    // spot held past HOLD_MS must deliver the SGR press/release pair.
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await page.waitForTimeout(700); // > HOLD_MS
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await expect(pane).toContainText('[<', { timeout: 10000 });
+  } finally {
+    // Never leave cat -v holding the shared session's tty, and never leave
+    // mouse tracking on for the next spec: both outlive this page.
+    await page.keyboard.press('Control+C').catch(() => {});
+    await page.keyboard.type("printf '\\033[?1002l\\033[?1006l'").catch(() => {});
+    await page.keyboard.press('Enter').catch(() => {});
+  }
+});
