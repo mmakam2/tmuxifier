@@ -365,6 +365,23 @@ test('tap guard: taps are inert to a mouse-tracking app, a long-press clicks', a
     expect(await page.evaluate(() => !!document.activeElement?.closest('.stage-pane')),
       'a long-press from unfocused must not focus (= must not open the soft keyboard)').toBe(false);
 
+    // Mid-hold, Android's native long-press fires `contextmenu`, and xterm's
+    // own handler responds by focusing the textarea for right-click paste —
+    // AFTER the guard's blur, which on a phone re-summons the soft keyboard
+    // (the close-then-reopen flap seen on device). During a guarded gesture
+    // the event must be swallowed before xterm ever sees it.
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await page.waitForTimeout(700); // > HOLD_MS — the press has been dispatched
+    const midHold = await page.evaluate(([cx, cy]) => {
+      const el = document.elementFromPoint(cx, cy)!;
+      const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: cx, clientY: cy });
+      el.dispatchEvent(ev);
+      return { prevented: ev.defaultPrevented, focused: !!document.activeElement?.closest('.stage-pane') };
+    }, [x, y] as [number, number]);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    expect(midHold.prevented, 'contextmenu during a guarded hold must be swallowed').toBe(true);
+    expect(midHold.focused, 'contextmenu during a guarded hold must not focus the terminal').toBe(false);
+
     // …and — the Z Fold repro — focused with NO soft keyboard visible must
     // blur: Android's back gesture hides the keyboard without blurring, so a
     // focused textarea proves nothing, and preserving focus in that state

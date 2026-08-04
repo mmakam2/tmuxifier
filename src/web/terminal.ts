@@ -242,7 +242,13 @@ function wireTouchGestures(parent: HTMLElement, deps: { guard(): boolean; focus(
   const g = createTouchGesture();
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
   let pressTarget: HTMLElement | null = null; // element under the finger at touchstart
+  let guarded = false;  // a guard-mode gesture is in flight (touchstart → end/cancel)
+  let holdKeep = true;  // the hold's keep-focus decision, re-asserted at release
   const clearHold = () => { clearTimeout(holdTimer); holdTimer = undefined; };
+  const blurInside = () => {
+    const ae = document.activeElement;
+    if (ae instanceof HTMLElement && parent.contains(ae)) ae.blur();
+  };
   const mouse = (type: 'mousedown' | 'mouseup', x: number, y: number) => {
     pressTarget?.dispatchEvent(new MouseEvent(type, {
       clientX: x, clientY: y, button: 0, buttons: type === 'mousedown' ? 1 : 0,
@@ -280,17 +286,18 @@ function wireTouchGestures(parent: HTMLElement, deps: { guard(): boolean; focus(
         // deploys; one that IS up (mid-typing) is left alone.
         const vv = window.visualViewport;
         const kbUp = vv ? keyboardOpen(window.innerHeight, Math.round(vv.height * vv.scale)) : false;
-        const keep = holdKeepsFocus(parent.contains(document.activeElement), phoneCoarse(), kbUp);
+        holdKeep = holdKeepsFocus(parent.contains(document.activeElement), phoneCoarse(), kbUp);
         mouse('mousedown', a.x, a.y);
-        if (!keep) {
-          const ae = document.activeElement;
-          if (ae instanceof HTMLElement && parent.contains(ae)) ae.blur();
-        }
+        if (!holdKeep) blurInside();
         break;
       }
       case 'hold-release':
         if (ev.cancelable) ev.preventDefault();
         mouse('mouseup', a.x, a.y);
+        // Re-assert the press-time decision: any focus that arrived DURING
+        // the hold (the contextmenu path below, or any other native
+        // follow-up) is undone before the finger leaves.
+        if (!holdKeep) blurInside();
         break;
       case 'cancelled': clearHold(); break;
     }
@@ -299,25 +306,40 @@ function wireTouchGestures(parent: HTMLElement, deps: { guard(): boolean; focus(
     clearHold();
     const t = ev.touches.length === 1 ? ev.touches[0] : null;
     pressTarget = ev.target as HTMLElement | null;
-    g.start(t?.clientX ?? 0, t?.clientY ?? 0, ev.touches.length, deps.guard());
+    guarded = ev.touches.length === 1 && deps.guard();
+    g.start(t?.clientX ?? 0, t?.clientY ?? 0, ev.touches.length, guarded);
     if (g.holdPending) holdTimer = setTimeout(() => apply(g.timerFired(), ev), HOLD_MS);
   };
   const onMove = (ev: TouchEvent) => {
     const t = ev.touches.length === 1 ? ev.touches[0] : null;
     apply(g.move(t?.clientX ?? 0, t?.clientY ?? 0, ev.touches.length), ev);
   };
-  const onEnd = (ev: TouchEvent) => { apply(g.end(), ev); clearHold(); };
-  const onCancel = (ev: TouchEvent) => { apply(g.cancel(), ev); clearHold(); };
+  const onEnd = (ev: TouchEvent) => { apply(g.end(), ev); clearHold(); guarded = false; };
+  const onCancel = (ev: TouchEvent) => { apply(g.cancel(), ev); clearHold(); guarded = false; };
+  // Android's native long-press fires `contextmenu` mid-hold, and xterm's own
+  // handler (rightClickHandler → moveTextAreaUnderMouseCursor) responds by
+  // FOCUSING the textarea for right-click paste — which on a phone re-summons
+  // the soft keyboard the guard just declined to open (seen on device as a
+  // close-then-reopen flap). While a guarded gesture is in flight the event
+  // is swallowed in capture phase, before xterm sees it; with tracking off
+  // (`guarded` false) native long-press behavior is untouched.
+  const onCtx = (ev: Event) => {
+    if (!guarded) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+  };
   parent.addEventListener('touchstart', onStart, { capture: true, passive: true });
   parent.addEventListener('touchmove', onMove, { capture: true, passive: false });
   parent.addEventListener('touchend', onEnd, true);
   parent.addEventListener('touchcancel', onCancel, true);
+  parent.addEventListener('contextmenu', onCtx, true);
   return () => {
     clearHold(); // a pane disposed mid-hold must not fire a stray mousedown
     parent.removeEventListener('touchstart', onStart, true);
     parent.removeEventListener('touchmove', onMove, true);
     parent.removeEventListener('touchend', onEnd, true);
     parent.removeEventListener('touchcancel', onCancel, true);
+    parent.removeEventListener('contextmenu', onCtx, true);
   };
 }
 
