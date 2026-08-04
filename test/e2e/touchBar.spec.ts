@@ -113,5 +113,20 @@ for (const width of [360, 390, 430]) {
       });
       expect(opacity).toEqual({ idle: '1', disabled: '0.3', working: '0.7', recording: '1' });
     });
+
+    test('the enter cap is pinned on screen, outside the scroller', async ({ page }) => {
+      await openOnPhone(page);
+      const enter = page.locator('.touch-keys > button[aria-label="enter"]');
+      await expect(enter).toBeVisible({ timeout: 10000 });
+      const box = (await enter.boundingBox())!;
+      // Wholly within the viewport — the exact failure the old last-in-strip
+      // position had. Geometry, not toBeVisible(): an element scrolled off
+      // inside an overflow container is still "visible" to Playwright.
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      expect(box.height).toBeGreaterThanOrEqual(36); // still a thumb target
+      // Structurally out of the scroller, so no future reflow can pull it back in.
+      expect(await page.locator('.touch-caps button[aria-label="enter"]').count()).toBe(0);
+    });
   });
 }

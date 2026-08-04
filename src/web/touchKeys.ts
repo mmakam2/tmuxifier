@@ -6,7 +6,7 @@
 export type TouchKey =
   | 'esc' | 'ctrl-c' | 'tab' | 'shift-tab' | 'up' | 'down' | 'left' | 'right' | 'enter' | 'ctrl';
 
-export const TOUCH_KEYS: { id: TouchKey; label: string }[] = [
+export const TOUCH_KEYS: { id: TouchKey; label: string; pinned?: true }[] = [
   { id: 'esc', label: 'esc' },
   // Dedicated ^C beside esc — the two Claude Code interrupts. Sticky Ctrl
   // cannot cover this on a composing soft keyboard: an IME buffers letters
@@ -21,7 +21,11 @@ export const TOUCH_KEYS: { id: TouchKey; label: string }[] = [
   { id: 'left', label: '←' },
   { id: 'right', label: '→' },
   { id: 'ctrl', label: 'ctrl' },
-  { id: 'enter', label: '⏎' },
+  // Pinned outside the scroller (a direct child of the bar, like the mic):
+  // ⏎ is the most-used cap — submitting to Claude, confirming prompts — and
+  // as the LAST item of a ~450px strip it sat past the right edge of every
+  // phone viewport, reachable only by a swipe nothing advertises.
+  { id: 'enter', label: '⏎', pinned: true },
 ];
 
 // Arrows honor DECCKM (application cursor keys): tmux, vim and Claude Code's
@@ -84,13 +88,14 @@ export function buildTouchKeyBar(
     ctrlBtn?.classList.toggle('armed', deps.sticky.armed);
     ctrlBtn?.setAttribute('aria-pressed', String(deps.sticky.armed));
   };
-  // Two children, and the split is load-bearing: the caps scroll, the mic does
-  // not. The cap strip is a constant ~494px, so with the scroller on the bar
+  // The split is load-bearing: the caps scroll, the pinned tail (⏎, mic) does
+  // not. The cap strip is a constant ~450px, so with the scroller on the bar
   // itself the mic sat at x 442-486 — past the right edge of every phone
   // viewport (360/390/430), reachable only by a horizontal swipe nothing
-  // advertises. A cap clipped inside the scroller is fine; the mic is not.
+  // advertises. A cap clipped inside the scroller is fine; ⏎ and the mic are not.
   const caps = document.createElement('div');
   caps.className = 'touch-caps';
+  mount.appendChild(caps); // before the loop: a pinned cap appended to `mount` mid-loop must land AFTER the strip
   for (const k of TOUCH_KEYS) {
     const b = document.createElement('button');
     b.type = 'button';
@@ -119,9 +124,8 @@ export function buildTouchKeyBar(
     // 0 — so this adds the missing path without touching the focus-retention
     // one, and can never double-fire a tap.
     b.addEventListener('click', (ev) => { if (ev.detail === 0) fire(); });
-    caps.appendChild(b);
+    (k.pinned ? mount : caps).appendChild(b);
   }
-  mount.appendChild(caps);
   const micSlot = document.createElement('span');
   micSlot.className = 'touch-mic-slot';
   mount.appendChild(micSlot); // outside the scroller — always on screen
