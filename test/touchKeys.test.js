@@ -108,9 +108,8 @@ test('ctrl-c is a dedicated cap sending ETX regardless of cursor mode', () => {
 });
 
 test('enter and compose are the only pinned caps — nothing else may leave the scroller', () => {
-  // compose is pinned but display-gated to `.composing` (it is the composer
-  // CLOSER), so the idle bar still renders exactly one pinned cap and keeps
-  // the round-2 344px budget; the geometry itself is pinned by the e2e suites.
+  // compose took the dropped ctrl cap's width, so the idle bar keeps the
+  // round-2 344px budget; the geometry itself is pinned by the e2e suites.
   for (const k of TOUCH_KEYS) {
     expect(!!k.pinned).toBe(k.id === 'enter' || k.id === 'compose');
   }
@@ -130,4 +129,13 @@ test('the compose cap is pinned, sits before enter, and maps to no sequence', ()
   // A mode toggle, like ctrl: it must never send bytes itself.
   expect(seqFor('compose', false)).toBeNull();
   expect(seqFor('compose', true)).toBeNull();
+});
+
+test('no ctrl cap in the catalog — its slot went to the composer toggle', () => {
+  // Sticky ctrl's letter-masking is structurally broken under a composing IME
+  // (words commit as multi-char chunks the transform passes through), which is
+  // why ^C has its own cap. The 344px budget fits exactly one more pinned
+  // control, and the composer earns it. createStickyCtrl and seqFor keep the
+  // machinery, so restoring the cap is one catalog line — the arrows pattern.
+  expect(TOUCH_KEYS.some((k) => k.id === 'ctrl')).toBe(false);
 });

@@ -1729,7 +1729,6 @@ button.empty-kbd:hover { color: var(--text); }
 /* Desktop is untouched: everything here lives inside the media queries. The
    phone bar exists in the DOM on desktop too but never displays. */
 .phone-bar { display: none; }
-.phone-compose { display: none; }
 .touch-keys { display: none; }
 /* Before buildTouchKeyBar populates it, the bar would render as an empty strip
    on a coarse-pointer phone (the media query below only sets display: flex). */
@@ -1825,16 +1824,6 @@ button.empty-kbd:hover { color: var(--text); }
      scrolling, because caps fire on pointerdown and a scroll begun on a cap
      sends that cap's key. Touch targets stay 40px — the trim is all gaps and
      padding. Pinned by the 344px touchBar e2e. */
-  /* The composer opener. Lives in the top bar (the key bar has no 344px room
-     for a fifth pinned control) and is coarse-gated like the key bar itself:
-     a narrow desktop window shows the phone top bar but has NO key bar, and
-     an opener there would toggle an invisible composer. .phone-menu's
-     icon-button styling. */
-  .phone-compose {
-    display: block; width: 40px; height: 40px; flex: 0 0 auto;
-    background: none; border: 1px solid var(--border); border-radius: 8px;
-    color: var(--text); font-size: 16px; cursor: pointer;
-  }
   .touch-keys {
     display: flex; align-items: center; gap: 5px;
     padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
@@ -1887,10 +1876,9 @@ button.empty-kbd:hover { color: var(--text); }
   .touch-keys.composing .touch-caps { display: none; }
   /* Send-on-empty covers bare Enter, and the field needs the width on 344px. */
   .touch-keys.composing > button[aria-label='enter'] { display: none; }
-  /* The compose cap is the CLOSER: it appears only once the strip is hidden.
-     Idle, the bar is byte-identical to round 2 — a fifth pinned control would
-     re-overflow the 344px budget the touchBar e2e pins. */
-  .touch-keys:not(.composing) > button[aria-label='compose'] { display: none; }
+  /* The compose cap is always visible — it took the ctrl cap's width in the
+     344px budget, so the bar still never scrolls (pinned by the e2e suites).
+     While composing it lights `.armed` amber, the ctrl cap's own idiom. */
   /* 16px is load-bearing: iOS auto-zooms any focused field under 16px (the
      drawer .search lesson — phoneMode multiplies the zoom back out, but not
      needing to is better). Input styling matches .phone-switch. */

@@ -189,9 +189,9 @@ plain sidebar click does on the desktop.
 **The touch key bar.** On a touch device a key bar sits along the bottom of the screen carrying
 what a soft keyboard either lacks or types unreliably: `esc`, ^C (a dedicated Ctrl+C — the
 interrupt, sitting beside `esc` because those two are how you interrupt Claude Code), ⇥ (Tab),
-⇤ (Shift+Tab), and `ctrl`, with ⏎ (Enter) and the **mic** pinned at the bar's right edge —
-you can submit a line (answer a prompt, send a message to a running agent) without opening the
-soft keyboard at all. Everything fits on one row with nothing to scroll, sized for screens as
+and ⇤ (Shift+Tab), with ✏️ (the composer, below), ⏎ (Enter) and the **mic** pinned at the
+bar's right edge — you can submit a line (answer a prompt, send a message to a running agent)
+without opening the soft keyboard at all. Everything fits on one row with nothing to scroll, sized for screens as
 narrow as a foldable's cover display. On a phone the
 voice button moves out of the pane header and into this bar, and moves back to the header when
 the layout returns to desktop width. Press and hold it to dictate and release to transcribe,
@@ -209,25 +209,21 @@ miss them: dragging on the terminal already sends arrow keys at a prompt (the sc
 which follows the terminal's cursor-key mode), and in Claude Code's interface a long-press
 picks options directly.
 
-`ctrl` is **sticky** rather than held: tap it, it lights amber, and the next single character
-you type — from the soft keyboard or anywhere else — is sent as its control code, after which
-the modifier releases itself. `ctrl` then space sends NUL. Tapping `ctrl` a second time cancels
-it. Anything that can't be masked — an emoji, an autocorrect burst, a pasted string — passes
-through untouched and *also* releases the modifier, so an armed Ctrl can never quietly corrupt
-something you type later. The bar's own keys are never Ctrl-modified: `ctrl` followed by ⏎
-sends a plain Enter and clears the modifier.
-
-One honest limit: a soft keyboard running autocorrect **composes** — it buffers letters into a
-word and hands the terminal the whole word at once, which is exactly the "can't be masked"
-case above. On such a keyboard, `ctrl` then `c` types a plain `c`. That is why ^C has its own
-cap: it sends the interrupt itself and owes the keyboard nothing. For other combinations
-(Ctrl+D, Ctrl+R, Ctrl+Z), sticky `ctrl` works when autocorrect is off or the keyboard sends
-single characters; otherwise a hardware keyboard is the reliable route.
+There is deliberately no `ctrl` cap. The bar once carried a **sticky** Ctrl (tap to arm, the
+next character masked into its control code), but a soft keyboard running autocorrect
+**composes** — it buffers letters into a word and hands the terminal the whole word at once,
+which the mask must pass through untouched — so on such a keyboard `ctrl` then `c` typed a
+plain `c`. That is why ^C has its own cap: it sends the interrupt itself and owes the keyboard
+nothing. When the composer arrived, the width budget of the narrowest phones fit exactly one
+more always-on control, and the ✏️ earned the slot the mostly-inert `ctrl` held. For the rare
+other combination (Ctrl+D, Ctrl+R, Ctrl+Z), a hardware keyboard is the reliable route — and
+the sticky-Ctrl machinery remains in the code, so the cap can return as quickly as the arrows
+could.
 
 **The composer.** Composing goes further: the terminal can't be *edited into* — every byte the
 soft keyboard commits is already sent, so an autocorrect that rewrites a word mid-sentence
-garbles the line at the prompt. The ✏️ button in the top bar swaps the key bar's cap strip for
-a native text field and a ➤ **Send** button (the ✏️ that appears beside Send closes it again).
+garbles the line at the prompt. The pinned ✏️ cap swaps the key bar's cap strip for a native
+text field and a ➤ **Send** button (the same ✏️, lit amber, closes it again).
 Type — or dictate: while the composer is open the mic appends the transcript into the field —
 with the full soft keyboard: autocorrect, word suggestions and cursor edits all work normally
 here, because the terminal sees nothing until you tap Send. Send transmits the message plus

@@ -25,11 +25,15 @@ export const TOUCH_KEYS: { id: TouchKey; label: string; pinned?: true }[] = [
   // never scrolls. Arrows stay in seqFor/PLAIN/APP so restoring them is one
   // catalog line each; drag-to-scroll already covers arrow needs at a prompt
   // (the wheel fallback), and long-press-click covers TUI option picking.
-  { id: 'ctrl', label: 'ctrl' },
-  // Composer CLOSER — pinned, but display-gated to `.composing` (style.css):
-  // the idle bar has no room for another 40px cap at 344px (round-2 budget),
-  // so opening happens from the phone top bar (#phone-compose, main.ts) where
-  // slack exists, and this cap appears only once the strip is hidden. A mode
+  // No ctrl cap, for now (2026-08-04, on-device composer round): its
+  // letter-masking is structurally broken under a composing IME (words commit
+  // as multi-char chunks the transform passes through — the reason ^C has its
+  // own cap), and the 344px budget fits exactly one more pinned control, which
+  // the composer toggle earns instead. createStickyCtrl, the transformInput
+  // seam and seqFor's guard all remain, so restoring it is one catalog line —
+  // the arrows pattern.
+  // Composer toggle — pinned beside ⏎/mic, always thumb-reachable, and (unlike
+  // a top-bar opener) still on screen while the soft keyboard is up. A mode
   // switch, not a key: fire() special-cases it and seqFor maps it to null.
   { id: 'compose', label: '✏️', pinned: true },
   // Pinned outside the scroller (a direct child of the bar, like the mic):
@@ -102,7 +106,7 @@ export function buildTouchKeyBar(
 ): {
   micSlot: HTMLElement;
   syncCap: () => void;
-  composer: { isOpen(): boolean; open(): void; close(): void; appendDraft(t: string): void };
+  composer: { isOpen(): boolean; close(): void; appendDraft(t: string): void };
 } {
   let ctrlBtn: HTMLButtonElement | null = null;
   const paint = () => {
@@ -194,8 +198,7 @@ export function buildTouchKeyBar(
     syncCap: paint,
     composer: {
       isOpen: () => composing,
-      open: () => setComposing(true),   // the top-bar #phone-compose button's target
-      close: () => setComposing(false),
+      close: () => setComposing(false), // main.ts force-closes on a flip to desktop
       appendDraft: row.appendDraft,
     },
   };

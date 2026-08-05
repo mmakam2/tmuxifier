@@ -667,8 +667,11 @@ additionally on `(pointer: coarse)`, so a narrow desktop window reflows but grow
 is why `main.ts` asks the DOM (`touchBarShown`) rather than re-declaring that query in JS before
 adopting the pane's mic into it. The pure half is `TOUCH_KEYS`/`seqFor` (no arrow caps since
 2026-08-04 — they made the strip overflow narrow screens, and caps fire on pointerdown, so a
-scroll begun on a cap sent that cap's key; `seqFor` keeps the DECCKM-aware arrow map so
-restoring them is one catalog line each) — and `createStickyCtrl`, the
+scroll begun on a cap sent that cap's key; no ctrl cap since the same day's composer round —
+its letter-masking is structurally broken under a composing IME, the reason ^C has its own
+cap, and the 344px budget fit exactly one more pinned control, which the composer toggle
+earned instead; `seqFor` keeps the DECCKM-aware arrow map and the ctrl guard so restoring
+any of them is one catalog line each) — and `createStickyCtrl`, the
 arm → mask-one-character → disarm modifier whose case fold is a raw ASCII a–z fold and never
 `toUpperCase()` (`'ß'.toUpperCase()` is `'SS'`, and masking that `'S'` would send `\x13` XOFF
 and freeze the pane); space masks to NUL and anything unmaskable passes through untouched but
@@ -676,7 +679,7 @@ still disarms, so an armed modifier can never silently corrupt later input. The 
 on `pointerdown` + `preventDefault` — a click would move focus off xterm's hidden textarea and
 close the soft keyboard on every key press, with a `detail === 0` `click` handler beside it
 carrying the keyboard/AT activation path that same `preventDefault` would otherwise leave dead — splits the bar into a cap strip and a
-pinned tail — the ⏎ cap (`pinned: true` in `TOUCH_KEYS`) and the mic slot — with the whole row
+pinned tail — the ✏️ and ⏎ caps (`pinned: true` in `TOUCH_KEYS`) and the mic slot — with the whole row
 spacing-budgeted to fit a 344px viewport (Z Fold 6 cover screen) with nothing to scroll,
 pinned by the touchBar e2e, never Ctrl-modifies its own keys, and returns
 `syncCap`, the repaint seam `transformInput` calls when the soft keyboard's own input spends
@@ -684,18 +687,18 @@ the modifier with no pointer event on the bar to notice. The bar's `send` seam i
 boolean-returning (a live pane accepted the bytes, or not), and its deps carry
 `focusTerminal` (composer close hands the keyboard back to xterm) and `onLayoutChange`
 (open terminals refit when the composer changes the bar's height)),
-`composer.ts` (the phone composer the top bar's ✏️ opens — the opener lives there, not in
-the key bar, because a fifth pinned cap re-overflows the 344px budget round 2 fixed; the
-in-bar ✏️ cap exists only while composing, as the closer, so the idle bar stays
-byte-identical: pure `sendTextOf` — whitespace runs collapse to single spaces because a raw
+`composer.ts` (the phone composer the bar's pinned ✏️ cap toggles — it took the dropped
+ctrl cap's slot in the 344px budget, so it is always thumb-reachable and, unlike the
+top-bar opener it briefly was, still on screen while the soft keyboard is up:
+pure `sendTextOf` — whitespace runs collapse to single spaces because a raw
 newline reaching the pty IS Enter, remaining C0/C1 controls stripped, trimmed — plus the DOM
 row (textarea + ➤) that `buildTouchKeyBar` display-toggles in place of the cap strip, so the
 draft persists across toggles and pane switches. Send transmits `sendTextOf(draft) + '\r'`
 through the bar's `send` seam and clears the field only on `true`, so Send never destroys a
 draft a setup/stopped pane couldn't accept; an empty draft sends bare Enter. Opening focuses
 the field (the soft keyboard retargets to a real input the IME can safely word-replace in —
-the round-2 structural fix) and disarms an armed sticky Ctrl inside `setComposing`, not the
-cap's fire() branch, since the top-bar opener never taps the bar; closing refocuses the
+the round-2 structural fix) and disarms an armed sticky modifier inside `setComposing` —
+the one place every open path funnels through; closing refocuses the
 terminal, and flipping to desktop force-closes via `main.ts`'s onFlip. While open, the pane
 mic reroutes transcripts into the draft through `VoiceHost.sink` (evaluated at finish-time,
 and `voiceUi.ts`'s `finish()` skips its terminal refocus on that path — the field is holding

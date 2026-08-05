@@ -67,7 +67,7 @@ let phoneCtl: PhoneMode | null = null;
 const stickyCtrl = createStickyCtrl();
 let touchMicSlot: HTMLElement | null = null;
 let touchSyncCap: (() => void) | null = null;
-let touchComposer: { isOpen(): boolean; open(): void; close(): void; appendDraft(t: string): void } | null = null;
+let touchComposer: { isOpen(): boolean; close(): void; appendDraft(t: string): void } | null = null;
 let lastPaneStates = ''; // pollStatus repaints only when a docked box's derived state flips
 let allBoxes: Box[] = [];
 let latestStatus: Record<string, Status> = {};
@@ -1013,7 +1013,6 @@ async function renderDashboard() {
       <header class="phone-bar">
         <button id="phone-menu" class="phone-menu" type="button" title="Boxes" aria-label="Open box list">☰</button>
         <select id="phone-switch" class="phone-switch" aria-label="Switch pane" disabled></select>
-        <button id="phone-compose" class="phone-compose" type="button" title="Compose message" aria-label="Compose message">✏️</button>
       </header>
       <main id="stage" class="stage"><div class="stage-grid"></div><div class="stage-parking"></div></main>
       <div class="touch-keys" id="touch-keys"></div>
@@ -1058,7 +1057,6 @@ async function renderDashboard() {
   touchMicSlot = bar.micSlot;
   touchSyncCap = bar.syncCap;
   touchComposer = bar.composer;
-  app.querySelector('#phone-compose')!.addEventListener('click', () => touchComposer?.open());
   repaintStage();
   app.querySelector('#logout')!.addEventListener('click', async () => {
     teardownWorkspace();

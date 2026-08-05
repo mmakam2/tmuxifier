@@ -30,7 +30,7 @@ async function openOnPhone(page: Page) {
 }
 
 async function openComposer(page: Page) {
-  await page.click('#phone-compose'); // top-bar opener; the in-bar ✏️ (visible only while composing) closes
+  await page.click('.touch-keys > button[aria-label="compose"]'); // the pinned ✏️ toggles open/close
   await expect(page.locator('.composer-field')).toBeVisible();
 }
 
@@ -68,11 +68,8 @@ test('the draft survives closing and reopening the composer', async ({ page }) =
   // NOTE: the closer hides itself on pointerdown. If click() ever flakes on
   // that mid-gesture hide, switch to dispatchEvent('pointerdown') — the
   // voice.spec.ts precedent for handlers that don't live on click.
-  await page.click('.touch-keys > button[aria-label="compose"]'); // in-bar closer
+  await page.click('.touch-keys > button[aria-label="compose"]'); // toggle closed
   await expect(page.locator('.composer-field')).toBeHidden();
-  // The closer leaves with the composer: the idle bar must keep round-2
-  // geometry (no fifth pinned control at 344px).
-  await expect(page.locator('.touch-keys > button[aria-label="compose"]')).toBeHidden();
   await openComposer(page);
   await expect(page.locator('.composer-field')).toHaveValue('keep me');
 });
@@ -80,6 +77,14 @@ test('the draft survives closing and reopening the composer', async ({ page }) =
 test('composing fits 344px: field, send, compose and mic on screen; caps and enter gone', async ({ page }) => {
   await openOnPhone(page);
   await expect(page.locator('.voice-btn')).toBeVisible({ timeout: 10000 }); // mic mounted before measuring
+  // IDLE first: ✏️ took the ctrl cap's slot, so the closed bar must still fit
+  // 344px with nothing to scroll — the round-2 invariant this cap once broke.
+  const idle = (await page.locator('.touch-keys > button[aria-label="compose"]').boundingBox())!;
+  expect(idle).not.toBeNull();
+  expect(idle.x).toBeGreaterThanOrEqual(0);
+  expect(idle.x + idle.width).toBeLessThanOrEqual(344);
+  const idleBar = await page.locator('.touch-keys').evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+  expect(idleBar.scrollWidth).toBeLessThanOrEqual(idleBar.clientWidth);
   await openComposer(page);
   for (const sel of ['.composer-field', 'button[aria-label="send"]', '.touch-keys > button[aria-label="compose"]', '.voice-btn']) {
     const box = (await page.locator(sel).boundingBox())!;
