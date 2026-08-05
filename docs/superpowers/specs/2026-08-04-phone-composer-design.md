@@ -32,6 +32,16 @@ because there the user has not authored the injected text.
    opener.) Caveat, accepted: `kb-open` hides the top bar, so reaching the opener
    mid-direct-typing means dismissing the soft keyboard first — the natural
    start-of-compose state anyway.
+
+   **Amended again during on-device validation (2026-08-04):** the operator found the
+   top-of-screen reach wrong for the feature's most frequent action, and the kb-open
+   caveat bit immediately. The ✏️ moved into the key bar's pinned zone by **dropping the
+   `ctrl` cap** — the alternative originally declined — whose letter-masking is
+   structurally broken under the operator's composing IME anyway (the reason the ^C cap
+   exists). One ✏️ now toggles open/close from one place, reachable with the keyboard up;
+   the top-bar `#phone-compose` button was removed. `createStickyCtrl`, the
+   `transformInput` seam and `seqFor`'s guard remain, so restoring `ctrl` is one catalog
+   line (the arrows pattern).
 2. **Multi-line — collapse on Send.** Autogrowing textarea (~4 rows max). The keyboard's
    Enter inserts a newline while composing; on Send, newline runs collapse to single
    spaces — the `voiceText.js` rule, because a raw newline reaching the pty IS Enter and
