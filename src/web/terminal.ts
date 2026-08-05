@@ -441,7 +441,10 @@ export function openTerminal(
   parent: HTMLElement,
   boxId: string,
   label?: string,
-  opts?: { voiceMount?: HTMLElement; onConnState?: (s: PaneConn) => void; transformInput?: (d: string) => string },
+  opts?: {
+    voiceMount?: HTMLElement; onConnState?: (s: PaneConn) => void; transformInput?: (d: string) => string;
+    voiceSink?: () => ((text: string) => void) | null;
+  },
 ) {
   const term = new Terminal({
     cursorBlink: true,
@@ -483,6 +486,7 @@ export function openTerminal(
       });
     },
     focus: () => term.focus(),
+    sink: opts?.voiceSink,
   });
   wireClipboard(term, voice);
   const offUploads = wireUploads(parent, term, boxId);

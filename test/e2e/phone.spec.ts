@@ -123,7 +123,7 @@ test('a desktop split renders as ONE pane; switcher swaps without reconnecting',
   expect(sockets, 'switching back must reuse the parked terminal').toHaveLength(2);
 });
 
-test('key bar: esc reaches the pty, sticky ctrl+c interrupts', async ({ page }) => {
+test('key bar: esc reaches the pty without stealing focus', async ({ page }) => {
   await login(page);
   const pane = await openLocalhost(page);
   // The bar's whole reason for using pointerdown + preventDefault is that a
@@ -146,28 +146,9 @@ test('key bar: esc reaches the pty, sticky ctrl+c interrupts', async ({ page }) 
     await expect.poll(focusInPane, { message: 'the esc cap stole focus from the terminal' }).toBe(true);
     await page.keyboard.press('Enter');
     await expect(pane).toContainText('^[', { timeout: 10000 });
-
-    // Sticky ctrl: the cap arms, the next soft-keyboard character is masked into
-    // its control byte, and the cap disarms on use (transformInput repaints it).
-    await cap(page, 'ctrl').tap();
-    await expect(cap(page, 'ctrl')).toHaveClass(/armed/);
-    await expect.poll(focusInPane, { message: 'the ctrl cap stole focus from the terminal' }).toBe(true);
-    await page.keyboard.type('c');
-    await expect(cap(page, 'ctrl'), 'the modifier is spent by the character it masked').not.toHaveClass(/armed/);
-
-    // The INTR byte reached the tty: ECHOCTL prints it. This is the only direct
-    // evidence in the test that \x03 arrived rather than a plain 'c'.
-    await expect(pane).toContainText('^C', { timeout: 10000 });
-
-    // And it was delivered as a SIGNAL, not merely echoed — cat is gone and the
-    // SHELL is reading again. The quotes are load-bearing: with cat -v still in
-    // the foreground the screen would show `echo PHONE''_DONE` twice (tty echo,
-    // then cat's own copy) and never the collapsed `PHONE_DONE`, which only the
-    // shell can produce. A plain `echo X` would have matched either way, since
-    // cat happily echoes the command line back.
-    await page.keyboard.type("echo PHONE''_DONE");
-    await page.keyboard.press('Enter');
-    await expect(pane).toContainText('PHONE_DONE', { timeout: 10000 });
+    // (The sticky-ctrl leg lived here until the ctrl cap was dropped for the
+    // composer toggle — signal delivery via the bar is still pinned by "the
+    // dedicated ^C cap interrupts the foreground process" below.)
   } finally {
     // Never leave `cat -v` holding the shared session's tty on a failure path:
     // every other spec in both projects attaches this same tmux session, and a
@@ -180,53 +161,25 @@ test('key bar: esc reaches the pty, sticky ctrl+c interrupts', async ({ page }) 
 test('a cap fires from the keyboard, not only from a finger', async ({ page }) => {
   await login(page);
   await openLocalhost(page);
-  try {
-    const ctrl = cap(page, 'ctrl');
-    await ctrl.focus();
-    // preventDefault() on pointerdown suppresses the click a POINTER gesture
-    // would synthesize — which also left these caps dead to Enter, Space and to
-    // any assistive technology that activates a control rather than pointing at
-    // it. A keyboard-originated click carries detail 0, which is what the bar
-    // discriminates on, so this must fire without double-firing a tap.
-    await page.keyboard.press('Enter');
-    await expect(ctrl, 'Enter on a focused cap must arm sticky ctrl').toHaveClass(/armed/);
-    await page.keyboard.press('Enter');
-    await expect(ctrl, 'and a second Enter must toggle it back off').not.toHaveClass(/armed/);
-  } finally {
-    await page.keyboard.press('Control+C').catch(() => {});
-  }
+  // preventDefault() on pointerdown suppresses the click a POINTER gesture
+  // would synthesize — which also left these caps dead to Enter, Space and to
+  // any assistive technology that activates a control rather than pointing at
+  // it. A keyboard-originated click carries detail 0, which is what the bar
+  // discriminates on, so this must fire without double-firing a tap. Driven
+  // through the compose cap (the ctrl cap, the old vehicle, was dropped for
+  // it): opening moves focus INTO the composer field by design, so only the
+  // opening direction is keyboard-drivable here.
+  const compose = cap(page, 'compose');
+  await compose.focus();
+  await page.keyboard.press('Enter');
+  await expect(compose, 'Enter on the focused cap must open the composer').toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.composer-field')).toBeVisible();
 });
 
-test('an armed ctrl does not survive a logout', async ({ page }) => {
-  await login(page);
-  // No pane docked, deliberately. With one docked, re-login reopens it and
-  // tmux's focus-in report (\x1b[I) reaches transformInput first — unmaskable,
-  // so it passes through untouched but SPENDS the modifier, hiding the very bug
-  // this asserts. The bare dashboard is both the honest path and the real one:
-  // the user logs back in, THEN opens a box, then types.
-  await page.evaluate(() => localStorage.removeItem('tmuxifier.stageLayout'));
-  await page.reload();
-  await expect(page.locator('#phone-menu')).toBeVisible({ timeout: 10000 });
-
-  await cap(page, 'ctrl').tap();
-  await expect(cap(page, 'ctrl')).toHaveClass(/armed/);
-
-  await openDrawer(page);
-  await page.click('#logout');
-  await expect(page.locator('#pw')).toBeVisible({ timeout: 10000 });
-  await login(page);
-
-  // The modifier is module-level in main.ts and outlives the bar #app drops, so
-  // without teardownWorkspace disarming it the next login's first typed
-  // character would be masked — `d` arriving as ^D and closing the shell — with
-  // a freshly built, unlit cap giving no clue why. Asserted BEFORE any keystroke,
-  // since sticky.transform spends the modifier on whatever arrives first.
-  await expect(
-    cap(page, 'ctrl'),
-    'an armed ctrl must not survive teardownWorkspace',
-  ).not.toHaveClass(/armed/);
-  await expect(cap(page, 'ctrl')).toHaveAttribute('aria-pressed', 'false');
-});
+// ('an armed ctrl does not survive a logout' lived here until the ctrl cap was
+// dropped: with no cap to arm the modifier, the scenario is unreachable from
+// the UI. teardownWorkspace keeps its stickyCtrl.disarm() as defense in depth
+// for the day the cap returns — restoring it is one catalog line.)
 
 test('phone chrome is media-query gated: invisible at desktop width', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -269,8 +222,7 @@ test('touch drag on the terminal scrolls the pty instead of panning the page', a
   } finally {
     // End cat so the shared session is at a prompt for whatever runs next.
     await page.locator('.stage-pane').click();
-    await cap(page, 'ctrl').tap();
-    await page.keyboard.type('c');
+    await cap(page, 'ctrl-c').tap();
   }
 });
 

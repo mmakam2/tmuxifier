@@ -384,3 +384,40 @@ test('focus is handed back even when the transcription round trip throws', async
   expect(writes.join('')).toContain('voice failed');
   expect(focused).toBe(1);
 });
+
+test('a present sink reroutes the transcript into it with inject=off and leaves focus alone', async () => {
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    return { ok: true, status: 200, statusText: 'OK', json: async () => ({ text: 'hi there', injected: false, mode: 'off' }) };
+  };
+  const rec = {
+    start: async () => {},
+    stop: async () => new ArrayBuffer(45), // one byte past the 44-byte WAV header — reaches the server call
+    cancel() {},
+    recording: () => true,
+  };
+  const sunk = [];
+  const controller = createVoiceController('box1', 120, {
+    write() {},
+    copy() { throw new Error('the sink path must not fall back to the clipboard'); },
+    focus() { throw new Error('the sink path must leave focus on the composer field'); },
+    sink: () => (t) => sunk.push(t),
+  }, () => rec);
+  await controller.begin();
+  await controller.finish();
+  expect(urls[0]).toContain('inject=off');
+  expect(sunk).toEqual(['hi there']);
+});
+
+test('without a sink, finish() still refocuses the terminal (the pre-composer contract)', async () => {
+  globalThis.fetch = async () => (
+    { ok: true, status: 200, statusText: 'OK', json: async () => ({ text: 'hi', injected: true, mode: 'claude' }) });
+  const rec = { start: async () => {}, stop: async () => new ArrayBuffer(45), cancel() {}, recording: () => true };
+  let focused = 0;
+  const controller = createVoiceController('box1', 120,
+    { write() {}, copy() {}, focus() { focused++; } }, () => rec);
+  await controller.begin();
+  await controller.finish();
+  expect(focused).toBe(1);
+});
