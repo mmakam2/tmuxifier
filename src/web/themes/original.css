@@ -20,6 +20,18 @@
      --crit inherits.
    - --gbtn-bg / --gbtn-bg-hover / --gbtn-ink / --gbtn-border — Google's brand
      identity for the sign-in button. Brand-fixed in every theme.
+   - --syn-string / --syn-const / --syn-fn / --syn-gutter — the script editor's
+     syntax hues. The editor's chrome ALREADY follows this theme (its keywords,
+     caret, focus ring and selection all read --accent, its comments --dim, its
+     variables --text), so what inherits is only the three hues with no chassis
+     counterpart, plus the gutter ink. A syntax palette is display content
+     rather than chassis: it wants hues separable from each other, which is a
+     different job from matching the cyan field, and picking navy-world values
+     blind would be guessing at exactly the thing that has to be judged on
+     screen. They are tuned at live validation, where --syn-gutter is the first
+     candidate — it is the one chrome neutral of the four (line-number ink), and
+     a warm olive gutter over the navy --screen is the visible mismatch; the
+     cool counterpart already sits in this file as --dim.
    - color-scheme: dark on :root — both shipped themes are dark (light themes are
      out of scope for the engine), so the declaration stays theme-independent.  */
 :root[data-theme="original"] {

@@ -139,6 +139,13 @@
   --gbtn-bg-hover: #f7f8f8;      /* Google sign-in identity: hover face */
   --gbtn-ink: #1f1f1f;           /* Google sign-in identity: label ink */
   --gbtn-border: #dadce0;        /* Google sign-in identity: hairline */
+  /* Script-editor syntax (CodeMirror emits real CSS, so themes reach these).
+     Only the hues with no chassis counterpart live here — the editor's other
+     colors already flow from --accent/--text/--muted/--dim. */
+  --syn-string: #a8c987;         /* string literals: sage phosphor */
+  --syn-const: #ff9d5c;          /* numbers, booleans, atoms */
+  --syn-fn: #ffd166;             /* definitions and function names */
+  --syn-gutter: #5d594e;         /* line-number gutter ink (unfocused rows) */
   /* Terminal glass selection wash. MUST stay a plain color literal (hex or
      rgba) in every theme: xterm parses this string itself, so color-mix()
      or var() indirection here would not resolve (see theme.ts probe note). */

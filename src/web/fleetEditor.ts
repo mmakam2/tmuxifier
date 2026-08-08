@@ -49,18 +49,21 @@ export function buildCompletions(recent: string[]): Completion[] {
   return out;
 }
 
-// Dark highlight + chrome theme tuned to the app's palette (style.css :root vars).
-// The editor is display content on recessed screen glass (Bench Instrument
-// world): warm phosphor syntax, amber caret/focus, Meslo like every screen.
+// Highlight + chrome theme driven entirely by the style.css token fence, so a
+// theme switch re-skins the editor with no JS at all: HighlightStyle and
+// EditorView.theme emit real CSS classes, so `var()` and `color-mix()` are just
+// values the browser resolves per document — nothing here re-runs on switch.
+// The editor is display content on recessed screen glass, so its syntax hues
+// come from the --syn-* tokens and its chrome from the shared chassis roles.
 const HIGHLIGHT = HighlightStyle.define([
-  { tag: [t.keyword, t.controlKeyword, t.operatorKeyword], color: '#ffb000' },
-  { tag: [t.string, t.special(t.string)], color: '#a8c987' },
-  { tag: [t.comment, t.lineComment, t.blockComment], color: '#8a8577', fontStyle: 'italic' },
-  { tag: [t.number, t.bool, t.null], color: '#ff9d5c' },
-  { tag: [t.variableName, t.propertyName], color: '#e6e2da' },
-  { tag: [t.definitionKeyword, t.function(t.variableName)], color: '#ffd166' },
-  { tag: [t.operator, t.punctuation], color: '#b9b4a6' },
-  { tag: t.atom, color: '#ff9d5c' },
+  { tag: [t.keyword, t.controlKeyword, t.operatorKeyword], color: 'var(--accent)' },
+  { tag: [t.string, t.special(t.string)], color: 'var(--syn-string)' },
+  { tag: [t.comment, t.lineComment, t.blockComment], color: 'var(--dim)', fontStyle: 'italic' },
+  { tag: [t.number, t.bool, t.null], color: 'var(--syn-const)' },
+  { tag: [t.variableName, t.propertyName], color: 'var(--text)' },
+  { tag: [t.definitionKeyword, t.function(t.variableName)], color: 'var(--syn-fn)' },
+  { tag: [t.operator, t.punctuation], color: 'var(--muted)' },
+  { tag: t.atom, color: 'var(--syn-const)' },
 ]);
 
 // Height is deliberately absent here: the editor stretches to fill its host
@@ -76,12 +79,18 @@ const THEME = EditorView.theme({
     fontSize: '12.5px',
   },
   '&.cm-focused': {
-    outline: 'none', borderColor: 'rgba(255, 176, 0, 0.45)',
-    boxShadow: 'inset 0 2px 5px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(255, 176, 0, 0.12)',
+    outline: 'none', borderColor: 'color-mix(in srgb, var(--accent) 45%, transparent)',
+    boxShadow: 'inset 0 2px 5px rgba(0, 0, 0, 0.5), 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent)',
   },
   // No minHeight: a floor on the scroller would stop it shrinking inside the
   // editor box and spill the content instead of scrolling it. The floor lives
   // on `.fleet-script` in style.css, where it bounds the whole editor.
+  //
+  // fontFamily stays a LITERAL and deliberately does NOT read var(--face): the
+  // face token is the chassis legend face, which a theme may set to a sans
+  // stack (Original does), and this is screen content — a shell script whose
+  // indentation and column alignment only survive in a monospace face. Same
+  // reason termFont.ts keeps its own bundled stack for the terminal.
   '.cm-scroller': {
     fontFamily: "'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', ui-monospace, SFMono-Regular, Menlo, monospace",
     lineHeight: '1.5',
@@ -89,23 +98,23 @@ const THEME = EditorView.theme({
   '.cm-content': { padding: '8px 0', caretColor: 'var(--accent)' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent)' },
   '.cm-gutters': {
-    backgroundColor: 'transparent', color: '#5d594e', border: 'none',
+    backgroundColor: 'transparent', color: 'var(--syn-gutter)', border: 'none',
   },
-  '.cm-activeLine': { backgroundColor: 'rgba(255, 176, 0, 0.04)' },
+  '.cm-activeLine': { backgroundColor: 'color-mix(in srgb, var(--accent) 4%, transparent)' },
   '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--muted)' },
   '&.cm-focused .cm-matchingBracket': {
-    backgroundColor: 'rgba(255, 176, 0, 0.16)', color: 'inherit',
+    backgroundColor: 'color-mix(in srgb, var(--accent) 16%, transparent)', color: 'inherit',
   },
   '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': {
-    backgroundColor: 'rgba(255, 176, 0, 0.2)',
+    backgroundColor: 'color-mix(in srgb, var(--accent) 20%, transparent)',
   },
-  '.cm-placeholder': { color: '#8a8577' },
+  '.cm-placeholder': { color: 'var(--dim)' },
   '.cm-tooltip.cm-tooltip-autocomplete': {
     backgroundColor: 'var(--panel)', border: '1px solid var(--border)',
     borderRadius: '8px', overflow: 'hidden',
   },
   '.cm-tooltip-autocomplete ul li[aria-selected]': {
-    backgroundColor: 'rgba(255, 176, 0, 0.14)', color: 'var(--text)',
+    backgroundColor: 'color-mix(in srgb, var(--accent) 14%, transparent)', color: 'var(--text)',
   },
   '.cm-completionDetail': { color: 'var(--muted)', fontStyle: 'normal' },
 }, { dark: true });
