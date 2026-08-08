@@ -178,6 +178,43 @@ export function createSetupManager({
     finish(j, 'done');
   }
 
+  // Spawn one remote script over the setup transport and stream it into the
+  // job log. Shared by the setup run and the post-setup saved-script phase:
+  // both need the same spawn / append / coalesced-persist / handle-register /
+  // exit-code sequence, and only the setup run cares about stderr (it sniffs
+  // for password prompts). Registering the handle under the job id is what
+  // makes cancelForBox able to kill whichever of the two is in flight.
+  async function streamRemote(j, box, script, { onStderr = null, timeoutMs = taskTimeoutMs } = {}) {
+    const argv = buildSetupArgv(box, script, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
+    // Coalesced log persistence: a chatty install emits thousands of chunks,
+    // and a full-history save per chunk is a multi-MB stringify each time.
+    // Status/phase transitions still persist immediately; finish() flushes
+    // the tail.
+    let lastLogPersist = nowMs();
+    let pendingLogBytes = 0;
+    const handle = sshStream(argv, {
+      timeout: timeoutMs,
+      onData: (chunk, stream) => {
+        appendLog(j, chunk);
+        if (stream === 'stderr' && onStderr) onStderr(chunk);
+        pendingLogBytes += chunk.length;
+        const t = nowMs();
+        if (t - lastLogPersist >= logPersistMs || pendingLogBytes >= logPersistBytes) {
+          lastLogPersist = t;
+          pendingLogBytes = 0;
+          persist();
+        }
+      },
+    });
+    runningHandles.set(j.id, handle);
+    try {
+      const { code } = await handle.done;
+      return code;
+    } finally {
+      runningHandles.delete(j.id);
+    }
+  }
+
   async function run(j, box, { waitForSsh }) {
     try {
       if (waitForSsh) {
@@ -196,39 +233,18 @@ export function createSetupManager({
       j.phase = 'running'; persist();
 
       const script = buildScript(box, j.options);
-      const argv = buildSetupArgv(box, script, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
       let sawSudoPw = false;
       let sawSshPw = false;
       let stderrTail = '';
-      // Coalesced log persistence: a chatty install emits thousands of chunks,
-      // and a full-history save per chunk is a multi-MB stringify each time.
-      // Status/phase transitions still persist immediately; finish() flushes
-      // the tail.
-      let lastLogPersist = nowMs();
-      let pendingLogBytes = 0;
-      const handle = sshStream(argv, {
-        timeout: taskTimeoutMs,
-        onData: (chunk, stream) => {
-          appendLog(j, chunk);
-          if (stream === 'stderr') {
-            // Bounded stderr-only accumulator so a phrase split across chunks is
-            // still detected, without matching sudo text that appeared on stdout.
-            stderrTail = (stderrTail + chunk).slice(-4096);
-            if (!sawSudoPw && SUDO_PW_RE.test(stderrTail)) sawSudoPw = true;
-            if (!sawSshPw && SSH_PW_RE.test(stderrTail)) sawSshPw = true;
-          }
-          pendingLogBytes += chunk.length;
-          const t = nowMs();
-          if (t - lastLogPersist >= logPersistMs || pendingLogBytes >= logPersistBytes) {
-            lastLogPersist = t;
-            pendingLogBytes = 0;
-            persist();
-          }
+      const code = await streamRemote(j, box, script, {
+        onStderr: (chunk) => {
+          // Bounded stderr-only accumulator so a phrase split across chunks is
+          // still detected, without matching sudo text that appeared on stdout.
+          stderrTail = (stderrTail + chunk).slice(-4096);
+          if (!sawSudoPw && SUDO_PW_RE.test(stderrTail)) sawSudoPw = true;
+          if (!sawSshPw && SSH_PW_RE.test(stderrTail)) sawSshPw = true;
         },
       });
-      runningHandles.set(j.id, handle);
-      const { code } = await handle.done;
-      runningHandles.delete(j.id);
 
       if (code === 0) await completeDone(j, box);
       // sudo wins when both are somehow set: sudo text can only appear once the
@@ -240,7 +256,9 @@ export function createSetupManager({
       else if (code === 124) { j.error = 'setup timed out'; finish(j, 'error'); }
       else { j.error = `setup exited ${code}`; finish(j, 'error'); }
     } catch (e) {
-      runningHandles.delete(j.id);
+      // No runningHandles cleanup here: streamRemote's own finally covers the
+      // window in which a handle exists, and a throw before that (a rejecting
+      // buildSetupArgv) never registered one.
       j.error = e?.message || 'setup error';
       finish(j, 'error');
     }
