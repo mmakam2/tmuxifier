@@ -1,0 +1,86 @@
+/* Original — the pre-v1.18.0 neon-terminal world, reinterpreted as a skin over
+   the Instrument layout (source palette: `git show 247b906~1:src/web/style.css`).
+   Navy field, cyan accent, green commit, glow instead of extrusion, sans chrome.
+
+   Every rule here is scoped to :root[data-theme="original"] so the theme can
+   never leak into the default (pinned by test/styleTokens.test.js), and the file
+   holds token overrides only — the token fence in style.css is the whole themable
+   surface, so there is nothing a component rule would have to reach for.
+
+   Terminal-facing tokens (--screen, --text, --accent, --term-sel) MUST stay plain
+   color literals: theme.ts resolves them for xterm, which parses the string
+   itself, so color-mix() or var() indirection here would not resolve.
+
+   DELIBERATE INHERITS (a token absent below is a decision, not an omission):
+   - --ok / --warn / --crit / --auth — status LEDs are semantic, not palette: a
+     green/red/amber/violet lamp means the same thing in every theme, and the
+     washes derived from them (color-mix over --warn/--crit) follow for free.
+   - --crit-soft — the salmon body text inside red-tinted warnings is --crit's
+     companion; overriding one without the other would drift the pairing, and
+     --crit inherits.
+   - --gbtn-bg / --gbtn-bg-hover / --gbtn-ink / --gbtn-border — Google's brand
+     identity for the sign-in button. Brand-fixed in every theme.
+   - color-scheme: dark on :root — both shipped themes are dark (light themes are
+     out of scope for the engine), so the declaration stays theme-independent.  */
+:root[data-theme="original"] {
+  /* --- Chassis neutrals: the deep navy field ------------------------------ */
+  --bg: #070a0f;
+  --panel: #0d121b;
+  --panel-2: #111824;
+  --gunmetal: #1c2635;    /* pressed/engaged key fill (no consumer today; kept in
+                             the navy family so a future rule inherits the world) */
+  --border: #202938;
+  --screen: #050a12;      /* terminal glass — literal (xterm reads this) */
+  --text: #d8e1ea;        /* literal (xterm reads this) */
+  --muted: #7f8b9a;
+  --dim: #5c6878;
+  /* --- Functional light: cyan alive, green commit ------------------------- */
+  --accent: #24d3e8;      /* literal (xterm cursor reads this) */
+  --accent-deep: #17a8ba;
+  --commit: #58e58c;      /* the old sheet's green, kept as the one commit color */
+  /* Commit key material ramp, re-derived in the green family. */
+  --commit-hi: #7deca6;
+  --commit-hi-2: #6ae99a;
+  --commit-mid: #58e58c;
+  --commit-mid-2: #46d97d;
+  --commit-deep: #2ca75c;
+  --commit-edge: #1d7440;
+  --commit-rim: #175c34;
+  --commit-ink: #05130b;
+  /* --- Chrome face -------------------------------------------------------- */
+  /* System sans for the chassis legends, as the original sheet had. The TERMINAL
+     font is untouched — that is termFont.ts's bundled Meslo stack. */
+  --face: ui-sans-serif, system-ui, sans-serif;
+  /* --- Material: glow over extrusion -------------------------------------- */
+  /* Keys are flat navy plates with a hairline, not machined caps: the edge
+     shadow loses its 3px drop and the press becomes an inset rather than a
+     travel, so the world reads as lit glass instead of powder-coated metal. */
+  --key-border: #223045;
+  --key-face: linear-gradient(180deg, #121a28, #0d121b);
+  --key-edge: 0 1px 0 rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --key-edge-down: inset 0 1px 3px rgba(0, 0, 0, 0.45);
+  --recess: inset 0 1px 3px rgba(0, 0, 0, 0.45);
+  --lift: 0 24px 80px rgba(0, 0, 0, 0.45);  /* the old modal/panel drop shadow */
+  /* --- Role tokens (the token collapse's Rule-D mints) -------------------- */
+  --seam: #19212f;               /* top seam of a recessed well, under --border */
+  --key-hi: #121a28;             /* key-face top; ALSO the off-LED lamp fill, so
+                                    an unlit lamp stays a dark navy bead */
+  --key-lit: #1b2536;            /* engaged mode-key gradient top */
+  --header-hi: #0c1119;          /* pane-header bezel strip gradient top */
+  --divider: #0a0f17;            /* chassis seam between mounted displays */
+  --scroll-thumb: #1f2a3a;       /* Firefox scrollbar-color thumb */
+  --scroll-thumb-wk: #1a2432;    /* WebKit scrollbar thumb */
+  --scroll-thumb-hover: #26334a; /* WebKit thumb hover; ALSO the stage-grid bezel
+                                    edge, so it is picked to read as a lit rim
+                                    around the screen bay, not just a hover tint */
+  --scrim: rgba(3, 6, 11, 0.66); /* modal/drawer backdrop wash */
+  /* --- Terminal glass selection (plain literal, see header note) ---------- */
+  --term-sel: rgba(36, 211, 232, 0.25);
+  /* --- The bench: cyan worklight over a vertical navy gradient ------------ */
+  /* Two layers where Instrument has three (noise tile + worklight + color); the
+     body's `background-repeat: repeat, no-repeat, no-repeat` simply has one
+     value spare, and `repeat` on a full-area radial gradient tiles nothing. */
+  --bench:
+    radial-gradient(circle at 50% 12%, rgba(36, 211, 232, 0.12), transparent 34%),
+    linear-gradient(180deg, #0a1018 0%, #070a0f 56%, #05070b 100%);
+}
