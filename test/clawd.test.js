@@ -62,3 +62,24 @@ test('pref: round-trips, and every failure path falls back to the default', () =
   expect(normalizeClawdVariant(42)).toBe('star');
   expect(loadClawdVariant()).toBe('star');             // no storage at all (node has no localStorage)
 });
+
+// The server-backed cache. The pref is authoritative in data/ui-settings.json;
+// this module keeps a synchronous copy so the render sites never await. The
+// cache is module-level, so it persists across tests in this file — each test
+// below sets it explicitly before reading it.
+import { setClawdVariant, currentClawdVariant, hasStoredClawdPref } from '../src/web/clawd.ts';
+
+test('setClawdVariant normalizes, caches, and refreshes the mirror', () => {
+  const store = memStorage();
+  expect(setClawdVariant('pace', store)).toBe('pace');
+  expect(store.getItem('tmuxifier.clawdAnim')).toBe('pace');
+  expect(currentClawdVariant()).toBe('pace');
+  // junk from the server (stale slug after a rename) falls back to default
+  expect(setClawdVariant('gone-variant', store)).toBe(DEFAULT_CLAWD_VARIANT);
+  expect(currentClawdVariant()).toBe(DEFAULT_CLAWD_VARIANT);
+});
+
+test('hasStoredClawdPref distinguishes never-set from set', () => {
+  expect(hasStoredClawdPref(memStorage())).toBe(false);
+  expect(hasStoredClawdPref(memStorage({ 'tmuxifier.clawdAnim': 'star' }))).toBe(true);
+});
