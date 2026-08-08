@@ -109,8 +109,14 @@ export function classifyTransitions(prev, next, thresholds, state) {
 
   // Agent edges (box's configured session only). Both sides of an agent-input
   // edge are hook-sourced (sampleOf sets `agent` only from a marker), so a
-  // single-sample working→waiting is always a real turn ending — the old
-  // anti-blip streak guarded a heuristic that no longer exists. Suppressed
+  // single-sample working→waiting is a real turn ending — the old anti-blip
+  // streak guarded a heuristic that no longer exists. NOTE this rests entirely
+  // on the hook's own background-work gate (claudeAgentHooks.js): Claude Code's
+  // `Stop` also fires on a turn that ended merely to await a background
+  // subagent or shell, and until that was gated ON THE BOX, every such pause
+  // arrived here as a genuine-looking edge and paged the operator. There is
+  // deliberately no second settle window on this side — it would only catch
+  // sub-poll flicker, and a background job runs for minutes. Suppressed
   // while that session is attached — watching the terminal is its own
   // notification; agent-done checks BOTH ends of the edge, since the user may
   // attach in the final poll interval. agent-done additionally requires

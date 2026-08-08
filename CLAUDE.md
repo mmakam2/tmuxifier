@@ -565,6 +565,36 @@ pattern for new modules.
   `sampleOf`'s agent state (hook-only, see `healthHistory.js`). Run by `setupManager.js` as
   the post-statusline `agent-hooks` phase, recorded on `job.agentHooks`, never promoted to a
   job failure.
+  Three further events — SubagentStart/SubagentStop/PreToolUse — feed the hook's
+  **background-work gate**, and exist because `Stop` does not mean what it reads like: it
+  fires whenever the main agent finishes responding, INCLUDING a turn that ended solely to
+  await a background subagent or shell, which the harness then resumes on its own. Writing
+  `waiting` there sent the operator back to a screen where nothing wanted them. So outstanding
+  work is tracked as token files under `.tmuxifier-agent/busy/<session>/` — SubagentStart/Stop
+  bracket a subagent exactly (both carry `agent_id`), PreToolUse covers a backgrounded shell
+  and is the only entry carrying a `matcher` (`Bash`), since it is the one event that fires per
+  tool call — and `stop` writes `working` instead of `waiting` while a token is live. The gate
+  covers the `notify` path too, but ONLY for `notification_type: idle_prompt`: that one is a
+  timer that fires a fixed interval after any turn ends, so gating `Stop` alone just moved the
+  false ping a minute later (observed: a second `waiting` write at exactly Stop+60s). Every
+  other notification type — `permission_prompt`, `agent_needs_input`, … — is Claude Code saying
+  it genuinely wants the operator, and still lands. Two rules are load-bearing. `prompt` clears
+  every token, because the harness re-invoking the agent after background work finishes fires
+  UserPromptSubmit exactly like a human turn, and for a backgrounded **shell** that is the only
+  completion signal there is (a subagent has SubagentStop; a shell has nothing). And every
+  token expires, on two deliberately different clocks, because only one kind is exact. A
+  `sub.` token is bracketed — SubagentStop always fires, mid-turn or not — so its 120min TTL
+  only ever catches a killed subagent. A `bg.` token is a **heuristic** and gets ~2min: if the
+  shell finishes while the turn is still running, NOTHING fires (UserPromptSubmit fires only
+  when the harness resumes an *ended* turn), so the token goes stale silently and would
+  suppress the next real `Stop`. Live testing is what surfaced that — the token outlived its
+  shell and sat there. The short TTL bounds the exposure to turns ending within ~2min of the
+  launch, a window in which a just-launched job is far likelier to still be running than not.
+  The whole gate fails OPEN by design: a missed notification is worse than a spurious one.
+  Residual, accepted: two concurrent background jobs, one finishing, clears both tokens, so
+  the second can still produce one false `waiting`.
+  The hook therefore READS its stdin event JSON (it used to discard it) — substring-matched
+  only, never eval'd, and every value taken from it is re-sanitized before reaching a path.
 - `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`pinnedSocket`/`normFp`) used
   by both the Proxmox and NetBox API clients. Pin mode verifies the pinned fingerprint on each
   request's own connection (`pinnedSocket` via `createConnection`) instead of OpenSSL chain

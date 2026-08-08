@@ -11,24 +11,38 @@
 // single .statusLine key), so the merge is remove-then-append per event:
 // drop any entry whose serialized form mentions tmuxifier-agent-hook, then
 // append ours — idempotent across reruns, never touches the operator's own
-// hooks. `matcher` is omitted everywhere: unsupported on UserPromptSubmit
-// and Stop, optional on the other three.
-
+// hooks.
+//
+// The last three events exist only to feed the hook's background-work gate.
+// `Stop` fires when the main agent finishes responding, which INCLUDES a turn
+// that ended solely to await a background subagent or shell — work the harness
+// resumes on its own. Reading that as "waiting on the operator" is what sent
+// people back to a screen where nothing wanted them. SubagentStart/SubagentStop
+// bracket a subagent exactly (both carry agent_id); PreToolUse covers a
+// backgrounded shell, and is the ONE event here that fires per tool call, hence
+// the only `matcher` we carry — without it the hook would fork on every Read
+// and Edit too. `matcher` stays omitted elsewhere: unsupported on
+// UserPromptSubmit and Stop (Claude Code ignores one silently, so a dead field
+// would only mislead a reader), unnecessary on the rest.
 const HOOK_EVENTS = [
   ['UserPromptSubmit', 'prompt'],
   ['Stop', 'stop'],
   ['Notification', 'notify'],
   ['SessionStart', 'start'],
   ['SessionEnd', 'end'],
+  ['SubagentStart', 'subagent-start'],
+  ['SubagentStop', 'subagent-stop'],
+  ['PreToolUse', 'pretool', 'Bash'],
 ];
 
 // The command value, written LITERALLY — its ${...} is expanded later by the
 // shell Claude Code spawns for the hook, not at install time.
-const hookEntry = (arg) => ({
-  hooks: [{ type: 'command', command: 'sh "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tmuxifier-agent-hook.sh" ' + arg }],
-});
+const hookEntry = (arg, matcher) => {
+  const entry = { hooks: [{ type: 'command', command: 'sh "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tmuxifier-agent-hook.sh" ' + arg }] };
+  return matcher ? { matcher, ...entry } : entry;
+};
 
-const HOOKS_JSON = JSON.stringify(Object.fromEntries(HOOK_EVENTS.map(([ev, arg]) => [ev, [hookEntry(arg)]])));
+const HOOKS_JSON = JSON.stringify(Object.fromEntries(HOOK_EVENTS.map(([ev, arg, matcher]) => [ev, [hookEntry(arg, matcher)]])));
 
 export function buildAgentHooksInstallScript() {
   return [
