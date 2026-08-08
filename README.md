@@ -153,7 +153,7 @@ dashboard tabs are open. The full per-module map lives in [AGENTS.md](AGENTS.md)
 | --- | --- |
 | [Configuration reference](docs/configuration.md) | every option, `config.json`, terminal fonts, the settings modal |
 | [Authentication](docs/authentication.md) | password & OAuth modes, passkeys, require-a-passkey |
-| [Boxes & setup jobs](docs/boxes-and-setup.md) | setup jobs, tools checklist, statusline push, AI CLI auth seeding |
+| [Boxes & setup jobs](docs/boxes-and-setup.md) | setup jobs, tools checklist, statusline push, AI CLI auth seeding, post-setup script |
 | [Terminal features](docs/terminal.md) | splits, uploads & clipboard, voice dictation, host shell, reconnect |
 | [Standby dashboard](docs/dashboard.md) | service tiles, icons, Pi-hole/TrueNAS/UniFi/Immich cards |
 | [Status, health & Fleet Command](docs/fleet-and-health.md) | rate-limit-safe probing, health events, fleet jobs |
@@ -172,8 +172,9 @@ interrupt it, and a failed setup keeps the box and offers **Retry** (or **Finish
 interactively** when a password prompt is the blocker). The same setup can push this host's
 Claude Code statusline and **seed the box with this host's Claude/Codex subscription
 credentials** — a deliberate, unchecked-by-default handover of your CLI identity to that box.
-The setup-job lifecycle, the tools checklist, and the seeding security model are in
-[boxes & setup jobs](docs/boxes-and-setup.md).
+A saved Fleet Command script can also be selected to run as the last step of setup — after the
+tools and credentials, before the tmux session. The setup-job lifecycle, the tools checklist,
+and the seeding security model are in [boxes & setup jobs](docs/boxes-and-setup.md).
 
 ## Standby dashboard
 When no terminal is docked, the stage shows a standby dashboard: **service tiles** for your

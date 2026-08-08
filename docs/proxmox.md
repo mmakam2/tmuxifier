@@ -58,6 +58,11 @@ Add/Edit Box modal — see [Boxes & setup jobs](boxes-and-setup.md)). Watch the 
 the container is up Tmuxifier installs tmux
 (and any selected frameworks/tools) over SSH, then an **Open terminal** button drops you into it.
 
+The Provision tab's setup options include a **post-setup script** picker: one of
+Fleet Command's saved scripts, run on the container after every other install and
+before its tmux session is created. See
+[Post-setup script](boxes-and-setup.md#post-setup-script).
+
 ### Shell-framework update clamps
 
 Shell-framework auto-updaters are disabled on every box setup — not only when Tmuxifier

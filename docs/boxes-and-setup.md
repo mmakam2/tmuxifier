@@ -86,3 +86,34 @@ Either secret travels to the box over stdin on the same SSH connection used for 
 never in a command line, a script file, a log, or an API response. **Seeding hands that box your
 Claude and/or Codex subscription identity, exactly as if you'd logged in on it yourself — seed
 only boxes you trust the way you'd trust anyone holding your own login.**
+
+## Post-setup script
+
+The setup form's last section picks one of Fleet Command's **saved scripts** to run
+on the box once everything else is installed. The order is deliberate:
+
+```
+tools & shell framework → AI-auth seeding → Claude statusline → agent hooks
+  → your saved script → tmux session created
+```
+
+Your script runs *before* the box's tmux session exists, so anything it writes to
+`.zshrc`, `.bashrc` or `.tmux.conf` is picked up by that session's first shell. It
+runs non-interactively over the same SSH connection as the rest of setup, so it
+cannot answer a sudo password prompt — use a box that sudoes without one, or run
+the script from Fleet Command afterwards.
+
+The picker appears in both the Add/Edit Box modal and the Proxmox hub's Provision
+tab. Selecting **None** (the default) runs nothing.
+
+**A failing script never fails the setup job.** Everything Tmuxifier installed
+succeeded and the box is usable, so the job still reaches `done` and the result is
+reported on its own line — `bootstrap failed (exited 2)` — with the script's full
+output in the job log above it. Re-run it from Fleet Command once you have fixed it;
+retrying the setup would reinstall everything just to retry the script.
+
+The script is resolved by id when it runs, not snapshotted when you pick it, so
+editing it between clicking Provision and the phase starting means the edited
+version runs. One deleted in that window is reported as
+`bootstrap skipped (saved script no longer exists)`. The *name* recorded on the job
+is frozen, so renaming a script later never rewrites what a past job says it ran.

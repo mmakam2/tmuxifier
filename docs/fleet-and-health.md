@@ -121,3 +121,7 @@ each run with the name of the script it came from.
 A saved script's body is stored as plain text — the file is owner-only (`0o600`) but not
 encrypted, and the same text is persisted again in the fleet job history along with its output.
 Don't paste credentials into one.
+
+A saved script is not limited to fleet runs: the box setup form and the Proxmox
+Provision tab can select one to run as the last step of setting a box up. See
+[Post-setup script](boxes-and-setup.md#post-setup-script).
