@@ -361,6 +361,38 @@ function refitActiveTerminals() {
   for (const t of tabs.values()) t.term.refit();
 }
 
+// Server-side UI prefs: theme + clawd animation. Best-effort — on failure the
+// mirror-painted theme and localStorage-seeded clawd pref stand.
+//
+// Called from EVERY path that reaches the workspace, not just start(): a fresh
+// login transitions to the dashboard without a page load, so leaving this in
+// start() alone meant a brand-new browser (no mirror to paint from) logged in
+// wearing the default theme however the server was configured, until a manual
+// reload. The contract is "after auth, apply the server's prefs", and a fresh
+// login is after auth. Google sign-in is the one path that needs nothing: it is
+// a full navigation to /api/auth/google/login and returns via a redirect, so it
+// arrives through start() like any other page load.
+async function loadUiSettings(): Promise<void> {
+  try {
+    const st = await api.uiSettings();
+    applyTheme(st.theme);
+    if (st.clawdAnim === null) {
+      if (hasStoredClawdPref()) {
+        // One-time migration: the pref used to be per-browser localStorage.
+        void api.patchUiSettings({ clawdAnim: setClawdVariant(loadClawdVariant()) }).catch(() => {});
+      }
+      // else: nothing stored anywhere — leave the cache unseeded rather than
+      // calling setClawdVariant, which PERSISTS. Seeding here would write a
+      // phantom mirror key that the next boot's hasStoredClawdPref() reads as
+      // a legacy pref and PATCHes as an explicit choice the user never made.
+      // currentClawdVariant() already falls through to loadClawdVariant()'s
+      // default, so doing nothing is the correct unset state.
+    } else {
+      setClawdVariant(st.clawdAnim);
+    }
+  } catch {}
+}
+
 async function start() {
   if (await api.me()) {
     // Apply the configured terminal font before any box opens. Best-effort: on
@@ -370,26 +402,7 @@ async function start() {
       setTerminalFont(uiCfg);
       setTerminalUploads(uiCfg);
     } catch {}
-    // Server-side UI prefs: theme + clawd animation. Best-effort — on failure
-    // the mirror-painted theme and localStorage-seeded clawd pref stand.
-    try {
-      const st = await api.uiSettings();
-      applyTheme(st.theme);
-      if (st.clawdAnim === null) {
-        if (hasStoredClawdPref()) {
-          // One-time migration: the pref used to be per-browser localStorage.
-          void api.patchUiSettings({ clawdAnim: setClawdVariant(loadClawdVariant()) }).catch(() => {});
-        }
-        // else: nothing stored anywhere — leave the cache unseeded rather than
-        // calling setClawdVariant, which PERSISTS. Seeding here would write a
-        // phantom mirror key that the next boot's hasStoredClawdPref() reads as
-        // a legacy pref and PATCHes as an explicit choice the user never made.
-        // currentClawdVariant() already falls through to loadClawdVariant()'s
-        // default, so doing nothing is the correct unset state.
-      } else {
-        setClawdVariant(st.clawdAnim);
-      }
-    } catch {}
+    await loadUiSettings();
     renderDashboard();
   } else await renderLogin();
 }
@@ -481,7 +494,7 @@ async function renderLogin() {
     </form>`;
   app.querySelector('#login')!.addEventListener('submit', async (e) => {
     e.preventDefault();
-    try { await api.login((app.querySelector('#pw') as HTMLInputElement).value); renderDashboard(); }
+    try { await api.login((app.querySelector('#pw') as HTMLInputElement).value); await loadUiSettings(); renderDashboard(); }
     catch (ex) {
       // The server's error is always a fixed string on this route (e.g.
       // "invalid", "too many attempts", or "passkey required" against a
@@ -506,6 +519,7 @@ function wirePasskeyButton() {
       const options = await pk.loginBegin();
       const credential = await getPasskey(options);
       await pk.loginFinish(serializeAssertion(credential));
+      await loadUiSettings();
       renderDashboard();
     } catch (e) {
       btn.disabled = false;

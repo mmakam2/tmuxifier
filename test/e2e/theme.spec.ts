@@ -109,13 +109,52 @@ test('a fresh browser boots without inventing a clawd preference', async ({ page
   expect(await page.evaluate(() => localStorage.getItem('tmuxifier.clawdAnim'))).toBeNull();
 
   // The reload is the load-bearing half, and deliberately not a formality: the
-  // ui-settings boot fetch runs in start(), which only a page LOAD with a live
-  // session reaches — the submit handler jumps straight to renderDashboard() —
-  // so the check above covers the login path while this one covers the boot path
-  // where the phantom seed (and, on the boot after it, the phantom PATCH) lived.
+  // check above covers the fresh-login path through loadUiSettings(), while this
+  // one covers the start() boot path where the phantom seed — and, on the boot
+  // after it, the phantom PATCH it manufactured — actually lived.
   await page.reload();
   await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
   expect(await page.evaluate(() => localStorage.getItem('tmuxifier.clawdAnim'))).toBeNull();
   const stored = await (await page.request.get('/api/ui-settings')).json();
   expect(stored.clawdAnim).toBeNull();
+});
+
+// The server's theme must land on the FIRST authenticated paint, not one reload
+// later. The ui-settings fetch used to live only in start(), which a login does
+// not run — the submit handler transitions to the workspace without a page load
+// — so a brand-new browser (no mirror for theme-boot.js to paint from) logged in
+// wearing Instrument however the server was configured, and stayed that way
+// until something reloaded the page.
+test('a fresh login applies the server theme with no reload', async ({ page, browser }) => {
+  // Arrange on the shared server via the API, so the assertions below are about
+  // the login transition alone and not about a picker interaction.
+  await page.request.post('/api/login', { data: { password: 'e2e' } });
+  await page.request.patch('/api/ui-settings', { data: { theme: 'original' } });
+
+  // A genuinely fresh browser: its own cookies AND its own empty localStorage,
+  // which is what makes this the interesting case — with no mirror, the boot
+  // script stamps nothing, so only the post-login fetch can supply the theme.
+  const ctx = await browser.newContext();
+  try {
+    const fresh = await ctx.newPage();
+    await fresh.goto('/');
+    await expect(fresh.locator('#pw')).toBeVisible({ timeout: 10000 });
+    await expect(fresh.locator('html')).not.toHaveAttribute('data-theme', /./);
+    const bgLoggedOut = await bodyBg(fresh);
+
+    await fresh.fill('#pw', 'e2e');
+    await fresh.click('button:has-text("Unlock")');
+    await expect(fresh.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
+
+    // No reload anywhere above this line.
+    await expect(fresh.locator('html')).toHaveAttribute('data-theme', 'original');
+    expect(await bodyBg(fresh)).not.toBe(bgLoggedOut);
+  } finally {
+    await ctx.close();
+  }
+
+  // Restore for the rest of the suite (shared server, workers: 1).
+  await page.request.patch('/api/ui-settings', { data: { theme: 'instrument' } });
+  const stored = await (await page.request.get('/api/ui-settings')).json();
+  expect(stored.theme).toBe('instrument');
 });
