@@ -9,7 +9,7 @@ import { openSettingsModal } from './settingsUi';
 import { renderPresetsTab } from './proxmoxPresets';
 import { renderGuestsTab } from './proxmoxGuests';
 import { renderActivityTab } from './proxmoxActivity';
-import { setupStatusText, formatSeedResults } from './setupStatus';
+import { setupStatusText, formatSeedResults, formatStatuslineResult } from './setupStatus';
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { registerModal } from './modalRegistry';
 import { createSetupJobPoller } from './setupPoller';
@@ -197,6 +197,8 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
           // off the job rather than firing a request from the tab.
           const seedTxt = formatSeedResults(job.seed);
           if (seedTxt) phase.textContent = `${phase.textContent} · auth: ${seedTxt}`;
+          const psTxt = formatStatuslineResult(job.postScript);
+          if (psTxt) phase.textContent = `${phase.textContent} · ${psTxt}`;
           if (job.status === 'needs-interactive') {
             const finishBtn = el('button', { type: 'button', class: 'pve-primary' }, ['Finish interactively']) as HTMLButtonElement;
             finishBtn.disabled = setupLauncher.active();

@@ -190,10 +190,10 @@ export interface FleetJobSummary {
 export type SetupStatus = 'running' | 'done' | 'error' | 'needs-interactive' | 'interrupted' | 'superseded';
 // claudeStatusline is legacy-only: the statusline (and agent hooks) now ride
 // the `claude` tools entry; old persisted jobs still carry the flag.
-export interface SetupOptions { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth?: boolean; claudeStatusline?: boolean }
+export interface SetupOptions { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth?: boolean; claudeStatusline?: boolean; scriptId?: string | null; scriptName?: string | null }
 export interface SetupSummary {
   id: string; boxId: string; boxLabel: string; status: SetupStatus;
-  phase: 'waiting-ssh' | 'running' | 'seeding' | 'statusline' | 'agent-hooks' | null; options: SetupOptions; error: string | null;
+  phase: 'waiting-ssh' | 'running' | 'seeding' | 'statusline' | 'agent-hooks' | 'script' | null; options: SetupOptions; error: string | null;
   // Present once a job that asked for seeding has attempted it. Absent (or
   // null) on jobs that predate server-side seeding, and on jobs that never
   // asked for it.
@@ -203,6 +203,9 @@ export interface SetupSummary {
   // Present once the always-on agent-hooks push has attempted it (done jobs).
   // Absent (or null) on jobs persisted before the push existed.
   agentHooks?: SeedResult | null;
+  // Present once a job that selected a saved Fleet Command script has attempted
+  // it. Absent (or null) on jobs that predate the phase or never selected one.
+  postScript?: PushResult | null;
   // Which credential a `needs-interactive` job stalled on: 'sudo' (the script
   // reached sudo) or 'ssh' (ssh itself could not authenticate, so only the
   // non-BatchMode interactive finish can get in). Null in every other status,
@@ -211,7 +214,12 @@ export interface SetupSummary {
   createdAt: string; finishedAt: string | null;
 }
 export interface SetupJob extends SetupSummary { log: string; }
-export interface SeedResult { target: 'claude' | 'codex' | 'all' | 'statusline' | 'agent-hooks'; ok: boolean; skipped?: string; error?: string }
+// The shape every post-setup step's result shares. `target` is free-form here
+// because the saved-script phase reports the SCRIPT'S OWN NAME; SeedResult
+// narrows it to the fixed set the seed/statusline/hooks steps use, so those
+// keep their exhaustiveness while the script phase stays expressible.
+export interface PushResult { target: string; ok: boolean; skipped?: string; error?: string }
+export interface SeedResult extends PushResult { target: 'claude' | 'codex' | 'all' | 'statusline' | 'agent-hooks' }
 export interface AiAuthCliStatus { ready: boolean; reason?: string }
 export interface AiAuthStatus { claude: AiAuthCliStatus; codex: AiAuthCliStatus }
 
