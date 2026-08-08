@@ -147,6 +147,58 @@ test('a saved script survives a reload and loads back into the editor', async ({
   await expect(page.locator('.fleet-script-modal .cm-content')).toContainText('echo SAVED_SCRIPT_MARKER');
 });
 
+// A big selection used to grow the script modal past the viewport in both
+// directions — the title off the top, the Cancel/Save/Run row off the bottom —
+// because nothing bounded the modal's height and the target list wrapped to a
+// dozen lines. The fleet fixture only seeds three boxes, so the list response is
+// padded here rather than in the shared server, which other specs count on.
+test('the script editor keeps its footer keys on screen with a large selection', async ({ page }) => {
+  await page.route('**/api/boxes', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    const res = await route.fetch();
+    const boxes = await res.json();
+    const filler = Array.from({ length: 57 }, (_, i) => ({
+      ...boxes[0],
+      id: `filler-${i}`,
+      label: `fleet-filler-${String(i).padStart(2, '0')}`,
+      tags: [],
+    }));
+    await route.fulfill({ response: res, json: [...boxes, ...filler] });
+  });
+
+  await loginAndWait(page);
+  await page.getByRole('button', { name: 'Fleet Command', exact: true }).click();
+  await page.locator('.fleet-select-all .select-all-check').check();
+  await expect(page.locator('#fleet-run')).toHaveText('Run on 60');
+
+  await page.locator('.fleet-expand').click();
+  const modal = page.locator('.fleet-script-modal');
+  await expect(modal.locator('.cm-content')).toBeVisible();
+
+  const viewport = page.viewportSize()!;
+
+  // The modal fits the viewport, so nothing is clipped off the top either.
+  const modalBox = (await modal.boundingBox())!;
+  expect(modalBox.y).toBeGreaterThanOrEqual(0);
+  expect(modalBox.y + modalBox.height).toBeLessThanOrEqual(viewport.height);
+
+  // The commit key — the whole point — is reachable, not merely present.
+  const run = modal.locator('.fleet-script-run');
+  await expect(run).toBeInViewport({ ratio: 1 });
+  await expect(run).toHaveText('Run on 60 boxes');
+
+  // The names are bounded and scrollable rather than clipped: the band carries
+  // more content than it shows, and the count says how much.
+  const targets = modal.locator('.fleet-confirm-targets');
+  const overflow = await targets.evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(overflow).toBeGreaterThan(0);
+  await expect(modal.locator('.fleet-targets .fs-eyebrow')).toHaveText('Targets · 60 boxes');
+
+  // The editor is the part that gave way, and it is still usable.
+  const editor = (await modal.locator('.fleet-script .cm-editor').boundingBox())!;
+  expect(editor.height).toBeGreaterThanOrEqual(200);
+});
+
 test('running a saved script labels the job with the script name', async ({ page }) => {
   await loginAndWait(page);
   await page.getByRole('button', { name: 'Fleet Command', exact: true }).click();

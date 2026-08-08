@@ -1288,8 +1288,28 @@ button.empty-kbd:hover { color: var(--text); }
   background: var(--key-face); color: var(--dim);
   box-shadow: var(--key-edge-down); text-shadow: none;
 }
-.fleet-confirm-cmd { background: var(--screen); border: 1px solid var(--border); border-top-color: #1f2228; box-shadow: var(--recess); border-radius: 8px; padding: 10px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-family: var(--face); font-size: 12.5px; color: var(--muted); }
-.fleet-confirm-targets { color: var(--dim); font-size: 0.9em; margin: 8px 0; }
+/* Both wells are bounded: whatever is pasted in, the modal's actions row stays
+   on screen. (`overflow-x: auto` already computes `overflow-y` to `auto`, so
+   the max-height is all the vertical scroll needs.) */
+.fleet-confirm-cmd { background: var(--screen); border: 1px solid var(--border); border-top-color: #1f2228; box-shadow: var(--recess); border-radius: 8px; padding: 10px; max-height: 24vh; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-family: var(--face); font-size: 12.5px; color: var(--muted); }
+/* The selected-box names, under a count eyebrow (see buildTargetBand). Three
+   wrapped lines, then the band scrolls — a 50-box selection used to push the
+   Run key off the viewport. */
+.fleet-targets { display: flex; flex-direction: column; gap: 4px; }
+.fleet-confirm-targets {
+  color: var(--dim); font-size: 0.9em; line-height: 1.45; margin: 0;
+  /* 3½ lines: three read cleanly and the half-line showing under them is the
+     scroll cue, which a flush bottom edge would not give. The +14px is the
+     band's own padding and border, which the global border-box counts in. */
+  max-height: calc(1.45em * 3.5 + 14px); overflow-y: auto;
+  padding: 6px 8px; border-radius: 6px;
+  border: 1px solid var(--border); border-top-color: #1f2228;
+  background: var(--screen); box-shadow: var(--recess);
+}
+/* `.err` is a reserved slot (min-height: 1em) so an error can't shift the
+   layout — but the UA's paragraph margins around it are dead space these two
+   modals can't spare, sitting between the target band and the actions row. */
+.fleet-confirm > .err, .fleet-script-modal > .err { margin: 0; }
 /* One-liner input + "expand to script editor" button share a row. */
 .fleet-input-row { display: flex; gap: 6px; align-items: stretch; }
 .fleet-input-row .fleet-input { flex: 1; min-width: 0; }
@@ -1302,16 +1322,25 @@ button.empty-kbd:hover { color: var(--text); }
 }
 .fleet-expand:hover { color: var(--text); }
 .fleet-expand:active { transform: translateY(1px); box-shadow: var(--key-edge-down); }
-/* Bash-script editor modal — wider than the default modal to give real room. */
-.fleet-script-modal { width: 620px; }
+/* Bash-script editor modal — a workbench rather than a dialog, so it takes the
+   widest role width in the app (DESIGN.md, Layout). The height is bounded and
+   only the editor body flexes: every other part is `flex: 0 0 auto`, so a long
+   script or a 50-box selection scrolls inside its own well instead of growing
+   the modal past the viewport and carrying the footer keys off with it. */
+.fleet-script-modal { width: 1040px; max-width: 94vw; max-height: 90vh; }
+.fleet-script-modal > * { flex: 0 0 auto; }
+.fleet-script-modal > .fleet-script-body { flex: 1 1 auto; min-height: 0; }
 /* Lift the script-editor backdrop above the Fleet jobs sidebar (z-index: 50). */
 .modal-backdrop:has(> .fleet-script-modal) { z-index: 60; }
 .modal-backdrop:has(> .pve-disk-modal) { z-index: 60; }
 .fleet-script-hint { margin: 0; color: var(--dim); font-size: 11px; }
 /* Host for the CodeMirror editor; the .cm-editor inside carries its own border,
-   background and focus ring (see createFleetScriptEditor's THEME). */
-.fleet-script { width: 100%; }
-.fleet-script .cm-editor { width: 100%; }
+   background and focus ring (see createFleetScriptEditor's THEME). The editor
+   takes its height from this host by cross-axis stretch rather than from a
+   `max-height` of its own, which is what lets it give way when the modal hits
+   its ceiling — down to the 220px floor here, and no further. */
+.fleet-script { width: 100%; flex: 1 1 auto; min-height: 220px; display: flex; }
+.fleet-script .cm-editor { flex: 1 1 auto; min-width: 0; }
 /* The script editor's commit key (matches the other orange commits). */
 .modal-actions .fleet-script-run {
   border-color: #c94f0e; border-bottom-color: #8f3708;
@@ -1321,11 +1350,13 @@ button.empty-kbd:hover { color: var(--text); }
 }
 .modal-actions .fleet-script-run:hover { background: linear-gradient(180deg, #ff8a4d, #fb6c1a); color: #1a0e05; }
 /* Saved-script rail and the editor share the modal body. */
-.fleet-script-body { display: flex; gap: 12px; align-items: stretch; }
-.fleet-script-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.fleet-script-rail { flex: 0 0 180px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fleet-script-body { display: flex; gap: 12px; align-items: stretch; min-height: 0; }
+.fleet-script-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.fleet-script-rail { flex: 0 0 180px; display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; }
 .fs-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
-.fs-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; max-height: 46vh; display: flex; flex-direction: column; gap: 2px; }
+/* The rail's list is the one part of the rail that gives, so it tracks the
+   editor's height beside it instead of carrying a viewport cap of its own. */
+.fs-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 2px; }
 .fs-row { display: flex; align-items: stretch; gap: 4px; border-radius: 6px; }
 /* Amber marks the engaged row, matching the editor's own active-line glow. */
 .fs-row.selected { background: rgba(255, 176, 0, 0.1); }
@@ -1340,16 +1371,19 @@ button.empty-kbd:hover { color: var(--text); }
 .fs-empty { color: var(--muted); font-size: 11px; padding: 6px 8px; }
 .fs-new { align-self: flex-start; background: var(--key-face); border: 1px solid var(--key-border); box-shadow: var(--key-edge); border-radius: 6px; color: var(--dim); cursor: pointer; font-size: 11px; padding: 4px 8px; }
 .fs-new:hover { color: var(--text); }
-.fs-meta-row { display: flex; gap: 6px; }
+.fs-meta-row { display: flex; gap: 6px; flex: 0 0 auto; }
 .fs-meta-row .fs-name { flex: 0 0 40%; min-width: 0; }
 .fs-meta-row .fs-note { flex: 1; min-width: 0; }
 /* `.danger` is only ever scoped in this file, so the discard dialog needs its
    own rule rather than inheriting a global one that does not exist. */
 .fs-discard .danger { color: var(--crit); }
 @media (max-width: 720px) {
+  /* Stacked, the rail keeps its intrinsic height and the editor is what gives —
+     the same division of labour as the two-column layout, just rotated. */
   .fleet-script-body { flex-direction: column; }
-  .fleet-script-rail { flex: 1 1 auto; }
-  .fs-list { max-height: 22vh; }
+  .fleet-script-rail { flex: 0 0 auto; }
+  .fs-list { flex: 0 0 auto; max-height: 22vh; }
+  .fleet-script { min-height: 140px; }
 }
 /* The closed drawer used to hide by transform alone, which leaves every control
    inside it focusable off-screen — tabbing past the sidebar walked into up to

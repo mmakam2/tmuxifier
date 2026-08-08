@@ -2416,6 +2416,29 @@ function syncFleetUI() {
   }
 }
 
+// The selected boxes, as a bounded band under a count eyebrow. Fifty labels wrap
+// to a dozen lines, and an unbounded list grew the modal past the viewport in
+// both directions — taking the actions row, Run included, off screen. The band
+// scrolls at three lines instead, so the footer keys stay put at any selection
+// size, and the count answers "how many" without reading the names.
+function buildTargetBand(targets: { label: string }[], emptyText: string): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'fleet-targets';
+
+  const eyebrow = document.createElement('div');
+  eyebrow.className = 'fs-eyebrow';
+  eyebrow.textContent = targets.length
+    ? `Targets · ${targets.length} box${targets.length === 1 ? '' : 'es'}`
+    : 'Targets';
+
+  const names = document.createElement('div');
+  names.className = 'fleet-confirm-targets';
+  names.textContent = targets.length ? targets.map((t) => t.label).join('  •  ') : emptyText;
+
+  wrap.append(eyebrow, names);
+  return wrap;
+}
+
 function openFleetConfirm(command: string, targets: { id: string; label: string }[]) {
   const form = document.createElement('form');
   form.className = 'modal fleet-confirm';
@@ -2427,9 +2450,7 @@ function openFleetConfirm(command: string, targets: { id: string; label: string 
   cmd.className = 'fleet-confirm-cmd';
   cmd.textContent = `$ ${command}`;
 
-  const targetList = document.createElement('div');
-  targetList.className = 'fleet-confirm-targets';
-  targetList.textContent = targets.map((t) => t.label).join('  •  ');
+  const targetList = buildTargetBand(targets, 'No boxes selected.');
 
   const err = document.createElement('p');
   err.className = 'err';
@@ -2509,11 +2530,7 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
   const body = document.createElement('div');
   body.className = 'fleet-script-body';
 
-  const targetList = document.createElement('div');
-  targetList.className = 'fleet-confirm-targets';
-  targetList.textContent = targets.length
-    ? targets.map((t) => t.label).join('  •  ')
-    : 'No boxes selected — select boxes before running.';
+  const targetList = buildTargetBand(targets, 'No boxes selected — select boxes before running.');
 
   const err = document.createElement('p');
   err.className = 'err';

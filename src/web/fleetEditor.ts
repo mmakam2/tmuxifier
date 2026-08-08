@@ -63,20 +63,28 @@ const HIGHLIGHT = HighlightStyle.define([
   { tag: t.atom, color: '#ff9d5c' },
 ]);
 
+// Height is deliberately absent here: the editor stretches to fill its host
+// (`.fleet-script`, a flex row), so the modal's own max-height governs how tall
+// it gets and the editor is the part that yields when the modal runs out of
+// room. A `max-height` of its own would leave the modal free to grow past the
+// viewport and take the footer keys with it.
 const THEME = EditorView.theme({
   '&': {
     color: 'var(--text)', backgroundColor: 'var(--screen)',
     border: '1px solid var(--border)', borderRadius: '8px',
     boxShadow: 'inset 0 2px 5px rgba(0, 0, 0, 0.5)',
-    fontSize: '12.5px', maxHeight: '60vh',
+    fontSize: '12.5px',
   },
   '&.cm-focused': {
     outline: 'none', borderColor: 'rgba(255, 176, 0, 0.45)',
     boxShadow: 'inset 0 2px 5px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(255, 176, 0, 0.12)',
   },
+  // No minHeight: a floor on the scroller would stop it shrinking inside the
+  // editor box and spill the content instead of scrolling it. The floor lives
+  // on `.fleet-script` in style.css, where it bounds the whole editor.
   '.cm-scroller': {
     fontFamily: "'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', ui-monospace, SFMono-Regular, Menlo, monospace",
-    lineHeight: '1.5', minHeight: '220px',
+    lineHeight: '1.5',
   },
   '.cm-content': { padding: '8px 0', caretColor: 'var(--amber)' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--amber)' },
