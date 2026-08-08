@@ -48,6 +48,7 @@ import os from 'node:os';
 import { registerShutdownFlush } from './shutdown.js';
 import { createVoiceEngine } from './voiceEngine.js';
 import { createVoiceStore } from './voiceStore.js';
+import { createUiSettingsStore } from './uiSettingsStore.js';
 import { createVoiceInstallStore } from './voiceInstallStore.js';
 import { createVoiceInstallManager } from './voiceInstall.js';
 import { resolveVoicePaths } from './voicePaths.js';
@@ -82,6 +83,9 @@ const boxActions = createBoxActions({
 // precedence rules and the .env escape hatches).
 const repoRoot = process.cwd();
 const voiceStore = createVoiceStore({ dataDir: config.dataDir });
+// Cross-device UI preferences (theme, clawd animation), read per request like
+// voiceStore so a Settings change applies without a restart.
+const uiSettingsStore = createUiSettingsStore({ dataDir: config.dataDir });
 // Held in a named binding rather than constructed inline: it is a debounced store
 // like the four job stores, so the shutdown flush below has to be able to await
 // its whenIdle(). Inline, it could not be — and a SIGTERM landing during a
@@ -316,7 +320,7 @@ const iconStore = createIconStore({
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
 const voiceEnabledInitial = (await resolveVoice()).enabled;
-const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial });
+const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial, uiSettingsStore });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
