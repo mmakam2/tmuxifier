@@ -30,7 +30,12 @@ export function applyTheme(raw: unknown): void {
   try { localStorage.setItem(KEY, id); } catch { /* private mode: login flash only */ }
   if (id === current) return;
   current = id;
-  for (const fn of [...listeners]) fn();
+  // Each subscriber is isolated: one pane's failure must not stop the rest of
+  // the notify pass, or a single stale terminal handle would leave every other
+  // open pane wearing the previous theme.
+  for (const fn of [...listeners]) {
+    try { fn(); } catch { /* one pane's failure must not stop the rest */ }
+  }
 }
 
 export function onThemeChange(fn: () => void): () => void {
