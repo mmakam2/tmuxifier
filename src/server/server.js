@@ -109,6 +109,7 @@ const NO_ICONS = {
 // request.
 const NO_FLEET_SCRIPTS = {
   listScripts: async () => [],
+  getScript: async () => null,
   addScript: async () => { throw new Error('saved scripts are unavailable'); },
   updateScript: async () => { throw new Error('saved scripts are unavailable'); },
   removeScript: async () => {},
@@ -1146,7 +1147,16 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     let tools;
     try { tools = resolveTools(Array.isArray(b.tools) ? b.tools.join(',') : (typeof b.tools === 'string' ? b.tools : '')); }
     catch { return reply.code(400).send({ error: 'invalid tools' }); }
-    const options = { ohMyTmux: !!b.ohMyTmux, ohMyZsh: !!b.ohMyZsh, ohMyBash: !!b.ohMyBash, tools, seedAiAuth: !!b.seedAiAuth, claudeStatusline: !!b.claudeStatusline };
+    // Hand-written field list: anything not named here is silently dropped, and
+    // that is exactly how the statusline checkbox once ran jobs that pushed
+    // nothing. scriptId/scriptName are passed through raw — setupManager's
+    // normalizeOptions is the validation authority for both, and scriptId is
+    // only ever a lookup key against the saved-scripts store.
+    const options = {
+      ohMyTmux: !!b.ohMyTmux, ohMyZsh: !!b.ohMyZsh, ohMyBash: !!b.ohMyBash, tools,
+      seedAiAuth: !!b.seedAiAuth, claudeStatusline: !!b.claudeStatusline,
+      scriptId: b.scriptId, scriptName: b.scriptName,
+    };
     return reply.code(201).send(setupManager.start(box, options));
   });
   app.get('/api/setup', { preHandler: requireAuth }, async () => setupManager.listJobs());
