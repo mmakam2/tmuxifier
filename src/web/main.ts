@@ -2,7 +2,8 @@ import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sampl
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
 import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, blocksTerminal } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor, agentBadgeFor } from './statusDot';
-import { buildClawd } from './clawd';
+import { buildClawd, setClawdVariant, hasStoredClawdPref, loadClawdVariant } from './clawd';
+import { applyTheme, currentTheme } from './theme';
 import { sparkline } from './sparkline';
 import { formatEvent, relTime, unseenCountFiltered, notificationsToFire } from './healthEvents';
 import { loadNotifyPrefs, enabledKinds } from './notifyPrefs';
@@ -37,6 +38,9 @@ import { createPhoneMode, type PhoneMode } from './phoneMode';
 import { buildTouchKeyBar, createStickyCtrl } from './touchKeys';
 
 const app = document.getElementById('app')!;
+// Reconcile whatever theme-boot.js stamped pre-paint: applyTheme normalizes
+// stale/unknown mirror ids back to the default and seeds the subscriber state.
+applyTheme(currentTheme());
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal>; voiceMount: HTMLElement }>();
 const connStates = new Map<string, PaneConn>();
 const paneHeaders = new Map<string, (m: PaneHeaderModel) => void>();
@@ -365,6 +369,18 @@ async function start() {
       const uiCfg = await api.uiConfig();
       setTerminalFont(uiCfg);
       setTerminalUploads(uiCfg);
+    } catch {}
+    // Server-side UI prefs: theme + clawd animation. Best-effort — on failure
+    // the mirror-painted theme and localStorage-seeded clawd pref stand.
+    try {
+      const st = await api.uiSettings();
+      applyTheme(st.theme);
+      if (st.clawdAnim === null && hasStoredClawdPref()) {
+        // One-time migration: the pref used to be per-browser localStorage.
+        void api.patchUiSettings({ clawdAnim: setClawdVariant(loadClawdVariant()) }).catch(() => {});
+      } else {
+        setClawdVariant(st.clawdAnim);
+      }
     } catch {}
     renderDashboard();
   } else await renderLogin();
