@@ -375,9 +375,17 @@ async function start() {
     try {
       const st = await api.uiSettings();
       applyTheme(st.theme);
-      if (st.clawdAnim === null && hasStoredClawdPref()) {
-        // One-time migration: the pref used to be per-browser localStorage.
-        void api.patchUiSettings({ clawdAnim: setClawdVariant(loadClawdVariant()) }).catch(() => {});
+      if (st.clawdAnim === null) {
+        if (hasStoredClawdPref()) {
+          // One-time migration: the pref used to be per-browser localStorage.
+          void api.patchUiSettings({ clawdAnim: setClawdVariant(loadClawdVariant()) }).catch(() => {});
+        }
+        // else: nothing stored anywhere — leave the cache unseeded rather than
+        // calling setClawdVariant, which PERSISTS. Seeding here would write a
+        // phantom mirror key that the next boot's hasStoredClawdPref() reads as
+        // a legacy pref and PATCHes as an explicit choice the user never made.
+        // currentClawdVariant() already falls through to loadClawdVariant()'s
+        // default, so doing nothing is the correct unset state.
       } else {
         setClawdVariant(st.clawdAnim);
       }
