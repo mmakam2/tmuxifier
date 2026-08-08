@@ -1,4 +1,4 @@
-import type { SeedResult, SetupJob, SetupStatus } from './api';
+import type { PushResult, SeedResult, SetupJob, SetupStatus } from './api';
 
 export function setupStatusText(job: Pick<SetupJob, 'status' | 'phase' | 'error' | 'needs'>): string {
   switch (job.status) {
@@ -7,6 +7,7 @@ export function setupStatusText(job: Pick<SetupJob, 'status' | 'phase' | 'error'
         : job.phase === 'seeding' ? 'Seeding AI credentials…'
         : job.phase === 'statusline' ? 'Configuring statusline…'
         : job.phase === 'agent-hooks' ? 'Installing agent hooks…'
+        : job.phase === 'script' ? 'Running saved script…'
         : 'Running setup…';
     case 'done': return 'Setup complete ✓';
     case 'error': return `Setup failed${job.error ? ` — ${job.error}` : ''}`;
@@ -73,11 +74,12 @@ export function formatSeedResults(seed: SeedResult[] | null | undefined): string
     .join(' · ');
 }
 
-// One-line summary of a single push outcome — statusline or agent-hooks, the
-// shape is target-generic — e.g. "statusline ✓" / "agent-hooks skipped (no
-// Claude on the box)". Empty string when nothing was pushed, so callers test
-// it for truthiness and old jobs without the field render nothing.
-export function formatStatuslineResult(statusline: SeedResult | null | undefined): string {
+// One-line summary of a single post-setup step's outcome — statusline,
+// agent-hooks, or the saved script, the shape is target-generic — e.g.
+// "statusline ✓" / "agent-hooks skipped (no Claude on the box)" /
+// "bootstrap failed (exited 2)". Empty string when the step never ran, so
+// callers test it for truthiness and old jobs without the field render nothing.
+export function formatStatuslineResult(statusline: PushResult | null | undefined): string {
   if (!statusline) return '';
   const r = statusline;
   return `${r.target} ${r.ok ? '✓' : r.skipped ? `skipped (${r.skipped})` : `failed (${r.error ?? 'failed'})`}`;

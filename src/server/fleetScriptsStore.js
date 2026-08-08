@@ -78,6 +78,15 @@ export function createFleetScriptsStore({ dataDir }) {
     async listScripts() {
       return [...(await readAll())].sort(newestFirst);
     },
+    // Single-record read for the setup manager's post-setup script phase, which
+    // resolves by id at run time rather than snapshotting the body. Not
+    // serialized: reads stay free here, the same rule listScripts follows. A
+    // missing or malformed id is `null`, never a throw — the caller turns that
+    // into a recorded skip, not a failure.
+    async getScript(id) {
+      if (typeof id !== 'string' || !id) return null;
+      return (await readAll()).find((s) => s.id === id) || null;
+    },
     async addScript(spec) {
       return serialize(async () => {
         const scripts = await readAll();

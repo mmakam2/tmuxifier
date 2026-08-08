@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { seedStatusParts, setupStartPayload } from '../src/web/setupOptions.ts';
+import { seedStatusParts, setupStartPayload, scriptSelection } from '../src/web/setupOptions.ts';
 
 // These used to call a `seedStatusLine` export that production never used —
 // it existed only so this file could assert on a whole string (D3 in the
@@ -88,4 +88,34 @@ test('tools defaults to an empty list and is copied, not aliased', () => {
   const payload = setupStartPayload(VALUES);
   payload.tools.push('curl');
   expect(VALUES.tools).toEqual(['git', 'gh', 'claude']);
+});
+
+const SCRIPTS = [
+  { id: 'fs-1', name: 'bootstrap', script: 'echo hi\n', createdAt: 'a', updatedAt: 'a' },
+  { id: 'fs-2', name: 'harden', script: 'echo ho\n', createdAt: 'a', updatedAt: 'a' },
+];
+
+test('scriptSelection maps the picked id onto the two payload fields', () => {
+  expect(scriptSelection(SCRIPTS, '')).toEqual({ scriptId: null, scriptName: null });
+  expect(scriptSelection(SCRIPTS, 'fs-2')).toEqual({ scriptId: 'fs-2', scriptName: 'harden' });
+});
+
+// A stale id — the script was deleted elsewhere while this form sat open —
+// still selects, because the server resolves by id and records a skip. What it
+// must not do is invent a label for a record it cannot see.
+test('scriptSelection contributes no label for an id it cannot resolve', () => {
+  expect(scriptSelection(SCRIPTS, 'fs-gone')).toEqual({ scriptId: 'fs-gone', scriptName: null });
+  expect(scriptSelection([], 'fs-1')).toEqual({ scriptId: 'fs-1', scriptName: null });
+});
+
+// setupStartPayload spreads rather than naming fields, precisely so a new
+// option reaches the server without a second edit at the call site. This is
+// that guarantee, exercised by the first option added since it was written.
+test('setupStartPayload carries the saved-script selection through untouched', () => {
+  const v = {
+    ohMyTmux: true, ohMyZsh: false, ohMyBash: false, tools: ['claude'],
+    seedAiAuth: false, scriptId: 'fs-1', scriptName: 'bootstrap',
+  };
+  expect(setupStartPayload(v)).toEqual(v);
+  expect(setupStartPayload(v).tools).not.toBe(v.tools);
 });

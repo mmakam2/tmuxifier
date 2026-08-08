@@ -154,6 +154,11 @@ const setupManager = createSetupManager({
   ),
   pushStatusline: (box) => statuslinePusher.push(box),
   pushAgentHooks: (box) => agentHooksPusher.push(box),
+  // Late-bound on purpose: fleetScriptsStore is constructed further down this
+  // file, so this cannot be a direct reference. The arrow body only runs when a
+  // job reaches the script phase, long after both exist — the same trick the
+  // provisionManager's startSetup thunk already uses below.
+  getScript: (id) => fleetScriptsStore.getScript(id),
 });
 const statusChecker = createStatusChecker({
   run: (argv) => sshRun(argv),

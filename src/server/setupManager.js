@@ -56,6 +56,10 @@ export function createSetupManager({
   // construct. Unlike seed/statusline there is NO options gate — the push is
   // always-on and the box decides via its own command -v claude check.
   pushAgentHooks = null,
+  // Post-setup saved Fleet Command script (fleetScriptsStore.getScript). Default
+  // null: an unwired manager skips the phase entirely, which is what every
+  // existing test constructs — same pattern as seed/pushStatusline/pushAgentHooks.
+  getScript = null,
   load, save,
   hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist,
   now = () => new Date().toISOString(),
@@ -102,15 +106,30 @@ export function createSetupManager({
   }
   function persist() { prune(); save(ordered()); }
   function summary(j) {
-    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, needs: j.needs ?? null, seed: j.seed ?? null, statusline: j.statusline ?? null, agentHooks: j.agentHooks ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
+    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, needs: j.needs ?? null, seed: j.seed ?? null, statusline: j.statusline ?? null, agentHooks: j.agentHooks ?? null, postScript: j.postScript ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
   }
   function appendLog(j, text) { if (text) j.log = (j.log + text).slice(-maxLogBytes); }
   function normalizeOptions(o = {}) {
+    // A saved Fleet Command script to run as the last step of setup. `scriptId`
+    // is only ever a LOOKUP KEY against fleetScriptsStore — nothing user-typed
+    // reaches a shell through it, the same chokepoint discipline
+    // iconCatalog.js/voiceCatalog.js apply to their allowlists. The 128-char cap
+    // is defensive only (an id is `fs-<uuid>`, 39 chars).
+    const scriptId = typeof o.scriptId === 'string' && o.scriptId.trim()
+      ? o.scriptId.trim().slice(0, 128)
+      : null;
+    // A frozen display label, fleet.js's own rule: dropped when blank or
+    // oversized, and NEVER resolved back against the store, so renaming or
+    // deleting a script cannot rewrite what a past job says it ran. An orphan
+    // name (no id) is a label for nothing, so it goes too.
+    const rawName = typeof o.scriptName === 'string' ? o.scriptName.trim() : '';
     return {
       ohMyTmux: !!o.ohMyTmux, ohMyZsh: !!o.ohMyZsh, ohMyBash: !!o.ohMyBash,
       tools: Array.isArray(o.tools) ? o.tools : [],
       seedAiAuth: !!o.seedAiAuth,
       claudeStatusline: !!o.claudeStatusline,
+      scriptId,
+      scriptName: scriptId && rawName && rawName.length <= 80 ? rawName : null,
     };
   }
   function currentForBox(boxId) { return ordered().find((j) => j.boxId === boxId) || null; }
@@ -131,6 +150,29 @@ export function createSetupManager({
   // A seed failure is recorded, never promoted: setup itself succeeded, and a
   // missing host credential must not turn a good box red. j.cancelled means the
   // box is on its way out (usually removal), so seeding it is pointless.
+  // The post-setup saved-script phase. Never throws and never fails the job:
+  // setup itself succeeded, the box is usable, and marking it broken over the
+  // operator's own script would be wrong (the rule seed/statusline/agent-hooks
+  // already follow). The script's OUTPUT goes into the shared job log via
+  // streamRemote — there is deliberately no second copy of it on the result.
+  async function runSavedScript(j, box) {
+    const label = j.options.scriptName || 'script';
+    let rec;
+    try { rec = await getScript(j.options.scriptId); }
+    catch { return { target: label, ok: false, error: 'saved script could not be read' }; }
+    // Resolved by id at run time rather than snapshotted, so a script deleted
+    // in the minutes between clicking Provision and this phase is a skip.
+    if (!rec || !rec.script) return { target: label, ok: false, skipped: 'saved script no longer exists' };
+    const target = rec.name || label;
+    let code;
+    try { code = await streamRemote(j, box, rec.script); }
+    catch (e) { return { target, ok: false, error: e?.message || 'script failed' }; }
+    if (code === 0) return { target, ok: true };
+    // 124 is the transport's timeout code, the same reading run() gives it.
+    if (code === 124) return { target, ok: false, error: 'script timed out' };
+    return { target, ok: false, error: `exited ${code}` };
+  }
+
   async function completeDone(j, box) {
     if (seed && j.options.seedAiAuth && box && !j.cancelled) {
       j.phase = 'seeding';
@@ -168,6 +210,17 @@ export function createSetupManager({
       try { j.agentHooks = await pushAgentHooks(box); }
       catch { j.agentHooks = { target: 'agent-hooks', ok: false, error: 'agent hooks push failed' }; }
     }
+    // The operator's own bootstrap: last of the installs, and strictly BEFORE
+    // ensureSession. A shell reads its rc files once at startup, so a script
+    // that edits .zshrc/.bashrc/.tmux.conf has to land before the box's tmux
+    // session is created — the same ordering rule the seed already imposes.
+    // Recorded, never promoted; see runSavedScript.
+    if (getScript && j.options.scriptId && box && !j.cancelled) {
+      j.phase = 'script';
+      persist();
+      try { j.postScript = await runSavedScript(j, box); }
+      catch { j.postScript = { target: j.options.scriptName || 'script', ok: false, error: 'script failed' }; }
+    }
     // Strictly after the seed, so the session's first shell reads rc files that
     // already carry the token. Failure is swallowed: attaching creates the
     // session anyway (`new-session -A`), so this costs a convenience, not the
@@ -176,6 +229,43 @@ export function createSetupManager({
       try { await ensureSession(box, j.options); } catch { /* attach will create it */ }
     }
     finish(j, 'done');
+  }
+
+  // Spawn one remote script over the setup transport and stream it into the
+  // job log. Shared by the setup run and the post-setup saved-script phase:
+  // both need the same spawn / append / coalesced-persist / handle-register /
+  // exit-code sequence, and only the setup run cares about stderr (it sniffs
+  // for password prompts). Registering the handle under the job id is what
+  // makes cancelForBox able to kill whichever of the two is in flight.
+  async function streamRemote(j, box, script, { onStderr = null, timeoutMs = taskTimeoutMs } = {}) {
+    const argv = buildSetupArgv(box, script, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
+    // Coalesced log persistence: a chatty install emits thousands of chunks,
+    // and a full-history save per chunk is a multi-MB stringify each time.
+    // Status/phase transitions still persist immediately; finish() flushes
+    // the tail.
+    let lastLogPersist = nowMs();
+    let pendingLogBytes = 0;
+    const handle = sshStream(argv, {
+      timeout: timeoutMs,
+      onData: (chunk, stream) => {
+        appendLog(j, chunk);
+        if (stream === 'stderr' && onStderr) onStderr(chunk);
+        pendingLogBytes += chunk.length;
+        const t = nowMs();
+        if (t - lastLogPersist >= logPersistMs || pendingLogBytes >= logPersistBytes) {
+          lastLogPersist = t;
+          pendingLogBytes = 0;
+          persist();
+        }
+      },
+    });
+    runningHandles.set(j.id, handle);
+    try {
+      const { code } = await handle.done;
+      return code;
+    } finally {
+      runningHandles.delete(j.id);
+    }
   }
 
   async function run(j, box, { waitForSsh }) {
@@ -196,39 +286,18 @@ export function createSetupManager({
       j.phase = 'running'; persist();
 
       const script = buildScript(box, j.options);
-      const argv = buildSetupArgv(box, script, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
       let sawSudoPw = false;
       let sawSshPw = false;
       let stderrTail = '';
-      // Coalesced log persistence: a chatty install emits thousands of chunks,
-      // and a full-history save per chunk is a multi-MB stringify each time.
-      // Status/phase transitions still persist immediately; finish() flushes
-      // the tail.
-      let lastLogPersist = nowMs();
-      let pendingLogBytes = 0;
-      const handle = sshStream(argv, {
-        timeout: taskTimeoutMs,
-        onData: (chunk, stream) => {
-          appendLog(j, chunk);
-          if (stream === 'stderr') {
-            // Bounded stderr-only accumulator so a phrase split across chunks is
-            // still detected, without matching sudo text that appeared on stdout.
-            stderrTail = (stderrTail + chunk).slice(-4096);
-            if (!sawSudoPw && SUDO_PW_RE.test(stderrTail)) sawSudoPw = true;
-            if (!sawSshPw && SSH_PW_RE.test(stderrTail)) sawSshPw = true;
-          }
-          pendingLogBytes += chunk.length;
-          const t = nowMs();
-          if (t - lastLogPersist >= logPersistMs || pendingLogBytes >= logPersistBytes) {
-            lastLogPersist = t;
-            pendingLogBytes = 0;
-            persist();
-          }
+      const code = await streamRemote(j, box, script, {
+        onStderr: (chunk) => {
+          // Bounded stderr-only accumulator so a phrase split across chunks is
+          // still detected, without matching sudo text that appeared on stdout.
+          stderrTail = (stderrTail + chunk).slice(-4096);
+          if (!sawSudoPw && SUDO_PW_RE.test(stderrTail)) sawSudoPw = true;
+          if (!sawSshPw && SSH_PW_RE.test(stderrTail)) sawSshPw = true;
         },
       });
-      runningHandles.set(j.id, handle);
-      const { code } = await handle.done;
-      runningHandles.delete(j.id);
 
       if (code === 0) await completeDone(j, box);
       // sudo wins when both are somehow set: sudo text can only appear once the
@@ -240,7 +309,9 @@ export function createSetupManager({
       else if (code === 124) { j.error = 'setup timed out'; finish(j, 'error'); }
       else { j.error = `setup exited ${code}`; finish(j, 'error'); }
     } catch (e) {
-      runningHandles.delete(j.id);
+      // No runningHandles cleanup here: streamRemote's own finally covers the
+      // window in which a handle exists, and a throw before that (a rejecting
+      // buildSetupArgv) never registered one.
       j.error = e?.message || 'setup error';
       finish(j, 'error');
     }

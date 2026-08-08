@@ -417,7 +417,10 @@ pattern for new modules.
   `netbox.json` — a script body holds no credential class Tmuxifier manages, and encrypting it would
   imply a guarantee the feature cannot make, since the same text is persisted again in the job
   history. The body cap is deliberately the same 65536 the `/api/fleet/jobs` route enforces on
-  `command`, so a script that can be saved can always be run.
+  `command`, so a script that can be saved can always be run. `getScript(id)` is the single-record
+  read serving `setupManager.js`'s post-setup script phase, which resolves a selection by id at run
+  time rather than snapshotting the body; a missing or malformed id reads as `null`, never a throw,
+  because the caller turns that into a recorded skip.
 - `setupManager.js` / `setupStore.js` — `createSetupManager` runs the on-box setup script (tmux +
   shell frameworks + tool catalog from `buildEnsureTmuxRemote`) as a persisted, pollable, resumable
   server-side job over the shared ControlMaster, streaming into a rolling capped log; statuses
@@ -448,6 +451,19 @@ pattern for new modules.
   script used to do) holds an environment with no seeded token in it. The setup script therefore
   runs with `createSession: false`, and attaching would create the session anyway
   (`new-session -A`), so a failed `ensureSession` costs a convenience, not the box.
+  A `script` phase follows the Claude stack, gated on the setup options' `scriptId`: it resolves
+  that id against `fleetScriptsStore` (injected `getScript`) and streams the saved Fleet Command
+  script over the same transport as the install script, recorded on `job.postScript` and — like
+  every phase before it — never promoted to a job failure. It runs strictly BEFORE `ensureSession`
+  for the same reason the seed does: a shell reads its rc files once, at startup, so a script that
+  edits them must land before the session's first shell. `scriptId` is only ever a LOOKUP KEY, the
+  chokepoint discipline `iconCatalog.js`/`voiceCatalog.js` apply — nothing user-typed reaches a
+  shell through it — while `scriptName` is a frozen display label on `fleet.js`'s own rule, never
+  re-resolved, so a rename cannot rewrite what a past job says it ran. `streamRemote` is the shared
+  spawn/log-append/coalesced-persist/handle-register/exit-code helper both the install run and the
+  script phase call, so the two cannot drift; only the install run passes `onStderr` (it sniffs for
+  password prompts — a script hitting sudo under BatchMode is a script failure, not a reason to
+  park the job and block the box's terminal).
   `createSetupStore` is the debounced `data/setup-jobs.json` persistence (mirrors `provisionStore.js`).
 - `healthHistory.js` / `healthEventsStore.js` — `createHealthHistory` keeps a rolling in-memory
   sample series per box (fed by the status poller after each snapshot swap) and derives an
@@ -776,11 +792,16 @@ one renders silently static. All motion is pure CSS `.clawd-v-*` classes in
 `style.css` — no timers, so a fleet of working boxes costs nothing to animate — and
 `prefers-reduced-motion` rests every variant on one frame. Waiting chips deliberately carry no
 indicator: stillness is what makes that state read as the operator's turn),
-`setupOptions.ts` (the shared post-create setup form — Terminal/Tools/AI-auth sections —
+`setupOptions.ts` (the shared post-create setup form — Terminal/Tools/AI-auth/Post-setup-script
+sections —
 used by the Add/Edit Box modal and the hub's Provision tab; fetches `GET /api/ai-auth/status`
 to show per-CLI seed readiness with fix-it commands, and disables the seed checkbox only when
 both CLIs are unready; the Tools section also carries the opt-in "Push Claude Code statusline"
-checkbox — `claudeStatusline` in the payload), `provisionTools.ts` (`PROVISION_TOOLS`, the curated
+checkbox — `claudeStatusline` in the payload. The Post-setup script section is a lookup-key
+`<select>` over the saved fleet scripts, contributing `scriptId`/`scriptName` via the pure
+`scriptSelection` — the server resolves the id, so nothing chosen here reaches a shell as text;
+an empty list or a failed fetch degrades to a disabled control with a reason rather than an
+unexplained empty dropdown), `provisionTools.ts` (`PROVISION_TOOLS`, the curated
 provision-time tool id/label list plus its `toolsCheckboxGroup` builder; the ids mirror `TOOL_IDS`
 in `boxActions.js` — the server stays the validation authority and `test/provisionTools.test.js`
 locks the two lists together), `presetSummary.ts` (pure one-line preset description builder),

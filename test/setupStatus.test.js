@@ -124,3 +124,17 @@ test('no job at all does not block', () => {
   expect(blocksTerminal(undefined)).toBe(false);
   expect(blocksTerminal(null)).toBe(false);
 });
+
+test('the saved-script phase names itself', () => {
+  expect(setupStatusText({ status: 'running', phase: 'script' })).toMatch(/saved script/i);
+});
+
+// formatStatuslineResult is documented as target-generic; the saved-script phase
+// is the first caller whose target is a free-form name rather than a fixed one.
+test('formatStatuslineResult renders a saved-script result under the script own name', () => {
+  expect(formatStatuslineResult({ target: 'bootstrap', ok: true })).toBe('bootstrap ✓');
+  expect(formatStatuslineResult({ target: 'bootstrap', ok: false, error: 'exited 2' })).toBe('bootstrap failed (exited 2)');
+  expect(formatStatuslineResult({ target: 'bootstrap', ok: false, skipped: 'saved script no longer exists' }))
+    .toBe('bootstrap skipped (saved script no longer exists)');
+  expect(formatStatuslineResult(null)).toBe('');
+});

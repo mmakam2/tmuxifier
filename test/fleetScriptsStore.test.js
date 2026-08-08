@@ -121,3 +121,16 @@ test('a corrupt file is quarantined and read as empty rather than destroying it'
   const left = await fs.readdir(dir);
   expect(left.some((f) => f.startsWith('fleet-scripts.json.corrupt-'))).toBe(true);
 });
+
+// The setup manager resolves a saved script by id at run time (it stores only
+// the id plus a frozen display name), so a single-record read is the one thing
+// this store lacked. A bad id must read as "not found", never throw — the
+// caller records it as a skip.
+test('getScript returns the record by id, and null for anything else', async () => {
+  const rec = await store.addScript(spec);
+  expect(await store.getScript(rec.id)).toEqual(rec);
+  expect(await store.getScript('fs-nope')).toBeNull();
+  expect(await store.getScript('')).toBeNull();
+  expect(await store.getScript(undefined)).toBeNull();
+  expect(await store.getScript(null)).toBeNull();
+});

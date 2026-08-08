@@ -109,3 +109,29 @@ test('setup route defaults claudeStatusline to false', async () => {
   await app.inject({ method: 'POST', url: `/api/boxes/${BOX.id}/setup`, headers: h, payload: { ohMyTmux: true } });
   expect(sm._started[0].options.claudeStatusline).toBe(false);
 });
+
+// The route builds its options object by hand, field by field — the same shape
+// of omission that once let the Add/Edit Box modal's statusline checkbox run a
+// job that never pushed anything (see the setupStartPayload comment). This test
+// is the guard for the two newest fields on that list.
+test('a selected saved script rides the setup body through to the manager', async () => {
+  const h = await headers();
+  const res = await app.inject({
+    method: 'POST', url: `/api/boxes/${BOX.id}/setup`, headers: h,
+    payload: { tools: [], scriptId: 'fs-1', scriptName: 'bootstrap' },
+  });
+  expect(res.statusCode).toBe(201);
+  expect(sm._started[0].options.scriptId).toBe('fs-1');
+  expect(sm._started[0].options.scriptName).toBe('bootstrap');
+});
+
+test('a setup body with no script selection forwards undefined, not a stray value', async () => {
+  const h = await headers();
+  const res = await app.inject({
+    method: 'POST', url: `/api/boxes/${BOX.id}/setup`, headers: h,
+    payload: { tools: [] },
+  });
+  expect(res.statusCode).toBe(201);
+  expect(sm._started[0].options.scriptId).toBeUndefined();
+  expect(sm._started[0].options.scriptName).toBeUndefined();
+});

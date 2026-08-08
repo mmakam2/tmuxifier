@@ -1,11 +1,18 @@
-import { el, makeRadio } from './dom';
+import { el, field, makeRadio } from './dom';
 import { toolsCheckboxGroup } from './provisionTools';
+import { fleetScripts, sortScripts, type FleetScript } from './fleetScripts';
 import { api, type AiAuthStatus, type AiAuthCliStatus } from './api';
 
 // No claudeStatusline field: the statusline (and the agent-state hooks) ride
 // the `claude` TOOLS entry — one knob for the whole Claude stack. The server
 // still accepts the legacy flag from stale bundles.
-export interface SetupOptionsValues { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth: boolean }
+export interface SetupOptionsValues {
+  ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth: boolean;
+  // The saved Fleet Command script to run last. `scriptId` is what selects;
+  // `scriptName` rides along only as a display label the server freezes onto
+  // the job, so a later rename cannot rewrite what that job says it ran.
+  scriptId: string | null; scriptName: string | null;
+}
 
 export type SeedTone = 'ok' | 'bad' | 'unknown';
 
@@ -33,6 +40,21 @@ export function seedStatusParts(cli: 'claude' | 'codex', s: AiAuthCliStatus | nu
     ? 'run `claude setup-token` on the Tmuxifier host, put the token in .env as TMUXIFIER_CLAUDE_OAUTH_TOKEN, then restart Tmuxifier'
     : 'run `codex login` on the Tmuxifier host';
   return { tone: 'bad', before: `${cli}: `, dot: '○', after: ` not set up — ${fix}` };
+}
+
+/**
+ * The two fields a script selection contributes to the setup payload. Pure, so
+ * the picker's one piece of logic is testable in a DOM-free suite.
+ *
+ * `scriptId` is what selects — the server resolves it against
+ * data/fleet-scripts.json — and `scriptName` rides along only as a display
+ * label the server freezes onto the job. An id with no matching record still
+ * selects (the server records a skip for it) but contributes no label: an
+ * invented one would be a label for a script nobody can see.
+ */
+export function scriptSelection(list: FleetScript[], selectedId: string): { scriptId: string | null; scriptName: string | null } {
+  if (!selectedId) return { scriptId: null, scriptName: null };
+  return { scriptId: selectedId, scriptName: list.find((s) => s.id === selectedId)?.name ?? null };
 }
 
 // Two forms can be open at once (hub tab + box modal); a per-instance radio
@@ -82,6 +104,45 @@ export function createSetupOptionsForm(initial: { ohMyTmux?: boolean } = {}): {
   const claudeRow = el('div', { class: 'seed-status' }, ['claude: checking…']);
   const codexRow = el('div', { class: 'seed-status' }, ['codex: checking…']);
 
+  // Post-setup saved script. The select is a LOOKUP KEY picker — its values are
+  // script ids and the server resolves them against data/fleet-scripts.json, so
+  // nothing chosen here can reach a shell as text. Populated once on creation;
+  // both empty-list and failed-fetch degrade in place to a disabled control with
+  // a reason, the same posture the seed rows take, rather than presenting an
+  // empty dropdown the operator cannot explain.
+  const scriptSel = el('select', {}, [el('option', { value: '' }, ['None'])]) as HTMLSelectElement;
+  const scriptWhen = el('div', { class: 'seed-status' }, [
+    'Runs on the box after the tools, shell framework and AI-auth seeding, and before its tmux session is created.',
+  ]);
+  const scriptDesc = el('div', { class: 'seed-status' });
+  let scriptList: FleetScript[] = [];
+
+  function syncScriptDesc() {
+    scriptDesc.textContent = scriptList.find((s) => s.id === scriptSel.value)?.description || '';
+  }
+  scriptSel.addEventListener('change', syncScriptDesc);
+
+  function applyScripts(list: FleetScript[] | null) {
+    if (!list) {
+      scriptSel.disabled = true;
+      scriptDesc.textContent = 'Saved scripts are unavailable.';
+      return;
+    }
+    scriptList = sortScripts(list);
+    if (!scriptList.length) {
+      scriptSel.disabled = true;
+      scriptDesc.textContent = 'No saved scripts — create one in Fleet Command.';
+      return;
+    }
+    scriptSel.disabled = false;
+    scriptSel.replaceChildren(
+      el('option', { value: '' }, ['None']),
+      ...scriptList.map((s) => el('option', { value: s.id }, [s.name])),
+    );
+    syncScriptDesc();
+  }
+  void fleetScripts.list().then(applyScripts).catch(() => applyScripts(null));
+
   function renderSeedRow(row: HTMLElement, cli: 'claude' | 'codex', s: AiAuthCliStatus | null) {
     const { tone, before, dot, after } = seedStatusParts(cli, s);
     row.replaceChildren(before, ...(dot ? [el('span', { class: `seed-dot ${tone}` }, [dot])] : []), after);
@@ -105,6 +166,7 @@ export function createSetupOptionsForm(initial: { ohMyTmux?: boolean } = {}): {
     section('Terminal', omtField, shellGroup),
     tools.element,
     section('AI auth seeding', seedField, claudeRow, codexRow),
+    section('Post-setup script', field('Saved script', scriptSel), scriptWhen, scriptDesc),
   ]);
 
   return {
@@ -115,6 +177,7 @@ export function createSetupOptionsForm(initial: { ohMyTmux?: boolean } = {}): {
       ohMyBash: shBash.input.checked,
       tools: tools.selected(),
       seedAiAuth: seedInput.checked,
+      ...scriptSelection(scriptList, scriptSel.value),
     }),
     applySeedStatus,
   };
