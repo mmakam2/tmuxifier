@@ -553,7 +553,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
    a lit lamp glows its own color. */
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--key-hi); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07), inset 0 1px 2px rgba(0, 0, 0, 0.6); }
 .dot.green { background: var(--ok); box-shadow: inset 0 0 2px rgba(0, 0, 0, 0.25), 0 0 6px color-mix(in srgb, var(--ok) 50%, transparent); }
-.dot.amber { background: var(--warn); box-shadow: inset 0 0 2px rgba(0, 0, 0, 0.25), 0 0 6px color-mix(in srgb, var(--accent) 50%, transparent); }
+.dot.amber { background: var(--warn); box-shadow: inset 0 0 2px rgba(0, 0, 0, 0.25), 0 0 6px color-mix(in srgb, var(--warn) 50%, transparent); }
 .dot.red { background: var(--crit); box-shadow: inset 0 0 2px rgba(0, 0, 0, 0.25), 0 0 6px color-mix(in srgb, var(--crit) 55%, transparent); }
 /* "auth" = reachable but the SSH master expired and a password is needed; a
    distinct colour signals "actionable", not "dead". */
@@ -1505,7 +1505,7 @@ button.empty-kbd:hover { color: var(--text); }
 .fr-badge { flex: 0 0 auto; font-family: var(--face); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; padding: 1px 8px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); }
 .fleet-result.ok .fr-badge { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); color: var(--ok); }
 .fleet-result.error .fr-badge { background: color-mix(in srgb, var(--crit) 12%, transparent); border-color: color-mix(in srgb, var(--crit) 40%, transparent); color: var(--crit); }
-.fleet-result.skipped .fr-badge { background: color-mix(in srgb, var(--accent) 10%, transparent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--warn); }
+.fleet-result.skipped .fr-badge { background: color-mix(in srgb, var(--warn) 10%, transparent); border-color: color-mix(in srgb, var(--warn) 40%, transparent); color: var(--warn); }
 .fleet-result.running .fr-badge { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent); }
 .fr-output { margin: 6px 0 0; max-height: 240px; overflow: auto; background: var(--screen); border: 1px solid var(--border); border-top-color: var(--seam); box-shadow: var(--recess); border-radius: 6px; padding: 8px; white-space: pre-wrap; word-break: break-all; font-family: var(--face); font-size: 11px; color: var(--muted); }
 .fleet-empty, .fleet-detail .err { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
@@ -1721,7 +1721,7 @@ button.empty-kbd:hover { color: var(--text); }
    even be the operator's — so unlike the merely-dim kind/template badges it
    gets the same amber treatment as 'running', matching dotClassFor's 'amber'
    verdict for this state (statusDot.ts). */
-.pve-badge.mismatch { color: var(--warn); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.pve-badge.mismatch { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: color-mix(in srgb, var(--warn) 8%, transparent); }
 /* The CT/VM kind badge sits beside the state badge — a secondary, less
    emphatic mark (dim legend, no LED color) since kind is identity, not
    machine state; DESIGN.md reserves LED colors for state semantics only. */
