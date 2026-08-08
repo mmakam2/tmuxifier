@@ -86,8 +86,8 @@ const THEME = EditorView.theme({
     fontFamily: "'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', ui-monospace, SFMono-Regular, Menlo, monospace",
     lineHeight: '1.5',
   },
-  '.cm-content': { padding: '8px 0', caretColor: 'var(--amber)' },
-  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--amber)' },
+  '.cm-content': { padding: '8px 0', caretColor: 'var(--accent)' },
+  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent)' },
   '.cm-gutters': {
     backgroundColor: 'transparent', color: '#5d594e', border: 'none',
   },
