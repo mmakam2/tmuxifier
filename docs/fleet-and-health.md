@@ -1,7 +1,8 @@
 # Status, health & Fleet Command
 
 How Tmuxifier probes the fleet without tripping brute-force protection, the per-box health
-history and event timeline, and running commands across many boxes at once. Part of the
+history and event timeline, running commands across many boxes at once, and the appearance
+settings (themes and the working-agent animation). Part of the
 [Tmuxifier docs](../README.md).
 
 ## Status, multiplexing & rate-limit safety
@@ -77,7 +78,8 @@ session", not "the agent is fine".
 
 The working chip carries a small animated indicator — Clawd, the Claude Code mascot, or the CLI's
 own star spinner. **Settings → Appearance** picks between six modes: Off (no indicator at all),
-Static Clawd, CLI star (the default), Wiggle, Pace, and Big hop. The choice is per-browser, and
+Static Clawd, CLI star (the default), Wiggle, Pace, and Big hop. The choice is saved on the
+Tmuxifier host, so every browser you sign in from follows it (see [Appearance](#appearance)), and
 the sidebar badge, pane chips, and dashboard fleet strip all pick it up on their next status
 refresh. Waiting chips
 stay still on purpose — stillness plus orange is what makes it read as your turn — and a browser
@@ -95,6 +97,33 @@ Browser notifications for these agent events and for the box-health events above
 per kind in **Settings → Notifications**: per-browser, and they only fire once you grant the browser's
 notification permission (which itself requires an HTTPS dashboard). All events always appear in
 the events log regardless of which kinds have notifications enabled.
+
+## Appearance
+
+**Settings → Appearance** holds the two looks-only preferences: the **theme**, and the
+working-agent animation described above. Both are saved on the Tmuxifier host
+(`data/ui-settings.json`) rather than in the browser, so one pick follows you to every browser
+and device you sign in from — the browser you change it in switches instantly, the others follow
+on their next load. There is no Save button; if the save can't reach the server the choice still
+applies in that browser for the session, and the tab says so.
+
+Two themes ship built in:
+
+- **Bench Instrument** (the default) — the machined charcoal chassis with amber phosphor
+  readouts, the look described in [DESIGN.md](../DESIGN.md).
+- **Original** — the first tmuxifier look: deep navy field, cyan glow.
+
+A theme re-skins the whole app, not just the chrome: sidebar and modals, the standby dashboard
+and its cards, the terminal glass — open terminals re-color live, no reattach — and the Fleet
+script editor. Status lamps stay green/red/amber/violet: a lamp's color is what it means, not
+decoration, so a theme inherits them unless it has a deliberate reason not to. The login screen
+paints in the chosen theme too, and that's the one piece of it kept in the browser — a copy of
+the theme id in `localStorage`, purely so the pre-login page doesn't flash the default before
+there's a session to ask the server about.
+
+Adding a theme is a code change rather than a setting — a CSS file under `src/web/themes/` that
+overrides the token block in `src/web/style.css`, plus one entry in the theme manifest. The token
+contract and the rules a theme has to respect are in [DESIGN.md](../DESIGN.md#themes).
 
 ## Fleet Command
 
