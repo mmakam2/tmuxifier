@@ -19,6 +19,17 @@ const CLAUDE_MARKERS = [
   /plan mode/i,
 ];
 
+// Codex CLI's persistent status footer — '<model> · <cwd>', small indent,
+// always the last non-empty line. It is the marker rather than the composer
+// row because Codex draws the composer's '›' on modal rows too (the first-run
+// "do you trust this directory?" menu selects with one), and a menu awaiting a
+// keystroke is exactly the pane that must not be typed into. The footer is
+// present in every state that accepts input — idle, working, after output —
+// and absent from that modal. A narrow pane truncates the path with an
+// ellipsis but keeps the shape, so the path is matched by its leading '/'
+// or '~' rather than in full.
+const CODEX_FOOTER = /^ {1,3}\S.* · [~/]/;
+
 // A pane whose last non-empty line (trailing padding trimmed — tmux capture
 // output may pad lines to the pane width) ends in a prompt character is a
 // shell. '%' (zsh) counts only when preceded by a non-digit, so progress
@@ -26,12 +37,18 @@ const CLAUDE_MARKERS = [
 // Python's '>>>', dialog button rows ('< Cancel >'), and Claude's own input
 // row all end in '>' — a missed prompt fails safe (status message), a
 // mis-typed busy pane does not. Anything unrecognized is 'busy'.
+//
+// Codex is checked before Claude because the two share a marker: Codex's
+// working footer also reads 'esc to interrupt', so Claude would otherwise
+// claim every busy Codex pane. Both are typed into, so the order only decides
+// which CLI the reported mode names.
 export function classifyPane(text) {
   const t = String(text || '');
   if (!t.trim()) return 'busy';
-  if (CLAUDE_MARKERS.some((re) => re.test(t))) return 'claude';
   const lines = t.split(/\r?\n/).filter((l) => l.trim() !== '');
   const last = (lines[lines.length - 1] || '').trimEnd();
+  if (CODEX_FOOTER.test(last)) return 'codex';
+  if (CLAUDE_MARKERS.some((re) => re.test(t))) return 'claude';
   if (/[$#❯]$/.test(last)) return 'shell';
   if (/[^\d\s]%$/.test(last)) return 'shell';
   return 'busy';
@@ -55,9 +72,17 @@ export function parsePaneState(raw) {
   return { command, screen };
 }
 
-// Commands that may host a Claude Code TUI: its process name is normally
-// 'claude', but wrappers and dev installs run under a JS runtime.
+// Commands that may host a Claude Code or Codex TUI: their process names are
+// normally 'claude'/'codex', but wrappers and dev installs run under a JS
+// runtime. Codex reaches this branch on every box Tmuxifier provisions: the
+// npm package is a Node script that spawns the platform binary as a child, so
+// the process-group leader tmux reports through #{pane_current_command} is
+// 'node'. Only a native install (homebrew/cargo, or the vendored binary run
+// directly) names itself.
 const JS_RUNTIMES = new Set(['node', 'bun', 'deno']);
+
+// Pane modes safe to type into. 'busy'/'error'/'empty' are the refusals.
+const TYPEABLE = new Set(['claude', 'codex', 'shell']);
 
 // Command-first classification. The screen heuristics (classifyPane) apply
 // only when the command doesn't already identify the pane: any OTHER named
@@ -67,6 +92,7 @@ const JS_RUNTIMES = new Set(['node', 'bun', 'deno']);
 export function classifyPaneState({ command, screen } = {}) {
   const cmd = String(command || '').trim().toLowerCase();
   if (cmd === 'claude' || cmd.startsWith('claude-')) return 'claude';
+  if (cmd === 'codex' || cmd.startsWith('codex-')) return 'codex';
   if (SHELL_COMMANDS.has(cmd)) return 'shell';
   if (cmd === '' || JS_RUNTIMES.has(cmd)) return classifyPane(screen);
   return 'busy';
@@ -136,7 +162,7 @@ export async function injectTextVia(runScript, session, text, { label = 'text', 
   try {
     const cap = await runScript(buildPaneStateRemote(session));
     mode = cap && cap.code === 0 ? classifyPaneState(parsePaneState(cap.stdout)) : 'busy';
-    if (mode === 'claude' || mode === 'shell') {
+    if (TYPEABLE.has(mode)) {
       const sent = await runScript(buildSendKeysRemote(session, body));
       if (!sent || sent.code !== 0) throw new Error('send-keys failed');
       await say(onOk());

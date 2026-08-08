@@ -293,13 +293,13 @@ export const api = {
   async healthEvents() { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?t=${Date.now()}`)); },
   async uiConfig() { return j<{ termFont: string | null; termFontSize: number; uploadMaxBytes: number; voice: boolean; voiceMaxSeconds: number }>(await fetch('/api/ui-config')); },
   async uploadFile(boxId: string, name: string, blob: Blob) {
-    return j<{ path: string; injected: boolean; mode: 'claude' | 'shell' | 'busy' | 'error' }>(await fetch(`/api/upload?box=${encodeURIComponent(boxId)}&name=${encodeURIComponent(name)}`, {
+    return j<{ path: string; injected: boolean; mode: 'claude' | 'codex' | 'shell' | 'busy' | 'error' }>(await fetch(`/api/upload?box=${encodeURIComponent(boxId)}&name=${encodeURIComponent(name)}`, {
       method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: blob,
     }));
   },
   async postVoice(boxId: string, blob: Blob, opts?: { inject?: boolean }) {
     const q = opts?.inject === false ? '&inject=off' : '';
-    return j<{ text: string; injected: boolean; mode: 'claude' | 'shell' | 'busy' | 'error' | 'empty' | 'off' }>(
+    return j<{ text: string; injected: boolean; mode: 'claude' | 'codex' | 'shell' | 'busy' | 'error' | 'empty' | 'off' }>(
       await fetch(`/api/voice?box=${encodeURIComponent(boxId)}${q}`, {
         method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: blob,
       }));

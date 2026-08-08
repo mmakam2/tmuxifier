@@ -27,6 +27,95 @@ const CLAUDE_WORKING = [
   '✻ Cerebrating… (esc to interrupt)',
 ].join('\n');
 
+// Captured from a real Codex CLI TUI (v0.144/0.147), values replaced with
+// placeholders. The load-bearing shape is the persistent status footer —
+// '<model> · <cwd>' as the last non-empty line — which is present in every
+// state that accepts typed input and absent from the startup trust modal.
+const CODEX_IDLE = [
+  '╭───────────────────────────────────────╮',
+  '│ >_ OpenAI Codex (v0.147.0)            │',
+  '│                                       │',
+  '│ model:     gpt-5.6-sol max            │',
+  '│ directory: /home/u/project            │',
+  '╰───────────────────────────────────────╯',
+  '',
+  '  Tip: Use /compact when the conversation gets long.',
+  '',
+  '› Write tests for @filename',
+  '',
+  '  gpt-5.6-sol max · /home/u/project',
+].join('\n');
+
+const CODEX_WORKING = [
+  '• Running it now.',
+  '',
+  '• Working (14s • esc to interrupt) · 1 background terminal running · /ps to view',
+  '',
+  '› Write tests for @filename',
+  '',
+  '  gpt-5.6-sol max · /home/u/project',
+].join('\n');
+
+// A narrow pane truncates the footer's path with an ellipsis but keeps its shape.
+const CODEX_NARROW = [
+  '› Summarize recent commits',
+  '',
+  '  gpt-5.6-sol max · /home/u/very-long-pa…',
+].join('\n');
+
+// First run in a directory: a modal awaiting a menu choice, NOT a composer.
+// Its selected row also starts with '›', which is exactly why the composer row
+// is not the marker — typing a path here would feed keystrokes to the menu.
+const CODEX_TRUST = [
+  '> You are in /home/u/project',
+  '',
+  '  Do you trust the contents of this directory?',
+  '',
+  '› 1. Yes, continue',
+  '  2. No, quit',
+  '',
+  '  Press enter to continue',
+].join('\n');
+
+test('classifyPane detects Codex CLI screens', () => {
+  expect(classifyPane(CODEX_IDLE)).toBe('codex');
+  expect(classifyPane(CODEX_NARROW)).toBe('codex');
+});
+
+test('classifyPane detects a working Codex pane as codex, not claude', () => {
+  // Codex's working footer says 'esc to interrupt' too, so the shared Claude
+  // marker would otherwise claim it. Behaviour is the same (both are typed
+  // into) but the reported mode must name the right CLI.
+  expect(classifyPane(CODEX_WORKING)).toBe('codex');
+});
+
+test("classifyPane leaves Codex's trust modal busy", () => {
+  expect(classifyPane(CODEX_TRUST)).toBe('busy');
+});
+
+test('classifyPaneState detects Codex behind the npm node shim', () => {
+  // The npm install of @openai/codex is a Node script that spawns the native
+  // binary as a child, so tmux's #{pane_current_command} reports the process
+  // group leader: 'node'. This is the reported bug — an idle Codex pane read
+  // as busy and refused the pasted image path.
+  expect(classifyPaneState({ command: 'node', screen: CODEX_IDLE })).toBe('codex');
+  // A native install (homebrew/cargo, or the platform binary run directly)
+  // reports its own name instead.
+  expect(classifyPaneState({ command: 'codex', screen: '' })).toBe('codex');
+  expect(classifyPaneState({ command: 'codex-x86_64-unknown-linux-musl', screen: '' })).toBe('codex');
+  // The command gate still holds: a pager showing a captured Codex screen is
+  // never typed into on screen contents alone.
+  expect(classifyPaneState({ command: 'less', screen: CODEX_IDLE })).toBe('busy');
+});
+
+test('injectVia types the path into a Codex pane', async () => {
+  const { run, calls } = fakeRunner(`node\n${CODEX_IDLE}`);
+  const res = await injectVia(run, 'web', '/root/.tmuxifier-uploads/1-aa-shot.png');
+  expect(res).toEqual({ injected: true, mode: 'codex' });
+  expect(calls.find((c) => c.startsWith('tmux send-keys')))
+    .toContain('/root/.tmuxifier-uploads/1-aa-shot.png');
+});
+
 test('classifyPane detects Claude Code screens', () => {
   expect(classifyPane(CLAUDE_IDLE)).toBe('claude');
   expect(classifyPane(CLAUDE_WORKING)).toBe('claude');
