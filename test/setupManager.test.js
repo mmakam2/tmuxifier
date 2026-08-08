@@ -603,3 +603,152 @@ test('interactive finish also creates the session after seeding', async () => {
   await m._settled(s.id);
   expect(order).toEqual(['seed', 'session']);
 });
+
+// --- post-setup saved script -------------------------------------------------
+
+const SCRIPT_REC = { id: 'fs-1', name: 'bootstrap', script: 'echo hi\n', createdAt: 'now', updatedAt: 'now' };
+
+// The whole point of the phase's position: a script that edits .zshrc/.bashrc/
+// .tmux.conf must land before the box's tmux session is created, because a
+// shell reads its rc files once, at startup.
+test('a selected saved script runs after agent-hooks and strictly before ensureSession', async () => {
+  const order = [];
+  const m = make({
+    pushStatusline: async () => { order.push('statusline'); return { target: 'statusline', ok: true }; },
+    pushAgentHooks: async () => { order.push('agent-hooks'); return { target: 'agent-hooks', ok: true }; },
+    getScript: async (id) => { order.push(`script:${id}`); return SCRIPT_REC; },
+    ensureSession: async () => { order.push('session'); },
+  });
+  const s = m.start(BOX, { tools: ['claude'], scriptId: 'fs-1', scriptName: 'bootstrap' });
+  await m._settled(s.id);
+  expect(order).toEqual(['statusline', 'agent-hooks', 'script:fs-1', 'session']);
+  expect(m.getJob(s.id).postScript).toEqual({ target: 'bootstrap', ok: true });
+  expect(m.listJobs()[0].postScript).toEqual({ target: 'bootstrap', ok: true });
+});
+
+test('no scriptId: getScript is never called and the summary reports null', async () => {
+  let calls = 0;
+  const m = make({ getScript: async () => { calls += 1; return SCRIPT_REC; } });
+  const s = m.start(BOX, { tools: [] });
+  await m._settled(s.id);
+  expect(calls).toBe(0);
+  expect(m.getJob(s.id).postScript).toBeUndefined();
+  expect(m.listJobs()[0].postScript).toBeNull();
+});
+
+// An unwired manager skips the phase, which is what every construction above
+// this line does — the default is what keeps them all passing untouched.
+test('getScript unwired: a scriptId is skipped rather than failing', async () => {
+  const m = make();
+  const s = m.start(BOX, { tools: [], scriptId: 'fs-1' });
+  await m._settled(s.id);
+  expect(m.getJob(s.id).status).toBe('done');
+  expect(m.getJob(s.id).postScript).toBeUndefined();
+});
+
+test('a script deleted between selection and run records a skip and opens no ssh for it', async () => {
+  const ssh = fakeSsh({ chunks: [['stdout', 'ok\n']], code: 0 });
+  const m = make({ sshStream: ssh, getScript: async () => null });
+  const s = m.start(BOX, { tools: [], scriptId: 'fs-gone', scriptName: 'bootstrap' });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(job.postScript).toEqual({ target: 'bootstrap', ok: false, skipped: 'saved script no longer exists' });
+  expect(ssh.calls.length).toBe(1); // the setup run only
+});
+
+// Setup itself succeeded — tmux and the tools installed and the box is usable.
+// Marking it broken over the operator's own script would be wrong, and Retry
+// would re-run the ENTIRE setup just to retry one script.
+test('a non-zero script exit is recorded, the job still reaches done, and the session is still created', async () => {
+  const order = [];
+  let call = 0;
+  const ssh = (argv, { onData } = {}) => {
+    call += 1;
+    const code = call === 1 ? 0 : 2; // setup ok, saved script fails
+    onData?.(call === 1 ? 'installing\n' : 'boom\n', 'stdout');
+    return { done: Promise.resolve({ code }), kill() {} };
+  };
+  const m = make({ sshStream: ssh, getScript: async () => SCRIPT_REC, ensureSession: async () => { order.push('session'); } });
+  const s = m.start(BOX, { tools: [], scriptId: 'fs-1' });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(job.error).toBe(null);
+  expect(job.postScript).toEqual({ target: 'bootstrap', ok: false, error: 'exited 2' });
+  expect(job.log).toContain('boom'); // output lands in the shared job log
+  expect(order).toEqual(['session']);
+});
+
+test('a script that times out says so rather than reporting a bare exit code', async () => {
+  let call = 0;
+  const ssh = () => { call += 1; return { done: Promise.resolve({ code: call === 1 ? 0 : 124 }), kill() {} }; };
+  const m = make({ sshStream: ssh, getScript: async () => SCRIPT_REC });
+  const s = m.start(BOX, { tools: [], scriptId: 'fs-1' });
+  await m._settled(s.id);
+  expect(m.getJob(s.id).postScript).toEqual({ target: 'bootstrap', ok: false, error: 'script timed out' });
+});
+
+test('a getScript that throws is recorded, never promoted', async () => {
+  const m = make({ getScript: async () => { throw new Error('disk'); } });
+  const s = m.start(BOX, { tools: [], scriptId: 'fs-1', scriptName: 'bootstrap' });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(job.postScript).toEqual({ target: 'bootstrap', ok: false, error: 'saved script could not be read' });
+});
+
+// The resolved record's own name wins over the frozen label: the label exists
+// for the window before resolution (and for a script that has since vanished).
+test('the result is labelled with the resolved name, not the frozen one', async () => {
+  const m = make({ getScript: async () => ({ ...SCRIPT_REC, name: 'renamed' }) });
+  const s = m.start(BOX, { tools: [], scriptId: 'fs-1', scriptName: 'bootstrap' });
+  await m._settled(s.id);
+  expect(m.getJob(s.id).postScript).toEqual({ target: 'renamed', ok: true });
+});
+
+test('the interactive finish also runs the saved script, before the session', async () => {
+  const order = [];
+  const m = make({
+    sshStream: sudoSsh(SUDO, 1),
+    getBox: async () => BOX,
+    getScript: async () => { order.push('script'); return SCRIPT_REC; },
+    ensureSession: async () => { order.push('session'); },
+  });
+  const s = m.start(BOX, { tools: [], scriptId: 'fs-1' });
+  await m._settled(s.id);
+  m.markInteractiveResult(BOX.id, 0);
+  await m._settled(s.id);
+  expect(order).toEqual(['script', 'session']);
+});
+
+test('cancelling during the script phase kills its ssh handle', async () => {
+  let killed = false;
+  let call = 0;
+  const ssh = () => {
+    call += 1;
+    if (call === 1) return { done: Promise.resolve({ code: 0 }), kill() {} };
+    return { done: new Promise(() => {}), kill: () => { killed = true; } };
+  };
+  const m = make({ sshStream: ssh, getScript: async () => SCRIPT_REC });
+  const s = m.start(BOX, { tools: [], scriptId: 'fs-1' });
+  await waitFor(() => m.getJob(s.id).phase === 'script');
+  m.cancelForBox(BOX.id);
+  expect(killed).toBe(true);
+});
+
+// The id is what selects; the name only labels. A name with no id would be a
+// label for nothing, and is dropped rather than persisted as a half-selection.
+test('options normalize the selection: id trimmed, blank or orphan name dropped', async () => {
+  const m = make({ getScript: async () => SCRIPT_REC });
+  const a = m.start(BOX, { tools: [], scriptId: '  fs-1  ', scriptName: '   ' });
+  expect(a.options.scriptId).toBe('fs-1');
+  expect(a.options.scriptName).toBe(null);
+  await m._settled(a.id);
+
+  const m2 = make();
+  const b = m2.start(BOX, { tools: [], scriptName: 'bootstrap' });
+  expect(b.options.scriptId).toBe(null);
+  expect(b.options.scriptName).toBe(null);
+  await m2._settled(b.id);
+});
