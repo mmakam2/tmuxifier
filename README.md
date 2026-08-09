@@ -19,6 +19,7 @@ back into the same state.
 - [How persistence works](#how-persistence-works)
 - [Standby dashboard](#standby-dashboard)
 - [Terminal features](#terminal-features)
+- [Themes](#themes)
 - [Status, health & Fleet Command](#status-health--fleet-command)
 - [Proxmox](#proxmox)
 - [Security](#security)
@@ -156,7 +157,7 @@ dashboard tabs are open. The full per-module map lives in [AGENTS.md](AGENTS.md)
 | [Boxes & setup jobs](docs/boxes-and-setup.md) | setup jobs, tools checklist, statusline push, AI CLI auth seeding, post-setup script |
 | [Terminal features](docs/terminal.md) | splits, uploads & clipboard, voice dictation, host shell, reconnect |
 | [Standby dashboard](docs/dashboard.md) | service tiles, icons, Pi-hole/TrueNAS/UniFi/Immich cards |
-| [Status, health & Fleet Command](docs/fleet-and-health.md) | rate-limit-safe probing, health events, fleet jobs |
+| [Status, health & Fleet Command](docs/fleet-and-health.md) | rate-limit-safe probing, health events, fleet jobs, themes |
 | [Proxmox](docs/proxmox.md) | LXC provisioning, guest lifecycle, deprovision |
 | [Deployment](docs/DEPLOY.md) | systemd, passwordless SSH keys, TLS, OAuth behind a tunnel |
 
@@ -194,6 +195,13 @@ browser and transcribes on the Tmuxifier host with local whisper.cpp — audio n
 host. A **Host Shell** opens a terminal on the Tmuxifier host itself, and every box row has a
 **Reconnect** action, plus a confirm-gated **Forget host key** for a box you rebuilt. Details
 in [terminal features](docs/terminal.md).
+
+## Themes
+**Settings → Appearance** re-skins the whole app — chrome, standby dashboard, terminal glass and
+the Fleet script editor — switching between the built-in **Bench Instrument** (charcoal chassis,
+amber phosphor) and **Original** (deep navy, cyan glow) looks, saved on the Tmuxifier host so
+every browser you sign in from follows the same pick; details, and how to add a theme, are in
+[appearance & themes](docs/fleet-and-health.md#appearance).
 
 ## Status, health & Fleet Command
 A single server-side loop probes every box over a shared SSH ControlMaster with adaptive

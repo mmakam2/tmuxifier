@@ -29,6 +29,8 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   secret — a Pi-hole app password or a TrueNAS/UniFi/Immich API key — is **encrypted**, so unlike
   the rest of the file it never appears in the clear, and switching a tile between credential
   kinds drops it rather than replaying one product's credential at another), `health-events.json` (in-app health event log),
+  `ui-settings.json` (cross-device UI preferences — the theme and working-agent animation
+  picks; nothing secret, unlike most of its neighbours),
   `auth-state.json` (the logout session-revocation watermark), `passkeys.json` (enrolled WebAuthn
   credentials, the pinned relying party id, and the passkey-only flag — public keys only, so
   unlike `proxmox.json`/`netbox.json` nothing in it is encrypted, though it's still written
@@ -228,6 +230,16 @@ pattern for new modules.
   URL or path from reaching a download), and the lazily-spawned whisper.cpp server with an
   idle timeout. `POST /api/voice` transcribes a browser-recorded WAV and types the result into
   the pane via the same `injectVia` guard uploads use. Audio never leaves the host.
+- `uiSettingsStore.js` — `data/ui-settings.json` CRUD for the cross-device UI preferences (the
+  theme and the working-agent animation), served by `GET`/`PATCH /api/ui-settings`. Read per
+  request like `voiceStore.js`, so a change applies without a restart. Deliberately
+  **catalog-agnostic**: the theme and variant catalogs live in the web bundle, so the server
+  validates SHAPE only (a `^[a-z0-9-]{1,32}$` slug) and the client normalizes an unknown id to
+  its default — renaming a theme in code can never brick the server. A `null` value means
+  "never set", which is what lets the client tell a fresh install from an explicit choice (the
+  clawd migration). Nothing here is secret, so nothing is sealed; the file is still written
+  `0o600` through `jsonFile.js`, and a corrupt one fails **open** to nulls (cosmetic data, and
+  `jsonFile.js` has already quarantined the original).
 - `localShellActions.js` — `createLocalShellActions`: provisions the optional local shell
   (`localShell` = `none`/`omz`/`omb`) that backs a terminal on the Tmuxifier host itself.
   `installAgentHooks()` puts the same Claude Code agent-state hook a box gets onto this host by
@@ -631,7 +643,13 @@ setup runs server-side; clicking a box whose setup job is still `running` render
 setting-up panel (`blocksTerminal` in `setupStatus.ts`) instead of a terminal, and opens the
 terminal itself once the job settles; the login screen also wires the passkey button through the same
 `evaluateOrigin` verdict, with a dead-end message when "require a passkey" is armed but this
-browser has no usable one), `api.ts`, `http.ts` (the shared fetch helpers — `jsonOf`/`jsonFetch`/
+browser has no usable one; `loadUiSettings()` applies the server's UI prefs — theme, clawd
+variant — at boot *and* on the password and passkey login paths, so a fresh sign-in is not left
+wearing the default until a manual reload, and it owns the clawd pref's one-time migration:
+a `null` server value plus a stored legacy key PATCHes this browser's pick up, while nothing
+stored anywhere leaves the pref unset rather than persisting a phantom choice. Google sign-in
+needs no wiring — it is a full navigation that returns through `start()` like any page load),
+`api.ts`, `http.ts` (the shared fetch helpers — `jsonOf`/`jsonFetch`/
 `textFetch`/`httpError`/`statusOf`/`jsonBody` — and the central 401 seam: `onUnauthorized` is
 registered by `main.ts` to tear the workspace down to the login screen when the session dies,
 and every fetch layer must route non-ok handling through here — `test/webHttp.test.js` forbids
@@ -778,10 +796,28 @@ bit rates and `fmtBytes` would render them in the wrong unit and base),
 `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
 history: pure SVG-path builder and event-line formatters), `notifyPrefs.ts` (per-kind
 browser-notification preferences, localStorage-backed, defaults all-on except `up`/
-`threshold-clear`), `clawd.ts` (the indicator beside every **working** agent chip — sidebar badge,
-pane chip, dashboard fleet strip: the ordered variant catalog, the per-browser preference under
-`tmuxifier.clawdAnim` (localStorage, the `notifyPrefs.ts` pattern; an unknown stored value falls
-back to the default CLI star spinner rather than rendering nothing), and the variant DOM builder.
+`threshold-clear`), `themes.ts` (the pure theme catalog — `THEMES`, `DEFAULT_THEME_ID`, and
+`normalizeThemeId`, which folds an unknown or stale id back to the default rather than
+propagating one nothing can resolve. No DOM and no CSS imports, so a node test can import the
+manifest), `theme.ts` (its DOM half: `applyTheme` stamps `data-theme` on `<html>` — the default
+carries **no** attribute, since `:root` *is* the Instrument theme — mirrors the id into
+`localStorage`, and notifies subscribers so every open terminal re-resolves its colors on a
+switch, each subscriber isolated so one stale pane handle can't leave the rest on the old theme.
+`resolveScreenTheme` reads `--screen`/`--text`/`--accent`/`--term-sel` through a throwaway probe
+element because a raw custom property reads back unresolved; the theme CSS side-effect imports
+live here rather than in `themes.ts` precisely so vitest never pulls CSS. The localStorage mirror
+is what `public/theme-boot.js` — a blocking classic script in `<head>`, an external same-origin
+file because CSP stays `script-src 'self'` and inlining it would need an exception — stamps
+pre-paint, so the login screen wears the chosen theme before any session exists. Adding a theme
+is `themes/<id>.css` with every rule `[data-theme]`-scoped, one `themes.ts` entry, and its import
+here; `test/styleTokens.test.js` pins both halves of the contract),
+`clawd.ts` (the indicator beside every **working** agent chip — sidebar badge,
+pane chip, dashboard fleet strip: the ordered variant catalog, the preference — authoritative
+**server-side** in `data/ui-settings.json` since the themes engine, so one pick covers every
+browser, with a synchronous in-module cache the frequent render sites read without awaiting and
+`tmuxifier.clawdAnim` in localStorage demoted to a boot mirror that seeds renders before the
+first `GET /api/ui-settings` lands; an unknown value normalizes to the default CLI star spinner
+rather than rendering nothing — and the variant DOM builder.
 `off` means no indicator at all — the builder still returns an element (`.clawd-v-off` is
 `display: none` in `style.css`) so the render sites never branch on the variant — and `static` is
 the motionless sprite. The one catalog drives the Appearance picker rows, pref normalization, and
@@ -873,10 +909,12 @@ install job started through `POST /api/voice/install` and watched with the share
 test, and pure `voiceStatusLine`/`micTestMessage`/`installPollDelay` helpers), Notifications
 (`settingsNotifications.ts`:
 browser-notification permission flow plus per-kind toggles), and Appearance
-(`settingsAppearance.ts`: the rightmost tab — the working-agent animation picker, radio rows whose
-live previews are built by `clawd.ts`'s own builder with the real `.clawd-v-*` classes, so a
-preview cannot drift from the chip it describes; selecting a row persists immediately, so there is
-no Save button) tabs) with `settingsForm.ts` (pure
+(`settingsAppearance.ts`: the rightmost tab — the theme picker over `THEMES` and the
+working-agent animation picker, the latter's radio rows carrying live previews built by
+`clawd.ts`'s own builder with the real `.clawd-v-*` classes, so a preview cannot drift from the
+chip it describes; selecting a row applies instantly and `PATCH`es `/api/ui-settings`, so there
+is no Save button, and a failed save keeps the local apply and says so rather than yanking back
+a theme the operator is already looking at) tabs) with `settingsForm.ts` (pure
 payload/result helpers), `netbox.ts` and `voice.ts` (fetch layers), `passkeys.ts` (passkey fetch layer,
 base64url↔bytes helpers, the pure WebAuthn option/credential converters, and `evaluateOrigin` —
 the ordered readiness check, browser support first, that both the login screen and Settings →
@@ -1101,8 +1139,10 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   the user-facing deep dives the README links to. Living documentation, maintained alongside
   the code (unlike the point-in-time records below); a feature change that used to update a
   README section now updates the matching guide.
-- `DESIGN.md` — the visual authority for the UI (the v1.18.0 "instrument" redesign). Read it
-  before changing anything the operator looks at; it outranks ad-hoc styling decisions.
+- `DESIGN.md` — the visual authority for the **Instrument** theme (the v1.18.0 redesign, i.e.
+  the `:root` token defaults) and for the themes engine's token contract — what a theme may
+  override, what must stay a plain literal, what is brand-fixed. Read it before changing
+  anything the operator looks at; it outranks ad-hoc styling decisions.
 - `PRODUCT.md` — what Tmuxifier is for and who it is for, when a scope question needs settling.
 - `AGENTS.md` — this file, adapted for general coding agents (kept in sync with CLAUDE.md).
 - `docs/DEPLOY.md` + `deploy/tmuxifier.service` — running it as a systemd service (self-contained

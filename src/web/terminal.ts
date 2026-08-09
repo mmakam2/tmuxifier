@@ -9,6 +9,7 @@ import { filesFromDataTransfer, uploadName, sizeError, termSafe } from './upload
 import { wireVoice, createVoiceHotkeyHandler, type VoiceHotkeyTarget } from './voiceUi';
 import { createTouchGesture, holdKeepsFocus, HOLD_MS, type GestureAction } from './touchGesture';
 import { keyboardOpen } from './phoneMode';
+import { resolveScreenTheme, onThemeChange } from './theme';
 import type { PaneConn } from './paneHeader';
 
 // Phone mode raises the terminal font two steps for touch legibility. Checked
@@ -426,16 +427,12 @@ interface ProvisionOptions {
   tools?: string[];
 }
 
-// The display glass (Bench Instrument world): screen-well background, bone
-// foreground, amber cursor. ANSI colors stay at xterm defaults — terminal
-// content belongs to the programs running in it, not to the chrome.
-const SCREEN_THEME = {
-  background: '#0a0b0d',
-  foreground: '#e6e2da',
-  cursor: '#ffb000',
-  cursorAccent: '#0a0b0d',
-  selectionBackground: 'rgba(255, 176, 0, 0.25)',
-};
+// The old SCREEN_THEME const lived here: the display glass hard-coded to the
+// Bench Instrument world (screen-well background, bone foreground, amber
+// cursor). Those literals now live on as theme.ts's SCREEN_FALLBACK, which
+// resolveScreenTheme() falls back to when a token can't be probed — so the
+// glass reads the active theme's tokens instead of one theme's constants,
+// and an unthemed/failed probe still lands on exactly the old colors.
 
 export function openTerminal(
   parent: HTMLElement,
@@ -458,7 +455,10 @@ export function openTerminal(
     // one step reads comfortably, two costs too many columns.
     fontSize: phoneCoarse() ? clampFontSize(Math.min(termFontSize + 1, 32)) : termFontSize,
     fontFamily: termFontFamily(),
-    theme: SCREEN_THEME,
+    // Resolved from the active theme's tokens. ANSI colors stay at xterm
+    // defaults — terminal content belongs to the programs running in it, not to
+    // the chrome, in every theme.
+    theme: resolveScreenTheme(),
     // A box terminal is always a tmux attach, and tmux draws on the alternate
     // screen — nothing ever lands in xterm's own scrollback (scroll history is
     // tmux copy-mode). Zeroing it matters for width, not memory: FitAddon
@@ -495,6 +495,9 @@ export function openTerminal(
     guard: () => term.modes.mouseTrackingMode !== 'none',
     focus: () => term.focus(),
   });
+  // Re-skin the glass in place when the operator switches themes: xterm
+  // repaints on options.theme assignment, no reopen needed.
+  const offTheme = onThemeChange(() => { term.options.theme = resolveScreenTheme(); });
 
   // Strip control chars so a box label can't inject escape sequences into the
   // terminal feedback line.
@@ -564,7 +567,7 @@ export function openTerminal(
 
   return {
     focus: () => term.focus(),
-    dispose: () => { offUploads(); offTouchScroll(); voice.dispose(); closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
+    dispose: () => { offUploads(); offTouchScroll(); offTheme(); voice.dispose(); closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
     refit: onResize,
     input: sendInput,
     appCursor: () => term.modes.applicationCursorKeysMode,
@@ -581,13 +584,19 @@ export function openProvisionTerminal(
     cursorBlink: true,
     fontSize: termFontSize,
     fontFamily: termFontFamily(),
-    theme: SCREEN_THEME,
+    // Resolved from the active theme's tokens. ANSI colors stay at xterm
+    // defaults — terminal content belongs to the programs running in it, not to
+    // the chrome, in every theme.
+    theme: resolveScreenTheme(),
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(parent);
   fit.fit();
   refitWhenFontReady(term, fit);
+  // Re-skin the glass in place when the operator switches themes: xterm
+  // repaints on options.theme assignment, no reopen needed.
+  const offTheme = onThemeChange(() => { term.options.theme = resolveScreenTheme(); });
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const qs = [
@@ -620,6 +629,16 @@ export function openProvisionTerminal(
   };
 
   ws.onclose = () => {
+    // Unsubscribing here, and not only in dispose(), is load-bearing: unlike a
+    // box terminal, this handle is often never disposed. createInteractiveLauncher's
+    // done() drops the reference when the session ends on its own, and the
+    // provision panel just removes the container node — so a finished session
+    // would strand this listener, and the whole xterm instance it closes over,
+    // for the life of the page. The server always closes the socket right after
+    // the `x` exit message, so this is the one funnel both endings pass through.
+    // The cost is that a finished log left on screen (the Proxmox hub keeps
+    // one) holds the theme it was rendered in; it is inert output by then.
+    offTheme();
     if (!done) onComplete(-1);
   };
 
@@ -629,6 +648,9 @@ export function openProvisionTerminal(
   return {
     dispose: () => {
       window.removeEventListener('resize', onResize);
+      // Idempotent (a Set delete), so calling it here as well as in ws.onclose
+      // is safe whichever end comes first.
+      offTheme();
       if (!done) { done = true; onComplete(-1); }
       ws.close();
       term.dispose();

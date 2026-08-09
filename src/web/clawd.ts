@@ -1,10 +1,12 @@
 // Clawd: the Claude Code mascot beside WORKING agent chips (sidebar badge,
 // pane chip, dashboard fleet strip). The Appearance settings tab picks one of
-// six variants; the choice is a per-browser display preference (localStorage,
-// the notifyPrefs pattern). Everything renders as currentColor glyphs from the
-// bundled mono stack — no new hue, no new font — and all motion is pure CSS
-// (.clawd-v-* in style.css); this module is just the catalog, the pref, and
-// the DOM. 'off' means no indicator at all, 'static' the motionless sprite.
+// six variants; the choice is now authoritative SERVER-side (data/ui-settings.json,
+// one setting for every browser), and localStorage is kept only as a boot-seed
+// mirror so a render before the first fetch lands is not the default flicker.
+// Everything renders as currentColor glyphs from the bundled mono stack — no
+// new hue, no new font — and all motion is pure CSS (.clawd-v-* in style.css);
+// this module is just the catalog, the pref, and the DOM. 'off' means no
+// indicator at all, 'static' the motionless sprite.
 export type ClawdVariantId = 'off' | 'static' | 'star' | 'wiggle' | 'pace' | 'big-hop';
 
 export const CLAWD_BODY = '▐▛███▜▌';
@@ -48,6 +50,45 @@ export function saveClawdVariant(id: ClawdVariantId, storage?: PrefStorage): voi
   try { (storage ?? localStorage).setItem(KEY, id); } catch { /* private mode / quota — the choice is simply lost */ }
 }
 
+// The authoritative pref now lives server-side (data/ui-settings.json, one
+// setting for every browser). This module keeps a synchronous cache so the
+// frequent render sites (sidebar badge, pane chips, fleet strip) never await:
+// main.ts seeds it from GET /api/ui-settings at boot, the Appearance tab sets
+// it on change. localStorage remains as a mirror that seeds pre-fetch renders.
+let cached: ClawdVariantId | null = null;
+
+export function setClawdVariant(raw: unknown, storage?: PrefStorage): ClawdVariantId {
+  cached = normalizeClawdVariant(raw);
+  saveClawdVariant(cached, storage); // keep the mirror fresh for the next boot
+  return cached;
+}
+
+export function currentClawdVariant(): ClawdVariantId {
+  return cached ?? loadClawdVariant();
+}
+
+export function hasStoredClawdPref(storage?: PrefStorage): boolean {
+  try { return (storage ?? localStorage).getItem(KEY) !== null; } catch { return false; }
+}
+
+// The boot-time migration decision, pure so it is testable: a PATCH payload is
+// produced ONLY for a genuine legacy pref (server unset AND a local mirror key
+// present). The pref used to live per-browser in localStorage, so the first
+// boot against a server that has none should adopt whatever this browser
+// already had — normalized, since the stored slug may predate a rename.
+//
+// A null return for "server unset, nothing stored" is load-bearing: the caller
+// must then persist NOTHING. Seeding the cache there would write a phantom
+// mirror key that the next boot's hasStoredClawdPref() reads as a legacy pref
+// and PATCHes as an explicit choice the user never made.
+export function clawdMigrationPatch(
+  serverVal: string | null,
+  storedLocal: string | null,
+): { clawdAnim: ClawdVariantId } | null {
+  if (serverVal !== null || storedLocal === null) return null;
+  return { clawdAnim: normalizeClawdVariant(storedLocal) };
+}
+
 // aria-hidden: the adjacent "working" text is the accessible label; the
 // sprite is decoration for sighted users only.
 export function buildClawdVariant(variant: ClawdVariantId): HTMLElement {
@@ -78,5 +119,5 @@ export function buildClawdVariant(variant: ClawdVariantId): HTMLElement {
 }
 
 export function buildClawd(): HTMLElement {
-  return buildClawdVariant(loadClawdVariant());
+  return buildClawdVariant(currentClawdVariant());
 }

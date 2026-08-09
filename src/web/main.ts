@@ -2,7 +2,8 @@ import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sampl
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
 import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, blocksTerminal } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor, agentBadgeFor } from './statusDot';
-import { buildClawd } from './clawd';
+import { buildClawd, setClawdVariant, hasStoredClawdPref, loadClawdVariant, clawdMigrationPatch } from './clawd';
+import { applyTheme, currentTheme } from './theme';
 import { sparkline } from './sparkline';
 import { formatEvent, relTime, unseenCountFiltered, notificationsToFire } from './healthEvents';
 import { loadNotifyPrefs, enabledKinds } from './notifyPrefs';
@@ -37,6 +38,9 @@ import { createPhoneMode, type PhoneMode } from './phoneMode';
 import { buildTouchKeyBar, createStickyCtrl } from './touchKeys';
 
 const app = document.getElementById('app')!;
+// Reconcile whatever theme-boot.js stamped pre-paint: applyTheme normalizes
+// stale/unknown mirror ids back to the default and seeds the subscriber state.
+applyTheme(currentTheme());
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal>; voiceMount: HTMLElement }>();
 const connStates = new Map<string, PaneConn>();
 const paneHeaders = new Map<string, (m: PaneHeaderModel) => void>();
@@ -357,6 +361,43 @@ function refitActiveTerminals() {
   for (const t of tabs.values()) t.term.refit();
 }
 
+// Server-side UI prefs: theme + clawd animation. Best-effort — on failure the
+// mirror-painted theme and localStorage-seeded clawd pref stand.
+//
+// Called from EVERY path that reaches the workspace, not just start(): a fresh
+// login transitions to the dashboard without a page load, so leaving this in
+// start() alone meant a brand-new browser (no mirror to paint from) logged in
+// wearing the default theme however the server was configured, until a manual
+// reload. The contract is "after auth, apply the server's prefs", and a fresh
+// login is after auth. Google sign-in is the one path that needs nothing: it is
+// a full navigation to /api/auth/google/login and returns via a redirect, so it
+// arrives through start() like any other page load.
+async function loadUiSettings(): Promise<void> {
+  try {
+    const st = await api.uiSettings();
+    applyTheme(st.theme);
+    // The decision itself is pure (clawdMigrationPatch, unit-tested); this
+    // half only does the effects. The mirror is read as "its value, or null
+    // when the key was never set" — the presence check is what lets the helper
+    // tell a legacy pref from an unset one, since loadClawdVariant() alone
+    // cannot (it answers with the default either way).
+    const patch = clawdMigrationPatch(st.clawdAnim, hasStoredClawdPref() ? loadClawdVariant() : null);
+    if (patch) {
+      // One-time migration: the pref used to be per-browser localStorage.
+      setClawdVariant(patch.clawdAnim);
+      void api.patchUiSettings(patch).catch(() => {});
+    } else if (st.clawdAnim !== null) {
+      setClawdVariant(st.clawdAnim);
+    }
+    // else: nothing stored anywhere — leave the cache unseeded rather than
+    // calling setClawdVariant, which PERSISTS. Seeding here would write a
+    // phantom mirror key that the next boot's hasStoredClawdPref() reads as
+    // a legacy pref and PATCHes as an explicit choice the user never made.
+    // currentClawdVariant() already falls through to loadClawdVariant()'s
+    // default, so doing nothing is the correct unset state.
+  } catch {}
+}
+
 async function start() {
   if (await api.me()) {
     // Apply the configured terminal font before any box opens. Best-effort: on
@@ -366,6 +407,7 @@ async function start() {
       setTerminalFont(uiCfg);
       setTerminalUploads(uiCfg);
     } catch {}
+    await loadUiSettings();
     renderDashboard();
   } else await renderLogin();
 }
@@ -457,7 +499,7 @@ async function renderLogin() {
     </form>`;
   app.querySelector('#login')!.addEventListener('submit', async (e) => {
     e.preventDefault();
-    try { await api.login((app.querySelector('#pw') as HTMLInputElement).value); renderDashboard(); }
+    try { await api.login((app.querySelector('#pw') as HTMLInputElement).value); await loadUiSettings(); renderDashboard(); }
     catch (ex) {
       // The server's error is always a fixed string on this route (e.g.
       // "invalid", "too many attempts", or "passkey required" against a
@@ -482,6 +524,7 @@ function wirePasskeyButton() {
       const options = await pk.loginBegin();
       const credential = await getPasskey(options);
       await pk.loginFinish(serializeAssertion(credential));
+      await loadUiSettings();
       renderDashboard();
     } catch (e) {
       btn.disabled = false;

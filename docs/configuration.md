@@ -114,15 +114,17 @@ It carries no SSH secrets; boxes still rely on your keys/agent/`~/.ssh/config` a
 The sidebar itself and each tag group can be collapsed (‹ next to the brand, click a group
 header); both states persist across reloads.
 
-A ⚙ **settings** modal (top of the sidebar) has seven tabs: **Boxes** (box-list export/import,
+A ⚙ **settings** modal (top of the sidebar) has eight tabs: **Boxes** (box-list export/import,
 above), **Services** (the standby dashboard's service tiles — name, URL, icon, group, and the
 liveness check, including the credentialed Pi-hole/TrueNAS/UniFi/Immich kinds), **NetBox** (an http/https selector +
 host and token — the TLS options, including fingerprint pinning for self-signed certs, appear
 only for https — plus a connection test; also powers `auto-static` IP allocation during
 provisioning), **Proxmox** (host profiles and LXC secrets), **Passkeys** (enroll, remove, and the
 optional "require a passkey" sign-in policy), **Voice** (whisper.cpp install, model choice, and a
-mic test), and **Notifications** (browser
-notification permission and per-event-kind toggles); see
+mic test), **Notifications** (browser
+notification permission and per-event-kind toggles), and **Appearance** (the theme and the
+working-agent animation, both saved on the Tmuxifier host so every browser follows); see
 [Proxmox](proxmox.md) for NetBox and Proxmox details,
-[Authentication](authentication.md#passkeys) for the sign-in policy, and
-[Terminal features](terminal.md#voice-dictation) for the voice install flow.
+[Authentication](authentication.md#passkeys) for the sign-in policy,
+[Terminal features](terminal.md#voice-dictation) for the voice install flow, and
+[Fleet & health](fleet-and-health.md#appearance) for themes and the animation picker.

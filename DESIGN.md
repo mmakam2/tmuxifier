@@ -148,6 +148,36 @@ the display can lead.
 - Status is hardware vocabulary: LED lamps (green/red/amber/violet) and lit-vs-dark chips
 - Density serves supervision: dense keycap rows for the fleet, one glowing display at a time
 
+## Themes
+
+This document is the visual authority for the **Instrument** theme — the `:root` token
+defaults in `src/web/style.css`, and the world every other page of DESIGN.md describes. The
+themes engine lets a second checked-in CSS file re-skin the whole bench without touching a
+single component rule: every color in the sheet flows from the token fence
+(`/* === THEME TOKENS (color literals allowed) === */`), and a theme overrides tokens under
+`:root[data-theme="<id>"]` in `src/web/themes/<id>.css`. `test/styleTokens.test.js` enforces
+both halves — no color literal outside the fence, no theme rule that isn't scoped. Adding one
+is three edits: the CSS file, an entry in `src/web/themes.ts`, and its import in `theme.ts`;
+the Appearance picker, persistence, open terminals and the script editor all follow.
+
+A theme owns its world. Overriding the material recipes (`--key-face`, `--key-edge`,
+`--recess`, `--bench`) is expected, not a hack — the shipped **Original** theme trades
+machined extrusion for neon glow exactly that way. Four rules bound it:
+
+- **Terminal-facing tokens stay plain color literals.** `--screen`, `--text`, `--accent` and
+  `--term-sel` are handed to xterm, which parses the strings itself; `theme.ts` resolves them
+  through a throwaway probe element (a raw custom property reads back unresolved), and a
+  `color-mix()` can come back as `color(srgb …)`, which xterm's parser refuses.
+- **Status LEDs inherit unless a theme deliberately overrides them.** `--ok`/`--warn`/
+  `--crit`/`--auth` are semantic, not palette: a green/red/amber/violet lamp means the same
+  thing on every bench, and the washes mixed from them follow for free.
+- **The Google button's four tokens are brand-fixed.** `--gbtn-bg`, `--gbtn-bg-hover`,
+  `--gbtn-ink` and `--gbtn-border` are Google's sign-in identity, not the theme's — never
+  repaint them.
+- **Two role tokens do double duty**, as their fence comments say: `--key-hi` is the key-face
+  top highlight *and* the off-LED lamp fill; `--scroll-thumb-hover` is the scrollbar thumb
+  hover *and* the stage-grid bezel edge. Pick each value for both jobs.
+
 ## Colors
 
 Matte chassis neutrals under warm functional light.
@@ -165,25 +195,33 @@ Matte chassis neutrals under warm functional light.
 - **Legend Dim** (#8a8577): tertiary/disabled legends, hints, engraved section labels.
 
 ### Functional light
-- **Amber** (#ffb000): live state — the screen's phosphor. Readout values, the active tab's
-  lit legend, a working agent, a running job, focus glow on inputs. Amber Deep (#e09600)
-  for borders/edges of lit elements.
-- **Safety Orange** (#ff6a1a): operator action needed — the one committing key on any
-  surface (Unlock, Run on N boxes, Create), the agent-waiting chip, needs-interactive
-  states. Text on solid orange is near-black (#1a0e05).
+
+The two functional accents are the theme-facing pair: the token names are semantic (`--accent`,
+`--commit`), the hues below are Instrument's answer to them.
+
+- **Amber** (#ffb000, `--accent`): live state — the screen's phosphor. Readout values, the
+  active tab's lit legend, a working agent, a running job, focus glow on inputs. Amber Deep
+  (#e09600, `--accent-deep`) for borders/edges of lit elements.
+- **Safety Orange** (#ff6a1a, `--commit`): operator action needed — the one committing key on
+  any surface (Unlock, Run on N boxes, Create), the agent-waiting chip, needs-interactive
+  states. Text on solid orange is near-black (#1a0e05, `--commit-ink`), and the key's material
+  ramp has its own `--commit-*` tokens.
 
 ### Status LEDs (semantic only)
-- **LED Green** (#3ecf6e): reachable, healthy, success.
-- **LED Red** (#ff5c47): down, error, destructive affordances.
-- **LED Violet** (#a98bff): reachable but needs a login — actionable, not dead.
-- Warn/degraded uses **Amber** in lamp form (a dot or chip), distinct from amber-as-glow by
-  shape, matching annunciator practice.
+- **LED Green** (#3ecf6e, `--ok`): reachable, healthy, success.
+- **LED Red** (#ff5c47, `--crit`): down, error, destructive affordances.
+- **LED Violet** (#a98bff, `--auth`): reachable but needs a login — actionable, not dead.
+- Warn/degraded uses **Amber** in lamp form (`--warn`, a dot or chip), distinct from
+  amber-as-glow by shape, matching annunciator practice.
 
 ### Display phosphors (content only)
-- **Phosphor Moss** (#a8c987) and **Phosphor Peach** (#ff9d5c): syntax-highlight phosphors
-  for code shown on screen glass (the Fleet script editor) — display *content*, never
-  chrome, and deliberately softer than the LED hues so machine-state color keeps its
-  monopoly on meaning. Ink-on-Orange (#1a0e05) is the engraved text on the commit key.
+- **Phosphor Moss** (#a8c987, `--syn-string`) and **Phosphor Peach** (#ff9d5c, `--syn-const`):
+  syntax-highlight phosphors for code shown on screen glass (the Fleet script editor) — display
+  *content*, never chrome, and deliberately softer than the LED hues so machine-state color
+  keeps its monopoly on meaning. Only the hues with no chassis counterpart get their own
+  `--syn-*` tokens; the editor's keywords, caret and selection already read `--accent`, its
+  comments `--dim`, its variables `--text`. Ink-on-Orange (#1a0e05) is the engraved text on
+  the commit key.
 
 ### Named Rules
 **The Orange Means You Rule.** Safety orange appears only where the operator's press is the
@@ -252,8 +290,8 @@ Depth is machined, not lit. Three honest moves:
 - **Overlay lift** (modals, toasts, drawers — parts genuinely above the bench):
   `0 16px 48px rgba(0,0,0,0.55)` with a bezel border.
 
-**The Glow Is Power Rule.** Amber emission (`0 0 12–20px rgba(255,176,0,0.15–0.35)`)
-appears only on live/engaged elements — the empty-stage standby cursor, focused inputs,
+**The Glow Is Power Rule.** Amber emission (`0 0 12–20px` of the accent at 12–35%, mixed from
+`var(--accent)`) appears only on live/engaged elements — the empty-stage standby cursor, focused inputs,
 an engaged Fleet Command key, working-agent chips. Glow never signals altitude; shadow
 never decorates.
 
@@ -266,9 +304,10 @@ Bezel Line; interactive warmth comes from putty→bone legend brightening and am
 never from painted borders alone.
 
 **The Lamp-and-Beacon Rule.** Selection/attachment is a lamp turned on plus a 2px amber
-inset bar on the part's left edge (`inset 2px 0 0 var(--amber)`); the row itself lifts one
-chassis step. Focus (keyboard) is the shared amber ring (`outline: 2px solid
-rgba(255,176,0,0.6)` offset 2px).
+inset bar on the part's left edge (`inset 2px 0 0 var(--accent)`); the row itself lifts one
+chassis step. Focus (keyboard) is the shared accent ring (`outline: 2px solid
+color-mix(in srgb, var(--accent) 60%, transparent)` offset 2px — amber here, the theme's
+accent elsewhere).
 
 ## Components
 
@@ -308,8 +347,9 @@ rgba(255,176,0,0.6)` offset 2px).
 ## Do's and Don'ts
 
 ### Do:
-- **Do** pull every color from the frontmatter tokens; the `:root` custom properties in
-  style.css are the same system in code.
+- **Do** pull every color from the frontmatter tokens; the `:root` custom properties inside
+  style.css's token fence are the same system in code, and a new literal outside it fails
+  `test/styleTokens.test.js`.
 - **Do** give every part its material: extrude interactive parts, recess content glass,
   keep the chassis visible between mounted panels.
 - **Do** keep one solid-orange commit per view and let everything else stay neutral.

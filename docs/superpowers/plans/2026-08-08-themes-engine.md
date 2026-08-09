@@ -1182,3 +1182,28 @@ Standing workflow (CLAUDE.md "Shipping"), with one trap called out: **this featu
 2. Operator validates: Instrument looks pixel-identical everywhere (login, sidebar, terminal, dashboard, cards, settings, fleet editor, phone); Original reads right on desktop + phone; switch is instant; terminals re-skin live; login screen paints Original pre-auth after a reload; clawd pick survives a different browser.
 3. Tune `themes/original.css` values on the branch until the operator is happy (this is where the spec's "starting palette" gets finished).
 4. Merge to main, then the release checklist (version bump, build, restart, health check, PII scrub of the staged diff, tag, release).
+
+---
+
+## Addendum (2026-08-09): live-validation checklist
+
+Five items the final whole-branch review parked as "decide on the candidate deploy, not from the
+diff" — each needs the operator's eye on the running app rather than another test:
+
+1. **Original: `--face` is a sans stack on readouts.** `.pve-log`, `.fr-output` and
+   `.login-note code` are fixed-width readouts that inherit `--face`; under Original they lose
+   the mono column. Decide whether a scoped mono rule is needed, or whether the sans reads fine.
+2. **Original: `--key-face`'s bottom stop equals `--panel`.** That flattens the key extrusion into
+   a plate — believed deliberate (Original trades machined depth for neon glow), so confirm it is
+   the intent and not a copied value.
+3. **Original: the warm `--syn-*` hues over navy.** The script editor's syntax palette was carried
+   across unchanged; `--syn-gutter` is the first tuning candidate if anything reads muddy.
+4. **The empty `.appearance-save-note`.** It occupies a line-height even with no text, so the
+   Appearance tab may show a gap under the picker. If it reads as one, add `:empty { display: none }`.
+5. **xterm's in-place repaint on a theme switch.** Open a terminal, switch themes, and confirm the
+   glass re-colors live without a reattach (the `options.theme` assignment path).
+
+**Deploy rule for this candidate:** branch checkout + `npm run build` + a full service restart —
+this branch changes server files (`server.js`, `index.js`, `uiSettingsStore.js`), so the
+rsync-`dist/`-only recipe would run the OLD server against the NEW client (the v1.24.25 lesson).
+The restart waits until no setup/provision/lifecycle/fleet/voice-install job is `running`.

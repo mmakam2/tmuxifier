@@ -1,5 +1,11 @@
 import type { PveGuestKind } from './proxmox';
 
+// Cross-device UI preferences (GET/PATCH /api/ui-settings). The server
+// validates slug SHAPE only and knows no catalog, so an unknown id reaches the
+// client and is normalized there; `null` means "never set" (see
+// uiSettingsStore.js).
+export interface UiSettings { theme: string | null; clawdAnim: string | null }
+
 export interface PveBoxLink { hostId: string; node: string; vmid: number; kind: PveGuestKind; endpoint: string; }
 export interface Box {
   id: string; label: string; host: string; user?: string; port?: number;
@@ -300,6 +306,10 @@ export const api = {
   async healthSeries() { return j<Record<string, Sample[]>>(await fetch(`/api/health/series?t=${Date.now()}`)); },
   async healthEvents() { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?t=${Date.now()}`)); },
   async uiConfig() { return j<{ termFont: string | null; termFontSize: number; uploadMaxBytes: number; voice: boolean; voiceMaxSeconds: number }>(await fetch('/api/ui-config')); },
+  async uiSettings() { return j<UiSettings>(await fetch('/api/ui-settings')); },
+  async patchUiSettings(patch: Partial<UiSettings>) {
+    return j<UiSettings>(await fetch('/api/ui-settings', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }));
+  },
   async uploadFile(boxId: string, name: string, blob: Blob) {
     return j<{ path: string; injected: boolean; mode: 'claude' | 'codex' | 'shell' | 'busy' | 'error' }>(await fetch(`/api/upload?box=${encodeURIComponent(boxId)}&name=${encodeURIComponent(name)}`, {
       method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: blob,
