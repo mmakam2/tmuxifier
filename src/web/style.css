@@ -638,9 +638,13 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .settings-modal .settings-section { display: flex; flex-direction: column; gap: 10px; }
 .modal.settings-modal h3 { margin: 4px 0 0; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
 /* Settings -> Devices: one row per enrolled Android device. */
+/* Standalone Devices-tab actions (Pair / Build): the same key recipe as
+   .modal-actions button, sized to content rather than stretched. */
+.device-cta { display: inline-block; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--key-border); border-bottom-color: var(--bg); background: var(--key-face); box-shadow: var(--key-edge); color: var(--muted); cursor: pointer; font-family: var(--face); font-size: 12.5px; }
+.device-cta:hover { color: var(--text); }
 .pair-code { display: flex; align-items: baseline; gap: 10px; margin: 6px 0 10px; }
 /* Read off this screen and typed into a phone across the room — so it's large. */
-.pair-code code { font-family: var(--face); font-size: 22px; letter-spacing: 2px; color: var(--accent); background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
+.pair-code code { font-family: var(--face); font-size: 26px; letter-spacing: 2px; color: var(--accent); background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
 .device-list { display: flex; flex-direction: column; gap: 6px; }
 .device-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); font-size: 12.5px; }
 .device-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

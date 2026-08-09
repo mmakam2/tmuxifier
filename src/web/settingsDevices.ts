@@ -66,6 +66,7 @@ export async function renderDevicesSection(content: HTMLElement): Promise<void> 
     if (!p) {
       return el('button', {
         type: 'button',
+        class: 'device-cta',
         onclick: () => {
           void mintPairingCode().then((minted) => {
             if (my !== gen || content.isConnected === false) return;
@@ -119,6 +120,7 @@ export async function renderDevicesSection(content: HTMLElement): Promise<void> 
     }
     const btn = el('button', {
       type: 'button',
+      class: 'device-cta',
       onclick: () => {
         void startApkBuild().then((r) => {
           if (my !== gen || content.isConnected === false) return;
