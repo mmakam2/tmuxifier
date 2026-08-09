@@ -3,6 +3,7 @@ package com.tmuxifier.console.ui
 // Home: box cards, waiting agents on top. Polls every 10s while STARTED —
 // repeatOnLifecycle cancels the loop in background (push covers it; the spec
 // forbids background polling).
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -33,7 +34,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import com.tmuxifier.console.R
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -94,12 +97,17 @@ fun FleetScreen(
             Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Image(
+                painterResource(R.drawable.tmuxifier_logo),
+                contentDescription = null,
+                modifier = Modifier.size(30.dp),
+            )
             // Version in the home header: device-validation rounds keep
             // getting confused about which build is actually installed.
             Text(
                 "tmuxifier · v${com.tmuxifier.console.BuildConfig.VERSION_NAME}",
                 style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).padding(start = 10.dp),
             )
             IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, contentDescription = "Settings") }
         }
