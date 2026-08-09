@@ -75,6 +75,9 @@ class ApiClient(val baseUrl: String, private val token: String?) {
         request("POST", "/api/boxes/$boxId/keys", buildJsonObject { put("key", key) }.toString())
     }
 
+    suspend fun fcmConfig(): FcmConfig =
+        parse(FcmConfig.serializer(), request("GET", "/api/devices/fcm-config"))
+
     suspend fun updateSelf(fcmToken: String? = null, notify: Map<String, Boolean>? = null): DeviceView {
         val body = buildJsonObject {
             if (fcmToken != null) put("fcmToken", fcmToken)

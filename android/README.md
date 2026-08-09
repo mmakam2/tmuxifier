@@ -37,18 +37,27 @@ The app's Gradle build is fully separate from the repo's `npm test` — Node nev
 tests and vice versa. Compose UI is validated **on the real device** (the repo's
 validate-on-live rule); there is no emulator tier.
 
-## Firebase (push notifications) — optional
+## Firebase (push notifications) — optional, per-instance, zero build coupling
 
-The build works with **no Firebase config present**: the google-services plugin is applied only
-when `app/google-services.json` exists (see `app/build.gradle.kts`), and push is simply off.
-To enable push:
+**Nothing Firebase is baked into the APK.** The app initializes Firebase at runtime from the
+client config its own server serves (`GET /api/devices/fcm-config`), so one published APK
+works against any operator's Firebase project. An operator enabling push for their instance:
 
-1. Firebase console → add an **Android app** with package name `com.tmuxifier.console`,
-   download `google-services.json` into `android/app/` (gitignored;
-   `app/google-services.json.example` shows the shape).
-2. Project settings → Service accounts → generate a private key; save it on the server box
-   **outside the repo** and set `TMUXIFIER_FCM_CREDENTIALS=<path>` in the server's `.env`.
-   That file can send push as your Firebase project — treat it like the cookie secret.
+1. Firebase console → create a (free) project → add an **Android app** with package name
+   `com.tmuxifier.console` (no SHA-1 needed) → download `google-services.json`. Put it on the
+   **server box** (outside the repo, e.g. `/root/secrets/`) and set
+   `TMUXIFIER_FCM_APP_CONFIG=<path>` in `.env`. These are public client identifiers — the
+   server just hands them to enrolled devices. (`app/google-services.json.example` shows the
+   file's shape; the build itself never reads it.)
+2. Project settings → Service accounts → generate a private key; save it beside the first
+   file and set `TMUXIFIER_FCM_CREDENTIALS=<path>`. This one IS a secret — it can send push
+   as the Firebase project; treat it like the cookie secret.
+3. Grant the service account the **Firebase Cloud Messaging API Admin** role in Google Cloud
+   IAM (a fresh project's auto-created roles are not sufficient; sends 403 without it).
+4. Restart Tmuxifier. Devices fetch the config on their next launch/enrollment and register
+   against that project; "push on" appears in Settings → Devices.
+
+No config on the server = no push, everything else unaffected.
 
 ## Play Store (internal testing track)
 

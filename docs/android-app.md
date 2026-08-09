@@ -41,8 +41,11 @@ Sign out only forgets the token locally.
 
 ## Push notifications
 
-With `TMUXIFIER_FCM_CREDENTIALS` set on the server (see `android/README.md` for the Firebase
-setup), an agent flipping to **waiting** (or finishing) buzzes the phone even when locked —
+Push is **fully per-instance**: nothing Firebase is baked into the APK. Your server hands the
+app your own Firebase project's client config (`TMUXIFIER_FCM_APP_CONFIG`) and sends through
+your own service account (`TMUXIFIER_FCM_CREDENTIALS`) — see `android/README.md` for the
+four-step setup. With both set, an agent flipping to **waiting** (or finishing) buzzes the
+phone even when locked —
 suppressed while that session is attached in a browser, and filtered by the per-kind toggles.
 Tapping the notification opens that box's session directly.
 

@@ -26,7 +26,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.google.firebase.messaging.FirebaseMessaging
-import com.tmuxifier.console.push.pushAvailable
+import com.tmuxifier.console.push.initFirebase
 import com.tmuxifier.console.ui.FleetScreen
 import com.tmuxifier.console.ui.SessionScreen
 import com.tmuxifier.console.ui.SettingsScreen
@@ -115,16 +115,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Push the current FCM registration token to the server when it differs
-    // from the last one it accepted (rotation also lands via onNewToken).
+    // Fetch the operator's Firebase client config from THEIR server, persist
+    // it, (re)initialize Firebase from it, then sync the registration token.
+    // Nothing is baked into the APK — a server with no TMUXIFIER_FCM_APP_CONFIG
+    // simply has no push, and everything else works.
     private fun syncFcmToken(state: AppState) {
-        if (!pushAvailable(this)) return
-        FirebaseMessaging.getInstance().token.addOnSuccessListener { t ->
-            if (t.isNullOrEmpty() || t == state.prefs.fcmSynced) return@addOnSuccessListener
-            val client = state.client() ?: return@addOnSuccessListener
-            CoroutineScope(Dispatchers.IO).launch {
-                runCatching { client.updateSelf(fcmToken = t) }
-                    .onSuccess { state.prefs.fcmSynced = t }
+        val client = state.client() ?: return
+        val appCtx = applicationContext
+        CoroutineScope(Dispatchers.IO).launch {
+            val cfg = runCatching { client.fcmConfig() }.getOrNull()
+            if (cfg?.available == true) {
+                val json = com.tmuxifier.console.api.ApiJson.encodeToString(
+                    com.tmuxifier.console.api.FcmConfig.serializer(), cfg,
+                )
+                if (json != state.prefs.fcmClientConfig) {
+                    state.prefs.fcmClientConfig = json
+                    state.prefs.fcmSynced = null // possibly a new project — re-sync the token
+                }
+            }
+            if (!initFirebase(appCtx, state.prefs.fcmClientConfig)) return@launch
+            FirebaseMessaging.getInstance().token.addOnSuccessListener { t ->
+                if (t.isNullOrEmpty() || t == state.prefs.fcmSynced) return@addOnSuccessListener
+                CoroutineScope(Dispatchers.IO).launch {
+                    runCatching { client.updateSelf(fcmToken = t) }
+                        .onSuccess { state.prefs.fcmSynced = t }
+                }
             }
         }
     }

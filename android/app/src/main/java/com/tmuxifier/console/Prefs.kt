@@ -22,4 +22,11 @@ class Prefs(context: Context) {
     var fcmSynced: String?
         get() = p.getString("fcmSynced", null)
         set(v) { p.edit().putString("fcmSynced", v).apply() }
+
+    // The server-fetched Firebase client config (FcmConfig JSON) that runtime
+    // Firebase init uses — persisted so the Application class can initialize
+    // at process start (a push can arrive while the app is dead).
+    var fcmClientConfig: String?
+        get() = p.getString("fcmClientConfig", null)
+        set(v) { p.edit().putString("fcmClientConfig", v).apply() }
 }
