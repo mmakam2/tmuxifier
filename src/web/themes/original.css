@@ -109,3 +109,17 @@
 :root[data-theme='original'] .brand-home img {
   filter: hue-rotate(134deg) saturate(0.75);
 }
+
+/* The Instrument engraves its bezel legends wide (10px / 700 / 0.12em) because
+   the mono face is narrow; the sans chrome face is already wide per glyph, so
+   the same tracking sprawls and 10px sans caps read squat. Pull the pane-header
+   legends back toward normal sans caps: tighter tracking, a notch lighter, half
+   a point taller. letter-spacing inherits, so the header rule also covers the
+   title and anything unstyled inside the bezel. */
+:root[data-theme='original'] .pane-header {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+:root[data-theme='original'] .pane-header .pane-life { font-weight: 600; letter-spacing: 0.03em; }
+:root[data-theme='original'] .pane-chip { letter-spacing: 0.03em; }
