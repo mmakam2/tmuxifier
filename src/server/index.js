@@ -52,6 +52,8 @@ import { createVoiceEngine } from './voiceEngine.js';
 import { createVoiceStore } from './voiceStore.js';
 import { createUiSettingsStore } from './uiSettingsStore.js';
 import { createVoiceInstallStore } from './voiceInstallStore.js';
+import { createApkBuildStore } from './apkBuildStore.js';
+import { createApkBuildManager } from './apkBuild.js';
 import { createVoiceInstallManager } from './voiceInstall.js';
 import { resolveVoicePaths } from './voicePaths.js';
 
@@ -97,6 +99,15 @@ const voiceInstallManager = createVoiceInstallManager({
   repoRoot,
   store: voiceInstallStore,
   voiceStore,
+});
+
+// Server-side Android APK build (Settings → Devices "Build app"): the same
+// persisted single-flight job pattern as the whisper install above.
+const apkBuildStore = createApkBuildStore({ dataDir: config.dataDir });
+const apkBuildManager = createApkBuildManager({
+  repoRoot,
+  dataDir: config.dataDir,
+  store: apkBuildStore,
 });
 const resolveVoice = async () =>
   resolveVoicePaths({ repoRoot, config, settings: await voiceStore.read() });
@@ -330,7 +341,7 @@ const iconStore = createIconStore({
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
 const voiceEnabledInitial = (await resolveVoice()).enabled;
-const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial, uiSettingsStore, deviceStore });
+const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial, uiSettingsStore, deviceStore, apkBuildManager });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
@@ -353,7 +364,7 @@ app.listen({ host: config.bindAddress, port: config.port })
     // reload as 'interrupted').
     registerShutdownFlush({
       flush: [
-        ...[fleetStore, setupStore, provisionStore, lifecycleStore, voiceInstallStore].map((s) => () => s.whenIdle()),
+        ...[fleetStore, setupStore, provisionStore, lifecycleStore, voiceInstallStore, apkBuildStore].map((s) => () => s.whenIdle()),
         // Revoke Pi-hole and TrueNAS sessions rather than leak one per configured
         // service across every restart — Pi-hole v6 caps how many can be live at
         // once, and a TrueNAS socket left open is a session left authenticated.

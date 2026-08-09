@@ -243,6 +243,12 @@ mkdir -p ../data/app
 cp app/build/outputs/apk/release/app-release.apk ../data/app/tmuxifier-console.apk
 ```
 
+Once the toolchain above is installed, you never need the last block again: **Settings →
+Devices → Build the app on the server** runs the same Gradle build as a background job
+(pollable, single-flight, recorded in `data/apk-build-jobs.json`) and publishes the result
+itself. Without `keystore.properties` it falls back to a debug-signed build — installable,
+but switching to a proper release signature later requires a one-time uninstall on phones.
+
 On the phone: open the dashboard in the browser (signed in), **Settings → Devices →
 Download the Android app**, install (Play Protect challenges a sideloaded app once — "More
 details → Install anyway"), then **Pair new device**. Updating the app later is just

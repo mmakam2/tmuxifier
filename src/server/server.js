@@ -117,7 +117,7 @@ const NO_FLEET_SCRIPTS = {
   removeScript: async () => {},
 };
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, uiSettingsStore = null, deviceStore = null, pairingCodes = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, uiSettingsStore = null, deviceStore = null, pairingCodes = null, apkBuildManager = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -778,6 +778,23 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     } catch {
       return { available: false };
     }
+  });
+
+  // Server-side APK build (Settings → Devices "Build app"): browser-session
+  // only — a device must not be able to spend the host's CPU — and
+  // single-flight in the manager (a second start answers 409). GET is the
+  // poll the tab watches; both are harmless reads of the same job view.
+  app.post('/api/devices/apk/build', { preHandler: requireAuth }, async (req, reply) => {
+    if (!apkBuildManager) return reply.code(503).send({ error: 'build unavailable' });
+    if (req.deviceId) return reply.code(403).send({ error: 'browser session required' });
+    try {
+      return { job: await apkBuildManager.start() };
+    } catch (e) {
+      return reply.code(409).send({ error: e?.message || 'a build is already running' });
+    }
+  });
+  app.get('/api/devices/apk/build', { preHandler: requireAuth }, async () => {
+    return { job: apkBuildManager ? apkBuildManager.current() : null };
   });
 
   app.get('/api/devices/apk', { preHandler: requireAuth }, async (req, reply) => {

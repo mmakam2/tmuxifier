@@ -111,9 +111,9 @@ pattern for new modules.
   and are rename()d into place (a crash never truncates), an unparseable/wrong-shape file is
   quarantined to `<file>.corrupt-<timestamp>` instead of being silently read as empty, and files
   are written `0o600`. The store modules build on it.
-- `debouncedJsonStore.js` — the shared debounced-write store behind the five persisted job
-  managers (`fleetStore`/`setupStore`/`provisionStore`/`proxmoxLifecycleStore`/`voiceInstallStore`
-  are one-line wrappers); `whenIdle()` is the graceful-shutdown flush seam, and every one of the
+- `debouncedJsonStore.js` — the shared debounced-write store behind the six persisted job
+  managers (`fleetStore`/`setupStore`/`provisionStore`/`proxmoxLifecycleStore`/`voiceInstallStore`/
+  `apkBuildStore` are one-line wrappers); `whenIdle()` is the graceful-shutdown flush seam, and every one of the
   five is wired into it — a store constructed inline could not be, which is how `voiceInstallStore`
   came to be left out and a finished install reloaded as `interrupted` after a SIGTERM.
 
@@ -209,7 +209,10 @@ pattern for new modules.
   Firebase CLIENT config (extracted by `fcmAppConfig.js` from the google-services.json at
   `TMUXIFIER_FCM_APP_CONFIG`, read per request) for the app's runtime Firebase init — public
   client identifiers, so one published APK works against any operator's project with nothing
-  baked in; absent/unparsable reads as `available: false`.
+  baked in; absent/unparsable reads as `available: false`. `POST/GET /api/devices/apk/build`
+  starts/polls the server-side Gradle build (`apkBuild.js` — persisted single-flight job in the
+  `voiceInstall.js` mold, browser-session only, publishes to `data/app/` on success; variant
+  decided by whether `android/keystore.properties` exists).
   `GET /api/boxes/:id/pane` is a read-only tmux snapshot
   for the app — `capture-pane` over the ControlMaster with a bounded `-S` scrollback, never
   attaching — merged with the box's latest agent-state sample from `healthHistory`. `POST
@@ -1049,7 +1052,7 @@ content-type), not just `GET /`. Only after validation does the branch merge to 
 checklist below run (its build converges `dist/` onto the released version); a failed
 validation is fixed on the branch and redeployed, and rollback is just `npm run build` from
 main. Any restart — candidate or release — waits until no setup/provision/lifecycle/fleet/
-voice-install job is `running` (a restart would interrupt them).
+voice-install/apk-build job is `running` (a restart would interrupt them).
 
 ```bash
 npm version patch --no-git-tag-version # bump package.json + package-lock.json by 0.0.1

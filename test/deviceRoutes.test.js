@@ -142,6 +142,43 @@ test('the Android APK downloads authenticated once published into data/app', asy
   expect((await app.inject({ method: 'GET', url: '/api/devices/apk/info' })).statusCode).toBe(401);
 });
 
+test('apk build routes: browser-only start, 409 when busy, pollable status', async () => {
+  // Not wired in the beforeEach app: soft 503/null.
+  const h = await cookieHeaders();
+  expect((await app.inject({ method: 'POST', url: '/api/devices/apk/build', headers: h })).statusCode).toBe(503);
+  expect((await app.inject({ method: 'GET', url: '/api/devices/apk/build', headers: h })).json()).toEqual({ job: null });
+
+  let busy = false;
+  const fakeManager = {
+    start: async () => {
+      if (busy) throw new Error('a build is already running');
+      busy = true;
+      return { id: 'ab-1', status: 'running', variant: null };
+    },
+    current: () => ({ id: 'ab-1', status: busy ? 'running' : null }),
+  };
+  const app2 = buildServer({
+    config: {
+      bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
+      passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir,
+      localShell: 'none', configPath: path.join(dir, 'config.json'),
+    },
+    store: createStore({ dataDir: dir }),
+    sessions: { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} },
+    statusChecker: { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) },
+    passkeyStore: createPasskeyStore({ dataDir: dir }), deviceStore, apkBuildManager: fakeManager,
+  });
+  const login = await app2.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === 'tmuxifier_session');
+  const h2 = { cookie: `${c.name}=${c.value}` };
+  expect((await app2.inject({ method: 'POST', url: '/api/devices/apk/build' })).statusCode).toBe(401);
+  const { token } = (await app2.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'Fold2' } })).json();
+  expect((await app2.inject({ method: 'POST', url: '/api/devices/apk/build', headers: { authorization: `Bearer ${token}` } })).statusCode).toBe(403);
+  expect((await app2.inject({ method: 'POST', url: '/api/devices/apk/build', headers: h2 })).json().job.status).toBe('running');
+  expect((await app2.inject({ method: 'POST', url: '/api/devices/apk/build', headers: h2 })).statusCode).toBe(409);
+  expect((await app2.inject({ method: 'GET', url: '/api/devices/apk/build', headers: h2 })).json().job.id).toBe('ab-1');
+});
+
 test('fcm-config serves the operator client config, auth-gated, absent-fails-soft', async () => {
   const h = await cookieHeaders();
   // No TMUXIFIER_FCM_APP_CONFIG in the beforeEach app: soft absence.
