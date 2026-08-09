@@ -65,6 +65,11 @@ fun SettingsScreen(state: AppState, onEnrolled: () -> Unit, onSignedOut: () -> U
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Settings", style = MaterialTheme.typography.titleLarge)
+        Text(
+            "Tmuxifier console v${com.tmuxifier.console.BuildConfig.VERSION_NAME} (${com.tmuxifier.console.BuildConfig.VERSION_CODE})",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         if (enrolled) {
             Text("Server: ${state.store.baseUrl}", style = MaterialTheme.typography.bodyMedium)
             Text("Device: ${state.store.deviceName}", style = MaterialTheme.typography.bodyMedium)
