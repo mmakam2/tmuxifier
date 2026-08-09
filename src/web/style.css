@@ -478,7 +478,12 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .box-meta .lvl-auth { color: var(--auth); }
 /* Nerd Font icon (e.g. the CPU chip glyph). Neutral color of its own so the
    severity color stays on the number alone, not doubled up on the icon. */
-.box-meta .nf { font-family: var(--face); font-style: normal; color: var(--dim); }
+/* Nerd Font icon glyphs (cpu/ram/disk, PUA codepoints) are CONTENT, not
+   chrome: they exist only in the bundled Meslo faces, so they pin that stack
+   literally rather than riding var(--face) — a theme with a sans chrome face
+   (Original) would otherwise render them as fallback tofu. Same rule as the
+   script editor's .cm-scroller. */
+.box-meta .nf { font-family: 'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', ui-monospace, SFMono-Regular, Menlo, monospace; font-style: normal; color: var(--dim); }
 .box-badges { display: flex; gap: 4px; }
 .box-badges:empty { display: none; }
 /* Mode chips: small machined tags, lit or dark. */
