@@ -33,6 +33,8 @@ import { createSecretBox } from './secretBox.js';
 import { createProxmoxStore } from './proxmoxStore.js';
 import { createNetboxStore } from './netboxStore.js';
 import { createPasskeyStore } from './passkeyStore.js';
+import { createDeviceStore } from './deviceStore.js';
+import { createFcmPush } from './fcmPush.js';
 import { createProvisionStore } from './provisionStore.js';
 import { createProvisionManager } from './proxmoxProvision.js';
 import { createProxmoxClient, inspectEndpoint } from './proxmoxApi.js';
@@ -202,6 +204,7 @@ const secretBox = createSecretBox(config.cookieSecret);
 const proxmoxStore = createProxmoxStore({ dataDir: config.dataDir, secretBox });
 const netboxStore = createNetboxStore({ dataDir: config.dataDir, secretBox });
 const passkeyStore = createPasskeyStore({ dataDir: config.dataDir });
+const deviceStore = createDeviceStore({ dataDir: config.dataDir });
 const provisionStore = createProvisionStore({ dataDir: config.dataDir });
 const makeProxmoxClient = (host) => createProxmoxClient({ host, timeoutMs: config.pveTimeoutMs });
 // Cache the first successful read: deriving the key shells out to ssh-keygen
@@ -276,6 +279,13 @@ const history = createHealthHistory({
   load: () => healthEventsStore.load(),
   save: (events) => healthEventsStore.save(events),
 });
+// FCM push to enrolled Android devices: agent-input/agent-done events become
+// lock-screen notifications. Unset credentials = feature off; a send failure
+// is logged inside notify() and can never disturb the poll loop.
+if (config.fcmCredentials) {
+  const fcmPush = createFcmPush({ credentialsPath: config.fcmCredentials, deviceStore });
+  history.onEvent((e) => { fcmPush.notify(e).catch(() => {}); });
+}
 // One server-side poll loop drives all status probing; the /api/status handler
 // just serves its snapshot, so SSH volume no longer scales with open tab count.
 const statusPoller = createStatusPoller({
@@ -320,7 +330,7 @@ const iconStore = createIconStore({
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
 const voiceEnabledInitial = (await resolveVoice()).enabled;
-const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial, uiSettingsStore });
+const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial, uiSettingsStore, deviceStore });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });

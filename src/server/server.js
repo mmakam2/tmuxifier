@@ -21,7 +21,7 @@ import { createTruenasClient } from './truenasApi.js';
 import { createUnifiClient } from './unifiApi.js';
 import { createImmichClient } from './immichApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
-import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault } from './tmuxInject.js';
+import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault, NAMED_KEYS, sanitizeSendText } from './tmuxInject.js';
 import { normalizeTranscript } from './voiceText.js';
 import { MODEL_IDS, resolveModel } from './voiceCatalog.js';
 import { vendorModelPath } from './voicePaths.js';
@@ -115,7 +115,7 @@ const NO_FLEET_SCRIPTS = {
   removeScript: async () => {},
 };
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, uiSettingsStore = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, uiSettingsStore = null, deviceStore = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -595,9 +595,22 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     }
     return false;
   }
-  function requireAuth(req, reply, done) {
-    if (!isAuthed(req)) { reply.code(401).send({ error: 'unauthorized' }); return; }
-    done();
+  async function deviceAuthed(req) {
+    if (!deviceStore) return false;
+    const h = String(req.headers?.authorization || '');
+    if (!h.startsWith('Bearer ')) return false;
+    const device = await deviceStore.verify(h.slice(7).trim());
+    if (!device) return false;
+    req.deviceId = device.id;
+    // lastSeen is cosmetic; a write failure must not fail the request.
+    deviceStore.touch(device.id).catch(() => {});
+    return true;
+  }
+  // Async on purpose (Fastify dispatches on arity): cookie first — the common
+  // browser case stays synchronous — then the device-token branch.
+  async function requireAuth(req, reply) {
+    if (isAuthed(req) || (await deviceAuthed(req))) return;
+    return reply.code(401).send({ error: 'unauthorized' });
   }
 
   app.get('/api/auth/info', async () => {
@@ -686,6 +699,48 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
 
   app.get('/api/me', { preHandler: requireAuth }, async () => ({ ok: true }));
+
+  // Device enrollment authenticates with the password directly (not a cookie):
+  // the Android app enrolls once and holds a revocable token thereafter. Same
+  // rate-limit bucket as /api/login — this is a password oracle otherwise.
+  // v1 is password-mode only; OAuth-mode pairing codes are a recorded v2 item.
+  app.post('/api/devices/enroll', async (req, reply) => {
+    if (!deviceStore) return reply.code(501).send({ error: 'devices not supported' });
+    if (config.authMode === 'google') return reply.code(501).send({ error: 'device enrollment requires password mode' });
+    if (passkeyOnlyArmed(await passkeySnapshot())) return reply.code(403).send({ error: 'passkey required' });
+    const ip = req.ip;
+    if (loginLimiter.limited(ip)) return reply.code(429).send({ error: 'too many attempts' });
+    const ok = await verifyPassword(req.body?.password || '', config.passwordHash);
+    if (!ok) { loginLimiter.fail(ip); return reply.code(401).send({ error: 'invalid' }); }
+    loginLimiter.succeed(ip);
+    try {
+      const { device, token } = await deviceStore.enroll({ name: req.body?.name, fcmToken: req.body?.fcmToken });
+      return { ...device, token };
+    } catch (e) {
+      return reply.code(400).send({ error: e?.message || 'invalid device' });
+    }
+  });
+
+  app.get('/api/devices', { preHandler: requireAuth }, async (req, reply) => {
+    if (!deviceStore) return reply.code(501).send({ error: 'devices not supported' });
+    return { devices: await deviceStore.list() };
+  });
+
+  app.delete('/api/devices/:id', { preHandler: requireAuth }, async (req, reply) => {
+    if (!deviceStore) return reply.code(501).send({ error: 'devices not supported' });
+    return deviceStore.remove(String(req.params.id));
+  });
+
+  // The device updates its own record (FCM token rotation, notify toggles).
+  // Bearer-only: a browser session has no deviceId and gets a 403.
+  app.patch('/api/devices/self', { preHandler: requireAuth }, async (req, reply) => {
+    if (!deviceStore) return reply.code(501).send({ error: 'devices not supported' });
+    if (!req.deviceId) return reply.code(403).send({ error: 'device token required' });
+    const body = req.body || {};
+    const updated = await deviceStore.updateSelf(req.deviceId, { fcmToken: body.fcmToken, notify: body.notify });
+    if (!updated) return reply.code(404).send({ error: 'not found' });
+    return updated;
+  });
 
   app.get('/api/boxes', { preHandler: requireAuth }, async () => store.listBoxes());
   app.post('/api/boxes', { preHandler: requireAuth }, async (req, reply) => {
@@ -800,6 +855,34 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       return reply.code(500).send({ error: 'seeding failed' });
     }
     return { results };
+  });
+
+  // App-facing pane snapshot: read-only, bounded scrollback, agent state from
+  // the health series so the client needs no second request.
+  app.get('/api/boxes/:id/pane', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'not found' });
+    const lines = req.query?.lines != null ? Number(req.query.lines) : 200;
+    const snap = await boxActions.paneSnapshot(box, box.sessionName, { lines });
+    if (!snap.ok) return reply.code(502).send({ error: snap.error });
+    const last = history ? (history.getSeries(box.id).at(-1) || null) : null;
+    return { ...snap, agent: last?.agent ?? null, sessionName: box.sessionName };
+  });
+
+  app.post('/api/boxes/:id/keys', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'not found' });
+    const { text, key } = req.body || {};
+    const hasText = typeof text === 'string' && text.length > 0;
+    const hasKey = typeof key === 'string' && key.length > 0;
+    if (hasText === hasKey) return reply.code(400).send({ error: 'exactly one of text or key' });
+    if (hasText && text.length > 65536) return reply.code(400).send({ error: 'text too long' });
+    if (hasKey && !NAMED_KEYS.has(key)) return reply.code(400).send({ error: 'unknown key' });
+    const payload = hasKey ? { key } : { text: sanitizeSendText(text) };
+    if (payload.text === '') return { ok: true, skipped: 'empty' }; // sanitizer ate it all
+    const res = await boxActions.sendKeys(box, box.sessionName, payload);
+    if (!res.ok) return reply.code(502).send({ error: res.error });
+    return { ok: true };
   });
 
   // Host-side AI-auth readiness for the provision forms: is there anything to

@@ -34,8 +34,9 @@ Configuration, secrets, and runtime state all live **inside the repo**:
   `auth-state.json` (the logout session-revocation watermark), `passkeys.json` (enrolled WebAuthn
   credentials, the pinned relying party id, and the passkey-only flag — public keys only, so
   unlike `proxmox.json`/`netbox.json` nothing in it is encrypted, though it's still written
-  `0o600`), scraped service favicons under `data/icons/`, and SSH ControlMaster sockets
-  under `data/cm/`.
+  `0o600`), `devices.json` (Android app device tokens — SHA-256 digests only, the token itself is
+  never stored; FCM registration tokens; per-device notification toggles), scraped service
+  favicons under `data/icons/`, and SSH ControlMaster sockets under `data/cm/`.
 - `vendor/` (gitignored) — the whisper.cpp checkout, its build output, and the downloaded speech
   model, all created by `npm run setup-voice`. Together they take up roughly 1.2 GB;
   `rm -rf vendor/whisper` reclaims it. Also `vendor/icons/`, the service-logo catalog written
@@ -151,6 +152,17 @@ pattern for new modules.
   also disarms `passkeyOnly`) by design — failing closed would brick fleet access on a disk
   glitch, and whoever can corrupt this file can already read the password hash from `.env` on the
   same disk.
+- `deviceStore.js` — device-token auth for the Android app: `data/devices.json` CRUD in the
+  `passkeyStore.js` mold (withLock mutex, `0o600`, corrupt-fails-open). Stores SHA-256 digests of
+  32-byte random tokens — fast digest on purpose: the entropy is the defence, and scrypt would tax
+  the app's ~1s pane polling. `verify` compares with `timingSafeEqual`; `touch` throttles lastSeen
+  writes to once a minute. Enrollment is password-authenticated through the same `rateLimit.js`
+  bucket as login; revocation (Settings → Devices) takes effect on the device's next request.
+- `fcmPush.js` — the first subscriber the `healthHistory.onEvent` seam ever had: agent-input/
+  agent-done events become FCM HTTP v1 pushes to enrolled devices. Dependency-free in the
+  `googleAuth.js` mold (RS256 JWT via `node:crypto`, cached OAuth2 token). `TMUXIFIER_FCM_CREDENTIALS`
+  unset = feature off. Failures are logged, never propagated; an UNREGISTERED response clears that
+  device's FCM token, never its auth.
 - `server.js` — Fastify app: login rate-limiting, REST under `/api/*`, and the `/term` WebSocket.
   Box setup routes: `POST /api/boxes/:id/setup` (start), `GET /api/setup` (list), `GET
   /api/setup/:id` and `GET /api/boxes/:id/setup` (poll one/by-box). `GET /api/ai-auth/status`
@@ -168,6 +180,18 @@ pattern for new modules.
   body — a client cannot be trusted to declare what type a vmid is, and trusting it once was a
   real mid-flight defect: a request that lied about `kind` would have stored a link that then read
   every subsequent poll as a permanent kind `'mismatch'` against the cluster's own truth.
+  `requireAuth` is async and accepts either the signed session cookie or an `Authorization: Bearer
+  <device token>` header verified via `deviceStore.verify` (`req.deviceId` set on that branch) —
+  cookie first, since that keeps the common browser request synchronous, then the device-token
+  fallback for the Android app. `POST /api/devices/enroll` deliberately does not go through
+  `requireAuth`: it authenticates with the password directly, over the same `rateLimit.js` bucket
+  as `/api/login`, so it can't become a password oracle; it 403s under armed passkey-only and 501s
+  in OAuth mode (v1 is password-mode only). `GET /api/boxes/:id/pane` is a read-only tmux snapshot
+  for the app — `capture-pane` over the ControlMaster with a bounded `-S` scrollback, never
+  attaching — merged with the box's latest agent-state sample from `healthHistory`. `POST
+  /api/boxes/:id/keys` accepts exactly one of literal text (sent via `send-keys -l` after
+  `tmuxInject.js`'s `sanitizeSendText`) or a named key drawn from its closed `NAMED_KEYS`
+  allowlist, never both.
 - `store.js` — `data/boxes.json` CRUD; normalizes/validates boxes; exports/imports the box list as
   a versioned JSON file (`exportBoxes`/`importBoxes`; import re-mints ids and skips dup/unsafe entries).
   A Proxmox link carries a `kind` (`'lxc'` | `'qemu'`); an absent one defaults to `'lxc'` in
@@ -492,10 +516,11 @@ pattern for new modules.
   (a claude restarting in place between SessionEnd and SessionStart) from reading as an exit.
   Emits edge-triggered `agent-input`/`agent-done` events — suppressed while that session is
   attached, since watching the terminal is its own notification.
-  `onEvent(cb)` is the deferred server-push delivery seam —
-  nothing subscribes to it; browser notifications are instead delivered client-side, by `main.ts`
-  polling `GET /api/health/events` and filtering by the kinds enabled in Settings → Notifications
-  (`notifyPrefs.ts`).
+  `onEvent(cb)` is the server-push delivery seam: `fcmPush.js` subscribes when
+  `TMUXIFIER_FCM_CREDENTIALS` is set, turning these same events into FCM pushes to enrolled
+  Android devices. Browser notifications still poll client-side rather than subscribing here, by
+  `main.ts` polling `GET /api/health/events` and filtering by the kinds enabled in Settings →
+  Notifications (`notifyPrefs.ts`).
 - `secretBox.js` — AES-256-GCM seal/open for secrets at rest; key derived from `cookieSecret` via
   HKDF. Encrypts the persisted Proxmox secrets: the API token, any added SSH management keys, and
   the optional root password.
@@ -1041,6 +1066,18 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   user's in-flight challenge, but an attacker spread across many source addresses still can — the
   same residual limit as the login rate limiter itself. Under "require a passkey" that would deny
   sign-in outright, with the `.env` break-glass above as the remedy.
+- Device tokens (the Android app's credential) join the same story: `POST /api/devices/enroll` is
+  password-gated and shares the `rateLimit.js` login bucket, so it cannot be used to brute-force
+  the password for free; it also 403s when "require a passkey" is armed, same as the password
+  login form, and 501s in OAuth mode (v1 is password-mode only). Only the token's SHA-256 digest
+  is stored — the plaintext is returned once, at enrollment, and never again. `requireAuth`
+  accepts a device's `Authorization: Bearer <token>` alongside the session cookie, and revoking a
+  device (Settings → Devices) takes effect on its very next request, since every request re-reads
+  `data/devices.json`. Arming "require a passkey" does **not** revoke devices already enrolled —
+  a device token never expires and ignores the logout watermark, so only that Settings → Devices
+  revocation cuts one off. `TMUXIFIER_FCM_CREDENTIALS` — the Firebase service-account path that
+  turns on push notifications — joins the `.env` secret class alongside the password hash and
+  cookie secret.
 - Passwords are scrypt-hashed; login attempts are rate-limited per IP (`rateLimit.js` — set
   `TMUXIFIER_TRUST_PROXY` behind a reverse proxy so the limiter sees real client IPs, and only
   then, since trusting forwarded headers from direct clients lets them spoof their IP). The

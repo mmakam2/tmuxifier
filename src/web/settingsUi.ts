@@ -7,16 +7,18 @@ import { renderServicesSection } from './settingsServices';
 import { renderNetboxSection } from './settingsNetbox';
 import { renderProxmoxSection } from './settingsProxmox';
 import { renderPasskeysSection } from './settingsPasskeys';
+import { renderDevicesSection, stopDevicesWatch } from './settingsDevices';
 import { renderVoiceSection, stopVoiceWatch } from './settingsVoice';
 import { renderNotificationsSection } from './settingsNotifications';
 import { renderAppearanceSection } from './settingsAppearance';
 
-export type SettingsTab = 'boxes' | 'services' | 'netbox' | 'proxmox' | 'passkeys' | 'voice' | 'notifications' | 'appearance';
+export type SettingsTab = 'boxes' | 'services' | 'netbox' | 'proxmox' | 'passkeys' | 'devices' | 'voice' | 'notifications' | 'appearance';
 
 // `dispose` tears down anything a section leaves running after its content is
-// replaced. Sections are otherwise stateless: only Voice owns a background job
-// watch, and without a seam to stop it, it repainted whichever tab was open when
-// the install finished and kept polling after the modal closed.
+// replaced. Sections are otherwise stateless: Voice owns a background job
+// watch, and Devices an armed-revoke timeout plus an in-flight DELETE; without
+// a seam to stop them, either repainted whichever tab was open when the install
+// finished / the revoke settled and kept running after the modal closed.
 type Section = {
   label: string;
   render: (content: HTMLElement, close: () => void) => void | Promise<void>;
@@ -30,6 +32,7 @@ const SECTIONS: Record<SettingsTab, Section> = {
   netbox: { label: 'NetBox', render: renderNetboxSection },
   proxmox: { label: 'Proxmox', render: (content) => renderProxmoxSection(content) },
   passkeys: { label: 'Passkeys', render: (content) => renderPasskeysSection(content) },
+  devices: { label: 'Devices', render: (content) => renderDevicesSection(content), dispose: stopDevicesWatch },
   // renderVoiceSection resolves with the status it painted (the install-settle
   // loop checks it); the tab shell only cares that it finished.
   voice: { label: 'Voice', render: async (content) => { await renderVoiceSection(content); }, dispose: stopVoiceWatch },

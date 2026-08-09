@@ -70,6 +70,9 @@ const DEFAULTS = {
   // is the .env break-glass that forces the stored passkey-only flag off.
   rpId: undefined,
   passkeyOnlyKillSwitch: undefined,
+  // Android app push notifications: path to a Firebase service-account JSON.
+  // Unset = feature off. See fcmPush.js.
+  fcmCredentials: undefined,
 };
 
 function clean(obj) {
@@ -165,6 +168,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     tlsCert: e.TMUXIFIER_TLS_CERT,
     tlsKey: e.TMUXIFIER_TLS_KEY,
     termFont: e.TMUXIFIER_TERM_FONT,
+    fcmCredentials: e.TMUXIFIER_FCM_CREDENTIALS,
     termFontSize: e.TMUXIFIER_TERM_FONT_SIZE ? Number(e.TMUXIFIER_TERM_FONT_SIZE) : undefined,
     claudeOauthToken: e.TMUXIFIER_CLAUDE_OAUTH_TOKEN && e.TMUXIFIER_CLAUDE_OAUTH_TOKEN.trim() ? e.TMUXIFIER_CLAUDE_OAUTH_TOKEN.trim() : undefined,
     uploadMaxMb: e.TMUXIFIER_UPLOAD_MAX_MB ? Number(e.TMUXIFIER_UPLOAD_MAX_MB) : undefined,
@@ -283,6 +287,10 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   merged.termFont = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$/.test(fontName) ? fontName : undefined;
   const fontSize = Number(merged.termFontSize);
   merged.termFontSize = Number.isFinite(fontSize) && fontSize >= 6 && fontSize <= 32 ? fontSize : 12;
+  // Android push: a path or nothing — same trim-or-undefined treatment as
+  // whisperBin/whisperModel above, so a config.json/overrides value gets the
+  // same normalization as one arriving through .env.
+  { const p = String(merged.fcmCredentials ?? '').trim(); merged.fcmCredentials = p || undefined; }
   // Health knobs share the clampInt fallback-to-default behavior above.
   merged.healthHistoryMax = clampInt(merged.healthHistoryMax, 10, 5000, DEFAULTS.healthHistoryMax);
   merged.healthEventsMax = clampInt(merged.healthEventsMax, 10, 5000, DEFAULTS.healthEventsMax);

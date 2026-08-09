@@ -10,6 +10,11 @@ import {
   injectVia,
   injectTextVia,
   injectLocalUploadPath,
+  buildPaneSnapshotRemote,
+  parsePaneSnapshot,
+  NAMED_KEYS,
+  buildSendNamedKeyRemote,
+  sanitizeSendText,
 } from '../src/server/tmuxInject.js';
 
 const CLAUDE_IDLE = [
@@ -340,4 +345,40 @@ test('injectTextVia sh-quotes text containing quotes and semicolons', async () =
   // shSingleQuote renders an embedded apostrophe as '\'' — the shell never
   // sees an unquoted ; or an unbalanced quote.
   expect(sendKeys).toContain(`'it'\\''s fine; rm -rf /'`);
+});
+
+test('buildPaneSnapshotRemote: geometry line, then bounded capture, atomic on failure', () => {
+  const s = buildPaneSnapshotRemote('main', { lines: 200 });
+  expect(s).toContain("display-message -p -t '=main:' '#{pane_width} #{pane_height} #{cursor_x} #{cursor_y}'");
+  expect(s).toContain("capture-pane -e -p -t '=main:' -S -200");
+  expect(s).toContain(' && '); // one failure fails the whole script (non-zero exit)
+});
+
+test('buildPaneSnapshotRemote clamps lines and quotes the session', () => {
+  expect(buildPaneSnapshotRemote('a b', { lines: 999999 })).toContain('-S -2000');
+  expect(buildPaneSnapshotRemote('a b', { lines: -5 })).toContain('-S -0');
+  expect(buildPaneSnapshotRemote("a'b", {})).toContain("'=a-b:'");
+});
+
+test('parsePaneSnapshot splits geometry from content', () => {
+  expect(parsePaneSnapshot('80 24 5 23\nline1\nline2\n')).toEqual({
+    width: 80, height: 24, cursorX: 5, cursorY: 23, content: 'line1\nline2',
+  });
+  expect(parsePaneSnapshot('80 24 5 23')).toEqual({ width: 80, height: 24, cursorX: 5, cursorY: 23, content: '' });
+  expect(parsePaneSnapshot('garbage\nstuff')).toBe(null);
+  expect(parsePaneSnapshot('')).toBe(null);
+  expect(parsePaneSnapshot(null)).toBe(null);
+});
+
+test('named keys are a closed allowlist', () => {
+  expect([...NAMED_KEYS].sort()).toEqual(['BSpace', 'C-c', 'Down', 'Enter', 'Escape', 'Left', 'Right', 'Tab', 'Up']);
+  expect(buildSendNamedKeyRemote('main', 'Enter')).toBe("tmux send-keys -t '=main:' Enter");
+  expect(() => buildSendNamedKeyRemote('main', 'C-d')).toThrow(/unknown key/);
+  expect(() => buildSendNamedKeyRemote('main', 'Enter; rm -rf /')).toThrow(/unknown key/);
+});
+
+test('sanitizeSendText: newlines collapse (a newline IS Enter), controls stripped', () => {
+  expect(sanitizeSendText('  hello\n  world\t!  ')).toBe('hello world !');
+  expect(sanitizeSendText('a\u0007b\u001b[31mc')).toBe('ab[31mc');
+  expect(sanitizeSendText('\r\n\r\n')).toBe('');
 });

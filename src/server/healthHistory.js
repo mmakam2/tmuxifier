@@ -168,8 +168,9 @@ export function classifyTransitions(prev, next, thresholds, state) {
 // healthEventsStore.js). Fed by the status poller after each snapshot swap;
 // read by GET /api/health/*. Browser notifications are delivered client-side
 // (src/web/main.ts pollHealth reads GET /api/health/events and filters by
-// Settings → Notifications) — onEvent below is an unused server-push seam
-// (webhook/email) that nothing currently subscribes to.
+// Settings → Notifications) — onEvent below is the server-push seam;
+// fcmPush.js subscribes to it when TMUXIFIER_FCM_CREDENTIALS is set, browser
+// notifications still poll client-side regardless.
 export function createHealthHistory({
   maxSamples = 120,
   maxEvents = 200,
@@ -194,9 +195,9 @@ export function createHealthHistory({
     e.seq = ++seq;
     events.push(e);
     while (events.length > maxEvents) events.shift();
-    // Unused server-push seam (webhook/email would subscribe here; browser
-    // notifications instead poll GET /api/health/events client-side). A
-    // listener error must never break the poll.
+    // Server-push seam: fcmPush.js subscribes when TMUXIFIER_FCM_CREDENTIALS
+    // is set; browser notifications still poll GET /api/health/events
+    // client-side regardless. A listener error must never break the poll.
     for (const fn of listeners) { try { fn(e); } catch { /* ignore */ } }
   }
 
