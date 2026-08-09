@@ -20,6 +20,7 @@ back into the same state.
 - [Standby dashboard](#standby-dashboard)
 - [Terminal features](#terminal-features)
 - [Themes](#themes)
+- [Android app (agent console)](#android-app-agent-console)
 - [Status, health & Fleet Command](#status-health--fleet-command)
 - [Proxmox](#proxmox)
 - [Security](#security)
@@ -202,6 +203,15 @@ the Fleet script editor — switching between the built-in **Bench Instrument** 
 amber phosphor) and **Original** (deep navy, cyan glow) looks, saved on the Tmuxifier host so
 every browser you sign in from follows the same pick; details, and how to add a theme, are in
 [appearance & themes](docs/fleet-and-health.md#appearance).
+
+## Android app (agent console)
+A native Kotlin/Compose companion in [`android/`](android/) for driving **Claude Code
+sessions from a phone**: fleet glance with waiting-first sorting, a read-only pane snapshot
+rendered as native text (tmux stays the terminal emulator — phone viewing can never resize
+your desktop windows), a semantic action row, a local-until-send composer, and FCM push when
+an agent needs you. Devices enroll with a single-use **pairing code** minted in Settings →
+Devices, where the signed APK is also downloadable. Details in
+[the Android app guide](docs/android-app.md).
 
 ## Status, health & Fleet Command
 A single server-side loop probes every box over a shared SSH ControlMaster with adaptive
