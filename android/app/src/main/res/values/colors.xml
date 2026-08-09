@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches the logo tile's chassis so the adaptive-icon background blends
+         seamlessly under any launcher mask. -->
+    <color name="ic_launcher_background">#222223</color>
+</resources>
