@@ -3,7 +3,7 @@
 // reads and revokes. Revoke is irreversible for the device (it must re-enroll
 // with the password), so it goes through the shared arm-then-fire reducer.
 import { el } from './dom';
-import { listDevices, revokeDevice, mintPairingCode, apkInfo, type PairingCode, type ApkInfo, type DeviceInfo } from './devices';
+import { listDevices, revokeDevice, mintPairingCode, apkInfo, startApkBuild, apkBuildStatus, type PairingCode, type ApkInfo, type ApkBuildJob, type DeviceInfo } from './devices';
 import { fmtBytes } from './fmt';
 import { armReduce, IDLE, ARM_MS, type ArmState } from './arming';
 
@@ -25,12 +25,15 @@ function when(t: number | null): string {
 let gen = 0;
 let armTimer: number | undefined;
 let codeTimer: number | undefined;
+let buildTimer: number | undefined;
 
 export function stopDevicesWatch(): void {
   window.clearTimeout(armTimer);
   armTimer = undefined;
   window.clearInterval(codeTimer);
   codeTimer = undefined;
+  window.clearInterval(buildTimer);
+  buildTimer = undefined;
   gen += 1;
 }
 
@@ -39,9 +42,14 @@ export async function renderDevicesSection(content: HTMLElement): Promise<void> 
   content.replaceChildren(el('p', { class: 'muted' }, ['Loading…']));
   let devices: DeviceInfo[];
   let apk: ApkInfo = { available: false };
+  let build: ApkBuildJob | null = null;
   try {
-    // The APK readout is a nicety: its failure must not blank the device list.
-    [devices, apk] = await Promise.all([listDevices(), apkInfo().catch(() => ({ available: false }))]);
+    // The APK/build readouts are niceties: their failure must not blank the list.
+    [devices, apk, build] = await Promise.all([
+      listDevices(),
+      apkInfo().catch(() => ({ available: false })),
+      apkBuildStatus().then((r) => r.job).catch(() => null),
+    ]);
   } catch {
     content.replaceChildren(el('p', { class: 'muted' }, ['Could not load devices.']));
     return;
@@ -78,6 +86,52 @@ export async function renderDevicesSection(content: HTMLElement): Promise<void> 
       el('code', {}, [p.code]),
       el('span', { class: 'muted' }, [` expires in ${left}s — enter it in the app: Settings → Pair`]),
     ]);
+  };
+
+  // Poll the running build every 2.5s; on completion refresh the APK readout
+  // so the download link appears (or updates) without a tab reload. Same
+  // gen/isConnected discipline as every other timer in this tab.
+  const watchBuild = () => {
+    window.clearInterval(buildTimer);
+    buildTimer = window.setInterval(() => {
+      void apkBuildStatus().then(async (r) => {
+        if (my !== gen || content.isConnected === false) { window.clearInterval(buildTimer); return; }
+        build = r.job;
+        if (build?.status !== 'running') {
+          window.clearInterval(buildTimer);
+          if (build?.status === 'done') {
+            apk = await apkInfo().catch(() => ({ available: false }));
+          }
+        }
+        paint();
+      }).catch(() => { /* transient poll failure: keep polling */ });
+    }, 2500);
+  };
+  if (build?.status === 'running') watchBuild();
+
+  // The server-side Gradle build behind "Build app": what the operator gets
+  // (signed release vs debug) is decided server-side by which gitignored
+  // files exist — see docs/DEPLOY.md § Building the Android app.
+  const buildRow = (): HTMLElement => {
+    const b = build;
+    if (b && b.status === 'running') {
+      return el('p', { class: 'muted' }, [`Building the app on the server (${b.phase ?? '…'}) — takes a few minutes on first run.`]);
+    }
+    const btn = el('button', {
+      type: 'button',
+      onclick: () => {
+        void startApkBuild().then((r) => {
+          if (my !== gen || content.isConnected === false) return;
+          build = r.job;
+          watchBuild();
+          paint();
+        }).catch(() => paint());
+      },
+    }, [apk.available ? 'Rebuild the app on the server' : 'Build the app on the server']);
+    const note = b && b.status === 'error'
+      ? el('span', { class: 'muted' }, [` last build failed: ${b.error ?? 'unknown'}`])
+      : null;
+    return el('div', { class: 'apk-build-row' }, note ? [btn, note] : [btn]);
   };
 
   const paint = () => {
@@ -127,6 +181,7 @@ export async function renderDevicesSection(content: HTMLElement): Promise<void> 
       el('p', { class: 'muted' }, ['Android devices enrolled with the Tmuxifier app. Revoking a device signs it out on its next request; it re-enrolls with a pairing code (or the password, in password mode).']),
       pairRow(),
       ...(apkRow ? [apkRow] : []),
+      buildRow(),
       devices.length ? el('div', { class: 'device-list' }, rows)
         : el('p', { class: 'muted' }, ['No devices enrolled. In the app: Settings → server URL + a pairing code from the button above.']),
     );

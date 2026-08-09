@@ -32,3 +32,23 @@ export type ApkInfo = { available: boolean; size?: number; mtime?: number };
 export function apkInfo(): Promise<ApkInfo> {
   return jsonFetch<ApkInfo>('/api/devices/apk/info');
 }
+
+export type ApkBuildJob = {
+  id: string;
+  status: string;
+  variant: string | null;
+  phase: string | null;
+  log: string;
+  error: string | null;
+  createdAt: number;
+  finishedAt: number | null;
+};
+
+/** Start the server-side Gradle build (single-flight; 409 when one is running). */
+export function startApkBuild(): Promise<{ job: ApkBuildJob }> {
+  return jsonFetch<{ job: ApkBuildJob }>('/api/devices/apk/build', { method: 'POST' });
+}
+
+export function apkBuildStatus(): Promise<{ job: ApkBuildJob | null }> {
+  return jsonFetch<{ job: ApkBuildJob | null }>('/api/devices/apk/build');
+}
