@@ -202,6 +202,58 @@ the local box; lifecycle and provision jobs are recorded in the hub's **Activity
 `data/proxmox-lifecycle-jobs.json`. The token, any SSH management keys, and the optional root password
 are encrypted at rest in `data/proxmox.json` and never sent to the browser.
 
+## Building the Android app (optional)
+
+The Android companion app (see [the Android app guide](android-app.md)) is distributed by your
+own instance: **Settings → Devices** shows a download link as soon as a file exists at
+`data/app/tmuxifier-console.apk`. The public repo ships no prebuilt binary, so building it is
+part of deploying — a one-time toolchain install plus one Gradle run. Any Linux box with
+~5 GB free disk and ~3 GB RAM works; the Tmuxifier host itself is fine.
+
+```bash
+# One-time toolchain (JDK 17 + Android SDK + Gradle; a few GB of downloads)
+apt-get install -y openjdk-17-jdk-headless unzip
+mkdir -p /opt/android-sdk/cmdline-tools
+curl -fL -o /tmp/clt.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+unzip -q /tmp/clt.zip -d /opt/android-sdk/cmdline-tools
+mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/latest
+rm /tmp/clt.zip
+yes | /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null
+/opt/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+curl -fL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+unzip -q /tmp/gradle.zip -d /opt && rm /tmp/gradle.zip
+
+# Project setup (first time only)
+cd android
+cp local.properties.example local.properties        # points sdk.dir at /opt/android-sdk
+/opt/gradle-8.10.2/bin/gradle wrapper --gradle-version 8.10.2
+
+# Signing keystore (first time only), then fill the passwords you chose into
+# keystore.properties (copied from its .example):
+mkdir -p keystore
+keytool -genkeypair -v -keystore keystore/release.jks -alias tmuxifier \
+  -keyalg RSA -keysize 4096 -validity 10000
+cp keystore.properties.example keystore.properties   # then edit it
+# BACK UP keystore/release.jks + keystore.properties together, off this host —
+# losing them breaks update-in-place installs forever.
+
+# Build and publish — the download link appears immediately, no restart needed
+./gradlew assembleRelease
+mkdir -p ../data/app
+cp app/build/outputs/apk/release/app-release.apk ../data/app/tmuxifier-console.apk
+```
+
+On the phone: open the dashboard in the browser (signed in), **Settings → Devices →
+Download the Android app**, install (Play Protect challenges a sideloaded app once — "More
+details → Install anyway"), then **Pair new device**. Updating the app later is just
+`./gradlew assembleRelease` and the same `cp` — installed phones update in place from the
+same link.
+
+Push notifications are optional and separate: set `TMUXIFIER_FCM_APP_CONFIG` and
+`TMUXIFIER_FCM_CREDENTIALS` per the Firebase walkthrough in
+[`android/README.md`](../android/README.md). Nothing is baked into the APK, so the app you
+just built works with any Firebase project — or none.
+
 ## Install the service
 
 The repo ships a ready-to-use unit at `deploy/tmuxifier.service`, which assumes the repo is at
