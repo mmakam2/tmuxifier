@@ -94,6 +94,11 @@ long-lived **device token** instead. A token is 32 random bytes; the server stor
 SHA-256 digest in `data/devices.json`, never the token itself, so a copy of that file alone is not
 a working credential.
 
+**Getting the app** is also a Settings → Devices affair: once a signed APK has been published on
+the server, the tab shows a **Download the Android app** link. Open the dashboard in the phone's
+browser (signed in — the same session cookie authenticates the download), download, install, then
+pair. No link means no APK has been published yet.
+
 **Enrolling a device** starts on the web dashboard: **Settings → Devices → Pair new device**
 mints a single-use pairing code (`XXXX-XXXX`, 2-minute expiry, shown with a countdown). In the
 app, enter your Tmuxifier URL (e.g. `https://tmuxifier.example.com`), a name for the device, and

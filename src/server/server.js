@@ -743,6 +743,33 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return devicePairing.mint();
   });
 
+  // The Android app itself, downloadable from Settings → Devices. The release
+  // checklist publishes the signed APK to data/app/tmuxifier-console.apk (a
+  // build artifact — gitignored with the rest of data/, never committed);
+  // until it exists the info route says so and the tab renders no link.
+  // Authenticated like every other route — the operator downloads it from a
+  // signed-in phone browser, then pairs. Bearer allowed on purpose: a future
+  // in-app update check is the same read.
+  const apkFile = path.join(config.dataDir ?? 'data', 'app', 'tmuxifier-console.apk');
+  app.get('/api/devices/apk/info', { preHandler: requireAuth }, async () => {
+    try {
+      const st = await fs.promises.stat(apkFile);
+      return { available: true, size: st.size, mtime: Math.round(st.mtimeMs) };
+    } catch {
+      return { available: false };
+    }
+  });
+  app.get('/api/devices/apk', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      await fs.promises.access(apkFile);
+    } catch {
+      return reply.code(404).send({ error: 'no app published' });
+    }
+    reply.header('content-disposition', 'attachment; filename="tmuxifier-console.apk"');
+    reply.type('application/vnd.android.package-archive');
+    return reply.send(fs.createReadStream(apkFile));
+  });
+
   app.get('/api/devices', { preHandler: requireAuth }, async (req, reply) => {
     if (!deviceStore) return reply.code(501).send({ error: 'devices not supported' });
     return { devices: await deviceStore.list() };

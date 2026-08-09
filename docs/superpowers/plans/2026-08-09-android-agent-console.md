@@ -32,6 +32,7 @@ All routes require auth: session cookie **or** `Authorization: Bearer <device to
 - `GET /api/boxes/:id/pane?lines=N` — `{ok: true, width, height, cursorX, cursorY, content, agent: 'working'|'waiting'|null, sessionName}`. `content` = `capture-pane -e` output: scrollback+screen lines joined by `\n`, raw SGR escapes. The **visible screen is the last `height` lines**; `cursorX`/`cursorY` are 0-based within that screen. 502 `{error}` on capture failure (box unreachable, session missing), 404 unknown box.
 - `POST /api/boxes/:id/keys` — body exactly one of `{text}` (≤65536 chars; server collapses whitespace runs to single spaces and strips C0/C1 — a newline would be Enter) or `{key}` from `NAMED_KEYS = Enter, Escape, Up, Down, Left, Right, Tab, BSpace, C-c` (src/server/tmuxInject.js:162 — note: **digits and y/n are NOT named keys**; the app sends them as `{text}`). Returns `{ok: true}` (or `{ok: true, skipped: 'empty'}` if the sanitizer ate everything); 400 on both/neither/unknown key, 502 on send failure.
 - FCM messages (src/server/fcmPush.js): `notification: {title, body}` + `data: {boxId, kind}`. Sent on `agent-input`/`agent-done` events, suppressed while the session is attached, filtered per device by stored notify toggles. Enabled only when `TMUXIFIER_FCM_CREDENTIALS` points at a service-account JSON.
+- `GET /api/devices/apk` / `GET /api/devices/apk/info` (added mid-plan, 2026-08-09): authenticated download of the signed APK published at `data/app/tmuxifier-console.apk`, plus its `{available, size, mtime}` readout. Settings → Devices shows the download link when available; Task 13 publishes the file.
 
 ---
 
@@ -1202,7 +1203,14 @@ android {
 
 - [ ] **Step 5: Ship**
 
-Install the signed release APK on the Fold (sideload). Merge the branch to main; run the repo release checklist (version bump, build, restart gate, health check, PII scrub of `git diff --cached` — android/ adds new file classes to eyeball: no real hostnames in committed Kotlin/docs, no google-services.json, no keystore). Tag + `gh release create`. Optionally attach `app-release.apk` to the GitHub release — **decide deliberately**: the APK embeds the Firebase project id (not a secret, but project-identifying); if attached, note that in the release body, else record "APK distributed by sideload only" in docs/android-app.md.
+Publish the APK to the live server so Settings → Devices offers it (the primary distribution path — the routes shipped with Tasks 1–3):
+
+```bash
+mkdir -p /root/tmuxifier/data/app
+cp android/app/build/outputs/apk/release/app-release.apk /root/tmuxifier/data/app/tmuxifier-console.apk
+```
+
+No restart needed — the route stats the file per request. Verify the link appears in Settings → Devices and installs on the phone from the signed-in browser. Then merge the branch to main; run the repo release checklist (version bump, build, restart gate, health check, PII scrub of `git diff --cached` — android/ adds new file classes to eyeball: no real hostnames in committed Kotlin/docs, no google-services.json, no keystore). Tag + `gh release create`. Do **not** attach the APK to the GitHub release — it embeds the Firebase project id, and the authenticated route already distributes it; docs/android-app.md records that.
 
 ---
 

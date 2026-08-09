@@ -3,7 +3,8 @@
 // reads and revokes. Revoke is irreversible for the device (it must re-enroll
 // with the password), so it goes through the shared arm-then-fire reducer.
 import { el } from './dom';
-import { listDevices, revokeDevice, mintPairingCode, type PairingCode, type DeviceInfo } from './devices';
+import { listDevices, revokeDevice, mintPairingCode, apkInfo, type PairingCode, type ApkInfo, type DeviceInfo } from './devices';
+import { fmtBytes } from './fmt';
 import { armReduce, IDLE, ARM_MS, type ArmState } from './arming';
 
 function when(t: number | null): string {
@@ -37,8 +38,10 @@ export async function renderDevicesSection(content: HTMLElement): Promise<void> 
   const my = gen;
   content.replaceChildren(el('p', { class: 'muted' }, ['Loading…']));
   let devices: DeviceInfo[];
+  let apk: ApkInfo = { available: false };
   try {
-    devices = await listDevices();
+    // The APK readout is a nicety: its failure must not blank the device list.
+    [devices, apk] = await Promise.all([listDevices(), apkInfo().catch(() => ({ available: false }))]);
   } catch {
     content.replaceChildren(el('p', { class: 'muted' }, ['Could not load devices.']));
     return;
@@ -111,10 +114,19 @@ export async function renderDevicesSection(content: HTMLElement): Promise<void> 
         revoke,
       ]);
     });
+    // A plain same-origin link: the browser's session cookie authenticates the
+    // download, so this works from a signed-in phone browser — install, then pair.
+    const apkRow = apk.available
+      ? el('p', { class: 'muted' }, [
+          el('a', { href: '/api/devices/apk' }, ['Download the Android app']),
+          ` (APK, ${fmtBytes(apk.size)}) — install on the phone, then pair above.`,
+        ])
+      : null;
     content.replaceChildren(
       el('h3', {}, ['Devices']),
       el('p', { class: 'muted' }, ['Android devices enrolled with the Tmuxifier app. Revoking a device signs it out on its next request; it re-enrolls with a pairing code (or the password, in password mode).']),
       pairRow(),
+      ...(apkRow ? [apkRow] : []),
       devices.length ? el('div', { class: 'device-list' }, rows)
         : el('p', { class: 'muted' }, ['No devices enrolled. In the app: Settings → server URL + a pairing code from the button above.']),
     );

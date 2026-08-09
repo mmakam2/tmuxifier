@@ -25,3 +25,10 @@ export type PairingCode = { code: string; expiresAt: number };
 export function mintPairingCode(): Promise<PairingCode> {
   return jsonFetch<PairingCode>('/api/devices/pair', { method: 'POST' });
 }
+
+export type ApkInfo = { available: boolean; size?: number; mtime?: number };
+
+/** Whether a signed APK is published on the server (data/app) for download. */
+export function apkInfo(): Promise<ApkInfo> {
+  return jsonFetch<ApkInfo>('/api/devices/apk/info');
+}

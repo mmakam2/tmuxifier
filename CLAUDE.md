@@ -36,7 +36,10 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   unlike `proxmox.json`/`netbox.json` nothing in it is encrypted, though it's still written
   `0o600`), `devices.json` (Android app device tokens — SHA-256 digests only, the token itself is
   never stored; FCM registration tokens; per-device notification toggles), scraped service
-  favicons under `data/icons/`, and SSH ControlMaster sockets under `data/cm/`.
+  favicons under `data/icons/`, the published Android app APK under `data/app/` (a signed build
+  artifact the release checklist copies there, served by `GET /api/devices/apk` for the
+  Settings → Devices download link — never committed), and SSH ControlMaster sockets under
+  `data/cm/`.
 - `vendor/` (gitignored) — the whisper.cpp checkout, its build output, and the downloaded speech
   model, all created by `npm run setup-voice`. Together they take up roughly 1.2 GB;
   `rm -rf vendor/whisper` reclaims it. Also `vendor/icons/`, the service-logo catalog written
@@ -199,7 +202,10 @@ pattern for new modules.
   become a password or code-guessing oracle. The password branch 403s under armed passkey-only
   and 501s in OAuth mode; the code branch works in every mode — the code was minted by an
   authenticated session via `POST /api/devices/pair`, which is browser-session only (`req.deviceId`
-  gets 403: a device must not mint invites its own revocation wouldn't reach).
+  gets 403: a device must not mint invites its own revocation wouldn't reach). `GET
+  /api/devices/apk` (+ `/info`) serves the signed APK published at
+  `data/app/tmuxifier-console.apk` — the Settings → Devices download link; an absent file reads
+  as `available: false`, never an error.
   `GET /api/boxes/:id/pane` is a read-only tmux snapshot
   for the app — `capture-pane` over the ControlMaster with a bounded `-S` scrollback, never
   attaching — merged with the box's latest agent-state sample from `healthHistory`. `POST

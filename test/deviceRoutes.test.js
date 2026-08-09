@@ -121,6 +121,27 @@ test('bad codes feed the login limiter', async () => {
   expect(limited.statusCode).toBe(429);
 });
 
+test('the Android APK downloads authenticated once published into data/app', async () => {
+  const h = await cookieHeaders();
+  // Nothing published yet: info says so, download 404s.
+  expect((await app.inject({ method: 'GET', url: '/api/devices/apk/info', headers: h })).json()).toEqual({ available: false });
+  expect((await app.inject({ method: 'GET', url: '/api/devices/apk', headers: h })).statusCode).toBe(404);
+  // Publish: the release checklist copies the signed APK here.
+  await fs.mkdir(path.join(dir, 'app'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'app', 'tmuxifier-console.apk'), 'not-a-real-apk');
+  const info = (await app.inject({ method: 'GET', url: '/api/devices/apk/info', headers: h })).json();
+  expect(info.available).toBe(true);
+  expect(info.size).toBe(14);
+  const dl = await app.inject({ method: 'GET', url: '/api/devices/apk', headers: h });
+  expect(dl.statusCode).toBe(200);
+  expect(dl.headers['content-type']).toBe('application/vnd.android.package-archive');
+  expect(dl.headers['content-disposition']).toContain('tmuxifier-console.apk');
+  expect(dl.body).toBe('not-a-real-apk');
+  // Unauthenticated: neither route answers.
+  expect((await app.inject({ method: 'GET', url: '/api/devices/apk' })).statusCode).toBe(401);
+  expect((await app.inject({ method: 'GET', url: '/api/devices/apk/info' })).statusCode).toBe(401);
+});
+
 test('OAuth mode: password enroll still 501s but a pairing code enrolls', async () => {
   // Google-mode app has no /api/login; forge the session cookie the way the
   // server would sign it (same secret) — the only test in the file needing it.
