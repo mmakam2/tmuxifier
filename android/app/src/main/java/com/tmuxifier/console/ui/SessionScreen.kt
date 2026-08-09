@@ -51,6 +51,7 @@ import com.tmuxifier.console.AppState
 import com.tmuxifier.console.api.ApiException
 import com.tmuxifier.console.api.PaneSnapshot
 import com.tmuxifier.console.keys.SendSpec
+import com.tmuxifier.console.keys.sendTextOf
 import com.tmuxifier.console.pane.Span
 import com.tmuxifier.console.pane.Style
 import com.tmuxifier.console.pane.parseSgr
@@ -76,6 +77,8 @@ fun SessionScreen(
     var lines by remember { mutableStateOf<List<List<Span>>>(emptyList()) }
     var reconnecting by remember { mutableStateOf(false) }
     var sendError by remember { mutableStateOf<String?>(null) }
+    var draft by remember(boxId) { mutableStateOf(state.prefs.draft(boxId)) }
+    var sending by remember { mutableStateOf(false) }
     var fontSize by remember { mutableFloatStateOf(state.prefs.fontSize) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -196,6 +199,38 @@ fun SessionScreen(
                 }
             }
         })
+        ComposerBar(
+            draft = draft,
+            onDraft = { draft = it; state.prefs.setDraft(boxId, it) },
+            busy = sending,
+            onSend = {
+                val text = sendTextOf(draft)
+                sending = true
+                scope.launch {
+                    try {
+                        if (text.isEmpty()) {
+                            client.sendKey(boxId, "Enter")
+                        } else {
+                            client.sendText(boxId, text)
+                            // The pane accepted the text: the draft's job is done
+                            // even if the follow-up Enter fails (the row recovers).
+                            draft = ""
+                            state.prefs.setDraft(boxId, "")
+                            try {
+                                client.sendKey(boxId, "Enter")
+                            } catch (e: ApiException) {
+                                sendError = "sent — Enter failed, tap ⏎"
+                            }
+                        }
+                    } catch (e: ApiException) {
+                        // Send never destroys a draft the pane didn't accept.
+                        if (e.status == 401) onUnauthorized() else sendError = e.message
+                    } finally {
+                        sending = false
+                    }
+                }
+            },
+        )
         bottomBar()
     }
 }
