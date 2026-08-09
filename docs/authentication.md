@@ -86,3 +86,36 @@ Two more things worth knowing about the security model:
   sign-in, but an attacker spread across many source addresses could still exhaust the bound and
   deny sign-in — under **Require a passkey** that would deny everyone, and the break-glass above
   is the remedy.
+
+## Device tokens (Android app)
+
+The Tmuxifier Android app doesn't carry a browser cookie — it authenticates every request with a
+long-lived **device token** instead. A token is 32 random bytes; the server stores only its
+SHA-256 digest in `data/devices.json`, never the token itself, so a copy of that file alone is not
+a working credential.
+
+**Enrolling a device** happens in the app, not on the web dashboard: enter your Tmuxifier URL
+(e.g. `https://tmuxifier.example.com`), your password, and a name for the device, then enroll. The
+app calls `POST /api/devices/enroll`, which checks the password directly — the same way the login
+form does, through the same per-IP rate limiter — and returns the plaintext token exactly once;
+the app is responsible for storing it, since the server can never show it again.
+
+A few things worth knowing:
+
+- **Require a passkey blocks enrollment.** If that toggle (see above) is armed, enrollment 403s
+  the same as the password login form. Disarm it, or use the `.env` break-glass, before enrolling
+  a new device.
+- **Password mode only, for now.** Enrollment needs `TMUXIFIER_AUTH_MODE=password`; in OAuth mode
+  it returns 501. An OAuth-compatible pairing flow is a possible future addition, not something
+  v1 supports.
+- **Revoking a device** is done from the dashboard, at **Settings → Devices**: it lists every
+  enrolled device with its last-seen time and a Revoke button (arm-then-fire, like the other
+  destructive controls in Settings). Revocation takes effect on the device's very next request —
+  there's no grace window the way the browser session cookie has a TTL.
+- Once enrolled, the device authenticates every request with `Authorization: Bearer <token>`; it
+  never needs the password again unless it re-enrolls.
+
+**Push notifications** are optional and separate from enrollment. If `TMUXIFIER_FCM_CREDENTIALS`
+in `.env` points at a Firebase service-account JSON file, Tmuxifier pushes agent-input/agent-done
+notifications to enrolled devices via FCM as they happen. Leaving it unset means the app receives
+no proactive notifications, but enrollment and the device token behave identically either way.
