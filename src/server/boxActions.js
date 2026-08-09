@@ -8,7 +8,14 @@ import {
   shSingleQuote,
 } from './sshCommand.js';
 import { storedUploadName, buildUploadRemote } from './uploads.js';
-import { injectVia, injectTextVia } from './tmuxInject.js';
+import {
+  injectVia,
+  injectTextVia,
+  buildPaneSnapshotRemote,
+  parsePaneSnapshot,
+  buildSendNamedKeyRemote,
+  buildSendKeysRemote,
+} from './tmuxInject.js';
 
 // Curated provision-time tools. Ids are the ONLY strings that ever reach the
 // generated shell script — resolveTools throws on anything not in the catalog,
@@ -563,6 +570,33 @@ export function createBoxActions({ run, runStdin, hostKeyPolicy = 'accept-new', 
     // the client regardless of whether it could be typed.
     async injectText(box, session, text, { timeoutMs = 8000 } = {}) {
       return injectTextVia((script) => runRemote(box, script, timeoutMs), session, text, { label: 'dictation' });
+    },
+    // Read-only snapshot of the box session's active pane: tmux is the
+    // terminal emulator, this just ships its screen. Never attaches a client,
+    // so it can never resize the window under a desktop viewer.
+    async paneSnapshot(box, session, { lines = 200, timeoutMs = 8000 } = {}) {
+      const res = await runRemote(box, buildPaneSnapshotRemote(session, { lines }), timeoutMs);
+      if (!res || res.code !== 0) {
+        const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
+        return { ok: false, error: msg || 'capture failed' };
+      }
+      const snap = parsePaneSnapshot(res.stdout);
+      if (!snap) return { ok: false, error: 'unparseable snapshot' };
+      return { ok: true, ...snap };
+    },
+    // Text goes literal (-l) via the same builder dictation uses; a named key
+    // must already be validated against NAMED_KEYS by the route — the builder
+    // throws on anything else as the second line of defence.
+    async sendKeys(box, session, { text, key } = {}, { timeoutMs = 8000 } = {}) {
+      const remote = key != null
+        ? buildSendNamedKeyRemote(session, key)
+        : buildSendKeysRemote(session, String(text ?? ''));
+      const res = await runRemote(box, remote, timeoutMs);
+      if (!res || res.code !== 0) {
+        const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
+        return { ok: false, error: msg || 'send-keys failed' };
+      }
+      return { ok: true };
     },
     async exitMaster(box) {
       try {

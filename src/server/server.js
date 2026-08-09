@@ -21,7 +21,7 @@ import { createTruenasClient } from './truenasApi.js';
 import { createUnifiClient } from './unifiApi.js';
 import { createImmichClient } from './immichApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
-import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault } from './tmuxInject.js';
+import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault, NAMED_KEYS, sanitizeSendText } from './tmuxInject.js';
 import { normalizeTranscript } from './voiceText.js';
 import { MODEL_IDS, resolveModel } from './voiceCatalog.js';
 import { vendorModelPath } from './voicePaths.js';
@@ -855,6 +855,34 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       return reply.code(500).send({ error: 'seeding failed' });
     }
     return { results };
+  });
+
+  // App-facing pane snapshot: read-only, bounded scrollback, agent state from
+  // the health series so the client needs no second request.
+  app.get('/api/boxes/:id/pane', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'not found' });
+    const lines = req.query?.lines != null ? Number(req.query.lines) : 200;
+    const snap = await boxActions.paneSnapshot(box, box.sessionName, { lines });
+    if (!snap.ok) return reply.code(502).send({ error: snap.error });
+    const last = history ? (history.getSeries(box.id).at(-1) || null) : null;
+    return { ...snap, agent: last?.agent ?? null, sessionName: box.sessionName };
+  });
+
+  app.post('/api/boxes/:id/keys', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'not found' });
+    const { text, key } = req.body || {};
+    const hasText = typeof text === 'string' && text.length > 0;
+    const hasKey = typeof key === 'string' && key.length > 0;
+    if (hasText === hasKey) return reply.code(400).send({ error: 'exactly one of text or key' });
+    if (hasText && text.length > 65536) return reply.code(400).send({ error: 'text too long' });
+    if (hasKey && !NAMED_KEYS.has(key)) return reply.code(400).send({ error: 'unknown key' });
+    const payload = hasKey ? { key } : { text: sanitizeSendText(text) };
+    if (payload.text === '') return { ok: true, skipped: 'empty' }; // sanitizer ate it all
+    const res = await boxActions.sendKeys(box, box.sessionName, payload);
+    if (!res.ok) return reply.code(502).send({ error: res.error });
+    return { ok: true };
   });
 
   // Host-side AI-auth readiness for the provision forms: is there anything to
