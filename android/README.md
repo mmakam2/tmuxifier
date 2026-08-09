@@ -50,6 +50,26 @@ To enable push:
    **outside the repo** and set `TMUXIFIER_FCM_CREDENTIALS=<path>` in the server's `.env`.
    That file can send push as your Firebase project — treat it like the cookie secret.
 
+## Play Store (internal testing track)
+
+Optional distribution channel that removes sideload friction (Play Protect prompts, unknown
+sources) and adds auto-updates. The app lives on the **internal testing** track permanently —
+no public listing, no production review, and no closed-testing tester quota (that gauntlet
+only gates the production track).
+
+- Build the bundle: `./gradlew bundleRelease` → `app/build/outputs/bundle/release/app-release.aab`
+  (signed by the same `keystore.properties` config; under Play App Signing this key becomes the
+  **upload key** while Google holds the actual app signing key).
+- Play Console: create the app (package `com.tmuxifier.console`), enroll in Play App Signing,
+  upload the AAB to **Internal testing**, add your own Google account as a tester, and install
+  from the opt-in link. Data-safety form: the app sends data only to the user-configured
+  Tmuxifier server; nothing is collected by the developer.
+- **Signature migration**: Play re-signs with its own key, so the first Play install requires
+  uninstalling a sideloaded build (then re-pair). To keep the Settings → Devices download link
+  usable alongside Play, serve the **Play-signed universal APK** (Console → App Bundle
+  Explorer → download) at `data/app/tmuxifier-console.apk` — same signature, either channel
+  updates the other.
+
 ## Signing & distribution
 
 Lands with the release task: keystore under `android/keystore/` (gitignored),
