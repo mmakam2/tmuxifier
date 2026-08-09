@@ -97,7 +97,7 @@ fun FleetScreen(
             // Version in the home header: device-validation rounds keep
             // getting confused about which build is actually installed.
             Text(
-                "Tmuxifier · v${com.tmuxifier.console.BuildConfig.VERSION_NAME}",
+                "tmuxifier · v${com.tmuxifier.console.BuildConfig.VERSION_NAME}",
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.weight(1f),
             )

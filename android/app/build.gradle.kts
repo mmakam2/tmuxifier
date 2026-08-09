@@ -14,8 +14,8 @@ android {
         applicationId = "com.tmuxifier.console"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.0.0"
+        versionCode = 12
+        versionName = "1.0.1"
     }
     // Release signing only when the operator's keystore exists (same
     // conditional posture as the Firebase config below): the public repo
