@@ -5,6 +5,8 @@
     <!-- cleartext: LAN/dev servers may be plain http; the live server is https -->
     <application
         android:label="tmuxifier"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="true">
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
