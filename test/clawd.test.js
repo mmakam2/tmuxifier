@@ -83,3 +83,23 @@ test('hasStoredClawdPref distinguishes never-set from set', () => {
   expect(hasStoredClawdPref(memStorage())).toBe(false);
   expect(hasStoredClawdPref(memStorage({ 'tmuxifier.clawdAnim': 'star' }))).toBe(true);
 });
+
+// The boot-time migration decision, extracted from main.ts's loadUiSettings so
+// the rule is testable without a DOM or a fetch: a PATCH payload is produced
+// ONLY for a genuine legacy pref (server unset AND a local mirror key present).
+// The null return for server-unset + nothing-stored is load-bearing — see the
+// comment on the helper.
+import { clawdMigrationPatch } from '../src/web/clawd.ts';
+
+test('clawdMigrationPatch: only a genuine legacy pref produces a payload', () => {
+  // server unset + a local value -> migrate it, normalized
+  expect(clawdMigrationPatch(null, 'pace')).toEqual({ clawdAnim: 'pace' });
+  // server unset + junk local value -> the default, not the junk
+  expect(clawdMigrationPatch(null, 'hop')).toEqual({ clawdAnim: DEFAULT_CLAWD_VARIANT });
+  // server unset + nothing stored -> nothing to migrate; persisting anything
+  // here would mint a phantom pref the user never chose.
+  expect(clawdMigrationPatch(null, null)).toBe(null);
+  // server already has a value -> never re-PATCH it, whatever the mirror says
+  expect(clawdMigrationPatch('pace', 'big-hop')).toBe(null);
+  expect(clawdMigrationPatch('pace', null)).toBe(null);
+});

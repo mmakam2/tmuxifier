@@ -2,7 +2,7 @@ import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sampl
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
 import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, blocksTerminal } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor, agentBadgeFor } from './statusDot';
-import { buildClawd, setClawdVariant, hasStoredClawdPref, loadClawdVariant } from './clawd';
+import { buildClawd, setClawdVariant, hasStoredClawdPref, loadClawdVariant, clawdMigrationPatch } from './clawd';
 import { applyTheme, currentTheme } from './theme';
 import { sparkline } from './sparkline';
 import { formatEvent, relTime, unseenCountFiltered, notificationsToFire } from './healthEvents';
@@ -376,20 +376,25 @@ async function loadUiSettings(): Promise<void> {
   try {
     const st = await api.uiSettings();
     applyTheme(st.theme);
-    if (st.clawdAnim === null) {
-      if (hasStoredClawdPref()) {
-        // One-time migration: the pref used to be per-browser localStorage.
-        void api.patchUiSettings({ clawdAnim: setClawdVariant(loadClawdVariant()) }).catch(() => {});
-      }
-      // else: nothing stored anywhere — leave the cache unseeded rather than
-      // calling setClawdVariant, which PERSISTS. Seeding here would write a
-      // phantom mirror key that the next boot's hasStoredClawdPref() reads as
-      // a legacy pref and PATCHes as an explicit choice the user never made.
-      // currentClawdVariant() already falls through to loadClawdVariant()'s
-      // default, so doing nothing is the correct unset state.
-    } else {
+    // The decision itself is pure (clawdMigrationPatch, unit-tested); this
+    // half only does the effects. The mirror is read as "its value, or null
+    // when the key was never set" — the presence check is what lets the helper
+    // tell a legacy pref from an unset one, since loadClawdVariant() alone
+    // cannot (it answers with the default either way).
+    const patch = clawdMigrationPatch(st.clawdAnim, hasStoredClawdPref() ? loadClawdVariant() : null);
+    if (patch) {
+      // One-time migration: the pref used to be per-browser localStorage.
+      setClawdVariant(patch.clawdAnim);
+      void api.patchUiSettings(patch).catch(() => {});
+    } else if (st.clawdAnim !== null) {
       setClawdVariant(st.clawdAnim);
     }
+    // else: nothing stored anywhere — leave the cache unseeded rather than
+    // calling setClawdVariant, which PERSISTS. Seeding here would write a
+    // phantom mirror key that the next boot's hasStoredClawdPref() reads as
+    // a legacy pref and PATCHes as an explicit choice the user never made.
+    // currentClawdVariant() already falls through to loadClawdVariant()'s
+    // default, so doing nothing is the correct unset state.
   } catch {}
 }
 

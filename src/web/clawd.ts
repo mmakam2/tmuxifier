@@ -71,6 +71,24 @@ export function hasStoredClawdPref(storage?: PrefStorage): boolean {
   try { return (storage ?? localStorage).getItem(KEY) !== null; } catch { return false; }
 }
 
+// The boot-time migration decision, pure so it is testable: a PATCH payload is
+// produced ONLY for a genuine legacy pref (server unset AND a local mirror key
+// present). The pref used to live per-browser in localStorage, so the first
+// boot against a server that has none should adopt whatever this browser
+// already had — normalized, since the stored slug may predate a rename.
+//
+// A null return for "server unset, nothing stored" is load-bearing: the caller
+// must then persist NOTHING. Seeding the cache there would write a phantom
+// mirror key that the next boot's hasStoredClawdPref() reads as a legacy pref
+// and PATCHes as an explicit choice the user never made.
+export function clawdMigrationPatch(
+  serverVal: string | null,
+  storedLocal: string | null,
+): { clawdAnim: ClawdVariantId } | null {
+  if (serverVal !== null || storedLocal === null) return null;
+  return { clawdAnim: normalizeClawdVariant(storedLocal) };
+}
+
 // aria-hidden: the adjacent "working" text is the accessible label; the
 // sprite is decoration for sighted users only.
 export function buildClawdVariant(variant: ClawdVariantId): HTMLElement {

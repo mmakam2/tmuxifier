@@ -121,9 +121,11 @@ paints in the chosen theme too, and that's the one piece of it kept in the brows
 the theme id in `localStorage`, purely so the pre-login page doesn't flash the default before
 there's a session to ask the server about.
 
-Adding a theme is a code change rather than a setting — a CSS file under `src/web/themes/` that
-overrides the token block in `src/web/style.css`, plus one entry in the theme manifest. The token
-contract and the rules a theme has to respect are in [DESIGN.md](../DESIGN.md#themes).
+Adding a theme is a code change rather than a setting, and it is three edits: a CSS file under
+`src/web/themes/` that overrides the token block in `src/web/style.css`, one entry in the
+`src/web/themes.ts` manifest, and its import in `src/web/theme.ts` — the edit that actually loads
+the stylesheet. The token contract and the rules a theme has to respect are in
+[DESIGN.md](../DESIGN.md#themes).
 
 ## Fleet Command
 

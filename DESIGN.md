@@ -154,7 +154,7 @@ This document is the visual authority for the **Instrument** theme — the `:roo
 defaults in `src/web/style.css`, and the world every other page of DESIGN.md describes. The
 themes engine lets a second checked-in CSS file re-skin the whole bench without touching a
 single component rule: every color in the sheet flows from the token fence
-(`/* === THEME TOKENS === */`), and a theme overrides tokens under
+(`/* === THEME TOKENS (color literals allowed) === */`), and a theme overrides tokens under
 `:root[data-theme="<id>"]` in `src/web/themes/<id>.css`. `test/styleTokens.test.js` enforces
 both halves — no color literal outside the fence, no theme rule that isn't scoped. Adding one
 is three edits: the CSS file, an entry in `src/web/themes.ts`, and its import in `theme.ts`;
