@@ -21,6 +21,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.tmuxifier.console.ui.FleetScreen
 import com.tmuxifier.console.ui.SettingsScreen
 
 // Screen survives process death as a string — no navigation library for a
@@ -73,9 +74,12 @@ private fun Shell(state: AppState) {
             onEnrolled = { screen = Screen.Fleet },
             onSignedOut = { /* stay on Settings, now in enroll mode */ },
         )
-        Screen.Fleet -> PlaceholderScreen("Fleet", "Enrolled. The fleet screen lands with the next task.") {
-            screen = Screen.Settings
-        }
+        Screen.Fleet -> FleetScreen(
+            state,
+            onOpen = { screen = it },
+            onSettings = { screen = Screen.Settings },
+            onUnauthorized = { screen = Screen.Settings },
+        )
         is Screen.Session -> PlaceholderScreen("Session", "The session screen lands with a later task.") {
             screen = Screen.Settings
         }
