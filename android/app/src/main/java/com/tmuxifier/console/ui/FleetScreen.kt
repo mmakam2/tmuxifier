@@ -94,7 +94,13 @@ fun FleetScreen(
             Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Tmuxifier", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            // Version in the home header: device-validation rounds keep
+            // getting confused about which build is actually installed.
+            Text(
+                "Tmuxifier · v${com.tmuxifier.console.BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.weight(1f),
+            )
             IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, contentDescription = "Settings") }
         }
         if (offline) {
