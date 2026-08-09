@@ -28,6 +28,7 @@ import { vendorModelPath } from './voicePaths.js';
 import { verifyAssertion, verifyRegistration, makeOriginCheck, SUPPORTED_ALGS } from './webauthn.js';
 import { createPasskeyChallenges } from './passkeyChallenges.js';
 import { createPairingCodes } from './pairingCodes.js';
+import { extractFcmAppConfig } from './fcmAppConfig.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': [
@@ -759,6 +760,26 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       return { available: false };
     }
   });
+  // The Firebase CLIENT config for the app's runtime init — per-instance push
+  // with no project baked into the APK. The operator points
+  // TMUXIFIER_FCM_APP_CONFIG at the google-services.json downloaded from
+  // THEIR Firebase project; the app fetches these values after enrolling and
+  // registers against that project. Read per request (voiceStore.js
+  // precedent: applies without a restart); absent or unparsable reads as
+  // {available:false}, never an error. The values are public client
+  // identifiers (every Firebase APK ships them openly) — served auth-gated
+  // anyway, like everything else.
+  app.get('/api/devices/fcm-config', { preHandler: requireAuth }, async () => {
+    if (!config.fcmAppConfig) return { available: false };
+    try {
+      const raw = JSON.parse(await fs.promises.readFile(config.fcmAppConfig, 'utf8'));
+      const cfg = extractFcmAppConfig(raw);
+      return cfg ? { available: true, ...cfg } : { available: false };
+    } catch {
+      return { available: false };
+    }
+  });
+
   app.get('/api/devices/apk', { preHandler: requireAuth }, async (req, reply) => {
     try {
       await fs.promises.access(apkFile);

@@ -142,6 +142,37 @@ test('the Android APK downloads authenticated once published into data/app', asy
   expect((await app.inject({ method: 'GET', url: '/api/devices/apk/info' })).statusCode).toBe(401);
 });
 
+test('fcm-config serves the operator client config, auth-gated, absent-fails-soft', async () => {
+  const h = await cookieHeaders();
+  // No TMUXIFIER_FCM_APP_CONFIG in the beforeEach app: soft absence.
+  expect((await app.inject({ method: 'GET', url: '/api/devices/fcm-config', headers: h })).json()).toEqual({ available: false });
+  expect((await app.inject({ method: 'GET', url: '/api/devices/fcm-config' })).statusCode).toBe(401);
+  // Configured app serves the extracted values.
+  const file = path.join(dir, 'gs.json');
+  await fs.writeFile(file, JSON.stringify({
+    project_info: { project_id: 'their-project', project_number: '42' },
+    client: [{
+      client_info: { mobilesdk_app_id: '1:42:android:beef', android_client_info: { package_name: 'com.tmuxifier.console' } },
+      api_key: [{ current_key: 'AIzaTest' }],
+    }],
+  }));
+  const config2 = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
+    passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir,
+    localShell: 'none', configPath: path.join(dir, 'config.json'), fcmAppConfig: file,
+  };
+  const app2 = buildServer({
+    config: config2, store: createStore({ dataDir: dir }),
+    sessions: { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} },
+    statusChecker: { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) },
+    passkeyStore: createPasskeyStore({ dataDir: dir }), deviceStore,
+  });
+  const login = await app2.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === 'tmuxifier_session');
+  const res = (await app2.inject({ method: 'GET', url: '/api/devices/fcm-config', headers: { cookie: `${c.name}=${c.value}` } })).json();
+  expect(res).toEqual({ available: true, projectId: 'their-project', senderId: '42', applicationId: '1:42:android:beef', apiKey: 'AIzaTest' });
+});
+
 test('OAuth mode: password enroll still 501s but a pairing code enrolls', async () => {
   // Google-mode app has no /api/login; forge the session cookie the way the
   // server would sign it (same secret) — the only test in the file needing it.

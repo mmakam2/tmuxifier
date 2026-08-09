@@ -127,7 +127,10 @@ A few things worth knowing:
 - Once enrolled, the device authenticates every request with `Authorization: Bearer <token>`; it
   never needs the password again unless it re-enrolls.
 
-**Push notifications** are optional and separate from enrollment. If `TMUXIFIER_FCM_CREDENTIALS`
+**Push notifications** are optional, separate from enrollment, and fully per-instance: the
+app carries no Firebase project of its own — it registers at runtime against whatever project
+your server's `TMUXIFIER_FCM_APP_CONFIG` declares (served to enrolled devices as public
+client identifiers via `GET /api/devices/fcm-config`). If `TMUXIFIER_FCM_CREDENTIALS`
 in `.env` points at a Firebase service-account JSON file, Tmuxifier pushes agent-input/agent-done
 notifications to enrolled devices via FCM as they happen. Leaving it unset means the app receives
 no proactive notifications, but enrollment and the device token behave identically either way.

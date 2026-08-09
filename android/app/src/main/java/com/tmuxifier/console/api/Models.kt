@@ -88,6 +88,17 @@ data class DeviceView(
     val notify: Map<String, Boolean> = emptyMap(),
 )
 
+// The Firebase client config the operator's server serves for runtime init
+// (GET /api/devices/fcm-config). Public client identifiers, not secrets.
+@Serializable
+data class FcmConfig(
+    val available: Boolean = false,
+    val projectId: String? = null,
+    val senderId: String? = null,
+    val applicationId: String? = null,
+    val apiKey: String? = null,
+)
+
 val ApiJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
 val boxListSerializer = ListSerializer(BoxInfo.serializer())
 val statusMapSerializer = MapSerializer(String.serializer(), BoxStatus.serializer())

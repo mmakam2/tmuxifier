@@ -25,6 +25,14 @@ class ModelsTest {
         assertEquals("working", s["b1"]?.last()?.agent)
         assertEquals(1723180000000L, s["b1"]?.last()?.t)
     }
+    @Test fun fcmConfigParses() {
+        val c = ApiJson.decodeFromString(FcmConfig.serializer(),
+            """{"available":true,"projectId":"p","senderId":"42","applicationId":"1:42:android:x","apiKey":"AIza"}""")
+        assertEquals("42", c.senderId)
+        val off = ApiJson.decodeFromString(FcmConfig.serializer(), """{"available":false}""")
+        assertEquals(false, off.available)
+    }
+
     @Test fun enrollParses() {
         val e = ApiJson.decodeFromString(EnrollResponse.serializer(),
             """{"id":"abc123","name":"Fold","created":1,"lastSeen":null,"hasFcmToken":false,"notify":{"agent-input":true,"agent-done":true},"token":"tok"}""")

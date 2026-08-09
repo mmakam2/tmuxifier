@@ -205,7 +205,11 @@ pattern for new modules.
   gets 403: a device must not mint invites its own revocation wouldn't reach). `GET
   /api/devices/apk` (+ `/info`) serves the signed APK published at
   `data/app/tmuxifier-console.apk` — the Settings → Devices download link; an absent file reads
-  as `available: false`, never an error.
+  as `available: false`, never an error. `GET /api/devices/fcm-config` serves the operator's
+  Firebase CLIENT config (extracted by `fcmAppConfig.js` from the google-services.json at
+  `TMUXIFIER_FCM_APP_CONFIG`, read per request) for the app's runtime Firebase init — public
+  client identifiers, so one published APK works against any operator's project with nothing
+  baked in; absent/unparsable reads as `available: false`.
   `GET /api/boxes/:id/pane` is a read-only tmux snapshot
   for the app — `capture-pane` over the ControlMaster with a bounded `-S` scrollback, never
   attaching — merged with the box's latest agent-state sample from `healthHistory`. `POST
@@ -996,9 +1000,13 @@ no handler in it reaches the pty); `keys/` holds the pure action-row/composer lo
 `{text}` sends, never key names); `api/` is the OkHttp client + Keystore-backed token store.
 Build with Gradle (`android/README.md`: toolchain, ~3 GB-RAM memory caps, signing, the
 **keystore backup obligation**), completely separate from `npm test` — pure logic gets JVM
-unit tests, Compose UI is validated **on the real device only**. Firebase and release signing
-are both conditional on gitignored operator files (`google-services.json`,
-`keystore.properties` — `.example` counterparts committed), so the public repo always builds.
+unit tests, Compose UI is validated **on the real device only**. Firebase is a RUNTIME
+concern, not a build input: the app fetches the operator's client config from
+`GET /api/devices/fcm-config` and initializes programmatically (`push/Push.kt`'s
+`initFirebase`, called from `TmuxifierApp` at process start off the persisted copy) — no
+google-services plugin, nothing project-specific in the APK. Release signing stays
+conditional on the gitignored `keystore.properties` (`.example` committed), so the public
+repo always builds.
 The signed APK is published to `data/app/tmuxifier-console.apk` (served by
 `GET /api/devices/apk`), never attached to GitHub releases. When writing Kotlin with `\uXXXX`
 escapes, run the control-byte check (`grep -naP '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]'`) before

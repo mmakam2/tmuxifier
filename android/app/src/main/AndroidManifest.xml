@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- cleartext: LAN/dev servers may be plain http; the live server is https -->
     <application
+        android:name=".TmuxifierApp"
         android:label="tmuxifier"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"

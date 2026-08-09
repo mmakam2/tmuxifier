@@ -11,7 +11,10 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
 import com.tmuxifier.console.MainActivity
+import com.tmuxifier.console.api.ApiJson
+import com.tmuxifier.console.api.FcmConfig
 
 const val CHANNEL_AGENT = "agent"
 
@@ -19,6 +22,37 @@ fun pushAvailable(context: Context): Boolean = try {
     FirebaseApp.getApps(context).isNotEmpty()
 } catch (_: Throwable) {
     false
+}
+
+/** Initialize (or re-initialize) Firebase from the server-fetched client
+ *  config JSON. Returns whether a usable FirebaseApp exists afterwards.
+ *  Nothing is baked into the APK — no config from the server, no push. */
+fun initFirebase(context: Context, cfgJson: String?): Boolean {
+    if (cfgJson == null) return pushAvailable(context)
+    return try {
+        val cfg = ApiJson.decodeFromString(FcmConfig.serializer(), cfgJson)
+        val projectId = cfg.projectId ?: return false
+        val appId = cfg.applicationId ?: return false
+        val apiKey = cfg.apiKey ?: return false
+        val senderId = cfg.senderId ?: return false
+        val existing = FirebaseApp.getApps(context).firstOrNull()
+        if (existing != null) {
+            if (existing.options.applicationId == appId) return true
+            existing.delete() // server switched Firebase projects — rare, legal
+        }
+        FirebaseApp.initializeApp(
+            context,
+            FirebaseOptions.Builder()
+                .setProjectId(projectId)
+                .setApplicationId(appId)
+                .setApiKey(apiKey)
+                .setGcmSenderId(senderId)
+                .build(),
+        )
+        true
+    } catch (_: Throwable) {
+        false
+    }
 }
 
 fun showAgentNotification(context: Context, boxId: String, title: String, body: String) {
