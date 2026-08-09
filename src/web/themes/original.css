@@ -101,8 +101,10 @@
    tokens cannot reach. hue-rotate's filter matrix lands the amber #ffb000 on
    #2dd7ea — a hair off this theme's --accent, imperceptible at logo size —
    while the near-neutral chassis drifts by ~1 RGB point (angle fitted against
-   the spec's hueRotate matrix, not eyeballed). The favicon keeps the amber
-   mark: it is a static <link> in index.html, themable only with JS. */
+   the spec's hueRotate matrix, not eyeballed). The favicon follows too, but
+   as a real asset swapped by theme.ts (applyFavicon) — a <link> icon cannot
+   be CSS-filtered; its PNG was rendered through this exact filter so the two
+   cannot disagree. */
 :root[data-theme='original'] .login-logo,
 :root[data-theme='original'] .brand-home img {
   filter: hue-rotate(134deg) saturate(0.75);

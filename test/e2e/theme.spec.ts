@@ -61,6 +61,9 @@ test('theme switches live, persists server-side, and paints pre-auth via the mir
   // import leaves the attribute stamped and every colour unchanged.
   const bgAfter = await bodyBg(page);
   expect(bgAfter).not.toBe(bgBefore);
+  // The favicon is a real swapped asset (theme.ts applyFavicon), not CSS —
+  // assert the link retargeted to the Original variant.
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', /tmuxifier-logo-original/);
 
   // Server-persisted: a fresh load lands on Original again…
   await page.reload();
@@ -90,6 +93,7 @@ test('theme switches live, persists server-side, and paints pre-auth via the mir
   await pickTheme(page, 'Bench Instrument');
   await expect(page.locator('html')).not.toHaveAttribute('data-theme', /./);
   expect(await bodyBg(page)).toBe(bgBefore);
+  await expect(page.locator('link[rel="icon"]')).not.toHaveAttribute('href', /tmuxifier-logo-original/);
   // The restore has to reach the SERVER, not just this DOM — that is the copy
   // every later spec's browser reads at boot.
   const stored = await (await page.request.get('/api/ui-settings')).json();
