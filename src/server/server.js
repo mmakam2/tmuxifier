@@ -27,6 +27,7 @@ import { MODEL_IDS, resolveModel } from './voiceCatalog.js';
 import { vendorModelPath } from './voicePaths.js';
 import { verifyAssertion, verifyRegistration, makeOriginCheck, SUPPORTED_ALGS } from './webauthn.js';
 import { createPasskeyChallenges } from './passkeyChallenges.js';
+import { createPairingCodes } from './pairingCodes.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': [
@@ -115,7 +116,7 @@ const NO_FLEET_SCRIPTS = {
   removeScript: async () => {},
 };
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, uiSettingsStore = null, deviceStore = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, uiSettingsStore = null, deviceStore = null, pairingCodes = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -208,6 +209,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   // store silently controlling only enrollment would be a seam a caller
   // could easily miss.
   const pkLoginChallenges = passkeyChallenges ?? createPasskeyChallenges({ ttlMs: PK_TTL_SECONDS * 1000 });
+  const devicePairing = pairingCodes ?? createPairingCodes();
   const challengeStoreFor = (kind) => (kind === 'auth' ? pkLoginChallenges : pkChallenges);
 
   // Whether the configured rpId could ever complete a passkey login right
@@ -700,25 +702,45 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
   app.get('/api/me', { preHandler: requireAuth }, async () => ({ ok: true }));
 
-  // Device enrollment authenticates with the password directly (not a cookie):
-  // the Android app enrolls once and holds a revocable token thereafter. Same
-  // rate-limit bucket as /api/login — this is a password oracle otherwise.
-  // v1 is password-mode only; OAuth-mode pairing codes are a recorded v2 item.
+  // Device enrollment authenticates with the password directly (not a
+  // cookie), or with a single-use pairing code minted by an authenticated
+  // browser session (Settings → Devices) — the OAuth-mode/passkey-only path.
+  // The Android app enrolls once and holds a revocable token thereafter. Same
+  // rate-limit bucket as /api/login — this is a password oracle otherwise,
+  // and a code-guessing oracle without it.
   app.post('/api/devices/enroll', async (req, reply) => {
     if (!deviceStore) return reply.code(501).send({ error: 'devices not supported' });
-    if (config.authMode === 'google') return reply.code(501).send({ error: 'device enrollment requires password mode' });
-    if (passkeyOnlyArmed(await passkeySnapshot())) return reply.code(403).send({ error: 'passkey required' });
+    const body = req.body || {};
     const ip = req.ip;
     if (loginLimiter.limited(ip)) return reply.code(429).send({ error: 'too many attempts' });
-    const ok = await verifyPassword(req.body?.password || '', config.passwordHash);
-    if (!ok) { loginLimiter.fail(ip); return reply.code(401).send({ error: 'invalid' }); }
+    if (typeof body.code === 'string' && body.code.length > 0) {
+      // Pairing branch: mode-independent, and deliberately NOT gated on
+      // passkey-only — the code was minted by an authenticated session, which
+      // under an armed passkey-only flag was itself passkey-authenticated.
+      if (!devicePairing.take(body.code)) { loginLimiter.fail(ip); return reply.code(401).send({ error: 'invalid or expired code' }); }
+    } else {
+      // Password branch: unchanged v1 semantics (password mode only).
+      if (config.authMode === 'google') return reply.code(501).send({ error: 'device enrollment requires password mode or a pairing code' });
+      if (passkeyOnlyArmed(await passkeySnapshot())) return reply.code(403).send({ error: 'passkey required' });
+      const ok = await verifyPassword(body.password || '', config.passwordHash);
+      if (!ok) { loginLimiter.fail(ip); return reply.code(401).send({ error: 'invalid' }); }
+    }
     loginLimiter.succeed(ip);
     try {
-      const { device, token } = await deviceStore.enroll({ name: req.body?.name, fcmToken: req.body?.fcmToken });
+      const { device, token } = await deviceStore.enroll({ name: body.name, fcmToken: body.fcmToken });
       return { ...device, token };
     } catch (e) {
       return reply.code(400).send({ error: e?.message || 'invalid device' });
     }
+  });
+
+  // Mint a pairing code for the app. Browser-session only: a device must not
+  // be able to mint invites for further devices (revoking it would not revoke
+  // what it invited). Inverse of /api/devices/self's Bearer-only gate.
+  app.post('/api/devices/pair', { preHandler: requireAuth }, async (req, reply) => {
+    if (!deviceStore) return reply.code(501).send({ error: 'devices not supported' });
+    if (req.deviceId) return reply.code(403).send({ error: 'browser session required' });
+    return devicePairing.mint();
   });
 
   app.get('/api/devices', { preHandler: requireAuth }, async (req, reply) => {

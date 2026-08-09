@@ -6,7 +6,8 @@ import { buildServer } from '../src/server/server.js';
 import { createStore } from '../src/server/store.js';
 import { createDeviceStore } from '../src/server/deviceStore.js';
 import { createPasskeyStore } from '../src/server/passkeyStore.js';
-import { hashPassword } from '../src/server/auth.js';
+import { hashPassword, sessionValue } from '../src/server/auth.js';
+import { Signer } from '@fastify/cookie';
 
 let app, dir, deviceStore;
 beforeEach(async () => {
@@ -87,4 +88,59 @@ test('enroll refuses when passkey-only is armed', async () => {
   await pk.setPasskeyOnly(true);
   const res = await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'Fold' } });
   expect(res.statusCode).toBe(403);
+});
+
+test('pair mints only for a browser session; a device token gets 403', async () => {
+  expect((await app.inject({ method: 'POST', url: '/api/devices/pair' })).statusCode).toBe(401);
+  const h = await cookieHeaders();
+  const minted = (await app.inject({ method: 'POST', url: '/api/devices/pair', headers: h })).json();
+  expect(minted.code).toMatch(/^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/);
+  expect(minted.expiresAt).toBeGreaterThan(Date.now());
+  const { token } = (await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'Fold' } })).json();
+  const viaDevice = await app.inject({ method: 'POST', url: '/api/devices/pair', headers: { authorization: `Bearer ${token}` } });
+  expect(viaDevice.statusCode).toBe(403);
+});
+
+test('a minted code enrolls a device exactly once', async () => {
+  const h = await cookieHeaders();
+  const { code } = (await app.inject({ method: 'POST', url: '/api/devices/pair', headers: h })).json();
+  const ok = await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { code, name: 'Fold' } });
+  expect(ok.statusCode).toBe(200);
+  expect(ok.json().token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  const authed = await app.inject({ method: 'GET', url: '/api/boxes', headers: { authorization: `Bearer ${ok.json().token}` } });
+  expect(authed.statusCode).toBe(200);
+  const replay = await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { code, name: 'Again' } });
+  expect(replay.statusCode).toBe(401);
+});
+
+test('bad codes feed the login limiter', async () => {
+  for (let i = 0; i < 10; i++) {
+    await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { code: 'AAAA-AAAA', name: 'x' } });
+  }
+  const limited = await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { code: 'AAAA-AAAA', name: 'x' } });
+  expect(limited.statusCode).toBe(429);
+});
+
+test('OAuth mode: password enroll still 501s but a pairing code enrolls', async () => {
+  // Google-mode app has no /api/login; forge the session cookie the way the
+  // server would sign it (same secret) — the only test in the file needing it.
+  const config2 = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
+    cookieSecret: 'test-secret', dataDir: dir, localShell: 'none',
+    configPath: path.join(dir, 'config.json'), authMode: 'google',
+    googleClientId: 'id', googleClientSecret: 'secret', allowedEmails: ['a@example.com'],
+    baseExternalUrl: 'https://tmuxifier.example.com',
+  };
+  const sessions2 = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
+  const app2 = buildServer({
+    config: config2, store: createStore({ dataDir: dir }), sessions: sessions2,
+    statusChecker: { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) },
+    passkeyStore: createPasskeyStore({ dataDir: dir }), deviceStore,
+  });
+  const signed = new Signer(['test-secret']).sign(sessionValue());
+  const h = { cookie: `tmuxifier_session=${encodeURIComponent(signed)}` };
+  expect((await app2.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'x' } })).statusCode).toBe(501);
+  const { code } = (await app2.inject({ method: 'POST', url: '/api/devices/pair', headers: h })).json();
+  const ok = await app2.inject({ method: 'POST', url: '/api/devices/enroll', payload: { code, name: 'Fold' } });
+  expect(ok.statusCode).toBe(200);
 });
