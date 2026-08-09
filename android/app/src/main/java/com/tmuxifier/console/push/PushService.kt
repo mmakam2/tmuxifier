@@ -30,7 +30,7 @@ class PushService : FirebaseMessagingService() {
         showAgentNotification(
             this,
             boxId,
-            msg.notification?.title ?: "Tmuxifier",
+            msg.notification?.title ?: "tmuxifier",
             msg.notification?.body ?: kind,
         )
     }
