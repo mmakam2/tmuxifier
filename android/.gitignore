@@ -1,0 +1,10 @@
+# android/.gitignore — secrets and machine/build state; the repo is public and
+# the release checklist stages with `git add -A`, so this file must predate the
+# first build. Placeholder counterparts: *.example beside each ignored file.
+.gradle/
+build/
+local.properties
+google-services.json
+keystore/
+keystore.properties
+.kotlin/
