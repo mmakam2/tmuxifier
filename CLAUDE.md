@@ -985,6 +985,25 @@ the mic button (click-and-hold, unchanged), and the controller), and `voiceWorkl
 AudioWorklet processor, shipped as a real Vite-emitted static asset rather than a blob: URL,
 specifically so the Content-Security-Policy can stay `script-src 'self'`).
 
+## Android app (`android/`)
+
+Kotlin/Compose agent console for the phone — a **renderer of the server APIs** (design:
+`docs/superpowers/specs/2026-08-09-android-agent-console-design.md`): it never speaks SSH and
+never emulates a terminal. `pane/Sgr.kt` parses `capture-pane -e` SGR into spans and
+`ui/SessionScreen.kt` renders them as native text (the pane is structurally inert to touch —
+no handler in it reaches the pty); `keys/` holds the pure action-row/composer logic
+(`armReduce` mirrors web `arming.ts`, `sendTextOf` mirrors `sanitizeSendText` — digits/y/n are
+`{text}` sends, never key names); `api/` is the OkHttp client + Keystore-backed token store.
+Build with Gradle (`android/README.md`: toolchain, ~3 GB-RAM memory caps, signing, the
+**keystore backup obligation**), completely separate from `npm test` — pure logic gets JVM
+unit tests, Compose UI is validated **on the real device only**. Firebase and release signing
+are both conditional on gitignored operator files (`google-services.json`,
+`keystore.properties` — `.example` counterparts committed), so the public repo always builds.
+The signed APK is published to `data/app/tmuxifier-console.apk` (served by
+`GET /api/devices/apk`), never attached to GitHub releases. When writing Kotlin with `\uXXXX`
+escapes, run the control-byte check (`grep -naP '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]'`) before
+building — generated escapes repeatedly land as raw bytes.
+
 ## Conventions
 
 - ESM everywhere (`"type": "module"`); Node 20+.
@@ -1196,7 +1215,8 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 - `README.md` — user-facing overview + quickstart: setup, essential config, the architecture
   diagram, and a short section per feature area linking into `docs/`.
 - `docs/configuration.md`, `docs/authentication.md`, `docs/boxes-and-setup.md`,
-  `docs/terminal.md`, `docs/dashboard.md`, `docs/fleet-and-health.md`, `docs/proxmox.md` —
+  `docs/terminal.md`, `docs/dashboard.md`, `docs/fleet-and-health.md`, `docs/proxmox.md`,
+  `docs/android-app.md` —
   the user-facing deep dives the README links to. Living documentation, maintained alongside
   the code (unlike the point-in-time records below); a feature change that used to update a
   README section now updates the matching guide.

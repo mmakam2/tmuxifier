@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -15,8 +17,26 @@ android {
         versionCode = 5
         versionName = "0.5.0"
     }
+    // Release signing only when the operator's keystore exists (same
+    // conditional posture as the Firebase config below): the public repo
+    // builds an unsigned release without it.
+    val ksProps = rootProject.file("keystore.properties")
+    signingConfigs {
+        if (ksProps.exists()) {
+            create("release") {
+                val p = Properties().apply { ksProps.inputStream().use { s -> load(s) } }
+                storeFile = rootProject.file(p.getProperty("storeFile"))
+                storePassword = p.getProperty("storePassword")
+                keyAlias = p.getProperty("keyAlias")
+                keyPassword = p.getProperty("keyPassword")
+            }
+        }
+    }
     buildTypes {
-        release { isMinifyEnabled = false }
+        release {
+            isMinifyEnabled = false
+            if (ksProps.exists()) signingConfig = signingConfigs.getByName("release")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -38,6 +58,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.core:core-ktx:1.15.0")
+    // Not used directly (no fragments) — pins the transitive fragment above
+    // 1.3.0 so the ActivityResult lint-vital check passes on release builds.
+    implementation("androidx.fragment:fragment-ktx:1.8.5")
     implementation("com.google.firebase:firebase-messaging:24.1.0")
     testImplementation("org.jetbrains.kotlin:kotlin-test:2.1.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
