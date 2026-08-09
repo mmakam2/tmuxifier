@@ -87,7 +87,15 @@ class MainActivity : ComponentActivity() {
                     // bar instead of lifting it. safeDrawing = bars + cutout
                     // + ime, so the keyboard resizes the layout too.
                     Box(Modifier.fillMaxSize().safeDrawingPadding()) {
-                        Shell(state, pendingBox)
+                        // onEnrolled side effects run HERE too, not only in
+                        // onCreate: a fresh install enrolls mid-session, and
+                        // gating permission+token-sync on cold-start left the
+                        // new server row with no FCM token (observed live —
+                        // zero push targets after an uninstall/re-pair).
+                        Shell(state, pendingBox, onEnrolledSideEffects = {
+                            maybeAskNotifications()
+                            syncFcmToken(state)
+                        })
                     }
                 }
             }
@@ -123,7 +131,11 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun Shell(state: AppState, pendingBox: MutableState<String?>) {
+private fun Shell(
+    state: AppState,
+    pendingBox: MutableState<String?>,
+    onEnrolledSideEffects: () -> Unit,
+) {
     var screen by rememberSaveable(stateSaver = ScreenSaver) {
         mutableStateOf(if (state.enrolled) Screen.Fleet else Screen.Settings)
     }
@@ -137,7 +149,10 @@ private fun Shell(state: AppState, pendingBox: MutableState<String?>) {
     when (screen) {
         Screen.Settings -> SettingsScreen(
             state,
-            onEnrolled = { screen = Screen.Fleet },
+            onEnrolled = {
+                onEnrolledSideEffects()
+                screen = Screen.Fleet
+            },
             onSignedOut = { /* stay on Settings, now in enroll mode */ },
         )
         Screen.Fleet -> FleetScreen(

@@ -25,6 +25,11 @@ class AppState(context: Context) {
     }
 
     // Local sign-out only: there is no self-delete route — the server-side
-    // record stays until it is revoked from web Settings → Devices.
-    fun signOut() { store.clear() }
+    // record stays until it is revoked from web Settings → Devices. The FCM
+    // sync cache must go too: a re-enrollment mints a NEW server row, and a
+    // cached "already synced" token would skip the PATCH that row needs.
+    fun signOut() {
+        store.clear()
+        prefs.fcmSynced = null
+    }
 }
