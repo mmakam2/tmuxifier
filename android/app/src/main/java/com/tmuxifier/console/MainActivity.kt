@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.tmuxifier.console.ui.FleetScreen
+import com.tmuxifier.console.ui.SessionScreen
 import com.tmuxifier.console.ui.SettingsScreen
 
 // Screen survives process death as a string — no navigation library for a
@@ -80,8 +81,14 @@ private fun Shell(state: AppState) {
             onSettings = { screen = Screen.Settings },
             onUnauthorized = { screen = Screen.Settings },
         )
-        is Screen.Session -> PlaceholderScreen("Session", "The session screen lands with a later task.") {
-            screen = Screen.Settings
+        is Screen.Session -> {
+            val s = screen as Screen.Session
+            SessionScreen(
+                state,
+                boxId = s.boxId,
+                boxLabel = s.boxLabel,
+                onUnauthorized = { screen = Screen.Settings },
+            )
         }
     }
 }
