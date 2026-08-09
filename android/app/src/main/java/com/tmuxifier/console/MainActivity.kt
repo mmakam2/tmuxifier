@@ -9,7 +9,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.darkColorScheme
@@ -71,7 +73,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(Modifier.fillMaxSize()) {
-                    Shell(state, pendingBox)
+                    // targetSdk 35 forces edge-to-edge: without this, the
+                    // composer sits under the gesture-nav zone (taps eaten,
+                    // keyboard never summoned) and the IME covers the bottom
+                    // bar instead of lifting it. safeDrawing = bars + cutout
+                    // + ime, so the keyboard resizes the layout too.
+                    Box(Modifier.fillMaxSize().safeDrawingPadding()) {
+                        Shell(state, pendingBox)
+                    }
                 }
             }
         }
