@@ -3,7 +3,8 @@
 // reads and revokes. Revoke is irreversible for the device (it must re-enroll
 // with the password), so it goes through the shared arm-then-fire reducer.
 import { el } from './dom';
-import { listDevices, revokeDevice, type DeviceInfo } from './devices';
+import { listDevices, revokeDevice, mintPairingCode, apkInfo, type PairingCode, type ApkInfo, type DeviceInfo } from './devices';
+import { fmtBytes } from './fmt';
 import { armReduce, IDLE, ARM_MS, type ArmState } from './arming';
 
 function when(t: number | null): string {
@@ -23,10 +24,13 @@ function when(t: number | null): string {
 // DOM stand-in the render tests use has no isConnected at all).
 let gen = 0;
 let armTimer: number | undefined;
+let codeTimer: number | undefined;
 
 export function stopDevicesWatch(): void {
   window.clearTimeout(armTimer);
   armTimer = undefined;
+  window.clearInterval(codeTimer);
+  codeTimer = undefined;
   gen += 1;
 }
 
@@ -34,14 +38,47 @@ export async function renderDevicesSection(content: HTMLElement): Promise<void> 
   const my = gen;
   content.replaceChildren(el('p', { class: 'muted' }, ['Loading…']));
   let devices: DeviceInfo[];
+  let apk: ApkInfo = { available: false };
   try {
-    devices = await listDevices();
+    // The APK readout is a nicety: its failure must not blank the device list.
+    [devices, apk] = await Promise.all([listDevices(), apkInfo().catch(() => ({ available: false }))]);
   } catch {
     content.replaceChildren(el('p', { class: 'muted' }, ['Could not load devices.']));
     return;
   }
 
   let arm: ArmState = IDLE;
+  let pairing: PairingCode | null = null;
+
+  // The pairing row: a mint button, or the live code with a 1s countdown. The
+  // interval respects gen/isConnected exactly like paint() — a tab switch or
+  // modal close must not leave it repainting a dead panel.
+  const pairRow = (): HTMLElement => {
+    const p = pairing;
+    if (!p) {
+      return el('button', {
+        type: 'button',
+        onclick: () => {
+          void mintPairingCode().then((minted) => {
+            if (my !== gen || content.isConnected === false) return;
+            pairing = minted;
+            window.clearInterval(codeTimer);
+            codeTimer = window.setInterval(() => {
+              if (my !== gen || content.isConnected === false) { window.clearInterval(codeTimer); return; }
+              if (pairing && pairing.expiresAt <= Date.now()) { pairing = null; window.clearInterval(codeTimer); }
+              paint();
+            }, 1000);
+            paint();
+          }).catch(() => paint());
+        },
+      }, ['Pair new device']);
+    }
+    const left = Math.max(0, Math.ceil((p.expiresAt - Date.now()) / 1000));
+    return el('div', { class: 'pair-code' }, [
+      el('code', {}, [p.code]),
+      el('span', { class: 'muted' }, [` expires in ${left}s — enter it in the app: Settings → Pair`]),
+    ]);
+  };
 
   const paint = () => {
     // A stale generation (the shell disposed this render) or a detached
@@ -77,11 +114,21 @@ export async function renderDevicesSection(content: HTMLElement): Promise<void> 
         revoke,
       ]);
     });
+    // A plain same-origin link: the browser's session cookie authenticates the
+    // download, so this works from a signed-in phone browser — install, then pair.
+    const apkRow = apk.available
+      ? el('p', { class: 'muted' }, [
+          el('a', { href: '/api/devices/apk' }, ['Download the Android app']),
+          ` (APK, ${fmtBytes(apk.size)}) — install on the phone, then pair above.`,
+        ])
+      : null;
     content.replaceChildren(
       el('h3', {}, ['Devices']),
-      el('p', { class: 'muted' }, ['Android devices enrolled with the Tmuxifier app. Revoking a device signs it out on its next request; it re-enrolls with the password.']),
+      el('p', { class: 'muted' }, ['Android devices enrolled with the Tmuxifier app. Revoking a device signs it out on its next request; it re-enrolls with a pairing code (or the password, in password mode).']),
+      pairRow(),
+      ...(apkRow ? [apkRow] : []),
       devices.length ? el('div', { class: 'device-list' }, rows)
-        : el('p', { class: 'muted' }, ['No devices enrolled. In the app: Settings → server URL + password.']),
+        : el('p', { class: 'muted' }, ['No devices enrolled. In the app: Settings → server URL + a pairing code from the button above.']),
     );
   };
   paint();

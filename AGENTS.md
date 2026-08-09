@@ -36,7 +36,10 @@ Configuration, secrets, and runtime state all live **inside the repo**:
   unlike `proxmox.json`/`netbox.json` nothing in it is encrypted, though it's still written
   `0o600`), `devices.json` (Android app device tokens — SHA-256 digests only, the token itself is
   never stored; FCM registration tokens; per-device notification toggles), scraped service
-  favicons under `data/icons/`, and SSH ControlMaster sockets under `data/cm/`.
+  favicons under `data/icons/`, the published Android app APK under `data/app/` (a signed build
+  artifact the release checklist copies there, served by `GET /api/devices/apk` for the
+  Settings → Devices download link — never committed), and SSH ControlMaster sockets under
+  `data/cm/`.
 - `vendor/` (gitignored) — the whisper.cpp checkout, its build output, and the downloaded speech
   model, all created by `npm run setup-voice`. Together they take up roughly 1.2 GB;
   `rm -rf vendor/whisper` reclaims it. Also `vendor/icons/`, the service-logo catalog written
@@ -156,8 +159,18 @@ pattern for new modules.
   `passkeyStore.js` mold (withLock mutex, `0o600`, corrupt-fails-open). Stores SHA-256 digests of
   32-byte random tokens — fast digest on purpose: the entropy is the defence, and scrypt would tax
   the app's ~1s pane polling. `verify` compares with `timingSafeEqual`; `touch` throttles lastSeen
-  writes to once a minute. Enrollment is password-authenticated through the same `rateLimit.js`
-  bucket as login; revocation (Settings → Devices) takes effect on the device's next request.
+  writes to once a minute. Enrollment authenticates through the same `rateLimit.js` bucket as
+  login — with the password (password mode), or with a single-use pairing code from
+  `pairingCodes.js` in any mode; revocation (Settings → Devices) takes effect on the device's
+  next request.
+- `pairingCodes.js` — `createPairingCodes`: bounded, single-use, 120s device pairing codes, the
+  OAuth-mode/passkey-only enrollment path. Minted only by an authenticated browser session
+  (Settings → Devices → Pair new device), spent by `POST /api/devices/enroll { code }`. Human-typed
+  off another screen, so the 32-symbol alphabet drops 0/1/I/O and `take()` normalizes case and
+  separators; only SHA-256 digests are held, compared with `timingSafeEqual`, and a wrong guess
+  spends nothing (the guesser doesn't hold the code) but feeds the login limiter at the route.
+  Simple oldest-first eviction rather than `passkeyChallenges.js`'s two-layer owner policy —
+  minting requires auth, so there is no anonymous flood to defend against.
 - `fcmPush.js` — the first subscriber the `healthHistory.onEvent` seam ever had: agent-input/
   agent-done events become FCM HTTP v1 pushes to enrolled devices. Dependency-free in the
   `googleAuth.js` mold (RS256 JWT via `node:crypto`, cached OAuth2 token). `TMUXIFIER_FCM_CREDENTIALS`
@@ -184,9 +197,16 @@ pattern for new modules.
   <device token>` header verified via `deviceStore.verify` (`req.deviceId` set on that branch) —
   cookie first, since that keeps the common browser request synchronous, then the device-token
   fallback for the Android app. `POST /api/devices/enroll` deliberately does not go through
-  `requireAuth`: it authenticates with the password directly, over the same `rateLimit.js` bucket
-  as `/api/login`, so it can't become a password oracle; it 403s under armed passkey-only and 501s
-  in OAuth mode (v1 is password-mode only). `GET /api/boxes/:id/pane` is a read-only tmux snapshot
+  `requireAuth`: it authenticates with the password directly or with a single-use pairing code
+  (`pairingCodes.js`), both over the same `rateLimit.js` bucket as `/api/login`, so it can't
+  become a password or code-guessing oracle. The password branch 403s under armed passkey-only
+  and 501s in OAuth mode; the code branch works in every mode — the code was minted by an
+  authenticated session via `POST /api/devices/pair`, which is browser-session only (`req.deviceId`
+  gets 403: a device must not mint invites its own revocation wouldn't reach). `GET
+  /api/devices/apk` (+ `/info`) serves the signed APK published at
+  `data/app/tmuxifier-console.apk` — the Settings → Devices download link; an absent file reads
+  as `available: false`, never an error.
+  `GET /api/boxes/:id/pane` is a read-only tmux snapshot
   for the app — `capture-pane` over the ControlMaster with a bounded `-S` scrollback, never
   attaching — merged with the box's latest agent-state sample from `healthHistory`. `POST
   /api/boxes/:id/keys` accepts exactly one of literal text (sent via `send-keys -l` after
@@ -1067,9 +1087,13 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   same residual limit as the login rate limiter itself. Under "require a passkey" that would deny
   sign-in outright, with the `.env` break-glass above as the remedy.
 - Device tokens (the Android app's credential) join the same story: `POST /api/devices/enroll` is
-  password-gated and shares the `rateLimit.js` login bucket, so it cannot be used to brute-force
-  the password for free; it also 403s when "require a passkey" is armed, same as the password
-  login form, and 501s in OAuth mode (v1 is password-mode only). Only the token's SHA-256 digest
+  gated by the password or a single-use pairing code and shares the `rateLimit.js` login bucket,
+  so it cannot be used to brute-force either for free. The password branch 403s when "require a
+  passkey" is armed, same as the password login form, and 501s in OAuth mode; the pairing-code
+  branch works in every mode and under armed passkey-only, because minting a code (Settings →
+  Devices) requires an authenticated browser session — under passkey-only that session was itself
+  passkey-authenticated, so the code inherits the gate rather than bypassing it. Codes are
+  single-use, expire in 2 minutes, and at most 4 are outstanding. Only the token's SHA-256 digest
   is stored — the plaintext is returned once, at enrollment, and never again. `requireAuth`
   accepts a device's `Authorization: Bearer <token>` alongside the session cookie, and revoking a
   device (Settings → Devices) takes effect on its very next request, since every request re-reads

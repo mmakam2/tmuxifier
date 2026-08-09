@@ -94,22 +94,30 @@ long-lived **device token** instead. A token is 32 random bytes; the server stor
 SHA-256 digest in `data/devices.json`, never the token itself, so a copy of that file alone is not
 a working credential.
 
-**Enrolling a device** happens in the app, not on the web dashboard: enter your Tmuxifier URL
-(e.g. `https://tmuxifier.example.com`), your password, and a name for the device, then enroll. The
-app calls `POST /api/devices/enroll`, which checks the password directly — the same way the login
-form does, through the same per-IP rate limiter — and returns the plaintext token exactly once;
-the app is responsible for storing it, since the server can never show it again.
+**Getting the app** is also a Settings → Devices affair: once a signed APK has been published on
+the server, the tab shows a **Download the Android app** link. Open the dashboard in the phone's
+browser (signed in — the same session cookie authenticates the download), download, install, then
+pair. No link means no APK has been published yet.
+
+**Enrolling a device** starts on the web dashboard: **Settings → Devices → Pair new device**
+mints a single-use pairing code (`XXXX-XXXX`, 2-minute expiry, shown with a countdown). In the
+app, enter your Tmuxifier URL (e.g. `https://tmuxifier.example.com`), a name for the device, and
+that code, then enroll. The app calls `POST /api/devices/enroll`, which spends the code — it can
+never be used twice, expired codes are refused, and wrong guesses feed the same per-IP rate
+limiter as the login form — and returns the plaintext token exactly once; the app is responsible
+for storing it, since the server can never show it again. In password mode the route also still
+accepts the password directly in place of a code (the original v1 flow, useful for curl).
 
 A few things worth knowing:
 
-- **Require a passkey blocks enrollment.** If that toggle (see above) is armed, enrollment 403s
-  the same as the password login form. Disarm it, or use the `.env` break-glass, before enrolling
-  a new device. Arming it does **not** revoke devices already enrolled — a device token never
-  expires and ignores the logout watermark, so an existing token keeps working until it is
-  explicitly revoked from Settings → Devices.
-- **Password mode only, for now.** Enrollment needs `TMUXIFIER_AUTH_MODE=password`; in OAuth mode
-  it returns 501. An OAuth-compatible pairing flow is a possible future addition, not something
-  v1 supports.
+- **Pairing codes work in every auth mode.** Minting one requires an authenticated browser
+  session, so the code inherits whatever gate that session passed — password, Google, or a
+  passkey. That is why enrollment-by-code is allowed even while "require a passkey" is armed
+  (the password branch still 403s there, exactly like the login form), and why it works on
+  OAuth-mode servers where the password branch returns 501. Arming passkey-only does **not**
+  revoke devices already enrolled — a device token never expires and ignores the logout
+  watermark, so an existing token keeps working until it is explicitly revoked from
+  Settings → Devices.
 - **Revoking a device** is done from the dashboard, at **Settings → Devices**: it lists every
   enrolled device with its last-seen time and a Revoke button (arm-then-fire, like the other
   destructive controls in Settings). Revocation takes effect on the device's very next request —
