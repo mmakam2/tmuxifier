@@ -16,4 +16,10 @@ class Prefs(context: Context) {
     // switches and process death (the whole point of local-until-send).
     fun draft(boxId: String): String = p.getString("draft.$boxId", "") ?: ""
     fun setDraft(boxId: String, text: String) { p.edit().putString("draft.$boxId", text).apply() }
+
+    // The last FCM registration token the server accepted — skip the PATCH
+    // when it hasn't rotated.
+    var fcmSynced: String?
+        get() = p.getString("fcmSynced", null)
+        set(v) { p.edit().putString("fcmSynced", v).apply() }
 }

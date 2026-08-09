@@ -7,6 +7,7 @@ package com.tmuxifier.console.ui
 import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -18,15 +19,18 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
@@ -47,6 +51,14 @@ fun SettingsScreen(state: AppState, onEnrolled: () -> Unit, onSignedOut: () -> U
     var enrolled by remember { mutableStateOf(state.enrolled) }
     var confirmSignOut by remember { mutableStateOf(false) }
     var fontSize by remember { mutableStateOf(state.prefs.fontSize) }
+    var notify by remember { mutableStateOf<Map<String, Boolean>?>(null) }
+
+    // Current server-side toggles: an empty PATCH returns the device view.
+    LaunchedEffect(enrolled) {
+        if (enrolled) {
+            notify = runCatching { state.client()?.updateSelf() }.getOrNull()?.notify
+        }
+    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -62,6 +74,25 @@ fun SettingsScreen(state: AppState, onEnrolled: () -> Unit, onSignedOut: () -> U
                 onValueChange = { fontSize = it; state.prefs.fontSize = it },
                 valueRange = 8f..32f,
             )
+            notify?.let { n ->
+                Text("Notifications", style = MaterialTheme.typography.titleMedium)
+                for ((kind, label) in listOf("agent-input" to "Agent needs input", "agent-done" to "Agent finished")) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(label, modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = n[kind] != false,
+                            onCheckedChange = { v ->
+                                // Booleans outright, one kind per PATCH — the
+                                // server merges; omitted kinds keep their value.
+                                notify = n + (kind to v)
+                                scope.launch {
+                                    runCatching { state.client()?.updateSelf(notify = mapOf(kind to v)) }
+                                }
+                            },
+                        )
+                    }
+                }
+            }
             Button(onClick = { confirmSignOut = true }) { Text("Sign out") }
             if (confirmSignOut) {
                 AlertDialog(

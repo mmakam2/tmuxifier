@@ -44,8 +44,8 @@ when `app/google-services.json` exists (see `app/build.gradle.kts`), and push is
 To enable push:
 
 1. Firebase console → add an **Android app** with package name `com.tmuxifier.console`,
-   download `google-services.json` into `android/app/` (gitignored; see
-   `app/google-services.json.example` once the FCM task lands).
+   download `google-services.json` into `android/app/` (gitignored;
+   `app/google-services.json.example` shows the shape).
 2. Project settings → Service accounts → generate a private key; save it on the server box
    **outside the repo** and set `TMUXIFIER_FCM_CREDENTIALS=<path>` in the server's `.env`.
    That file can send push as your Firebase project — treat it like the cookie secret.

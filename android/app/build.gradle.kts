@@ -12,8 +12,8 @@ android {
         applicationId = "com.tmuxifier.console"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.5.0"
     }
     buildTypes {
         release { isMinifyEnabled = false }
@@ -37,8 +37,15 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("com.google.firebase:firebase-messaging:24.1.0")
     testImplementation("org.jetbrains.kotlin:kotlin-test:2.1.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 }
-// Firebase joins in the FCM task (conditional google-services plugin — the
-// public repo must build with no google-services.json present).
+
+// Firebase only when the operator's config exists — the public repo must
+// build with no google-services.json present (placeholder-counterpart rule);
+// push is simply off then (pushAvailable() reads false at runtime).
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
