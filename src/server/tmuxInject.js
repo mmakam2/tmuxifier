@@ -130,6 +130,53 @@ export function buildSendKeysRemote(session, text) {
   return `tmux send-keys -t ${sess(session)} -l -- ${shSingleQuote(text)}`;
 }
 
+// One script, one round trip: geometry first (a single parseable line), then
+// the styled capture. `&&` makes failure atomic — a missing session exits
+// non-zero instead of shipping half a snapshot. -e keeps SGR sequences; the
+// Android client renders them as styled spans. -S bounds scrollback.
+export function buildPaneSnapshotRemote(session, { lines = 200 } = {}) {
+  const q = sess(session);
+  const n = Math.max(0, Math.min(2000, Math.trunc(Number(lines) || 0)));
+  return [
+    `tmux display-message -p -t ${q} '#{pane_width} #{pane_height} #{cursor_x} #{cursor_y}'`,
+    `tmux capture-pane -e -p -t ${q} -S -${n}`,
+  ].join(' && ');
+}
+
+export function parsePaneSnapshot(raw) {
+  const txt = String(raw ?? '');
+  const nl = txt.indexOf('\n');
+  const head = (nl === -1 ? txt : txt.slice(0, nl)).trim();
+  const m = /^(\d+) (\d+) (\d+) (\d+)$/.exec(head);
+  if (!m) return null;
+  return {
+    width: Number(m[1]), height: Number(m[2]), cursorX: Number(m[3]), cursorY: Number(m[4]),
+    content: nl === -1 ? '' : txt.slice(nl + 1).replace(/\n$/, ''),
+  };
+}
+
+// Closed allowlist — these are the ONLY strings that ever reach send-keys as a
+// key NAME (everything else goes literal via -l). Same chokepoint discipline
+// as voiceCatalog.js/iconCatalog.js: the route validates against this set and
+// the builder throws rather than trusting its caller.
+export const NAMED_KEYS = new Set(['Enter', 'Escape', 'Up', 'Down', 'Left', 'Right', 'Tab', 'BSpace', 'C-c']);
+
+export function buildSendNamedKeyRemote(session, key) {
+  if (!NAMED_KEYS.has(key)) throw new Error(`unknown key: ${String(key).slice(0, 32)}`);
+  return `tmux send-keys -t ${sess(session)} ${key}`;
+}
+
+// Mirror of the phone composer's sendTextOf (src/web/composer.ts): whitespace
+// runs — including newlines, which send-keys would deliver as Enter — collapse
+// to single spaces; remaining C0/C1 controls are stripped. Server-side because
+// the client cannot be trusted to have done it.
+export function sanitizeSendText(text) {
+  return String(text ?? '')
+    .replace(/\s+/g, ' ')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
+    .trim();
+}
+
 export function buildDisplayMessageRemote(session, msg) {
   return `tmux display-message -t ${sess(session)} ${shSingleQuote(msg)}`;
 }
