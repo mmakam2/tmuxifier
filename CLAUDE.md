@@ -1072,9 +1072,11 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   is stored — the plaintext is returned once, at enrollment, and never again. `requireAuth`
   accepts a device's `Authorization: Bearer <token>` alongside the session cookie, and revoking a
   device (Settings → Devices) takes effect on its very next request, since every request re-reads
-  `data/devices.json`. `TMUXIFIER_FCM_CREDENTIALS` — the Firebase service-account path that turns
-  on push notifications — joins the `.env` secret class alongside the password hash and cookie
-  secret.
+  `data/devices.json`. Arming "require a passkey" does **not** revoke devices already enrolled —
+  a device token never expires and ignores the logout watermark, so only that Settings → Devices
+  revocation cuts one off. `TMUXIFIER_FCM_CREDENTIALS` — the Firebase service-account path that
+  turns on push notifications — joins the `.env` secret class alongside the password hash and
+  cookie secret.
 - Passwords are scrypt-hashed; login attempts are rate-limited per IP (`rateLimit.js` — set
   `TMUXIFIER_TRUST_PROXY` behind a reverse proxy so the limiter sees real client IPs, and only
   then, since trusting forwarded headers from direct clients lets them spoof their IP). The

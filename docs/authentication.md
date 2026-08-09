@@ -104,14 +104,18 @@ A few things worth knowing:
 
 - **Require a passkey blocks enrollment.** If that toggle (see above) is armed, enrollment 403s
   the same as the password login form. Disarm it, or use the `.env` break-glass, before enrolling
-  a new device.
+  a new device. Arming it does **not** revoke devices already enrolled — a device token never
+  expires and ignores the logout watermark, so an existing token keeps working until it is
+  explicitly revoked from Settings → Devices.
 - **Password mode only, for now.** Enrollment needs `TMUXIFIER_AUTH_MODE=password`; in OAuth mode
   it returns 501. An OAuth-compatible pairing flow is a possible future addition, not something
   v1 supports.
 - **Revoking a device** is done from the dashboard, at **Settings → Devices**: it lists every
   enrolled device with its last-seen time and a Revoke button (arm-then-fire, like the other
   destructive controls in Settings). Revocation takes effect on the device's very next request —
-  there's no grace window the way the browser session cookie has a TTL.
+  just as immediate as logout's watermark revoking a browser session cookie. The real asymmetry is
+  that a session cookie also expires on its own after 7 days, while a device token never does — it
+  is a standing credential until someone revokes it from Settings → Devices.
 - Once enrolled, the device authenticates every request with `Authorization: Bearer <token>`; it
   never needs the password again unless it re-enrolls.
 

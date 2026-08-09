@@ -20,7 +20,7 @@ const NAME_RE = /^[^\u0000-\u001f\u007f]{1,64}$/;
 export function createDeviceStore({ dataDir, now = () => Date.now(), log = (msg) => console.error(msg) }) {
   const file = path.join(dataDir, 'devices.json');
   const validShape = (v) => v && typeof v === 'object' && !Array.isArray(v)
-    && ((!'devices' in v) || Array.isArray(v.devices));
+    && (!('devices' in v) || Array.isArray(v.devices));
 
   async function readAll() {
     const v = await readJson(file, { fallback: {}, validate: validShape, onCorrupt: log });

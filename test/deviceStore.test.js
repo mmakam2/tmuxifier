@@ -95,3 +95,18 @@ test('corrupt store fails open to empty', async () => {
   expect(await s2.list()).toEqual([]);
   expect(logs.length).toBeGreaterThan(0);
 });
+
+test('a legitimate key-less file reads as valid-empty, not corrupt', async () => {
+  // Regression for an operator-precedence bug: `(!'devices' in v)` evaluates
+  // as `('false' in v)`, always false, so the shape check unconditionally
+  // demanded Array.isArray(v.devices) and quarantined a file with no
+  // `devices` key at all (e.g. `{"version":1}`) instead of reading it as
+  // valid-empty, same as passkeyStore.js does for a key-less passkeys.json.
+  await fs.writeFile(path.join(dir, 'devices.json'), JSON.stringify({ version: 1 }), 'utf8');
+  const logs = [];
+  const s2 = createDeviceStore({ dataDir: dir, now: () => clock.t, log: (m) => logs.push(m) });
+  expect(await s2.list()).toEqual([]);
+  expect(logs.length).toBe(0);
+  const entries = await fs.readdir(dir);
+  expect(entries.some((f) => f.startsWith('devices.json.corrupt-'))).toBe(false);
+});

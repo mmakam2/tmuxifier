@@ -1,17 +1,20 @@
 import { createSign } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import https from 'node:https';
+import { NOTIFY_KINDS } from './deviceStore.js';
 
 // FCM HTTP v1 sender, dependency-free in the googleAuth.js mold: sign the
 // service-account JWT with node:crypto, trade it for an OAuth2 access token
 // (cached until near expiry), POST the message. Subscribed to
-// healthHistory.onEvent — the seam that module documents as deferred
-// server-push delivery. Failure posture: log and continue, never reject —
-// a push must not disturb the poll loop (same rule as every side-channel).
+// healthHistory.onEvent — the server-push seam (see healthHistory.js): this
+// module is what subscribes to it when TMUXIFIER_FCM_CREDENTIALS is set,
+// browser notifications still poll client-side regardless. Failure posture:
+// log and continue, never reject — a push must not disturb the poll loop
+// (same rule as every side-channel).
 
 const SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 const GRANT = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
-const KINDS = new Set(['agent-input', 'agent-done']);
+const KINDS = new Set(NOTIFY_KINDS);
 const TITLES = { 'agent-input': 'Claude is waiting', 'agent-done': 'Agent finished' };
 
 const b64uJson = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
