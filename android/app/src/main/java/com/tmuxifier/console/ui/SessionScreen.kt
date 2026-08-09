@@ -50,6 +50,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.tmuxifier.console.AppState
 import com.tmuxifier.console.api.ApiException
 import com.tmuxifier.console.api.PaneSnapshot
+import com.tmuxifier.console.keys.SendSpec
 import com.tmuxifier.console.pane.Span
 import com.tmuxifier.console.pane.Style
 import com.tmuxifier.console.pane.parseSgr
@@ -74,6 +75,7 @@ fun SessionScreen(
     var snap by remember { mutableStateOf<PaneSnapshot?>(null) }
     var lines by remember { mutableStateOf<List<List<Span>>>(emptyList()) }
     var reconnecting by remember { mutableStateOf(false) }
+    var sendError by remember { mutableStateOf<String?>(null) }
     var fontSize by remember { mutableFloatStateOf(state.prefs.fontSize) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -170,6 +172,30 @@ fun SessionScreen(
             }
         }
 
+        sendError?.let { msg ->
+            Text(
+                msg,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            LaunchedEffect(msg) {
+                delay(4_000)
+                sendError = null
+            }
+        }
+        ActionRow(onSend = { spec ->
+            scope.launch {
+                try {
+                    when (spec) {
+                        is SendSpec.Named -> client.sendKey(boxId, spec.key)
+                        is SendSpec.Text -> client.sendText(boxId, spec.text)
+                    }
+                } catch (e: ApiException) {
+                    if (e.status == 401) onUnauthorized() else sendError = e.message
+                }
+            }
+        })
         bottomBar()
     }
 }
