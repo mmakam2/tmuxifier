@@ -8,7 +8,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -65,11 +64,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Explicit edge-to-edge on every Android version: this is what makes
-        // the window dispatch real inset values, which safeDrawingPadding
-        // below then consumes. Relying on targetSdk-35 forced e2e left inset
-        // dispatch OEM-dependent (observed: bars cutting off header/composer).
-        enableEdgeToEdge()
+        // Deliberately NOT edge-to-edge: the manifest opts out of the
+        // targetSdk-35 enforcement (windowOptOutEdgeToEdgeEnforcement) so the
+        // framework lays the app out BETWEEN the system bars the classic way.
+        // A utility console gains nothing from bar blending, and zero inset
+        // math is the robust choice over enableEdgeToEdge()+padding (whose
+        // correctness depends on per-OEM inset dispatch). safeDrawingPadding
+        // stays below as a harmless no-op where the decor consumes insets.
         val state = AppState(applicationContext)
         pendingBox.value = intent?.getStringExtra("boxId")
         if (state.enrolled) {
