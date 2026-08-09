@@ -66,17 +66,19 @@ real code, `jsonFile.js` persistence (`0o600`, atomic rename, quarantine-on-corr
 
 ### Device auth — `deviceStore.js` + Bearer path
 
-- `data/devices.json`: per device — id, name, **scrypt hash of the token** (the token
-  itself is returned exactly once at enrollment and never stored), created/lastSeen
+- `data/devices.json`: per device — id, name, **SHA-256 digest of the token** (the token
+  itself is returned exactly once at enrollment and never stored; a 32-byte random token
+  has 256-bit entropy, so a fast digest is the right primitive — scrypt's cost defends
+  low-entropy passwords and would only tax every ~1s poll request here), created/lastSeen
   timestamps, FCM registration token, per-event-kind notification toggles.
 - `POST /api/devices/enroll` — body: password + device name (+ FCM token). Guarded by the
   same per-IP `rateLimit.js` bucket as login. Mints a 32-byte random token, returns it
   once. Password-mode v1; OAuth-mode enrollment via a pairing code minted from an
   authenticated browser session is a recorded v2 item (not built now).
 - Auth check accepts *session cookie or valid device token* (`Authorization: Bearer`).
-  Token compare is scrypt-verify against the stored hash, with a small in-memory
-  verified-token cache so per-request cost stays flat. No expiry: revocation is the
-  lifecycle.
+  Token compare is a SHA-256 digest compared with `timingSafeEqual` against each stored
+  digest — cheap enough per request that no cache is needed. No expiry: revocation is
+  the lifecycle.
 - `GET /api/devices` / `DELETE /api/devices/:id` (cookie-authed) + a **Settings → Devices**
   tab on the web (list, name, last seen, revoke). Revocation takes effect on the device's
   next request.
