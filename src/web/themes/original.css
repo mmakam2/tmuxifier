@@ -96,3 +96,14 @@
     radial-gradient(circle at 50% 12%, rgba(36, 211, 232, 0.12), transparent 34%),
     linear-gradient(180deg, #0a1018 0%, #070a0f 56%, #05070b 100%);
 }
+
+/* The logo mark is a raster (amber prompt glyphs on a charcoal keypad) that
+   tokens cannot reach. hue-rotate's filter matrix lands the amber #ffb000 on
+   #2dd7ea — a hair off this theme's --accent, imperceptible at logo size —
+   while the near-neutral chassis drifts by ~1 RGB point (angle fitted against
+   the spec's hueRotate matrix, not eyeballed). The favicon keeps the amber
+   mark: it is a static <link> in index.html, themable only with JS. */
+:root[data-theme='original'] .login-logo,
+:root[data-theme='original'] .brand-home img {
+  filter: hue-rotate(134deg) saturate(0.75);
+}
