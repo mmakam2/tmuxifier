@@ -70,9 +70,26 @@ busy_add() {
 case "${1:-}" in
   prompt)
     # A new turn — from the operator OR from the harness resuming the agent
-    # after background work finished. The latter is the only completion signal
-    # a backgrounded shell ever gives, so it has to clear the tokens.
-    rm -rf "$BUSY" 2>/dev/null
+    # after background work finished. The two must clear DIFFERENT tokens.
+    #
+    # A resume is the only completion signal a backgrounded shell ever gives, so
+    # it still clears every `bg.` token. It must NOT touch `sub.` tokens: every
+    # background subagent that finishes resumes the main agent this way, so a
+    # blanket clear destroys the tokens of the siblings still running and the
+    # next `Stop` reads `waiting` for their whole remaining runtime — the bug
+    # this branch exists to avoid, arriving through the door left open for it.
+    # A subagent is bracketed by its own SubagentStop; that is what ends it.
+    #
+    # The operator's own prompt IS a clean slate: they are at the keyboard, the
+    # turn is genuinely new, and clearing everything is what bounds a `sub.`
+    # token whose SubagentStop never fired (a killed subagent) to the next time
+    # a human types, rather than to its 120min TTL. A pasted prompt that happens
+    # to contain the marker only costs that reset, since every token still
+    # expires on its own clock.
+    case "$IN" in
+      *'<task-notification>'*) rm -f "$BUSY"/bg.* 2>/dev/null ;;
+      *) rm -rf "$BUSY" 2>/dev/null ;;
+    esac
     STATE=working ;;
   subagent-start)
     # agent_id pairs start with stop exactly. A payload without one still gets
@@ -99,10 +116,14 @@ case "${1:-}" in
     if busy_live; then STATE=working; else STATE=waiting; fi ;;
   notify)
     # idle_prompt is a TIMER, not a request: it fires a fixed interval after
-    # any turn ends, including one that ended awaiting background work. Every
-    # other notification type — permission_prompt, agent_needs_input, … — is
-    # Claude Code saying it genuinely wants the operator, so it still lands.
-    if [ "$(json_str notification_type)" = idle_prompt ] && busy_live; then exit 0; fi
+    # any turn ends, including one that ended awaiting background work.
+    # agent_completed announces that ONE background agent finished, which is not
+    # the operator's turn while its siblings are still running. Both are
+    # therefore gated on outstanding work — and both still land once none is
+    # left. Every other type — permission_prompt, agent_needs_input, … — is
+    # Claude Code saying it genuinely wants the operator, so it always lands.
+    NT=$(json_str notification_type)
+    if { [ "$NT" = idle_prompt ] || [ "$NT" = agent_completed ]; } && busy_live; then exit 0; fi
     STATE=waiting ;;
   start) STATE=waiting ;;
   end) rm -f "$FILE"; rm -rf "$BUSY" 2>/dev/null; exit 0 ;;

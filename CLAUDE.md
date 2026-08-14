@@ -654,14 +654,27 @@ pattern for new modules.
   bracket a subagent exactly (both carry `agent_id`), PreToolUse covers a backgrounded shell
   and is the only entry carrying a `matcher` (`Bash`), since it is the one event that fires per
   tool call — and `stop` writes `working` instead of `waiting` while a token is live. The gate
-  covers the `notify` path too, but ONLY for `notification_type: idle_prompt`: that one is a
-  timer that fires a fixed interval after any turn ends, so gating `Stop` alone just moved the
-  false ping a minute later (observed: a second `waiting` write at exactly Stop+60s). Every
-  other notification type — `permission_prompt`, `agent_needs_input`, … — is Claude Code saying
-  it genuinely wants the operator, and still lands. Two rules are load-bearing. `prompt` clears
-  every token, because the harness re-invoking the agent after background work finishes fires
-  UserPromptSubmit exactly like a human turn, and for a backgrounded **shell** that is the only
-  completion signal there is (a subagent has SubagentStop; a shell has nothing). And every
+  covers the `notify` path too, for exactly two of its types. `idle_prompt` is a timer that
+  fires a fixed interval after any turn ends, so gating `Stop` alone just moved the false ping
+  a minute later (observed: a second `waiting` write at exactly Stop+60s). `agent_completed`
+  announces that ONE background agent finished, which is not the operator's turn while its
+  siblings are still running. Both still land once nothing is outstanding. Every other
+  notification type — `permission_prompt`, `agent_needs_input`, … — is Claude Code saying
+  it genuinely wants the operator, and always lands. Two rules are load-bearing. `prompt`
+  clears tokens BY KIND rather than wholesale, because UserPromptSubmit has two callers that
+  mean opposite things: the operator typing, and the harness resuming the agent after
+  background work finished. A resume is announced by a `<task-notification>` block in the
+  payload's `prompt` field (not `user_input`, whatever the docs say), and clears only `bg.`
+  tokens — for a backgrounded **shell** that resume is the only completion signal there is (a
+  subagent has SubagentStop; a shell has nothing). It must NOT clear `sub.` tokens: every
+  background subagent that finishes resumes the main agent this way, so the blanket `rm -rf`
+  this branch used to do destroyed the tokens of the siblings STILL RUNNING, and the next
+  `Stop` then read `waiting` for their whole remaining runtime — the very bug the gate exists
+  to prevent, arriving through the door left open for it. Diagnosed 2026-08-14 on a live
+  event trace; the unit tests were green the entire time it was broken, for the second time
+  in this file's history. The operator's own prompt still clears everything, and that is what
+  bounds a `sub.` token whose SubagentStop never fired (a killed subagent) to the next time a
+  human types rather than to its 120min TTL. And every
   token expires, on two deliberately different clocks, because only one kind is exact. A
   `sub.` token is bracketed — SubagentStop always fires, mid-turn or not — so its 120min TTL
   only ever catches a killed subagent. A `bg.` token is a **heuristic** and gets ~2min: if the
@@ -671,8 +684,11 @@ pattern for new modules.
   shell and sat there. The short TTL bounds the exposure to turns ending within ~2min of the
   launch, a window in which a just-launched job is far likelier to still be running than not.
   The whole gate fails OPEN by design: a missed notification is worse than a spurious one.
-  Residual, accepted: two concurrent background jobs, one finishing, clears both tokens, so
-  the second can still produce one false `waiting`.
+  Residual, accepted: two concurrent background **shells**, one finishing, still clears both
+  `bg.` tokens, so the second can produce one false `waiting` — a shell token carries no
+  identity to match a resume against, the way a subagent's `agent_id` does. And a subagent
+  killed without a SubagentStop now holds its token until the operator's next prompt (or the
+  120min TTL), trading a possible late ping for the false one that used to be routine.
   The hook therefore READS its stdin event JSON (it used to discard it) — substring-matched
   only, never eval'd, and every value taken from it is re-sanitized before reaching a path.
 - `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`pinnedSocket`/`normFp`) used

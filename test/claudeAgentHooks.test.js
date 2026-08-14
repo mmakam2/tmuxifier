@@ -75,6 +75,12 @@ const SUBAGENT = (id) => `{"hook_event_name":"SubagentStart","agent_id":"${id}",
 const BG_TOOL = '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"sleep 60","run_in_background":true}}';
 const FG_TOOL = '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls","run_in_background":false}}';
 const NOTIFY = (type) => `{"hook_event_name":"Notification","notification_type":"${type}","message":"hi"}`;
+// The two kinds of UserPromptSubmit, told apart by the prompt text itself. The
+// harness announces a resume with a <task-notification> block; anything else is
+// the operator at the keyboard. Confirmed against Claude Code 2.1.232, whose
+// resume payload carries the block in `prompt` (not `user_input`).
+const RESUME = '{"hook_event_name":"UserPromptSubmit","prompt":"<task-notification>\\n<task-id>abc123</task-id>\\n<status>completed</status>\\n</task-notification>"}';
+const OPERATOR = '{"hook_event_name":"UserPromptSubmit","prompt":"fix the failing test please"}';
 
 test('stop with a live subagent token writes working, not waiting', async () => {
   const { dir, env } = await hookEnv('web');
@@ -107,11 +113,46 @@ test('a backgrounded tool call gates stop; a foreground one does not', async () 
   expect(await marker(bg.dir)).toMatch(/^web:working:\d+\n$/);
 });
 
-test('prompt clears outstanding tokens — a re-invocation is the only completion signal a background shell gives', async () => {
+test('a resume clears outstanding shell tokens — a re-invocation is the only completion signal a background shell gives', async () => {
   const { dir, env } = await hookEnv('web');
   await runHook('pretool', env, BG_TOOL);
-  await runHook('prompt', env);
+  await runHook('prompt', env, RESUME);
   expect(await marker(dir)).toMatch(/^web:working:\d+\n$/);
+  await runHook('stop', env);
+  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/);
+});
+
+// The defect this pair pins down: every background subagent that finishes
+// resumes the main agent with a synthetic prompt, so a blanket clear on
+// UserPromptSubmit destroys the tokens of the siblings STILL RUNNING — and the
+// next Stop then reads waiting for their whole remaining runtime. A `sub.`
+// token is bracketed by its own SubagentStop and must outlive a resume; only
+// the operator's own prompt is a clean slate.
+test('a harness resume leaves a live subagent token alone', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('subagent-start', env, SUBAGENT('sub-1'));
+  await runHook('subagent-start', env, SUBAGENT('sub-2'));
+  await runHook('stop', env);
+  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/);
+
+  await runHook('subagent-stop', env, SUBAGENT('sub-1')); // one finishes...
+  await runHook('prompt', env, RESUME); // ...and the harness resumes the main agent
+  expect(await fs.readdir(busyDir(dir))).toEqual(['sub.sub-2']);
+
+  await runHook('stop', env);
+  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/); // sub-2 is still running
+
+  await runHook('subagent-stop', env, SUBAGENT('sub-2'));
+  await runHook('stop', env);
+  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/); // now it really is the operator's turn
+});
+
+test('the operator’s own prompt is a clean slate, so no token can go stale across turns', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('subagent-start', env, SUBAGENT('sub-1'));
+  await runHook('pretool', env, BG_TOOL);
+  await runHook('prompt', env, OPERATOR);
+  await expect(fs.readdir(busyDir(dir))).rejects.toBeTruthy();
   await runHook('stop', env);
   expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/);
 });
@@ -154,6 +195,30 @@ test('idle_prompt is gated by outstanding work; every other notification still m
   expect(await marker(dir)).toMatch(/^web:working:\d+\n$/); // the +60s timer must not ping
   await runHook('notify', env, NOTIFY('permission_prompt'));
   expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/); // a real request still does
+});
+
+// agent_completed announces that ONE background agent finished. While siblings
+// are still running that is not the operator's turn, so it is gated exactly
+// like idle_prompt — and lands as waiting once nothing is outstanding.
+test('agent_completed is gated by outstanding work, and lands once nothing is', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('subagent-start', env, SUBAGENT('sub-1'));
+  await runHook('subagent-start', env, SUBAGENT('sub-2'));
+  await runHook('stop', env); // turn ends with both live -> working
+  await runHook('subagent-stop', env, SUBAGENT('sub-1'));
+  await runHook('notify', env, NOTIFY('agent_completed'));
+  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/); // sub-2 still running
+
+  await runHook('subagent-stop', env, SUBAGENT('sub-2'));
+  await runHook('notify', env, NOTIFY('agent_completed'));
+  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/);
+});
+
+test('agent_needs_input is never gated — a background agent asking for the operator is real', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('subagent-start', env, SUBAGENT('sub-1'));
+  await runHook('notify', env, NOTIFY('agent_needs_input'));
+  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/);
 });
 
 test('gate events write no marker of their own, and the busy dir stays invisible to the probe', async () => {
