@@ -58,6 +58,12 @@ Add/Edit Box modal — see [Boxes & setup jobs](boxes-and-setup.md)). Watch the 
 the container is up Tmuxifier installs tmux
 (and any selected frameworks/tools) over SSH, then an **Open terminal** button drops you into it.
 
+The hostname becomes the new box's label, and box labels are unique — so a hostname already
+taken by a box is refused when you press Provision, before anything is created in Proxmox
+(the form also warns as you type). The same check covers the IP for a static preset. This used
+to surface only at the very end, when the finished container was linked, leaving a real guest
+behind a failed job for you to clean up by hand.
+
 The Provision tab's setup options include a **post-setup script** picker: one of
 Fleet Command's saved scripts, run on the container after every other install and
 before its tmux session is created. See

@@ -97,6 +97,17 @@ export function createProvisionManager({
     });
   }
 
+  // The address the linked box WILL carry, when it is knowable before the
+  // container exists — static presets only. dhcp discovers a lease (and
+  // buildNet0 ignores an ip override there, so the override could never be
+  // this container's address) and auto-static allocates from NetBox at run
+  // time, so neither can be checked up front. Mirrors run()'s own boxHost
+  // choice for the static case.
+  function plannedHost(preset, ip) {
+    if (preset.net.ipMode !== 'static') return null;
+    return String(ip || preset.net.cidr || '').split('/')[0] || null;
+  }
+
   async function discoverIp(client, node, vmid) {
     const deadline = Date.now() + leaseTimeoutMs;
     for (;;) {
@@ -201,6 +212,13 @@ export function createProvisionManager({
       assertProvisionInput({ hostname, vmid, ip, tags });
       const preset = await proxmoxStore.getPreset(presetId);
       if (!preset) throw new Error('preset not found');
+      // Fail fast, and here it is load-bearing rather than merely tidy: the
+      // hostname becomes the box's label and only addBox — in the link phase,
+      // long after Proxmox has built the container — enforces uniqueness, so a
+      // duplicate used to be discovered by a failed job standing next to an
+      // orphaned guest the user then had to clean up by hand.
+      const conflict = await boxStore.uniquenessConflict({ label: hostname, host: plannedHost(preset, ip) });
+      if (conflict) throw new Error(`${conflict} — nothing was provisioned`);
       // Fail fast: reject at request time (HTTP 400, no job record) instead of
       // erroring later in the allocate-ip phase of a job that already exists.
       if (preset.net.ipMode === 'auto-static') await requireNetboxSettings();

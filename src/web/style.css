@@ -1656,6 +1656,7 @@ button.empty-kbd:hover { color: var(--text); }
 .pve-test-status.err { color: var(--crit); }
 .pve-test-status.pending { color: var(--dim); }
 .pve-sub { color: var(--dim); font-size: 11px; }
+.pve-sub.warn { color: var(--warn); }
 .pve-hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0; }
 .pve-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .pve-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }

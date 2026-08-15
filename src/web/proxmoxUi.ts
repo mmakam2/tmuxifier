@@ -91,6 +91,20 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
     const tagDatalist = el('datalist', { id: tagListId }, tagOptions.map((t) => el('option', { value: t })));
     const tag = input('', { placeholder: 'prod, staging (optional)', list: tagListId });
 
+    // The hostname becomes the new box's label, and a duplicate is refused
+    // server-side before anything is created — so say so while it is being
+    // typed rather than after a round trip. Advisory: this list is a snapshot
+    // taken when the tab rendered, and the server stays the authority.
+    const takenLabels = new Set(boxes.map((b) => (b.label || '').trim().toLowerCase()));
+    const dup = el('div', { class: 'pve-sub warn', 'aria-live': 'polite' });
+    const syncHostname = () => {
+      const typed = hostname.value.trim();
+      dup.textContent = typed && takenLabels.has(typed.toLowerCase())
+        ? `a box named "${typed}" already exists — pick another hostname`
+        : '';
+    };
+    hostname.addEventListener('input', syncHostname);
+
     const setupForm = createSetupOptionsForm();
 
     const box = el('div', {});
@@ -141,7 +155,7 @@ export function openProxmoxHub(opts: HubOpts, initial: HubInitial = {}) {
       el('fieldset', { class: 'setup-section' }, [
         el('legend', {}, ['Container']),
         field('Preset', sel), summary, preview,
-        field('Hostname', hostname), ipField,
+        field('Hostname', hostname), dup, ipField,
         field('Tag', tag), tagDatalist,
       ]),
       setupForm.element,

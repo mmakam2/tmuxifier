@@ -1,5 +1,9 @@
 import { test, expect } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { createProvisionManager } from '../src/server/proxmoxProvision.js';
+import { createStore } from '../src/server/store.js';
 
 const PRESET_DHCP = {
   id: 'p1', name: 'dev', hostId: 'h1', node: 'pve', template: 'local:vztmpl/x.tar.zst',
@@ -18,11 +22,13 @@ function makeStore(preset) {
     getRootPassword: async () => null,
   };
 }
-function fakeBoxStore() {
+function fakeBoxStore({ conflict = null } = {}) {
   const added = [];
   const addOptions = [];
+  const asked = [];
   return {
-    added, addOptions,
+    added, addOptions, asked,
+    uniquenessConflict: async (candidate) => { asked.push(candidate); return conflict; },
     addBox: async (spec, options) => {
       const box = { id: `box-${added.length + 1}`, ...spec };
       added.push(box); addOptions.push(options); return box;
@@ -74,6 +80,53 @@ test('static preset: create -> start -> link box from the static IP', async () =
   expect(boxStore.added[0].proxmox).toMatchObject({ node: 'pve', vmid: 131, hostId: 'h1' });
   expect(boxStore.addOptions[0]).toEqual({ trustedProxmox: true });
   expect(done.boxId).toBe('box-1');
+});
+
+// A collision was only ever discovered by addBox in the link phase — i.e. after
+// Proxmox had already built the container — leaving an orphaned guest behind a
+// failed job. The whole point of the pre-check is that nothing is created.
+test('a hostname colliding with an existing box is refused before any container exists', async () => {
+  const boxStore = fakeBoxStore({ conflict: 'box label already exists' });
+  const client = { ...okClient(), createLxc: async () => { throw new Error('createLxc must not run'); } };
+  const mgr = createProvisionManager(base({ proxmoxStore: makeStore(PRESET_STATIC), boxStore, makeClient: () => client }));
+
+  await expect(mgr.createProvision({ presetId: 'p2', hostname: 'dev-01' })).rejects.toThrow(/label already exists/);
+  expect(mgr.listProvisions()).toHaveLength(0); // no job record either — a 400, not a failed job
+});
+
+test('the pre-check asks about the hostname as label and a static preset IP as host', async () => {
+  const boxStore = fakeBoxStore();
+  const mgr = createProvisionManager(base({ proxmoxStore: makeStore(PRESET_STATIC), boxStore, makeClient: () => okClient() }));
+  await mgr._settled((await mgr.createProvision({ presetId: 'p2', hostname: 'dev-01' })).id);
+  expect(boxStore.asked).toEqual([{ label: 'dev-01', host: '192.168.1.50' }]);
+  expect(boxStore.added[0].host).toBe('192.168.1.50'); // the address the check asked about
+});
+
+test('the pre-check has no host to ask about when the address is only knowable later', async () => {
+  const dhcp = fakeBoxStore();
+  const m1 = createProvisionManager(base({ proxmoxStore: makeStore(PRESET_DHCP), boxStore: dhcp, makeClient: () => okClient() }));
+  await m1._settled((await m1.createProvision({ presetId: 'p1', hostname: 'dev-01', ip: '192.168.1.99/24' })).id);
+  // dhcp discovers a lease and ignores the ip override, so that override must
+  // not become the address the check asks about.
+  expect(dhcp.asked).toEqual([{ label: 'dev-01', host: null }]);
+});
+
+// The fakes above pin the wiring; this pins the wiring to the REAL rule, so the
+// pre-check can never drift from the uniqueness addBox actually enforces.
+test('against the real box store, a second provision at the same hostname never reaches Proxmox', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-prov-'));
+  const boxStore = createStore({ dataDir: dir });
+  const created = [];
+  const client = { ...okClient(), createLxc: async (_node, params) => { created.push(params.hostname); return 'UPID:create'; } };
+  // dhcp: the first box's address is discovered, so only the LABEL collides.
+  const mgr = createProvisionManager(base({ proxmoxStore: makeStore(PRESET_DHCP), boxStore, makeClient: () => client }));
+
+  await mgr._settled((await mgr.createProvision({ presetId: 'p1', hostname: 'dev-01' })).id);
+  expect((await boxStore.listBoxes()).map((b) => b.label)).toEqual(['dev-01']);
+
+  await expect(mgr.createProvision({ presetId: 'p1', hostname: 'DEV-01' })).rejects.toThrow(/label already exists — nothing was provisioned/);
+  expect(created).toEqual(['dev-01']);
+  expect(mgr.listProvisions()).toHaveLength(1);
 });
 
 test('provision tags are applied to the linked box; absent tags fall back to preset boxDefaults', async () => {

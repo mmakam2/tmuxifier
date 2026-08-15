@@ -115,6 +115,19 @@ test('addBox rejects duplicate label ignoring case', async () => {
   await expect(store.addBox({ host: 'prod-db-2', label: 'primary db' })).rejects.toThrow(/label already exists/);
 });
 
+test('uniquenessConflict reads the same rule addBox enforces, without mutating anything', async () => {
+  const store = createStore({ dataDir: dir });
+  await store.addBox({ host: 'Prod-DB', label: 'Primary DB' });
+
+  expect(await store.uniquenessConflict({ label: 'primary db' })).toMatch(/label already exists/);
+  expect(await store.uniquenessConflict({ host: 'prod-db' })).toMatch(/host already exists/);
+  expect(await store.uniquenessConflict({ label: 'dev-01', host: '192.168.1.11' })).toBeNull();
+  // An absent/blank field is simply not checked (a provision with no known IP yet).
+  expect(await store.uniquenessConflict({ label: 'dev-01', host: null })).toBeNull();
+  expect(await store.uniquenessConflict({})).toBeNull();
+  expect(await store.listBoxes()).toHaveLength(1);
+});
+
 test('updateBox rejects duplicate host and label from another box', async () => {
   const store = createStore({ dataDir: dir });
   const first = await store.addBox({ host: 'prod-db-1', label: 'Primary DB' });

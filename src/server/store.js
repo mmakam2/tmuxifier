@@ -96,6 +96,16 @@ export function createStore({ dataDir }) {
     async getBox(id) {
       return (await readAll()).find((b) => b.id === id);
     },
+    // The read-only half of assertUniqueBox, for callers that must know a name
+    // is free BEFORE doing expensive, hard-to-undo work: provisioning builds a
+    // real container in Proxmox and only then calls addBox, so a collision
+    // discovered there leaves an orphaned guest behind a failed job. Returns
+    // the message addBox would have thrown, or null. Advisory, not a lock —
+    // addBox re-checks inside the write serialization and stays the authority.
+    async uniquenessConflict(candidate) {
+      try { assertUniqueBox(await readAll(), candidate); } catch (e) { return e.message; }
+      return null;
+    },
     async addBox(spec, { trustedProxmox = false } = {}) {
       return serialize(async () => {
         const boxes = await readAll();

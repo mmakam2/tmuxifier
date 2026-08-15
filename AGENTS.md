@@ -221,6 +221,10 @@ pattern for new modules.
   allowlist, never both.
 - `store.js` — `data/boxes.json` CRUD; normalizes/validates boxes; exports/imports the box list as
   a versioned JSON file (`exportBoxes`/`importBoxes`; import re-mints ids and skips dup/unsafe entries).
+  `uniquenessConflict(candidate)` is the read-only half of `assertUniqueBox` — the same rule,
+  returning the message rather than throwing — for callers that must know a label/host is free
+  BEFORE doing work that is expensive to undo; `proxmoxProvision.js` is the one that needs it.
+  Advisory, not a lock: `addBox` re-checks inside the write serialization and stays the authority.
   A Proxmox link carries a `kind` (`'lxc'` | `'qemu'`); an absent one defaults to `'lxc'` in
   `readAll()`, the single chokepoint every reader (`listBoxes`/`getBox`/`exportBoxes`, plus every
   mutation's own read half) goes through, so a link written before VM support migrates by asserting
@@ -572,7 +576,13 @@ pattern for new modules.
   the create→poll→start→discover→auto-link-box job manager (with an `allocate-ip` NetBox phase
   first for `auto-static` presets; the Fleet job pattern). On box-link it auto-starts a server-side
   setup job (injected `startSetup`, `waitForSsh: true`) so the container is usable without the
-  browser staying open.
+  browser staying open. `createProvision` refuses a hostname/IP that would collide with an
+  existing box (`boxStore.uniquenessConflict`) at request time, alongside the existing
+  preset/NetBox/host/node fail-fast checks — the hostname becomes the box's label, and until
+  this check existed the collision was discovered only by `addBox` in the **link** phase, i.e.
+  after Proxmox had already built the container, leaving an orphaned guest behind a failed job.
+  Only a *knowable* address is checked: `plannedHost` returns the static preset's CIDR (or the
+  override), and null for dhcp and `auto-static`, whose addresses don't exist yet.
 - `proxmoxInventory.js` — cluster-wide linked-guest (LXC **and** QEMU VM) inventory and status
   authority (one `/cluster/resources?type=vm` call per host — that query already covered both
   kinds before VM support; what changed is that the response's qemu rows are no longer discarded
