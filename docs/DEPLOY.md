@@ -255,6 +255,16 @@ details → Install anyway"), then **Pair new device**. Updating the app later i
 `./gradlew assembleRelease` and the same `cp` — installed phones update in place from the
 same link.
 
+**Unless you also distribute through Play.** Play App Signing re-signs the app with a key
+Google holds, so a locally built APK — signed with your *upload* key — can no longer be
+installed over a Play install, in either direction. Once a phone has the Play build, keep the
+download link on the same signature by publishing the **Play-signed universal APK** (Play
+Console → App bundle explorer → Downloads) to `data/app/tmuxifier-console.apk` instead of a
+local `assembleRelease` output, and ship updates by uploading a new bundle to the testing
+track. See [`android/README.md`](../android/README.md) § *Play Store (internal testing
+track)*. This affects only instances that opted into Play; a purely self-hosted install keeps
+the simple loop above.
+
 Push notifications are optional and separate: set `TMUXIFIER_FCM_APP_CONFIG` and
 `TMUXIFIER_FCM_CREDENTIALS` per the Firebase walkthrough in
 [`android/README.md`](../android/README.md). Nothing is baked into the APK, so the app you
