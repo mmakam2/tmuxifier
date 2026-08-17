@@ -17,6 +17,12 @@ class Prefs(context: Context) {
     fun draft(boxId: String): String = p.getString("draft.$boxId", "") ?: ""
     fun setDraft(boxId: String, text: String) { p.edit().putString("draft.$boxId", text).apply() }
 
+    // A pinched-in TUI pane size persists per box (0 = unset, follow the
+    // auto-fit); the pane's ⤢ fit chip clears it back to auto.
+    fun paneFont(boxId: String): Float = p.getFloat("paneFont.$boxId", 0f)
+    fun setPaneFont(boxId: String, sp: Float) { p.edit().putFloat("paneFont.$boxId", sp.coerceIn(6f, 32f)).apply() }
+    fun clearPaneFont(boxId: String) { p.edit().remove("paneFont.$boxId").apply() }
+
     // The last FCM registration token the server accepted — skip the PATCH
     // when it hasn't rotated.
     var fcmSynced: String?

@@ -44,4 +44,11 @@ class FitTest {
         assertNull(fitFontSp(availPx = 1000f, cols = 0, glyphWidthPerSpPx = 6f))
         assertNull(fitFontSp(availPx = 1000f, cols = 80, glyphWidthPerSpPx = 0f))
     }
+
+    // The pannable content width for an unwrapped TUI pane: one extra column
+    // of slack so per-size glyph rounding can never clip the last character.
+    @Test fun contentWidthCarriesOneColumnSlack() {
+        assertEquals(81f * 2f * 10f, paneContentWidthPx(cols = 80, glyphWidthPerSpPx = 2f, sp = 10f))
+        assertEquals(0f, paneContentWidthPx(cols = 0, glyphWidthPerSpPx = 2f, sp = 10f))
+    }
 }

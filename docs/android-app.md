@@ -34,8 +34,9 @@ Sign out only forgets the token locally.
 - **Session** — the pane snapshot at 1 s cadence: full terminal colors, cursor marker,
   stick-to-bottom with a "▼ latest" jump chip. A full-screen TUI pane (Claude Code, vim)
   **auto-fits** its whole column count to the screen so borders and layout render exactly as
-  tmux drew them; plain shell panes keep larger soft-wrapped text. Pinch overrides either
-  (persisted for shells; a ⤢ fit chip snaps a TUI pane back). The pane is **inert to touch** — scroll and select only. Below it: the
+  tmux drew them, and never soft-wraps: pinching in zooms to a per-box persisted size and the
+  pane pans horizontally at intact layout (the ⤢ fit chip returns to auto-fit). Plain shell
+  panes keep larger soft-wrapped text at the Settings font size. The pane is **inert to touch** — scroll and select only. Below it: the
   action row (`Esc ↑ ↓ Tab ⏎ 1 2 3 y n`, and `^C` behind a two-tap arm) and the composer — a
   real Android text field where drafting, autocorrect, and voice dictation stay local until
   **Send** (literal text + Enter). Drafts persist per box; empty Send is a bare Enter.

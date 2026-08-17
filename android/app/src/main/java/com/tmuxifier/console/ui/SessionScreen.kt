@@ -4,19 +4,24 @@ package com.tmuxifier.console.ui
 // text. A full-screen TUI pane (alt-screen: Claude Code, vim) auto-FITS its
 // column count to the screen width (pane/Fit.kt) so borders and layout render
 // exactly as tmux drew them — soft-wrapping an 80-column frame at phone width
-// shredded every border into stacked dashes. Plain shell panes keep the
-// larger soft-wrapped text; pinch always overrides (a ⤢ fit chip snaps an alt
-// pane back). INERT TO TOUCH by design: the pane composables carry no click
+// shredded every border into stacked dashes. A TUI pane never wraps: pinching
+// in zooms to a per-box persisted size and the pane pans horizontally at
+// intact layout (the ⤢ fit chip returns to auto-fit). Plain shell panes keep
+// the larger soft-wrapped text at the Settings size. INERT TO TOUCH by design: the pane composables carry no click
 // handlers wired to the API, so touches structurally have no path to the pty
 // — scroll and select are the only gestures that do anything. The bottomBar
 // slot hosts the action row and composer (later tasks).
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -69,6 +74,7 @@ import com.tmuxifier.console.keys.sendTextOf
 import com.tmuxifier.console.pane.Span
 import com.tmuxifier.console.pane.Style
 import com.tmuxifier.console.pane.fitFontSp
+import com.tmuxifier.console.pane.paneContentWidthPx
 import com.tmuxifier.console.pane.parseSgr
 import com.tmuxifier.console.pane.visibleWindow
 import com.tmuxifier.console.pane.xtermColor
@@ -95,9 +101,9 @@ fun SessionScreen(
     var draft by remember(boxId) { mutableStateOf(state.prefs.draft(boxId)) }
     var sending by remember { mutableStateOf(false) }
     var fontSize by remember { mutableFloatStateOf(state.prefs.fontSize) }
-    // Pinching an alt-screen pane leaves fit mode for this visit; the ⤢ fit
-    // chip (or reopening the session) returns to it.
-    var manualZoom by remember(boxId) { mutableStateOf(false) }
+    // A pinched TUI pane size sticks per box (null = follow auto-fit); the
+    // ⤢ fit chip clears it back to auto.
+    var manualSp by remember(boxId) { mutableStateOf(state.prefs.paneFont(boxId).takeIf { it > 0f }) }
     // Bumped after a wheel send: re-keys the poll effect so the next snapshot
     // is fetched immediately instead of up to 1s later.
     var refreshTick by remember { mutableIntStateOf(0) }
@@ -175,15 +181,21 @@ fun SessionScreen(
                 ).size.width / 100f
             }
             val availPx = constraints.maxWidth - with(LocalDensity.current) { 12.dp.toPx() }
-            val fit = if (snap?.alt == true && !manualZoom) {
+            val altPane = snap?.alt == true
+            val fit = if (altPane && manualSp == null) {
                 fitFontSp(availPx, snap?.width ?: 0, glyphPerSp)
             } else null
-            val effSp = fit?.sp ?: fontSize
-            // A fitted line can't exceed the width, so wrap goes off — unless
-            // even the floor size couldn't hold the columns (fits=false).
-            val effWrap = fit == null || !fit.fits
-            val fitNow = rememberUpdatedState(fit)
+            val effSp = manualSp ?: fit?.sp ?: fontSize
+            val altNow = rememberUpdatedState(altPane)
             val effSpNow = rememberUpdatedState(effSp)
+            // A TUI pane NEVER soft-wraps — wrapping is what shredded Claude's
+            // borders into stacked dashes. Fitted it spans the screen exactly;
+            // zoomed in it pans horizontally at intact layout instead.
+            val hScroll = rememberScrollState()
+            LaunchedEffect(fit != null) { if (fit != null) hScroll.scrollTo(0) }
+            val contentWidth = with(LocalDensity.current) {
+                paneContentWidthPx(snap?.width ?: 0, glyphPerSp, effSp).toDp()
+            }
             // includeFontPadding=false drops Android's extra first/last-line
             // padding so consecutive box-drawing rows sit close enough to read
             // as continuous borders; natural line metrics avoid glyph clipping.
@@ -193,38 +205,45 @@ fun SessionScreen(
                 platformStyle = PlatformTextStyle(includeFontPadding = false),
             )
             SelectionContainer {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(Unit) {
-                            detectTransformGestures { _, _, zoom, _ ->
-                                if (zoom != 1f) {
-                                    // First pinch on a fitted pane continues
-                                    // smoothly from the fitted size.
-                                    if (fitNow.value != null && !manualZoom) {
-                                        fontSize = effSpNow.value
-                                        manualZoom = true
+                Box(Modifier.fillMaxSize().then(if (altPane) Modifier.horizontalScroll(hScroll) else Modifier)) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = (if (altPane) Modifier.fillMaxHeight().width(contentWidth) else Modifier.fillMaxSize())
+                            .pointerInput(Unit) {
+                                detectTransformGestures { _, _, zoom, _ ->
+                                    if (zoom != 1f) {
+                                        if (altNow.value) {
+                                            // Per-box persisted zoom, seeded from
+                                            // the current size so the first pinch
+                                            // continues smoothly from the fit.
+                                            val next = (effSpNow.value * zoom).coerceIn(6f, 32f)
+                                            manualSp = next
+                                            state.prefs.setPaneFont(boxId, next)
+                                        } else {
+                                            fontSize = (fontSize * zoom).coerceIn(8f, 32f)
+                                            state.prefs.fontSize = fontSize
+                                        }
                                     }
-                                    fontSize = (fontSize * zoom).coerceIn(8f, 32f)
-                                    state.prefs.fontSize = fontSize
                                 }
                             }
+                            .padding(horizontal = 6.dp),
+                    ) {
+                        itemsIndexed(all) { i, spans ->
+                            Text(
+                                annotated(spans, if (i == cursorLine) snap?.cursorX else null),
+                                style = paneStyle,
+                                color = DEFAULT_FG,
+                                softWrap = !altPane,
+                            )
                         }
-                        .padding(horizontal = 6.dp),
-                ) {
-                    itemsIndexed(all) { i, spans ->
-                        Text(
-                            annotated(spans, if (i == cursorLine) snap?.cursorX else null),
-                            style = paneStyle,
-                            color = DEFAULT_FG,
-                            softWrap = effWrap,
-                        )
                     }
                 }
             }
-            if (snap?.alt == true && manualZoom) {
-                PaneChip("⤢ fit", Modifier.align(Alignment.TopEnd).padding(8.dp)) { manualZoom = false }
+            if (altPane && manualSp != null) {
+                PaneChip("⤢ fit", Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                    manualSp = null
+                    state.prefs.clearPaneFont(boxId)
+                }
             }
             if (listState.canScrollForward) {
                 PaneChip("▼ latest", Modifier.align(Alignment.BottomEnd).padding(8.dp)) {

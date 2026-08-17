@@ -21,3 +21,10 @@ fun fitFontSp(
     val floored = floor(raw * 10f) / 10f
     return FitResult(sp = floored.coerceIn(minSp, maxSp), fits = floored >= minSp)
 }
+
+// Width of an unwrapped TUI pane's content at a given size — what the
+// horizontal pan container must hold. One extra column of slack: glyph
+// advances are measured at one reference size and scaled, so per-size
+// rounding must never be able to clip the last character.
+fun paneContentWidthPx(cols: Int, glyphWidthPerSpPx: Float, sp: Float): Float =
+    if (cols <= 0) 0f else (cols + 1) * glyphWidthPerSpPx * sp
