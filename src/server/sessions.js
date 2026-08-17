@@ -157,6 +157,37 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     return entry;
   }
 
+  // The Android app's invisible tmux client. The app renders capture-pane
+  // snapshots and never attaches a terminal — which meant it could never make
+  // tmux reflow the window to phone geometry the way an attached browser does
+  // (`window-size latest`). This gives its poll loop a REAL client of the
+  // phone's cols×rows, keyed like any viewer (so group closes and the
+  // per-box viewer cap apply), whose output nobody watches. Lifetime is a
+  // rolling TTL refreshed by each poll rather than listener-count grace,
+  // because there is never a listener: ~30s after the last poll the client
+  // detaches, and the window keeps its last size until another client acts —
+  // tmux's own rule, identical to closing one of two browsers.
+  const SIZED_TTL_MS = 30_000;
+  const SIZED_ID = /^[A-Za-z0-9_-]{1,60}$/;
+  function ensureSizedViewer({ box, session, clientId, cols, rows }) {
+    // Refused, not collapsed: safeClientId's 'shared' fallback would let a
+    // malformed id resize a browser viewer's PTY out from under it.
+    if (!SIZED_ID.test(String(clientId ?? ''))) return null;
+    const key = terminalKey(box.id, `app-${clientId}`);
+    const entry = open({ key, box, session, size: { cols, rows } });
+    entry.headless = true;
+    if (!entry.exited && (entry.pty.cols !== cols || entry.pty.rows !== rows)) {
+      resize(entry, { cols, rows });
+    }
+    if (entry.sizedTimer) clearTimeout(entry.sizedTimer);
+    entry.sizedTimer = setTimeout(() => {
+      // A listener means a real terminal adopted this key; its lifecycle wins.
+      if (entry.listeners.size === 0) close(entry);
+    }, SIZED_TTL_MS);
+    entry.sizedTimer.unref?.();
+    return entry;
+  }
+
   function attach(entry, onData) {
     if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
     // Replay recent output so a (re)attaching client sees the current screen —
@@ -199,6 +230,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
   function close(entry) {
     entry.exited = true;
     if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
+    if (entry.sizedTimer) { clearTimeout(entry.sizedTimer); entry.sizedTimer = null; }
     try { entry.pty.kill(); } catch {}
     if (entries.get(entry.key) === entry) entries.delete(entry.key);
   }
@@ -270,5 +302,5 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     return liveInGroup(boxId).length > 0;
   }
 
-  return { open, openLocal, provision, attach, onExit, write, resize, detach, close, closeIfUnwatched, closeKey, closeGroup, hasLiveSession, hasLiveSessionForBox, _count: () => entries.size };
+  return { open, openLocal, provision, ensureSizedViewer, attach, onExit, write, resize, detach, close, closeIfUnwatched, closeKey, closeGroup, hasLiveSession, hasLiveSessionForBox, _count: () => entries.size };
 }

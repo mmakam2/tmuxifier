@@ -32,11 +32,15 @@ Sign out only forgets the token locally.
   durations), waiting agents sorted to the top. Polls every 10 s while open; never in the
   background. Tap a card to open its session.
 - **Session** — the pane snapshot at 1 s cadence: full terminal colors, cursor marker,
-  stick-to-bottom with a "▼ latest" jump chip. A full-screen TUI pane (Claude Code, vim)
-  **auto-fits** its whole column count to the screen so borders and layout render exactly as
-  tmux drew them, and never soft-wraps: pinching in zooms to a per-box persisted size and the
-  pane pans horizontally at intact layout (the ⤢ fit chip returns to auto-fit). Plain shell
-  panes keep larger soft-wrapped text at the Settings font size. The pane is **inert to touch** — scroll and select only. Below it: the
+  stick-to-bottom with a "▼ latest" jump chip. While you're viewing, the server keeps an
+  **invisible tmux client** attached at your phone's geometry, so tmux reflows the session to
+  phone shape exactly as a narrowed desktop browser would — pinch is effectively a resize, and
+  your pinched size persists per box (the ⤢ fit chip returns to auto). When a desktop client
+  is active it takes the size back (tmux follows the most recently used client), and the pane
+  then renders the wide window auto-fitted: full-screen TUIs (Claude Code, vim) never
+  soft-wrap — they fit or pan horizontally at intact layout. Plain shell panes keep larger
+  soft-wrapped text at the Settings font size. Leaving the session detaches the invisible
+  client within ~30 s; the window keeps its last size until another client acts. The pane is **inert to touch** — scroll and select only. Below it: the
   action row (`Esc ↑ ↓ Tab ⏎ 1 2 3 y n`, and `^C` behind a two-tap arm) and the composer — a
   real Android text field where drafting, autocorrect, and voice dictation stay local until
   **Send** (literal text + Enter). Drafts persist per box; empty Send is a bare Enter.

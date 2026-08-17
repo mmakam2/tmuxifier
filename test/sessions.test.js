@@ -379,3 +379,99 @@ test('an abandoned viewer in its grace window yields its slot to a new one', () 
   expect(mgr.hasLiveSession(terminalKey('box1', 'v1'))).toBe(false); // reclaimed, not merely ignored
   expect(mgr.hasLiveSession(terminalKey('box1', 'v2'))).toBe(true);  // a watched viewer is untouched
 });
+
+// --- headless sized viewers (the Android app's invisible tmux client) ---
+
+// A recording fake for the sized-viewer tests: remembers resizes and kills.
+function sizedFakePty(cols, rows) {
+  let dataCb, exitCb;
+  return {
+    cols, rows,
+    resizes: [],
+    killed: false,
+    onData: (cb) => { dataCb = cb; },
+    onExit: (cb) => { exitCb = cb; },
+    write: () => {},
+    resize(c, r) { this.cols = c; this.rows = r; this.resizes.push([c, r]); },
+    kill() { this.killed = true; exitCb && exitCb({ exitCode: 0 }); },
+    emit: (d) => dataCb && dataCb(d),
+  };
+}
+
+function sizedHarness(opts = {}) {
+  const spawned = [];
+  const spawn = (cmd, argv, o) => {
+    const pty = sizedFakePty(o.cols, o.rows);
+    spawned.push({ cmd, argv, o, pty });
+    return pty;
+  };
+  const mgr = createSessionManager({ spawn, ...opts });
+  return { mgr, spawned };
+}
+
+const BOX = { id: 'b1', host: '192.168.1.10', user: 'u' };
+
+test('ensureSizedViewer attaches an invisible client at the requested size', () => {
+  const { mgr, spawned } = sizedHarness();
+  const entry = mgr.ensureSizedViewer({ box: BOX, session: 'main', clientId: 'dev1', cols: 48, rows: 90 });
+  expect(entry).toBeTruthy();
+  expect(spawned.length).toBe(1);
+  expect(spawned[0].o.cols).toBe(48);
+  expect(spawned[0].o.rows).toBe(90);
+  expect(mgr.hasLiveSessionForBox('b1')).toBe(true);
+});
+
+test('ensureSizedViewer reuses the client and resizes when geometry changes', () => {
+  const { mgr, spawned } = sizedHarness();
+  mgr.ensureSizedViewer({ box: BOX, session: 'main', clientId: 'dev1', cols: 48, rows: 90 });
+  mgr.ensureSizedViewer({ box: BOX, session: 'main', clientId: 'dev1', cols: 48, rows: 90 });
+  expect(spawned.length).toBe(1);
+  expect(spawned[0].pty.resizes).toEqual([]); // same size: no churn
+  mgr.ensureSizedViewer({ box: BOX, session: 'main', clientId: 'dev1', cols: 60, rows: 80 });
+  expect(spawned.length).toBe(1);
+  expect(spawned[0].pty.resizes).toEqual([[60, 80]]);
+});
+
+test('a sized viewer expires after its TTL unless polls keep refreshing it', () => {
+  vi.useFakeTimers();
+  try {
+    const { mgr, spawned } = sizedHarness();
+    mgr.ensureSizedViewer({ box: BOX, session: 'main', clientId: 'dev1', cols: 48, rows: 90 });
+    vi.advanceTimersByTime(20_000);
+    mgr.ensureSizedViewer({ box: BOX, session: 'main', clientId: 'dev1', cols: 48, rows: 90 });
+    vi.advanceTimersByTime(20_000); // 40s since open, 20s since refresh: alive
+    expect(mgr.hasLiveSessionForBox('b1')).toBe(true);
+    vi.advanceTimersByTime(15_000); // 35s since last refresh: expired
+    expect(mgr.hasLiveSessionForBox('b1')).toBe(false);
+    expect(spawned[0].pty.killed).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('a sized viewer whose key a live listener holds is never TTL-killed', () => {
+  vi.useFakeTimers();
+  try {
+    const { mgr } = sizedHarness();
+    const entry = mgr.ensureSizedViewer({ box: BOX, session: 'main', clientId: 'dev1', cols: 48, rows: 90 });
+    mgr.attach(entry, () => {});
+    vi.advanceTimersByTime(120_000);
+    expect(mgr.hasLiveSessionForBox('b1')).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('ensureSizedViewer refuses an invalid client id instead of collapsing onto the shared key', () => {
+  const { mgr, spawned } = sizedHarness();
+  expect(mgr.ensureSizedViewer({ box: BOX, session: 'main', clientId: 'not ok!', cols: 48, rows: 90 })).toBe(null);
+  expect(mgr.ensureSizedViewer({ box: BOX, session: 'main', clientId: 'x'.repeat(80), cols: 48, rows: 90 })).toBe(null);
+  expect(spawned.length).toBe(0);
+});
+
+test('sized viewers respect the per-box viewer cap when every slot is watched', () => {
+  const { mgr } = sizedHarness({ maxViewersPerBox: 1 });
+  const browser = mgr.open({ key: terminalKey('b1', 'tab1'), box: BOX, session: 'main', size: { cols: 80, rows: 24 } });
+  mgr.attach(browser, () => {});
+  expect(() => mgr.ensureSizedViewer({ box: BOX, session: 'main', clientId: 'dev1', cols: 48, rows: 90 })).toThrow(/too many viewers/);
+});

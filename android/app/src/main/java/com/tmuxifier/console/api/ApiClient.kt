@@ -64,8 +64,13 @@ class ApiClient(val baseUrl: String, private val token: String?) {
 
     suspend fun series(): Map<String, List<Sample>> = parse(seriesMapSerializer, request("GET", "/api/health/series"))
 
-    suspend fun pane(boxId: String, lines: Int = 200): PaneSnapshot =
-        parse(PaneSnapshot.serializer(), request("GET", "/api/boxes/$boxId/pane?lines=$lines"))
+    // cols/rows, when present, ask the server to keep an invisible tmux client
+    // of that size attached (device-token identity), so the window reflows to
+    // phone geometry the way an attached browser would.
+    suspend fun pane(boxId: String, lines: Int = 200, cols: Int? = null, rows: Int? = null): PaneSnapshot {
+        val geo = if (cols != null && rows != null) "&cols=$cols&rows=$rows" else ""
+        return parse(PaneSnapshot.serializer(), request("GET", "/api/boxes/$boxId/pane?lines=$lines$geo"))
+    }
 
     suspend fun sendText(boxId: String, text: String) {
         request("POST", "/api/boxes/$boxId/keys", buildJsonObject { put("text", text) }.toString())

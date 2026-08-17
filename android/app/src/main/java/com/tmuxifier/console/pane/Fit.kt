@@ -28,3 +28,21 @@ fun fitFontSp(
 // rounding must never be able to clip the last character.
 fun paneContentWidthPx(cols: Int, glyphWidthPerSpPx: Float, sp: Float): Float =
     if (cols <= 0) 0f else (cols + 1) * glyphWidthPerSpPx * sp
+
+// The window geometry the app asks the server to shape the tmux window to
+// (its invisible sizing client): how many cells of the chosen font fit the
+// pane area, clamped to the range the server accepts.
+data class PaneGeometry(val cols: Int, val rows: Int)
+
+fun paneRequestGeometry(
+    availWpx: Float,
+    availHpx: Float,
+    glyphWPerSpPx: Float,
+    glyphHPerSpPx: Float,
+    sp: Float,
+): PaneGeometry? {
+    if (availWpx <= 0f || availHpx <= 0f || glyphWPerSpPx <= 0f || glyphHPerSpPx <= 0f || sp <= 0f) return null
+    val cols = floor(availWpx / (glyphWPerSpPx * sp)).toInt().coerceIn(20, 400)
+    val rows = floor(availHpx / (glyphHPerSpPx * sp)).toInt().coerceIn(5, 300)
+    return PaneGeometry(cols, rows)
+}

@@ -51,4 +51,28 @@ class FitTest {
         assertEquals(81f * 2f * 10f, paneContentWidthPx(cols = 80, glyphWidthPerSpPx = 2f, sp = 10f))
         assertEquals(0f, paneContentWidthPx(cols = 0, glyphWidthPerSpPx = 2f, sp = 10f))
     }
+
+    // The window geometry the app requests from the server: how many cells of
+    // the chosen font fit the pane area, floored, clamped to the server's
+    // accepted range (cols 20..400, rows 5..300).
+    @Test fun requestGeometryFloorsCells() {
+        val g = paneRequestGeometry(availWpx = 1000f, availHpx = 2000f, glyphWPerSpPx = 1.2f, glyphHPerSpPx = 2.4f, sp = 16f)!!
+        assertEquals(52, g.cols)  // 1000 / (1.2*16) = 52.08
+        assertEquals(52, g.rows)  // 2000 / (2.4*16) = 52.08
+    }
+
+    @Test fun requestGeometryClampsToServerRange() {
+        val big = paneRequestGeometry(availWpx = 100000f, availHpx = 100000f, glyphWPerSpPx = 1f, glyphHPerSpPx = 2f, sp = 6f)!!
+        assertEquals(400, big.cols)
+        assertEquals(300, big.rows)
+        val small = paneRequestGeometry(availWpx = 50f, availHpx = 50f, glyphWPerSpPx = 1f, glyphHPerSpPx = 2f, sp = 32f)!!
+        assertEquals(20, small.cols)
+        assertEquals(5, small.rows)
+    }
+
+    @Test fun requestGeometryDegenerateIsNull() {
+        assertNull(paneRequestGeometry(availWpx = 0f, availHpx = 100f, glyphWPerSpPx = 1f, glyphHPerSpPx = 2f, sp = 16f))
+        assertNull(paneRequestGeometry(availWpx = 100f, availHpx = 100f, glyphWPerSpPx = 0f, glyphHPerSpPx = 2f, sp = 16f))
+        assertNull(paneRequestGeometry(availWpx = 100f, availHpx = 100f, glyphWPerSpPx = 1f, glyphHPerSpPx = 2f, sp = 0f))
+    }
 }

@@ -7,7 +7,7 @@ import { createStore } from '../src/server/store.js';
 import { createBoxActions } from '../src/server/boxActions.js';
 import { hashPassword } from '../src/server/auth.js';
 
-let app, dir, calls, boxId, failNext, noMouseNext, captureOut;
+let app, dir, calls, boxId, failNext, noMouseNext, captureOut, sizedCalls, setupRunning;
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-pane-'));
   calls = [];
@@ -37,10 +37,16 @@ beforeEach(async () => {
     passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir,
     localShell: 'none', configPath: path.join(dir, 'config.json'),
   };
-  const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
+  sizedCalls = [];
+  setupRunning = false;
+  const sessions = {
+    open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {},
+    ensureSizedViewer(args) { sizedCalls.push(args); return {}; },
+  };
+  const setupManager = { currentForBox: () => (setupRunning ? { status: 'running' } : null) };
   const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
   const history = { getSeries: () => [{ t: 1, up: true, agent: 'waiting' }], getEvents: () => ({ events: [], latestSeq: 0 }), record() {}, onEvent() {} };
-  app = buildServer({ config, store, sessions, statusChecker, boxActions, history });
+  app = buildServer({ config, store, sessions, statusChecker, boxActions, history, setupManager });
 });
 
 async function headers() {
@@ -68,6 +74,34 @@ test('GET pane on an alt-screen pane ships only the visible screen, flagged alt/
   expect(body.alt).toBe(true);
   expect(body.mouse).toBe(true);
   expect(body.content).toBe('claude-1\nclaude-2');
+});
+
+test('GET pane with viewer geometry ensures the sizing client after a good capture', async () => {
+  const h = await headers();
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?cols=48&rows=90&client=dev1`, headers: h });
+  expect(res.statusCode).toBe(200);
+  expect(sizedCalls.length).toBe(1);
+  expect(sizedCalls[0]).toMatchObject({ clientId: 'dev1', cols: 48, rows: 90 });
+  expect(sizedCalls[0].box?.id).toBe(boxId);
+});
+
+test('GET pane geometry is best-effort and validated: bad, partial, or out-of-range never sizes', async () => {
+  const h = await headers();
+  for (const q of ['cols=48', 'rows=90', 'cols=abc&rows=90&client=c', 'cols=48.5&rows=90&client=c', 'cols=10&rows=90&client=c', 'cols=48&rows=999&client=c', 'cols=48&rows=90']) {
+    const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?${q}`, headers: h });
+    expect(res.statusCode).toBe(200);
+  }
+  expect(sizedCalls.length).toBe(0);
+});
+
+test('GET pane geometry is not applied while the box is mid-setup or after a failed capture', async () => {
+  const h = await headers();
+  setupRunning = true;
+  expect((await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?cols=48&rows=90&client=c`, headers: h })).statusCode).toBe(200);
+  setupRunning = false;
+  failNext = true;
+  expect((await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?cols=48&rows=90&client=c`, headers: h })).statusCode).toBe(502);
+  expect(sizedCalls.length).toBe(0);
 });
 
 test('POST keys: wheel sends gated SGR wheel reports to the pane', async () => {

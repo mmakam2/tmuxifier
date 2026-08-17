@@ -952,6 +952,20 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const lines = req.query?.lines != null ? Number(req.query.lines) : 200;
     const snap = await boxActions.paneSnapshot(box, box.sessionName, { lines });
     if (!snap.ok) return reply.code(502).send({ error: snap.error });
+    // Viewer geometry: the app asks for a phone-shaped window by keeping an
+    // invisible tmux client attached at cols×rows (sessions.ensureSizedViewer)
+    // — the same mechanism that lets a narrowed browser reflow the session.
+    // Strictly best-effort AFTER a good capture: a working snapshot proves the
+    // ControlMaster is up, so the attach can't fall into interactive auth (the
+    // one window where a spawned ssh would garble a live login). Gated like
+    // /term while a setup job runs, so no client can hatch the session early.
+    const cols = Number(req.query?.cols), rows = Number(req.query?.rows);
+    const viewerId = req.deviceId || req.query?.client;
+    if (Number.isInteger(cols) && cols >= 20 && cols <= 400
+      && Number.isInteger(rows) && rows >= 5 && rows <= 300
+      && viewerId && setupManager?.currentForBox(box.id)?.status !== 'running') {
+      try { sessions.ensureSizedViewer({ box, session: box.sessionName, clientId: viewerId, cols, rows }); } catch {}
+    }
     const last = history ? (history.getSeries(box.id).at(-1) || null) : null;
     return { ...snap, agent: last?.agent ?? null, sessionName: box.sessionName };
   });

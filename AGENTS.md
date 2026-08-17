@@ -214,8 +214,16 @@ pattern for new modules.
   `voiceInstall.js` mold, browser-session only, publishes to `data/app/` on success; variant
   decided by whether `android/keystore.properties` exists).
   `GET /api/boxes/:id/pane` is a read-only tmux snapshot
-  for the app — `capture-pane` over the ControlMaster with a bounded `-S` scrollback, never
-  attaching — merged with the box's latest agent-state sample from `healthHistory`. The
+  for the app — `capture-pane` over the ControlMaster with a bounded `-S` scrollback — merged
+  with the box's latest agent-state sample from `healthHistory`. Optional `cols`/`rows` (with a
+  device identity, or a `client` id for a cookie session) keep an **invisible sizing client**
+  attached via `sessions.ensureSizedViewer`: a real tmux client of phone geometry whose output
+  nobody watches, so `window-size latest` reflows the session for the app exactly as a narrowed
+  browser would — the one deliberate retreat from "the app never attaches". Best-effort only,
+  ensured strictly AFTER a successful capture (proof the master is up, so the attach can't fall
+  into interactive auth) and gated like `/term` while a setup job runs; lifetime is a rolling
+  ~30s TTL refreshed by each poll, so leaving the app detaches the client and the window keeps
+  its last size until another client acts — tmux's own rule. The
   geometry line also reports `#{alternate_on}` and the pane's mouse flags: on an alt-screen
   pane (Claude Code, vim) the capture's history lines belong to the PRIMARY screen — the shell
   from before the TUI launched, not the TUI's own past — so `parsePaneSnapshot` ships only the

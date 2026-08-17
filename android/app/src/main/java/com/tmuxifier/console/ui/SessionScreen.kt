@@ -1,13 +1,16 @@
 package com.tmuxifier.console.ui
 
 // The session surface: a 1s-polled tmux snapshot rendered as native styled
-// text. A full-screen TUI pane (alt-screen: Claude Code, vim) auto-FITS its
-// column count to the screen width (pane/Fit.kt) so borders and layout render
-// exactly as tmux drew them — soft-wrapping an 80-column frame at phone width
-// shredded every border into stacked dashes. A TUI pane never wraps: pinching
-// in zooms to a per-box persisted size and the pane pans horizontally at
-// intact layout (the ⤢ fit chip returns to auto-fit). Plain shell panes keep
-// the larger soft-wrapped text at the Settings size. INERT TO TOUCH by design: the pane composables carry no click
+// text. Each poll also asks the server for a PHONE-SHAPED window: the server
+// keeps an invisible tmux client attached at the cols×rows that fit this
+// screen at the user's chosen size (paneRequestGeometry → ensureSizedViewer),
+// so tmux reflows the session exactly as a narrowed browser would and the
+// snapshot arrives phone-shaped. Rendering still self-defends for any
+// geometry a desktop viewer imposes: a full-screen TUI pane (alt-screen:
+// Claude Code, vim) auto-FITS its column count to the screen width
+// (pane/Fit.kt) and never soft-wraps — pinching zooms to a per-box persisted
+// size with horizontal pan at intact layout (⤢ fit returns to auto). Plain
+// shell panes keep the larger soft-wrapped text at the Settings size. INERT TO TOUCH by design: the pane composables carry no click
 // handlers wired to the API, so touches structurally have no path to the pty
 // — scroll and select are the only gestures that do anything. The bottomBar
 // slot hosts the action row and composer (later tasks).
@@ -36,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -71,10 +75,12 @@ import com.tmuxifier.console.api.ApiException
 import com.tmuxifier.console.api.PaneSnapshot
 import com.tmuxifier.console.keys.SendSpec
 import com.tmuxifier.console.keys.sendTextOf
+import com.tmuxifier.console.pane.PaneGeometry
 import com.tmuxifier.console.pane.Span
 import com.tmuxifier.console.pane.Style
 import com.tmuxifier.console.pane.fitFontSp
 import com.tmuxifier.console.pane.paneContentWidthPx
+import com.tmuxifier.console.pane.paneRequestGeometry
 import com.tmuxifier.console.pane.parseSgr
 import com.tmuxifier.console.pane.visibleWindow
 import com.tmuxifier.console.pane.xtermColor
@@ -107,6 +113,10 @@ fun SessionScreen(
     // Bumped after a wheel send: re-keys the poll effect so the next snapshot
     // is fetched immediately instead of up to 1s later.
     var refreshTick by remember { mutableIntStateOf(0) }
+    // The window geometry this screen wants tmux shaped to — written by the
+    // pane layout below (it knows the measured cell and the pane area), read
+    // by each poll, which the server turns into the invisible sizing client.
+    val paneGeom = remember { mutableStateOf<PaneGeometry?>(null) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
@@ -116,7 +126,8 @@ fun SessionScreen(
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 try {
-                    val s = client.pane(boxId)
+                    val g = paneGeom.value
+                    val s = client.pane(boxId, cols = g?.cols, rows = g?.rows)
                     // Stick to the bottom when the viewer was already there;
                     // a scrolled-back reader stays put.
                     val stick = !listState.canScrollForward
@@ -174,13 +185,31 @@ fun SessionScreen(
             // screen. Null (plain shell, or pinched to manual) keeps the
             // preference size and soft-wrap.
             val measurer = rememberTextMeasurer()
-            val glyphPerSp = remember(measurer) {
-                measurer.measure(
+            val glyphCell = remember(measurer) {
+                val m = measurer.measure(
                     AnnotatedString("0"),
                     TextStyle(fontFamily = FontFamily.Monospace, fontSize = 100.sp),
-                ).size.width / 100f
+                ).size
+                Pair(m.width / 100f, m.height / 100f)
             }
+            val glyphPerSp = glyphCell.first
             val availPx = constraints.maxWidth - with(LocalDensity.current) { 12.dp.toPx() }
+            // Ask the server for a window shaped to this area at the size the
+            // user chose (their per-box pinch, else the Settings size). tmux
+            // reflows, the snapshot comes back phone-shaped, and the auto-fit
+            // below renders it at ≈ that chosen size — no panning, no
+            // letterboxing. When a desktop client is active it wins the size
+            // (tmux window-size latest) and the fit gracefully shows its wide
+            // window small again.
+            SideEffect {
+                paneGeom.value = paneRequestGeometry(
+                    availWpx = availPx,
+                    availHpx = constraints.maxHeight.toFloat(),
+                    glyphWPerSpPx = glyphCell.first,
+                    glyphHPerSpPx = glyphCell.second,
+                    sp = manualSp ?: fontSize,
+                )
+            }
             val altPane = snap?.alt == true
             val fit = if (altPane && manualSp == null) {
                 fitFontSp(availPx, snap?.width ?: 0, glyphPerSp)
