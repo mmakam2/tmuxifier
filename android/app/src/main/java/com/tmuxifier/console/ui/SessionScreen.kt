@@ -1,14 +1,21 @@
 package com.tmuxifier.console.ui
 
 // The session surface: a 1s-polled tmux snapshot rendered as native styled
-// text. Soft-wrapped at the chosen font size — never shrunk to fit 80
-// columns. INERT TO TOUCH by design: the pane composables carry no click
+// text. A full-screen TUI pane (alt-screen: Claude Code, vim) auto-FITS its
+// column count to the screen width (pane/Fit.kt) so borders and layout render
+// exactly as tmux drew them — soft-wrapping an 80-column frame at phone width
+// shredded every border into stacked dashes. Plain shell panes keep the
+// larger soft-wrapped text; pinch always overrides (a ⤢ fit chip snaps an alt
+// pane back). INERT TO TOUCH by design: the pane composables carry no click
 // handlers wired to the API, so touches structurally have no path to the pty
 // — scroll and select are the only gestures that do anything. The bottomBar
 // slot hosts the action row and composer (later tasks).
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,18 +37,24 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -55,6 +68,7 @@ import com.tmuxifier.console.keys.SendSpec
 import com.tmuxifier.console.keys.sendTextOf
 import com.tmuxifier.console.pane.Span
 import com.tmuxifier.console.pane.Style
+import com.tmuxifier.console.pane.fitFontSp
 import com.tmuxifier.console.pane.parseSgr
 import com.tmuxifier.console.pane.visibleWindow
 import com.tmuxifier.console.pane.xtermColor
@@ -81,6 +95,9 @@ fun SessionScreen(
     var draft by remember(boxId) { mutableStateOf(state.prefs.draft(boxId)) }
     var sending by remember { mutableStateOf(false) }
     var fontSize by remember { mutableFloatStateOf(state.prefs.fontSize) }
+    // Pinching an alt-screen pane leaves fit mode for this visit; the ⤢ fit
+    // chip (or reopening the session) returns to it.
+    var manualZoom by remember(boxId) { mutableStateOf(false) }
     // Bumped after a wheel send: re-keys the poll effect so the next snapshot
     // is fetched immediately instead of up to 1s later.
     var refreshTick by remember { mutableIntStateOf(0) }
@@ -142,9 +159,39 @@ fun SessionScreen(
             )
         }
 
-        Box(Modifier.weight(1f).fillMaxWidth().background(SCREEN_BG)) {
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(SCREEN_BG)) {
             val (all, screenStart) = visibleWindow(lines, snap?.height ?: 0)
             val cursorLine = snap?.let { screenStart + it.cursorY }
+            // Fit-to-width for full-screen TUIs: measure the monospace glyph
+            // once (per density — the measurer is recreated on fold/unfold)
+            // and size the font so the pane's whole column count spans the
+            // screen. Null (plain shell, or pinched to manual) keeps the
+            // preference size and soft-wrap.
+            val measurer = rememberTextMeasurer()
+            val glyphPerSp = remember(measurer) {
+                measurer.measure(
+                    AnnotatedString("0"),
+                    TextStyle(fontFamily = FontFamily.Monospace, fontSize = 100.sp),
+                ).size.width / 100f
+            }
+            val availPx = constraints.maxWidth - with(LocalDensity.current) { 12.dp.toPx() }
+            val fit = if (snap?.alt == true && !manualZoom) {
+                fitFontSp(availPx, snap?.width ?: 0, glyphPerSp)
+            } else null
+            val effSp = fit?.sp ?: fontSize
+            // A fitted line can't exceed the width, so wrap goes off — unless
+            // even the floor size couldn't hold the columns (fits=false).
+            val effWrap = fit == null || !fit.fits
+            val fitNow = rememberUpdatedState(fit)
+            val effSpNow = rememberUpdatedState(effSp)
+            // includeFontPadding=false drops Android's extra first/last-line
+            // padding so consecutive box-drawing rows sit close enough to read
+            // as continuous borders; natural line metrics avoid glyph clipping.
+            val paneStyle = TextStyle(
+                fontFamily = FontFamily.Monospace,
+                fontSize = effSp.sp,
+                platformStyle = PlatformTextStyle(includeFontPadding = false),
+            )
             SelectionContainer {
                 LazyColumn(
                     state = listState,
@@ -153,6 +200,12 @@ fun SessionScreen(
                         .pointerInput(Unit) {
                             detectTransformGestures { _, _, zoom, _ ->
                                 if (zoom != 1f) {
+                                    // First pinch on a fitted pane continues
+                                    // smoothly from the fitted size.
+                                    if (fitNow.value != null && !manualZoom) {
+                                        fontSize = effSpNow.value
+                                        manualZoom = true
+                                    }
                                     fontSize = (fontSize * zoom).coerceIn(8f, 32f)
                                     state.prefs.fontSize = fontSize
                                 }
@@ -163,19 +216,20 @@ fun SessionScreen(
                     itemsIndexed(all) { i, spans ->
                         Text(
                             annotated(spans, if (i == cursorLine) snap?.cursorX else null),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = fontSize.sp,
+                            style = paneStyle,
                             color = DEFAULT_FG,
-                            softWrap = true,
+                            softWrap = effWrap,
                         )
                     }
                 }
             }
+            if (snap?.alt == true && manualZoom) {
+                PaneChip("⤢ fit", Modifier.align(Alignment.TopEnd).padding(8.dp)) { manualZoom = false }
+            }
             if (listState.canScrollForward) {
-                TextButton(
-                    onClick = { scope.launch { if (lines.isNotEmpty()) listState.scrollToItem(lines.size - 1) } },
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
-                ) { Text("▼ latest") }
+                PaneChip("▼ latest", Modifier.align(Alignment.BottomEnd).padding(8.dp)) {
+                    scope.launch { if (lines.isNotEmpty()) listState.scrollToItem(lines.size - 1) }
+                }
             }
             // A mouse-aware pane app (Claude Code) keeps its own transcript;
             // the snapshot carries no scrollback for it (the server trims the
@@ -193,9 +247,12 @@ fun SessionScreen(
                         }
                     }
                 }
-                Column(Modifier.align(Alignment.CenterEnd).padding(end = 4.dp)) {
-                    TextButton(onClick = { wheel("up") }) { Text("▲ older") }
-                    TextButton(onClick = { wheel("down") }) { Text("▼ newer") }
+                Column(
+                    Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    PaneChip("▲ older") { wheel("up") }
+                    PaneChip("▼ newer") { wheel("down") }
                 }
             }
         }
@@ -258,6 +315,22 @@ fun SessionScreen(
         )
         bottomBar()
     }
+}
+
+/** Compact pill control overlaying the pane — clipped, translucent-backed so
+ *  it reads as a button over any content rather than loose floating text. */
+@Composable
+private fun PaneChip(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Text(
+        label,
+        color = MaterialTheme.colorScheme.primary,
+        style = MaterialTheme.typography.labelLarge,
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xE61A212B))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    )
 }
 
 /** Spans → styled text; the cursor column gets a background overlay. */
