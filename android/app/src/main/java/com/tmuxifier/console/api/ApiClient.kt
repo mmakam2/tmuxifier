@@ -75,6 +75,13 @@ class ApiClient(val baseUrl: String, private val token: String?) {
         request("POST", "/api/boxes/$boxId/keys", buildJsonObject { put("key", key) }.toString())
     }
 
+    // Scroll a mouse-aware pane app's own viewport (Claude Code's transcript):
+    // the server injects SGR wheel reports, refusing panes without mouse
+    // tracking (409). dir is "up" or "down" — server-validated.
+    suspend fun sendWheel(boxId: String, dir: String, steps: Int = 5) {
+        request("POST", "/api/boxes/$boxId/keys", buildJsonObject { put("wheel", dir); put("steps", steps) }.toString())
+    }
+
     suspend fun fcmConfig(): FcmConfig =
         parse(FcmConfig.serializer(), request("GET", "/api/devices/fcm-config"))
 

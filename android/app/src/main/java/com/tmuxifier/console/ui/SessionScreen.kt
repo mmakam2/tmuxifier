@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -80,12 +81,15 @@ fun SessionScreen(
     var draft by remember(boxId) { mutableStateOf(state.prefs.draft(boxId)) }
     var sending by remember { mutableStateOf(false) }
     var fontSize by remember { mutableFloatStateOf(state.prefs.fontSize) }
+    // Bumped after a wheel send: re-keys the poll effect so the next snapshot
+    // is fetched immediately instead of up to 1s later.
+    var refreshTick by remember { mutableIntStateOf(0) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
 
     val lifecycleOwner = LocalLifecycleOwner.current
-    LaunchedEffect(client, boxId) {
+    LaunchedEffect(client, boxId, refreshTick) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 try {
@@ -172,6 +176,27 @@ fun SessionScreen(
                     onClick = { scope.launch { if (lines.isNotEmpty()) listState.scrollToItem(lines.size - 1) } },
                     modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
                 ) { Text("▼ latest") }
+            }
+            // A mouse-aware pane app (Claude Code) keeps its own transcript;
+            // the snapshot carries no scrollback for it (the server trims the
+            // alt screen's stale shell history), so these scroll the app
+            // itself via server-injected wheel events. Worded labels — a bare
+            // arrow would blur into "▼ latest" one corner away.
+            if (snap?.mouse == true) {
+                val wheel: (String) -> Unit = { dir ->
+                    scope.launch {
+                        try {
+                            client.sendWheel(boxId, dir)
+                            refreshTick++ // fetch the scrolled screen now, not next second
+                        } catch (e: ApiException) {
+                            if (e.status == 401) onUnauthorized() else sendError = e.message
+                        }
+                    }
+                }
+                Column(Modifier.align(Alignment.CenterEnd).padding(end = 4.dp)) {
+                    TextButton(onClick = { wheel("up") }) { Text("▲ older") }
+                    TextButton(onClick = { wheel("down") }) { Text("▼ newer") }
+                }
             }
         }
 

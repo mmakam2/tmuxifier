@@ -11,6 +11,7 @@ import {
   injectTextVia,
   injectLocalUploadPath,
   buildPaneSnapshotRemote,
+  buildSendWheelRemote,
   parsePaneSnapshot,
   NAMED_KEYS,
   buildSendNamedKeyRemote,
@@ -347,9 +348,9 @@ test('injectTextVia sh-quotes text containing quotes and semicolons', async () =
   expect(sendKeys).toContain(`'it'\\''s fine; rm -rf /'`);
 });
 
-test('buildPaneSnapshotRemote: geometry line, then bounded capture, atomic on failure', () => {
+test('buildPaneSnapshotRemote: geometry line with alt/mouse flags, then bounded capture, atomic on failure', () => {
   const s = buildPaneSnapshotRemote('main', { lines: 200 });
-  expect(s).toContain("display-message -p -t '=main:' '#{pane_width} #{pane_height} #{cursor_x} #{cursor_y}'");
+  expect(s).toContain("display-message -p -t '=main:' '#{pane_width} #{pane_height} #{cursor_x} #{cursor_y} #{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag}'");
   expect(s).toContain("capture-pane -e -p -t '=main:' -S -200");
   expect(s).toContain(' && '); // one failure fails the whole script (non-zero exit)
 });
@@ -361,13 +362,49 @@ test('buildPaneSnapshotRemote clamps lines and quotes the session', () => {
 });
 
 test('parsePaneSnapshot splits geometry from content', () => {
-  expect(parsePaneSnapshot('80 24 5 23\nline1\nline2\n')).toEqual({
-    width: 80, height: 24, cursorX: 5, cursorY: 23, content: 'line1\nline2',
+  expect(parsePaneSnapshot('80 24 5 23 0 0 0\nline1\nline2\n')).toEqual({
+    width: 80, height: 24, cursorX: 5, cursorY: 23, alt: false, mouse: false, content: 'line1\nline2',
   });
-  expect(parsePaneSnapshot('80 24 5 23')).toEqual({ width: 80, height: 24, cursorX: 5, cursorY: 23, content: '' });
+  expect(parsePaneSnapshot('80 24 5 23 0 0 0')).toEqual({
+    width: 80, height: 24, cursorX: 5, cursorY: 23, alt: false, mouse: false, content: '',
+  });
+  // A box tmux too old for the mouse/alt format variables expands them to
+  // nothing — the pane view must degrade to the old behaviour, not 502.
+  expect(parsePaneSnapshot('80 24 5 23\nline1\n')).toEqual({
+    width: 80, height: 24, cursorX: 5, cursorY: 23, alt: false, mouse: false, content: 'line1',
+  });
   expect(parsePaneSnapshot('garbage\nstuff')).toBe(null);
   expect(parsePaneSnapshot('')).toBe(null);
   expect(parsePaneSnapshot(null)).toBe(null);
+});
+
+test('parsePaneSnapshot: alt screen ships only the visible screen — capture history above it is the primary screen (stale shell), not the app', () => {
+  // height 2, alt on: 4 content lines = 2 history + 2 screen; keep the last 2.
+  expect(parsePaneSnapshot('80 2 0 1 1 1 1\nold-shell-1\nold-shell-2\nscreen-1\nscreen-2\n')).toEqual({
+    width: 80, height: 2, cursorX: 0, cursorY: 1, alt: true, mouse: true, content: 'screen-1\nscreen-2',
+  });
+  // alt off keeps the full scrollback untouched.
+  expect(parsePaneSnapshot('80 2 0 1 0 1 1\na\nb\nc\n').content).toBe('a\nb\nc');
+  // mouse requires BOTH tracking and SGR encoding — wheel injection is SGR-only.
+  expect(parsePaneSnapshot('80 24 0 0 1 1 0\nx\n').mouse).toBe(false);
+  expect(parsePaneSnapshot('80 24 0 0 1 0 1\nx\n').mouse).toBe(false);
+});
+
+test('buildSendWheelRemote: SGR wheel reports gated on pane mouse mode, session quoted, steps clamped', () => {
+  const up = buildSendWheelRemote('main', 'up', 5);
+  // Refuses (exit 93) unless the pane has mouse tracking AND SGR encoding on —
+  // wheel bytes written to a non-mouse pane would arrive as garbage input.
+  expect(up).toContain("'#{mouse_any_flag} #{mouse_sgr_flag} #{pane_width} #{pane_height}'");
+  expect(up).toContain('exit 93');
+  expect(up).toContain('[<64;'); // SGR wheel-up button code
+  expect(up).toContain('-lt 5');
+  expect(up).toContain("send-keys -t '=main:' -l --");
+  expect(buildSendWheelRemote('main', 'down', 3)).toContain('[<65;'); // wheel-down
+  expect(buildSendWheelRemote("a'b", 'up', 3)).toContain("'=a-b:'");
+  expect(buildSendWheelRemote('main', 'up', 999)).toContain('-lt 25');
+  expect(buildSendWheelRemote('main', 'up', 0)).toContain('-lt 3');
+  expect(() => buildSendWheelRemote('main', 'left', 1)).toThrow(/wheel direction/);
+  expect(() => buildSendWheelRemote('main', 'up; rm -rf /', 1)).toThrow(/wheel direction/);
 });
 
 test('named keys are a closed allowlist', () => {

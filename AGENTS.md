@@ -215,10 +215,19 @@ pattern for new modules.
   decided by whether `android/keystore.properties` exists).
   `GET /api/boxes/:id/pane` is a read-only tmux snapshot
   for the app — `capture-pane` over the ControlMaster with a bounded `-S` scrollback, never
-  attaching — merged with the box's latest agent-state sample from `healthHistory`. `POST
+  attaching — merged with the box's latest agent-state sample from `healthHistory`. The
+  geometry line also reports `#{alternate_on}` and the pane's mouse flags: on an alt-screen
+  pane (Claude Code, vim) the capture's history lines belong to the PRIMARY screen — the shell
+  from before the TUI launched, not the TUI's own past — so `parsePaneSnapshot` ships only the
+  visible screen there (scrolling the app used to walk out of a Claude session into stale
+  shell output), and the response's `alt`/`mouse` booleans tell the client what it holds. `POST
   /api/boxes/:id/keys` accepts exactly one of literal text (sent via `send-keys -l` after
-  `tmuxInject.js`'s `sanitizeSendText`) or a named key drawn from its closed `NAMED_KEYS`
-  allowlist, never both.
+  `tmuxInject.js`'s `sanitizeSendText`), a named key drawn from its closed `NAMED_KEYS`
+  allowlist, or `wheel: 'up'|'down'` (+ clamped `steps`) — `buildSendWheelRemote` injecting
+  SGR wheel reports into the pane's input, the bytes a real terminal's scroll sends, which is
+  the only way to reach a transcript that lives inside the TUI. The wheel script self-gates on
+  the box (`exit 93` → 409) unless the pane has mouse tracking AND SGR encoding on, because to
+  a non-mouse pane those bytes are garbage input.
 - `store.js` — `data/boxes.json` CRUD; normalizes/validates boxes; exports/imports the box list as
   a versioned JSON file (`exportBoxes`/`importBoxes`; import re-mints ids and skips dup/unsafe entries).
   `uniquenessConflict(candidate)` is the read-only half of `assertUniqueBox` — the same rule,

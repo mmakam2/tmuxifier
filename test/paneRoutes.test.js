@@ -7,20 +7,24 @@ import { createStore } from '../src/server/store.js';
 import { createBoxActions } from '../src/server/boxActions.js';
 import { hashPassword } from '../src/server/auth.js';
 
-let app, dir, calls, boxId, failNext;
+let app, dir, calls, boxId, failNext, noMouseNext, captureOut;
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-pane-'));
   calls = [];
   // Tests flip this to exercise the routes' 502 mapping — consumed by the very
   // next call so a test can fail exactly one ssh round trip.
   failNext = false;
+  // The wheel script's own box-side refusal (exit 93): pane not mouse-aware.
+  noMouseNext = false;
+  captureOut = '80 24 3 10 0 0 0\nhello\nworld\n';
   // Real createBoxActions over a fake ssh transport (the run seam) — the argv
   // building, quoting, and parsing under test are the real code.
   const run = async (argv) => {
     calls.push(argv);
     if (failNext) { failNext = false; return { code: 1, stdout: '', stderr: 'boom' }; }
+    if (noMouseNext) { noMouseNext = false; return { code: 93, stdout: '', stderr: '' }; }
     const remote = argv[argv.length - 1];
-    if (remote.includes('capture-pane')) return { code: 0, stdout: '80 24 3 10\nhello\nworld\n', stderr: '' };
+    if (remote.includes('capture-pane')) return { code: 0, stdout: captureOut, stderr: '' };
     if (remote.includes('send-keys')) return { code: 0, stdout: '', stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
   };
@@ -50,9 +54,55 @@ test('GET pane returns parsed snapshot plus agent state', async () => {
   const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane`, headers: h });
   expect(res.statusCode).toBe(200);
   expect(res.json()).toEqual({
-    ok: true, width: 80, height: 24, cursorX: 3, cursorY: 10,
+    ok: true, width: 80, height: 24, cursorX: 3, cursorY: 10, alt: false, mouse: false,
     content: 'hello\nworld', agent: 'waiting', sessionName: 'main',
   });
+});
+
+test('GET pane on an alt-screen pane ships only the visible screen, flagged alt/mouse', async () => {
+  captureOut = '80 2 0 1 1 1 1\nstale-shell-1\nstale-shell-2\nclaude-1\nclaude-2\n';
+  const h = await headers();
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane`, headers: h });
+  expect(res.statusCode).toBe(200);
+  const body = res.json();
+  expect(body.alt).toBe(true);
+  expect(body.mouse).toBe(true);
+  expect(body.content).toBe('claude-1\nclaude-2');
+});
+
+test('POST keys: wheel sends gated SGR wheel reports to the pane', async () => {
+  const h = await headers();
+  const up = await app.inject({ method: 'POST', url: `/api/boxes/${boxId}/keys`, headers: h, payload: { wheel: 'up', steps: 5 } });
+  expect(up.statusCode).toBe(200);
+  const remote = calls.map((argv) => argv[argv.length - 1]).find((r) => r.includes('[<64;'));
+  expect(remote).toContain('exit 93');
+  expect(remote).toContain('-lt 5');
+  expect(remote).toContain("send-keys -t '=main:' -l --");
+  const down = await app.inject({ method: 'POST', url: `/api/boxes/${boxId}/keys`, headers: h, payload: { wheel: 'down' } });
+  expect(down.statusCode).toBe(200);
+  expect(calls.map((argv) => argv[argv.length - 1]).some((r) => r.includes('[<65;'))).toBe(true);
+});
+
+test('POST keys: wheel validates direction, steps and exclusivity', async () => {
+  const h = await headers();
+  const bad = await app.inject({ method: 'POST', url: `/api/boxes/${boxId}/keys`, headers: h, payload: { wheel: 'sideways' } });
+  expect(bad.statusCode).toBe(400);
+  const badSteps = await app.inject({ method: 'POST', url: `/api/boxes/${boxId}/keys`, headers: h, payload: { wheel: 'up', steps: 999 } });
+  expect(badSteps.statusCode).toBe(400);
+  const fracSteps = await app.inject({ method: 'POST', url: `/api/boxes/${boxId}/keys`, headers: h, payload: { wheel: 'up', steps: 1.5 } });
+  expect(fracSteps.statusCode).toBe(400);
+  const withText = await app.inject({ method: 'POST', url: `/api/boxes/${boxId}/keys`, headers: h, payload: { wheel: 'up', text: 'x' } });
+  expect(withText.statusCode).toBe(400);
+  const withKey = await app.inject({ method: 'POST', url: `/api/boxes/${boxId}/keys`, headers: h, payload: { wheel: 'up', key: 'Enter' } });
+  expect(withKey.statusCode).toBe(400);
+});
+
+test('POST keys: a pane refusing mouse input is 409, not 502', async () => {
+  const h = await headers();
+  noMouseNext = true;
+  const res = await app.inject({ method: 'POST', url: `/api/boxes/${boxId}/keys`, headers: h, payload: { wheel: 'up' } });
+  expect(res.statusCode).toBe(409);
+  expect(res.json().error).toMatch(/mouse/);
 });
 
 test('POST keys: named key goes unquoted from the allowlist, text goes literal and sanitized', async () => {

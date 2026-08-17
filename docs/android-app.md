@@ -37,6 +37,11 @@ Sign out only forgets the token locally.
   action row (`Esc ↑ ↓ Tab ⏎ 1 2 3 y n`, and `^C` behind a two-tap arm) and the composer — a
   real Android text field where drafting, autocorrect, and voice dictation stay local until
   **Send** (literal text + Enter). Drafts persist per box; empty Send is a bare Enter.
+  A full-screen app like Claude Code keeps its conversation history inside itself, not in tmux
+  scrollback — so for those panes the snapshot stops at the top of the screen (no more sliding
+  up into stale shell output), and "▲ older" / "▼ newer" chips on the right edge scroll the
+  app's own transcript instead, by sending it the same wheel events a desktop scroll would.
+  Plain shell panes keep their ordinary scrollback.
 - **Settings** — server/device identity, per-kind notification toggles, font size, sign out.
 
 ## Push notifications

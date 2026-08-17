@@ -133,12 +133,15 @@ export function buildSendKeysRemote(session, text) {
 // One script, one round trip: geometry first (a single parseable line), then
 // the styled capture. `&&` makes failure atomic — a missing session exits
 // non-zero instead of shipping half a snapshot. -e keeps SGR sequences; the
-// Android client renders them as styled spans. -S bounds scrollback.
+// Android client renders them as styled spans. -S bounds scrollback. The
+// geometry line also carries #{alternate_on} (parse trims accordingly) and the
+// pane's mouse flags, which tell the client whether wheel injection
+// (buildSendWheelRemote) would land.
 export function buildPaneSnapshotRemote(session, { lines = 200 } = {}) {
   const q = sess(session);
   const n = Math.max(0, Math.min(2000, Math.trunc(Number(lines) || 0)));
   return [
-    `tmux display-message -p -t ${q} '#{pane_width} #{pane_height} #{cursor_x} #{cursor_y}'`,
+    `tmux display-message -p -t ${q} '#{pane_width} #{pane_height} #{cursor_x} #{cursor_y} #{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag}'`,
     `tmux capture-pane -e -p -t ${q} -S -${n}`,
   ].join(' && ');
 }
@@ -147,12 +150,60 @@ export function parsePaneSnapshot(raw) {
   const txt = String(raw ?? '');
   const nl = txt.indexOf('\n');
   const head = (nl === -1 ? txt : txt.slice(0, nl)).trim();
-  const m = /^(\d+) (\d+) (\d+) (\d+)$/.exec(head);
+  // The flag triple is optional: a box tmux too old for these format variables
+  // expands them to nothing, and the pane view must degrade, not 502.
+  const m = /^(\d+) (\d+) (\d+) (\d+)(?: (\d) (\d) (\d))?$/.exec(head);
   if (!m) return null;
-  return {
-    width: Number(m[1]), height: Number(m[2]), cursorX: Number(m[3]), cursorY: Number(m[4]),
-    content: nl === -1 ? '' : txt.slice(nl + 1).replace(/\n$/, ''),
-  };
+  const height = Number(m[2]);
+  const alt = m[5] === '1';
+  // Wheel injection writes SGR-encoded reports, so plain X10-only tracking
+  // does not count as mouse-capable.
+  const mouse = m[6] === '1' && m[7] === '1';
+  let content = nl === -1 ? '' : txt.slice(nl + 1).replace(/\n$/, '');
+  // On the alternate screen the capture's history lines belong to the PRIMARY
+  // screen — the shell from before the TUI started, not the TUI's own past
+  // (a full-screen app repaints in place; its scrolled-off content never
+  // enters tmux history). Shipping them had the app's scroll walk out of a
+  // Claude session into stale shell output, so ship only the screen.
+  if (alt && height > 0) {
+    const rows = content.split('\n');
+    if (rows.length > height) content = rows.slice(-height).join('\n');
+  }
+  return { width: Number(m[1]), height, cursorX: Number(m[3]), cursorY: Number(m[4]), alt, mouse, content };
+}
+
+// Scroll a mouse-aware TUI's own viewport: write SGR wheel reports into the
+// pane's input, exactly the bytes a real terminal sends when the app has
+// mouse tracking on — how the web terminal's scroll gesture reaches Claude
+// Code, and the only way to reach its transcript, which lives inside the app
+// (see the alternate-screen note above). Gated ON THE BOX (exit 93) by the
+// pane's live mouse flags: to a pane not tracking the mouse these bytes are
+// garbage input. Coordinates are mid-pane, computed box-side from the same
+// display-message. `dir` and `steps` are validated here as the second line of
+// defence (NAMED_KEYS discipline); only the derived button code and clamped
+// count are ever interpolated.
+export function buildSendWheelRemote(session, dir, steps = 3) {
+  if (dir !== 'up' && dir !== 'down') throw new Error(`unknown wheel direction: ${String(dir).slice(0, 32)}`);
+  const q = sess(session);
+  const n = Math.max(1, Math.min(25, Math.trunc(Number(steps) || 0) || 3));
+  const btn = dir === 'up' ? 64 : 65;
+  // The fields are split with `read`, NOT `set -- $flags`: this runs under the
+  // box's login shell, and zsh (the fleet's provisioned shell) does not
+  // word-split an unquoted variable — the set form read one giant field and
+  // the gate refused every pane (test/wheelScript.integration.test.js pins
+  // all three shells).
+  return [
+    `flags=$(tmux display-message -p -t ${q} '#{mouse_any_flag} #{mouse_sgr_flag} #{pane_width} #{pane_height}')`,
+    'IFS=" " read m_any m_sgr m_w m_h <<EOF',
+    '$flags',
+    'EOF',
+    '[ "$m_any" = 1 ] && [ "$m_sgr" = 1 ] || exit 93',
+    'x=$(( m_w / 2 + 1 )); y=$(( m_h / 2 + 1 ))',
+    `esc=$(printf '\\033[<${btn};%d;%dM' "$x" "$y")`,
+    "buf=''; i=0",
+    `while [ "$i" -lt ${n} ]; do buf="$buf$esc"; i=$((i+1)); done`,
+    `tmux send-keys -t ${q} -l -- "$buf"`,
+  ].join('\n');
 }
 
 // Closed allowlist — these are the ONLY strings that ever reach send-keys as a

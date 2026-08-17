@@ -64,6 +64,13 @@ data class PaneSnapshot(
     val height: Int = 0,
     val cursorX: Int = 0,
     val cursorY: Int = 0,
+    // alt: the pane app owns the full screen (Claude Code, vim); the server
+    // ships only the visible screen, so there is no local scrollback beyond
+    // it. mouse: the pane accepts SGR wheel injection ({wheel} on /keys) —
+    // the app's path to scrolling the TUI's own transcript. Old servers send
+    // neither; both default off.
+    val alt: Boolean = false,
+    val mouse: Boolean = false,
     val content: String = "",
     val agent: String? = null,
     val sessionName: String? = null,

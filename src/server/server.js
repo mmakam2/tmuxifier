@@ -959,10 +959,23 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   app.post('/api/boxes/:id/keys', { preHandler: requireAuth }, async (req, reply) => {
     const box = await store.getBox(req.params.id);
     if (!box) return reply.code(404).send({ error: 'not found' });
-    const { text, key } = req.body || {};
+    const { text, key, wheel } = req.body || {};
     const hasText = typeof text === 'string' && text.length > 0;
     const hasKey = typeof key === 'string' && key.length > 0;
-    if (hasText === hasKey) return reply.code(400).send({ error: 'exactly one of text or key' });
+    const hasWheel = typeof wheel === 'string' && wheel.length > 0;
+    if ((hasText ? 1 : 0) + (hasKey ? 1 : 0) + (hasWheel ? 1 : 0) !== 1) {
+      return reply.code(400).send({ error: 'exactly one of text, key or wheel' });
+    }
+    if (hasWheel) {
+      // Wheel = scroll a mouse-aware TUI's own viewport (a Claude transcript);
+      // the box-side script refuses panes without mouse tracking → 409.
+      if (wheel !== 'up' && wheel !== 'down') return reply.code(400).send({ error: 'unknown wheel direction' });
+      const steps = req.body.steps == null ? 3 : req.body.steps;
+      if (!Number.isInteger(steps) || steps < 1 || steps > 25) return reply.code(400).send({ error: 'steps out of range' });
+      const res = await boxActions.sendWheel(box, box.sessionName, wheel, { steps });
+      if (!res.ok) return reply.code(res.noMouse ? 409 : 502).send({ error: res.error });
+      return { ok: true };
+    }
     if (hasText && text.length > 65536) return reply.code(400).send({ error: 'text too long' });
     if (hasKey && !NAMED_KEYS.has(key)) return reply.code(400).send({ error: 'unknown key' });
     const payload = hasKey ? { key } : { text: sanitizeSendText(text) };

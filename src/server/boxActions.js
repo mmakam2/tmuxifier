@@ -15,6 +15,7 @@ import {
   parsePaneSnapshot,
   buildSendNamedKeyRemote,
   buildSendKeysRemote,
+  buildSendWheelRemote,
 } from './tmuxInject.js';
 
 // Curated provision-time tools. Ids are the ONLY strings that ever reach the
@@ -595,6 +596,24 @@ export function createBoxActions({ run, runStdin, hostKeyPolicy = 'accept-new', 
       if (!res || res.code !== 0) {
         const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
         return { ok: false, error: msg || 'send-keys failed' };
+      }
+      return { ok: true };
+    },
+    // Scroll a mouse-aware TUI's own viewport (buildSendWheelRemote). Exit 93
+    // is the box-side "pane isn't tracking the mouse" refusal, surfaced as
+    // noMouse so the route can answer 409 rather than 502.
+    async sendWheel(box, session, dir, { steps = 3, timeoutMs = 8000 } = {}) {
+      let remote;
+      try {
+        remote = buildSendWheelRemote(session, dir, steps);
+      } catch (e) {
+        return { ok: false, error: e?.message || 'invalid wheel' };
+      }
+      const res = await runRemote(box, remote, timeoutMs);
+      if (res && res.code === 93) return { ok: false, noMouse: true, error: 'pane does not accept mouse input' };
+      if (!res || res.code !== 0) {
+        const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
+        return { ok: false, error: msg || 'wheel failed' };
       }
       return { ok: true };
     },

@@ -13,6 +13,19 @@ class ModelsTest {
         assertEquals("waiting", snap.agent)
         assertEquals(22, snap.cursorY)
     }
+    @Test fun paneSnapshotAltMouseParse() {
+        // New servers flag alt-screen panes (content trimmed to the screen) and
+        // mouse-aware panes (wheel scrolling available); an old server sends
+        // neither and both must default off.
+        val snap = ApiJson.decodeFromString(PaneSnapshot.serializer(),
+            """{"ok":true,"width":80,"height":24,"cursorX":0,"cursorY":0,"alt":true,"mouse":true,"content":"x"}""")
+        assertEquals(true, snap.alt)
+        assertEquals(true, snap.mouse)
+        val old = ApiJson.decodeFromString(PaneSnapshot.serializer(),
+            """{"ok":true,"width":80,"height":24,"cursorX":0,"cursorY":0,"content":"x"}""")
+        assertEquals(false, old.alt)
+        assertEquals(false, old.mouse)
+    }
     @Test fun statusMapParses() {
         val m = ApiJson.decodeFromString(statusMapSerializer,
             """{"b1":{"reachable":true,"metrics":{"cpus":4,"memTotalKb":8000000,"memAvailKb":2000000,"osId":"debian","osVer":"12"}},"b2":{"reachable":false,"error":"timeout"}}""")
