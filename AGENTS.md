@@ -193,6 +193,22 @@ pattern for new modules.
   body — a client cannot be trusted to declare what type a vmid is, and trusting it once was a
   real mid-flight defect: a request that lied about `kind` would have stored a link that then read
   every subsequent poll as a permanent kind `'mismatch'` against the cluster's own truth.
+  `POST /api/boxes/:id/sessions` creates a tmux session on the box, detached, without switching
+  the box to it — the Edit modal's Create field and, downstream, the pane header's session
+  dropdown feed off it. It runs `buildEnsureSessionRemote` with the box's `startupCommand` over
+  the ControlMaster, so a pre-created session is indistinguishable from one the attach path's
+  `new-session -A` would have made; the name is validated against `SESSION_NAME_RE` (exported
+  from `sshCommand.js` beside `sanitizeSession`, mirrored in `paneHeader.ts` and locked by
+  `test/paneHeader.test.js`) and rejected rather than silently rewritten — an explicit create
+  must not rename behind the user's back. Gated like `/term` and the pane sizing viewer while
+  the box's setup job is `running` (409): a session hatched mid-setup predates the seeded
+  credentials, and one matching the configured name would turn setup's own ensureSession-last
+  phase into a has-session no-op. The ensure/kill remotes all target `-t '=name'` — bare `-t`
+  prefix-matches when no exact name exists (the `=local` lesson), which silently skipped the
+  create (or killed a stranger like `web2`) whenever a longer-named session was present.
+  Switching the active session needs no route of its own: the
+  existing `PATCH /api/boxes/:id` already closes the box's terminal PTY group when `sessionName`
+  changes, so every viewer reconnects attached to the new session.
   `requireAuth` is async and accepts either the signed session cookie or an `Authorization: Bearer
   <device token>` header verified via `deviceStore.verify` (`req.deviceId` set on that branch) —
   cookie first, since that keeps the common browser request synchronous, then the device-token
@@ -793,7 +809,22 @@ layer whose `update()` rewrites in place, so the voice button (mounted into the 
 `openTerminal`'s `voiceMount` seam) survives polls. It also exposes a `lifecycleSlot` for
 `paneLifecycle.ts` and, via `wantRefresh`, hands back the Reconnect cap rather than owning its
 click policy — that action kills the pane's tmux session, so `main.ts` wires arm-then-fire onto
-it instead), `paneLifecycle.ts` (the Proxmox lifecycle keys in that slot: `lifecycleKeysFor`
+it instead. The identity half also carries the active-session dropdown (pure `sessionOptions`:
+the configured session first — kept offered even when tmux no longer lists it — then the cached
+snapshot's live names; built only when `onSelectSession` is passed, which `main.ts` gates on
+`model.sessions` so the offer rule lives in the model alone),
+whose `update()` never repopulates a focused select — a status poll landing mid-pick would slam
+the native dropdown shut. That guard is why the change handler blurs the select before acting:
+a native select keeps focus after `change`, so without the blur a failed switch could never
+snap the value back and the header would keep showing a switch that never happened. Live names
+outside `SESSION_NAME_RE` (spaces, `@`, …) render as disabled options rather than being hidden
+or offered: `store.js`'s `sanitizeSession` would silently rewrite a PATCHed name, so "switching"
+to one would create a fresh mangled-name session instead of attaching — the session is real,
+only unswitchable from here (`isSwitchableSession`, with a `switchSession` backstop).
+Selecting PATCHes `sessionName` via `main.ts`'s `switchSession`; the
+server already drops the box's terminal PTYs on that change, so the pane just reopens attached
+to the new session — non-destructive, hence a plain callback and no arm-then-fire),
+`paneLifecycle.ts` (the Proxmox lifecycle keys in that slot: `lifecycleKeysFor`
 derives which keys a pane's state allows, the caps are **words** (`START`/`SHUTDOWN`/`REBOOT`/
 `STOP`) precisely because the old `↺` reboot glyph was indistinguishable from the Reconnect
 button's `↻` sitting in the same header, and a destructive key arms before it fires through the

@@ -58,7 +58,7 @@ test('buildEnsureTmuxRemote installs tmux when missing and creates the session',
   expect(remote).toContain('apt-get install -y --no-install-recommends tmux');
   expect(remote).toContain('apt-get update || true');
   expect(remote).toContain('dnf install -y tmux');
-  expect(remote).toContain("\"$TMUX_BIN\" has-session -t 'web'");
+  expect(remote).toContain("\"$TMUX_BIN\" has-session -t '=web'");
   expect(remote).toContain("\"$TMUX_BIN\" new-session -d -s 'web' 'echo '\\''hi'\\'''");
 });
 
@@ -101,7 +101,7 @@ test('buildEnsureTmuxRemote skips package managers when tmux is already installe
   });
 
   expect(res.code).toBe(0);
-  await expect(fs.readFile(tmuxLog, 'utf8')).resolves.toContain('has-session -t web');
+  await expect(fs.readFile(tmuxLog, 'utf8')).resolves.toContain('has-session -t =web');
   await expect(fs.stat(aptLog)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
@@ -217,8 +217,10 @@ ${buildEnsureTmuxRemote('web', undefined, { installOhMyTmux: true })}`, {
 });
 
 test('buildKillTmuxRemote ignores absent tmux sessions', () => {
+  // '=' forces an exact target: bare -t prefix-matches when no exact name
+  // exists, so killing 'web' with only 'web2' present would kill 'web2'.
   expect(buildKillTmuxRemote('we b')).toBe(
-    "if command -v tmux >/dev/null 2>&1; then tmux kill-session -t 'we-b' 2>/dev/null || true; fi",
+    "if command -v tmux >/dev/null 2>&1; then tmux kill-session -t '=we-b' 2>/dev/null || true; fi",
   );
 });
 
@@ -769,12 +771,15 @@ test('buildEnsureTmuxRemote can omit session creation, deferring it past the see
 
 test('buildEnsureTmuxRemote still creates the session by default', () => {
   const remote = buildEnsureTmuxRemote('web', "echo 'hi'");
+  expect(remote).toContain("\"$TMUX_BIN\" has-session -t '=web'");
   expect(remote).toContain("\"$TMUX_BIN\" new-session -d -s 'web' 'echo '\\''hi'\\'''");
 });
 
 test('buildEnsureSessionRemote creates the session and quotes the startup command', () => {
   const remote = buildEnsureSessionRemote('web', "echo 'hi'");
-  expect(remote).toContain("\"$TMUX_BIN\" has-session -t 'web'");
+  // Exact-match guard: a bare -t would prefix-match 'web2' and skip creating
+  // 'web' entirely (the '=local' lesson from localTmuxScope.js).
+  expect(remote).toContain("\"$TMUX_BIN\" has-session -t '=web'");
   expect(remote).toContain("\"$TMUX_BIN\" new-session -d -s 'web' 'echo '\\''hi'\\'''");
 });
 

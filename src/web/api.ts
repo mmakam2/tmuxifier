@@ -261,6 +261,9 @@ export const api = {
   async probeSessions(spec: { id?: string; host: string; user?: string; port?: number; proxyJump?: string }) {
     return j<Status>(await fetch('/api/boxes/probe-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(spec) }));
   },
+  async createSession(id: string, name: string) {
+    return j<{ ok: boolean; name: string }>(await fetch(`/api/boxes/${id}/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) }));
+  },
   async importBoxes(payload: unknown) {
     return j<{ added: Box[]; skipped: number }>(await fetch('/api/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }));
   },

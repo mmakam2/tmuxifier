@@ -8,7 +8,7 @@ test('buildEnsureLocalShellScript enables Oh My Zsh in local tmux session', () =
 
   expect(script).toContain('https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh');
   expect(script).toContain('apt-get install -y --no-install-recommends zsh');
-  expect(script).toContain('"$TMUX_BIN" has-session -t \'local\'');
+  expect(script).toContain('"$TMUX_BIN" has-session -t \'=local\'');
   expect(script).toContain('"$TMUX_BIN" set-option -g default-shell "$ZSH_BIN"');
   expect(script).toContain('respawn-window -t \'local\':$W -k "$ZSH_BIN"');
 });
@@ -17,7 +17,7 @@ test('buildEnsureLocalShellScript enables Oh My Bash in local tmux session', () 
   const script = buildEnsureLocalShellScript('omb');
 
   expect(script).toContain('https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh');
-  expect(script).toContain('"$TMUX_BIN" has-session -t \'local\'');
+  expect(script).toContain('"$TMUX_BIN" has-session -t \'=local\'');
   expect(script).toContain('"$TMUX_BIN" set-option -g default-shell "$BASH_BIN"');
   expect(script).toContain('respawn-window -t \'local\':$W -k "$BASH_BIN"');
 });

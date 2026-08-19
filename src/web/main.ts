@@ -32,7 +32,7 @@ import { createSetupOptionsForm, setupStartPayload, type SetupOptionsValues } fr
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
 import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
 import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks, type PaneRect } from './stagePanes';
-import { paneHeaderModel, buildPaneHeader, type PaneConn, type PaneHeaderModel } from './paneHeader';
+import { paneHeaderModel, buildPaneHeader, isSwitchableSession, SESSION_NAME_RE, type PaneConn, type PaneHeaderModel } from './paneHeader';
 import { buildPaneLifecycle } from './paneLifecycle';
 import { createPhoneMode, type PhoneMode } from './phoneMode';
 import { buildTouchKeyBar, createStickyCtrl } from './touchKeys';
@@ -837,7 +837,32 @@ function paneHeaderModelFor(id: string): PaneHeaderModel {
     agent: series?.[series.length - 1]?.agent,
     conn: connStates.get(id),
     state: paneState(id),
+    sessionName: box?.sessionName,
   });
+}
+
+// Switch the box's active tmux session: persist it (the server drops every
+// viewer's terminal PTY on a sessionName change so they reconnect attached to
+// the new session over the existing ControlMaster), then reopen this pane.
+// Non-destructive — the old session keeps running on the box.
+async function switchSession(id: string, name: string) {
+  const box = allBoxes.find((b) => b.id === id);
+  if (!box || box.sessionName === name) return;
+  // The dropdown already disables unswitchable names; this is the backstop
+  // that keeps a PATCH from silently sanitize-renaming one (store.js rewrites
+  // out-of-charset names rather than rejecting them).
+  if (!isSwitchableSession(name)) { updatePaneHeaders(); return; }
+  try {
+    const updated = await api.updateBox(id, { sessionName: name });
+    box.sessionName = updated.sessionName; // keep the local model in step until the next refresh()
+    closeTab(id, { keepPane: true });
+    repaintStage();
+    fastStatusPoll(id);
+  } catch {
+    // Save failed: repaint the headers so the select snaps back to the stored
+    // session instead of showing a switch that never happened.
+    updatePaneHeaders();
+  }
 }
 
 function updatePaneHeaders() {
@@ -858,6 +883,10 @@ function paneHooks(): PaneHooks {
         // differs from the sidebar row's `Reconnect ${label}` — an identical
         // accessible name would trip Playwright strict mode.
         ...(terminalPane ? { wantRefresh: true } : {}),
+        // The model is the single authority on whether a session switch is on
+        // offer (non-local terminal pane): gate the callback on it rather than
+        // re-encoding that rule here.
+        ...(model.sessions ? { onSelectSession: (name: string) => void switchSession(id, name) } : {}),
         ...(split ? { onUndock: () => undockBox(id), undockLabel: `Undock ${model.title}` } : {}),
       });
       // The header's Reconnect cap gets the same two-click guard as the sidebar
@@ -2178,12 +2207,63 @@ function openBoxDialog(box?: Box) {
       return chip;
     }));
   }
+  // Create a session on the box right now (detached, via the same ensure-session
+  // remote an attach uses) — so it shows up as a bubble and in the pane header's
+  // session dropdown without switching the box to it. Edit mode only — an
+  // unsaved box has no ControlMaster to run over — and the whole apparatus
+  // (elements, listeners, closure) is built under that guard, so `box.id`
+  // inside it is provably defined rather than assertion-guarded from afar.
+  let createRow: HTMLElement | null = null;
+  if (isEdit) {
+    createRow = document.createElement('div');
+    createRow.className = 'session-row session-create';
+    const createInput = document.createElement('input');
+    createInput.type = 'text';
+    createInput.placeholder = 'new session name';
+    createInput.setAttribute('aria-label', 'New tmux session name');
+    const createBtn = document.createElement('button');
+    createBtn.type = 'button';
+    createBtn.className = 'session-refresh';
+    createBtn.textContent = 'Create';
+    createBtn.title = 'Create this tmux session on the box now';
+    createRow.append(createInput, createBtn);
+    const boxId = box!.id;
+    async function createSessionNow() {
+      const name = createInput.value.trim();
+      if (!SESSION_NAME_RE.test(name)) {
+        sessionHint.textContent = 'session names: 1-64 letters, digits, _ or -';
+        sessionHint.className = 'session-hint err';
+        return;
+      }
+      createBtn.disabled = true;
+      sessionHint.className = 'session-hint';
+      sessionHint.textContent = `creating ${name}…`;
+      try {
+        await api.createSession(boxId, name);
+        createInput.value = '';
+        // Re-probe so the new session lands as a bubble (and the count updates).
+        await probeAndApply();
+      } catch (e: any) {
+        sessionHint.textContent = e?.message || 'create failed';
+        sessionHint.className = 'session-hint err';
+      } finally {
+        createBtn.disabled = false;
+      }
+    }
+    createBtn.addEventListener('click', () => void createSessionNow());
+    // Enter in the name field creates the session; without this it would submit
+    // the surrounding Edit Box form instead.
+    createInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); void createSessionNow(); }
+    });
+  }
+
   sessionRow.append(sessionInput, sessionRefresh);
-  sessionWrap.append(sessionSpan, sessionRow, sessionPicker, sessionHint);
+  sessionWrap.append(sessionSpan, sessionRow, sessionPicker, ...(createRow ? [createRow] : []), sessionHint);
   // Pre-fill from cached status (edit mode only — an unsaved box has no snapshot).
   applySessions(isEdit ? (latestStatus[box!.id]?.sessions ?? []).map((s) => s.name) : []);
 
-  sessionRefresh.addEventListener('click', async () => {
+  async function probeAndApply() {
     const host = fields.host.value.trim();
     if (!host) { sessionHint.textContent = 'enter a host first'; sessionHint.className = 'session-hint err'; return; }
     sessionRefresh.disabled = true;
@@ -2218,7 +2298,8 @@ function openBoxDialog(box?: Box) {
     } finally {
       sessionRefresh.disabled = false;
     }
-  });
+  }
+  sessionRefresh.addEventListener('click', () => void probeAndApply());
 
   // Shared setup-options component (Terminal / Tools / AI auth seeding).
   // Edit mode defaults Oh My Tmux off — the box already went through setup.
@@ -2298,6 +2379,12 @@ function openBoxDialog(box?: Box) {
   const { close } = openModal({ modal: form, mount: app });
   fields.host.focus();
   cancel.addEventListener('click', close);
+
+  // Edit mode: refresh the session bubbles from the box automatically. The
+  // cached-status pre-fill above paints instantly but can be a poll interval
+  // stale (or empty after a backoff/mid-login poll), which is how a session
+  // created from the command line failed to show until ⟳ was clicked.
+  if (isEdit) void probeAndApply();
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();

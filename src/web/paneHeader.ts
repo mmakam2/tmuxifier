@@ -17,10 +17,28 @@ export interface PaneHeaderInput {
   agent?: 'working' | 'waiting';
   conn?: PaneConn;
   state: 'terminal' | 'stopped' | 'setup';
+  sessionName?: string;
 }
 
 export interface PaneChip { kind: 'state' | 'conn' | 'agent'; text: string; cls: string; sprite?: boolean }
-export interface PaneHeaderModel { title: string; target: string; dotClass: string; dotTitle: string; chip: PaneChip | null }
+export interface PaneHeaderModel {
+  title: string; target: string; dotClass: string; dotTitle: string; chip: PaneChip | null;
+  // Session dropdown contents: null hides it (local shell, stopped/setup pane).
+  // The configured session is always element 0 — the selected value.
+  sessions: string[] | null;
+}
+
+// Client mirror of the server's session-name rule (SESSION_NAME_RE in
+// sshCommand.js), locked together by test/paneHeader.test.js. Live tmux names
+// outside it exist legitimately (spaces, '@', …) but cannot round-trip a
+// switch: store.js's sanitizeSession would silently rewrite the PATCHed name
+// and the reattach would create a fresh mangled-name session instead of
+// attaching — a rename behind the user's back. The dropdown offers such names
+// disabled rather than hiding them: the session is real, only unswitchable.
+export const SESSION_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+export function isSwitchableSession(name: string): boolean {
+  return SESSION_NAME_RE.test(name);
+}
 
 // One slot, strict precedence: a pane-level state (stopped container, box
 // mid-setup) outranks connection churn, which outranks the agent read — a
@@ -52,7 +70,21 @@ export function paneHeaderModel(i: PaneHeaderInput): PaneHeaderModel {
     dotClass,
     dotTitle,
     chip: paneHeaderChip(i),
+    // Only a live terminal pane on a real box offers the session switch: the
+    // local shell's session is config, and a stopped/setting-up pane has no
+    // attach to move.
+    sessions: !i.local && i.state === 'terminal' ? sessionOptions(i.status, i.sessionName) : null,
   };
+}
+
+// Option list for the header's session dropdown: the box's configured session
+// first (always present — it's the selected value, and it must stay offered
+// even when tmux no longer lists it), then every live session the cached
+// status snapshot knows. Pure, so the dropdown's contents are unit-testable.
+export function sessionOptions(status: Status | undefined, sessionName: string | undefined): string[] {
+  const current = sessionName || 'web'; // store.js defaults an absent name to 'web'
+  const live = (status?.sessions ?? []).map((s) => s.name).filter(Boolean);
+  return [current, ...live.filter((n) => n !== current)];
 }
 
 export interface PaneHeaderActions {
@@ -63,6 +95,10 @@ export interface PaneHeaderActions {
   wantRefresh?: boolean;
   onUndock?: () => void;
   undockLabel?: string;
+  // Switch the box's active tmux session. Non-destructive (the old session
+  // keeps running on the box), so unlike Reconnect this is a plain callback:
+  // no arm-then-fire.
+  onSelectSession?: (name: string) => void;
 }
 
 // update() rewrites text/classes only — the voice button lives inside
@@ -86,9 +122,30 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
   // must never rebuild them.
   const lifecycleSlot = document.createElement('span');
   lifecycleSlot.className = 'pane-lifecycle-slot';
+  // The session dropdown sits with the identity: which session this pane shows
+  // is part of what the pane IS, not an action on it. Built only when the
+  // caller can act on a pick; options are populated by update() below.
+  let sessionSel: HTMLSelectElement | null = null;
+  if (actions.onSelectSession) {
+    sessionSel = document.createElement('select');
+    sessionSel.className = 'pane-session';
+    sessionSel.title = 'Active tmux session';
+    sessionSel.setAttribute('aria-label', 'Active tmux session');
+    sessionSel.addEventListener('click', (e) => e.stopPropagation());
+    // Blur before acting: a native select keeps focus after `change`, and the
+    // focused-select guard in update() below (rightly) refuses to touch a
+    // focused select — so without this, a failed switch could never snap the
+    // value back and the header would keep showing a switch that never
+    // happened. On success the repaint rebuilds the header anyway.
+    sessionSel.addEventListener('change', () => {
+      const name = sessionSel!.value;
+      sessionSel!.blur();
+      actions.onSelectSession!(name);
+    });
+  }
   const identity = document.createElement('div');
   identity.className = 'pane-header-id';
-  identity.append(dot, title, target, lifecycleSlot);
+  identity.append(dot, title, target, ...(sessionSel ? [sessionSel] : []), lifecycleSlot);
 
   const chip = document.createElement('span');
   const voiceSlot = document.createElement('span');
@@ -127,6 +184,31 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
     dot.title = m.dotTitle;
     title.textContent = m.title;
     target.textContent = m.target;
+    if (sessionSel) {
+      const list = m.sessions ?? [];
+      sessionSel.hidden = list.length === 0;
+      // Never rebuild under the user: this runs on every status poll, and
+      // repopulating a native select while its dropdown is open slams it shut
+      // mid-pick. The focused select keeps its current options until blur.
+      if (document.activeElement !== sessionSel) {
+        const key = list.join('\n');
+        if (sessionSel.dataset.opts !== key) {
+          sessionSel.dataset.opts = key;
+          sessionSel.replaceChildren(...list.map((n) => {
+            const o = document.createElement('option');
+            o.value = n;
+            o.textContent = n;
+            if (!isSwitchableSession(n)) {
+              o.disabled = true;
+              o.title = 'name not switchable from here (allowed: letters, digits, _ -)';
+            }
+            return o;
+          }));
+        }
+        // The configured session is sessionOptions' element 0 by construction.
+        sessionSel.value = list[0] ?? '';
+      }
+    }
     if (m.chip) {
       chip.hidden = false;
       chip.className = `pane-chip ${m.chip.cls}`;

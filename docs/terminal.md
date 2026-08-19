@@ -12,10 +12,18 @@ individual pane's edge splits just that pane, and dropping on a pane's center re
 The row's ◫ **Dock** button (visible while the stage has room) is the keyboard path. Every
 divider drags to resize its own split (double-click resets 50/50, arrow keys work when it's
 focused, and its small ⤢ control flips that split's direction). Every terminal pane — split
-or not — carries a header bar: status dot, box name, and `user@host` on the left; on the
+or not — carries a header bar: status dot, box name, `user@host`, and the **active-session
+dropdown** on the left; on the
 right a state chip (agent **working**/**waiting** from the health poller, or connection
 state while the terminal reconnects) beside the voice, reconnect ↻, and — in a split —
-undock ✕ buttons, so nothing floats over the terminal itself. The focused pane's bar
+undock ✕ buttons, so nothing floats over the terminal itself. The dropdown lists the box's
+live tmux sessions (from the status poll, so a session created from the command line appears
+within one poll cycle) and picking one switches the box's configured session: every open
+terminal for that box reconnects attached to it, while the previous session keeps running on
+the box. The agent chip and notifications follow the switch, since they track the configured
+session. A session whose name falls outside Tmuxifier's safe charset (letters, digits, `_`,
+`-`, up to 64) is listed but greyed out — switching would silently rename it, so it can only
+be attached from the command line. The focused pane's bar
 carries the cyan beacon, `Ctrl+Shift+Arrow` moves focus to the geometrically adjacent pane,
 and plain-clicking another box in the sidebar replaces the **focused** pane while the
 others keep running. Undocking keeps the terminal connected in the background, exactly like

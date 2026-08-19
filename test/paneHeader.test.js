@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { paneHeaderModel, paneHeaderChip } from '../src/web/paneHeader.ts';
+import { paneHeaderModel, paneHeaderChip, sessionOptions, isSwitchableSession, SESSION_NAME_RE } from '../src/web/paneHeader.ts';
 
 const box = (over = {}) => ({
   local: false, label: 'db-primary', user: 'ops', host: '192.168.1.10',
@@ -54,4 +54,48 @@ test('agent chip only when the connection is quiet, and only for a hook-sourced 
 
 test('retrying without an attempt count defaults to ×1', () => {
   expect(paneHeaderChip(box({ conn: { kind: 'retrying' } }))?.text).toBe('reconnecting ×1');
+});
+
+// --- sessionOptions: the session dropdown's pure option list ---------------
+
+test('sessionOptions merges live sessions with the configured one, no duplicate', () => {
+  const status = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1 }, { name: 'proj2', windows: 2 }] };
+  expect(sessionOptions(status, 'web')).toEqual(['web', 'proj2']);
+});
+
+test('sessionOptions keeps the configured session listed even when tmux no longer has it', () => {
+  const status = { reachable: true, tmux: true, sessions: [{ name: 'other', windows: 1 }] };
+  expect(sessionOptions(status, 'gone')).toEqual(['gone', 'other']);
+});
+
+test('sessionOptions with no snapshot still offers the configured session', () => {
+  expect(sessionOptions(undefined, 'main')).toEqual(['main']);
+});
+
+test('sessionOptions defaults a missing configured name to web (the store default)', () => {
+  expect(sessionOptions(undefined, undefined)).toEqual(['web']);
+});
+
+test('sessionOptions drops empty names from the live list', () => {
+  const status = { reachable: true, tmux: true, sessions: [{ name: '', windows: 1 }, { name: 'a', windows: 1 }] };
+  expect(sessionOptions(status, 'a')).toEqual(['a']);
+});
+
+test('the client session-name rule is locked to the server route\'s rule', async () => {
+  // Three surfaces enforce/describe one rule (the create route, the client-side
+  // pre-check, the dropdown's switchable gate). The provisionTools.ts pattern:
+  // one locking test so the copies cannot drift apart silently.
+  const { SESSION_NAME_RE: serverRe } = await import('../src/server/sshCommand.js');
+  expect(serverRe).toBeInstanceOf(RegExp); // guard: String(undefined) === String(undefined) must not pass
+  expect(String(SESSION_NAME_RE)).toBe(String(serverRe));
+});
+
+test('isSwitchableSession accepts exactly what the switch path can round-trip', () => {
+  expect(isSwitchableSession('proj-2_x')).toBe(true);
+  // sanitizeSession would silently rewrite these on PATCH, so switching to
+  // them would create a fresh mangled-name session instead of attaching.
+  expect(isSwitchableSession('my proj')).toBe(false);
+  expect(isSwitchableSession('box@home')).toBe(false);
+  expect(isSwitchableSession('a'.repeat(65))).toBe(false);
+  expect(isSwitchableSession('')).toBe(false);
 });

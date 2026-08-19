@@ -8,8 +8,8 @@ import websocket from '@fastify/websocket';
 import { verifyPassword, COOKIE_NAME, cookieOptions, sessionValue, sessionValueValid } from './auth.js';
 import { createLoginRateLimiter } from './rateLimit.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
-import { buildEnsureTmuxRemote, resolveTools } from './boxActions.js';
-import { assertBoxSafe } from './sshCommand.js';
+import { buildEnsureTmuxRemote, buildEnsureSessionRemote, resolveTools } from './boxActions.js';
+import { assertBoxSafe, SESSION_NAME_RE } from './sshCommand.js';
 import { provisionKey, terminalKey, localKey, LOCAL_GROUP } from './sessions.js';
 import { upsertConfigFile } from './configFile.js';
 import { readJsonSync, writeJsonSync } from './jsonFile.js';
@@ -888,6 +888,34 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       return reply.code(400).send({ error: e.message });
     }
     return statusChecker.listSessions(spec);
+  });
+  // Create a tmux session on the box, detached, without switching the box to
+  // it. Runs the same ensure-session remote the setup job and (via -A) the
+  // attach path use, carrying the box's startupCommand — so a session created
+  // here is indistinguishable from one an attach would have created. The name
+  // is validated against sanitizeSession's own charset rather than silently
+  // rewritten: an explicit create must not rename behind the user's back.
+  app.post('/api/boxes/:id/sessions', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'box not found' });
+    // Same gate as /term and the pane sizing viewer: a session created while
+    // the setup job runs holds an environment predating the seeded credentials
+    // and installed tools — and one matching the configured name would turn
+    // setup's own ensureSession-last phase into a has-session no-op, leaving
+    // the box's primary session pre-seed forever.
+    if (setupManager?.currentForBox(box.id)?.status === 'running') {
+      return reply.code(409).send({ error: 'box setup is still running' });
+    }
+    const name = (req.body || {}).name;
+    if (typeof name !== 'string' || !SESSION_NAME_RE.test(name)) {
+      return reply.code(400).send({ error: 'session name must be 1-64 letters, digits, _ or -' });
+    }
+    if (!boxActions?.execCommand) return reply.code(503).send({ error: 'session creation unavailable' });
+    const res = await boxActions.execCommand(box, buildEnsureSessionRemote(name, box.startupCommand), { timeoutMs: 20000 });
+    if (!res || res.code !== 0) {
+      return reply.code(502).send({ error: String(res?.stderr || '').trim() || 'failed to create session' });
+    }
+    return { ok: true, name };
   });
   app.post('/api/boxes/:id/reconnect', { preHandler: requireAuth }, async (req, reply) => {
     const box = await store.getBox(req.params.id);

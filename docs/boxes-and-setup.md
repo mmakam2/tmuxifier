@@ -3,13 +3,20 @@
 What happens when a box is added: the server-side setup job, the tools checklist, the Claude
 Code statusline push, and AI CLI auth seeding. Part of the [Tmuxifier docs](../README.md).
 
-Each terminal runs `ssh -tt <box> "tmux -u new-session -A -D -s <session>"` (`-u` forces UTF-8
-output so glyphs survive a C/POSIX locale; `-D` detaches any
-other client so a stale connection can't freeze the layout). `<session>` is the box's tmux session
+Each terminal runs `ssh -tt <box> "tmux -u new-session -A -s <session>"` (`-u` forces UTF-8
+output so glyphs survive a C/POSIX locale). `<session>` is the box's tmux session
 name — set per box in the Add/Edit dialog (a type-or-pick field whose ⟳ button fetches the host's
 live sessions), defaulting to `web`. Because tmux runs on the box, the session and its processes
 survive disconnects. A 45s server-side grace window makes brief reconnects seamless; after that
 the local ssh process is dropped while the on-box session keeps running.
+
+Editing a box refreshes its session bubbles automatically from the host, so sessions created
+outside Tmuxifier — including from the command line — show up without clicking ⟳. The Edit
+dialog can also **create** a session on the box right away (detached, without switching to it):
+type a name next to the bubbles and hit Create. It appears as a bubble and in the pane header's
+session dropdown, ready to be switched to. Switching the active session — by saving the dialog
+with a different pick, or from the [pane header's dropdown](terminal.md) — reconnects every open
+terminal for that box to the new session; the old session keeps running on the box.
 
 ## The setup job
 

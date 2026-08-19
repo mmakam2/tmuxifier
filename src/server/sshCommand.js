@@ -17,6 +17,13 @@ function controlArgs(opts = {}) {
   ];
 }
 
+// The one authoritative statement of the session-name rule. sanitizeSession
+// REWRITES to this charset (attach/store tolerance); routes that must reject
+// rather than rename (an explicit create must not rename behind the user's
+// back) validate against this instead. The web client mirrors it in
+// paneHeader.ts, locked together by test/paneHeader.test.js.
+export const SESSION_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
 export function sanitizeSession(name) {
   const cleaned = String(name || '').replace(/[^A-Za-z0-9_-]/g, '-');
   return cleaned.length ? cleaned : 'web';

@@ -241,6 +241,10 @@ export function buildFrameworkUpdateClamps() {
 
 export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
   const sess = shSingleQuote(sanitizeSession(session));
+  // '=' forces an exact -t match: bare targets prefix-match when no exact name
+  // exists (the '=local' lesson), so 'web2' alone would satisfy a bare
+  // `has-session -t web` and the create would be silently skipped.
+  const exact = shSingleQuote('=' + sanitizeSession(session));
   const startup = startupCommand ? ` ${shSingleQuote(startupCommand)}` : '';
   const tools = resolveTools(options.tools);
   const toolBlocks = tools.flatMap((id) => TOOLS[id]());
@@ -420,7 +424,7 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
     // ~/.profile/.bashrc/.zshrc. setupManager passes createSession: false and
     // runs buildEnsureSessionRemote below once seeding is done.
     ...(options.createSession === false ? [] : [
-      `"$TMUX_BIN" has-session -t ${sess} 2>/dev/null || "$TMUX_BIN" new-session -d -s ${sess}${startup}`,
+      `"$TMUX_BIN" has-session -t ${exact} 2>/dev/null || "$TMUX_BIN" new-session -d -s ${sess}${startup}`,
       `[ -n "\${ZSH_BIN-}" ] && { "$TMUX_BIN" set-option -g default-shell "$ZSH_BIN" 2>/dev/null || true; W=\$("$TMUX_BIN" list-windows -t ${sess} -F '#{window_index}' 2>/dev/null | head -1); [ -n "\$W" ] && "$TMUX_BIN" respawn-window -t ${sess}:\$W -k "$ZSH_BIN" 2>/dev/null || true; } || true`,
       `[ -n "\${BASH_BIN-}" ] && { "$TMUX_BIN" set-option -g default-shell "$BASH_BIN" 2>/dev/null || true; W=\$("$TMUX_BIN" list-windows -t ${sess} -F '#{window_index}' 2>/dev/null | head -1); [ -n "\$W" ] && "$TMUX_BIN" respawn-window -t ${sess}:\$W -k "$BASH_BIN" 2>/dev/null || true; } || true`,
     ]),
@@ -443,6 +447,11 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
 // ever killed.
 export function buildEnsureSessionRemote(session, startupCommand, options = {}) {
   const sess = shSingleQuote(sanitizeSession(session));
+  // Exact -t match, same reason as buildEnsureTmuxRemote: with only a
+  // longer-named session present, a bare target prefix-matches and the guard
+  // reports the session as existing — so it is never created, while the
+  // caller (the create route, the setup job's ensureSession phase) reports ok.
+  const exact = shSingleQuote('=' + sanitizeSession(session));
   const startup = startupCommand ? ` ${shSingleQuote(startupCommand)}` : '';
   const shell = options.installOhMyZsh ? 'zsh' : options.installOhMyBash ? 'bash' : null;
   return [
@@ -458,13 +467,16 @@ export function buildEnsureSessionRemote(session, startupCommand, options = {}) 
       // fresh box nothing has started one yet.
       '[ -n "$SHELL_BIN" ] && { "$TMUX_BIN" start-server 2>/dev/null || true; "$TMUX_BIN" set-option -g default-shell "$SHELL_BIN" 2>/dev/null || true; } || true',
     ] : []),
-    `"$TMUX_BIN" has-session -t ${sess} 2>/dev/null || "$TMUX_BIN" new-session -d -s ${sess}${startup}`,
+    `"$TMUX_BIN" has-session -t ${exact} 2>/dev/null || "$TMUX_BIN" new-session -d -s ${sess}${startup}`,
   ].join('\n');
 }
 
 export function buildKillTmuxRemote(session) {
-  const sess = shSingleQuote(sanitizeSession(session));
-  return `if command -v tmux >/dev/null 2>&1; then tmux kill-session -t ${sess} 2>/dev/null || true; fi`;
+  // Exact -t match ('=' prefix, as killSessionArgs in server.js): a bare
+  // target with no exact match prefix-matches, so killing 'web' with only
+  // 'web2' present would kill 'web2' — a stranger's session.
+  const exact = shSingleQuote('=' + sanitizeSession(session));
+  return `if command -v tmux >/dev/null 2>&1; then tmux kill-session -t ${exact} 2>/dev/null || true; fi`;
 }
 
 export function createBoxActions({ run, runStdin, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist }) {

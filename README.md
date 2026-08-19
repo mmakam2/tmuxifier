@@ -163,7 +163,7 @@ dashboard tabs are open. The full per-module map lives in [AGENTS.md](AGENTS.md)
 | [Deployment](docs/DEPLOY.md) | systemd, passwordless SSH keys, TLS, OAuth behind a tunnel |
 
 ## How persistence works
-Each terminal runs `ssh -tt <box> "tmux -u new-session -A -D -s <session>"`, so the session
+Each terminal runs `ssh -tt <box> "tmux -u new-session -A -s <session>"`, so the session
 and its processes live on the box and survive disconnects. A 45s server-side grace window makes
 brief reconnects seamless; after that the local ssh process is dropped while the on-box session
 keeps running.
