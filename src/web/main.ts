@@ -14,6 +14,7 @@ import { fleetScripts, isDirty, sortScripts, validateName, type FleetScript } fr
 import { buildFleetScriptRail } from './fleetScriptRail';
 import { statusOf } from './http';
 import { createFleetPoller } from './fleetPoll';
+import { createFreshProbe } from './freshProbe';
 import { partitionJobs, jobLamp, jobReadout, jobClock, runningCount } from './fleetJobs';
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { closeAllModals } from './modalRegistry';
@@ -570,6 +571,26 @@ function fastStatusPoll(id: string, everyMs = 3000, timeoutMs = 180000) {
   void tick();
 }
 
+// On-demand refresh for controls that must be current the instant they are
+// used, rather than within the two 30s intervals above: POST /api/boxes/:id/probe
+// re-probes one box and this folds the answer into the snapshot everything
+// renders from. Its only caller today is the pane header's session/window
+// dropdown — a window opened on the box with `prefix-c` was invisible there for
+// up to a minute, which is exactly when the operator goes looking for it.
+// freshProbe.ts owns the single-flight/freshness/wait-cap policy, so a pointer
+// crossing the control repeatedly still costs at most one probe every few
+// seconds.
+const freshProbe = createFreshProbe({
+  freshMs: 3000,
+  probe: async (id) => {
+    const one = await api.probeBox(id);
+    latestStatus = { ...latestStatus, ...one };
+    const row = app.querySelector<HTMLElement>(`.box[data-id="${CSS.escape(id)}"]`);
+    if (row) applyRowStatus(row, id, latestStatus[id]);
+    updatePaneHeaders();
+  },
+});
+
 async function pollStatus() {
   if (polling) return;
   polling = true;
@@ -921,7 +942,12 @@ function paneHooks(): PaneHooks {
         // The model is the single authority on whether a switch is on offer
         // (non-local terminal pane): gate the callback on it rather than
         // re-encoding that rule here.
-        ...(model.targets ? { onSelectTarget: (t: SessionTarget) => void selectTarget(id, t) } : {}),
+        ...(model.targets ? {
+          onSelectTarget: (t: SessionTarget) => void selectTarget(id, t),
+          // Same gate as the callback above: the model decides whether a switch
+          // is on offer, so a pane with no dropdown never probes for one.
+          onWillOpenTarget: (opts?: { waitMs?: number }) => freshProbe.refresh(id, opts),
+        } : {}),
         ...(split ? { onUndock: () => undockBox(id), undockLabel: `Undock ${model.title}` } : {}),
       });
       // The header's Reconnect cap gets the same two-click guard as the sidebar

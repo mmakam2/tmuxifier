@@ -969,6 +969,34 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     try { await statusPoller?.probeOne?.(box.id); } catch { /* the next sweep will catch up */ }
     return { ok: true, windowId };
   });
+  // Re-probe ONE box now and hand back its fresh status entry. GET /api/status
+  // serves statusPoller's cached snapshot, which only moves on the poll
+  // interval (30s), and the tab re-reads that snapshot on its own 30s interval
+  // — so a window created on the box with `prefix-c` could take a full minute
+  // to appear in the pane header's dropdown, which is exactly the moment the
+  // operator is looking at it. The client calls this as the dropdown is being
+  // reached for, so the list it opens with is current.
+  //
+  // Deliberately NOT gated by a running setup job, unlike /term, the sizing
+  // viewer, the session-create route and the window-select route: those all
+  // steer or hatch something on the box, while this only reads what the poller
+  // is already reading on every sweep. Nor is it a fan-out risk — status.js
+  // coalesces concurrent probes of the same box, so a user worrying a dropdown
+  // open and shut collapses into one SSH round trip at a time.
+  app.post('/api/boxes/:id/probe', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'box not found' });
+    if (!statusPoller?.probeOne) return reply.code(503).send({ error: 'status polling unavailable' });
+    // A failed probe is a stale dropdown, never a broken one: the client keeps
+    // the snapshot it already has. Say so plainly rather than answering with an
+    // empty entry, which the client would paint over a perfectly good one.
+    let entry = null;
+    try { entry = await statusPoller.probeOne(box.id); } catch { entry = null; }
+    if (!entry) return reply.code(502).send({ error: 'probe failed' });
+    // Keyed by box id, the shape GET /api/status already answers in, so the
+    // client merges this into its snapshot with one spread.
+    return { [box.id]: entry };
+  });
   app.post('/api/boxes/:id/reconnect', { preHandler: requireAuth }, async (req, reply) => {
     const box = await store.getBox(req.params.id);
     if (!box) return reply.code(404).send({ error: 'box not found' });

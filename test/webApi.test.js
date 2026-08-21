@@ -58,3 +58,14 @@ test('api.setProxmoxLink PUTs the link and api.clearProxmoxLink DELETEs it', asy
   expect(calls[1].url).toBe('/api/boxes/B1/proxmox');
   expect(calls[1].opts).toMatchObject({ method: 'DELETE' });
 });
+
+// The pane header's on-demand refresh. Keyed by box id in the response because
+// it merges straight into the snapshot GET /api/status returns.
+test('probeBox posts to that box and returns the /api/status-shaped answer', async () => {
+  const calls = [];
+  const snap = { B1: { reachable: true, tmux: true, sessions: [] } };
+  globalThis.fetch = async (url, opts) => { calls.push({ url, opts }); return { ok: true, status: 200, statusText: 'OK', json: async () => snap }; };
+  await expect(api.probeBox('B1')).resolves.toEqual(snap);
+  expect(calls[0].url).toBe('/api/boxes/B1/probe');
+  expect(calls[0].opts).toMatchObject({ method: 'POST' });
+});

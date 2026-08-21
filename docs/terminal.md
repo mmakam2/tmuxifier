@@ -17,10 +17,13 @@ dropdown** on the left; on the
 right a state chip (agent **working**/**waiting** from the health poller, or connection
 state while the terminal reconnects) beside the voice, reconnect ↻, and — in a split —
 undock ✕ buttons, so nothing floats over the terminal itself. The dropdown lists the box's
-live tmux sessions (from the status poll, so a session created from the command line appears
-within one poll cycle) with that session's windows indented beneath it, `→ 1: zsh`-style, and
+live tmux sessions with that session's windows indented beneath it, `→ 1: zsh`-style, and
 the selected row tracks whichever window the session actually has active — so the dropdown
-answers "which window am I looking at", not just which session. Picking a window in the
+answers "which window am I looking at", not just which session. Its contents are re-read
+from the box the moment you reach for the control — hovering it, or tapping it on a phone —
+rather than only on the status poll's own schedule, so a session or window you just opened
+from the command line with `prefix-c` is already there when the list drops down instead of
+turning up a poll cycle later. Picking a window in the
 pane's **current** session switches instantly, with no reconnect: it's a plain tmux
 window-select on the box, and the attached pane just follows. Picking a window in a
 **different** session switches that session too — the same reconnect a plain session pick

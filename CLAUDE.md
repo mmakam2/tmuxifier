@@ -226,6 +226,18 @@ pattern for new modules.
   a cache up to `statusPollMs` stale (without it the header's select visibly snapped back to the
   previous window); a throwing probe, or a deployment with no poller wired, still returns 200.
   Gated 409 like `/term` and the session-create route while the box's setup job is `running`.
+  `POST /api/boxes/:id/probe` is the read-only counterpart to that best-effort call: it re-probes
+  ONE box through the same `statusPoller.probeOne` and answers with that box's fresh entry, keyed
+  by box id so it is the same shape `GET /api/status` returns and the client merges it with one
+  spread. It exists because `/api/status` serves a cache that only moves on `statusPollMs`, which
+  the tab then re-reads on its own 30s interval — so a window opened on the box with `prefix-c`
+  was invisible in the pane header's dropdown for up to a minute while the Edit Box modal, which
+  probes live via `POST /api/boxes/probe-sessions`, showed it at once. Deliberately NOT gated by a
+  running setup job, unlike `/term`, the sizing viewer and the session-create/window-select routes:
+  those steer or hatch something on the box, while this only reads what the poller already reads
+  every sweep. Nor is it a fan-out risk — `status.js` coalesces concurrent probes of one box — and
+  a failed probe is a plain 502 rather than a half-empty entry the client would paint over a good
+  one.
   `requireAuth` is async and accepts either the signed session cookie or an `Authorization: Bearer
   <device token>` header verified via `deviceStore.verify` (`req.deviceId` set on that branch) —
   cookie first, since that keeps the common browser request synchronous, then the device-token
@@ -853,7 +865,15 @@ which session. Built only when `onSelectTarget` is passed, which `main.ts` gates
 whose `update()` never repopulates a focused select — a status poll landing mid-pick would slam
 the native dropdown shut. That guard is why the change handler blurs the select before acting:
 a native select keeps focus after `change`, so without the blur a failed switch could never
-snap the value back and the header would keep showing a switch that never happened. Live
+snap the value back and the header would keep showing a switch that never happened. That same
+guard is why the list is refreshed as the control is REACHED FOR rather than after it opens:
+`onWillOpenTarget` fires on `pointerenter` (mouse only — the prefetch, which repopulates freely
+because the select is not focused yet) and on `pointerdown`, where `preventDefault` holds the
+native picker shut until the probe lands and `showPicker()` then opens it on the refreshed list,
+focusing the select first so the guard protects it. Both are best-effort: no `showPicker`, a
+failed probe or one past `OPEN_REFRESH_WAIT_MS` just means the picker opens on the snapshot
+already held. A refresh that does land while the picker is open is re-applied on `blur`, since
+the guard would otherwise strand those options until the next poll. Live
 session names outside `SESSION_NAME_RE` (spaces, `@`, …) render as disabled options rather than
 being hidden or offered: `store.js`'s `sanitizeSession` would silently rewrite a PATCHed name,
 so "switching" to one would create a fresh mangled-name session instead of attaching — the
@@ -968,6 +988,10 @@ in-place-updating DOM layer; it lives outside `dashboard.ts` rather than growing
 `unifiCard.ts` (the UniFi card: the pure model — a six-cell client/WAN census over
 per-device-class rollup rows — plus `unifiLamp` and the local `fmtBitrate`, since UniFi reports
 bit rates and `fmtBytes` would render them in the wrong unit and base),
+`freshProbe.ts` (the on-demand status refresh policy behind that dropdown: single-flight per box,
+a short freshness window, and a caller-side wait cap that abandons the WAIT and never the probe,
+so a box that has gone away is a slightly-late list rather than a dead click; a failed probe
+resolves the caller and is deliberately not recorded as fresh, so the next reach retries),
 `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
 history: pure SVG-path builder and event-line formatters), `notifyPrefs.ts` (per-kind
 browser-notification preferences, localStorage-backed, defaults all-on except `up`/

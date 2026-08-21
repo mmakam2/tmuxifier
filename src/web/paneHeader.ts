@@ -162,7 +162,20 @@ export interface PaneHeaderActions {
   // session keeps running on the box, and a window switch does not even drop
   // the attach), so unlike Reconnect this is a plain callback: no arm-then-fire.
   onSelectTarget?: (target: SessionTarget) => void;
+  // Fired as the dropdown is REACHED FOR, before it opens: re-probe this box so
+  // the list it opens with is current. The options here are rendered from the
+  // status snapshot, which is a 30s server cache read on a 30s client interval,
+  // so a window opened on the box with `prefix-c` was invisible here for up to
+  // a minute (and the ✓ sat on a window that was no longer the active one).
+  // Resolves when the caller considers the snapshot good enough to open on —
+  // see freshProbe.ts for the single-flight/freshness/wait-cap policy.
+  onWillOpenTarget?: (opts?: { waitMs?: number }) => Promise<void>;
 }
+
+// How long the click path holds the native picker shut while the box answers.
+// Long enough for a healthy box over the ControlMaster, short enough that a box
+// that has gone away is a slightly-late dropdown rather than a dead click.
+export const OPEN_REFRESH_WAIT_MS = 700;
 
 // update() rewrites text/classes only — the voice button lives inside
 // voiceSlot across updates, and rebuilding children would kill an in-flight
@@ -208,6 +221,45 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
       sessionSel!.blur();
       if (target) actions.onSelectTarget!(target);
     });
+    // Reaching for the dropdown is the signal to re-probe the box. Two events,
+    // because a pointer arrives before it presses and a finger does not:
+    //
+    // - pointerenter (mouse only): the prefetch. The select is not focused yet,
+    //   so the answer repopulates it freely through update() below, and by the
+    //   time the click lands the list is already current.
+    // - pointerdown: the guarantee. preventDefault holds the picker shut while
+    //   the box answers, then showPicker() opens it on the refreshed list.
+    //
+    // Both are best-effort: a probe that fails or times out just means the
+    // picker opens on the snapshot we already had, which is what it did before.
+    const reach = (opts?: { waitMs?: number }) => actions.onWillOpenTarget?.(opts) ?? Promise.resolve();
+    sessionSel.addEventListener('pointerenter', (e) => {
+      if ((e as PointerEvent).pointerType === 'mouse') void reach();
+    });
+    sessionSel.addEventListener('pointerdown', (e) => {
+      if (!actions.onWillOpenTarget) return;
+      const sel = sessionSel!;
+      const picker = (sel as HTMLSelectElement & { showPicker?: () => void }).showPicker;
+      // Without showPicker() the popup can only be opened by this very event,
+      // so let it open on what we have and refresh underneath — the prefetch
+      // above has usually made that current already, and the focused-select
+      // guard in update() keeps a late answer from slamming an open picker shut.
+      if (typeof picker !== 'function') { void reach(); return; }
+      e.preventDefault();
+      void reach({ waitMs: OPEN_REFRESH_WAIT_MS }).then(() => {
+        // focus() first, and it is load-bearing twice: preventDefault above
+        // suppressed the focus this click would have moved, and the guard that
+        // stops a status poll from repopulating the list under an open picker
+        // keys on this select being the active element.
+        sel.focus();
+        try { picker.call(sel); } catch { /* a browser that refuses just needs a second click */ }
+      });
+    });
+    // A refresh that lands while the picker is open is deliberately not applied
+    // (see the guard in update()), which would otherwise leave those options
+    // stale until the next poll — up to 30s later. Re-apply on the way out.
+    // Deferred a turn because activeElement is not settled during `blur`.
+    sessionSel.addEventListener('blur', () => { setTimeout(() => update(lastModel), 0); });
   }
   const identity = document.createElement('div');
   identity.className = 'pane-header-id';
@@ -245,7 +297,11 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
 
   el.append(identity, acts);
 
+  // The last model applied, so the blur handler above can re-run update() with
+  // it rather than inventing one or waiting for the next poll.
+  let lastModel = model;
   const update = (m: PaneHeaderModel) => {
+    lastModel = m;
     dot.className = `dot ${m.dotClass}`;
     dot.title = m.dotTitle;
     title.textContent = m.title;

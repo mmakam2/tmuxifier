@@ -266,6 +266,13 @@ export const api = {
   async probeSessions(spec: { id?: string; host: string; user?: string; port?: number; proxyJump?: string }) {
     return j<Status>(await fetch('/api/boxes/probe-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(spec) }));
   },
+  // Re-probe ONE box now, answering in the same id-keyed shape as
+  // `status()` so the caller merges it with a spread. /api/status serves a
+  // cache that only moves on the server's poll interval, so this is what a
+  // control that must be current the instant it is used calls (the pane
+  // header's session/window dropdown) instead of waiting up to a minute for
+  // the two 30s intervals to line up.
+  async probeBox(id: string) { return j<Record<string, Status>>(await fetch(`/api/boxes/${id}/probe`, { method: 'POST' })); },
   async createSession(id: string, name: string) {
     return j<{ ok: boolean; name: string }>(await fetch(`/api/boxes/${id}/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) }));
   },
