@@ -2211,13 +2211,19 @@ function openBoxDialog(box?: Box) {
   sessionRow.className = 'session-row';
   const sessionInput = document.createElement('input');
   sessionInput.type = 'text';
-  sessionInput.placeholder = 'web';
+  sessionInput.placeholder = 'new session name';
   // sessionWrap is a <label>, and a label binds to the FIRST labelable element
   // it contains — which is now the dropdown below, not this input. Without its
-  // own name the revealed custom-name field would be announced by its
+  // own name the revealed new-session field would be announced by its
   // placeholder alone (and by nothing at all once typed into).
   sessionInput.setAttribute('aria-label', 'New tmux session name');
-  if (isEdit && box!.sessionName) sessionInput.value = box!.sessionName;
+  // Starts EMPTY, deliberately. This input was the session field itself until
+  // the dropdown took that job, and it was pre-filled with box.sessionName so
+  // it could show the current value. Under Create New Session… that pre-fill
+  // is actively wrong: it opens the field holding the name of the session the
+  // box already has, so Create no-ops against the existing session (the remote
+  // is has-session-else-create) and Save "switches" to where it already was.
+  // Blank still submits as 'web', the store default.
   const sessionRefresh = document.createElement('button');
   sessionRefresh.type = 'button';
   sessionRefresh.className = 'session-refresh';
