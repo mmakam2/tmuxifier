@@ -900,7 +900,21 @@ async function switchSession(id: string, name: string) {
 // row: the PTY drops and the attach path's `new-session -A` recreates it empty,
 // which is what the Reconnect cap already does to this very session.
 async function killTarget(id: string, t: SessionTarget) {
-  await api.killTarget(id, t.session, t.kind === 'window' ? t.windowId : undefined);
+  // Defense in depth alongside api.ts's own windowId !== undefined fix: a
+  // malformed window target with no id must never fall back to killing the
+  // whole session it belongs to.
+  if (t.kind === 'window' && !t.windowId) throw new Error('missing window id');
+  try {
+    await api.killTarget(id, t.session, t.kind === 'window' ? t.windowId : undefined);
+  } catch (e: any) {
+    // The pane header has no per-widget error surface the way the Edit Box
+    // modal's sessionHint does — sessionPicker.ts's own onKill catch swallows
+    // silently ("the surface reports"), so without this a 409 (setup still
+    // running), a 502 (the row vanished between poll and click) or a network
+    // error after a confirmed destructive click produced no feedback at all.
+    showToast(e?.message || 'kill failed', 'error');
+    throw e;
+  }
   await pollStatus();
 }
 
@@ -2352,20 +2366,50 @@ function openBoxDialog(box?: Box) {
 
   const picker = buildSessionPicker({
     className: 'session-select',
-    // The Create row names no session on the box, so it gets no ×.
-    canKill: (t) => t.value !== CUSTOM,
+    // The Create row names no session on the box, so it gets no ×. Add mode
+    // gets no × on any row either: probeAndApply() (the ⟳ button) can list
+    // real live sessions on a host that isn't a box yet, but this widget's
+    // onKill always no-ops in that mode (there is no box id, so no api call
+    // is valid) — rendering the control anyway made it a destructive-looking
+    // button that silently did nothing.
+    canKill: (t) => isEdit && t.value !== CUSTOM,
     onSelect: (t) => { picked = t.value; onPick(t); },
     onKill: async (t) => {
       // Add mode has no box id, so there is no live tmux to kill and no api
       // call is valid.
       if (!isEdit) return;
+      // Defense in depth alongside api.ts's own windowId !== undefined fix: a
+      // malformed window target with no id must never fall back to killing
+      // the whole session it belongs to.
+      if (t.kind === 'window' && !t.windowId) {
+        sessionHint.textContent = 'missing window id';
+        sessionHint.className = 'session-hint err';
+        return;
+      }
       sessionHint.className = 'session-hint';
       sessionHint.textContent = `killing ${cleanLabel(t.label)}…`;
       try {
         await api.killTarget(box!.id, t.session, t.kind === 'window' ? t.windowId : undefined);
-        // Clear a selection that just stopped existing, so Save cannot persist
-        // a session name the box no longer has.
-        if (picked === t.value) { picked = ''; lastPick = ''; }
+        // Deliberately NOT clearing `picked`/`lastPick` here even though the
+        // row they may name just stopped existing. probeAndApply() below only
+        // repaints (via applySessions) on two of its six outcomes — the
+        // "tmux not running" and success branches — and does nothing at all
+        // on the other four (empty host, in-use, needs-auth, unreachable, or
+        // its own catch). Clearing unconditionally used to leave `picked`
+        // sitting at '' with no repaint on exactly those four paths, so
+        // sessionFieldValue()'s `|| 'web'` fallback silently wrote a session
+        // name the operator never chose (kill `work`, box goes unreachable,
+        // Save writes 'web'). Leaving `picked` alone instead means: on those
+        // four no-repaint paths it still names the box's own session (the
+        // common case, since a row is normally only killable while selected
+        // if it WAS the current session/window) and Save keeps writing that
+        // name — which is correct, not stale, because sessionTargets() always
+        // emits the box's own configured session as a row even once tmux no
+        // longer lists it, and the attach path's `new-session -A` recreates
+        // it empty exactly like the Reconnect button already does. On the two
+        // paths that DO repaint, applySessions()'s own re-derivation (it
+        // keeps `picked` if the row still exists, else snaps to that same
+        // box-owned session row) makes any manual clearing redundant anyway.
         await probeAndApply();
       } catch (e: any) {
         sessionHint.textContent = e?.message || 'kill failed';
@@ -2419,6 +2463,14 @@ function openBoxDialog(box?: Box) {
       // update() is called.
       lastPick = t.value;
       renderPicker();
+      // Create New Session… reveals the name field via syncCustom() above,
+      // but the picker's own pick handler already called closePop() before
+      // invoking onSelect (which is what runs onPick), and closePop() sends
+      // focus back to the trigger by default — so without this the field is
+      // revealed and immediately abandoned. Restores what the pre-picker
+      // <select> handler did directly (`sessionSelect.value === CUSTOM` ->
+      // sessionInput.focus()).
+      if (t.value === CUSTOM) sessionInput.focus();
     }
   }
 

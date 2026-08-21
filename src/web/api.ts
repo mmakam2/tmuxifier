@@ -293,7 +293,15 @@ export const api = {
   // the list is a report of the box rather than a wish.
   async killTarget(id: string, session: string, windowId?: string) {
     const body: { session: string; windowId?: string } = { session };
-    if (windowId) body.windowId = windowId;
+    // `windowId !== undefined`, not truthiness: the server reads an ABSENT
+    // windowId as "kill the whole session" (server.js:996's own
+    // `windowId !== undefined && windowId !== null`), so a falsy-but-present
+    // value (an empty string, say, from a caller bug upstream) must still
+    // reach the server and fail its WINDOW_ID_RE check there rather than
+    // silently degrading into a session kill here. Same chokepoint discipline
+    // proxmoxApi.js applies to `kind` before interpolating it — re-check at
+    // the boundary rather than trust a caller three modules away.
+    if (windowId !== undefined) body.windowId = windowId;
     return j<{ ok: boolean }>(await fetch(`/api/boxes/${id}/kill`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
   },
   async importBoxes(payload: unknown) {

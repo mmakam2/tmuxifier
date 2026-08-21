@@ -117,28 +117,55 @@ export function buildSessionPicker(deps: SessionPickerDeps): SessionPicker {
     if (id) { fire(t); return; }
     armTimer = setTimeout(disarm, ARM_MS);
     render();
-    // render() just replaced the button that was clicked with a fresh armed
-    // one (list.replaceChildren rebuilds every row) — mirrors
-    // paneLifecycle.ts's onKeyClick, which refocuses its own armed
-    // replacement for the same reason: without this a keyboard user who just
-    // armed a destructive action has no way to reach the confirming second
-    // click OR Escape (bound to `pop`, which no longer contains focus once it
-    // reverts to body). Unconditional, matching that precedent exactly rather
-    // than gating on input modality — a mouse user refocusing the control
-    // they just clicked is unsurprising (it is the same control, now visibly
-    // armed), and it does not fight the focusout guard above: the outgoing
-    // focus here is the removed button reverting to `body` (relatedTarget
-    // null, already guarded), not a move away from `el`, so nothing closes.
-    // disarm()'s own render() (timeout / Escape / outside click / the second,
-    // firing click) deliberately gets NO matching focus() call, so letting an
-    // arm expire never steals focus from wherever the user has since moved it
-    // — it only ever reverts to `body`, same as any other row-changing
-    // render() in this widget.
-    el.querySelector<HTMLElement>('.session-picker-kill.armed')?.focus();
+    // render() itself now restores focus onto the row/button it was called
+    // with — see focusedRowButton()/the restore at the end of render(). The
+    // just-clicked kill button is document.activeElement when render() runs
+    // above, so this is no longer a bespoke case: it is the same mechanism
+    // that also covers a status poll landing mid-arm, Escape, and the arrow
+    // keys, all of which used to go dead the moment any render() rebuilt the
+    // row out from under the focused button.
   }
+
+  // The row (by data-key) and which of its two buttons held focus, captured
+  // BEFORE a rebuild so it can be restored after — but only when focus was
+  // genuinely inside `list` to begin with. render() rebuilds every row via
+  // replaceChildren, which unconditionally destroys whatever was focused
+  // (focus reverts to `body`), taking the popup's keydown handler (bound to
+  // `pop`) down with it: Escape and the arrow keys go dead until the next
+  // mouse click. This used to only be patched around for the arm/disarm
+  // render in clickKill; a poll-driven render() via update() got no such
+  // treatment, so ArrowUp/Down/Home/End and Escape died on every status-poll
+  // tick while the popup was open, not just after arming a kill.
+  function focusedRowButton(): { key: string; cls: '.session-picker-pick' | '.session-picker-kill' } | null {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !list.contains(active)) return null;
+    const row = active.closest<HTMLElement>('.session-picker-row');
+    const key = row?.dataset.key;
+    if (!key) return null;
+    const cls = active.classList.contains('session-picker-kill') ? '.session-picker-kill' : '.session-picker-pick';
+    return { key, cls };
+  }
+
+  // Content-key memo, mirroring the content-key the native <select> this
+  // replaced used to skip its own rebuild (`sessionSel.dataset.opts`, keyed on
+  // the option list's own join). Render's output is fully determined by the
+  // options list, which row is current, and which row (if any) is armed, so a
+  // poll that reports the same sessions/windows — the overwhelming common
+  // case — need not touch the DOM at all. That makes the focus-preserving
+  // dance above unnecessary for most renders rather than merely correct for
+  // the rest.
+  let lastKey: string | null = null;
 
   function render() {
     const opts = current?.options ?? [];
+    const key = JSON.stringify([
+      current?.value ?? null,
+      arm.armed ?? null,
+      opts.map((t) => [t.value, t.label, t.disabled ?? false, t.title ?? '']),
+    ]);
+    if (key === lastKey) return;
+    lastKey = key;
+    const focused = focusedRowButton();
     trigger.textContent = (opts.find((t) => t.value === current?.value)?.label ?? '').replace(/^[\s ]*→[\s ]*/, '').trim() || '—';
     list.replaceChildren(...opts.map((t) => {
       const li = document.createElement('li');
@@ -181,6 +208,17 @@ export function buildSessionPicker(deps: SessionPickerDeps): SessionPicker {
       li.append(pick, kill);
       return li;
     }));
+    // Restore focus to the equivalent button in the freshly-built row, if any
+    // — never to a button focus was not already on, so a render() triggered
+    // while focus sits elsewhere on the page (the trigger, the terminal,
+    // another modal) can never steal it. A row that no longer exists (just
+    // killed, or aged out of the list) simply gets no restore, same as a
+    // disabled replacement.
+    if (focused) {
+      const row = list.querySelector<HTMLElement>(`.session-picker-row[data-key="${CSS.escape(focused.key)}"]`);
+      const btn = row?.querySelector<HTMLButtonElement>(focused.cls);
+      if (btn && !btn.disabled) btn.focus();
+    }
   }
 
   function focusables(): HTMLButtonElement[] {
