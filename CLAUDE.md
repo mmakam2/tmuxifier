@@ -208,7 +208,15 @@ pattern for new modules.
   create (or killed a stranger like `web2`) whenever a longer-named session was present.
   Switching the active session needs no route of its own: the
   existing `PATCH /api/boxes/:id` already closes the box's terminal PTY group when `sessionName`
-  changes, so every viewer reconnects attached to the new session.
+  changes, so every viewer reconnects attached to the new session. `POST /api/boxes/:id/window`
+  switches the box's **active window inside its current session** — `tmux select-window` by
+  `#{window_id}` (re-validated server-side against `WINDOW_ID_RE`, the same chokepoint discipline
+  as every other allowlisted id in this file) — and, unlike a session switch, needs no reattach at
+  all: the current window is *session* state in tmux, so every client already attached to that
+  session follows the moment `select-window` returns. Nothing is persisted — `boxes.json` still
+  stores only the session name — because a stored window would fight `prefix-n` on the box's next
+  reconnect. Gated 409 like `/term` and the session-create route while the box's setup job is
+  `running`.
   `requireAuth` is async and accepts either the signed session cookie or an `Authorization: Bearer
   <device token>` header verified via `deviceStore.verify` (`req.deviceId` set on that branch) —
   cookie first, since that keeps the common browser request synchronous, then the device-token
@@ -405,6 +413,14 @@ pattern for new modules.
   one `__AGENT__` line per `~/.tmuxifier-agent/` marker file (written by the Claude Code hook
   `claudeAgentHooks.js` pushes), allowlisted by `parseAgentMarks` with the same input distrust —
   a closed `working`/`waiting` state set and a numeric timestamp, capped at 200 bytes on the box.
+  A single `tmux list-windows -a` appended to the same probe emits one `__WIN__` line per window
+  on the box (`WINDOW_FMT`/`parseTmuxWindows`), so every session's windows arrive with the status
+  snapshot at no extra SSH round trip; `attachWindows` folds them onto their session's
+  `windowList`. The format puts the window **name** last, because a window name may contain a
+  colon while a session name may not — the same reason `STATUS_FMT` orders its own fields.
+  Windows are addressed by `#{window_id}` (`@7`) rather than index: indexes renumber under
+  `move-window`, so an index captured by the poll that built a dropdown could name a different
+  window by the time a click uses it.
 - `statusPoller.js` — single server-side poll loop: probes every box on an interval
   (`statusPollMs`) and caches the snapshot `/api/status` serves, so status SSH volume is
   independent of how many dashboard tabs are open. An optional `localAgent` sampler
@@ -808,21 +824,31 @@ layer whose `update()` rewrites in place, so the voice button (mounted into the 
 `openTerminal`'s `voiceMount` seam) survives polls. It also exposes a `lifecycleSlot` for
 `paneLifecycle.ts` and, via `wantRefresh`, hands back the Reconnect cap rather than owning its
 click policy — that action kills the pane's tmux session, so `main.ts` wires arm-then-fire onto
-it instead. The identity half also carries the active-session dropdown (pure `sessionOptions`:
-the configured session first — kept offered even when tmux no longer lists it — then the cached
-snapshot's live names; built only when `onSelectSession` is passed, which `main.ts` gates on
-`model.sessions` so the offer rule lives in the model alone),
+it instead. The identity half also carries the active-session/window dropdown (pure
+`sessionTargets`/`sessionTargetList`: the configured session first — kept offered even when
+tmux no longer lists it — with its windows indented beneath it (`WINDOW_INDENT`, `→ 1: zsh`),
+then every other live session and its own windows; `sessionTargetList` additionally picks
+which row is *selected* — the current session's ACTIVE window when the snapshot knows one,
+else the session row itself — so the header answers "which window am I looking at", not just
+which session. Built only when `onSelectTarget` is passed, which `main.ts` gates on
+`model.targets` so the offer rule lives in the model alone),
 whose `update()` never repopulates a focused select — a status poll landing mid-pick would slam
 the native dropdown shut. That guard is why the change handler blurs the select before acting:
 a native select keeps focus after `change`, so without the blur a failed switch could never
-snap the value back and the header would keep showing a switch that never happened. Live names
-outside `SESSION_NAME_RE` (spaces, `@`, …) render as disabled options rather than being hidden
-or offered: `store.js`'s `sanitizeSession` would silently rewrite a PATCHed name, so "switching"
-to one would create a fresh mangled-name session instead of attaching — the session is real,
-only unswitchable from here (`isSwitchableSession`, with a `switchSession` backstop).
-Selecting PATCHes `sessionName` via `main.ts`'s `switchSession`; the
-server already drops the box's terminal PTYs on that change, so the pane just reopens attached
-to the new session — non-destructive, hence a plain callback and no arm-then-fire),
+snap the value back and the header would keep showing a switch that never happened. Live
+session names outside `SESSION_NAME_RE` (spaces, `@`, …) render as disabled options rather than
+being hidden or offered: `store.js`'s `sanitizeSession` would silently rewrite a PATCHed name,
+so "switching" to one would create a fresh mangled-name session instead of attaching — the
+session is real, only unswitchable from here (`isSwitchableSession`, with a `switchSession`
+backstop). A locked session's window rows inherit the same disabled verdict — EXCEPT the
+pane's own current session, whose windows stay selectable however it's named, since reaching
+one needs no PATCH at all. Picking a row runs `main.ts`'s `selectTarget`: a window row in the
+pane's current session is the cheap case, `api.selectWindow` alone with no PATCH and no PTY
+kill, since every client attached to that session follows the `select-window` on its own; a
+row naming a different session runs `switchSession` (PATCHing `sessionName`, which drops the
+box's terminal PTYs so every viewer reopens attached to the new session) — window-first when
+both are needed, so the forced reattach lands already on the chosen window. Either path is a
+plain callback rather than arm-then-fire: nothing here is destructive the way Reconnect is),
 `paneLifecycle.ts` (the Proxmox lifecycle keys in that slot: `lifecycleKeysFor`
 derives which keys a pane's state allows, the caps are **words** (`START`/`SHUTDOWN`/`REBOOT`/
 `STOP`) precisely because the old `↺` reboot glyph was indistinguishable from the Reconnect

@@ -18,12 +18,22 @@ right a state chip (agent **working**/**waiting** from the health poller, or con
 state while the terminal reconnects) beside the voice, reconnect ↻, and — in a split —
 undock ✕ buttons, so nothing floats over the terminal itself. The dropdown lists the box's
 live tmux sessions (from the status poll, so a session created from the command line appears
-within one poll cycle) and picking one switches the box's configured session: every open
-terminal for that box reconnects attached to it, while the previous session keeps running on
-the box. The agent chip and notifications follow the switch, since they track the configured
-session. A session whose name falls outside Tmuxifier's safe charset (letters, digits, `_`,
-`-`, up to 64) is listed but greyed out — switching would silently rename it, so it can only
-be attached from the command line. The focused pane's bar
+within one poll cycle) with that session's windows indented beneath it, `→ 1: zsh`-style, and
+the selected row tracks whichever window the session actually has active — so the dropdown
+answers "which window am I looking at", not just which session. Picking a window in the
+pane's **current** session switches instantly, with no reconnect: it's a plain tmux
+window-select on the box, and the attached pane just follows. Picking a window in a
+**different** session switches that session too — the same reconnect a plain session pick
+causes, landing every open terminal for that box already on the window you chose. Either way,
+remember that in tmux the current window belongs to the *session*, not to your browser tab:
+switching it moves anyone else attached to that session right along with you, whether that's
+a second browser or an SSH terminal on the box itself — exactly as if you'd pressed
+`prefix-n` there. The agent chip and notifications follow a session switch, since they track
+the configured session. A session whose name falls outside Tmuxifier's safe charset (letters,
+digits, `_`, `-`, up to 64) is listed but greyed out — switching would silently rename it, so
+it can only be attached from the command line — and its windows are greyed out with it,
+except when it's the pane's own current session, where no switch is needed to reach them. The
+focused pane's bar
 carries the cyan beacon, `Ctrl+Shift+Arrow` moves focus to the geometrically adjacent pane,
 and plain-clicking another box in the sidebar replaces the **focused** pane while the
 others keep running. Undocking keeps the terminal connected in the background, exactly like

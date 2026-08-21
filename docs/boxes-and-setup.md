@@ -5,18 +5,28 @@ Code statusline push, and AI CLI auth seeding. Part of the [Tmuxifier docs](../R
 
 Each terminal runs `ssh -tt <box> "tmux -u new-session -A -s <session>"` (`-u` forces UTF-8
 output so glyphs survive a C/POSIX locale). `<session>` is the box's tmux session
-name — set per box in the Add/Edit dialog (a type-or-pick field whose ⟳ button fetches the host's
-live sessions), defaulting to `web`. Because tmux runs on the box, the session and its processes
-survive disconnects. A 45s server-side grace window makes brief reconnects seamless; after that
-the local ssh process is dropped while the on-box session keeps running.
+name — set per box in the Add/Edit dialog's **tmux session** dropdown, defaulting to `web`.
+The dropdown carries the same hierarchy as the [pane header's](terminal.md): every live
+session (from the cached status snapshot, or a fresh probe via ⟳) with its windows indented
+beneath it, plus a `Custom name…` row that reveals a free-text field for a session that
+doesn't exist yet. Because tmux runs on the box, the session and its processes survive
+disconnects. A 45s server-side grace window makes brief reconnects seamless; after that the
+local ssh process is dropped while the on-box session keeps running.
 
-Editing a box refreshes its session bubbles automatically from the host, so sessions created
-outside Tmuxifier — including from the command line — show up without clicking ⟳. The Edit
-dialog can also **create** a session on the box right away (detached, without switching to it):
-type a name next to the bubbles and hit Create. It appears as a bubble and in the pane header's
-session dropdown, ready to be switched to. Switching the active session — by saving the dialog
-with a different pick, or from the [pane header's dropdown](terminal.md) — reconnects every open
-terminal for that box to the new session; the old session keeps running on the box.
+Editing a box refreshes the dropdown automatically from the host, so sessions and windows
+created outside Tmuxifier — including from the command line — show up without clicking ⟳.
+Picking a window row there acts immediately: it's a live tmux window-select on the box, not
+form state, so it doesn't wait on Save — the session half is still written on Save like any
+other field, and a failed live switch snaps the dropdown back rather than saving a change
+that never happened. The Edit dialog can also **create** a session on the box right away
+(detached, without switching to it): type a name below the dropdown and hit Create. It
+appears in the dropdown and in the [pane header's](terminal.md), ready to be switched to.
+Switching the active session — by saving the dialog with a different pick, or from the pane
+header's dropdown — reconnects every open terminal for that box to the new session; the old
+session keeps running on the box. Add mode has no box yet to run a live window-select
+against, so once you ⟳ a host's sessions their windows appear in the dropdown for
+orientation but disabled — `web (default)` and `Custom name…` are the only rows you can
+actually pick until the box exists.
 
 ## The setup job
 
