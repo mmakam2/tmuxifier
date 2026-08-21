@@ -6,6 +6,7 @@ import {
   buildControlPathArgv,
   sanitizeSession,
   shSingleQuote,
+  WINDOW_ID_RE,
 } from './sshCommand.js';
 import { storedUploadName, buildUploadRemote } from './uploads.js';
 import {
@@ -468,6 +469,26 @@ export function buildEnsureSessionRemote(session, startupCommand, options = {}) 
       '[ -n "$SHELL_BIN" ] && { "$TMUX_BIN" start-server 2>/dev/null || true; "$TMUX_BIN" set-option -g default-shell "$SHELL_BIN" 2>/dev/null || true; } || true',
     ] : []),
     `"$TMUX_BIN" has-session -t ${exact} 2>/dev/null || "$TMUX_BIN" new-session -d -s ${sess}${startup}`,
+  ].join('\n');
+}
+
+// Switch a session's current window. The id is validated by the route and again
+// here before quoting, then targeted directly: `-t '@7'` needs no `=`-prefixed
+// exact match because a window id is already exact, unlike the session names
+// buildEnsureSessionRemote has to guard against prefix-matching. tmux is
+// resolved the same way as there — this runs under whatever PATH the box's
+// non-interactive shell provides.
+export function buildSelectWindowRemote(windowId) {
+  if (!WINDOW_ID_RE.test(String(windowId))) throw new Error('invalid window id');
+  const id = shSingleQuote(String(windowId));
+  return [
+    'set -eu',
+    'TMUX_BIN="$(command -v tmux || true)"',
+    'if [ -z "$TMUX_BIN" ]; then',
+    '  for p in /usr/bin/tmux /usr/local/bin/tmux /bin/tmux; do if [ -x "$p" ]; then TMUX_BIN="$p"; break; fi; done',
+    'fi',
+    '[ -n "$TMUX_BIN" ]',
+    `"$TMUX_BIN" select-window -t ${id}`,
   ].join('\n');
 }
 

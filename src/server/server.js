@@ -8,8 +8,8 @@ import websocket from '@fastify/websocket';
 import { verifyPassword, COOKIE_NAME, cookieOptions, sessionValue, sessionValueValid } from './auth.js';
 import { createLoginRateLimiter } from './rateLimit.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
-import { buildEnsureTmuxRemote, buildEnsureSessionRemote, resolveTools } from './boxActions.js';
-import { assertBoxSafe, SESSION_NAME_RE } from './sshCommand.js';
+import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildSelectWindowRemote, resolveTools } from './boxActions.js';
+import { assertBoxSafe, SESSION_NAME_RE, WINDOW_ID_RE } from './sshCommand.js';
 import { provisionKey, terminalKey, localKey, LOCAL_GROUP } from './sessions.js';
 import { upsertConfigFile } from './configFile.js';
 import { readJsonSync, writeJsonSync } from './jsonFile.js';
@@ -916,6 +916,37 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       return reply.code(502).send({ error: String(res?.stderr || '').trim() || 'failed to create session' });
     }
     return { ok: true, name };
+  });
+  // Switch the box's ACTIVE WINDOW inside its tmux session. Unlike a session
+  // switch — PATCH sessionName, which drops every viewer's PTY so they reattach
+  // — this needs no reattach at all: in tmux the current window is *session*
+  // state, so every client attached to that session follows the moment
+  // select-window returns. Nothing is persisted; boxes.json still stores only
+  // the session name, deliberately, because a stored window would fight
+  // prefix-n on the next reconnect.
+  app.post('/api/boxes/:id/window', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'box not found' });
+    // Same gate as /term, the sizing viewer and the session-create route: a box
+    // mid-setup has no environment worth steering into.
+    if (setupManager?.currentForBox(box.id)?.status === 'running') {
+      return reply.code(409).send({ error: 'box setup is still running' });
+    }
+    const windowId = (req.body || {}).windowId;
+    // The client read this id out of a status snapshot, but it becomes a tmux
+    // target, so it is re-validated here — the chokepoint discipline
+    // iconCatalog.js and voiceCatalog.js apply to their own allowlists.
+    if (typeof windowId !== 'string' || !WINDOW_ID_RE.test(windowId)) {
+      return reply.code(400).send({ error: 'window id must look like @7' });
+    }
+    if (!boxActions?.execCommand) return reply.code(503).send({ error: 'window switching unavailable' });
+    const res = await boxActions.execCommand(box, buildSelectWindowRemote(windowId), { timeoutMs: 15000 });
+    // A window that vanished between the poll and the click lands here; the next
+    // status poll rebuilds the dropdown without it.
+    if (!res || res.code !== 0) {
+      return reply.code(502).send({ error: String(res?.stderr || '').trim() || 'failed to select window' });
+    }
+    return { ok: true, windowId };
   });
   app.post('/api/boxes/:id/reconnect', { preHandler: requireAuth }, async (req, reply) => {
     const box = await store.getBox(req.params.id);
