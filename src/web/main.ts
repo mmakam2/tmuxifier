@@ -34,6 +34,7 @@ import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from 
 import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
 import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks, type PaneRect } from './stagePanes';
 import { paneHeaderModel, buildPaneHeader, isSwitchableSession, sessionTargets, SESSION_NAME_RE, WINDOW_INDENT, type PaneConn, type PaneHeaderModel, type SessionTarget } from './paneHeader';
+import { buildSessionPicker } from './sessionPicker';
 import { buildPaneLifecycle } from './paneLifecycle';
 import { createPhoneMode, type PhoneMode } from './phoneMode';
 import { buildTouchKeyBar, createStickyCtrl } from './touchKeys';
@@ -2290,87 +2291,77 @@ function openBoxDialog(box?: Box) {
 
   // One control for the whole choice: every live session with its windows
   // indented beneath it (the pane header's own pure model, reused so the two
-  // surfaces cannot drift), plus a Create New Session… row that reveals the free-text
-  // input for a session that does not exist yet.
+  // surfaces cannot drift), plus a Create New Session… row that reveals the
+  // free-text input for a session that does not exist yet. This is the same
+  // widget the pane header uses (Task 7), so a session behaves identically
+  // wherever it is met — Create New Session… stays a ROW in this list, and
+  // `customRow` (the text field it reveals) stays OUTSIDE the picker's popup,
+  // exactly where it sits below the control today: a field mounted inside the
+  // popup would vanish the moment picking the row closed the popup, precisely
+  // when the operator starts typing into it.
   const CUSTOM = '__custom__';
-  const sessionSelect = document.createElement('select');
-  sessionSelect.className = 'session-select';
-  sessionSelect.setAttribute('aria-label', 'tmux session or window');
   let targets: SessionTarget[] = [];
   // The last selection Save is allowed to see as committed. A session-row or
   // Custom pick commits immediately (pure form state); a window-row pick
   // commits only once api.selectWindow actually succeeds, so a failed live
-  // switch can snap the select back rather than leaving Save to silently
+  // switch can snap the picker back rather than leaving Save to silently
   // persist a switch that never happened (mirrors selectTarget()/
   // switchSession() above reverting via updatePaneHeaders() on catch).
   let lastPick = '';
   // True between firing api.selectWindow and its settling. applySessions() runs
   // on its own schedule (the automatic probe, the ⟳ button, Create), and while a
-  // switch is outstanding the select is already showing the PENDING pick — so
+  // switch is outstanding the picker is already showing the PENDING pick — so
   // committing that as lastPick would make the .catch() below "revert" to the
   // very pick that just failed.
   let windowPending = false;
+  // What the picker currently shows selected — this widget's analogue of the
+  // old <select>'s own .value. Unlike a native <select>, the picker cannot be
+  // nudged in place: every spot that used to assign sessionSelect.value now
+  // sets this and calls picker.update() (via applySessions/customRowTarget)
+  // to repaint.
+  let picked = '';
 
-  function applySessions(status: Status | undefined) {
-    // Never rebuild under the user. probeAndApply() fires automatically ~0.5-2s
-    // after the modal opens (and again on ⟳ / Create), which can land while this
-    // dropdown is open and slam it shut mid-pick — the lesson paneHeader.ts's
-    // update() already learned for the header's own select. `targets` is held
-    // back with the options, so the rendered rows and the list the change
-    // handler resolves a pick against can never disagree.
-    if (document.activeElement === sessionSelect) return;
-    targets = sessionTargets(status, sessionInput.value.trim() || (isEdit ? box!.sessionName : '') || 'web');
-    const keep = sessionSelect.value;
-    const custom = document.createElement('option');
-    custom.value = CUSTOM;
-    custom.textContent = 'Create New Session…';
-    sessionSelect.replaceChildren(...targets.map((t) => {
-      const o = document.createElement('option');
-      o.value = t.value;
-      o.textContent = t.kind === 'session' && t.session === 'web' ? 'web (default)' : t.label;
-      // Add mode has no box to run select-window against, so a window is shown
-      // for orientation but cannot be acted on — disabled-not-hidden, the same
-      // treatment an unswitchable session name gets: the window is real, just
-      // not actionable from a box that does not exist yet.
-      if (t.disabled || (!isEdit && t.kind === 'window')) {
-        o.disabled = true;
-        o.title = t.title ?? 'add the box first, then switch windows from the pane header';
+  // The synthetic Create row, carried in the options list exactly as the
+  // <option> was, so `picked === CUSTOM` still drives syncCustom() unchanged.
+  // Factored out so createSessionNow() can re-render without re-deriving
+  // targets from a status snapshot (see its own comment below).
+  function customRowTarget(): SessionTarget {
+    return { kind: 'session', value: CUSTOM, label: 'Create New Session…', session: '' };
+  }
+
+  const picker = buildSessionPicker({
+    className: 'session-select',
+    // The Create row names no session on the box, so it gets no ×.
+    canKill: (t) => t.value !== CUSTOM,
+    onSelect: (t) => { picked = t.value; onPick(t); },
+    onKill: async (t) => {
+      // Add mode has no box id, so there is no live tmux to kill and no api
+      // call is valid.
+      if (!isEdit) return;
+      sessionHint.className = 'session-hint';
+      sessionHint.textContent = `killing ${t.label.trim()}…`;
+      try {
+        await api.killTarget(box!.id, t.session, t.kind === 'window' ? t.windowId : undefined);
+        // Clear a selection that just stopped existing, so Save cannot persist
+        // a session name the box no longer has.
+        if (picked === t.value) { picked = ''; lastPick = ''; }
+        await probeAndApply();
+      } catch (e: any) {
+        sessionHint.textContent = e?.message || 'kill failed';
+        sessionHint.className = 'session-hint err';
       }
-      return o;
-    }), custom);
-    sessionSelect.value = targets.some((t) => t.value === keep) || keep === CUSTOM ? keep : (targets[0]?.value ?? CUSTOM);
-    if (!windowPending) lastPick = sessionSelect.value;
+    },
+  });
+
+  function onPick(t: SessionTarget) {
     syncCustom();
-  }
-
-  // The new-session row is only in play under Create New Session…; otherwise the
-  // selected row IS the value, so leaving the input visible would present two
-  // fields that disagree. `hidden` needs the [hidden] rule in style.css to
-  // land: this row carries .session-row, whose `display: flex` outranks the UA
-  // stylesheet's `[hidden] { display: none }` (author beats user-agent), so
-  // without that rule the attribute is set and nothing happens.
-  function syncCustom() {
-    customRow.hidden = sessionSelect.value !== CUSTOM;
-  }
-
-  // What Save writes. One reader for both submit branches so add and edit
-  // cannot drift.
-  function sessionFieldValue(): string {
-    if (sessionSelect.value === CUSTOM) return sessionInput.value.trim() || 'web';
-    return targets.find((t) => t.value === sessionSelect.value)?.session || 'web';
-  }
-
-  sessionSelect.addEventListener('change', () => {
-    syncCustom();
-    if (sessionSelect.value === CUSTOM) { lastPick = CUSTOM; sessionInput.focus(); return; }
-    const t = targets.find((x) => x.value === sessionSelect.value);
     // A window pick acts immediately, exactly as it does in the pane header —
     // it is a live tmux action, not form state, and nothing about it is saved.
     // The session half still rides Save like every other field.
-    if (isEdit && t?.kind === 'window' && t.windowId) {
-      // The indent is part of the label so the <option> text reads as a tree;
-      // strip it for the hint sentence, where it would just leave a stray
-      // arrow ("switching to → 2: bash…") since .trim() only eats whitespace.
+    if (isEdit && t.kind === 'window' && t.windowId) {
+      // The indent is part of the label so the row reads as a tree; strip it
+      // for the hint sentence, where it would just leave a stray arrow
+      // ("switching to → 2: bash…") since .trim() only eats whitespace.
       const label = t.label.startsWith(WINDOW_INDENT) ? t.label.slice(WINDOW_INDENT.length) : t.label.trim();
       // A window in a session this box is NOT attached to does move on the box
       // right now, but the pane will not show it until Save switches the box to
@@ -2382,28 +2373,80 @@ function openBoxDialog(box?: Box) {
       api.selectWindow(box!.id, t.session, t.windowId)
         .then(() => {
           windowPending = false;
-          lastPick = sessionSelect.value;
+          lastPick = t.value;
           sessionHint.textContent = elsewhere ? `will show ${label} — Save to switch session` : `showing ${label}`;
         })
         .catch((e: any) => {
           windowPending = false;
           // Snap back to the last selection Save is allowed to see, the same
           // guard selectTarget()/switchSession() apply to the pane header's
-          // own dropdown: a failed live switch must not leave the select (and
-          // therefore Save) showing a change that never happened. Programmatic
-          // .value assignment does not dispatch 'change', so this cannot
-          // re-enter this handler.
-          sessionSelect.value = lastPick;
+          // own dropdown: a failed live switch must not leave the picker (and
+          // therefore Save) showing a change that never happened.
+          picked = lastPick;
+          applySessions(latestStatus[box!.id]);
           syncCustom();
           sessionHint.textContent = e?.message || 'window switch failed';
           sessionHint.className = 'session-hint err';
         });
     } else {
-      // A session-row pick (or Custom, handled above) is pure form state — no
-      // live call — so it commits immediately.
-      lastPick = sessionSelect.value;
+      // A session-row pick (or Custom) is pure form state — no live call — so
+      // it commits immediately.
+      lastPick = t.value;
     }
-  });
+  }
+
+  function applySessions(status: Status | undefined) {
+    // The old focused-select guard is gone: the widget holds its own
+    // armed-row invariant, and a popup we own can be repopulated while it is
+    // open — the lesson paneHeader.ts's own update() already learned for the
+    // header's picker.
+    targets = sessionTargets(status, sessionInput.value.trim() || (isEdit ? box!.sessionName : '') || 'web');
+    // Add mode has no box to run select-window against, so a window is shown
+    // for orientation but cannot be picked — disabled-not-hidden, the same
+    // treatment an unswitchable session name gets: the window is real, just
+    // not actionable from a box that does not exist yet.
+    if (!isEdit) {
+      for (const t of targets) {
+        if (t.kind === 'window' && !t.disabled) {
+          t.disabled = true;
+          t.title = 'add the box first, then switch windows from the pane header';
+        }
+      }
+    }
+    const rows: SessionTarget[] = [...targets, customRowTarget()];
+    // Re-derive picked exactly like the old sessionSelect.value assignment
+    // did: keep it if the row it names still exists (rows, not just targets,
+    // so CUSTOM counts as "still exists" the same way `keep === CUSTOM` did),
+    // otherwise snap to the box's own session row (always targets[0] per
+    // sessionTargets' own ordering) or the first target. This runs on every
+    // probe/refresh, not only when picked is empty, so a session killed from
+    // outside the picker (an ssh session exiting, someone killing it from a
+    // terminal) cannot leave the trigger pointing at a row that no longer
+    // exists.
+    if (!rows.some((t) => t.value === picked)) {
+      picked = targets.find((t) => t.session === (isEdit ? box!.sessionName : ''))?.value ?? targets[0]?.value ?? '';
+    }
+    if (!windowPending) lastPick = picked;
+    picker.update({ options: rows, value: picked });
+  }
+
+  // The new-session row is only in play under Create New Session…; otherwise the
+  // selected row IS the value, so leaving the input visible would present two
+  // fields that disagree. `hidden` needs the [hidden] rule in style.css to
+  // land: this row carries .session-row, whose `display: flex` outranks the UA
+  // stylesheet's `[hidden] { display: none }` (author beats user-agent), so
+  // without that rule the attribute is set and nothing happens.
+  function syncCustom() {
+    customRow.hidden = picked !== CUSTOM;
+  }
+
+  // What Save writes. One reader for both submit branches so add and edit
+  // cannot drift.
+  function sessionFieldValue(): string {
+    if (picked === CUSTOM) return sessionInput.value.trim() || 'web';
+    return targets.find((t) => t.value === picked)?.session || 'web';
+  }
+
   // One text input for the whole idea of "a session that isn't in the list":
   // the field is the NAME (what Save writes, created lazily by the attach
   // path's `new-session -A`), and the Create key beside it is the optional
@@ -2447,7 +2490,16 @@ function openBoxDialog(box?: Box) {
         // via syncCustom(), which is the cue that the name is now a real
         // session rather than a string waiting to be saved.
         await probeAndApply();
-        if (targets.some((t) => t.value === `s:${name}`)) { sessionSelect.value = `s:${name}`; lastPick = sessionSelect.value; syncCustom(); }
+        if (targets.some((t) => t.value === `s:${name}`)) {
+          picked = `s:${name}`;
+          lastPick = picked;
+          // Re-render with the targets probeAndApply() just fetched live —
+          // NOT a fresh applySessions(latestStatus[...]) call, which would
+          // recompute from the periodic status cache and could still be
+          // missing the session this instant just created.
+          picker.update({ options: [...targets, customRowTarget()], value: picked });
+          syncCustom();
+        }
       } catch (e: any) {
         sessionHint.textContent = e?.message || 'create failed';
         sessionHint.className = 'session-hint err';
@@ -2462,7 +2514,7 @@ function openBoxDialog(box?: Box) {
     // that happens to land here.
   }
 
-  sessionRow.append(sessionSelect, sessionRefresh);
+  sessionRow.append(picker.el, sessionRefresh);
   sessionWrap.append(sessionSpan, sessionRow, customRow, sessionHint);
   // Pre-fill from cached status (edit mode only — an unsaved box has no snapshot).
   applySessions(isEdit ? latestStatus[box!.id] : undefined);
@@ -2581,7 +2633,13 @@ function openBoxDialog(box?: Box) {
     if (box!.proxyJump) fields.proxyJump.value = box!.proxyJump;
   }
 
-  const { close } = openModal({ modal: form, mount: app });
+  // picker.destroy() tears down the document-level click listener the picker
+  // registers — otherwise the closure and its detached popup subtree outlive
+  // this dialog. onClose fires exactly once on every close path openModal
+  // recognizes: Escape, a genuine backdrop click, the explicit close() below
+  // (Cancel and a successful Save), and closeAllModals() for any modal that
+  // is registered with it.
+  const { close } = openModal({ modal: form, mount: app, onClose: () => picker.destroy() });
   fields.host.focus();
   cancel.addEventListener('click', close);
 

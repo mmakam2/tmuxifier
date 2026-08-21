@@ -616,10 +616,17 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
    cap carries a word, so the glyph-sized type comes down to label scale. */
 .modal .session-create .session-refresh { font-size: 12px; letter-spacing: 0.04em; }
 /* The session field is one control now: sessions with their windows indented
-   under them, plus a Create New Session… row that reveals the free-text input. */
-.modal .session-select { flex: 1; min-width: 0; padding: 9px 10px; border-radius: 6px; border: 1px solid var(--border); border-top-color: var(--seam); background: var(--screen); box-shadow: var(--recess); color: var(--text); font-family: var(--face); font-size: 14px; }
-.modal .session-select:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 45%, transparent); box-shadow: var(--recess), 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent); }
-.modal .session-select option:disabled { color: var(--dim); }
+   under them, plus a Create New Session… row that reveals the free-text input.
+   It is the session-picker widget (sessionPicker.ts), the same one the pane
+   header uses — but the modal keeps its OWN larger metrics (14px/9px) rather
+   than the header's denser 11px/1px trigger, since these are different
+   surfaces with different densities. .session-picker is inline-flex by
+   default (sized to content), so the wrapper needs its own flex:1 to fill the
+   row the way the old <select> did; the visual metrics live on the trigger
+   button one level in, since that's the element actually painted. */
+.modal .session-select { flex: 1; min-width: 0; }
+.modal .session-picker-trigger { width: 100%; min-width: 0; padding: 9px 10px; border-radius: 6px; border: 1px solid var(--border); border-top-color: var(--seam); background: var(--screen); box-shadow: var(--recess); color: var(--text); font-family: var(--face); font-size: 14px; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal .session-picker-trigger:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 45%, transparent); box-shadow: var(--recess), 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent); }
 .modal .check-field { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text); }
 .modal .check-field input { width: 15px; height: 15px; accent-color: var(--accent); }
 .modal .radio-group { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px; }
