@@ -32,7 +32,7 @@ import { createSetupOptionsForm, setupStartPayload, type SetupOptionsValues } fr
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
 import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
 import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks, type PaneRect } from './stagePanes';
-import { paneHeaderModel, buildPaneHeader, isSwitchableSession, sessionTargets, SESSION_NAME_RE, type PaneConn, type PaneHeaderModel, type SessionTarget } from './paneHeader';
+import { paneHeaderModel, buildPaneHeader, isSwitchableSession, sessionTargets, SESSION_NAME_RE, WINDOW_INDENT, type PaneConn, type PaneHeaderModel, type SessionTarget } from './paneHeader';
 import { buildPaneLifecycle } from './paneLifecycle';
 import { createPhoneMode, type PhoneMode } from './phoneMode';
 import { buildTouchKeyBar, createStickyCtrl } from './touchKeys';
@@ -2223,6 +2223,13 @@ function openBoxDialog(box?: Box) {
   sessionSelect.className = 'session-select';
   sessionSelect.setAttribute('aria-label', 'tmux session or window');
   let targets: SessionTarget[] = [];
+  // The last selection Save is allowed to see as committed. A session-row or
+  // Custom pick commits immediately (pure form state); a window-row pick
+  // commits only once api.selectWindow actually succeeds, so a failed live
+  // switch can snap the select back rather than leaving Save to silently
+  // persist a switch that never happened (mirrors selectTarget()/
+  // switchSession() above reverting via updatePaneHeaders() on catch).
+  let lastPick = '';
 
   function applySessions(status: Status | undefined) {
     targets = sessionTargets(status, sessionInput.value.trim() || (isEdit ? box!.sessionName : '') || 'web');
@@ -2245,6 +2252,7 @@ function openBoxDialog(box?: Box) {
       return o;
     }), custom);
     sessionSelect.value = targets.some((t) => t.value === keep) || keep === CUSTOM ? keep : (targets[0]?.value ?? CUSTOM);
+    lastPick = sessionSelect.value;
     syncCustom();
   }
 
@@ -2264,20 +2272,39 @@ function openBoxDialog(box?: Box) {
 
   sessionSelect.addEventListener('change', () => {
     syncCustom();
-    if (sessionSelect.value === CUSTOM) { sessionInput.focus(); return; }
+    if (sessionSelect.value === CUSTOM) { lastPick = CUSTOM; sessionInput.focus(); return; }
     const t = targets.find((x) => x.value === sessionSelect.value);
     // A window pick acts immediately, exactly as it does in the pane header —
     // it is a live tmux action, not form state, and nothing about it is saved.
     // The session half still rides Save like every other field.
     if (isEdit && t?.kind === 'window' && t.windowId) {
+      // The indent is part of the label so the <option> text reads as a tree;
+      // strip it for the hint sentence, where it would just leave a stray
+      // arrow ("switching to → 2: bash…") since .trim() only eats whitespace.
+      const label = t.label.startsWith(WINDOW_INDENT) ? t.label.slice(WINDOW_INDENT.length) : t.label.trim();
       sessionHint.className = 'session-hint';
-      sessionHint.textContent = `switching to ${t.label.trim()}…`;
+      sessionHint.textContent = `switching to ${label}…`;
       api.selectWindow(box!.id, t.windowId)
-        .then(() => { sessionHint.textContent = `showing ${t.label.trim()}`; })
+        .then(() => {
+          lastPick = sessionSelect.value;
+          sessionHint.textContent = `showing ${label}`;
+        })
         .catch((e: any) => {
+          // Snap back to the last selection Save is allowed to see, the same
+          // guard selectTarget()/switchSession() apply to the pane header's
+          // own dropdown: a failed live switch must not leave the select (and
+          // therefore Save) showing a change that never happened. Programmatic
+          // .value assignment does not dispatch 'change', so this cannot
+          // re-enter this handler.
+          sessionSelect.value = lastPick;
+          syncCustom();
           sessionHint.textContent = e?.message || 'window switch failed';
           sessionHint.className = 'session-hint err';
         });
+    } else {
+      // A session-row pick (or Custom, handled above) is pure form state — no
+      // live call — so it commits immediately.
+      lastPick = sessionSelect.value;
     }
   });
   // Create a session on the box right now (detached, via the same ensure-session
@@ -2316,7 +2343,7 @@ function openBoxDialog(box?: Box) {
         createInput.value = '';
         // Re-probe so the new session lands in the dropdown (and the count updates).
         await probeAndApply();
-        if (targets.some((t) => t.value === `s:${name}`)) { sessionSelect.value = `s:${name}`; syncCustom(); }
+        if (targets.some((t) => t.value === `s:${name}`)) { sessionSelect.value = `s:${name}`; lastPick = sessionSelect.value; syncCustom(); }
       } catch (e: any) {
         sessionHint.textContent = e?.message || 'create failed';
         sessionHint.className = 'session-hint err';
