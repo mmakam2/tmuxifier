@@ -2281,8 +2281,8 @@ function openBoxDialog(box?: Box) {
     }
   });
   // Create a session on the box right now (detached, via the same ensure-session
-  // remote an attach uses) — so it shows up as a bubble and in the pane header's
-  // session dropdown without switching the box to it. Edit mode only — an
+  // remote an attach uses) — so it shows up in this dropdown and in the pane
+  // header's session dropdown without switching the box to it. Edit mode only — an
   // unsaved box has no ControlMaster to run over — and the whole apparatus
   // (elements, listeners, closure) is built under that guard, so `box.id`
   // inside it is provably defined rather than assertion-guarded from afar.
@@ -2456,7 +2456,7 @@ function openBoxDialog(box?: Box) {
   fields.host.focus();
   cancel.addEventListener('click', close);
 
-  // Edit mode: refresh the session bubbles from the box automatically. The
+  // Edit mode: refresh the session dropdown from the box automatically. The
   // cached-status pre-fill above paints instantly but can be a poll interval
   // stale (or empty after a backoff/mid-login poll), which is how a session
   // created from the command line failed to show until ⟳ was clicked.
