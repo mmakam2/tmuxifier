@@ -55,6 +55,14 @@ export interface SessionPicker {
   el: HTMLElement;
   update(list: SessionTargetList | null): void;
   close(): void;
+  // Tears down the document-level listener close()/the popup itself cannot
+  // remove on their own. Distinct from close(): close() is called routinely —
+  // including from inside the outside-click handler this removes — and must
+  // never rip out the listener that makes it work. Callers that stop using a
+  // picker instance (a repaint that rebuilds the pane header, an undocked
+  // pane) must call this or the listener, and the detached popup subtree it
+  // closes over, outlive the DOM they were built for.
+  destroy(): void;
 }
 
 export function buildSessionPicker(deps: SessionPickerDeps): SessionPicker {
@@ -78,7 +86,6 @@ export function buildSessionPicker(deps: SessionPickerDeps): SessionPicker {
 
   el.append(trigger, pop);
 
-  let rows: SessionTarget[] = [];
   let current: SessionTargetList | null = null;
   let open = false;
   let arm: ArmState = IDLE;
@@ -114,7 +121,6 @@ export function buildSessionPicker(deps: SessionPickerDeps): SessionPicker {
 
   function render() {
     const opts = current?.options ?? [];
-    rows = opts;
     trigger.textContent = (opts.find((t) => t.value === current?.value)?.label ?? '').replace(/^[\s ]*→[\s ]*/, '').trim() || '—';
     list.replaceChildren(...opts.map((t) => {
       const li = document.createElement('li');
@@ -224,6 +230,26 @@ export function buildSessionPicker(deps: SessionPickerDeps): SessionPicker {
   const onDoc = (e: MouseEvent) => { if (open && !el.contains(e.target as Node)) closePop(false); };
   document.addEventListener('click', onDoc);
 
+  // Tab needs a way to leave an open popup. Every row button is tabIndex=-1
+  // (focus moves between them programmatically — arrow keys, openPop's initial
+  // focus — not via native Tab order), so nothing here stops Tab from moving
+  // focus out on its own, and Escape is bound to `pop`, unreachable once focus
+  // has already left it. Without this a keyboard user could Tab past the
+  // trigger and be left looking at a popup with no keyboard way to close it.
+  // Guarded exactly like paneLifecycle.ts's own focusout handler, for the same
+  // reason: `next == null` covers a focused button being REMOVED by render()
+  // (arming a kill re-renders every row, and the browser reports that as focus
+  // leaving to nowhere) — treating that as "focus left" would close the popup
+  // in the very repaint that just armed a row. `el.contains(next)` covers
+  // every WITHIN-popup move — row-to-row via the arrow keys, a row's pick to
+  // its own kill button, and the trigger to the popup's first row when
+  // openPop() calls first?.focus() — none of which are "leaving".
+  el.addEventListener('focusout', (e) => {
+    const next = (e as FocusEvent).relatedTarget as Node | null;
+    if (next == null || el.contains(next)) return;
+    closePop(false);
+  });
+
   const update = (l: SessionTargetList | null) => {
     if (arm.armed) { pendingList = l; return; }
     current = l;
@@ -231,6 +257,11 @@ export function buildSessionPicker(deps: SessionPickerDeps): SessionPicker {
     render();
   };
 
+  const destroy = () => {
+    document.removeEventListener('click', onDoc);
+    clearTimeout(armTimer);
+  };
+
   update(null);
-  return { el, update, close: () => closePop(false) };
+  return { el, update, close: () => closePop(false), destroy };
 }
