@@ -47,7 +47,7 @@ with the focused one at full strength.
 **Killing a session or window.** Each row in that same dropdown carries its own **×** beside the
 name — reach the picker the same way whether you're in a pane header or the Add/Edit Box
 dialog. The × takes two clicks: the first arms it (the row's label changes to say what it's
-about to do — "kill session web?", or "kill → 2: bash?" for a window) and the second, within a
+about to do — "kill session web?", or "kill 2: bash?" for a window) and the second, within a
 few seconds, commits; clicking anywhere else, pressing Escape, or just waiting cancels it with
 nothing killed. Killing a session's **last** window ends the session itself — that's tmux's own
 rule, not something Tmuxifier is special-casing — and the arming label says so up front ("last
