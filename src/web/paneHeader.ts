@@ -151,10 +151,10 @@ export interface PaneHeaderActions {
   wantRefresh?: boolean;
   onUndock?: () => void;
   undockLabel?: string;
-  // Switch the box's active tmux session. Non-destructive (the old session
-  // keeps running on the box), so unlike Reconnect this is a plain callback:
-  // no arm-then-fire.
-  onSelectSession?: (name: string) => void;
+  // Switch which session/window this pane shows. Non-destructive (the old
+  // session keeps running on the box, and a window switch does not even drop
+  // the attach), so unlike Reconnect this is a plain callback: no arm-then-fire.
+  onSelectTarget?: (target: SessionTarget) => void;
 }
 
 // update() rewrites text/classes only — the voice button lives inside
@@ -182,11 +182,14 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
   // is part of what the pane IS, not an action on it. Built only when the
   // caller can act on a pick; options are populated by update() below.
   let sessionSel: HTMLSelectElement | null = null;
-  if (actions.onSelectSession) {
+  // The rows currently rendered, so the change handler can resolve a value back
+  // to its target without re-deriving which session a window belongs to.
+  let rendered: SessionTarget[] = [];
+  if (actions.onSelectTarget) {
     sessionSel = document.createElement('select');
     sessionSel.className = 'pane-session';
-    sessionSel.title = 'Active tmux session';
-    sessionSel.setAttribute('aria-label', 'Active tmux session');
+    sessionSel.title = 'Active tmux session and window';
+    sessionSel.setAttribute('aria-label', 'Active tmux session and window');
     sessionSel.addEventListener('click', (e) => e.stopPropagation());
     // Blur before acting: a native select keeps focus after `change`, and the
     // focused-select guard in update() below (rightly) refuses to touch a
@@ -194,9 +197,9 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
     // value back and the header would keep showing a switch that never
     // happened. On success the repaint rebuilds the header anyway.
     sessionSel.addEventListener('change', () => {
-      const name = sessionSel!.value;
+      const target = rendered.find((t) => t.value === sessionSel!.value);
       sessionSel!.blur();
-      actions.onSelectSession!(name);
+      if (target) actions.onSelectTarget!(target);
     });
   }
   const identity = document.createElement('div');
@@ -241,28 +244,28 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
     title.textContent = m.title;
     target.textContent = m.target;
     if (sessionSel) {
-      const list = m.sessions ?? [];
+      const list = m.targets?.options ?? [];
       sessionSel.hidden = list.length === 0;
       // Never rebuild under the user: this runs on every status poll, and
       // repopulating a native select while its dropdown is open slams it shut
       // mid-pick. The focused select keeps its current options until blur.
       if (document.activeElement !== sessionSel) {
-        const key = list.join('\n');
+        const key = list.map((t) => `${t.value}\t${t.label}\t${t.disabled ? 1 : 0}`).join('\n');
         if (sessionSel.dataset.opts !== key) {
           sessionSel.dataset.opts = key;
-          sessionSel.replaceChildren(...list.map((n) => {
+          rendered = list;
+          sessionSel.replaceChildren(...list.map((t) => {
             const o = document.createElement('option');
-            o.value = n;
-            o.textContent = n;
-            if (!isSwitchableSession(n)) {
-              o.disabled = true;
-              o.title = 'name not switchable from here (allowed: letters, digits, _ -)';
-            }
+            o.value = t.value;
+            o.textContent = t.label;
+            if (t.disabled) { o.disabled = true; if (t.title) o.title = t.title; }
             return o;
           }));
         }
-        // The configured session is sessionOptions' element 0 by construction.
-        sessionSel.value = list[0] ?? '';
+        // The selected row: sessionTargetList picks the current session's
+        // active window when the snapshot knows it, else the session row
+        // itself — not simply "the first option" (there is no such rule here).
+        sessionSel.value = m.targets?.value ?? '';
       }
     }
     if (m.chip) {

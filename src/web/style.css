@@ -1024,7 +1024,7 @@ button.empty-kbd:hover { color: var(--text); }
    shows is part of what it IS). Session names are literals, so the bezel's
    uppercase transform is undone; sizing matches the chips beside it. */
 .pane-header .pane-session {
-  flex: 0 1 auto; min-width: 0; max-width: 14ch;
+  flex: 0 1 auto; min-width: 0; max-width: 18ch;
   overflow: hidden; text-overflow: ellipsis;
   font-family: var(--face); font-size: 11px; padding: 1px 4px;
   text-transform: none; letter-spacing: normal;

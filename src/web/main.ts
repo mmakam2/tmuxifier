@@ -32,7 +32,7 @@ import { createSetupOptionsForm, setupStartPayload, type SetupOptionsValues } fr
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
 import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
 import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks, type PaneRect } from './stagePanes';
-import { paneHeaderModel, buildPaneHeader, isSwitchableSession, SESSION_NAME_RE, type PaneConn, type PaneHeaderModel } from './paneHeader';
+import { paneHeaderModel, buildPaneHeader, isSwitchableSession, SESSION_NAME_RE, type PaneConn, type PaneHeaderModel, type SessionTarget } from './paneHeader';
 import { buildPaneLifecycle } from './paneLifecycle';
 import { createPhoneMode, type PhoneMode } from './phoneMode';
 import { buildTouchKeyBar, createStickyCtrl } from './touchKeys';
@@ -865,6 +865,32 @@ async function switchSession(id: string, name: string) {
   }
 }
 
+// Act on a pane-header dropdown pick. A window in the box's CURRENT session is
+// the cheap case: select-window alone, no PATCH, no PTY kill — every client
+// attached to that session follows on its own. A pick in another session needs
+// both, window first: switchSession's PATCH drops every viewer's PTY, so
+// selecting the window beforehand means the forced reattach lands already on it.
+async function selectTarget(id: string, t: SessionTarget) {
+  const box = allBoxes.find((b) => b.id === id);
+  if (!box) return;
+  if (t.kind === 'window' && t.windowId) {
+    try {
+      await api.selectWindow(id, t.windowId);
+    } catch {
+      // The window vanished between the poll and the click (502) or the box is
+      // mid-setup (409): repaint so the select snaps back rather than showing a
+      // switch that never happened.
+      updatePaneHeaders();
+      return;
+    }
+  }
+  if ((box.sessionName || 'web') !== t.session) { await switchSession(id, t.session); return; }
+  // Same session: nothing was persisted, so pull a fresh snapshot to move the
+  // selected row onto the window that is now active.
+  if (t.kind === 'window') fastStatusPoll(id);
+  else updatePaneHeaders();
+}
+
 function updatePaneHeaders() {
   for (const [id, update] of paneHeaders) update(paneHeaderModelFor(id));
   for (const [id, ctl] of paneLifecycles) ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState, template: latestStatus[id]?.proxmoxTemplate });
@@ -883,10 +909,10 @@ function paneHooks(): PaneHooks {
         // differs from the sidebar row's `Reconnect ${label}` — an identical
         // accessible name would trip Playwright strict mode.
         ...(terminalPane ? { wantRefresh: true } : {}),
-        // The model is the single authority on whether a session switch is on
-        // offer (non-local terminal pane): gate the callback on it rather than
+        // The model is the single authority on whether a switch is on offer
+        // (non-local terminal pane): gate the callback on it rather than
         // re-encoding that rule here.
-        ...(model.sessions ? { onSelectSession: (name: string) => void switchSession(id, name) } : {}),
+        ...(model.targets ? { onSelectTarget: (t: SessionTarget) => void selectTarget(id, t) } : {}),
         ...(split ? { onUndock: () => undockBox(id), undockLabel: `Undock ${model.title}` } : {}),
       });
       // The header's Reconnect cap gets the same two-click guard as the sidebar
