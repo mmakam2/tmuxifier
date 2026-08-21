@@ -1038,6 +1038,49 @@ button.empty-kbd:hover { color: var(--text); }
   cursor: pointer; opacity: 0.75;
 }
 .pane-header .pane-session:hover, .pane-header .pane-session:focus-visible { opacity: 1; color: var(--text); }
+/* Session picker: replaces the native <select>, which could not host a per-row
+   kill. The trigger keeps the old control's exact metrics so the header row
+   does not reflow. */
+.session-picker { position: relative; display: inline-flex; min-width: 0; }
+.session-picker[hidden] { display: none; }
+.pane-header .session-picker-trigger {
+  flex: 0 1 auto; min-width: 0; max-width: 18ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--face); font-size: 11px; padding: 1px 4px;
+  text-transform: none; letter-spacing: normal;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--panel-2); color: var(--muted);
+  cursor: pointer; opacity: 0.75;
+}
+.pane-header .session-picker-trigger:hover,
+.pane-header .session-picker-trigger:focus-visible { opacity: 1; color: var(--text); }
+.session-picker-pop {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 40;
+  min-width: 200px; max-width: 340px; max-height: 60vh; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: var(--lift);
+}
+.session-picker-list { list-style: none; margin: 0; padding: 4px; }
+.session-picker-row { display: flex; align-items: center; gap: 4px; }
+.session-picker-pick {
+  flex: 1 1 auto; min-width: 0; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--face); font-size: 12px; padding: 5px 6px;
+  background: none; border: 0; border-radius: 4px; color: var(--text); cursor: pointer;
+}
+.session-picker-pick:hover, .session-picker-pick:focus-visible { background: var(--panel-2); }
+.session-picker-pick[disabled] { color: var(--dim); cursor: not-allowed; }
+.session-picker-row.current .session-picker-pick { color: var(--accent); }
+.session-picker-kill {
+  flex: 0 0 auto; font-family: var(--face); font-size: 12px; line-height: 1;
+  padding: 4px 6px; background: none; border: 0; border-radius: 4px;
+  color: var(--dim); cursor: pointer;
+}
+.session-picker-kill:hover, .session-picker-kill:focus-visible { color: var(--crit); background: var(--panel-2); }
+.session-picker-kill.armed {
+  color: var(--crit); border: 1px solid var(--crit);
+  font-size: 10px; padding: 3px 5px; white-space: nowrap;
+}
 /* Proxmox lifecycle keys: icon keys per DESIGN.md — flat legend-dim glyphs on
    small hit pads, hover raises a step and brightens, destructive hover LED red. */
 /* flex: 0 0 auto is load-bearing. Without it flexbox shrinks the caps below their
