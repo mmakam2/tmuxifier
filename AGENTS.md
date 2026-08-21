@@ -238,6 +238,20 @@ pattern for new modules.
   every sweep. Nor is it a fan-out risk — `status.js` coalesces concurrent probes of one box — and
   a failed probe is a plain 502 rather than a half-empty entry the client would paint over a good
   one.
+  `POST /api/boxes/:id/kill` kills a tmux SESSION, or one WINDOW inside it, on the box — one route
+  rather than two, because the session-required rule is the same chokepoint the window-select
+  route already enforces: `session` is REQUIRED in **both** forms of `{ session, windowId? }`,
+  since a grouped session shares its window objects and a bare `@7` would let tmux resolve
+  whichever of two sharing sessions it finds first. Gated 409 like `/term` and the create/
+  window-select routes while the box's setup job is `running` — a box mid-setup has no
+  environment worth steering, and killing the session that setup's own ensureSession-last phase
+  is about to (re)create would leave the box in a state nothing recovers cleanly. On success it
+  awaits the same best-effort `statusPoller.probeOne` the window route calls, so the client's next
+  `/api/status` no longer lists what was just killed rather than waiting out `statusPollMs`.
+  Killing the session the pane is ITSELF attached to is allowed, deliberately, under one uniform
+  rule rather than a special case: the PTY simply drops and the attach path's own `new-session -A`
+  recreates it empty on reconnect — the exact same observable outcome the header's Reconnect cap
+  already produces against this very session.
   `requireAuth` is async and accepts either the signed session cookie or an `Authorization: Bearer
   <device token>` header verified via `deviceStore.verify` (`req.deviceId` set on that branch) —
   cookie first, since that keeps the common browser request synchronous, then the device-token
@@ -304,6 +318,16 @@ pattern for new modules.
   Codex/Claude/Antigravity CLIs — ids validated server-side, nothing user-typed reaches the
   script), the non-interactive `execCommand` that Fleet Command runs, and ControlMaster
   liveness/stale-socket reaping (`isMasterAlive`/`reapStaleMaster`).
+  Also exports the exact-target remote builders behind `POST /api/boxes/:id/kill`:
+  `buildKillSessionRemote`/`buildKillWindowRemote` (`-t '=name'` / session-qualified
+  `-t '=name:@id'` — the same `=` exact-match rule as `buildEnsureSessionRemote`/
+  `buildSelectWindowRemote`), sharing a `tmuxBinPreamble()` helper with `buildSelectWindowRemote`
+  that resolves an absolute `tmux` binary under whatever PATH the box's login shell provides.
+  Deliberately **not** a widening of the neighbouring `buildKillTmuxRemote`: that one runs
+  `sanitizeSession` (silently REWRITES a bad name rather than rejecting it) and ends in `|| true`
+  (reports success no matter what actually happened) — both correct for its own caller, best-effort
+  teardown when a box is removed, where an unreachable host must not block the removal, and both
+  wrong for an explicit user kill whose entire job is to report what it did.
   `buildFrameworkUpdateClamps` disables every shell framework's self-updater and runs on **every**
   setup, not just when a framework is installed — the box carrying a hand-installed oh-my-* is
   exactly the one that never ticks a checkbox. Each clamp is guarded by evidence the framework is
@@ -863,36 +887,54 @@ which row is *selected* — the current session's ACTIVE window when the snapsho
 else the session row itself — so the header answers "which window am I looking at", not just
 which session. Built only when `onSelectTarget` is passed, which `main.ts` gates on
 `model.targets` so the offer rule lives in the model alone),
-whose `update()` never repopulates a focused select — a status poll landing mid-pick would slam
-the native dropdown shut. That guard is why the change handler blurs the select before acting:
-a native select keeps focus after `change`, so without the blur a failed switch could never
-snap the value back and the header would keep showing a switch that never happened. That same
-guard is why the list is refreshed as the control is REACHED FOR rather than after it opens:
-`onWillOpenTarget` fires on `pointerenter` (mouse only — the prefetch, which repopulates freely
-because the select is not focused yet) and on `pointerdown`, where `preventDefault` holds the
-native picker shut until the probe lands and `showPicker()` then opens it on the refreshed list,
-focusing the select first so the guard protects it. Both are best-effort: no `showPicker`, a
-failed probe or one past `OPEN_REFRESH_WAIT_MS` just means the picker opens on the snapshot
-already held. A refresh that does land while the picker is open is re-applied on `blur`, since
-the guard would otherwise strand those options until the next poll. Live
-session names outside `SESSION_NAME_RE` (spaces, `@`, …) render as disabled options rather than
-being hidden or offered: `store.js`'s `sanitizeSession` would silently rewrite a PATCHed name,
-so "switching" to one would create a fresh mangled-name session instead of attaching — the
-session is real, only unswitchable from here (`isSwitchableSession`, with a `switchSession`
-backstop). A locked session's window rows inherit the same disabled verdict — EXCEPT the
-pane's own current session, whose windows stay selectable however it's named, since reaching
-one needs no PATCH at all. Picking a row runs `main.ts`'s `selectTarget`: a window row in the
-pane's current session is the cheap case, `api.selectWindow` alone with no PATCH and no PTY
-kill, since every client attached to that session follows the `select-window` on its own; a
-row naming a different session runs `switchSession` (PATCHing `sessionName`, which drops the
-box's terminal PTYs so every viewer reopens attached to the new session) — window-first when
-both are needed, so the forced reattach lands already on the chosen window. Either path is a
-plain callback rather than arm-then-fire: nothing here is destructive the way Reconnect is. A
-window row's `value` is `w:<session>:<@id>` rather than `w:<@id>`, because a grouped session
-shares its window objects and two rows carrying one `<option>` value would resolve a click to
-the wrong session — which, if the box's own session were the second of them, would fire a
-`switchSession` PATCH nobody asked for; the option-rebuild cache key carries `session` for the
-same reason),
+whose rows are rendered by `sessionPicker.ts`'s popup rather than a native `<select>` (see its own
+entry below) — but the rules governing what fills it are still decided here. Live session names
+outside `SESSION_NAME_RE` (spaces, `@`, …) render as disabled rows rather than being hidden or
+offered: `store.js`'s `sanitizeSession` would silently rewrite a PATCHed name, so "switching" to
+one would create a fresh mangled-name session instead of attaching — the session is real, only
+unswitchable from here (`isSwitchableSession`, with a `switchSession` backstop). A locked
+session's window rows inherit the same disabled verdict — EXCEPT the pane's own current session,
+whose windows stay selectable however it's named, since reaching one needs no PATCH at all.
+Picking a row runs `main.ts`'s `selectTarget`: a window row in the pane's current session is the
+cheap case, `api.selectWindow` alone with no PATCH and no PTY kill, since every client attached to
+that session follows the `select-window` on its own; a row naming a different session runs
+`switchSession` (PATCHing `sessionName`, which drops the box's terminal PTYs so every viewer
+reopens attached to the new session) — window-first when both are needed, so the forced reattach
+lands already on the chosen window. Either path is a plain callback rather than arm-then-fire:
+nothing here is destructive the way Reconnect (or the picker's own kill button) is. A window
+row's `value` is `w:<session>:<@id>` rather than `w:<@id>`, because a grouped session shares its
+window objects and two rows carrying one value would resolve a click to the wrong session —
+which, if the box's own session were the second of them, would fire a `switchSession` PATCH
+nobody asked for; the option-rebuild cache key carries `session` for the same reason),
+`sessionPicker.ts` (the popup that replaced the native `<select>` both the pane header and the
+Edit Box modal used: an `<option>` can host no per-row control, so it could never carry the
+per-row kill × this feature needed. Split the same way as `paneHeader.ts`/`stagePanes.ts` — a
+pure half (`isSoleWindow`, `killLegend`, `rowKey`) unit-tested, the DOM half (rows, keyboard nav,
+arm-then-fire kill) Playwright-only, since vitest runs `environment: 'node'` with no jsdom. Rows
+are `<li>` with two buttons and a roving tabindex, deliberately NOT `role="option"` in a listbox
+— an option must not contain interactive descendants. Kill is arm-then-fire through the shared
+`arming.ts` reducer, and `update()` enforces the **armed-row invariant**: it never rebuilds rows
+while a row is armed, holding the incoming list in `pendingList` and applying it only on disarm.
+Without this, a status poll landing between the arming click and the firing one could reorder
+the list and migrate the arm onto a different session — which is also why `rowKey` keys on
+`SessionTarget.value` (already carrying its session, per the value-encoding rule above) rather
+than a bare window id: an id alone is not unique across a grouped session's shared windows.
+`showPicker()`/`preventDefault` and the focused-select repopulation guard `paneHeader.ts` used to
+need are gone entirely: a popup this code owns, unlike a native `<select>`, can be repopulated
+while it is OPEN, so `openPop()` opens immediately and the probe (`onWillOpen`,
+`OPEN_REFRESH_WAIT_MS` — now the sole home of that constant) lands underneath rather than racing a
+closed control. `canKill?: (t) => boolean` lets a caller exempt a row from the × entirely (no
+button at all, not a disabled one) — the Edit Box modal's synthetic "Create New Session…" row
+uses it, since that row names no session on the box to kill. `destroy()` is not optional: the
+widget owns a `document`-level click listener (closes the popup on an outside click) that its own
+`close()` cannot remove, so every consumer that discards a picker instance must call it or the
+listener — and the detached popup subtree it closes over — outlives the DOM it was built for;
+`main.ts` wires this via `destroyPaneHeaders()` for the header (called from `repaintStage()` and
+workspace teardown) and via the Edit Box modal's `onClose` plus `registerModal(close)` for the
+modal — that registration was the piece previously missing, which is why `closeAllModals()` on
+logout could not reach that dialog. In phone mode the picker is not built at all: `paneHeaderModel`
+takes a `phone` flag and returns `targets: null`, so sessions are managed from the Edit Box modal
+off the box list instead),
 `paneLifecycle.ts` (the Proxmox lifecycle keys in that slot: `lifecycleKeysFor`
 derives which keys a pane's state allows, the caps are **words** (`START`/`SHUTDOWN`/`REBOOT`/
 `STOP`) precisely because the old `↺` reboot glyph was indistinguishable from the Reconnect

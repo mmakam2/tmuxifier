@@ -44,6 +44,19 @@ switching away, and the neighboring pane absorbs the space. The whole arrangemen
 directions, and ratios — survives reloads; docked boxes' sidebar rows show the cyan beacon,
 with the focused one at full strength.
 
+**Killing a session or window.** Each row in that same dropdown carries its own **×** beside the
+name — reach the picker the same way whether you're in a pane header or the Add/Edit Box
+dialog. The × takes two clicks: the first arms it (the row's label changes to say what it's
+about to do — "kill session web?", or "kill → 2: bash?" for a window) and the second, within a
+few seconds, commits; clicking anywhere else, pressing Escape, or just waiting cancels it with
+nothing killed. Killing a session's **last** window ends the session itself — that's tmux's own
+rule, not something Tmuxifier is special-casing — and the arming label says so up front ("last
+window — the session goes too") so it's never a surprise. Killing the session your own pane is
+attached to is allowed, and does exactly what the **Reconnect** button already does to that same
+session: the terminal drops and reconnects to a fresh, empty session of the same name. Nothing
+disappears from the list on the strength of the click alone — Tmuxifier confirms the kill against
+the box first, so a failed attempt (the box went away, say) leaves the row right where it was.
+
 ## Pasting images & files
 
 Pasting an image (Ctrl/Cmd+V) or dropping any file onto a terminal uploads it to
