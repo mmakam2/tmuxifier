@@ -176,3 +176,22 @@ test('isSwitchableSession accepts exactly what the switch path can round-trip', 
   expect(isSwitchableSession('a'.repeat(65))).toBe(false);
   expect(isSwitchableSession('')).toBe(false);
 });
+
+test('phone mode renders no session control at all', () => {
+  // The header row is the most contested real estate in the app, and the
+  // operator's phone use is the Android app rather than the browser under
+  // 720px. Dropping it also means the picker popup never has to open into a
+  // 344px viewport (the Z Fold 6 cover screen).
+  const withTargets = paneHeaderModel(box({ sessionName: 'web' }));
+  expect(withTargets.targets).not.toBeNull();
+  expect(paneHeaderModel(box({ sessionName: 'web', phone: true })).targets).toBeNull();
+});
+
+test('phone mode changes nothing else about the header', () => {
+  const desktop = paneHeaderModel(box({ sessionName: 'web', conn: { kind: 'open' } }));
+  const phone = paneHeaderModel(box({ sessionName: 'web', conn: { kind: 'open' }, phone: true }));
+  expect(phone.title).toBe(desktop.title);
+  expect(phone.target).toBe(desktop.target);
+  expect(phone.dotClass).toBe(desktop.dotClass);
+  expect(phone.chip).toEqual(desktop.chip);
+});

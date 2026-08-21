@@ -18,6 +18,10 @@ export interface PaneHeaderInput {
   conn?: PaneConn;
   state: 'terminal' | 'stopped' | 'setup';
   sessionName?: string;
+  // Phone mode (≤720px). The session picker is dropped entirely there: the
+  // header row is the most contested space in the app, and sessions are
+  // managed from the Edit Box modal off the box list instead.
+  phone?: boolean;
 }
 
 export interface PaneChip { kind: 'state' | 'conn' | 'agent'; text: string; cls: string; sprite?: boolean }
@@ -72,7 +76,7 @@ export function paneHeaderModel(i: PaneHeaderInput): PaneHeaderModel {
     // Only a live terminal pane on a real box offers the switch: the local
     // shell's session is config, and a stopped/setting-up pane has no attach to
     // move.
-    targets: !i.local && i.state === 'terminal' ? sessionTargetList(i.status, i.sessionName) : null,
+    targets: !i.local && !i.phone && i.state === 'terminal' ? sessionTargetList(i.status, i.sessionName) : null,
   };
 }
 

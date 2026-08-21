@@ -859,6 +859,9 @@ function paneHeaderModelFor(id: string): PaneHeaderModel {
     conn: connStates.get(id),
     state: paneState(id),
     sessionName: box?.sessionName,
+    // phoneCtl is created in start(); before that there is no stage to paint,
+    // so the `?? false` is a boot-order guard, not a default policy.
+    phone: phoneCtl?.matches() ?? false,
   });
 }
 
