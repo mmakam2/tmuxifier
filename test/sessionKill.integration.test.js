@@ -30,10 +30,13 @@ async function harness() {
 const listSessions = (boxActions, box) =>
   boxActions.execCommand(box, "tmux list-sessions -F '#{session_name}'", { timeoutMs: 12000 });
 
-test('killing a session leaves a longer-named neighbour alone (exact-match guard)', async () => {
-  // THE test. A bare `kill-session -t web` prefix-matches when no exact 'web'
-  // exists — and even when it does exist, this asserts the neighbour survives.
-  // Getting this wrong destroys a stranger's session with no way back.
+test('killing a session removes exactly that session, leaving another running session alone', async () => {
+  // NOT the exact-match guard: with 'web' itself present, tmux resolves a bare
+  // `-t web` to the exact name FIRST (verified on real tmux 3.5a — prefix
+  // matching only kicks in when no exact match exists), so this passes
+  // identically whether buildKillSessionRemote emits '=web' or a bare 'web'.
+  // It only proves the ordinary case works. See the next test for the actual
+  // exact-match guard, which requires the exact name to be ABSENT.
   const { box, boxActions } = await harness();
   expect((await boxActions.execCommand(box, buildEnsureSessionRemote('web', null), { timeoutMs: 20000 })).code).toBe(0);
   expect((await boxActions.execCommand(box, buildEnsureSessionRemote('web2', null), { timeoutMs: 20000 })).code).toBe(0);
@@ -44,6 +47,23 @@ test('killing a session leaves a longer-named neighbour alone (exact-match guard
   const ls = await listSessions(boxActions, box);
   expect(ls.stdout).toContain('web2');
   expect(ls.stdout.split(/\r?\n/).map((s) => s.trim())).not.toContain('web');
+});
+
+test('killing an absent session does not prefix-match a longer-named neighbour (exact-match guard)', async () => {
+  // THE exact-match guard, mirroring sessionCreate.integration.test.js's own
+  // "a longer-named session does not swallow the create" test: create ONLY
+  // the longer name, then target the SHORTER name that does not exist. A bare
+  // `kill-session -t web` with only 'web2' present prefix-matches and kills
+  // web2 with exit 0 — verified on real tmux 3.5a. Only the '=' target fails
+  // with "can't find session: web" and leaves web2 untouched.
+  const { box, boxActions } = await harness();
+  expect((await boxActions.execCommand(box, buildEnsureSessionRemote('web2', null), { timeoutMs: 20000 })).code).toBe(0);
+
+  const killed = await boxActions.execCommand(box, buildKillSessionRemote('web'), { timeoutMs: 15000 });
+  expect(killed.code).not.toBe(0);
+
+  const ls = await listSessions(boxActions, box);
+  expect(ls.stdout).toContain('web2');
 });
 
 test('killing a window removes only that window and leaves the session running', async () => {
