@@ -1,5 +1,6 @@
 import { test, expect } from 'vitest';
 import { isSoleWindow, killLegend, rowKey } from '../src/web/sessionPicker.ts';
+import { WINDOW_INDENT } from '../src/web/paneHeader.ts';
 
 const s = (name) => ({ kind: 'session', value: `s:${name}`, label: name, session: name });
 const w = (name, id, label) => ({ kind: 'window', value: `w:${name}:${id}`, label, session: name, windowId: id });
@@ -35,4 +36,16 @@ test('rowKey carries the session, so an armed row cannot migrate to another', ()
   // a different session's row — and then fire on it.
   expect(rowKey(w('web', '@7', '1: zsh'))).not.toBe(rowKey(w('webclone', '@7', '1: zsh')));
   expect(rowKey(s('web'))).not.toBe(rowKey(w('web', '@7', '1: zsh')));
+});
+
+test('the legend strips the real window indent from labels before confirmation', () => {
+  // Window labels in the dropdown are indented with WINDOW_INDENT (non-breaking
+  // space + arrow). The legend must strip this so the confirmation reads
+  // "kill 2: claude?" not "kill  → 2: claude?". Assert both the positive
+  // (label name is in the legend) and negative (indent/arrow are not).
+  const indent = WINDOW_INDENT + '2: claude';
+  const legend = killLegend(w('web', '@2', indent), false);
+  expect(legend).toContain('2: claude');
+  expect(legend).not.toMatch(/→/);
+  expect(legend).not.toContain(WINDOW_INDENT);
 });
