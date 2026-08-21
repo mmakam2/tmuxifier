@@ -671,6 +671,17 @@ test('parseTmuxWindows strips control characters and caps the name (box input re
   expect(w[1].name).toHaveLength(64);
 });
 
+test('cleanWindowName strips bidi controls, not only C0/C1 (a row could reorder itself)', () => {
+  // U+202E (RIGHT-TO-LEFT OVERRIDE) and U+2066-2069 (the isolates) are not
+  // control characters, so they survived the C0/C1 strip while still being able
+  // to visually rearrange a window's dropdown row against the rows around it.
+  const out = '__WIN__ web:1:@1:0:a\u202eb\u202cc\n'
+    + '__WIN__ web:2:@2:0:x\u2066y\u2069z';
+  const w = parseTmuxWindows(out);
+  expect(w[0].name).toBe('abc');
+  expect(w[1].name).toBe('xyz');
+});
+
 test('parseTmuxSessions ignores __WIN__ lines', () => {
   const out = 'web:2:1:1718000000:claude\n__WIN__ web:1:@0:1:zsh\n';
   expect(parseTmuxSessions(out)).toEqual([
@@ -695,6 +706,12 @@ test('the probe asks for windows by id, not index (indexes renumber between poll
   expect(PROBE_REMOTE).toContain('#{window_id}');
 });
 
+test('the probe bounds the window rows on the BOX, as AGENT_PROBE bounds each marker', () => {
+  // The row count is box-controlled: hundreds of windows would otherwise ship to
+  // every open tab on every poll. Capped at the source, before the wire.
+  expect(PROBE_REMOTE).toMatch(/list-windows[^;]*\| head -n 200/);
+});
+
 test('checkBox nests each session\'s windows into the snapshot', async () => {
   const stdout = [
     'web:2:1:1718000000:claude',
@@ -707,4 +724,25 @@ test('checkBox nests each session\'s windows into the snapshot', async () => {
     { id: '@0', index: 1, name: 'zsh', active: false },
     { id: '@1', index: 2, name: 'claude', active: true },
   ]);
+});
+
+test('a window NAMED __NO_TMUX__ does not make the box report tmux: false', async () => {
+  // The sentinel is a line the probe emits on its own; window names are freely
+  // set on the box (tmux's automatic-rename copies the running process name), so
+  // matching it anywhere in stdout let one window blank the whole box's tmux
+  // state -- no sessions, no windows, no agent chip.
+  const stdout = [
+    'web:1:1:1718000000:zsh',
+    '__WIN__ web:1:@0:1:__NO_TMUX__',
+  ].join('\n');
+  const run = async () => ({ code: 0, stdout, stderr: '' });
+  const status = await createStatusChecker({ run }).checkBox({ host: '192.168.1.10' });
+  expect(status.tmux).toBe(true);
+  expect(status.sessions[0].windowList).toEqual([{ id: '@0', index: 1, name: '__NO_TMUX__', active: true }]);
+});
+
+test('the real sentinel line is still honoured', async () => {
+  const run = async () => ({ code: 0, stdout: '__META__ load1=0.4\n__NO_TMUX__\n', stderr: '' });
+  const status = await createStatusChecker({ run }).checkBox({ host: '192.168.1.10' });
+  expect(status).toMatchObject({ reachable: true, tmux: false, sessions: [] });
 });

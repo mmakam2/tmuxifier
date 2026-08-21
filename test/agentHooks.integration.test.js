@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { setupLocalBox } from './helpers/localBox.js';
 import { sshRun } from '../src/server/sshRun.js';
-import { PROBE_REMOTE, parseAgentMarks } from '../src/server/status.js';
+import { PROBE_REMOTE, parseAgentMarks, parseTmuxWindows } from '../src/server/status.js';
 
 let lb; let teardown;
 afterEach(async () => {
@@ -38,4 +38,18 @@ test('hook script → marker file → PROBE_REMOTE → parseAgentMarks round tri
   const marks = parseAgentMarks(res.stdout);
   expect(marks).toBeTruthy();
   expect(marks.agenthooks).toMatchObject({ state: 'waiting' });
+  // The same probe pins WINDOW_FMT against REAL tmux. Every other window test
+  // feeds parseTmuxWindows a hand-written __WIN__ line, so a wrong field order or
+  // a specifier that expands differently from what we assume would pass all of
+  // them -- this repo's own recorded lesson being that thousands of green tests
+  // over a fake transport proved nothing about the real one.
+  const windows = parseTmuxWindows(res.stdout).filter((w) => w.session === 'agenthooks');
+  expect(windows.length).toBeGreaterThan(0);
+  const w = windows[0];
+  expect(Number.isInteger(w.index)).toBe(true);
+  expect(w.id).toMatch(/^@\d+$/);
+  // A session's only window is always its active one, so this pins the
+  // #{window_active} field's position and its 0/1 spelling as well.
+  expect(w.active).toBe(true);
+  expect(typeof w.name).toBe('string');
 });

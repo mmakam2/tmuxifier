@@ -62,9 +62,19 @@ const AGENT_PROBE =
 // renumber between the poll that builds the dropdown and the click that uses it.
 export const WINDOW_FMT = '#{session_name}:#{window_index}:#{window_id}:#{window_active}:#{window_name}';
 
+// `head -n 200` for the same reason AGENT_PROBE caps each marker at 200 bytes:
+// the row count is decided on the BOX, so an operator with hundreds of windows
+// (or a runaway script opening them) would ship every one of them to every open
+// tab on every poll. Capping at the source keeps the probe's output bounded
+// before it crosses the wire rather than after. The brace wrap is AGENT_PROBE's
+// idiom and is load-bearing twice over: it silences tmux's own stderr AND the
+// shell's message on a box whose PATH has no `head` (which the probe already
+// depends on for the agent markers), neither of which may reach the probe's
+// stderr, where the reachability classifier reads. `|| true` covers the whole
+// pipeline: head closing the pipe early can leave tmux with a SIGPIPE exit.
 export const PROBE_REMOTE =
   `${META_PROBE} ${AGENT_PROBE}if command -v tmux >/dev/null 2>&1; then tmux ls -F '${STATUS_FMT}' 2>/dev/null || true; ` +
-  `tmux list-windows -a -F '__WIN__ ${WINDOW_FMT}' 2>/dev/null || true; else echo __NO_TMUX__; fi`;
+  `{ tmux list-windows -a -F '__WIN__ ${WINDOW_FMT}' | head -n 200; } 2>/dev/null || true; else echo __NO_TMUX__; fi`;
 
 const META_KEYS = new Set([
   'load1', 'load5', 'load15', 'cpus', 'cpuUsageUsec',
@@ -148,7 +158,20 @@ const MUX_STALE_RE = /disabling multiplexing|ControlSocket .* already exists/i;
 // A window name is a string on the box, so it is input: control characters are
 // stripped and the length capped before it can reach a <select> in the browser.
 // parseAgentMarks' posture, for the same reason.
-const cleanWindowName = (s) => s.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 64);
+// The bidi controls go in with the C0/C1 set: U+202A-202E (embeddings and
+// overrides) and U+2066-2069 (isolates) are not control *characters*, so they
+// survived that strip, but they reorder rendered text -- a window name carrying
+// them could visually rearrange its own dropdown row against the rows around it.
+// Display-spoofing rather than injection, but the same posture: refuse it at the
+// parse boundary rather than downstream.
+const cleanWindowName = (s) => s.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, 64);
+
+// The probe's own "tmux is not installed" sentinel, which it emits on a line of
+// its own. Matched as a WHOLE LINE rather than anywhere in stdout: window names
+// are freely set on the box (tmux's automatic-rename copies the running process
+// name), so a substring test let a window called `__NO_TMUX__` make a box with a
+// perfectly healthy tmux report `tmux: false, sessions: []`.
+const noTmux = (stdout) => String(stdout).split(/\r?\n/).some((l) => l.trim() === '__NO_TMUX__');
 
 // Pull `__WIN__ <session>:<index>:<id>:<active>:<name>` lines into flat rows.
 // Every field is allowlisted rather than trusted: a bad id, a non-numeric index
@@ -186,7 +209,10 @@ export function attachWindows(sessions, windows) {
 export function parseTmuxSessions(stdout) {
   return String(stdout)
     .split(/\r?\n/)
-    .filter((l) => l.trim() && !l.includes('__NO_TMUX__') && !l.startsWith('__META__') && !l.startsWith('__AGENT__') && !l.startsWith('__WIN__'))
+    // Whole-line match on the sentinel for the same reason noTmux() uses one: a
+    // session may legitimately be NAMED `__NO_TMUX__`, and a substring test would
+    // silently drop its row.
+    .filter((l) => l.trim() && l.trim() !== '__NO_TMUX__' && !l.startsWith('__META__') && !l.startsWith('__AGENT__') && !l.startsWith('__WIN__'))
     .map((line) => {
       const [name, windows, attached, activity, paneCmd] = line.split(':');
       return { name, windows: Number(windows), attached: attached === '1', activity: Number(activity), paneCmd: paneCmd || '' };
@@ -252,7 +278,7 @@ export function createStatusChecker({
       const metrics = parseMeta(res.stdout);
       deriveCpuPct(box, metrics);
       const agentMarks = parseAgentMarks(res.stdout);
-      const base = String(res.stdout).includes('__NO_TMUX__')
+      const base = noTmux(res.stdout)
         ? { reachable: true, tmux: false, sessions: [] }
         : { reachable: true, tmux: true, sessions: attachWindows(parseTmuxSessions(res.stdout), parseTmuxWindows(res.stdout)) };
       const withMeta = metrics ? { ...base, metrics } : base;
