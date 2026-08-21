@@ -607,14 +607,14 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .modal .session-refresh:disabled { opacity: 0.5; cursor: default; }
 .modal .session-hint { font-size: 11px; color: var(--dim); min-height: 1em; }
 .modal .session-hint.err { color: var(--crit); }
-.modal .session-picker { display: flex; flex-wrap: wrap; gap: 6px; }
-.modal .session-picker:empty { display: none; }
 /* Create-session row: same input+key pairing as the probe row above, but the
    cap carries a word, so the glyph-sized type comes down to label scale. */
 .modal .session-create .session-refresh { font-size: 12px; letter-spacing: 0.04em; }
-.modal .session-chip { padding: 3px 9px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer; font-family: var(--face); font-size: 11px; line-height: 1.5; }
-.modal .session-chip:hover { color: var(--text); border-color: var(--key-border); }
-.modal .session-chip.selected { border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+/* The session field is one control now: sessions with their windows indented
+   under them, plus a Custom name… row that reveals the free-text input. */
+.modal .session-select { flex: 1; min-width: 0; padding: 9px 10px; border-radius: 6px; border: 1px solid var(--border); border-top-color: var(--seam); background: var(--screen); box-shadow: var(--recess); color: var(--text); font-family: var(--face); font-size: 14px; }
+.modal .session-select:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 45%, transparent); box-shadow: var(--recess), 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent); }
+.modal .session-select option:disabled { color: var(--dim); }
 .modal .check-field { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text); }
 .modal .check-field input { width: 15px; height: 15px; accent-color: var(--accent); }
 .modal .radio-group { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px; }

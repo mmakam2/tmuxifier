@@ -32,7 +32,7 @@ import { createSetupOptionsForm, setupStartPayload, type SetupOptionsValues } fr
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
 import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
 import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks, type PaneRect } from './stagePanes';
-import { paneHeaderModel, buildPaneHeader, isSwitchableSession, SESSION_NAME_RE, type PaneConn, type PaneHeaderModel, type SessionTarget } from './paneHeader';
+import { paneHeaderModel, buildPaneHeader, isSwitchableSession, sessionTargets, SESSION_NAME_RE, type PaneConn, type PaneHeaderModel, type SessionTarget } from './paneHeader';
 import { buildPaneLifecycle } from './paneLifecycle';
 import { createPhoneMode, type PhoneMode } from './phoneMode';
 import { buildTouchKeyBar, createStickyCtrl } from './touchKeys';
@@ -2191,9 +2191,9 @@ function openBoxDialog(box?: Box) {
     return wrap;
   }
 
-  // tmux session: a type-or-pick field. The datalist pre-fills from the status
-  // snapshot we already cache (0 new SSH); the ⟳ button does a user-triggered
-  // live probe. Empty submits as 'web' (the store default).
+  // tmux session: a dropdown over the cached status snapshot (0 new SSH);
+  // the ⟳ button does a user-triggered live probe. Empty submits as 'web'
+  // (the store default).
   const sessionWrap = document.createElement('label');
   sessionWrap.className = 'field';
   const sessionSpan = document.createElement('span');
@@ -2210,29 +2210,76 @@ function openBoxDialog(box?: Box) {
   sessionRefresh.title = 'Fetch live tmux sessions from the host';
   sessionRefresh.setAttribute('aria-label', 'Fetch live tmux sessions from the host');
   sessionRefresh.textContent = '⟳';
-  // Known sessions show as clickable chips that fill the field on click; the
-  // field itself stays free-text so you can also type a brand-new session name.
-  const sessionPicker = document.createElement('div');
-  sessionPicker.className = 'session-picker';
   const sessionHint = document.createElement('span');
   sessionHint.className = 'session-hint';
   sessionHint.setAttribute('aria-live', 'polite');
-  function applySessions(names: string[]) {
-    const all = Array.from(new Set(['web', ...names.filter(Boolean)]));
-    sessionPicker.replaceChildren(...all.map((n) => {
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'session-chip';
-      chip.textContent = n === 'web' ? 'web (default)' : n;
-      if (sessionInput.value.trim() === n) chip.classList.add('selected');
-      chip.addEventListener('click', () => {
-        sessionInput.value = n;
-        for (const c of sessionPicker.children) c.classList.toggle('selected', c === chip);
-        sessionInput.focus();
-      });
-      return chip;
-    }));
+
+  // One control for the whole choice: every live session with its windows
+  // indented beneath it (the pane header's own pure model, reused so the two
+  // surfaces cannot drift), plus a Custom name… row that reveals the free-text
+  // input for a session that does not exist yet.
+  const CUSTOM = '__custom__';
+  const sessionSelect = document.createElement('select');
+  sessionSelect.className = 'session-select';
+  sessionSelect.setAttribute('aria-label', 'tmux session or window');
+  let targets: SessionTarget[] = [];
+
+  function applySessions(status: Status | undefined) {
+    targets = sessionTargets(status, sessionInput.value.trim() || (isEdit ? box!.sessionName : '') || 'web');
+    const keep = sessionSelect.value;
+    const custom = document.createElement('option');
+    custom.value = CUSTOM;
+    custom.textContent = 'Custom name…';
+    sessionSelect.replaceChildren(...targets.map((t) => {
+      const o = document.createElement('option');
+      o.value = t.value;
+      o.textContent = t.kind === 'session' && t.session === 'web' ? 'web (default)' : t.label;
+      // Add mode has no box to run select-window against, so a window is shown
+      // for orientation but cannot be acted on — disabled-not-hidden, the same
+      // treatment an unswitchable session name gets: the window is real, just
+      // not actionable from a box that does not exist yet.
+      if (t.disabled || (!isEdit && t.kind === 'window')) {
+        o.disabled = true;
+        o.title = t.title ?? 'add the box first, then switch windows from the pane header';
+      }
+      return o;
+    }), custom);
+    sessionSelect.value = targets.some((t) => t.value === keep) || keep === CUSTOM ? keep : (targets[0]?.value ?? CUSTOM);
+    syncCustom();
   }
+
+  // The free-text input is only in play under Custom name…; otherwise the
+  // selected row IS the value, so leaving the input visible would present two
+  // fields that disagree.
+  function syncCustom() {
+    sessionInput.hidden = sessionSelect.value !== CUSTOM;
+  }
+
+  // What Save writes. One reader for both submit branches so add and edit
+  // cannot drift.
+  function sessionFieldValue(): string {
+    if (sessionSelect.value === CUSTOM) return sessionInput.value.trim() || 'web';
+    return targets.find((t) => t.value === sessionSelect.value)?.session || 'web';
+  }
+
+  sessionSelect.addEventListener('change', () => {
+    syncCustom();
+    if (sessionSelect.value === CUSTOM) { sessionInput.focus(); return; }
+    const t = targets.find((x) => x.value === sessionSelect.value);
+    // A window pick acts immediately, exactly as it does in the pane header —
+    // it is a live tmux action, not form state, and nothing about it is saved.
+    // The session half still rides Save like every other field.
+    if (isEdit && t?.kind === 'window' && t.windowId) {
+      sessionHint.className = 'session-hint';
+      sessionHint.textContent = `switching to ${t.label.trim()}…`;
+      api.selectWindow(box!.id, t.windowId)
+        .then(() => { sessionHint.textContent = `showing ${t.label.trim()}`; })
+        .catch((e: any) => {
+          sessionHint.textContent = e?.message || 'window switch failed';
+          sessionHint.className = 'session-hint err';
+        });
+    }
+  });
   // Create a session on the box right now (detached, via the same ensure-session
   // remote an attach uses) — so it shows up as a bubble and in the pane header's
   // session dropdown without switching the box to it. Edit mode only — an
@@ -2267,8 +2314,9 @@ function openBoxDialog(box?: Box) {
       try {
         await api.createSession(boxId, name);
         createInput.value = '';
-        // Re-probe so the new session lands as a bubble (and the count updates).
+        // Re-probe so the new session lands in the dropdown (and the count updates).
         await probeAndApply();
+        if (targets.some((t) => t.value === `s:${name}`)) { sessionSelect.value = `s:${name}`; syncCustom(); }
       } catch (e: any) {
         sessionHint.textContent = e?.message || 'create failed';
         sessionHint.className = 'session-hint err';
@@ -2284,10 +2332,11 @@ function openBoxDialog(box?: Box) {
     });
   }
 
-  sessionRow.append(sessionInput, sessionRefresh);
-  sessionWrap.append(sessionSpan, sessionRow, sessionPicker, ...(createRow ? [createRow] : []), sessionHint);
+  sessionRow.append(sessionSelect, sessionRefresh);
+  sessionInput.hidden = true;
+  sessionWrap.append(sessionSpan, sessionRow, sessionInput, ...(createRow ? [createRow] : []), sessionHint);
   // Pre-fill from cached status (edit mode only — an unsaved box has no snapshot).
-  applySessions(isEdit ? (latestStatus[box!.id]?.sessions ?? []).map((s) => s.name) : []);
+  applySessions(isEdit ? latestStatus[box!.id] : undefined);
 
   async function probeAndApply() {
     const host = fields.host.value.trim();
@@ -2311,12 +2360,13 @@ function openBoxDialog(box?: Box) {
         sessionHint.textContent = "couldn't reach host";
         sessionHint.className = 'session-hint err';
       } else if (res.tmux === false) {
-        applySessions([]);
+        applySessions(undefined);
         sessionHint.textContent = 'tmux not running';
       } else {
-        const names = (res.sessions ?? []).map((s) => s.name);
-        applySessions(names);
-        sessionHint.textContent = names.length ? `${names.length} session${names.length === 1 ? '' : 's'}` : 'no sessions yet';
+        applySessions(res);
+        const names = (res.sessions ?? []).length;
+        const wins = (res.sessions ?? []).reduce((n, s) => n + (s.windowList?.length ?? 0), 0);
+        sessionHint.textContent = names ? `${names} session${names === 1 ? '' : 's'}, ${wins} window${wins === 1 ? '' : 's'}` : 'no sessions yet';
       }
     } catch (e: any) {
       sessionHint.textContent = e?.message || 'fetch failed';
@@ -2423,7 +2473,7 @@ function openBoxDialog(box?: Box) {
         const jump = fields.proxyJump.value.trim(); patch.proxyJump = jump || null;
         const tag = canonicalTagForInput(fields.tag.value);
         patch.tags = tag ? [tag] : [];
-        patch.sessionName = sessionInput.value.trim() || 'web';
+        patch.sessionName = sessionFieldValue();
         const portRaw = fields.port.value.trim();
         if (portRaw) {
           const port = Number(portRaw);
@@ -2455,7 +2505,7 @@ function openBoxDialog(box?: Box) {
         const spec: AddBoxSpec = { host };
         const label = fields.label.value.trim(); if (label) spec.label = label;
         const tag = canonicalTagForInput(fields.tag.value); if (tag) spec.tags = [tag];
-        spec.sessionName = sessionInput.value.trim() || 'web';
+        spec.sessionName = sessionFieldValue();
         const user = fields.user.value.trim(); if (user) spec.user = user;
         const jump = fields.proxyJump.value.trim(); if (jump) spec.proxyJump = jump;
         const portRaw = fields.port.value.trim();
