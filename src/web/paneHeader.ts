@@ -81,7 +81,14 @@ export function paneHeaderModel(i: PaneHeaderInput): PaneHeaderModel {
 // resolves to, so a caller never has to re-derive which session a window is in.
 export interface SessionTarget {
   kind: 'session' | 'window';
-  value: string;        // 's:<session>' | 'w:<@id>'
+  // 's:<session>' | 'w:<session>:<@id>'. The window value carries its session
+  // even though `@id` looks unique: a grouped session (`new-session -t web -s
+  // webclone`) SHARES window objects, so the same id legitimately appears under
+  // two session names. Without the session in the value the two rows would be
+  // indistinguishable <option> values, and resolving a click by value would hand
+  // back the first one — acting on the wrong session (and, if the box's own
+  // session is the second, firing a session PATCH nobody asked for).
+  value: string;
   label: string;
   session: string;
   windowId?: string;
@@ -122,7 +129,7 @@ export function sessionTargets(status: Status | undefined, sessionName: string |
     for (const w of s.windowList ?? []) {
       out.push({
         kind: 'window',
-        value: `w:${w.id}`,
+        value: `w:${s.name}:${w.id}`,
         label: `${WINDOW_INDENT}${w.index}: ${w.name || 'window'}`,
         session: s.name,
         windowId: w.id,
@@ -140,7 +147,7 @@ export function sessionTargets(status: Status | undefined, sessionName: string |
 export function sessionTargetList(status: Status | undefined, sessionName: string | undefined): SessionTargetList {
   const current = sessionName || 'web';
   const active = (status?.sessions ?? []).find((s) => s.name === current)?.windowList?.find((w) => w.active);
-  return { options: sessionTargets(status, sessionName), value: active ? `w:${active.id}` : `s:${current}` };
+  return { options: sessionTargets(status, sessionName), value: active ? `w:${current}:${active.id}` : `s:${current}` };
 }
 
 export interface PaneHeaderActions {
@@ -250,7 +257,11 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
       // repopulating a native select while its dropdown is open slams it shut
       // mid-pick. The focused select keeps its current options until blur.
       if (document.activeElement !== sessionSel) {
-        const key = list.map((t) => `${t.value}\t${t.label}\t${t.disabled ? 1 : 0}`).join('\n');
+        // `session` is part of the key even though it is not rendered: `rendered`
+        // is what the change handler resolves a pick against, so a row whose
+        // session moved while its value/label/disabled stayed put would otherwise
+        // keep a stale session and steer the wrong one.
+        const key = list.map((t) => `${t.value}\t${t.label}\t${t.session}\t${t.disabled ? 1 : 0}`).join('\n');
         if (sessionSel.dataset.opts !== key) {
           sessionSel.dataset.opts = key;
           rendered = list;

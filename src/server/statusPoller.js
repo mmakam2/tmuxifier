@@ -154,6 +154,12 @@ export function createStatusPoller({
 
   return {
     pollOnce,
+    // Exported so a route that just CHANGED something on a box can make the
+    // next /api/status authoritative about it. /api/status serves the cached
+    // snapshot, which only moves on the poll interval (30s by default), so a
+    // caller that re-fetches status straight after acting would otherwise read
+    // back the pre-action state and paint it over the action's own result.
+    probeOne,
     refreshUntil,
     getSnapshot: () => snapshot,
     async start() {

@@ -875,7 +875,9 @@ async function selectTarget(id: string, t: SessionTarget) {
   if (!box) return;
   if (t.kind === 'window' && t.windowId) {
     try {
-      await api.selectWindow(id, t.windowId);
+      // The session goes with the id: a grouped session shares its windows, so
+      // the id alone does not name one session (see buildSelectWindowRemote).
+      await api.selectWindow(id, t.session, t.windowId);
     } catch {
       // The window vanished between the poll and the click (502) or the box is
       // mid-setup (409): repaint so the select snaps back rather than showing a
@@ -885,9 +887,16 @@ async function selectTarget(id: string, t: SessionTarget) {
     }
   }
   if ((box.sessionName || 'web') !== t.session) { await switchSession(id, t.session); return; }
-  // Same session: nothing was persisted, so pull a fresh snapshot to move the
-  // selected row onto the window that is now active.
-  if (t.kind === 'window') fastStatusPoll(id);
+  // Same session: nothing was persisted, so the header only moves once the
+  // status snapshot does. ONE poll is enough and it is authoritative — the
+  // route re-probes this box before it answers, so by the time we get here the
+  // cached snapshot already names the new active window. (This used to call
+  // fastStatusPoll, which was worse than useless here: /api/status serves a
+  // cache that only refreshes on the poll interval, so the loop re-read the
+  // same stale snapshot every 3s, its exit condition — a paneState change — is
+  // one a window switch structurally never produces, and starting it cancelled
+  // any lifecycle fast-poll the user was watching.)
+  if (t.kind === 'window') void pollStatus();
   else updatePaneHeaders();
 }
 
@@ -2203,6 +2212,11 @@ function openBoxDialog(box?: Box) {
   const sessionInput = document.createElement('input');
   sessionInput.type = 'text';
   sessionInput.placeholder = 'web';
+  // sessionWrap is a <label>, and a label binds to the FIRST labelable element
+  // it contains — which is now the dropdown below, not this input. Without its
+  // own name the revealed custom-name field would be announced by its
+  // placeholder alone (and by nothing at all once typed into).
+  sessionInput.setAttribute('aria-label', 'Custom tmux session name');
   if (isEdit && box!.sessionName) sessionInput.value = box!.sessionName;
   const sessionRefresh = document.createElement('button');
   sessionRefresh.type = 'button';
@@ -2230,8 +2244,21 @@ function openBoxDialog(box?: Box) {
   // persist a switch that never happened (mirrors selectTarget()/
   // switchSession() above reverting via updatePaneHeaders() on catch).
   let lastPick = '';
+  // True between firing api.selectWindow and its settling. applySessions() runs
+  // on its own schedule (the automatic probe, the ⟳ button, Create), and while a
+  // switch is outstanding the select is already showing the PENDING pick — so
+  // committing that as lastPick would make the .catch() below "revert" to the
+  // very pick that just failed.
+  let windowPending = false;
 
   function applySessions(status: Status | undefined) {
+    // Never rebuild under the user. probeAndApply() fires automatically ~0.5-2s
+    // after the modal opens (and again on ⟳ / Create), which can land while this
+    // dropdown is open and slam it shut mid-pick — the lesson paneHeader.ts's
+    // update() already learned for the header's own select. `targets` is held
+    // back with the options, so the rendered rows and the list the change
+    // handler resolves a pick against can never disagree.
+    if (document.activeElement === sessionSelect) return;
     targets = sessionTargets(status, sessionInput.value.trim() || (isEdit ? box!.sessionName : '') || 'web');
     const keep = sessionSelect.value;
     const custom = document.createElement('option');
@@ -2252,7 +2279,7 @@ function openBoxDialog(box?: Box) {
       return o;
     }), custom);
     sessionSelect.value = targets.some((t) => t.value === keep) || keep === CUSTOM ? keep : (targets[0]?.value ?? CUSTOM);
-    lastPick = sessionSelect.value;
+    if (!windowPending) lastPick = sessionSelect.value;
     syncCustom();
   }
 
@@ -2282,14 +2309,21 @@ function openBoxDialog(box?: Box) {
       // strip it for the hint sentence, where it would just leave a stray
       // arrow ("switching to → 2: bash…") since .trim() only eats whitespace.
       const label = t.label.startsWith(WINDOW_INDENT) ? t.label.slice(WINDOW_INDENT.length) : t.label.trim();
+      // A window in a session this box is NOT attached to does move on the box
+      // right now, but the pane will not show it until Save switches the box to
+      // that session — so the success line says "will show", not "showing".
+      const elsewhere = (box!.sessionName || 'web') !== t.session;
       sessionHint.className = 'session-hint';
       sessionHint.textContent = `switching to ${label}…`;
-      api.selectWindow(box!.id, t.windowId)
+      windowPending = true;
+      api.selectWindow(box!.id, t.session, t.windowId)
         .then(() => {
+          windowPending = false;
           lastPick = sessionSelect.value;
-          sessionHint.textContent = `showing ${label}`;
+          sessionHint.textContent = elsewhere ? `will show ${label} — Save to switch session` : `showing ${label}`;
         })
         .catch((e: any) => {
+          windowPending = false;
           // Snap back to the last selection Save is allowed to see, the same
           // guard selectTarget()/switchSession() apply to the pane header's
           // own dropdown: a failed live switch must not leave the select (and

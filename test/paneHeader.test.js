@@ -67,10 +67,10 @@ test('sessionTargets lists the configured session first, its windows indented be
   ] };
   expect(sessionTargets(status, 'web').map((t) => [t.kind, t.value, t.label])).toEqual([
     ['session', 's:web', 'web'],
-    ['window', 'w:@0', `${WINDOW_INDENT}1: zsh`],
-    ['window', 'w:@1', `${WINDOW_INDENT}2: claude`],
+    ['window', 'w:web:@0', `${WINDOW_INDENT}1: zsh`],
+    ['window', 'w:web:@1', `${WINDOW_INDENT}2: claude`],
     ['session', 's:proj2', 'proj2'],
-    ['window', 'w:@5', `${WINDOW_INDENT}1: zsh`],
+    ['window', 'w:proj2:@5', `${WINDOW_INDENT}1: zsh`],
   ]);
 });
 
@@ -103,7 +103,7 @@ test('sessionTargets disables an unswitchable session AND its windows', () => {
   ] };
   const t = sessionTargets(status, 'web');
   expect(t.find((x) => x.value === 's:my session').disabled).toBe(true);
-  expect(t.find((x) => x.value === 'w:@4').disabled).toBe(true);
+  expect(t.find((x) => x.value === 'w:my session:@4').disabled).toBe(true);
 });
 
 test('sessionTargets leaves the CURRENT session\'s windows selectable whatever its name', () => {
@@ -113,14 +113,36 @@ test('sessionTargets leaves the CURRENT session\'s windows selectable whatever i
     { name: 'my session', windows: 1, windowList: [win('@4', 1, 'vim')] },
   ] };
   const t = sessionTargets(status, 'my session');
-  expect(t.find((x) => x.value === 'w:@4').disabled).toBeUndefined();
+  expect(t.find((x) => x.value === 'w:my session:@4').disabled).toBeUndefined();
+});
+
+test('sessionTargets gives a shared window a DISTINCT value under each session', () => {
+  // A grouped session (`tmux new-session -t web -s webclone`) shares its window
+  // objects, so the same @id legitimately appears under two session names —
+  // verified on tmux 3.5a, where `list-windows -a` reported `web:1:@0` and
+  // `webclone:1:@0`. Two <option>s with one value would make the second row
+  // unclickable in practice: resolving a pick by value hands back the first,
+  // which acts on the wrong session (and can fire a session PATCH nobody asked
+  // for). The session therefore rides in the value, not only in the row.
+  const status = { reachable: true, tmux: true, sessions: [
+    { name: 'web', windows: 1, windowList: [win('@0', 1, 'zsh', true)] },
+    { name: 'webclone', windows: 1, windowList: [win('@0', 1, 'zsh')] },
+  ] };
+  const t = sessionTargets(status, 'web');
+  const values = t.map((x) => x.value);
+  expect(values).toEqual(['s:web', 'w:web:@0', 's:webclone', 'w:webclone:@0']);
+  expect(new Set(values).size).toBe(values.length);
+  // And each row still resolves to its own session, which is what the caller
+  // sends to POST /api/boxes/:id/window.
+  expect(t.find((x) => x.value === 'w:webclone:@0').session).toBe('webclone');
+  expect(t.find((x) => x.value === 'w:webclone:@0').windowId).toBe('@0');
 });
 
 test('sessionTargetList selects the current session\'s active window', () => {
   const status = { reachable: true, tmux: true, sessions: [
     { name: 'web', windows: 2, windowList: [win('@0', 1, 'zsh'), win('@1', 2, 'claude', true)] },
   ] };
-  expect(sessionTargetList(status, 'web').value).toBe('w:@1');
+  expect(sessionTargetList(status, 'web').value).toBe('w:web:@1');
 });
 
 test('sessionTargetList falls back to the session row when no active window is known', () => {

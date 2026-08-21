@@ -269,11 +269,15 @@ export const api = {
   async createSession(id: string, name: string) {
     return j<{ ok: boolean; name: string }>(await fetch(`/api/boxes/${id}/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) }));
   },
-  // Switch which window the box's tmux session is showing. Not a PATCH of the
+  // Switch which window a tmux session on the box is showing. Not a PATCH of the
   // box: nothing is persisted, and every client attached to that session
   // follows without a reattach (tmux's current window is session state).
-  async selectWindow(id: string, windowId: string) {
-    return j<{ ok: boolean; windowId: string }>(await fetch(`/api/boxes/${id}/window`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ windowId }) }));
+  // The session is required, not derived from the window id: a grouped session
+  // shares its windows, so an id alone does not name one session (see
+  // buildSelectWindowRemote). The server resolves it once the box answers, so
+  // the returned promise means the switch actually happened.
+  async selectWindow(id: string, session: string, windowId: string) {
+    return j<{ ok: boolean; windowId: string }>(await fetch(`/api/boxes/${id}/window`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session, windowId }) }));
   },
   async importBoxes(payload: unknown) {
     return j<{ added: Box[]; skipped: number }>(await fetch('/api/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }));

@@ -932,20 +932,41 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (setupManager?.currentForBox(box.id)?.status === 'running') {
       return reply.code(409).send({ error: 'box setup is still running' });
     }
-    const windowId = (req.body || {}).windowId;
-    // The client read this id out of a status snapshot, but it becomes a tmux
-    // target, so it is re-validated here — the chokepoint discipline
-    // iconCatalog.js and voiceCatalog.js apply to their own allowlists.
+    const { session, windowId } = req.body || {};
+    // Both halves are re-validated here before either reaches a tmux target —
+    // the chokepoint discipline iconCatalog.js and voiceCatalog.js apply to
+    // their own allowlists — even though the client read them straight out of a
+    // status snapshot.
     if (typeof windowId !== 'string' || !WINDOW_ID_RE.test(windowId)) {
       return reply.code(400).send({ error: 'window id must look like @7' });
     }
+    // Required, with no bare-id fallback. A window id is unique per window
+    // OBJECT, not per session: a grouped session (`new-session -t web -s
+    // webclone`) shares those objects, so `select-window -t '@7'` picks whichever
+    // of the sharing sessions tmux resolves first and exits 0 either way. Acting
+    // on a target we cannot pin is exactly what this codebase refuses to do
+    // elsewhere, so an absent session is a 400 rather than a guess.
+    if (typeof session !== 'string' || !SESSION_NAME_RE.test(session)) {
+      return reply.code(400).send({ error: 'session name is required and must be letters, digits, _ or -' });
+    }
     if (!boxActions?.execCommand) return reply.code(503).send({ error: 'window switching unavailable' });
-    const res = await boxActions.execCommand(box, buildSelectWindowRemote(windowId), { timeoutMs: 15000 });
-    // A window that vanished between the poll and the click lands here; the next
-    // status poll rebuilds the dropdown without it.
+    const res = await boxActions.execCommand(box, buildSelectWindowRemote(session, windowId), { timeoutMs: 15000 });
+    // A window that vanished between the poll and the click lands here, as does
+    // a session/window pair that does not go together (verified on tmux 3.5a:
+    // `-t '=web:@3'` where @3 belongs to another session exits 1 with "can't
+    // find window"). The next status poll rebuilds the dropdown without it.
     if (!res || res.code !== 0) {
       return reply.code(502).send({ error: String(res?.stderr || '').trim() || 'failed to select window' });
     }
+    // Re-probe this one box so the client's next /api/status is authoritative
+    // about which window is now active. /api/status serves statusPoller's cached
+    // snapshot, which only moves on the poll interval (30s by default), so
+    // without this the client repaints from a snapshot whose `active` flag still
+    // names the PREVIOUS window and the dropdown visibly snaps back for up to a
+    // full interval. Best-effort in both directions: a deployment with no poller
+    // wired (tests) skips it, and a probe that throws or hangs must never turn a
+    // switch that already succeeded on the box into an error response.
+    try { await statusPoller?.probeOne?.(box.id); } catch { /* the next sweep will catch up */ }
     return { ok: true, windowId };
   });
   app.post('/api/boxes/:id/reconnect', { preHandler: requireAuth }, async (req, reply) => {
