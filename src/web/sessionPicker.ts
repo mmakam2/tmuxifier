@@ -117,6 +117,24 @@ export function buildSessionPicker(deps: SessionPickerDeps): SessionPicker {
     if (id) { fire(t); return; }
     armTimer = setTimeout(disarm, ARM_MS);
     render();
+    // render() just replaced the button that was clicked with a fresh armed
+    // one (list.replaceChildren rebuilds every row) — mirrors
+    // paneLifecycle.ts's onKeyClick, which refocuses its own armed
+    // replacement for the same reason: without this a keyboard user who just
+    // armed a destructive action has no way to reach the confirming second
+    // click OR Escape (bound to `pop`, which no longer contains focus once it
+    // reverts to body). Unconditional, matching that precedent exactly rather
+    // than gating on input modality — a mouse user refocusing the control
+    // they just clicked is unsurprising (it is the same control, now visibly
+    // armed), and it does not fight the focusout guard above: the outgoing
+    // focus here is the removed button reverting to `body` (relatedTarget
+    // null, already guarded), not a move away from `el`, so nothing closes.
+    // disarm()'s own render() (timeout / Escape / outside click / the second,
+    // firing click) deliberately gets NO matching focus() call, so letting an
+    // arm expire never steals focus from wherever the user has since moved it
+    // — it only ever reverts to `body`, same as any other row-changing
+    // render() in this widget.
+    el.querySelector<HTMLElement>('.session-picker-kill.armed')?.focus();
   }
 
   function render() {
