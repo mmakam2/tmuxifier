@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseTmuxSessions, parseMeta, parseAgentMarks, createStatusChecker, PROBE_REMOTE } from '../src/server/status.js';
+import { parseTmuxSessions, parseMeta, parseAgentMarks, createStatusChecker, PROBE_REMOTE, parseTmuxWindows, attachWindows } from '../src/server/status.js';
 
 test('parseTmuxSessions maps fields', () => {
   const out = 'web:3:1:1718000000\nbuild:1:0:1718000100\n';
@@ -193,7 +193,10 @@ function runProbe(pathDir) {
 
 test('PROBE_REMOTE: tmux present with sessions prints the format lines', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-tmux-'));
-  writeFakeTmux(dir, `echo 'web:2:1:123'`);
+  // The fake binary is invoked twice now (`ls` for sessions, `list-windows -a`
+  // for windows); stay silent on the second so this fixture still asserts only
+  // the session line, as before the window probe existed.
+  writeFakeTmux(dir, `[ "$1" = "list-windows" ] && exit 0\necho 'web:2:1:123'`);
   expect(runProbe(dir)).toBe('web:2:1:123');
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -630,4 +633,78 @@ test('checkBox: attaches agentMarks when the probe carries __AGENT__ lines, omit
   const without = async () => ({ code: 0, stdout: 'web:1:0:1718000000:claude\n', stderr: '' });
   const st2 = await createStatusChecker({ run: without }).checkBox({ host: 'h' });
   expect(st2.agentMarks).toBeUndefined();
+});
+
+test('parseTmuxWindows maps one row per window and rejoins a colon-bearing name', () => {
+  // Verified on tmux 3.5a: window names may contain colons ("we:ird name"),
+  // session names may not — so the name is the LAST field and the tail rejoins.
+  const out = [
+    '__META__ load1=0.4',
+    'web:2:1:1718000000:claude',
+    '__WIN__ web:1:@0:0:zsh',
+    '__WIN__ web:2:@3:1:we:ird name',
+  ].join('\n');
+  expect(parseTmuxWindows(out)).toEqual([
+    { session: 'web', index: 1, id: '@0', active: false, name: 'zsh' },
+    { session: 'web', index: 2, id: '@3', active: true, name: 'we:ird name' },
+  ]);
+});
+
+test('parseTmuxWindows drops rows that fail the allowlist', () => {
+  const out = [
+    '__WIN__ web:1:nope:0:bad-id',
+    '__WIN__ web:x:@1:0:bad-index',
+    '__WIN__ web:1:@2:2:bad-active',
+    '__WIN__ :1:@3:0:no-session',
+    '__WIN__ web:1:@4',
+    '__WIN__ web:1:@5:1:ok',
+  ].join('\n');
+  expect(parseTmuxWindows(out)).toEqual([
+    { session: 'web', index: 1, id: '@5', active: true, name: 'ok' },
+  ]);
+});
+
+test('parseTmuxWindows strips control characters and caps the name (box input reaching the UI)', () => {
+  const out = `__WIN__ web:1:@1:0:a\x1b[31mb\n__WIN__ web:2:@2:0:${'x'.repeat(90)}`;
+  const w = parseTmuxWindows(out);
+  expect(w[0].name).toBe('a[31mb');
+  expect(w[1].name).toHaveLength(64);
+});
+
+test('parseTmuxSessions ignores __WIN__ lines', () => {
+  const out = 'web:2:1:1718000000:claude\n__WIN__ web:1:@0:1:zsh\n';
+  expect(parseTmuxSessions(out)).toEqual([
+    { name: 'web', windows: 2, attached: true, activity: 1718000000, paneCmd: 'claude' },
+  ]);
+});
+
+test('attachWindows nests windows under their session and drops orphans', () => {
+  const sessions = [{ name: 'web', windows: 2 }, { name: 'build', windows: 1 }];
+  const windows = [
+    { session: 'web', index: 1, id: '@0', active: true, name: 'zsh' },
+    { session: 'gone', index: 1, id: '@9', active: true, name: 'orphan' },
+  ];
+  expect(attachWindows(sessions, windows)).toEqual([
+    { name: 'web', windows: 2, windowList: [{ id: '@0', index: 1, name: 'zsh', active: true }] },
+    { name: 'build', windows: 1 },
+  ]);
+});
+
+test('the probe asks for windows by id, not index (indexes renumber between poll and click)', () => {
+  expect(PROBE_REMOTE).toContain('list-windows -a');
+  expect(PROBE_REMOTE).toContain('#{window_id}');
+});
+
+test('checkBox nests each session\'s windows into the snapshot', async () => {
+  const stdout = [
+    'web:2:1:1718000000:claude',
+    '__WIN__ web:1:@0:0:zsh',
+    '__WIN__ web:2:@1:1:claude',
+  ].join('\n');
+  const run = async () => ({ code: 0, stdout, stderr: '' });
+  const status = await createStatusChecker({ run }).checkBox({ host: '192.168.1.10' });
+  expect(status.sessions[0].windowList).toEqual([
+    { id: '@0', index: 1, name: 'zsh', active: false },
+    { id: '@1', index: 2, name: 'claude', active: true },
+  ]);
 });

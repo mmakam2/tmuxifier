@@ -1,4 +1,4 @@
-import { buildProbeArgv } from './sshCommand.js';
+import { buildProbeArgv, WINDOW_ID_RE } from './sshCommand.js';
 
 // The activity field is `#{window_activity}` — the last time the session's
 // current window produced OUTPUT — and deliberately not `#{session_activity}`,
@@ -55,8 +55,16 @@ const AGENT_PROBE =
   `if [ -d "$HOME/.tmuxifier-agent" ]; then for f in "$HOME"/.tmuxifier-agent/*; do ` +
   `[ -f "$f" ] && { printf '__AGENT__ '; head -c 200 "$f" | tr -d '\\n'; echo; }; done; fi 2>/dev/null; `;
 
+// One line per window on the box, appended to the same probe so windows cost no
+// extra SSH. The name is LAST because window names may contain colons (verified
+// on tmux 3.5a: "we:ird name") while session names may not — the invariant
+// STATUS_FMT already relies on. `#{window_id}` rather than the index: indexes
+// renumber between the poll that builds the dropdown and the click that uses it.
+export const WINDOW_FMT = '#{session_name}:#{window_index}:#{window_id}:#{window_active}:#{window_name}';
+
 export const PROBE_REMOTE =
-  `${META_PROBE} ${AGENT_PROBE}if command -v tmux >/dev/null 2>&1; then tmux ls -F '${STATUS_FMT}' 2>/dev/null || true; else echo __NO_TMUX__; fi`;
+  `${META_PROBE} ${AGENT_PROBE}if command -v tmux >/dev/null 2>&1; then tmux ls -F '${STATUS_FMT}' 2>/dev/null || true; ` +
+  `tmux list-windows -a -F '__WIN__ ${WINDOW_FMT}' 2>/dev/null || true; else echo __NO_TMUX__; fi`;
 
 const META_KEYS = new Set([
   'load1', 'load5', 'load15', 'cpus', 'cpuUsageUsec',
@@ -137,10 +145,48 @@ const HOSTKEY_CHANGE_RE = /remote host identification has changed/i;
 // dot is stuck red forever. Seeing this is our cue to reap the stale socket.
 const MUX_STALE_RE = /disabling multiplexing|ControlSocket .* already exists/i;
 
+// A window name is a string on the box, so it is input: control characters are
+// stripped and the length capped before it can reach a <select> in the browser.
+// parseAgentMarks' posture, for the same reason.
+const cleanWindowName = (s) => s.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 64);
+
+// Pull `__WIN__ <session>:<index>:<id>:<active>:<name>` lines into flat rows.
+// Every field is allowlisted rather than trusted: a bad id, a non-numeric index
+// or an active flag that is not 0/1 drops that row instead of the whole probe.
+export function parseTmuxWindows(stdout) {
+  const out = [];
+  for (const line of String(stdout).split(/\r?\n/)) {
+    if (!line.startsWith('__WIN__ ')) continue;
+    const parts = line.slice('__WIN__ '.length).split(':');
+    if (parts.length < 5) continue;
+    const [session, indexRaw, id, activeRaw] = parts;
+    const index = Number(indexRaw);
+    if (!session || !WINDOW_ID_RE.test(id)) continue;
+    if (!Number.isInteger(index) || index < 0) continue;
+    if (activeRaw !== '0' && activeRaw !== '1') continue;
+    out.push({ session, index, id, active: activeRaw === '1', name: cleanWindowName(parts.slice(4).join(':')) });
+  }
+  return out;
+}
+
+// Nest the flat rows under their session. A row whose session is not in the
+// session list drops — the two tmux calls are not atomic, so a session created
+// between them can appear in one and not the other. Windows keep tmux's own
+// order: `list-windows -a` is index-ordered within each session.
+export function attachWindows(sessions, windows) {
+  if (!windows.length) return sessions;
+  const bySession = new Map();
+  for (const w of windows) {
+    if (!bySession.has(w.session)) bySession.set(w.session, []);
+    bySession.get(w.session).push({ id: w.id, index: w.index, name: w.name, active: w.active });
+  }
+  return sessions.map((s) => (bySession.has(s.name) ? { ...s, windowList: bySession.get(s.name) } : s));
+}
+
 export function parseTmuxSessions(stdout) {
   return String(stdout)
     .split(/\r?\n/)
-    .filter((l) => l.trim() && !l.includes('__NO_TMUX__') && !l.startsWith('__META__') && !l.startsWith('__AGENT__'))
+    .filter((l) => l.trim() && !l.includes('__NO_TMUX__') && !l.startsWith('__META__') && !l.startsWith('__AGENT__') && !l.startsWith('__WIN__'))
     .map((line) => {
       const [name, windows, attached, activity, paneCmd] = line.split(':');
       return { name, windows: Number(windows), attached: attached === '1', activity: Number(activity), paneCmd: paneCmd || '' };
@@ -208,7 +254,7 @@ export function createStatusChecker({
       const agentMarks = parseAgentMarks(res.stdout);
       const base = String(res.stdout).includes('__NO_TMUX__')
         ? { reachable: true, tmux: false, sessions: [] }
-        : { reachable: true, tmux: true, sessions: parseTmuxSessions(res.stdout) };
+        : { reachable: true, tmux: true, sessions: attachWindows(parseTmuxSessions(res.stdout), parseTmuxWindows(res.stdout)) };
       const withMeta = metrics ? { ...base, metrics } : base;
       return agentMarks ? { ...withMeta, agentMarks } : withMeta;
     } catch (e) {

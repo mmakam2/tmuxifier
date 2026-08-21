@@ -24,6 +24,14 @@ function controlArgs(opts = {}) {
 // paneHeader.ts, locked together by test/paneHeader.test.js.
 export const SESSION_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
+// tmux's own window identifier: `@` plus digits, unique per tmux server and
+// stable across the renumbering that `move-window` and window kills cause —
+// which is why the UI addresses a window by id and never by `session:index`.
+// The one authoritative statement of the rule: status.js parses against it and
+// the select-window route re-validates against it before the value reaches a
+// tmux target.
+export const WINDOW_ID_RE = /^@\d{1,9}$/;
+
 export function sanitizeSession(name) {
   const cleaned = String(name || '').replace(/[^A-Za-z0-9_-]/g, '-');
   return cleaned.length ? cleaned : 'web';
