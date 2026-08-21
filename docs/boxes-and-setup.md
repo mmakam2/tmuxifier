@@ -8,7 +8,7 @@ output so glyphs survive a C/POSIX locale). `<session>` is the box's tmux sessio
 name — set per box in the Add/Edit dialog's **tmux session** dropdown, defaulting to `web`.
 The dropdown carries the same hierarchy as the [pane header's](terminal.md): every live
 session (from the cached status snapshot, or a fresh probe via ⟳) with its windows indented
-beneath it, plus a `Custom name…` row that reveals a free-text field for a session that
+beneath it, plus a `Create New Session…` row that reveals a free-text field for a session that
 doesn't exist yet. Because tmux runs on the box, the session and its processes survive
 disconnects. A 45s server-side grace window makes brief reconnects seamless; after that the
 local ssh process is dropped while the on-box session keeps running.
@@ -22,7 +22,7 @@ that never happened. Picking a window that belongs to a *different* session move
 session's window on the box straight away too, but the pane won't show it until Save
 switches the box over, which is what the hint under the dropdown says. Add mode has no box
 yet to run a live window-select against, so once you ⟳ a host's sessions their windows
-appear in the dropdown for orientation but disabled — `web (default)` and `Custom name…`
+appear in the dropdown for orientation but disabled — `web (default)` and `Create New Session…`
 are the only rows you can actually pick until the box exists.
 
 The Edit dialog can also **create** a session on the box right away (detached, without

@@ -616,7 +616,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
    cap carries a word, so the glyph-sized type comes down to label scale. */
 .modal .session-create .session-refresh { font-size: 12px; letter-spacing: 0.04em; }
 /* The session field is one control now: sessions with their windows indented
-   under them, plus a Custom name… row that reveals the free-text input. */
+   under them, plus a Create New Session… row that reveals the free-text input. */
 .modal .session-select { flex: 1; min-width: 0; padding: 9px 10px; border-radius: 6px; border: 1px solid var(--border); border-top-color: var(--seam); background: var(--screen); box-shadow: var(--recess); color: var(--text); font-family: var(--face); font-size: 14px; }
 .modal .session-select:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 45%, transparent); box-shadow: var(--recess), 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent); }
 .modal .session-select option:disabled { color: var(--dim); }

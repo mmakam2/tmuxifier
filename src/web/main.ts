@@ -2216,7 +2216,7 @@ function openBoxDialog(box?: Box) {
   // it contains — which is now the dropdown below, not this input. Without its
   // own name the revealed custom-name field would be announced by its
   // placeholder alone (and by nothing at all once typed into).
-  sessionInput.setAttribute('aria-label', 'Custom tmux session name');
+  sessionInput.setAttribute('aria-label', 'New tmux session name');
   if (isEdit && box!.sessionName) sessionInput.value = box!.sessionName;
   const sessionRefresh = document.createElement('button');
   sessionRefresh.type = 'button';
@@ -2230,7 +2230,7 @@ function openBoxDialog(box?: Box) {
 
   // One control for the whole choice: every live session with its windows
   // indented beneath it (the pane header's own pure model, reused so the two
-  // surfaces cannot drift), plus a Custom name… row that reveals the free-text
+  // surfaces cannot drift), plus a Create New Session… row that reveals the free-text
   // input for a session that does not exist yet.
   const CUSTOM = '__custom__';
   const sessionSelect = document.createElement('select');
@@ -2263,7 +2263,7 @@ function openBoxDialog(box?: Box) {
     const keep = sessionSelect.value;
     const custom = document.createElement('option');
     custom.value = CUSTOM;
-    custom.textContent = 'Custom name…';
+    custom.textContent = 'Create New Session…';
     sessionSelect.replaceChildren(...targets.map((t) => {
       const o = document.createElement('option');
       o.value = t.value;
@@ -2283,7 +2283,7 @@ function openBoxDialog(box?: Box) {
     syncCustom();
   }
 
-  // The custom-name row is only in play under Custom name…; otherwise the
+  // The new-session row is only in play under Create New Session…; otherwise the
   // selected row IS the value, so leaving the input visible would present two
   // fields that disagree. `hidden` needs the [hidden] rule in style.css to
   // land: this row carries .session-row, whose `display: flex` outranks the UA
