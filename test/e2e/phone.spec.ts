@@ -361,3 +361,11 @@ test('tap guard: taps are inert to a mouse-tracking app, a long-press clicks', a
     await page.keyboard.press('Enter').catch(() => {});
   }
 });
+
+test('phone mode gives the pane header no session control', async ({ page }) => {
+  await login(page);
+  await openLocalhost(page);
+  // The header row is the most contested space on a phone, and sessions are
+  // managed from the Edit Box modal off the box list instead.
+  await expect(page.locator('.stage-pane .session-picker')).toHaveCount(0);
+});
