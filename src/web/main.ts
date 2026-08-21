@@ -44,7 +44,10 @@ const app = document.getElementById('app')!;
 applyTheme(currentTheme());
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal>; voiceMount: HTMLElement }>();
 const connStates = new Map<string, PaneConn>();
-const paneHeaders = new Map<string, (m: PaneHeaderModel) => void>();
+// Holds the full built header, not just its update closure, so its picker's
+// destroy() (the document-level click listener teardown) can be reached from
+// every path that discards headers — see destroyPaneHeaders().
+const paneHeaders = new Map<string, ReturnType<typeof buildPaneHeader>>();
 // Lifecycle controls live alongside the header updaters and share their
 // lifetime: each owns a poll loop and an arm timer, so an orphan would keep
 // running after its pane's DOM died. Destroyed in repaintStage and on logout.
@@ -889,6 +892,17 @@ async function switchSession(id: string, name: string) {
   }
 }
 
+// Kill a session or window from the pane header's picker. Nothing is removed
+// locally on the strength of the call — the route re-probes the box before it
+// answers, so ONE poll afterwards is authoritative. Killing the session this
+// pane is attached to is allowed under the same uniform rule as every other
+// row: the PTY drops and the attach path's `new-session -A` recreates it empty,
+// which is what the Reconnect cap already does to this very session.
+async function killTarget(id: string, t: SessionTarget) {
+  await api.killTarget(id, t.session, t.kind === 'window' ? t.windowId : undefined);
+  await pollStatus();
+}
+
 // Act on a pane-header dropdown pick. A window in the box's CURRENT session is
 // the cheap case: select-window alone, no PATCH, no PTY kill — every client
 // attached to that session follows on its own. A pick in another session needs
@@ -925,7 +939,7 @@ async function selectTarget(id: string, t: SessionTarget) {
 }
 
 function updatePaneHeaders() {
-  for (const [id, update] of paneHeaders) update(paneHeaderModelFor(id));
+  for (const [id, h] of paneHeaders) h.update(paneHeaderModelFor(id));
   for (const [id, ctl] of paneLifecycles) ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState, template: latestStatus[id]?.proxmoxTemplate });
 }
 
@@ -950,6 +964,7 @@ function paneHooks(): PaneHooks {
           // Same gate as the callback above: the model decides whether a switch
           // is on offer, so a pane with no dropdown never probes for one.
           onWillOpenTarget: (opts?: { waitMs?: number }) => freshProbe.refresh(id, opts),
+          onKillTarget: (t: SessionTarget) => killTarget(id, t),
         } : {}),
         ...(split ? { onUndock: () => undockBox(id), undockLabel: `Undock ${model.title}` } : {}),
       });
@@ -967,7 +982,7 @@ function paneHooks(): PaneHooks {
         ensureTab(id);
         built.voiceSlot.append(tabs.get(id)!.voiceMount);
       }
-      paneHeaders.set(id, built.update);
+      paneHeaders.set(id, built);
       // Proxmox-linked boxes only: the local shell has no container, and an
       // unlinked box has nothing for these keys to act on.
       const linked = allBoxes.find((b) => b.id === id)?.proxmox;
@@ -1012,6 +1027,16 @@ function destroyPaneLifecycles() {
   paneLifecycles.clear();
 }
 
+// Mirrors destroyPaneLifecycles(): each header's picker holds a document-level
+// click listener (closes the popup on an outside click), which survives its
+// DOM being detached or replaced — only destroy() removes it. Called from
+// every path that discards headers: repaintStage() and workspace teardown
+// (logout / session-expiry).
+function destroyPaneHeaders() {
+  for (const [, h] of paneHeaders) h.destroy();
+  paneHeaders.clear();
+}
+
 // Whether the touch key bar is actually on screen. Phone LAYOUT starts at
 // max-width 720px, but the key bar additionally requires `pointer: coarse` — so
 // a desktop window dragged narrow is in phone mode with NO bar. Adopting the mic
@@ -1024,7 +1049,7 @@ function touchBarShown(): boolean {
 }
 
 function repaintStage() {
-  paneHeaders.clear(); // stale update closures die with their DOM; headerFor re-registers survivors
+  destroyPaneHeaders(); // their pickers' document listeners would outlive the DOM otherwise; headerFor re-registers survivors
   destroyPaneLifecycles(); // their pollers and arm timers would outlive the DOM otherwise
   const grid = stageGrid();
   // What this repaint will actually put on screen. On phone that is the single
@@ -3601,6 +3626,10 @@ function teardownWorkspace(): void {
   // elements (unopenable boxes after re-login) and live reconnect loops.
   for (const [, t] of tabs) { t.term.dispose(); t.el.remove(); }
   tabs.clear();
+  // #app is about to be replaced with app.innerHTML elsewhere (renderLogin),
+  // which drops this DOM but not a document-level listener registered on it —
+  // only destroy() removes a picker's outside-click handler.
+  destroyPaneHeaders();
   destroyPaneLifecycles(); // #app is about to be replaced; nothing repaints the stage on this path
   stopFastStatusPoll();
   updateLocalDot();

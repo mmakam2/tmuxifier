@@ -4,6 +4,7 @@
 import { dotClassFor, dotTitleFor } from './statusDot';
 import { buildClawd } from './clawd';
 import type { Status, TmuxWindow } from './api';
+import { buildSessionPicker, type SessionPicker } from './sessionPicker';
 
 export type ConnKind = 'connecting' | 'open' | 'retrying' | 'setup';
 export interface PaneConn { kind: ConnKind; attempt?: number }
@@ -174,19 +175,24 @@ export interface PaneHeaderActions {
   // Resolves when the caller considers the snapshot good enough to open on —
   // see freshProbe.ts for the single-flight/freshness/wait-cap policy.
   onWillOpenTarget?: (opts?: { waitMs?: number }) => Promise<void>;
+  // Kill the row's session or window on the box. Destructive, so the widget
+  // arms it — unlike onSelectTarget, which is a plain callback because a switch
+  // costs nothing. Rejecting leaves the row in place.
+  onKillTarget?: (t: SessionTarget) => Promise<void>;
 }
-
-// How long the click path holds the native picker shut while the box answers.
-// Long enough for a healthy box over the ControlMaster, short enough that a box
-// that has gone away is a slightly-late dropdown rather than a dead click.
-export const OPEN_REFRESH_WAIT_MS = 700;
 
 // update() rewrites text/classes only — the voice button lives inside
 // voiceSlot across updates, and rebuilding children would kill an in-flight
 // recording. Action buttons are fixed at build time: refresh/undock
 // availability changes only on a full stage repaint, never mid-poll.
 export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActions = {}): {
-  el: HTMLElement; voiceSlot: HTMLElement; lifecycleSlot: HTMLElement; refreshBtn: HTMLButtonElement | null; update(m: PaneHeaderModel): void;
+  el: HTMLElement; voiceSlot: HTMLElement; lifecycleSlot: HTMLElement; refreshBtn: HTMLButtonElement | null;
+  update(m: PaneHeaderModel): void;
+  // Tears down the picker's document-level click listener. Every caller that
+  // discards this header — a stage repaint, workspace teardown on logout/
+  // session-expiry — must call this or the listener (and the detached popup
+  // subtree it closes over) outlives the DOM it was built for.
+  destroy(): void;
 } {
   const el = document.createElement('div');
   el.className = 'pane-header';
@@ -202,72 +208,24 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
   // must never rebuild them.
   const lifecycleSlot = document.createElement('span');
   lifecycleSlot.className = 'pane-lifecycle-slot';
-  // The session dropdown sits with the identity: which session this pane shows
-  // is part of what the pane IS, not an action on it. Built only when the
-  // caller can act on a pick; options are populated by update() below.
-  let sessionSel: HTMLSelectElement | null = null;
-  // The rows currently rendered, so the change handler can resolve a value back
-  // to its target without re-deriving which session a window belongs to.
-  let rendered: SessionTarget[] = [];
+  // The picker sits with the identity: which session this pane shows is part of
+  // what the pane IS, not an action on it. Built only when the caller can act on
+  // a pick. It replaced a native <select>, whose <option> could not host the
+  // per-row kill — and with it went the showPicker()/preventDefault dance and
+  // the focused-select repopulation guard, both of which existed only because a
+  // native picker can be refreshed solely BEFORE it opens.
+  let picker: SessionPicker | null = null;
   if (actions.onSelectTarget) {
-    sessionSel = document.createElement('select');
-    sessionSel.className = 'pane-session';
-    sessionSel.title = 'Active tmux session and window';
-    sessionSel.setAttribute('aria-label', 'Active tmux session and window');
-    sessionSel.addEventListener('click', (e) => e.stopPropagation());
-    // Blur before acting: a native select keeps focus after `change`, and the
-    // focused-select guard in update() below (rightly) refuses to touch a
-    // focused select — so without this, a failed switch could never snap the
-    // value back and the header would keep showing a switch that never
-    // happened. On success the repaint rebuilds the header anyway.
-    sessionSel.addEventListener('change', () => {
-      const target = rendered.find((t) => t.value === sessionSel!.value);
-      sessionSel!.blur();
-      if (target) actions.onSelectTarget!(target);
+    picker = buildSessionPicker({
+      onSelect: (t) => actions.onSelectTarget!(t),
+      onKill: async (t) => { await actions.onKillTarget?.(t); },
+      onWillOpen: (opts) => actions.onWillOpenTarget?.(opts) ?? Promise.resolve(),
     });
-    // Reaching for the dropdown is the signal to re-probe the box. Two events,
-    // because a pointer arrives before it presses and a finger does not:
-    //
-    // - pointerenter (mouse only): the prefetch. The select is not focused yet,
-    //   so the answer repopulates it freely through update() below, and by the
-    //   time the click lands the list is already current.
-    // - pointerdown: the guarantee. preventDefault holds the picker shut while
-    //   the box answers, then showPicker() opens it on the refreshed list.
-    //
-    // Both are best-effort: a probe that fails or times out just means the
-    // picker opens on the snapshot we already had, which is what it did before.
-    const reach = (opts?: { waitMs?: number }) => actions.onWillOpenTarget?.(opts) ?? Promise.resolve();
-    sessionSel.addEventListener('pointerenter', (e) => {
-      if ((e as PointerEvent).pointerType === 'mouse') void reach();
-    });
-    sessionSel.addEventListener('pointerdown', (e) => {
-      if (!actions.onWillOpenTarget) return;
-      const sel = sessionSel!;
-      const picker = (sel as HTMLSelectElement & { showPicker?: () => void }).showPicker;
-      // Without showPicker() the popup can only be opened by this very event,
-      // so let it open on what we have and refresh underneath — the prefetch
-      // above has usually made that current already, and the focused-select
-      // guard in update() keeps a late answer from slamming an open picker shut.
-      if (typeof picker !== 'function') { void reach(); return; }
-      e.preventDefault();
-      void reach({ waitMs: OPEN_REFRESH_WAIT_MS }).then(() => {
-        // focus() first, and it is load-bearing twice: preventDefault above
-        // suppressed the focus this click would have moved, and the guard that
-        // stops a status poll from repopulating the list under an open picker
-        // keys on this select being the active element.
-        sel.focus();
-        try { picker.call(sel); } catch { /* a browser that refuses just needs a second click */ }
-      });
-    });
-    // A refresh that lands while the picker is open is deliberately not applied
-    // (see the guard in update()), which would otherwise leave those options
-    // stale until the next poll — up to 30s later. Re-apply on the way out.
-    // Deferred a turn because activeElement is not settled during `blur`.
-    sessionSel.addEventListener('blur', () => { setTimeout(() => update(lastModel), 0); });
+    picker.el.addEventListener('click', (e) => e.stopPropagation());
   }
   const identity = document.createElement('div');
   identity.className = 'pane-header-id';
-  identity.append(dot, title, target, ...(sessionSel ? [sessionSel] : []), lifecycleSlot);
+  identity.append(dot, title, target, ...(picker ? [picker.el] : []), lifecycleSlot);
 
   const chip = document.createElement('span');
   const voiceSlot = document.createElement('span');
@@ -301,44 +259,14 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
 
   el.append(identity, acts);
 
-  // The last model applied, so the blur handler above can re-run update() with
-  // it rather than inventing one or waiting for the next poll.
-  let lastModel = model;
   const update = (m: PaneHeaderModel) => {
-    lastModel = m;
     dot.className = `dot ${m.dotClass}`;
     dot.title = m.dotTitle;
     title.textContent = m.title;
     target.textContent = m.target;
-    if (sessionSel) {
-      const list = m.targets?.options ?? [];
-      sessionSel.hidden = list.length === 0;
-      // Never rebuild under the user: this runs on every status poll, and
-      // repopulating a native select while its dropdown is open slams it shut
-      // mid-pick. The focused select keeps its current options until blur.
-      if (document.activeElement !== sessionSel) {
-        // `session` is part of the key even though it is not rendered: `rendered`
-        // is what the change handler resolves a pick against, so a row whose
-        // session moved while its value/label/disabled stayed put would otherwise
-        // keep a stale session and steer the wrong one.
-        const key = list.map((t) => `${t.value}\t${t.label}\t${t.session}\t${t.disabled ? 1 : 0}`).join('\n');
-        if (sessionSel.dataset.opts !== key) {
-          sessionSel.dataset.opts = key;
-          rendered = list;
-          sessionSel.replaceChildren(...list.map((t) => {
-            const o = document.createElement('option');
-            o.value = t.value;
-            o.textContent = t.label;
-            if (t.disabled) { o.disabled = true; if (t.title) o.title = t.title; }
-            return o;
-          }));
-        }
-        // The selected row: sessionTargetList picks the current session's
-        // active window when the snapshot knows it, else the session row
-        // itself — not simply "the first option" (there is no such rule here).
-        sessionSel.value = m.targets?.value ?? '';
-      }
-    }
+    // The widget holds its own armed-row invariant, so this can be called on
+    // every poll without a focus guard of any kind.
+    picker?.update(m.targets);
     if (m.chip) {
       chip.hidden = false;
       chip.className = `pane-chip ${m.chip.cls}`;
@@ -356,5 +284,5 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
     }
   };
   update(model);
-  return { el, voiceSlot, lifecycleSlot, refreshBtn, update };
+  return { el, voiceSlot, lifecycleSlot, refreshBtn, update, destroy: () => picker?.destroy() };
 }

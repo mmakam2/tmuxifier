@@ -286,6 +286,16 @@ export const api = {
   async selectWindow(id: string, session: string, windowId: string) {
     return j<{ ok: boolean; windowId: string }>(await fetch(`/api/boxes/${id}/window`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session, windowId }) }));
   },
+  // Kill a tmux session, or one window inside it, on the box. The session is
+  // required in both forms — a grouped session shares its window objects, so an
+  // id alone does not name one session (see buildKillWindowRemote). Nothing is
+  // removed client-side on the strength of this: the caller re-probes, because
+  // the list is a report of the box rather than a wish.
+  async killTarget(id: string, session: string, windowId?: string) {
+    const body: { session: string; windowId?: string } = { session };
+    if (windowId) body.windowId = windowId;
+    return j<{ ok: boolean }>(await fetch(`/api/boxes/${id}/kill`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+  },
   async importBoxes(payload: unknown) {
     return j<{ added: Box[]; skipped: number }>(await fetch('/api/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }));
   },

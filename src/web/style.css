@@ -1025,19 +1025,6 @@ button.empty-kbd:hover { color: var(--text); }
   cursor: pointer; opacity: 0.6;
 }
 .pane-header .pane-act:hover, .pane-header .pane-act:focus-visible { opacity: 1; color: var(--text); }
-/* Active-session selector: rides the identity group (which session the pane
-   shows is part of what it IS). Session names are literals, so the bezel's
-   uppercase transform is undone; sizing matches the chips beside it. */
-.pane-header .pane-session {
-  flex: 0 1 auto; min-width: 0; max-width: 18ch;
-  overflow: hidden; text-overflow: ellipsis;
-  font-family: var(--face); font-size: 11px; padding: 1px 4px;
-  text-transform: none; letter-spacing: normal;
-  border: 1px solid var(--border); border-radius: 4px;
-  background: var(--panel-2); color: var(--muted);
-  cursor: pointer; opacity: 0.75;
-}
-.pane-header .pane-session:hover, .pane-header .pane-session:focus-visible { opacity: 1; color: var(--text); }
 /* Session picker: replaces the native <select>, which could not host a per-row
    kill. The trigger keeps the old control's exact metrics so the header row
    does not reflow. */
