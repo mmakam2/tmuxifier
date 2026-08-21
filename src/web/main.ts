@@ -17,7 +17,7 @@ import { createFleetPoller } from './fleetPoll';
 import { createFreshProbe } from './freshProbe';
 import { partitionJobs, jobLamp, jobReadout, jobClock, runningCount } from './fleetJobs';
 import { createInteractiveLauncher } from './interactiveLauncher';
-import { closeAllModals } from './modalRegistry';
+import { closeAllModals, registerModal } from './modalRegistry';
 import { openModal, makeRadio } from './dom';
 import { armReduce, ARM_MS, IDLE as ARM_IDLE, type ArmState } from './arming';
 import { createSetupJobPoller } from './setupPoller';
@@ -2329,6 +2329,27 @@ function openBoxDialog(box?: Box) {
     return { kind: 'session', value: CUSTOM, label: 'Create New Session…', session: '' };
   }
 
+  // The indent is part of the label so a row reads as a tree; strip it for a
+  // sentence, where it would otherwise leave a stray arrow ("switching to →
+  // 2: bash…" / "killing → 2: bash…") since .trim() only eats whitespace.
+  // Matches this file's own established idiom (WINDOW_INDENT) rather than
+  // importing sessionPicker.ts's regex-based equivalent (killLegend), so
+  // main.ts keeps one label-cleaning idiom instead of two.
+  function cleanLabel(label: string): string {
+    return label.startsWith(WINDOW_INDENT) ? label.slice(WINDOW_INDENT.length) : label.trim();
+  }
+
+  // Every place that changes `picked` or `targets` must call this to actually
+  // repaint — unlike the native <select> it replaced, the picker has no
+  // browser-provided instant-update; render() only reflects whatever
+  // update() was last called with. Defaults to rebuilding rows from the
+  // current `targets` (correct whenever targets itself hasn't changed, which
+  // is every caller except applySessions, which passes its own freshly built
+  // `rows` to avoid constructing it twice).
+  function renderPicker(rows: SessionTarget[] = [...targets, customRowTarget()]) {
+    picker.update({ options: rows, value: picked });
+  }
+
   const picker = buildSessionPicker({
     className: 'session-select',
     // The Create row names no session on the box, so it gets no ×.
@@ -2339,7 +2360,7 @@ function openBoxDialog(box?: Box) {
       // call is valid.
       if (!isEdit) return;
       sessionHint.className = 'session-hint';
-      sessionHint.textContent = `killing ${t.label.trim()}…`;
+      sessionHint.textContent = `killing ${cleanLabel(t.label)}…`;
       try {
         await api.killTarget(box!.id, t.session, t.kind === 'window' ? t.windowId : undefined);
         // Clear a selection that just stopped existing, so Save cannot persist
@@ -2359,10 +2380,7 @@ function openBoxDialog(box?: Box) {
     // it is a live tmux action, not form state, and nothing about it is saved.
     // The session half still rides Save like every other field.
     if (isEdit && t.kind === 'window' && t.windowId) {
-      // The indent is part of the label so the row reads as a tree; strip it
-      // for the hint sentence, where it would just leave a stray arrow
-      // ("switching to → 2: bash…") since .trim() only eats whitespace.
-      const label = t.label.startsWith(WINDOW_INDENT) ? t.label.slice(WINDOW_INDENT.length) : t.label.trim();
+      const label = cleanLabel(t.label);
       // A window in a session this box is NOT attached to does move on the box
       // right now, but the pane will not show it until Save switches the box to
       // that session — so the success line says "will show", not "showing".
@@ -2374,6 +2392,11 @@ function openBoxDialog(box?: Box) {
         .then(() => {
           windowPending = false;
           lastPick = t.value;
+          // Repaint: the picker has no native-<select> instant-update, so
+          // without this the trigger/current-row keep showing whatever they
+          // were painted with last (the PREVIOUS session/window) even though
+          // this switch just succeeded and `picked` already names the new one.
+          renderPicker();
           sessionHint.textContent = elsewhere ? `will show ${label} — Save to switch session` : `showing ${label}`;
         })
         .catch((e: any) => {
@@ -2390,8 +2413,12 @@ function openBoxDialog(box?: Box) {
         });
     } else {
       // A session-row pick (or Custom) is pure form state — no live call — so
-      // it commits immediately.
+      // it commits immediately. Same repaint requirement as the window-switch
+      // success path above: `picked` was already updated by onSelect before
+      // onPick ran, but the trigger/current-row won't reflect it until
+      // update() is called.
       lastPick = t.value;
+      renderPicker();
     }
   }
 
@@ -2427,7 +2454,7 @@ function openBoxDialog(box?: Box) {
       picked = targets.find((t) => t.session === (isEdit ? box!.sessionName : ''))?.value ?? targets[0]?.value ?? '';
     }
     if (!windowPending) lastPick = picked;
-    picker.update({ options: rows, value: picked });
+    renderPicker(rows);
   }
 
   // The new-session row is only in play under Create New Session…; otherwise the
@@ -2496,8 +2523,9 @@ function openBoxDialog(box?: Box) {
           // Re-render with the targets probeAndApply() just fetched live —
           // NOT a fresh applySessions(latestStatus[...]) call, which would
           // recompute from the periodic status cache and could still be
-          // missing the session this instant just created.
-          picker.update({ options: [...targets, customRowTarget()], value: picked });
+          // missing the session this instant just created. renderPicker()'s
+          // default rebuilds rows from that same fresh `targets`.
+          renderPicker();
           syncCustom();
         }
       } catch (e: any) {
@@ -2636,10 +2664,23 @@ function openBoxDialog(box?: Box) {
   // picker.destroy() tears down the document-level click listener the picker
   // registers — otherwise the closure and its detached popup subtree outlive
   // this dialog. onClose fires exactly once on every close path openModal
-  // recognizes: Escape, a genuine backdrop click, the explicit close() below
-  // (Cancel and a successful Save), and closeAllModals() for any modal that
-  // is registered with it.
-  const { close } = openModal({ modal: form, mount: app, onClose: () => picker.destroy() });
+  // recognizes: Escape, a genuine backdrop click, and the explicit close()
+  // below (Cancel and a successful Save).
+  //
+  // This modal is mounted under `mount: app` (not document.body), so — unlike
+  // the body-mounted modals modalRegistry.ts's own comment describes
+  // (Proxmox hub, settings) — it is normally NOT reached by closeAllModals().
+  // But the picker's document click listener is new in this diff, and a
+  // logout/401 expiry re-renders #app out from under an open modal without
+  // ever calling its close(), which would leak that listener plus its
+  // closure over box/api/targets and the detached popup. registerModal is a
+  // plain Set of idempotent closers regardless of mount point, so registering
+  // here costs nothing on the normal close paths and closes this one gap:
+  // teardownWorkspace() calls closeAllModals() before renderLogin() replaces
+  // #app, so this modal's close() — and therefore picker.destroy() — now runs
+  // on that path too.
+  const { close } = openModal({ modal: form, mount: app, onClose: () => { unregister(); picker.destroy(); } });
+  const unregister = registerModal(close);
   fields.host.focus();
   cancel.addEventListener('click', close);
 
