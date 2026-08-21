@@ -74,6 +74,21 @@ test('POST kill with a windowId kills only that window, session-qualified', asyn
   expect(remoteOf('kill-session')).toBeUndefined();
 });
 
+// The route's own gate is `windowId !== undefined && windowId !== null`, so an
+// explicit `null` must take the same session-kill branch as an altogether
+// absent key — not merely the OMITTED-key case the first test above already
+// exercises. This is the exact branch api.ts's own `windowId !== undefined`
+// fix rides on: a client that sends `{ session, windowId: null }` (rather than
+// omitting the key) must still kill the whole session, not 400 or no-op.
+test('POST kill with windowId: null kills the whole session, same as omitting it', async () => {
+  const h = await headers();
+  const res = await app.inject({ method: 'POST', url: killUrl(), headers: h, payload: { session: 'web', windowId: null } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true });
+  expect(remoteOf('kill-session')).toContain("kill-session -t '=web'");
+  expect(remoteOf('kill-window')).toBeUndefined();
+});
+
 test('POST kill requires a session name even when killing a window', async () => {
   const h = await headers();
   // No fallback to a bare-id target: it is ambiguous under grouped sessions,

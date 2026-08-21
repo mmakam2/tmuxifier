@@ -119,6 +119,77 @@ test('one click on × does not kill — arm-then-fire holds', async ({ page }) =
   }
 });
 
+test('a poll landing while a row is armed does not move the arm', async ({ page }) => {
+  await login(page);
+  await page.locator('.box .name', { hasText: 'localhost' }).click();
+  const pane = page.locator('.stage-pane').first();
+  await expect(pane.locator('.xterm-rows')).toContainText(/[#$%>]/, { timeout: 15000 });
+
+  // A throwaway session, so the fixture's shared one survives for later specs
+  // (the suite runs workers: 1 against one tmux session).
+  await pane.click();
+  await page.keyboard.type('tmux new-session -d -s e2earmpoll');
+  await page.keyboard.press('Enter');
+
+  try {
+    const picker = pane.locator('.session-picker');
+    await picker.locator('.session-picker-trigger').click();
+    const row = picker.locator('.session-picker-row', { hasText: 'e2earmpoll' });
+    await expect(row).toHaveCount(1, { timeout: 10000 });
+    const key = await row.getAttribute('data-key');
+
+    // Let the trigger's own freshness window (freshProbe.ts, main.ts's
+    // freshMs: 3000) lapse from the open above BEFORE arming — not after.
+    // Arming starts its OWN 3s clock (ARM_MS), so waiting here first (while
+    // nothing is armed, so there is nothing to expire) means the hover below
+    // lands well inside a freshly-armed row's window instead of racing its
+    // own expiry. Waiting AFTER arming instead would just let the arm time
+    // out on its own before the hover ever fires.
+    await page.waitForTimeout(3600);
+
+    // Arm this row's ×. The spec's own concern is a refresh landing BETWEEN
+    // the arming click and the committing one — sessionPicker.ts holds any
+    // list that arrives while a row is armed (`pendingList`) rather than
+    // rebuilding rows out from under it, the arm-then-fire equivalent of the
+    // stale-index bug that made this codebase address windows by @id instead
+    // of index.
+    const kill = row.locator('.session-picker-kill');
+    await kill.click();
+    await expect(row.locator('.session-picker-kill.armed')).toHaveCount(1);
+
+    // Force a fresh probe underneath the still-open, still-armed popup, well
+    // inside the arm's own 3s window. The wait above guarantees this reach is
+    // outside the trigger's freshness window, so it is a genuinely NEW
+    // request rather than served from cache with no request at all — without
+    // that, the assertions below would pass vacuously regardless of whether
+    // the guard in sessionPicker.ts actually held. This is what "a status
+    // poll lands mid-arm" looks like from the widget's own point of view: any
+    // picker.update() call carrying a fresh list while a row is armed — the
+    // production 30s client poll exercises the identical code path but would
+    // never fire within an e2e test's lifetime.
+    const probed = page.waitForRequest(
+      (r) => /\/api\/boxes\/[^/]+\/probe$/.test(r.url()) && r.method() === 'POST',
+      { timeout: 10000 },
+    );
+    await picker.locator('.session-picker-trigger').hover();
+    await probed;
+
+    // The arm held: still exactly one armed row, and it is the SAME row —
+    // not merely "some row is armed", which a refresh that reordered the
+    // list and migrated the arm onto a different session would still satisfy.
+    await expect(picker.locator('.session-picker-kill.armed')).toHaveCount(1, { timeout: 5000 });
+    await expect(picker.locator(`.session-picker-row[data-key="${key}"] .session-picker-kill`)).toHaveClass(/armed/);
+  } finally {
+    // If any assertion above threw before the arm expired or was dismissed,
+    // e2earmpoll would otherwise survive as a detached session for every
+    // later spec (workers: 1, one shared tmux server). Straight at tmux, not
+    // back through the picker, matching the neighbouring tests' own net.
+    await pane.click().catch(() => {});
+    await page.keyboard.type('tmux kill-session -t e2earmpoll 2>/dev/null').catch(() => {});
+    await page.keyboard.press('Enter').catch(() => {});
+  }
+});
+
 test('killing a window removes it and leaves the session', async ({ page }) => {
   await login(page);
   await page.locator('.box .name', { hasText: 'localhost' }).click();
@@ -134,8 +205,9 @@ test('killing a window removes it and leaves the session', async ({ page }) => {
     await expect(pane.locator('.xterm-rows')).toContainText(/[#$%>]/, { timeout: 15000 });
 
     // ONE open — one fresh probe — for the whole test. freshProbe.ts answers
-    // a second reach within its 2s freshness window from the FIRST probe's
-    // (by then stale) result rather than hitting the network again, so an
+    // a second reach within its 3s freshness window (main.ts's freshMs: 3000)
+    // from the FIRST probe's (by then stale) result rather than hitting the
+    // network again, so an
     // earlier separate open to pre-capture a "before" witness would starve
     // this one of the very refresh the assertions below depend on.
     await picker.locator('.session-picker-trigger').click();
