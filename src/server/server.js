@@ -8,7 +8,7 @@ import websocket from '@fastify/websocket';
 import { verifyPassword, COOKIE_NAME, cookieOptions, sessionValue, sessionValueValid } from './auth.js';
 import { createLoginRateLimiter } from './rateLimit.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
-import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildSelectWindowRemote, resolveTools } from './boxActions.js';
+import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildSelectWindowRemote, buildKillSessionRemote, buildKillWindowRemote, resolveTools } from './boxActions.js';
 import { assertBoxSafe, SESSION_NAME_RE, WINDOW_ID_RE } from './sshCommand.js';
 import { provisionKey, terminalKey, localKey, LOCAL_GROUP } from './sessions.js';
 import { upsertConfigFile } from './configFile.js';
@@ -968,6 +968,47 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     // switch that already succeeded on the box into an error response.
     try { await statusPoller?.probeOne?.(box.id); } catch { /* the next sweep will catch up */ }
     return { ok: true, windowId };
+  });
+  // Kill a tmux SESSION, or one WINDOW inside it, on the box. One route rather
+  // than two so the "always session-qualified" rule lives at a single
+  // chokepoint: `session` is required in both forms, because a window id is
+  // unique per window OBJECT and a grouped session shares those objects, so a
+  // bare '@7' names two windows and tmux resolves whichever it finds first.
+  //
+  // Killing the session the pane is attached to is allowed, deliberately and
+  // under one uniform rule: the PTY drops and the attach path's `new-session -A`
+  // recreates it empty on reconnect — the same observable outcome as the header's
+  // Reconnect cap, which does exactly this to the pane's own session already.
+  app.post('/api/boxes/:id/kill', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'box not found' });
+    // Same gate as /term, the sizing viewer, and the session-create and
+    // window-select routes: a box mid-setup has no environment worth steering,
+    // and killing the session setup's own ensureSession-last phase is about to
+    // create leaves the box in a state nothing recovers.
+    if (setupManager?.currentForBox(box.id)?.status === 'running') {
+      return reply.code(409).send({ error: 'box setup is still running' });
+    }
+    const { session, windowId } = req.body || {};
+    if (typeof session !== 'string' || !SESSION_NAME_RE.test(session)) {
+      return reply.code(400).send({ error: 'session name is required and must be letters, digits, _ or -' });
+    }
+    const killWindow = windowId !== undefined && windowId !== null;
+    if (killWindow && (typeof windowId !== 'string' || !WINDOW_ID_RE.test(windowId))) {
+      return reply.code(400).send({ error: 'window id must look like @7' });
+    }
+    if (!boxActions?.execCommand) return reply.code(503).send({ error: 'kill unavailable' });
+    const remote = killWindow ? buildKillWindowRemote(session, windowId) : buildKillSessionRemote(session);
+    const res = await boxActions.execCommand(box, remote, { timeoutMs: 15000 });
+    // A session or window that vanished between the poll and the click lands
+    // here, as does a session/window pair that does not go together.
+    if (!res || res.code !== 0) {
+      return reply.code(502).send({ error: String(res?.stderr || '').trim() || 'failed to kill' });
+    }
+    // Re-probe so the client's next /api/status no longer lists what was just
+    // killed. Best-effort in both directions — see the window route above.
+    try { await statusPoller?.probeOne?.(box.id); } catch { /* the next sweep will catch up */ }
+    return { ok: true };
   });
   // Re-probe ONE box now and hand back its fresh status entry. GET /api/status
   // serves statusPoller's cached snapshot, which only moves on the poll
