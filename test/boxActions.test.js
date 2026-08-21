@@ -824,3 +824,38 @@ test('execScriptStdin surfaces code/stdout/stderr on non-zero exit and sets ok=f
   expect(res.stdout).toBe('MARKER');
   expect(res.stderr).toBe('boom');
 });
+
+import { buildKillSessionRemote, buildKillWindowRemote } from '../src/server/boxActions.js';
+
+test('kill-session targets the exact session name, never a prefix match', () => {
+  // A bare `-t web` prefix-matches when no exact 'web' exists, so on a box
+  // holding only 'web2' this would kill a stranger's session. Unrecoverable,
+  // unlike the same mistake in has-session.
+  expect(buildKillSessionRemote('web')).toContain("kill-session -t '=web'");
+});
+
+test('kill-window targets a SESSION-QUALIFIED exact window', () => {
+  // A window id is unique per window OBJECT, not per session: a grouped session
+  // (`new-session -t web -s webclone`) shares those objects, so a bare `@7`
+  // names two windows and tmux resolves whichever it finds first.
+  expect(buildKillWindowRemote('web', '@7')).toContain("kill-window -t '=web:@7'");
+});
+
+test('the kill builders reject bad names and ids rather than rewriting them', () => {
+  // buildKillTmuxRemote sanitizes (silently rewrites); these must throw. An
+  // explicit user kill that quietly retargets is worse than one that fails.
+  for (const bad of ['', 'my session', "web'", 'web:1', 'a'.repeat(65), 42, null, undefined]) {
+    expect(() => buildKillSessionRemote(bad)).toThrow();
+    expect(() => buildKillWindowRemote(bad, '@1')).toThrow();
+  }
+  for (const bad of ['', '7', '@1;rm -rf /', "@1'", '@' + '9'.repeat(10), 42, null, undefined]) {
+    expect(() => buildKillWindowRemote('web', bad)).toThrow();
+  }
+});
+
+test('the kill builders do not swallow a failure the way the teardown builder does', () => {
+  // buildKillTmuxRemote ends in `|| true` because box removal must not be
+  // blocked by an unreachable host. These report, so the route can 502.
+  expect(buildKillSessionRemote('web')).not.toContain('|| true');
+  expect(buildKillWindowRemote('web', '@1')).not.toContain('|| true');
+});

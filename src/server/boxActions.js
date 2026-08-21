@@ -473,6 +473,24 @@ export function buildEnsureSessionRemote(session, startupCommand, options = {}) 
   ].join('\n');
 }
 
+// The tmux-resolution preamble every session/window remote opens with. These
+// run under the box's LOGIN shell with whatever PATH it provides, which is not
+// the PATH an interactive shell shows — hence the explicit fallback sweep. The
+// `command -v tmux` probe is guarded by an `if`, not `|| true`, so a plain
+// substring scan of the built remote (see the kill builders' tests below)
+// never trips over a stray `|| true` this preamble doesn't actually need.
+function tmuxBinPreamble() {
+  return [
+    'set -eu',
+    'TMUX_BIN=""',
+    'if command -v tmux >/dev/null 2>&1; then TMUX_BIN="$(command -v tmux)"; fi',
+    'if [ -z "$TMUX_BIN" ]; then',
+    '  for p in /usr/bin/tmux /usr/local/bin/tmux /bin/tmux; do if [ -x "$p" ]; then TMUX_BIN="$p"; break; fi; done',
+    'fi',
+    '[ -n "$TMUX_BIN" ]',
+  ];
+}
+
 // Switch a session's current window. The target is SESSION-QUALIFIED
 // (`-t '=web:@7'`), not the bare window id it used to be, and both halves are
 // validated by the route and again here before quoting.
@@ -493,15 +511,39 @@ export function buildSelectWindowRemote(session, windowId) {
   if (!SESSION_NAME_RE.test(String(session))) throw new Error('invalid session name');
   if (!WINDOW_ID_RE.test(String(windowId))) throw new Error('invalid window id');
   const target = shSingleQuote(`=${session}:${windowId}`);
-  return [
-    'set -eu',
-    'TMUX_BIN="$(command -v tmux || true)"',
-    'if [ -z "$TMUX_BIN" ]; then',
-    '  for p in /usr/bin/tmux /usr/local/bin/tmux /bin/tmux; do if [ -x "$p" ]; then TMUX_BIN="$p"; break; fi; done',
-    'fi',
-    '[ -n "$TMUX_BIN" ]',
-    `"$TMUX_BIN" select-window -t ${target}`,
-  ].join('\n');
+  return [...tmuxBinPreamble(), `"$TMUX_BIN" select-window -t ${target}`].join('\n');
+}
+
+// Kill one tmux session on the box. Deliberately NOT a widening of
+// buildKillTmuxRemote below: that one runs sanitizeSession (silently REWRITES a
+// name rather than rejecting it) and ends in `|| true` (reports success
+// whatever happened). Both are correct for its caller — best-effort teardown
+// when a box is being removed, which must not be blocked by an unreachable host
+// — and both are wrong for an explicit user action whose whole job is to say
+// what it did.
+//
+// The session/windowId checks below test `typeof x === 'string'` before the
+// regex, not `SESSION_NAME_RE.test(String(x))` the way buildSelectWindowRemote
+// does: String(42), String(null), and String(undefined) are 'null', '42',
+// 'undefined' — every one of them a syntactically valid-looking session name —
+// so the coercing form would silently accept a type-confused caller instead of
+// rejecting it.
+export function buildKillSessionRemote(session) {
+  if (typeof session !== 'string' || !SESSION_NAME_RE.test(session)) throw new Error('invalid session name');
+  const target = shSingleQuote(`=${session}`);
+  return [...tmuxBinPreamble(), `"$TMUX_BIN" kill-session -t ${target}`].join('\n');
+}
+
+// Kill ONE window. Session-qualified for the same reason select-window is: a
+// grouped session shares its window objects, so a bare `@7` names two windows
+// at once and tmux picks whichever it resolves first — verified on tmux 3.5a.
+// Killing the last window of a session destroys the session; that is tmux's own
+// rule and is not special-cased here.
+export function buildKillWindowRemote(session, windowId) {
+  if (typeof session !== 'string' || !SESSION_NAME_RE.test(session)) throw new Error('invalid session name');
+  if (typeof windowId !== 'string' || !WINDOW_ID_RE.test(windowId)) throw new Error('invalid window id');
+  const target = shSingleQuote(`=${session}:${windowId}`);
+  return [...tmuxBinPreamble(), `"$TMUX_BIN" kill-window -t ${target}`].join('\n');
 }
 
 export function buildKillTmuxRemote(session) {
