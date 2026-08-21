@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { paneHeaderModel, paneHeaderChip, sessionOptions, isSwitchableSession, SESSION_NAME_RE } from '../src/web/paneHeader.ts';
+import { paneHeaderModel, paneHeaderChip, sessionTargets, sessionTargetList, WINDOW_INDENT, isSwitchableSession, SESSION_NAME_RE } from '../src/web/paneHeader.ts';
 
 const box = (over = {}) => ({
   local: false, label: 'db-primary', user: 'ops', host: '192.168.1.10',
@@ -56,29 +56,84 @@ test('retrying without an attempt count defaults to ×1', () => {
   expect(paneHeaderChip(box({ conn: { kind: 'retrying' } }))?.text).toBe('reconnecting ×1');
 });
 
-// --- sessionOptions: the session dropdown's pure option list ---------------
+// --- sessionTargets: the dropdown's pure, hierarchical option list ----------
 
-test('sessionOptions merges live sessions with the configured one, no duplicate', () => {
-  const status = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1 }, { name: 'proj2', windows: 2 }] };
-  expect(sessionOptions(status, 'web')).toEqual(['web', 'proj2']);
+const win = (id, index, name, active = false) => ({ id, index, name, active });
+
+test('sessionTargets lists the configured session first, its windows indented beneath it', () => {
+  const status = { reachable: true, tmux: true, sessions: [
+    { name: 'proj2', windows: 1, windowList: [win('@5', 1, 'zsh')] },
+    { name: 'web', windows: 2, windowList: [win('@0', 1, 'zsh'), win('@1', 2, 'claude', true)] },
+  ] };
+  expect(sessionTargets(status, 'web').map((t) => [t.kind, t.value, t.label])).toEqual([
+    ['session', 's:web', 'web'],
+    ['window', 'w:@0', `${WINDOW_INDENT}1: zsh`],
+    ['window', 'w:@1', `${WINDOW_INDENT}2: claude`],
+    ['session', 's:proj2', 'proj2'],
+    ['window', 'w:@5', `${WINDOW_INDENT}1: zsh`],
+  ]);
 });
 
-test('sessionOptions keeps the configured session listed even when tmux no longer has it', () => {
+test('sessionTargets keeps the configured session offered when tmux no longer lists it', () => {
   const status = { reachable: true, tmux: true, sessions: [{ name: 'other', windows: 1 }] };
-  expect(sessionOptions(status, 'gone')).toEqual(['gone', 'other']);
+  expect(sessionTargets(status, 'gone').map((t) => t.value)).toEqual(['s:gone', 's:other']);
 });
 
-test('sessionOptions with no snapshot still offers the configured session', () => {
-  expect(sessionOptions(undefined, 'main')).toEqual(['main']);
+test('sessionTargets with no snapshot still offers the configured session, defaulting to web', () => {
+  expect(sessionTargets(undefined, 'main').map((t) => t.value)).toEqual(['s:main']);
+  expect(sessionTargets(undefined, undefined).map((t) => t.value)).toEqual(['s:web']);
 });
 
-test('sessionOptions defaults a missing configured name to web (the store default)', () => {
-  expect(sessionOptions(undefined, undefined)).toEqual(['web']);
-});
-
-test('sessionOptions drops empty names from the live list', () => {
+test('sessionTargets drops empty session names from the live list', () => {
   const status = { reachable: true, tmux: true, sessions: [{ name: '', windows: 1 }, { name: 'a', windows: 1 }] };
-  expect(sessionOptions(status, 'a')).toEqual(['a']);
+  expect(sessionTargets(status, 'a').map((t) => t.value)).toEqual(['s:a']);
+});
+
+test('sessionTargets names an unnamed window rather than rendering a bare index', () => {
+  const status = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, windowList: [win('@0', 3, '')] }] };
+  expect(sessionTargets(status, 'web')[1].label).toBe(`${WINDOW_INDENT}3: window`);
+});
+
+test('sessionTargets disables an unswitchable session AND its windows', () => {
+  // store.js's sanitizeSession would rewrite a PATCHed 'my session' and the
+  // reattach would create a fresh mangled-name session instead of attaching.
+  const status = { reachable: true, tmux: true, sessions: [
+    { name: 'web', windows: 1 },
+    { name: 'my session', windows: 1, windowList: [win('@4', 1, 'vim')] },
+  ] };
+  const t = sessionTargets(status, 'web');
+  expect(t.find((x) => x.value === 's:my session').disabled).toBe(true);
+  expect(t.find((x) => x.value === 'w:@4').disabled).toBe(true);
+});
+
+test('sessionTargets leaves the CURRENT session\'s windows selectable whatever its name', () => {
+  // A window inside the session the box is already attached to needs no PATCH,
+  // so the session-name charset rule does not bind it.
+  const status = { reachable: true, tmux: true, sessions: [
+    { name: 'my session', windows: 1, windowList: [win('@4', 1, 'vim')] },
+  ] };
+  const t = sessionTargets(status, 'my session');
+  expect(t.find((x) => x.value === 'w:@4').disabled).toBeUndefined();
+});
+
+test('sessionTargetList selects the current session\'s active window', () => {
+  const status = { reachable: true, tmux: true, sessions: [
+    { name: 'web', windows: 2, windowList: [win('@0', 1, 'zsh'), win('@1', 2, 'claude', true)] },
+  ] };
+  expect(sessionTargetList(status, 'web').value).toBe('w:@1');
+});
+
+test('sessionTargetList falls back to the session row when no active window is known', () => {
+  const status = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 2 }] };
+  expect(sessionTargetList(status, 'web').value).toBe('s:web');
+  expect(sessionTargetList(undefined, 'web').value).toBe('s:web');
+});
+
+test('paneHeaderModel exposes the target list only for a live terminal pane on a real box', () => {
+  const status = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1 }] };
+  expect(paneHeaderModel(box({ status, sessionName: 'web' })).targets.options.length).toBe(1);
+  expect(paneHeaderModel(box({ status, state: 'stopped' })).targets).toBeNull();
+  expect(paneHeaderModel({ local: true, label: 'Host Shell', state: 'terminal' }).targets).toBeNull();
 });
 
 test('the client session-name rule is locked to the server route\'s rule', async () => {

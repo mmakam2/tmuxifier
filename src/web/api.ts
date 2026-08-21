@@ -29,10 +29,15 @@ export interface BoxMetrics {
 // type disagrees with the stored link, so the probe passes the guest
 // inventory's state through unchanged (see proxmoxInventory.js mergeProxmoxStatus).
 export type ProxmoxBoxState = 'running' | 'stopped' | 'missing' | 'unknown' | 'mismatch';
+// One tmux window, as the status probe reports it (status.js parseTmuxWindows).
+// `id` is tmux's own `@N` — stable across the renumbering `move-window` causes,
+// which `index` is not, so the id is what the UI acts on and the index is only
+// ever displayed.
+export interface TmuxWindow { id: string; index: number; name: string; active: boolean }
 export interface Status {
   reachable: boolean; tmux?: boolean; needsAuth?: boolean; inUse?: boolean; paused?: boolean;
   hostKeyChanged?: boolean;
-  nextProbeAt?: number; sessions?: { name: string; windows: number; attached?: boolean; activity?: number; paneCmd?: string }[];
+  nextProbeAt?: number; sessions?: { name: string; windows: number; attached?: boolean; activity?: number; paneCmd?: string; windowList?: TmuxWindow[] }[];
   metrics?: BoxMetrics; error?: string;
   proxmoxState?: ProxmoxBoxState; proxmoxNode?: string; proxmoxVmid?: number; proxmoxKind?: PveGuestKind;
   proxmoxTemplate?: boolean;

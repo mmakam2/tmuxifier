@@ -3,7 +3,7 @@
 // main.ts; everything arrives via PaneHeaderInput / PaneHeaderActions.
 import { dotClassFor, dotTitleFor } from './statusDot';
 import { buildClawd } from './clawd';
-import type { Status } from './api';
+import type { Status, TmuxWindow } from './api';
 
 export type ConnKind = 'connecting' | 'open' | 'retrying' | 'setup';
 export interface PaneConn { kind: ConnKind; attempt?: number }
@@ -24,8 +24,7 @@ export interface PaneChip { kind: 'state' | 'conn' | 'agent'; text: string; cls:
 export interface PaneHeaderModel {
   title: string; target: string; dotClass: string; dotTitle: string; chip: PaneChip | null;
   // Session dropdown contents: null hides it (local shell, stopped/setup pane).
-  // The configured session is always element 0 — the selected value.
-  sessions: string[] | null;
+  targets: SessionTargetList | null;
 }
 
 // Client mirror of the server's session-name rule (SESSION_NAME_RE in
@@ -70,21 +69,78 @@ export function paneHeaderModel(i: PaneHeaderInput): PaneHeaderModel {
     dotClass,
     dotTitle,
     chip: paneHeaderChip(i),
-    // Only a live terminal pane on a real box offers the session switch: the
-    // local shell's session is config, and a stopped/setting-up pane has no
-    // attach to move.
-    sessions: !i.local && i.state === 'terminal' ? sessionOptions(i.status, i.sessionName) : null,
+    // Only a live terminal pane on a real box offers the switch: the local
+    // shell's session is config, and a stopped/setting-up pane has no attach to
+    // move.
+    targets: !i.local && i.state === 'terminal' ? sessionTargetList(i.status, i.sessionName) : null,
   };
 }
 
-// Option list for the header's session dropdown: the box's configured session
-// first (always present — it's the selected value, and it must stay offered
-// even when tmux no longer lists it), then every live session the cached
-// status snapshot knows. Pure, so the dropdown's contents are unit-testable.
-export function sessionOptions(status: Status | undefined, sessionName: string | undefined): string[] {
+// One row of the session dropdown. A row is either a session or one of its
+// windows; `value` is the <option> value and `session` is the session the row
+// resolves to, so a caller never has to re-derive which session a window is in.
+export interface SessionTarget {
+  kind: 'session' | 'window';
+  value: string;        // 's:<session>' | 'w:<@id>'
+  label: string;
+  session: string;
+  windowId?: string;
+  disabled?: boolean;
+  title?: string;       // why it is disabled
+}
+export interface SessionTargetList { options: SessionTarget[]; value: string }
+
+// <option> cannot be styled, so the hierarchy is text — the same concession the
+// unswitchable-name rule already makes. Non-breaking spaces: a native select
+// collapses ordinary leading whitespace.
+export const WINDOW_INDENT = '  → ';
+
+const UNSWITCHABLE = 'name not switchable from here (allowed: letters, digits, _ -)';
+
+// The dropdown's rows: the box's configured session first (always present — it
+// is the selected value, and it must stay offered even when tmux no longer
+// lists it), its windows indented beneath it, then every other live session
+// followed by its own windows.
+export function sessionTargets(status: Status | undefined, sessionName: string | undefined): SessionTarget[] {
   const current = sessionName || 'web'; // store.js defaults an absent name to 'web'
-  const live = (status?.sessions ?? []).map((s) => s.name).filter(Boolean);
-  return [current, ...live.filter((n) => n !== current)];
+  const live = (status?.sessions ?? []).filter((s) => s.name);
+  const currentLive = live.find((s) => s.name === current);
+  const rows: { name: string; windowList?: TmuxWindow[] }[] = [
+    currentLive ?? { name: current },
+    ...live.filter((s) => s.name !== current),
+  ];
+  const out: SessionTarget[] = [];
+  for (const s of rows) {
+    // Switching to a live session whose name is outside the charset would
+    // silently rename it: store.js's sanitizeSession rewrites the PATCHed name
+    // and the reattach then creates a fresh mangled-name session. Offered but
+    // disabled — the session is real, only unswitchable from here. Windows
+    // inherit that, EXCEPT the current session's, which need no PATCH at all.
+    const locked = s.name !== current && !isSwitchableSession(s.name);
+    const lock = locked ? { disabled: true, title: UNSWITCHABLE } : {};
+    out.push({ kind: 'session', value: `s:${s.name}`, label: s.name, session: s.name, ...lock });
+    for (const w of s.windowList ?? []) {
+      out.push({
+        kind: 'window',
+        value: `w:${w.id}`,
+        label: `${WINDOW_INDENT}${w.index}: ${w.name || 'window'}`,
+        session: s.name,
+        windowId: w.id,
+        ...lock,
+      });
+    }
+  }
+  return out;
+}
+
+// The rows plus the one that is selected: the current session's ACTIVE window
+// when the snapshot knows it, else the session row. This is what makes the
+// header answer "which window am I looking at" rather than only naming the
+// session the pane belongs to.
+export function sessionTargetList(status: Status | undefined, sessionName: string | undefined): SessionTargetList {
+  const current = sessionName || 'web';
+  const active = (status?.sessions ?? []).find((s) => s.name === current)?.windowList?.find((w) => w.active);
+  return { options: sessionTargets(status, sessionName), value: active ? `w:${active.id}` : `s:${current}` };
 }
 
 export interface PaneHeaderActions {
