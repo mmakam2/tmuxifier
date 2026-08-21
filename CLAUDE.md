@@ -209,14 +209,23 @@ pattern for new modules.
   Switching the active session needs no route of its own: the
   existing `PATCH /api/boxes/:id` already closes the box's terminal PTY group when `sessionName`
   changes, so every viewer reconnects attached to the new session. `POST /api/boxes/:id/window`
-  switches the box's **active window inside its current session** — `tmux select-window` by
-  `#{window_id}` (re-validated server-side against `WINDOW_ID_RE`, the same chokepoint discipline
-  as every other allowlisted id in this file) — and, unlike a session switch, needs no reattach at
-  all: the current window is *session* state in tmux, so every client already attached to that
-  session follows the moment `select-window` returns. Nothing is persisted — `boxes.json` still
-  stores only the session name — because a stored window would fight `prefix-n` on the box's next
-  reconnect. Gated 409 like `/term` and the session-create route while the box's setup job is
-  `running`.
+  switches a tmux session's **active window** on the box — `tmux select-window` against a
+  SESSION-QUALIFIED exact target, `-t '=<session>:@<id>'` — and, unlike a session switch, needs no
+  reattach at all: the current window is *session* state in tmux, so every client already attached
+  to that session follows the moment `select-window` returns. The body is `{ session, windowId }`
+  and **both** are re-validated server-side (`SESSION_NAME_RE`, `WINDOW_ID_RE`) before either
+  reaches the shell, the same chokepoint discipline as every other allowlisted id in this file.
+  The session is REQUIRED, with no fallback to a bare `-t '@7'`: a window id is unique per window
+  *object*, not per session, and a grouped session (`new-session -t web -s webclone`) shares those
+  objects — verified on tmux 3.5a, where a bare id moved the CLONE and exited 0 while the intended
+  session never budged. The `=` is the same exact-match rule `buildEnsureSessionRemote` and
+  `buildKillTmuxRemote` use (a bare `alpha:@5` prefix-matches `alpha2`). Nothing is persisted —
+  `boxes.json` still stores only the session name — because a stored window would fight `prefix-n`
+  on the box's next reconnect. On success the route awaits a best-effort
+  `statusPoller.probeOne(box.id)`, so the client's next `/api/status` is authoritative rather than
+  a cache up to `statusPollMs` stale (without it the header's select visibly snapped back to the
+  previous window); a throwing probe, or a deployment with no poller wired, still returns 200.
+  Gated 409 like `/term` and the session-create route while the box's setup job is `running`.
   `requireAuth` is async and accepts either the signed session cookie or an `Authorization: Bearer
   <device token>` header verified via `deviceStore.verify` (`req.deviceId` set on that branch) —
   cookie first, since that keeps the common browser request synchronous, then the device-token
@@ -420,7 +429,16 @@ pattern for new modules.
   colon while a session name may not — the same reason `STATUS_FMT` orders its own fields.
   Windows are addressed by `#{window_id}` (`@7`) rather than index: indexes renumber under
   `move-window`, so an index captured by the poll that built a dropdown could name a different
-  window by the time a click uses it.
+  window by the time a click uses it — but an id names a window OBJECT, and a grouped session
+  shares those, which is why the select route pairs it with a session name. The row count is
+  capped at 200 on the box (`| head -n 200`, the whole pipeline brace-wrapped and
+  stderr-silenced) for the same reason `AGENT_PROBE` caps each marker at 200 bytes: it is
+  box-controlled, and every row ships to every open tab on every poll. `cleanWindowName` strips
+  the bidi controls (U+202A-202E, U+2066-2069) alongside C0/C1 — they are not control characters
+  but they reorder rendered text, so a name could rearrange its own dropdown row. The probe's
+  `__NO_TMUX__` sentinel is matched as a whole LINE, not a substring: window names are freely set
+  (tmux's `automatic-rename` copies a process name), so a window called `__NO_TMUX__` used to
+  make a healthy box report `tmux: false, sessions: []`.
 - `statusPoller.js` — single server-side poll loop: probes every box on an interval
   (`statusPollMs`) and caches the snapshot `/api/status` serves, so status SSH volume is
   independent of how many dashboard tabs are open. An optional `localAgent` sampler
@@ -848,7 +866,12 @@ kill, since every client attached to that session follows the `select-window` on
 row naming a different session runs `switchSession` (PATCHing `sessionName`, which drops the
 box's terminal PTYs so every viewer reopens attached to the new session) — window-first when
 both are needed, so the forced reattach lands already on the chosen window. Either path is a
-plain callback rather than arm-then-fire: nothing here is destructive the way Reconnect is),
+plain callback rather than arm-then-fire: nothing here is destructive the way Reconnect is. A
+window row's `value` is `w:<session>:<@id>` rather than `w:<@id>`, because a grouped session
+shares its window objects and two rows carrying one `<option>` value would resolve a click to
+the wrong session — which, if the box's own session were the second of them, would fire a
+`switchSession` PATCH nobody asked for; the option-rebuild cache key carries `session` for the
+same reason),
 `paneLifecycle.ts` (the Proxmox lifecycle keys in that slot: `lifecycleKeysFor`
 derives which keys a pane's state allows, the caps are **words** (`START`/`SHUTDOWN`/`REBOOT`/
 `STOP`) precisely because the old `↺` reboot glyph was indistinguishable from the Reconnect

@@ -18,15 +18,19 @@ created outside Tmuxifier — including from the command line — show up withou
 Picking a window row there acts immediately: it's a live tmux window-select on the box, not
 form state, so it doesn't wait on Save — the session half is still written on Save like any
 other field, and a failed live switch snaps the dropdown back rather than saving a change
-that never happened. The Edit dialog can also **create** a session on the box right away
-(detached, without switching to it): type a name below the dropdown and hit Create. It
-appears in the dropdown and in the [pane header's](terminal.md), ready to be switched to.
-Switching the active session — by saving the dialog with a different pick, or from the pane
-header's dropdown — reconnects every open terminal for that box to the new session; the old
-session keeps running on the box. Add mode has no box yet to run a live window-select
-against, so once you ⟳ a host's sessions their windows appear in the dropdown for
-orientation but disabled — `web (default)` and `Custom name…` are the only rows you can
-actually pick until the box exists.
+that never happened. Picking a window that belongs to a *different* session moves that
+session's window on the box straight away too, but the pane won't show it until Save
+switches the box over, which is what the hint under the dropdown says. Add mode has no box
+yet to run a live window-select against, so once you ⟳ a host's sessions their windows
+appear in the dropdown for orientation but disabled — `web (default)` and `Custom name…`
+are the only rows you can actually pick until the box exists.
+
+The Edit dialog can also **create** a session on the box right away (detached, without
+switching to it): type a name below the dropdown and hit Create. It appears in the dropdown
+and in the [pane header's](terminal.md), ready to be switched to. Switching the active
+session — by saving the dialog with a different pick, or from the pane header's dropdown —
+reconnects every open terminal for that box to the new session; the old session keeps
+running on the box.
 
 ## The setup job
 

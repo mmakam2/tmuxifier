@@ -202,3 +202,38 @@ route-level.
 `docs/terminal.md` (header dropdown) and `docs/boxes-and-setup.md` (Edit modal) both describe
 the session picker and need the window behaviour added, including the "other attached clients
 follow" note.
+
+## Correction, 2026-08-21, found in final review
+
+`#{window_id}` is unique per **window object**, not per session, and the two are not the same
+thing. A grouped/linked session (`tmux new-session -t web -s webclone`) SHARES its window
+objects, so one id legitimately belongs to several sessions at once. Verified on tmux 3.5a:
+
+```
+$ tmux list-windows -a -F '#{session_name}:#{window_id}:active=#{window_active}'
+web:@0:active=0
+web:@2:active=1
+webclone:@0:active=0
+webclone:@2:active=1
+$ tmux select-window -t '@0'   # exit 0
+web:@2:active=1                # web did not move
+webclone:@0:active=1           # the CLONE did
+```
+
+So `select-window -t '@1'` does not, as stated above, change "that window's own session" —
+under a grouped session there is no such single session, and tmux picks one and exits 0
+either way. Everything else in this section holds, including the session-state semantics that
+shape the design.
+
+Two consequences, both implemented:
+
+- The remote is session-qualified: `select-window -t '=<session>:@<id>'`, and
+  `POST /api/boxes/:id/window` takes `{ session, windowId }` with **both** validated
+  server-side (`SESSION_NAME_RE`, `WINDOW_ID_RE`). An absent session is a 400, not a fallback
+  to the ambiguous bare-id target. The `=` prefix is the repo's existing exact-match rule:
+  with only `alpha2` present, `select-window -t 'alpha:@5'` prefix-matches and moves alpha2
+  (exit 0), while `-t '=alpha:@5'` fails with `can't find session: alpha`.
+- `SessionTarget.value` for a window row is `w:<session>:<@id>`, not `w:<@id>`. Two rows
+  sharing an `<option>` value made the second unreachable: resolving a pick by value returned
+  the first row, acting on the wrong session — and if the box's own session was the second,
+  `selectTarget` then fired a full `switchSession` PATCH (a PTY drop) nobody asked for.
