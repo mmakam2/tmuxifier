@@ -600,6 +600,11 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .modal .field input::placeholder { color: var(--dim); }
 .modal .field input:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 45%, transparent); box-shadow: var(--recess), 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent); }
 .modal .session-row { display: flex; gap: 6px; align-items: stretch; }
+/* Load-bearing: an author `display: flex` outranks the UA stylesheet's
+   `[hidden] { display: none }` regardless of specificity, so the custom-name
+   row would stay visible with the attribute set. Every hideable .session-row
+   needs this. */
+.modal .session-row[hidden] { display: none; }
 .modal .session-row input { flex: 1; min-width: 0; }
 .modal .session-refresh { flex: 0 0 auto; padding: 0 11px; border-radius: 6px; border: 1px solid var(--key-border); border-bottom-color: var(--bg); background: var(--key-face); box-shadow: var(--key-edge); color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; }
 .modal .session-refresh:hover { color: var(--text); }

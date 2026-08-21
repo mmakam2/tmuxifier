@@ -2283,11 +2283,14 @@ function openBoxDialog(box?: Box) {
     syncCustom();
   }
 
-  // The free-text input is only in play under Custom name…; otherwise the
+  // The custom-name row is only in play under Custom name…; otherwise the
   // selected row IS the value, so leaving the input visible would present two
-  // fields that disagree.
+  // fields that disagree. `hidden` needs the [hidden] rule in style.css to
+  // land: this row carries .session-row, whose `display: flex` outranks the UA
+  // stylesheet's `[hidden] { display: none }` (author beats user-agent), so
+  // without that rule the attribute is set and nothing happens.
   function syncCustom() {
-    sessionInput.hidden = sessionSelect.value !== CUSTOM;
+    customRow.hidden = sessionSelect.value !== CUSTOM;
   }
 
   // What Save writes. One reader for both submit branches so add and edit
@@ -2341,29 +2344,33 @@ function openBoxDialog(box?: Box) {
       lastPick = sessionSelect.value;
     }
   });
-  // Create a session on the box right now (detached, via the same ensure-session
-  // remote an attach uses) — so it shows up in this dropdown and in the pane
-  // header's session dropdown without switching the box to it. Edit mode only — an
-  // unsaved box has no ControlMaster to run over — and the whole apparatus
-  // (elements, listeners, closure) is built under that guard, so `box.id`
-  // inside it is provably defined rather than assertion-guarded from afar.
-  let createRow: HTMLElement | null = null;
+  // One text input for the whole idea of "a session that isn't in the list":
+  // the field is the NAME (what Save writes, created lazily by the attach
+  // path's `new-session -A`), and the Create key beside it is the optional
+  // verb — make it exist on the box right now, detached, without switching to
+  // it. These were two stacked text inputs until they were merged: naming a
+  // session and creating one produce the same box state in the common case, so
+  // the pair read as duplicates of each other.
+  //
+  // The key is edit mode only — an unsaved box has no ControlMaster to run
+  // over — and its whole apparatus (element, listener, closure) is built under
+  // that guard, so `box.id` inside it is provably defined rather than
+  // assertion-guarded from afar. In add mode the row is the bare input, which
+  // is exactly what that mode needs.
+  const customRow = document.createElement('div');
+  customRow.className = 'session-row session-create';
+  customRow.hidden = true;
+  customRow.append(sessionInput);
   if (isEdit) {
-    createRow = document.createElement('div');
-    createRow.className = 'session-row session-create';
-    const createInput = document.createElement('input');
-    createInput.type = 'text';
-    createInput.placeholder = 'new session name';
-    createInput.setAttribute('aria-label', 'New tmux session name');
     const createBtn = document.createElement('button');
     createBtn.type = 'button';
     createBtn.className = 'session-refresh';
     createBtn.textContent = 'Create';
-    createBtn.title = 'Create this tmux session on the box now';
-    createRow.append(createInput, createBtn);
+    createBtn.title = 'Create this tmux session on the box now, without switching to it';
+    customRow.append(createBtn);
     const boxId = box!.id;
     async function createSessionNow() {
-      const name = createInput.value.trim();
+      const name = sessionInput.value.trim();
       if (!SESSION_NAME_RE.test(name)) {
         sessionHint.textContent = 'session names: 1-64 letters, digits, _ or -';
         sessionHint.className = 'session-hint err';
@@ -2374,8 +2381,11 @@ function openBoxDialog(box?: Box) {
       sessionHint.textContent = `creating ${name}…`;
       try {
         await api.createSession(boxId, name);
-        createInput.value = '';
-        // Re-probe so the new session lands in the dropdown (and the count updates).
+        // Re-probe so the new session lands in the dropdown (and the count
+        // updates), then select it — having to hunt for the session you just
+        // created would be a step for nothing. Selecting it also hides this row
+        // via syncCustom(), which is the cue that the name is now a real
+        // session rather than a string waiting to be saved.
         await probeAndApply();
         if (targets.some((t) => t.value === `s:${name}`)) { sessionSelect.value = `s:${name}`; lastPick = sessionSelect.value; syncCustom(); }
       } catch (e: any) {
@@ -2386,16 +2396,14 @@ function openBoxDialog(box?: Box) {
       }
     }
     createBtn.addEventListener('click', () => void createSessionNow());
-    // Enter in the name field creates the session; without this it would submit
-    // the surrounding Edit Box form instead.
-    createInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); void createSessionNow(); }
-    });
+    // Deliberately no Enter handler on the field. It is the session-name field
+    // now, so Enter submits the modal like every other field in this form;
+    // creating a session ON THE BOX is an explicit click, never a keystroke
+    // that happens to land here.
   }
 
   sessionRow.append(sessionSelect, sessionRefresh);
-  sessionInput.hidden = true;
-  sessionWrap.append(sessionSpan, sessionRow, sessionInput, ...(createRow ? [createRow] : []), sessionHint);
+  sessionWrap.append(sessionSpan, sessionRow, customRow, sessionHint);
   // Pre-fill from cached status (edit mode only — an unsaved box has no snapshot).
   applySessions(isEdit ? latestStatus[box!.id] : undefined);
 
