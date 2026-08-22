@@ -108,6 +108,10 @@ fun SessionSheet(
             if (result != null && seq > appliedSeq) {
                 status = result
                 appliedSeq = seq
+                // A successful probe retires whatever the last failure said:
+                // otherwise an offline message sits under a freshly-populated
+                // list until the next action happens to clear it.
+                error = null
             }
         } catch (e: ApiException) {
             when {
@@ -246,6 +250,10 @@ fun SessionSheet(
                     OutlinedTextField(
                         value = newName,
                         onValueChange = { newName = it },
+                        // Gated like the Create button beside it: the success
+                        // path clears newName, so text typed while a create is
+                        // in flight would be wiped without ever being sent.
+                        enabled = !busy,
                         singleLine = true,
                         label = { Text("session name") },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
@@ -267,7 +275,11 @@ fun SessionSheet(
                     ) { Text("Create") }
                 }
             } else {
-                TextButton(onClick = { creating = true }, modifier = Modifier.padding(horizontal = 8.dp)) {
+                TextButton(
+                    onClick = { creating = true },
+                    enabled = !busy,
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                ) {
                     Text("+ New session…")
                 }
             }
