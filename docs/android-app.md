@@ -30,7 +30,10 @@ Sign out only forgets the token locally.
 
 - **Fleet** — box cards (status dot, distro + cores, RAM + disk, agent chip with "waiting 4m"
   durations), waiting agents sorted to the top. Polls every 10 s while open; never in the
-  background. Tap a card to open its session.
+  background. Tap a card to open its session. **Long-press** a card for its session sheet: every tmux session on the box with its windows
+  beneath it, a ✓ on the one you're looking at. Tap a row to switch the box to that session or
+  window, `×` to kill it (two taps — the first arms and says what it will take, including when a
+  window is the session's last), or **+ New session…** to create one without switching to it.
 - **Session** — the pane snapshot at 1 s cadence: full terminal colors, cursor marker,
   stick-to-bottom with a "▼ latest" jump chip. While you're viewing, the server keeps an
   **invisible tmux client** attached at your phone's geometry, so tmux reflows the session to
@@ -48,7 +51,10 @@ Sign out only forgets the token locally.
   scrollback — so for those panes the snapshot stops at the top of the screen (no more sliding
   up into stale shell output), and "▲ older" / "▼ newer" chips on the right edge scroll the
   app's own transcript instead, by sending it the same wheel events a desktop scroll would.
-  Plain shell panes keep their ordinary scrollback.
+  Plain shell panes keep their ordinary scrollback. The header's `web ▾` chip opens the same session sheet, so you can retarget without leaving
+  the pane. Switching the **session** repoints the box everywhere — open browsers reconnect to
+  it; switching a **window** needs no reconnect at all. Killing the session the app is showing
+  is allowed: the pane goes dark and the row it leaves behind recreates it in one tap.
 - **Settings** — server/device identity, per-kind notification toggles, font size, sign out.
 
 ## Push notifications
