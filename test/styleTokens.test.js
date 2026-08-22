@@ -39,3 +39,39 @@ test('theme files: every rule is [data-theme]-scoped, no at-rules', () => {
     }
   }
 });
+
+// A CSS `filter` paints the element's WHOLE box — its border and box-shadow
+// included, not just the raster inside it. The Original theme used one to
+// rotate the mark's baked-in amber to cyan, and it rotated the token-colored
+// `border: 1px solid var(--border)` right along with it: #202938 navy landed
+// on #352524, a warm reddish rim around a cool logo. Themes recolor the mark
+// by swapping the asset (theme.ts), never by filtering it.
+test('theme files: the logo mark is swapped, never filtered', () => {
+  const dir = path.join(WEB, 'themes');
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.css')) : [];
+  for (const f of files) {
+    const text = fs.readFileSync(path.join(dir, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const chunk of text.split('}')) {
+      const [sel, body = ''] = chunk.split('{');
+      if (!/\.login-logo|\.brand-home\s+img|\.brand\s+img/.test(sel)) continue;
+      expect(/(^|[\s;])filter\s*:/.test(body), `${f}: filter on the logo mark ("${sel.trim()}")`).toBe(false);
+    }
+  }
+});
+
+// theme.ts owns which raster a theme wears, so it must be the only door to the
+// asset: a module importing the logo directly would render the default mark
+// under every theme and silently reintroduce the need for a CSS filter.
+test('the logo raster is imported only by theme.ts', () => {
+  const offenders = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { if (e.name !== 'assets') walk(p); continue; }
+      if (!/\.tsx?$/.test(e.name) || e.name === 'theme.ts') continue;
+      if (/from\s+'[^']*tmuxifier-logo[^']*'/.test(fs.readFileSync(p, 'utf8'))) offenders.push(path.relative(WEB, p));
+    }
+  };
+  walk(WEB);
+  expect(offenders, `import the logo through theme.ts instead: ${offenders.join(', ')}`).toEqual([]);
+});

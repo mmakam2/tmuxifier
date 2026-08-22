@@ -3,7 +3,7 @@ import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUpload
 import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, blocksTerminal } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor, agentBadgeFor } from './statusDot';
 import { buildClawd, setClawdVariant, hasStoredClawdPref, loadClawdVariant, clawdMigrationPatch } from './clawd';
-import { applyTheme, currentTheme } from './theme';
+import { applyTheme, currentTheme, themedLogo } from './theme';
 import { sparkline } from './sparkline';
 import { formatEvent, relTime, unseenCountFiltered, notificationsToFire } from './healthEvents';
 import { loadNotifyPrefs, enabledKinds } from './notifyPrefs';
@@ -21,7 +21,6 @@ import { closeAllModals, registerModal } from './modalRegistry';
 import { openModal, makeRadio } from './dom';
 import { armReduce, ARM_MS, IDLE as ARM_IDLE, type ArmState } from './arming';
 import { createSetupJobPoller } from './setupPoller';
-import logoUrl from './assets/tmuxifier-logo.png';
 import { openProxmoxHub } from './proxmoxUi';
 import { pve } from './proxmox';
 import { kindLabel } from './proxmoxGuests';
@@ -450,7 +449,7 @@ async function renderLogin() {
   });
   const canPasskey = passkey.enrolled > 0 && verdict.ok;
   const brand = `<div class="login-brand">
-        <img class="login-logo" src="${logoUrl}" alt="" />
+        <img class="login-logo" src="${themedLogo()}" alt="" />
         <h1>tmuxifier</h1>
         <p>persistent remote terminals for your boxes</p>
       </div>`;
@@ -1162,7 +1161,7 @@ async function renderDashboard() {
       <aside class="sidebar">
         <h1 class="sr-only">tmuxifier</h1>
         <div class="brand">
-          <button id="home" class="brand-home" type="button" title="Standby dashboard" aria-label="Standby dashboard"><img src="${logoUrl}" alt="" /><span class="brand-name">tmuxifier</span></button>
+          <button id="home" class="brand-home" type="button" title="Standby dashboard" aria-label="Standby dashboard"><img src="${themedLogo()}" alt="" /><span class="brand-name">tmuxifier</span></button>
           <div class="brand-actions">
             <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-label="${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}" aria-expanded="${sidebarCollapsed ? 'false' : 'true'}">${sidebarCollapsed ? '›' : '‹'}</button>
             <button id="settings" type="button" title="Settings" aria-label="Settings">⚙</button>

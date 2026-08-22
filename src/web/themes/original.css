@@ -98,17 +98,13 @@
 }
 
 /* The logo mark is a raster (amber prompt glyphs on a charcoal keypad) that
-   tokens cannot reach. hue-rotate's filter matrix lands the amber #ffb000 on
-   #2dd7ea — a hair off this theme's --accent, imperceptible at logo size —
-   while the near-neutral chassis drifts by ~1 RGB point (angle fitted against
-   the spec's hueRotate matrix, not eyeballed). The favicon follows too, but
-   as a real asset swapped by theme.ts (applyFavicon) — a <link> icon cannot
-   be CSS-filtered; its PNG was rendered through this exact filter so the two
-   cannot disagree. */
-:root[data-theme='original'] .login-logo,
-:root[data-theme='original'] .brand-home img {
-  filter: hue-rotate(134deg) saturate(0.75);
-}
+   tokens cannot reach, and this theme's cyan variant is a real ASSET, swapped
+   by theme.ts, rather than the scoped hue-rotate that used to live here. A
+   filter paints the element's whole box: it rotated the mark's amber to cyan
+   and the `border: 1px solid var(--border)` around it from navy #202938 to
+   #352524 in the same pass, ringing a cool logo in warm red. The replacement
+   PNG is the default mark run through that same matrix once, so nothing about
+   the mark changed — only the chrome, which now stays on its tokens. */
 
 /* The Instrument engraves its bezel legends wide (10px / 700 / 0.12em) because
    the mono face is narrow; the sans chrome face is already wide per glyph, so

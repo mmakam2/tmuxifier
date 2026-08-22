@@ -9,25 +9,35 @@
 // import the manifest, and they must never pull CSS through vitest.
 import './themes/original.css';
 import { DEFAULT_THEME_ID, normalizeThemeId } from './themes';
-import faviconDefault from './assets/tmuxifier-logo.png';
-import faviconOriginal from './assets/tmuxifier-logo-original.png';
+import logoDefault from './assets/tmuxifier-logo.png';
+import logoOriginal from './assets/tmuxifier-logo-original.png';
 
 const KEY = 'tmuxifier.theme';
 const listeners = new Set<() => void>();
 
-// The favicon is a raster the CSS logo filter cannot reach, so each themed
-// variant is a real asset — tmuxifier-logo-original.png is the default mark
-// rendered through the SAME filter original.css applies to the on-screen
-// logos (hue-rotate(134deg) saturate(0.75), via Chromium canvas), so the tab
-// icon and the login/sidebar marks cannot disagree. A theme that wants its
-// own favicon drops the asset beside the default and registers it here — in
-// theme.ts, not themes.ts, because node tests import the manifest and must
-// never pull binary assets through vitest.
-const FAVICONS: Record<string, string> = { original: faviconOriginal };
+// The mark is a raster no token can reach, so each theme's variant is a real
+// asset — NOT a CSS filter. A filter paints the element's whole box, so the
+// hue-rotate that recolored Original's mark rotated the token-colored
+// `border: 1px solid var(--border)` with it: navy #202938 came out #352524, a
+// warm rim around a cool logo. tmuxifier-logo-original.png is the default mark
+// put through that exact matrix once (hue-rotate(134deg) saturate(0.75), via
+// Chromium canvas), so the swap is pixel-equivalent to the filter it replaces
+// while the chrome around it stays on its tokens. One asset covers the
+// on-screen marks and the <link rel=icon> favicon — which a filter could never
+// have reached at all — so the tab icon and the login/sidebar marks cannot
+// disagree. A theme that wants its own mark drops the asset beside the default
+// and registers it here, in theme.ts and not themes.ts, because node tests
+// import the manifest and must never pull binary assets through vitest.
+const LOGOS: Record<string, string> = { original: logoOriginal };
 
-function applyFavicon(id: string): void {
+// Re-points every mark already in the DOM. Render sites that build their own
+// <img> read themedLogo() instead, so a live theme switch and a later render
+// agree without either half owning the rule.
+function applyLogo(id: string): void {
+  const href = LOGOS[id] ?? logoDefault;
   const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
-  if (link) link.href = FAVICONS[id] ?? faviconDefault;
+  if (link) link.href = href;
+  for (const img of document.querySelectorAll<HTMLImageElement>('.login-logo, .brand-home img')) img.src = href;
 }
 
 function readMirror(): string {
@@ -38,6 +48,9 @@ let current = normalizeThemeId(readMirror());
 
 export function currentTheme(): string { return current; }
 
+// The mark for the theme in force, for render sites building <img> markup.
+export function themedLogo(): string { return LOGOS[current] ?? logoDefault; }
+
 export function applyTheme(raw: unknown): void {
   const id = normalizeThemeId(raw);
   // The default carries no attribute: :root tokens ARE the Instrument theme,
@@ -47,7 +60,7 @@ export function applyTheme(raw: unknown): void {
   // Before the same-id early return, not after: the first applyTheme of a boot
   // is usually a no-op *change* (theme-boot.js already stamped the attribute)
   // but the favicon still starts on the static index.html default.
-  applyFavicon(id);
+  applyLogo(id);
   try { localStorage.setItem(KEY, id); } catch { /* private mode: login flash only */ }
   if (id === current) return;
   current = id;
