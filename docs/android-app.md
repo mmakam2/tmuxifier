@@ -11,11 +11,22 @@ desktop's tmux window.
 
 ## Getting the app
 
-Once a signed APK has been published on the server, **Settings → Devices** in the web dashboard
-shows a **Download the Android app** link. Open the dashboard in the phone's browser (signed
-in — the same session cookie authenticates the download), download, and install. Play Protect
-challenges sideloaded apps once: "More details → Install anyway" (or briefly toggle Play
-Protect scanning off and back on). There is no Play Store listing, deliberately.
+**From Play (simplest).** The app lives permanently on an **[internal testing
+track](https://play.google.com/apps/internaltest/4701129402312577506)** — no public listing, no
+production review. Opt in with that link, install from Play, and it auto-updates. Nothing about
+the build is instance-specific: it fetches your Firebase client config and your server URL after
+pairing, so one published build serves every operator.
+
+**From your own server.** Once a signed APK has been published there, **Settings → Devices** in
+the web dashboard shows a **Download the Android app** link. Open the dashboard in the phone's
+browser (signed in — the same session cookie authenticates the download), download, and install.
+Play Protect challenges sideloaded apps once: "More details → Install anyway" (or briefly toggle
+Play Protect scanning off and back on). A fresh deployment has no APK yet (`data/` is gitignored,
+so none ships with a clone): publish one with **Settings → Devices → Build app**, which runs
+Gradle on the host and needs the Android SDK there.
+
+The two are signed by different keys unless your server build uses the same keystore, so moving
+between them means uninstalling first — pick one per phone.
 
 ## Pairing
 

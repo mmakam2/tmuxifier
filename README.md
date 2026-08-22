@@ -210,8 +210,14 @@ sessions from a phone**: fleet glance with waiting-first sorting, a read-only pa
 rendered as native text (tmux stays the terminal emulator — phone viewing can never resize
 your desktop windows), a semantic action row, a local-until-send composer, and FCM push when
 an agent needs you. Devices enroll with a single-use **pairing code** minted in Settings →
-Devices, where the signed APK is also downloadable. Details in
-[the Android app guide](docs/android-app.md).
+Devices, where the signed APK is also downloadable once one has been published on your server.
+
+Two ways to get the app. Join the **[internal testing
+track](https://play.google.com/apps/internaltest/4701129402312577506)** for a Play-signed build
+that auto-updates — it carries nothing project-specific, so it works against *your* server once
+you pair it. Or build one on the server (Settings → Devices → **Build app**, which needs the
+Android SDK on the host) and install it from that download link. Either way the app talks only
+to the Tmuxifier you pair it with. Details in [the Android app guide](docs/android-app.md).
 
 ## Status, health & Fleet Command
 A single server-side loop probes every box over a shared SSH ControlMaster with adaptive
