@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -79,11 +81,27 @@ fun SessionSheet(
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState()
 
+    // Every refresh() call is its own independently-launched coroutine (the
+    // open-path probe keeps running past its own wait cap, and an action's
+    // post-action probe can be launched while it is still in flight), so two
+    // responses can land out of order. A monotonic generation — issued at the
+    // START of refresh(), compared before the result is applied — keeps a
+    // late, stale response from clobbering a fresher one. All of these run on
+    // the composable's own (main) dispatcher, so plain Int state is enough:
+    // no two refresh() calls execute concurrently between suspension points.
+    var probeSeq by remember(boxId) { mutableStateOf(0) }
+    var appliedSeq by remember(boxId) { mutableStateOf(0) }
+
     // quiet: an open-path probe that fails while we already have rows is a
     // slightly-stale list, not something to shout about. After an action it is.
     suspend fun refresh(quiet: Boolean) {
+        val seq = ++probeSeq
         try {
-            client.probe(boxId)[boxId]?.let { status = it }
+            val result = client.probe(boxId)[boxId]
+            if (result != null && seq > appliedSeq) {
+                status = result
+                appliedSeq = seq
+            }
         } catch (e: ApiException) {
             when {
                 e.status == 401 -> onUnauthorized()
@@ -133,7 +151,7 @@ fun SessionSheet(
     val list = sessionTargetList(status, sessionName)
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        Column(Modifier.fillMaxWidth().padding(bottom = 28.dp)) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 28.dp)) {
             Row(
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
