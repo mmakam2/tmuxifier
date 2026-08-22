@@ -70,6 +70,7 @@ npm test             # typecheck + vitest run (unit + integration)
 npm run test:e2e     # playwright (spins up an isolated sshd-backed box; see test/helpers/localBox.js)
 npm run setup-voice  # headless equivalent of Settings -> Voice: builds whisper.cpp + downloads a pinned model into vendor/, records the choice in data/voice.json
 npm run fetch-icons  # downloads the pinned service-logo catalog into vendor/icons/ (one-time; the running server never contacts the CDN)
+npm run fetch-apk    # downloads the published Android APK into data/app/ against a pinned digest (no Android toolchain needed; the alternative is Settings -> Devices -> Build app)
 ```
 
 ## Configuration model

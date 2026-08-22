@@ -202,13 +202,37 @@ the local box; lifecycle and provision jobs are recorded in the hub's **Activity
 `data/proxmox-lifecycle-jobs.json`. The token, any SSH management keys, and the optional root password
 are encrypted at rest in `data/proxmox.json` and never sent to the browser.
 
-## Building the Android app (optional)
+## Publishing the Android app (optional)
 
 The Android companion app (see [the Android app guide](android-app.md)) is distributed by your
 own instance: **Settings → Devices** shows a download link as soon as a file exists at
-`data/app/tmuxifier-console.apk`. The public repo ships no prebuilt binary, so building it is
-part of deploying — a one-time toolchain install plus one Gradle run. Any Linux box with
-~5 GB free disk and ~3 GB RAM works; the Tmuxifier host itself is fine.
+`data/app/tmuxifier-console.apk`. `data/` is gitignored, so a fresh clone has none and that link
+is absent until you put one there. Three ways, cheapest first.
+
+**Fetch the published build** — one command, no toolchain:
+
+```bash
+npm run fetch-apk
+```
+
+It downloads the APK attached to the matching GitHub release into `data/app/`, verifying a
+digest pinned in `scripts/fetch-apk.mjs` before the file is moved into place (the same
+streamed, temp-then-rename path the whisper model uses). The link appears immediately — no
+restart, since the route reads the file per request.
+
+**Or install from Play** — the app is on a permanent [internal testing
+track](https://play.google.com/apps/internaltest/4701129402312577506) and auto-updates there.
+Nothing in the build is instance-specific, so it reaches whichever server you pair it with; you
+do not need a published APK on your own host at all if this is how your phones get it.
+
+**Or build it yourself** — the option that trusts no binary, and the one to use if you have
+modified the app. Either press **Settings → Devices → Build app** (it runs Gradle on this host
+with the toolchain below) or run the steps by hand. A one-time toolchain install plus one Gradle
+run; any Linux box with ~5 GB free disk and ~3 GB RAM works, the Tmuxifier host itself is fine.
+
+A build without `android/keystore.properties` is **debug-signed**, and Android refuses to update
+across a change of signing key — a phone holding the Play build must uninstall before taking a
+locally-built one, and vice versa. Pick one source per phone.
 
 ```bash
 # One-time toolchain (JDK 17 + Android SDK + Gradle; a few GB of downloads)

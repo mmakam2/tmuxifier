@@ -17,13 +17,16 @@ production review. Opt in with that link, install from Play, and it auto-updates
 the build is instance-specific: it fetches your Firebase client config and your server URL after
 pairing, so one published build serves every operator.
 
-**From your own server.** Once a signed APK has been published there, **Settings → Devices** in
-the web dashboard shows a **Download the Android app** link. Open the dashboard in the phone's
-browser (signed in — the same session cookie authenticates the download), download, and install.
-Play Protect challenges sideloaded apps once: "More details → Install anyway" (or briefly toggle
-Play Protect scanning off and back on). A fresh deployment has no APK yet (`data/` is gitignored,
-so none ships with a clone): publish one with **Settings → Devices → Build app**, which runs
-Gradle on the host and needs the Android SDK there.
+**From your own server.** Once an APK has been published there, **Settings → Devices** in the web
+dashboard shows a **Download the Android app** link. Open the dashboard in the phone's browser
+(signed in — the same session cookie authenticates the download), download, and install. Play
+Protect challenges sideloaded apps once: "More details → Install anyway" (or briefly toggle Play
+Protect scanning off and back on).
+
+A fresh deployment has no APK yet — `data/` is gitignored, so none ships with a clone. Get one
+with `npm run fetch-apk`, which downloads the published build into `data/app/` against a pinned
+digest and needs no toolchain, or build your own with **Settings → Devices → Build app** (Gradle
+on the host, Android SDK required — see [docs/DEPLOY.md](DEPLOY.md)).
 
 The two are signed by different keys unless your server build uses the same keystore, so moving
 between them means uninstalling first — pick one per phone.

@@ -19,7 +19,8 @@
     "set-password": "node scripts/hash-password.js",
     "gen-secret": "node scripts/gen-secret.js",
     "setup-voice": "node scripts/setup-voice.mjs",
-    "fetch-icons": "node scripts/fetch-icons.mjs"
+    "fetch-icons": "node scripts/fetch-icons.mjs",
+    "fetch-apk": "node scripts/fetch-apk.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
