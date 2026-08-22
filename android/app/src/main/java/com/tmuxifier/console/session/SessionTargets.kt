@@ -130,3 +130,24 @@ fun killLegend(t: SessionTarget, sole: Boolean): String = when {
     sole -> "kill ${t.label}? last window — the session goes too"
     else -> "kill ${t.label}?"
 }
+
+/**
+ * Just the consequence half of [killLegend] — what the operator did not already
+ * know from reading the row — or null when the row name says it all.
+ *
+ * The full sentence is 57 characters at its longest, and rendering it inside the
+ * row's button wrapped to three lines and grew the row by ~300px: the armed
+ * control then sat well below where the × had been, which is a misfire hazard on
+ * a touch screen, not just an ugly one. So the sheet shows this clause on the
+ * row's own secondary line (beside "not running — tap to recreate", which lives
+ * there already) and keeps the button compact. [killLegend] stays the full
+ * sentence and becomes the button's accessibility description, so a screen
+ * reader still hears the whole warning in one utterance.
+ */
+fun killConsequence(t: SessionTarget, sole: Boolean): String? = when {
+    t.kind == TargetKind.SESSION && t.current -> "the app is showing this session"
+    t.kind == TargetKind.SESSION -> null
+    sole && t.current -> "last window — the app's session goes too"
+    sole -> "last window — the session goes too"
+    else -> null
+}

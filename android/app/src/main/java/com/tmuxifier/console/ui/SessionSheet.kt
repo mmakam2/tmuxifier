@@ -31,6 +31,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -46,6 +48,7 @@ import com.tmuxifier.console.session.SessionTarget
 import com.tmuxifier.console.session.TargetKind
 import com.tmuxifier.console.session.canKill
 import com.tmuxifier.console.session.isSoleWindow
+import com.tmuxifier.console.session.killConsequence
 import com.tmuxifier.console.session.killLegend
 import com.tmuxifier.console.session.rowAction
 import com.tmuxifier.console.session.rowKey
@@ -334,21 +337,40 @@ private fun TargetRow(
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (dim) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
             )
+            // While armed, the pending consequence outranks both — it is the
+            // only one of the three that is about to destroy something, and it
+            // lasts three seconds.
+            val consequence = if (armed) killConsequence(t, sole) else null
             val note = when {
+                consequence != null -> consequence
                 t.reason != null -> t.reason
                 action == RowAction.RECREATE -> "not running — tap to recreate"
                 else -> null
             }
             note?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (consequence != null) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         if (canKill(t)) {
-            TextButton(enabled = enabled, onClick = onKill) {
+            // The button stays compact in both states so the tap target does not
+            // move between the arming tap and the firing one; the warning itself
+            // rides the row's note line above. Sighted users read the clause
+            // there, screen readers get the whole sentence from here.
+            val legend = killLegend(t, sole)
+            TextButton(
+                enabled = enabled,
+                onClick = onKill,
+                modifier = Modifier.semantics { contentDescription = legend },
+            ) {
                 Text(
-                    if (armed) killLegend(t, sole) else "×",
+                    if (armed) "kill?" else "×",
                     color = MaterialTheme.colorScheme.error,
-                    style = if (armed) MaterialTheme.typography.bodySmall else MaterialTheme.typography.titleMedium,
+                    style = if (armed) MaterialTheme.typography.labelLarge else MaterialTheme.typography.titleMedium,
                 )
             }
         }

@@ -9,6 +9,7 @@ import com.tmuxifier.console.api.TmuxWindow
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private fun win(id: String, index: Int, name: String, active: Boolean = false) =
@@ -99,6 +100,61 @@ class SessionTargetsTest {
         assertEquals("kill session other?", legends[1])
         assertEquals("kill 1: claude?", legends[2])
         assertTrue(legends[3].contains("last window"))
+    }
+
+    @Test fun killConsequenceCarriesOnlyWhatTheRowDoesNotAlreadySay() {
+        // The sheet renders this on the row's own note line while armed, so it
+        // must NOT repeat the row's name — and must be null wherever the name
+        // plus a "kill?" button already tells the whole story, or every armed
+        // row would grow a redundant second line.
+        val t = sessionTargets(
+            status(
+                TmuxSession(name = "web", windowList = listOf(win("@0", 0, "zsh"), win("@1", 1, "claude"))),
+                TmuxSession(name = "other", windowList = listOf(win("@9", 0, "zsh"))),
+            ),
+            "web",
+        )
+        val currentSession = t.first { it.value == "s:web" }
+        val otherSession = t.first { it.value == "s:other" }
+        val plainWindow = t.first { it.value == "w:web:@1" }
+        val soleOther = t.first { it.value == "w:other:@9" }
+
+        assertEquals("the app is showing this session", killConsequence(currentSession, false))
+        // The two nulls are the point of the split: without them this would just
+        // be killLegend with the name lopped off.
+        assertNull(killConsequence(otherSession, false))
+        assertNull(killConsequence(plainWindow, isSoleWindow(t, plainWindow)))
+        assertEquals("last window — the session goes too", killConsequence(soleOther, isSoleWindow(t, soleOther)))
+    }
+
+    @Test fun killConsequenceDistinguishesTheCurrentSessionsSoleWindow() {
+        // Falsifying half of the row above: a sole window in the session the app
+        // is SHOWING costs more than one in any other session, and the clause
+        // says so. Same fixture shape, different session name.
+        val t = sessionTargets(status(TmuxSession(name = "web", windowList = listOf(win("@0", 0, "zsh")))), "web")
+        val soleCurrent = t.first { it.kind == TargetKind.WINDOW }
+        assertTrue(soleCurrent.current)
+        assertEquals("last window — the app's session goes too", killConsequence(soleCurrent, isSoleWindow(t, soleCurrent)))
+    }
+
+    @Test fun everyConsequenceIsAStrictSuffixOfItsLegend() {
+        // The two functions must not drift into telling different stories: the
+        // note line and the screen reader's sentence describe one act.
+        val t = sessionTargets(
+            status(
+                TmuxSession(name = "web", windowList = listOf(win("@0", 0, "zsh"))),
+                TmuxSession(name = "other", windowList = listOf(win("@9", 0, "zsh"), win("@8", 1, "top"))),
+            ),
+            "web",
+        )
+        for (target in t) {
+            val sole = isSoleWindow(t, target)
+            val consequence = killConsequence(target, sole) ?: continue
+            assertTrue(
+                killLegend(target, sole).endsWith(consequence),
+                "legend '${killLegend(target, sole)}' should end with consequence '$consequence'",
+            )
+        }
     }
 
     @Test fun unaddressableNamesOfferNoAction() {
