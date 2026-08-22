@@ -72,6 +72,13 @@ fun SessionSheet(
 ) {
     val client = state.client() ?: return
     var status by remember(boxId) { mutableStateOf(initialStatus) }
+    // The sheet owns its idea of which session the box is pointed at. The
+    // param is the caller's snapshot — up to a Fleet poll (10s) old, and after
+    // a switch made from HERE it is simply wrong until that poll lands. Both
+    // the ✓ and killLegend key on it, so a stale value moves the tick nowhere
+    // after a successful switch and makes the arm legend state the wrong blast
+    // radius ("the app is showing this session" on the session it no longer is).
+    var currentSession by remember(boxId) { mutableStateOf(sessionName) }
     var refreshing by remember(boxId) { mutableStateOf(false) }
     var busy by remember(boxId) { mutableStateOf(false) }
     var error by remember(boxId) { mutableStateOf<String?>(null) }
@@ -111,6 +118,14 @@ fun SessionSheet(
         }
     }
 
+    // Repoint the box, and adopt the name the server hands back — that BoxInfo
+    // is what setSession returns and is fresher than anything the caller holds,
+    // so the sheet's ✓ and legends are correct before the next poll lands.
+    suspend fun switchTo(name: String) {
+        val info = client.setSession(boxId, name)
+        currentSession = info.sessionName.ifEmpty { name }
+    }
+
     fun act(block: suspend () -> Unit) {
         scope.launch {
             busy = true
@@ -138,8 +153,30 @@ fun SessionSheet(
     LaunchedEffect(boxId) {
         refreshing = true
         scope.launch { refresh(quiet = true) }
+        // Handed no name at all (the Session screen before its first snapshot,
+        // or after /pane went 502 on a dead session): ask the server what the
+        // box is configured for, alongside the probe. Without this the model
+        // would default to 'web' — store.js's own default, but not necessarily
+        // THIS box's session — and offer to recreate a session it never had.
+        // Best-effort: a failure leaves the sheet working on that default.
+        if (sessionName.isEmpty()) {
+            scope.launch {
+                val name = try {
+                    client.boxes().firstOrNull { it.id == boxId }?.sessionName.orEmpty()
+                } catch (_: ApiException) {
+                    ""
+                }
+                if (name.isNotEmpty() && currentSession.isEmpty()) currentSession = name
+            }
+        }
         delay(OPEN_REFRESH_WAIT_MS)
         refreshing = false
+    }
+    // A changed param is fresh server truth from the caller's own poll, so it
+    // wins over what the sheet remembers. Empty is not truth — it is the
+    // caller having nothing yet — and never clobbers a resolved name.
+    LaunchedEffect(sessionName) {
+        if (sessionName.isNotEmpty()) currentSession = sessionName
     }
     LaunchedEffect(arm) {
         if (arm.armed != null) {
@@ -148,7 +185,7 @@ fun SessionSheet(
         }
     }
 
-    val list = sessionTargetList(status, sessionName)
+    val list = sessionTargetList(status, currentSession)
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 28.dp)) {
@@ -169,11 +206,25 @@ fun SessionSheet(
                     onTap = {
                         arm = ArmState()
                         when (rowAction(t)) {
+                            // A window of the CURRENT session is the cheap case:
+                            // select-window alone, no PATCH and no reattach —
+                            // the current window is session state in tmux, so
+                            // every attached client follows on its own. A window
+                            // of ANOTHER session needs both, window first: the
+                            // PATCH is what actually repoints the box (without
+                            // it the tap changes a session nobody is looking at
+                            // and nothing visible moves), and doing the window
+                            // first means the reattach it forces lands already
+                            // on the chosen window. Both in ONE act {} so a
+                            // failure surfaces once and the probe still runs.
                             RowAction.SWITCH ->
                                 if (t.kind == TargetKind.WINDOW) {
-                                    act { client.selectWindow(boxId, t.session, t.windowId!!) }
+                                    act {
+                                        client.selectWindow(boxId, t.session, t.windowId!!)
+                                        if (!t.current) switchTo(t.session)
+                                    }
                                 } else {
-                                    act { client.setSession(boxId, t.session) }
+                                    act { switchTo(t.session) }
                                 }
                             RowAction.RECREATE -> act { client.createSession(boxId, t.session) }
                             RowAction.SELECTED, RowAction.NONE -> Unit

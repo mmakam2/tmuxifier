@@ -163,6 +163,31 @@ class SessionTargetsTest {
         assertEquals("s:web", sessionTargetList(null, "web").value)
     }
 
+    @Test fun aWindowRowKnowsWhetherItsSessionIsTheConfiguredOne() {
+        // `current` is the flag the sheet branches on for a window tap: a window
+        // of the configured session needs select-window alone, one of ANOTHER
+        // session needs the PATCH too or the tap changes a session nobody is
+        // looking at. So both halves are pinned here, and the configured
+        // session's ACTIVE window is the one used — a model that answered
+        // SELECTED for it (it IS the ✓ row) would silently make that tap a
+        // no-op, and every other fixture in this file builds inactive windows.
+        val snapshot = status(
+            TmuxSession(name = "web", windowList = listOf(win("@0", 0, "zsh"), win("@3", 1, "claude", active = true))),
+            TmuxSession(name = "alpha", windowList = listOf(win("@5", 2, "claude"))),
+        )
+        val t = sessionTargets(snapshot, "web")
+        val activeOfCurrent = t.first { it.value == "w:web:@3" }
+        val foreign = t.first { it.value == "w:alpha:@5" }
+        assertTrue(activeOfCurrent.current)
+        assertFalse(foreign.current)
+        // Both are still a SWITCH: what differs is only the price of the switch.
+        assertEquals(RowAction.SWITCH, rowAction(activeOfCurrent))
+        assertEquals(RowAction.SWITCH, rowAction(foreign))
+        // ...and the active window is the selected row, so the two facts above
+        // are about the row the ✓ actually sits on.
+        assertEquals("w:web:@3", sessionTargetList(snapshot, "web").value)
+    }
+
     @Test fun otherSessionsFollowTheConfiguredOneWithTheirOwnWindows() {
         val t = sessionTargets(
             status(

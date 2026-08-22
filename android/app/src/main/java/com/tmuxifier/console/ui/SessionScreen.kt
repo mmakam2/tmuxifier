@@ -65,6 +65,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -118,6 +119,12 @@ fun SessionScreen(
     // by each poll, which the server turns into the invisible sizing client.
     val paneGeom = remember { mutableStateOf<PaneGeometry?>(null) }
     var sheetOpen by remember(boxId) { mutableStateOf(false) }
+    // The last session name a snapshot carried. The chip is drawn off this,
+    // not off `snap`: killing the session the app is showing — or arriving on
+    // a box whose session is already gone (a notification, a return trip) —
+    // makes /pane answer 502, leaves `snap` null, and would take the chip away
+    // at exactly the moment its recreate row is the thing wanted.
+    var lastSession by remember(boxId) { mutableStateOf("") }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
@@ -133,6 +140,7 @@ fun SessionScreen(
                     // a scrolled-back reader stays put.
                     val stick = !listState.canScrollForward
                     snap = s
+                    s.sessionName?.takeIf { it.isNotEmpty() }?.let { lastSession = it }
                     lines = parseSgr(s.content)
                     reconnecting = false
                     if (stick && lines.isNotEmpty()) {
@@ -154,9 +162,22 @@ fun SessionScreen(
             Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(boxLabel, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            snap?.sessionName?.takeIf { it.isNotEmpty() }?.let { name ->
-                TextButton(onClick = { sheetOpen = true }) { Text("$name ▾") }
+            Text(
+                boxLabel,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            // Always offered, named when we know the name: with nothing known
+            // yet the sheet resolves the box's configured session itself rather
+            // than guessing (the model would default to 'web').
+            TextButton(onClick = { sheetOpen = true }) {
+                Text(
+                    if (lastSession.isEmpty()) "session ▾" else "$lastSession ▾",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             snap?.agent?.let { agent ->
                 val fg = if (agent == "waiting") Color(0xFFFFB300) else Color(0xFF4CAF50)
@@ -371,7 +392,7 @@ fun SessionScreen(
                 state = state,
                 boxId = boxId,
                 boxLabel = boxLabel,
-                sessionName = snap?.sessionName.orEmpty(),
+                sessionName = lastSession,
                 // This screen polls /pane, never /api/status, so it has no
                 // cached sessions: the sheet opens on the configured-session
                 // row alone and fills in from its own probe.

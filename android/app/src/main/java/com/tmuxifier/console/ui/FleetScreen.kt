@@ -72,7 +72,11 @@ fun FleetScreen(
     val client = state.client() ?: return
     var cards by remember { mutableStateOf<List<BoxCard>>(emptyList()) }
     var statuses by remember { mutableStateOf<Map<String, BoxStatus>>(emptyMap()) }
-    var sheetFor by remember { mutableStateOf<BoxCard?>(null) }
+    // The box id, not the card: the 10s poll rebuilds `cards`, and a sheet
+    // handed the snapshot it opened with would keep naming the session the box
+    // pointed at then — including right after a switch made from the sheet
+    // itself. Re-derived below on every composition instead.
+    var sheetForId by remember { mutableStateOf<String?>(null) }
     var loaded by remember { mutableStateOf(false) }
     var offline by remember { mutableStateOf(false) }
 
@@ -146,20 +150,22 @@ fun FleetScreen(
                 BoxCardRow(
                     card,
                     onClick = { onOpen(Screen.Session(card.id, card.label)) },
-                    onLongClick = { sheetFor = card },
+                    onLongClick = { sheetForId = card.id },
                 )
             }
         }
-        sheetFor?.let { card ->
-            SessionSheet(
-                state = state,
-                boxId = card.id,
-                boxLabel = card.label,
-                sessionName = card.sessionName,
-                initialStatus = statuses[card.id],
-                onDismiss = { sheetFor = null },
-                onUnauthorized = onUnauthorized,
-            )
+        sheetForId?.let { id ->
+            cards.firstOrNull { it.id == id }?.let { card ->
+                SessionSheet(
+                    state = state,
+                    boxId = card.id,
+                    boxLabel = card.label,
+                    sessionName = card.sessionName,
+                    initialStatus = statuses[card.id],
+                    onDismiss = { sheetForId = null },
+                    onUnauthorized = onUnauthorized,
+                )
+            }
         }
     }
 }
