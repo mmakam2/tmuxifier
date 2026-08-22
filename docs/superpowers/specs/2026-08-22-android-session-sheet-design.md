@@ -151,8 +151,16 @@ Two additions the web's model does not carry:
 | Configured session, not live | **Recreate** → `POST /sessions { name }` | absent (`canKill` false) |
 | Other live session, switchable name | `PATCH { sessionName }` | armed kill |
 | Any session with an unaddressable name, and its windows | disabled + reason | absent |
-| Window (indented under its session) | `POST /window { session, windowId }` | armed kill, sole-window legend |
+| Window of the CURRENT session (indented) | `POST /window { session, windowId }` — no reattach | armed kill, sole-window legend |
+| Window of ANOTHER session | `POST /window`, then `PATCH { sessionName }` — window first | armed kill, sole-window legend |
 | `+ New session…` | expands a name field + Create | absent |
+
+A window of another session needs BOTH calls. `POST /window` alone changes that session's active
+window on the box and nothing else: the box still points elsewhere, so the pane keeps rendering
+the old session, the ✓ never moves, and the re-probe repaints an identical list — a silent no-op.
+Window FIRST, because the `PATCH` drops every viewer's PTY: selecting the window beforehand means
+the forced reattach lands already on the chosen window. This is exactly what the web's
+`selectTarget` does (`src/web/main.ts`), and the app inherits the rule rather than re-deriving it.
 
 The ✓ follows `sessionTargetList`: the current session's **active window** when the snapshot
 knows one, else the session row — so the sheet answers "which window am I looking at", not only
@@ -226,7 +234,7 @@ message inline at its foot, not as a toast, so it survives the recomposition an 
 |---|---|---|
 | 401 | device revoked | `onUnauthorized()` — the existing path to Settings |
 | 404 | box removed since the list was drawn | close the sheet, message on the screen beneath |
-| 409 | box setup is still running | keep the sheet, show the server's message; every steering route is gated this way, `probe` is not |
+| 409 | box setup is still running | keep the sheet, show the server's message. `/sessions`, `/window` and `/kill` are gated this way (as is `/term`); `PATCH /api/boxes/:id` and `probe` are NOT (`src/server/server.js`), so a session switch still succeeds on a box mid-setup |
 | 400 | name/id outside the charset — should be unreachable | show the message; it means the model let through a row it should not have |
 | 502 | the target vanished between poll and tap, or the box is unreachable | show the message, **keep the row**; the list is a report of what is on the box, not a wish |
 | 0 | transport | "offline — retry", the app's existing wording |
@@ -281,8 +289,9 @@ device validation for UI.
 7. Kill a sole window: the legend says the session goes too, and it does.
 8. Kill the configured session: the pane's error appears, the row survives as not-live, Recreate
    brings it back, and the pane recovers with no browser involved.
-9. A box mid-setup: the sheet opens (probe is un-gated) and every action reports the 409 rather
-   than failing silently.
+9. A box mid-setup: the sheet opens (probe is un-gated); the window, kill and create actions
+   report the 409 rather than failing silently, while a session switch succeeds — `PATCH
+   /api/boxes/:id` is not setup-gated, so that is the correct result, not a failure.
 10. Aeroplane mode: opening the sheet still shows the configured-session row and an offline
     message, not a spinner that never resolves.
 

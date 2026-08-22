@@ -1190,7 +1190,9 @@ never emulates a terminal. `pane/Sgr.kt` parses `capture-pane -e` SGR into spans
 `ui/SessionScreen.kt` renders them as native text (the pane is structurally inert to touch —
 no handler in it reaches the pty); `keys/` holds the pure action-row/composer logic
 (`armReduce` mirrors web `arming.ts`, `sendTextOf` mirrors `sanitizeSendText` — digits/y/n are
-`{text}` sends, never key names); `api/` is the OkHttp client + Keystore-backed token store.
+`{text}` sends, never key names); `session/` holds the pure session/window row model behind the
+long-press sheet (row ordering, addressability, what a tap does, the kill legend), JVM-tested
+like `keys/`; `api/` is the OkHttp client + Keystore-backed token store.
 Build with Gradle (`android/README.md`: toolchain, ~3 GB-RAM memory caps, signing, the
 **keystore backup obligation**), completely separate from `npm test` — pure logic gets JVM
 unit tests, Compose UI is validated **on the real device only**. Firebase is a RUNTIME
