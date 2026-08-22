@@ -1,4 +1,8 @@
+# Both forms: the trailing-slash pattern matches a directory only, and the
+# worktree workflow in CLAUDE.md invites a `node_modules` SYMLINK beside it,
+# which slipped into a commit once.
 node_modules/
+node_modules
 dist/
 data/
 output/
