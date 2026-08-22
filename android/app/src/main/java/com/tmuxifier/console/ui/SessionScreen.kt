@@ -167,12 +167,29 @@ fun SessionScreen(
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
+                // 2:1 against the chip below. Compose splits the row by the
+                // declared ratio and does NOT hand back what a fill = false
+                // child leaves unused, so an even split would cap the label at
+                // half the row even when the chip renders "web ▾" — ellipsis
+                // beside visible empty space. Two thirds keeps the common case
+                // roomy while still leaving a long session name a third to
+                // ellipsize within.
+                modifier = Modifier.weight(2f),
             )
             // Always offered, named when we know the name: with nothing known
             // yet the sheet resolves the box's configured session itself rather
             // than guessing (the model would default to 'web').
-            TextButton(onClick = { sheetOpen = true }) {
+            //
+            // weight(fill = false) is load-bearing, not tidying: a session name
+            // may be 64 characters, and an unweighted button sizes to its
+            // content and evicts its siblings — verified on a phone, where a
+            // 43-char name pushed BOTH the box label and the browser button off
+            // the row. Weighted, it yields space instead of taking it, and the
+            // Text's ellipsis then has somewhere to happen.
+            TextButton(
+                onClick = { sheetOpen = true },
+                modifier = Modifier.weight(1f, fill = false),
+            ) {
                 Text(
                     if (lastSession.isEmpty()) "session ▾" else "$lastSession ▾",
                     maxLines = 1,
