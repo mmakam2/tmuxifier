@@ -56,6 +56,51 @@ test('deprovision is never offered', () => {
   expect(everyKey.some((k) => k.action === 'deprovision')).toBe(false);
 });
 
+// Every key carries two faces: the word it draws when the header has room, and
+// the glyph it collapses to when it does not (style.css swaps them on a
+// container query — the DOM always holds both, so no JS reads a width).
+const ALL_KEYS = ['terminal', 'stopped'].flatMap((pane) =>
+  ['running', 'stopped'].flatMap((pve) => lifecycleKeysFor(pane, pve)));
+
+test('every key carries both a word face and a single-glyph icon', () => {
+  expect(ALL_KEYS.length).toBeGreaterThan(0);
+  for (const k of ALL_KEYS) {
+    expect(k.face, k.action).toMatch(/^[A-Z]+$/);
+    expect([...k.icon], `${k.action} icon is one glyph`).toHaveLength(1);
+  }
+});
+
+// The collapsed marks must all come from ONE icon family, because style.css
+// sizes them with a single rule and no per-glyph correction. The Nerd Font
+// Private Use Area is where that family lives (the bundled Meslo faces' Font
+// Awesome set); a mark from outside it would be a Unicode glyph drawn by an
+// unrelated hand, which is what made the first two attempts at this need four
+// hand-tuned font-sizes that still did not match.
+test('every collapsed mark comes from the Nerd Font PUA', () => {
+  for (const k of ALL_KEYS) {
+    const cp = k.icon.codePointAt(0);
+    expect(cp, `${k.action} (U+${cp.toString(16).toUpperCase()})`).toBeGreaterThanOrEqual(0xe000);
+    expect(cp, `${k.action} (U+${cp.toString(16).toUpperCase()})`).toBeLessThanOrEqual(0xf8ff);
+  }
+});
+
+test('the stop key is nf-fa-stop', () => {
+  expect(keyFor('terminal', 'running', 'stop').icon).toBe('\uf04d');
+});
+
+test('no two keys collapse to the same glyph', () => {
+  const icons = ALL_KEYS.map((k) => k.icon);
+  expect(new Set(icons).size).toBe(new Set(ALL_KEYS.map((k) => k.action)).size);
+});
+
+// The Reconnect cap (main.ts) draws U+21BB idle and U+26A0 armed in this same
+// header. The reboot key is its mirror U+21BA by deliberate choice — the two
+// are told apart by separation, tooltip, and the armed form expanding back to
+// a word — but a key that drew Reconnect's OWN glyph would be indefensible.
+test('no lifecycle glyph is one of the Reconnect cap\'s own faces', () => {
+  for (const k of ALL_KEYS) expect(['\u21bb', '\u26a0']).not.toContain(k.icon);
+});
+
 test('start fires on the first click and never arms', () => {
   const start = keyFor('stopped', 'stopped', 'start');
   expect(start.armLegend).toBeNull();

@@ -259,12 +259,20 @@ lit standby lamp beside it.
 - **Readout** (400, 11px, tabular-nums): meta figures, timestamps, event times.
 - **Glyph** (14–16px): icon keys (✎ ↻ ✕ ⚷, closes); geometry, not copy.
   The size is the *drawn* mark, not the font-size. Unicode geometry ink varies
-  wildly at one font-size (the power mark ⏻ inks 0.96em, the reboot arrow ↺ only
-  0.50em), so a key whose glyph is drawn small carries a compensating font-size
-  outside this step (e.g. `.pane-life-reboot` at 21px) to land on the same drawn
-  height. Those keys must be fixed-size boxes, so the compensation moves the
-  glyph and never the layout. Pick glyphs the bundled face actually has — a
-  missing one falls through to a system face and lands at the wrong size.
+  wildly at one font-size (the power mark ⏻ inks 0.97em, the reboot arrow ↺ only
+  0.54em), so a lone Unicode mark carries a compensating font-size outside this
+  step to land on the same drawn height, in a fixed-size box so the compensation
+  moves the mark and never the layout.
+  **Prefer a set to a lone mark.** Where several marks sit in one row, take them
+  from a single Nerd Font icon family rather than from Unicode: the family's
+  designer has already balanced a solid square against a hairline ring, so one
+  font-size serves the row and nothing drifts when the face changes. Matching
+  ink *height* is not the same as matching perceived *weight*, which is why the
+  pane's lifecycle keys hand-tuned four sizes twice and looked wrong both times
+  before moving to the bundled Font Awesome set (`.pane-life-icon`).
+  Pick marks the bundled face actually has — a missing one falls through to a
+  system face and lands at the wrong size — and pin that face literally for PUA
+  codepoints (`.box-meta .nf`), since a theme's chrome face may not carry them.
 
 ## Layout
 

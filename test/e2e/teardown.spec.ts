@@ -122,62 +122,99 @@ test('an expired session detected by a settings tab tears the workspace down', a
 // v1.23.0 replaced the lifecycle glyphs with words (START/SHUTDOWN/REBOOT/STOP)
 // because the reboot arrow was indistinguishable from Reconnect's. The open risk
 // was width: four panes means quarter-width headers already carrying dot, label,
-// host and a state chip.
+// host and a state chip. The cap now carries BOTH faces and CSS chooses, so this
+// walks all three rungs of the ladder rather than the two it used to.
 //
 // The e2e fixture has no Proxmox host, so no pane renders lifecycle keys — the
-// caps are injected with the real markup and classes. That is deliberate: the
-// question is whether the CSS fits three words in that space, not whether the
-// data plumbing works (which paneLifecycle's own tests cover).
-test('lifecycle word caps never overlap: full size when they fit, hidden when they do not', async ({ page }) => {
+// caps are injected with the real markup and classes, which since the two-face
+// change means the real CHILD SPANS too: injecting bare text would leave the
+// collapse rules matching nothing and quietly assert about markup the app does
+// not ship. That is deliberate: the question is whether the CSS holds at each
+// width, not whether the data plumbing works (paneLifecycle's own tests cover
+// that, including which mark each action carries).
+test('lifecycle caps walk the ladder: words, then marks, then gone — never squeezed', async ({ page }) => {
   await login(page);
   await page.locator('.box .name', { hasText: 'localhost' }).click();
   await expect(page.locator('.stage-pane')).toHaveCount(1);
 
-  // The fixture has no Proxmox host, so no pane renders lifecycle keys on its own.
-  // The caps are injected with the real markup and classes: the question is whether
-  // the CSS holds, which paneLifecycle's unit tests cannot answer.
   const measure = () => page.evaluate(() => {
-    const KEYS = [['shutdown', 'SHUTDOWN'], ['reboot', 'REBOOT'], ['stop', 'STOP']];
+    // Mirrors paint() in paneLifecycle.ts: a word span and a mark span, both
+    // always present, with style.css deciding which is shown.
+    const KEYS = [['shutdown', 'SHUTDOWN', '\uf011'], ['reboot', 'REBOOT', '\uf021'], ['stop', 'STOP', '\uf04d']];
     document.querySelectorAll('.pane-header').forEach((header) => {
       const slot = header.querySelector('.pane-lifecycle-slot');
       if (!slot || slot.childElementCount) return;
-      for (const [action, word] of KEYS) {
+      for (const [action, word, mark] of KEYS) {
         const b = document.createElement('button');
         b.type = 'button';
         b.className = `pane-life pane-life-${action}${action === 'stop' ? ' danger' : ''}`;
-        b.textContent = word;
+        const w = document.createElement('span');
+        w.className = 'pane-life-word';
+        w.textContent = word;
+        const i = document.createElement('span');
+        i.className = 'pane-life-icon';
+        i.textContent = mark;
+        b.append(w, i);
         slot.appendChild(b);
       }
     });
+    const shown = (e: Element | null) => !!e && getComputedStyle(e).display !== 'none';
     return [...document.querySelectorAll('.pane-header')].map((header) => {
       const el = header as HTMLElement;
       const id = header.querySelector('.pane-header-id') as HTMLElement;
       const slot = header.querySelector('.pane-lifecycle-slot') as HTMLElement | null;
       const caps = [...header.querySelectorAll('.pane-life')] as HTMLElement[];
+      const picker = header.querySelector('.session-picker') as HTMLElement | null;
       return {
         header: Math.round(el.clientWidth),
         idOverflow: id.scrollWidth - id.clientWidth,
         capsShown: !!slot && getComputedStyle(slot).display !== 'none',
-        // A cap squeezed under its own text is the overlap bug: scrollWidth
-        // exceeds clientWidth while the text spills instead of clipping.
+        wordsShown: caps.filter((c) => shown(c.querySelector('.pane-life-word'))).length,
+        marksShown: caps.filter((c) => shown(c.querySelector('.pane-life-icon'))).length,
+        capWidths: caps.map((c) => Math.round(c.getBoundingClientRect().width)),
+        pickerWidth: picker ? Math.round(picker.getBoundingClientRect().width) : null,
+        // A cap squeezed under its own content is the overlap bug: scrollWidth
+        // exceeds clientWidth while the content spills instead of clipping.
         squeezed: caps.filter((c) => c.scrollWidth - c.clientWidth > 1).length,
       };
     });
   });
 
-  // Wide: the caps show, at full size, with nothing overflowing.
+  // Rung 0 — a full-stage header: three words, at full size, nothing overflowing.
+  await page.setViewportSize({ width: 1920, height: 900 });
   const wide = await measure();
+  expect(wide[0].header, 'the wide case must actually be wide').toBeGreaterThan(560);
   expect(wide[0].capsShown).toBe(true);
+  expect(wide[0].wordsShown, 'words carry the wide face').toBe(3);
+  expect(wide[0].marksShown, 'marks stay in reserve while words fit').toBe(0);
   expect(wide[0].squeezed).toBe(0);
   expect(wide[0].idOverflow).toBeLessThanOrEqual(1);
 
-  // Narrow enough that three words plus an identity cannot coexist: the caps leave
-  // rather than print over the chip and the mic button.
+  // Rung 1 — two panes: too narrow for three words, wide enough for three marks.
+  // The caps collapse instead of clipping, and the session picker must not have
+  // paid for it: it holds the width it had at full stage.
   await page.getByRole('button', { name: 'Dock db-primary beside current terminal' }).click();
+  await expect(page.locator('.stage-pane')).toHaveCount(2);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const mid = await measure();
+  for (const row of mid) {
+    expect(row.header, 'the mid case must sit between the rungs').toBeLessThanOrEqual(560);
+    expect(row.header).toBeGreaterThan(400);
+    expect(row.capsShown, `caps gone from a ${row.header}px header`).toBe(true);
+    expect(row.wordsShown, `words still drawn in a ${row.header}px header`).toBe(0);
+    expect(row.marksShown, `marks missing from a ${row.header}px header`).toBe(3);
+    expect(row.capWidths.every((w) => w === 20), `collapsed caps are ${row.capWidths}`).toBe(true);
+    expect(row.squeezed, `${row.squeezed} cap(s) squeezed at ${row.header}px`).toBe(0);
+    expect(row.idOverflow, `identity group overflows by ${row.idOverflow}px at ${row.header}px`).toBeLessThanOrEqual(1);
+    if (row.pickerWidth !== null && wide[0].pickerWidth !== null) {
+      expect(row.pickerWidth, 'the picker paid for the caps').toBe(wide[0].pickerWidth);
+    }
+  }
+
+  // Rung 3 — three panes: even the marks go, rather than print over the chip
+  // and the mic button.
   await page.getByRole('button', { name: 'Dock untagged-worker beside current terminal' }).click();
   await expect(page.locator('.stage-pane')).toHaveCount(3);
-  await page.setViewportSize({ width: 1280, height: 800 });
-
   const narrow = await measure();
   for (const row of narrow) {
     expect(row.header, 'the narrow case must actually be narrow').toBeLessThan(400);
@@ -185,7 +222,7 @@ test('lifecycle word caps never overlap: full size when they fit, hidden when th
     expect(row.idOverflow, `identity group overflows by ${row.idOverflow}px at ${row.header}px`).toBeLessThanOrEqual(1);
   }
 
-  // And they come back when there is room again.
+  // And the words come back when there is room again.
   await page.setViewportSize({ width: 1920, height: 900 });
   const roomy = await measure();
   for (const row of roomy) {
@@ -194,5 +231,5 @@ test('lifecycle word caps never overlap: full size when they fit, hidden when th
     expect(row.idOverflow, `identity group overflows by ${row.idOverflow}px at ${row.header}px`).toBeLessThanOrEqual(1);
   }
 
-  await page.screenshot({ path: 'test-results/pane-lifecycle-words.png' });
+  await page.screenshot({ path: 'test-results/pane-lifecycle-ladder.png' });
 });

@@ -1037,6 +1037,18 @@ button.empty-kbd:hover { color: var(--text); }
    does not reflow. */
 .session-picker { position: relative; display: inline-flex; min-width: 0; }
 .session-picker[hidden] { display: none; }
+/* The floor is what keeps the dropdown out of the header's shrink order. Both
+   it and the lifecycle caps used to be squeezed by the same flex pressure, but
+   only the picker could yield — the caps are `flex: 0 0 auto` — so the control
+   naming which session you are looking at ellipsised away while three words no
+   narrower than before sat beside it. With a floor the pressure lands on the
+   target and then the label, and the caps collapse (560px) and finally leave
+   (400px) on their own container queries, always before the picker is reached.
+   It sits on the WRAPPER, not the trigger: the wrapper is the flex item, and a
+   floor on the trigger alone would let the wrapper shrink underneath it — and a
+   nowrap item squeezed under its content spills rather than clipping, the same
+   failure that once drew STOP as "OP" across the mic button. */
+.pane-header .session-picker { min-width: 13ch; }
 .pane-header .session-picker-trigger {
   flex: 0 1 auto; min-width: 0; max-width: 18ch;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1084,14 +1096,46 @@ button.empty-kbd:hover { color: var(--text); }
    query below the keys leave entirely. */
 .pane-lifecycle-slot, .pane-lifecycle { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .pane-header .pane-life { flex: 0 0 auto; }
-/* Too narrow to hold three words plus an identity: the keys drop out rather than
-   overlap, and the container query means it follows the PANE's width, so the same
-   box shows them full-stage and hides them in a four-way split. Power actions
-   remain available from the Proxmox hub's Containers tab. */
+/* Rung 1 of the ladder: the caps give up their words before anything else in
+   the header gives up anything, because three words are the widest thing here
+   that nothing needs to READ — the glyphs say the same and cost ~100px less.
+   The container is the header, so this follows the PANE's width: the same box
+   draws words full-stage and glyphs in a four-way split. */
+@container (max-width: 560px) {
+  .pane-header .pane-life:not(.armed) {
+    width: 20px; padding: 0; letter-spacing: normal;
+  }
+  .pane-header .pane-life:not(.armed) .pane-life-word { display: none; }
+  .pane-header .pane-life:not(.armed) .pane-life-icon { display: inline-flex; }
+  /* One size for all four, and no per-glyph correction anywhere: the marks are
+     one icon family (paneLifecycle.ts), so their designer has already balanced
+     a solid square against a hairline power ring. The four hand-tuned
+     font-sizes that stood here through two attempts were compensating for
+     Unicode marks drawn by four unrelated hands, and they could only ever
+     match ink HEIGHT, which is not what makes two marks look the same weight.
+     The face is pinned literally rather than var(--face): these are PUA
+     codepoints that exist only in the bundled Meslo faces, so a theme with a
+     sans chrome face would tofu them. Same rule as `.box-meta .nf`. */
+  .pane-header .pane-life-icon {
+    font-family: 'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+}
+/* An ARMED cap is the one thing that never collapses — `:not(.armed)` above is
+   load-bearing, not tidiness. The reboot glyph is a mirror image of the
+   Reconnect cap's, one power-cycling a guest and the other destroying a tmux
+   session, which is why the wide face is words at all. A mark cannot state its
+   own consequence, so the moment a key is one click from firing it takes its
+   word back and the row widens by however much that costs. */
+/* Rung 3: below this even the glyphs go. Three 20px pads are affordable where
+   three words were not, but the identity and the session picker outrank them,
+   and this fires while the picker is still at its full width — never as a
+   consequence of it having been squeezed. Power actions remain available from
+   the Proxmox hub's Guests tab. */
 @container (max-width: 400px) {
   .pane-header .pane-lifecycle-slot { display: none; }
 }
-/* Give up the host address before the label. Shrinking both together produced the
+/* Rung 2: give up the host address before the label. Shrinking both together produced the
    worst of both — "L… tm…", two stubs instead of one complete identity — and the
    label is what you navigate by, while the sidebar row shows the host for every box
    anyway. Below this the label gets the space and stays whole; its own ellipsis is
@@ -1119,6 +1163,8 @@ button.empty-kbd:hover { color: var(--text); }
   border: 1px solid transparent; border-radius: 4px;
   background: none; color: var(--dim); opacity: 0.75; cursor: pointer;
 }
+/* Both faces ship in every cap (paneLifecycle.ts); this is the wide one. */
+.pane-header .pane-life-icon { display: none; }
 .pane-header .pane-life:hover, .pane-header .pane-life:focus-visible {
   opacity: 1; color: var(--text); background: var(--panel-2); border-color: var(--border);
 }
