@@ -34,6 +34,28 @@ data class Metrics(
     val osVer: String? = null,
 )
 
+// One tmux window. `id` is tmux's own #{window_id} ("@7") — an id names a
+// window OBJECT, not a slot: indexes renumber under move-window, and a grouped
+// session (`new-session -t web -s webclone`) SHARES window objects, which is why
+// every route that takes an id also demands the session.
+@Serializable
+data class TmuxWindow(
+    val id: String,
+    val index: Int = 0,
+    val name: String = "",
+    val active: Boolean = false,
+)
+
+@Serializable
+data class TmuxSession(
+    val name: String,
+    val windows: Int = 0,
+    val attached: Boolean = false,
+    val activity: Long? = null,
+    val paneCmd: String? = null,
+    val windowList: List<TmuxWindow> = emptyList(),
+)
+
 @Serializable
 data class BoxStatus(
     val reachable: Boolean = false,
@@ -42,6 +64,7 @@ data class BoxStatus(
     val paused: Boolean? = null,
     val hostKeyChanged: Boolean? = null,
     val metrics: Metrics? = null,
+    val sessions: List<TmuxSession> = emptyList(),
     val proxmoxState: String? = null,
     val error: String? = null,
 )

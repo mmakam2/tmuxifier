@@ -1215,8 +1215,10 @@ Against a real box, in order. This is the ONLY coverage the sheet's UI has.
 6. Kill a window in a session that has two → first tap arms with the plain legend, second kills, the row goes.
 7. Kill a sole window → the legend says the session goes too, and it does.
 8. Kill the configured session → the pane errors, its row survives marked "not running", tapping it recreates the session, and the pane recovers with no browser involved.
-9. A box with a setup job running → the sheet still opens (probe is un-gated) and every action reports the server's 409 rather than failing silently.
+9. A box with a setup job running → the sheet still opens (probe is un-gated). The window, kill and create actions each report the server's 409 rather than failing silently; a session switch is `PATCH /api/boxes/:id`, which is NOT setup-gated, so it SUCCEEDS — that is the correct result, not a failure. (A window of another session does both calls, so it stops on the 409 from the window half.)
 10. Aeroplane mode → the sheet still shows the configured-session row plus an error line, not a spinner that never resolves.
+11. Switch to a window of a DIFFERENT session → the pane follows onto that session AND onto the window tapped, in one action; a browser attached to the box reconnects already showing that window. Window first, then the PATCH — without the PATCH this tap is a silent no-op.
+12. Switch sessions from the FLEET sheet and keep it open → the ✓ moves to the new session within the sheet itself (no reopen), and arming a kill on it says "the app is showing this session" while the old session's kill reads as a plain session kill. Both legends describe the session the box points at NOW.
 
 Any failure here is fixed on this branch and the checklist re-run from step 1 — not deferred.
 

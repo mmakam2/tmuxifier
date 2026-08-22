@@ -4,6 +4,7 @@ package com.tmuxifier.console.api
 // unknown fields must be ignored — the server adds fields over time.
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class ModelsTest {
     @Test fun paneSnapshotParses() {
@@ -51,5 +52,27 @@ class ModelsTest {
             """{"id":"abc123","name":"Fold","created":1,"lastSeen":null,"hasFcmToken":false,"notify":{"agent-input":true,"agent-done":true},"token":"tok"}""")
         assertEquals("tok", e.token)
         assertEquals(true, e.notify["agent-input"])
+    }
+
+    @Test fun statusCarriesSessionsAndWindows() {
+        // Real /api/status shape: STATUS_FMT fields plus the __WIN__ rows
+        // status.js folds on as windowList.
+        val m = ApiJson.decodeFromString(statusMapSerializer,
+            """{"b1":{"reachable":true,"tmux":true,"sessions":[{"name":"web","windows":2,"attached":true,"activity":1723180000,"paneCmd":"claude","windowList":[{"id":"@0","index":0,"name":"zsh","active":false},{"id":"@3","index":1,"name":"claude","active":true}]}]}}""")
+        val s = m["b1"]?.sessions?.single()
+        assertEquals("web", s?.name)
+        assertEquals(true, s?.attached)
+        assertEquals(2, s?.windowList?.size)
+        assertEquals("@3", s?.windowList?.last()?.id)
+        assertEquals(1, s?.windowList?.last()?.index)
+        assertEquals(true, s?.windowList?.last()?.active)
+        assertEquals(false, s?.windowList?.first()?.active)
+    }
+
+    @Test fun oldServerStatusHasNoSessions() {
+        // The falsifying half: without this, a model that hardcoded an empty
+        // list would pass the test above just as well.
+        val m = ApiJson.decodeFromString(statusMapSerializer, """{"b1":{"reachable":true}}""")
+        assertTrue(m["b1"]?.sessions?.isEmpty() == true)
     }
 }

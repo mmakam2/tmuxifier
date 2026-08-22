@@ -21,6 +21,14 @@ import java.util.concurrent.TimeUnit
 
 class ApiException(val status: Int, message: String) : Exception(message)
 
+// Split out of killTarget so the presence rule is unit-testable: the route
+// branches on whether windowId is there, so a session kill must OMIT it rather
+// than send null.
+internal fun killBody(session: String, windowId: String?): String = buildJsonObject {
+    put("session", session)
+    if (windowId != null) put("windowId", windowId)
+}.toString()
+
 class ApiClient(val baseUrl: String, private val token: String?) {
     private val http = OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build()
     private val jsonType = "application/json".toMediaType()
@@ -86,6 +94,37 @@ class ApiClient(val baseUrl: String, private val token: String?) {
     suspend fun sendWheel(boxId: String, dir: String, steps: Int = 5) {
         request("POST", "/api/boxes/$boxId/keys", buildJsonObject { put("wheel", dir); put("steps", steps) }.toString())
     }
+
+    // Re-probe ONE box and hand back its fresh entry, keyed by box id — the
+    // same shape GET /api/status answers in. Deliberately un-gated by a running
+    // setup job on the server: it only reads what the poller already reads.
+    suspend fun probe(boxId: String): Map<String, BoxStatus> =
+        parse(statusMapSerializer, request("POST", "/api/boxes/$boxId/probe"))
+
+    // Switch the session's active window. No reattach: the current window is
+    // session state in tmux, so every attached client follows on its own.
+    suspend fun selectWindow(boxId: String, session: String, windowId: String) {
+        request("POST", "/api/boxes/$boxId/window",
+            buildJsonObject { put("session", session); put("windowId", windowId) }.toString())
+    }
+
+    // Kill a session, or one window inside it. Session-qualified in both forms.
+    suspend fun killTarget(boxId: String, session: String, windowId: String? = null) {
+        request("POST", "/api/boxes/$boxId/kill", killBody(session, windowId))
+    }
+
+    // Create a session detached, WITHOUT switching the box to it — the same
+    // ensure-session remote (carrying the box's startupCommand) that the
+    // browser's attach path would have run.
+    suspend fun createSession(boxId: String, name: String) {
+        request("POST", "/api/boxes/$boxId/sessions", buildJsonObject { put("name", name) }.toString())
+    }
+
+    // Repoint the box at another session. GLOBAL: the server drops every
+    // viewer's PTY so browsers reattach to the new session.
+    suspend fun setSession(boxId: String, name: String): BoxInfo =
+        parse(BoxInfo.serializer(), request("PATCH", "/api/boxes/$boxId",
+            buildJsonObject { put("sessionName", name) }.toString()))
 
     suspend fun fcmConfig(): FcmConfig =
         parse(FcmConfig.serializer(), request("GET", "/api/devices/fcm-config"))

@@ -75,4 +75,20 @@ class FleetModelTest {
         assertEquals("38G", fmtBytesKb(40_000_000))
         assertEquals("512K", fmtBytesKb(512))
     }
+
+    @Test fun cardsCarryTheConfiguredSessionName() {
+        val cards = fleetCards(
+            boxes = listOf(
+                BoxInfo(id = "b1", label = "alpha", sessionName = "web"),
+                BoxInfo(id = "b2", label = "beta"),
+            ),
+            status = emptyMap(),
+            series = emptyMap(),
+            now = 0L,
+        )
+        assertEquals("web", cards.first { it.id == "b1" }.sessionName)
+        // An unset name stays empty here; the target model applies store.js's
+        // 'web' default in one place rather than two.
+        assertEquals("", cards.first { it.id == "b2" }.sessionName)
+    }
 }

@@ -12,6 +12,7 @@ enum class Dot { OK, DOWN, AUTH, PAUSED, STOPPED }
 data class BoxCard(
     val id: String,
     val label: String,
+    val sessionName: String,   // the box's configured tmux session — what the sheet opens on
     val dot: Dot,
     val agent: String?,        // "working" | "waiting" | null
     val agentForMin: Long?,    // whole minutes in the current agent state
@@ -32,6 +33,7 @@ fun fleetCards(
         BoxCard(
             id = box.id,
             label = box.label.ifEmpty { box.id },
+            sessionName = box.sessionName,
             dot = dotOf(st),
             agent = agent,
             agentForMin = if (agent != null && sinceT != null) ((now - sinceT) / 60_000).coerceAtLeast(0) else null,

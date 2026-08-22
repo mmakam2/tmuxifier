@@ -3,9 +3,10 @@ package com.tmuxifier.console.ui
 // Home: box cards, waiting agents on top. Polls every 10s while STARTED —
 // repeatOnLifecycle cancels the loop in background (push covers it; the spec
 // forbids background polling).
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +35,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.tmuxifier.console.R
@@ -43,6 +46,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.tmuxifier.console.AppState
 import com.tmuxifier.console.Screen
 import com.tmuxifier.console.api.ApiException
+import com.tmuxifier.console.api.BoxStatus
 import com.tmuxifier.console.fleet.BoxCard
 import com.tmuxifier.console.fleet.Dot
 import com.tmuxifier.console.fleet.fleetCards
@@ -67,6 +71,12 @@ fun FleetScreen(
 ) {
     val client = state.client() ?: return
     var cards by remember { mutableStateOf<List<BoxCard>>(emptyList()) }
+    var statuses by remember { mutableStateOf<Map<String, BoxStatus>>(emptyMap()) }
+    // The box id, not the card: the 10s poll rebuilds `cards`, and a sheet
+    // handed the snapshot it opened with would keep naming the session the box
+    // pointed at then — including right after a switch made from the sheet
+    // itself. Re-derived below on every composition instead.
+    var sheetForId by remember { mutableStateOf<String?>(null) }
     var loaded by remember { mutableStateOf(false) }
     var offline by remember { mutableStateOf(false) }
 
@@ -76,10 +86,19 @@ fun FleetScreen(
             while (true) {
                 try {
                     coroutineScope {
-                        val b = async { client.boxes() }
-                        val st = async { client.status() }
-                        val se = async { client.series() }
-                        cards = fleetCards(b.await(), st.await(), se.await(), System.currentTimeMillis())
+                        val boxesJob = async { client.boxes() }
+                        val statusJob = async { client.status() }
+                        val seriesJob = async { client.series() }
+                        val bx = boxesJob.await()
+                        val st = statusJob.await()
+                        val se = seriesJob.await()
+                        // The sheet opens on this snapshot; fleetCards keeps only
+                        // what a card draws, and the rows need the sessions. Both
+                        // writes land together, after every await succeeds, so a
+                        // failure on one endpoint can never leave statuses ahead
+                        // of cards from different poll cycles.
+                        statuses = st
+                        cards = fleetCards(bx, st, se, System.currentTimeMillis())
                     }
                     loaded = true
                     offline = false
@@ -128,18 +147,43 @@ fun FleetScreen(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
         ) {
             items(cards, key = { it.id }) { card ->
-                BoxCardRow(card) { onOpen(Screen.Session(card.id, card.label)) }
+                BoxCardRow(
+                    card,
+                    onClick = { onOpen(Screen.Session(card.id, card.label)) },
+                    onLongClick = { sheetForId = card.id },
+                )
+            }
+        }
+        sheetForId?.let { id ->
+            cards.firstOrNull { it.id == id }?.let { card ->
+                SessionSheet(
+                    state = state,
+                    boxId = card.id,
+                    boxLabel = card.label,
+                    sessionName = card.sessionName,
+                    initialStatus = statuses[card.id],
+                    onDismiss = { sheetForId = null },
+                    onUnauthorized = onUnauthorized,
+                )
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun BoxCardRow(card: BoxCard, onClick: () -> Unit) {
+private fun BoxCardRow(card: BoxCard, onClick: () -> Unit, onLongClick: () -> Unit) {
+    val haptic = LocalHapticFeedback.current
     Surface(
         shape = RoundedCornerShape(10.dp),
         tonalElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().combinedClickable(
+            onClick = onClick,
+            onLongClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onLongClick()
+            },
+        ),
     ) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(10.dp).background(dotColor(card.dot), CircleShape))
