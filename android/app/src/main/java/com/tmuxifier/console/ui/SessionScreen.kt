@@ -117,6 +117,7 @@ fun SessionScreen(
     // pane layout below (it knows the measured cell and the pane area), read
     // by each poll, which the server turns into the invisible sizing client.
     val paneGeom = remember { mutableStateOf<PaneGeometry?>(null) }
+    var sheetOpen by remember(boxId) { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
@@ -154,6 +155,9 @@ fun SessionScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(boxLabel, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            snap?.sessionName?.takeIf { it.isNotEmpty() }?.let { name ->
+                TextButton(onClick = { sheetOpen = true }) { Text("$name ▾") }
+            }
             snap?.agent?.let { agent ->
                 val fg = if (agent == "waiting") Color(0xFFFFB300) else Color(0xFF4CAF50)
                 Text(
@@ -362,6 +366,20 @@ fun SessionScreen(
             },
         )
         bottomBar()
+        if (sheetOpen) {
+            SessionSheet(
+                state = state,
+                boxId = boxId,
+                boxLabel = boxLabel,
+                sessionName = snap?.sessionName.orEmpty(),
+                // This screen polls /pane, never /api/status, so it has no
+                // cached sessions: the sheet opens on the configured-session
+                // row alone and fills in from its own probe.
+                initialStatus = null,
+                onDismiss = { sheetOpen = false },
+                onUnauthorized = onUnauthorized,
+            )
+        }
     }
 }
 
