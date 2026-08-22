@@ -22,10 +22,10 @@ import { downloadVerified } from '../src/server/voiceDownload.js';
 // app release goes out; the digest is what makes the URL safe to trust, so it is
 // never derived at runtime from whatever the server happens to answer with.
 const RELEASE = {
-  version: '1.2.1',
-  versionCode: 21,
-  url: 'https://github.com/mmakam2/tmuxifier/releases/download/android-v1.2.1/tmuxifier-console-v1.2.1.apk',
-  sha256: '710c80cc870f1d6bf1e1e5fb36e133f341194e432f8bf0dcc0dcd68d26ebd285',
+  version: '1.2.2',
+  versionCode: 22,
+  url: 'https://github.com/mmakam2/tmuxifier/releases/download/android-v1.2.2/tmuxifier-console-v1.2.2.apk',
+  sha256: '247c1a84ea68e5714ec18f84a0efd5b66f5f17ad18cb3c4500b62dc4fc3eeb18',
 };
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
