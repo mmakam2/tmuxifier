@@ -85,11 +85,16 @@ fun FleetScreen(
                         val boxesJob = async { client.boxes() }
                         val statusJob = async { client.status() }
                         val seriesJob = async { client.series() }
-                        // The sheet opens on this snapshot; fleetCards keeps only
-                        // what a card draws, and the rows need the sessions.
+                        val bx = boxesJob.await()
                         val st = statusJob.await()
+                        val se = seriesJob.await()
+                        // The sheet opens on this snapshot; fleetCards keeps only
+                        // what a card draws, and the rows need the sessions. Both
+                        // writes land together, after every await succeeds, so a
+                        // failure on one endpoint can never leave statuses ahead
+                        // of cards from different poll cycles.
                         statuses = st
-                        cards = fleetCards(boxesJob.await(), st, seriesJob.await(), System.currentTimeMillis())
+                        cards = fleetCards(bx, st, se, System.currentTimeMillis())
                     }
                     loaded = true
                     offline = false
