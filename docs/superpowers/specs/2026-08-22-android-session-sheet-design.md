@@ -58,7 +58,7 @@ New:
 
 - `android/app/src/main/java/com/tmuxifier/console/session/SessionTargets.kt` — the pure model,
   JVM-tested. A transliteration of the web's `sessionTargets`/`sessionTargetList` (`paneHeader.ts`)
-  and `isSoleWindow`/`killLegend`/`rowKey` (`sessionPicker.ts`), plus the `live`/`killable`
+  and `isSoleWindow`/`killLegend`/`rowKey` (`sessionPicker.ts`), plus the `live`/`addressable`
   additions below.
 - `android/app/src/main/java/com/tmuxifier/console/ui/SessionSheet.kt` — the Compose half.
 - `android/app/src/test/java/com/tmuxifier/console/session/SessionTargetsTest.kt`.
@@ -88,17 +88,20 @@ data class SessionTarget(
     val label: String,        // session name, or "1: zsh" for a window
     val session: String,
     val windowId: String? = null,
-    val switchable: Boolean = true,  // false → row disabled, `reason` says why
-    val reason: String? = null,
-    val live: Boolean = true,        // tmux currently lists it
-) {
-    val killable: Boolean get() = live && SESSION_NAME_RE.matches(session)
-}
+    val current: Boolean = false,     // belongs to the box's configured session
+    val live: Boolean = true,         // tmux lists it right now
+    val addressable: Boolean = true,  // the routes can name it (both regexes)
+    val reason: String? = null,       // why not
+)
 
 data class SessionTargetList(val options: List<SessionTarget>, val value: String)
 
+enum class RowAction { SELECTED, SWITCH, RECREATE, NONE }
+
 fun sessionTargets(status: BoxStatus?, sessionName: String?): List<SessionTarget>
 fun sessionTargetList(status: BoxStatus?, sessionName: String?): SessionTargetList
+fun rowAction(t: SessionTarget): RowAction        // what a tap does
+fun canKill(t: SessionTarget): Boolean            // addressable && live
 fun isSoleWindow(targets: List<SessionTarget>, t: SessionTarget): Boolean
 fun killLegend(t: SessionTarget, sole: Boolean): String
 fun rowKey(t: SessionTarget): String = t.value
@@ -114,8 +117,8 @@ Rules carried over from the web unchanged:
   is `value` for exactly this reason: an arm keyed by bare id could migrate onto a different
   session between the arming tap and the firing one.
 - **Unswitchable names are disabled, not hidden.** The session is real; it is only unreachable
-  from here. Its windows inherit the lock — except the current session's windows, which need no
-  PATCH at all.
+  from here. Its windows inherit the lock — with no exception for the current session's, unlike
+  the web (see `addressable` below).
 - **`killLegend`** says the quiet part on a sole window: `kill 1: zsh? last window — the
   session goes too`.
 
@@ -130,19 +133,24 @@ Two additions the web's model does not carry:
 - **`live`** — false when the configured session is not in the status snapshot's session list.
   The web never needed it (a browser's attach recreates the session on reconnect); the app does,
   because of consequence 2 above.
-- **`killable`** — `live && SESSION_NAME_RE.matches(session)`. The web renders an enabled `×` on
-  an unswitchable row, reasoning that "an unswitchable NAME is about PATCH round-tripping, which
-  the kill path does not do at all" (`sessionPicker.ts:195`). That reasoning is wrong — the kill
-  route applies the same charset — so on the web that `×` can only ever 400. See Deferred.
+- **`addressable`** — the target's name (and, for a window, its id) matches what the routes
+  accept, so `canKill` is `addressable && live` and `rowAction` is `NONE` without it. This is
+  ONE predicate rather than a switchable/killable pair, because the two would always be equal
+  and could only drift. It also means a window under an unaddressable session name offers
+  nothing — including under the CURRENT session, where the web exempts windows ("they need no
+  PATCH"): `POST /window` sends the session too, and 400s on that name. The web renders an enabled `×` on
+  an unswitchable row for the same reason ("an unswitchable NAME is about PATCH round-tripping,
+  which the kill path does not do at all", `sessionPicker.ts:195`) — wrong, because the kill route
+  applies the same charset, so on the web that `×` can only ever 400. See Deferred.
 
 ### Row states
 
 | Row | Tap | `×` |
 |---|---|---|
 | Configured session, live | selected (✓), no-op | armed kill, legend naming the app's own view |
-| Configured session, not live | **Recreate** → `POST /sessions { name }` | absent (`killable` false) |
+| Configured session, not live | **Recreate** → `POST /sessions { name }` | absent (`canKill` false) |
 | Other live session, switchable name | `PATCH { sessionName }` | armed kill |
-| Other live session, unswitchable name | disabled + reason | absent |
+| Any session with an unaddressable name, and its windows | disabled + reason | absent |
 | Window (indented under its session) | `POST /window { session, windowId }` | armed kill, sole-window legend |
 | `+ New session…` | expands a name field + Create | absent |
 
@@ -243,10 +251,14 @@ constructing that world; these are the same rules restated as fixtures:
 - **`killLegend` distinguishes the sole-window case** — assert the two sentences differ on
   the two-window and one-window fixtures above. Asserting only that the string contains the
   window name passes for both and proves nothing.
-- **`killable` is false for an unswitchable name** — fixture name `my session`, i.e. a name that
-  actually fails `SESSION_NAME_RE`, and true for `web` beside it.
-- **Windows of the CURRENT session stay switchable even when its name is unswitchable**, and
-  windows of another such session do not. Both halves, one fixture.
+- **An unswitchable name is not addressable** — fixture name `my session`, i.e. a name that
+  actually fails `SESSION_NAME_RE`, with an addressable `web` beside it so a model that answered
+  `NONE` for everything would fail. Assert `rowAction` is `NONE` and `canKill` false.
+- **Windows of an unaddressable session are unaddressable too, including the CURRENT session's**
+  — the deviation from the web, which exempts them. A separate fixture where the configured
+  session is itself named `my session`.
+- **A window id outside `WINDOW_ID_RE`** makes only that row unaddressable, its session row
+  unaffected.
 - **`sessionTargetList` selects the active window** when the snapshot marks one, and the session
   row when it does not.
 
