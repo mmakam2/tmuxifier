@@ -78,6 +78,20 @@ only gates the production track).
   usable alongside Play, serve the **Play-signed universal APK** (Console → App Bundle
   Explorer → download) at `data/app/tmuxifier-console.apk` — same signature, either channel
   updates the other.
+- **Republish for other deployments**, so `npm run fetch-apk` stops handing out the previous
+  build. Nothing enforces this — the pin is a constant, and a stale one fetches happily:
+
+  ```bash
+  gh release create android-v<version> --title "android-v<version> — <summary>" --notes "…"
+  cp data/app/tmuxifier-console.apk /tmp/tmuxifier-console-v<version>.apk
+  gh release upload android-v<version> /tmp/tmuxifier-console-v<version>.apk
+  sha256sum data/app/tmuxifier-console.apk       # → scripts/fetch-apk.mjs RELEASE.sha256
+  ```
+
+  Then update all four fields of `RELEASE` in `scripts/fetch-apk.mjs` together — version,
+  versionCode, url, sha256. `test/fetchApkScript.test.js` checks the URL and version agree with
+  each other, but it cannot know which release you *meant*, so a wholesale-stale manifest still
+  passes.
 
 ## Signing & distribution
 
