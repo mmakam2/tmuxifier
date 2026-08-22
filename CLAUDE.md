@@ -936,10 +936,19 @@ logout could not reach that dialog. In phone mode the picker is not built at all
 takes a `phone` flag and returns `targets: null`, so sessions are managed from the Edit Box modal
 off the box list instead),
 `paneLifecycle.ts` (the Proxmox lifecycle keys in that slot: `lifecycleKeysFor`
-derives which keys a pane's state allows, the caps are **words** (`START`/`SHUTDOWN`/`REBOOT`/
-`STOP`) precisely because the old `↺` reboot glyph was indistinguishable from the Reconnect
-button's `↻` sitting in the same header, and a destructive key arms before it fires through the
-shared `arming.ts` reducer; a job in flight owns the chip slot and its `onSettled` triggers a
+derives which keys a pane's state allows. Each cap carries **two faces** and the DOM always holds
+both: the word (`START`/`SHUTDOWN`/`REBOOT`/`STOP`) at full width, and a Nerd Font mark it
+collapses to under `@container (max-width: 560px)` — rung 1 of the pane header's degradation
+ladder, ahead of the host address (520px) and the keys leaving entirely (400px), so the session
+picker is never squeezed to make room for them. `style.css` alone decides which face shows; no JS
+reads a width. Words are the wide face because the `↺` reboot glyph is indistinguishable from
+the Reconnect button's `↻` in this same header, and an **armed** cap therefore takes its word back
+in both modes — a mark cannot state its own consequence. The marks come from ONE icon family
+(the bundled Font Awesome set: `\uf011`/`\uf021`/`\uf04d`/`\uf04b`), which is why `.pane-life-icon` needs a
+single font-size where four hand-tuned per-glyph sizes had failed twice: Unicode marks drawn by
+unrelated hands can be matched on ink height but not on perceived weight. Being PUA they pin the
+Meslo stack literally rather than riding `var(--face)`, the `.box-meta .nf` rule. A destructive key
+arms before it fires through the shared `arming.ts` reducer; a job in flight owns the chip slot and its `onSettled` triggers a
 fast status poll), `arming.ts` (the shared arm-then-fire policy — first click arms, second
 commits, anything else disarms — used by the lifecycle keys and all three Reconnect buttons, so a
 third armable control inherits the behaviour rather than re-deriving the disarm cases),
