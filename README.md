@@ -202,7 +202,8 @@ in [terminal features](docs/terminal.md).
 ## Themes
 **Settings → Appearance** re-skins the whole app — chrome, standby dashboard, terminal glass and
 the Fleet script editor — switching between the built-in **Bench Instrument** (charcoal chassis,
-amber phosphor) and **Original** (deep navy, cyan glow) looks, saved on the Tmuxifier host so
+amber phosphor), **Original** (deep navy, cyan glow) and **Vercel** (pure black, hairline gray,
+deployment blue) looks, saved on the Tmuxifier host so
 every browser you sign in from follows the same pick; details, and how to add a theme, are in
 [appearance & themes](docs/fleet-and-health.md#appearance).
 

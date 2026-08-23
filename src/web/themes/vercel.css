@@ -1,0 +1,112 @@
+/* Vercel — the deployment dashboard read of the Instrument layout: pure black
+   field, hairline gray seams, white text, the blue reserved for what is alive,
+   and the one commit key as Vercel's signature white inverted button.
+
+   Every rule here is scoped to :root[data-theme="vercel"] so the theme can
+   never leak into the default (pinned by test/styleTokens.test.js), and the
+   file holds token overrides only — the token fence in style.css is the whole
+   themable surface, so there is nothing a component rule would have to reach
+   for.
+
+   Terminal-facing tokens (--screen, --text, --accent, --term-sel) MUST stay
+   plain color literals: theme.ts resolves them for xterm, which parses the
+   string itself, so color-mix() or var() indirection here would not resolve.
+
+   DELIBERATE INHERITS (a token absent below is a decision, not an omission):
+   - --ok / --warn / --crit / --auth — status LEDs are semantic, not palette: a
+     green/red/amber/violet lamp means the same thing in every theme, and the
+     washes derived from them (color-mix over --warn/--crit) follow for free.
+   - --crit-soft — --crit's companion; --crit inherits, so its pairing does too.
+   - --gbtn-* — Google's brand identity for the sign-in button. Brand-fixed.
+   - --syn-string / --syn-const / --syn-fn — the script editor's syntax hues.
+     The editor's chrome already follows this theme (keywords/caret/focus ring
+     read --accent, comments --dim, variables --text); the three display hues
+     with no chassis counterpart are judged on screen at live validation, the
+     Original precedent. --syn-gutter IS overridden below: it is the one chrome
+     neutral of the four (line-number ink), and a warm olive gutter over the
+     black screen would be the visible mismatch.
+   - color-scheme: dark on :root — all shipped themes are dark (light themes
+     are out of scope for the engine), so the declaration stays
+     theme-independent.  */
+:root[data-theme="vercel"] {
+  /* --- Chassis neutrals: true black under hairline gray -------------------- */
+  --bg: #000000;
+  --panel: #0a0a0a;
+  --panel-2: #111111;
+  --gunmetal: #1f1f1f;    /* pressed/engaged key fill (no consumer today; kept in
+                             the gray family so a future rule inherits the world) */
+  --border: #2e2e2e;      /* the signature 1px hairline */
+  --screen: #000000;      /* terminal glass — literal (xterm reads this); Vercel
+                             code blocks are pure black behind a hairline */
+  --text: #ededed;        /* literal (xterm reads this) */
+  --muted: #a1a1a1;
+  --dim: #6e6e6e;
+  /* --- Functional light: blue alive, white commit -------------------------- */
+  --accent: #0070f3;      /* literal (xterm cursor reads this) */
+  --accent-deep: #0761d1;
+  --commit: #ffffff;      /* the white inverted button — Vercel's primary CTA */
+  /* Commit key material ramp: white face pressing into light gray. */
+  --commit-hi: #ffffff;
+  --commit-hi-2: #fafafa;
+  --commit-mid: #f2f2f2;
+  --commit-mid-2: #ebebeb;
+  --commit-deep: #d4d4d4;
+  --commit-edge: #a8a8a8;
+  --commit-rim: #8f8f8f;
+  --commit-ink: #000000;
+  /* --- Chrome face --------------------------------------------------------- */
+  /* Geist-adjacent system sans for the chassis legends. The TERMINAL font is
+     untouched — that is termFont.ts's bundled Meslo stack. */
+  --face: ui-sans-serif, system-ui, sans-serif;
+  /* --- Material: flat plates, hairline seams ------------------------------- */
+  /* Keys are flat black plates defined by their 1px border, not machined caps:
+     the extrusion collapses to a whisper of top light, the press to a shallow
+     inset, and panels float on one soft wide shadow (the Vercel modal). */
+  --key-border: #2e2e2e;
+  --key-face: linear-gradient(180deg, #0f0f0f, #0a0a0a);
+  --key-edge: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --key-edge-down: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+  --recess: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+  --lift: 0 8px 30px rgba(0, 0, 0, 0.6);
+  /* --- Role tokens (the token collapse's Rule-D mints) --------------------- */
+  --seam: #1a1a1a;               /* top seam of a recessed well, under --border */
+  --key-hi: #0f0f0f;             /* key-face top; ALSO the off-LED lamp fill, so
+                                    an unlit lamp stays a near-black bead */
+  --key-lit: #1f1f1f;            /* engaged mode-key gradient top */
+  --header-hi: #0d0d0d;          /* pane-header bezel strip gradient top */
+  --divider: #1a1a1a;            /* chassis seam between mounted displays */
+  --scroll-thumb: #333333;       /* Firefox scrollbar-color thumb */
+  --scroll-thumb-wk: #2e2e2e;    /* WebKit scrollbar thumb */
+  --scroll-thumb-hover: #444444; /* WebKit thumb hover; ALSO the stage-grid bezel
+                                    edge, so it reads as a lit hairline rim */
+  --scrim: rgba(0, 0, 0, 0.66);  /* modal/drawer backdrop wash */
+  /* --- Script editor: the one chrome neutral of the syntax set ------------- */
+  --syn-gutter: #555555;
+  /* --- Terminal glass selection (plain literal, see header note) ----------- */
+  --term-sel: rgba(0, 112, 243, 0.30);
+  /* --- The bench: flat black ----------------------------------------------- */
+  /* One dead-flat layer where Instrument has three (noise + worklight + color)
+     and Original two (glow + gradient): the flatness IS the look. The body's
+     background-repeat list simply has values spare. */
+  --bench: linear-gradient(180deg, #000000, #000000);
+}
+
+/* The logo mark is a raster (amber prompt glyphs on a charcoal keypad) that
+   tokens cannot reach; this theme's blue variant is a real ASSET, swapped by
+   theme.ts — never a scoped filter, which would repaint the token-colored
+   border around the mark in the same pass (the Original lesson, pinned by
+   test/styleTokens.test.js). */
+
+/* The Instrument engraves its bezel legends wide (10px / 700 / 0.12em) because
+   the mono face is narrow; the sans chrome face is already wide per glyph, so
+   the same tracking sprawls and 10px sans caps read squat. Pull the pane-header
+   legends back toward normal sans caps — the Original precedent, same numbers.
+   letter-spacing inherits, so the header rule also covers the title and
+   anything unstyled inside the bezel. */
+:root[data-theme='vercel'] .pane-header {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+:root[data-theme='vercel'] .pane-header .pane-life { font-weight: 600; letter-spacing: 0.03em; }
+:root[data-theme='vercel'] .pane-chip { letter-spacing: 0.03em; }
