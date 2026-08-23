@@ -230,9 +230,11 @@ modified the app. Either press **Settings → Devices → Build app** (it runs G
 with the toolchain below) or run the steps by hand. A one-time toolchain install plus one Gradle
 run; any Linux box with ~5 GB free disk and ~3 GB RAM works, the Tmuxifier host itself is fine.
 
-A build without `android/keystore.properties` is **debug-signed**, and Android refuses to update
-across a change of signing key — a phone holding the Play build must uninstall before taking a
-locally-built one, and vice versa. Pick one source per phone.
+Without `android/keystore.properties`, Build app switches to a **debug-signed** build
+(installable); a hand-run `assembleRelease` without it produces an **unsigned** APK that Android
+refuses to install, so the hand steps below create the keystore first. Android also refuses to
+update across a change of signing key — a phone holding the Play build must uninstall before
+taking a locally-built one, and vice versa. Pick one source per phone.
 
 ```bash
 # One-time toolchain (JDK 17 + Android SDK + Gradle; a few GB of downloads)
@@ -244,13 +246,11 @@ mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/l
 rm /tmp/clt.zip
 yes | /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null
 /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-curl -fL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
-unzip -q /tmp/gradle.zip -d /opt && rm /tmp/gradle.zip
+# No standalone Gradle: the committed wrapper (android/gradlew) downloads 8.10.2 itself on first run.
 
 # Project setup (first time only)
 cd android
 cp local.properties.example local.properties        # points sdk.dir at /opt/android-sdk
-/opt/gradle-8.10.2/bin/gradle wrapper --gradle-version 8.10.2
 
 # Signing keystore (first time only), then fill the passwords you chose into
 # keystore.properties (copied from its .example):
@@ -272,6 +272,9 @@ Devices → Build the app on the server** runs the same Gradle build as a backgr
 (pollable, single-flight, recorded in `data/apk-build-jobs.json`) and publishes the result
 itself. Without `keystore.properties` it falls back to a debug-signed build — installable,
 but switching to a proper release signature later requires a one-time uninstall on phones.
+It **overwrites** `data/app/tmuxifier-console.apk`: if that file is the Play-signed build
+(`android/README.md`, § Play Store), pressing Build app replaces it with one signed by your
+own key, and phones that installed from the link must uninstall before they can update.
 
 On the phone: open the dashboard in the browser (signed in), **Settings → Devices →
 Download the Android app**, install (Play Protect challenges a sideloaded app once — "More

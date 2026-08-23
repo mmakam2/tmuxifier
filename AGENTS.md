@@ -1213,7 +1213,11 @@ google-services plugin, nothing project-specific in the APK. Release signing sta
 conditional on the gitignored `keystore.properties` (`.example` committed), so the public
 repo always builds.
 The signed APK is published to `data/app/tmuxifier-console.apk` (served by
-`GET /api/devices/apk`), never attached to GitHub releases. When writing Kotlin with `\uXXXX`
+`GET /api/devices/apk`) — by `apkBuild.js` itself or by hand — and each app version is also
+attached to its own `android-v<version>` GitHub release, the source `npm run fetch-apk` pins by
+digest (never the server's own `vX.Y.Z` releases). `apkBuild.js` overwrites that file, so on a
+server serving the Play-signed build one press of Build app swaps in the upload-key signature
+and strands phones that installed from the link. When writing Kotlin with `\uXXXX`
 escapes, run the control-byte check (`grep -naP '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]'`) before
 building — generated escapes repeatedly land as raw bytes.
 

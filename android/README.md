@@ -9,25 +9,26 @@ native text and sends input through `POST /api/boxes/:id/keys`. Design:
 
 ## Build prerequisites (one-time, machine-global)
 
-```bash
-apt-get install -y openjdk-17-jdk-headless unzip
-# Android cmdline-tools into /opt/android-sdk, then:
-yes | /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses
-/opt/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-# Gradle 8.10.2 into /opt/gradle-8.10.2 (bootstrap only; the wrapper takes over)
-cp local.properties.example local.properties   # points sdk.dir at /opt/android-sdk
-```
+The toolchain install — JDK 17, Android cmdline-tools and SDK packages, `local.properties`,
+the signing keystore — is scripted step by step in `docs/DEPLOY.md` (§ Publishing the Android
+app). Follow it there rather than a copy here. No standalone Gradle install is needed: the
+wrapper (`gradlew` + `gradle/wrapper/gradle-wrapper.jar`) is committed and downloads Gradle
+8.10.2 itself on first run.
 
-Versions pinned here: JDK 17, AGP 8.7.3, Kotlin 2.1.0, Compose BOM 2024.12.01, compileSdk 35,
-minSdk 26. If a download URL 404s, the pinned version moved — pick the nearest current one and
-record the change here.
+Versions pinned here: JDK 17, AGP 8.7.3, Kotlin 2.1.0, Compose BOM 2024.12.01, Gradle 8.10.2
+(wrapper), compileSdk/targetSdk 35, minSdk 26; SDK packages `platform-tools`,
+`platforms;android-35`, `build-tools;35.0.0`. If one of DEPLOY.md's download URLs 404s, the
+pinned version moved — pick the nearest current one and record the change in both files.
 
 ## Commands
 
 ```bash
-./gradlew test           # pure-Kotlin JVM unit tests (SGR parser, models, arming, composer)
-./gradlew assembleDebug  # app/build/outputs/apk/debug/app-debug.apk
-./gradlew assembleRelease # signed release APK (needs keystore.properties — see Signing)
+./gradlew test            # pure-Kotlin JVM unit tests (api/, fleet/, keys/, pane/, session/)
+./gradlew assembleDebug   # app/build/outputs/apk/debug/app-debug.apk (debug-signed, installable)
+./gradlew assembleRelease # app/build/outputs/apk/release/app-release.apk — signed with
+                          # keystore.properties when it exists, otherwise UNSIGNED (Android
+                          # refuses to install it); see Signing
+./gradlew bundleRelease   # app/build/outputs/bundle/release/app-release.aab (Play upload)
 ```
 
 The memory caps in `gradle.properties` are load-bearing: the build box has ~3 GB RAM. If the
@@ -36,6 +37,33 @@ Kotlin daemon OOMs, lower the caps rather than raising them.
 The app's Gradle build is fully separate from the repo's `npm test` — Node never runs Kotlin
 tests and vice versa. Compose UI is validated **on the real device** (the repo's
 validate-on-live rule); there is no emulator tier.
+
+When writing Kotlin with `\uXXXX` escapes, run the control-byte check
+(`grep -naP '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]' app/src`) before building — generated escapes
+have repeatedly landed as raw bytes.
+
+## Building on the server (Settings → Devices → Build app)
+
+`src/server/apkBuild.js` runs the same Gradle build as a persisted, single-flight background
+job (`POST`/`GET /api/devices/apk/build`, history in `data/apk-build-jobs.json`) and publishes
+the result itself. What it does, so a hand build can match it:
+
+- Preflight: `android/gradlew` must exist, and either `android/local.properties` or
+  `ANDROID_HOME` must point at the SDK.
+- The variant is decided by which gitignored file exists, never by the request:
+  `keystore.properties` present → `assembleRelease` (signed); absent → `assembleDebug`
+  (debug-signed, installable). It never produces the unsigned release a bare
+  `assembleRelease` without the keystore would.
+- Runs `gradlew --no-daemon --console=plain <task>` as the service user under a 20-minute
+  deadline; `--no-daemon` so a resident daemon does not hold ~1.5 GB beside the live server.
+- Verifies the APK exists after `BUILD SUCCESSFUL`, then copies it to
+  `data/app/tmuxifier-console.apk` — **overwriting whatever is there**.
+
+That last step is the trap. If `data/app/` holds the **Play-signed** APK (see Play Store
+below), one press of Build app replaces it with a build signed by your upload key. The two
+signatures do not update each other, so every phone that installed from the download link is
+then stuck until it uninstalls. Press Build app only on a server whose download link is meant
+to serve your own key, or restore the Play-signed file afterwards.
 
 ## Firebase (push notifications) — optional, per-instance, zero build coupling
 
@@ -77,7 +105,9 @@ only gates the production track).
   uninstalling a sideloaded build (then re-pair). To keep the Settings → Devices download link
   usable alongside Play, serve the **Play-signed universal APK** (Console → App Bundle
   Explorer → download) at `data/app/tmuxifier-console.apk` — same signature, either channel
-  updates the other.
+  updates the other. Copy it there by hand; do **not** press Build app on that server
+  afterwards, which would overwrite it with an upload-key-signed build (see Building on the
+  server above).
 - **Republish for other deployments**, so `npm run fetch-apk` stops handing out the previous
   build. Nothing enforces this — the pin is a constant, and a stale one fetches happily:
 
@@ -95,8 +125,11 @@ only gates the production track).
 
 ## Signing & distribution
 
-Lands with the release task: keystore under `android/keystore/` (gitignored),
-`keystore.properties` from its `.example`. **Back up the keystore off this box the day it is
-generated — losing it breaks update-in-place installs forever.** The signed APK is published to
-the server's `data/app/tmuxifier-console.apk`, where `GET /api/devices/apk` serves it and
-Settings → Devices shows the download link.
+The release keystore lives under `android/keystore/` (gitignored) with `keystore.properties`
+copied from its `.example`; `docs/DEPLOY.md` has the `keytool` command. **Back up the keystore
+off this box the day it is generated — losing it breaks update-in-place installs forever.** The
+signed APK is published to the server's `data/app/tmuxifier-console.apk`, where
+`GET /api/devices/apk` serves it and Settings → Devices shows the download link — Build app
+copies it there itself; a hand build needs the `cp` in DEPLOY.md. A fresh deployment needs no
+toolchain at all: `npm run fetch-apk` downloads the build attached to the `android-v<version>`
+GitHub release against the digest pinned in `scripts/fetch-apk.mjs`.

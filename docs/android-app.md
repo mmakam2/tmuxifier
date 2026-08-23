@@ -85,7 +85,12 @@ Tapping the notification opens that box's session directly.
 
 ## Building and releasing
 
-Toolchain, memory caps, Firebase config, signing, and the **keystore backup obligation** are
-documented in `android/README.md`. The signed APK is published by copying it to the server's
-`data/app/tmuxifier-console.apk` — the download link appears immediately (no restart), and the
-APK is deliberately not attached to GitHub releases.
+Toolchain, memory caps, Firebase config, signing, the server-side Build app job, and the
+**keystore backup obligation** are documented in `android/README.md`. The signed APK is
+published by copying it to the server's `data/app/tmuxifier-console.apk` — Build app does that
+itself, and the download link appears immediately (no restart). Each app version is also
+attached to its own `android-v<version>` GitHub release (separate from the server's `vX.Y.Z`
+releases); that is where `npm run fetch-apk` downloads it from, against the digest pinned in
+`scripts/fetch-apk.mjs`. Build app **overwrites** that file: on a server serving the
+Play-signed build, pressing it swaps in an upload-key signature, and phones that installed from
+the link must uninstall before they can update.
