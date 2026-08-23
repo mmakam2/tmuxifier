@@ -313,7 +313,9 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
   const addSvc = document.createElement('button');
   addSvc.type = 'button';
   addSvc.className = 'dash-add-svc';
-  addSvc.textContent = '+ ADD SERVICE';
+  // Proper case in markup, caps via CSS — the repo convention, and what lets
+  // the Vercel theme's sentence-case button rule reach this label too.
+  addSvc.textContent = '+ Add service';
   addSvc.addEventListener('click', () => hooks.onAddService());
   servicesHead.append(servicesLegend, addSvc);
   const servicesBody = div('dash-services-body');

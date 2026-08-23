@@ -13,10 +13,8 @@
    string itself, so color-mix() or var() indirection here would not resolve.
 
    DELIBERATE INHERITS (a token absent below is a decision, not an omission):
-   - --ok / --warn / --crit / --auth — status LEDs are semantic, not palette: a
-     green/red/amber/violet lamp means the same thing in every theme, and the
-     washes derived from them (color-mix over --warn/--crit) follow for free.
-   - --crit-soft — --crit's companion; --crit inherits, so its pairing does too.
+   - --auth — the violet needs-login LED. Vercel's own palette has no fourth
+     semantic hue to map it to, and the lamp's meaning is the violet.
    - --gbtn-* — Google's brand identity for the sign-in button. Brand-fixed.
    - --syn-string / --syn-const / --syn-fn — the script editor's syntax hues.
      The editor's chrome already follows this theme (keywords/caret/focus ring
@@ -54,11 +52,24 @@
   --commit-edge: #a8a8a8;
   --commit-rim: #8f8f8f;
   --commit-ink: #000000;
+  /* --- Status LEDs: Vercel's own semantic palette -------------------------- */
+  /* A deliberate override of the engine's LEDs-inherit default (DESIGN.md
+     permits it): same green/amber/red meanings, Vercel's exact hues. --auth
+     inherits — see the header note. --crit-soft moves with --crit (the
+     pairing rule): its lightened companion for body text in red warnings. */
+  --ok: #45a557;
+  --warn: #f5a623;
+  --crit: #e5484d;
+  --crit-soft: #ffb3ae;
   /* --- Chrome face --------------------------------------------------------- */
   /* The real Geist (bundled in style.css's @font-face block, SIL OFL) for the
      chassis legends, with the system sans as fallback. The TERMINAL font is
      untouched — that is termFont.ts's bundled Meslo stack. */
   --face: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  /* Geist Mono for the code surfaces (--face-code consumers: command
+     previews, logs, fingerprints, pairing codes), Meslo behind it for the
+     Nerd-Font glyphs a log line may carry. */
+  --face-code: 'Geist Mono', 'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', ui-monospace, SFMono-Regular, Menlo, monospace;
   /* --- Material: flat plates, hairline seams ------------------------------- */
   /* Keys are flat black plates defined by their 1px border, not machined caps:
      the extrusion collapses to a whisper of top light, the press to a shallow
@@ -114,3 +125,26 @@
 }
 :root[data-theme='vercel'] .pane-header .pane-life { font-weight: 600; letter-spacing: 0.03em; }
 :root[data-theme='vercel'] .pane-chip { letter-spacing: 0.03em; }
+
+/* Vercel never shouts: buttons are sentence case at medium weight with
+   near-zero tracking, not engraved caps. One element-wide rule (0,2,1 beats
+   every component rule's 0,1,1) so a new button inherits the manner without
+   being enumerated here. The markup already carries proper-case labels — the
+   caps were text-transform all along. Everything rendered as a <button>
+   follows, the sidebar's collapsible group headers included; the non-button
+   caps (stage section titles, badges, chips, the pane header) stay small
+   caps — quiet uppercase LABELS over sentence-case ACTIONS is exactly
+   Vercel's own split. The Google button is an <a>, so its brand identity
+   never enters this rule. */
+:root[data-theme='vercel'] button {
+  text-transform: none;
+  letter-spacing: 0.01em;
+  font-weight: 500;
+}
+
+/* The one gradient in the world: Vercel's blue→purple→pink on the login
+   screen's breathing standby dot — homage kept to the doorstep, since the
+   dashboard proper stays austere. The accent glow beneath it inherits. */
+:root[data-theme='vercel'] .login h1::after {
+  background: linear-gradient(135deg, #0070f3, #7928ca 55%, #ff0080);
+}

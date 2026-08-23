@@ -87,15 +87,31 @@
    package): the CHROME face of the Vercel theme's --face stack, nothing more.
    Declared here because theme files hold flat [data-theme] rules only (no
    at-rules, pinned by test/styleTokens.test.js); a face no rendered element
-   references is never fetched, so these cost other themes nothing. The three
-   weights are the ones the chrome legends use (400/700 in this sheet, 600 in
-   the theme pane-header rules); the terminal never sees this face. */
+   references is never fetched, so these cost other themes nothing. The four
+   weights are the ones the chrome legends use (400/700 in this sheet, 500 for
+   the theme's sentence-case buttons, 600 in the theme pane-header rules); the
+   terminal never sees this face. Geist Mono rides along for the theme's
+   --face-code stack (command previews, logs). */
 @font-face {
   font-family: 'Geist';
   font-style: normal;
   font-weight: 400;
   font-display: block;
   src: url('./assets/fonts/Geist-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 500;
+  font-display: block;
+  src: url('./assets/fonts/Geist-Medium.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/GeistMono-Regular.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Geist';
@@ -145,6 +161,12 @@
   --auth: #a98bff;
   /* The one face (One Legend Face rule) */
   --face: 'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* The code face: command previews, logs, fingerprints, pairing codes —
+     text that must read as terminal material even when a theme's chrome
+     --face goes sans (Original, Vercel). A literal copy of the Meslo stack
+     rather than var(--face), so it holds mono on its own unless a theme
+     overrides it deliberately. */
+  --face-code: 'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', ui-monospace, SFMono-Regular, Menlo, monospace;
   /* Corner radii a theme may tighten. Only the two large tiers are tokens:
      the 6px/4px control radii and the 999px pills read the same in every
      world, but how soft a mounted panel's corner is IS the world. */
@@ -337,7 +359,7 @@ button.pkbtn:hover:not(:disabled) { color: var(--text); background: var(--panel-
 button.pkbtn:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--key-edge-down); }
 button.pkbtn:disabled { opacity: .5; cursor: default; }
 .login-note { font-size: .85em; color: var(--dim); text-align: center; }
-.login-note code { font-family: var(--face); color: var(--muted); }
+.login-note code { font-family: var(--face-code); color: var(--muted); }
 .err { color: var(--crit); min-height: 1em; text-align: center; font-size: 12.5px; }
 
 /* --- The bench: control cluster beside the screen bay --------------------- */
@@ -700,7 +722,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .device-cta:hover { color: var(--text); }
 .pair-code { display: flex; align-items: baseline; gap: 10px; margin: 6px 0 10px; }
 /* Read off this screen and typed into a phone across the room — so it's large. */
-.pair-code code { font-family: var(--face); font-size: 26px; letter-spacing: 2px; color: var(--accent); background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
+.pair-code code { font-family: var(--face-code); font-size: 26px; letter-spacing: 2px; color: var(--accent); background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
 .device-list { display: flex; flex-direction: column; gap: 6px; }
 .device-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); font-size: 12.5px; }
 .device-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -727,7 +749,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .modal .settings-hint { margin: 0; font-size: 11px; color: var(--dim); min-height: 1em; }
 .modal .settings-hint.err { color: var(--crit); }
 .modal .settings-hint.ok { color: var(--ok); }
-.modal .settings-fp { font-family: var(--face); word-break: break-all; }
+.modal .settings-fp { font-family: var(--face-code); word-break: break-all; }
 .modal .settings-test { display: flex; gap: 8px; align-items: center; }
 .modal .settings-test button { padding: 6px 10px; border-radius: 6px; border: 1px solid var(--key-border); border-bottom-color: var(--bg); background: var(--key-face); box-shadow: var(--key-edge); color: var(--muted); cursor: pointer; font-family: var(--face); font-size: 11px; }
 .modal .settings-test button:hover { color: var(--text); }
@@ -835,6 +857,7 @@ button.empty-kbd:hover { color: var(--text); }
   color: var(--dim);
   font: 700 10px/1.5 var(--face);
   letter-spacing: 0.12em;
+  text-transform: uppercase;
   cursor: pointer;
 }
 .dash-add-svc:hover { color: var(--muted); border-color: var(--key-border); }
@@ -1497,7 +1520,7 @@ button.empty-kbd:hover { color: var(--text); }
 /* Both wells are bounded: whatever is pasted in, the modal's actions row stays
    on screen. (`overflow-x: auto` already computes `overflow-y` to `auto`, so
    the max-height is all the vertical scroll needs.) */
-.fleet-confirm-cmd { background: var(--screen); border: 1px solid var(--border); border-top-color: var(--seam); box-shadow: var(--recess); border-radius: var(--r-well); padding: 10px; max-height: 24vh; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-family: var(--face); font-size: 12.5px; color: var(--muted); }
+.fleet-confirm-cmd { background: var(--screen); border: 1px solid var(--border); border-top-color: var(--seam); box-shadow: var(--recess); border-radius: var(--r-well); padding: 10px; max-height: 24vh; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-family: var(--face-code); font-size: 12.5px; color: var(--muted); }
 /* The selected-box names, under a count eyebrow (see buildTargetBand). Three
    wrapped lines, then the band scrolls — a 50-box selection used to push the
    Run key off the viewport. */
@@ -1679,7 +1702,7 @@ button.empty-kbd:hover { color: var(--text); }
 .fleet-result.error .fr-badge { background: color-mix(in srgb, var(--crit) 12%, transparent); border-color: color-mix(in srgb, var(--crit) 40%, transparent); color: var(--crit); }
 .fleet-result.skipped .fr-badge { background: color-mix(in srgb, var(--warn) 10%, transparent); border-color: color-mix(in srgb, var(--warn) 40%, transparent); color: var(--warn); }
 .fleet-result.running .fr-badge { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent); }
-.fr-output { margin: 6px 0 0; max-height: 240px; overflow: auto; background: var(--screen); border: 1px solid var(--border); border-top-color: var(--seam); box-shadow: var(--recess); border-radius: 6px; padding: 8px; white-space: pre-wrap; word-break: break-all; font-family: var(--face); font-size: 11px; color: var(--muted); }
+.fr-output { margin: 6px 0 0; max-height: 240px; overflow: auto; background: var(--screen); border: 1px solid var(--border); border-top-color: var(--seam); box-shadow: var(--recess); border-radius: 6px; padding: 8px; white-space: pre-wrap; word-break: break-all; font-family: var(--face-code); font-size: 11px; color: var(--muted); }
 .fleet-empty, .fleet-detail .err { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 /* First run: the copy is the only thing in the pane, so it sits in the middle
    of it rather than pinned to the top of a panel-height void. */
@@ -1821,7 +1844,7 @@ button.empty-kbd:hover { color: var(--text); }
 .pve-hub select, .pve-disk-modal select { padding: 9px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-family: var(--face); font-size: 14px; }
 .pve-err { color: var(--crit); font-size: 12.5px; }
 .pve-phase { font-size: 12.5px; color: var(--text); }
-.pve-log { max-height: 320px; overflow: auto; background: var(--screen); border: 1px solid var(--border); border-top-color: var(--seam); box-shadow: var(--recess); border-radius: var(--r-well); padding: 10px; font-family: var(--face); font-size: 11px; white-space: pre-wrap; color: var(--muted); }
+.pve-log { max-height: 320px; overflow: auto; background: var(--screen); border: 1px solid var(--border); border-top-color: var(--seam); box-shadow: var(--recess); border-radius: var(--r-well); padding: 10px; font-family: var(--face-code); font-size: 11px; white-space: pre-wrap; color: var(--muted); }
 .pve-badge { font-family: var(--face); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel-2); }
 .pve-badge.done { color: var(--ok); } .pve-badge.error { color: var(--crit); } .pve-badge.running { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .pve-badge.cancelled { color: var(--dim); } .pve-badge.interrupted { color: var(--warn); }
