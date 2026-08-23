@@ -1,6 +1,6 @@
 import { test, expect, afterEach } from 'vitest';
 import http from 'node:http';
-import { createApiClient, ApiError, ROUTES } from '../src/mcp/apiClient.js';
+import { createApiClient, ApiError, ROUTES, ID_RE } from '../src/mcp/apiClient.js';
 
 const EXPECTED = {
   listBoxes: ['GET', '/api/boxes'],
@@ -41,16 +41,16 @@ test('every method hits its route with Bearer auth, encoded ids, and a JSON body
   const request = async (opts) => { calls.push(opts); return { status: 200, json: { ok: true }, text: '{"ok":true}' }; };
   const c = createApiClient({ baseUrl: 'http://127.0.0.1:7437/', token: 'tok', request });
   await c.listBoxes(); await c.addBox({ host: 'h' }); await c.getStatus(); await c.getSeries('b 1'); await c.getSeries(); await c.getEvents();
-  await c.getPane('b 1', { lines: 50 }); await c.sendKeys('b1', { text: 'x' }); await c.startSetup('b1', { tools: [] });
-  await c.listSetupJobs(); await c.getSetupJob('s/1'); await c.listFleetScripts(); await c.createFleetJob({ boxIds: ['b1'], command: 'x' });
+  await c.getPane('b1', { lines: 50 }); await c.sendKeys('b1', { text: 'x' }); await c.startSetup('b1', { tools: [] });
+  await c.listSetupJobs(); await c.getSetupJob('s1'); await c.listFleetScripts(); await c.createFleetJob({ boxIds: ['b1'], command: 'x' });
   await c.listFleetJobs(); await c.getFleetJob('j1'); await c.cancelFleetJob('j1'); await c.listPresets(); await c.listProxmoxHosts();
   await c.listGuests(); await c.createProvision({ presetId: 'p' }); await c.listProvisions(); await c.getProvision('p1');
   await c.createLifecycleJob({ boxId: 'b1', action: 'start' }); await c.listLifecycleJobs(); await c.getLifecycleJob('l1');
   const seen = calls.map((o) => `${o.method} ${new URL(o.url).pathname}${new URL(o.url).search}`);
   expect(seen).toEqual([
     'GET /api/boxes', 'POST /api/boxes', 'GET /api/status', 'GET /api/health/series?box=b%201', 'GET /api/health/series', 'GET /api/health/events',
-    'GET /api/boxes/b%201/pane?lines=50', 'POST /api/boxes/b1/keys', 'POST /api/boxes/b1/setup',
-    'GET /api/setup', 'GET /api/setup/s%2F1', 'GET /api/fleet/scripts', 'POST /api/fleet/jobs',
+    'GET /api/boxes/b1/pane?lines=50', 'POST /api/boxes/b1/keys', 'POST /api/boxes/b1/setup',
+    'GET /api/setup', 'GET /api/setup/s1', 'GET /api/fleet/scripts', 'POST /api/fleet/jobs',
     'GET /api/fleet/jobs', 'GET /api/fleet/jobs/j1', 'POST /api/fleet/jobs/j1/cancel', 'GET /api/proxmox/presets', 'GET /api/proxmox/hosts',
     'GET /api/proxmox/guests', 'POST /api/proxmox/provisions', 'GET /api/proxmox/provisions', 'GET /api/proxmox/provisions/p1',
     'POST /api/proxmox/lifecycle-jobs', 'GET /api/proxmox/lifecycle-jobs', 'GET /api/proxmox/lifecycle-jobs/l1',
@@ -80,6 +80,22 @@ test('a transport failure is unreachable with the resolved base URL', async () =
 
 let srv;
 afterEach(async () => { if (srv) await new Promise((r) => srv.close(r)); srv = null; });
+
+// Probed at module level rather than in beforeAll: test.skipIf is evaluated when
+// the test is registered, which happens before any hook runs. A host without
+// IPv6 skips silently instead of failing on EADDRNOTAVAIL/EAFNOSUPPORT.
+const IPV6 = await new Promise((resolve) => {
+  const probe = http.createServer();
+  probe.once('error', () => resolve(false));
+  probe.listen(0, '::1', () => probe.close(() => resolve(true)));
+});
+
+test.skipIf(!IPV6)('an IPv6 base URL reaches the server: the literal\'s brackets never go to the resolver', async () => {
+  srv = http.createServer((req, res) => { res.setHeader('content-type', 'application/json'); res.end('[]'); });
+  await new Promise((r) => srv.listen(0, '::1', r));
+  const c = createApiClient({ baseUrl: `http://[::1]:${srv.address().port}`, token: 'tok', timeoutMs: 5000 });
+  expect(await c.listBoxes()).toEqual([]);
+});
 
 test('the default httpRequest speaks real HTTP with a fixed Content-Length and parses JSON', async () => {
   const seen = [];
@@ -142,4 +158,35 @@ test('a non-JSON 2xx body is an ApiError; an empty/whitespace 2xx body still res
   await expect(c.listBoxes()).rejects.toMatchObject({ kind: 'http', status: 200, message: 'non-JSON response from /api/boxes' });
   const c204 = createApiClient({ baseUrl: 'http://127.0.0.1:7437', token: 't', request: async () => ({ status: 204, json: null, text: '' }) });
   expect(await c204.listBoxes()).toBeNull();
+});
+
+test('an id outside the uuid-ish shape is refused before any request is made', async () => {
+  const calls = [];
+  const c = createApiClient({ baseUrl: 'http://127.0.0.1:7437', token: 't', request: async (o) => { calls.push(o); return { status: 200, json: {}, text: '{}' }; } });
+  for (const bad of ['..', '.', 'a/b', '%2e%2e', 'a b', '../../api/boxes/x', '']) {
+    await expect(c.getPane(bad)).rejects.toMatchObject({ kind: 'http', status: 400, message: expect.stringContaining('invalid id') });
+  }
+  await expect(c.getSetupJob('a/b')).rejects.toMatchObject({ kind: 'http', status: 400, path: '/api/setup/:id' });
+  expect(calls).toEqual([]);
+  // Every id the server actually mints still passes: a uuid, a script's fs-<uuid>, the host shell.
+  await c.getSetupJob('6f1c0c8e-2f9a-4a1b-8f4b-1b2c3d4e5f60');
+  await c.getFleetJob('fs-6f1c0c8e-2f9a-4a1b-8f4b-1b2c3d4e5f60');
+  await c.getPane('__local__');
+  expect(calls.map((o) => new URL(o.url).pathname)).toEqual([
+    '/api/setup/6f1c0c8e-2f9a-4a1b-8f4b-1b2c3d4e5f60',
+    '/api/fleet/jobs/fs-6f1c0c8e-2f9a-4a1b-8f4b-1b2c3d4e5f60',
+    '/api/boxes/__local__/pane',
+  ]);
+  expect(ID_RE.test('a'.repeat(128))).toBe(true);
+  expect(ID_RE.test('a'.repeat(129))).toBe(false);
+});
+
+test('a ca certificate is forwarded to the request layer, unlike the default', async () => {
+  const calls = [];
+  const request = async (o) => { calls.push(o); return { status: 200, json: [], text: '[]' }; };
+  const ca = '-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n';
+  await createApiClient({ baseUrl: 'https://tmux.example.com', token: 't', ca, request }).listBoxes();
+  await createApiClient({ baseUrl: 'https://tmux.example.com', token: 't', request }).listBoxes();
+  expect(calls[0].ca).toBe(ca);
+  expect(calls[1].ca).toBeUndefined();
 });

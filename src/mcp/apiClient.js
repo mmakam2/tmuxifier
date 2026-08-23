@@ -37,6 +37,13 @@ export const ROUTES = freezeRoutes({
   getLifecycleJob: ['GET', '/api/proxmox/lifecycle-jobs/:id'],
 });
 
+// Every id the server mints is a UUID (or `fs-<uuid>`), so the shape of a
+// legitimate id is narrow. Validating against it — rather than relying on
+// encodeURIComponent — is what makes the ROUTES allowlist structural: a `..`
+// or `a/b` id cannot normalize its way out of the template into a route the
+// table deliberately omits.
+export const ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
 export class ApiError extends Error {
   constructor(kind, message, { status, path, baseUrl } = {}) {
     super(message);
@@ -45,7 +52,7 @@ export class ApiError extends Error {
   }
 }
 
-export function httpRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 15000, insecure = false }) {
+export function httpRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 15000, insecure = false, ca }) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const settleResolve = (v) => { if (!settled) { settled = true; resolve(v); } };
@@ -58,9 +65,15 @@ export function httpRequest({ url, method = 'GET', headers = {}, body, timeoutMs
     const payload = body == null ? null : JSON.stringify(body);
     const reqHeaders = payload == null ? headers : { ...headers, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) };
     const req = mod.request({
-      hostname: u.hostname, port: u.port || (secure ? 443 : 80), path: u.pathname + u.search,
+      // new URL() keeps an IPv6 literal's brackets in u.hostname, but Node's
+      // own resolver does not accept them: `[::1]` fails with getaddrinfo
+      // ENOTFOUND. config.js brackets a bind address to build a valid URL, so
+      // this is the matching unwrap on the way back out.
+      hostname: u.hostname.replace(/^\[|\]$/g, ''), port: u.port || (secure ? 443 : 80), path: u.pathname + u.search,
       method, headers: reqHeaders, timeout: timeoutMs,
-      ...(secure ? { rejectUnauthorized: !insecure } : {}),
+      // `ca` is the server's own certificate when the URL was derived from this
+      // repo's TLS config — trusting exactly that cert, not disabling verification.
+      ...(secure ? { rejectUnauthorized: !insecure, ...(ca ? { ca } : {}) } : {}),
     }, (res) => {
       let data = '';
       res.setEncoding('utf8'); // decode as text, not per-chunk Buffer→string, so a
@@ -79,9 +92,13 @@ export function httpRequest({ url, method = 'GET', headers = {}, body, timeoutMs
   });
 }
 
-export function createApiClient({ baseUrl, token, insecure = false, timeoutMs = 15000, request = httpRequest }) {
+export function createApiClient({ baseUrl, token, insecure = false, ca, timeoutMs = 15000, request = httpRequest }) {
   const base = String(baseUrl).replace(/\/+$/, '');
-  const fill = (template, id) => template.replace(':id', encodeURIComponent(String(id)));
+  const fill = (template, id) => {
+    const s = String(id);
+    if (!ID_RE.test(s)) throw new ApiError('http', `invalid id: ${s.slice(0, 32)}`, { status: 400, path: template, baseUrl: base });
+    return template.replace(':id', encodeURIComponent(s));
+  };
 
   async function call(name, { id, query, body } = {}) {
     const [method, template] = ROUTES[name];
@@ -91,7 +108,7 @@ export function createApiClient({ baseUrl, token, insecure = false, timeoutMs = 
     const qs = pairs.length ? `?${pairs.join('&')}` : '';
     let res;
     try {
-      res = await request({ url: `${base}${path}${qs}`, method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, body, timeoutMs, insecure });
+      res = await request({ url: `${base}${path}${qs}`, method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, body, timeoutMs, insecure, ca });
     } catch (e) {
       throw new ApiError('unreachable', e?.code || e?.message || String(e), { path, baseUrl: base });
     }
