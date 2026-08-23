@@ -30,7 +30,9 @@ beforeAll(async () => {
     hostKeyPolicy: 'accept-new', sshConfigFile: lb.sshConfigFile,
   });
   // A predictable pane in the box's configured session: cat echoes what we type.
-  const mk = await boxActions.execCommand(box, `tmux new-session -d -s ${lb.session} 'printf mcp-marker\\\\n; exec cat'`);
+  // The marker carries real SGR (red, then reset) so read_pane's SGR-stripping
+  // is exercised end-to-end, not just unit-tested against a synthetic string.
+  const mk = await boxActions.execCommand(box, `tmux new-session -d -s ${lb.session} 'printf "\\\\033[31mmcp-marker\\\\033[0m\\\\n"; exec cat'`);
   expect(mk.code).toBe(0);
 
   const fleetScriptsStore = createFleetScriptsStore({ dataDir: dir });
@@ -67,10 +69,15 @@ beforeAll(async () => {
 }, 90_000);
 
 afterAll(async () => {
-  if (mcp) await mcp.close();
-  if (app) await app.close();
-  if (boxActions && lb) await boxActions.execCommand(box, `tmux kill-session -t =${lb.session}`).catch(() => {});
-  if (lb) await lb.cleanup();
+  try {
+    if (mcp) await mcp.close();
+  } finally {
+    try { if (app) await app.close(); }
+    finally {
+      try { if (boxActions && lb) await boxActions.execCommand(box, `tmux kill-session -t =${lb.session}`).catch(() => {}); }
+      finally { if (lb) await lb.cleanup(); }
+    }
+  }
 });
 
 test('list_boxes shows the real box with its status and sample', async () => {
@@ -83,10 +90,17 @@ test('read_pane sees real tmux output and send_text round-trips through the pane
   const before = await mcp.call('read_pane', { box_id: box.id, lines: 20 });
   expect(before.content[0].text).toMatch(new RegExp(`^pane local session ${lb.session} \\d+x\\d+ cursor \\d+,\\d+ alt:false mouse:false agent:gone\\n---\\n`));
   expect(before.content[0].text).toContain('mcp-marker');
+  // The fixture pane emits real SGR (see beforeAll); read_pane must strip it.
+  expect(before.content[0].text).not.toContain('\x1b');
   const sent = await mcp.call('send_text', { box_id: box.id, text: 'typed-via-mcp', submit: true });
   expect(sent.content[0].text).toBe('sent 13 chars + Enter');
-  await new Promise((r) => setTimeout(r, 700));
-  const after = await mcp.call('read_pane', { box_id: box.id, lines: 20 });
+  const deadline = Date.now() + 5000;
+  let after;
+  do {
+    after = await mcp.call('read_pane', { box_id: box.id, lines: 20 });
+    if (after.content[0].text.includes('typed-via-mcp')) break;
+    await new Promise((r) => setTimeout(r, 100));
+  } while (Date.now() < deadline);
   expect(after.content[0].text).toContain('typed-via-mcp');
 });
 
@@ -117,18 +131,22 @@ test('run_fleet_command by script_id sends the saved body under its frozen name'
 
 test('wait_for_agent returns immediately for the gone state and box_health lists the sample', async () => {
   const r = await mcp.call('wait_for_agent', { box_id: box.id, until: ['gone'], timeout_sec: 5 });
-  expect(r.content[0].text).toBe('state: gone\ntimed_out: false\nwaited_sec: 0');
+  // A slow first round trip could round waited_sec up to 1.
+  expect(r.content[0].text).toMatch(/^state: gone\ntimed_out: false\nwaited_sec: [01]$/);
   const h = await mcp.call('box_health', { box_id: box.id });
   expect(h.content[0].text).toMatch(/^latest: up\nevents \(\d+\):/);
 });
 
-test('the subsystems that are not wired degrade to readable lines, never crashes', async () => {
+test('unwired subsystems relay the server\'s error as a readable line, never a crash', async () => {
   const jobs = await mcp.call('list_jobs');
   expect(jobs.content[0].text).toMatch(/fleet \S+ done/);
   const guests = await mcp.call('list_guests');
-  expect(guests.isError).toBe(true); // no proxmox store wired in this harness → the route's error is relayed
+  // no proxmox store wired in this harness → the route's 502 is relayed as text
+  expect(guests.isError).toBe(true);
+  expect(guests.content[0].text).toMatch(/^502 \/api\/proxmox\/guests: /);
 });
 
+// Must remain the last test: it revokes the shared device token.
 test('revoking the device turns every call into the re-enroll message', async () => {
   const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
   const c = login.cookies.find((x) => x.name === 'tmuxifier_session');
