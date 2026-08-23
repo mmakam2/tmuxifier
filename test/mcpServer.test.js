@@ -118,3 +118,11 @@ test('connect() never sends for a notification', async () => {
   await new Promise((r) => setTimeout(r, 5));
   expect(sent).toEqual([]);
 });
+
+test('a prototype name is method-not-found, not a handler', async () => {
+  const s = server();
+  for (const method of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
+    const res = await s.handle(req(7, method));
+    expect(res).toMatchObject({ id: 7, error: { code: METHOD_NOT_FOUND } });
+  }
+});

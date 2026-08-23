@@ -1464,7 +1464,7 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   diagram, and a short section per feature area linking into `docs/`.
 - `docs/configuration.md`, `docs/authentication.md`, `docs/boxes-and-setup.md`,
   `docs/terminal.md`, `docs/dashboard.md`, `docs/fleet-and-health.md`, `docs/proxmox.md`,
-  `docs/android-app.md` —
+  `docs/android-app.md`, `docs/mcp.md` —
   the user-facing deep dives the README links to. Living documentation, maintained alongside
   the code (unlike the point-in-time records below); a feature change that used to update a
   README section now updates the matching guide.

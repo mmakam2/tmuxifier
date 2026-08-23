@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import { TOOL_DEFS, JOB_KINDS, GUEST_ACTIONS, AGENT_STATES, SEND_KEYS, WAIT_MAX_SEC, validateArgs, createToolRegistry, UnknownToolError } from '../src/mcp/tools.js';
 import { ApiError } from '../src/mcp/apiClient.js';
-import { NAMED_KEYS } from '../src/server/tmuxInject.js';
+import { NAMED_KEYS, sanitizeSendText } from '../src/server/tmuxInject.js';
 
 const NAMES = ['list_boxes', 'read_pane', 'box_health', 'list_fleet_scripts', 'list_presets', 'list_guests', 'list_jobs', 'job_status',
   'send_text', 'send_key', 'scroll_pane', 'run_fleet_command', 'cancel_fleet_job', 'add_box', 'start_setup', 'provision_guest', 'guest_power',
@@ -34,6 +34,16 @@ test('the untrusted-output warning is in the two descriptions that hand box outp
 
 test('send_key stays pinned to the server\'s NAMED_KEYS allowlist', () => {
   expect(new Set(SEND_KEYS)).toEqual(NAMED_KEYS);
+});
+
+// The description tells the model what its text will actually become. A newline
+// through send-keys IS Enter, so the server collapses whitespace runs — a model
+// that thinks it can lay out a multi-line prompt would submit it line by line.
+test('send_text describes what the server\'s sanitizer really does to the text', () => {
+  const desc = TOOL_DEFS.find((t) => t.name === 'send_text').description;
+  expect(desc).toMatch(/whitespace/i);
+  expect(desc).toMatch(/newlines? included/i);
+  expect(sanitizeSendText('first line\nsecond   line\ttab')).toBe('first line second line tab');
 });
 
 test('validateArgs reports missing/typed/enum/array-item problems', () => {

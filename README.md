@@ -21,6 +21,7 @@ back into the same state.
 - [Terminal features](#terminal-features)
 - [Themes](#themes)
 - [Android app (agent console)](#android-app-agent-console)
+- [MCP server](#mcp-server)
 - [Status, health & Fleet Command](#status-health--fleet-command)
 - [Proxmox](#proxmox)
 - [Security](#security)
@@ -224,12 +225,15 @@ pair it with; only push notifications need Google Play Services on the phone —
 phone gets everything else. Details in [the Android app guide](docs/android-app.md).
 
 ## MCP server
-`npm run mcp` is a dependency-free stdio [MCP](https://modelcontextprotocol.io) server that
-lets Claude Code (or any MCP client) operate the fleet: list boxes and their Claude agent
+`src/mcp/index.js` is a dependency-free stdio [MCP](https://modelcontextprotocol.io) server
+that lets Claude Code (or any MCP client) operate the fleet: list boxes and their Claude agent
 states, read panes, send prompts and keys to the Claude sessions on boxes, run fleet commands,
 start setup jobs, provision guests and operate guest power — with blocking `wait_for_agent` /
-`wait_for_job` tools so one call replaces a polling loop. It is a renderer of the same REST
-API the Android app uses, enrolled as a device (`npm run mcp-enroll`) and revocable from
+`wait_for_job` tools so one call replaces a polling loop. Register that file as the command —
+`claude mcp add tmuxifier -- node /path/to/tmuxifier/src/mcp/index.js` — from any directory;
+`npm run mcp` is for a manual smoke test only, and then as `npm run -s mcp`, because npm prints
+its run-script banner on stdout, which is the protocol stream. It is a renderer of the same
+REST API the Android app uses, enrolled as a device (`npm run mcp-enroll`) and revocable from
 Settings → Devices; administration (credentials, deletion, deprovision) has no code path in
 it. Setup and the tool reference are in [the MCP guide](docs/mcp.md).
 

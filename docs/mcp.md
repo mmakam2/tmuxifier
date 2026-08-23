@@ -33,23 +33,45 @@ https://host:port` (default: `TMUXIFIER_MCP_URL`, else derived from this repo's 
 
 ## Register with Claude Code
 
-On the Tmuxifier host, from anywhere:
+On the Tmuxifier host, from anywhere — register the `node` command shown, with the absolute
+path to this repo's `src/mcp/index.js`:
 
 ```bash
 claude mcp add tmuxifier -- node /path/to/tmuxifier/src/mcp/index.js
 ```
 
-Run from the repo folder the server needs no configuration: the base URL comes from `.env`
-(bind address, port, TLS) and the token from `data/mcp-token.json`. From another machine — a
-box orchestrating its siblings — set the two environment variables instead:
+Register `node …`, not `npm run mcp`: npm prints its run-script banner on **stdout**, which is
+the protocol stream, so a client reading it sees a corrupt first message. `npm run -s mcp`
+silences the banner and is fine for a manual smoke test:
+
+```bash
+# Should answer with a JSON-RPC result naming the server and its version.
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' | npm run -s mcp
+```
+
+No configuration is needed on the Tmuxifier host, wherever the client starts the process from:
+the repo folder is derived from the module, so the base URL comes from the URL recorded at
+enrollment (`--url`), else this repo's `.env` (bind address, port, TLS), and the token from
+`data/mcp-token.json`. When the server is configured with its own TLS certificate
+(`TMUXIFIER_TLS_CERT`/`TMUXIFIER_TLS_KEY`), the MCP server trusts exactly that certificate
+automatically; `TMUXIFIER_MCP_INSECURE=1` remains the fallback for a served chain that differs
+from it (a reverse proxy in front, say).
+
+From another machine — a box orchestrating its siblings — set the two environment variables
+instead:
 
 ```bash
 claude mcp add tmuxifier -e TMUXIFIER_MCP_URL=https://tmuxifier.example.com -e TMUXIFIER_MCP_TOKEN=… -- node /path/to/tmuxifier/src/mcp/index.js
 ```
 
-`TMUXIFIER_MCP_INSECURE=1` accepts a self-signed certificate. Environment variables win over
-the repo-derived values. The process logs one line to stderr at start naming the URL it
-resolved and where each setting came from; stdout is the protocol stream.
+That stores the plaintext token in Claude Code's own configuration file, so treat that file
+like `data/mcp-token.json`: it is a fleet credential, and revoking the device in Settings →
+Devices is what retires it.
+
+Environment variables win over everything else — including the `TMUXIFIER_MCP_*` lines in this
+repo's own `.env`, which the server reads like every other setting. The process logs one line
+to stderr at start naming the URL it resolved and where each setting came from; stdout is the
+protocol stream.
 
 ## Tools
 
@@ -66,7 +88,7 @@ Every tool returns compact text. Ids come from `list_boxes` / `list_jobs` / `lis
 | `list_guests` | Linked Proxmox guests: CT/VM, vmid, node, state, template flag. |
 | `list_jobs` | Fleet, setup, provision and lifecycle jobs newest first (`kind` filters). |
 | `job_status` | One job with its log tail; fleet jobs show per-target stdout/stderr. |
-| `send_text` | Type literal text; `submit: true` presses Enter afterwards — how you send a prompt to a Claude session. |
+| `send_text` | Type literal text — whitespace runs, newlines included, collapse to single spaces server-side, so a multi-line prompt arrives as one line. `submit: true` presses Enter afterwards — how you send a prompt to a Claude session. |
 | `send_key` | Press one named key: Enter, Escape, Tab, BSpace, Up, Down, Left, Right or C-c — the server's allowlist, mirrored as the tool's enum so an unsupported key is refused without a round trip. |
 | `scroll_pane` | Scroll a mouse-aware TUI (a Claude transcript) by wheel events; refused, with an explanation, on a plain shell. |
 | `run_fleet_command` | Run a command or a saved script (`script_id`) on several boxes as a fleet job. |

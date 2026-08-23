@@ -35,7 +35,10 @@ export function createMcpServer({ registry, serverInfo, log = () => {} }) {
     const kind = classify(msg);
     if (kind === 'invalid') return error(null, INVALID_REQUEST, 'invalid request');
     if (kind === 'notification' || kind === 'response') return null;
-    const fn = methods[msg.method];
+    // Object.hasOwn, not a bare lookup: `methods` is a plain object literal, so
+    // 'constructor'/'toString'/'valueOf' would otherwise resolve to Object's
+    // prototype and be called as handlers.
+    const fn = Object.hasOwn(methods, msg.method) ? methods[msg.method] : undefined;
     if (!fn) return error(msg.id, METHOD_NOT_FOUND, `method not found: ${msg.method}`);
     try {
       return result(msg.id, await fn(msg.params));
