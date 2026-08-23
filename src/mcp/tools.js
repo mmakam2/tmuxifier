@@ -6,6 +6,9 @@ import { fleetOverview, paneText, healthText, jobLine, jobDetail, scriptsText, p
 export const JOB_KINDS = ['fleet', 'setup', 'provision', 'lifecycle'];
 export const AGENT_STATES = ['waiting', 'working', 'gone'];
 export const GUEST_ACTIONS = ['start', 'shutdown', 'reboot', 'stop'];
+// Mirrors src/server/tmuxInject.js's NAMED_KEYS — pinned by a test that imports
+// that Set directly, since src/mcp must not import from src/server itself.
+export const SEND_KEYS = ['Enter', 'Escape', 'Tab', 'BSpace', 'Up', 'Down', 'Left', 'Right', 'C-c'];
 export const WAIT_DEFAULT_SEC = 120;
 export const WAIT_MAX_SEC = 540;
 
@@ -32,7 +35,7 @@ export const TOOL_DEFS = [
   { name: 'list_jobs', description: 'Newest-first summary of fleet, setup, provision and lifecycle jobs; filter with kind.', inputSchema: { type: 'object', properties: { kind: KIND, limit: int('Rows to return (default 20)') } } },
   { name: 'job_status', description: `One job with its log tail (fleet: per-target stdout/stderr). ${UNTRUSTED_JOB}`, inputSchema: { type: 'object', required: ['kind', 'id'], properties: { kind: KIND, id: str('Job id'), tail: int('Characters of log/output to keep from the end (default 4000, max 65536)') } } },
   { name: 'send_text', description: 'Type literal text into the box\'s session (control characters are stripped server-side). Set submit=true to press Enter afterwards — use it to send a prompt to a Claude session.', inputSchema: { type: 'object', required: ['box_id', 'text'], properties: { box_id: BOX_ID, text: str('Text to type'), submit: bool('Press Enter after the text (default false)') } } },
-  { name: 'send_key', description: 'Press one named key in the box\'s session: Enter, Escape, Tab, BSpace, Up, Down, Left, Right, PageUp, PageDown, Home, End, C-c, C-d, C-z, C-l, C-u, C-r (the server\'s allowlist is the authority; an unknown key is refused).', inputSchema: { type: 'object', required: ['box_id', 'key'], properties: { box_id: BOX_ID, key: str('Key name') } } },
+  { name: 'send_key', description: 'Press one named key in the box\'s session: Enter, Escape, Tab, BSpace, Up, Down, Left, Right, or C-c (the server\'s allowlist is the authority).', inputSchema: { type: 'object', required: ['box_id', 'key'], properties: { box_id: BOX_ID, key: { type: 'string', enum: SEND_KEYS, description: 'Key name' } } } },
   { name: 'scroll_pane', description: 'Scroll a mouse-aware TUI (a Claude Code transcript) by injecting wheel events. Refused with an explanation when the pane has no mouse tracking — use read_pane with more lines for a plain shell.', inputSchema: { type: 'object', required: ['box_id', 'direction'], properties: { box_id: BOX_ID, direction: { type: 'string', enum: ['up', 'down'] }, steps: int('Wheel steps 1–25 (default 3)') } } },
   { name: 'run_fleet_command', description: 'Run a shell command (or a saved script by script_id) on several boxes as a persisted fleet job. Returns the job id; follow it with wait_for_job.', inputSchema: { type: 'object', required: ['box_ids'], properties: { box_ids: { type: 'array', items: { type: 'string' }, description: 'Target box ids' }, command: str('Shell command text (exclusive with script_id)'), script_id: str('Saved script id from list_fleet_scripts (exclusive with command)') } } },
   { name: 'cancel_fleet_job', description: 'Cancel a running fleet job; targets not yet started are skipped.', inputSchema: { type: 'object', required: ['id'], properties: { id: str('Fleet job id') } } },
@@ -128,6 +131,7 @@ export function createToolRegistry({ client, sleep = (ms) => new Promise((r) => 
       return ok(jobDetail(kind, await jobGet[kind](id), { tail: Math.min(65536, Math.max(1, tail)) }));
     },
     async send_text({ box_id, text, submit = false }) {
+      if (!text.length) return fail('text is empty');
       const res = await client.sendKeys(box_id, { text });
       if (res?.skipped === 'empty') return ok('nothing sent: sanitizer removed every character');
       if (submit) await client.sendKeys(box_id, { key: 'Enter' });
@@ -182,6 +186,7 @@ export function createToolRegistry({ client, sleep = (ms) => new Promise((r) => 
     async call(name, args = {}) {
       const def = defs.get(name);
       if (!def) throw new UnknownToolError(name);
+      args = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
       const problem = validateArgs(def.inputSchema, args);
       if (problem) return fail(problem);
       try { return await handlers[name](args); }
