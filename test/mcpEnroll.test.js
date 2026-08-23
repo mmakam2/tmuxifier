@@ -2,6 +2,8 @@ import { test, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { buildServer } from '../src/server/server.js';
 import { createStore } from '../src/server/store.js';
 import { createDeviceStore } from '../src/server/deviceStore.js';
@@ -83,4 +85,21 @@ test('parseArgs reads code/name/url/insecure in both spellings', () => {
 test('parseArgs rejects a flag with no value', () => {
   expect(() => parseArgs(['--code'])).toThrow(/--code needs a value/);
   expect(() => parseArgs(['--name', '--insecure'])).toThrow(/--name needs a value/);
+});
+
+// The enroll CLI writes the token file and reads .env from the SAME repo root
+// rule as src/mcp/index.js — a direct `node /path/to/tmuxifier/scripts/
+// mcp-enroll.js` from elsewhere must not read a stranger's .env or leave the
+// plaintext token in their directory. Read out of a process started elsewhere,
+// since this runner's own cwd is the repo and would satisfy process.cwd().
+test('the enroll CLI resolves the repo from the module, not from the caller\'s cwd', async () => {
+  const repo = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
+  const script = new URL('../scripts/mcp-enroll.js', import.meta.url).href;
+  const elsewhere = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-enroll-cwd-'));
+  const out = await new Promise((resolve, reject) => {
+    execFile(process.execPath, ['-e', `import(${JSON.stringify(script)}).then((m) => process.stdout.write(m.REPO_ROOT))`], { cwd: elsewhere },
+      (err, stdout, stderr) => (err ? reject(new Error(`${err.message}\n${stderr}`)) : resolve(stdout)));
+  });
+  expect(path.resolve(out.trim())).toBe(repo);
+  expect(path.resolve(out.trim())).not.toBe(path.resolve(elsewhere));
 });

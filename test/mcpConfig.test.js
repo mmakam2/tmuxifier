@@ -33,3 +33,24 @@ test('insecure parses common truthy spellings only', () => {
 test('the token file path is the documented one', () => {
   expect(TOKEN_FILE).toBe('data/mcp-token.json');
 });
+
+test('a config-derived https URL also names the server\'s own certificate to trust', () => {
+  const https = resolveMcpConfig({ serverConfig: { bindAddress: '127.0.0.1', port: 8443, tlsCert: 'tls/cert.pem', tlsKey: 'tls/key.pem' }, tokenFile: { token: 't' } });
+  expect(https).toMatchObject({ baseUrl: 'https://127.0.0.1:8443', caFile: 'tls/cert.pem', source: { url: 'config' } });
+  // Plain http, an env URL and an enrollment URL are none of Tmuxifier's certificate:
+  // the far end may be a reverse proxy serving a chain this file has nothing to do with.
+  expect(resolveMcpConfig({ serverConfig: { bindAddress: '127.0.0.1', port: 7437 }, tokenFile: { token: 't' } }).caFile).toBeUndefined();
+  expect(resolveMcpConfig({ env: { TMUXIFIER_MCP_URL: 'https://tmux.example.com' }, serverConfig: { bindAddress: '127.0.0.1', port: 8443, tlsCert: 'tls/cert.pem', tlsKey: 'tls/key.pem' }, tokenFile: { token: 't' } }).caFile).toBeUndefined();
+  expect(resolveMcpConfig({ serverConfig: { bindAddress: '127.0.0.1', port: 8443, tlsCert: 'tls/cert.pem', tlsKey: 'tls/key.pem' }, tokenFile: { token: 't', url: 'https://tmux.example.com' } }).caFile).toBeUndefined();
+});
+
+test('the URL recorded at enrollment is honoured, under the env and over the server config', () => {
+  const fromFile = resolveMcpConfig({ serverConfig: { bindAddress: '127.0.0.1', port: 7437 }, tokenFile: { token: 't', url: 'https://tmux.example.com/' } });
+  expect(fromFile).toMatchObject({ baseUrl: 'https://tmux.example.com', source: { url: 'file', token: 'file' } });
+  expect(resolveMcpConfig({ env: { TMUXIFIER_MCP_URL: 'http://192.168.1.10:7437' }, tokenFile: { token: 't', url: 'https://tmux.example.com' } }))
+    .toMatchObject({ baseUrl: 'http://192.168.1.10:7437', source: { url: 'env' } });
+  // A blank or non-string url is no url at all — fall through to the server config.
+  for (const url of ['', '   ', '/', null, 42]) {
+    expect(resolveMcpConfig({ serverConfig: { bindAddress: '127.0.0.1', port: 7437 }, tokenFile: { token: 't', url } }).source.url).toBe('config');
+  }
+});

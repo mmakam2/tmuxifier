@@ -12,11 +12,11 @@ import { resolveMcpConfig, TOKEN_FILE } from '../src/mcp/config.js';
 import { loadConfig } from '../src/server/config.js';
 import { readEnvFile } from '../src/server/envFile.js';
 
-export async function enroll({ baseUrl, code, password, name = 'MCP orchestrator', insecure = false, request = httpRequest }) {
+export async function enroll({ baseUrl, code, password, name = 'MCP orchestrator', insecure = false, ca, request = httpRequest }) {
   const base = String(baseUrl).replace(/\/+$/, '');
   const body = code ? { code, name } : { password: password ?? '', name };
   let res;
-  try { res = await request({ url: `${base}/api/devices/enroll`, method: 'POST', body, headers: { Accept: 'application/json' }, insecure, timeoutMs: 15000 }); }
+  try { res = await request({ url: `${base}/api/devices/enroll`, method: 'POST', body, headers: { Accept: 'application/json' }, insecure, ca, timeoutMs: 15000 }); }
   catch (e) { throw new Error(`cannot reach Tmuxifier at ${base}: ${e?.code || e?.message || e}`); }
   if (res.status === 200 && res.json?.token) return { id: res.json.id, name: res.json.name, token: res.json.token };
   const msg = res.json?.error || `HTTP ${res.status}`;
@@ -98,10 +98,15 @@ async function promptHidden(question) {
   });
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
+// The repo's own files, found from the module rather than from process.cwd() —
+// `npm run mcp-enroll` sets cwd to the repo, but a direct `node
+// /path/to/tmuxifier/scripts/mcp-enroll.js` does not, and it would then read a
+// stranger's .env and write the token beside it. Same rule as src/mcp/index.js.
+export const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+
+async function main({ cwd = REPO_ROOT, argv = process.argv.slice(2) } = {}) {
+  const args = parseArgs(argv);
   if (args.help) { process.stderr.write(`${USAGE}\n`); return 0; }
-  const cwd = process.cwd();
   const env = { ...readEnvFile(path.join(cwd, '.env')), ...process.env };
   let serverConfig = null;
   try { serverConfig = loadConfig({}, { env, cwd }); } catch {}
@@ -109,8 +114,15 @@ async function main() {
     env: { ...env, ...(args.url ? { TMUXIFIER_MCP_URL: args.url } : {}), ...(args.insecure ? { TMUXIFIER_MCP_INSECURE: '1' } : {}) },
     serverConfig, tokenFile: { token: '-' },
   });
+  // Same rule as the MCP server: a config-derived https URL is this repo's own
+  // server, so trust exactly the certificate it serves.
+  let ca;
+  if (resolved.caFile) {
+    try { ca = fs.readFileSync(path.resolve(cwd, resolved.caFile)); }
+    catch { /* system trust store, or --insecure */ }
+  }
   const password = args.code ? undefined : await promptHidden(`Tmuxifier password for ${resolved.baseUrl}: `);
-  const r = await enroll({ baseUrl: resolved.baseUrl, code: args.code, password, name: args.name, insecure: resolved.insecure });
+  const r = await enroll({ baseUrl: resolved.baseUrl, code: args.code, password, name: args.name, insecure: resolved.insecure, ca });
   writeTokenFile(path.join(cwd, TOKEN_FILE), { id: r.id, name: r.name, token: r.token, url: resolved.baseUrl });
   process.stderr.write(`enrolled device "${r.name}" (${r.id}) — token written to ${TOKEN_FILE} (0600). Revoke it any time in Settings → Devices.\n`);
   return 0;
