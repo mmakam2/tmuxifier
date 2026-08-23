@@ -160,6 +160,7 @@ dashboard tabs are open. The full per-module map lives in [AGENTS.md](AGENTS.md)
 | [Standby dashboard](docs/dashboard.md) | service tiles, icons, Pi-hole/TrueNAS/UniFi/Immich cards |
 | [Status, health & Fleet Command](docs/fleet-and-health.md) | rate-limit-safe probing, health events, fleet jobs, themes |
 | [Proxmox](docs/proxmox.md) | LXC provisioning, guest lifecycle, deprovision |
+| [MCP server](docs/mcp.md) | enrolling, registering with Claude Code, the tool reference, what it cannot do |
 | [Deployment](docs/DEPLOY.md) | systemd, passwordless SSH keys, TLS, OAuth behind a tunnel |
 
 ## How persistence works
@@ -221,6 +222,16 @@ Play-signed build with auto-updates — it carries nothing project-specific, so 
 which needs the Android SDK on the host). Either way the app talks only to the Tmuxifier you
 pair it with; only push notifications need Google Play Services on the phone — a de-googled
 phone gets everything else. Details in [the Android app guide](docs/android-app.md).
+
+## MCP server
+`npm run mcp` is a dependency-free stdio [MCP](https://modelcontextprotocol.io) server that
+lets Claude Code (or any MCP client) operate the fleet: list boxes and their Claude agent
+states, read panes, send prompts and keys to the Claude sessions on boxes, run fleet commands,
+start setup jobs, provision guests and operate guest power — with blocking `wait_for_agent` /
+`wait_for_job` tools so one call replaces a polling loop. It is a renderer of the same REST
+API the Android app uses, enrolled as a device (`npm run mcp-enroll`) and revocable from
+Settings → Devices; administration (credentials, deletion, deprovision) has no code path in
+it. Setup and the tool reference are in [the MCP guide](docs/mcp.md).
 
 ## Status, health & Fleet Command
 A single server-side loop probes every box over a shared SSH ControlMaster with adaptive
