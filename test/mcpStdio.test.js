@@ -35,6 +35,19 @@ test('the entry point speaks MCP over stdio against the configured URL and keeps
   expect(mcp.child.exitCode).toBe(0);
 });
 
+// A client that closes its read end (or crashes) must not leave the server
+// hung or crash it on the next write's EPIPE — it should exit clean, like a
+// closed stdin.
+test('a closed stdout makes the process exit cleanly instead of crashing on EPIPE', async () => {
+  const mcp = spawnMcp({ env: { TMUXIFIER_MCP_URL: 'http://127.0.0.1:1', TMUXIFIER_MCP_TOKEN: 'tok' } });
+  await mcp.rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } });
+  mcp.child.stdout.destroy();
+  mcp.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'tools/list' }) + '\n');
+  const code = await new Promise((r) => mcp.child.once('exit', r));
+  expect(code).toBe(0);
+  expect(mcp.stderr()).toContain('stdout closed');
+});
+
 test('without a token the process explains itself on stderr and exits 2', async () => {
   expect(process.env.TMUXIFIER_MCP_TOKEN).toBeUndefined();
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-mcp-'));

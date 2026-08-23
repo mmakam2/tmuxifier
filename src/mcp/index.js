@@ -40,6 +40,16 @@ export async function main({ env = process.env, cwd = process.cwd(), stdin = pro
       send: (m) => stdout.write(encode(m)),
       onMessage: (cb) => { stdin.on('data', (chunk) => { for (const entry of parser.push(chunk)) cb(entry); }); },
     });
+    // A client that closes its read end (or crashes) turns the next stdout
+    // write into an EPIPE. Without a handler, an 'error' event with nobody
+    // listening throws and crashes the process; treat a dead stdout exactly
+    // like stdin ending — there is no one left to talk to. Resolving alone
+    // is not enough to let the process exit: stdin's own 'data' listener
+    // (registered above by onMessage) still holds the event loop open, since
+    // a client that only closed its read end hasn't closed our stdin — so
+    // destroy it too, releasing the handle that would otherwise keep the
+    // process alive forever.
+    stdout.on('error', (e) => { log(`stdout closed (${e?.code || e?.message || e}); exiting`); stdin.destroy(); resolve(); });
     stdin.on('end', resolve);
     stdin.on('close', resolve);
   });

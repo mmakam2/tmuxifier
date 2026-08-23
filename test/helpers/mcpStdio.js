@@ -20,11 +20,12 @@ export function spawnMcp({ env = {}, cwd = process.cwd() } = {}) {
         buf = lines.pop();
         for (const line of lines) {
           const msg = JSON.parse(line);
-          if (msg.id === id) { child.stdout.off('data', onData); resolve(msg); }
+          if (msg.id === id) { child.stdout.off('data', onData); child.off('exit', onExit); resolve(msg); }
         }
       };
+      const onExit = () => reject(new Error(`mcp exited: ${stderr.join('')}`));
       child.stdout.on('data', onData);
-      child.once('exit', () => reject(new Error(`mcp exited: ${stderr.join('')}`)));
+      child.once('exit', onExit);
       child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
     });
   }
@@ -37,7 +38,11 @@ export function spawnMcp({ env = {}, cwd = process.cwd() } = {}) {
     return res.result;
   }
   async function close() {
-    child.stdin.end();
+    // The child may already have exited (a premature crash, or a previous
+    // rpc() call already observed 'exit') — Node only ever fires 'exit' once
+    // per child, so a listener attached after the fact would hang forever.
+    if (child.exitCode !== null) return child.exitCode;
+    try { child.stdin.end(); } catch { /* already-destroyed pipe: nothing to end */ }
     await new Promise((r) => child.once('exit', r));
     return child.exitCode;
   }
