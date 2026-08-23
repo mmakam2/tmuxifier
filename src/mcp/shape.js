@@ -58,12 +58,12 @@ export function paneText(snap, box) {
   return `${head}\n---\n${stripSgr(snap.content)}`;
 }
 
-export function healthText(boxId, series, events, { maxEvents = 20 } = {}) {
+export function healthText(boxId, series = [], events = [], { maxEvents = 20 } = {}) {
   const last = series.at(-1);
   const latest = last
     ? ['latest: ' + upWord(undefined, last), metricsSeg(last), last.agent ? `agent: ${last.agent}` : ''].filter(Boolean).join(' · ')
     : 'latest: no samples';
-  const mine = events.filter((e) => e.boxId === boxId).slice(0, maxEvents);
+  const mine = (events || []).filter((e) => e.boxId === boxId).slice(0, maxEvents);
   const lines = [latest, `events (${mine.length}):`];
   for (const e of mine) lines.push(`${new Date(e.t).toISOString()} ${e.kind}${e.metric ? ` ${e.metric}=${e.value}` : ''}`);
   return lines.join('\n');

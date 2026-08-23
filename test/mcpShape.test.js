@@ -52,6 +52,8 @@ test('healthText summarizes the latest sample and the box\'s events newest first
     `${new Date(1000).toISOString()} up`,
   ]);
   expect(healthText('b1', [], [])).toBe('latest: no samples\nevents (0):');
+  expect(healthText('b1')).toBe('latest: no samples\nevents (0):');
+  expect(healthText('b1', [{ t: 1, up: true }], undefined)).toBe('latest: up\nevents (0):');
 });
 
 test('jobLine renders each kind, deriving fleet counts from targets when the raw job has none', () => {
