@@ -55,9 +55,10 @@
   --commit-rim: #8f8f8f;
   --commit-ink: #000000;
   /* --- Chrome face --------------------------------------------------------- */
-  /* Geist-adjacent system sans for the chassis legends. The TERMINAL font is
+  /* The real Geist (bundled in style.css's @font-face block, SIL OFL) for the
+     chassis legends, with the system sans as fallback. The TERMINAL font is
      untouched — that is termFont.ts's bundled Meslo stack. */
-  --face: ui-sans-serif, system-ui, sans-serif;
+  --face: 'Geist', ui-sans-serif, system-ui, sans-serif;
   /* --- Material: flat plates, hairline seams ------------------------------- */
   /* Keys are flat black plates defined by their 1px border, not machined caps:
      the extrusion collapses to a whisper of top light, the press to a shallow
@@ -80,6 +81,9 @@
   --scroll-thumb-hover: #444444; /* WebKit thumb hover; ALSO the stage-grid bezel
                                     edge, so it reads as a lit hairline rim */
   --scrim: rgba(0, 0, 0, 0.66);  /* modal/drawer backdrop wash */
+  /* --- Corners: tighter than the machined bench ---------------------------- */
+  --r-card: 8px;
+  --r-well: 6px;
   /* --- Script editor: the one chrome neutral of the syntax set ------------- */
   --syn-gutter: #555555;
   /* --- Terminal glass selection (plain literal, see header note) ----------- */

@@ -83,6 +83,35 @@
   unicode-range: U+2000-2BFF;
 }
 
+/* Geist Sans (Vercel's face, SIL OFL — vendored from the pinned npm `geist`
+   package): the CHROME face of the Vercel theme's --face stack, nothing more.
+   Declared here because theme files hold flat [data-theme] rules only (no
+   at-rules, pinned by test/styleTokens.test.js); a face no rendered element
+   references is never fetched, so these cost other themes nothing. The three
+   weights are the ones the chrome legends use (400/700 in this sheet, 600 in
+   the theme pane-header rules); the terminal never sees this face. */
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/Geist-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 600;
+  font-display: block;
+  src: url('./assets/fonts/Geist-SemiBold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('./assets/fonts/Geist-Bold.woff2') format('woff2');
+}
+
 /* === THEME TOKENS (color literals allowed) === */
 :root {
   color-scheme: dark;
@@ -116,6 +145,11 @@
   --auth: #a98bff;
   /* The one face (One Legend Face rule) */
   --face: 'MesloLGMDZ Nerd Font', 'MesloLGSDZ Nerd Font', ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Corner radii a theme may tighten. Only the two large tiers are tokens:
+     the 6px/4px control radii and the 999px pills read the same in every
+     world, but how soft a mounted panel's corner is IS the world. */
+  --r-card: 14px;   /* mounted cards: sidebar, login faceplate, modals */
+  --r-well: 8px;    /* recessed wells and inner cards: screen bay, logs, toasts */
   /* Shared material recipes */
   --key-border: #343943;
   --key-face: linear-gradient(180deg, #23262c, #1c1f25);
@@ -204,13 +238,16 @@ body {
   gap: 14px;
   padding: 26px 26px 24px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--r-card);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0) 48px),
     var(--panel);
   box-shadow: var(--lift), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 .login-brand { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 6px; }
+/* Literal 14px, not --r-card: this radius hugs the rounding BAKED INTO the
+   logo raster, so a theme tightening the card token must not open corner gaps
+   around the mark. */
 .login-logo { width: 84px; height: 84px; border-radius: 14px; border: 1px solid var(--border); box-shadow: 0 2px 0 rgba(0, 0, 0, 0.5), 0 6px 16px rgba(0, 0, 0, 0.4); }
 /* The nameplate engraving: lowercase (brand commitment), tracked wide, with a
    1px cut highlight below the glyphs' shadow — model-name on the faceplate. */
@@ -292,7 +329,11 @@ button.pkbtn {
   cursor: pointer;
   text-shadow: none;
 }
-button.pkbtn:hover:not(:disabled) { color: var(--text); }
+/* Re-assert the key material, not just the ink: `.login button:hover` (0,2,1)
+   outguns the base `button.pkbtn` (0,1,1), so without a background here the
+   commit-key hover gradient leaked onto the passkey key — safety orange under
+   Instrument, and white-under-white text under Vercel's white commit ramp. */
+button.pkbtn:hover:not(:disabled) { color: var(--text); background: var(--panel-2); }
 button.pkbtn:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--key-edge-down); }
 button.pkbtn:disabled { opacity: .5; cursor: default; }
 .login-note { font-size: .85em; color: var(--dim); text-align: center; }
@@ -318,7 +359,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 /* The control cluster: a mounted panel with its own bezel. */
 .sidebar {
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--r-card);
   display: flex; flex-direction: column; padding: 12px; gap: 10px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 90px),
@@ -592,7 +633,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 
 /* --- Service panels (modals) ---------------------------------------------- */
 .modal-backdrop { position: fixed; inset: 0; background: var(--scrim); display: flex; align-items: center; justify-content: center; z-index: 55; }
-.modal { width: 340px; max-width: 92vw; display: flex; flex-direction: column; gap: 10px; padding: 18px; border-radius: 14px; border: 1px solid var(--border); background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0) 56px), var(--panel); box-shadow: var(--lift), inset 0 1px 0 rgba(255, 255, 255, 0.05); }
+.modal { width: 340px; max-width: 92vw; display: flex; flex-direction: column; gap: 10px; padding: 18px; border-radius: var(--r-card); border: 1px solid var(--border); background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0) 56px), var(--panel); box-shadow: var(--lift), inset 0 1px 0 rgba(255, 255, 255, 0.05); }
 /* Panel headings: engraved title legends over a seam. */
 .modal h2 { margin: 0 0 4px; font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text); padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .modal .field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--dim); letter-spacing: 0.04em; }
@@ -674,7 +715,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .modal .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
 @media (max-width: 620px) { .modal .field-grid { grid-template-columns: 1fr; } }
 .modal .setup-options { display: flex; flex-direction: column; gap: 12px; }
-.modal fieldset.setup-section { margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
+.modal fieldset.setup-section { margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-well); display: flex; flex-direction: column; gap: 8px; }
 .modal fieldset.setup-section > legend { padding: 0 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: var(--dim); }
 .modal .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 @media (max-width: 620px) { .modal .tools-grid { grid-template-columns: 1fr; } }
@@ -976,7 +1017,7 @@ button.empty-kbd:hover { color: var(--text); }
   position: absolute; inset: 0; display: grid; grid-template: 1fr / 1fr;
   border: 1px solid var(--scroll-thumb-hover);
   border-top-color: var(--key-hi);
-  border-radius: 8px;
+  border-radius: var(--r-well);
   background: var(--screen);
   overflow: hidden;
   box-shadow: var(--recess), 0 2px 8px rgba(0, 0, 0, 0.3);
@@ -1207,7 +1248,7 @@ button.empty-kbd:hover { color: var(--text); }
 .drop-zone { position: absolute; }
 .drop-preview {
   position: absolute; z-index: 31; display: none; pointer-events: none;
-  border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent); border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent); border-radius: var(--r-well);
   background: color-mix(in srgb, var(--accent) 9%, transparent);
 }
 .drop-zone-left { left: 4px; top: 4px; bottom: 4px; width: 22%; }
@@ -1353,7 +1394,7 @@ button.empty-kbd:hover { color: var(--text); }
   background: var(--screen);
   border: 1px solid var(--border);
   border-top-color: var(--seam);
-  border-radius: 8px;
+  border-radius: var(--r-well);
   box-shadow: var(--recess);
 }
 
@@ -1456,7 +1497,7 @@ button.empty-kbd:hover { color: var(--text); }
 /* Both wells are bounded: whatever is pasted in, the modal's actions row stays
    on screen. (`overflow-x: auto` already computes `overflow-y` to `auto`, so
    the max-height is all the vertical scroll needs.) */
-.fleet-confirm-cmd { background: var(--screen); border: 1px solid var(--border); border-top-color: var(--seam); box-shadow: var(--recess); border-radius: 8px; padding: 10px; max-height: 24vh; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-family: var(--face); font-size: 12.5px; color: var(--muted); }
+.fleet-confirm-cmd { background: var(--screen); border: 1px solid var(--border); border-top-color: var(--seam); box-shadow: var(--recess); border-radius: var(--r-well); padding: 10px; max-height: 24vh; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-family: var(--face); font-size: 12.5px; color: var(--muted); }
 /* The selected-box names, under a count eyebrow (see buildTargetBand). Three
    wrapped lines, then the band scrolls — a 50-box selection used to push the
    Run key off the viewport. */
@@ -1624,7 +1665,7 @@ button.empty-kbd:hover { color: var(--text); }
    so the key states its consequence and waits for a second, deliberate click. */
 .fleet-cancel.armed { background: color-mix(in srgb, var(--crit) 14%, transparent); border-color: color-mix(in srgb, var(--crit) 55%, transparent); color: var(--crit); }
 .fleet-cancel[disabled] { opacity: 0.55; cursor: default; }
-.fleet-result { border: 1px solid var(--border); border-radius: 8px; margin: 8px 0; padding: 8px; background: rgba(255, 255, 255, 0.012); }
+.fleet-result { border: 1px solid var(--border); border-radius: var(--r-well); margin: 8px 0; padding: 8px; background: rgba(255, 255, 255, 0.012); }
 .fleet-result-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 /* A box label has no server-side length cap and this span had no rule at all,
    so a long one could not shrink below its content: it gave the whole drawer a
@@ -1717,7 +1758,7 @@ button.empty-kbd:hover { color: var(--text); }
 .event-row.ok .event-text { color: var(--ok); }
 
 /* Toast: a small readout module lifted above the bench. */
-.toast { position: fixed; bottom: 22px; left: 50%; translate: -50% 16px; background: var(--panel); color: var(--text); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); padding: 10px 16px; border-radius: 8px; font-family: var(--face); font-size: 12.5px; opacity: 0; transition: opacity .2s ease, translate .2s ease; z-index: 1000; pointer-events: none; box-shadow: var(--lift), inset 0 1px 0 rgba(255, 255, 255, 0.05); }
+.toast { position: fixed; bottom: 22px; left: 50%; translate: -50% 16px; background: var(--panel); color: var(--text); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); padding: 10px 16px; border-radius: var(--r-well); font-family: var(--face); font-size: 12.5px; opacity: 0; transition: opacity .2s ease, translate .2s ease; z-index: 1000; pointer-events: none; box-shadow: var(--lift), inset 0 1px 0 rgba(255, 255, 255, 0.05); }
 .toast.show { opacity: 1; translate: -50% 0; }
 .toast-error { border-color: color-mix(in srgb, var(--crit) 55%, transparent); color: var(--crit-soft); }
 @media (prefers-reduced-motion: reduce) { .toast { transition: opacity .2s ease; translate: -50% 0; } }
@@ -1780,7 +1821,7 @@ button.empty-kbd:hover { color: var(--text); }
 .pve-hub select, .pve-disk-modal select { padding: 9px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-family: var(--face); font-size: 14px; }
 .pve-err { color: var(--crit); font-size: 12.5px; }
 .pve-phase { font-size: 12.5px; color: var(--text); }
-.pve-log { max-height: 320px; overflow: auto; background: var(--screen); border: 1px solid var(--border); border-top-color: var(--seam); box-shadow: var(--recess); border-radius: 8px; padding: 10px; font-family: var(--face); font-size: 11px; white-space: pre-wrap; color: var(--muted); }
+.pve-log { max-height: 320px; overflow: auto; background: var(--screen); border: 1px solid var(--border); border-top-color: var(--seam); box-shadow: var(--recess); border-radius: var(--r-well); padding: 10px; font-family: var(--face); font-size: 11px; white-space: pre-wrap; color: var(--muted); }
 .pve-badge { font-family: var(--face); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel-2); }
 .pve-badge.done { color: var(--ok); } .pve-badge.error { color: var(--crit); } .pve-badge.running { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .pve-badge.cancelled { color: var(--dim); } .pve-badge.interrupted { color: var(--warn); }
@@ -1949,12 +1990,12 @@ button.empty-kbd:hover { color: var(--text); }
   }
   .phone-menu {
     width: 40px; height: 40px; flex: 0 0 auto;
-    background: none; border: 1px solid var(--border); border-radius: 8px;
+    background: none; border: 1px solid var(--border); border-radius: var(--r-well);
     color: var(--text); font-size: 16px; cursor: pointer; /* the file's icon-button step (.brand button, .fleet-panel-close) */
   }
   .phone-switch {
     flex: 1; min-width: 0; padding: 9px 10px;
-    border: 1px solid var(--border); border-radius: 8px;
+    border: 1px solid var(--border); border-radius: var(--r-well);
     background: var(--panel-2); color: var(--text); font-family: var(--face); font-size: 14px;
   }
   .phone-switch:disabled { opacity: 0.6; }
@@ -2040,7 +2081,7 @@ button.empty-kbd:hover { color: var(--text); }
   .touch-keys .touch-caps::-webkit-scrollbar { display: none; }
   .touch-keys button {
     min-width: 40px; height: 40px; padding: 0 7px; flex: 0 0 auto;
-    border: 1px solid var(--key-border); border-bottom-color: var(--bg); border-radius: 8px;
+    border: 1px solid var(--key-border); border-bottom-color: var(--bg); border-radius: var(--r-well);
     background: var(--key-face); color: var(--muted);
     box-shadow: 0 1px 0 rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.04);
     font-family: var(--face); font-size: 14px; cursor: pointer;
@@ -2085,7 +2126,7 @@ button.empty-kbd:hover { color: var(--text); }
   .touch-keys .composer-field {
     flex: 1 1 auto; min-width: 0; resize: none;
     min-height: 40px; max-height: 96px; /* COMPOSER_FIELD_MAX_PX */
-    padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px;
+    padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--r-well);
     background: var(--panel-2); color: var(--text);
     font-family: var(--face); font-size: 16px; line-height: 20px;
   }
