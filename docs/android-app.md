@@ -83,6 +83,14 @@ phone even when locked —
 suppressed while that session is attached in a browser, and filtered by the per-kind toggles.
 Tapping the notification opens that box's session directly.
 
+Push is the one feature that needs **Google Play Services on the phone** — FCM has no other
+delivery path. On a de-googled phone (GrapheneOS, CalyxOS, LineageOS without GApps) everything
+else works unchanged: the app is plain HTTPS polling of your server, and with no Firebase
+config on the server it never touches the messaging library. Leave `TMUXIFIER_FCM_APP_CONFIG`
+unset for such a deployment rather than pointing it at a project the phone can't register
+with; the fleet glance's waiting-first sort is the no-push way to see who needs you. A
+Google-free sender (UnifiedPush/ntfy) is a planned follow-up, not a current feature.
+
 ## Building and releasing
 
 Toolchain, memory caps, Firebase config, signing, the server-side Build app job, and the

@@ -85,7 +85,10 @@ works against any operator's Firebase project. An operator enabling push for the
 4. Restart Tmuxifier. Devices fetch the config on their next launch/enrollment and register
    against that project; "push on" appears in Settings → Devices.
 
-No config on the server = no push, everything else unaffected.
+No config on the server = no push, everything else unaffected. The phone side needs Google
+Play Services — FCM has no other delivery path — so a de-googled phone gets every feature but
+push; leave `TMUXIFIER_FCM_APP_CONFIG` unset on a server that serves such phones (see
+`docs/android-app.md` § Push notifications).
 
 ## Play Store (internal testing track)
 

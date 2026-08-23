@@ -212,12 +212,15 @@ your desktop windows), a semantic action row, a local-until-send composer, and F
 an agent needs you. Devices enroll with a single-use **pairing code** minted in Settings →
 Devices, where the signed APK is also downloadable once one has been published on your server.
 
-Two ways to get the app. Join the **[internal testing
-track](https://play.google.com/apps/internaltest/4701129402312577506)** for a Play-signed build
-that auto-updates — it carries nothing project-specific, so it works against *your* server once
-you pair it. Or build one on the server (Settings → Devices → **Build app**, which needs the
-Android SDK on the host) and install it from that download link. Either way the app talks only
-to the Tmuxifier you pair it with. Details in [the Android app guide](docs/android-app.md).
+Three ways to get the app. Run `npm run fetch-apk` on your server — it downloads the published
+build into `data/app/` against a pinned digest, needs no toolchain, and Settings → Devices
+offers the download link at once. Or join the **[internal testing
+track](https://play.google.com/apps/internaltest/4701129402312577506)** for the same
+Play-signed build with auto-updates — it carries nothing project-specific, so it works against
+*your* server once you pair it. Or build one on the server (Settings → Devices → **Build app**,
+which needs the Android SDK on the host). Either way the app talks only to the Tmuxifier you
+pair it with; only push notifications need Google Play Services on the phone — a de-googled
+phone gets everything else. Details in [the Android app guide](docs/android-app.md).
 
 ## Status, health & Fleet Command
 A single server-side loop probes every box over a shared SSH ControlMaster with adaptive
