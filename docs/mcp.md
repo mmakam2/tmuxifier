@@ -29,7 +29,10 @@ watermark, so revoke it when an orchestrator retires.
 
 Options: `--name "MCP orchestrator"` (the device name in Settings → Devices), `--url
 https://host:port` (default: `TMUXIFIER_MCP_URL`, else derived from this repo's `.env`),
-`--insecure` (accept a self-signed certificate).
+`--insecure` (accept a self-signed certificate). The URL enrollment paired against is recorded
+in the token file and reused on every start — host **and** port — so changing `TMUXIFIER_PORT`
+(or the bind address) afterwards means re-enrolling, or setting `TMUXIFIER_MCP_URL` to the new
+address.
 
 ## Register with Claude Code
 

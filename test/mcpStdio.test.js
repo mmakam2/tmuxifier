@@ -38,10 +38,11 @@ async function withMain({ cwd, env = {} }, fn) {
 
 async function runMain({ cwd, env = {} }) {
   const stdin = new PassThrough(); const stdout = new PassThrough();
-  const logs = [];
+  const logs = []; let out = '';
+  stdout.on('data', (c) => { out += c; });
   const code = main({ cwd, env, stdin, stdout, log: (m) => logs.push(m) });
   stdin.end();
-  return { code: await code, log: logs.join('\n') };
+  return { code: await code, log: logs.join('\n'), out };
 }
 
 // Drive the real entry point as a child over pipes: the transport, the stdout
@@ -87,16 +88,18 @@ test('a closed stdout makes the process exit cleanly instead of crashing on EPIP
   expect(mcp.stderr()).toContain('stdout closed');
 });
 
-test('without a token the process explains itself on stderr and exits 2', async () => {
-  expect(process.env.TMUXIFIER_MCP_TOKEN).toBeUndefined();
-  const cwd = await tmpdir();
-  const mcp = spawnMcp({ cwd });
-  let stdout = '';
-  mcp.child.stdout.on('data', (c) => { stdout += c; });
-  const code = await new Promise((r) => mcp.child.once('exit', r));
+// Driven in-process rather than through spawnMcp: a spawned child takes the
+// CLI branch, which calls main() with no arguments, so its cwd defaults to
+// REPO_ROOT and it reads THIS repo's .env and data/mcp-token.json — the temp
+// cwd would be decorative and the test would go red the day the repo is
+// actually enrolled. Injecting the cwd is the only hermetic way to describe a
+// host that has no token.
+test('without a token it explains itself on stderr, exits 2, and writes nothing to the protocol stream', async () => {
+  const cwd = await tmpdir(); // neither .env nor data/mcp-token.json in it
+  const { code, log, out } = await runMain({ cwd });
   expect(code).toBe(2);
-  expect(mcp.stderr()).toMatch(/no MCP token: set TMUXIFIER_MCP_TOKEN or run `npm run mcp-enroll`/);
-  expect(stdout).toBe('');
+  expect(log).toMatch(/no MCP token: set TMUXIFIER_MCP_TOKEN or run `npm run mcp-enroll`/);
+  expect(out).toBe('');
 });
 
 // An MCP client spawns this server with its OWN working directory, which is
@@ -166,42 +169,77 @@ test('.env supplies the MCP knobs themselves, not just the server settings', asy
 let opensslOk = true;
 try { execFileSync('openssl', ['version'], { stdio: 'ignore' }); } catch { opensslOk = false; }
 
-describe.runIf(opensslOk)('a config-derived https URL', () => {
-  let srv; let cwd; let port;
+describe.runIf(opensslOk)('this repo\'s own TLS endpoint', () => {
+  let srv; let other; let cwd; let enrolled; let port; let otherPort;
+
+  const certFor = (dir, cn) => {
+    const f = (n) => path.join(dir, n);
+    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-keyout', f('key.pem'), '-out', f('cert.pem'),
+      '-days', '1', '-nodes', '-subj', `/CN=${cn}`, '-addext', 'subjectAltName=IP:127.0.0.1'], { stdio: 'ignore' });
+    return { cert: fsSync.readFileSync(f('cert.pem')), key: fsSync.readFileSync(f('key.pem')) };
+  };
+  const api = (req, res) => {
+    res.setHeader('content-type', 'application/json');
+    if (req.headers.authorization !== 'Bearer tok') { res.statusCode = 401; return res.end('{"error":"unauthorized"}'); }
+    res.end(req.url === '/api/boxes' ? '[]' : '{}');
+  };
 
   beforeAll(async () => {
     cwd = await tmpdir();
-    await fs.mkdir(path.join(cwd, 'tls'));
-    await fs.mkdir(path.join(cwd, 'data'));
-    const f = (n) => path.join(cwd, 'tls', n);
-    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-keyout', f('key.pem'), '-out', f('cert.pem'),
-      '-days', '1', '-nodes', '-subj', '/CN=tmuxifier-test', '-addext', 'subjectAltName=IP:127.0.0.1'], { stdio: 'ignore' });
-    srv = https.createServer({ cert: fsSync.readFileSync(f('cert.pem')), key: fsSync.readFileSync(f('key.pem')) }, (req, res) => {
-      res.setHeader('content-type', 'application/json');
-      if (req.headers.authorization !== 'Bearer tok') { res.statusCode = 401; return res.end('{"error":"unauthorized"}'); }
-      res.end(req.url === '/api/boxes' ? '[]' : '{}');
-    });
+    enrolled = await tmpdir();
+    for (const d of [cwd, enrolled]) { await fs.mkdir(path.join(d, 'tls')); await fs.mkdir(path.join(d, 'data')); }
+    srv = https.createServer(certFor(path.join(cwd, 'tls'), 'tmuxifier-test'), api);
     await new Promise((r) => srv.listen(0, '127.0.0.1', r));
     port = srv.address().port;
-    await fs.writeFile(path.join(cwd, '.env'), `TMUXIFIER_PORT=${port}\nTMUXIFIER_TLS_CERT=tls/cert.pem\nTMUXIFIER_TLS_KEY=tls/key.pem\n`);
+    // A second server with a certificate of its own — the stranger this repo's
+    // certificate must never be offered to.
+    const otherDir = await tmpdir();
+    other = https.createServer(certFor(otherDir, 'somebody-else'), api);
+    await new Promise((r) => other.listen(0, '127.0.0.1', r));
+    otherPort = other.address().port;
+
+    const env = `TMUXIFIER_PORT=${port}\nTMUXIFIER_TLS_CERT=tls/cert.pem\nTMUXIFIER_TLS_KEY=tls/key.pem\n`;
+    await fs.writeFile(path.join(cwd, '.env'), env);
     await fs.writeFile(path.join(cwd, 'data/mcp-token.json'), JSON.stringify({ token: 'tok' }));
+    // The same host, enrolled: mcp-enroll records the URL it paired against on
+    // EVERY run, so this — not the bare token file above — is the ordinary case.
+    await fs.writeFile(path.join(enrolled, '.env'), env);
+    await fs.copyFile(path.join(cwd, 'tls/cert.pem'), path.join(enrolled, 'tls/cert.pem'));
+    await fs.copyFile(path.join(cwd, 'tls/key.pem'), path.join(enrolled, 'tls/key.pem'));
+    await fs.writeFile(path.join(enrolled, 'data/mcp-token.json'), JSON.stringify({ token: 'tok', url: `https://127.0.0.1:${port}` }));
   });
 
-  afterAll(async () => { if (srv) await new Promise((r) => srv.close(r)); });
-
-  test('is trusted by the certificate this repo is configured to serve', async () => {
-    await withMain({ cwd }, async ({ rpc, logs }) => {
-      expect(logs.join('\n')).toContain(`→ https://127.0.0.1:${port} (url from config, token from file)`);
-      const res = await rpc('tools/call', { name: 'list_boxes', arguments: {} });
-      expect(res.result).toEqual({ content: [{ type: 'text', text: 'no boxes' }] });
-    });
+  afterAll(async () => {
+    if (srv) await new Promise((r) => srv.close(r));
+    if (other) await new Promise((r) => other.close(r));
   });
 
-  test('but an env URL is a stranger\'s chain: the same certificate is not trusted there', async () => {
-    await withMain({ cwd, env: { TMUXIFIER_MCP_URL: `https://127.0.0.1:${port}`, TMUXIFIER_MCP_TOKEN: 'tok' } }, async ({ rpc }) => {
-      const res = await rpc('tools/call', { name: 'list_boxes', arguments: {} });
-      expect(res.result.isError).toBe(true);
-      expect(res.result.content[0].text).toMatch(/SELF_SIGNED_CERT_IN_CHAIN|DEPTH_ZERO_SELF_SIGNED_CERT|unable to verify/);
-    });
+  const listBoxes = async ({ dir, env = {} }) => withMain({ cwd: dir, env }, async ({ rpc, logs }) => {
+    const res = await rpc('tools/call', { name: 'list_boxes', arguments: {} });
+    return { res: res.result, log: logs.join('\n') };
+  });
+
+  test('is trusted when the config itself resolved the URL', async () => {
+    const { res, log } = await listBoxes({ dir: cwd });
+    expect(log).toContain(`\u2192 https://127.0.0.1:${port} (url from config, token from file)`);
+    expect(res).toEqual({ content: [{ type: 'text', text: 'no boxes' }] });
+  });
+
+  test('is trusted when the URL came from the token file enrollment wrote', async () => {
+    const { res, log } = await listBoxes({ dir: enrolled });
+    expect(log).toContain(`\u2192 https://127.0.0.1:${port} (url from file, token from file)`);
+    expect(res).toEqual({ content: [{ type: 'text', text: 'no boxes' }] });
+  });
+
+  test('is trusted when the env names that same URL', async () => {
+    const { res, log } = await listBoxes({ dir: cwd, env: { TMUXIFIER_MCP_URL: `https://127.0.0.1:${port}`, TMUXIFIER_MCP_TOKEN: 'tok' } });
+    expect(log).toContain('(url from env, token from env)');
+    expect(res).toEqual({ content: [{ type: 'text', text: 'no boxes' }] });
+  });
+
+  test('is never offered to a different endpoint, which serves a chain of its own', async () => {
+    const { res } = await listBoxes({ dir: cwd, env: { TMUXIFIER_MCP_URL: `https://127.0.0.1:${otherPort}`, TMUXIFIER_MCP_TOKEN: 'tok' } });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toMatch(/SELF_SIGNED_CERT_IN_CHAIN|DEPTH_ZERO_SELF_SIGNED_CERT|unable to verify/);
   });
 });

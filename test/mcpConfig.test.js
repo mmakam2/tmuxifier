@@ -34,14 +34,31 @@ test('the token file path is the documented one', () => {
   expect(TOKEN_FILE).toBe('data/mcp-token.json');
 });
 
-test('a config-derived https URL also names the server\'s own certificate to trust', () => {
-  const https = resolveMcpConfig({ serverConfig: { bindAddress: '127.0.0.1', port: 8443, tlsCert: 'tls/cert.pem', tlsKey: 'tls/key.pem' }, tokenFile: { token: 't' } });
-  expect(https).toMatchObject({ baseUrl: 'https://127.0.0.1:8443', caFile: 'tls/cert.pem', source: { url: 'config' } });
-  // Plain http, an env URL and an enrollment URL are none of Tmuxifier's certificate:
-  // the far end may be a reverse proxy serving a chain this file has nothing to do with.
+const TLS_CONFIG = { bindAddress: '127.0.0.1', port: 8443, tlsCert: 'tls/cert.pem', tlsKey: 'tls/key.pem' };
+
+test('the repo\'s own certificate is trusted whenever the RESOLVED url is the repo\'s TLS endpoint', () => {
+  // Derived from the config, nothing else naming it.
+  expect(resolveMcpConfig({ serverConfig: TLS_CONFIG, tokenFile: { token: 't' } }))
+    .toMatchObject({ baseUrl: 'https://127.0.0.1:8443', caFile: 'tls/cert.pem', source: { url: 'config' } });
+  // Named by the token file — which enrollment writes on EVERY run, so this is
+  // the ordinary case, not the exotic one. Same URL must mean the same trust.
+  expect(resolveMcpConfig({ serverConfig: TLS_CONFIG, tokenFile: { token: 't', url: 'https://127.0.0.1:8443' } }))
+    .toMatchObject({ baseUrl: 'https://127.0.0.1:8443', caFile: 'tls/cert.pem', source: { url: 'file' } });
+  // Named by the env, same URL: same trust again.
+  expect(resolveMcpConfig({ env: { TMUXIFIER_MCP_URL: 'https://127.0.0.1:8443/' }, serverConfig: TLS_CONFIG, tokenFile: { token: 't' } }))
+    .toMatchObject({ baseUrl: 'https://127.0.0.1:8443', caFile: 'tls/cert.pem', source: { url: 'env' } });
+});
+
+test('a url that is not the repo\'s TLS endpoint never inherits its certificate', () => {
+  // Somewhere else entirely: a proxy in front may serve a chain this file has
+  // nothing to do with, from either source.
+  expect(resolveMcpConfig({ serverConfig: TLS_CONFIG, tokenFile: { token: 't', url: 'https://tmux.example.com' } }).caFile).toBeUndefined();
+  expect(resolveMcpConfig({ env: { TMUXIFIER_MCP_URL: 'https://tmux.example.com' }, serverConfig: TLS_CONFIG, tokenFile: { token: 't' } }).caFile).toBeUndefined();
+  // Same host, different port: a different listener, not this one.
+  expect(resolveMcpConfig({ serverConfig: TLS_CONFIG, tokenFile: { token: 't', url: 'https://127.0.0.1:9443' } }).caFile).toBeUndefined();
+  // No TLS configured at all, and no server config at all.
   expect(resolveMcpConfig({ serverConfig: { bindAddress: '127.0.0.1', port: 7437 }, tokenFile: { token: 't' } }).caFile).toBeUndefined();
-  expect(resolveMcpConfig({ env: { TMUXIFIER_MCP_URL: 'https://tmux.example.com' }, serverConfig: { bindAddress: '127.0.0.1', port: 8443, tlsCert: 'tls/cert.pem', tlsKey: 'tls/key.pem' }, tokenFile: { token: 't' } }).caFile).toBeUndefined();
-  expect(resolveMcpConfig({ serverConfig: { bindAddress: '127.0.0.1', port: 8443, tlsCert: 'tls/cert.pem', tlsKey: 'tls/key.pem' }, tokenFile: { token: 't', url: 'https://tmux.example.com' } }).caFile).toBeUndefined();
+  expect(resolveMcpConfig({ tokenFile: { token: 't' } }).caFile).toBeUndefined();
 });
 
 test('the URL recorded at enrollment is honoured, under the env and over the server config', () => {

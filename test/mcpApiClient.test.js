@@ -1,6 +1,7 @@
 import { test, expect, afterEach } from 'vitest';
 import http from 'node:http';
-import { createApiClient, ApiError, ROUTES, ID_RE } from '../src/mcp/apiClient.js';
+import tls from 'node:tls';
+import { createApiClient, ApiError, ROUTES, ID_RE, trustBundle } from '../src/mcp/apiClient.js';
 
 const EXPECTED = {
   listBoxes: ['GET', '/api/boxes'],
@@ -184,9 +185,23 @@ test('an id outside the uuid-ish shape is refused before any request is made', a
 test('a ca certificate is forwarded to the request layer, unlike the default', async () => {
   const calls = [];
   const request = async (o) => { calls.push(o); return { status: 200, json: [], text: '[]' }; };
-  const ca = '-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n';
+  const ca = trustBundle('-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n');
   await createApiClient({ baseUrl: 'https://tmux.example.com', token: 't', ca, request }).listBoxes();
   await createApiClient({ baseUrl: 'https://tmux.example.com', token: 't', request }).listBoxes();
   expect(calls[0].ca).toBe(ca);
   expect(calls[1].ca).toBeUndefined();
+});
+
+// node:tls's `ca` option REPLACES the default trust store. Pinning the repo's
+// certificate must therefore ADD to it: a leaf issued by a CA the system
+// already trusts (mkcert, Caddy's internal CA) worked before the pin existed
+// and has to keep working.
+test('the trust bundle adds the certificate to the system roots rather than replacing them', () => {
+  const cert = '-----BEGIN CERTIFICATE-----\nours\n-----END CERTIFICATE-----\n';
+  const bundle = trustBundle(cert);
+  expect(Array.isArray(bundle)).toBe(true);
+  expect(bundle).toContain(cert);
+  expect(tls.rootCertificates.length).toBeGreaterThan(0);
+  expect(bundle.length).toBe(tls.rootCertificates.length + 1);
+  for (const root of tls.rootCertificates) expect(bundle).toContain(root);
 });

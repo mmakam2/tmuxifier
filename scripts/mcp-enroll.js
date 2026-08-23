@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
-import { httpRequest } from '../src/mcp/apiClient.js';
+import { httpRequest, trustBundle } from '../src/mcp/apiClient.js';
 import { resolveMcpConfig, TOKEN_FILE } from '../src/mcp/config.js';
 import { loadConfig } from '../src/server/config.js';
 import { readEnvFile } from '../src/server/envFile.js';
@@ -118,7 +118,7 @@ async function main({ cwd = REPO_ROOT, argv = process.argv.slice(2) } = {}) {
   // server, so trust exactly the certificate it serves.
   let ca;
   if (resolved.caFile) {
-    try { ca = fs.readFileSync(path.resolve(cwd, resolved.caFile)); }
+    try { ca = trustBundle(fs.readFileSync(path.resolve(cwd, resolved.caFile), 'utf8')); }
     catch { /* system trust store, or --insecure */ }
   }
   const password = args.code ? undefined : await promptHidden(`Tmuxifier password for ${resolved.baseUrl}: `);

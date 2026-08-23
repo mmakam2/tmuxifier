@@ -4,6 +4,15 @@
 // permission check; absent. Widening ROUTES is a reviewed edit.
 import http from 'node:http';
 import https from 'node:https';
+import tls from 'node:tls';
+
+// A `ca` option REPLACES Node's default trust store rather than adding to it,
+// so pinning the repo's own certificate would break the case that already
+// worked: a leaf issued by a CA the system already trusts (mkcert, Caddy's
+// internal CA). The pin has to be additive.
+export function trustBundle(cert) {
+  return [...tls.rootCertificates, cert];
+}
 
 function freezeRoutes(routes) {
   for (const row of Object.values(routes)) Object.freeze(row);

@@ -10,7 +10,22 @@ const TRUTHY = new Set(['1', 'true', 'yes', 'on']);
 const WILDCARD_BINDS = new Set(['0.0.0.0', '::', '']);
 
 export function resolveMcpConfig({ env = {}, serverConfig = null, tokenFile = null } = {}) {
-  let baseUrl; let urlSource; let caFile;
+  // The URL this repo's own config describes, computed whatever the precedence
+  // below ends up choosing. It is not only a fallback: it is the yardstick for
+  // "is the resolved URL this very server?", and therefore for whether the
+  // certificate on disk is ours to trust. Deriving it inside the config branch
+  // alone made the trust an accident of which source named the URL — and
+  // enrollment records that URL every time, so the file branch then shadowed
+  // the config branch and silently disarmed the certificate for the exact
+  // deployment it exists for.
+  let configUrl = null; let configSecure = false;
+  if (serverConfig) {
+    configSecure = Boolean(serverConfig.tlsCert && serverConfig.tlsKey);
+    const bind = String(serverConfig.bindAddress ?? '');
+    const host = WILDCARD_BINDS.has(bind) ? '127.0.0.1' : (bind.includes(':') ? `[${bind}]` : bind);
+    configUrl = `${configSecure ? 'https' : 'http'}://${host}:${serverConfig.port ?? 7437}`;
+  }
+  let baseUrl; let urlSource;
   const fileUrl = tokenFile && typeof tokenFile.url === 'string' ? tokenFile.url.trim().replace(/\/+$/, '') : '';
   if (env.TMUXIFIER_MCP_URL) {
     baseUrl = String(env.TMUXIFIER_MCP_URL).replace(/\/+$/, ''); urlSource = 'env';
@@ -18,19 +33,15 @@ export function resolveMcpConfig({ env = {}, serverConfig = null, tokenFile = nu
     // Enrollment recorded the URL it actually paired against (`--url`); a token
     // is only valid for that server, so the pair travels together.
     baseUrl = fileUrl; urlSource = 'file';
-  } else if (serverConfig) {
-    const secure = Boolean(serverConfig.tlsCert && serverConfig.tlsKey);
-    const scheme = secure ? 'https' : 'http';
-    const bind = String(serverConfig.bindAddress ?? '');
-    const host = WILDCARD_BINDS.has(bind) ? '127.0.0.1' : (bind.includes(':') ? `[${bind}]` : bind);
-    baseUrl = `${scheme}://${host}:${serverConfig.port ?? 7437}`; urlSource = 'config';
-    // The URL is this repo's own server, so its certificate is this repo's own
-    // file: trust exactly that one. Never for an env or enrollment URL — those
-    // may name a proxy in front of a different chain entirely.
-    if (secure) caFile = serverConfig.tlsCert;
+  } else if (configUrl) {
+    baseUrl = configUrl; urlSource = 'config';
   } else {
     baseUrl = 'http://127.0.0.1:7437'; urlSource = 'default';
   }
+  // Trust the repo's certificate whenever the resolved URL IS the repo's own
+  // TLS endpoint, whichever source named it — and never otherwise: a URL
+  // pointing anywhere else may be a proxy in front of a different chain.
+  const caFile = configSecure && baseUrl === configUrl ? serverConfig.tlsCert : undefined;
   let token; let tokenSource;
   if (env.TMUXIFIER_MCP_TOKEN) { token = String(env.TMUXIFIER_MCP_TOKEN); tokenSource = 'env'; }
   else if (tokenFile && typeof tokenFile.token === 'string' && tokenFile.token) { token = tokenFile.token; tokenSource = 'file'; }

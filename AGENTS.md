@@ -1245,8 +1245,13 @@ server's `NAMED_KEYS` as an enum, pinned to it by `test/mcpTools.test.js`); `sha
 formatters (pane text is `capture-pane -e` output, so SGR is stripped here); saved fleet
 scripts are read by the store's real field names (`script`/`description`), a mismatch the
 full-stack test was the only thing to catch; `config.js` the pure precedence
-(`TMUXIFIER_MCP_URL`/`_TOKEN`/`_INSECURE` env first, then the repo's own `loadConfig()` +
-token file); `index.js` the entry point, which redirects `console.log` to stderr before
+(URL: `TMUXIFIER_MCP_URL` env, then the URL recorded at enrollment in the token file, then the
+repo's own `loadConfig()`, then the default bind; token: `TMUXIFIER_MCP_TOKEN` env, then the
+token file — and when the RESOLVED URL is this repo's own TLS endpoint, whichever source named
+it, `caFile` names the configured certificate so the client trusts it **additively** on top of
+the system roots. Keying that on the source rather than on the URL is what a review caught:
+enrollment records the URL every time, so the file branch shadowed the config branch and
+disarmed the certificate for the one deployment it exists for); `index.js` the entry point, which redirects `console.log` to stderr before
 anything else runs because stdout is the protocol stream. The `read_pane` and `job_status`
 descriptions state that box output is untrusted data, not instructions — the same posture
 `status.js` takes toward `__META__`/`__AGENT__` lines. The full-stack integration test drives

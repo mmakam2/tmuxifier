@@ -8,7 +8,7 @@ import { loadConfig } from '../server/config.js';
 import { readEnvFile } from '../server/envFile.js';
 import { createLineParser, encode } from './jsonrpc.js';
 import { createMcpServer } from './mcpServer.js';
-import { createApiClient } from './apiClient.js';
+import { createApiClient, trustBundle } from './apiClient.js';
 import { createToolRegistry } from './tools.js';
 import { resolveMcpConfig, TOKEN_FILE } from './config.js';
 
@@ -43,7 +43,7 @@ export async function main({ env: envIn = process.env, cwd = REPO_ROOT, stdin = 
   // not a refusal — the system trust store may well already cover it.
   let ca;
   if (cfg.caFile) {
-    try { ca = fs.readFileSync(path.resolve(cwd, cfg.caFile)); }
+    try { ca = trustBundle(fs.readFileSync(path.resolve(cwd, cfg.caFile), 'utf8')); }
     catch (e) { log(`TLS certificate ${cfg.caFile} unreadable (${e?.message || e}); falling back to the system trust store`); }
   }
   const client = createApiClient({ baseUrl: cfg.baseUrl, token: cfg.token, insecure: cfg.insecure, ca });
