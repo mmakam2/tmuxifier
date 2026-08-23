@@ -5,7 +5,12 @@
 import http from 'node:http';
 import https from 'node:https';
 
-export const ROUTES = {
+function freezeRoutes(routes) {
+  for (const row of Object.values(routes)) Object.freeze(row);
+  return Object.freeze(routes);
+}
+
+export const ROUTES = freezeRoutes({
   listBoxes: ['GET', '/api/boxes'],
   addBox: ['POST', '/api/boxes'],
   getStatus: ['GET', '/api/status'],
@@ -30,7 +35,7 @@ export const ROUTES = {
   createLifecycleJob: ['POST', '/api/proxmox/lifecycle-jobs'],
   listLifecycleJobs: ['GET', '/api/proxmox/lifecycle-jobs'],
   getLifecycleJob: ['GET', '/api/proxmox/lifecycle-jobs/:id'],
-};
+});
 
 export class ApiError extends Error {
   constructor(kind, message, { status, path, baseUrl } = {}) {
@@ -42,6 +47,9 @@ export class ApiError extends Error {
 
 export function httpRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 15000, insecure = false }) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const settleResolve = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const settleReject = (e) => { if (!settled) { settled = true; reject(e); } };
     const u = new URL(url);
     const secure = u.protocol === 'https:';
     const mod = secure ? https : http;
@@ -55,11 +63,17 @@ export function httpRequest({ url, method = 'GET', headers = {}, body, timeoutMs
       ...(secure ? { rejectUnauthorized: !insecure } : {}),
     }, (res) => {
       let data = '';
+      res.setEncoding('utf8'); // decode as text, not per-chunk Buffer→string, so a
+      // multi-byte UTF-8 character split across chunk boundaries decodes correctly.
       res.on('data', (c) => { data += c; });
-      res.on('end', () => { let json = null; try { json = data ? JSON.parse(data) : null; } catch {} resolve({ status: res.statusCode, json, text: data }); });
+      res.on('end', () => { let json = null; try { json = data ? JSON.parse(data) : null; } catch {} settleResolve({ status: res.statusCode, json, text: data }); });
+      // A response that dies mid-body (socket destroyed before 'end') must reject,
+      // not hang forever — 'end' never fires for it, and timeoutMs only watches req.
+      res.on('aborted', () => settleReject(Object.assign(new Error('response aborted'), { code: 'ECONNRESET' })));
+      res.on('error', settleReject);
     });
     req.on('timeout', () => req.destroy(Object.assign(new Error('request timed out'), { code: 'ETIMEDOUT' })));
-    req.on('error', reject);
+    req.on('error', settleReject);
     if (payload != null) req.write(payload);
     req.end();
   });
@@ -84,6 +98,12 @@ export function createApiClient({ baseUrl, token, insecure = false, timeoutMs = 
     if (res.status === 401) throw new ApiError('unauthorized', res.json?.error || 'unauthorized', { status: 401, path, baseUrl: base });
     if (res.status < 200 || res.status >= 300) {
       throw new ApiError('http', res.json?.error || `HTTP ${res.status}`, { status: res.status, path, baseUrl: base });
+    }
+    // A non-JSON 2xx (e.g. a wrong base URL hitting the SPA's text/html fallback) must
+    // not resolve as null indistinguishable from an empty 204 — only a blank/whitespace
+    // body is legitimately "no content".
+    if (res.json === null && res.text && res.text.trim() !== '') {
+      throw new ApiError('http', `non-JSON response from ${path}`, { status: res.status, path, baseUrl: base });
     }
     return res.json ?? null;
   }

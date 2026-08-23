@@ -102,3 +102,44 @@ test('a refused port is unreachable end to end', async () => {
   const c = createApiClient({ baseUrl: 'http://127.0.0.1:1', token: 'tok', timeoutMs: 2000 });
   expect(await c.listBoxes().catch((e) => e)).toMatchObject({ kind: 'unreachable' });
 });
+
+test('a response aborted mid-body rejects as unreachable instead of hanging forever', async () => {
+  srv = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Length': '100', 'Content-Type': 'application/json' });
+    res.write('{"a":');
+    // The delay lets the client fully receive the headers (so the response
+    // callback fires and its handlers attach) before the socket dies —
+    // an immediate destroy races the client's own parser and can surface as
+    // a plain req-level error instead, which was never the gap.
+    setTimeout(() => res.socket.destroy(), 10);
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const c = createApiClient({ baseUrl: `http://127.0.0.1:${srv.address().port}`, token: 'tok', timeoutMs: 2000 });
+  await expect(c.listBoxes()).rejects.toMatchObject({ kind: 'unreachable' });
+});
+
+test('a multi-byte UTF-8 character split across a chunk boundary decodes correctly', async () => {
+  const buf = Buffer.from(JSON.stringify({ text: '─' }));
+  const splitAt = buf.indexOf(Buffer.from('─')) + 1; // splits inside the 3-byte character
+  srv = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.write(buf.subarray(0, splitAt));
+    setTimeout(() => { res.write(buf.subarray(splitAt)); res.end(); }, 5);
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const c = createApiClient({ baseUrl: `http://127.0.0.1:${srv.address().port}`, token: 'tok' });
+  const result = await c.listBoxes();
+  expect(result.text).toBe('─');
+});
+
+test('ROUTES is frozen at the table level and per-row', () => {
+  expect(Object.isFrozen(ROUTES)).toBe(true);
+  expect(Object.isFrozen(ROUTES.listBoxes)).toBe(true);
+});
+
+test('a non-JSON 2xx body is an ApiError; an empty/whitespace 2xx body still resolves null', async () => {
+  const c = createApiClient({ baseUrl: 'http://127.0.0.1:7437', token: 't', request: async () => ({ status: 200, json: null, text: '<!doctype html>' }) });
+  await expect(c.listBoxes()).rejects.toMatchObject({ kind: 'http', status: 200, message: 'non-JSON response from /api/boxes' });
+  const c204 = createApiClient({ baseUrl: 'http://127.0.0.1:7437', token: 't', request: async () => ({ status: 204, json: null, text: '' }) });
+  expect(await c204.listBoxes()).toBeNull();
+});
