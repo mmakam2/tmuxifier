@@ -114,8 +114,11 @@ export function scriptsText(scripts) {
   if (!scripts.length) return 'no saved scripts';
   const lines = [`${scripts.length} saved scripts`];
   for (const s of scripts) {
-    lines.push(`${s.id} ${s.name}${s.note ? ` — ${s.note}` : ''}`);
-    for (const l of String(s.body || '').split('\n')) lines.push(`  ${l}`);
+    // Mirrors fleetScriptsStore.js's own record shape (`script`/`description`),
+    // not the `body`/`note` names this used to assume — those were never the
+    // wire shape GET /api/fleet/scripts actually returns.
+    lines.push(`${s.id} ${s.name}${s.description ? ` — ${s.description}` : ''}`);
+    for (const l of String(s.script || '').split('\n')) lines.push(`  ${l}`);
   }
   return lines.join('\n');
 }

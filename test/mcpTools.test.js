@@ -59,7 +59,10 @@ function stubClient(over = {}) {
     sendKeys: async () => ({ ok: true }),
     startSetup: async () => ({ id: 's1', status: 'running', boxLabel: 'web', phase: 'running', createdAt: 'T' }),
     listSetupJobs: async () => [], getSetupJob: async () => ({ id: 's1', status: 'done', boxLabel: 'web', phase: 'done', log: 'ok', createdAt: 'T' }),
-    listFleetScripts: async () => [{ id: 'fs-1', name: 'Upgrade', note: '', body: 'apt upgrade' }],
+    // Real fleetScriptsStore.js field names (`script`/`description`), not
+    // `body`/`note` — a mismatched mock here once hid a run_fleet_command bug
+    // that a full-stack run against the real store caught.
+    listFleetScripts: async () => [{ id: 'fs-1', name: 'Upgrade', description: '', script: 'apt upgrade' }],
     createFleetJob: async (body) => ({ id: 'j1', status: 'running', command: body.command, scriptName: body.scriptName ?? null, createdAt: 'T', targets: body.boxIds.map((boxId) => ({ boxId, label: 'web', status: 'pending', code: null, stdout: '', stderr: '' })) }),
     listFleetJobs: async () => [{ id: 'j1', status: 'done', okCount: 1, targetCount: 1, errorCount: 0, command: 'uptime', createdAt: '2026-08-23T10:00:00.000Z' }],
     getFleetJob: async () => ({ id: 'j1', status: 'done', command: 'uptime', createdAt: 'T', targets: [{ label: 'web', status: 'ok', code: 0, stdout: 'up 1 day', stderr: '' }] }),

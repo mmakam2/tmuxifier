@@ -79,7 +79,10 @@ test('jobDetail tails fleet targets and job logs', () => {
 });
 
 test('scriptsText, presetsText and guestsText render their lists', () => {
-  expect(scriptsText([{ id: 'fs-1', name: 'Upgrade', note: 'apt', body: 'apt update\napt -y upgrade' }])).toBe('1 saved scripts\nfs-1 Upgrade — apt\n  apt update\n  apt -y upgrade');
+  // Field names mirror fleetScriptsStore.js's real record shape (`script`,
+  // `description`) — a mismatch here once hid a run_fleet_command bug that
+  // only a full-stack run against the real store caught.
+  expect(scriptsText([{ id: 'fs-1', name: 'Upgrade', description: 'apt', script: 'apt update\napt -y upgrade' }])).toBe('1 saved scripts\nfs-1 Upgrade — apt\n  apt update\n  apt -y upgrade');
   expect(scriptsText([])).toBe('no saved scripts');
   const presets = [{ id: 'pr1', name: 'small', hostId: 'h1', node: null, template: 'debian-12', cores: 2, memoryMiB: 2048, diskGiB: 8, net: { bridge: 'vmbr0', vlan: 20, ipMode: 'static', cidr: '192.168.1.50/24' } }];
   expect(presetsText(presets, [{ id: 'h1', name: 'pve', defaultNode: 'pve1' }])).toBe('pr1 small host=pve node=pve1 template=debian-12 2c 2048MiB disk 8GiB net vmbr0 vlan 20 static 192.168.1.50/24');

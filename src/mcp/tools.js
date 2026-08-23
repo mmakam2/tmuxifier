@@ -148,7 +148,8 @@ export function createToolRegistry({ client, sleep = (ms) => new Promise((r) => 
       if (script_id) {
         const script = ((await client.listFleetScripts()) || []).find((s) => s.id === script_id);
         if (!script) return fail(`unknown script: ${script_id}`);
-        body = { boxIds: box_ids, command: script.body, scriptName: script.name };
+        // fleetScriptsStore.js's record field is `script`, not `body`.
+        body = { boxIds: box_ids, command: script.script, scriptName: script.name };
       }
       const job = await client.createFleetJob(body);
       return ok(jobLine('fleet', job) + waitHint('fleet', job));
