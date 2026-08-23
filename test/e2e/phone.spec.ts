@@ -57,6 +57,17 @@ test('drawer opens, box opens one full pane, drawer closes on pick', async ({ pa
   await openLocalhost(page);
 });
 
+test('host shell: a tap anywhere on its row opens it AND closes the drawer', async ({ page }) => {
+  await login(page);
+  await expect(page.locator('.box')).toHaveCount(3);
+  await openDrawer(page);
+  // The dot is a plain span — reaching it means the ROW is the control, both
+  // for opening (main.ts) and for the drawer's close-on-activation list.
+  await page.locator('.local-shell .local-dot').click();
+  await expect(page.locator('.local-shell')).toHaveClass(/active/);
+  await expect(page.locator('.layout')).not.toHaveClass(/drawer-open/);
+});
+
 test('a desktop split renders as ONE pane; switcher swaps without reconnecting', async ({ page }) => {
   await login(page);
 

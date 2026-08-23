@@ -25,7 +25,7 @@ const SIDEBAR_COLLAPSED_KEY = 'tmuxifier.sidebarCollapsed';
 // its own click, so it never reaches this delegated listener at all.
 const CLOSES_DRAWER = [
   '.box',
-  '.local-name',
+  '.local-shell',
   '#home',
   '#settings',
   '#logout',

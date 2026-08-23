@@ -135,6 +135,18 @@ test('host shell clears active tag group after opening a grouped box', async ({ 
   await expect(page.locator('.local-shell')).toHaveClass(/active/);
 });
 
+test('host shell row opens from anywhere on the row, not just its name', async ({ page }) => {
+  await page.goto('/');
+  await page.fill('#pw', 'e2e');
+  await page.click('button:has-text("Unlock")');
+  await expect(page.getByRole('button', { name: /Prod\s+2/ })).toBeVisible({ timeout: 10000 });
+
+  // The status dot is a plain span with no handler of its own — a click on it
+  // only opens the shell if the ROW listens, the way a box row's <li> does.
+  await page.locator('.local-shell .local-dot').click();
+  await expect(page.locator('.local-shell')).toHaveClass(/active/);
+});
+
 test('edit box tag joins an existing group and can be cleared', async ({ page }) => {
   await page.goto('/');
   await page.fill('#pw', 'e2e');

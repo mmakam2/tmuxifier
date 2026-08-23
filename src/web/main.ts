@@ -1304,9 +1304,12 @@ async function renderDashboard() {
   }));
   void syncProxmoxButton();
 
-  // Local shell — name click opens terminal; the row also drags like a box row
-  app.querySelector('.local-name')!.addEventListener('click', () => openLocalShell());
+  // Local shell — the whole row opens the terminal, like a box row's <li>
+  // (its refresh/edit buttons stopPropagation, as the box actions do); the
+  // inner <button> stays so keyboard focus/Enter reach the same path. The
+  // row also drags like a box row.
   const localRow = app.querySelector('.local-shell') as HTMLElement;
+  localRow.addEventListener('click', () => openLocalShell());
   localRow.draggable = true;
   localRow.addEventListener('dragstart', (e) => {
     dragSourceId = '__local__';
