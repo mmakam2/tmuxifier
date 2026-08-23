@@ -29,10 +29,18 @@ export async function enroll({ baseUrl, code, password, name = 'MCP orchestrator
 
 export function writeTokenFile(file, record) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ ...record, enrolledAt: new Date().toISOString() }, null, 2) + '\n', { mode: 0o600 });
-  fs.chmodSync(tmp, 0o600);
-  fs.renameSync(tmp, file);
+  // Unique per-call name (jsonFile.js's tmpName idea), and the write/chmod/rename
+  // sequence is wrapped so a mid-write failure (e.g. rename onto a directory)
+  // cannot leave the plaintext token sitting in an orphaned tmp file.
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ ...record, enrolledAt: new Date().toISOString() }, null, 2) + '\n', { mode: 0o600 });
+    fs.chmodSync(tmp, 0o600);
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* already gone */ }
+    throw e;
+  }
 }
 
 export function parseArgs(argv) {
@@ -41,7 +49,11 @@ export function parseArgs(argv) {
     const a = argv[i];
     const eq = a.indexOf('=');
     const key = eq === -1 ? a : a.slice(0, eq);
-    const val = () => (eq === -1 ? argv[++i] : a.slice(eq + 1));
+    const val = () => {
+      const v = eq === -1 ? argv[++i] : a.slice(eq + 1);
+      if (v === undefined || v.startsWith('--')) throw new Error(`${key} needs a value`);
+      return v;
+    };
     if (key === '--code') out.code = val();
     else if (key === '--name') out.name = val();
     else if (key === '--url') out.url = val();

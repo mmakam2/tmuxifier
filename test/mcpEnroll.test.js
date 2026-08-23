@@ -66,9 +66,21 @@ test('writeTokenFile lands an 0600 JSON file atomically', async () => {
   expect(await fs.readdir(path.dirname(file))).toEqual(['mcp-token.json']);
 });
 
+test('writeTokenFile cleans up its tmp file when the rename fails', async () => {
+  const target = path.join(dir, 'data', 'mcp-token.json');
+  await fs.mkdir(target, { recursive: true }); // a directory sits at the final path, so rename(tmp, target) fails
+  expect(() => writeTokenFile(target, { id: 'd1', name: 'MCP orchestrator', token: 't', url: baseUrl })).toThrow();
+  expect(await fs.readdir(path.dirname(target))).toEqual(['mcp-token.json']);
+});
+
 test('parseArgs reads code/name/url/insecure in both spellings', () => {
   expect(parseArgs(['--code', 'ABCD-EFGH', '--name=orch', '--url', 'https://t.example.com', '--insecure']))
     .toEqual({ code: 'ABCD-EFGH', name: 'orch', url: 'https://t.example.com', insecure: true, help: false });
   expect(parseArgs([])).toEqual({ insecure: false, help: false });
   expect(parseArgs(['-h']).help).toBe(true);
+});
+
+test('parseArgs rejects a flag with no value', () => {
+  expect(() => parseArgs(['--code'])).toThrow(/--code needs a value/);
+  expect(() => parseArgs(['--name', '--insecure'])).toThrow(/--name needs a value/);
 });
