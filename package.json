@@ -20,7 +20,9 @@
     "gen-secret": "node scripts/gen-secret.js",
     "setup-voice": "node scripts/setup-voice.mjs",
     "fetch-icons": "node scripts/fetch-icons.mjs",
-    "fetch-apk": "node scripts/fetch-apk.mjs"
+    "fetch-apk": "node scripts/fetch-apk.mjs",
+    "mcp": "node src/mcp/index.js",
+    "mcp-enroll": "node scripts/mcp-enroll.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

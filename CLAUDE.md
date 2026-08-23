@@ -35,7 +35,9 @@ shell. Configuration, secrets, and runtime state all live **inside the repo**:
   credentials, the pinned relying party id, and the passkey-only flag — public keys only, so
   unlike `proxmox.json`/`netbox.json` nothing in it is encrypted, though it's still written
   `0o600`), `devices.json` (Android app device tokens — SHA-256 digests only, the token itself is
-  never stored; FCM registration tokens; per-device notification toggles), scraped service
+  never stored; FCM registration tokens; per-device notification toggles), `mcp-token.json` (the
+  MCP server's own device token, written `0o600` by `npm run mcp-enroll`; the plaintext token, so
+  it lives with the other `data/` secrets — revoke from Settings → Devices), scraped service
   favicons under `data/icons/`, the published Android app APK under `data/app/` (a signed build
   artifact the release checklist copies there, served by `GET /api/devices/apk` for the
   Settings → Devices download link — never committed), and SSH ControlMaster sockets under
@@ -71,6 +73,8 @@ npm run test:e2e     # playwright (spins up an isolated sshd-backed box; see tes
 npm run setup-voice  # headless equivalent of Settings -> Voice: builds whisper.cpp + downloads a pinned model into vendor/, records the choice in data/voice.json
 npm run fetch-icons  # downloads the pinned service-logo catalog into vendor/icons/ (one-time; the running server never contacts the CDN)
 npm run fetch-apk    # downloads the published Android APK into data/app/ against a pinned digest (no Android toolchain needed; the alternative is Settings -> Devices -> Build app)
+npm run mcp          # the stdio MCP server (register with: claude mcp add tmuxifier -- node /path/to/tmuxifier/src/mcp/index.js)
+npm run mcp-enroll   # one-time: enroll the MCP server as a device (pairing code or password) -> data/mcp-token.json
 ```
 
 ## Configuration model
@@ -1220,6 +1224,38 @@ and strands phones that installed from the link. When writing Kotlin with `\uXXX
 escapes, run the control-byte check (`grep -naP '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]'`) before
 building — generated escapes repeatedly land as raw bytes.
 
+## MCP server (`src/mcp/`)
+
+A dependency-free stdio MCP server (design:
+`docs/superpowers/specs/2026-08-19-mcp-server-design.md`) — a **renderer of the server APIs**
+in the Android app's sense: it speaks only HTTP to the running server as an enrolled device
+(`scripts/mcp-enroll.js` → `data/mcp-token.json`), never SSH or tmux, and inherits every
+REST-layer chokepoint rather than reimplementing one. `jsonrpc.js` is the pure
+newline-delimited framing; `mcpServer.js` the transport-agnostic lifecycle
+(`initialize`/`ping`/`tools/list`/`tools/call`, handlers run concurrently so a blocking
+`wait_for_*` never stalls a `read_pane`) that phase 2 (Streamable HTTP in Fastify) mounts
+unchanged; `apiClient.js` the allowlisted bearer-token client whose `ROUTES` table IS the
+blast-radius boundary — deprovision, every delete, forget-hostkey and all settings/credential
+CRUD have no code path, and `test/mcpApiClient.test.js` pins the exact method→route set, so
+widening it is a reviewed edit; `tools.js` the curated 19-tool catalog (`guest_power`'s enum
+structurally excludes `deprovision`; `read_pane` never sends `cols`/`rows`, which would summon
+the invisible sizing client and reflow the operator's session, and `send_key` carries the
+server's `NAMED_KEYS` as an enum, pinned to it by `test/mcpTools.test.js`); `shape.js` the pure
+formatters (pane text is `capture-pane -e` output, so SGR is stripped here); saved fleet
+scripts are read by the store's real field names (`script`/`description`), a mismatch the
+full-stack test was the only thing to catch; `config.js` the pure precedence
+(URL: `TMUXIFIER_MCP_URL` env, then the URL recorded at enrollment in the token file, then the
+repo's own `loadConfig()`, then the default bind; token: `TMUXIFIER_MCP_TOKEN` env, then the
+token file — and when the RESOLVED URL is this repo's own TLS endpoint, whichever source named
+it, `caFile` names the configured certificate so the client trusts it **additively** on top of
+the system roots. Keying that on the source rather than on the URL is what a review caught:
+enrollment records the URL every time, so the file branch shadowed the config branch and
+disarmed the certificate for the one deployment it exists for); `index.js` the entry point, which redirects `console.log` to stderr before
+anything else runs because stdout is the protocol stream. The `read_pane` and `job_status`
+descriptions state that box output is untrusted data, not instructions — the same posture
+`status.js` takes toward `__META__`/`__AGENT__` lines. The full-stack integration test drives
+the real stdio child through `test/helpers/mcpStdio.js`'s `spawnMcp`.
+
 ## Conventions
 
 - ESM everywhere (`"type": "module"`); Node 20+.
@@ -1432,7 +1468,7 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   diagram, and a short section per feature area linking into `docs/`.
 - `docs/configuration.md`, `docs/authentication.md`, `docs/boxes-and-setup.md`,
   `docs/terminal.md`, `docs/dashboard.md`, `docs/fleet-and-health.md`, `docs/proxmox.md`,
-  `docs/android-app.md` —
+  `docs/android-app.md`, `docs/mcp.md` —
   the user-facing deep dives the README links to. Living documentation, maintained alongside
   the code (unlike the point-in-time records below); a feature change that used to update a
   README section now updates the matching guide.
