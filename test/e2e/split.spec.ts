@@ -251,6 +251,48 @@ test('stale-zone regression: a second drag builds zones from the current layout'
   await page.mouse.up();
 });
 
+// Rearranging the stage: dragging a pane's HEADER (its identity strip on the
+// left, holding name/host/session dropdown) MOVES that exact pane — unlike a
+// sidebar row drag, which docks/duplicates. Same native-HTML5-drag technique
+// as the row drags above (mousedown, a couple of moves to promote the gesture
+// to a real drag, then move+drop over the target) — the header sets a
+// `text/x-tmuxifier-pane` payload on dragstart instead of the row's
+// `text/x-tmuxifier-box`, and main.ts's stage drop handler branches on it.
+test('drag a pane header onto another pane to swap their positions', async ({ page }) => {
+  await login(page);
+  await page.locator('.box .name', { hasText: 'localhost' }).click();
+  await page.getByRole('button', { name: 'Dock beside current terminal — db-primary' }).click();
+  await expect(page.locator('.stage-pane')).toHaveCount(2);
+
+  const firstPane = page.locator('.stage-pane').first();
+  const secondPane = page.locator('.stage-pane').nth(1);
+  await expect(firstPane.locator('.pane-title')).toHaveText(/localhost/i);
+  await expect(secondPane.locator('.pane-title')).toHaveText(/db-primary/i);
+  const firstId = await firstPane.getAttribute('data-pane-id');
+  const secondId = await secondPane.getAttribute('data-pane-id');
+
+  // Drag pane 1's header (grabbed by its title, inside the draggable
+  // `.pane-header-id` strip — not the session picker or a button, which stay
+  // clickable per spec) onto pane 2's CENTER: the innermost 'replace' zone.
+  const srcBox = (await firstPane.locator('.pane-header-id .pane-title').boundingBox())!;
+  const dstBox = (await secondPane.boundingBox())!;
+  await page.mouse.move(srcBox.x + srcBox.width / 2, srcBox.y + srcBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(srcBox.x + srcBox.width / 2 + 12, srcBox.y + srcBox.height / 2, { steps: 4 });
+  await page.mouse.move(dstBox.x + dstBox.width / 2, dstBox.y + dstBox.height / 2, { steps: 10 });
+  await expect(page.locator('.drop-zone-replace')).toBeVisible();
+  await page.mouse.up();
+
+  // A MOVE, not a duplicate: still exactly two panes, but their order has
+  // swapped — the layout changed, addressed by data-pane-id, not merely by
+  // title text (which a duplicate would also satisfy).
+  await expect(page.locator('.stage-pane')).toHaveCount(2);
+  await expect(page.locator('.stage-pane').first()).toHaveAttribute('data-pane-id', secondId!);
+  await expect(page.locator('.stage-pane').nth(1)).toHaveAttribute('data-pane-id', firstId!);
+  await expect(page.locator('.stage-pane').first().locator('.pane-title')).toHaveText(/db-primary/i);
+  await expect(page.locator('.stage-pane').nth(1).locator('.pane-title')).toHaveText(/localhost/i);
+});
+
 // Regression: the last terminal row must be fully visible, never clipped.
 //
 // `.term` is `inset: 0` with a padded gutter under the global `* { box-sizing:

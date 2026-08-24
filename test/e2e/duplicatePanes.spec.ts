@@ -47,7 +47,17 @@ async function promptIn(pane) {
 // (duplicateSession.ts's `chooseDuplicateSession`).
 async function readSessionName(page, pane) {
   await pane.click();
-  await page.keyboard.type("tmux display-message -p '#S'");
+  // `clear;` first: scrollback:0 means the pane's visible screen carries only
+  // what's currently ON SCREEN — but tmux itself does not wipe that on
+  // reattach, so an EARLIER command this same pane already had echoed back
+  // (e.g. another test's own `tmux kill-session -t '<name>-2' ...` cleanup,
+  // whose literal command TEXT contains this same pattern) can already
+  // satisfy the wait below before the fresh output this call is about to
+  // produce ever renders — a race a plain "read whatever matches" cannot
+  // resolve, since the stale text really is the only match at that instant.
+  // Clearing first removes the stale text from the screen entirely, so the
+  // next match can only be the fresh one.
+  await page.keyboard.type("clear; tmux display-message -p '#S'");
   await page.keyboard.press('Enter');
   const rows = pane.locator('.xterm-rows');
   await expect(rows).toContainText(/tmuxifiertest-[0-9a-f]{8}/i, { timeout: 10000 });
@@ -132,6 +142,92 @@ test('duplicating adopts a live unshown session before creating one', async ({ p
     await page.waitForTimeout(1200).catch(() => {});
     await firstPane.click().catch(() => {});
     await page.keyboard.type('tmux kill-session -t sparee2e 2>/dev/null').catch(() => {});
+    await page.keyboard.press('Enter').catch(() => {});
+  }
+});
+
+// CRITICAL regression guard: a pane-local session switch (the header dropdown,
+// pane-only per spec decision 3) closes that pane's own WS and reopens it
+// against the picked session via `/term`'s `session` query param, reusing the
+// SAME viewer key (client id). On the unfixed sessions.js, `sessions.open()`
+// reused that key's live/grace-window entry regardless of which session was
+// requested, so the pane silently reattached to the session it was trying to
+// LEAVE. This test fails on the unfixed code.
+test('pane-local dropdown switch reattaches THIS pane to the picked session, leaving the other pane and its session untouched', async ({ page }) => {
+  await login(page);
+  await page.locator('.box .name', { hasText: 'localhost' }).click();
+  const firstPane = page.locator('.stage-pane').first();
+  await promptIn(firstPane);
+
+  const configured = await readSessionName(page, firstPane);
+  await promptIn(firstPane);
+
+  const row = page.locator('.box', { has: page.locator('.name', { hasText: 'localhost' }) });
+  await row.locator('.dock').click();
+  await expect(page.locator('.stage-pane')).toHaveCount(2, { timeout: 10000 });
+  const secondPane = page.locator('.stage-pane').nth(1);
+  await promptIn(secondPane);
+
+  try {
+    // A spare session, created from pane 1 so pane 2's own attach is
+    // untouched by the act of creating it.
+    await firstPane.click();
+    await page.keyboard.type('tmux new-session -d -s swtiche2e');
+    await page.keyboard.press('Enter');
+    await promptIn(firstPane);
+
+    // Pane 2's own dropdown-switch: pick the spare session from pane 2's
+    // picker. Same open/probe idiom as sessionDropdown.spec.ts — reaching for
+    // the trigger re-probes the box so the just-created session is there.
+    // dockBox above already ran its own freshProbe.refresh for this box
+    // (duplicateBox), so let that freshness window (freshProbe.ts, main.ts's
+    // freshMs: 3000) lapse first — otherwise this hover answers from that
+    // still-fresh probe with no new request, and the wait below times out.
+    await page.waitForTimeout(3200);
+
+    const picker = secondPane.locator('.session-picker');
+    const trigger = picker.locator('.session-picker-trigger');
+    const probed = page.waitForRequest(
+      (r) => /\/api\/boxes\/[^/]+\/probe$/.test(r.url()) && r.method() === 'POST',
+      { timeout: 10000 },
+    );
+    await trigger.hover();
+    await probed;
+    await trigger.click();
+    const target = picker.locator('.session-picker-row', { hasText: 'swtiche2e' });
+    await expect(target).toHaveCount(1, { timeout: 10000 });
+    await target.locator('.session-picker-pick').click();
+
+    // THE regression assertion. Wait for the switch to reconnect, then read
+    // pane 2's live tmux session name straight off the pane.
+    await promptIn(secondPane);
+    await secondPane.click();
+    await page.keyboard.type("tmux display-message -p '#S'");
+    await page.keyboard.press('Enter');
+    await expect(secondPane.locator('.xterm-rows')).toContainText('swtiche2e', { timeout: 10000 });
+
+    // Pane 1 is untouched: still attached to its original configured session.
+    const firstAfter = await readSessionName(page, firstPane);
+    expect(firstAfter).toBe(configured);
+  } finally {
+    // Two sessions to reap: `swtiche2e` (created above) and `<configured>-2`
+    // — the session duplicateBox itself created for pane 2 at dock time
+    // (adopt-then-create finds nothing else live to adopt at that point, same
+    // as the first test above), now orphaned (detached, no client) once the
+    // picker moved pane 2 off it. Explicit targets, from pane 1 (never from
+    // inside pane 2, which is attached to swtiche2e) — same discipline as the
+    // tests above. Pane 2 stays docked and attached through this whole block,
+    // so the kill can race its reconnect-and-recreate; wait past the ~1s
+    // backoff base and re-issue the same (idempotent) kills to reap anything
+    // recreated.
+    await firstPane.click().catch(() => {});
+    await page.keyboard.type("tmux kill-session -t 'swtiche2e' 2>/dev/null").catch(() => {});
+    await page.keyboard.press('Enter').catch(() => {});
+    await page.keyboard.type(`tmux kill-session -t '${configured}-2' 2>/dev/null`).catch(() => {});
+    await page.keyboard.press('Enter').catch(() => {});
+    await page.waitForTimeout(1200).catch(() => {});
+    await firstPane.click().catch(() => {});
+    await page.keyboard.type("tmux kill-session -t 'swtiche2e' 2>/dev/null").catch(() => {});
     await page.keyboard.press('Enter').catch(() => {});
   }
 });
