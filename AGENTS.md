@@ -835,7 +835,32 @@ variant — at boot *and* on the password and passkey login paths, so a fresh si
 wearing the default until a manual reload, and it owns the clawd pref's one-time migration:
 a `null` server value plus a stored legacy key PATCHes this browser's pick up, while nothing
 stored anywhere leaves the pref unset rather than persisting a phantom choice. Google sign-in
-needs no wiring — it is a full navigation that returns through `start()` like any page load),
+needs no wiring — it is a full navigation that returns through `start()` like any page load.
+Duplicate panes (`stageLayout.ts`'s instance ids) are gestured from two places — dragging an
+already-docked box's sidebar row, or its `◫` dock button — both routed through `duplicateBox`,
+which runs `freshProbe.refresh(boxId)` before picking a session (`chooseDuplicateSession` in
+`duplicateSession.ts`: adopt the first live session no pane of this box already shows, in
+snapshot order, skipping unswitchable names; create `<configured>-2`… only when the box is dry)
+so the pick acts on a current session list rather than the 30s status cache; a `duplicating`
+Set gates re-entry per box and the pane cap is re-checked again after the await, since that
+await is exactly the window a second drop/click could have raced through. The two drag
+payloads mean different things: a pane header's own
+identity strip (`.pane-header-id`, `draggable`) carries `text/x-tmuxifier-pane` and MOVES that
+exact instance (`replacePane`/`movePane`, never `duplicateBox`), while a sidebar box row still
+carries `text/x-tmuxifier-box` and, on a box already docked, now DUPLICATES it instead — the
+same asymmetry the dock button encodes without a drag. Host Shell (`__local__`) is the one
+exception: its session lives on the Tmuxifier host itself, not on a box, so its row's drag/drop
+stays pure move (`moveOnly` in the drop handler) and it never grows a second instance.
+`openTerminal`'s `session` option — the pane-local override held in `paneSessions`, absent for a
+pane on its box's configured session — rides `/term`'s own `session` query param, which the
+server strict-validates against `SESSION_NAME_RE` and rejects (`1008`) rather than silently
+rewriting it; `paneOrdinal` (`ordinalOfInstance`) suffixes the viewer's client id (`-p2`, `-p3`…)
+so pane 1 keeps today's client id — and with it the grace-window reattach — while a duplicate
+gets its own PTY and its own reconnect grace, independent of pane 1's. The header's Reconnect
+cap (wired in `headerFor`) follows the same split: a pane on its box's configured session still
+calls the heavy `reconnectBox` (full ControlMaster teardown), but an overridden pane calls the
+lightweight kill route against its own `attachedSession` instead — killing just that pane's
+session, not the box's primary one),
 `api.ts`, `http.ts` (the shared fetch helpers — `jsonOf`/`jsonFetch`/
 `textFetch`/`httpError`/`statusOf`/`jsonBody` — and the central 401 seam: `onUnauthorized` is
 registered by `main.ts` to tear the workspace down to the login screen when the session dies,
@@ -863,14 +888,23 @@ mid-session flip leaves open terminals at the size they started with; the bump s
 BEFORE `clampFontSize` sees it, because that clamp falls back to the default 12 for anything
 out of range — an unsaturated bump past the ceiling came back smaller than the desktop it was
 meant to enlarge), `index.html`, `style.css`, plus feature modules —
-`stageLayout.ts` (the pure split-tree stage model — a node is a box-id leaf or a split
+`stageLayout.ts` (the pure split-tree stage model — a node is an INSTANCE leaf, `${box}#${ordinal}`
+(`instanceId`/`boxOfInstance`/`ordinalOfInstance`/`nextOrdinal`), or a split
 (orientation/children/ratios) in canonical form (splits ≥2 children, no same-orientation
 nesting), with stage-edge/pane-edge dock, atomic move, undock-collapse, path-addressed
-setRatio/toggleOrientation, and v2 serialize/restore with v1 migration and vanished-box
-pruning; the four-pane cap is main.ts's `MAX_PANES`, not the model's. `phonePaneOf` is the pure
-one-pane selection phone mode renders through — the focused id if it is still docked, else the
-first pane — and it only *reads* the tree, so a phone session renders a one-leaf view of the
-desktop split rather than flattening the persisted layout), `stagePanes.ts`
+setRatio/toggleOrientation, and v3 serialize/restore carrying a per-pane `sessions` record
+(instance id → session-name override) alongside the tree and focus. The instance id is what
+lets one BOX dock into several panes at once — every tree algorithm above still compares
+leaves by `===`, unchanged, and `#` is outside the box-id/session-name/client-id charsets so
+the separator can never collide with a real id. v1/v2 payloads — whose leaves are plain box
+ids, back when one instance per box was all that existed — migrate by appending `#1` to every
+leaf, so a pre-duplication layout restores unchanged; vanished-box pruning now checks
+`boxOfInstance(id)` against the known set, so an instance survives exactly as long as its
+underlying box does, whichever ordinal it is. The four-pane cap is main.ts's `MAX_PANES`, not
+the model's. `phonePaneOf` is the pure one-pane selection phone mode renders through — the
+focused id if it is still docked, else the first pane — and it only *reads* the tree, so a
+phone session renders a one-leaf view of the desktop split rather than flattening the
+persisted layout), `stagePanes.ts`
 (pure grid/ARIA helpers plus the recursive `.stage-split` DOM renderer with path-addressed
 WAI-ARIA splitter dividers, typed drop targets — stage-edge/pane-edge/replace — and
 spatial `focusMove`;
@@ -879,14 +913,18 @@ every pane renders a header via the `headerFor` hook and wraps its content in `.
 `tmuxifier.stageLayout`, and parks undocked terminals in a hidden div so they stay
 connected), `paneHeader.ts` (the pane header bar: the pure view-model — identity, status
 dot, and one state-chip slot with pane-state > connection > agent precedence, the agent
-read coming from the latest `/api/health/series` sample — plus the `buildPaneHeader` DOM
+read coming from the latest `/api/health/series` sample and gated on `sessionName` (the
+session THIS pane is attached to — per-pane since duplicate panes) matching `configuredSession`
+(the box's stored name): the hook marker `healthHistory.js` samples is keyed to the configured
+session only, so a pane parked on any other session renders no agent chip at all rather than a
+state it isn't actually showing — plus the `buildPaneHeader` DOM
 layer whose `update()` rewrites in place, so the voice button (mounted into the bar via
 `openTerminal`'s `voiceMount` seam) survives polls. It also exposes a `lifecycleSlot` for
 `paneLifecycle.ts` and, via `wantRefresh`, hands back the Reconnect cap rather than owning its
 click policy — that action kills the pane's tmux session, so `main.ts` wires arm-then-fire onto
 it instead. The identity half also carries the active-session/window dropdown (pure
-`sessionTargets`/`sessionTargetList`: the configured session first — kept offered even when
-tmux no longer lists it — with its windows indented beneath it (`WINDOW_INDENT`, `→ 1: zsh`),
+`sessionTargets`/`sessionTargetList`: the pane's own attached session first — kept offered even
+when tmux no longer lists it — with its windows indented beneath it (`WINDOW_INDENT`, `→ 1: zsh`),
 then every other live session and its own windows; `sessionTargetList` additionally picks
 which row is *selected* — the current session's ACTIVE window when the snapshot knows one,
 else the session row itself — so the header answers "which window am I looking at", not just
@@ -897,20 +935,24 @@ entry below) — but the rules governing what fills it are still decided here. L
 outside `SESSION_NAME_RE` (spaces, `@`, …) render as disabled rows rather than being hidden or
 offered: `store.js`'s `sanitizeSession` would silently rewrite a PATCHed name, so "switching" to
 one would create a fresh mangled-name session instead of attaching — the session is real, only
-unswitchable from here (`isSwitchableSession`, with a `switchSession` backstop). A locked
+unswitchable from here (`isSwitchableSession`, with a `switchPaneSession` backstop). A locked
 session's window rows inherit the same disabled verdict — EXCEPT the pane's own current session,
 whose windows stay selectable however it's named, since reaching one needs no PATCH at all.
 Picking a row runs `main.ts`'s `selectTarget`: a window row in the pane's current session is the
 cheap case, `api.selectWindow` alone with no PATCH and no PTY kill, since every client attached to
 that session follows the `select-window` on its own; a row naming a different session runs
-`switchSession` (PATCHing `sessionName`, which drops the box's terminal PTYs so every viewer
-reopens attached to the new session) — window-first when both are needed, so the forced reattach
-lands already on the chosen window. Either path is a plain callback rather than arm-then-fire:
-nothing here is destructive the way Reconnect (or the picker's own kill button) is. A window
-row's `value` is `w:<session>:<@id>` rather than `w:<@id>`, because a grouped session shares its
-window objects and two rows carrying one value would resolve a click to the wrong session —
-which, if the box's own session were the second of them, would fire a `switchSession` PATCH
-nobody asked for; the option-rebuild cache key carries `session` for the same reason),
+`switchPaneSession` — PANE-LOCAL by spec decision 3, not the old header PATCH: no `sessionName`
+write, no group close, no other pane or browser touched. It records the pick in a `paneSessions`
+map keyed by instance id, drops only THIS pane's own PTY (`closeTab(keepPane: true)`), and the
+repaint reopens it against the override via `/term`'s `session` query param — window-first when
+both are needed, so the forced reattach lands already on the chosen window. The box's *configured*
+session is Edit-modal business now; the header dropdown lost that path entirely. Either path is a
+plain callback rather than arm-then-fire: nothing here is destructive the way Reconnect (or the
+picker's own kill button) is. A window row's `value` is `w:<session>:<@id>` rather than `w:<@id>`,
+because a grouped session shares its window objects and two rows carrying one value would resolve
+a click to the wrong session — which, if the pane's own session were the second of them, would
+point this pane at the wrong session's override nobody asked for; the option-rebuild cache key
+carries `session` for the same reason),
 `sessionPicker.ts` (the popup that replaced the native `<select>` both the pane header and the
 Edit Box modal used: an `<option>` can host no per-row control, so it could never carry the
 per-row kill × this feature needed. Split the same way as `paneHeader.ts`/`stagePanes.ts` — a

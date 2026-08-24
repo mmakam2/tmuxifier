@@ -1,11 +1,13 @@
 # Terminal features
 
-Split terminals, pasting images and files, voice dictation, the host shell, per-box
-reconnect, and the phone layout. Part of the [Tmuxifier docs](../README.md).
+Split terminals, docking a box into several panes at once, pasting images and files, voice
+dictation, the host shell, per-box reconnect, and the phone layout. Part of the
+[Tmuxifier docs](../README.md).
 
 ## Split terminals
 
-Up to four boxes can share the stage, and splits nest. Drag a box row onto the stage:
+Up to four panes can share the stage, and splits nest — the same box can fill more than one of
+them (see [Several panes of one box](#several-panes-of-one-box) below). Drag a box row onto the stage:
 dropping on the stage's outer edge splits the whole stage (a full-width or full-height
 pane — two side-by-side terminals with a third across the bottom, say), dropping near an
 individual pane's edge splits just that pane, and dropping on a pane's center replaces it.
@@ -25,14 +27,19 @@ rather than only on the status poll's own schedule, so a session or window you j
 from the command line with `prefix-c` is already there when the list drops down instead of
 turning up a poll cycle later. Picking a window in the
 pane's **current** session switches instantly, with no reconnect: it's a plain tmux
-window-select on the box, and the attached pane just follows. Picking a window in a
-**different** session switches that session too — the same reconnect a plain session pick
-causes, landing every open terminal for that box already on the window you chose. Either way,
-remember that in tmux the current window belongs to the *session*, not to your browser tab:
-switching it moves anyone else attached to that session right along with you, whether that's
-a second browser or an SSH terminal on the box itself — exactly as if you'd pressed
-`prefix-n` there. The agent chip and notifications follow a session switch, since they track
-the configured session. A session whose name falls outside Tmuxifier's safe charset (letters,
+window-select on the box, and every client attached to that session — this pane, another
+open browser tab, an SSH terminal on the box itself — follows along, exactly as if you'd
+pressed `prefix-n` there, because in tmux the current window belongs to the *session*, not to
+any one client watching it. Picking a **different session**, though, reattaches *this pane
+only*: the picked session keeps running exactly as it was, this pane's terminal reconnects to
+it, and nothing else is touched — not another pane on the same box, not another browser tab,
+not the box's own configured session (see
+[Several panes of one box](#several-panes-of-one-box) below for what that means when a box has
+more than one pane docked). To change what a box opens to by default, use the session field in
+its Edit dialog instead — that's the one place a session choice is still global. The agent
+chip and notifications stay pinned to the box's **configured** session specifically, so a pane
+you've pointed at some other session goes quiet — that's the cue that Tmuxifier isn't tracking
+agent state for whatever this pane happens to be showing, not a bug. A session whose name falls outside Tmuxifier's safe charset (letters,
 digits, `_`, `-`, up to 64) is listed but greyed out — switching would silently rename it, so
 it can only be attached from the command line — and its windows are greyed out with it,
 except when it's the pane's own current session, where no switch is needed to reach them. The
@@ -56,6 +63,49 @@ attached to is allowed, and does exactly what the **Reconnect** button already d
 session: the terminal drops and reconnects to a fresh, empty session of the same name. Nothing
 disappears from the list on the strength of the click alone — Tmuxifier confirms the kill against
 the box first, so a failed attempt (the box went away, say) leaves the row right where it was.
+
+## Several panes of one box
+
+A box isn't limited to one pane on the stage. Drag its sidebar row onto a copy of itself that's
+already docked — or press its ◫ **Dock** button while it's showing somewhere already — and
+Tmuxifier docks a *second* pane of the same box, up to the same four-pane limit that applies to
+any mix of boxes. (Host Shell is the one exception: its session lives on the Tmuxifier host
+itself, not on a box, so dragging or docking it always just *moves* the existing pane — it never
+duplicates.)
+
+The new pane's session follows an **adopt-then-create** rule. Tmuxifier first re-checks the
+box's live tmux sessions, so the pick isn't made against a status snapshot that could be a few
+seconds stale, then looks for a session **no pane of this box is already showing** and attaches
+the new pane to the first one it finds (skipping any name outside the safe charset described
+above, for the same reason the dropdown greys those out). Only once every live session is
+already claimed by a pane does it fall back to creating a new one — `<configured-session>-2`,
+then `-3`, and so on. So duplicating a box that has a second idle tmux session sitting there
+puts you straight into it; duplicating a box with only its usual one session gives you a fresh
+second session to work in instead.
+
+Each pane's own active-session dropdown is **pane-local** (see [Split terminals](#split-terminals)
+above): picking a different session there reattaches that one pane only, and neither the box's
+other panes, nor any other open browser tab, nor the box's own configured session change as a
+result. The **Reconnect** button in a pane's header follows the same split — on a pane still
+showing the box's configured session it does the same full reconnect as the sidebar row's own
+↻ (SSH plumbing torn down and rebuilt); on a pane you've pointed at a different session, it
+instead just kills *that pane's own session* and reconnects to a fresh one of the same name,
+leaving the box's SSH connection and its other panes alone.
+
+Point two panes at the **same** session — say, a duplicate you haven't yet re-pointed anywhere
+else — and tmux treats them exactly as it treats any two clients attached to one session: they
+mirror each other, keystrokes typed in either land in the same place, and whichever pane you
+last interacted with decides the shared terminal's size (tmux's own "most recently used client
+wins" rule) — the same thing that already happens if you open one box in two browser tabs.
+Tmuxifier doesn't fight this; it's ordinary tmux behavior, not a bug to work around. If you want
+two genuinely independent views of a box, point the panes at different sessions instead.
+
+Rearranging the stage works differently for a pane than for a box in the sidebar: drag a pane's
+**header** — the identity strip on the left holding its name, host, and session dropdown — to
+move that exact pane to a new spot, using the same stage-edge/pane-edge/replace drop zones as
+docking a box from the sidebar. Dragging a box's *sidebar* row is still how you add a pane (or,
+per above, duplicate one that's already docked) — the header is for rearranging what's already
+on the stage, not for adding to it.
 
 ## Pasting images & files
 
