@@ -1025,8 +1025,20 @@ function paneHooks(): PaneHooks {
       if (built.refreshBtn) {
         wireReconnectButton(built.refreshBtn, `pane:${id}`, `${model.title} terminal`, async () => {
           if (isLocalPane(id)) await api.reconnectLocalShell();
-          else if (paneSessions.has(id)) await api.killTarget(boxOfInstance(id), attachedSession(id));
-          else await api.reconnectBox(boxOfInstance(id));
+          else if (paneSessions.has(id)) {
+            try {
+              await api.killTarget(boxOfInstance(id), attachedSession(id));
+            } catch (e: any) {
+              // Unlike the box-level reconnectBox path, this session kill can
+              // fail outright (502 unreachable, 409 mid-setup) with nothing
+              // else to fall back on — surface it, same as the header
+              // dropdown's own killTarget, and skip the close/repaint below
+              // rather than tearing the PTY down for a kill that never
+              // happened on the box.
+              showToast(e?.message || 'reconnect failed', 'error');
+              return;
+            }
+          } else await api.reconnectBox(boxOfInstance(id));
           closeTab(id, { keepPane: true });
           repaintStage();
         });
@@ -1230,11 +1242,20 @@ async function duplicateBox(boxId: string, drop: DropSpec | { kind: 'replace'; p
     // Re-check: the await above is exactly the window a second call could
     // have docked into, so the entry check alone is not enough.
     if (drop.kind !== 'replace' && panesOf(stageRoot).length >= MAX_PANES) return;
+    // The replace target can vanish (undocked elsewhere) during that same
+    // await. Bail before an override/focus ever get set for this duplicate's
+    // iid — stranding them on a pane that never gets docked helps no one.
+    if (drop.kind === 'replace' && !panesOf(stageRoot).includes(drop.paneId)) return;
     const configured = box.sessionName || 'web';
     const live = (latestStatus[boxId]?.sessions ?? []).map((s) => s.name).filter(Boolean);
     const shown = instancesOfBox(boxId).map((iid) => attachedSession(iid));
     const session = chooseDuplicateSession(configured, live, shown);
     const iid = instanceId(boxId, nextOrdinal(boxId, instancesOfBox(boxId)));
+    // A re-minted ordinal (the pane that held it before was undocked/closed
+    // and its override never got cleaned up — see closeTab below) must not
+    // resurrect a STALE override just because this new duplicate happens to
+    // land on the configured session: clear unconditionally first.
+    paneSessions.delete(iid);
     if (session !== configured) paneSessions.set(iid, session);
     if (drop.kind === 'replace') {
       stageRoot = replacePane(stageRoot, drop.paneId, iid);
@@ -2164,10 +2185,13 @@ function closeTab(id: string, opts?: { keepPane?: boolean }) {
   const t = tabs.get(id);
   if (t) {
     t.term.dispose(); t.el.remove(); tabs.delete(id); connStates.delete(id);
-    // A keepPane teardown is a reconnect/switch that rebuilds this very pane, so
-    // its session override must survive; a full teardown retires the instance.
-    if (!opts?.keepPane) paneSessions.delete(id);
   }
+  // A keepPane teardown is a reconnect/switch that rebuilds this very pane, so
+  // its session override must survive; a full teardown retires the instance —
+  // outside the `if (t)` guard so a pane with no live tab (a stopped/
+  // setting-up panel never had one) still has its override cleared, not left
+  // to resurrect onto whatever ordinal gets re-minted next.
+  if (!opts?.keepPane) paneSessions.delete(id);
   if (isLocalPane(id)) updateLocalDot();
   if (!opts?.keepPane && panesOf(stageRoot).includes(id)) undockBox(id);
 }
