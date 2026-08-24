@@ -30,9 +30,12 @@ const listeners = new Set<() => void>();
 // disagree. A theme that wants its own mark drops the asset beside the default
 // and registers it here, in theme.ts and not themes.ts, because node tests
 // import the manifest and must never pull binary assets through vitest.
-// tmuxifier-logo-vercel.png is the same recipe at hue-rotate(185deg): the
-// matrix is a linear approximation, so 185° (not the naive 172°) is what lands
-// the amber glyphs on Vercel blue's ~213° hue.
+// tmuxifier-logo-vercel.png is a per-pixel HSL remap instead (Chromium
+// canvas): chromatic pixels — the glyphs — get hue pinned to #0070f3's
+// 212.6°, saturation ×1.8, lightness ×0.72, and the neutral chassis passes
+// through untouched. The filter-matrix recipe could only reach a pastel
+// sky blue from this amber; matching the app's accent needed the exact-hue
+// remap.
 const LOGOS: Record<string, string> = { original: logoOriginal, vercel: logoVercel };
 
 // Re-points every mark already in the DOM. Render sites that build their own

@@ -148,3 +148,15 @@
 :root[data-theme='vercel'] .login h1::after {
   background: linear-gradient(135deg, #0070f3, #7928ca 55%, #ff0080);
 }
+
+/* The wordmark's aura: the dot's gradient cast as light behind the letters —
+   Vercel's hero-glow move. Layered text-shadows (blue left, purple center,
+   pink right) rather than a backdrop element, so it needs no new DOM and
+   follows the letterforms exactly; it also replaces the Instrument's
+   engraved 1px drop, which pure black doesn't need. */
+:root[data-theme='vercel'] .login h1 {
+  text-shadow:
+    -18px 0 46px rgba(0, 112, 243, 0.65),
+    0 0 30px rgba(121, 40, 202, 0.5),
+    18px 0 46px rgba(255, 0, 128, 0.45);
+}
