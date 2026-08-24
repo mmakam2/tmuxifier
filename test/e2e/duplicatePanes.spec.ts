@@ -12,10 +12,21 @@ import { test, expect } from '@playwright/test';
 // client kills that client's own attach — and the pane's WS reconnect then
 // re-runs the same `/term?session=...` attach, which is `new-session -A`
 // (attach-or-create), recreating the very session just killed. Cleanup below
-// always names its target explicitly (`-t '<name>'`) and, for the pane the
-// test itself created, runs the kill from a DIFFERENT pane after the
-// duplicate has been undocked (so nothing is left watching/reconnecting to
-// it) rather than from the duplicate's own terminal.
+// always names its target explicitly (`-t '<name>'`) and runs the kill from a
+// DIFFERENT pane than the one attached to it (never from inside that pane's
+// own terminal).
+//
+// Undocking (`.pane-undock` → undockBox) does NOT close that watching
+// connection — it only PARKS the terminal (main.ts's keep-alive contract:
+// the handle moves into the hidden `.stage-parking` div, still connected;
+// only `closeTab` sets `closedByUser` and actually closes the WS). So an
+// explicit-target kill can still race a live reconnect: the killed session's
+// still-parked (or still-docked) client sees its WS drop and, per
+// reconnect.ts's escalating backoff (base 1000ms), reattaches after ~1s —
+// which is `new-session -A` again — recreating the very session the kill
+// just removed. The targeted kill is idempotent (`2>/dev/null`), so each
+// cleanup below waits past that base delay and re-issues the SAME kill to
+// reap any session a reconnect recreated in the meantime.
 
 async function login(page) {
   await page.goto('/');
@@ -71,11 +82,17 @@ test('duplicating with only one session creates <name>-2; the dropdown stays pan
     // session, untouched by the duplicate.
     await expect(firstPane.locator('.session-picker-trigger')).not.toContainText('-2');
   } finally {
-    // Undock the duplicate FIRST — this drops its PTY/WS so nothing is left
-    // watching `<configured>-2` — then kill that session by explicit name
+    // Undock the duplicate (parks its terminal — the WS stays connected, see
+    // the file-level comment), then kill `<configured>-2` by explicit name
     // from the surviving first pane, never from inside the pane that was
-    // attached to it.
+    // attached to it. Parking means that kill can still race the parked
+    // client's own reconnect-and-recreate, so wait past the ~1s backoff base
+    // and re-issue the same (idempotent) kill to reap anything it recreated.
     await secondPane.locator('.pane-undock').click().catch(() => {});
+    await firstPane.click().catch(() => {});
+    await page.keyboard.type(`tmux kill-session -t '${configured}-2' 2>/dev/null`).catch(() => {});
+    await page.keyboard.press('Enter').catch(() => {});
+    await page.waitForTimeout(1200).catch(() => {});
     await firstPane.click().catch(() => {});
     await page.keyboard.type(`tmux kill-session -t '${configured}-2' 2>/dev/null`).catch(() => {});
     await page.keyboard.press('Enter').catch(() => {});
@@ -104,7 +121,15 @@ test('duplicating adopts a live unshown session before creating one', async ({ p
     await expect(secondPane.locator('.xterm-rows')).toContainText('sparee2e', { timeout: 10000 });
   } finally {
     // Explicit target, from the FIRST pane (never a bare kill typed into the
-    // pane attached to sparee2e) — same discipline as above.
+    // pane attached to sparee2e) — same discipline as above. secondPane stays
+    // docked (still attached, WS live) through this whole block, so the kill
+    // can race its reconnect-and-recreate exactly as in the first test above;
+    // wait past the ~1s backoff base and re-issue the same (idempotent) kill
+    // to reap anything it recreated.
+    await firstPane.click().catch(() => {});
+    await page.keyboard.type('tmux kill-session -t sparee2e 2>/dev/null').catch(() => {});
+    await page.keyboard.press('Enter').catch(() => {});
+    await page.waitForTimeout(1200).catch(() => {});
     await firstPane.click().catch(() => {});
     await page.keyboard.type('tmux kill-session -t sparee2e 2>/dev/null').catch(() => {});
     await page.keyboard.press('Enter').catch(() => {});
