@@ -160,3 +160,30 @@
     0 0 30px rgba(121, 40, 202, 0.5),
     18px 0 46px rgba(255, 0, 128, 0.45);
 }
+
+/* The same aura on the sidebar nameplate once logged in, scaled to its 12.5px
+   wordmark (roughly half the login h1) and a notch brighter per layer — a
+   small glyph body emits far less ink into the blur, so equal alphas read as
+   no glow at all. Also replaces the engraved drop, as above. */
+:root[data-theme='vercel'] .brand-name {
+  text-shadow:
+    -9px 0 22px rgba(0, 112, 243, 0.8),
+    0 0 14px rgba(121, 40, 202, 0.65),
+    9px 0 22px rgba(255, 0, 128, 0.6);
+}
+
+/* And the orb beside it: the login dot's gradient sibling at nameplate scale,
+   breathing on the same keyframes (defined globally in style.css; the
+   reduced-motion guard there rests this selector too). It lives inside
+   .brand-name's overflow, so the collapsed rail hides it with the wordmark. */
+:root[data-theme='vercel'] .brand-name::after {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin-left: 8px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: linear-gradient(135deg, #0070f3, #7928ca 55%, #ff0080);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 50%, transparent);
+  animation: standby-breathe 3s ease-in-out infinite;
+}

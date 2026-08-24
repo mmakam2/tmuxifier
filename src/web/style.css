@@ -301,7 +301,9 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
-@media (prefers-reduced-motion: reduce) { .login h1::after { animation: none; } }
+/* .brand-name::after exists only under the Vercel theme (its sidebar orb);
+   listing it here keeps the guard generic and the theme file at-rule-free. */
+@media (prefers-reduced-motion: reduce) { .login h1::after, .brand-name::after { animation: none; } }
 .login p { margin: 0; color: var(--dim); font-size: 12.5px; text-align: center; letter-spacing: 0.02em; }
 .login input, .login button, .actions button { font-family: var(--face); border-radius: 6px; color: inherit; }
 /* Typing happens in the glass: the password field is a recessed input. */
