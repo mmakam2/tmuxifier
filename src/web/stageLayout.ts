@@ -190,7 +190,9 @@ export function serialize(root: PaneNode | null, focusedId: string | null, sessi
   return JSON.stringify({ v: 3, root, focusedId, sessions });
 }
 
-// Structural validation for v2 payloads; per-split ratio sanity falls back to even.
+// Structural validation for v2 AND v3 payloads (the tree/ratio shape is unchanged between
+// them — v3 only adds the sibling `sessions` record serialize/restore handle separately);
+// per-split ratio sanity falls back to even.
 function sanitize(node: unknown): PaneNode | null {
   if (typeof node === 'string') return node;
   const s = node as Partial<SplitNode>;

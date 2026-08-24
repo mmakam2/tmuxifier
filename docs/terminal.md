@@ -83,14 +83,23 @@ then `-3`, and so on. So duplicating a box that has a second idle tmux session s
 puts you straight into it; duplicating a box with only its usual one session gives you a fresh
 second session to work in instead.
 
+Undocking a duplicate doesn't let its claim go: the pane keeps running in the background exactly
+like any undocked pane, but its session stays counted by the adopt-then-create rule above — so a
+later duplicate can't land on the same session while this one is parked there — right up until
+the box's own **Reconnect** button or logging out tears it down for good. Nothing re-docks it on
+its own; getting back to it means dragging or docking the box again.
+
 Each pane's own active-session dropdown is **pane-local** (see [Split terminals](#split-terminals)
 above): picking a different session there reattaches that one pane only, and neither the box's
 other panes, nor any other open browser tab, nor the box's own configured session change as a
 result. The **Reconnect** button in a pane's header follows the same split — on a pane still
 showing the box's configured session it does the same full reconnect as the sidebar row's own
 ↻ (SSH plumbing torn down and rebuilt); on a pane you've pointed at a different session, it
-instead just kills *that pane's own session* and reconnects to a fresh one of the same name,
-leaving the box's SSH connection and its other panes alone.
+instead just kills *that session* and reconnects this pane to a fresh one of the same name,
+leaving the box's SSH connection alone — but not necessarily its other panes: killing a session
+takes down every client attached to it, browser tab or otherwise, so another pane you've pointed
+at that same session drops right along with it, because it's the session being killed, not just
+this pane's view of it.
 
 Point two panes at the **same** session — say, a duplicate you haven't yet re-pointed anywhere
 else — and tmux treats them exactly as it treats any two clients attached to one session: they
