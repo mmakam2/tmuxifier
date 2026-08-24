@@ -147,6 +147,9 @@
    dashboard proper stays austere. The accent glow beneath it inherits. */
 :root[data-theme='vercel'] .login h1::after {
   background: linear-gradient(135deg, #0070f3, #7928ca 55%, #ff0080);
+  /* Tighter than the Instrument's 14px: the wordmark's 0.22em tracking
+     already leaves a phantom trailing gap after the final glyph. */
+  margin-left: 6px;
 }
 
 /* The wordmark's aura: the dot's gradient cast as light behind the letters —
@@ -180,7 +183,8 @@
   content: '';
   display: inline-block;
   width: 6px; height: 6px;
-  margin-left: 8px;
+  /* 3px, not 8: the nameplate's 0.2em tracking already trails ~2.5px. */
+  margin-left: 3px;
   border-radius: 50%;
   vertical-align: 1px;
   background: linear-gradient(135deg, #0070f3, #7928ca 55%, #ff0080);
