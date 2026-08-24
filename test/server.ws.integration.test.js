@@ -685,6 +685,77 @@ test('/term forwards a valid session override to sessions.open, default unchange
   expect(opened[1].session).toBe('web');
 }, 10000);
 
+// CRITICAL regression guard: a pane-local session switch closes its WS with
+// keepPane semantics — the server just sees an ordinary socket close — which
+// arms sessions.js's grace window with the PTY still attached to the OLD
+// session. The repaint then reopens a WS with the SAME viewer id and the NEW
+// session. Before the fix, sessions.open() reused that live/grace-window
+// entry unconditionally and the requested session was silently discarded, so
+// the pane re-attached to the session it was trying to leave. This drives the
+// REAL sessions.js (createSessionManager), not the fake `sessions` stub the
+// neighboring tests use, with a fake node-pty `spawn` (mirrors
+// test/sessions.test.js's fakePty) so the grace-window/reuse logic runs
+// end-to-end through the WS route without needing a real sshd.
+test('/term reopening the same viewer id with a different session spawns a fresh PTY targeting it, not the grace-window reuse', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-ws-sess-switch-'));
+  const config = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
+    passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
+    sshConfigPath: path.join(dir, 'nope'),
+  };
+  const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
+  const saved = await store.addBox({ host: 'h1', sessionName: 'web' });
+
+  const spawned = [];
+  const fakeSpawn = (cmd, argv) => {
+    let exitCb;
+    spawned.push({ cmd, argv });
+    return {
+      cols: 80, rows: 24,
+      onData: () => {},
+      onExit: (cb) => { exitCb = cb; },
+      write: () => {},
+      resize: () => {},
+      kill: () => { exitCb && exitCb({ exitCode: 0 }); },
+    };
+  };
+  const sessions = createSessionManager({ graceSeconds: 5, spawn: fakeSpawn });
+  const app = buildServer({ config, store, sessions, statusChecker: { checkBox: async () => ({ reachable: true }) } });
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const { port } = app.server.address();
+  teardown = async () => { await app.close(); await fs.rm(dir, { recursive: true, force: true }); };
+
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === COOKIE_NAME);
+  const cookie = `${c.name}=${c.value}`;
+
+  // Same 50ms-after-open pattern as this file's own connect()/raceOpenClose
+  // helpers: the client 'open' event races ahead of the still-async server
+  // route handler reaching sessions.open().
+  const connect = (qs) => new Promise((res, rej) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/term?box=${saved.id}&cols=80&rows=24&${qs}`, { headers: { cookie } });
+    ws.on('open', () => setTimeout(() => { ws.close(); res(); }, 50));
+    ws.on('error', rej);
+  });
+
+  // Open key K with session "web", then close (server-side: detach -> grace).
+  await connect('client=paneK&session=web');
+  expect(spawned).toHaveLength(1);
+
+  // Reopen the SAME key with a DIFFERENT session. Must NOT reuse the
+  // grace-window entry: a fresh spawn must occur and its argv must target
+  // the new session — the regression this fix closes.
+  await connect('client=paneK&session=altsess');
+  expect(spawned).toHaveLength(2);
+  const lastArgv = spawned[1].argv;
+  expect(lastArgv[lastArgv.length - 1]).toContain('-s altsess');
+
+  // Reopening the same key with that SAME session again reuses — no further
+  // spawn — preserving the existing grace-window reattach story.
+  await connect('client=paneK&session=altsess');
+  expect(spawned).toHaveLength(2);
+}, 10000);
+
 test('/term closes 1008 "invalid session" before opening a session', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-ws-badsess-'));
   const config = {

@@ -66,8 +66,18 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
   function open({ key, box, session, size }) {
     const existing = entries.get(key);
     if (existing && !existing.exited) {
-      if (existing.graceTimer) { clearTimeout(existing.graceTimer); existing.graceTimer = null; }
-      return existing;
+      if (existing.session === session) {
+        if (existing.graceTimer) { clearTimeout(existing.graceTimer); existing.graceTimer = null; }
+        return existing;
+      }
+      // Same viewer key, a DIFFERENT session: the live/grace-window entry is
+      // still attached to the session the caller is trying to leave (a pane-
+      // local session switch closes the WS and reopens with the same client
+      // id), so reusing it would silently reattach the OLD session instead of
+      // the one just requested. close() kills this ATTACH client only — the
+      // on-box tmux session itself keeps running — and we fall through to
+      // spawn a fresh PTY targeting the new session.
+      close(existing);
     }
     // `|| key` keeps a caller that has no box id (only tests) grouped under its
     // own key, so a missing id can never silently merge two boxes into one
@@ -86,7 +96,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
       cwd: process.cwd(),
       env: spawnEnv,
     });
-    const entry = { key, group, kind: 'terminal', pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false, buffer: '' };
+    const entry = { key, group, kind: 'terminal', pty, listeners: new Set(), exitCbs: new Set(), graceTimer: null, exited: false, buffer: '', session };
     pipeOutput(entry);
     pty.onExit(() => {
       entry.exited = true;
