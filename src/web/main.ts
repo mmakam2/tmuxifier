@@ -1036,6 +1036,22 @@ function paneHooks(): PaneHooks {
         built.voiceSlot.append(tabs.get(id)!.voiceMount);
       }
       paneHeaders.set(id, built);
+      // Move gesture (spec decision 4): the header's identity strip drags the
+      // pane; sidebar rows spawn. dragstart only fires on an actual drag, so
+      // the picker and buttons inside stay clickable. dragSourceId is the REAL
+      // instance id — dropTargets exempts a docked pane from the cap (a move
+      // never grows the pane count).
+      const idStrip = built.el.querySelector('.pane-header-id') as HTMLElement;
+      idStrip.draggable = true;
+      idStrip.addEventListener('dragstart', (e) => {
+        dragSourceId = id;
+        e.dataTransfer?.setData('text/x-tmuxifier-pane', id);
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+      });
+      idStrip.addEventListener('dragend', () => {
+        dragSourceId = null;
+        app.querySelector('#stage')?.classList.remove('dragging');
+      });
       // Proxmox-linked boxes only: the local shell has no container, and an
       // unlinked box has nothing for these keys to act on.
       const linked = boxFor(id)?.proxmox;
@@ -1493,7 +1509,8 @@ async function renderDashboard() {
     };
 
     stage.addEventListener('dragenter', (e) => {
-      if (!e.dataTransfer?.types.includes('text/x-tmuxifier-box')) return;
+      const types = e.dataTransfer?.types;
+      if (!types?.includes('text/x-tmuxifier-box') && !types?.includes('text/x-tmuxifier-pane')) return;
       // Cancelling dragenter is what makes the hovered element the drop
       // target; without it dragover/drop fire elsewhere and never reach us.
       e.preventDefault();
@@ -1509,7 +1526,8 @@ async function renderDashboard() {
       preview.style.display = 'none';
     });
     stage.addEventListener('dragover', (e) => {
-      if (!e.dataTransfer?.types.includes('text/x-tmuxifier-box')) return;
+      const types = e.dataTransfer?.types;
+      if (!types?.includes('text/x-tmuxifier-box') && !types?.includes('text/x-tmuxifier-pane')) return;
       e.preventDefault(); // required, or the browser refuses the drop
       showPreview(document.elementFromPoint(e.clientX, e.clientY)?.closest('.drop-zone') as HTMLElement | null);
     });
@@ -1522,6 +1540,23 @@ async function renderDashboard() {
       // the overlay (display: none), after which elementFromPoint can't see it.
       const zone = document.elementFromPoint(e.clientX, e.clientY)?.closest('.drop-zone') as HTMLElement | null;
       stage.classList.remove('dragging');
+      const movedPane = e.dataTransfer?.getData('text/x-tmuxifier-pane');
+      if (movedPane) {
+        zones.replaceChildren();
+        dragSourceId = null;
+        preview.style.display = 'none';
+        if (!zone) return;
+        const kind = zone.dataset.kind;
+        if (kind === 'stage-edge') dockBox(movedPane, { kind: 'stage-edge', edge: zone.dataset.edge as Edge });
+        else if (kind === 'pane-edge') dockBox(movedPane, { kind: 'pane-edge', paneId: zone.dataset.paneId!, edge: zone.dataset.edge as Edge });
+        else if (kind === 'replace' && zone.dataset.paneId !== movedPane) {
+          // Both docked: replacePane swaps the two panes in place.
+          stageRoot = replacePane(stageRoot, zone.dataset.paneId!, movedPane);
+          focusedPaneId = movedPane;
+          repaintStage();
+        }
+        return;
+      }
       const id = e.dataTransfer?.getData('text/x-tmuxifier-box');
       if (!id) return;
       if (!zone) return;

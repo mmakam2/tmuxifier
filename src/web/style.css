@@ -1076,6 +1076,8 @@ button.empty-kbd:hover { color: var(--text); }
    value always on screen while a terminal is up (Amber Means Alive). */
 .stage-pane.focused .pane-header .pane-target { color: var(--accent); opacity: 1; text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 25%, transparent); }
 .pane-header-id { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.pane-header-id { cursor: grab; }
+.pane-header-id:active { cursor: grabbing; }
 /* The label gives way before anything collides. It had neither a shrink floor nor
    an ellipsis, so the identity group overflowed its own box by 12-19px even before
    the lifecycle keys were words — the keys only made a latent bug visible. */
