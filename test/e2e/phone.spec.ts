@@ -86,6 +86,13 @@ test('a desktop split renders as ONE pane; switcher swaps without reconnecting',
   // a split node of { orientation, children, ratios }. Written before the
   // reload because renderDashboard reads the key once, up front, and every
   // repaint after that writes it back.
+  //
+  // Seeded as v2 on purpose — it is also the restore MIGRATION under test. A v2
+  // leaf is a bare box id and restore() rewrites it to the instance id `<box>#1`
+  // (single-instance history), which is what the pane ids below are. Every one
+  // of those assertions is an EXACT match, never a prefix: `[data-pane-id="X#1"]`
+  // does not match `X#1#1`, so a double migration fails here rather than passing
+  // on a substring.
   await page.evaluate(([a, b]) => {
     localStorage.setItem('tmuxifier.stageLayout', JSON.stringify({
       v: 2,
@@ -107,7 +114,7 @@ test('a desktop split renders as ONE pane; switcher swaps without reconnecting',
   // and the socket's `box=` parameter are the only exact signals available, and
   // without them this test would pass on a switcher that rendered the same box
   // twice.
-  await expect(page.locator(`.stage-pane[data-pane-id="${first}"]`)).toHaveCount(1);
+  await expect(page.locator(`.stage-pane[data-pane-id="${first}#1"]`)).toHaveCount(1);
   await expect(page.locator('.stage-pane .xterm-rows')).toContainText(/[#$%>]/, { timeout: 15000 });
   // The two-pane split survives in the model — only ONE pane is rendered, and
   // only that pane connects.
@@ -116,20 +123,20 @@ test('a desktop split renders as ONE pane; switcher swaps without reconnecting',
 
   const sw = page.locator('#phone-switch');
   await expect(sw).toBeEnabled();
-  await expect(sw).toHaveValue(first);
+  await expect(sw).toHaveValue(`${first}#1`);
   await expect(sw.locator('option')).toHaveCount(2);
 
   await sw.selectOption({ index: 1 });
   await expect(page.locator('.stage-pane')).toHaveCount(1);
-  await expect(page.locator(`.stage-pane[data-pane-id="${second}"]`)).toHaveCount(1);
+  await expect(page.locator(`.stage-pane[data-pane-id="${second}#1"]`)).toHaveCount(1);
   await expect(page.locator('.stage-pane .xterm-rows')).toContainText(/[#$%>]/, { timeout: 15000 });
   expect(sockets, 'switching to the second pane connects it once').toHaveLength(2);
   expect(new URL(sockets[1]).searchParams.get('box')).toBe(second);
 
-  await sw.selectOption(first);
+  await sw.selectOption(`${first}#1`);
   // Back on the first pane with no new socket: it was parked, still attached.
   await expect(page.locator('.stage-pane')).toHaveCount(1);
-  await expect(page.locator(`.stage-pane[data-pane-id="${first}"]`)).toHaveCount(1);
+  await expect(page.locator(`.stage-pane[data-pane-id="${first}#1"]`)).toHaveCount(1);
   await expect(page.locator('.stage-pane .xterm-rows')).toContainText(/[#$%>]/, { timeout: 5000 });
   expect(sockets, 'switching back must reuse the parked terminal').toHaveLength(2);
 });
