@@ -2044,6 +2044,17 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         socket.close(1008, 'setting up');
         return;
       }
+
+      // Per-pane session override (duplicate panes): strict-validated and
+      // REJECTED on mismatch — the create/kill routes' posture, never
+      // sanitizeSession's silent rewrite. Absent = the stored name, so every
+      // existing client is byte-for-byte unaffected.
+      const requestedSession = req.query.session;
+      if (requestedSession !== undefined
+        && (typeof requestedSession !== 'string' || !SESSION_NAME_RE.test(requestedSession))) {
+        socket.close(1008, 'invalid session');
+        return;
+      }
       const size = { cols: Number(cols) || 80, rows: Number(rows) || 24 };
 
       let entry;
@@ -2053,7 +2064,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         // of Tmuxifier mirroring one screen at one size to all of them. The
         // client id is stable across that browser's reconnects, so the grace
         // window still hands the same PTY back.
-        entry = sessions.open({ key: terminalKey(boxId, req.query.client), box, session: box.sessionName, size });
+        entry = sessions.open({ key: terminalKey(boxId, req.query.client), box, session: requestedSession || box.sessionName, size });
       } catch (err) {
         const msg = err?.message || 'session error';
         try { socket.send(msg); } catch {}

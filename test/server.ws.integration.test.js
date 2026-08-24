@@ -643,3 +643,75 @@ test('/term host shell awaits the scoped-server ensure before opening the pty', 
   expect(seq).toEqual([['ensure', 'omz', 0]]);
   expect(fixture.state.localKeys).toEqual([localKey('laptop')]);
 }, 10000);
+
+test('/term forwards a valid session override to sessions.open, default unchanged', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-ws-sess-'));
+  const config = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
+    passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
+    sshConfigPath: path.join(dir, 'nope'),
+  };
+  const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
+  const saved = await store.addBox({ host: 'h1', sessionName: 'web' });
+  const opened = [];
+  const sessions = {
+    open(o) { opened.push(o); return {}; },
+    attach() { return () => {}; }, onExit() { return () => {}; },
+    write() {}, resize() {}, detach() {}, close() {},
+  };
+  const app = buildServer({ config, store, sessions, statusChecker: { checkBox: async () => ({ reachable: true }) } });
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const { port } = app.server.address();
+  teardown = async () => { await app.close(); await fs.rm(dir, { recursive: true, force: true }); };
+
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === COOKIE_NAME);
+  // A mirror of the file's own raceOpenClose helper (:541): the client's
+  // 'open' event fires as soon as the WS upgrade completes, which races
+  // ahead of the still-async server route handler reaching sessions.open().
+  // A short pause after 'open' before closing lets that handler finish.
+  const connect = (qs) => new Promise((res, rej) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/term?box=${saved.id}&cols=80&rows=24&${qs}`,
+      { headers: { cookie: `${c.name}=${c.value}` } });
+    ws.on('open', () => setTimeout(() => { ws.close(); res(); }, 50));
+    ws.on('error', rej);
+  });
+
+  await connect('client=dupA&session=altsess');
+  await connect('client=dupB');
+  expect(opened).toHaveLength(2);
+  expect(opened[0].session).toBe('altsess');
+  expect(opened[0].key).toBe(terminalKey(saved.id, 'dupA'));
+  expect(opened[1].session).toBe('web');
+}, 10000);
+
+test('/term closes 1008 "invalid session" before opening a session', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-ws-badsess-'));
+  const config = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
+    passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
+    sshConfigPath: path.join(dir, 'nope'),
+  };
+  const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
+  const saved = await store.addBox({ host: 'h1', sessionName: 'web' });
+  let openCalled = false;
+  const sessions = {
+    open() { openCalled = true; return {}; },
+    attach() { return () => {}; }, onExit() { return () => {}; },
+    write() {}, resize() {}, detach() {}, close() {},
+  };
+  const app = buildServer({ config, store, sessions, statusChecker: { checkBox: async () => ({ reachable: true }) } });
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const { port } = app.server.address();
+  teardown = async () => { await app.close(); await fs.rm(dir, { recursive: true, force: true }); };
+
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === COOKIE_NAME);
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${port}/term?box=${saved.id}&cols=80&rows=24&client=dupC&session=${encodeURIComponent('bad name')}`,
+    { headers: { cookie: `${c.name}=${c.value}` } },
+  );
+  const code = await new Promise((resolve, reject) => { ws.on('close', resolve); ws.on('error', reject); });
+  expect(code).toBe(1008);
+  expect(openCalled).toBe(false);
+}, 10000);
