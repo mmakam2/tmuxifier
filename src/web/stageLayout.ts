@@ -17,6 +17,27 @@ export type DropSpec = { kind: 'stage-edge'; edge: Edge } | { kind: 'pane-edge';
 
 export const MIN_RATIO = 0.2;
 
+// Instance ids: one BOX may dock several times; each docked pane is an
+// INSTANCE `${box}#${ordinal}`. Leaves stay plain strings (every tree
+// algorithm below compares leaves by ===), and '#' is outside the box-id,
+// session-name and client-id charsets, so the separator can never collide.
+export const instanceId = (box: string, ordinal: number): string => `${box}#${ordinal}`;
+export function boxOfInstance(id: string): string {
+  const i = id.lastIndexOf('#');
+  return i < 0 ? id : id.slice(0, i);
+}
+export function ordinalOfInstance(id: string): number {
+  const i = id.lastIndexOf('#');
+  const n = i < 0 ? NaN : Number(id.slice(i + 1));
+  return Number.isInteger(n) && n > 0 ? n : 1;
+}
+export function nextOrdinal(box: string, usedIds: string[]): number {
+  const used = new Set(usedIds.filter((x) => boxOfInstance(x) === box).map(ordinalOfInstance));
+  let n = 1;
+  while (used.has(n)) n += 1;
+  return n;
+}
+
 export const isSplit = (n: PaneNode): n is SplitNode => typeof n !== 'string';
 const even = (n: number): number[] => Array.from({ length: n }, () => 1 / n);
 const round = (x: number): number => Math.round(x * 1e4) / 1e4;
@@ -165,8 +186,8 @@ export function toggleOrientation(root: PaneNode | null, path: number[]): PaneNo
   return normalize(apply(root, 0));
 }
 
-export function serialize(root: PaneNode | null, focusedId: string | null): string {
-  return JSON.stringify({ v: 2, root, focusedId });
+export function serialize(root: PaneNode | null, focusedId: string | null, sessions: Record<string, string> = {}): string {
+  return JSON.stringify({ v: 3, root, focusedId, sessions });
 }
 
 // Structural validation for v2 payloads; per-split ratio sanity falls back to even.
@@ -188,16 +209,33 @@ function sanitize(node: unknown): PaneNode | null {
   return normalize({ orientation: s.orientation, children, ratios: sane ? (r as number[]) : even(children.length) });
 }
 
-export function restore(raw: string | null, knownIds: string[]): { root: PaneNode | null; focusedId: string | null } {
-  const fallback = { root: null as PaneNode | null, focusedId: null as string | null };
+// v3 payload leaves are already instance ids; v1/v2 leaves are plain box ids
+// and migrate to ordinal 1 (single-instance history, restored as-is).
+function toInstances(node: PaneNode): PaneNode {
+  return isSplit(node) ? { ...node, children: node.children.map(toInstances) } : `${node}#1`;
+}
+
+export function restore(raw: string | null, knownIds: string[]): { root: PaneNode | null; focusedId: string | null; sessions: Record<string, string> } {
+  const fallback = { root: null as PaneNode | null, focusedId: null as string | null, sessions: {} as Record<string, string> };
   if (!raw) return fallback;
   let parsed: unknown;
   try { parsed = JSON.parse(raw); } catch { return fallback; }
-  const p = parsed as { v?: unknown; root?: unknown; layout?: { orientation?: unknown; panes?: unknown; ratios?: unknown }; focusedId?: unknown };
+  const p = parsed as {
+    v?: unknown; root?: unknown; layout?: { orientation?: unknown; panes?: unknown; ratios?: unknown };
+    focusedId?: unknown; sessions?: unknown;
+  };
   let root: PaneNode | null = null;
-  if (p?.v === 2) {
+  let focusedRaw = typeof p.focusedId === 'string' ? p.focusedId : null;
+  let sessionsRaw: unknown = {};
+  if (p?.v === 3) {
     root = p.root == null ? null : sanitize(p.root);
     if (root == null && p.root != null) return fallback;
+    sessionsRaw = p.sessions;
+  } else if (p?.v === 2) {
+    root = p.root == null ? null : sanitize(p.root);
+    if (root == null && p.root != null) return fallback;
+    if (root != null) root = toInstances(root);
+    if (focusedRaw != null) focusedRaw = `${focusedRaw}#1`;
   } else if (p?.v === 1 && p.layout && Array.isArray(p.layout.panes)) {
     const panes = (p.layout.panes as unknown[]).filter((x): x is string => typeof x === 'string');
     if (panes.length === 0) root = null;
@@ -209,12 +247,21 @@ export function restore(raw: string | null, knownIds: string[]): { root: PaneNod
         ratios: p.layout.ratios,
       });
     }
+    if (root != null) root = toInstances(root);
+    if (focusedRaw != null) focusedRaw = `${focusedRaw}#1`;
   } else return fallback;
   const known = new Set(knownIds);
-  for (const id of panesOf(root)) if (!known.has(id)) root = undockPane(root, id);
+  for (const id of panesOf(root)) if (!known.has(boxOfInstance(id))) root = undockPane(root, id);
   const panes = panesOf(root);
-  const focusedId = typeof p.focusedId === 'string' && panes.includes(p.focusedId) ? p.focusedId : panes[0] ?? null;
-  return { root, focusedId };
+  const focusedId = focusedRaw != null && panes.includes(focusedRaw) ? focusedRaw : panes[0] ?? null;
+  const panes2 = new Set(panes);
+  const sessions: Record<string, string> = {};
+  if (sessionsRaw && typeof sessionsRaw === 'object') {
+    for (const [k, v] of Object.entries(sessionsRaw as Record<string, unknown>)) {
+      if (typeof v === 'string' && panes2.has(k)) sessions[k] = v;
+    }
+  }
+  return { root, focusedId, sessions };
 }
 
 // Phone mode shows exactly one pane. The focused pane if it is still docked,

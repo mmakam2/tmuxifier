@@ -47,6 +47,11 @@ state), and that Phase 2 is explicitly out of scope.
   string-leaf model silently depends on.
 - `MAX_PANES` (4) stays a `main.ts` gesture-layer rule.
 
+> **Implementation refinement (2026-08-24, plan):** the leaf is normalized to an instance-id
+> *string* `${box}#${pane}` with session overrides in a v3 `sessions` record keyed by instance
+> id — the same persisted information as the object leaf sketched above, chosen so every tree
+> algorithm (and its test file) keeps operating on string leaves.
+
 ## Gesture changes (`src/web/main.ts`, `src/web/stagePanes.ts`)
 
 - **Sidebar drag / ⊞ dock button, box not docked**: unchanged — docks instance

@@ -2,6 +2,7 @@ import { test, expect } from 'vitest';
 import {
   panesOf, dockAtStageEdge, dockAtPaneEdge, movePane, undockPane, replacePane,
   setRatio, toggleOrientation, splitAt, serialize, restore, MIN_RATIO, phonePaneOf,
+  instanceId, boxOfInstance, ordinalOfInstance, nextOrdinal,
 } from '../src/web/stageLayout.ts';
 
 const row = (children, ratios) => ({ orientation: 'row', children, ratios: ratios ?? children.map(() => 1 / children.length) });
@@ -103,9 +104,9 @@ test('serialize/restore round-trips a tree (v2)', () => {
 
 test('restore migrates a v1 flat layout', () => {
   const v1 = JSON.stringify({ v: 1, layout: { orientation: 'column', panes: ['a', 'b'], ratios: [0.7, 0.3] }, focusedId: 'b' });
-  expect(restore(v1, ['a', 'b'])).toEqual({ root: col(['a', 'b'], [0.7, 0.3]), focusedId: 'b' });
+  expect(restore(v1, ['a', 'b'])).toEqual({ root: col(['a#1', 'b#1'], [0.7, 0.3]), focusedId: 'b#1', sessions: {} });
   const single = JSON.stringify({ v: 1, layout: { orientation: 'row', panes: ['a'], ratios: [1] }, focusedId: 'a' });
-  expect(restore(single, ['a'])).toEqual({ root: 'a', focusedId: 'a' });
+  expect(restore(single, ['a'])).toEqual({ root: 'a#1', focusedId: 'a#1', sessions: {} });
 });
 
 test('restore prunes vanished boxes through collapse and refocuses', () => {
@@ -116,10 +117,10 @@ test('restore prunes vanished boxes through collapse and refocuses', () => {
 });
 
 test('restore rejects garbage and insane ratios', () => {
-  expect(restore('not json', ['a'])).toEqual({ root: null, focusedId: null });
-  expect(restore(JSON.stringify({ v: 2, root: { orientation: 'row', children: ['a'], ratios: [1] } }), ['a']).root).toBe('a');
+  expect(restore('not json', ['a'])).toEqual({ root: null, focusedId: null, sessions: {} });
+  expect(restore(JSON.stringify({ v: 2, root: { orientation: 'row', children: ['a'], ratios: [1] } }), ['a']).root).toBe('a#1');
   const bad = JSON.stringify({ v: 2, root: { orientation: 'row', children: ['a', 'b'], ratios: [0.9, 0.9] }, focusedId: 'a' });
-  expect(restore(bad, ['a', 'b']).root).toEqual(row(['a', 'b']));
+  expect(restore(bad, ['a', 'b']).root).toEqual(row(['a#1', 'b#1']));
 });
 
 test('phonePaneOf: empty stage yields null', () => {
@@ -135,4 +136,57 @@ test('phonePaneOf: stale or unset focus falls back to the first pane', () => {
 });
 test('phonePaneOf: single-leaf root', () => {
   expect(phonePaneOf('a', null)).toBe('a');
+});
+
+test('instance ids round-trip and tolerate plain box ids', () => {
+  expect(instanceId('b1', 2)).toBe('b1#2');
+  expect(boxOfInstance('b1#2')).toBe('b1');
+  expect(boxOfInstance('b1')).toBe('b1');
+  expect(ordinalOfInstance('b1#2')).toBe(2);
+  expect(ordinalOfInstance('b1')).toBe(1);
+  expect(ordinalOfInstance('b1#nope')).toBe(1);
+});
+
+test('nextOrdinal fills the smallest gap per box', () => {
+  expect(nextOrdinal('b1', [])).toBe(1);
+  expect(nextOrdinal('b1', ['b1#1', 'b2#1'])).toBe(2);
+  expect(nextOrdinal('b1', ['b1#1', 'b1#3'])).toBe(2);
+});
+
+test('v3 serialize/restore round-trips sessions for docked panes only', () => {
+  const raw = serialize(row(['b1#1', 'b1#2']), 'b1#2', { 'b1#2': 'dev-2', 'gone#9': 'x' });
+  const r = restore(raw, ['b1']);
+  expect(panesOf(r.root)).toEqual(['b1#1', 'b1#2']);
+  expect(r.focusedId).toBe('b1#2');
+  expect(r.sessions).toEqual({ 'b1#2': 'dev-2' });
+});
+
+test('restore prunes vanished BOXES by instance', () => {
+  const raw = serialize(row(['b1#1', 'dead#2']), 'dead#2', { 'dead#2': 'x' });
+  const r = restore(raw, ['b1']);
+  expect(r.root).toBe('b1#1');
+  expect(r.focusedId).toBe('b1#1');
+  expect(r.sessions).toEqual({});
+});
+
+test('v2 payloads migrate leaves and focus to ordinal 1', () => {
+  const v2 = JSON.stringify({ v: 2, root: { orientation: 'row', children: ['a', 'b'], ratios: [0.5, 0.5] }, focusedId: 'b' });
+  const r = restore(v2, ['a', 'b']);
+  expect(panesOf(r.root)).toEqual(['a#1', 'b#1']);
+  expect(r.focusedId).toBe('b#1');
+  expect(r.sessions).toEqual({});
+});
+
+test('v1 payloads migrate leaves to ordinal 1', () => {
+  const v1 = JSON.stringify({ v: 1, layout: { orientation: 'row', panes: ['a', 'b'] }, focusedId: 'a' });
+  const r = restore(v1, ['a', 'b']);
+  expect(panesOf(r.root)).toEqual(['a#1', 'b#1']);
+});
+
+test('restore drops non-string session values', () => {
+  const raw = serialize('b1#1', 'b1#1', {});
+  const parsed = JSON.parse(raw);
+  parsed.sessions = { 'b1#1': 42 };
+  const r = restore(JSON.stringify(parsed), ['b1']);
+  expect(r.sessions).toEqual({});
 });
