@@ -1191,6 +1191,14 @@ function dockBox(id: string, drop: DropSpec) {
   repaintStage();
 }
 
+// One duplicateBox() in flight per box: the whole point of this function is
+// an await (see below), and two rapid duplicate actions on the same box that
+// both pass the entry checks before either resolves would either mint the
+// same ordinal twice (the second just relocates the first's pane) or blow
+// past MAX_PANES if the cap moved between them. duplicating gates re-entry;
+// the cap is re-checked below for the same straddling-the-await reason.
+const duplicating = new Set<string>();
+
 // Dock a SECOND pane of an already-docked box (spec: adopt-then-create).
 // Async: the session list refreshes through freshProbe first, so adoption
 // doesn't act on the 30s cache; refresh() resolves on its wait cap even when
@@ -1199,18 +1207,27 @@ async function duplicateBox(boxId: string, drop: DropSpec | { kind: 'replace'; p
   const box = allBoxes.find((b) => b.id === boxId);
   if (!box) return;
   if (drop.kind !== 'replace' && panesOf(stageRoot).length >= MAX_PANES) return;
-  try { await freshProbe.refresh(boxId); } catch { /* cached snapshot */ }
-  const configured = box.sessionName || 'web';
-  const live = (latestStatus[boxId]?.sessions ?? []).map((s) => s.name).filter(Boolean);
-  const shown = instancesOfBox(boxId).map((iid) => attachedSession(iid));
-  const session = chooseDuplicateSession(configured, live, shown);
-  const iid = instanceId(boxId, nextOrdinal(boxId, instancesOfBox(boxId)));
-  if (session !== configured) paneSessions.set(iid, session);
-  if (drop.kind === 'replace') {
-    stageRoot = replacePane(stageRoot, drop.paneId, iid);
-    focusedPaneId = iid;
-    repaintStage();
-  } else dockBox(iid, drop);
+  if (duplicating.has(boxId)) return;
+  duplicating.add(boxId);
+  try {
+    try { await freshProbe.refresh(boxId); } catch { /* cached snapshot */ }
+    // Re-check: the await above is exactly the window a second call could
+    // have docked into, so the entry check alone is not enough.
+    if (drop.kind !== 'replace' && panesOf(stageRoot).length >= MAX_PANES) return;
+    const configured = box.sessionName || 'web';
+    const live = (latestStatus[boxId]?.sessions ?? []).map((s) => s.name).filter(Boolean);
+    const shown = instancesOfBox(boxId).map((iid) => attachedSession(iid));
+    const session = chooseDuplicateSession(configured, live, shown);
+    const iid = instanceId(boxId, nextOrdinal(boxId, instancesOfBox(boxId)));
+    if (session !== configured) paneSessions.set(iid, session);
+    if (drop.kind === 'replace') {
+      stageRoot = replacePane(stageRoot, drop.paneId, iid);
+      focusedPaneId = iid;
+      repaintStage();
+    } else dockBox(iid, drop);
+  } finally {
+    duplicating.delete(boxId);
+  }
 }
 
 function undockBox(id: string) {
