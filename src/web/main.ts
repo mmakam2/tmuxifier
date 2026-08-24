@@ -909,34 +909,25 @@ function paneHeaderModelFor(id: string): PaneHeaderModel {
     conn: connStates.get(id),
     state: paneState(id),
     sessionName: attachedSession(id),
+    configuredSession: boxFor(id)?.sessionName || 'web',
     // phoneCtl is created in start(); before that there is no stage to paint,
     // so the `?? false` is a boot-order guard, not a default policy.
     phone: phoneCtl?.matches() ?? false,
   });
 }
 
-// Switch the box's active tmux session: persist it (the server drops every
-// viewer's terminal PTY on a sessionName change so they reconnect attached to
-// the new session over the existing ControlMaster), then reopen this pane.
-// Non-destructive — the old session keeps running on the box.
-async function switchSession(id: string, name: string) {
-  const box = boxFor(id);
-  if (!box || box.sessionName === name) return;
-  // The dropdown already disables unswitchable names; this is the backstop
-  // that keeps a PATCH from silently sanitize-renaming one (store.js rewrites
-  // out-of-charset names rather than rejecting them).
+// Point THIS pane at another session — pane-local by spec decision 3: no
+// PATCH, no group close, other panes and browsers untouched. The box's
+// configured sessionName is Edit-modal business now. closeTab(keepPane)
+// drops only this instance's PTY; the repaint reopens it on the override.
+function switchPaneSession(iid: string, name: string) {
+  if (attachedSession(iid) === name) return;
   if (!isSwitchableSession(name)) { updatePaneHeaders(); return; }
-  try {
-    const updated = await api.updateBox(boxOfInstance(id), { sessionName: name });
-    box.sessionName = updated.sessionName; // keep the local model in step until the next refresh()
-    closeTab(id, { keepPane: true });
-    repaintStage();
-    fastStatusPoll(boxOfInstance(id));
-  } catch {
-    // Save failed: repaint the headers so the select snaps back to the stored
-    // session instead of showing a switch that never happened.
-    updatePaneHeaders();
-  }
+  if (name === (boxFor(iid)?.sessionName || 'web')) paneSessions.delete(iid);
+  else paneSessions.set(iid, name);
+  closeTab(iid, { keepPane: true });
+  repaintStage();
+  fastStatusPoll(boxOfInstance(iid));
 }
 
 // Kill a session or window from the pane header's picker. Nothing is removed
@@ -964,14 +955,13 @@ async function killTarget(id: string, t: SessionTarget) {
   await pollStatus();
 }
 
-// Act on a pane-header dropdown pick. A window in the box's CURRENT session is
-// the cheap case: select-window alone, no PATCH, no PTY kill — every client
-// attached to that session follows on its own. A pick in another session needs
-// both, window first: switchSession's PATCH drops every viewer's PTY, so
-// selecting the window beforehand means the forced reattach lands already on it.
+// Act on a pane-header dropdown pick. A window in the pane's ATTACHED session
+// is the cheap case: select-window alone, no pane-local override, no PTY kill
+// — every client attached to that session follows on its own. A pick in
+// another session needs both, window first: switchPaneSession drops this
+// pane's own PTY, so selecting the window beforehand means the reopen lands
+// already on it.
 async function selectTarget(id: string, t: SessionTarget) {
-  const box = boxFor(id);
-  if (!box) return;
   if (t.kind === 'window' && t.windowId) {
     try {
       // The session goes with the id: a grouped session shares its windows, so
@@ -985,7 +975,7 @@ async function selectTarget(id: string, t: SessionTarget) {
       return;
     }
   }
-  if ((box.sessionName || 'web') !== t.session) { await switchSession(id, t.session); return; }
+  if (attachedSession(id) !== t.session) { switchPaneSession(id, t.session); return; }
   // Same session: nothing was persisted, so the header only moves once the
   // status snapshot does. ONE poll is enough and it is authoritative — the
   // route re-probes this box before it answers, so by the time we get here the
@@ -1034,6 +1024,7 @@ function paneHooks(): PaneHooks {
       if (built.refreshBtn) {
         wireReconnectButton(built.refreshBtn, `pane:${id}`, `${model.title} terminal`, async () => {
           if (isLocalPane(id)) await api.reconnectLocalShell();
+          else if (paneSessions.has(id)) await api.killTarget(boxOfInstance(id), attachedSession(id));
           else await api.reconnectBox(boxOfInstance(id));
           closeTab(id, { keepPane: true });
           repaintStage();
@@ -2413,7 +2404,7 @@ function openBoxDialog(box?: Box) {
   // commits only once api.selectWindow actually succeeds, so a failed live
   // switch can snap the picker back rather than leaving Save to silently
   // persist a switch that never happened (mirrors selectTarget()/
-  // switchSession() above reverting via updatePaneHeaders() on catch).
+  // switchPaneSession() above reverting via updatePaneHeaders() on catch).
   let lastPick = '';
   // True between firing api.selectWindow and its settling. applySessions() runs
   // on its own schedule (the automatic probe, the ⟳ button, Create), and while a
@@ -2539,7 +2530,7 @@ function openBoxDialog(box?: Box) {
         .catch((e: any) => {
           windowPending = false;
           // Snap back to the last selection Save is allowed to see, the same
-          // guard selectTarget()/switchSession() apply to the pane header's
+          // guard selectTarget()/switchPaneSession() apply to the pane header's
           // own dropdown: a failed live switch must not leave the picker (and
           // therefore Save) showing a change that never happened.
           picked = lastPick;

@@ -195,3 +195,21 @@ test('phone mode changes nothing else about the header', () => {
   expect(phone.dotClass).toBe(desktop.dotClass);
   expect(phone.chip).toEqual(desktop.chip);
 });
+
+test('agent chip renders only when the pane shows the configured session', () => {
+  const base = { local: false, label: 'b', state: 'terminal', agent: 'working' };
+  const on = paneHeaderModel({ ...base, sessionName: 'web', configuredSession: 'web' });
+  expect(on.chip?.kind).toBe('agent');
+  const off = paneHeaderModel({ ...base, sessionName: 'web-2', configuredSession: 'web' });
+  expect(off.chip).toBeNull();
+  // Defaults ('web') keep every existing caller's behavior.
+  const dflt = paneHeaderModel({ ...base, sessionName: undefined, configuredSession: undefined });
+  expect(dflt.chip?.kind).toBe('agent');
+});
+
+test('the dropdown lists from the ATTACHED session as current', () => {
+  const status = { sessions: [{ name: 'web' }, { name: 'dev-2' }] };
+  const m = paneHeaderModel({ local: false, label: 'b', state: 'terminal', status, sessionName: 'dev-2', configuredSession: 'web' });
+  expect(m.targets.options[0]).toMatchObject({ kind: 'session', session: 'dev-2' });
+  expect(m.targets.value).toBe('s:dev-2');
+});

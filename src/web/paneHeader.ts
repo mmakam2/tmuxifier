@@ -19,6 +19,11 @@ export interface PaneHeaderInput {
   conn?: PaneConn;
   state: 'terminal' | 'stopped' | 'setup';
   sessionName?: string;
+  // sessionName is the session this PANE is attached to (per-pane since the
+  // duplicate-panes change); configuredSession is the box's stored name.
+  // Agent state is hook-only and keyed to the CONFIGURED session, so on any
+  // other session the chip would describe something the pane isn't showing.
+  configuredSession?: string;
   // Phone mode (≤720px). The session picker is dropped entirely there: the
   // header row is the most contested space in the app, and sessions are
   // managed from the Edit Box modal off the box list instead.
@@ -68,12 +73,14 @@ export function paneHeaderModel(i: PaneHeaderInput): PaneHeaderModel {
   // way the sidebar's local dot does, not an SSH probe it will never have.
   const dotClass = i.local ? (i.conn?.kind === 'open' ? 'green' : 'gray') : dotClassFor(i.status);
   const dotTitle = i.local ? (i.conn?.kind === 'open' ? 'Connected' : 'Not connected') : dotTitleFor(i.status);
+  const onConfigured = (i.sessionName || 'web') === (i.configuredSession || 'web');
+  const chip = paneHeaderChip(onConfigured ? i : { ...i, agent: undefined });
   return {
     title: i.label,
     target: i.local ? 'this host' : (i.user ? `${i.user}@${i.host ?? ''}` : i.host ?? ''),
     dotClass,
     dotTitle,
-    chip: paneHeaderChip(i),
+    chip,
     // Only a live terminal pane on a real box offers the switch: the local
     // shell's session is config, and a stopped/setting-up pane has no attach to
     // move.
