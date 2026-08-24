@@ -441,6 +441,10 @@ export function openTerminal(
   opts?: {
     voiceMount?: HTMLElement; onConnState?: (s: PaneConn) => void; transformInput?: (d: string) => string;
     voiceSink?: () => ((text: string) => void) | null;
+    // Duplicate panes: attach this tmux session instead of the box's stored
+    // one, and key this viewer's PTY per pane instance (ordinal >1 suffixes
+    // the client id, so pane 1 keeps today's key and its grace reattach).
+    session?: string; paneOrdinal?: number;
   },
 ) {
   const term = new Terminal({
@@ -523,7 +527,12 @@ export function openTerminal(
     // Immediate feedback so opening a box is never a mystery blank cursor — the
     // user knows it's connecting (and that a password prompt may be coming).
     term.write(`\x1b[2m[connecting to ${name}…]\x1b[0m\r\n`);
-    ws = new WebSocket(`${proto}://${location.host}/term?box=${encodeURIComponent(boxId)}&cols=${cols}&rows=${rows}&client=${clientId()}`);
+    // -p<ordinal> keeps each pane of one box a distinct viewer. The base id is
+    // trimmed so the suffixed id stays within the server's 64-char CLIENT_ID.
+    const suffix = opts?.paneOrdinal && opts.paneOrdinal > 1 ? `-p${opts.paneOrdinal}` : '';
+    const client = suffix ? clientId().slice(0, 64 - suffix.length) + suffix : clientId();
+    const sess = opts?.session ? `&session=${encodeURIComponent(opts.session)}` : '';
+    ws = new WebSocket(`${proto}://${location.host}/term?box=${encodeURIComponent(boxId)}&cols=${cols}&rows=${rows}&client=${client}${sess}`);
     ws.onopen = () => {
       emitConn({ kind: 'open' });
       sendResize();
