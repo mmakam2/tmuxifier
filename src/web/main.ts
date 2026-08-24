@@ -30,7 +30,7 @@ import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createSetupOptionsForm, setupStartPayload, type SetupOptionsValues } from './setupOptions';
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
-import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore } from './stageLayout';
+import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore, instanceId, boxOfInstance, ordinalOfInstance } from './stageLayout';
 import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks, type PaneRect } from './stagePanes';
 import { paneHeaderModel, buildPaneHeader, isSwitchableSession, sessionTargets, SESSION_NAME_RE, WINDOW_INDENT, type PaneConn, type PaneHeaderModel, type SessionTarget } from './paneHeader';
 import { buildSessionPicker } from './sessionPicker';
@@ -42,6 +42,11 @@ const app = document.getElementById('app')!;
 // Reconcile whatever theme-boot.js stamped pre-paint: applyTheme normalizes
 // stale/unknown mirror ids back to the default and seeds the subscriber state.
 applyTheme(currentTheme());
+// Every pane-keyed structure below (tabs, connStates, paneHeaders,
+// paneLifecycles, settingUpPollers, stoppedShown) is keyed by INSTANCE id
+// (`${boxId}#${ordinal}`), not by box id: one box may hold several panes.
+// Anything keyed by box — latestStatus, latestSeries, latestSetups, freshProbe,
+// the api.* calls — takes boxOfInstance(iid).
 const tabs = new Map<string, { el: HTMLElement; term: ReturnType<typeof openTerminal>; voiceMount: HTMLElement }>();
 const connStates = new Map<string, PaneConn>();
 // Holds the full built header, not just its update closure, so its picker's
@@ -63,7 +68,10 @@ let chordWired = false; // renderDashboard re-runs on re-login; wire document on
 // the dragged id at dragenter time to gate edge zones by the pane cap.
 let dragSourceId: string | null = null;
 let stageRoot: PaneNode | null = null;
-let focusedBoxId: string | null = null; // the pane typing targets and plain clicks replace
+let focusedPaneId: string | null = null; // the pane instance typing targets and plain clicks replace
+// Per-pane session OVERRIDES only — absence means "the box's configured
+// session". Runtime authority; persistStage mirrors it into the v3 payload.
+const paneSessions = new Map<string, string>();
 // The phone shell's drawer/media-query controller. Owned by renderDashboard (it
 // binds to elements inside #app) and disposed in teardownWorkspace, so a
 // re-login never leaves a listener bound to a detached layout.
@@ -565,10 +573,16 @@ function stopFastStatusPoll() {
 function fastStatusPoll(id: string, everyMs = 3000, timeoutMs = 180000) {
   stopFastStatusPoll();
   const deadline = Date.now() + timeoutMs;
-  const before = paneState(id);
+  // `id` is a BOX id, but paneState is per-instance (its stoppedShown stickiness
+  // belongs to the pane that painted the panel), so read it through one of this
+  // box's instances. Falling back to the box id keeps an undocked box working:
+  // boxOfInstance is the identity on an id with no ordinal, so only the sticky
+  // branch — which needs a pane anyway — differs.
+  const stateOf = () => paneState(instancesOfBox(id)[0] ?? id);
+  const before = stateOf();
   const tick = async () => {
     await pollStatus();
-    if (paneState(id) !== before || Date.now() >= deadline) { fastStatusTimer = null; return; }
+    if (stateOf() !== before || Date.now() >= deadline) { fastStatusTimer = null; return; }
     fastStatusTimer = window.setTimeout(() => { void tick(); }, everyMs);
   };
   void tick();
@@ -618,7 +632,7 @@ async function pollStatus() {
       // never mistaken for a start. One repaint only when a derived state
       // flips, so steady state costs nothing.
       for (const [id] of tabs) {
-        if (id !== '__local__' && status[id]?.proxmoxState === 'stopped') {
+        if (!isLocalPane(id) && status[boxOfInstance(id)]?.proxmoxState === 'stopped') {
           closeTab(id, { keepPane: panesOf(stageRoot).includes(id) });
         }
       }
@@ -771,7 +785,14 @@ function teardownDash() {
 // the same keep-alive contract as the old display:none tab toggling.
 
 function persistStage() {
-  localStorage.setItem(STAGE_LAYOUT_KEY, serialize(stageRoot, focusedBoxId));
+  // Only DOCKED panes' overrides are persisted: the layout payload describes the
+  // stage, and a parked instance is not on it.
+  const sessions: Record<string, string> = {};
+  for (const iid of panesOf(stageRoot)) {
+    const s = paneSessions.get(iid);
+    if (s) sessions[iid] = s;
+  }
+  localStorage.setItem(STAGE_LAYOUT_KEY, serialize(stageRoot, focusedPaneId, sessions));
 }
 
 function stageGrid(): HTMLElement { return app.querySelector('.stage-grid') as HTMLElement; }
@@ -782,13 +803,18 @@ function ensureTab(id: string) {
   const el = document.createElement('div');
   el.className = 'term';
   stageParking().appendChild(el);
-  const box = allBoxes.find((b) => b.id === id);
+  const box = boxFor(id);
   // The voice button mounts into this slot, which the pane header adopts on
   // every repaint — the button (and an in-flight recording) survives header
   // rebuilds because the slot element persists with the tab, not the header.
   const voiceMount = document.createElement('span');
   voiceMount.className = 'pane-voice-slot';
-  const term = openTerminal(el, id, id === '__local__' ? 'local shell' : box?.label, {
+  const term = openTerminal(el, boxOfInstance(id), isLocalPane(id) ? 'local shell' : box?.label, {
+    // Absent override = the box's configured session, i.e. today's attach.
+    // The ordinal keys this viewer's PTY: pane #1 keeps the existing client id
+    // (and with it the grace-window reattach), duplicates get their own.
+    session: paneSessions.get(id),
+    paneOrdinal: ordinalOfInstance(id),
     voiceMount,
     onConnState: (s) => { connStates.set(id, s); updatePaneHeaders(); },
     // Sticky Ctrl armed on the touch bar masks the next soft-keyboard character
@@ -806,21 +832,41 @@ function ensureTab(id: string) {
     voiceSink: () => (touchComposer?.isOpen() ? (t: string) => touchComposer?.appendDraft(t) : null),
   });
   tabs.set(id, { el, term, voiceMount });
-  if (id === '__local__') updateLocalDot();
+  if (isLocalPane(id)) updateLocalDot();
 }
 
 // Content states a pane can show instead of a terminal. 'unknown' PVE state is
 // sticky for a pane already showing its stopped panel — a failed/stale PVE read
-// must never be read as "the guest started" (see pollStatus).
+// must never be read as "the guest started" (see pollStatus). Instance-keyed:
+// the stickiness belongs to the pane that painted the panel.
 const stoppedShown = new Set<string>();
 
 function paneState(id: string): 'terminal' | 'stopped' | 'setup' {
-  if (id === '__local__') return 'terminal';
-  const pveState = latestStatus[id]?.proxmoxState;
+  if (isLocalPane(id)) return 'terminal';
+  const boxId = boxOfInstance(id);
+  const pveState = latestStatus[boxId]?.proxmoxState;
   if (pveState === 'stopped') return 'stopped';
   if (pveState === 'unknown' && stoppedShown.has(id)) return 'stopped';
-  if (blocksTerminal(latestSetups.find((s) => s.boxId === id)?.status)) return 'setup';
+  if (blocksTerminal(latestSetups.find((s) => s.boxId === boxId)?.status)) return 'setup';
   return 'terminal';
+}
+
+// --- Instance ↔ box seam ---------------------------------------------------
+// The stage's leaves, and every map keyed off them, hold INSTANCE ids; the box
+// list, the status/series/setup caches and the API hold BOX ids. These four are
+// the only translation, so a box id can never reach a pane-keyed map by accident.
+const boxFor = (iid: string): Box | undefined => allBoxes.find((b) => b.id === boxOfInstance(iid));
+const isLocalPane = (iid: string): boolean => boxOfInstance(iid) === '__local__';
+function attachedSession(iid: string): string {
+  return paneSessions.get(iid) ?? (boxFor(iid)?.sessionName || 'web');
+}
+// Docked panes plus parked tabs — a parked duplicate still holds its PTY and
+// its ordinal, so both count for session adoption and ordinal reuse.
+function instancesOfBox(boxId: string): string[] {
+  return [...new Set([...panesOf(stageRoot), ...tabs.keys()])].filter((iid) => boxOfInstance(iid) === boxId);
+}
+function closeTabsForBox(boxId: string, opts?: { keepPane?: boolean }) {
+  for (const iid of instancesOfBox(boxId)) closeTab(iid, opts);
 }
 
 const settingUpPollers = new Map<string, { start: () => void; stop: () => void }>();
@@ -832,7 +878,7 @@ function clearSettingUpPanel(id: string) {
 
 function paneContentFor(id: string): HTMLElement {
   const state = paneState(id);
-  const box = allBoxes.find((b) => b.id === id);
+  const box = boxFor(id);
   stoppedShown.delete(id);
   if (state === 'stopped' && box) {
     closeTab(id, { keepPane: true });
@@ -841,27 +887,28 @@ function paneContentFor(id: string): HTMLElement {
   }
   if (state === 'setup' && box) {
     closeTab(id, { keepPane: true });
-    return buildSettingUpPanel(box);
+    return buildSettingUpPanel(box, id);
   }
   ensureTab(id);
   return tabs.get(id)!.el;
 }
 
 function paneHeaderModelFor(id: string): PaneHeaderModel {
-  const box = allBoxes.find((b) => b.id === id);
+  const box = boxFor(id);
+  const boxId = boxOfInstance(id);
   // Latest health sample carries the agent read (see the spec: the series
   // already ships it; the bar is its first client consumer).
-  const series = latestSeries[id];
+  const series = latestSeries[boxId];
   return paneHeaderModel({
-    local: id === '__local__',
-    label: id === '__local__' ? 'Host Shell' : box?.label ?? id,
+    local: isLocalPane(id),
+    label: isLocalPane(id) ? 'Host Shell' : box?.label ?? boxId,
     user: box?.user,
     host: box?.host,
-    status: latestStatus[id],
+    status: latestStatus[boxId],
     agent: series?.[series.length - 1]?.agent,
     conn: connStates.get(id),
     state: paneState(id),
-    sessionName: box?.sessionName,
+    sessionName: attachedSession(id),
     // phoneCtl is created in start(); before that there is no stage to paint,
     // so the `?? false` is a boot-order guard, not a default policy.
     phone: phoneCtl?.matches() ?? false,
@@ -873,18 +920,18 @@ function paneHeaderModelFor(id: string): PaneHeaderModel {
 // the new session over the existing ControlMaster), then reopen this pane.
 // Non-destructive — the old session keeps running on the box.
 async function switchSession(id: string, name: string) {
-  const box = allBoxes.find((b) => b.id === id);
+  const box = boxFor(id);
   if (!box || box.sessionName === name) return;
   // The dropdown already disables unswitchable names; this is the backstop
   // that keeps a PATCH from silently sanitize-renaming one (store.js rewrites
   // out-of-charset names rather than rejecting them).
   if (!isSwitchableSession(name)) { updatePaneHeaders(); return; }
   try {
-    const updated = await api.updateBox(id, { sessionName: name });
+    const updated = await api.updateBox(boxOfInstance(id), { sessionName: name });
     box.sessionName = updated.sessionName; // keep the local model in step until the next refresh()
     closeTab(id, { keepPane: true });
     repaintStage();
-    fastStatusPoll(id);
+    fastStatusPoll(boxOfInstance(id));
   } catch {
     // Save failed: repaint the headers so the select snaps back to the stored
     // session instead of showing a switch that never happened.
@@ -904,7 +951,7 @@ async function killTarget(id: string, t: SessionTarget) {
   // whole session it belongs to.
   if (t.kind === 'window' && !t.windowId) throw new Error('missing window id');
   try {
-    await api.killTarget(id, t.session, t.kind === 'window' ? t.windowId : undefined);
+    await api.killTarget(boxOfInstance(id), t.session, t.kind === 'window' ? t.windowId : undefined);
   } catch (e: any) {
     // The pane header has no per-widget error surface the way the Edit Box
     // modal's sessionHint does — sessionPicker.ts's own onKill catch swallows
@@ -923,13 +970,13 @@ async function killTarget(id: string, t: SessionTarget) {
 // both, window first: switchSession's PATCH drops every viewer's PTY, so
 // selecting the window beforehand means the forced reattach lands already on it.
 async function selectTarget(id: string, t: SessionTarget) {
-  const box = allBoxes.find((b) => b.id === id);
+  const box = boxFor(id);
   if (!box) return;
   if (t.kind === 'window' && t.windowId) {
     try {
       // The session goes with the id: a grouped session shares its windows, so
       // the id alone does not name one session (see buildSelectWindowRemote).
-      await api.selectWindow(id, t.session, t.windowId);
+      await api.selectWindow(boxOfInstance(id), t.session, t.windowId);
     } catch {
       // The window vanished between the poll and the click (502) or the box is
       // mid-setup (409): repaint so the select snaps back rather than showing a
@@ -954,7 +1001,7 @@ async function selectTarget(id: string, t: SessionTarget) {
 
 function updatePaneHeaders() {
   for (const [id, h] of paneHeaders) h.update(paneHeaderModelFor(id));
-  for (const [id, ctl] of paneLifecycles) ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState, template: latestStatus[id]?.proxmoxTemplate });
+  for (const [id, ctl] of paneLifecycles) ctl.update({ paneState: paneState(id), pveState: latestStatus[boxOfInstance(id)]?.proxmoxState, template: latestStatus[boxOfInstance(id)]?.proxmoxTemplate });
 }
 
 function paneHooks(): PaneHooks {
@@ -977,7 +1024,7 @@ function paneHooks(): PaneHooks {
           onSelectTarget: (t: SessionTarget) => void selectTarget(id, t),
           // Same gate as the callback above: the model decides whether a switch
           // is on offer, so a pane with no dropdown never probes for one.
-          onWillOpenTarget: (opts?: { waitMs?: number }) => freshProbe.refresh(id, opts),
+          onWillOpenTarget: (opts?: { waitMs?: number }) => freshProbe.refresh(boxOfInstance(id), opts),
           onKillTarget: (t: SessionTarget) => killTarget(id, t),
         } : {}),
         ...(split ? { onUndock: () => undockBox(id), undockLabel: `Undock ${model.title}` } : {}),
@@ -986,8 +1033,8 @@ function paneHooks(): PaneHooks {
       // rows. Keyed per pane, so arming one pane's cap does not arm another's.
       if (built.refreshBtn) {
         wireReconnectButton(built.refreshBtn, `pane:${id}`, `${model.title} terminal`, async () => {
-          if (id === '__local__') await api.reconnectLocalShell();
-          else await api.reconnectBox(id);
+          if (isLocalPane(id)) await api.reconnectLocalShell();
+          else await api.reconnectBox(boxOfInstance(id));
           closeTab(id, { keepPane: true });
           repaintStage();
         });
@@ -999,24 +1046,24 @@ function paneHooks(): PaneHooks {
       paneHeaders.set(id, built);
       // Proxmox-linked boxes only: the local shell has no container, and an
       // unlinked box has nothing for these keys to act on.
-      const linked = allBoxes.find((b) => b.id === id)?.proxmox;
-      if (id !== '__local__' && linked) {
+      const linked = boxFor(id)?.proxmox;
+      if (!isLocalPane(id) && linked) {
         const ctl = buildPaneLifecycle({
-          boxId: id,
+          boxId: boxOfInstance(id),
           onOpenJobLog: (jobId) => openProxmoxHub({
             openBox,
             openEditBox: (boxId) => { const target = allBoxes.find((item) => item.id === boxId); if (target) openBoxDialog(target); },
             onBoxLinked: () => { void refresh(); },
-          }, jobId ? { lifecycleJobId: jobId } : { tab: 'Guests', focusBoxId: id }),
-          onSettled: () => { fastStatusPoll(id); },
+          }, jobId ? { lifecycleJobId: jobId } : { tab: 'Guests', focusBoxId: boxOfInstance(id) }),
+          onSettled: () => { fastStatusPoll(boxOfInstance(id)); },
         });
-        ctl.update({ paneState: paneState(id), pveState: latestStatus[id]?.proxmoxState, template: latestStatus[id]?.proxmoxTemplate });
+        ctl.update({ paneState: paneState(id), pveState: latestStatus[boxOfInstance(id)]?.proxmoxState, template: latestStatus[boxOfInstance(id)]?.proxmoxTemplate });
         built.lifecycleSlot.append(ctl.el);
         paneLifecycles.set(id, ctl);
       }
       return built.el;
     },
-    onFocus: (id) => { if (focusedBoxId !== id) { focusedBoxId = id; syncPaneFocus(); persistStage(); } },
+    onFocus: (id) => { if (focusedPaneId !== id) { focusedPaneId = id; syncPaneFocus(); persistStage(); } },
     onRatio: (path, divider, firstShare, phase) => {
       stageRoot = setRatio(stageRoot, path, divider, firstShare);
       if (stageRoot != null) applyRatios(stageGrid(), stageRoot);
@@ -1031,7 +1078,7 @@ function paneHooks(): PaneHooks {
 function syncPaneFocus() {
   const split = panesOf(stageRoot).length > 1;
   stageGrid().querySelectorAll<HTMLElement>('.stage-pane').forEach((p) => {
-    p.classList.toggle('focused', split && p.dataset.paneId === focusedBoxId);
+    p.classList.toggle('focused', split && p.dataset.paneId === focusedPaneId);
   });
   highlightStage();
 }
@@ -1072,7 +1119,7 @@ function repaintStage() {
   // that was never rendered, and its stoppedShown entry stale. Desktop is
   // unchanged: the two sets coincide when every pane is rendered.
   const rendered = stageRoot != null && phoneCtl?.matches()
-    ? [phonePaneOf(stageRoot, focusedBoxId)!]
+    ? [phonePaneOf(stageRoot, focusedPaneId)!]
     : panesOf(stageRoot);
   // Panels that lost their pane (or whose box left setup) must stop polling.
   for (const [id] of settingUpPollers) {
@@ -1097,7 +1144,7 @@ function repaintStage() {
       // Phone: one pane, full screen. The split tree in stageRoot (and its
       // persisted form) is untouched — this renders a one-leaf view of it.
       const pid = rendered[0]; // phonePaneOf, already computed above
-      focusedBoxId = pid;
+      focusedPaneId = pid;
       renderStagePanes(grid, pid, pid, paneHooks());
       // The mic moves out of the pane header into the key bar, where a thumb can
       // reach it. Desktop repaints re-adopt it into the header (headerFor), so
@@ -1114,14 +1161,14 @@ function repaintStage() {
         if (vm) touchMicSlot.replaceChildren(vm); else touchMicSlot.replaceChildren();
       }
     } else {
-      renderStagePanes(grid, stageRoot, focusedBoxId, paneHooks());
+      renderStagePanes(grid, stageRoot, focusedPaneId, paneHooks());
     }
   }
   lastPaneStates = panesOf(stageRoot).map((id) => `${id}:${paneState(id)}`).join('|');
   refitActiveTerminals();
   highlightStage();
   persistStage();
-  if (focusedBoxId) tabs.get(focusedBoxId)?.term.focus();
+  if (focusedPaneId) tabs.get(focusedPaneId)?.term.focus();
   filterAndPaint(); // dock-button visibility and row highlights track the layout
   syncPhoneSwitch();
 }
@@ -1135,22 +1182,26 @@ function syncPhoneSwitch() {
   sel.replaceChildren(...panes.map((id) => {
     const o = document.createElement('option');
     o.value = id;
-    o.textContent = id === '__local__' ? 'Host Shell' : (allBoxes.find((b) => b.id === id)?.label ?? id);
+    // Two panes of one box would otherwise be indistinguishable rows; the
+    // override (when there is one) is what tells them apart.
+    const base = isLocalPane(id) ? 'Host Shell' : (boxFor(id)?.label ?? boxOfInstance(id));
+    const ov = paneSessions.get(id);
+    o.textContent = ov ? `${base} · ${ov}` : base;
     return o;
   }));
   sel.disabled = panes.length < 2;
-  if (focusedBoxId) sel.value = focusedBoxId;
+  if (focusedPaneId) sel.value = focusedPaneId;
 }
 
 function dockBox(id: string, drop: DropSpec) {
   stageRoot = movePane(stageRoot, id, drop);
-  focusedBoxId = id;
+  focusedPaneId = id;
   repaintStage();
 }
 
 function undockBox(id: string) {
   stageRoot = undockPane(stageRoot, id);
-  if (focusedBoxId === id) focusedBoxId = panesOf(stageRoot)[0] ?? null;
+  if (focusedPaneId === id) focusedPaneId = panesOf(stageRoot)[0] ?? null;
   repaintStage();
 }
 
@@ -1217,14 +1268,14 @@ async function renderDashboard() {
     // Boolean-returning: the composer clears its draft only when a live pane
     // accepted the bytes (setup/stopped panes have no terminal behind them).
     send: (d) => {
-      const t = focusedBoxId ? tabs.get(focusedBoxId)?.term : undefined;
+      const t = focusedPaneId ? tabs.get(focusedPaneId)?.term : undefined;
       if (!t) return false;
       t.input(d);
       return true;
     },
-    appCursor: () => (focusedBoxId ? tabs.get(focusedBoxId)?.term.appCursor() ?? false : false),
+    appCursor: () => (focusedPaneId ? tabs.get(focusedPaneId)?.term.appCursor() ?? false : false),
     sticky: stickyCtrl,
-    focusTerminal: () => { if (focusedBoxId) tabs.get(focusedBoxId)?.term.focus(); },
+    focusTerminal: () => { if (focusedPaneId) tabs.get(focusedPaneId)?.term.focus(); },
     // The bar changes height when the composer opens/closes/grows; open
     // terminals must re-fit to the stage that remains.
     onLayoutChange: () => refitActiveTerminals(),
@@ -1250,7 +1301,7 @@ async function renderDashboard() {
     window.setTimeout(refitActiveTerminals, 260);
   });
   (app.querySelector('#phone-switch') as HTMLSelectElement).addEventListener('change', (ev) => {
-    focusedBoxId = (ev.target as HTMLSelectElement).value;
+    focusedPaneId = (ev.target as HTMLSelectElement).value;
     repaintStage();
   });
   app.querySelector('#settings')!.addEventListener('click', () => { openSettingsModal('boxes', () => { void syncProxmoxButton(); }); });
@@ -1261,7 +1312,7 @@ async function renderDashboard() {
   app.querySelector('#home')!.addEventListener('click', () => {
     if (stageRoot == null) return; // already home
     stageRoot = null;
-    focusedBoxId = null;
+    focusedPaneId = null;
     repaintStage();
   });
   const searchInput = app.querySelector('#search') as HTMLInputElement;
@@ -1312,7 +1363,9 @@ async function renderDashboard() {
   localRow.addEventListener('click', () => openLocalShell());
   localRow.draggable = true;
   localRow.addEventListener('dragstart', (e) => {
-    dragSourceId = '__local__';
+    // The zone gating needs the INSTANCE being dragged (a docked one moves and
+    // is cap-exempt); the payload stays the box id, resolved again on drop.
+    dragSourceId = panesOf(stageRoot).find(isLocalPane) ?? instanceId('__local__', 1);
     e.dataTransfer?.setData('text/x-tmuxifier-box', '__local__');
     if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
   });
@@ -1447,16 +1500,21 @@ async function renderDashboard() {
       zones.replaceChildren();
       dragSourceId = null;
       preview.style.display = 'none';
+      // The payload names a BOX; the layout speaks instances. Today's semantics
+      // are a MOVE, so a docked box resolves to the pane it already holds and an
+      // undocked one to its `#1` candidate. (Task 7 makes this a duplicate.)
+      const docked = panesOf(stageRoot).find((iid) => boxOfInstance(iid) === id);
+      const target = docked ?? instanceId(id, 1);
       const kind = zone?.dataset.kind;
       if (kind === 'stage-edge') {
-        dockBox(id, { kind: 'stage-edge', edge: zone!.dataset.edge as Edge });
+        dockBox(target, { kind: 'stage-edge', edge: zone!.dataset.edge as Edge });
       } else if (kind === 'pane-edge') {
-        dockBox(id, { kind: 'pane-edge', paneId: zone!.dataset.paneId!, edge: zone!.dataset.edge as Edge });
+        dockBox(target, { kind: 'pane-edge', paneId: zone!.dataset.paneId!, edge: zone!.dataset.edge as Edge });
       } else if (kind === 'replace') {
-        const target = zone!.dataset.paneId!;
-        if (target !== id) {
-          stageRoot = replacePane(stageRoot, target, id);
-          focusedBoxId = id;
+        const zoneTarget = zone!.dataset.paneId!;
+        if (zoneTarget !== target) {
+          stageRoot = replacePane(stageRoot, zoneTarget, target);
+          focusedPaneId = target;
           repaintStage();
         }
       }
@@ -1471,8 +1529,8 @@ async function renderDashboard() {
     'local', 'host shell',
     async () => {
       await api.reconnectLocalShell();
-      const wasDocked = panesOf(stageRoot).includes('__local__');
-      closeTab('__local__', { keepPane: wasDocked });
+      const wasDocked = panesOf(stageRoot).some(isLocalPane);
+      closeTabsForBox('__local__', { keepPane: wasDocked });
       if (wasDocked) repaintStage();
     },
   );
@@ -1497,9 +1555,9 @@ async function renderDashboard() {
         const r = p.getBoundingClientRect();
         return { id: p.dataset.paneId!, x: r.x, y: r.y, w: r.width, h: r.height };
       });
-      const target = focusMove(rects, focusedBoxId, e.key);
+      const target = focusMove(rects, focusedPaneId, e.key);
       if (target) {
-        focusedBoxId = target;
+        focusedPaneId = target;
         syncPaneFocus();
         persistStage();
         tabs.get(target)?.term.focus();
@@ -1514,7 +1572,12 @@ async function renderDashboard() {
   const restored = restore(savedStage, [...allBoxes.map((b) => b.id), '__local__']);
   if (restored.root != null) {
     stageRoot = restored.root;
-    focusedBoxId = restored.focusedId;
+    focusedPaneId = restored.focusedId;
+    // Charset policy lives here, not in the model: a persisted override that
+    // would fail /term's validation is dropped, falling back to configured.
+    for (const [iid, name] of Object.entries(restored.sessions)) {
+      if (isSwitchableSession(name)) paneSessions.set(iid, name);
+    }
     repaintStage();
   }
   pollInterval = setInterval(pollStatus, POLL_MS);
@@ -1627,8 +1690,12 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
 
   const li = document.createElement('li');
   li.className = 'box';
-  if (b.id === focusedBoxId) li.classList.add('active');
-  else if (panesOf(stageRoot).includes(b.id)) li.classList.add('docked');
+  // A row tracks its BOX, so both reads fold the focused/docked pane instances
+  // back to the box they belong to.
+  const dockedHere = panesOf(stageRoot).some((iid) => boxOfInstance(iid) === b.id);
+  const activeHere = !!focusedPaneId && boxOfInstance(focusedPaneId) === b.id;
+  if (activeHere) li.classList.add('active');
+  else if (dockedHere) li.classList.add('docked');
   li.dataset.id = b.id;
   li.dataset.boxId = b.id; // matches [data-box-id] used by tests/tooling to locate a card
 
@@ -1687,7 +1754,10 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
 
   li.draggable = true;
   li.addEventListener('dragstart', (e) => {
-    dragSourceId = b.id;
+    // Zone gating needs the INSTANCE in flight: a docked box's drag is a move
+    // and stays cap-exempt, an undocked one is the `#1` candidate. The payload
+    // stays the box id, resolved to an instance again on drop.
+    dragSourceId = panesOf(stageRoot).find((iid) => boxOfInstance(iid) === b.id) ?? instanceId(b.id, 1);
     e.dataTransfer?.setData('text/x-tmuxifier-box', b.id);
     if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
   });
@@ -1703,10 +1773,10 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   dock.title = 'Dock beside current terminal';
   dock.setAttribute('aria-label', `Dock ${b.label} beside current terminal`);
   dock.textContent = '◫';
-  dock.hidden = !(panesOf(stageRoot).length >= 1 && panesOf(stageRoot).length < MAX_PANES && !panesOf(stageRoot).includes(b.id));
+  dock.hidden = !(panesOf(stageRoot).length >= 1 && panesOf(stageRoot).length < MAX_PANES && !dockedHere);
   dock.addEventListener('click', (e) => {
     e.stopPropagation();
-    dockBox(b.id, { kind: 'stage-edge', edge: 'right' });
+    dockBox(instanceId(b.id, 1), { kind: 'stage-edge', edge: 'right' });
   });
 
   const refreshBtn = document.createElement('button');
@@ -1714,8 +1784,10 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
   // Title/label/glyph and the two-click guard are owned by wireReconnectButton.
   wireReconnectButton(refreshBtn, `box:${b.id}`, b.label, async () => {
     await api.reconnectBox(b.id);
-    const wasDocked = panesOf(stageRoot).includes(b.id);
-    closeTab(b.id, { keepPane: wasDocked });
+    // Read live, not from the row-build snapshot above: the layout may have
+    // moved between the row being built and this cap being fired.
+    const wasDocked = panesOf(stageRoot).some((iid) => boxOfInstance(iid) === b.id);
+    closeTabsForBox(b.id, { keepPane: wasDocked });
     if (wasDocked) repaintStage(); // rebuilds the terminal in its pane
   });
 
@@ -1729,8 +1801,8 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
     e.stopPropagation();
     if (!confirm(`Forget the stored host key for ${b.label}? Only do this if the box was legitimately rebuilt.`)) return;
     await api.forgetHostKey(b.id);
-    const wasDocked = panesOf(stageRoot).includes(b.id);
-    closeTab(b.id, { keepPane: wasDocked });
+    const wasDocked = panesOf(stageRoot).some((iid) => boxOfInstance(iid) === b.id);
+    closeTabsForBox(b.id, { keepPane: wasDocked });
     if (wasDocked) repaintStage();
   });
 
@@ -1757,7 +1829,7 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
     // session on the box keeps running.)
     if (!confirm(`Remove box ${b.label}?`)) return;
     await api.removeBox(b.id);
-    closeTab(b.id);
+    closeTabsForBox(b.id);
     await refresh();
   });
 
@@ -1805,9 +1877,11 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
     list.appendChild(row);
   }
 
+  // A group tracks the BOX the focused pane belongs to, not the pane instance.
+  const activeBoxId = focusedPaneId ? boxOfInstance(focusedPaneId) : null;
   for (const group of groupBoxes(boxes)) {
     const collapsed = !searching && isGroupCollapsed(group.key);
-    const containsActive = !!focusedBoxId && group.boxes.some(b => b.id === focusedBoxId);
+    const containsActive = !!activeBoxId && group.boxes.some(b => b.id === activeBoxId);
 
     const groupItem = document.createElement('li');
     groupItem.className = `box-group${collapsed ? ' collapsed' : ''}${containsActive ? ' active-child' : ''}`;
@@ -1881,35 +1955,42 @@ function openLocalShell() { openPane('__local__'); }
 
 function updateLocalDot() {
   const dot = app.querySelector('.local-dot');
-  if (dot) dot.classList.toggle('green', tabs.has('__local__'));
+  if (dot) dot.classList.toggle('green', [...tabs.keys()].some(isLocalPane));
 }
 
 // Sidebar highlight derived from the layout: docked = on stage (dimmed
 // beacon); active = the focused pane (full beacon). One derivation shared by
 // every repaint so highlight state never drifts.
 function highlightStage() {
+  // A sidebar row names a BOX; the layout and the focus name pane INSTANCES, so
+  // every comparison here folds an instance back to its box.
+  const activeBoxId = focusedPaneId ? boxOfInstance(focusedPaneId) : null;
+  const dockedBoxIds = new Set(panesOf(stageRoot).map(boxOfInstance));
   app.querySelectorAll('.box').forEach((element) => {
     const row = element as HTMLElement;
     const id = row.dataset.id ?? '';
-    row.classList.toggle('docked', panesOf(stageRoot).includes(id) && id !== focusedBoxId);
-    row.classList.toggle('active', id === focusedBoxId);
+    row.classList.toggle('docked', dockedBoxIds.has(id) && id !== activeBoxId);
+    row.classList.toggle('active', id === activeBoxId);
   });
   app.querySelectorAll('.box-group').forEach((element) => {
     const group = element as HTMLElement;
-    group.classList.toggle('active-child', !!focusedBoxId && !!group.querySelector(`.box[data-id="${CSS.escape(focusedBoxId)}"]`));
+    group.classList.toggle('active-child', !!activeBoxId && !!group.querySelector(`.box[data-id="${CSS.escape(activeBoxId)}"]`));
   });
   const ls = app.querySelector('.local-shell');
   if (ls) {
-    ls.classList.toggle('docked', panesOf(stageRoot).includes('__local__') && focusedBoxId !== '__local__');
-    ls.classList.toggle('active', focusedBoxId === '__local__');
+    const localFocused = focusedPaneId != null && isLocalPane(focusedPaneId);
+    ls.classList.toggle('docked', panesOf(stageRoot).some(isLocalPane) && !localFocused);
+    ls.classList.toggle('active', localFocused);
   }
 }
 
 // Pane panel shown instead of a terminal while a box's setup job is running.
 // Live: it polls the job, renders its status and log, and hands the pane back
 // to a terminal (via repaintStage's state re-resolution) once the job settles.
-function buildSettingUpPanel(box: Box): HTMLElement {
-  clearSettingUpPanel(box.id);
+// Keyed by the pane INSTANCE, not the box: two panes of one box mid-setup each
+// own their own poller and their own panel DOM.
+function buildSettingUpPanel(box: Box, iid: string): HTMLElement {
+  clearSettingUpPanel(iid);
   const panel = document.createElement('div');
   panel.className = 'setting-up-state';
   const title = document.createElement('strong');
@@ -1932,13 +2013,13 @@ function buildSettingUpPanel(box: Box): HTMLElement {
       // Job settled: refresh the sidebar's pill, then let the pane re-resolve
       // to a terminal. The fresh job state beats the cached latestSetups list,
       // so clear the poller first or the repaint would rebuild this panel.
-      clearSettingUpPanel(box.id);
+      clearSettingUpPanel(iid);
       void refresh();
       repaintStage();
       return null;
     },
   });
-  settingUpPollers.set(box.id, poller);
+  settingUpPollers.set(iid, poller);
   poller.start();
   return panel;
 }
@@ -1973,28 +2054,33 @@ function openBox(b: Box) { openPane(b.id); }
 // Plain activation (sidebar click): focus the pane if already docked, replace
 // the focused pane in a split, or become the single pane otherwise — the
 // confirmed "C replaces the focused pane" semantics.
-function openPane(id: string) {
-  if (panesOf(stageRoot).includes(id)) {
+function openPane(boxId: string) {
+  // Plain activation acts on the box: if any of its panes is already docked,
+  // focus that one rather than hatching a second (docking a duplicate is the
+  // drag gesture's job).
+  const docked = panesOf(stageRoot).find((iid) => boxOfInstance(iid) === boxId);
+  if (docked) {
     // On phone the focused pane is the ONLY rendered one, so changing focus is
     // a re-render — the focus-paint shortcut below would leave the previous
     // pane on screen while keystrokes went to this one, parked and invisible.
     // Re-activating the pane already on screen is just a focus call, though:
     // a full repaint would tear down and rebuild the DOM the user is looking at.
     if (phoneCtl?.matches()) {
-      if (focusedBoxId !== id) { focusedBoxId = id; repaintStage(); } else tabs.get(id)?.term.focus();
+      if (focusedPaneId !== docked) { focusedPaneId = docked; repaintStage(); } else tabs.get(docked)?.term.focus();
       return;
     }
-    focusedBoxId = id;
+    focusedPaneId = docked;
     syncPaneFocus();
     persistStage();
-    tabs.get(id)?.term.focus();
+    tabs.get(docked)?.term.focus();
     return;
   }
+  const iid = instanceId(boxId, 1);
   const panes = panesOf(stageRoot);
   stageRoot = panes.length === 0
-    ? id
-    : replacePane(stageRoot, panes.length <= 1 || !focusedBoxId ? panes[0] : focusedBoxId, id);
-  focusedBoxId = id;
+    ? iid
+    : replacePane(stageRoot, panes.length <= 1 || !focusedPaneId ? panes[0] : focusedPaneId, iid);
+  focusedPaneId = iid;
   repaintStage();
 }
 
@@ -2003,8 +2089,13 @@ function openPane(id: string) {
 // reconnect will immediately rebuild the terminal in place.
 function closeTab(id: string, opts?: { keepPane?: boolean }) {
   const t = tabs.get(id);
-  if (t) { t.term.dispose(); t.el.remove(); tabs.delete(id); connStates.delete(id); }
-  if (id === '__local__') updateLocalDot();
+  if (t) {
+    t.term.dispose(); t.el.remove(); tabs.delete(id); connStates.delete(id);
+    // A keepPane teardown is a reconnect/switch that rebuilds this very pane, so
+    // its session override must survive; a full teardown retires the instance.
+    if (!opts?.keepPane) paneSessions.delete(id);
+  }
+  if (isLocalPane(id)) updateLocalDot();
   if (!opts?.keepPane && panesOf(stageRoot).includes(id)) undockBox(id);
 }
 
@@ -3779,6 +3870,11 @@ function teardownWorkspace(): void {
   // elements (unopenable boxes after re-login) and live reconnect loops.
   for (const [, t] of tabs) { t.term.dispose(); t.el.remove(); }
   tabs.clear();
+  // Every instance this session knew is gone with its tab; the persisted layout
+  // (deliberately left standing) carries the docked panes' overrides back in on
+  // the way back. Keeping them here would strand a PARKED pane's override —
+  // persistStage never wrote one — on an id a later login could re-mint.
+  paneSessions.clear();
   // #app is about to be replaced with app.innerHTML elsewhere (renderLogin),
   // which drops this DOM but not a document-level listener registered on it —
   // only destroy() removes a picker's outside-click handler.
@@ -3788,7 +3884,7 @@ function teardownWorkspace(): void {
   updateLocalDot();
   for (const id of [...settingUpPollers.keys()]) clearSettingUpPanel(id);
   stageRoot = null;
-  focusedBoxId = null;
+  focusedPaneId = null;
   phoneCtl?.dispose(); // bound to elements inside #app, which is about to be replaced
   phoneCtl = null;
   // Same reason: both point into the key bar #app is about to drop. renderDashboard
