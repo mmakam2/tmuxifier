@@ -31,7 +31,7 @@ test('an expired session preserves the persisted split and stops polling', async
   await login(page);
   await page.locator('.box .name', { hasText: 'localhost' }).click();
   await expect(page.locator('.stage-pane')).toHaveCount(1);
-  await page.getByRole('button', { name: 'Dock db-primary beside current terminal' }).click();
+  await page.getByRole('button', { name: 'Dock beside current terminal — db-primary' }).click();
   await expect(page.locator('.stage-pane')).toHaveCount(2);
 
   const saved = await page.evaluate(() => localStorage.getItem('tmuxifier.stageLayout'));
@@ -193,7 +193,7 @@ test('lifecycle caps walk the ladder: words, then marks, then gone — never squ
   // Rung 1 — two panes: too narrow for three words, wide enough for three marks.
   // The caps collapse instead of clipping, and the session picker must not have
   // paid for it: it holds the width it had at full stage.
-  await page.getByRole('button', { name: 'Dock db-primary beside current terminal' }).click();
+  await page.getByRole('button', { name: 'Dock beside current terminal — db-primary' }).click();
   await expect(page.locator('.stage-pane')).toHaveCount(2);
   await page.setViewportSize({ width: 1280, height: 800 });
   const mid = await measure();
@@ -213,7 +213,7 @@ test('lifecycle caps walk the ladder: words, then marks, then gone — never squ
 
   // Rung 3 — three panes: even the marks go, rather than print over the chip
   // and the mic button.
-  await page.getByRole('button', { name: 'Dock untagged-worker beside current terminal' }).click();
+  await page.getByRole('button', { name: 'Dock beside current terminal — untagged-worker' }).click();
   await expect(page.locator('.stage-pane')).toHaveCount(3);
   const narrow = await measure();
   for (const row of narrow) {

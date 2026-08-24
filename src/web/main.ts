@@ -30,7 +30,8 @@ import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createSetupOptionsForm, setupStartPayload, type SetupOptionsValues } from './setupOptions';
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
-import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore, instanceId, boxOfInstance, ordinalOfInstance } from './stageLayout';
+import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore, instanceId, boxOfInstance, ordinalOfInstance, nextOrdinal } from './stageLayout';
+import { chooseDuplicateSession } from './duplicateSession';
 import { renderStagePanes, applyRatios, focusMove, dropTargets, type PaneHooks, type PaneRect } from './stagePanes';
 import { paneHeaderModel, buildPaneHeader, isSwitchableSession, sessionTargets, SESSION_NAME_RE, WINDOW_INDENT, type PaneConn, type PaneHeaderModel, type SessionTarget } from './paneHeader';
 import { buildSessionPicker } from './sessionPicker';
@@ -1190,6 +1191,28 @@ function dockBox(id: string, drop: DropSpec) {
   repaintStage();
 }
 
+// Dock a SECOND pane of an already-docked box (spec: adopt-then-create).
+// Async: the session list refreshes through freshProbe first, so adoption
+// doesn't act on the 30s cache; refresh() resolves on its wait cap even when
+// the probe is slow, and a failed probe falls back to the cached snapshot.
+async function duplicateBox(boxId: string, drop: DropSpec | { kind: 'replace'; paneId: string }) {
+  const box = allBoxes.find((b) => b.id === boxId);
+  if (!box) return;
+  if (drop.kind !== 'replace' && panesOf(stageRoot).length >= MAX_PANES) return;
+  try { await freshProbe.refresh(boxId); } catch { /* cached snapshot */ }
+  const configured = box.sessionName || 'web';
+  const live = (latestStatus[boxId]?.sessions ?? []).map((s) => s.name).filter(Boolean);
+  const shown = instancesOfBox(boxId).map((iid) => attachedSession(iid));
+  const session = chooseDuplicateSession(configured, live, shown);
+  const iid = instanceId(boxId, nextOrdinal(boxId, instancesOfBox(boxId)));
+  if (session !== configured) paneSessions.set(iid, session);
+  if (drop.kind === 'replace') {
+    stageRoot = replacePane(stageRoot, drop.paneId, iid);
+    focusedPaneId = iid;
+    repaintStage();
+  } else dockBox(iid, drop);
+}
+
 function undockBox(id: string) {
   stageRoot = undockPane(stageRoot, id);
   if (focusedPaneId === id) focusedPaneId = panesOf(stageRoot)[0] ?? null;
@@ -1491,21 +1514,26 @@ async function renderDashboard() {
       zones.replaceChildren();
       dragSourceId = null;
       preview.style.display = 'none';
-      // The payload names a BOX; the layout speaks instances. Today's semantics
-      // are a MOVE, so a docked box resolves to the pane it already holds and an
-      // undocked one to its `#1` candidate. (Task 7 makes this a duplicate.)
-      const docked = panesOf(stageRoot).find((iid) => boxOfInstance(iid) === id);
-      const target = docked ?? instanceId(id, 1);
+      // The payload names a BOX; the layout speaks instances. A docked box's
+      // drop now DUPLICATES it (spec decision 2 + amendment) — except Host
+      // Shell, whose session is server-fixed and keeps pure move semantics.
+      // An undocked box still resolves to its `#1` candidate and docks/moves.
+      const dockedIid = panesOf(stageRoot).find((iid) => boxOfInstance(iid) === id);
+      const moveOnly = id === '__local__';
       const kind = zone?.dataset.kind;
-      if (kind === 'stage-edge') {
-        dockBox(target, { kind: 'stage-edge', edge: zone!.dataset.edge as Edge });
-      } else if (kind === 'pane-edge') {
-        dockBox(target, { kind: 'pane-edge', paneId: zone!.dataset.paneId!, edge: zone!.dataset.edge as Edge });
+      const asDrop: DropSpec | null =
+        kind === 'stage-edge' ? { kind: 'stage-edge', edge: zone!.dataset.edge as Edge }
+        : kind === 'pane-edge' ? { kind: 'pane-edge', paneId: zone!.dataset.paneId!, edge: zone!.dataset.edge as Edge }
+        : null;
+      if (asDrop) {
+        if (dockedIid && !moveOnly) void duplicateBox(id, asDrop);
+        else dockBox(dockedIid ?? instanceId(id, 1), asDrop);
       } else if (kind === 'replace') {
-        const zoneTarget = zone!.dataset.paneId!;
-        if (zoneTarget !== target) {
-          stageRoot = replacePane(stageRoot, zoneTarget, target);
-          focusedPaneId = target;
+        const target = zone!.dataset.paneId!;
+        if (dockedIid && !moveOnly) { if (boxOfInstance(target) !== id) void duplicateBox(id, { kind: 'replace', paneId: target }); }
+        else if (target !== (dockedIid ?? instanceId(id, 1))) {
+          stageRoot = replacePane(stageRoot, target, dockedIid ?? instanceId(id, 1));
+          focusedPaneId = dockedIid ?? instanceId(id, 1);
           repaintStage();
         }
       }
@@ -1745,10 +1773,11 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
 
   li.draggable = true;
   li.addEventListener('dragstart', (e) => {
-    // Zone gating needs the INSTANCE in flight: a docked box's drag is a move
-    // and stays cap-exempt, an undocked one is the `#1` candidate. The payload
-    // stays the box id, resolved to an instance again on drop.
-    dragSourceId = panesOf(stageRoot).find((iid) => boxOfInstance(iid) === b.id) ?? instanceId(b.id, 1);
+    // Zone gating needs the INSTANCE in flight. A docked box's row-drag now
+    // DUPLICATES (spec decision 2 + amendment), so the candidate is the next
+    // free ordinal — an add, which the cap must gate — rather than the pane
+    // it already holds. The payload stays the box id, resolved again on drop.
+    dragSourceId = instanceId(b.id, nextOrdinal(b.id, instancesOfBox(b.id)));
     e.dataTransfer?.setData('text/x-tmuxifier-box', b.id);
     if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
   });
@@ -1757,17 +1786,18 @@ function createBoxRow(b: Box, status: Record<string, Status>): HTMLElement {
     app.querySelector('#stage')?.classList.remove('dragging');
   });
 
-  // Keyboard-path equivalent of dragging onto the trailing edge: visible only
-  // when exactly one *other* pane is on stage and the cap allows a second.
+  // Keyboard-path equivalent of dragging onto the trailing edge: visible
+  // whenever a duplicate or a first dock fits, title reflecting which.
   const dock = document.createElement('button');
   dock.className = 'dock';
-  dock.title = 'Dock beside current terminal';
-  dock.setAttribute('aria-label', `Dock ${b.label} beside current terminal`);
+  dock.title = dockedHere ? 'Dock another pane of this box' : 'Dock beside current terminal';
+  dock.setAttribute('aria-label', `${dock.title} — ${b.label}`);
   dock.textContent = '◫';
-  dock.hidden = !(panesOf(stageRoot).length >= 1 && panesOf(stageRoot).length < MAX_PANES && !dockedHere);
+  dock.hidden = !(panesOf(stageRoot).length >= 1 && panesOf(stageRoot).length < MAX_PANES);
   dock.addEventListener('click', (e) => {
     e.stopPropagation();
-    dockBox(instanceId(b.id, 1), { kind: 'stage-edge', edge: 'right' });
+    if (panesOf(stageRoot).some((iid) => boxOfInstance(iid) === b.id)) void duplicateBox(b.id, { kind: 'stage-edge', edge: 'right' });
+    else dockBox(instanceId(b.id, 1), { kind: 'stage-edge', edge: 'right' });
   });
 
   const refreshBtn = document.createElement('button');

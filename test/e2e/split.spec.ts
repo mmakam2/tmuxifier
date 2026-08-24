@@ -18,7 +18,7 @@ test('dock a second box, type into the focused pane, resize, and survive reload'
   // Open localhost full-stage, then dock db-primary beside it via the keyboard path.
   await page.locator('.box .name', { hasText: 'localhost' }).click();
   await expect(page.locator('.stage-pane')).toHaveCount(1);
-  await page.getByRole('button', { name: 'Dock db-primary beside current terminal' }).click();
+  await page.getByRole('button', { name: 'Dock beside current terminal — db-primary' }).click();
   await expect(page.locator('.stage-pane')).toHaveCount(2);
   await expect(page.locator('.pane-header .pane-title').first()).toHaveText(/localhost/i);
 
@@ -148,7 +148,7 @@ test('the sidebar Reconnect arms independently of the pane header cap', async ({
 test('plain-clicking a third box replaces the focused pane', async ({ page }) => {
   await login(page);
   await page.locator('.box .name', { hasText: 'localhost' }).click();
-  await page.getByRole('button', { name: 'Dock db-primary beside current terminal' }).click();
+  await page.getByRole('button', { name: 'Dock beside current terminal — db-primary' }).click();
   await expect(page.locator('.stage-pane')).toHaveCount(2);
 
   // db-primary is focused (it was just docked); clicking untagged-worker replaces it.
@@ -161,7 +161,7 @@ test('plain-clicking a third box replaces the focused pane', async ({ page }) =>
 test('sub-partition: stage-bottom drop under a 2-up gives a full-width third pane', async ({ page }) => {
   await login(page);
   await page.locator('.box .name', { hasText: 'localhost' }).click();
-  await page.getByRole('button', { name: 'Dock db-primary beside current terminal' }).click();
+  await page.getByRole('button', { name: 'Dock beside current terminal — db-primary' }).click();
   await expect(page.locator('.stage-pane')).toHaveCount(2);
 
   const row = page.locator('.box', { hasText: 'untagged-worker' });
@@ -202,7 +202,7 @@ test('sub-partition: stage-bottom drop under a 2-up gives a full-width third pan
 test('pane-edge drop splits only that pane', async ({ page }) => {
   await login(page);
   await page.locator('.box .name', { hasText: 'localhost' }).click();
-  await page.getByRole('button', { name: 'Dock db-primary beside current terminal' }).click();
+  await page.getByRole('button', { name: 'Dock beside current terminal — db-primary' }).click();
   const b = (await page.locator('.stage-pane', { has: page.locator('.pane-title', { hasText: 'db-primary' }) }).boundingBox())!;
 
   const row = page.locator('.box', { hasText: 'untagged-worker' });
