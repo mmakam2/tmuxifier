@@ -175,6 +175,11 @@
     -9px 0 22px rgba(0, 112, 243, 0.8),
     0 0 14px rgba(121, 40, 202, 0.65),
     9px 0 22px rgba(255, 0, 128, 0.6);
+  /* .brand-name is itself matched by `.brand span` (descendant), so it is an
+     inline-flex container whose 8px gap — not any margin — spaces the orb
+     ::after off the wordmark. Tighten just this container's gap; the outer
+     span keeps its 8px between mark and wordmark. */
+  gap: 1px;
 }
 
 /* And the orb beside it: the login dot's gradient sibling at nameplate scale,
@@ -185,12 +190,13 @@
   content: '';
   display: inline-block;
   width: 6px; height: 6px;
-  /* Superscript placement, matching the login mark: the nameplate's 0.2em
-     tracking already trails ~2.5px, and the lift puts the 6px dot at the
-     top right of the 12.5px wordmark. */
-  margin-left: 0;
+  /* Superscript placement, matching the login mark — via flex properties,
+     because inside the inline-flex .brand-name this ::after is a FLEX ITEM:
+     vertical-align is inert on it and the parent's align-items: center is
+     what was holding it at mid-height. */
+  align-self: flex-start;
+  margin-top: 1px;
   border-radius: 50%;
-  vertical-align: 6px;
   background: linear-gradient(135deg, #0070f3, #7928ca 55%, #ff0080);
   box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 50%, transparent);
   animation: standby-breathe 3s ease-in-out infinite;
