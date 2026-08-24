@@ -107,11 +107,13 @@ and device you sign in from — the browser you change it in switches instantly,
 on their next load. There is no Save button; if the save can't reach the server the choice still
 applies in that browser for the session, and the tab says so.
 
-Two themes ship built in:
+Three themes ship built in:
 
 - **Bench Instrument** (the default) — the machined charcoal chassis with amber phosphor
   readouts, the look described in [DESIGN.md](../DESIGN.md).
 - **Original** — the first tmuxifier look: deep navy field, cyan glow.
+- **Vercel** — pure black field, hairline gray seams, deployment blue, and the one commit
+  button per view as a white inverted key.
 
 A theme re-skins the whole app, not just the chrome: sidebar and modals, the standby dashboard
 and its cards, the terminal glass — open terminals re-color live, no reattach — and the Fleet

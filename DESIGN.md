@@ -178,6 +178,19 @@ machined extrusion for neon glow exactly that way. Four rules bound it:
   top highlight *and* the off-LED lamp fill; `--scroll-thumb-hover` is the scrollbar thumb
   hover *and* the stage-grid bezel edge. Pick each value for both jobs.
 
+Two non-color knobs are themable alongside the colors. The corner radii of the two large
+surface tiers are tokens — `--r-card` (mounted cards: sidebar, login faceplate, modals; 14px
+here) and `--r-well` (recessed wells and inner cards; 8px here) — so a theme can tighten the
+corners without touching a component rule; the 6px/4px control radii and the 999px pills are
+deliberately not tokens, and `.login-logo` keeps a literal radius because it hugs the rounding
+baked into the raster mark. And `--face` may swap the chrome onto another bundled face: Geist
+Sans and Geist Mono (SIL OFL, vendored from the pinned npm `geist` package) ship beside the
+Meslo faces for the Vercel theme — an unreferenced face is never fetched, so it costs the other
+themes nothing. `--face-code` is the companion token for code-shaped chrome (command previews,
+logs, fingerprints, pairing codes): it defaults to the Meslo stack as a literal copy rather
+than `var(--face)`, so a sans-chrome theme keeps mono code unless it overrides it deliberately.
+The terminal's own font is `termFont.ts`'s concern and never follows `--face`.
+
 ## Colors
 
 Matte chassis neutrals under warm functional light.

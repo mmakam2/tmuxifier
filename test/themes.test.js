@@ -15,6 +15,11 @@ test('manifest: instrument first, ids unique and slug-valid, labels present', ()
   }
 });
 
+test('vercel theme: in the catalog and normalizes to itself', () => {
+  expect(THEMES.some((t) => t.id === 'vercel')).toBe(true);
+  expect(normalizeThemeId('vercel')).toBe('vercel');
+});
+
 test('normalizeThemeId: known ids pass, everything else falls back to the default', () => {
   expect(normalizeThemeId('original')).toBe('original');
   expect(normalizeThemeId('instrument')).toBe('instrument');

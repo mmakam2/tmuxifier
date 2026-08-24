@@ -8,9 +8,11 @@
 // Theme CSS side-effect imports live HERE, not in themes.ts: node tests
 // import the manifest, and they must never pull CSS through vitest.
 import './themes/original.css';
+import './themes/vercel.css';
 import { DEFAULT_THEME_ID, normalizeThemeId } from './themes';
 import logoDefault from './assets/tmuxifier-logo.png';
 import logoOriginal from './assets/tmuxifier-logo-original.png';
+import logoVercel from './assets/tmuxifier-logo-vercel.png';
 
 const KEY = 'tmuxifier.theme';
 const listeners = new Set<() => void>();
@@ -28,7 +30,13 @@ const listeners = new Set<() => void>();
 // disagree. A theme that wants its own mark drops the asset beside the default
 // and registers it here, in theme.ts and not themes.ts, because node tests
 // import the manifest and must never pull binary assets through vitest.
-const LOGOS: Record<string, string> = { original: logoOriginal };
+// tmuxifier-logo-vercel.png is a per-pixel HSL remap instead (Chromium
+// canvas): chromatic pixels — the glyphs — get hue pinned to #0070f3's
+// 212.6°, saturation ×1.8, lightness ×0.72, and the neutral chassis passes
+// through untouched. The filter-matrix recipe could only reach a pastel
+// sky blue from this amber; matching the app's accent needed the exact-hue
+// remap.
+const LOGOS: Record<string, string> = { original: logoOriginal, vercel: logoVercel };
 
 // Re-points every mark already in the DOM. Render sites that build their own
 // <img> read themedLogo() instead, so a live theme switch and a later render

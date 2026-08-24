@@ -12,6 +12,7 @@ export const DEFAULT_THEME_ID = 'instrument';
 export const THEMES: ThemeDef[] = [
   { id: 'instrument', label: 'Bench Instrument', description: 'charcoal chassis, amber phosphor — the machined desk instrument' },
   { id: 'original', label: 'Original', description: 'the first tmuxifier look: deep navy, cyan glow' },
+  { id: 'vercel', label: 'Vercel', description: 'pure black, hairline gray, deployment blue — the triangle dashboard' },
 ];
 
 // Unknown/stale ids (removed theme, hand-edited store) read as the default
