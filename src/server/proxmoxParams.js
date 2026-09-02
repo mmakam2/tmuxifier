@@ -71,7 +71,9 @@ export function describeNet0(pairs) {
   const gw = net0Field(pairs, 'gw');
   const tag = net0Field(pairs, 'tag');
   return {
-    bridge: net0Field(pairs, 'bridge'),
+    // PVE-side content served straight to the readdress dialog — bounded like
+    // the job's own hostname field, so a mangled config can't inflate the response.
+    bridge: (net0Field(pairs, 'bridge') ?? '').slice(0, 64) || null,
     vlan: tag != null && /^\d{1,4}$/.test(tag) ? Number(tag) : null,
     ip: ip && isCidr(ip) ? ip : null,
     gateway: gw && isIp(gw) ? gw : null,

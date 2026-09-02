@@ -1607,7 +1607,8 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     catch (error) { return serviceFailure(reply, error, 502); }
     if (!config || typeof config.net0 !== 'string') return reply.code(409).send({ error: 'container has no net0 interface' });
     try {
-      return { hostname: typeof config.hostname === 'string' ? config.hostname : null, ...describeNet0(parseNet0(config.net0)) };
+      // PVE-side content, bounded like proxmoxLifecycle.js's own job.hostname.
+      return { hostname: typeof config.hostname === 'string' ? config.hostname.slice(0, 255) : null, ...describeNet0(parseNet0(config.net0)) };
     } catch (error) { return serviceFailure(reply, error, 502); }
   });
 
