@@ -102,8 +102,8 @@ export function createStore({ dataDir }) {
     // discovered there leaves an orphaned guest behind a failed job. Returns
     // the message addBox would have thrown, or null. Advisory, not a lock —
     // addBox re-checks inside the write serialization and stays the authority.
-    async uniquenessConflict(candidate) {
-      try { assertUniqueBox(await readAll(), candidate); } catch (e) { return e.message; }
+    async uniquenessConflict(candidate, ignoreId) {
+      try { assertUniqueBox(await readAll(), candidate, ignoreId); } catch (e) { return e.message; }
       return null;
     },
     async addBox(spec, { trustedProxmox = false } = {}) {
@@ -166,6 +166,29 @@ export function createStore({ dataDir }) {
         if (index === -1) throw new Error('box not found');
         const { proxmox: _link, ...base } = boxes[index];
         boxes[index] = { ...base, source: 'manual' };
+        await writeAll(boxes);
+        return boxes[index];
+      });
+    },
+    // The re-address job's one write: the new host and the new NetBox
+    // allocation land together, or not at all. Two writes (updateBox for the
+    // host, then setProxmoxLink for the id) would leave a window in which the
+    // box points at the new address while its link still claims the old
+    // allocation — exactly the state the lifecycle manager's boot reconcile
+    // cannot tell from a leaked id. Every other field and link key is kept as
+    // it was; the same assertBoxSafe/assertUniqueBox checks as every other
+    // mutation apply. A null id is refused: this feature always allocates.
+    async readdressBox(id, { host, netboxIpId } = {}) {
+      if (typeof host !== 'string' || !host) throw new Error('box requires a host');
+      if (!Number.isInteger(netboxIpId) || netboxIpId <= 0) throw new Error('netboxIpId must be a positive integer');
+      return serialize(async () => {
+        const boxes = await readAll();
+        const index = boxes.findIndex((box) => box.id === id);
+        if (index === -1) throw new Error('box not found');
+        if (!boxes[index].proxmox) throw new Error('box is not linked to Proxmox');
+        boxes[index] = { ...boxes[index], host, proxmox: { ...boxes[index].proxmox, netboxIpId } };
+        assertBoxSafe(boxes[index]);
+        assertUniqueBox(boxes, boxes[index], id);
         await writeAll(boxes);
         return boxes[index];
       });

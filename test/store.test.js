@@ -197,7 +197,7 @@ test('updateBox can clear and replace the primary tag', async () => {
   expect(replaced.tags).toEqual(['Staging East']);
 });
 
-const LINK = { hostId: 'H1', node: 'pve', vmid: 131, endpoint: 'pve.example.com:8006' };
+const LINK = { hostId: 'H1', node: 'pve', vmid: 131, kind: 'lxc', endpoint: 'pve.example.com:8006', netboxIpId: 99 };
 
 test('ordinary addBox cannot create lifecycle authority', async () => {
   const store = createStore({ dataDir: dir });
@@ -326,4 +326,34 @@ test('concurrent mutations are serialized — no write is lost to a read-modify-
   await Promise.all(Array.from({ length: 8 }, (_, i) => store.addBox({ host: `192.168.1.${10 + i}` })));
   expect(await store.listBoxes()).toHaveLength(8);
   await fs.rm(dir, { recursive: true, force: true });
+});
+
+test('readdressBox writes host and the link allocation id together, keeping the rest of the box and link', async () => {
+  const store = createStore({ dataDir: dir });
+  const box = await store.addBox({ host: '192.168.20.5', label: 'dev-01', user: 'root', proxmox: LINK }, { trustedProxmox: true });
+  const updated = await store.readdressBox(box.id, { host: '192.168.30.7', netboxIpId: 120 });
+  expect(updated.host).toBe('192.168.30.7');
+  expect(updated.proxmox).toEqual({ ...LINK, netboxIpId: 120 });
+  expect(updated).toMatchObject({ id: box.id, label: 'dev-01', user: 'root', source: 'proxmox' });
+  expect((await store.getBox(box.id)).host).toBe('192.168.30.7');
+});
+
+test('readdressBox refuses a taken host, an unlinked box, an unknown id, and a bad allocation id — and changes nothing', async () => {
+  const store = createStore({ dataDir: dir });
+  await store.addBox({ host: '192.168.30.7', label: 'other' });
+  const linked = await store.addBox({ host: '192.168.20.5', label: 'dev-01', proxmox: LINK }, { trustedProxmox: true });
+  const plain = await store.addBox({ host: '192.168.20.6', label: 'plain' });
+  await expect(store.readdressBox(linked.id, { host: '192.168.30.7', netboxIpId: 120 })).rejects.toThrow(/host already exists/);
+  await expect(store.readdressBox(plain.id, { host: '192.168.30.8', netboxIpId: 120 })).rejects.toThrow(/not linked/);
+  await expect(store.readdressBox('nope', { host: '192.168.30.8', netboxIpId: 120 })).rejects.toThrow(/not found/);
+  await expect(store.readdressBox(linked.id, { host: '192.168.30.8', netboxIpId: null })).rejects.toThrow(/netboxIpId/);
+  await expect(store.readdressBox(linked.id, { host: '', netboxIpId: 120 })).rejects.toThrow(/host/);
+  expect((await store.getBox(linked.id))).toMatchObject({ host: '192.168.20.5', proxmox: LINK });
+});
+
+test('uniquenessConflict can ignore the box being re-addressed', async () => {
+  const store = createStore({ dataDir: dir });
+  const box = await store.addBox({ host: '192.168.30.7', label: 'dev-01' });
+  expect(await store.uniquenessConflict({ host: '192.168.30.7' })).toMatch(/host already exists/);
+  expect(await store.uniquenessConflict({ host: '192.168.30.7' }, box.id)).toBeNull();
 });
