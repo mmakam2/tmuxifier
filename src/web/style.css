@@ -1933,6 +1933,8 @@ button.empty-kbd:hover { color: var(--text); }
 .pve-guest-row .pve-badge-group { display: flex; align-items: center; gap: 4px; }
 .pve-guest-row .pve-err { grid-column: 1 / -1; }
 .pve-deprovision-modal { width: 460px; }
+.pve-readdress-modal { width: 460px; }
+.pve-readdress-modal .pve-vlan-select { width: 100%; }
 .pve-warning { margin: 0; color: var(--crit-soft); font-size: 12.5px; line-height: 1.5; }
 @media (max-width: 720px) {
   .pve-guest-row { grid-template-columns: minmax(0, 1fr) auto auto; }

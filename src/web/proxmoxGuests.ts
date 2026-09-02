@@ -1,6 +1,7 @@
 import { pve, type LifecycleAction, type PveGuestKind, type PveGuestState, type PveLinkedGuest } from './proxmox';
 import { el, err, input, openModal } from './dom';
 import { registerModal } from './modalRegistry';
+import { openReaddressDialog } from './proxmoxReaddress';
 
 export const kindLabel = (kind: PveGuestKind): 'CT' | 'VM' => (kind === 'qemu' ? 'VM' : 'CT');
 
@@ -129,11 +130,15 @@ export async function renderGuestsTab(content: HTMLElement, deps: {
       }, [`View ${guest.activeJob.action}`]));
     } else {
       for (const action of actionsForGuest(guest)) {
-        const label = action === 'deprovision' ? 'Deprovision' : action === 'stop' ? 'Stop now' : action[0].toUpperCase() + action.slice(1);
+        const label = action === 'deprovision' ? 'Deprovision'
+          : action === 'stop' ? 'Stop now'
+          : action === 'readdress' ? 'Re-address'
+          : action[0].toUpperCase() + action.slice(1);
         const button = el('button', {
           type: 'button',
-          class: action === 'deprovision' ? 'danger' : action === 'stop' ? 'warn' : '',
+          class: action === 'deprovision' ? 'danger' : action === 'stop' || action === 'readdress' ? 'warn' : '',
           ...(action === 'stop' ? { title: 'Force an immediate stop' } : {}),
+          ...(action === 'readdress' ? { title: 'Move to another NetBox-managed VLAN/IP' } : {}),
         }, [label]);
         button.addEventListener('click', () => {
           const run = async (confirmName?: string) => {
@@ -145,6 +150,7 @@ export async function renderGuestsTab(content: HTMLElement, deps: {
             } finally { button.disabled = false; }
           };
           if (action === 'deprovision') openDeprovisionDialog(guest, run);
+          else if (action === 'readdress') openReaddressDialog(guest, { showLifecycleJob: deps.showLifecycleJob });
           else void run().catch((error) => { row.append(err(error instanceof Error ? error.message : 'Lifecycle action failed')); });
         });
         actions.append(button);
