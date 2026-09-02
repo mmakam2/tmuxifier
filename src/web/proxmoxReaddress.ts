@@ -81,7 +81,11 @@ export function openReaddressDialog(guest: PveLinkedGuest, deps: { showLifecycle
   void (async () => {
     const [net, vlans] = await Promise.allSettled([pve.guestNet(guest.boxId), nbx.vlans()]);
     if (net.status === 'fulfilled') now.textContent = `Now: ${currentNetLine(net.value)}`;
-    else { now.replaceWith(err(net.reason instanceof Error ? net.reason.message : 'Could not read the container interface')); return; }
+    else {
+      now.replaceWith(err(net.reason instanceof Error ? net.reason.message : 'Could not read the container interface'));
+      select.replaceChildren(el('option', { value: '' }, ['Unavailable']));
+      return;
+    }
     if (vlans.status === 'rejected') { select.replaceChildren(el('option', { value: '' }, ['NetBox unavailable'])); errorLine.textContent = vlans.reason instanceof Error ? vlans.reason.message : 'Could not load VLANs'; return; }
     if (!vlans.value.ok) { select.replaceChildren(el('option', { value: '' }, ['NetBox unavailable'])); errorLine.textContent = vlans.value.error; return; }
     select.replaceChildren(el('option', { value: '' }, ['Choose a VLAN…']));
