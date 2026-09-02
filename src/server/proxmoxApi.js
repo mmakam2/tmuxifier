@@ -116,6 +116,15 @@ export function createProxmoxClient({ host, request = httpsRequest, connect = tl
     taskStatus: (node, upid) => call('GET', `/nodes/${enc(node)}/tasks/${enc(upid)}/status`),
     taskLog: (node, upid, start = 0) => call('GET', `/nodes/${enc(node)}/tasks/${enc(upid)}/log?start=${enc(start)}&limit=500`),
     lxcInterfaces: (node, vmid) => call('GET', `/nodes/${enc(node)}/lxc/${enc(vmid)}/interfaces`),
+    // The guest's config as PVE holds it — for a container, the `net0` line is
+    // the only record of which VLAN/address it is on (boxes.json stores
+    // neither). Kind is a URL segment, so it is re-validated here like every
+    // other kind-parameterized method; async for the same reason they are.
+    guestConfig: async (kind, node, vmid) => call('GET', `/nodes/${enc(node)}/${guestKind(kind)}/${enc(vmid)}/config`),
+    // PUT config is synchronous for containers (no UPID comes back) and PVE
+    // hot-applies a net change to a running guest. LXC-only like createLxc:
+    // re-addressing a VM would need cloud-init, which is out of scope.
+    setLxcConfig: (node, vmid, params) => call('PUT', `/nodes/${enc(node)}/lxc/${enc(vmid)}/config`, params),
   };
 }
 export async function inspectEndpoint(endpoint, { connect = tlsProbe, timeoutMs = 8000 } = {}) {

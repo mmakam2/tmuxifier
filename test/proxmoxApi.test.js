@@ -205,3 +205,24 @@ test('an unknown guest kind is refused before it can become a path segment', asy
   await expect(client.destroyGuest(undefined, 'pve', 131)).rejects.toThrow(/guest kind/);
   expect(request.calls).toHaveLength(0); // nothing reached the wire
 });
+
+test('guestConfig GETs the kind-qualified config path and re-validates the kind before any request', async () => {
+  const request = fakeRequest(() => ({ status: 200, json: { data: { hostname: 'dev-01', net0: 'name=eth0,bridge=vmbr0,ip=dhcp' } } }));
+  const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
+  await expect(client.guestConfig('lxc', 'pve', 131)).resolves.toMatchObject({ hostname: 'dev-01' });
+  expect(request.calls[0].method).toBe('GET');
+  expect(request.calls[0].url).toBe('https://pve.example.com:8006/api2/json/nodes/pve/lxc/131/config');
+  await expect(client.guestConfig('disk', 'pve', 131)).rejects.toThrow(/invalid proxmox guest kind/);
+  expect(request.calls).toHaveLength(1);
+});
+
+test('setLxcConfig PUTs a form-encoded body to the lxc config path', async () => {
+  const request = fakeRequest(() => ({ status: 200, json: { data: null } }));
+  const client = createProxmoxClient({ host: HOST, request, connect: fakeConnect() });
+  await expect(client.setLxcConfig('pve', 131, { net0: 'name=eth0,bridge=vmbr0,ip=192.168.30.7/24,gw=192.168.30.1,tag=30' })).resolves.toBeNull();
+  const call = request.calls[0];
+  expect(call.method).toBe('PUT');
+  expect(call.url).toBe('https://pve.example.com:8006/api2/json/nodes/pve/lxc/131/config');
+  expect(call.headers['Content-Type']).toBe('application/x-www-form-urlencoded');
+  expect(call.body).toBe('net0=name%3Deth0%2Cbridge%3Dvmbr0%2Cip%3D192.168.30.7%2F24%2Cgw%3D192.168.30.1%2Ctag%3D30');
+});
