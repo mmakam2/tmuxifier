@@ -1129,11 +1129,16 @@ resolves the caller and is deliberately not recorded as fresh, so the next reach
 `reconnect.ts` (escalating backoff), `statusDot.ts`, `sparkline.ts`/`healthEvents.ts` (health
 history: pure SVG-path builder and event-line formatters), `notifyPrefs.ts` (per-kind
 browser-notification preferences, localStorage-backed, defaults all-on except `up`/
-`threshold-clear`), `themes.ts` (the pure theme catalog — `THEMES`, `DEFAULT_THEME_ID`, and
-`normalizeThemeId`, which folds an unknown or stale id back to the default rather than
+`threshold-clear`), `themes.ts` (the pure theme catalog — `THEMES`, `DEFAULT_THEME_ID`
+(`vercel`: what a null or unknown preference resolves to, listed first in the picker),
+`ROOT_THEME_ID` (`instrument`: the theme `:root`'s own tokens paint with no attribute, the one
+with no `themes/<id>.css` of its own — the two ids parted ways when Vercel became the default
+in v1.24.58, and naming them separately is what let the default flip without moving a token),
+and `normalizeThemeId`, which folds an unknown or stale id back to the default rather than
 propagating one nothing can resolve. No DOM and no CSS imports, so a node test can import the
-manifest), `theme.ts` (its DOM half: `applyTheme` stamps `data-theme` on `<html>` — the default
-carries **no** attribute, since `:root` *is* the Instrument theme — mirrors the id into
+manifest), `theme.ts` (its DOM half: `applyTheme` stamps `data-theme` on `<html>` — the **root**
+theme carries **no** attribute, since `:root` *is* the Instrument theme, while the default wears
+one like any scoped theme — mirrors the id into
 `localStorage`, and notifies subscribers so every open terminal re-resolves its colors on a
 switch, each subscriber isolated so one stale pane handle can't leave the rest on the old theme.
 `resolveScreenTheme` reads `--screen`/`--text`/`--accent`/`--term-sel` through a throwaway probe
@@ -1141,7 +1146,9 @@ element because a raw custom property reads back unresolved; the theme CSS side-
 live here rather than in `themes.ts` precisely so vitest never pulls CSS. The localStorage mirror
 is what `public/theme-boot.js` — a blocking classic script in `<head>`, an external same-origin
 file because CSP stays `script-src 'self'` and inlining it would need an exception — stamps
-pre-paint, so the login screen wears the chosen theme before any session exists. Adding a theme
+pre-paint, so the login screen wears the chosen theme before any session exists; an empty mirror
+stamps the default and the root theme stamps nothing, both literals pinned to the manifest by
+`test/themes.test.js` since a classic script cannot import it. Adding a theme
 is `themes/<id>.css` with every rule `[data-theme]`-scoped, one `themes.ts` entry, and its import
 here; `test/styleTokens.test.js` pins both halves of the contract),
 `clawd.ts` (the indicator beside every **working** agent chip — sidebar badge,
@@ -1564,7 +1571,8 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   the code (unlike the point-in-time records below); a feature change that used to update a
   README section now updates the matching guide.
 - `DESIGN.md` — the visual authority for the **Instrument** theme (the v1.18.0 redesign, i.e.
-  the `:root` token defaults) and for the themes engine's token contract — what a theme may
+  the `:root` token defaults — the engine's root theme, no longer its shipped default since
+  Vercel took that in v1.24.58) and for the themes engine's token contract — what a theme may
   override, what must stay a plain literal, what is brand-fixed. Read it before changing
   anything the operator looks at; it outranks ad-hoc styling decisions.
 - `PRODUCT.md` — what Tmuxifier is for and who it is for, when a scope question needs settling.

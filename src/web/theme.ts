@@ -9,7 +9,7 @@
 // import the manifest, and they must never pull CSS through vitest.
 import './themes/original.css';
 import './themes/vercel.css';
-import { DEFAULT_THEME_ID, normalizeThemeId } from './themes';
+import { DEFAULT_THEME_ID, ROOT_THEME_ID, normalizeThemeId } from './themes';
 import logoDefault from './assets/tmuxifier-logo.png';
 import logoOriginal from './assets/tmuxifier-logo-original.png';
 import logoVercel from './assets/tmuxifier-logo-vercel.png';
@@ -61,9 +61,12 @@ export function themedLogo(): string { return LOGOS[current] ?? logoDefault; }
 
 export function applyTheme(raw: unknown): void {
   const id = normalizeThemeId(raw);
-  // The default carries no attribute: :root tokens ARE the Instrument theme,
-  // and theme-boot.js only ever sets a non-default id.
-  if (id === DEFAULT_THEME_ID) delete document.documentElement.dataset.theme;
+  // The ROOT theme carries no attribute: :root's own tokens ARE Instrument, so
+  // there is no [data-theme="instrument"] block for an attribute to select.
+  // Keyed on ROOT_THEME_ID, not DEFAULT_THEME_ID — the two parted ways when
+  // Vercel became the default, and the default now needs its attribute like
+  // any other scoped theme (theme-boot.js stamps it pre-paint the same way).
+  if (id === ROOT_THEME_ID) delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = id;
   // Before the same-id early return, not after: the first applyTheme of a boot
   // is usually a no-op *change* (theme-boot.js already stamped the attribute)
@@ -91,12 +94,15 @@ export function onThemeChange(fn: () => void): () => void {
 // Terminal-facing theme tokens must still be plain literals (see style.css
 // --term-sel comment): a color-mix() there can serialize as color(srgb …),
 // which xterm's parser refuses — the startsWith guard falls back if so.
+// The literals mirror the DEFAULT theme's terminal-facing tokens (themes/
+// vercel.css: --screen, --text, --accent, --term-sel), so a probe failure
+// leaves a fresh install's terminal on the colors it was meant to have.
 const SCREEN_FALLBACK = {
-  background: '#0a0b0d',
-  foreground: '#e6e2da',
-  cursor: '#ffb000',
-  cursorAccent: '#0a0b0d',
-  selectionBackground: 'rgba(255, 176, 0, 0.25)',
+  background: '#000000',
+  foreground: '#ededed',
+  cursor: '#0070f3',
+  cursorAccent: '#000000',
+  selectionBackground: 'rgba(0, 112, 243, 0.30)',
 };
 
 function resolveColor(varName: string, fallback: string): string {

@@ -151,7 +151,11 @@ the display can lead.
 ## Themes
 
 This document is the visual authority for the **Instrument** theme — the `:root` token
-defaults in `src/web/style.css`, and the world every other page of DESIGN.md describes. The
+defaults in `src/web/style.css`, and the world every other page of DESIGN.md describes.
+Instrument is the engine's *root* theme, not its shipped *default*: since v1.24.58 a fresh
+install wears **Vercel** (`DEFAULT_THEME_ID` in `src/web/themes.ts`), while `<html>` with no
+`data-theme` attribute still paints Instrument (`ROOT_THEME_ID`). The two ids are distinct on
+purpose — flipping the default touched neither the token fence nor this document. The
 themes engine lets a second checked-in CSS file re-skin the whole bench without touching a
 single component rule: every color in the sheet flows from the token fence
 (`/* === THEME TOKENS (color literals allowed) === */`), and a theme overrides tokens under

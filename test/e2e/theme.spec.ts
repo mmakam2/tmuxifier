@@ -6,9 +6,9 @@ import { test, expect, type Page } from '@playwright/test';
 // any session or bundle exists.
 //
 // Suite hygiene: the pref is server-global and the e2e server is shared by every
-// spec (workers: 1), so this file MUST hand Instrument back before it finishes —
-// the closing assertions are that proof, not a formality. A navy app would
-// otherwise leak into every spec that runs after it.
+// spec (workers: 1), so this file MUST hand the default (Vercel) back before it
+// finishes — the closing assertions are that proof, not a formality. A navy app
+// would otherwise leak into every spec that runs after it.
 
 async function login(page: Page) {
   await page.goto('/');
@@ -43,15 +43,17 @@ const bodyBg = (page: Page) => page.evaluate(() => getComputedStyle(document.bod
 test.afterEach(async ({ page }) => {
   try {
     await page.request.post('/api/login', { data: { password: 'e2e' } });
-    await page.request.patch('/api/ui-settings', { data: { theme: 'instrument' } });
+    await page.request.patch('/api/ui-settings', { data: { theme: 'vercel' } });
   } catch { /* the assertions in the test are the real proof */ }
 });
 
 test('theme switches live, persists server-side, and paints pre-auth via the mirror', async ({ page }) => {
   await login(page);
   // Precondition — and the state this test owes the rest of the suite: the
-  // default theme carries no attribute, because :root's own tokens ARE Instrument.
-  await expect(page.locator('html')).not.toHaveAttribute('data-theme', /./);
+  // server pref starts null ("never set"), which the client resolves to the
+  // DEFAULT theme, Vercel — a scoped theme, so unlike the root theme it wears
+  // its attribute (themes.ts: DEFAULT_THEME_ID vs ROOT_THEME_ID).
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'vercel');
   const bgBefore = await bodyBg(page);
 
   await pickTheme(page, 'Original');
@@ -88,16 +90,26 @@ test('theme switches live, persists server-side, and paints pre-auth via the mir
   await expect(page.locator('#pw')).toBeVisible({ timeout: 10000 });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'original');
 
-  // Restore for the rest of the suite (shared server, workers: 1).
+  // The ROOT theme is the one that carries no attribute: Bench Instrument is
+  // :root's own token block, so applyTheme deletes data-theme rather than
+  // stamping one — and the body still repaints away from Vercel's black.
   await login(page);
   await pickTheme(page, 'Bench Instrument');
   await expect(page.locator('html')).not.toHaveAttribute('data-theme', /./);
+  const bgInstrument = await bodyBg(page);
+  expect(bgInstrument).not.toBe(bgBefore);
+  expect(bgInstrument).not.toBe(bgAfter);
+  await expect(page.locator('link[rel="icon"]')).not.toHaveAttribute('href', /tmuxifier-logo-(original|vercel)/);
+
+  // Restore for the rest of the suite (shared server, workers: 1).
+  await pickTheme(page, 'Vercel');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'vercel');
   expect(await bodyBg(page)).toBe(bgBefore);
-  await expect(page.locator('link[rel="icon"]')).not.toHaveAttribute('href', /tmuxifier-logo-original/);
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', /tmuxifier-logo-vercel/);
   // The restore has to reach the SERVER, not just this DOM — that is the copy
   // every later spec's browser reads at boot.
   const stored = await (await page.request.get('/api/ui-settings')).json();
-  expect(stored.theme).toBe('instrument');
+  expect(stored.theme).toBe('vercel');
 });
 
 // A fresh browser must not invent a clawd preference on first boot. The server
@@ -127,7 +139,8 @@ test('a fresh browser boots without inventing a clawd preference', async ({ page
 // later. The ui-settings fetch used to live only in start(), which a login does
 // not run — the submit handler transitions to the workspace without a page load
 // — so a brand-new browser (no mirror for theme-boot.js to paint from) logged in
-// wearing Instrument however the server was configured, and stayed that way
+// wearing the default (Instrument, at the time) however the server was
+// configured, and stayed that way
 // until something reloaded the page.
 test('a fresh login applies the server theme with no reload', async ({ page, browser }) => {
   // Arrange on the shared server via the API, so the assertions below are about
@@ -137,13 +150,14 @@ test('a fresh login applies the server theme with no reload', async ({ page, bro
 
   // A genuinely fresh browser: its own cookies AND its own empty localStorage,
   // which is what makes this the interesting case — with no mirror, the boot
-  // script stamps nothing, so only the post-login fetch can supply the theme.
+  // script can only stamp the DEFAULT (Vercel), so only the post-login fetch
+  // can supply the server's Original.
   const ctx = await browser.newContext();
   try {
     const fresh = await ctx.newPage();
     await fresh.goto('/');
     await expect(fresh.locator('#pw')).toBeVisible({ timeout: 10000 });
-    await expect(fresh.locator('html')).not.toHaveAttribute('data-theme', /./);
+    await expect(fresh.locator('html')).toHaveAttribute('data-theme', 'vercel');
     const bgLoggedOut = await bodyBg(fresh);
 
     await fresh.fill('#pw', 'e2e');
@@ -158,7 +172,7 @@ test('a fresh login applies the server theme with no reload', async ({ page, bro
   }
 
   // Restore for the rest of the suite (shared server, workers: 1).
-  await page.request.patch('/api/ui-settings', { data: { theme: 'instrument' } });
+  await page.request.patch('/api/ui-settings', { data: { theme: 'vercel' } });
   const stored = await (await page.request.get('/api/ui-settings')).json();
-  expect(stored.theme).toBe('instrument');
+  expect(stored.theme).toBe('vercel');
 });

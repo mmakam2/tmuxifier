@@ -109,18 +109,19 @@ applies in that browser for the session, and the tab says so.
 
 Three themes ship built in:
 
-- **Bench Instrument** (the default) — the machined charcoal chassis with amber phosphor
-  readouts, the look described in [DESIGN.md](../DESIGN.md).
+- **Vercel** (the default) — pure black field, hairline gray seams, deployment blue, and the
+  one commit button per view as a white inverted key.
+- **Bench Instrument** — the machined charcoal chassis with amber phosphor readouts, the look
+  described in [DESIGN.md](../DESIGN.md). It is also the engine's baseline: the theme the
+  stylesheet's own tokens paint before any theme file applies.
 - **Original** — the first tmuxifier look: deep navy field, cyan glow.
-- **Vercel** — pure black field, hairline gray seams, deployment blue, and the one commit
-  button per view as a white inverted key.
 
 A theme re-skins the whole app, not just the chrome: sidebar and modals, the standby dashboard
 and its cards, the terminal glass — open terminals re-color live, no reattach — and the Fleet
 script editor. Status lamps stay green/red/amber/violet: a lamp's color is what it means, not
 decoration, so a theme inherits them unless it has a deliberate reason not to. The login screen
 paints in the chosen theme too, and that's the one piece of it kept in the browser — a copy of
-the theme id in `localStorage`, purely so the pre-login page doesn't flash the default before
+the theme id in `localStorage`, purely so the pre-login page doesn't flash another theme before
 there's a session to ask the server about.
 
 Adding a theme is a code change rather than a setting, and it is three edits: a CSS file under
