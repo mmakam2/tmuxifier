@@ -917,22 +917,22 @@ test('readdress refusals create no job: VM link, template, missing state, setup 
     boxStore: { getBox: async () => ({ ...BOX, proxmox: { ...BOX.proxmox, kind: 'qemu' } }) },
     inventory: { refreshBox: async () => ({ boxId: 'B1', state: 'running', node: 'pve', vmid: 131, kind: 'qemu' }) },
   });
-  await expect(qemu.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 409, message: /containers only/ });
+  await expect(qemu.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/containers only/) });
   const template = readdressFixture('stopped', { inventory: { refreshBox: async () => ({ boxId: 'B1', state: 'stopped', node: 'pve', vmid: 131, kind: 'lxc', template: true }) } });
   await expect(template.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 409 });
   const missing = readdressFixture('missing');
-  await expect(missing.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 409, message: /cannot run from missing/ });
+  await expect(missing.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/cannot run from missing/) });
   const setup = readdressFixture('running', { setupRunning: () => true });
-  await expect(setup.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 409, message: /setup/ });
+  await expect(setup.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/setup/) });
   const ok = readdressFixture('running');
   for (const vlan of [undefined, 0, 4095, '30', 30.5]) {
-    await expect(ok.manager.createJob({ boxId: 'B1', action: 'readdress', vlan })).rejects.toMatchObject({ statusCode: 400, message: /vlan/ });
+    await expect(ok.manager.createJob({ boxId: 'B1', action: 'readdress', vlan })).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/vlan/) });
   }
-  await expect(ok.manager.createJob({ boxId: 'B1', action: 'shutdown', vlan: 30 })).rejects.toMatchObject({ statusCode: 400, message: /vlan/ });
+  await expect(ok.manager.createJob({ boxId: 'B1', action: 'shutdown', vlan: 30 })).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/vlan/) });
   const noNetbox = readdressFixture('running', { netboxStore: null });
-  await expect(noNetbox.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 400, message: /NetBox/ });
+  await expect(noNetbox.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/NetBox/) });
   const unconfigured = readdressFixture('running', { netboxStore: { getSettings: async () => null } });
-  await expect(unconfigured.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 400, message: /NetBox/ });
+  await expect(unconfigured.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/NetBox/) });
   for (const f of [qemu, template, missing, setup, ok, noNetbox, unconfigured]) expect(f.manager.listJobs()).toEqual([]);
 });
 
@@ -940,7 +940,7 @@ test('readdress fails before any NetBox call when the container has no net0', as
   const { manager, calls } = readdressFixture('running', {}, { net0: null });
   await manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 });
   await manager._settled('J1');
-  expect(manager.getJob('J1')).toMatchObject({ status: 'error', phase: 'inspect', error: /net0/ });
+  expect(manager.getJob('J1')).toMatchObject({ status: 'error', phase: 'inspect', error: expect.stringMatching(/net0/) });
   expect(calls).toEqual(['config:lxc:pve:131']);
 });
 
@@ -955,7 +955,7 @@ test('a uniqueness conflict on the new address fails the job and releases the fr
   await manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 });
   await manager._settled('J1');
   const job = manager.getJob('J1');
-  expect(job).toMatchObject({ status: 'error', phase: 'allocate-ip', error: /host already exists/, netboxIpId: null });
+  expect(job).toMatchObject({ status: 'error', phase: 'allocate-ip', error: expect.stringMatching(/host already exists/), netboxIpId: null });
   expect(calls.filter((c) => typeof c === 'string' && c.startsWith('set:'))).toEqual([]);
   expect(calls.filter((c) => typeof c === 'string' && c.startsWith('release:'))).toEqual(['release:120']);
   expect(job.log).toContain('released NetBox ip 120 (unused allocation)');
