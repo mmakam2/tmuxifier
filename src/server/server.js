@@ -14,6 +14,7 @@ import { provisionKey, terminalKey, localKey, LOCAL_GROUP } from './sessions.js'
 import { upsertConfigFile } from './configFile.js';
 import { readJsonSync, writeJsonSync } from './jsonFile.js';
 import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
+import { parseNet0, describeNet0 } from './proxmoxParams.js';
 import { assertSettingsInput as assertNetboxSettings } from './netboxValidate.js';
 import { testNetbox, createNetboxClient, netboxSummary } from './netboxApi.js';
 import { createPiholeClient } from './piholeApi.js';
@@ -1589,6 +1590,27 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     } catch (error) { return serviceFailure(reply, error); }
   });
 
+  // Read-only view of a linked container's live interface for the re-address
+  // dialog. The parsed net0 is the only truth about which VLAN/address the
+  // container is on — boxes.json stores neither. Containers only: the
+  // lifecycle action behind it is LXC-only, so a VM gets the same 409 here
+  // rather than a dialog that ends in one.
+  app.get('/api/boxes/:id/proxmox/net', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await store.getBox(req.params.id);
+    if (!box) return reply.code(404).send({ error: 'box not found' });
+    if (!box.proxmox) return reply.code(409).send({ error: 'box is not linked to Proxmox' });
+    if (box.proxmox.kind === 'qemu') return reply.code(409).send({ error: 'only containers can be re-addressed' });
+    const host = await proxmoxStore.getHost(box.proxmox.hostId, { withSecret: true });
+    if (!host) return reply.code(404).send({ error: 'proxmox host not found' });
+    let config;
+    try { config = await makeProxmoxClient(host).guestConfig('lxc', box.proxmox.node, box.proxmox.vmid); }
+    catch (error) { return serviceFailure(reply, error, 502); }
+    if (!config || typeof config.net0 !== 'string') return reply.code(409).send({ error: 'container has no net0 interface' });
+    try {
+      return { hostname: typeof config.hostname === 'string' ? config.hostname : null, ...describeNet0(parseNet0(config.net0)) };
+    } catch (error) { return serviceFailure(reply, error, 502); }
+  });
+
   app.post('/api/proxmox/lifecycle-jobs', { preHandler: requireAuth }, async (req, reply) => {
     if (['hostId', 'node', 'vmid'].some((key) => key in (req.body || {}))) {
       return reply.code(400).send({ error: 'lifecycle targets are resolved from the box link' });
@@ -1648,6 +1670,17 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       const { address, prefix } = await makeNetboxClient(settings).nextIp(Number(vlan));
       return { ok: true, address, prefix };
     } catch (e) { return { ok: false, error: e.message }; }
+  });
+  // The re-address dialog's VLAN picker. Result-shaped like next-ip: an
+  // unconfigured, undecryptable or unreachable NetBox renders inline in the
+  // dialog, never as a 500.
+  app.get('/api/netbox/vlans', { preHandler: requireAuth }, async () => {
+    let settings = null;
+    try { settings = await netboxStore.getSettings({ withSecret: true }); }
+    catch { return { ok: false, error: 'could not decrypt the stored NetBox token — re-enter it (was TMUXIFIER_COOKIE_SECRET rotated?)' }; }
+    if (!settings) return { ok: false, error: 'NetBox is not configured — set it up in Settings (⚙)' };
+    try { return { ok: true, vlans: await makeNetboxClient(settings).listVlanPrefixes() }; }
+    catch (e) { return { ok: false, error: e.message }; }
   });
   // Dashboard readout. Cached in-process: the dashboard polls this once a
   // minute per tab, and the summary itself costs NetBox API calls.

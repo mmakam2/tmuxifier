@@ -267,6 +267,19 @@ const lifecycleManager = createProxmoxLifecycleManager({
   // Late-bound on purpose: statusPoller is constructed below, and this only
   // ever runs once a lifecycle job has reached its verify phase.
   onContainerUp: (boxId) => statusPoller.refreshUntil(boxId),
+  // readdress: refuse while a setup job streams over the SSH master the job
+  // is about to sever — the same test the /term gate applies.
+  setupRunning: (boxId) => setupManager.currentForBox(boxId)?.status === 'running',
+  // readdress: once the box points at its new address, exit the old
+  // ControlMaster (built from the OLD record — its socket is keyed by host),
+  // drop every viewer's terminal so it reconnects at the new host (terminals
+  // only, as PATCH /api/boxes does), and reset the status backoff. Each step
+  // best-effort; the job has already succeeded.
+  onReaddress: async ({ before }) => {
+    try { await boxActions.exitMaster(before); } catch { /* best-effort */ }
+    try { sessions.closeGroup(before.id, 'terminal'); } catch { /* best-effort */ }
+    try { statusChecker.resetBackoff?.(before.id); } catch { /* best-effort */ }
+  },
 });
 // A drift write (auto-follow) must not race a lifecycle job's own snapshot of
 // the link it's operating on — the job would abort when resolveTarget sees a

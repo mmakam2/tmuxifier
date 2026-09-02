@@ -175,3 +175,31 @@ test('summary is served from the injected builder and cached for 60s', async () 
   await fresh.inject({ method: 'GET', url: '/api/netbox/summary', headers: h });
   expect(calls).toBe(1); // second hit came from the cache
 });
+
+test('vlans: requires auth, reports ok:false when unconfigured without touching the client', async () => {
+  expect((await app.inject({ method: 'GET', url: '/api/netbox/vlans' })).statusCode).toBe(401);
+  let made = 0;
+  const a = buildServer({ ...baseDeps, makeNetboxClient: () => { made += 1; return {}; } });
+  const h = await headers(a);
+  const res = await a.inject({ method: 'GET', url: '/api/netbox/vlans', headers: h });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toMatchObject({ ok: false, error: expect.stringMatching(/not configured/i) });
+  expect(made).toBe(0);
+});
+
+test('vlans: lists via the client, never leaks the token, and renders a client failure inline', async () => {
+  let fail = false;
+  const a = buildServer({ ...baseDeps, makeNetboxClient: () => ({
+    listVlanPrefixes: async () => { if (fail) throw new Error('netbox down'); return [{ vid: 30, name: 'servers', prefix: '192.168.30.0/24', allocatable: true }]; },
+  }) });
+  const h = await headers(a);
+  await a.inject({ method: 'PUT', url: '/api/netbox/settings', headers: h, payload: { url: 'https://netbox.example.com', token: 'nb-secret-token' } });
+  const res = await a.inject({ method: 'GET', url: '/api/netbox/vlans', headers: h });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true, vlans: [{ vid: 30, name: 'servers', prefix: '192.168.30.0/24', allocatable: true }] });
+  expect(res.body).not.toContain('nb-secret-token');
+  fail = true;
+  const down = await a.inject({ method: 'GET', url: '/api/netbox/vlans', headers: h });
+  expect(down.statusCode).toBe(200);
+  expect(down.json()).toEqual({ ok: false, error: 'netbox down' });
+});

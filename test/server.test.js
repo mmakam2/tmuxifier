@@ -1434,3 +1434,53 @@ test('POST /api/upload returns 413 over the configured limit and 502 on ssh fail
   expect(res.statusCode).toBe(502);
   expect(res.json().error).toContain('upload failed');
 });
+
+test('GET /api/boxes/:id/proxmox/net reads the container net0 through PVE and gates VMs and unlinked boxes', async () => {
+  const stubs = proxmoxStubs();
+  const configCalls = [];
+  stubs.makeProxmoxClient = () => ({
+    guestConfig: async (kind, node, vmid) => { configCalls.push([kind, node, vmid]); return { hostname: 'dev-01', net0: 'name=eth0,bridge=vmbr0,gw=192.168.20.1,hwaddr=BC:24:11:AA:BB:CC,ip=192.168.20.5/24,tag=20,type=veth' }; },
+  });
+  const store = createStore({ dataDir: dir });
+  const ct = await store.addBox({ host: '192.168.20.5', label: 'ct', proxmox: { hostId: 'H1', node: 'pve', vmid: 131, kind: 'lxc' } }, { trustedProxmox: true });
+  const vm = await store.addBox({ host: '192.168.20.6', label: 'vm', proxmox: { hostId: 'H1', node: 'pve', vmid: 200, kind: 'qemu' } }, { trustedProxmox: true });
+  const plain = await store.addBox({ host: '192.168.20.7', label: 'plain' });
+  app = await makeApp({ ...stubs, store });
+  expect((await app.inject({ method: 'GET', url: `/api/boxes/${ct.id}/proxmox/net` })).statusCode).toBe(401);
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${ct.id}/proxmox/net`, headers });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ hostname: 'dev-01', bridge: 'vmbr0', vlan: 20, ip: '192.168.20.5/24', gateway: '192.168.20.1' });
+  expect(configCalls).toEqual([['lxc', 'pve', 131]]);
+  expect((await app.inject({ method: 'GET', url: `/api/boxes/${vm.id}/proxmox/net`, headers })).statusCode).toBe(409);
+  expect((await app.inject({ method: 'GET', url: `/api/boxes/${plain.id}/proxmox/net`, headers })).statusCode).toBe(409);
+  expect((await app.inject({ method: 'GET', url: '/api/boxes/nope/proxmox/net', headers })).statusCode).toBe(404);
+  expect(configCalls).toHaveLength(1); // the refusals never reached PVE
+});
+
+test('GET /api/boxes/:id/proxmox/net maps a PVE failure to 502 and a config without net0 to 409', async () => {
+  const stubs = proxmoxStubs();
+  let mode = 'throw';
+  stubs.makeProxmoxClient = () => ({ guestConfig: async () => { if (mode === 'throw') throw new Error('pveproxy down'); return { hostname: 'dev-01' }; } });
+  const store = createStore({ dataDir: dir });
+  const ct = await store.addBox({ host: '192.168.20.5', label: 'ct', proxmox: { hostId: 'H1', node: 'pve', vmid: 131, kind: 'lxc' } }, { trustedProxmox: true });
+  app = await makeApp({ ...stubs, store });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const down = await app.inject({ method: 'GET', url: `/api/boxes/${ct.id}/proxmox/net`, headers });
+  expect(down.statusCode).toBe(502);
+  expect(down.json().error).toContain('pveproxy down');
+  mode = 'nonet';
+  expect((await app.inject({ method: 'GET', url: `/api/boxes/${ct.id}/proxmox/net`, headers })).statusCode).toBe(409);
+});
+
+test('POST /api/proxmox/lifecycle-jobs passes a readdress vlan through to the manager untouched', async () => {
+  const calls = [];
+  app = await makeApp(proxmoxStubs(calls));
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const created = await app.inject({ method: 'POST', url: '/api/proxmox/lifecycle-jobs', headers, payload: { boxId: 'B1', action: 'readdress', vlan: 30 } });
+  expect(created.statusCode).toBe(201);
+  expect(calls).toContainEqual(['createLifecycleJob', { boxId: 'B1', action: 'readdress', vlan: 30 }]);
+});
