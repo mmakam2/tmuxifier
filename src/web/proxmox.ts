@@ -25,10 +25,13 @@ export type PveGuestKind = 'lxc' | 'qemu';
 // 'mismatch': the vmid's observed type disagrees with the stored link — a
 // different guest wearing the same number. No lifecycle action is offered.
 export type PveGuestState = 'running' | 'stopped' | 'missing' | 'unknown' | 'mismatch';
-export type LifecycleAction = 'start' | 'shutdown' | 'stop' | 'reboot' | 'deprovision';
+export type LifecycleAction = 'start' | 'shutdown' | 'stop' | 'reboot' | 'deprovision' | 'readdress';
 export type LifecycleStatus = 'running' | 'done' | 'error' | 'interrupted';
 export interface PveLinkedGuest { boxId: string; boxLabel: string; hostId: string; hostName: string | null; node: string; vmid: number; kind: PveGuestKind; containerName: string | null; state: PveGuestState; fetchedAt: number; error: string | null; activeJob: LifecycleJobSummary | null; template: boolean; }
 export interface PveNodeGuest { hostId: string; node: string; kind: PveGuestKind; vmid: number; name: string; state: PveGuestState; linkedBoxId: string | null; template: boolean; }
+// A linked container's live net0 as GET /api/boxes/:id/proxmox/net reports
+// it — the truth about which VLAN/address it is on. `ip` is null for dhcp.
+export interface PveGuestNet { hostname: string | null; bridge: string | null; vlan: number | null; ip: string | null; gateway: string | null; }
 export interface PveClusterNode {
   hostId: string; hostName: string | null; node: string | null;
   status: 'online' | 'offline' | 'unknown' | 'error';
@@ -69,7 +72,8 @@ export const pve = {
   linkedGuests() { return jr<PveLinkedGuest[]>('/api/proxmox/guests'); },
   clusterNodes() { return jr<PveClusterNode[]>('/api/proxmox/nodes'); },
   nodeGuests(hostId: string, node: string) { return jr<PveNodeGuest[]>(`/api/proxmox/hosts/${hostId}/nodes/${encodeURIComponent(node)}/guests`); },
-  createLifecycleJob(spec: { boxId: string; action: LifecycleAction; confirmName?: string }) { return jr<LifecycleJobSummary>('/api/proxmox/lifecycle-jobs', post(spec)); },
+  guestNet(boxId: string) { return jr<PveGuestNet>(`/api/boxes/${boxId}/proxmox/net`); },
+  createLifecycleJob(spec: { boxId: string; action: LifecycleAction; confirmName?: string; vlan?: number }) { return jr<LifecycleJobSummary>('/api/proxmox/lifecycle-jobs', post(spec)); },
   lifecycleJobs() { return jr<LifecycleJobSummary[]>('/api/proxmox/lifecycle-jobs'); },
   lifecycleJob(id: string) { return jr<LifecycleJob>(`/api/proxmox/lifecycle-jobs/${id}?t=${Date.now()}`); },
 };

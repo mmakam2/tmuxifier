@@ -6,6 +6,8 @@ export interface NetboxSettingsInput {
   url: string; token?: string; tlsMode?: 'ca' | 'pin' | 'insecure'; fingerprint256?: string | null; dnsSuffix?: string;
 }
 export type NetboxNextIp = { ok: true; address: string; prefix: string } | { ok: false; error: string };
+export interface NetboxVlan { vid: number; name: string; prefix: string; allocatable: boolean; reason?: string }
+export type NetboxVlans = { ok: true; vlans: NetboxVlan[] } | { ok: false; error: string };
 export type NetboxTestResult =
   | { ok: true; version: string }
   | { ok: false; kind: 'unreachable' | 'tls' | 'auth' | 'unexpected'; error: string; fingerprint256?: string | null };
@@ -22,5 +24,6 @@ export const nbx = {
   clear() { return jsonFetch<{ ok: boolean }>('/api/netbox/settings', { method: 'DELETE' }); },
   test(spec: Partial<NetboxSettingsInput>) { return jsonFetch<NetboxTestResult>('/api/netbox/test', jsonBody('POST', spec)); },
   nextIp(vlan: number) { return jsonFetch<NetboxNextIp>(`/api/netbox/next-ip?vlan=${vlan}`); },
+  vlans() { return jsonFetch<NetboxVlans>('/api/netbox/vlans'); },
   summary() { return jsonFetch<NetboxSummary>(`/api/netbox/summary?t=${Date.now()}`); },
 };

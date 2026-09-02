@@ -17,9 +17,17 @@ export function actionsForState(state: PveGuestState): LifecycleAction[] {
 // its reported state — Deprovisioning a template destroys the source every
 // future clone depends on, and Start is meaningless for one. Checked ahead of
 // actionsForState so a template can never fall through to a real action.
-export function actionsForGuest(guest: { state: PveGuestState; template: boolean }): LifecycleAction[] {
+// Re-address is container-only (a VM would need cloud-init) and needs a guest
+// PVE can actually see — running or stopped, never missing or unknown — and
+// sits before Deprovision so the destructive key stays last.
+export function actionsForGuest(guest: { state: PveGuestState; template: boolean; kind: PveGuestKind }): LifecycleAction[] {
   if (guest.template) return [];
-  return actionsForState(guest.state);
+  const actions = actionsForState(guest.state);
+  if (guest.kind === 'lxc' && (guest.state === 'running' || guest.state === 'stopped')) {
+    const i = actions.indexOf('deprovision');
+    actions.splice(i === -1 ? actions.length : i, 0, 'readdress');
+  }
+  return actions;
 }
 
 // Sidebar-style live filter: case-insensitive substring over the fields a row

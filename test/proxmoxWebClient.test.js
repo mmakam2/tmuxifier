@@ -66,3 +66,14 @@ test('lifecycle and guest fetch methods use exact routes and bodies', async () =
   expect(calls[2].opts.method).toBe('POST');
   expect(JSON.parse(calls[2].opts.body)).toEqual({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
 });
+
+test('pve.guestNet GETs the box net route and createLifecycleJob carries vlan', async () => {
+  const net = { hostname: 'dev-01', bridge: 'vmbr0', vlan: 20, ip: '192.168.20.5/24', gateway: '192.168.20.1' };
+  const calls = stubFetch({ ok: true, status: 200, statusText: 'OK', json: async () => net });
+  expect(await pve.guestNet('B1')).toEqual(net);
+  expect(calls[0].url).toBe('/api/boxes/B1/proxmox/net');
+  const calls2 = stubFetch({ ok: true, status: 201, statusText: 'Created', json: async () => ({ id: 'L1' }) });
+  await pve.createLifecycleJob({ boxId: 'B1', action: 'readdress', vlan: 30 });
+  expect(calls2[0].url).toBe('/api/proxmox/lifecycle-jobs');
+  expect(JSON.parse(calls2[0].opts.body)).toEqual({ boxId: 'B1', action: 'readdress', vlan: 30 });
+});

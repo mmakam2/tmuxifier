@@ -63,3 +63,12 @@ test('the filter matches the kind label the row displays', () => {
   expect(guestMatches(guest({ kind: 'lxc', boxLabel: 'ct-01' }), 'vm')).toBe(false);
   expect(guestMatches(guest(), '')).toBe(true);
 });
+
+test('readdress is offered to a running or stopped container, before deprovision, and never to a VM, template, missing or unknown guest', () => {
+  expect(actionsForGuest({ state: 'running', template: false, kind: 'lxc' })).toEqual(['shutdown', 'stop', 'reboot', 'readdress', 'deprovision']);
+  expect(actionsForGuest({ state: 'stopped', template: false, kind: 'lxc' })).toEqual(['start', 'readdress', 'deprovision']);
+  expect(actionsForGuest({ state: 'missing', template: false, kind: 'lxc' })).toEqual(['deprovision']);
+  expect(actionsForGuest({ state: 'unknown', template: false, kind: 'lxc' })).toEqual([]);
+  expect(actionsForGuest({ state: 'running', template: false, kind: 'qemu' })).toEqual(['shutdown', 'stop', 'reboot', 'deprovision']);
+  expect(actionsForGuest({ state: 'stopped', template: true, kind: 'lxc' })).toEqual([]);
+});
