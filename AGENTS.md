@@ -758,9 +758,11 @@ pattern for new modules.
 - `boxRemoval.js` — shared session/tmux/store cleanup for ordinary removal and verified deprovision.
 - `knownHosts.js` — `createKnownHosts`: best-effort `ssh-keygen -R` wrapper (argv, no shell).
   A known_hosts entry is removed only on verified deprovision, on provisioning a fresh
-  container's IP, or via the explicit `POST /api/boxes/:id/forget-hostkey` user action —
-  never automatically on a connection failure (`status.js` classifies changed keys as
-  `hostKeyChanged` so the UI can offer the ⚷ button).
+  container's IP, on a readdress job's newly allocated address and its released old IP (when
+  that old address is an IP literal — a hostname entry is left alone), or via the explicit
+  `POST /api/boxes/:id/forget-hostkey` user action — never automatically on a connection
+  failure (`status.js` classifies changed keys as `hostKeyChanged` so the UI can offer the ⚷
+  button).
 - `aiAuthSeed.js` — `createAiAuthSeeder` + pure seed-script builders: opt-in copying of the
   host's AI CLI subscription credentials to a box (Claude via the `.env`
   `TMUXIFIER_CLAUDE_OAUTH_TOKEN` from `claude setup-token`; Codex via the host's live

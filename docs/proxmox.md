@@ -198,14 +198,19 @@ from the chosen VLAN's prefix (skipping the gateway, stamping `description`/`dns
 provisioning does, from the container's hostname); refuses if another box already sits at that
 address; writes the new `tag`, `ip` and `gw` to `net0` — every other key, including `hwaddr`,
 the bridge and any IPv6 settings, is left exactly as it was; re-points the box at the new address;
-then releases the old NetBox record (by its stamped id when the container was provisioned
-`auto-static`, and by address otherwise — so a hand-registered record goes too). A running
-container is re-plugged live by Proxmox; open terminals drop and reconnect once SSH answers at
-the new address. A stopped one takes the change at its next start. The `known_hosts` entries for
-both addresses are removed — the new one was just handed out by NetBox as free, and the old one
-has just been released. The bridge never changes, VMs are not eligible (they would need
-cloud-init), and a container on `dhcp` can be moved onto a managed VLAN but not back. The
-token needs `VM.Config.Network` for the config write — already included in `PVEVMAdmin`.
+then releases the old NetBox record — by its stamped id when the link carries one, and by address
+whenever an old IPv4 address is known (from `net0` or, for a dhcp interface, the box's own host),
+in addition to the id, so a hand-registered record goes too even when the link never had a stamped
+one. The job's own fresh allocation is never swept by that address lookup, even on the anticipated
+path where NetBox hands the container back the address it already had. A running container is
+re-plugged live by Proxmox; open terminals drop and reconnect once SSH answers at the new address.
+A stopped one takes the change at its next start. The `known_hosts` entry for the new address is
+always removed — it was just handed out by NetBox as free. The old address's entry is removed too,
+but only when that address is an IP literal; a hostname-addressed box's entry is left alone, since
+the container's key hasn't changed and the entry stays valid if DNS is later repointed. The bridge
+never changes, VMs are not eligible (they would need cloud-init), and a container on `dhcp` can be
+moved onto a managed VLAN but not back. The token needs `VM.Config.Network` for the config write —
+already included in `PVEVMAdmin`.
 
 If the job fails before Proxmox is written, the fresh allocation is released and nothing has
 changed. If Proxmox accepted the change but the box record could not be updated, the job names
