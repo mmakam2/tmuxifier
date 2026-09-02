@@ -257,6 +257,10 @@ pattern for new modules.
   rule rather than a special case: the PTY simply drops and the attach path's own `new-session -A`
   recreates it empty on reconnect — the exact same observable outcome the header's Reconnect cap
   already produces against this very session.
+  `GET /api/boxes/:id/proxmox/net` is the re-address dialog's read of a linked container's live
+  `net0` (409 for a VM or an unlinked box, 502 when PVE cannot be read); `POST
+  /api/proxmox/lifecycle-jobs` carries the new `readdress` action's `vlan` unchanged to
+  `createJob`, which validates it.
   `requireAuth` is async and accepts either the signed session cookie or an `Authorization: Bearer
   <device token>` header verified via `deviceStore.verify` (`req.deviceId` set on that branch) —
   cookie first, since that keeps the common browser request synchronous, then the device-token
@@ -311,6 +315,10 @@ pattern for new modules.
   mutation's own read half) goes through, so a link written before VM support migrates by asserting
   what is already true rather than by rewriting the file — `boxes.json` itself is never touched, the
   default is just re-derived on every read, same as `normalize()`'s own default on write.
+  `readdressBox(id, { host, netboxIpId })` is the re-address job's one write — host and link
+  allocation id land together or not at all, since two writes would leave a window the boot
+  reconcile cannot tell from a leaked id; `uniquenessConflict` takes an optional `ignoreId` so
+  that job can be handed the box's own current address.
 - `sshCommand.js` — builds `ssh` argv for attach/probe; **all box fields are validated by
   `assertBoxSafe` and never shell-interpolated unquoted**. Touch this carefully (command-injection
   surface). Includes ControlMaster multiplexing args. `buildSetupArgv` is the non-interactive
@@ -677,7 +685,14 @@ pattern for new modules.
   that every caller already checked; the same chokepoint discipline `voiceCatalog.js` and
   `iconCatalog.js` apply to their own allowlists. `createLxc` and `lxcInterfaces` stay LXC-only; VM
   provisioning is out of scope.
-- `proxmoxParams.js` — pure preset → `pct`/LXC create-param mapping (`net0`, `ssh-public-keys`, …).
+  `guestConfig` (kind-parameterized, re-validated like the six above) reads a guest's config;
+  `setLxcConfig` PUTs one and is LXC-only for the same reason `createLxc` is — a VM's address
+  lives in cloud-init.
+- `proxmoxParams.js` — pure preset → `pct`/LXC create-param mapping (`net0`, `ssh-public-keys`, …),
+  plus the re-address side: `parseNet0` (ordered pairs, rejects what PVE never writes),
+  `describeNet0` (the IPv4 view; `dhcp`/`manual` read as null), and `buildNet0Readdress`, which
+  rewrites only `tag`/`ip`/`gw` in place and appends any that were absent, so `hwaddr`, the
+  bridge and IPv6 keys survive verbatim.
 - `defaultKey.js` — reads the Tmuxifier host's own SSH public key to inject as the default Proxmox
   management key so provisioned containers trust Tmuxifier (override with `TMUXIFIER_PVE_DEFAULT_PUBKEY`).
 - `provisionStore.js` / `proxmoxProvision.js` — debounced `data/provision-jobs.json` persistence and
@@ -725,6 +740,21 @@ pattern for new modules.
   This changed LXC deprovision too, not only VMs. Deprovision releases the box's NetBox-allocated IP
   and deletes any remaining NetBox records matching the box's current IP, so manually created
   records don't go stale (best-effort).
+  A third action, `readdress`, moves a linked LXC container to a new NetBox-managed VLAN/IP
+  (spec: `docs/superpowers/specs/2026-09-02-container-readdress-design.md`). Phase order is the
+  safety argument: `inspect` (read the live `net0` — `boxes.json` stores neither VLAN nor
+  gateway) → `allocate-ip` (next free from the VLAN's prefix; then `uniquenessConflict` on the
+  new address, ignoring the box itself) → `apply` (`setLxcConfig` with `buildNet0Readdress`,
+  which rewrites only `tag`/`ip`/`gw`) → `relink` (`store.readdressBox`, one write) → `release`
+  (the old record by stamped id and by address, the deprovision routine generalized into
+  `releaseNetboxRecords`) → `verify` (forget both `known_hosts` entries; `onReaddress` hook;
+  `onContainerUp` when it was running). A failure at `allocate-ip` or `apply` releases the fresh
+  allocation (the container never moved); a failure at `relink` releases nothing (both
+  addresses are in use somewhere) and names both in its error. The boot reconcile applies the
+  same rule: interrupted at `allocate-ip` → released, later → logged as chaseable. `vlan` is the
+  only client-supplied value that reaches PVE or NetBox and is integer-checked (no coercion)
+  before any I/O; `setupRunning` (wired to `setupManager.currentForBox`) refuses a job that
+  would sever a setup's SSH master. LXC-only, like provisioning.
 - `boxRemoval.js` — shared session/tmux/store cleanup for ordinary removal and verified deprovision.
 - `knownHosts.js` — `createKnownHosts`: best-effort `ssh-keygen -R` wrapper (argv, no shell).
   A known_hosts entry is removed only on verified deprovision, on provisioning a fresh
@@ -823,6 +853,9 @@ pattern for new modules.
   record's `dns_name` from the hostname plus the optional global DNS suffix setting; `nextIp`
   (same free-IP selection as the allocator, no reservation) powers the provision form's
   non-binding next-IP preview via `GET /api/netbox/next-ip`.
+  `listVlanPrefixes` (served by `GET /api/netbox/vlans`, result-shaped like `next-ip`) feeds the
+  re-address picker: IPv4 prefixes by VLAN, a multi-prefix VLAN listed as non-allocatable up
+  front rather than failing the job later.
 
 Web client is `src/web/` (TypeScript + xterm.js, bundled by Vite): `main.ts` (also drives the
 provision panel, a poll-based setup-job viewer — Retry / Remove / Finish-interactively — now that
@@ -1180,7 +1213,7 @@ not be the one the box is linked to. A template guest (PVE's `template: 1` flag,
 `proxmoxInventory.js`) gets the same no-actions-plus-"Edit link" treatment via `actionsForGuest`,
 checked ahead of `actionsForState`, plus a `TEMPLATE` badge in its own grid cell alongside the
 CT/VM one — Deprovisioning a template destroys the source every future clone depends on, and PVE
-does not otherwise distinguish a template from an ordinary stopped guest), `proxmoxActivity.ts`
+does not otherwise distinguish a template from an ordinary stopped guest; `actionsForGuest` also inserts `readdress` before `deprovision` for an LXC guest in `running`/`stopped` — never a VM, template, missing or unknown one — and the button opens `proxmoxReaddress.ts`: the dialog, pure `vlanOptionLabel`/`currentNetLine` unit-tested and the DOM half live-validated, which reads `GET /api/boxes/:id/proxmox/net` and `GET /api/netbox/vlans`, previews via the existing `next-ip`, and hands the created job to `showLifecycleJob`, whose existing settle path already refetches the box list through `onBoxLinked`), `proxmoxActivity.ts`
 (the Activity tab merging provision and lifecycle jobs newest-first), `proxmoxAssociation.ts` (the
 Add/Edit Box modals' manual Proxmox link/unlink picker — hidden until a Proxmox host profile
 exists, except for already-linked boxes; a template's option is `TEMPLATE`-marked and disabled,
@@ -1492,6 +1525,13 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   `POST /api/boxes/:id/forget-hostkey` (confirm-gated in the UI). Ordinary box removal does
   **not** forget a key — the machine still exists and `~/.ssh/known_hosts` is shared with your
   regular ssh usage.
+- A container re-address removes two `known_hosts` entries, both under the existing rule: the
+  new address was just handed out by NetBox as free (any entry for it is a recycled-IP leftover,
+  the same argument provisioning makes), and the old address has just been released to NetBox
+  (the container's identity has verifiably left it). `vlan` is the only new client-supplied
+  value that reaches an external system; the address and gateway written to PVE come from
+  NetBox and are re-validated with `isCidr`/`isIp`, and the PVE-reported hostname becomes a
+  NetBox `dns_name` only when it passes the same `DNS_LABEL` check a typed hostname does.
 - Box setup now runs server-side over the already-authenticated ControlMaster (`BatchMode`),
   decoupled from the browser tab that started it; a failed setup keeps the box — it is removed
   only via the explicit user action.

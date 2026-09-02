@@ -187,3 +187,29 @@ where Tmuxifier and PVE disagree about whether the guest is still running. Once 
 destroys the guest **and its attached disks/volumes**, **keeps** any independent backup archives,
 then removes the local box. The hub's **Activity** tab merges lifecycle and provision jobs
 newest-first (history persists to `data/proxmox-lifecycle-jobs.json`).
+
+**Re-address** moves a linked **container** to another NetBox-managed VLAN/IP without rebuilding
+it. On a running or stopped container the Guests tab offers **Re-address**, which reads the
+container's live `net0` from Proxmox (bridge, VLAN tag, address, gateway — Tmuxifier stores none
+of these), lists the IPv4 prefixes NetBox knows by VLAN (a VLAN with more than one prefix is shown
+but not selectable, the same rule provisioning applies), and previews the next free address
+(non-binding). Apply runs a lifecycle job that, in this order: allocates the next free address
+from the chosen VLAN's prefix (skipping the gateway, stamping `description`/`dns_name` the way
+provisioning does, from the container's hostname); refuses if another box already sits at that
+address; writes the new `tag`, `ip` and `gw` to `net0` — every other key, including `hwaddr`,
+the bridge and any IPv6 settings, is left exactly as it was; re-points the box at the new address;
+then releases the old NetBox record (by its stamped id when the container was provisioned
+`auto-static`, and by address otherwise — so a hand-registered record goes too). A running
+container is re-plugged live by Proxmox; open terminals drop and reconnect once SSH answers at
+the new address. A stopped one takes the change at its next start. The `known_hosts` entries for
+both addresses are removed — the new one was just handed out by NetBox as free, and the old one
+has just been released. The bridge never changes, VMs are not eligible (they would need
+cloud-init), and a container on `dhcp` can be moved onto a managed VLAN but not back. The
+token needs `VM.Config.Network` for the config write — already included in `PVEVMAdmin`.
+
+If the job fails before Proxmox is written, the fresh allocation is released and nothing has
+changed. If Proxmox accepted the change but the box record could not be updated, the job names
+both addresses in its error and releases nothing — fix the box host by hand in Edit box. A job
+interrupted by a restart between allocation and the Proxmox write releases its allocation on the
+next boot; one interrupted later leaves it and says so in its log, since the server cannot know
+whether Proxmox wrote the config.

@@ -253,8 +253,10 @@ With a Proxmox VE host configured (API token over pinned TLS; secrets encrypted 
 Tmuxifier can **provision LXC containers** from reusable presets — DHCP, static, or
 NetBox-allocated `auto-static` addressing — and auto-link the new container as a box. Any box
 can also be linked by hand to an existing guest, container **or QEMU VM**, unlocking lifecycle
-control: Start / Shutdown / Stop / Reboot and a confirm-gated **Deprovision** that destroys the
-guest and releases its NetBox IP. Token permissions, presets, the shell-framework update
+control: Start / Shutdown / Stop / Reboot, a **Re-address** that moves a container to another
+NetBox-managed VLAN/IP (next free address allocated, old record released, live re-plug on a
+running container), and a confirm-gated **Deprovision** that destroys the guest and releases its
+NetBox IP. Token permissions, presets, the shell-framework update
 clamps, and the lifecycle rules are in [the Proxmox guide](docs/proxmox.md).
 
 ## Security
