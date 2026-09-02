@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { buildNet0, buildCreateParams } from '../src/server/proxmoxParams.js';
+import { buildNet0, buildCreateParams, parseNet0, net0Field, describeNet0, buildNet0Readdress } from '../src/server/proxmoxParams.js';
 
 test('buildNet0 dhcp and static (with vlan + override)', () => {
   expect(buildNet0({ bridge: 'vmbr0', ipMode: 'dhcp' })).toBe('name=eth0,bridge=vmbr0,ip=dhcp');
@@ -57,4 +57,31 @@ test('auto-static net0 takes both overrides; static keeps its stored gateway', (
   const staticNet = { bridge: 'vmbr0', vlan: null, ipMode: 'static', cidr: '192.168.1.50/24', gateway: '192.168.1.1' };
   expect(buildNet0(staticNet, undefined, undefined))
     .toBe('name=eth0,bridge=vmbr0,ip=192.168.1.50/24,gw=192.168.1.1');
+});
+
+const LINE = 'name=eth0,bridge=vmbr0,firewall=1,gw=192.168.20.1,hwaddr=BC:24:11:AA:BB:CC,ip=192.168.20.5/24,ip6=fd00::5/64,gw6=fd00::1,tag=20,type=veth';
+
+test('parseNet0 keeps every pair in order and rejects what PVE never writes', () => {
+  expect(parseNet0(LINE).map(([k]) => k)).toEqual(['name', 'bridge', 'firewall', 'gw', 'hwaddr', 'ip', 'ip6', 'gw6', 'tag', 'type']);
+  expect(net0Field(parseNet0(LINE), 'hwaddr')).toBe('BC:24:11:AA:BB:CC');
+  expect(net0Field(parseNet0(LINE), 'rate')).toBeNull();
+  expect(() => parseNet0('')).toThrow(/empty/);
+  expect(() => parseNet0('name=eth0,garbage')).toThrow(/unparseable/);
+});
+
+test('buildNet0Readdress rewrites only tag/ip/gw, in place, keeping hwaddr and IPv6 verbatim', () => {
+  expect(buildNet0Readdress(parseNet0(LINE), { vlan: 30, ip: '192.168.30.7/24', gateway: '192.168.30.1' }))
+    .toBe('name=eth0,bridge=vmbr0,firewall=1,gw=192.168.30.1,hwaddr=BC:24:11:AA:BB:CC,ip=192.168.30.7/24,ip6=fd00::5/64,gw6=fd00::1,tag=30,type=veth');
+});
+
+test('buildNet0Readdress appends the managed keys an untagged dhcp interface lacks', () => {
+  const pairs = parseNet0('name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:01,ip=dhcp,type=veth');
+  expect(buildNet0Readdress(pairs, { vlan: 30, ip: '192.168.30.7/24', gateway: '192.168.30.1' }))
+    .toBe('name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:01,ip=192.168.30.7/24,type=veth,tag=30,gw=192.168.30.1');
+});
+
+test('describeNet0 reads the IPv4 view and nulls dhcp/absent fields', () => {
+  expect(describeNet0(parseNet0(LINE))).toEqual({ bridge: 'vmbr0', vlan: 20, ip: '192.168.20.5/24', gateway: '192.168.20.1' });
+  expect(describeNet0(parseNet0('name=eth0,bridge=vmbr0,ip=dhcp'))).toEqual({ bridge: 'vmbr0', vlan: null, ip: null, gateway: null });
+  expect(describeNet0(parseNet0('name=eth0,bridge=vmbr1,ip=manual,tag=abc,gw=nope'))).toEqual({ bridge: 'vmbr1', vlan: null, ip: null, gateway: null });
 });
