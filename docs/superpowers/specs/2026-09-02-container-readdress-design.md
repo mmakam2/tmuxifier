@@ -105,8 +105,10 @@ The job record carries `vlan` (target), and as the phases fill them in: `oldIp`,
 
 Each phase is persisted before it starts.
 
-1. **inspect** — `guestConfig`, `parseNet0(config.net0)`; record the old IPv4 address, tag and
-   hostname. No `net0`, or no IPv4 `ip=` on it, fails here before anything changes.
+1. **inspect** — `guestConfig`, `parseNet0(config.net0)`; record the old IPv4 address (null for
+   a dhcp interface), tag and hostname. No `net0` fails here before anything changes. A dhcp
+   interface is fine: the old address used for the release sweep and the `known_hosts` removal
+   is then the box's `host`, when it is an IP literal — the same source deprovision uses.
 2. **allocate-ip** — `findPrefixByVlan(vlan)`, then `allocateIp` with the provisioning rule for
    `description` (`tmuxifier: <name>`) and `dns_name` (`<name>[.<dnsSuffix>]`), where `<name>` is
    the container's PVE hostname when it is a valid DNS label, else the box label for the
@@ -167,8 +169,9 @@ config, and releasing an address a container is using is worse than a stale reco
   the reason with no Apply. Pure parts (`vlanOptionLabel`, `currentNetLine`, the eligibility
   rule) are unit-tested; the DOM half registers through `registerModal` like the deprovision
   dialog so logout teardown reaches it.
-- When the job settles, the hub's existing settle hook triggers the fast status poll and, new,
-  refetches the box list so the sidebar shows the new host without a reload.
+- When the job settles, the hub's lifecycle view already calls `onBoxLinked`, which `main.ts`
+  wires to `refresh()` (a box-list refetch plus a status re-read), so the sidebar shows the new
+  host without a reload. No change needed there; the plan only verifies it.
 
 ## Testing
 
