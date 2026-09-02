@@ -1213,7 +1213,13 @@ not be the one the box is linked to. A template guest (PVE's `template: 1` flag,
 `proxmoxInventory.js`) gets the same no-actions-plus-"Edit link" treatment via `actionsForGuest`,
 checked ahead of `actionsForState`, plus a `TEMPLATE` badge in its own grid cell alongside the
 CT/VM one — Deprovisioning a template destroys the source every future clone depends on, and PVE
-does not otherwise distinguish a template from an ordinary stopped guest; `actionsForGuest` also inserts `readdress` before `deprovision` for an LXC guest in `running`/`stopped` — never a VM, template, missing or unknown one — and the button opens `proxmoxReaddress.ts`: the dialog, pure `vlanOptionLabel`/`currentNetLine` unit-tested and the DOM half live-validated, which reads `GET /api/boxes/:id/proxmox/net` and `GET /api/netbox/vlans`, previews via the existing `next-ip`, and hands the created job to `showLifecycleJob`, whose existing settle path already refetches the box list through `onBoxLinked`), `proxmoxActivity.ts`
+does not otherwise distinguish a template from an ordinary stopped guest; `actionsForGuest` also
+inserts `readdress` before `deprovision` for an LXC guest in `running`/`stopped` — never a VM,
+template, missing or unknown one — and the button opens `proxmoxReaddress.ts`: the dialog, pure
+`vlanOptionLabel`/`currentNetLine` unit-tested and the DOM half live-validated, which reads
+`GET /api/boxes/:id/proxmox/net` and `GET /api/netbox/vlans`, previews via the existing
+`next-ip`, and hands the created job to `showLifecycleJob`, whose existing settle path already
+refetches the box list through `onBoxLinked`), `proxmoxActivity.ts`
 (the Activity tab merging provision and lifecycle jobs newest-first), `proxmoxAssociation.ts` (the
 Add/Edit Box modals' manual Proxmox link/unlink picker — hidden until a Proxmox host profile
 exists, except for already-linked boxes; a template's option is `TEMPLATE`-marked and disabled,
