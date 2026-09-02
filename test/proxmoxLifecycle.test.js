@@ -780,10 +780,10 @@ test("job.kind is pinned to the link, not the refreshed inventory record", async
 const NET0 = 'name=eth0,bridge=vmbr0,firewall=1,gw=192.168.1.1,hwaddr=BC:24:11:AA:BB:CC,ip=192.168.1.10/24,tag=10,type=veth';
 const NET0_AFTER = 'name=eth0,bridge=vmbr0,firewall=1,gw=192.168.30.1,hwaddr=BC:24:11:AA:BB:CC,ip=192.168.30.7/24,tag=30,type=veth';
 
-function readdressFixture(state = 'running', overrides = {}, { net0 = NET0, hostname = 'dev-01', netboxIpId = 99 } = {}) {
+function readdressFixture(state = 'running', overrides = {}, { net0 = NET0, hostname = 'dev-01', netboxIpId = 99, box = BOX } = {}) {
   const calls = [];
   const forgets = [];
-  let stored = { ...BOX, proxmox: { ...BOX.proxmox, ...(netboxIpId == null ? {} : { netboxIpId }) } };
+  let stored = { ...box, proxmox: { ...box.proxmox, ...(netboxIpId == null ? {} : { netboxIpId }) } };
   const client = {
     guestConfig: async (kind, node, vmid) => { calls.push(`config:${kind}:${node}:${vmid}`); return { hostname, ...(net0 == null ? {} : { net0 }) }; },
     setLxcConfig: async (node, vmid, params) => { calls.push(`set:${node}:${vmid}:${params.net0}`); return null; },
@@ -871,6 +871,38 @@ test('readdress of a dhcp, hand-linked container: no old id, old address swept f
   expect(calls).toContain('set:pve:131:name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:01,ip=192.168.30.7/24,type=veth,tag=30,gw=192.168.30.1');
   expect(calls.filter((c) => typeof c === 'string' && c.startsWith('release:'))).toEqual(['release:42']);
   expect(calls).toContain('lookup:192.168.1.10');
+});
+
+test('a readdress that is handed the box\'s own current address keeps its fresh allocation out of the old-address sweep', async () => {
+  const { manager, calls, getStored } = readdressFixture('running', {
+    makeNetboxClient: () => ({
+      findPrefixByVlan: async () => ({ id: 7, prefix: '192.168.1.0/24' }),
+      allocateIp: async () => ({ id: 120, address: '192.168.1.10/24', gateway: '192.168.1.1' }),
+      findIpsByAddress: async (ip) => { calls.push(`lookup:${ip}`); return [{ id: 120, address: '192.168.1.10/24' }, { id: 42, address: '192.168.1.10/32' }]; },
+      releaseIp: async (id) => { calls.push(`release:${id}`); },
+    }),
+  }, { net0: 'name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:01,ip=dhcp,type=veth', netboxIpId: null });
+  await manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 1 });
+  await manager._settled('J1');
+  const job = manager.getJob('J1');
+  expect(job).toMatchObject({ status: 'done', netboxIpId: 120 });
+  expect(getStored().proxmox.netboxIpId).toBe(120);
+  expect(calls.filter((c) => typeof c === 'string' && c.startsWith('release:'))).toEqual(['release:42']);
+  expect(job.log).toContain('kept NetBox ip 120');
+});
+
+test('a hostname-addressed box sweeps and forgets the old IP read from net0, never its own hostname', async () => {
+  const { manager, calls, forgets } = readdressFixture('running', {}, {
+    net0: NET0,
+    box: { ...BOX, host: 'dev-01.lan.example.com' },
+  });
+  await manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 });
+  await manager._settled('J1');
+  const job = manager.getJob('J1');
+  expect(job.status).toBe('done');
+  expect(calls).toContain('lookup:192.168.1.10');
+  expect(calls).toContain('release:99');
+  expect(forgets).toEqual([['192.168.30.7', undefined], ['192.168.1.10', undefined]]);
 });
 
 test('readdress uses the box label and no dns_name when the PVE hostname is not a DNS label', async () => {

@@ -29,8 +29,8 @@ export function createProxmoxLifecycleManager({
   setupRunning = () => false,
   // Fired once the box points at its new address: index.js exits the old
   // ControlMaster, closes the box's terminal group so viewers reconnect at the
-  // new host, and resets the status backoff. Best-effort, never awaited into
-  // the job's success (see runReaddress).
+  // new host, and resets the status backoff. Best-effort: awaited, but never
+  // allowed to fail the job (see runReaddress).
   onReaddress = null,
   load = () => [], save = () => {}, now = () => new Date().toISOString(), makeId = randomUUID,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), pollMs = 1500,
@@ -145,7 +145,7 @@ export function createProxmoxLifecycleManager({
   // address so a manually created NetBox record doesn't outlive what used it.
   // A NetBox failure must never fail a job whose container is already gone or
   // already moved — log it and let the rest finish.
-  async function releaseNetboxRecords(job, { ipId, hostIp }) {
+  async function releaseNetboxRecords(job, { ipId, hostIp, keepId = null }) {
     if ((!ipId && !hostIp) || !netboxStore) return;
     let settings = null;
     let readError = null;
@@ -179,6 +179,10 @@ export function createProxmoxLifecycleManager({
       return;
     }
     for (const rec of matches) {
+      if (keepId != null && rec.id === keepId) {
+        appendLog(job, `# kept NetBox ip ${rec.id} (${rec.address}) — this job's own allocation\n`); persist();
+        continue;
+      }
       try {
         await client.releaseIp(rec.id);
         appendLog(job, `# released NetBox ip ${rec.id} (${rec.address})\n`); persist();
@@ -267,13 +271,21 @@ export function createProxmoxLifecycleManager({
     const pairs = parseNet0(config.net0);
     const before = describeNet0(pairs);
     // The address the old record is swept by and whose known_hosts entry goes:
-    // the box's host, when it is an IP literal — also what deprovision uses.
-    // net0's own ip= is null for a dhcp interface, which is fine.
-    const oldHost = isIP(String(box.host || '')) ? box.host : null;
+    // net0's own static IPv4 when it carried one (this is what inspect just
+    // read from PVE, so it's authoritative even for a hostname-addressed box),
+    // else the box's host when THAT is an IP literal (a dhcp interface has no
+    // address of its own to report) — also what deprovision uses. A
+    // hostname-addressed box is deliberately never forgotten from known_hosts
+    // here: the container's key hasn't changed, and if DNS is later
+    // repointed the entry stays valid — the isIP guard on the fallback keeps
+    // oldAddr always an IP literal or null, never a hostname.
+    const oldAddr = before.ip ? before.ip.split('/')[0] : (isIP(String(box.host || '')) ? box.host : null);
     job.oldIp = before.ip;
     job.oldVlan = before.vlan;
     job.oldNetboxIpId = box.proxmox.netboxIpId || null;
-    job.hostname = typeof config.hostname === 'string' ? config.hostname : null;
+    // PVE-side content, bounded before it enters the job record (served raw
+    // by GET /api/boxes/:id/proxmox/net and persisted to disk).
+    job.hostname = typeof config.hostname === 'string' ? config.hostname.slice(0, 255) : null;
     appendLog(job, `# before: ${config.net0}\n`); persist();
 
     job.phase = 'allocate-ip'; persist();
@@ -305,9 +317,12 @@ export function createProxmoxLifecycleManager({
     job.phase = 'apply'; persist();
     const net0 = buildNet0Readdress(pairs, { vlan: job.vlan, ip: res.address, gateway: res.gateway });
     await client.setLxcConfig(job.node, job.vmid, { net0 });
-    appendLog(job, `# applied: ${net0}\n`); persist();
-
+    // Advance the phase the instant PVE confirms the write, before the log
+    // line: a throw between here and the box being relinked must never be
+    // read by run()'s catch as "still at apply" and release an allocation
+    // the container is now actually using.
     job.phase = 'relink'; persist();
+    appendLog(job, `# applied: ${net0}\n`); persist();
     let after;
     try {
       after = await boxStore.readdressBox(job.boxId, { host: newHost, netboxIpId: res.id });
@@ -319,12 +334,15 @@ export function createProxmoxLifecycleManager({
     appendLog(job, `# box ${box.label} now ${newHost}\n`); persist();
 
     job.phase = 'release'; persist();
-    await releaseNetboxRecords(job, { ipId: job.oldNetboxIpId, hostIp: oldHost });
+    // keepId guards the case NetBox hands the container its own current
+    // address (the anticipated hand-built-container path): findIpsByAddress
+    // would otherwise return this job's own fresh allocation and delete it.
+    await releaseNetboxRecords(job, { ipId: job.oldNetboxIpId, hostIp: oldAddr, keepId: job.netboxIpId });
 
     job.phase = 'verify'; persist();
     // The old address is free in NetBox now: the container's identity has
     // verifiably left it. Best-effort.
-    if (knownHosts && oldHost) { try { await knownHosts.forget(oldHost, box.port); } catch { /* best-effort */ } }
+    if (knownHosts && oldAddr) { try { await knownHosts.forget(oldAddr, box.port); } catch { /* best-effort */ } }
     if (onReaddress) { try { await Promise.resolve(onReaddress({ before: box, after })).catch(() => {}); } catch { /* best-effort */ } }
     if (current.state === 'running' && onContainerUp) {
       try { Promise.resolve(onContainerUp(job.boxId)).catch(() => {}); } catch { /* best-effort */ }
