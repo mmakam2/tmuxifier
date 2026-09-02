@@ -201,6 +201,28 @@ export function createNetboxClient(settings, { request = jsonRequest, connect = 
       const data = await call('GET', '/ipam/prefixes/?limit=100');
       return ((data && data.results) || []).map((rec) => ({ id: rec.id, prefix: String(rec.prefix) }));
     },
+    // The re-address picker's source: every IPv4 prefix NetBox knows that
+    // carries a VLAN, from the same bounded page listPrefixes reads. A VLAN
+    // with more than one prefix is listed but not allocatable — the rule
+    // findPrefixByVlan enforces at allocation time, surfaced up front so the
+    // picker can say why rather than failing a job later. The name is
+    // NetBox-side content that reaches the UI; it is trimmed and capped.
+    async listVlanPrefixes() {
+      const data = await call('GET', '/ipam/prefixes/?limit=100');
+      const byVid = new Map();
+      for (const rec of (data && data.results) || []) {
+        const vid = rec && rec.vlan ? Number(rec.vlan.vid) : NaN;
+        if (!Number.isInteger(vid) || vid < 1 || vid > 4094) continue;
+        if (!/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(String(rec.prefix))) continue; // v4 only
+        const name = typeof rec.vlan.name === 'string' ? rec.vlan.name.trim().slice(0, 64) : '';
+        const entry = byVid.get(vid) || { vid, name, prefix: String(rec.prefix), count: 0 };
+        entry.count += 1;
+        byVid.set(vid, entry);
+      }
+      return [...byVid.values()].sort((a, b) => a.vid - b.vid).map(({ count, ...entry }) => (
+        count === 1 ? { ...entry, allocatable: true } : { ...entry, allocatable: false, reason: `VLAN ${entry.vid} maps to ${count} NetBox prefixes` }
+      ));
+    },
   };
 }
 

@@ -325,3 +325,25 @@ test('countIpsInPrefix queries ip-addresses by parent and returns count', async 
   expect(await client.countIpsInPrefix('192.168.50.0/24')).toBe(37);
   expect(urls[0]).toContain('/ipam/ip-addresses/?parent=192.168.50.0%2F24&limit=1');
 });
+
+test('listVlanPrefixes lists v4 prefixes by VLAN, marks a two-prefix VLAN non-allocatable, skips v6 and VLAN-less', async () => {
+  const calls = [];
+  const client = createNetboxClient(NB, { request: async (o) => {
+    calls.push(o);
+    return { status: 200, json: { results: [
+      { id: 2, prefix: '192.168.40.0/24', vlan: { id: 6, vid: 40, name: 'lab' } },
+      { id: 1, prefix: '192.168.30.0/24', vlan: { id: 5, vid: 30, name: 'servers' } },
+      { id: 3, prefix: '192.168.41.0/24', vlan: { id: 6, vid: 40, name: 'lab' } },
+      { id: 4, prefix: 'fd00:30::/64', vlan: { id: 5, vid: 30, name: 'servers' } },
+      { id: 5, prefix: '10.0.0.0/8', vlan: null },
+      { id: 6, prefix: '192.168.50.0/24', vlan: { id: 7, vid: 50, name: null } },
+    ] }, text: '' };
+  } });
+  await expect(client.listVlanPrefixes()).resolves.toEqual([
+    { vid: 30, name: 'servers', prefix: '192.168.30.0/24', allocatable: true },
+    { vid: 40, name: 'lab', prefix: '192.168.40.0/24', allocatable: false, reason: 'VLAN 40 maps to 2 NetBox prefixes' },
+    { vid: 50, name: '', prefix: '192.168.50.0/24', allocatable: true },
+  ]);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].url).toBe('https://netbox.example.com/api/ipam/prefixes/?limit=100');
+});
