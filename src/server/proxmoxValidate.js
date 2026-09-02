@@ -28,6 +28,11 @@ export function isCidr(s) {
   return !!m && isIp(m[1]) && Number(m[2]) >= 0 && Number(m[2]) <= 32;
 }
 
+// One DNS label (a hostname, no dots) — what provisioning demands of a typed
+// hostname and what the re-address job demands of a PVE-reported one before
+// it becomes a NetBox dns_name.
+export function isDnsLabel(s) { return DNS_LABEL.test(String(s || '')); }
+
 export function parseEndpoint(value) {
   let s = String(value || '').trim().replace(/^[a-z]+:\/\//i, '').replace(/\/+$/, '');
   if (!s) throw new Error('endpoint is required');

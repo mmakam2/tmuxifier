@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest';
 import {
-  parseEndpoint, isCidr, isIp,
+  parseEndpoint, isCidr, isIp, isDnsLabel,
   assertHostInput, assertKeyInput, assertPresetInput, assertProvisionInput, assertRootPassword,
   assertProxmoxLinkInput,
 } from '../src/server/proxmoxValidate.js';
@@ -181,4 +181,13 @@ test('assertPresetInput validates boxDefaults', () => {
   expect(() => assertPresetInput({ ...PRESET, boxDefaults: { user: '-oProxyCommand=x' } }, ctx2)).toThrow(/user/i);
   expect(() => assertPresetInput({ ...PRESET, boxDefaults: { tags: 'Prod' } }, ctx2)).toThrow(/tags/i);
   expect(() => assertPresetInput({ ...PRESET, boxDefaults: { tags: [1] } }, ctx2)).toThrow(/tags/i);
+});
+
+test('isDnsLabel accepts a hostname label and rejects underscores, dots, and blanks', () => {
+  expect(isDnsLabel('dev-01')).toBe(true);
+  expect(isDnsLabel('DEV01')).toBe(true);
+  expect(isDnsLabel('dev_01')).toBe(false);
+  expect(isDnsLabel('dev.example')).toBe(false);
+  expect(isDnsLabel('')).toBe(false);
+  expect(isDnsLabel(null)).toBe(false);
 });

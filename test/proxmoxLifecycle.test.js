@@ -773,3 +773,232 @@ test("job.kind is pinned to the link, not the refreshed inventory record", async
   expect(manager.getJob(job.id)).toMatchObject({ status: 'done', error: null });
   expect(calls).toEqual(['start:qemu']);
 });
+
+// ---------------------------------------------------------------------------
+// readdress: move a linked container to a new NetBox-managed VLAN/IP
+// ---------------------------------------------------------------------------
+const NET0 = 'name=eth0,bridge=vmbr0,firewall=1,gw=192.168.1.1,hwaddr=BC:24:11:AA:BB:CC,ip=192.168.1.10/24,tag=10,type=veth';
+const NET0_AFTER = 'name=eth0,bridge=vmbr0,firewall=1,gw=192.168.30.1,hwaddr=BC:24:11:AA:BB:CC,ip=192.168.30.7/24,tag=30,type=veth';
+
+function readdressFixture(state = 'running', overrides = {}, { net0 = NET0, hostname = 'dev-01', netboxIpId = 99 } = {}) {
+  const calls = [];
+  const forgets = [];
+  let stored = { ...BOX, proxmox: { ...BOX.proxmox, ...(netboxIpId == null ? {} : { netboxIpId }) } };
+  const client = {
+    guestConfig: async (kind, node, vmid) => { calls.push(`config:${kind}:${node}:${vmid}`); return { hostname, ...(net0 == null ? {} : { net0 }) }; },
+    setLxcConfig: async (node, vmid, params) => { calls.push(`set:${node}:${vmid}:${params.net0}`); return null; },
+  };
+  const netbox = {
+    findPrefixByVlan: async (vid) => { calls.push(`prefix:${vid}`); return { id: 7, prefix: '192.168.30.0/24' }; },
+    allocateIp: async (prefix, fields) => { calls.push(['allocate', prefix.prefix, fields]); return { id: 120, address: '192.168.30.7/24', gateway: '192.168.30.1' }; },
+    findIpsByAddress: async (ip) => { calls.push(`lookup:${ip}`); return []; },
+    releaseIp: async (id) => { calls.push(`release:${id}`); },
+  };
+  const manager = createProxmoxLifecycleManager({
+    boxStore: {
+      getBox: async (id) => id === 'B1' ? stored : undefined,
+      uniquenessConflict: async ({ host }, ignoreId) => { calls.push(`unique:${host}:${ignoreId}`); return null; },
+      readdressBox: async (id, { host, netboxIpId: nid }) => { calls.push(`relink:${host}:${nid}`); stored = { ...stored, host, proxmox: { ...stored.proxmox, netboxIpId: nid } }; return stored; },
+    },
+    proxmoxStore: { getHost: async () => HOST },
+    inventory: { refreshBox: async () => ({ boxId: 'B1', state, node: 'pve', vmid: 131, kind: 'lxc' }) },
+    makeClient: () => client,
+    netboxStore: { getSettings: async () => ({ ...nbSettings, dnsSuffix: 'lan.example.com' }) },
+    makeNetboxClient: () => netbox,
+    knownHosts: { forget: async (host, port) => { forgets.push([host, port]); return []; } },
+    onReaddress: async ({ before, after }) => { calls.push(`hook:${before.host}->${after.host}`); },
+    onContainerUp: (boxId) => { calls.push(`up:${boxId}`); },
+    load: () => [], save: () => {}, sleep: async () => {}, pollMs: 0,
+    now: () => '2026-09-02T00:00:00.000Z', makeId: () => 'J1',
+    removeLinkedBox: async () => {},
+    ...overrides,
+  });
+  return { manager, calls, forgets, getStored: () => stored, client, netbox };
+}
+
+test('readdress on a running container: inspect, allocate, apply, relink, release old, forget both keys, fire hooks — in that order', async () => {
+  const { manager, calls, forgets, getStored } = readdressFixture('running');
+  const summary = await manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 });
+  expect(summary).toMatchObject({ id: 'J1', action: 'readdress', status: 'running', boxId: 'B1', kind: 'lxc' });
+  await manager._settled('J1');
+  const job = manager.getJob('J1');
+  expect(job).toMatchObject({
+    status: 'done', phase: 'done', error: null, vlan: 30,
+    oldIp: '192.168.1.10/24', oldVlan: 10, oldNetboxIpId: 99, hostname: 'dev-01',
+    ip: '192.168.30.7/24', gateway: '192.168.30.1', netboxIpId: 120,
+  });
+  expect(calls).toEqual([
+    'config:lxc:pve:131',
+    'prefix:30',
+    ['allocate', '192.168.30.0/24', { status: 'active', description: 'tmuxifier: dev-01', dns_name: 'dev-01.lan.example.com' }],
+    'unique:192.168.30.7:B1',
+    `set:pve:131:${NET0_AFTER}`,
+    'relink:192.168.30.7:120',
+    'release:99',
+    'lookup:192.168.1.10',
+    'hook:192.168.1.10->192.168.30.7',
+    'up:B1',
+  ]);
+  expect(forgets).toEqual([['192.168.30.7', undefined], ['192.168.1.10', undefined]]);
+  expect(getStored().host).toBe('192.168.30.7');
+  expect(job.log).toContain(`# before: ${NET0}`);
+  expect(job.log).toContain('allocated 192.168.30.7/24 from 192.168.30.0/24 (gw 192.168.30.1, NetBox ip 120)');
+  expect(job.log).toContain('released NetBox ip 99');
+});
+
+test('readdress on a stopped container does the same work but never signals container-up', async () => {
+  const { manager, calls } = readdressFixture('stopped');
+  await manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 });
+  await manager._settled('J1');
+  expect(manager.getJob('J1').status).toBe('done');
+  expect(calls).not.toContain('up:B1');
+  expect(calls).toContain('hook:192.168.1.10->192.168.30.7');
+});
+
+test('readdress of a dhcp, hand-linked container: no old id, old address swept from the box host', async () => {
+  const { manager, calls } = readdressFixture('running', {
+    makeNetboxClient: () => ({
+      findPrefixByVlan: async () => ({ id: 7, prefix: '192.168.30.0/24' }),
+      allocateIp: async () => ({ id: 120, address: '192.168.30.7/24', gateway: '192.168.30.1' }),
+      findIpsByAddress: async (ip) => { calls.push(`lookup:${ip}`); return [{ id: 42, address: '192.168.1.10/32' }]; },
+      releaseIp: async (id) => { calls.push(`release:${id}`); },
+    }),
+  }, { net0: 'name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:01,ip=dhcp,type=veth', netboxIpId: null });
+  await manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 });
+  await manager._settled('J1');
+  const job = manager.getJob('J1');
+  expect(job).toMatchObject({ status: 'done', oldIp: null, oldVlan: null, oldNetboxIpId: null, netboxIpId: 120 });
+  expect(calls).toContain('set:pve:131:name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:01,ip=192.168.30.7/24,type=veth,tag=30,gw=192.168.30.1');
+  expect(calls.filter((c) => typeof c === 'string' && c.startsWith('release:'))).toEqual(['release:42']);
+  expect(calls).toContain('lookup:192.168.1.10');
+});
+
+test('readdress uses the box label and no dns_name when the PVE hostname is not a DNS label', async () => {
+  const { manager, calls } = readdressFixture('running', {}, { hostname: 'bad_host' });
+  await manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 });
+  await manager._settled('J1');
+  expect(calls).toContainEqual(['allocate', '192.168.30.0/24', { status: 'active', description: 'tmuxifier: dev-01' }]);
+});
+
+test('readdress refusals create no job: VM link, template, missing state, setup running, bad vlan, vlan on a power action, NetBox unconfigured', async () => {
+  const qemu = readdressFixture('running', {
+    boxStore: { getBox: async () => ({ ...BOX, proxmox: { ...BOX.proxmox, kind: 'qemu' } }) },
+    inventory: { refreshBox: async () => ({ boxId: 'B1', state: 'running', node: 'pve', vmid: 131, kind: 'qemu' }) },
+  });
+  await expect(qemu.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 409, message: /containers only/ });
+  const template = readdressFixture('stopped', { inventory: { refreshBox: async () => ({ boxId: 'B1', state: 'stopped', node: 'pve', vmid: 131, kind: 'lxc', template: true }) } });
+  await expect(template.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 409 });
+  const missing = readdressFixture('missing');
+  await expect(missing.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 409, message: /cannot run from missing/ });
+  const setup = readdressFixture('running', { setupRunning: () => true });
+  await expect(setup.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 409, message: /setup/ });
+  const ok = readdressFixture('running');
+  for (const vlan of [undefined, 0, 4095, '30', 30.5]) {
+    await expect(ok.manager.createJob({ boxId: 'B1', action: 'readdress', vlan })).rejects.toMatchObject({ statusCode: 400, message: /vlan/ });
+  }
+  await expect(ok.manager.createJob({ boxId: 'B1', action: 'shutdown', vlan: 30 })).rejects.toMatchObject({ statusCode: 400, message: /vlan/ });
+  const noNetbox = readdressFixture('running', { netboxStore: null });
+  await expect(noNetbox.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 400, message: /NetBox/ });
+  const unconfigured = readdressFixture('running', { netboxStore: { getSettings: async () => null } });
+  await expect(unconfigured.manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 })).rejects.toMatchObject({ statusCode: 400, message: /NetBox/ });
+  for (const f of [qemu, template, missing, setup, ok, noNetbox, unconfigured]) expect(f.manager.listJobs()).toEqual([]);
+});
+
+test('readdress fails before any NetBox call when the container has no net0', async () => {
+  const { manager, calls } = readdressFixture('running', {}, { net0: null });
+  await manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 });
+  await manager._settled('J1');
+  expect(manager.getJob('J1')).toMatchObject({ status: 'error', phase: 'inspect', error: /net0/ });
+  expect(calls).toEqual(['config:lxc:pve:131']);
+});
+
+test('a uniqueness conflict on the new address fails the job and releases the fresh allocation, touching neither PVE nor the old record', async () => {
+  const { manager, calls, getStored } = readdressFixture('running', {
+    boxStore: {
+      getBox: async () => ({ ...BOX, proxmox: { ...BOX.proxmox, netboxIpId: 99 } }),
+      uniquenessConflict: async () => 'box host already exists',
+      readdressBox: async () => { throw new Error('must not be called'); },
+    },
+  });
+  await manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 });
+  await manager._settled('J1');
+  const job = manager.getJob('J1');
+  expect(job).toMatchObject({ status: 'error', phase: 'allocate-ip', error: /host already exists/, netboxIpId: null });
+  expect(calls.filter((c) => typeof c === 'string' && c.startsWith('set:'))).toEqual([]);
+  expect(calls.filter((c) => typeof c === 'string' && c.startsWith('release:'))).toEqual(['release:120']);
+  expect(job.log).toContain('released NetBox ip 120 (unused allocation)');
+  expect(getStored().host).toBe('192.168.1.10');
+});
+
+test('an apply failure releases the fresh allocation and leaves the old record and the box untouched', async () => {
+  const { manager, calls, getStored } = readdressFixture('running', {
+    makeClient: () => ({
+      guestConfig: async () => ({ hostname: 'dev-01', net0: NET0 }),
+      setLxcConfig: async () => { throw new Error('hotplug failed'); },
+    }),
+  });
+  await manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 });
+  await manager._settled('J1');
+  const job = manager.getJob('J1');
+  expect(job).toMatchObject({ status: 'error', phase: 'apply', error: 'hotplug failed', netboxIpId: null });
+  expect(calls.filter((c) => typeof c === 'string' && c.startsWith('release:'))).toEqual(['release:120']);
+  expect(calls.filter((c) => typeof c === 'string' && c.startsWith('relink:'))).toEqual([]);
+  expect(getStored().host).toBe('192.168.1.10');
+});
+
+test('a relink failure after the container moved names both addresses and releases nothing', async () => {
+  const { manager, calls } = readdressFixture('running', {
+    boxStore: {
+      getBox: async () => ({ ...BOX, proxmox: { ...BOX.proxmox, netboxIpId: 99 } }),
+      uniquenessConflict: async () => null,
+      readdressBox: async () => { throw new Error('disk write failed'); },
+    },
+  });
+  await manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 });
+  await manager._settled('J1');
+  const job = manager.getJob('J1');
+  expect(job.status).toBe('error');
+  expect(job.phase).toBe('relink');
+  expect(job.error).toContain('192.168.30.7');
+  expect(job.error).toContain('192.168.1.10');
+  expect(job.error).toContain('disk write failed');
+  expect(job.netboxIpId).toBe(120);
+  expect(calls.filter((c) => typeof c === 'string' && c.startsWith('release:'))).toEqual([]);
+});
+
+test('a failing old-record release or a throwing hook never fails a readdress job', async () => {
+  const { manager } = readdressFixture('running', {
+    makeNetboxClient: () => ({
+      findPrefixByVlan: async () => ({ id: 7, prefix: '192.168.30.0/24' }),
+      allocateIp: async () => ({ id: 120, address: '192.168.30.7/24', gateway: '192.168.30.1' }),
+      findIpsByAddress: async () => { throw new Error('netbox down'); },
+      releaseIp: async () => { throw new Error('netbox down'); },
+    }),
+    onReaddress: async () => { throw new Error('exitMaster exploded'); },
+    knownHosts: { forget: async () => { throw new Error('ssh-keygen missing'); } },
+  });
+  await manager.createJob({ boxId: 'B1', action: 'readdress', vlan: 30 });
+  await manager._settled('J1');
+  const job = manager.getJob('J1');
+  expect(job).toMatchObject({ status: 'done', phase: 'done', netboxIpId: 120 });
+  expect(job.log).toContain('could not release NetBox ip 99: netbox down');
+});
+
+test('boot reconcile releases an allocation interrupted at allocate-ip and only logs one interrupted at apply or later', async () => {
+  const released = [];
+  const { manager } = readdressFixture('running', {
+    load: () => [
+      { id: 'A', action: 'readdress', boxId: 'B1', status: 'running', phase: 'allocate-ip', netboxIpId: 120, log: '', createdAt: '2026-09-01T00:00:00Z' },
+      { id: 'B', action: 'readdress', boxId: 'B1', status: 'running', phase: 'apply', netboxIpId: 121, log: '', createdAt: '2026-09-01T00:00:01Z' },
+      { id: 'C', action: 'readdress', boxId: 'B1', status: 'running', phase: 'inspect', netboxIpId: null, log: '', createdAt: '2026-09-01T00:00:02Z' },
+    ],
+    makeNetboxClient: () => ({ releaseIp: async (id) => { released.push(id); } }),
+  });
+  await manager._reconciled();
+  expect(released).toEqual([120]);
+  expect(manager.getJob('A')).toMatchObject({ status: 'interrupted', netboxIpId: null });
+  expect(manager.getJob('A').log).toContain('released NetBox ip 120');
+  expect(manager.getJob('B')).toMatchObject({ status: 'interrupted', netboxIpId: 121 });
+  expect(manager.getJob('B').log).toContain('NetBox ip 121 may be in use');
+  expect(manager.getJob('C')).toMatchObject({ status: 'interrupted', netboxIpId: null });
+});
