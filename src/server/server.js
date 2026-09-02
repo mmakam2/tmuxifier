@@ -1655,6 +1655,16 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     } catch (e) { return reply.code(400).send({ error: e.message }); }
     return netboxTest(candidate);
   });
+  // The result-shaped NetBox routes (next-ip, vlans) share one settings read:
+  // a decrypt failure and "not configured" are both ok:false payloads the
+  // caller returns as-is, never a 500. Resolves { settings } or { error }.
+  async function netboxSettingsOrError() {
+    let settings = null;
+    try { settings = await netboxStore.getSettings({ withSecret: true }); }
+    catch { return { error: { ok: false, error: 'could not decrypt the stored NetBox token — re-enter it (was TMUXIFIER_COOKIE_SECRET rotated?)' } }; }
+    if (!settings) return { error: { ok: false, error: 'NetBox is not configured — set it up in Settings (⚙)' } };
+    return { settings };
+  }
   // Next-IP preview for auto-static provisioning. Read-only and result-shaped
   // (the testNetbox pattern): expected states — unconfigured, unreachable,
   // prefix full — are ok:false payloads, never 500s, so the provision form can
@@ -1662,10 +1672,8 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   app.get('/api/netbox/next-ip', { preHandler: requireAuth }, async (req, reply) => {
     const vlan = String((req.query && req.query.vlan) ?? '');
     if (!/^\d{1,4}$/.test(vlan)) return reply.code(400).send({ ok: false, error: 'vlan must be a VLAN id (1..4094)' });
-    let settings = null;
-    try { settings = await netboxStore.getSettings({ withSecret: true }); }
-    catch { return { ok: false, error: 'could not decrypt the stored NetBox token — re-enter it (was TMUXIFIER_COOKIE_SECRET rotated?)' }; }
-    if (!settings) return { ok: false, error: 'NetBox is not configured — set it up in Settings (⚙)' };
+    const { settings, error } = await netboxSettingsOrError();
+    if (error) return error;
     try {
       const { address, prefix } = await makeNetboxClient(settings).nextIp(Number(vlan));
       return { ok: true, address, prefix };
@@ -1675,10 +1683,8 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   // unconfigured, undecryptable or unreachable NetBox renders inline in the
   // dialog, never as a 500.
   app.get('/api/netbox/vlans', { preHandler: requireAuth }, async () => {
-    let settings = null;
-    try { settings = await netboxStore.getSettings({ withSecret: true }); }
-    catch { return { ok: false, error: 'could not decrypt the stored NetBox token — re-enter it (was TMUXIFIER_COOKIE_SECRET rotated?)' }; }
-    if (!settings) return { ok: false, error: 'NetBox is not configured — set it up in Settings (⚙)' };
+    const { settings, error } = await netboxSettingsOrError();
+    if (error) return error;
     try { return { ok: true, vlans: await makeNetboxClient(settings).listVlanPrefixes() }; }
     catch (e) { return { ok: false, error: e.message }; }
   });
