@@ -78,9 +78,10 @@ test.skipIf(!hasPython)('never blocks without a reader, keeps at most 4 KB, and 
   const dir = await home();
   const fifo = await fifoIn(dir);
   const child = runWriter(dir);
+  const exited = exitOf(child);
   child.stdin.end(Buffer.from(Array.from({ length: 100 * 1024 }, (_, i) => i & 0xff)));
   const t0 = Date.now();
-  expect(await exitOf(child)).toBe(0);
+  expect(await exited).toBe(0);
   // The 2.5 s silence tail is the only thing that takes time.
   expect(Date.now() - t0).toBeLessThan(5000);
   const fd = fsSync.openSync(fifo, fsSync.constants.O_RDONLY | fsSync.constants.O_NONBLOCK);
@@ -94,6 +95,7 @@ test.skipIf(!hasPython)('keeps S16 alignment across odd-length chunks and drops,
   const dir = await home();
   const fifo = await fifoIn(dir);
   const child = runWriter(dir);
+  const exited = exitOf(child);
   const fd = fsSync.openSync(fifo, fsSync.constants.O_RDONLY | fsSync.constants.O_NONBLOCK);
   // A 16-bit ramp: every sample the reader sees must be a ramp value.
   const N = 20000;
@@ -120,7 +122,7 @@ test.skipIf(!hasPython)('keeps S16 alignment across odd-length chunks and drops,
   }
   const tailMs = Date.now() - t0;
   fsSync.closeSync(fd);
-  expect(await exitOf(child)).toBe(0);
+  expect(await exited).toBe(0);
   const all = Buffer.concat(got);
   expect(all.length % 2).toBe(0);
   const vals = [];
