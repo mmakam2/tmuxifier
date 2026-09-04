@@ -83,3 +83,31 @@ export function sshStream(argv, { env = process.env, timeout = 600000, onData, c
   child.on('close', (code) => finish(typeof code === 'number' ? code : 1));
   return { done: donePromise, kill: () => { try { child.kill('SIGKILL'); } catch {} finish(137); } };
 }
+
+// Long-lived stdin ssh: the caller writes to `stdin` for as long as it likes
+// (a voice link's audio frames) and ends it when done. stdout is ignored;
+// stderr is kept (capped) for the failure message. `done` resolves { code,
+// stderr } on `close`; kill() SIGKILLs and `done` then settles non-zero. The
+// stdin error handler matters: a child that exits before reading (writer
+// refused the box) EPIPEs the next write, which must not throw. `cmd` is
+// test-only injection (/bin/sh), as in sshRunStdin.
+const PIPE_STDERR_CAP = 4096;
+
+export function sshPipe(argv, { env = process.env, cmd = 'ssh' } = {}) {
+  const child = spawn(cmd, argv, { env, stdio: ['pipe', 'ignore', 'pipe'] });
+  let stderr = '';
+  const errDec = new StringDecoder('utf8');
+  child.stderr.on('data', (d) => { if (stderr.length < PIPE_STDERR_CAP) stderr += errDec.write(d); });
+  let settled = false;
+  let settle;
+  const done = new Promise((resolve) => { settle = resolve; });
+  const finish = (code) => { if (settled) return; settled = true; settle({ code, stderr }); };
+  child.on('error', () => finish(1));
+  child.on('close', (code) => finish(typeof code === 'number' ? code : 1));
+  child.stdin.on('error', () => {});
+  return {
+    stdin: child.stdin,
+    done,
+    kill: () => { try { child.kill('SIGKILL'); } catch {} },
+  };
+}
