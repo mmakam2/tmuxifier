@@ -56,6 +56,10 @@ export function createSetupManager({
   // construct. Unlike seed/statusline there is NO options gate — the push is
   // always-on and the box decides via its own command -v claude check.
   pushAgentHooks = null,
+  // Post-setup voice-link push (claudeVoiceLink.js). Default null: an
+  // unwired manager skips the step. Same one-knob gate as the statusline and
+  // the hooks; the box decides via its own command -v claude check.
+  pushVoiceLink = null,
   // Post-setup saved Fleet Command script (fleetScriptsStore.getScript). Default
   // null: an unwired manager skips the phase entirely, which is what every
   // existing test constructs — same pattern as seed/pushStatusline/pushAgentHooks.
@@ -106,7 +110,7 @@ export function createSetupManager({
   }
   function persist() { prune(); save(ordered()); }
   function summary(j) {
-    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, needs: j.needs ?? null, seed: j.seed ?? null, statusline: j.statusline ?? null, agentHooks: j.agentHooks ?? null, postScript: j.postScript ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
+    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, needs: j.needs ?? null, seed: j.seed ?? null, statusline: j.statusline ?? null, agentHooks: j.agentHooks ?? null, voiceLink: j.voiceLink ?? null, postScript: j.postScript ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
   }
   function appendLog(j, text) { if (text) j.log = (j.log + text).slice(-maxLogBytes); }
   function normalizeOptions(o = {}) {
@@ -209,6 +213,12 @@ export function createSetupManager({
       persist();
       try { j.agentHooks = await pushAgentHooks(box); }
       catch { j.agentHooks = { target: 'agent-hooks', ok: false, error: 'agent hooks push failed' }; }
+    }
+    if (pushVoiceLink && wantsClaudeStack && box && !j.cancelled) {
+      j.phase = 'voice-link';
+      persist();
+      try { j.voiceLink = await pushVoiceLink(box); }
+      catch { j.voiceLink = { target: 'voice-link', ok: false, error: 'voice link push failed' }; }
     }
     // The operator's own bootstrap: last of the installs, and strictly BEFORE
     // ensureSession. A shell reads its rc files once at startup, so a script

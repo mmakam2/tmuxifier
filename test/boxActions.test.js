@@ -502,6 +502,15 @@ test('buildEnsureTmuxRemote installs claude and agy via their curl installers', 
   expect(remote).toContain('$HOME/.local/bin:$PATH');
 });
 
+test('the claude tool also installs alsa-utils for the voice link, guarded on arecord', () => {
+  const s = buildEnsureTmuxRemote('web', '', { tools: ['claude'] });
+  expect(s).toContain('command -v arecord');
+  expect(s).toContain('apt-get install -y --no-install-recommends alsa-utils');
+  expect(s).toContain('apk add alsa-utils');
+  const g = buildEnsureTmuxRemote('web', '', { tools: ['git'] });
+  expect(g).not.toContain('alsa-utils');
+});
+
 test('buildEnsureTmuxRemote keeps upgrade first AMONG the tools (fresh indexes for later tool installs)', () => {
   // The tools now run after the tmux bootstrap (see the tmux-before-tools test),
   // but upgrade must still lead the tool blocks so curl/git/gh/node see fresh

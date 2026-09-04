@@ -752,3 +752,50 @@ test('options normalize the selection: id trimmed, blank or orphan name dropped'
   expect(b.options.scriptName).toBe(null);
   await m2._settled(b.id);
 });
+
+test('claude tool selected: the voice-link phase runs after agent-hooks and lands on the job and the summary', async () => {
+  const seen = [];
+  const m = make({
+    pushStatusline: async () => { seen.push('sl'); return { target: 'statusline', ok: true }; },
+    pushAgentHooks: async () => { seen.push('ah'); return { target: 'agent-hooks', ok: true }; },
+    pushVoiceLink: async (box) => { seen.push(`vl:${box.id}`); return { target: 'voice-link', ok: true, settings: 'applied' }; },
+  });
+  const s = m.start(BOX, { tools: ['claude'] });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(seen).toEqual(['sl', 'ah', `vl:${BOX.id}`]);
+  expect(job.voiceLink).toEqual({ target: 'voice-link', ok: true, settings: 'applied' });
+  expect(m.listJobs()[0].voiceLink).toEqual({ target: 'voice-link', ok: true, settings: 'applied' });
+});
+
+test('no claude tool: the voice-link phase is skipped entirely', async () => {
+  let called = 0;
+  const m = make({ pushVoiceLink: async () => { called++; return { target: 'voice-link', ok: true }; } });
+  const s = m.start(BOX, { tools: ['git'] });
+  await m._settled(s.id);
+  expect(called).toBe(0);
+  expect(m.getJob(s.id).voiceLink).toBeUndefined();
+});
+
+test('a failing voice-link push is recorded, never promoted', async () => {
+  const m = make({ pushVoiceLink: async () => { throw new Error('boom'); } });
+  const s = m.start(BOX, { tools: ['claude'] });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(job.voiceLink).toEqual({ target: 'voice-link', ok: false, error: 'voice link push failed' });
+});
+
+test('voice-link runs before the saved script and before the session is created', async () => {
+  const order = [];
+  const m = make({
+    pushVoiceLink: async () => { order.push('voice-link'); return { target: 'voice-link', ok: true }; },
+    getScript: async () => ({ id: 'fs-1', name: 's', script: 'true' }),
+    ensureSession: async () => { order.push('session'); },
+  });
+  const s = m.start(BOX, { tools: ['claude'], scriptId: 'fs-1' });
+  await m._settled(s.id);
+  expect(order[0]).toBe('voice-link');
+  expect(order[order.length - 1]).toBe('session');
+});

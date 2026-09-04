@@ -167,6 +167,11 @@ const TOOLS = {
     '  bash "$t"',
     '  rm -f "$t"',
     'fi',
+    // The voice link (claudeVoiceLink.js) needs alsa-lib for Claude Code's
+    // native capture path on boxes that see a sound card, and `arecord` for
+    // its fallback on boxes that see none; alsa-utils brings both. Guarded on
+    // arecord so a box that has it is left alone.
+    ...installPackagesBlock('arecord', samePkg('alsa-utils'), 'alsa-utils'),
   ],
   agy: () => [
     'if ! command -v agy >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/agy" ]; then',
