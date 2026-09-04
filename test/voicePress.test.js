@@ -50,6 +50,15 @@ test('release before a claude verdict still links (a tap)', () => {
   expect(r.effects).toEqual(['startMic', 'probe', 'openLink', 'stream']);
 });
 
+test('a release that lands while the link is still opening is remembered, and ready still goes live', () => {
+  const r = run([{ t: 'press' }, { t: 'verdict', kind: 'claude' }, { t: 'release' }, { t: 'ready' }]);
+  expect(r.model).toEqual({ state: 'live', released: true });
+  expect(r.effects).toEqual(['startMic', 'probe', 'openLink', 'stream']);
+  const refused = run([{ t: 'press' }, { t: 'verdict', kind: 'claude' }, { t: 'release' }, { t: 'refused' }]);
+  expect(refused.model.state).toBe('working');
+  expect(refused.effects.slice(-2)).toEqual(['noticeRefused', 'finishDictation']);
+});
+
 test('a refused link continues as dictation: recording if still held, finishing if already released', () => {
   const held = run([{ t: 'press' }, { t: 'verdict', kind: 'claude' }, { t: 'refused' }]);
   expect(held.model.state).toBe('recording');
@@ -77,7 +86,7 @@ test('stray events are inert', () => {
   ]) {
     const m = { state, released: false };
     const r = reducePress(m, ev);
-    expect(r.model).toEqual(m);
+    expect(r.model).toBe(m);
     expect(r.effects).toEqual([]);
   }
 });
