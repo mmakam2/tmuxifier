@@ -1,4 +1,4 @@
-import type { PushResult, SeedResult, SetupJob, SetupStatus } from './api';
+import type { PushResult, SeedResult, SetupJob, SetupStatus, VoiceLinkResult } from './api';
 
 export function setupStatusText(job: Pick<SetupJob, 'status' | 'phase' | 'error' | 'needs'>): string {
   switch (job.status) {
@@ -7,6 +7,7 @@ export function setupStatusText(job: Pick<SetupJob, 'status' | 'phase' | 'error'
         : job.phase === 'seeding' ? 'Seeding AI credentials…'
         : job.phase === 'statusline' ? 'Configuring statusline…'
         : job.phase === 'agent-hooks' ? 'Installing agent hooks…'
+        : job.phase === 'voice-link' ? 'Preparing the voice link…'
         : job.phase === 'script' ? 'Running saved script…'
         : 'Running setup…';
     case 'done': return 'Setup complete ✓';
@@ -83,6 +84,18 @@ export function formatStatuslineResult(statusline: PushResult | null | undefined
   if (!statusline) return '';
   const r = statusline;
   return `${r.target} ${r.ok ? '✓' : r.skipped ? `skipped (${r.skipped})` : `failed (${r.error ?? 'failed'})`}`;
+}
+
+// The voice-link phase's outcome, on the same shape as the line above plus the
+// one thing that step reports which no other push does: what happened to
+// Claude Code's own `voice` setting on the box. So "voice-link ✓ (settings
+// applied)" reads as the device AND the setting landing, and "voice-link ✓
+// (settings kept)" as the device landing on a box whose operator had already
+// made a voice choice — a materially different outcome the bare ✓ hid.
+export function formatVoiceLinkResult(voiceLink: VoiceLinkResult | null | undefined): string {
+  const base = formatStatuslineResult(voiceLink);
+  if (!base || !voiceLink?.ok || !voiceLink.settings) return base;
+  return `${base} (settings ${voiceLink.settings})`;
 }
 
 // Whether a setup job in this status must prevent opening the box's terminal.

@@ -1,6 +1,6 @@
-import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent, type SetupJob, type SetupSummary } from './api';
+import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent, type PushResult, type SetupJob, type SetupSummary } from './api';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
-import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, blocksTerminal } from './setupStatus';
+import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, formatVoiceLinkResult, blocksTerminal } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor, agentBadgeFor } from './statusDot';
 import { buildClawd, setClawdVariant, hasStoredClawdPref, loadClawdVariant, clawdMigrationPatch } from './clawd';
 import { applyTheme, currentTheme, themedLogo } from './theme';
@@ -2272,16 +2272,21 @@ async function openLocalShellEditModal() {
     if (!selected) { submit.disabled = false; return; }
     try {
       const res = await api.updateLocalShell(selected, hooksCheck.checked);
-      if (res.agentHooks && !res.agentHooks.ok) {
-        // The shell change saved; only the hook install needs attention.
-        // Keep the dialog open so the message is actually seen.
-        // The pusher is shared with the SSH path, so its skip reason says
-        // "on the box"; here the target is this host. Reworded at the seam
-        // rather than in the server string, which both paths read.
-        const skipped = res.agentHooks.skipped?.replace('on the box', 'on this host');
-        err.textContent = skipped
-          ? `Shell saved; hooks skipped: ${skipped}`
-          : `Shell saved; hook install failed: ${res.agentHooks.error || 'unknown error'}`;
+      // The checkbox installs two things on this host now — the agent-state
+      // hooks and the voice link's capture device — so report whichever did
+      // not land, not just the first.
+      const missed = [res.agentHooks, res.voiceLink].filter((r): r is PushResult => !!r && !r.ok);
+      if (missed.length) {
+        // The shell change saved; only the install needs attention. Keep the
+        // dialog open so the message is actually seen.
+        // The pushers are shared with the SSH path, so their reasons talk
+        // about "the box"; here the target is this host. Reworded at the seam
+        // rather than in the server strings, which both paths read.
+        const here = (t: string) => t.replace('on the box', 'on this host').replace('the box has', 'this host has');
+        const what = (r: PushResult) => (r.target === 'voice-link' ? 'voice link' : 'hooks');
+        err.textContent = `Shell saved; ${missed.map((r) => (r.skipped
+          ? `${what(r)} skipped: ${here(r.skipped)}`
+          : `${what(r)} install failed: ${r.error || 'unknown error'}`)).join('; ')}`;
         hooksCheck.checked = false;
         submit.disabled = false;
         return;
@@ -2374,10 +2379,14 @@ function openProvisionPanel(box: Box, options: SetupOptionsValues) {
         if (slTxt) status.textContent = `${status.textContent} · ${slTxt}`;
         const ahTxt = formatStatuslineResult(job.agentHooks);
         if (ahTxt) status.textContent = `${status.textContent} · ${ahTxt}`;
+        // Its own formatter, not the shared one: the voice-link phase reports
+        // what happened to Claude's `voice` setting as well as to the device.
+        const vlTxt = formatVoiceLinkResult(job.voiceLink);
+        if (vlTxt) status.textContent = `${status.textContent} · ${vlTxt}`;
         const psTxt = formatStatuslineResult(job.postScript);
         if (psTxt) status.textContent = `${status.textContent} · ${psTxt}`;
         // An outcome deserves longer on screen than a bare success.
-        autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), (seedTxt || slTxt || ahTxt || psTxt) ? 5000 : 2000);
+        autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), (seedTxt || slTxt || ahTxt || vlTxt || psTxt) ? 5000 : 2000);
         return null;
       }
       if (job.status === 'needs-interactive') return 2500;

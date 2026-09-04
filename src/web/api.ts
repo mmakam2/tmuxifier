@@ -204,7 +204,7 @@ export type SetupStatus = 'running' | 'done' | 'error' | 'needs-interactive' | '
 export interface SetupOptions { ohMyTmux: boolean; ohMyZsh: boolean; ohMyBash: boolean; tools: string[]; seedAiAuth?: boolean; claudeStatusline?: boolean; scriptId?: string | null; scriptName?: string | null }
 export interface SetupSummary {
   id: string; boxId: string; boxLabel: string; status: SetupStatus;
-  phase: 'waiting-ssh' | 'running' | 'seeding' | 'statusline' | 'agent-hooks' | 'script' | null; options: SetupOptions; error: string | null;
+  phase: 'waiting-ssh' | 'running' | 'seeding' | 'statusline' | 'agent-hooks' | 'voice-link' | 'script' | null; options: SetupOptions; error: string | null;
   // Present once a job that asked for seeding has attempted it. Absent (or
   // null) on jobs that predate server-side seeding, and on jobs that never
   // asked for it.
@@ -214,6 +214,10 @@ export interface SetupSummary {
   // Present once the always-on agent-hooks push has attempted it (done jobs).
   // Absent (or null) on jobs persisted before the push existed.
   agentHooks?: SeedResult | null;
+  // Present once the voice-link phase has attempted the ALSA capture device
+  // and Claude's voice setting. Absent (or null) on jobs persisted before the
+  // phase existed. Carries `settings` on top of the shared push shape.
+  voiceLink?: VoiceLinkResult | null;
   // Present once a job that selected a saved Fleet Command script has attempted
   // it. Absent (or null) on jobs that predate the phase or never selected one.
   postScript?: PushResult | null;
@@ -231,6 +235,10 @@ export interface SetupJob extends SetupSummary { log: string; }
 // keep their exhaustiveness while the script phase stays expressible.
 export interface PushResult { target: string; ok: boolean; skipped?: string; error?: string }
 export interface SeedResult extends PushResult { target: 'claude' | 'codex' | 'all' | 'statusline' | 'agent-hooks' }
+// The voice-link push reports one thing more than the others: what happened to
+// Claude Code's own `voice` setting on the box ('applied' when it was turned
+// on, 'kept' when the operator already had a choice, or an error token).
+export interface VoiceLinkResult extends PushResult { target: 'voice-link'; settings?: string }
 export interface AiAuthCliStatus { ready: boolean; reason?: string }
 export interface AiAuthStatus { claude: AiAuthCliStatus; codex: AiAuthCliStatus }
 
@@ -376,7 +384,7 @@ export const api = {
   },
   async getLocalShell() { return j<{ shell: string }>(await fetch('/api/local-shell')); },
   async updateLocalShell(shell: string, claudeHooks = false) {
-    return j<{ ok: boolean; agentHooks?: { ok: boolean; skipped?: string; error?: string } }>(
+    return j<{ ok: boolean; agentHooks?: PushResult | null; voiceLink?: VoiceLinkResult | null }>(
       await fetch('/api/local-shell', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },

@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, blocksTerminal } from '../src/web/setupStatus.ts';
+import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, formatVoiceLinkResult, blocksTerminal } from '../src/web/setupStatus.ts';
 
 test('status text covers each state', () => {
   expect(setupStatusText({ status: 'running', phase: 'waiting-ssh' })).toMatch(/waiting/i);
@@ -103,6 +103,28 @@ test('statusline result renders applied / skipped / failed / empty', () => {
   expect(formatStatuslineResult({ target: 'statusline', ok: false, error: 'statusline push failed' })).toBe('statusline failed (statusline push failed)');
   expect(formatStatuslineResult(null)).toBe('');
   expect(formatStatuslineResult(undefined)).toBe('');
+});
+
+test('the voice-link phase names itself while it runs', () => {
+  expect(setupStatusText({ status: 'running', phase: 'voice-link', error: null, needs: null }))
+    .toBe('Preparing the voice link…');
+});
+
+test('the voice-link result names the settings outcome as well as the device', () => {
+  // The one push that reports two things: whether the ALSA capture device
+  // landed, and what happened to Claude Code's own `voice` setting. A box
+  // whose operator ran /voice off keeps it ('kept') — the bare ✓ hid that.
+  expect(formatVoiceLinkResult({ target: 'voice-link', ok: true, settings: 'applied' })).toBe('voice-link ✓ (settings applied)');
+  expect(formatVoiceLinkResult({ target: 'voice-link', ok: true, settings: 'kept' })).toBe('voice-link ✓ (settings kept)');
+  expect(formatVoiceLinkResult({ target: 'voice-link', ok: true, settings: 'error-no-json-tool' })).toBe('voice-link ✓ (settings error-no-json-tool)');
+  // A skip or a failure never carries a settings outcome, so it reads exactly
+  // like every other push result.
+  expect(formatVoiceLinkResult({ target: 'voice-link', ok: false, skipped: 'no Claude on the box' })).toBe('voice-link skipped (no Claude on the box)');
+  expect(formatVoiceLinkResult({ target: 'voice-link', ok: false, error: 'voice link push failed' })).toBe('voice-link failed (voice link push failed)');
+  // Old jobs have no voiceLink field at all; callers test for truthiness.
+  expect(formatVoiceLinkResult(null)).toBe('');
+  expect(formatVoiceLinkResult(undefined)).toBe('');
+  expect(formatVoiceLinkResult({ target: 'voice-link', ok: true })).toBe('voice-link ✓');
 });
 
 test('only a running setup job blocks the terminal', () => {
