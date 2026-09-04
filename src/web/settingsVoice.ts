@@ -35,14 +35,16 @@ export function micTestMessage(
   switch (err.name) {
     case 'NotAllowedError':
     case 'SecurityError':
-      // NotAllowedError covers BOTH a user denial and a page that was loaded
-      // before voice was enabled (Permissions-Policy is applied at document
-      // load and cannot be changed afterwards). The browser does not let us
-      // tell them apart, so name both rather than guessing and sending the
-      // operator down the wrong path.
-      return 'Microphone blocked. If you enabled voice just now, reload this page and try again — '
-        + 'the browser fixes the microphone policy when the page loads. Otherwise access was '
-        + 'denied for this site; re-allow it in your browser’s site settings.';
+      // NotAllowedError covers BOTH a user denial and a tab that was loaded
+      // before this host was upgraded to a version with the voice link
+      // (Permissions-Policy is applied at document load and cannot be
+      // changed afterwards — it no longer tracks the voice on/off setting).
+      // The browser does not let us tell the two apart, so name both rather
+      // than guessing and sending the operator down the wrong path.
+      return 'Microphone blocked. If this tab has been open since before this host supported '
+        + 'the Claude Code voice link, reload the page — the browser applies the microphone '
+        + 'policy once, at load. Otherwise access was denied for this site; re-allow it in your '
+        + 'browser’s site settings.';
     case 'NotFoundError':
     case 'DevicesNotFoundError':
       return 'No microphone found. Connect a capture device and try again.';
@@ -182,11 +184,12 @@ export async function renderVoiceSection(content: HTMLElement): Promise<VoiceSta
     if (status.enabled) {
       // Permissions-Policy is applied when a page loads, and the microphone
       // token is now unconditionally microphone=(self) (the Claude Code voice
-      // link needs it too, not just dictation) — so this reload notice matters
-      // only for a tab that has been open since before this host was upgraded
-      // to grant it unconditionally.
+      // link needs it too, not just dictation) — so it no longer tracks this
+      // setting. A reload is only ever needed for a tab that has been open
+      // since before this host was upgraded to a version with the voice link.
       rows.push(el('div', { class: 'pve-sub' }, [
-        'If you just enabled voice, reload this page before the browser will grant microphone access.',
+        'Microphone access no longer depends on this setting — reload this page only if it has '
+        + 'been open since before this host supported the Claude Code voice link.',
       ]));
 
       const result = el('div', { class: 'pve-sub' });

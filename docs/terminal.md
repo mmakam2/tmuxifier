@@ -172,9 +172,10 @@ accepted). The install runs on the server as a background job with a live log, s
 the modal or navigate away while it works; it takes roughly two minutes and about 1.2 GB of disk.
 The same tab has the on/off switch and the model picker, and both take effect immediately.
 
-After turning voice **on**, reload the page. Browsers apply the microphone permission policy when
-a page loads, so a tab that was open while voice was off keeps the old policy until it's
-reloaded.
+Microphone access no longer depends on this switch: the browser grants it to Tmuxifier's origin
+on every page load, since the same microphone also feeds the Claude Code voice link. The only
+tab that still needs a reload is one that's been open since before this host was upgraded to a
+version with the voice link.
 
 There is an equivalent command-line path for headless setups:
 ```bash

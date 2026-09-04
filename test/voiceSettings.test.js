@@ -57,9 +57,10 @@ test('an insecure context explains HTTPS rather than blaming permission', () => 
 });
 
 test('a blocked permission names both plausible causes, including the reload', () => {
-  // NotAllowedError covers BOTH a user denial and a page loaded before voice
-  // was enabled (Permissions-Policy). We cannot tell them apart, so say so
-  // rather than guessing and sending the user down the wrong path.
+  // NotAllowedError covers BOTH a user denial and a tab loaded before this
+  // host was upgraded to a version with the voice link (Permissions-Policy
+  // no longer tracks the voice on/off setting). We cannot tell them apart,
+  // so say so rather than guessing and sending the user down the wrong path.
   const m = micTestMessage({ name: 'NotAllowedError' }, ok);
   expect(m).toMatch(/reload/i);
   expect(m).toMatch(/denied|blocked/i);
