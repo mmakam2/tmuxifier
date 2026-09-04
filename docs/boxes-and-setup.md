@@ -86,8 +86,8 @@ Ticking it makes the setup run do four things, each skipping cleanly when alread
 
 On a box with a pre-existing Claude install, ticking the checkbox simply adds whatever is
 missing. Unchecked means setup touches nothing Claude-related — no install, no statusline,
-no hook refresh. So if the agent chip or badge is missing for a running claude: open the
-box's Edit dialog, tick **Claude Code**, save, and once the setup job reports done, restart
+no hook refresh, no voice link. So if the agent chip or badge is missing for a running claude:
+open the box's Edit dialog, tick **Claude Code**, save, and once the setup job reports done, restart
 claude in that session (Claude Code reads its hooks at startup).
 
 To remove the hook from a box: delete the five `tmuxifier-agent-hook` entries from the box's
