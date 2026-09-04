@@ -32,6 +32,13 @@ test('closeReason maps the server codes', () => {
   expect(closeReason(4004, '')).toBe('stalled');
   expect(closeReason(1008, 'setting up')).toBe('setting-up');
   expect(closeReason(1008, 'unauthorized')).toBe('unauthorized');
+  // Every other 1008 the route can send — 'unknown box', 'forbidden origin',
+  // and anything added later — is a refusal, NOT an auth failure. Mapping
+  // them to 'unauthorized' told the operator their session had expired and
+  // sent them to log in again over a link that would be refused identically.
+  expect(closeReason(1008, 'unknown box')).toBe('refused');
+  expect(closeReason(1008, 'forbidden origin')).toBe('refused');
+  expect(closeReason(1008, '')).toBe('refused');
   expect(closeReason(1006, '')).toBe('closed');
   expect(LINK_MAX_MS).toBe(30 * 60 * 1000);
 });

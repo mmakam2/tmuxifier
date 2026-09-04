@@ -5,19 +5,28 @@
 // buffering for dictation until then and loses nothing on a refusal. After
 // ready, every close the caller did not ask for is reported once through
 // onClose — the server's codes, the 30-minute cap, and a hidden tab.
-// Sockets do not pass through http.ts's 401 seam, so an auth refusal (1008)
-// is reported here as 'unauthorized' for the controller to surface.
+// Sockets do not pass through http.ts's 401 seam, so an auth refusal (1008
+// with reason 'unauthorized') is reported here as 'unauthorized' for the
+// controller to surface; every other 1008 is a plain 'refused'.
 
 export const LINK_MAX_MS = 30 * 60 * 1000;
 
-export type LinkCloseWhy = 'closed' | 'superseded' | 'not-set-up' | 'writer-failed' | 'stalled' | 'cap' | 'hidden' | 'unauthorized' | 'setting-up';
+export type LinkCloseWhy = 'closed' | 'superseded' | 'not-set-up' | 'writer-failed' | 'stalled' | 'cap' | 'hidden' | 'unauthorized' | 'setting-up' | 'refused';
 
 export function closeReason(code: number, reason: string): LinkCloseWhy {
   if (code === 4001) return 'superseded';
   if (code === 4002) return 'not-set-up';
   if (code === 4003) return 'writer-failed';
   if (code === 4004) return 'stalled';
-  if (code === 1008) return reason === 'setting up' ? 'setting-up' : 'unauthorized';
+  // 1008 is the route's one refusal code, and it carries four different
+  // reasons — only ONE of which is an auth failure. Reporting 'unknown box'
+  // or 'forbidden origin' as "session expired" sent the operator to log in
+  // again over a link the server would refuse just as flatly next time.
+  if (code === 1008) {
+    if (reason === 'setting up') return 'setting-up';
+    if (reason === 'unauthorized') return 'unauthorized';
+    return 'refused';
+  }
   return 'closed';
 }
 

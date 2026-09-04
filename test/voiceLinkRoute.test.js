@@ -56,6 +56,19 @@ test('unauthenticated upgrade is refused 1008', async () => {
   expect(await closeOf(ws)).toEqual({ code: 1008, reason: 'unauthorized' });
 });
 
+test('an Origin header for another host is refused 1008 forbidden origin, before auth', async () => {
+  // The same CSRF chokepoint /term has: a page on another origin can open a
+  // WebSocket to us with the browser attaching our cookie, so the upgrade is
+  // refused on Origin BEFORE the cookie is even consulted. Sent WITH a valid
+  // cookie here precisely so a regression could not hide behind the 401.
+  const { port, boxId, cookie, voiceLinks } = await fixture();
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/voice-link?box=${boxId}`, {
+    headers: { cookie, origin: 'http://evil.example.com' },
+  });
+  expect(await closeOf(ws)).toEqual({ code: 1008, reason: 'forbidden origin' });
+  expect(voiceLinks.opens).toHaveLength(0);
+});
+
 test('unknown box is refused 1008', async () => {
   const { port, cookie } = await fixture();
   const ws = new WebSocket(`ws://127.0.0.1:${port}/voice-link?box=nope`, { headers: { cookie } });

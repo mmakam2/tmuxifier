@@ -363,12 +363,7 @@ const iconStore = createIconStore({
   cacheDir: path.join(config.dataDir, 'icons'),
 });
 
-// Still resolved and passed to buildServer for compatibility with callers that
-// read it, but the permissions-policy header no longer depends on this value
-// (spec 2026-09-04): the microphone token is granted unconditionally now that
-// the browser mic also feeds the Claude Code voice link.
-const voiceEnabledInitial = (await resolveVoice()).enabled;
-const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial, uiSettingsStore, deviceStore, apkBuildManager, voiceLinks });
+const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, uiSettingsStore, deviceStore, apkBuildManager, voiceLinks });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });

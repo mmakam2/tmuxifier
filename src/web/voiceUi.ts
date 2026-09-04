@@ -181,6 +181,7 @@ function refusedText(why: string): string {
   if (why === 'setting-up') return 'box setup is running';
   if (why === 'writer-failed') return 'the box-side writer failed';
   if (why === 'unauthorized') return 'session expired';
+  if (why === 'refused') return 'the server refused the link';
   return why;
 }
 
