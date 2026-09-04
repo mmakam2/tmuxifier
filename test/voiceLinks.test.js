@@ -36,6 +36,7 @@ test('sends ready once the writer has stayed alive readyMs, and forwards frames 
   const h = hooks();
   const link = links.open('b1', { id: 'b1' }, h);
   expect(link.write(Buffer.alloc(640))).toBe(false);       // before ready: dropped
+  expect(link.dropped).toBe(1);
   await tick(40);
   expect(h.ready).toBe(1);
   expect(link.write(Buffer.alloc(640))).toBe(true);
@@ -155,4 +156,24 @@ test('a link closed before openSink resolves ends and kills the late sink', asyn
   await tick(20);
   expect(s.ended).toBe(true);
   expect(s.killed).toBe(true);
+});
+
+test('done promise rejection closes with 4003 writer-failed', async () => {
+  const { links } = make(); const h = hooks();
+  let rejectDone;
+  const sinkWithRejectableDone = async () => {
+    const s = fakeSink();
+    s.done = new Promise((resolve, reject) => { rejectDone = reject; });
+    return s;
+  };
+  const customLinks = createVoiceLinks({
+    openSink: sinkWithRejectableDone,
+    readyMs: 20,
+  });
+  customLinks.open('b1', {}, h);
+  await tick(40);
+  expect(h.ready).toBe(1);
+  rejectDone(new Error('sink died'));
+  await tick(10);
+  expect(h.closes).toEqual([[LINK_CLOSE.writerFailed, 'writer-failed']]);
 });

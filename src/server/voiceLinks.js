@@ -66,7 +66,7 @@ export function createVoiceLinks({
 
     link.close = (code = 1000, reason = 'closed') => finish(code, reason);
     link.write = (frame) => {
-      if (!link.ready || link.closed || !sink) return false;
+      if (!link.ready || link.closed || !sink) { link.dropped++; return false; }
       if (!frame || frame.length > maxFrameBytes) { link.dropped++; return false; }
       const t = now();
       if (t - window.start >= 1000) window = { start: t, bytes: 0 };
@@ -88,7 +88,7 @@ export function createVoiceLinks({
         if (link.closed) return;
         if (!link.ready && code === 3) finish(LINK_CLOSE.notSetUp, 'not-set-up');
         else finish(LINK_CLOSE.writerFailed, 'writer-failed');
-      });
+      }).catch(() => finish(LINK_CLOSE.writerFailed, 'writer-failed'));
       readyTimer = setTimeout(() => {
         readyTimer = null;
         if (link.closed) return;
