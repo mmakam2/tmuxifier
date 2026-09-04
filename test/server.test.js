@@ -153,20 +153,20 @@ test('CSP script-src stays self-only, with no blob: widening', async () => {
   expect(csp).not.toContain('blob:');
 });
 
-// permissions-policy's microphone token must track config.voiceEnabled: an
-// empty allowlist disables getUserMedia() for the top-level document itself
-// (not just embedded frames), so it would silently break voice dictation if it
-// never opened up. camera/geolocation must stay locked down in both cases —
-// this change must never quietly widen them.
-test('permissions-policy locks the microphone down when voice is disabled', async () => {
+// permissions-policy's microphone token no longer tracks config.voiceEnabled
+// (spec 2026-09-04): the mic feeds both whisper dictation and the Claude Code
+// voice link, and the latter needs nothing installed on this host, so it is
+// granted to this origin unconditionally. camera/geolocation must stay locked
+// down regardless — this change must never quietly widen them.
+test('permissions-policy allows the microphone for this origin when voice is disabled', async () => {
   app = await makeApp({ config: { voiceEnabled: false } });
   const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
-  expect(res.headers['permissions-policy']).toContain('microphone=()');
+  expect(res.headers['permissions-policy']).toContain('microphone=(self)');
   expect(res.headers['permissions-policy']).toContain('camera=()');
   expect(res.headers['permissions-policy']).toContain('geolocation=()');
 });
 
-test('permissions-policy allows the microphone for this origin only when voice is enabled', async () => {
+test('permissions-policy allows the microphone for this origin when voice is enabled', async () => {
   app = await makeApp({ config: { voiceEnabled: true } });
   const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
   expect(res.headers['permissions-policy']).toContain('microphone=(self)');

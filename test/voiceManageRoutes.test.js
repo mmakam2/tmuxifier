@@ -150,20 +150,20 @@ test('enabling voice through settings flips what /api/ui-config reports', async 
   expect(after.json().voice).toBe(true);
 });
 
-test('the very first response already allows the microphone when voice is enabled at boot', async () => {
-  // Regression guard: the permissions-policy cache used to seed from
-  // config.voiceEnabled, which is false once the paths live in
-  // data/voice.json rather than .env. That served the FIRST page load of a
-  // fresh boot with microphone=(), and since Permissions-Policy is
-  // per-document, that tab had the mic blocked until it was reloaded.
+test('the very first response already allows the microphone regardless of voice-enabled state at boot', async () => {
+  // The microphone token no longer depends on config.voiceEnabled or
+  // data/voice.json: it feeds both whisper dictation and the Claude Code
+  // voice link, and the latter needs nothing installed on this host. So the
+  // FIRST page load of a fresh boot always allows it, whichever way
+  // voiceEnabledInitial (or a later data/voice.json read) comes out.
   const a = await makeApp({ voiceEnabledInitial: true });
   const res = await a.inject({ method: 'GET', url: '/api/auth/info' }); // unauthenticated, no prior call
   expect(res.headers['permissions-policy']).toContain('microphone=(self)');
 });
 
-test('the first response denies the microphone when voice is disabled at boot', async () => {
+test('the first response still allows the microphone when voice is disabled at boot', async () => {
   const a = await makeApp({ voiceEnabledInitial: false });
   const res = await a.inject({ method: 'GET', url: '/api/auth/info' });
-  expect(res.headers['permissions-policy']).toContain('microphone=()');
+  expect(res.headers['permissions-policy']).toContain('microphone=(self)');
   expect(res.headers['permissions-policy']).toContain('camera=()');
 });

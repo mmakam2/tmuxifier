@@ -16,7 +16,8 @@ import { createUnifiRegistry } from './unifiRegistry.js';
 import { createImmichRegistry } from './immichRegistry.js';
 import { createSessionManager } from './sessions.js';
 import { createLocalTmuxScope } from './localTmuxScope.js';
-import { sshRun, sshRunStdin, sshStream } from './sshRun.js';
+import { sshRun, sshRunStdin, sshStream, sshPipe } from './sshRun.js';
+import { createVoiceLinks } from './voiceLinks.js';
 import { createBoxActions, buildEnsureSessionRemote } from './boxActions.js';
 import { buildSetupArgv } from './sshCommand.js';
 import { createSetupStore } from './setupStore.js';
@@ -77,6 +78,7 @@ const localTmuxScope = createLocalTmuxScope();
 const boxActions = createBoxActions({
   run: (argv, opts) => sshRun(argv, opts),
   runStdin: (argv, input, opts) => sshRunStdin(argv, input, opts),
+  pipe: (argv) => sshPipe(argv),
   hostKeyPolicy: config.hostKeyPolicy,
   sshConfigFile: config.sshConfigFile,
   controlDir: config.controlDir,
@@ -195,6 +197,11 @@ const statusChecker = createStatusChecker({
 });
 const removeBox = createBoxRemoval({ store, sessions, boxActions, statusChecker });
 const localShellActions = createLocalShellActions();
+// Voice links: one box-side writer per linked box, fed by /voice-link. The
+// host's own shell gets the same writer spawned locally.
+const voiceLinks = createVoiceLinks({
+  openSink: ({ boxId, box }) => (boxId === '__local__' ? localShellActions.openAudioSink() : boxActions.openAudioSink(box)),
+});
 const fleetStore = createFleetStore({ dataDir: config.dataDir });
 const fleetManager = createFleetManager({
   store,
@@ -354,12 +361,12 @@ const iconStore = createIconStore({
 // Resolve once at boot so the permissions-policy header is correct on the very
 // first page load, not only after something has called voiceState().
 const voiceEnabledInitial = (await resolveVoice()).enabled;
-const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial, uiSettingsStore, deviceStore, apkBuildManager });
+const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, voiceEnabledInitial, uiSettingsStore, deviceStore, apkBuildManager, voiceLinks });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
 app.setNotFoundHandler((req, reply) => {
-  if (req.raw.url?.startsWith('/api') || req.raw.url?.startsWith('/term')) return reply.code(404).send({ error: 'not found' });
+  if (req.raw.url?.startsWith('/api') || req.raw.url?.startsWith('/term') || req.raw.url?.startsWith('/voice-link')) return reply.code(404).send({ error: 'not found' });
   return reply.sendFile('index.html');
 });
 
@@ -389,6 +396,8 @@ app.listen({ host: config.bindAddress, port: config.port })
         // Like UniFi, the Immich client holds no server-side session; retiring
         // it here keeps every registry on one shutdown path rather than two rules.
         () => immichRegistry.closeAll(),
+        // Drop every voice link so no box-side writer outlives the server.
+        () => { voiceLinks.closeAll(); return Promise.resolve(); },
       ],
       voiceEngine: { stop: async () => { if (voiceEngine) await voiceEngine.stop(); } },
     });

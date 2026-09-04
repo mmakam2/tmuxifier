@@ -55,16 +55,12 @@ const SECURITY_HEADERS = {
   'x-frame-options': 'DENY',
 };
 
-// permissions-policy is computed per-server (not a static header) because the
-// microphone token depends on config.voiceEnabled: an empty allowlist
-// (`microphone=()`) disables the microphone for the top-level document itself,
-// not merely embedded frames, so it must never ship that way while voice
-// dictation is on or getUserMedia() rejects with a policy error regardless of
-// HTTPS/user consent. `(self)` grants only this app's own origin — never
-// embedded third-party frames — and this app already sends `frame-ancestors
-// 'none'`, so that stays tight. camera/geolocation remain locked down always.
-function permissionsPolicyHeader(voiceEnabled) {
-  return `camera=(), microphone=(${voiceEnabled ? 'self' : ''}), geolocation=()`;
+// The microphone token is always granted to this origin: the mic feeds the
+// whisper dictation path AND the Claude Code voice link, and the latter needs
+// nothing installed on this host. `self` still means the operator's own
+// browser prompt gates every capture; it just stops depending on voice.json.
+function permissionsPolicyHeader() {
+  return 'camera=(), microphone=(self), geolocation=()';
 }
 
 function originOf(value) {
@@ -118,7 +114,7 @@ const NO_FLEET_SCRIPTS = {
   removeScript: async () => {},
 };
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, uiSettingsStore = null, deviceStore = null, pairingCodes = null, apkBuildManager = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, uiSettingsStore = null, deviceStore = null, pairingCodes = null, apkBuildManager = null, voiceLinks = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -144,29 +140,14 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
   // data/voice.json is authoritative for whether voice is on and which model
   // is selected, and it is read per request so a Settings change applies
-  // without a restart. `voiceEnabledCache` exists because the
-  // permissions-policy header is set in a SYNCHRONOUS onSend hook and cannot
-  // await the store — it is refreshed on every path that could change the
-  // answer. Note the header is per-document: a browser tab loaded while voice
-  // was off keeps `microphone=()` until it is reloaded, which is why the
-  // Settings tab tells the operator to reload after enabling.
-  // Seeded from the resolved store state when the caller supplies it. Falling
-  // back to config.voiceEnabled would serve the FIRST page load of a fresh
-  // boot with microphone=() whenever voice is enabled via data/voice.json
-  // rather than .env — and since Permissions-Policy is per-document, that tab
-  // would have the mic blocked until reloaded.
-  let voiceEnabledCache = voiceEnabledInitial === null
-    ? Boolean(config.voiceEnabled)
-    : Boolean(voiceEnabledInitial);
+  // without a restart.
   async function voiceState() {
     if (!resolveVoice) {
       // No store wired (older callers, and most unit tests): fall back to the
       // boot-time config so stage 1's behaviour is unchanged.
       return { bin: null, model: null, enabled: Boolean(config.voiceEnabled), pinned: { bin: null, model: null } };
     }
-    const s = await resolveVoice();
-    voiceEnabledCache = s.enabled;
-    return s;
+    return resolveVoice();
   }
   // Whether a given model FILE is present on disk. Injectable so route tests
   // stay filesystem-free; defaults to the vendored models directory.
@@ -537,7 +518,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       if (!reply.hasHeader(name)) reply.header(name, value);
     }
     if (!reply.hasHeader('permissions-policy')) {
-      reply.header('permissions-policy', permissionsPolicyHeader(voiceEnabledCache));
+      reply.header('permissions-policy', permissionsPolicyHeader());
     }
     // Same predicate as the Secure cookie flag: local TLS counts, not only an
     // https external URL — the self-hosted TLS mode the docs recommend was the
@@ -1847,9 +1828,6 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     }
     try {
       const next = await voiceStore.update(patch);
-      // Refresh the cached flag the permissions-policy hook reads, so a newly
-      // loaded page gets microphone=(self) without waiting for another call.
-      await voiceState();
       return next;
     } catch (e) {
       return reply.code(400).send({ error: e?.message || 'could not save voice settings' });
@@ -2130,6 +2108,30 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         if (typeof offExit === 'function') offExit();
         sessions.detach(entry);
       });
+    });
+
+    // Voice link (spec 2026-09-04): the browser mic, as 16 kHz S16 mono
+    // frames, into the box's default capture device via voiceLinks.js. Same
+    // auth and setup gate as /term; __local__ is the host's own writer.
+    // Binary frames only — a text frame from the client is ignored.
+    scope.get('/voice-link', { websocket: true }, async (socket, req) => {
+      if (!hasTrustedOrigin(req)) { socket.close(1008, 'forbidden origin'); return; }
+      if (!isAuthed(req)) { socket.close(1008, 'unauthorized'); return; }
+      if (!voiceLinks) { socket.close(1011, 'voice link unavailable'); return; }
+      const boxId = String(req.query.box || '');
+      const box = boxId === '__local__' ? null : await store.getBox(boxId);
+      if (boxId !== '__local__' && !box) { socket.close(1008, 'unknown box'); return; }
+      if (box && setupManager?.currentForBox(boxId)?.status === 'running') {
+        socket.close(1008, 'setting up');
+        return;
+      }
+      const link = voiceLinks.open(boxId, box, {
+        onReady: () => { try { if (socket.readyState === 1) socket.send('ready'); } catch {} },
+        onClose: (code, reason) => { try { socket.close(code, reason); } catch {} },
+      });
+      socket.on('message', (raw, isBinary) => { if (isBinary) link.write(raw); });
+      socket.on('close', () => link.close(1000, 'closed'));
+      socket.on('error', () => link.close(1000, 'closed'));
     });
   });
 
