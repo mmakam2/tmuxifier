@@ -214,6 +214,10 @@ export function createVoiceController(
   let refusedWhy = 'closed';
   let closedWhy = 'closed';
   let button: HTMLButtonElement | null = null;
+  // The readiness verdict this button mounted under. Held on the controller
+  // rather than only read in mount(), because paint() runs again on every
+  // refreshHint() — see the title rule below.
+  let verdict: VoiceVerdict | null = null;
 
   function paint(): void {
     if (!button) return;
@@ -221,7 +225,13 @@ export function createVoiceController(
     const ds = s === 'idle' ? 'idle' : s === 'recording' ? 'recording' : s === 'live' ? 'live' : 'working';
     button.dataset.state = ds;
     button.textContent = s === 'recording' ? '● rec' : s === 'live' ? '● live' : s === 'idle' ? '🎤' : '… ';
-    button.title = s === 'idle' ? idleTitle(host.hint?.() ?? null, dictationEnabled)
+    // A button disabled by a failed verdict keeps that verdict as its tooltip
+    // for good: it is the only explanation the user has, and main.ts calls
+    // refreshHint() after every status poll — so a state title here would
+    // paint "Hold to dictate" over the reason within seconds of mounting,
+    // on a mic that cannot dictate at all.
+    button.title = verdict && !verdict.ok ? `${verdict.reason} ${verdict.hint}`.trim()
+      : s === 'idle' ? idleTitle(host.hint?.() ?? null, dictationEnabled)
       : s === 'recording' ? 'Release to transcribe (or tap Ctrl+Shift+Space to stop)'
       : s === 'live' ? 'Linked to Claude Code — hold Space in the pane to talk. Tap to unlink.'
       : 'Working…';
@@ -334,13 +344,21 @@ export function createVoiceController(
     switch (fx) {
       case 'startMic': startMic(); break;
       case 'probe':
-        void probe(boxId, host.session?.()).then((kind) => { if (model.state === 'probing') dispatch({ t: 'verdict', kind }); });
+        void probe(boxId, host.session?.())
+          .then((kind) => { if (model.state === 'probing') dispatch({ t: 'verdict', kind }); })
+          // A probe that rejects reads exactly like the 1500ms timeout — the
+          // default one cannot, but an unanswered press must never strand the
+          // mic in 'probing' with the audio it captured unreachable.
+          .catch(() => { if (model.state === 'probing') dispatch({ t: 'verdict', kind: 'error' }); });
         break;
       case 'openLink': openLinkNow(); break;
       case 'stream': recorder?.stream((f) => link?.send(f)); break;
       case 'finishDictation': void finishDictation(); break;
       case 'unlink': link?.close(); link = null; break;
-      case 'stopMic': recorder?.cancel(); recorder = null; host.focus(); break;
+      // The focus handback follows finishDictation's rule: with the composer
+      // open, focus must STAY on the draft field — an unlink that yanked it
+      // back to the terminal would close the soft keyboard mid-edit.
+      case 'stopMic': recorder?.cancel(); recorder = null; if (!host.sink?.()) host.focus(); break;
       case 'noticeRefused': host.write(`\r\n\x1b[33m[voice link: ${termSafe(refusedText(refusedWhy))}; dictating instead]\x1b[0m\r\n`); break;
       case 'noticeClosed': host.write(`\r\n\x1b[2m[voice link: ${termSafe(closedText(closedWhy))}]\x1b[0m\r\n`); break;
     }
@@ -365,18 +383,18 @@ export function createVoiceController(
     recording(): boolean { return inFlight(model.state); },
     cancel,
     refreshHint(): void { if (model.state === 'idle') paint(); },
-    mount(parent: HTMLElement, verdict: VoiceVerdict): void {
+    mount(parent: HTMLElement, v: VoiceVerdict): void {
+      // Recorded BEFORE the first paint: paint() owns the title rule now, so
+      // a not-usable verdict is written by paint() itself rather than patched
+      // over an idle title afterwards. That patch was correct exactly once —
+      // refreshHint() repaints, and would have undone it.
+      verdict = v;
       button = document.createElement('button');
       button.className = 'voice-btn';
       button.type = 'button';
-      // paint() first: it writes the idle title unconditionally, so the
-      // not-usable verdict tooltip below must land after it, not before — the
-      // old order left a disabled button advertising "Hold to dictate".
       paint();
       if (!verdict.ok) {
         button.disabled = true;
-        button.title = `${verdict.reason} ${verdict.hint}`.trim();
-        button.setAttribute('aria-label', button.title);
       } else {
         // Pointer events, not mouse events: on touch the compatibility mouse
         // pair browsers synthesize arrives back-to-back AFTER touchend —

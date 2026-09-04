@@ -33,7 +33,7 @@ function stubDocument() {
   const made = [];
   globalThis.document = {
     createElement: () => {
-      const el = { dataset: {}, addEventListener() {}, remove() {}, setAttribute() {} };
+      const el = { dataset: {}, attrs: {}, addEventListener() {}, remove() {}, setAttribute(k, v) { this.attrs[k] = v; } };
       made.push(el);
       return el;
     },
@@ -493,13 +493,20 @@ test('a claude verdict links: the link opens, ready streams the recorder, the bu
     openLink: async (boxId, onClose) => { opened.push(['link', boxId]); closeCb = onClose; return link; },
     dictationEnabled: true,
   });
-  const btn = {};
-  c.mount({ appendChild: (b) => Object.assign(btn, b) }, { ok: true, reason: '', hint: '' });
+  let btn;
+  c.mount({ appendChild: (b) => { btn = b; } }, { ok: true, reason: '', hint: '' });
   c.begin();
   await flush(); await flush();
   expect(opened).toEqual([['probe', 'box1', 'proj'], ['link', 'box1']]);
   expect(typeof rec.streamed).toBe('function');
   expect(c.recording()).toBe(true);
+  // The button says so: amber 'live' state, the unlink affordance in the
+  // tooltip, and the same text mirrored into the accessible name (the label
+  // is a glyph, so the state change would otherwise be paint only).
+  expect(btn.dataset.state).toBe('live');
+  expect(btn.textContent).toBe('\u25cf live');
+  expect(btn.title).toContain('Tap to unlink');
+  expect(btn.attrs['aria-label']).toBe(btn.title);
   rec.streamed(new Uint8Array(640));
   expect(link.sent).toHaveLength(1);
   c.release();                       // ignored while live
@@ -508,6 +515,7 @@ test('a claude verdict links: the link opens, ready streams the recorder, the bu
   expect(link.closed).toBe(1);
   expect(rec.cancelled).toBe(1);
   expect(c.recording()).toBe(false);
+  expect(btn.dataset.state).toBe('idle');
   expect(typeof closeCb).toBe('function');
 });
 
@@ -598,12 +606,95 @@ test('the server closing a live link stops the mic and reports the reason', asyn
 test('finish() ends whatever is in flight: release for a recording, unlink for a link', async () => {
   const rec = streamRecorder();
   const link = fakeLink();
-  const c = createVoiceController('box1', 120, { ...noopHost, session: () => 'web' }, () => rec, {
+  // The composer is open, so the unlink's stopMic must leave focus on the
+  // draft field — the same rule finishDictation follows on the sink path.
+  const c = createVoiceController('box1', 120, {
+    ...noopHost,
+    session: () => 'web',
+    sink: () => (t) => t,
+    focus() { throw new Error('unlinking must not pull focus off the composer draft'); },
+  }, () => rec, {
     probe: async () => 'claude', openLink: async () => link, dictationEnabled: true,
   });
   c.begin();
   await flush(); await flush();
   c.finish();
   expect(link.closed).toBe(1);
+  expect(c.recording()).toBe(false);
+});
+
+// A mic disabled by the readiness verdict (plain HTTP, unsupported browser)
+// carries that verdict as its only explanation. refreshHint() repaints the
+// idle tooltip, and main.ts calls it after EVERY status poll, so without the
+// verdict surviving the repaint the button would advertise "Hold to dictate"
+// within seconds of mounting and do nothing when tapped.
+test('a disabled mic keeps its verdict tooltip through a hint refresh', () => {
+  const made = stubDocument();
+  const c = createVoiceController('box1', 120, noopHost, () => streamRecorder(), { probe: async () => 'shell' });
+  c.mount({ appendChild() {} }, { ok: false, reason: 'R', hint: 'H' });
+  const btn = made[0];
+  expect(btn.disabled).toBe(true);
+  expect(btn.title).toBe('R H');
+
+  c.refreshHint();
+  expect(btn.title).toBe('R H');
+  expect(btn.attrs['aria-label']).toBe('R H');
+  expect(btn.disabled).toBe(true);
+});
+
+// The other side of the getUserMedia race: the link reaches `ready` while the
+// permission prompt is still up, so the reducer's 'stream' effect runs against
+// a recorder with no worklet node and is a silent no-op. Without the re-arm in
+// startMic the button would read 'live' with nothing ever on the wire. This
+// fake mirrors the real recorder: stream() only takes effect once started.
+function lateStartRecorder() {
+  let resolveStart;
+  const r = {
+    cancelled: 0, started: false, streamed: null,
+    start: () => new Promise((res) => { resolveStart = res; }),
+    stop: async () => new ArrayBuffer(45),
+    cancel() { r.cancelled++; },
+    recording: () => true,
+    stream(sink) { if (r.started) r.streamed = sink; },
+    finishStart() { r.started = true; resolveStart(); },
+  };
+  return r;
+}
+
+test('a link that goes live while the mic is still opening streams once the mic is up', async () => {
+  const rec = lateStartRecorder();
+  const link = fakeLink();
+  const c = createVoiceController('box1', 120, { ...noopHost, session: () => 'web' }, () => rec, {
+    probe: async () => 'claude', openLink: async () => link, dictationEnabled: true,
+  });
+  c.begin();
+  await flush(); await flush();
+  // Live already — but the mic was not open when the effect ran, so nothing
+  // was armed. This is the state the bug leaves permanently.
+  expect(c.recording()).toBe(true);
+  expect(rec.streamed).toBeNull();
+
+  rec.finishStart();
+  await flush();
+  expect(typeof rec.streamed).toBe('function');
+  rec.streamed(new Uint8Array(640));
+  expect(link.sent).toHaveLength(1);
+});
+
+test('a probe that rejects cannot strand the press: it reads as error and dictates', async () => {
+  const urls = [];
+  globalThis.fetch = async (url) => { urls.push(String(url)); return { ok: true, status: 200, statusText: 'OK', json: async () => ({ text: 'hi', injected: true, mode: 'shell' }) }; };
+  const rec = streamRecorder();
+  const c = createVoiceController('box1', 120, { ...noopHost, session: () => 'web' }, () => rec, {
+    probe: async () => { throw new Error('x'); },
+    openLink: async () => { throw new Error('must not link'); },
+    dictationEnabled: true,
+  });
+  c.begin();
+  c.release();                       // the pointer is back up before the probe settles
+  await flush(); await flush(); await flush();
+  // An unanswered probe must never eat the audio: the reducer treats the
+  // rejection exactly like the 1500ms timeout's 'error' verdict.
+  expect(urls).toHaveLength(1);
   expect(c.recording()).toBe(false);
 });
