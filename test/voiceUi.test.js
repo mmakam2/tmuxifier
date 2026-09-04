@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from 'vitest';
-import { evaluateVoice, isVoiceHotkey, createVoiceHotkeyHandler, wireVoice, createVoiceController } from '../src/web/voiceUi';
+import { evaluateVoice, isVoiceHotkey, createVoiceHotkeyHandler, wireVoice, createVoiceController, idleTitle } from '../src/web/voiceUi';
 
 // wireVoice calls the global fetch (via api.uiConfig) and, once voice turns
 // out to be enabled, the global document (to mount a button), navigator/window
@@ -28,10 +28,21 @@ function fakeUiConfig(overrides = {}) {
 // Minimal stand-in for the DOM node createVoiceController.mount() touches —
 // not a full jsdom, just enough surface (dataset/addEventListener/remove/
 // setAttribute, the latter for the aria-label mirror) for the property
-// assignments in voiceUi.ts's setState()/mount() to succeed.
+// assignments in voiceUi.ts's paint()/mount() to succeed.
 function stubDocument() {
-  globalThis.document = { createElement: () => ({ dataset: {}, addEventListener() {}, remove() {}, setAttribute() {} }) };
+  const made = [];
+  globalThis.document = {
+    createElement: () => {
+      const el = { dataset: {}, addEventListener() {}, remove() {}, setAttribute() {} };
+      made.push(el);
+      return el;
+    },
+  };
+  return made;   // the elements mount() created, for tests that inspect the button
 }
+
+// One macrotask: drains every microtask the controller's promise chains queue.
+const flush = () => new Promise((r) => setTimeout(r, 0));
 
 // A browser that supports capture (mediaDevices.getUserMedia + AudioWorkletNode)
 // and is a secure context — the environment evaluateVoice needs to say ok:true
@@ -183,11 +194,14 @@ test('the chord falls through untouched when voice is not ready', () => {
   expect(voice.calls).toEqual([]);
 });
 
-// I1: a finish() that lands before start() resolves must not orphan a live
+// I1: a release that lands before start() resolves must not orphan a live
 // mic. createVoiceController's makeRecorder param (defaulting to the real
 // createVoiceRecorder) lets a fake recorder drive that race deterministically
-// instead of racing real getUserMedia/permission-prompt timing.
-test('finish() landing before start() resolves releases the mic once start() catches up, instead of orphaning it', async () => {
+// instead of racing real getUserMedia/permission-prompt timing. `probe` is
+// injected for the same reason: a press now probes the pane before it can
+// know it is a dictation, and a non-claude verdict is what hands the recorder
+// to the transcription round trip.
+test('a release landing before start() resolves releases the mic once start() catches up, instead of orphaning it', async () => {
   let resolveStart;
   const rec = {
     cancelled: false,
@@ -196,25 +210,27 @@ test('finish() landing before start() resolves releases the mic once start() cat
     cancel() { this.cancelled = true; },
     recording: () => true,
   };
-  const controller = createVoiceController('box1', 120, { write() {}, copy() {}, focus() {} }, () => rec);
+  const controller = createVoiceController('box1', 120, { write() {}, copy() {}, focus() {} }, () => rec,
+    { probe: async () => 'shell' });
 
-  const beginPromise = controller.begin();
-  // finish() runs while start() is still pending — the original bug's
-  // trigger: a tap shorter than getUserMedia's permission-prompt/device-open
-  // latency (a normal short click, or the very first use where the browser's
-  // permission prompt is in the way).
-  await controller.finish();
-  expect(rec.cancelled).toBe(false); // nothing was live yet, so finish() called stop(), not cancel()
+  controller.begin();
+  // The pointer comes back up while start() is still pending — the original
+  // bug's trigger: a tap shorter than getUserMedia's permission-prompt/
+  // device-open latency (a normal short click, or the very first use where
+  // the browser's permission prompt is in the way).
+  controller.release();
+  await flush(); await flush();
+  expect(rec.cancelled).toBe(false); // nothing was live yet, so the dictation called stop(), not cancel()
 
   // start() now resolves — in the real recorder this is the moment
-  // getUserMedia's promise settles and the mic track goes LIVE — after
-  // finish() already ran and nulled the outer `recorder` reference. Without
-  // the fix, begin() would blindly setState('recording') here with nothing
-  // left referencing `rec`, stranding the live mic until the 120s auto-stop
+  // getUserMedia's promise settles and the mic track goes LIVE — after the
+  // dictation already ran and nulled the outer `recorder` reference. Without
+  // the fix, begin() would blindly paint 'recording' here with nothing left
+  // referencing `rec`, stranding the live mic until the 120s auto-stop
   // (whose own onAutoStop would find `recorder` pointing at something else,
   // or null, and be unable to stop it either).
   resolveStart();
-  await beginPromise;
+  await flush();
   expect(rec.cancelled).toBe(true); // released through the still-live local reference
 });
 
@@ -235,15 +251,18 @@ test('a superseded recorder is released without disturbing a newer, still-active
     recording: () => true,
   };
   let call = 0;
-  const controller = createVoiceController('box1', 120, { write() {}, copy() {}, focus() {} }, () => (call++ === 0 ? stale : fresh));
+  const controller = createVoiceController('box1', 120, { write() {}, copy() {}, focus() {} },
+    () => (call++ === 0 ? stale : fresh), { probe: async () => 'shell' });
 
-  const staleBegin = controller.begin(); // recorder = stale, awaiting stale.start()
-  await controller.finish();             // supersedes stale (recorder -> null); stale.start() still pending
-  await controller.begin();              // recorder = fresh, resolves immediately
+  controller.begin();          // recorder = stale, awaiting stale.start()
+  controller.release();        // the verdict then supersedes stale (recorder -> null); stale.start() still pending
+  await flush(); await flush();
+  controller.begin();          // recorder = fresh, resolves immediately
+  await flush(); await flush();
   expect(controller.recording()).toBe(true);
 
   resolveStaleStart(); // the stale recorder's start() finally catches up
-  await staleBegin;
+  await flush();
   expect(stale.cancelled).toBe(true);  // the stale one was released...
   expect(fresh.cancelled).toBe(false); // ...without touching the newer, active one
   expect(controller.recording()).toBe(true);
@@ -259,9 +278,11 @@ test('a zero-sample clip is short-circuited client-side and never reaches the se
     recording: () => true,
   };
   const writes = [];
-  const controller = createVoiceController('box1', 120, { write: (t) => writes.push(t), copy() {}, focus() {} }, () => rec);
-  await controller.begin();
-  await controller.finish();
+  const controller = createVoiceController('box1', 120, { write: (t) => writes.push(t), copy() {}, focus() {} }, () => rec,
+    { probe: async () => 'shell' });
+  controller.begin();
+  controller.release();
+  await flush(); await flush();
   // Without the short-circuit this reaches api.postVoice() -> a real fetch()
   // of a relative URL in this Node test environment, which throws
   // immediately and would surface here as a "[voice failed: ...]" write.
@@ -272,9 +293,11 @@ test('a zero-sample clip is short-circuited client-side and never reaches the se
 // Readiness gating for terminal.ts's hotkey handler (finding: the hotkey must
 // not be swallowed — must not `return false` — when there is nothing mounted
 // to hand it to). wireVoice's ready() is the signal terminal.ts consults.
-test('wireVoice().ready() is false until the /api/ui-config fetch settles', async () => {
+test('wireVoice().ready() is false until the /api/ui-config fetch settles, and the mic mounts even with whisper off', async () => {
   let resolveFetch;
   globalThis.fetch = () => new Promise((r) => { resolveFetch = r; });
+  const made = stubDocument();
+  stubSupportedSecureEnv();
   const parent = { appendChild() {} };
   const host = { write() {}, copy() {}, focus() {} };
 
@@ -284,11 +307,18 @@ test('wireVoice().ready() is false until the /api/ui-config fetch settles', asyn
   // being swallowed with no controller to act on it.
   expect(voice.ready()).toBe(false);
   expect(() => { voice.begin(); voice.finish(); }).not.toThrow();
+  expect(made).toHaveLength(0);
 
   resolveFetch({ ok: true, status: 200, statusText: 'OK', json: async () => fakeUiConfig({ voice: false }) });
-  await new Promise((r) => setTimeout(r, 0));
-  // Server-disabled voice: still nothing mounted, ready() stays false forever.
-  expect(voice.ready()).toBe(false);
+  await flush();
+  // Server-disabled voice used to mean no button at all. It is the LINK
+  // button too now — a Claude pane links with no whisper on this host — so it
+  // mounts, enabled (only the readiness verdict disables it), and says in its
+  // idle tooltip that dictation is the half that is missing.
+  expect(made).toHaveLength(1);
+  expect(made[0].disabled).toBeFalsy();
+  expect(made[0].title).toMatch(/not enabled/i);
+  expect(voice.ready()).toBe(true);
 });
 
 test('wireVoice().ready() also stays false when the readiness fetch fails outright', async () => {
@@ -349,7 +379,7 @@ test('wireVoice().ready() stays false when a controller mounts but the readiness
 // dictated. mount()'s mousedown preventDefault() stops focus moving at all;
 // this pins the belt-and-braces handback for the paths that cannot cover
 // (focus already elsewhere, or the hotkey used while another element had it).
-test('finish() hands keyboard focus back to the terminal', async () => {
+test('a completed dictation hands keyboard focus back to the terminal', async () => {
   const rec = {
     start: () => Promise.resolve(),
     stop: () => Promise.resolve(new ArrayBuffer(44)), // header-only: short-circuits before any fetch
@@ -359,9 +389,11 @@ test('finish() hands keyboard focus back to the terminal', async () => {
   let focused = 0;
   const controller = createVoiceController(
     'box1', 120, { write() {}, copy() {}, focus() { focused += 1; } }, () => rec,
+    { probe: async () => 'shell' },
   );
-  await controller.begin();
-  await controller.finish();
+  controller.begin();
+  controller.release();
+  await flush(); await flush();
   expect(focused).toBe(1);
 });
 
@@ -376,9 +408,11 @@ test('focus is handed back even when the transcription round trip throws', async
   const writes = [];
   const controller = createVoiceController(
     'box1', 120, { write: (t) => writes.push(t), copy() {}, focus() { focused += 1; } }, () => rec,
+    { probe: async () => 'shell' },
   );
-  await controller.begin();
-  await controller.finish();
+  controller.begin();
+  controller.release();
+  await flush(); await flush();
   // The failure is reported to the pane AND focus still returns, so a failed
   // dictation cannot strand the keyboard on the button.
   expect(writes.join('')).toContain('voice failed');
@@ -403,21 +437,173 @@ test('a present sink reroutes the transcript into it with inject=off and leaves 
     copy() { throw new Error('the sink path must not fall back to the clipboard'); },
     focus() { throw new Error('the sink path must leave focus on the composer field'); },
     sink: () => (t) => sunk.push(t),
-  }, () => rec);
-  await controller.begin();
-  await controller.finish();
+  }, () => rec, { probe: async () => 'shell' });
+  controller.begin();
+  controller.release();
+  await flush(); await flush();
   expect(urls[0]).toContain('inject=off');
   expect(sunk).toEqual(['hi there']);
 });
 
-test('without a sink, finish() still refocuses the terminal (the pre-composer contract)', async () => {
+test('without a sink, a dictation still refocuses the terminal (the pre-composer contract)', async () => {
   globalThis.fetch = async () => (
     { ok: true, status: 200, statusText: 'OK', json: async () => ({ text: 'hi', injected: true, mode: 'claude' }) });
   const rec = { start: async () => {}, stop: async () => new ArrayBuffer(45), cancel() {}, recording: () => true };
   let focused = 0;
   const controller = createVoiceController('box1', 120,
-    { write() {}, copy() {}, focus() { focused++; } }, () => rec);
-  await controller.begin();
-  await controller.finish();
+    { write() {}, copy() {}, focus() { focused++; } }, () => rec, { probe: async () => 'shell' });
+  controller.begin();
+  controller.release();
+  await flush(); await flush();
   expect(focused).toBe(1);
+});
+
+// --- The one 🎤 button (spec 2026-09-04) -----------------------------------
+// A press probes the pane, links a Claude one, and dictates anywhere else.
+// The reducer (voicePress.ts) owns the orderings; these drive the controller
+// that runs its effects, with the recorder, the probe and the link all faked
+// so every path is deterministic.
+
+// A fake recorder that also supports the link's stream mode.
+function streamRecorder() {
+  const r = { started: 0, cancelled: 0, streamed: null, start: async () => { r.started++; }, stop: async () => new ArrayBuffer(45), cancel() { r.cancelled++; }, recording: () => true, stream(sink) { r.streamed = sink; } };
+  return r;
+}
+function fakeLink() {
+  const l = { sent: [], closed: 0, send: (f) => l.sent.push(f), close() { l.closed++; } };
+  return l;
+}
+const noopHost = { write() {}, copy() {}, focus() {} };
+
+test('idleTitle names the flow a press will take', () => {
+  expect(idleTitle('claude', true)).toMatch(/link your mic to Claude Code/i);
+  expect(idleTitle(null, true)).toMatch(/hold to dictate/i);
+  expect(idleTitle(null, false)).toMatch(/not enabled/i);
+  expect(idleTitle('claude', false)).toMatch(/link your mic/i);
+});
+
+test('a claude verdict links: the link opens, ready streams the recorder, the button reads live, a second press unlinks', async () => {
+  stubDocument();
+  const rec = streamRecorder();
+  const link = fakeLink();
+  let closeCb;
+  const opened = [];
+  const c = createVoiceController('box1', 120, { ...noopHost, session: () => 'proj' }, () => rec, {
+    probe: async (boxId, session) => { opened.push(['probe', boxId, session]); return 'claude'; },
+    openLink: async (boxId, onClose) => { opened.push(['link', boxId]); closeCb = onClose; return link; },
+    dictationEnabled: true,
+  });
+  const btn = {};
+  c.mount({ appendChild: (b) => Object.assign(btn, b) }, { ok: true, reason: '', hint: '' });
+  c.begin();
+  await flush(); await flush();
+  expect(opened).toEqual([['probe', 'box1', 'proj'], ['link', 'box1']]);
+  expect(typeof rec.streamed).toBe('function');
+  expect(c.recording()).toBe(true);
+  rec.streamed(new Uint8Array(640));
+  expect(link.sent).toHaveLength(1);
+  c.release();                       // ignored while live
+  expect(c.recording()).toBe(true);
+  c.begin();                         // second press = unlink
+  expect(link.closed).toBe(1);
+  expect(rec.cancelled).toBe(1);
+  expect(c.recording()).toBe(false);
+  expect(typeof closeCb).toBe('function');
+});
+
+test('a refused link continues as dictation with the buffered audio and says why', async () => {
+  const urls = [];
+  globalThis.fetch = async (url) => { urls.push(String(url)); return { ok: true, status: 200, statusText: 'OK', json: async () => ({ text: 'kept words', injected: true, mode: 'claude' }) }; };
+  const rec = streamRecorder();
+  const writes = [];
+  const c = createVoiceController('box1', 120, { ...noopHost, write: (t) => writes.push(t), session: () => 'web' }, () => rec, {
+    probe: async () => 'claude',
+    openLink: async () => { throw Object.assign(new Error('voice link not-set-up'), { why: 'not-set-up' }); },
+    dictationEnabled: true,
+  });
+  c.begin();
+  c.release();
+  await flush(); await flush(); await flush();
+  expect(writes.join('')).toMatch(/box not set up/);
+  expect(writes.join('')).toMatch(/dictating instead/);
+  expect(urls[0]).toContain('/api/voice?box=box1');
+  expect(rec.streamed).toBeNull();
+});
+
+test('a non-claude verdict is today\'s dictation, and a release before the verdict finishes once it lands', async () => {
+  const urls = [];
+  globalThis.fetch = async (url) => { urls.push(String(url)); return { ok: true, status: 200, statusText: 'OK', json: async () => ({ text: 'hi', injected: true, mode: 'shell' }) }; };
+  const rec = streamRecorder();
+  let resolveVerdict;
+  const c = createVoiceController('box1', 120, { ...noopHost, session: () => 'web' }, () => rec, {
+    probe: () => new Promise((r) => { resolveVerdict = r; }),
+    openLink: async () => { throw new Error('must not link'); },
+    dictationEnabled: true,
+  });
+  c.begin();
+  c.release();
+  await flush();
+  expect(urls).toEqual([]);
+  resolveVerdict('shell');
+  await flush(); await flush(); await flush();
+  expect(urls).toHaveLength(1);
+});
+
+test('with whisper off a non-claude press explains itself instead of posting', async () => {
+  let fetched = 0;
+  globalThis.fetch = async () => { fetched++; return { ok: true, status: 200, statusText: 'OK', json: async () => ({}) }; };
+  const rec = streamRecorder();
+  const writes = [];
+  const c = createVoiceController('box1', 120, { ...noopHost, write: (t) => writes.push(t), session: () => 'web' }, () => rec, {
+    probe: async () => 'shell', openLink: async () => fakeLink(), dictationEnabled: false,
+  });
+  c.begin(); c.release();
+  await flush(); await flush(); await flush();
+  expect(fetched).toBe(0);
+  expect(writes.join('')).toMatch(/not enabled/);
+  expect(rec.cancelled).toBe(1);
+});
+
+test('blur finishes a dictation but never unlinks a live link; dispose closes it', async () => {
+  const rec = streamRecorder();
+  const link = fakeLink();
+  const c = createVoiceController('box1', 120, { ...noopHost, session: () => 'web' }, () => rec, {
+    probe: async () => 'claude', openLink: async () => link, dictationEnabled: true,
+  });
+  c.begin();
+  await flush(); await flush();
+  expect(c.recording()).toBe(true);
+  c.blur();
+  expect(link.closed).toBe(0);
+  expect(c.recording()).toBe(true);
+  c.dispose();
+  expect(link.closed).toBe(1);
+});
+
+test('the server closing a live link stops the mic and reports the reason', async () => {
+  const rec = streamRecorder();
+  let onClose;
+  const writes = [];
+  const c = createVoiceController('box1', 120, { ...noopHost, write: (t) => writes.push(t), session: () => 'web' }, () => rec, {
+    probe: async () => 'claude', openLink: async (_b, cb) => { onClose = cb; return fakeLink(); }, dictationEnabled: true,
+  });
+  c.begin();
+  await flush(); await flush();
+  onClose('superseded');
+  expect(c.recording()).toBe(false);
+  expect(rec.cancelled).toBe(1);
+  expect(writes.join('')).toMatch(/another pane/);
+});
+
+test('finish() ends whatever is in flight: release for a recording, unlink for a link', async () => {
+  const rec = streamRecorder();
+  const link = fakeLink();
+  const c = createVoiceController('box1', 120, { ...noopHost, session: () => 'web' }, () => rec, {
+    probe: async () => 'claude', openLink: async () => link, dictationEnabled: true,
+  });
+  c.begin();
+  await flush(); await flush();
+  c.finish();
+  expect(link.closed).toBe(1);
+  expect(c.recording()).toBe(false);
 });

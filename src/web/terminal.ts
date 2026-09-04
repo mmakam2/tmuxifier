@@ -441,6 +441,10 @@ export function openTerminal(
   opts?: {
     voiceMount?: HTMLElement; onConnState?: (s: PaneConn) => void; transformInput?: (d: string) => string;
     voiceSink?: () => ((text: string) => void) | null;
+    // Voice link (spec 2026-09-04): the session this pane is attached to (for
+    // the press-time pane-kind probe; undefined = the server's own default)
+    // and the status-snapshot hint that paints the idle tooltip.
+    voiceSession?: () => string | undefined; voiceHint?: () => 'claude' | null;
     // Duplicate panes: attach this tmux session instead of the box's stored
     // one, and key this viewer's PTY per pane instance (ordinal >1 suffixes
     // the client id, so pane 1 keeps today's key and its grace reattach).
@@ -491,6 +495,8 @@ export function openTerminal(
     },
     focus: () => term.focus(),
     sink: opts?.voiceSink,
+    session: opts?.voiceSession,
+    hint: opts?.voiceHint,
   });
   wireClipboard(term, voice);
   const offUploads = wireUploads(parent, term, boxId);
@@ -580,6 +586,9 @@ export function openTerminal(
     refit: onResize,
     input: sendInput,
     appCursor: () => term.modes.applicationCursorKeysMode,
+    // Repaint the mic's idle tooltip after a status poll — the hint it reads
+    // (voiceHint) comes from the snapshot, so it moves when the snapshot does.
+    refreshHint: () => voice.refreshHint(),
   };
 }
 

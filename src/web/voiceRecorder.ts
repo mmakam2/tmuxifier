@@ -3,6 +3,7 @@
 // so whisper receives its native format and no ffmpeg is needed server-side.
 
 import { encodeWav } from './wavEncode';
+import { createPcmStream } from './pcmStream';
 // `?url` makes Vite emit voiceWorklet.js as a real, content-hashed, same-origin
 // static asset rather than bundling it — addModule() needs a URL to fetch, and
 // this keeps that fetch same-origin so CSP's `script-src 'self'` covers it with
@@ -14,6 +15,10 @@ export interface VoiceRecorder {
   stop(): Promise<ArrayBuffer>;
   cancel(): void;
   recording(): boolean;
+  // Voice link: from now on, frames go to `sink` as they are produced and the
+  // dictation buffer is dropped; the auto-stop cap no longer applies (the link
+  // has its own 30-minute cap).
+  stream(sink: (frame: Uint8Array) => void): void;
 }
 
 export function createVoiceRecorder(maxSeconds: number, onAutoStop: () => void): VoiceRecorder {
@@ -74,6 +79,14 @@ export function createVoiceRecorder(maxSeconds: number, onAutoStop: () => void):
     cancel(): void {
       chunks = [];
       teardown();
+    },
+
+    stream(sink: (frame: Uint8Array) => void): void {
+      if (!node) return;
+      if (capTimer) { clearTimeout(capTimer); capTimer = null; }
+      chunks = [];
+      const pcm = createPcmStream(rate || 48000);
+      node.port.onmessage = (e: MessageEvent) => { for (const f of pcm.push(e.data as Float32Array)) sink(f); };
     },
   };
 }

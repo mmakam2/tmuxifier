@@ -1344,6 +1344,11 @@ button.empty-kbd:hover { color: var(--text); }
 .voice-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .voice-btn[data-state='recording'] { color: var(--crit); border-color: var(--crit); font-weight: 700; opacity: 1; box-shadow: 0 0 8px color-mix(in srgb, var(--crit) 35%, transparent); }
 .voice-btn[data-state='working'] { opacity: 0.7; color: var(--accent); }
+/* Linked to Claude Code: the box is hearing this browser's mic. Amber — the
+   engaged-state accent (DESIGN.md, The Amber Means Alive Rule) with the Glow
+   Is Power emission — distinct from recording's red, which means "capturing
+   for dictation right now". */
+.voice-btn[data-state='live'] { color: var(--accent); border-color: var(--accent); font-weight: 700; opacity: 1; box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 30%, transparent); }
 
 /* --- Provision drawer: a service panel that slides off the bench ----------- */
 .provision-panel {
@@ -2160,4 +2165,7 @@ button.empty-kbd:hover { color: var(--text); }
     font-family: var(--face); font-size: 16px; line-height: 20px;
   }
   .touch-keys .touch-mic-slot .voice-btn[data-state='working'] { opacity: 0.7; }
+  /* Restated at the same 0-4-0 as the pair above, for the same reason: a live
+     link must read fully opaque in the bar, not inherit working's dimming. */
+  .touch-keys .touch-mic-slot .voice-btn[data-state='live'] { opacity: 1; }
 }

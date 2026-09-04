@@ -831,6 +831,10 @@ function ensureTab(id: string) {
     // While the composer is open, pane dictation lands in its draft instead
     // (inject=off round trip) — the operator edits, then Sends.
     voiceSink: () => (touchComposer?.isOpen() ? (t: string) => touchComposer?.appendDraft(t) : null),
+    // Per-pane session for the mic's pane-kind probe; the Host Shell lets the
+    // server name its own session.
+    voiceSession: () => (isLocalPane(id) ? undefined : attachedSession(id)),
+    voiceHint: () => paneVoiceHint(id),
   });
   tabs.set(id, { el, term, voiceMount });
   if (isLocalPane(id)) updateLocalDot();
@@ -860,6 +864,16 @@ const boxFor = (iid: string): Box | undefined => allBoxes.find((b) => b.id === b
 const isLocalPane = (iid: string): boolean => boxOfInstance(iid) === '__local__';
 function attachedSession(iid: string): string {
   return paneSessions.get(iid) ?? (boxFor(iid)?.sessionName || 'web');
+}
+// Pre-press hint for the mic: the status snapshot already carries each
+// session's active-pane command (paneCmd), so the idle tooltip can say which
+// flow a press will take. A hint only, up to 30 s stale — the press-time
+// verdict (POST pane-kind) decides. The Host Shell has no status entry.
+function paneVoiceHint(iid: string): 'claude' | null {
+  if (isLocalPane(iid)) return null;
+  const s = latestStatus[boxOfInstance(iid)]?.sessions?.find((x) => x.name === attachedSession(iid));
+  const cmd = (s?.paneCmd || '').toLowerCase();
+  return cmd === 'claude' || cmd.startsWith('claude-') ? 'claude' : null;
 }
 // Docked panes plus parked tabs — a parked duplicate still holds its PTY and
 // its ordinal, so both count for session adoption and ordinal reuse.
@@ -992,6 +1006,10 @@ async function selectTarget(id: string, t: SessionTarget) {
 
 function updatePaneHeaders() {
   for (const [id, h] of paneHeaders) h.update(paneHeaderModelFor(id));
+  // The mic's idle tooltip reads paneVoiceHint off this same snapshot, and the
+  // button lives in the pane's own voice slot rather than in the header the
+  // loop above rebuilds — so it is repainted here explicitly.
+  for (const [, t] of tabs) t.term.refreshHint();
   for (const [id, ctl] of paneLifecycles) ctl.update({ paneState: paneState(id), pveState: latestStatus[boxOfInstance(id)]?.proxmoxState, template: latestStatus[boxOfInstance(id)]?.proxmoxTemplate });
 }
 
