@@ -159,7 +159,9 @@ pane is classified at press time by the same check that decides where dictation 
 button never has to be told which mode you mean.
 
 A link streams audio continuously while it is up (about 32 KB/s), and ends when you unlink, when
-the tab is hidden, when the page is closed or logged out, or after 30 minutes. It is refused, with
+the tab is hidden, when the page is closed or logged out, or after 30 minutes. While nothing is
+linked, the box's microphone is simply silence, so pressing Space in Claude Code on a prepared
+but unlinked box ends with "No speech detected". It is refused, with
 a one-line note, on a box whose setup never installed the voice link — re-run setup with
 **Claude Code** ticked (see [Boxes & setup](boxes-and-setup.md#the-claude-code-checkbox)). Linked
 audio goes to the box and from there to Anthropic under that box's Claude.ai login — unlike
@@ -220,14 +222,23 @@ reattaches afterwards. Without `systemd-run` the terminal still works identicall
 session dies with the service, because a tmux server auto-started from inside the service
 inherits its control group and systemd kills the whole group on restart.
 
-The same ✎ dialog carries an **Install Claude Code hooks** checkbox. Ticking it and saving
-installs on the Tmuxifier host itself the same agent-state hook a box gets from its setup run:
-the hook script lands in the host account's `~/.claude/` (or `$CLAUDE_CONFIG_DIR`) and the
-matching entries are merged into that account's `~/.claude/settings.json` alongside any hooks
-you already have. It requires Claude Code to be installed on the host — if it isn't, the dialog
-stays open and reports the install was skipped, and the shell choice is saved either way — and it
-takes effect only after you restart any `claude` that is already running, since Claude Code reads
-its settings at startup.
+The same ✎ dialog carries an **Install Claude Code hooks and voice link** checkbox. Ticking it
+and saving installs on the Tmuxifier host itself the same two things a box gets from its setup
+run. First the agent-state hook: the hook script lands in the host account's `~/.claude/` (or
+`$CLAUDE_CONFIG_DIR`) and the matching entries are merged into that account's
+`~/.claude/settings.json` alongside any hooks you already have. Then the voice link: a
+user-level `~/.asoundrc` and the pipe under `~/.tmuxifier-voice/`, so the mic button can link
+a Host Shell pane running Claude Code exactly as it links a box's (see
+[Voice dictation](#voice-dictation)). Both require Claude Code to be installed on the host — if
+it isn't, the dialog stays open and reports what was skipped, and the shell choice is saved
+either way — and the hooks take effect only after you restart any `claude` that is already
+running, since Claude Code reads its settings at startup.
+
+The ALSA config claims the host's **default** device, so on a Tmuxifier host that has real
+audio hardware this shadows it: capture becomes your browser microphone and playback goes to
+`/dev/null` for anything asking for `default`. A host that already has its own `~/.asoundrc` is
+never touched and the step reports `skipped` — writing your own config is how you keep a real
+sound card.
 
 Once a hook-aware claude runs **inside the Host Shell's own tmux session** (`local`), its
 working/waiting state shows as a badge next to the **Host Shell** button in the sidebar and as

@@ -409,7 +409,11 @@ pattern for new modules.
   triggered by the optional `claudeHooks` flag on `PATCH /api/local-shell`, strictly `=== true`:
   absent or `false` touches nothing, unchecking never uninstalls, the install runs only after the
   shell choice has already persisted, and a failed install is reported on the response
-  (`{ ok: true, agentHooks }`) rather than failing the request.
+  (`{ ok: true, agentHooks, voiceLink }`) rather than failing the request. `installVoiceLink()`
+  is the same shape one step later — `createVoiceLinkPusher` over the same local transport, so
+  the one checkbox also prepares this host's own `~/.asoundrc` and `~/.tmuxifier-voice/` — and
+  `openAudioSink()` runs the box writer locally under `/bin/sh` so a Host Shell pane links like
+  any box's.
 - `localAgent.js` — `createLocalAgentSampler`: the Host Shell's stand-in for the SSH status probe.
   Reads this host's own tmux sessions (`tmux ls -F STATUS_FMT` via `execFile`) and its
   `~/.tmuxifier-agent/` markers, shaping them exactly like a box probe result so
@@ -850,11 +854,18 @@ pattern for new modules.
 - `claudeVoiceLink.js` — `buildVoiceLinkInstallScript` (pure) + `createVoiceLinkPusher`: the
   `voice-link` setup phase (spec 2026-09-04), run after `agent-hooks` under the same `claude`
   tools knob, recorded on `job.voiceLink`, never promoted. Makes the box's ALSA `default`
-  capture device a FIFO (`~/.tmuxifier-voice/mic`) through a user-level `~/.asoundrc`
-  (`plug` → `file(infile)` → `null`; the plug layer converts whatever Claude Code's capture
-  negotiates — its native cpal path asks for 48 kHz 32-bit mono — to the pipe's fixed 16 kHz
-  S16), creates the FIFO, and merges `voice.enabled: true` into Claude's settings.json only
-  when no `voice` key exists. Guarded by the `# tmuxifier-voice-link` marker: a foreign
+  capture device a FIFO through a user-level `~/.asoundrc` (`plug` → `file(infile)` → `null`;
+  the plug layer converts whatever Claude Code's capture negotiates — its native cpal path
+  asks for 48 kHz 32-bit mono — to the pipe's fixed 16 kHz S16), creates the FIFO, and merges
+  `voice.enabled: true` into Claude's settings.json only when no `voice` key exists. The path
+  `infile` names, `~/.tmuxifier-voice/mic`, is a **symlink**, not the FIFO: idle it points at
+  `/dev/zero` and only a live writer points it at the real FIFO, `mic.fifo` beside it. That
+  indirection is load-bearing — alsa-lib's file plugin opens `infile` `O_RDONLY`, and opening
+  a FIFO with no writer BLOCKS FOREVER, so every Claude Code Space press on a prepared but
+  unlinked box hung inside `snd_pcm_open`; `/dev/zero` answers at once with silence and
+  Claude's own detection ends the recording. The pre-symlink layout migrates in place (a FIFO
+  named `mic` is renamed to `mic.fifo`, or dropped if that name is taken); a regular file
+  named `mic` is never clobbered, the same posture as the `.asoundrc` guard. Guarded by the `# tmuxifier-voice-link` marker: a foreign
   `~/.asoundrc` is never touched and the phase skips. The box decides via `command -v claude`.
   Host Shell gets the same install under the local-shell `claudeHooks` flag.
 - `voiceWriter.js` / `voiceLinks.js` — the runtime half of the voice link. `voiceWriter.js`
@@ -863,6 +874,14 @@ pattern for new modules.
   blocks and EOF never reaches a reader, pipe shrunk to 4 KB, non-blocking writes dropped when
   full, even-length runs only, and 2.5 s of paced silence on stdin EOF — because alsa-lib's
   file plugin does not pad a closed FIFO with silence, it spins on stale buffer contents.
+  It also owns the idle-device symlink described above: it swaps `mic` onto `mic.fifo` on
+  start and back onto `/dev/zero` after its tail. `~/.tmuxifier-voice/writer.pid` makes it
+  single-instance — a starting writer SIGTERMs whatever live pid the file names and waits
+  ~300 ms, and a writer superseded that way exits AT ONCE, with no tail, no symlink restore
+  and no pidfile removal, since the successor owns all three (without that rule the
+  predecessor's tail interleaved zeros into the successor's live audio). A SIGKILLed writer
+  leaves the symlink on the FIFO until the next link, which always repairs it and treats a
+  dead pid as stale.
   `voiceLinks.js` holds one writer per linked box (newest wins, `4001`), sends `ready` after
   the writer survives 300 ms (exit 3 before that is `4002 not-set-up`, anything else `4003`),
   never queues audio (drops on backpressure, oversize, or over 64 KB/s), closes a link that

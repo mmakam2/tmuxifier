@@ -81,8 +81,22 @@ Ticking it makes the setup run do four things, each skipping cleanly when alread
   `~/.tmuxifier-voice/`, installs `alsa-utils`, and turns Claude Code's voice mode on in its
   settings.json unless you already chose (`/voice off` stays off). A box that already has its own
   `~/.asoundrc` is left alone and the step reports `skipped`. See [Voice dictation](terminal.md#voice-dictation)
-  for what the link does. The pipe is written by a small Python program on the box; on an image
-  without `python3` a plain `cat` takes its place and may carry a little stale audio.
+  for what the link does. The device the config names, `~/.tmuxifier-voice/mic`, is a symlink:
+  it points at `/dev/zero` — silence — whenever nothing is linked, and only at the real pipe
+  (`mic.fifo`, beside it) while a link is up, so pressing Space in Claude Code on an unlinked
+  box ends with "No speech detected" rather than hanging. The pipe is fed by a small Python
+  program on the box; on an image without `python3` a plain `cat` takes its place and may carry
+  a little stale audio.
+
+Two things are worth knowing before you tick it on a box that isn't a plain headless server.
+First, the ALSA config claims the **default** device: on a box that has real audio hardware and
+no `~/.asoundrc` of its own, capture becomes your browser microphone and playback goes to
+`/dev/null` for every program that asks for `default`. A box that already has an `~/.asoundrc`
+is never touched (the step reports `skipped`), so writing your own config is how you keep a
+real sound card. Second, ticking **Claude Code** now performs a package install over sudo
+(`alsa-utils`, unless `arecord` is already there) — so on a box that needs a sudo password the
+setup job parks at **needs sudo** and waits for you to finish it interactively, where before it
+might have completed unattended.
 
 On a box with a pre-existing Claude install, ticking the checkbox simply adds whatever is
 missing. Unchecked means setup touches nothing Claude-related — no install, no statusline,

@@ -2245,7 +2245,7 @@ async function openLocalShellEditModal() {
   const hooksCheck = document.createElement('input');
   hooksCheck.type = 'checkbox';
   const hooksText = document.createElement('span');
-  hooksText.textContent = 'Install Claude Code hooks (agent badge + notifications for this host)';
+  hooksText.textContent = 'Install Claude Code hooks and voice link (agent badge, notifications, and mic link for this host)';
   hooksLine.append(hooksCheck, hooksText);
 
   const err = document.createElement('p');
