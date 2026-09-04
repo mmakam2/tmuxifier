@@ -1,8 +1,9 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { setupLocalBox } from '../helpers/localBox.js';
 import { hashPassword } from '../../src/server/auth.js';
 import { createStore } from '../../src/server/store.js';
@@ -14,6 +15,14 @@ const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fix
 
 export default async function globalSetup() {
   const lb = await setupLocalBox();
+
+  // The voice link's box-side FIFO (spec 2026-09-04). The e2e box is this
+  // host, so the real Python writer runs against it; no ALSA config is
+  // needed for the link to reach `ready`.
+  const vdir = path.join(lb.home, '.tmuxifier-voice');
+  fsSync.mkdirSync(vdir, { recursive: true, mode: 0o700 });
+  execFileSync('mkfifo', ['-m', '600', path.join(vdir, 'mic')]);
+
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-e2e-'));
   const sshConfigText = await fs.readFile(lb.sshConfigFile, 'utf8');
   const aliasOptions = sshConfigText
@@ -40,8 +49,11 @@ export default async function globalSetup() {
   // is what the running server reads per request. The WHISPER_BIN/MODEL env
   // pins below only satisfy the *engine* half of GET /api/ui-config's
   // `enabled && engine` check; without this the temp data dir has no
-  // voice.json, voice reads as off, and wireVoice deliberately mounts no
-  // microphone button, so every voice spec fails on the .voice-btn locator.
+  // voice.json and voice reads as off. The mic button itself mounts either
+  // way (wireVoice mounts unconditionally since Task 14 — a Claude pane
+  // links with nothing on this host), but with dictation disabled a press on
+  // a non-Claude pane only writes a notice rather than transcribing, so
+  // voice.spec.ts's "hello from the fixture" assertions fail without this.
   await createVoiceStore({ dataDir }).update({ enabled: true });
 
   const hash = await hashPassword('e2e');

@@ -117,9 +117,10 @@ for (const width of [344, 360, 390, 430]) {
           disabled: read((b) => { b.disabled = true; }),
           working: read((b) => { b.dataset.state = 'working'; }),
           recording: read((b) => { b.dataset.state = 'recording'; }),
+          live: read((b) => { b.dataset.state = 'live'; }),
         };
       });
-      expect(opacity).toEqual({ idle: '1', disabled: '0.3', working: '0.7', recording: '1' });
+      expect(opacity).toEqual({ idle: '1', disabled: '0.3', working: '0.7', recording: '1', live: '1' });
     });
 
     test('the enter cap is pinned on screen, outside the scroller', async ({ page }) => {
