@@ -749,13 +749,34 @@ test('PATCH /api/local-shell claudeHooks:true runs the local hook install and re
 
   const res = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: 'none', claudeHooks: true } });
   expect(res.statusCode).toBe(200);
-  expect(res.json()).toEqual({ ok: true, agentHooks: { target: 'agent-hooks', ok: true } });
+  // This fake predates installVoiceLink, so the route's own fallback applies.
+  expect(res.json()).toEqual({ ok: true, agentHooks: { target: 'agent-hooks', ok: true }, voiceLink: null });
+});
+
+test('PATCH /api/local-shell claudeHooks:true also installs the voice link and reports it', async () => {
+  const localShellActions = {
+    async ensureReady() { return { ok: true }; },
+    async installAgentHooks() { return { target: 'agent-hooks', ok: true }; },
+    async installVoiceLink() { return { target: 'voice-link', ok: true, settings: 'applied' }; },
+  };
+  app = await makeApp({ localShellActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const res = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: 'none', claudeHooks: true } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({
+    ok: true,
+    agentHooks: { target: 'agent-hooks', ok: true },
+    voiceLink: { target: 'voice-link', ok: true, settings: 'applied' },
+  });
 });
 
 test('PATCH /api/local-shell without claudeHooks never touches the installer', async () => {
   const localShellActions = {
     async ensureReady() { return { ok: true }; },
     async installAgentHooks() { throw new Error('must not be called'); },
+    async installVoiceLink() { throw new Error('must not be called'); },
   };
   app = await makeApp({ localShellActions });
   const cookie = await login();
@@ -764,6 +785,7 @@ test('PATCH /api/local-shell without claudeHooks never touches the installer', a
   const res = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: 'none' } });
   expect(res.statusCode).toBe(200);
   expect(res.json()).toEqual({ ok: true });
+  expect(res.json().voiceLink).toBeUndefined();
 });
 
 test('PATCH /api/local-shell reports a failed hook install without failing the request', async () => {

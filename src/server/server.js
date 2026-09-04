@@ -1912,7 +1912,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     // reported, never promoted — the shell change above already persisted.
     if (claudeHooks === true && localShellActions?.installAgentHooks) {
       const agentHooks = await localShellActions.installAgentHooks();
-      return { ok: true, agentHooks };
+      // The voice link rides the same knob on the host as on a box.
+      const voiceLink = localShellActions.installVoiceLink ? await localShellActions.installVoiceLink() : null;
+      return { ok: true, agentHooks, voiceLink };
     }
     return { ok: true };
   });

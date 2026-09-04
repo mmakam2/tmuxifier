@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { buildEnsureTmuxRemote } from './boxActions.js';
 import { createAgentHooksPusher } from './claudeAgentHooks.js';
+import { createVoiceLinkPusher } from './claudeVoiceLink.js';
 import { sshPipe } from './sshRun.js';
 import { buildVoiceWriterRemote } from './voiceWriter.js';
 
@@ -74,6 +75,9 @@ export function createLocalShellActions({ run = runLocalShellScript, runStdin = 
     runStdin: (_box, script, bytes) => runStdin(script, bytes, { cwd, env }),
     readAsset: readHookAsset,
   });
+  const voiceLinkPusher = createVoiceLinkPusher({
+    runStdin: (_box, script, bytes) => runStdin(script, bytes, { cwd, env }),
+  });
   return {
     async ensureReady(shell) {
       const script = buildEnsureLocalShellScript(shell, localSession);
@@ -87,6 +91,9 @@ export function createLocalShellActions({ run = runLocalShellScript, runStdin = 
     },
     async installAgentHooks() {
       return hooksPusher.push(null);
+    },
+    async installVoiceLink() {
+      return voiceLinkPusher.push(null);
     },
     // Host Shell's voice link: the same writer a box runs, spawned locally
     // under /bin/sh (sshPipe's test-only `cmd` injection is exactly the seam

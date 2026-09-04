@@ -3,6 +3,7 @@ import os from 'node:os';
 import { buildEnsureLocalShellScript, createLocalShellActions, runLocalScriptStdin } from '../src/server/localShellActions.js';
 import { buildAgentHooksInstallScript } from '../src/server/claudeAgentHooks.js';
 import { buildVoiceWriterRemote } from '../src/server/voiceWriter.js';
+import { buildVoiceLinkInstallScript } from '../src/server/claudeVoiceLink.js';
 
 test('buildEnsureLocalShellScript enables Oh My Zsh in local tmux session', () => {
   const script = buildEnsureLocalShellScript('omz');
@@ -123,6 +124,17 @@ test('runLocalScriptStdin settles on timeout instead of hanging', async () => {
   const res = await runLocalScriptStdin('sleep 30', Buffer.from(''), { timeout: 100 });
   expect(res.code).not.toBe(0);
   expect(Date.now() - started).toBeLessThan(5000);
+});
+
+test('installVoiceLink runs the standard voice-link installer locally with empty stdin', async () => {
+  const calls = [];
+  const actions = createLocalShellActions({
+    runStdin: async (script, input, opts) => { calls.push({ script, input, opts }); return { code: 0, stdout: 'VOICELINK: applied settings=kept\n', stderr: '' }; },
+  });
+  await expect(actions.installVoiceLink()).resolves.toEqual({ target: 'voice-link', ok: true, settings: 'kept' });
+  expect(calls[0].script).toBe(buildVoiceLinkInstallScript());
+  expect(calls[0].input.length).toBe(0);
+  expect(calls[0].opts.cwd).toBe(os.homedir());
 });
 
 test('openAudioSink runs the writer remote under /bin/sh with the factory env', () => {
