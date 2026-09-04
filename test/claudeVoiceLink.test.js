@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -100,10 +100,43 @@ test('an operator who ran /voice off stays off: an existing voice key is kept ve
   expect(await fs.readFile(path.join(b.cfg, 'settings.json'), 'utf8')).toBe(before);
 });
 
+test('malformed settings.json: merge parse failure is reported, device installed anyway', async () => {
+  const b = await claudeBox();
+
+  // Build a custom tools bin with node/python3/claude/essential-commands but NOT jq
+  const toolsToLink = ['node', 'python3', 'claude', 'sh', 'mkdir', 'chmod', 'mkfifo', 'rm', 'mv', 'echo', 'cat', 'grep', 'printf'];
+  for (const tool of toolsToLink) {
+    try {
+      const toolPath = execFileSync('command', ['-v', tool], { shell: true, stdio: 'pipe' }).toString().trim();
+      if (toolPath && toolPath !== tool) {
+        await fs.symlink(toolPath, path.join(b.dir, 'bin', tool), 'file').catch(() => {});
+      }
+    } catch {
+      // Tool not found, skip
+    }
+  }
+
+  await fs.mkdir(b.cfg, { recursive: true });
+  const before = '{not json';
+  await fs.writeFile(path.join(b.cfg, 'settings.json'), before);
+
+  // PATH contains only our custom bin (no jq) - all essential tools are symlinked there
+  const customPath = path.join(b.dir, 'bin');
+
+  const res = await runShell(buildVoiceLinkInstallScript(), { HOME: b.dir, CLAUDE_CONFIG_DIR: b.cfg, PATH: customPath });
+  expect(res.code).toBe(0);
+  expect(res.stdout).toContain('VOICELINK: applied settings=error-settings-parse');
+  const rc = await fs.readFile(path.join(b.dir, '.asoundrc'), 'utf8');
+  expect(rc.startsWith('# tmuxifier-voice-link\n')).toBe(true);
+  expect(await isFifo(path.join(b.dir, '.tmuxifier-voice', 'mic'))).toBe(true);
+  expect(await fs.readFile(path.join(b.cfg, 'settings.json'), 'utf8')).toBe(before);
+});
+
 test('pusher maps applied → ok+settings, both skips → skipped, failure → error', async () => {
   const mk = (res) => createVoiceLinkPusher({ runStdin: async () => res });
   expect(await mk({ code: 0, stdout: 'VOICELINK: applied settings=applied\n' }).push({ id: 'b' })).toEqual({ target: 'voice-link', ok: true, settings: 'applied' });
   expect(await mk({ code: 0, stdout: 'VOICELINK: applied settings=kept\n' }).push({ id: 'b' })).toEqual({ target: 'voice-link', ok: true, settings: 'kept' });
+  expect(await mk({ code: 0, stdout: 'VOICELINK: applied settings=error-settings-parse\n' }).push({ id: 'b' })).toEqual({ target: 'voice-link', ok: true, settings: 'error-settings-parse' });
   expect(await mk({ code: 0, stdout: 'VOICELINK: skipped-no-claude\n' }).push({ id: 'b' })).toEqual({ target: 'voice-link', ok: false, skipped: 'no Claude on the box' });
   expect(await mk({ code: 0, stdout: 'VOICELINK: skipped-asoundrc-exists\n' }).push({ id: 'b' })).toEqual({ target: 'voice-link', ok: false, skipped: 'the box has its own ~/.asoundrc' });
   expect(await mk({ code: 1, stdout: '' }).push({ id: 'b' })).toEqual({ target: 'voice-link', ok: false, error: 'voice link push failed' });
