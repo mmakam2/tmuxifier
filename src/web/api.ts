@@ -365,6 +365,15 @@ export const api = {
         method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: blob,
       }));
   },
+  // The mic button's press-time verdict (POST /api/boxes/:id/pane-kind).
+  // `session` is omitted for __local__: the server classifies its own host
+  // session there.
+  async paneKind(boxId: string, session?: string) {
+    return j<{ kind: 'claude' | 'codex' | 'shell' | 'busy' }>(
+      await fetch(`/api/boxes/${encodeURIComponent(boxId)}/pane-kind`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(session ? { session } : {}),
+      }));
+  },
   async getLocalShell() { return j<{ shell: string }>(await fetch('/api/local-shell')); },
   async updateLocalShell(shell: string, claudeHooks = false) {
     return j<{ ok: boolean; agentHooks?: { ok: boolean; skipped?: string; error?: string } }>(
