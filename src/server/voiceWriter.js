@@ -60,7 +60,10 @@ export const WRITER_PROGRAM = [
   '    sys.exit(3)',
   // A superseding writer SIGTERMs us. The handler raises, so a blocking stdin
   // read — which PEP 475 would otherwise silently resume — unwinds at once.
-  'class Gone(Exception):',
+  // BaseException, not Exception, deliberately: readpid() below catches
+  // Exception, and a takeover request landing inside it must not be swallowed
+  // into "no predecessor" — that would leave two writers feeding one FIFO.
+  'class Gone(BaseException):',
   '    pass',
   'gone = []',
   'def bye(signum, frame):',
