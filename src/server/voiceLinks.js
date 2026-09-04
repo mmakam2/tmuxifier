@@ -13,11 +13,14 @@
 //    cap. Stale audio is worthless and a queue is a memory leak.
 //  - A link that delivers no frame for stallMs is closed (4004): a stalled
 //    feed leaves Claude's reader blocked and its stop hanging.
-//  - close() ends stdin (the writer then plays its 2.5 s silence tail and
-//    restores the idle capture device) and kills the child killGraceMs later.
-//    Nothing here shortens that grace to avoid overlapping a supersede: the
-//    box side owns that rule — a starting writer SIGTERMs its predecessor,
-//    which then exits with no tail at all (voiceWriter.js).
+//  - close() ends stdin (the writer then plays its 2.5 s silence tail, keeps
+//    pacing silence for as long as a reader still holds the FIFO — capped at
+//    10 minutes on the box — then parks the idle capture device) and kills
+//    the child only killGraceMs (11 minutes) later. Killing it sooner would
+//    hand a mid-recording reader an EOF, which alsa-lib turns into a
+//    memory-exhausting spin. Nothing here shortens that grace to avoid
+//    overlapping a supersede either: the box side owns that rule — a starting
+//    writer SIGTERMs its predecessor, which exits with no tail (voiceWriter.js).
 
 export const LINK_CLOSE = { superseded: 4001, notSetUp: 4002, writerFailed: 4003, stalled: 4004 };
 
@@ -25,7 +28,7 @@ export function createVoiceLinks({
   openSink,
   readyMs = 300,
   stallMs = 3000,
-  killGraceMs = 3000,
+  killGraceMs = 660000,
   maxFrameBytes = 8192,
   maxBytesPerSec = 65536,
   now = Date.now,

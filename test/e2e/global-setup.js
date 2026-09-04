@@ -18,14 +18,14 @@ export default async function globalSetup() {
 
   // The voice link's box-side layout (spec 2026-09-04), exactly as
   // buildVoiceLinkInstallScript() leaves it: the real FIFO is `mic.fifo`, and
-  // `mic` — the path ~/.asoundrc names — is a symlink parked on /dev/zero
+  // `mic` — the path ~/.asoundrc names — is a symlink parked on an absent path
   // until a writer swaps it onto the FIFO. The e2e box is this host, so the
   // real Python writer runs against it; no ALSA config is needed for the link
   // to reach `ready`.
   const vdir = path.join(lb.home, '.tmuxifier-voice');
   fsSync.mkdirSync(vdir, { recursive: true, mode: 0o700 });
   execFileSync('mkfifo', ['-m', '600', path.join(vdir, 'mic.fifo')]);
-  fsSync.symlinkSync('/dev/zero', path.join(vdir, 'mic'));
+  fsSync.symlinkSync(path.join(vdir, 'mic.absent'), path.join(vdir, 'mic'));
 
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-e2e-'));
   const sshConfigText = await fs.readFile(lb.sshConfigFile, 'utf8');

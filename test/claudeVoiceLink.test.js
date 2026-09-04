@@ -23,14 +23,17 @@ async function claudeBox() {
 }
 const isFifo = async (p) => (await fs.stat(p)).isFIFO();
 // What the box-side layout must look like after a run: the real FIFO under
-// mic.fifo, and `mic` — the path ~/.asoundrc names — a symlink parked on
-// /dev/zero. Idle it must read as silence, never block: alsa-lib opens
-// `infile` O_RDONLY and a FIFO with no writer blocks that open forever.
+// mic.fifo, and `mic` — the path ~/.asoundrc names — a symlink parked on an
+// ABSENT path, so an idle capture open FAILS. Not a writerless FIFO (open
+// blocks forever) and not /dev/zero (alsa-lib's null slave has no clock, so a
+// source that never blocks spins capture at CPU speed and the reader buffers
+// it until the box is out of memory — the v1.24.59 crash).
 async function expectIdleDevice(dir) {
   const d = path.join(dir, '.tmuxifier-voice');
   expect(await isFifo(path.join(d, 'mic.fifo'))).toBe(true);
   expect((await fs.lstat(path.join(d, 'mic'))).isSymbolicLink()).toBe(true);
-  expect(await fs.readlink(path.join(d, 'mic'))).toBe('/dev/zero');
+  expect(await fs.readlink(path.join(d, 'mic'))).toBe(path.join(d, 'mic.absent'));
+  await expect(fs.access(path.join(d, 'mic.absent'))).rejects.toBeTruthy();
 }
 
 test('the script interpolates nothing and carries the marker and the plug/file/null recipe', () => {
@@ -41,9 +44,12 @@ test('the script interpolates nothing and carries the marker and the plug/file/n
   expect(s).toContain('slave.pcm "null"');
   expect(s).toContain('format S16_LE rate 16000 channels 1');
   expect(s).toContain('command -v claude');
-  // The idle device: a symlink to /dev/zero, so a capture open with nothing
-  // linked returns silence instead of blocking on a writerless FIFO.
-  expect(s).toContain('ln -sfn /dev/zero "$DEV"');
+  // The idle device: a symlink to an absent path, so a capture open with
+  // nothing linked fails instead of blocking (writerless FIFO) or spinning
+  // (/dev/zero, EOF — alsa-lib's null slave has no clock).
+  expect(s).toContain('ln -sfn "$ABSENT" "$DEV"');
+  expect(s).not.toContain('ln -sfn /dev/zero');
+  expect(s).toContain('command -v python3');
   expect(s).toContain('mkfifo -m 600 "$FIFO"');
   expect(s).toContain('FIFO="$VDIR/mic.fifo"');
   expect(s).not.toMatch(/\$\{[^}]*(box|host|user|session)/i);
@@ -201,4 +207,33 @@ test('pusher maps applied → ok+settings, both skips → skipped, failure → e
   await createVoiceLinkPusher({ runStdin: async (box, script, input) => { seen = { box, script, input }; return { code: 0, stdout: 'VOICELINK: applied settings=applied\n' }; } }).push({ id: 'b' });
   expect(seen.script).toBe(buildVoiceLinkInstallScript());
   expect(seen.input.length).toBe(0);
+});
+
+test('a v1.24.59 layout (mic -> /dev/zero) is re-pointed at the absent path', async () => {
+  const b = await claudeBox();
+  const d = path.join(b.dir, '.tmuxifier-voice');
+  await fs.mkdir(d, { recursive: true, mode: 0o700 });
+  execFileSync('mkfifo', ['-m', '600', path.join(d, 'mic.fifo')]);
+  await fs.symlink('/dev/zero', path.join(d, 'mic'));
+  const res = await runShell(buildVoiceLinkInstallScript(), b.env());
+  expect(res.code).toBe(0);
+  expect(res.stdout).toContain('VOICELINK: applied');
+  await expectIdleDevice(b.dir);
+});
+
+test('no python3 on the box: nothing is installed and the phase reports skipped', async () => {
+  // The writer is a python3 program and nothing else can honour the
+  // reader-hold rule, so a box without python3 gets no shadowing device at
+  // all: a device with no safe writer is a hazard, not a feature.
+  const b = await claudeBox();
+  const res = await runShell(buildVoiceLinkInstallScript(), { ...b.env(), PATH: path.join(b.dir, 'bin') });
+  expect(res.code).toBe(0);
+  expect(res.stdout).toContain('VOICELINK: skipped-no-python3');
+  await expect(fs.access(path.join(b.dir, '.asoundrc'))).rejects.toBeTruthy();
+  await expect(fs.access(path.join(b.dir, '.tmuxifier-voice'))).rejects.toBeTruthy();
+});
+
+test('pusher maps the no-python3 skip', async () => {
+  const p = createVoiceLinkPusher({ runStdin: async () => ({ code: 0, stdout: 'VOICELINK: skipped-no-python3\n' }) });
+  expect(await p.push({ id: 'b' })).toEqual({ target: 'voice-link', ok: false, skipped: 'no python3 on the box' });
 });

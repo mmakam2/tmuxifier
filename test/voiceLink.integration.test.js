@@ -92,13 +92,13 @@ test('frames sent after ready land in the box FIFO byte-for-byte', async () => {
   expect(pyProbe.code, 'python3 must be on the fixture box PATH, or this test silently exercises the cat fallback instead of the real writer').toBe(0);
   // The layout buildVoiceLinkInstallScript() leaves on a prepared box: the
   // real FIFO is mic.fifo, and `mic` (what ~/.asoundrc names) is a symlink
-  // parked on /dev/zero until a writer swaps it onto the FIFO.
+  // parked on an absent path until a writer swaps it onto the FIFO.
   const vdir = path.join(lb.home, '.tmuxifier-voice');
   await fs.mkdir(vdir, { recursive: true, mode: 0o700 });
   const fifo = path.join(vdir, 'mic.fifo');
   execFileSync('mkfifo', ['-m', '600', fifo]);
   const dev = path.join(vdir, 'mic');
-  await fs.symlink('/dev/zero', dev);
+  await fs.symlink(path.join(vdir, 'mic.absent'), dev);
   const { ws, texts, closed } = connect(port, boxId, cookie);
   await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
   for (let i = 0; i < 100 && texts.length === 0; i++) await tick(50);

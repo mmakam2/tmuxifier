@@ -46,6 +46,7 @@ export function buildVoiceLinkInstallScript() {
     'VDIR="$HOME/.tmuxifier-voice"',
     'DEV="$VDIR/mic"',
     'FIFO="$VDIR/mic.fifo"',
+    'ABSENT="$VDIR/mic.absent"',
     "MARK='# tmuxifier-voice-link'",
     '',
     '# 1. Apply only when Claude Code is really installed on this box.',
@@ -55,6 +56,12 @@ export function buildVoiceLinkInstallScript() {
     '  exit 0',
     'fi',
     'cat >/dev/null 2>&1 || true',
+    '# ...and only where the python3 writer can run: a shadowing capture device',
+    '# with no safe writer is a hazard (voiceWriter.js), not a feature.',
+    'if ! command -v python3 >/dev/null 2>&1; then',
+    "  echo 'VOICELINK: skipped-no-python3'",
+    '  exit 0',
+    'fi',
     '',
     "# 2. Never touch an operator's own ALSA config.",
     'if [ -f "$RC" ] && ! grep -qF "$MARK" "$RC" 2>/dev/null; then',
@@ -63,8 +70,10 @@ export function buildVoiceLinkInstallScript() {
     'fi',
     '',
     "# 3. The FIFO Claude Code's default capture device reads — behind a",
-    '#    symlink, so the idle device is /dev/zero (silence, no writer needed)',
-    '#    rather than a writerless FIFO, whose open() blocks forever.',
+    '#    symlink parked on an ABSENT path while idle, so an unlinked open',
+    '#    fails. Not a writerless FIFO (open blocks forever) and NOT /dev/zero:',
+    '#    alsa-lib paces capture only through a live writer, so a source that',
+    '#    never blocks spins at CPU speed and the reader eats all memory.',
     'mkdir -p "$VDIR"',
     'chmod 700 "$VDIR"',
     '# Migrate the pre-symlink layout, where `mic` WAS the FIFO: move it into',
@@ -76,14 +85,15 @@ export function buildVoiceLinkInstallScript() {
     'fi',
     'if [ ! -p "$FIFO" ]; then rm -f "$FIFO"; mkfifo -m 600 "$FIFO"; fi',
     '# Only ever replace an absent path or a symlink (a dangling one included:',
-    '# -e follows). A regular file here belongs to the operator and is left',
-    '# alone — the link then simply does not work, the same posture the',
-    '# foreign-.asoundrc guard above takes.',
-    'if [ ! -e "$DEV" ] || [ -L "$DEV" ]; then ln -sfn /dev/zero "$DEV"; fi',
+    '# -e follows; so is the v1.24.59 /dev/zero link, which is re-pointed). A',
+    '# regular file here belongs to the operator and is left alone — the link',
+    '# then simply does not work, the same posture the foreign-.asoundrc guard',
+    '# above takes.',
+    'if [ ! -e "$DEV" ] || [ -L "$DEV" ]; then ln -sfn "$ABSENT" "$DEV"; fi',
     '',
     '# 4. ALSA: default = plug -> file(infile=DEV) -> null. Atomic write.',
     '#    DEV, not FIFO: alsa-lib opens infile once, so the indirection is what',
-    '#    lets the same recipe read silence when idle and the FIFO when linked.',
+    '#    lets the same recipe fail cleanly when idle and read the FIFO when linked.',
     'TMP="$RC.tmuxifier.tmp"',
     '{',
     '  echo "$MARK"',
@@ -130,6 +140,7 @@ export function createVoiceLinkPusher({ runStdin }) {
       if (res && res.code === 0) {
         if (/VOICELINK:\s*skipped-no-claude/.test(out)) return { target: 'voice-link', ok: false, skipped: 'no Claude on the box' };
         if (/VOICELINK:\s*skipped-asoundrc-exists/.test(out)) return { target: 'voice-link', ok: false, skipped: 'the box has its own ~/.asoundrc' };
+        if (/VOICELINK:\s*skipped-no-python3/.test(out)) return { target: 'voice-link', ok: false, skipped: 'no python3 on the box' };
         const m = /VOICELINK:\s*applied settings=(\S+)/.exec(out);
         if (m) return { target: 'voice-link', ok: true, settings: m[1] };
       }

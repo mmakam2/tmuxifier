@@ -160,8 +160,9 @@ button never has to be told which mode you mean.
 
 A link streams audio continuously while it is up (about 32 KB/s), and ends when you unlink, when
 the tab is hidden, when the page is closed or logged out, or after 30 minutes. While nothing is
-linked, the box's microphone is simply silence, so pressing Space in Claude Code on a prepared
-but unlinked box ends with "No speech detected". It is refused, with
+linked, the box has no microphone at all: pressing Space in Claude Code on a prepared but
+unlinked box makes Claude say it could not open an audio device. Link first, then hold Space.
+The link is refused, with
 a one-line note, on a box whose setup never installed the voice link — re-run setup with
 **Claude Code** ticked (see [Boxes & setup](boxes-and-setup.md#the-claude-code-checkbox)). Linked
 audio goes to the box and from there to Anthropic under that box's Claude.ai login — unlike

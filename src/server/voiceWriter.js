@@ -4,14 +4,24 @@
 // ALSA `default` capture device (see claudeVoiceLink.js) supplied with it.
 //
 // The device the ALSA config names, `~/.tmuxifier-voice/mic`, is a SYMLINK,
-// not the FIFO itself. Idle it points at /dev/zero; only while a writer is
-// alive does it point at the real FIFO, `mic.fifo`. That indirection is the
-// whole reason a Claude Code press works on a prepared box with nothing
-// linked: alsa-lib's file plugin opens `infile` O_RDONLY, and opening a FIFO
-// with no writer BLOCKS FOREVER — every Space press on an unlinked box hung
-// in snd_pcm_open. /dev/zero answers instantly with silence and never EOFs,
-// so Claude's own silence detection ends the recording with "No speech
-// detected" instead of hanging.
+// not the FIFO itself. Idle it points at an ABSENT path, `mic.absent`; only
+// while a writer is alive does it point at the real FIFO, `mic.fifo`. Both
+// halves of that rule are load-bearing, and both were learned the hard way:
+//  - A FIFO with no writer BLOCKS FOREVER in snd_pcm_open (alsa-lib's file
+//    plugin opens `infile` O_RDONLY), so every Space press on an unlinked
+//    box hung.
+//  - A source that never blocks is WORSE. alsa-lib's null slave has no clock:
+//    the only pacing capture ever has is a live writer on the FIFO. Pointed
+//    at /dev/zero (v1.24.59), capture returned 331 MILLION frames per second
+//    on this host — 20,000× real time — and Claude Code buffered that
+//    "silence" until the box, and then the Proxmox host, ran out of memory.
+//    EOF does the same: the plugin returns stale buffer contents in a tight
+//    loop once the last writer closes.
+// So idle = absent (the open fails, Claude reports no device — an error, not
+// a hang and not a crash), and a writer NEVER leaves a reader behind: after
+// its 2.5 s silence tail it keeps pacing zeros for as long as any O_RDONLY
+// holder of the FIFO remains (scanned via /proc, capped at 10 minutes), and
+// only then parks the device and exits.
 //
 // Three rules for the feed itself, each learned against alsa-lib's file plugin:
 //  - Open the FIFO O_RDWR: a plain O_WRONLY open blocks until a reader exists,
@@ -26,8 +36,9 @@
 //    therefore atomic.
 // On stdin EOF it feeds 2.5 s of paced silence — past Claude Code's 2.0 s
 // silence-detection window — so a recording in flight ends on silence
-// rather than EOF, then restores the idle symlink and exits 0. Exit 3 = the
-// FIFO is missing (box never set up), which voiceLinks.js maps to 4002.
+// rather than EOF, keeps pacing while a reader holds the FIFO (above), then
+// parks the idle symlink and exits 0. Exit 3 = the FIFO is missing (box never
+// set up) or no python3, which voiceLinks.js maps to 4002.
 //
 // Single writer, enforced on the box by `~/.tmuxifier-voice/writer.pid`: a
 // starting writer SIGTERMs whatever live pid the file names and waits ~300 ms
@@ -52,6 +63,7 @@ export const WRITER_PROGRAM = [
   'd = os.path.join(os.path.expanduser("~"), ".tmuxifier-voice")',
   'fifo = os.path.join(d, "mic.fifo")',
   'dev = os.path.join(d, "mic")',
+  'absent = os.path.join(d, "mic.absent")',
   'pidfile = os.path.join(d, "writer.pid")',
   'try:',
   '    if not stat.S_ISFIFO(os.stat(fifo).st_mode):',
@@ -117,6 +129,41 @@ export const WRITER_PROGRAM = [
   '    except OSError:',
   '        pass',
   'point(fifo)',
+  // Is any process other than us holding the FIFO open for reading? The
+  // alsa-lib reader opens it O_RDONLY; a successor writer holds it O_RDWR and
+  // must not count, so the access mode from fdinfo decides. Same user, same
+  // container, so /proc/<pid>/fd is readable; anything unreadable is skipped.
+  'def readers():',
+  '    try:',
+  '        st = os.stat(fifo)',
+  '        pids = os.listdir("/proc")',
+  '    except OSError:',
+  '        return False',
+  '    me = str(os.getpid())',
+  '    for p in pids:',
+  '        if not p.isdigit() or p == me:',
+  '            continue',
+  '        fdd = "/proc/" + p + "/fd"',
+  '        try:',
+  '            names = os.listdir(fdd)',
+  '        except OSError:',
+  '            continue',
+  '        for n in names:',
+  '            try:',
+  '                s2 = os.stat(fdd + "/" + n)',
+  '            except OSError:',
+  '                continue',
+  '            if s2.st_ino != st.st_ino or s2.st_dev != st.st_dev:',
+  '                continue',
+  '            try:',
+  '                info = open("/proc/" + p + "/fdinfo/" + n).read()',
+  '            except OSError:',
+  '                continue',
+  '            for line in info.split("\\n"):',
+  '                if line.startswith("flags:"):',
+  '                    if int(line.split()[1], 8) & 3 == 0:',
+  '                        return True',
+  '    return False',
   'src = sys.stdin.buffer',
   'carry = b""',
   'try:',
@@ -147,10 +194,26 @@ export const WRITER_PROGRAM = [
   '        w = t - time.monotonic()',
   '        if w > 0:',
   '            time.sleep(w)',
+  // The tail is over, but a reader mid-recording must never see EOF (spin).
+  // Keep pacing silence while anyone holds the FIFO for reading; rescan /proc
+  // every ~240 ms; give up after 10 minutes so a wedged reader cannot pin us.
+  '    t0 = time.monotonic()',
+  '    while not gone and time.monotonic() - t0 < 600 and readers():',
+  '        for _ in range(12):',
+  '            if gone:',
+  '                break',
+  '            try:',
+  '                os.write(fd, zeros)',
+  '            except BlockingIOError:',
+  '                pass',
+  '            t += 0.02',
+  '            w = t - time.monotonic()',
+  '            if w > 0:',
+  '                time.sleep(w)',
   'except Gone:',
   '    pass',
   'if not gone:',
-  '    point("/dev/zero")',
+  '    point(absent)',
   '    if readpid() == os.getpid():',
   '        try:',
   '            os.remove(pidfile)',
@@ -160,23 +223,19 @@ export const WRITER_PROGRAM = [
   'sys.exit(0)',
 ].join('\n');
 
-// The remote command. python3 is on every Debian/Ubuntu template; the `cat`
-// fallback (Alpine, minimal images) mirrors the minimum — point the device at
-// the FIFO, feed it, point it back at /dev/zero — but has no pidfile (so two
-// links interleave rather than the newer one taking over) and no silence
-// tail, can carry up to the pipe's default 64 KB of stale audio, and blocks
-// its channel while nobody reads. Documented as degraded. The FIFO check
-// comes first on that path so a box that was never set up still exits 3
-// rather than blocking in open().
+// The remote command. python3 only: there is no `cat` fallback any more,
+// because `cat` cannot honour the reader-hold rule above — it would close the
+// FIFO the instant the link ended and hand a mid-recording Claude Code an
+// EOF, which is the memory-exhausting spin this module exists to prevent. A
+// box without python3 exits 3 (voiceLinks.js: 4002 not-set-up), and the
+// setup phase (claudeVoiceLink.js) never installs the shadowing device on
+// such a box in the first place.
 export function buildVoiceWriterRemote() {
   return [
     'if command -v python3 >/dev/null 2>&1; then',
     `  exec python3 -c '${WRITER_PROGRAM}'`,
     'else',
-    `  [ -p "$HOME/${VOICE_FIFO_REL}" ] || exit ${WRITER_EXIT_NOT_SET_UP}`,
-    `  ln -sfn mic.fifo "$HOME/${VOICE_DEV_REL}"`,
-    `  cat > "$HOME/${VOICE_FIFO_REL}"`,
-    `  ln -sfn /dev/zero "$HOME/${VOICE_DEV_REL}"`,
+    `  exit ${WRITER_EXIT_NOT_SET_UP}`,
     'fi',
   ].join('\n');
 }

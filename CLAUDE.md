@@ -859,23 +859,34 @@ pattern for new modules.
   asks for 48 kHz 32-bit mono — to the pipe's fixed 16 kHz S16), creates the FIFO, and merges
   `voice.enabled: true` into Claude's settings.json only when no `voice` key exists. The path
   `infile` names, `~/.tmuxifier-voice/mic`, is a **symlink**, not the FIFO: idle it points at
-  `/dev/zero` and only a live writer points it at the real FIFO, `mic.fifo` beside it. That
-  indirection is load-bearing — alsa-lib's file plugin opens `infile` `O_RDONLY`, and opening
-  a FIFO with no writer BLOCKS FOREVER, so every Claude Code Space press on a prepared but
-  unlinked box hung inside `snd_pcm_open`; `/dev/zero` answers at once with silence and
-  Claude's own detection ends the recording. The pre-symlink layout migrates in place (a FIFO
-  named `mic` is renamed to `mic.fifo`, or dropped if that name is taken); a regular file
-  named `mic` is never clobbered, the same posture as the `.asoundrc` guard. Guarded by the `# tmuxifier-voice-link` marker: a foreign
-  `~/.asoundrc` is never touched and the phase skips. The box decides via `command -v claude`.
-  Host Shell gets the same install under the local-shell `claudeHooks` flag.
+  an ABSENT path (`mic.absent`) and only a live writer points it at the real FIFO, `mic.fifo`
+  beside it. Both halves are load-bearing. A FIFO with no writer BLOCKS FOREVER in
+  `snd_pcm_open` (alsa-lib's file plugin opens `infile` `O_RDONLY`), so every Space press on a
+  prepared but unlinked box hung. And a source that never blocks is WORSE: alsa-lib's null
+  slave has no clock, the only pacing capture ever has is a live writer, so v1.24.59's
+  `/dev/zero` idle target made capture return 331 million frames/s (measured) — Claude Code
+  buffered that "silence" until the box and then the Proxmox host ran out of memory. Idle =
+  absent means an unlinked press fails to open the device (Claude reports no microphone), an
+  error rather than a hang or a crash. The pre-symlink and the `/dev/zero` layouts both
+  migrate in place (a FIFO named `mic` is renamed to `mic.fifo`, or dropped if that name is
+  taken; any symlink is re-pointed); a regular file named `mic` is never clobbered, the same
+  posture as the `.asoundrc` guard. Guarded by the `# tmuxifier-voice-link` marker: a foreign
+  `~/.asoundrc` is never touched and the phase skips. The box decides via `command -v claude`
+  and `command -v python3` — without python3 nothing is installed (`skipped-no-python3`),
+  because a shadowing device with no safe writer is a hazard. Host Shell gets the same install
+  under the local-shell `claudeHooks` flag.
 - `voiceWriter.js` / `voiceLinks.js` — the runtime half of the voice link. `voiceWriter.js`
   is the static Python program (no single quote in it: it rides a single-quoted shell string;
-  `cat` fallback without python3) that keeps the FIFO fed: opened `O_RDWR` so open never
-  blocks and EOF never reaches a reader, pipe shrunk to 4 KB, non-blocking writes dropped when
-  full, even-length runs only, and 2.5 s of paced silence on stdin EOF — because alsa-lib's
-  file plugin does not pad a closed FIFO with silence, it spins on stale buffer contents.
-  It also owns the idle-device symlink described above: it swaps `mic` onto `mic.fifo` on
-  start and back onto `/dev/zero` after its tail. `~/.tmuxifier-voice/writer.pid` makes it
+  no `cat` fallback — without python3 the remote exits 3) that keeps the FIFO fed: opened
+  `O_RDWR` so open never blocks and EOF never reaches a reader, pipe shrunk to 4 KB,
+  non-blocking writes dropped when full, even-length runs only, and 2.5 s of paced silence on
+  stdin EOF — because alsa-lib's file plugin does not pad a closed FIFO with silence, it
+  spins on stale buffer contents at CPU speed, the same memory-exhausting spin as `/dev/zero`.
+  For the same reason a writer NEVER leaves a reader behind: after the tail it keeps pacing
+  zeros for as long as any `O_RDONLY` holder of the FIFO remains (scanned through
+  `/proc/*/fd` + `fdinfo`, capped at 10 minutes; `voiceLinks.js`'s kill grace is 11), and only
+  then parks the device. It also owns the idle-device symlink described above: it swaps `mic`
+  onto `mic.fifo` on start and back onto the absent path when it leaves. `~/.tmuxifier-voice/writer.pid` makes it
   single-instance — a starting writer SIGTERMs whatever live pid the file names and waits
   ~300 ms, and a writer superseded that way exits AT ONCE, with no tail, no symlink restore
   and no pidfile removal, since the successor owns all three (without that rule the

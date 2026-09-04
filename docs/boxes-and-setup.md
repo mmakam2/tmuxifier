@@ -82,11 +82,14 @@ Ticking it makes the setup run do four things, each skipping cleanly when alread
   settings.json unless you already chose (`/voice off` stays off). A box that already has its own
   `~/.asoundrc` is left alone and the step reports `skipped`. See [Voice dictation](terminal.md#voice-dictation)
   for what the link does. The device the config names, `~/.tmuxifier-voice/mic`, is a symlink:
-  it points at `/dev/zero` — silence — whenever nothing is linked, and only at the real pipe
-  (`mic.fifo`, beside it) while a link is up, so pressing Space in Claude Code on an unlinked
-  box ends with "No speech detected" rather than hanging. The pipe is fed by a small Python
-  program on the box; on an image without `python3` a plain `cat` takes its place and may carry
-  a little stale audio.
+  it points at a path that does not exist whenever nothing is linked, and only at the real pipe
+  (`mic.fifo`, beside it) while a link is up. So pressing Space in Claude Code on an unlinked
+  box makes Claude report that it has no microphone — an error, deliberately, rather than a
+  hang (a pipe nobody feeds blocks forever) or a crash (a source that never blocks, such as
+  `/dev/zero`, makes ALSA capture spin at CPU speed until the box is out of memory; that was
+  v1.24.59). The pipe is fed by a small Python program on the box, and it stays until Claude
+  has let go of the pipe, so a recording in flight ends on silence. A box without `python3`
+  gets no voice link at all (the step reports `skipped`) rather than an unsafe substitute.
 
 Two things are worth knowing before you tick it on a box that isn't a plain headless server.
 First, the ALSA config claims the **default** device: on a box that has real audio hardware and
