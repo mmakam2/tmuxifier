@@ -285,6 +285,21 @@ export function injectVia(runScript, session, remotePath) {
   });
 }
 
+// Which flow the pane header's mic should take (spec 2026-09-04): the SAME
+// capture and classifier the injectors use, so "links to Claude" and "would
+// type here" can never disagree. Never throws — a failed capture is reported,
+// not guessed at, because the client treats anything but 'claude' as
+// dictation and a guessed 'claude' would arm a link into a shell.
+export async function paneKindVia(runScript, session) {
+  try {
+    const cap = await runScript(buildPaneStateRemote(session));
+    if (!cap || cap.code !== 0) return { ok: false, error: String(cap?.stderr || '').trim() || 'pane state failed' };
+    return { ok: true, kind: classifyPaneState(parsePaneState(cap.stdout)) };
+  } catch (e) {
+    return { ok: false, error: e?.message || 'pane state failed' };
+  }
+}
+
 function runLocalScript(script, { timeout = 8000 } = {}) {
   return new Promise((resolve) => {
     execFile('/bin/sh', ['-c', script], { timeout, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
@@ -303,4 +318,8 @@ export function injectLocalUploadPath(session, path, { run = runLocalScript } = 
 // (sessions.openLocal), so the same flow works with a /bin/sh runner.
 export function injectLocalText(session, text, { run = runLocalScript } = {}) {
   return injectTextVia(run, session, text, { label: 'dictation' });
+}
+
+export function paneKindLocal(session, { run = runLocalScript } = {}) {
+  return paneKindVia(run, session);
 }

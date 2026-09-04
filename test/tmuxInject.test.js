@@ -16,6 +16,7 @@ import {
   NAMED_KEYS,
   buildSendNamedKeyRemote,
   sanitizeSendText,
+  paneKindVia,
 } from '../src/server/tmuxInject.js';
 
 const CLAUDE_IDLE = [
@@ -418,4 +419,20 @@ test('sanitizeSendText: newlines collapse (a newline IS Enter), controls strippe
   expect(sanitizeSendText('  hello\n  world\t!  ')).toBe('hello world !');
   expect(sanitizeSendText('a\u0007b\u001b[31mc')).toBe('ab[31mc');
   expect(sanitizeSendText('\r\n\r\n')).toBe('');
+});
+
+test('paneKindVia classifies through the same capture the injectors use', async () => {
+  const scripts = [];
+  const run = async (s) => { scripts.push(s); return { code: 0, stdout: 'claude\n╭─ Claude Code ─╮\n' }; };
+  expect(await paneKindVia(run, 'web')).toEqual({ ok: true, kind: 'claude' });
+  expect(scripts[0]).toContain("#{pane_current_command}");
+  expect(scripts[0]).toContain("'=web:'");
+  expect(await paneKindVia(async () => ({ code: 0, stdout: 'zsh\nuser@host $ ' }), 'web')).toEqual({ ok: true, kind: 'shell' });
+});
+
+test('paneKindVia reports a failed capture rather than guessing', async () => {
+  const r = await paneKindVia(async () => ({ code: 1, stdout: '', stderr: 'no session' }), 'web');
+  expect(r).toEqual({ ok: false, error: 'no session' });
+  const t = await paneKindVia(async () => { throw new Error('ssh died'); }, 'web');
+  expect(t).toEqual({ ok: false, error: 'ssh died' });
 });

@@ -13,6 +13,7 @@ import { storedUploadName, buildUploadRemote } from './uploads.js';
 import {
   injectVia,
   injectTextVia,
+  paneKindVia,
   buildPaneSnapshotRemote,
   parsePaneSnapshot,
   buildSendNamedKeyRemote,
@@ -673,6 +674,10 @@ export function createBoxActions({ run, runStdin, pipe = null, hostKeyPolicy = '
     // the client regardless of whether it could be typed.
     async injectText(box, session, text, { timeoutMs = 8000 } = {}) {
       return injectTextVia((script) => runRemote(box, script, timeoutMs), session, text, { label: 'dictation' });
+    },
+    // The mic button's press-time verdict: which flow this pane takes.
+    async paneKind(box, session, { timeoutMs = 8000 } = {}) {
+      return paneKindVia((script) => runRemote(box, script, timeoutMs), session);
     },
     // Read-only snapshot of the box session's active pane: tmux is the
     // terminal emulator, this just ships its screen. Never attaches a client,

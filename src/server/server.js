@@ -22,7 +22,7 @@ import { createTruenasClient } from './truenasApi.js';
 import { createUnifiClient } from './unifiApi.js';
 import { createImmichClient } from './immichApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
-import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault, NAMED_KEYS, sanitizeSendText } from './tmuxInject.js';
+import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault, paneKindLocal as paneKindLocalDefault, NAMED_KEYS, sanitizeSendText } from './tmuxInject.js';
 import { normalizeTranscript } from './voiceText.js';
 import { MODEL_IDS, resolveModel } from './voiceCatalog.js';
 import { vendorModelPath } from './voicePaths.js';
@@ -114,7 +114,7 @@ const NO_FLEET_SCRIPTS = {
   removeScript: async () => {},
 };
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, uiSettingsStore = null, deviceStore = null, pairingCodes = null, apkBuildManager = null, voiceLinks = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, paneKindLocal = paneKindLocalDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, voiceEnabledInitial = null, uiSettingsStore = null, deviceStore = null, pairingCodes = null, apkBuildManager = null, voiceLinks = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -950,6 +950,28 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     // switch that already succeeded on the box into an error response.
     try { await statusPoller?.probeOne?.(box.id); } catch { /* the next sweep will catch up */ }
     return { ok: true, windowId };
+  });
+  // The mic button's press-time verdict (spec 2026-09-04): 'claude' links the
+  // browser mic to the box, anything else dictates. Same classifier as
+  // dictation's own injection, same 409 gate as /term. __local__ classifies
+  // the host's own session.
+  app.post('/api/boxes/:id/pane-kind', { preHandler: requireAuth }, async (req, reply) => {
+    const id = String(req.params.id);
+    const box = id === '__local__' ? null : await store.getBox(id);
+    if (id !== '__local__' && !box) return reply.code(404).send({ error: 'box not found' });
+    if (box && setupManager?.currentForBox(box.id)?.status === 'running') {
+      return reply.code(409).send({ error: 'box setup is still running' });
+    }
+    const requested = (req.body || {}).session;
+    const session = requested === undefined ? (box ? box.sessionName : localSession) : requested;
+    if (typeof session !== 'string' || !SESSION_NAME_RE.test(session)) {
+      return reply.code(400).send({ error: 'session name must be letters, digits, _ or -' });
+    }
+    const res = box
+      ? (boxActions?.paneKind ? await boxActions.paneKind(box, session) : { ok: false, error: 'pane kind unavailable' })
+      : await paneKindLocal(session);
+    if (!res.ok) return reply.code(502).send({ error: res.error });
+    return { kind: res.kind };
   });
   // Kill a tmux SESSION, or one WINDOW inside it, on the box. One route rather
   // than two so the "always session-qualified" rule lives at a single
