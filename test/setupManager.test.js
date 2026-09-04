@@ -791,11 +791,10 @@ test('voice-link runs before the saved script and before the session is created'
   const order = [];
   const m = make({
     pushVoiceLink: async () => { order.push('voice-link'); return { target: 'voice-link', ok: true }; },
-    getScript: async () => ({ id: 'fs-1', name: 's', script: 'true' }),
+    getScript: async (id) => { order.push(`script:${id}`); return SCRIPT_REC; },
     ensureSession: async () => { order.push('session'); },
   });
   const s = m.start(BOX, { tools: ['claude'], scriptId: 'fs-1' });
   await m._settled(s.id);
-  expect(order[0]).toBe('voice-link');
-  expect(order[order.length - 1]).toBe('session');
+  expect(order).toEqual(['voice-link', 'script:fs-1', 'session']);
 });
