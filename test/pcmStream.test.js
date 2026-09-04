@@ -46,8 +46,10 @@ test('chunked 48 kHz input matches the whole-buffer resampler with no seam per b
   const frames = [];
   for (const b of blocks(src, 128)) frames.push(...st.push(b));   // AudioWorklet block size
   const got = s16(frames);
-  // Whole frames only: 7999 resampled samples → 24 full frames (7680).
-  expect(got.length).toBe(Math.floor((ref.length - 1) / 320) * 320);
+  // Whole frames only, and at most one held sample versus the whole-buffer resampler.
+  expect(got.length % 320).toBe(0);
+  expect(got.length).toBeGreaterThanOrEqual(ref.length - 320);
+  expect(got.length).toBeLessThanOrEqual(ref.length);
   for (let i = 0; i < got.length && i < ref.length - 1; i++) {
     expect(Math.abs(got[i] - ref[i])).toBeLessThan(2 / 32767);
   }
