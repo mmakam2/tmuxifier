@@ -67,8 +67,11 @@ substitutes what it can read from `infile` into each transfer and pads the rest 
 
 FIFO semantics that shaped the design: `open(O_RDONLY)` blocks until a writer exists; a read on
 an empty FIFO blocks (Claude's stop hung until bytes flowed); a short read is padded with
-silence, so the feed is not rate-locked to the reader. The writer must therefore stay open and
-keep feeding for the whole linked period, and must never let stale audio pile up.
+silence, so the feed is not rate-locked to the reader. And once the last writer closes, reads
+do **not** pad with silence: alsa-lib's file plugin returns stale buffer contents immediately,
+in a tight loop (measured: two million reads in three seconds). The writer must therefore stay
+open and keep feeding for the whole linked period, never let stale audio pile up, and never
+hand a mid-recording reader a bare EOF.
 
 ## Goals
 
@@ -101,8 +104,9 @@ keep feeding for the whole linked period, and must never let stale audio pile up
 - **Link refused by the server** after the mic went live (box not set up, or setup running):
   the press continues as dictation with the buffered audio, plus a one-line notice.
 - **Unlink triggers**: a second press; the socket closing for any reason (no automatic
-  re-arm); the pane being undocked, replaced, or its box removed; the page going hidden
-  (`visibilitychange`); logout or session expiry; a hard cap of 30 minutes linked. Window blur
+  re-arm), including the server closing a link that delivered no frame for 3 s; the pane being
+  undocked, replaced, or its box removed; the page going hidden (`visibilitychange`); logout or
+  session expiry; a hard cap of 30 minutes linked. Window blur
   alone does not unlink, unlike dictation, because the live state is persistent in the header
   and the browser's own microphone indicator is showing.
 
@@ -146,14 +150,16 @@ keep feeding for the whole linked period, and must never let stale audio pile up
   `isAuthed` path as `/term`; `client` through `safeClientId`. Close `1008 'setting up'` while
   the box's setup job is running. Accepts `__local__`. Binary frames only, each ≤ 8 KB; a text
   frame from the client is ignored. Server → client text frames: `ready`, and close codes
-  `4001 superseded`, `4002 not-set-up`, `4003 writer-failed`.
+  `4001 superseded`, `4002 not-set-up`, `4003 writer-failed`, `4004 stalled`.
 - `voiceLinks.js` (new): `createVoiceLinks({ openSink })`. One link per box, newest wins: a
   second `open(boxId)` closes the earlier socket with `4001`. `open` spawns the writer through
   `openSink(box)` and starts a 300 ms readiness timer; if the writer exits before it, the
   socket closes with `4002` (exit 3) or `4003` (anything else); otherwise `ready` is sent.
   `write(frame)` drops the frame when the child's stdin needs drain, or when the rolling
-  byte-rate exceeds 64 KB/s (twice nominal). Never queues. `close` ends stdin and kills the
-  child after a short grace. `closeAll` is wired into shutdown.
+  byte-rate exceeds 64 KB/s (twice nominal). Never queues. A link that has delivered no frame
+  for 3 s is closed with `4004 stalled`, because a stalled feed leaves Claude's reader blocked
+  and its stop hanging. `close` ends stdin and kills the child 3 s later, after the writer's
+  silence tail. `closeAll` is wired into shutdown.
 - `sshRun.js`: `sshPipe(argv)` (new), the streaming-stdin primitive beside `sshRunStdin` and
   `sshStream`: returns `{ stdin, done, kill }` with stdout ignored and stderr captured (capped)
   for the failure message.
@@ -185,8 +191,10 @@ Program contract (`test/voiceWriter.integration.test.js` pins it against the rea
 - Reads stdin in chunks, writes non-blocking, drops on `EAGAIN`. Only whole even-length runs
   are written or dropped: a one-byte carry keeps S16 sample alignment across arbitrary stdin
   chunk boundaries and across drops. Writes are ≤ `PIPE_BUF`, hence atomic.
-- Ends on stdin EOF with exit 0. Claude's reader then sees EOF, padded as silence, and its
-  own silence detection ends the recording.
+- On stdin EOF (the link is gone) it feeds 2.5 s of paced silence, past Claude Code's 2.0 s
+  silence-detection window, then exits 0. A reader mid-recording ends on silence rather than
+  seeing a bare EOF, which alsa-lib turns into a stale-buffer spin; a reader that has already
+  closed costs nothing, the zeros drop.
 
 The `cat` fallback (no python3: Alpine, minimal images) works but can carry up to the pipe's
 default 64 KB (2 s) of stale audio and blocks its ssh channel while nobody reads. Documented
@@ -230,7 +238,7 @@ Nominal rate 32 KB/s per linked box. At most one link per box.
 | Box never set up | writer exits 3 → close `4002` → press continues as dictation; terminal line: "voice link: box not set up — run setup with Claude Code ticked; dictating instead" |
 | Setup running on the box | socket refused `1008` → dictation, which the existing gate refuses too → the setting-up panel the user already sees |
 | Claude's voice mode off on the box | frames stream into a device nobody opens; the writer drops them; no ● REC in Claude; the setup phase result names the settings outcome |
-| Socket drops mid-link | button → idle, no re-arm; writer dies with its ssh; Claude reads EOF and ends on silence |
+| Socket drops mid-link, or stalls for 3 s | button → idle, no re-arm; the writer's stdin ends, it feeds 2.5 s of silence so a recording in flight ends on Claude's own silence detection, then exits |
 | Second tab or pane links the same box | earlier socket closed `4001` → its button idle with a one-line notice |
 | Claude pane read as shell (npm wrapper, heuristic miss) | dictation types the transcript into Claude's input box: degraded, not broken. The reverse cannot come from the command name |
 | Probe fails or exceeds 1.5 s | dictation |
@@ -263,8 +271,9 @@ Nominal rate 32 KB/s per linked box. At most one link per box.
   merge only when `voice` is absent. The classification route reuses `classifyPaneState`,
   already covered by `test/tmuxInject.test.js`.
 - **Writer contract, real python3.** Spawn the program against a local FIFO with a slow
-  reader: alignment survives odd-length chunks and drops; the writer never blocks; EOF ends it
-  with 0; a missing FIFO exits 3 inside 300 ms.
+  reader: alignment survives odd-length chunks and drops; the writer never blocks; a missing
+  FIFO exits 3 inside 300 ms; after stdin EOF a reader receives about 2.5 s of zeros, then
+  EOF, and the writer exits 0.
 - **Integration, isolated sshd box** (`test/helpers/localBox.js`). Open `/voice-link` against
   the localBox, stream a known pattern, read the FIFO on the box side, compare. Setup-job gate,
   supersede code, not-set-up code, Host Shell branch. The `voice-link` setup phase writing
