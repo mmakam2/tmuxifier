@@ -304,6 +304,12 @@ pattern for new modules.
   the only way to reach a transcript that lives inside the TUI. The wheel script self-gates on
   the box (`exit 93` → 409) unless the pane has mouse tracking AND SGR encoding on, because to
   a non-mouse pane those bytes are garbage input.
+  `GET /voice-link?box=` (WebSocket, cookie-authenticated like `/term`, `1008 'setting up'` while
+  the box's setup job runs, `__local__` accepted) carries the browser mic's 16 kHz S16 frames to
+  `voiceLinks.js`; `POST /api/boxes/:id/pane-kind` `{ session? }` is the mic button's press-time
+  verdict, the same `classifyPaneState` dictation's injection uses, so 'links' and 'would type
+  here' cannot disagree. The permissions-policy `microphone` token is always `self` now — the
+  link needs nothing installed on this host.
 - `store.js` — `data/boxes.json` CRUD; normalizes/validates boxes; exports/imports the box list as
   a versioned JSON file (`exportBoxes`/`importBoxes`; import re-mints ids and skips dup/unsafe entries).
   `uniquenessConflict(candidate)` is the read-only half of `assertUniqueBox` — the same rule,
@@ -842,6 +848,28 @@ pattern for new modules.
   120min TTL), trading a possible late ping for the false one that used to be routine.
   The hook therefore READS its stdin event JSON (it used to discard it) — substring-matched
   only, never eval'd, and every value taken from it is re-sanitized before reaching a path.
+- `claudeVoiceLink.js` — `buildVoiceLinkInstallScript` (pure) + `createVoiceLinkPusher`: the
+  `voice-link` setup phase (spec 2026-09-04), run after `agent-hooks` under the same `claude`
+  tools knob, recorded on `job.voiceLink`, never promoted. Makes the box's ALSA `default`
+  capture device a FIFO (`~/.tmuxifier-voice/mic`) through a user-level `~/.asoundrc`
+  (`plug` → `file(infile)` → `null`; the plug layer converts whatever Claude Code's capture
+  negotiates — its native cpal path asks for 48 kHz 32-bit mono — to the pipe's fixed 16 kHz
+  S16), creates the FIFO, and merges `voice.enabled: true` into Claude's settings.json only
+  when no `voice` key exists. Guarded by the `# tmuxifier-voice-link` marker: a foreign
+  `~/.asoundrc` is never touched and the phase skips. The box decides via `command -v claude`.
+  Host Shell gets the same install under the local-shell `claudeHooks` flag.
+- `voiceWriter.js` / `voiceLinks.js` — the runtime half of the voice link. `voiceWriter.js`
+  is the static Python program (no single quote in it: it rides a single-quoted shell string;
+  `cat` fallback without python3) that keeps the FIFO fed: opened `O_RDWR` so open never
+  blocks and EOF never reaches a reader, pipe shrunk to 4 KB, non-blocking writes dropped when
+  full, even-length runs only, and 2.5 s of paced silence on stdin EOF — because alsa-lib's
+  file plugin does not pad a closed FIFO with silence, it spins on stale buffer contents.
+  `voiceLinks.js` holds one writer per linked box (newest wins, `4001`), sends `ready` after
+  the writer survives 300 ms (exit 3 before that is `4002 not-set-up`, anything else `4003`),
+  never queues audio (drops on backpressure, oversize, or over 64 KB/s), closes a link that
+  delivers no frame for 3 s (`4004`), and is drained by `registerShutdownFlush`. Transport is
+  `sshRun.js`'s `sshPipe` via `boxActions.openAudioSink` (or `localShellActions.openAudioSink`
+  for the host).
 - `tlsPin.js` — shared TLS fingerprint-pinning helpers (`tlsProbe`/`pinnedSocket`/`normFp`) used
   by both the Proxmox and NetBox API clients. Pin mode verifies the pinned fingerprint on each
   request's own connection (`pinnedSocket` via `createConnection`) instead of OpenSSL chain
@@ -1096,7 +1124,9 @@ terminal, and flipping to desktop force-closes via `main.ts`'s onFlip. While ope
 mic reroutes transcripts into the draft through `VoiceHost.sink` (evaluated at finish-time,
 and `voiceUi.ts`'s `finish()` skips its terminal refocus on that path — the field is holding
 focus deliberately) and `POST /api/voice?inject=off`, which returns the text without touching
-the pane),
+the pane) — dictation only: a Claude Code pane's press still links rather than dictating, so a
+linked pane's audio goes straight to the box and Anthropic's own transcription, never through
+this sink,
 `immichCard.ts` (the Immich card: library and volume sizes kept distinct — `statistics.usage` is
 the library, `storage.diskUseRaw` the disk, and one "size" figure would conflate them — plus the
 job-queue verdict and the named `denied` readings a least-privilege key produces),
@@ -1277,12 +1307,20 @@ encoder — the reason the project needs no ffmpeg dependency: whisper.cpp wants
 format, and the browser's MediaRecorder would have emitted webm/opus requiring server-side
 decoding; the input sample rate is a parameter, not an assumption, since `AudioContext.sampleRate`
 is device-dependent — commonly 48000, often 44100), `voiceRecorder.ts` (microphone capture via
-`getUserMedia` and an AudioWorklet, producing WAV bytes), `voiceUi.ts` (the readiness verdict
+`getUserMedia` and an AudioWorklet, producing WAV bytes), `pcmStream.ts` (the stateful 16 kHz
+S16 resampler and 640-byte framer the link streams through), `voicePress.ts` (the pure
+press/verdict/release/ready/refused/closed reducer behind the one mic button: a `claude` verdict
+from `POST pane-kind` links, anything else dictates; a release before the verdict is
+remembered), `voiceLink.ts` (the `/voice-link` client: resolves on `ready`, rejects before it
+with the close reason so the same press falls back to dictation with its buffered audio,
+unlinks on the 30-minute cap and on a hidden tab), `voiceUi.ts` (the readiness verdict
 `evaluateVoice` — ordered browser-support then secure-context then server-enablement, the same
 shape as `passkeys.ts`'s `evaluateOrigin` — the hotkey predicate and its toggle handler
 (`createVoiceHotkeyHandler`: Ctrl+Shift+Space tap-to-start/tap-to-stop, swallowing every event of
 the chord — including auto-repeat keydowns and keyups — so a held key can't leak into the pane),
-the mic button (click-and-hold, unchanged), and the controller), and `voiceWorklet.js` (the
+the mic button (click-and-hold, unchanged), and the controller — it runs the reducer's effects;
+`blur()` ends a dictation but never a link; the button mounts whether or not whisper is enabled,
+and the idle tooltip reads the status snapshot's `paneCmd` as a hint), and `voiceWorklet.js` (the
 AudioWorklet processor, shipped as a real Vite-emitted static asset rather than a blob: URL,
 specifically so the Content-Security-Policy can stay `script-src 'self'`).
 
@@ -1557,8 +1595,11 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
   (see `voicePaths.js`) — or the legacy `TMUXIFIER_WHISPER_BIN`/`TMUXIFIER_WHISPER_MODEL` are set,
   which pins them. `TMUXIFIER_VOICE=off` hard-disables it regardless. Transcripts are stripped of
   control characters before reaching `send-keys`, so a transcription artefact cannot emit an
-  escape sequence into a pane. Audio is transcribed by a local whisper.cpp process and is never
-  sent to Anthropic or any third party — unlike Claude Code's built-in `/voice`.
+  escape sequence into a pane. For dictation, audio is transcribed by a local whisper.cpp
+  process and is never sent to Anthropic or any third party. A **linked** Claude Code pane is
+  the exception: that audio is streamed to the box and from there to Anthropic under Claude
+  Code's own `/voice` and that box's Claude.ai login — see `claudeVoiceLink.js` above and
+  `docs/terminal.md#voice-dictation`.
 
 ## Docs
 

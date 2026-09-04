@@ -149,11 +149,21 @@ and the transcribed text is typed into the pane — the same way a pasted file p
 works the other way — click and hold it, then release to transcribe — since a physical button has
 an unambiguous release and a key chord doesn't.
 
-This is not the same thing as Claude Code's own `/voice` command, and `/voice` cannot work on a
-headless box: it opens an audio device on the machine the CLI process runs on, and a box managed
-by Tmuxifier has no microphone of its own — it's a remote machine you're SSHed into, often
-running unattended. Tmuxifier's voice dictation instead captures audio in *your* browser, where
-the microphone actually is, and only ships the recording to the Tmuxifier host for transcription.
+The same button also drives Claude Code's own `/voice` mode. Claude Code reads the machine's
+**default microphone**, and a headless box has none — so when you press the mic on a pane where
+Claude Code is open, Tmuxifier **links** your browser microphone to that box instead of
+transcribing: the button turns amber (`● live`), and from then on you hold Space in the pane
+exactly as you would on a laptop, with Anthropic's transcription. Press the mic again to unlink.
+On any other pane the press is ordinary dictation, transcribed locally as described above. The
+pane is classified at press time by the same check that decides where dictation types, so the
+button never has to be told which mode you mean.
+
+A link streams audio continuously while it is up (about 32 KB/s), and ends when you unlink, when
+the tab is hidden, when the page is closed or logged out, or after 30 minutes. It is refused, with
+a one-line note, on a box whose setup never installed the voice link — re-run setup with
+**Claude Code** ticked (see [Boxes & setup](boxes-and-setup.md#the-claude-code-checkbox)). Linked
+audio goes to the box and from there to Anthropic under that box's Claude.ai login — unlike
+dictation, which never leaves the Tmuxifier host.
 
 Install it from **Settings → Voice**. The tab installs [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
 into a repo-local `vendor/whisper/` directory and downloads a speech model from a small pinned
@@ -184,9 +194,9 @@ dictation works automatically when Tmuxifier is reached at `http://127.0.0.1:...
 `TMUXIFIER_TLS_KEY` or a TLS-terminating reverse proxy in the
 [configuration reference](configuration.md).
 
-Audio never leaves the host: transcription runs locally via the whisper.cpp process Tmuxifier
-spawns, not a cloud API, and nothing is sent to Anthropic or any other third party — unlike
-Claude Code's built-in `/voice`.
+For dictation, audio never leaves the host: transcription runs locally via the whisper.cpp
+process Tmuxifier spawns, not a cloud API, and nothing is sent to Anthropic or any other third
+party — unlike a **linked** Claude Code pane, which uses Claude Code's own voice mode.
 
 The installed engine and model together take up roughly 1.2 GB under `vendor/`. Run
 `rm -rf vendor/whisper` at any time to remove them and reclaim the disk space; re-run
@@ -288,7 +298,8 @@ without opening the soft keyboard at all. Everything fits on one row with nothin
 narrow as a foldable's cover display. On a phone the
 voice button moves out of the pane header and into this bar, and moves back to the header when
 the layout returns to desktop width. Press and hold it to dictate and release to transcribe,
-exactly as on the desktop (see [Voice dictation](#voice-dictation)) — a hold that drifts under
+exactly as on the desktop — and on a Claude Code pane a tap links your mic, exactly as on the
+desktop (see [Voice dictation](#voice-dictation)) — a hold that drifts under
 your finger stays a hold rather than turning into a scroll. A narrow *desktop* window gets the
 phone layout but no key bar, and keeps its mic in the pane header: the bar is for pointing
 devices that are actually coarse.

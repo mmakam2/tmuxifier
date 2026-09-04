@@ -1734,8 +1734,10 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       termFont: config.termFont ?? null,
       termFontSize: config.termFontSize ?? 12,
       uploadMaxBytes,
-      // The client renders no microphone at all unless voice is usable, so a
-      // half-installed host never shows a button that only 503s.
+      // The mic button mounts whether or not whisper is usable — a Claude Code
+      // pane links with nothing installed on this host. This flag only gates
+      // whether a press on any OTHER pane can dictate, versus explaining
+      // itself (see voiceUi.ts's wireVoice/finishDictation).
       voice: (await voiceState()).enabled && Boolean(await currentEngine()),
       voiceMaxSeconds: config.voiceMaxSeconds ?? 120,
     };

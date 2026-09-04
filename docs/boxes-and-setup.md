@@ -65,7 +65,7 @@ provisioning skips anything already installed.
 ## The Claude Code checkbox
 
 The **Claude Code** entry in that tools checklist is one knob for the whole Claude stack.
-Ticking it makes the setup run do three things, each skipping cleanly when already present:
+Ticking it makes the setup run do four things, each skipping cleanly when already present:
 
 - **Install the CLI** if the box doesn't have it (an existing install is left untouched).
 - **Push this host's statusline**: merges a `statusLine` block into the box's
@@ -76,6 +76,13 @@ Ticking it makes the setup run do three things, each skipping cleanly when alrea
   terminal output. The hook never blocks or modifies the agent: it only writes a one-line
   state file under `~/.tmuxifier-agent/`, and its settings.json entries are merged
   alongside any hooks you already have, never over them.
+- **Prepare the voice link**: writes a user-level ALSA config (`~/.asoundrc`) that makes the
+  box's default microphone a pipe Tmuxifier feeds from your browser, creates that pipe under
+  `~/.tmuxifier-voice/`, installs `alsa-utils`, and turns Claude Code's voice mode on in its
+  settings.json unless you already chose (`/voice off` stays off). A box that already has its own
+  `~/.asoundrc` is left alone and the step reports `skipped`. See [Voice dictation](terminal.md#voice-dictation)
+  for what the link does. The pipe is written by a small Python program on the box; on an image
+  without `python3` a plain `cat` takes its place and may carry a little stale audio.
 
 On a box with a pre-existing Claude install, ticking the checkbox simply adds whatever is
 missing. Unchecked means setup touches nothing Claude-related — no install, no statusline,
@@ -115,7 +122,7 @@ on the box once everything else is installed. The order is deliberate:
 
 ```
 tools & shell framework → AI-auth seeding → Claude statusline → agent hooks
-  → your saved script → tmux session created
+  → voice link → your saved script → tmux session created
 ```
 
 Your script runs *before* the box's tmux session exists, so anything it writes to

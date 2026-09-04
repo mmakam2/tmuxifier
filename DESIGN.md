@@ -230,6 +230,9 @@ The two functional accents are the theme-facing pair: the token names are semant
 - **LED Violet** (#a98bff, `--auth`): reachable but needs a login — actionable, not dead.
 - Warn/degraded uses **Amber** in lamp form (`--warn`, a dot or chip), distinct from
   amber-as-glow by shape, matching annunciator practice.
+- The mic button carries both: its **recording** state keeps `--crit` (capturing audio now),
+  while its **linked** state (engaged with Claude Code's own voice mode) reads `--accent`
+  (engaged) instead — the two are visually distinct even though both mean "the mic is live".
 
 ### Display phosphors (content only)
 - **Phosphor Moss** (#a8c987, `--syn-string`) and **Phosphor Peach** (#ff9d5c, `--syn-const`):
@@ -317,8 +320,8 @@ Depth is machined, not lit. Three honest moves:
 
 **The Glow Is Power Rule.** Amber emission (`0 0 12–20px` of the accent at 12–35%, mixed from
 `var(--accent)`) appears only on live/engaged elements — the empty-stage standby cursor, focused inputs,
-an engaged Fleet Command key, working-agent chips. Glow never signals altitude; shadow
-never decorates.
+an engaged Fleet Command key, working-agent chips, the mic button while linked to Claude Code
+(`● live`). Glow never signals altitude; shadow never decorates.
 
 ## Shapes
 

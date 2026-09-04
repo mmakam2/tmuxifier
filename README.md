@@ -157,7 +157,7 @@ dashboard tabs are open. The full per-module map lives in [AGENTS.md](AGENTS.md)
 | [Configuration reference](docs/configuration.md) | every option, `config.json`, terminal fonts, the settings modal |
 | [Authentication](docs/authentication.md) | password & OAuth modes, passkeys, require-a-passkey |
 | [Boxes & setup jobs](docs/boxes-and-setup.md) | setup jobs, tools checklist, statusline push, AI CLI auth seeding, post-setup script |
-| [Terminal features](docs/terminal.md) | splits, uploads & clipboard, voice dictation, host shell, reconnect |
+| [Terminal features](docs/terminal.md) | splits, uploads & clipboard, voice dictation, voice link, host shell, reconnect |
 | [Standby dashboard](docs/dashboard.md) | service tiles, icons, Pi-hole/TrueNAS/UniFi/Immich cards |
 | [Status, health & Fleet Command](docs/fleet-and-health.md) | rate-limit-safe probing, health events, fleet jobs, themes |
 | [Proxmox](docs/proxmox.md) | LXC provisioning, guest lifecycle, deprovision |
@@ -190,12 +190,14 @@ with each secret AES-256-GCM encrypted at rest. Per-integration setup walkthroug
 [dashboard guide](docs/dashboard.md).
 
 ## Terminal features
-Up to four terminals share the stage in nested, resizable splits. Pasting an image or dropping
-a file onto a terminal uploads it to the box over the existing SSH connection and types the
-quoted path at a Claude Code or shell prompt (never into a busy pane); selections and in-app
-OSC 52 copies land on your clipboard. **Voice dictation** (Ctrl+Shift+Space) records in your
-browser and transcribes on the Tmuxifier host with local whisper.cpp — audio never leaves the
-host. A **Host Shell** opens a terminal on the Tmuxifier host itself, and every box row has a
+Up to four terminals share the stage in nested, resizable splits. Pasting an image or dropping a
+file onto a terminal uploads it to the box over the existing SSH connection and types the quoted
+path at a Claude Code or shell prompt (never into a busy pane); selections and in-app OSC 52
+copies land on your clipboard. **Voice dictation** (Ctrl+Shift+Space) records in your browser and
+transcribes on the Tmuxifier host with local whisper.cpp — audio never leaves the host — and on a
+pane running Claude Code the same button **links your mic to the box** so Claude Code's own
+`/voice` works there. A **Host Shell** opens a terminal on the Tmuxifier host itself, and every
+box row has a
 **Reconnect** action, plus a confirm-gated **Forget host key** for a box you rebuilt. Details
 in [terminal features](docs/terminal.md).
 

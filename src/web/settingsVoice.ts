@@ -180,8 +180,11 @@ export async function renderVoiceSection(content: HTMLElement): Promise<VoiceSta
     rows.push(el('label', { class: 'check-field' }, [cb, el('span', {}, ['Enable voice dictation'])]));
 
     if (status.enabled) {
-      // Permissions-Policy is applied when a page loads, so a tab that was open
-      // while voice was off keeps microphone=() until it is reloaded.
+      // Permissions-Policy is applied when a page loads, and the microphone
+      // token is now unconditionally microphone=(self) (the Claude Code voice
+      // link needs it too, not just dictation) — so this reload notice matters
+      // only for a tab that has been open since before this host was upgraded
+      // to grant it unconditionally.
       rows.push(el('div', { class: 'pve-sub' }, [
         'If you just enabled voice, reload this page before the browser will grant microphone access.',
       ]));
