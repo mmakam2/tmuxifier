@@ -1992,9 +1992,11 @@ test('emits whole 640-byte frames and carries the remainder', () => {
 
 test('16 kHz input passes through sample-exact', () => {
   const st = createPcmStream(16000);
-  const src = sine(0.04, 16000);                         // 640 samples = 2 frames
+  // 640 samples: the last one is held until the next block (interpolation
+  // needs its right neighbour), so one full 320-sample frame is emitted.
+  const src = sine(0.04, 16000);
   const got = s16(st.push(src));
-  expect(got.length).toBe(640);
+  expect(got.length).toBe(320);
   for (let i = 0; i < got.length; i++) expect(Math.abs(got[i] - src[i])).toBeLessThan(1 / 32767 + 1e-6);
 });
 
@@ -2005,7 +2007,8 @@ test('chunked 48 kHz input matches the whole-buffer resampler with no seam per b
   const frames = [];
   for (const b of blocks(src, 128)) frames.push(...st.push(b));   // AudioWorklet block size
   const got = s16(frames);
-  expect(got.length).toBeGreaterThanOrEqual(ref.length - 2);
+  // Whole frames only: 7999 resampled samples → 24 full frames (7680).
+  expect(got.length).toBe(Math.floor((ref.length - 1) / 320) * 320);
   for (let i = 0; i < got.length && i < ref.length - 1; i++) {
     expect(Math.abs(got[i] - ref[i])).toBeLessThan(2 / 32767);
   }
