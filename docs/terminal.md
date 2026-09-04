@@ -247,7 +247,8 @@ started outside tmux, or in a different tmux session on the same host, contribut
 checkbox is an action rather than a stored setting — it starts unchecked every time the dialog
 opens, so reopening it won't silently reinstall, and unchecking it never uninstalls anything.
 To remove the hooks, delete the `tmuxifier-agent-hook` entries from `~/.claude/settings.json`
-yourself.
+yourself; to remove the voice link, delete the host's `~/.asoundrc` (it carries a
+`# tmuxifier-voice-link` marker line) and `rm -rf ~/.tmuxifier-voice`.
 
 Every box row also has a ↻ **Reconnect** action. It tears down the box's SSH plumbing — shuts
 the ControlMaster down cleanly (removing its socket), drops the local PTY, best-effort kills the
