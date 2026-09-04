@@ -214,18 +214,28 @@ test('transcription is refused when the store has voice disabled', async () => {
   expect(res.statusCode).toBe(503);
 });
 
-test('the permissions-policy header follows the store, not boot config', async () => {
-  // The header gates getUserMedia and is set in a synchronous hook, so it
-  // reads a cache refreshed by voiceState(). Enabling voice at runtime must
-  // eventually flip it, or the mic stays blocked despite the UI saying on.
-  const a = await makeApp({ server: {
+test('the permissions-policy header grants the microphone regardless of the voice store', async () => {
+  // The browser mic now feeds the Claude Code voice link as well as whisper
+  // dictation, so it is granted to this origin whether or not local
+  // transcription is installed/enabled — the header no longer depends on
+  // what the voice store (data/voice.json) reports.
+  const disabled = await makeApp({ server: {
+    resolveVoice: async () => ({ bin: null, model: null, enabled: false, pinned: { bin: null, model: null } }),
+  } });
+  const disabledCookie = await login(disabled);
+  const disabledRes = await disabled.inject({
+    method: 'GET', url: '/api/ui-config', headers: { cookie: `${disabledCookie.name}=${disabledCookie.value}` },
+  });
+  expect(disabledRes.headers['permissions-policy']).toContain('microphone=(self)');
+
+  const enabled = await makeApp({ server: {
     resolveVoice: async () => ({ bin: '/w', model: '/m', enabled: true, pinned: { bin: null, model: null } }),
   } });
-  const cookie = await login(a);
-  const hdrs = { cookie: `${cookie.name}=${cookie.value}` };
-  await a.inject({ method: 'GET', url: '/api/ui-config', headers: hdrs }); // refreshes the cache
-  const res = await a.inject({ method: 'GET', url: '/api/ui-config', headers: hdrs });
-  expect(res.headers['permissions-policy']).toContain('microphone=(self)');
+  const enabledCookie = await login(enabled);
+  const enabledRes = await enabled.inject({
+    method: 'GET', url: '/api/ui-config', headers: { cookie: `${enabledCookie.name}=${enabledCookie.value}` },
+  });
+  expect(enabledRes.headers['permissions-policy']).toContain('microphone=(self)');
 });
 
 test('the engine is taken from getVoiceEngine when supplied, so a model switch is picked up', async () => {
