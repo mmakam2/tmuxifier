@@ -12,6 +12,7 @@ import { createBoxActions } from '../src/server/boxActions.js';
 import { createVoiceLinks } from '../src/server/voiceLinks.js';
 import { sshRun, sshRunStdin, sshPipe } from '../src/server/sshRun.js';
 import { hashPassword, COOKIE_NAME } from '../src/server/auth.js';
+import { buildProbeArgv } from '../src/server/sshCommand.js';
 import { setupLocalBox } from './helpers/localBox.js';
 
 let teardown;
@@ -79,6 +80,16 @@ test('a box that was never set up closes 4002 not-set-up', async () => {
 
 test('frames sent after ready land in the box FIFO byte-for-byte', async () => {
   const { lb, port, boxId, cookie } = await fixture();
+  // Guard against a fixture PATH regression or a python3-less image silently
+  // degrading to the `cat` fallback (voiceWriter.js): against a FIFO-less box
+  // BOTH branches exit 3, and even-length frames pass through `cat`
+  // byte-for-byte too, so nothing else in this test would notice the writer
+  // wasn't the real Python program. One extra round trip, no FIFO needed yet.
+  const pyProbe = await sshRun(
+    buildProbeArgv(lb.box, 'command -v python3', { sshConfigFile: lb.sshConfigFile }),
+    { env: lb.env },
+  );
+  expect(pyProbe.code, 'python3 must be on the fixture box PATH, or this test silently exercises the cat fallback instead of the real writer').toBe(0);
   const vdir = path.join(lb.home, '.tmuxifier-voice');
   await fs.mkdir(vdir, { recursive: true, mode: 0o700 });
   const fifo = path.join(vdir, 'mic');
@@ -88,12 +99,15 @@ test('frames sent after ready land in the box FIFO byte-for-byte', async () => {
   for (let i = 0; i < 100 && texts.length === 0; i++) await tick(50);
   expect(texts).toEqual(['ready']);
   const fd = fsSync.openSync(fifo, fsSync.constants.O_RDONLY | fsSync.constants.O_NONBLOCK);
-  const frames = [0, 1, 2].map((k) => Buffer.alloc(640, 0x10 + k));
-  const got = [];
-  for (const f of frames) { ws.send(f); await tick(30); got.push(drain(fd)); }
-  for (let i = 0; i < 40 && Buffer.concat(got).length < 1920; i++) { await tick(50); got.push(drain(fd)); }
-  expect(Buffer.concat(got).subarray(0, 1920)).toEqual(Buffer.concat(frames));
-  fsSync.closeSync(fd);
+  try {
+    const frames = [0, 1, 2].map((k) => Buffer.alloc(640, 0x10 + k));
+    const got = [];
+    for (const f of frames) { ws.send(f); await tick(30); got.push(drain(fd)); }
+    for (let i = 0; i < 40 && Buffer.concat(got).length < 1920; i++) { await tick(50); got.push(drain(fd)); }
+    expect(Buffer.concat(got).subarray(0, 1920)).toEqual(Buffer.concat(frames));
+  } finally {
+    fsSync.closeSync(fd);
+  }
   // ws.close() with no code sends a close frame with no status payload, which
   // the `ws` library (both sides) then reports as 1005 ("no status
   // received") rather than any code the server's onClose ever chose —
