@@ -17,6 +17,20 @@ import { setupLocalBox } from './helpers/localBox.js';
 
 let teardown;
 afterEach(async () => { if (teardown) await teardown(); teardown = null; });
+async function stopFeeder(pidfile) {
+  // The writer's parent exits after its 2.5 s tail and hands the pidfile to
+  // the feeder it forked; wait for that handover before stopping it.
+  for (let i = 0; i < 60; i++) {
+    let pid = 0;
+    try { pid = Number((await fs.readFile(pidfile, 'utf8')).trim()) || 0; } catch {}
+    if (pid > 0) {
+      try { process.kill(pid, 'SIGTERM'); } catch { return; }
+      for (let j = 0; j < 300; j++) { try { process.kill(pid, 0); } catch { return; } await tick(10); }
+      return;
+    }
+    await tick(100);
+  }
+}
 const tick = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function fixture() {
@@ -50,7 +64,13 @@ async function fixture() {
   const { port } = app.server.address();
   const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
   const c = login.cookies.find((x) => x.name === COOKIE_NAME);
-  teardown = async () => { voiceLinks.closeAll(); await app.close(); await lb.cleanup(); await fs.rm(dir, { recursive: true, force: true }); };
+  teardown = async () => {
+    voiceLinks.closeAll(); await app.close();
+    // A finished link leaves a resident feeder holding the FIFO; stop it the
+    // way a shutdown would before the fixture home is removed.
+    await stopFeeder(path.join(lb.home, '.tmuxifier-voice', 'writer.pid'));
+    await lb.cleanup(); await fs.rm(dir, { recursive: true, force: true });
+  };
   return { lb, port, boxId: saved.id, cookie: `${c.name}=${c.value}` };
 }
 function connect(port, boxId, cookie) {
@@ -97,6 +117,8 @@ test('frames sent after ready land in the box FIFO byte-for-byte', async () => {
   await fs.mkdir(vdir, { recursive: true, mode: 0o700 });
   const fifo = path.join(vdir, 'mic.fifo');
   execFileSync('mkfifo', ['-m', '600', fifo]);
+  // Pin the FIFO's format: the bytes sent must come out verbatim on any host.
+  fsSync.writeFileSync(path.join(vdir, 'format'), 's16le\n');
   const dev = path.join(vdir, 'mic');
   await fs.symlink(path.join(vdir, 'mic.absent'), dev);
   const { ws, texts, closed } = connect(port, boxId, cookie);

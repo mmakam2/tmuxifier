@@ -247,6 +247,94 @@ older layouts in place: a **FIFO** named `mic` is renamed to `mic.fifo` when tha
 else removed; any existing symlink (v1.24.59's `/dev/zero`) is re-pointed. A **regular file**
 named `mic` is never clobbered — the same posture as the foreign-`.asoundrc` guard.
 
+#### Idle is a fed FIFO: the resident silence feeder (third amendment, v1.24.61)
+
+Amended 2026-09-04 a third time. The absent path above is correct but its user experience is
+not: each unlinked Space press produced an ALSA error line in the TUI and, after three in ten
+seconds, Claude Code's "Voice input is failing repeatedly and has been paused" — a state the
+operator can only leave with `/voice`. The "per-box silence daemon" rejected above is adopted
+after all, now that the boot-persistence objection has an answer, and the absent path becomes
+the parked state after a clean shutdown rather than the idle state.
+
+- **Resident feeder.** When a link ends, the writer plays its 2.5 s tail and then, instead of
+  parking, `fork()`s a child that `setsid()`s, moves stdio to `/dev/null`, clears `O_NONBLOCK`
+  on the FIFO and writes 640 zero bytes every 20 ms **blocking**. With nobody reading, the
+  4 KB pipe fills and the write blocks — zero CPU, the state measured in
+  `test/voiceWriter.test.js`; with a reader, it is real-time silence, so an unlinked press
+  records nothing and ends on "No speech detected", no ALSA line. The parent records the
+  child's pid in `writer.pid` and exits, so the ssh session ends and the pidfile never names a
+  dead process in between. The `/proc` reader-hold scan is gone: a feeder that never leaves
+  makes it moot.
+- **Pidfile protocol, tightened.** A starting writer now **claims** the pidfile before it
+  `SIGTERM`s the pid it found there. The handler of the process being stopped then reads the
+  file after its unwind: another live pid means "superseded — leave device, FIFO and pidfile to
+  it, exit at once"; its own pid (or none) means "shutdown — park the device on the absent path
+  and remove the pidfile". That is what lets the feeder be taken over by a link and stopped by
+  a shutdown with one signal.
+- **Installed on the box.** The setup phase writes the writer program to
+  `~/.tmuxifier-voice/writer.py` (0600) and `~/.tmuxifier-voice/ensure.sh` (0700): `ensure.sh`
+  exits at once when `writer.pid` names a live process (a feeder or a link writer), and
+  otherwise starts `python3 writer.py` under `setsid` with stdin on `/dev/null` — the same
+  program, which on immediate EOF becomes a feeder. The phase runs `ensure.sh` at its end.
+- **Boot persistence** is a Claude Code `SessionStart` hook,
+  `sh "$HOME/.tmuxifier-voice/ensure.sh"`, merged into `~/.claude/settings.json` by the same
+  remove-then-append rule as the agent hooks (entries mentioning `tmuxifier-voice` are dropped,
+  ours appended; the operator's own `SessionStart` entries survive) through the same jq → node →
+  python3 chain. A rebooted box therefore has its feeder back the moment Claude Code starts —
+  before the first Space press can happen. `voice.enabled` keeps its only-when-absent rule.
+- **What stays.** A writerless FIFO still blocks and a non-blocking source still spins, so the
+  symlink rule and the absent path remain exactly for the parked state; `voiceLinks.js`'s
+  11-minute kill grace remains, so a writer is only ever ended by stdin EOF.
+
+#### What the FIFO carries, and the pipe that is not ours to size (fourth amendment, v1.24.61)
+
+Amended 2026-09-04 a fourth time, from measurements against the real Claude Code 2.1.260 with
+its `--debug` log and `strace` on both ends of the FIFO. Three findings, in the order they were
+made:
+
+1. **A frame per write reaches Claude stretched.** alsa-lib's file plugin does ONE `read()` per
+   transfer and pads a short one with stale data. Claude's transfers under the original recipe
+   (a plug over a slave pinned to 16 kHz S16, so a 48 kHz reader gets the rate plugin) rotate
+   800/3200/2400/1600 bytes; each returned one 640-byte frame after ~20 ms and was padded to
+   size, so speech arrived ~3x stretched. Anthropic's transcription mostly copes; it is why
+   v1.24.59's linked path "worked".
+2. **The rate plugin over the null slave loses data.** Writing read-sized chunks instead gave
+   full reads and byte-exact delivery at the FIFO — and Claude's own stream showed 100 ms of
+   audio per 250 ms: the plug → rate → file → null chain drops most of every read larger than
+   a frame (0.41x real time; transcripts of fragments). Without rate conversion (the reader
+   at 16 kHz, or a recipe with no fixed slave rate) there is no loss, only padding. The DIRECT
+   recipe therefore leaves the slave's rate and format unset: Claude's cpal negotiates 48 kHz
+   FLOAT_LE mono (alsa-lib's WAV tap reports 32-bit PCM — its header hardcodes tag 1 — but only
+   float32 transcribes) and reads 19200 bytes at a time; the writer converts the link's 16 kHz
+   S16 on the box (hold x3, scale) and writes 19200-byte pieces. Measured: 0 short reads, the
+   verbatim 108-character transcript. A cardless box (Claude's `arecord -f S16_LE -r 16000 -c
+   1` path, taken exactly when `/proc/asound/cards` lists nothing — the writer mirrors that
+   probe) gets 16 kHz S16 in 4000-byte pieces, arecord's default 125 ms period.
+3. **The pipe is capped by a per-uid kernel limit.** Pipe pages are accounted per uid across
+   the whole kernel; an unprivileged LXC's root is host uid 100000 on every container of the
+   host; once that uid is over `fs.pipe-user-pages-soft` (16384 pages) every new pipe is 8 KB
+   and `F_SETPIPE_SZ` to grow one is EPERM (measured on the Tmuxifier host with 31 pipes of its
+   own). A 19200-byte read from an 8 KB pipe is always short, and direct-recipe audio padded
+   that way transcribed to 9 characters. So the install chooses: DIRECT when a two-read pipe
+   can be grown now AND the box has the identity uid map (VM, bare metal) or its host has the
+   soft limit disabled; the RATE recipe (finding 1, one frame per write — the one shape that
+   plugin delivers intact) on any other container. The choice is recorded in
+   `~/.tmuxifier-voice/format` (`auto` | `s16le-rate`) for the writer and reported as
+   `pipe=direct|rate`; `docs/boxes-and-setup.md` names the host sysctl that lifts the cap.
+   Verified: the rate recipe on this capped host transcribes the JFK sample in full (107
+   characters) through the new writer.
+
+The writer also changed shape around the handover, from the same traces: it opens the FIFO
+`O_RDWR` BEFORE stopping its predecessor (a 10 ms writerless gap mid-recording hands the reader
+the EOF spin and came back as garbage), single-instance is an `flock` held for life and
+inherited by the feeder (two `ensure.sh` runs at once — two Claude sessions starting together —
+used to be able to leave two feeders, and the unnamed one would interleave zeros into every
+later link), a starter names itself in `writer.next` so the stopped process can tell a
+successor from a shutdown, a shutdown keeps pacing silence while any reader holds the FIFO
+(the v1.24.60 rule, back), the writer sizes its pieces to the pipe the kernel actually granted
+and gives a full pipe one piece-time to drain before dropping, and a partial piece that waited
+one piece-time goes out padded so the reader's read is still full.
+
 Setup phase, decided on the box by `command -v claude` (`skipped-no-claude` otherwise):
 
 - `~/.asoundrc`: written with the recipe above (path from `$HOME` on the box) only when the

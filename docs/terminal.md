@@ -160,9 +160,9 @@ button never has to be told which mode you mean.
 
 A link streams audio continuously while it is up (about 32 KB/s), and ends when you unlink, when
 the tab is hidden, when the page is closed or logged out, or after 30 minutes. While nothing is
-linked, the box has no microphone at all: pressing Space in Claude Code on a prepared but
-unlinked box makes Claude say it could not open an audio device. Link first, then hold Space.
-The link is refused, with
+linked, the box's microphone hears silence: pressing Space in Claude Code on a prepared but
+unlinked box records nothing and ends with Claude's own "No audio detected" notice, not an
+error. Link first, then hold Space. The link is refused, with
 a one-line note, on a box whose setup never installed the voice link — re-run setup with
 **Claude Code** ticked (see [Boxes & setup](boxes-and-setup.md#the-claude-code-checkbox)). Linked
 audio goes to the box and from there to Anthropic under that box's Claude.ai login — unlike
@@ -228,7 +228,8 @@ and saving installs on the Tmuxifier host itself the same two things a box gets 
 run. First the agent-state hook: the hook script lands in the host account's `~/.claude/` (or
 `$CLAUDE_CONFIG_DIR`) and the matching entries are merged into that account's
 `~/.claude/settings.json` alongside any hooks you already have. Then the voice link: a
-user-level `~/.asoundrc` and the pipe under `~/.tmuxifier-voice/`, so the mic button can link
+user-level `~/.asoundrc`, the pipe and its feeder program under `~/.tmuxifier-voice/`, and the
+`SessionStart` entry that restarts the feeder, so the mic button can link
 a Host Shell pane running Claude Code exactly as it links a box's (see
 [Voice dictation](#voice-dictation)). Both require Claude Code to be installed on the host — if
 it isn't, the dialog stays open and reports what was skipped, and the shell choice is saved
@@ -248,8 +249,10 @@ started outside tmux, or in a different tmux session on the same host, contribut
 checkbox is an action rather than a stored setting — it starts unchecked every time the dialog
 opens, so reopening it won't silently reinstall, and unchecking it never uninstalls anything.
 To remove the hooks, delete the `tmuxifier-agent-hook` entries from `~/.claude/settings.json`
-yourself; to remove the voice link, delete the host's `~/.asoundrc` (it carries a
-`# tmuxifier-voice-link` marker line) and `rm -rf ~/.tmuxifier-voice`.
+yourself; to remove the voice link, delete the `tmuxifier-voice` entry from the same file's
+`SessionStart` hooks, stop the silence feeder (`kill "$(cat ~/.tmuxifier-voice/writer.pid)"`),
+delete the host's `~/.asoundrc` (it carries a `# tmuxifier-voice-link` marker line) and
+`rm -rf ~/.tmuxifier-voice`.
 
 Every box row also has a ↻ **Reconnect** action. It tears down the box's SSH plumbing — shuts
 the ControlMaster down cleanly (removing its socket), drops the local PTY, best-effort kills the

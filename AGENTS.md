@@ -855,45 +855,89 @@ pattern for new modules.
 - `claudeVoiceLink.js` — `buildVoiceLinkInstallScript` (pure) + `createVoiceLinkPusher`: the
   `voice-link` setup phase (spec 2026-09-04), run after `agent-hooks` under the same `claude`
   tools knob, recorded on `job.voiceLink`, never promoted. Makes the box's ALSA `default`
-  capture device a FIFO through a user-level `~/.asoundrc` (`plug` → `file(infile)` → `null`;
-  the plug layer converts whatever Claude Code's capture negotiates — its native cpal path
-  asks for 48 kHz 32-bit mono — to the pipe's fixed 16 kHz S16), creates the FIFO, and merges
-  `voice.enabled: true` into Claude's settings.json only when no `voice` key exists. The path
-  `infile` names, `~/.tmuxifier-voice/mic`, is a **symlink**, not the FIFO: idle it points at
-  an ABSENT path (`mic.absent`) and only a live writer points it at the real FIFO, `mic.fifo`
-  beside it. Both halves are load-bearing. A FIFO with no writer BLOCKS FOREVER in
-  `snd_pcm_open` (alsa-lib's file plugin opens `infile` `O_RDONLY`), so every Space press on a
-  prepared but unlinked box hung. And a source that never blocks is WORSE: alsa-lib's null
-  slave has no clock, the only pacing capture ever has is a live writer, so v1.24.59's
-  `/dev/zero` idle target made capture return 331 million frames/s (measured) — Claude Code
-  buffered that "silence" until the box and then the Proxmox host ran out of memory. Idle =
-  absent means an unlinked press fails to open the device (Claude reports no microphone), an
-  error rather than a hang or a crash. The pre-symlink and the `/dev/zero` layouts both
-  migrate in place (a FIFO named `mic` is renamed to `mic.fifo`, or dropped if that name is
-  taken; any symlink is re-pointed); a regular file named `mic` is never clobbered, the same
-  posture as the `.asoundrc` guard. Guarded by the `# tmuxifier-voice-link` marker: a foreign
-  `~/.asoundrc` is never touched and the phase skips. The box decides via `command -v claude`
-  and `command -v python3` — without python3 nothing is installed (`skipped-no-python3`),
-  because a shadowing device with no safe writer is a hazard. Host Shell gets the same install
-  under the local-shell `claudeHooks` flag.
+  capture device a FIFO through a user-level `~/.asoundrc` (`plug` → `file(infile)` → `null`),
+  creates the FIFO, writes the writer program (`~/.tmuxifier-voice/writer.py`, the text of
+  `voiceWriter.js`'s program) and `ensure.sh` beside it, starts the resident silence feeder
+  (see `voiceWriter.js`), and merges into Claude's settings.json — remove-then-append like
+  `claudeAgentHooks.js` — a `SessionStart` hook that re-runs `ensure.sh` (so a reboot never
+  leaves the device unfed), plus `voice.enabled: true` only when no `voice` key exists. Two
+  recipes, chosen on the box and recorded in `~/.tmuxifier-voice/format` (`auto` |
+  `s16le-rate`, reported as `pipe=direct|rate` on the result line). The DIRECT one leaves the
+  slave's rate and format unset, so the reader negotiates with the null slave itself — Claude
+  Code's native cpal capture opens 48 kHz float mono and reads 19200 bytes at a time — and no
+  rate plugin sits in the chain: over a clock-less slave alsa-lib's rate plugin silently loses
+  most of every read larger than a frame (measured 0.41x real time, transcripts of fragments).
+  The RATE one (v1.24.59-60's) pins the slave to 16 kHz S16, so that reader gets the rate
+  plugin, which copes with exactly one 640-byte frame per write (short reads, padded;
+  stretched ~1.3-3x, a full transcript). Direct needs a pipe that holds one 19200-byte read,
+  and the pipe is not the box's to size: pipe pages are accounted per uid across the whole
+  kernel, an unprivileged LXC's root is the same host uid on every container of that host, and
+  once that uid is over `fs.pipe-user-pages-soft` every new pipe is 8 KB and `F_SETPIPE_SZ` to
+  grow one is EPERM (measured on this host: 31 pipes here, over the limit anyway). So direct
+  is chosen only when a two-read pipe can be grown at install time AND the box either has the
+  identity uid map (a VM, bare metal) or a host that has disabled the soft limit; any other
+  container gets the rate recipe, and `docs/boxes-and-setup.md` names the host sysctl that
+  lifts it. The path `infile` names, `~/.tmuxifier-voice/mic`, is a **symlink**, not the FIFO:
+  it points at the real FIFO, `mic.fifo` beside it, only while some process holds and feeds
+  that FIFO, and at an ABSENT path (`mic.absent`) otherwise. Both halves are load-bearing. A
+  FIFO with no writer BLOCKS FOREVER in `snd_pcm_open` (alsa-lib's file plugin opens `infile`
+  `O_RDONLY`), so every Space press on a prepared but unlinked box hung. And a source that never
+  blocks is WORSE: alsa-lib's null slave has no clock, the only pacing capture ever has is a
+  live writer, so v1.24.59's `/dev/zero` idle target made capture return 331 million frames/s
+  (measured) — Claude Code buffered that "silence" until the box and then the Proxmox host ran
+  out of memory. v1.24.60 parked the idle device on the absent path — an open error, so Claude
+  showed one ALSA line per press and paused voice after three — and v1.24.61 made the idle
+  state a fed FIFO instead, the feeder, so an unlinked press ends on Claude's own "No audio
+  detected" notice; the absent path is now only where a clean shutdown parks the device. The
+  pre-symlink and the `/dev/zero` layouts both migrate in place (a FIFO named `mic` is renamed
+  to `mic.fifo`, or dropped if that name is taken; any symlink is re-pointed); a regular file
+  named `mic` is never clobbered, the same posture as the `.asoundrc` guard. Guarded by the
+  `# tmuxifier-voice-link` marker: a foreign `~/.asoundrc` is never touched and the phase
+  skips; a marked one is rewritten, which is how a rerun switches recipes. The box decides via
+  `command -v claude` and `command -v python3` — without python3 nothing is installed
+  (`skipped-no-python3`), because a shadowing device with no safe writer is a hazard. Host
+  Shell gets the same install under the local-shell `claudeHooks` flag.
 - `voiceWriter.js` / `voiceLinks.js` — the runtime half of the voice link. `voiceWriter.js`
-  is the static Python program (no single quote in it: it rides a single-quoted shell string;
-  no `cat` fallback — without python3 the remote exits 3) that keeps the FIFO fed: opened
-  `O_RDWR` so open never blocks and EOF never reaches a reader, pipe shrunk to 4 KB,
-  non-blocking writes dropped when full, even-length runs only, and 2.5 s of paced silence on
-  stdin EOF — because alsa-lib's file plugin does not pad a closed FIFO with silence, it
-  spins on stale buffer contents at CPU speed, the same memory-exhausting spin as `/dev/zero`.
-  For the same reason a writer NEVER leaves a reader behind: after the tail it keeps pacing
-  zeros for as long as any `O_RDONLY` holder of the FIFO remains (scanned through
-  `/proc/*/fd` + `fdinfo`, capped at 10 minutes; `voiceLinks.js`'s kill grace is 11), and only
-  then parks the device. It also owns the idle-device symlink described above: it swaps `mic`
-  onto `mic.fifo` on start and back onto the absent path when it leaves. `~/.tmuxifier-voice/writer.pid` makes it
-  single-instance — a starting writer SIGTERMs whatever live pid the file names and waits
-  ~300 ms, and a writer superseded that way exits AT ONCE, with no tail, no symlink restore
-  and no pidfile removal, since the successor owns all three (without that rule the
-  predecessor's tail interleaved zeros into the successor's live audio). A SIGKILLed writer
-  leaves the symlink on the FIFO until the next link, which always repairs it and treats a
-  dead pid as stale.
+  is the static Python program (no single quote in it: it rides a single-quoted shell string
+  and a quoted heredoc; no `cat` fallback — without python3 the remote exits 3) that keeps
+  the FIFO fed. It opens the FIFO `O_RDWR` FIRST — so open never blocks, this end never sees
+  EOF, and a reader mid-recording never sees a writerless FIFO across a handover (on EOF
+  alsa-lib's file plugin stops blocking and hands the reader stale "audio" at CPU speed, the
+  v1.24.59 spin; a 10 ms handover gap came back as a garbled transcript) — then takes the
+  instance lock: an `flock` on `writer.lock` held for the process's life and inherited by the
+  forked feeder (same open file description), so single-instance is a kernel guarantee the
+  SIGKILL case cannot break, rather than a pidfile convention (two Claude sessions starting
+  together each run `ensure.sh`). A starter that finds the lock held names itself in
+  `writer.next`, SIGTERMs the pid in `writer.pid` and retries for 3 s (exit 4 otherwise); the
+  handler of the process being stopped reads `writer.next` after its unwind — a live successor
+  means superseded: exit at once, no tail, no symlink restore, no pidfile removal, the
+  successor owns all three (without that rule the predecessor's tail interleaved zeros into
+  the successor's live audio); anything else means shutdown: park the device on the absent
+  path, then keep pacing silence while any O_RDONLY holder of the FIFO remains (`/proc` fd +
+  fdinfo scan, 10 min cap), since closing on a mid-recording reader is the spin. What it
+  writes is decided by `~/.tmuxifier-voice/format` (see `claudeVoiceLink.js`): `s16le-rate`
+  hands the rate plugin one 640-byte frame per write; `auto` mirrors Claude Code's own probe —
+  `/proc/asound/cards` listing a card means the native cpal path, 48 kHz float mono converted
+  on the box (sample-and-hold x3, scaled to [-1, 1)) in 19200-byte pieces (Claude's read),
+  else `arecord`'s 16 kHz S16 in 4000-byte pieces (its 125 ms period). Pieces matter because
+  the file plugin does ONE read() per transfer and pads a short one with stale data: a frame
+  answering a 19200-byte read reached Claude as 20 ms of speech and 80 ms of filler. The writer
+  asks the kernel for a two-piece pipe, reads back what it actually got (8 KB on an over-limit
+  uid, above) and never writes a piece larger than that — a piece that always fits is never
+  partially written, so nothing is dropped; a full pipe is given one piece-time to drain (a
+  reader empties it within microseconds, and stdin can hand over several pieces at once) and
+  is otherwise dropped, since a pipe still full has no reader and stale audio is worthless. A
+  partial piece that has waited one piece-time goes out padded with silence. On stdin EOF it
+  plays 2.5 s of paced silence — past Claude Code's 2.0 s silence-detection window, so a
+  recording in flight ends on silence, never EOF — then forks the resident **feeder**
+  (`setsid`, stdio on `/dev/null`; the parent records the child's pid and exits so the ssh
+  session ends): it holds the FIFO and writes paced silence with BLOCKING writes — zero CPU
+  while nobody reads, real-time silence for a reader — the one state alsa-lib's file plugin
+  neither hangs on nor spins on. The same program with stdin on `/dev/null` (what `ensure.sh`
+  runs) is a feeder from the start. It owns the idle-device symlink: `mic` onto `mic.fifo` on
+  start, back onto the absent path only on a clean shutdown. A SIGKILLed writer leaves the
+  symlink on the FIFO until the next link or the next `ensure.sh`, both of which repair it;
+  the kernel has already dropped its lock, and a dead pid in the file is stale.
   `voiceLinks.js` holds one writer per linked box (newest wins, `4001`), sends `ready` after
   the writer survives 300 ms (exit 3 before that is `4002 not-set-up`, anything else `4003`),
   never queues audio (drops on backpressure, oversize, or over 64 KB/s), closes a link that

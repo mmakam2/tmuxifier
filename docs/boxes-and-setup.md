@@ -81,15 +81,31 @@ Ticking it makes the setup run do four things, each skipping cleanly when alread
   `~/.tmuxifier-voice/`, installs `alsa-utils`, and turns Claude Code's voice mode on in its
   settings.json unless you already chose (`/voice off` stays off). A box that already has its own
   `~/.asoundrc` is left alone and the step reports `skipped`. See [Voice dictation](terminal.md#voice-dictation)
-  for what the link does. The device the config names, `~/.tmuxifier-voice/mic`, is a symlink:
-  it points at a path that does not exist whenever nothing is linked, and only at the real pipe
-  (`mic.fifo`, beside it) while a link is up. So pressing Space in Claude Code on an unlinked
-  box makes Claude report that it has no microphone — an error, deliberately, rather than a
-  hang (a pipe nobody feeds blocks forever) or a crash (a source that never blocks, such as
-  `/dev/zero`, makes ALSA capture spin at CPU speed until the box is out of memory; that was
-  v1.24.59). The pipe is fed by a small Python program on the box, and it stays until Claude
-  has let go of the pipe, so a recording in flight ends on silence. A box without `python3`
-  gets no voice link at all (the step reports `skipped`) rather than an unsafe substitute.
+  for what the link does. The pipe is fed by a small Python program the step installs on the box
+  (`~/.tmuxifier-voice/writer.py`): your browser's audio while a link is up, and otherwise
+  **silence, in real time**, from a tiny resident feeder the step starts — so pressing Space in
+  Claude Code while nothing is linked simply ends with Claude's own "No speech detected". That
+  feeder costs nothing while nobody is listening (its write just blocks), a link takes it over
+  and hands back to it when the link ends, and a `SessionStart` hook the step adds to Claude
+  Code's settings re-starts it after a reboot (`~/.tmuxifier-voice/ensure.sh`, a no-op while one
+  is running). The device the config names, `~/.tmuxifier-voice/mic`, is a symlink onto the
+  real pipe (`mic.fifo`, beside it) while something feeds it, and onto a path that does not exist
+  after a clean shutdown — so a press then fails with an error rather than a hang (a pipe nobody
+  feeds blocks forever) or a crash (a source that never blocks, such as `/dev/zero`, makes ALSA
+  capture spin at CPU speed until the box is out of memory; that was v1.24.59). A box without
+  `python3` gets no voice link at all (the step reports `skipped`) rather than an unsafe
+  substitute. What the pipe carries is whatever Claude Code negotiates with ALSA, and the step
+  picks one of two recipes for it: on a VM or a bare-metal box Claude reads the pipe directly
+  and hears you at full quality (`pipe=direct` in the setup log); in an unprivileged LXC
+  container the kernel may cap every pipe at 8 KB — pipe memory is accounted per user across
+  the whole host, and a container's root is the same host user on every container — which is
+  too small for Claude's reads, so the step falls back to the recipe that puts ALSA's rate
+  converter in the way (`pipe=rate`): it works, with speech reaching Claude slightly
+  stretched. To get the direct recipe on containers, set `fs.pipe-user-pages-soft = 0` on the
+  Proxmox host (a line in `/etc/sysctl.d/`, then `sysctl --system`; it lifts a limit that only
+  guards against unprivileged users hoarding pipe memory) and re-run setup with Claude Code
+  ticked — the choice is made when the step runs, and a running `claude` must be restarted to
+  read the new recipe.
 
 Two things are worth knowing before you tick it on a box that isn't a plain headless server.
 First, the ALSA config claims the **default** device: on a box that has real audio hardware and

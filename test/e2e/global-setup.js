@@ -25,6 +25,7 @@ export default async function globalSetup() {
   const vdir = path.join(lb.home, '.tmuxifier-voice');
   fsSync.mkdirSync(vdir, { recursive: true, mode: 0o700 });
   execFileSync('mkfifo', ['-m', '600', path.join(vdir, 'mic.fifo')]);
+  fsSync.writeFileSync(path.join(vdir, 'format'), 's16le\n');   // bytes out = bytes in, on any host
   fsSync.symlinkSync(path.join(vdir, 'mic.absent'), path.join(vdir, 'mic'));
 
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-e2e-'));
@@ -110,6 +111,12 @@ export default async function globalSetup() {
 
   return async () => {
     server.kill();
+    // A finished voice link leaves a resident feeder holding the fixture's
+    // FIFO; stop it the way a shutdown would before the home is removed.
+    try {
+      const pid = Number(fsSync.readFileSync(path.join(vdir, 'writer.pid'), 'utf8').trim()) || 0;
+      if (pid > 0) { process.kill(pid, 'SIGTERM'); await new Promise((r) => setTimeout(r, 500)); }
+    } catch { /* no feeder */ }
     await lb.cleanup();
     await fs.rm(dataDir, { recursive: true, force: true });
   };
