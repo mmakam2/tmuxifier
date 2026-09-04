@@ -56,6 +56,24 @@ test('exits 3 at once when the FIFO does not exist', async () => {
   expect(Date.now() - t0).toBeLessThan(2000);
 });
 
+test('cat fallback: exits 3 when FIFO missing and python3 not on PATH', async () => {
+  const dir = await home();
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vw-bin-'));
+  try {
+    const catPath = execFileSync('command', ['-v', 'cat'], { shell: true, encoding: 'utf-8' }).trim();
+    const catLink = path.join(binDir, 'cat');
+    await fs.symlink(catPath, catLink);
+    const child = spawn('/bin/sh', ['-c', buildVoiceWriterRemote()], { env: { PATH: binDir, HOME: dir }, stdio: ['pipe', 'ignore', 'pipe'] });
+    child.stdin.destroy();
+    const t0 = Date.now();
+    expect(await exitOf(child)).toBe(3);
+    expect(Date.now() - t0).toBeLessThan(2000);
+  } finally {
+    try { await fs.rm(binDir, { recursive: true, force: true }); } catch {}
+    try { await fs.rm(dir, { recursive: true, force: true }); } catch {}
+  }
+});
+
 test.skipIf(!hasPython)('never blocks without a reader, keeps at most 4 KB, and exits 0 after stdin ends', async () => {
   const dir = await home();
   const fifo = await fifoIn(dir);
