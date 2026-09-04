@@ -65,13 +65,14 @@ exactly what the browser side of Tmuxifier's dictation already produces. The `fi
 substitutes what it can read from `infile` into each transfer and pads the rest with the
 `null` slave's silence.
 
-FIFO semantics that shaped the design: `open(O_RDONLY)` blocks until a writer exists; a read on
-an empty FIFO blocks (Claude's stop hung until bytes flowed); a short read is padded with
-silence, so the feed is not rate-locked to the reader. And once the last writer closes, reads
-do **not** pad with silence: alsa-lib's file plugin returns stale buffer contents immediately,
-in a tight loop (measured: two million reads in three seconds). The writer must therefore stay
-open and keep feeding for the whole linked period, never let stale audio pile up, and never
-hand a mid-recording reader a bare EOF.
+FIFO semantics that shaped the design (the first of them is also what forced the idle-device
+symlink — see "The idle capture device is `/dev/zero`" below): `open(O_RDONLY)` blocks until
+a writer exists; a read on an empty FIFO blocks (Claude's stop hung until bytes flowed); a
+short read is padded with silence, so the feed is not rate-locked to the reader. And once the
+last writer closes, reads do **not** pad with silence: alsa-lib's file plugin returns stale
+buffer contents immediately, in a tight loop (measured: two million reads in three seconds).
+The writer must therefore stay open and keep feeding for the whole linked period, never let
+stale audio pile up, and never hand a mid-recording reader a bare EOF.
 
 ## Goals
 
@@ -179,12 +180,12 @@ hand a mid-recording reader a bare EOF.
 The writer program is static text carried in the remote command; audio arrives on stdin.
 
 ```
-python3 -c '<program>' || exec cat > "$HOME/.tmuxifier-voice/mic"
+python3 -c '<program>' || <cat fallback into "$HOME/.tmuxifier-voice/mic.fifo">
 ```
 
-Program contract (`test/voiceWriter.integration.test.js` pins it against the real python3):
+Program contract (`test/voiceWriter.test.js` pins it against the real python3):
 
-- Exits 3 immediately when `~/.tmuxifier-voice/mic` is not a FIFO (box never set up).
+- Exits 3 immediately when `~/.tmuxifier-voice/mic.fifo` is not a FIFO (box never set up).
 - Opens the FIFO `O_RDWR | O_NONBLOCK`, so opening never blocks and the pipe never signals
   EOF while the link is up; `F_SETPIPE_SZ` to 4096 bytes (about 128 ms of audio), so Claude
   never hears more than that of pre-roll when it opens the device.
@@ -192,20 +193,56 @@ Program contract (`test/voiceWriter.integration.test.js` pins it against the rea
   are written or dropped: a one-byte carry keeps S16 sample alignment across arbitrary stdin
   chunk boundaries and across drops. Writes are ≤ `PIPE_BUF`, hence atomic.
 - On stdin EOF (the link is gone) it feeds 2.5 s of paced silence, past Claude Code's 2.0 s
-  silence-detection window, then exits 0. A reader mid-recording ends on silence rather than
-  seeing a bare EOF, which alsa-lib turns into a stale-buffer spin; a reader that has already
-  closed costs nothing, the zeros drop.
+  silence-detection window, then restores the idle device and exits 0. A reader mid-recording
+  ends on silence rather than seeing a bare EOF, which alsa-lib turns into a stale-buffer
+  spin; a reader that has already closed costs nothing, the zeros drop.
 
-The `cat` fallback (no python3: Alpine, minimal images) works but can carry up to the pipe's
-default 64 KB (2 s) of stale audio and blocks its ssh channel while nobody reads. Documented
-as degraded.
+The `cat` fallback (no python3: Alpine, minimal images) mirrors the minimum — point the device
+at the FIFO, feed it, point it back at `/dev/zero` — but has no pidfile and no silence tail,
+can carry up to the pipe's default 64 KB (2 s) of stale audio, and blocks its ssh channel
+while nobody reads. Documented as degraded.
+
+#### The idle capture device is `/dev/zero`, not the FIFO
+
+Amended 2026-09-04, after the final branch review. The path `~/.asoundrc` names,
+`~/.tmuxifier-voice/mic`, is a **symlink**; the real FIFO is `~/.tmuxifier-voice/mic.fifo`.
+Idle, the symlink points at `/dev/zero`; only while a writer is alive does it point at the
+FIFO.
+
+Why: alsa-lib's file plugin opens `infile` `O_RDONLY`, and **opening a FIFO with no writer
+blocks forever** (verified on this host). With `infile` naming the FIFO directly, every Claude
+Code Space press on a prepared box with nothing linked hung inside `snd_pcm_open` — and so did
+every press after an unlink. `/dev/zero` answers instantly, never EOFs, and reads as silence,
+so an unlinked recording ends on Claude's own silence detection ("No speech detected") instead
+of hanging. Rejected alternatives: a permanent FIFO holder (reads still block when a writer
+exists but sends nothing) and a per-box silence daemon (a new persistent process, needing boot
+persistence).
+
+The writer owns the swap, and one pidfile makes it single-instance:
+
+- Start: require `mic.fifo` to be a FIFO (else exit 3); read `~/.tmuxifier-voice/writer.pid`
+  and, when it names a **live** pid, `SIGTERM` it and poll ~300 ms for it to go; write our own
+  pid; open the FIFO; swap `mic → mic.fifo` atomically (temp symlink + `rename`).
+- Superseded (our `SIGTERM` handler fired): exit at once — **no silence tail**, no symlink
+  restore, no pidfile removal. The successor owns all three by then. Without this the
+  predecessor's 2.5 s tail interleaved zeros into the successor's live audio.
+- Normal end (stdin EOF): play the tail, then swap back to `/dev/zero` and remove the pidfile.
+- A writer `SIGKILL`ed without cleanup leaves the symlink on the FIFO until the next link. The
+  next writer always repairs it (it re-points unconditionally) and treats a dead pid as stale.
+  Accepted residual: between those two moments an unlinked press blocks as it did before.
+
+The install script therefore creates `mic.fifo` and `ln -sfn /dev/zero mic`, migrating the
+pre-symlink layout in place: a **FIFO** named `mic` is renamed to `mic.fifo` when that name is
+free, else removed. A **regular file** named `mic` is never clobbered — the same posture as
+the foreign-`.asoundrc` guard.
 
 Setup phase, decided on the box by `command -v claude` (`skipped-no-claude` otherwise):
 
 - `~/.asoundrc`: written with the recipe above (path from `$HOME` on the box) only when the
   file is absent or already carries the `# tmuxifier-voice-link` marker. Otherwise
   `skipped-asoundrc-exists`; an operator's own ALSA config is never touched.
-- `~/.tmuxifier-voice/mic`: `mkfifo`, mode 600, directory 700.
+- `~/.tmuxifier-voice/mic.fifo`: `mkfifo`, mode 600, directory 700; plus `mic`, the symlink
+  to `/dev/zero` described above (the pre-symlink layout is migrated in place).
 - Claude settings: `voice.enabled: true` merged into `~/.claude/settings.json` with the same
   jq → node → python3 chain the statusline push uses, only when no `voice` key exists, so an
   operator who ran `/voice off` stays off. Mode is left at Claude's default (hold). A box with

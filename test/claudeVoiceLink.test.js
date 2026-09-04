@@ -22,6 +22,16 @@ async function claudeBox() {
   return { dir, cfg: path.join(dir, '.claude'), env: () => ({ HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude'), PATH: `${bin}:/usr/bin:/bin` }) };
 }
 const isFifo = async (p) => (await fs.stat(p)).isFIFO();
+// What the box-side layout must look like after a run: the real FIFO under
+// mic.fifo, and `mic` — the path ~/.asoundrc names — a symlink parked on
+// /dev/zero. Idle it must read as silence, never block: alsa-lib opens
+// `infile` O_RDONLY and a FIFO with no writer blocks that open forever.
+async function expectIdleDevice(dir) {
+  const d = path.join(dir, '.tmuxifier-voice');
+  expect(await isFifo(path.join(d, 'mic.fifo'))).toBe(true);
+  expect((await fs.lstat(path.join(d, 'mic'))).isSymbolicLink()).toBe(true);
+  expect(await fs.readlink(path.join(d, 'mic'))).toBe('/dev/zero');
+}
 
 test('the script interpolates nothing and carries the marker and the plug/file/null recipe', () => {
   const s = buildVoiceLinkInstallScript();
@@ -31,6 +41,11 @@ test('the script interpolates nothing and carries the marker and the plug/file/n
   expect(s).toContain('slave.pcm "null"');
   expect(s).toContain('format S16_LE rate 16000 channels 1');
   expect(s).toContain('command -v claude');
+  // The idle device: a symlink to /dev/zero, so a capture open with nothing
+  // linked returns silence instead of blocking on a writerless FIFO.
+  expect(s).toContain('ln -sfn /dev/zero "$DEV"');
+  expect(s).toContain('mkfifo -m 600 "$FIFO"');
+  expect(s).toContain('FIFO="$VDIR/mic.fifo"');
   expect(s).not.toMatch(/\$\{[^}]*(box|host|user|session)/i);
 });
 
@@ -53,7 +68,8 @@ test('fresh box: writes ~/.asoundrc with the absolute FIFO path, makes the FIFO,
   expect(rc).toContain(`infile "${path.join(b.dir, '.tmuxifier-voice', 'mic')}"`);
   expect(rc).toContain('pcm.!default {');
   expect((await fs.stat(path.join(b.dir, '.asoundrc'))).mode & 0o777).toBe(0o600);
-  expect(await isFifo(path.join(b.dir, '.tmuxifier-voice', 'mic'))).toBe(true);
+  await expectIdleDevice(b.dir);
+  expect((await fs.stat(path.join(b.dir, '.tmuxifier-voice', 'mic.fifo'))).mode & 0o777).toBe(0o600);
   expect((await fs.stat(path.join(b.dir, '.tmuxifier-voice'))).mode & 0o777).toBe(0o700);
   const settings = JSON.parse(await fs.readFile(path.join(b.cfg, 'settings.json'), 'utf8'));
   expect(settings).toEqual({ voice: { enabled: true } });
@@ -66,7 +82,48 @@ test('rerun is idempotent: a marked ~/.asoundrc is rewritten, the FIFO kept, set
   const res = await runShell(buildVoiceLinkInstallScript(), b.env());
   expect(res.stdout).toContain('VOICELINK: applied settings=kept');
   expect(await fs.readFile(path.join(b.dir, '.asoundrc'), 'utf8')).toContain('type plug');
-  expect(await isFifo(path.join(b.dir, '.tmuxifier-voice', 'mic'))).toBe(true);
+  await expectIdleDevice(b.dir);
+});
+
+test('the pre-symlink layout migrates: a FIFO named `mic` becomes mic.fifo, `mic` becomes the symlink', async () => {
+  // Boxes prepared before the idle-device fix have the FIFO AT ~/.tmuxifier-voice/mic.
+  // Renaming it (rather than deleting and re-making it) keeps its mode and
+  // any reader already blocked on it, and leaves `mic` free for the symlink.
+  const b = await claudeBox();
+  const d = path.join(b.dir, '.tmuxifier-voice');
+  await fs.mkdir(d, { recursive: true, mode: 0o700 });
+  execFileSync('mkfifo', ['-m', '600', path.join(d, 'mic')]);
+  const res = await runShell(buildVoiceLinkInstallScript(), b.env());
+  expect(res.code).toBe(0);
+  await expectIdleDevice(b.dir);
+  expect((await fs.stat(path.join(d, 'mic.fifo'))).mode & 0o777).toBe(0o600);
+});
+
+test('the old FIFO is dropped rather than migrated when mic.fifo already exists', async () => {
+  // A half-migrated box: both names are FIFOs. The new one is authoritative —
+  // a second FIFO under the old name would have neither reader nor writer.
+  const b = await claudeBox();
+  const d = path.join(b.dir, '.tmuxifier-voice');
+  await fs.mkdir(d, { recursive: true, mode: 0o700 });
+  execFileSync('mkfifo', ['-m', '600', path.join(d, 'mic')]);
+  execFileSync('mkfifo', ['-m', '600', path.join(d, 'mic.fifo')]);
+  const res = await runShell(buildVoiceLinkInstallScript(), b.env());
+  expect(res.code).toBe(0);
+  await expectIdleDevice(b.dir);
+});
+
+test('a regular file where the device belongs is never clobbered', async () => {
+  // Same posture as the foreign-.asoundrc guard: Tmuxifier never creates a
+  // regular file there, so one is the operator's own. The link then simply
+  // does not work rather than something of theirs being destroyed.
+  const b = await claudeBox();
+  const d = path.join(b.dir, '.tmuxifier-voice');
+  await fs.mkdir(d, { recursive: true, mode: 0o700 });
+  await fs.writeFile(path.join(d, 'mic'), 'not ours\n');
+  const res = await runShell(buildVoiceLinkInstallScript(), b.env());
+  expect(res.code).toBe(0);
+  expect(await fs.readFile(path.join(d, 'mic'), 'utf8')).toBe('not ours\n');
+  expect(await isFifo(path.join(d, 'mic.fifo'))).toBe(true);
 });
 
 test('a foreign ~/.asoundrc is never touched: skipped, no FIFO, no settings change', async () => {
@@ -104,7 +161,7 @@ test('malformed settings.json: merge parse failure is reported, device installed
   const b = await claudeBox();
 
   // Build a custom tools bin with node/python3/claude/essential-commands but NOT jq
-  const toolsToLink = ['node', 'python3', 'claude', 'sh', 'mkdir', 'chmod', 'mkfifo', 'rm', 'mv', 'echo', 'cat', 'grep', 'printf'];
+  const toolsToLink = ['node', 'python3', 'claude', 'sh', 'mkdir', 'chmod', 'mkfifo', 'rm', 'mv', 'ln', 'echo', 'cat', 'grep', 'printf'];
   for (const tool of toolsToLink) {
     try {
       const toolPath = execFileSync('command', ['-v', tool], { shell: true, stdio: 'pipe' }).toString().trim();
@@ -128,7 +185,7 @@ test('malformed settings.json: merge parse failure is reported, device installed
   expect(res.stdout).toContain('VOICELINK: applied settings=error-settings-parse');
   const rc = await fs.readFile(path.join(b.dir, '.asoundrc'), 'utf8');
   expect(rc.startsWith('# tmuxifier-voice-link\n')).toBe(true);
-  expect(await isFifo(path.join(b.dir, '.tmuxifier-voice', 'mic'))).toBe(true);
+  await expectIdleDevice(b.dir);
   expect(await fs.readFile(path.join(b.cfg, 'settings.json'), 'utf8')).toBe(before);
 });
 

@@ -13,8 +13,11 @@
 //    cap. Stale audio is worthless and a queue is a memory leak.
 //  - A link that delivers no frame for stallMs is closed (4004): a stalled
 //    feed leaves Claude's reader blocked and its stop hanging.
-//  - close() ends stdin (the writer then plays its 2.5 s silence tail) and
-//    kills the child killGraceMs later.
+//  - close() ends stdin (the writer then plays its 2.5 s silence tail and
+//    restores the idle capture device) and kills the child killGraceMs later.
+//    Nothing here shortens that grace to avoid overlapping a supersede: the
+//    box side owns that rule — a starting writer SIGTERMs its predecessor,
+//    which then exits with no tail at all (voiceWriter.js).
 
 export const LINK_CLOSE = { superseded: 4001, notSetUp: 4002, writerFailed: 4003, stalled: 4004 };
 

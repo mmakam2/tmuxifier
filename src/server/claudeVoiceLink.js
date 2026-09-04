@@ -10,8 +10,14 @@
 //     or already ours (the marker line); an operator's own config is never
 //     touched, and the phase then skips entirely — the link cannot work
 //     without owning `default`.
-//  2. ~/.tmuxifier-voice/mic, the FIFO. Absolute path, resolved on the box
-//     from $HOME, because alsa-lib does not expand ~ in `infile`.
+//  2. ~/.tmuxifier-voice/mic, the capture device — a SYMLINK, not the FIFO.
+//     Absolute path, resolved on the box from $HOME, because alsa-lib does
+//     not expand ~ in `infile`. Idle it points at /dev/zero; the writer
+//     (voiceWriter.js) swaps it onto the real FIFO, ~/.tmuxifier-voice/
+//     mic.fifo, only while it is alive. A FIFO with no writer BLOCKS the
+//     reader's open() forever, which hung every Claude Code Space press on a
+//     prepared box with nothing linked; /dev/zero answers with silence at
+//     once and Claude's own silence detection ends the recording.
 //  3. voice.enabled=true in Claude's settings.json — only when no `voice` key
 //     exists, so a deliberate /voice off stays off. Same jq → node → python3
 //     chain the statusline push uses; a box with none reports it, and still
@@ -38,7 +44,8 @@ export function buildVoiceLinkInstallScript() {
     'SETTINGS="$DIR/settings.json"',
     'RC="$HOME/.asoundrc"',
     'VDIR="$HOME/.tmuxifier-voice"',
-    'FIFO="$VDIR/mic"',
+    'DEV="$VDIR/mic"',
+    'FIFO="$VDIR/mic.fifo"',
     "MARK='# tmuxifier-voice-link'",
     '',
     '# 1. Apply only when Claude Code is really installed on this box.',
@@ -55,17 +62,33 @@ export function buildVoiceLinkInstallScript() {
     '  exit 0',
     'fi',
     '',
-    "# 3. The FIFO Claude Code's default capture device reads.",
+    "# 3. The FIFO Claude Code's default capture device reads — behind a",
+    '#    symlink, so the idle device is /dev/zero (silence, no writer needed)',
+    '#    rather than a writerless FIFO, whose open() blocks forever.',
     'mkdir -p "$VDIR"',
     'chmod 700 "$VDIR"',
+    '# Migrate the pre-symlink layout, where `mic` WAS the FIFO: move it into',
+    '# place when nothing is there yet (keeping its mode), else drop it — a',
+    '# second FIFO under the old name would have neither reader nor writer.',
+    '# -p follows symlinks, so a live `mic -> mic.fifo` is left alone by -L.',
+    'if [ -p "$DEV" ] && [ ! -L "$DEV" ]; then',
+    '  if [ -e "$FIFO" ]; then rm -f "$DEV"; else mv "$DEV" "$FIFO"; fi',
+    'fi',
     'if [ ! -p "$FIFO" ]; then rm -f "$FIFO"; mkfifo -m 600 "$FIFO"; fi',
+    '# Only ever replace an absent path or a symlink (a dangling one included:',
+    '# -e follows). A regular file here belongs to the operator and is left',
+    '# alone — the link then simply does not work, the same posture the',
+    '# foreign-.asoundrc guard above takes.',
+    'if [ ! -e "$DEV" ] || [ -L "$DEV" ]; then ln -sfn /dev/zero "$DEV"; fi',
     '',
-    '# 4. ALSA: default = plug -> file(infile=FIFO) -> null. Atomic write.',
+    '# 4. ALSA: default = plug -> file(infile=DEV) -> null. Atomic write.',
+    '#    DEV, not FIFO: alsa-lib opens infile once, so the indirection is what',
+    '#    lets the same recipe read silence when idle and the FIFO when linked.',
     'TMP="$RC.tmuxifier.tmp"',
     '{',
     '  echo "$MARK"',
     ...RC_BODY.slice(0, 5).map((l) => `  echo '${l}'`),
-    '  echo "  infile \\"$FIFO\\""',
+    '  echo "  infile \\"$DEV\\""',
     ...RC_BODY.slice(5).map((l) => `  echo '${l}'`),
     '} > "$TMP"',
     'chmod 600 "$TMP"',
