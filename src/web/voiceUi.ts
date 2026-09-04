@@ -211,6 +211,8 @@ export function createVoiceController(
   let model: PressModel = IDLE;
   let recorder: VoiceRecorder | null = null;
   let link: VoiceLink | null = null;
+  // Bumped by every link attempt and by every unlink/dispose — see openLinkNow.
+  let linkGen = 0;
   let refusedWhy = 'closed';
   let closedWhy = 'closed';
   let button: HTMLButtonElement | null = null;
@@ -280,18 +282,42 @@ export function createVoiceController(
     });
   }
 
+  // Every attempt takes a generation. An unlink (or a dispose) bumps it, so
+  // the handshake still in flight is ORPHANED rather than left to land on
+  // whatever the button is doing by then: press → unlink → press used to let
+  // attempt 1's `.then` hand attempt 2's button a socket nobody asked for,
+  // and attempt 1's onClose to tear down attempt 2's live link with its own
+  // reason. A stale continuation closes its own socket and returns.
   function openLinkNow(): void {
+    const gen = ++linkGen;
+    let closed = false;                   // this attempt's socket reported a close
+    let pending: VoiceLink | null = null; // its resolved handle, if it got that far
     void openLink(boxId, (why) => {
-      closedWhy = why;
+      closed = true;
       // Only ever reached for a close we did NOT ask for (our own close()
       // suppresses the callback), so the socket is already gone: drop the
       // reference with it rather than leave dispose() to close it again.
+      if (gen !== linkGen) { pending?.close(); return; }
+      closedWhy = why;
       if (model.state === 'live') { dispatch({ t: 'closed' }); link = null; }
     }).then((l) => {
+      pending = l;
+      if (gen !== linkGen) { l.close(); return; }             // orphaned by an unlink
+      // Ready and closed in the same tick: the socket resolved but is already
+      // gone, so promoting it to `live` would leave a button claiming a link
+      // that can never carry a frame. Treat it as a refusal instead — the
+      // press continues as dictation with the audio already buffered.
+      if (closed) {
+        l.close();
+        refusedWhy = closedWhy;
+        if (model.state === 'linking') dispatch({ t: 'refused' });
+        return;
+      }
       if (model.state !== 'linking') { l.close(); return; }   // unlinked while connecting
       link = l;
       dispatch({ t: 'ready' });
     }).catch((e) => {
+      if (gen !== linkGen) return;
       refusedWhy = (e as { why?: string })?.why ?? 'closed';
       if (model.state === 'linking') dispatch({ t: 'refused' });
     });
@@ -354,7 +380,10 @@ export function createVoiceController(
       case 'openLink': openLinkNow(); break;
       case 'stream': recorder?.stream((f) => link?.send(f)); break;
       case 'finishDictation': void finishDictation(); break;
-      case 'unlink': link?.close(); link = null; break;
+      // The generation bump matters even when there is nothing to close: an
+      // unlink pressed DURING the handshake has no `link` yet, and orphaning
+      // the attempt is the only way to stop it landing later.
+      case 'unlink': linkGen++; link?.close(); link = null; break;
       // The focus handback follows finishDictation's rule: with the composer
       // open, focus must STAY on the draft field — an unlink that yanked it
       // back to the terminal would close the soft keyboard mid-edit.
@@ -366,7 +395,7 @@ export function createVoiceController(
 
   const begin = (): void => { dispatch({ t: 'press' }); };
   const release = (): void => { dispatch({ t: 'release' }); };
-  const cancel = (): void => { link?.close(); link = null; recorder?.cancel(); recorder = null; model = IDLE; paint(); };
+  const cancel = (): void => { linkGen++; link?.close(); link = null; recorder?.cancel(); recorder = null; model = IDLE; paint(); };
 
   return {
     begin,

@@ -698,3 +698,128 @@ test('a probe that rejects cannot strand the press: it reads as error and dictat
   expect(urls).toHaveLength(1);
   expect(c.recording()).toBe(false);
 });
+
+// --- Handshake generations -------------------------------------------------
+// A press → unlink → press inside the round trip used to let attempt 1's
+// continuations land on attempt 2: its `.then` handed the button a socket
+// nobody asked for, and its onClose tore down attempt 2's live link with a
+// reason belonging to a socket that was already gone. Every attempt now takes
+// a generation, and an unlink bumps it.
+
+// An openLink fake whose promises the test settles by hand, one per attempt.
+function pendingLinks() {
+  const attempts = [];
+  const openLink = (boxId, onClose) => new Promise((res, rej) => attempts.push({ res, rej, onClose }));
+  return { attempts, openLink };
+}
+
+test('an unlink during the handshake orphans it: the late socket is closed and nothing goes live', async () => {
+  stubDocument();
+  const rec = streamRecorder();
+  const link = fakeLink();
+  const { attempts, openLink } = pendingLinks();
+  const writes = [];
+  const c = createVoiceController('box1', 120, { ...noopHost, write: (t) => writes.push(t) }, () => rec, {
+    probe: async () => 'claude', openLink, dictationEnabled: true,
+  });
+  let btn;
+  c.mount({ appendChild: (b) => { btn = b; } }, { ok: true, reason: '', hint: '' });
+  c.begin();
+  await flush(); await flush();
+  expect(attempts).toHaveLength(1);
+  expect(btn.dataset.state).toBe('working');      // linking
+  c.begin();                                      // second press = unlink mid-handshake
+  expect(btn.dataset.state).toBe('idle');
+  attempts[0].res(link);                          // ...and only now does it connect
+  await flush(); await flush();
+  expect(link.closed).toBe(1);
+  expect(btn.dataset.state).toBe('idle');
+  expect(c.recording()).toBe(false);
+  expect(writes.join('')).toBe('');
+});
+
+test('an orphaned handshake that connects late cannot hijack the next press', async () => {
+  stubDocument();
+  const rec = streamRecorder();
+  const first = fakeLink();
+  const second = fakeLink();
+  const { attempts, openLink } = pendingLinks();
+  const writes = [];
+  const c = createVoiceController('box1', 120, { ...noopHost, write: (t) => writes.push(t) }, () => rec, {
+    probe: async () => 'claude', openLink, dictationEnabled: true,
+  });
+  let btn;
+  c.mount({ appendChild: (b) => { btn = b; } }, { ok: true, reason: '', hint: '' });
+  c.begin(); await flush(); await flush();        // attempt 1 in flight
+  c.begin();                                      // unlink
+  c.begin(); await flush(); await flush();        // attempt 2 in flight
+  expect(attempts).toHaveLength(2);
+  attempts[1].res(second);
+  await flush(); await flush();
+  expect(btn.dataset.state).toBe('live');
+
+  attempts[0].res(first);                         // the orphan finally answers
+  await flush(); await flush();
+  expect(first.closed).toBe(1);                   // dropped, not adopted
+  expect(btn.dataset.state).toBe('live');
+  rec.streamed(new Uint8Array(640));
+  expect(second.sent).toHaveLength(1);            // still the live one's socket
+  expect(first.sent).toHaveLength(0);
+
+  attempts[0].onClose('stalled');                 // and its close is not our close
+  await flush();
+  expect(btn.dataset.state).toBe('live');
+  expect(second.closed).toBe(0);
+  expect(writes.join('')).toBe('');
+});
+
+test('an orphaned handshake that fails late cannot refuse the attempt that replaced it', async () => {
+  stubDocument();
+  const rec = streamRecorder();
+  const { attempts, openLink } = pendingLinks();
+  const writes = [];
+  const c = createVoiceController('box1', 120, { ...noopHost, write: (t) => writes.push(t) }, () => rec, {
+    probe: async () => 'claude', openLink, dictationEnabled: true,
+  });
+  let btn;
+  c.mount({ appendChild: (b) => { btn = b; } }, { ok: true, reason: '', hint: '' });
+  c.begin(); await flush(); await flush();
+  c.begin();                                      // unlink
+  c.begin(); await flush(); await flush();        // attempt 2, still connecting
+  expect(btn.dataset.state).toBe('working');
+  attempts[0].rej(Object.assign(new Error('voice link not-set-up'), { why: 'not-set-up' }));
+  await flush(); await flush();
+  // Attempt 2 is untouched — it is still linking, not dumped into dictation
+  // with someone else's failure.
+  expect(btn.dataset.state).toBe('working');
+  expect(writes.join('')).toBe('');
+  const link = fakeLink();
+  attempts[1].res(link);
+  await flush(); await flush();
+  expect(btn.dataset.state).toBe('live');
+});
+
+test('a close landing in the same tick as ready refuses rather than going live', async () => {
+  stubDocument();
+  const rec = streamRecorder();
+  const link = fakeLink();
+  const writes = [];
+  const c = createVoiceController('box1', 120, { ...noopHost, write: (t) => writes.push(t) }, () => rec, {
+    probe: async () => 'claude',
+    // The real shape of this race: the `ready` frame resolves the promise and
+    // the close event arrives in the same tick, so onClose runs before the
+    // `.then` microtask. A socket that is already gone must never be painted
+    // as live — the button would advertise a link that can carry no frame.
+    openLink: (boxId, onClose) => { const p = Promise.resolve(link); onClose('writer-failed'); return p; },
+    dictationEnabled: true,
+  });
+  let btn;
+  c.mount({ appendChild: (b) => { btn = b; } }, { ok: true, reason: '', hint: '' });
+  c.begin();
+  await flush(); await flush();
+  expect(btn.dataset.state).toBe('recording');    // fell back to dictation
+  expect(link.closed).toBe(1);
+  expect(rec.streamed).toBeNull();
+  expect(writes.join('')).toMatch(/the box-side writer failed/);
+  expect(writes.join('')).toMatch(/dictating instead/);
+});
