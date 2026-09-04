@@ -2,6 +2,7 @@ import { test, expect } from 'vitest';
 import os from 'node:os';
 import { buildEnsureLocalShellScript, createLocalShellActions, runLocalScriptStdin } from '../src/server/localShellActions.js';
 import { buildAgentHooksInstallScript } from '../src/server/claudeAgentHooks.js';
+import { buildVoiceWriterRemote } from '../src/server/voiceWriter.js';
 
 test('buildEnsureLocalShellScript enables Oh My Zsh in local tmux session', () => {
   const script = buildEnsureLocalShellScript('omz');
@@ -122,4 +123,14 @@ test('runLocalScriptStdin settles on timeout instead of hanging', async () => {
   const res = await runLocalScriptStdin('sleep 30', Buffer.from(''), { timeout: 100 });
   expect(res.code).not.toBe(0);
   expect(Date.now() - started).toBeLessThan(5000);
+});
+
+test('openAudioSink runs the writer remote under /bin/sh with the factory env', () => {
+  const calls = [];
+  const handle = { stdin: {}, done: Promise.resolve({ code: 0 }), kill() {} };
+  const actions = createLocalShellActions({ env: { HOME: '/tmp/x', PATH: '/usr/bin' }, pipe: (argv, opts) => { calls.push({ argv, opts }); return handle; } });
+  expect(actions.openAudioSink()).toBe(handle);
+  expect(calls[0].argv).toEqual(['-c', buildVoiceWriterRemote()]);
+  expect(calls[0].opts.cmd).toBe('/bin/sh');
+  expect(calls[0].opts.env).toEqual({ HOME: '/tmp/x', PATH: '/usr/bin' });
 });

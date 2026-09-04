@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { buildEnsureTmuxRemote } from './boxActions.js';
 import { createAgentHooksPusher } from './claudeAgentHooks.js';
+import { sshPipe } from './sshRun.js';
+import { buildVoiceWriterRemote } from './voiceWriter.js';
 
 const SETUP_TIMEOUT_MS = 120000;
 
@@ -63,7 +65,7 @@ const readHookAssetDefault = () => fs.promises.readFile(new URL('./assets/tmuxif
 // localSession must match the session name the session manager attaches
 // (sessions.openLocal) — threading it here keeps the two from silently
 // diverging if the knob is ever set to a non-default value.
-export function createLocalShellActions({ run = runLocalShellScript, runStdin = runLocalScriptStdin, readHookAsset = readHookAssetDefault, cwd = os.homedir(), env = process.env, localSession = 'local' } = {}) {
+export function createLocalShellActions({ run = runLocalShellScript, runStdin = runLocalScriptStdin, readHookAsset = readHookAssetDefault, pipe = sshPipe, cwd = os.homedir(), env = process.env, localSession = 'local' } = {}) {
   // The SSH pusher's transport signature is (box, script, bytes); the host has
   // no box, so the local transport drops that argument. Everything else —
   // installer script, result parsing, skip/error mapping — is the pusher's,
@@ -85,6 +87,13 @@ export function createLocalShellActions({ run = runLocalShellScript, runStdin = 
     },
     async installAgentHooks() {
       return hooksPusher.push(null);
+    },
+    // Host Shell's voice link: the same writer a box runs, spawned locally
+    // under /bin/sh (sshPipe's test-only `cmd` injection is exactly the seam
+    // a local transport needs). HOME comes from `env`, so the FIFO is this
+    // host's own ~/.tmuxifier-voice/mic.
+    openAudioSink() {
+      return pipe(['-c', buildVoiceWriterRemote()], { cmd: '/bin/sh', env });
     },
   };
 }

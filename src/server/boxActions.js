@@ -19,6 +19,7 @@ import {
   buildSendKeysRemote,
   buildSendWheelRemote,
 } from './tmuxInject.js';
+import { buildVoiceWriterRemote } from './voiceWriter.js';
 
 // Curated provision-time tools. Ids are the ONLY strings that ever reach the
 // generated shell script — resolveTools throws on anything not in the catalog,
@@ -554,7 +555,7 @@ export function buildKillTmuxRemote(session) {
   return `if command -v tmux >/dev/null 2>&1; then tmux kill-session -t ${exact} 2>/dev/null || true; fi`;
 }
 
-export function createBoxActions({ run, runStdin, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist }) {
+export function createBoxActions({ run, runStdin, pipe = null, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist }) {
   async function runRemote(box, remote, timeout) {
     const argv = buildProbeArgv(box, remote, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
     return run(argv, { timeout });
@@ -644,6 +645,15 @@ export function createBoxActions({ run, runStdin, hostKeyPolicy = 'accept-new', 
         return { ok: false, code, stdout, stderr, error: msg || `ssh exited ${res ? res.code : 'unknown'}` };
       }
       return { ok: true, code, stdout, stderr };
+    },
+    // Long-lived stdin pipe to the box-side voice writer (voiceWriter.js) over
+    // the ControlMaster: the /voice-link WebSocket's audio frames go down it.
+    // Returns the sshPipe handle; voiceLinks.js owns its lifetime. Same
+    // validated argv path as every probe (assertBoxSafe inside buildProbeArgv).
+    openAudioSink(box) {
+      if (typeof pipe !== 'function') throw new Error('audio sink not supported');
+      const argv = buildProbeArgv(box, buildVoiceWriterRemote(), { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
+      return pipe(argv);
     },
     // After an upload lands, type its quoted path into the box session's
     // active pane — but only when the pane is a Claude Code or shell prompt
