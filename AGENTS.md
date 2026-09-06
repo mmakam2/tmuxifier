@@ -336,7 +336,16 @@ pattern for new modules.
   (`TOOL_IDS`/`resolveTools`: system upgrade, curl, git, gh, node/npm, bubblewrap, and the
   Codex/Claude/Antigravity CLIs — ids validated server-side, nothing user-typed reaches the
   script), the non-interactive `execCommand` that Fleet Command runs, and ControlMaster
-  liveness/stale-socket reaping (`isMasterAlive`/`reapStaleMaster`).
+  liveness/stale-socket reaping (`isMasterAlive`/`reapStaleMaster`). The `node` tool installs
+  the pinned `NODE_MAJOR` (24) from NodeSource on the apt/dnf/yum families — distro archives
+  lag by years and Claude Code's npm package wants >=22 — download-then-execute like the
+  claude/agy blocks, while Arch/Alpine/openSUSE keep their own tracking packages. Its guard is
+  **version-aware**, unlike every other tool's install-if-missing `command -v`: a box already
+  carrying the distro's Node is the one that needs the upgrade, so `node -v` below the pin
+  re-installs, dropping the distro `npm`/`libnode-dev` packages first (NodeSource's `nodejs`
+  declares `Conflicts: npm` and overwrites libnode-dev's headers; `remove`, never purge). The web label in
+  `provisionTools.ts` and the MCP `SETUP_TOOLS` enum carry the same number/ids, pinned by
+  `test/provisionTools.test.js` and `test/mcpTools.test.js`.
   Also exports the exact-target remote builders behind `POST /api/boxes/:id/kill`:
   `buildKillSessionRemote`/`buildKillWindowRemote` (`-t '=name'` / session-qualified
   `-t '=name:@id'` — the same `=` exact-match rule as `buildEnsureSessionRemote`/

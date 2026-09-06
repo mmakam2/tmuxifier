@@ -27,9 +27,18 @@ import { buildVoiceWriterRemote } from './voiceWriter.js';
 // which is what keeps the tools= query param out of command-injection territory.
 export const TOOL_IDS = ['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy'];
 
-// gh fetches GitHub's apt keyring with curl; codex is an npm global;
-// claude/agy are curl installers.
-const TOOL_IMPLIES = { gh: ['curl'], codex: ['node'], claude: ['curl'], agy: ['curl'] };
+// The Node major the `node` tool installs. Distro archives lag by years
+// (Ubuntu 24.04 and Debian 12 both ship 18) and the agent CLIs this catalog
+// exists for want a current runtime — Claude Code's npm package declares
+// >=22 — so on the apt and rpm families Node comes from NodeSource at this
+// pinned major; the rolling distros (Arch, Alpine) track upstream and keep
+// their own package. Bump here and in provisionTools.ts's label —
+// test/provisionTools.test.js pins the two together.
+export const NODE_MAJOR = 24;
+
+// gh and node fetch (GitHub's apt keyring, NodeSource's setup script) with
+// curl; codex is an npm global; claude/agy are curl installers.
+const TOOL_IMPLIES = { gh: ['curl'], node: ['curl'], codex: ['node'], claude: ['curl'], agy: ['curl'] };
 
 export function resolveTools(ids) {
   if (ids == null || ids === '') return [];
@@ -147,7 +156,63 @@ const TOOLS = {
     '  fi',
     'fi',
   ],
-  node: () => installPackagesBlock('npm', samePkg('nodejs npm'), 'npm'),
+  node: () => [
+    // Version-aware guard, unlike the other tools' install-if-missing: a box
+    // that already carries the distro's Node is exactly the one that needs
+    // the upgrade, and `command -v npm` would skip it forever. Parameter
+    // expansion only (no word splitting — the remote may be zsh) and a
+    // `case` so a non-numeric `node -v` reads as "install" rather than
+    // tripping `[ -ge ]`.
+    'NODE_NEED=1',
+    'if command -v node >/dev/null 2>&1; then',
+    '  v="$(node -v 2>/dev/null || true)"; v="${v#v}"; v="${v%%.*}"',
+    `  case "$v" in ''|*[!0-9]*) ;; *) if [ "$v" -ge ${NODE_MAJOR} ]; then NODE_NEED=0; fi ;; esac`,
+    'fi',
+    'if [ "$NODE_NEED" = 1 ]; then',
+    "  SUDO=''",
+    "  if [ \"$(id -u)\" != '0' ]; then SUDO='sudo'; fi",
+    '  if command -v apt-get >/dev/null 2>&1; then',
+    // NodeSource's nodejs bundles npm (a declared Conflicts: npm) and ships
+    // the headers libnode-dev owns (a dpkg file-overwrite failure), so an
+    // in-place upgrade has to drop those two first — remove, never purge or
+    // autoremove, and only when dpkg says they are installed, so a box
+    // without them is untouched.
+    '    for p in npm libnode-dev; do',
+    '      if dpkg -s "$p" >/dev/null 2>&1; then $SUDO env DEBIAN_FRONTEND=noninteractive apt-get remove -y "$p"; fi',
+    '    done',
+    // Download-then-execute, same shape and reason as the claude/agy blocks
+    // below. NodeSource's script adds the keyring + apt source and runs
+    // apt-get update itself; the install is a separate command so its exit
+    // status is the script's.
+    '    t="$(mktemp)"',
+    `    curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x -o "$t"`,
+    '    $SUDO bash "$t"',
+    '    rm -f "$t"',
+    '    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs',
+    '  elif command -v dnf >/dev/null 2>&1; then',
+    '    t="$(mktemp)"',
+    `    curl -fsSL https://rpm.nodesource.com/setup_${NODE_MAJOR}.x -o "$t"`,
+    '    $SUDO bash "$t"',
+    '    rm -f "$t"',
+    '    $SUDO dnf install -y nodejs',
+    '  elif command -v yum >/dev/null 2>&1; then',
+    '    t="$(mktemp)"',
+    `    curl -fsSL https://rpm.nodesource.com/setup_${NODE_MAJOR}.x -o "$t"`,
+    '    $SUDO bash "$t"',
+    '    rm -f "$t"',
+    '    $SUDO yum install -y nodejs',
+    '  elif command -v pacman >/dev/null 2>&1; then',
+    '    $SUDO pacman -Sy --noconfirm nodejs npm',
+    '  elif command -v apk >/dev/null 2>&1; then',
+    '    $SUDO apk add nodejs npm',
+    '  elif command -v zypper >/dev/null 2>&1; then',
+    '    $SUDO zypper --non-interactive install nodejs npm',
+    '  else',
+    "    echo 'node is not installed and no supported package manager was found' >&2",
+    '    exit 127',
+    '  fi',
+    'fi',
+  ],
   bubblewrap: () => installPackagesBlock('bwrap', samePkg('bubblewrap'), 'bubblewrap'),
   codex: () => [
     'if ! command -v codex >/dev/null 2>&1; then',

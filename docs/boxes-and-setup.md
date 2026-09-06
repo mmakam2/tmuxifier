@@ -58,9 +58,19 @@ usage.
 
 The Add/Edit Box modal (and the [Proxmox Provision form](proxmox.md)) also offer an **"Additional
 tools"** checklist that runs in the same provisioning step — a full system update/upgrade,
-curl, git, the GitHub CLI, Node.js + npm, Bubblewrap, and the Codex, Claude Code, and
+curl, git, the GitHub CLI, Node.js 24 + npm, Bubblewrap, and the Codex, Claude Code, and
 Antigravity CLIs — using the same idempotent multi-distro install script, so re-running
 provisioning skips anything already installed.
+
+Node.js is the one entry that does more than install-if-missing. Debian and Ubuntu archives
+ship a Node several majors behind (both Debian 12 and Ubuntu 24.04 carry 18), older than the
+agent CLIs want, so on apt-, dnf- and yum-based boxes the tool installs the pinned major from
+[NodeSource](https://github.com/nodesource/distributions) instead; Arch, Alpine and openSUSE
+keep their own current packages. The check is on the version, not just presence: re-running
+setup with Node.js ticked upgrades a box whose Node is older than the pin, removing the
+distro's `npm` and `libnode-dev` packages first (the NodeSource package bundles npm and
+ships the headers libnode-dev owns, so neither can stay). A box already at or above the pin
+is left alone.
 
 ## The Claude Code checkbox
 

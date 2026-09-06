@@ -2,6 +2,7 @@ import { test, expect } from 'vitest';
 import { TOOL_DEFS, JOB_KINDS, GUEST_ACTIONS, AGENT_STATES, SEND_KEYS, WAIT_MAX_SEC, validateArgs, createToolRegistry, UnknownToolError } from '../src/mcp/tools.js';
 import { ApiError } from '../src/mcp/apiClient.js';
 import { NAMED_KEYS, sanitizeSendText } from '../src/server/tmuxInject.js';
+import { TOOL_IDS } from '../src/server/boxActions.js';
 
 const NAMES = ['list_boxes', 'read_pane', 'box_health', 'list_fleet_scripts', 'list_presets', 'list_guests', 'list_jobs', 'job_status',
   'send_text', 'send_key', 'scroll_pane', 'run_fleet_command', 'cancel_fleet_job', 'add_box', 'start_setup', 'provision_guest', 'guest_power',
@@ -34,6 +35,15 @@ test('the untrusted-output warning is in the two descriptions that hand box outp
 
 test('send_key stays pinned to the server\'s NAMED_KEYS allowlist', () => {
   expect(new Set(SEND_KEYS)).toEqual(NAMED_KEYS);
+});
+
+// The description used to say `antigravity` where the server's id is `agy`,
+// so a model following it got 'unknown tool'. An enum pinned to TOOL_IDS
+// cannot drift that way.
+test('start_setup tool ids stay pinned to the server\'s TOOL_IDS catalog', () => {
+  const ss = TOOL_DEFS.find((t) => t.name === 'start_setup');
+  expect(ss.inputSchema.properties.tools.items.enum).toEqual(TOOL_IDS);
+  expect(ss.inputSchema.properties.tools.description).not.toContain('antigravity');
 });
 
 // The description tells the model what its text will actually become. A newline

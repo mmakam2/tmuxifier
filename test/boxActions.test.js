@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildKillTmuxRemote, buildFrameworkUpdateClamps, createBoxActions, resolveTools, TOOL_IDS } from '../src/server/boxActions.js';
+import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildKillTmuxRemote, buildFrameworkUpdateClamps, createBoxActions, resolveTools, TOOL_IDS, NODE_MAJOR } from '../src/server/boxActions.js';
 
 // The generated script uses sed and grep (framework rc edits, and the always-on
 // update clamps). The fake-PATH harnesses below are deliberately hermetic — no
@@ -486,9 +486,50 @@ test('buildEnsureTmuxRemote sets up the GitHub rpm repo for gh on dnf/yum', () =
 
 test('buildEnsureTmuxRemote installs codex via npm with node implied', () => {
   const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['codex'] });
-  expect(remote).toContain('if ! command -v npm >/dev/null 2>&1; then');
-  expect(remote).toContain('apt-get install -y --no-install-recommends nodejs npm');
+  expect(remote).toContain(`https://deb.nodesource.com/setup_${NODE_MAJOR}.x`);
   expect(remote).toContain('npm install -g @openai/codex');
+  expect(remote.indexOf('deb.nodesource.com')).toBeLessThan(remote.indexOf('npm install -g @openai/codex'));
+});
+
+// Distro archives lag Node by years (Ubuntu 24.04 and Debian 12 both ship 18)
+// and the agent CLIs this catalog exists for want a current runtime, so Node
+// comes from NodeSource at a pinned major on the apt and rpm families.
+test('the node tool installs a pinned NodeSource major, download-then-execute, with curl implied', () => {
+  expect(Number.isInteger(NODE_MAJOR)).toBe(true);
+  expect(NODE_MAJOR).toBeGreaterThanOrEqual(24);
+  expect(resolveTools(['node'])).toEqual(['curl', 'node']);
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['node'] });
+  expect(remote).toContain(`curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x -o "$t"`);
+  expect(remote).toContain(`curl -fsSL https://rpm.nodesource.com/setup_${NODE_MAJOR}.x -o "$t"`);
+  expect(remote).toContain('$SUDO bash "$t"');
+  expect(remote).not.toMatch(/setup_\d+\.x\s*\|/);
+  // The NodeSource package bundles npm, so apt no longer installs the distro's
+  // `nodejs npm` pair; the rolling distros (whose archives track upstream) still do.
+  expect(remote).toContain('apt-get install -y --no-install-recommends nodejs\n');
+  expect(remote).not.toContain('apt-get install -y --no-install-recommends nodejs npm');
+  expect(remote).toContain('pacman -Sy --noconfirm nodejs npm');
+  expect(remote).toContain('dnf install -y nodejs');
+  expect(remote).toContain('yum install -y nodejs');
+  // curl is implied and its block precedes the NodeSource fetch.
+  expect(remote).toContain('if ! command -v curl >/dev/null 2>&1; then');
+  expect(remote.indexOf('command -v curl')).toBeLessThan(remote.indexOf('deb.nodesource.com'));
+});
+
+// Unlike the other tools' install-if-missing guards, this one is version-aware:
+// a box that already carries the distro's Node is exactly the one that needs
+// the upgrade, and `command -v npm` would skip it forever.
+test('the node tool re-installs when the present node is older than the pinned major', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['node'] });
+  expect(remote).not.toContain('if ! command -v npm >/dev/null 2>&1; then');
+  expect(remote).toContain('node -v');
+  expect(remote).toContain(`-ge ${NODE_MAJOR}`);
+  // NodeSource's nodejs Conflicts: with the distro's npm and libnode-dev, so an
+  // in-place upgrade drops those first — remove, never purge, and only when
+  // dpkg says they are installed.
+  expect(remote).toContain('for p in npm libnode-dev; do');
+  expect(remote).toContain('if dpkg -s "$p" >/dev/null 2>&1; then $SUDO env DEBIAN_FRONTEND=noninteractive apt-get remove -y "$p"; fi');
+  expect(remote).not.toContain('apt-get purge');
+  expect(remote).not.toContain('autoremove');
 });
 
 test('buildEnsureTmuxRemote installs claude and agy via their curl installers', () => {
@@ -516,7 +557,7 @@ test('buildEnsureTmuxRemote keeps upgrade first AMONG the tools (fresh indexes f
   // but upgrade must still lead the tool blocks so curl/git/gh/node see fresh
   // package indexes.
   const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['upgrade', 'node'] });
-  expect(remote.indexOf('apt-get -y upgrade')).toBeLessThan(remote.indexOf('nodejs npm'));
+  expect(remote.indexOf('apt-get -y upgrade')).toBeLessThan(remote.indexOf('deb.nodesource.com'));
 });
 
 test('buildEnsureTmuxRemote omits tool blocks and PATH line when no tools selected', () => {
