@@ -1024,7 +1024,14 @@ under `(max-width: 720px) and (pointer: coarse)` decided once per `openTerminal`
 mid-session flip leaves open terminals at the size they started with; the bump saturates at 32
 BEFORE `clampFontSize` sees it, because that clamp falls back to the default 12 for anything
 out of range — an unsaturated bump past the ceiling came back smaller than the desktop it was
-meant to enlarge), `index.html`, `style.css`, plus feature modules —
+meant to enlarge. And the PTY learns every size xterm settles on through xterm's OWN
+`onResize` event, not only the window's: `fit.fit()` also runs when the webfonts resolve
+(`refitWhenFontReady`), and on a cold cache that refit lands AFTER the socket has already
+announced the fallback-font fit — until 2026-09-06 nothing sent the settled size, so tmux
+kept drawing for the taller fallback screen and a hard refresh cut off the bottom rows,
+while a normal refresh (fonts cached, refit before the socket) looked fine;
+`test/e2e/fontRefit.spec.ts` holds the `.woff2` responses to pin that ordering), `index.html`,
+`style.css`, plus feature modules —
 `stageLayout.ts` (the pure split-tree stage model — a node is an INSTANCE leaf, `${box}#${ordinal}`
 (`instanceId`/`boxOfInstance`/`ordinalOfInstance`/`nextOrdinal`), or a split
 (orientation/children/ratios) in canonical form (splits ≥2 children, no same-orientation

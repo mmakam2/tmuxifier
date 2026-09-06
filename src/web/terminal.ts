@@ -576,7 +576,19 @@ export function openTerminal(
   const sendInput = (d: string) => { if (ws?.readyState === 1) ws.send(JSON.stringify({ t: 'i', d })); };
   term.onData((d) => sendInput(opts?.transformInput ? opts.transformInput(d) : d));
 
-  const onResize = () => { fit.fit(); sendResize(); };
+  // Every size xterm settles on reaches the PTY: the send rides xterm's OWN
+  // resize event, not only the window's. fit.fit() also runs when the webfonts
+  // resolve (refitWhenFontReady) and on stage relayouts, and the font one was
+  // the hard-refresh hazard: on a cold cache the socket opened and announced
+  // the fallback-font fit, then the real font landed, xterm shrank to fewer
+  // rows, and nothing told tmux — it kept drawing for the taller screen and
+  // the bottom rows (status bar, a prompt's last lines) never appeared. A
+  // normal refresh serves the fonts from cache, so the refit lands before the
+  // socket opens and the one size it sends is already right — which is why it
+  // only ever showed after a hard refresh. Registered after `ws` is declared:
+  // fit.fit() fires this synchronously and sendResize reads that `let`.
+  term.onResize(() => sendResize());
+  const onResize = () => { fit.fit(); };
   window.addEventListener('resize', onResize);
   connect();
 
