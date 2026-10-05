@@ -282,16 +282,16 @@ test('netboxSummary enumerates every v4 prefix with utilization, skipping v6', a
   const client = {
     listPrefixes: async () => [
       { id: 1, prefix: '192.168.1.0/24' },
-      { id: 2, prefix: '192.168.7.0/24' },
+      { id: 2, prefix: '192.168.2.0/24' },
       { id: 3, prefix: 'fd00::/64' }, // no v4 host math — skipped, never counted
     ],
     countIpsInPrefix: async (p) => { counted.push(p); return 12; },
   };
   const summary = await netboxSummary(NB, { makeClient: () => client });
-  expect(counted).toEqual(['192.168.1.0/24', '192.168.7.0/24']);
+  expect(counted).toEqual(['192.168.1.0/24', '192.168.2.0/24']);
   expect(summary).toEqual({ configured: true, ok: true, prefixes: [
     { prefix: '192.168.1.0/24', used: 12, total: 254 },
-    { prefix: '192.168.7.0/24', used: 12, total: 254 },
+    { prefix: '192.168.2.0/24', used: 12, total: 254 },
   ] });
 });
 
@@ -311,9 +311,9 @@ test('netboxSummary reports a failure as ok:false, never throws', async () => {
 test('listPrefixes queries the prefixes endpoint with a bounded page', async () => {
   const urls = [];
   const client = createNetboxClient(NB, {
-    request: async ({ url }) => { urls.push(url); return { status: 200, json: { results: [{ id: 5, prefix: '192.168.9.0/24' }] }, text: '' }; },
+    request: async ({ url }) => { urls.push(url); return { status: 200, json: { results: [{ id: 5, prefix: '192.168.4.0/24' }] }, text: '' }; },
   });
-  expect(await client.listPrefixes()).toEqual([{ id: 5, prefix: '192.168.9.0/24' }]);
+  expect(await client.listPrefixes()).toEqual([{ id: 5, prefix: '192.168.4.0/24' }]);
   expect(urls[0]).toContain('/ipam/prefixes/?limit=100');
 });
 
