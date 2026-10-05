@@ -520,3 +520,183 @@ test('an ordinary linked guest defaults template to false', async () => {
   const [record] = await inventory.refreshLinked([linked('b1', 'pve', 131)]);
   expect(record.template).toBe(false);
 });
+
+// ── Cross-cluster follow (spec 2026-10-05) ─────────────────────────────────
+// Two clusters, per-host fake clients, and a box store whose writes land back
+// in `boxes`, so CAS re-reads see what a real store would.
+const HOSTS = {
+  H1: { id: 'H1', name: 'cluster-a', endpoint: 'pve-a.example.com:8006', tokenSecret: 's1' },
+  H2: { id: 'H2', name: 'cluster-b', endpoint: 'pve-b.example.com:8006', tokenSecret: 's2' },
+};
+const FP = { name: 'web01', mac: 'BC:24:11:AA:BB:CC' };
+const lxcNet0 = (mac) => `name=eth0,bridge=vmbr0,hwaddr=${mac},ip=dhcp`;
+const linkedTo = (id, hostId, node, vmid, extra = {}) => ({
+  id, label: id, host: '192.168.1.50',
+  proxmox: { hostId, node, vmid, kind: 'lxc', endpoint: HOSTS[hostId].endpoint, ...extra },
+});
+
+function clusters({ boxes, resources = {}, configs = {}, hosts = HOSTS, guard, failResources = [], failLink = null }) {
+  const calls = { resources: [], config: [] };
+  const writes = [];
+  const logs = [];
+  const store = {
+    getBox: async (id) => boxes.find((b) => b.id === id),
+    listBoxes: async () => boxes,
+    setProxmoxLink: async (id, link) => {
+      if (failLink) throw new Error(failLink);
+      writes.push([id, link]);
+      const i = boxes.findIndex((b) => b.id === id);
+      boxes[i] = { ...boxes[i], proxmox: link };
+      return boxes[i];
+    },
+  };
+  const inventory = createProxmoxInventory({
+    proxmoxStore: {
+      getHost: async (id) => hosts[id],
+      listHosts: async () => Object.values(hosts).map(({ tokenSecret, ...rest }) => rest),
+    },
+    makeClient: (host) => ({
+      clusterResources: async () => {
+        calls.resources.push(host.id);
+        if (failResources.includes(host.id)) throw new Error('connect ETIMEDOUT');
+        return resources[host.id] || [];
+      },
+      guestConfig: async (kind, node, vmid) => {
+        calls.config.push(`${host.id}:${kind}:${node}:${vmid}`);
+        const entry = configs[`${host.id}:${vmid}`];
+        const cfg = typeof entry === 'function' ? entry() : entry;
+        if (cfg instanceof Error) throw cfg;
+        if (!cfg) throw new Error('500 no such guest');
+        return cfg;
+      },
+    }),
+    boxStore: store,
+    now: () => 1000,
+    log: (line) => logs.push(line),
+  });
+  if (guard) inventory.setActiveJobGuard(guard);
+  return { inventory, writes, calls, logs };
+}
+
+test('backfill stamps the fingerprint from the guest config on the first poll', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120)];
+  const { inventory, writes } = clusters({
+    boxes,
+    resources: { H1: [{ vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'web01' }] },
+    configs: { 'H1:120': { net0: lxcNet0('bc:24:11:aa:bb:cc') } },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes.map(([id, link]) => [id, link.fp])).toEqual([['b1', FP]]);
+  expect(boxes[0].proxmox).toEqual({ hostId: 'H1', node: 'a1n', vmid: 120, kind: 'lxc', endpoint: HOSTS.H1.endpoint, fp: FP });
+});
+
+test('a stopped guest is stamped too; a missing or mismatched one is not', async () => {
+  const boxes = [
+    linkedTo('b1', 'H1', 'a1n', 120),
+    linkedTo('b2', 'H1', 'a1n', 121), // the cluster reports 121 as a VM: mismatch
+    linkedTo('b3', 'H1', 'a1n', 122), // absent: missing
+  ];
+  const net = { net0: lxcNet0(FP.mac) };
+  const { inventory, writes, calls } = clusters({
+    boxes,
+    resources: { H1: [
+      { vmid: 120, node: 'a1n', type: 'lxc', status: 'stopped', name: 'web01' },
+      { vmid: 121, node: 'a1n', type: 'qemu', status: 'running', name: 'vm01' },
+    ] },
+    configs: { 'H1:120': net, 'H1:121': net, 'H1:122': net },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(calls.config).toEqual(['H1:lxc:a1n:120']);
+  expect(writes.map(([id]) => id)).toEqual(['b1']);
+});
+
+test('a complete fingerprint is never re-read', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, writes, calls } = clusters({
+    boxes,
+    resources: { H1: [{ vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'web01' }] },
+    configs: { 'H1:120': { net0: lxcNet0(FP.mac) } },
+  });
+  await inventory.refreshLinked([...boxes]);
+  await inventory.refreshLinked([...boxes]);
+  expect(calls.config).toEqual([]);
+  expect(writes).toEqual([]);
+});
+
+test('a rename refreshes fp.name from the resource list without reading config', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, writes, calls } = clusters({
+    boxes,
+    resources: { H1: [{ vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'web01-new' }] },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(calls.config).toEqual([]);
+  expect(writes.map(([, link]) => link.fp)).toEqual([{ name: 'web01-new', mac: FP.mac }]);
+});
+
+test('a failed config read stamps nothing and is retried on the next poll', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120)];
+  const configs = { 'H1:120': new Error('500 timeout') };
+  const { inventory, writes, calls } = clusters({
+    boxes, configs,
+    resources: { H1: [{ vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'web01' }] },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes).toEqual([]);
+  configs['H1:120'] = { net0: lxcNet0(FP.mac) };
+  await inventory.refreshLinked([...boxes]);
+  expect(calls.config).toHaveLength(2);
+  expect(writes.map(([, link]) => link.fp)).toEqual([FP]);
+});
+
+test('a guest with no usable net0 or name is read once, not every poll', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120), linkedTo('b2', 'H1', 'a1n', 121)];
+  const { inventory, writes, calls } = clusters({
+    boxes,
+    resources: { H1: [
+      { vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'web01' },
+      { vmid: 121, node: 'a1n', type: 'lxc', status: 'running', name: 'bad name' },
+    ] },
+    configs: { 'H1:120': { hostname: 'web01' }, 'H1:121': { net0: lxcNet0(FP.mac) } },
+  });
+  await inventory.refreshLinked([...boxes]);
+  await inventory.refreshLinked([...boxes]);
+  expect(calls.config.sort()).toEqual(['H1:lxc:a1n:120', 'H1:lxc:a1n:121']);
+  expect(writes).toEqual([]);
+});
+
+test('stamping is skipped while a lifecycle job is active on the box', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120)];
+  const { inventory, writes, calls } = clusters({
+    boxes, guard: () => true,
+    resources: { H1: [{ vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'web01' }] },
+    configs: { 'H1:120': { net0: lxcNet0(FP.mac) } },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(calls.config).toEqual([]);
+  expect(writes).toEqual([]);
+});
+
+test('stamping is skipped if the box was re-linked while the config was being read (CAS)', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120)];
+  const { inventory, writes } = clusters({
+    boxes,
+    resources: { H1: [{ vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'web01' }] },
+    configs: { 'H1:120': () => { boxes[0] = linkedTo('b1', 'H1', 'a1n', 125); return { net0: lxcNet0(FP.mac) }; } },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes).toEqual([]);
+});
+
+test('refreshBox with follow:false never stamps', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120)];
+  const { inventory, writes, calls } = clusters({
+    boxes,
+    resources: { H1: [{ vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'web01' }] },
+    configs: { 'H1:120': { net0: lxcNet0(FP.mac) } },
+  });
+  const record = await inventory.refreshBox(boxes[0], { follow: false });
+  expect(record.state).toBe('running');
+  expect(calls.config).toEqual([]);
+  expect(writes).toEqual([]);
+});

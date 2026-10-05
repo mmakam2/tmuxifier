@@ -1,3 +1,6 @@
+import { mapWithConcurrency } from './concurrency.js';
+import { macOfNet0, cleanGuestName, fingerprintComplete } from './proxmoxParams.js';
+
 const targetKey = (link) => `${link.hostId}\u0000${link.node}\u0000${Number(link.vmid)}`;
 const normalizeState = (status) => status === 'running' ? 'running' : status === 'stopped' ? 'stopped' : 'unknown';
 // Parity with proxmoxValidate.js's client-supplied node check (assertProxmoxLinkInput,
@@ -7,6 +10,10 @@ const SAFE_NODE = /^[A-Za-z0-9_.-]+$/;
 const GUEST_TYPES = new Set(['lxc', 'qemu']);
 // A link written before VM support has no kind and is a container by definition.
 const linkKind = (box) => (box.proxmox && box.proxmox.kind === 'qemu' ? 'qemu' : 'lxc');
+// The fingerprint backfill reads one guest config per unstamped link; bounded
+// so the first poll after a deploy does not fire every link's read at once.
+const STAMP_CONCURRENCY = 4;
+const guestKey = (hostId, vmid) => `${hostId}\u0000${Number(vmid)}`;
 
 export function mergeProxmoxStatus(snapshot, boxes, records) {
   const next = { ...snapshot };
@@ -42,6 +49,11 @@ export function createProxmoxInventory({
   // would abort the job). Defaults open so tests without jobs need no wiring.
   let activeJobGuard = () => false;
 
+  // Guests whose config was read successfully but yielded no usable
+  // fingerprint (no net0, unrecognisable MAC, disallowed name). Remembered for
+  // the life of the process so such a guest costs one read, not one per poll.
+  const unusable = new Set();
+
   const record = (box, fields) => ({
     boxId: box.id, boxLabel: box.label, hostId: box.proxmox.hostId, hostName: null,
     node: box.proxmox.node, vmid: Number(box.proxmox.vmid), kind: linkKind(box), containerName: null,
@@ -55,7 +67,7 @@ export function createProxmoxInventory({
   // CAS + active-job guards as the node auto-follow. Ambiguity (zero or 2+
   // endpoint matches) never guesses; every failure mode degrades to the
   // plain "host profile missing" report.
-  async function healGroup(hostBoxes) {
+  async function healGroup(hostBoxes, ctx) {
     const orphan = (box) => record(box, { error: 'host profile missing' });
     if (!boxStore) return hostBoxes.map(orphan);
     let hosts;
@@ -99,25 +111,29 @@ export function createProxmoxInventory({
           results.push(orphan(box));
         }
       }
-      if (healed.length) results.push(...await fetchHost(candidateId, healed));
+      if (healed.length) results.push(...await fetchHost(candidateId, healed, ctx));
     }
     return results;
   }
 
-  async function fetchHost(hostId, hostBoxes) {
+  async function fetchHost(hostId, hostBoxes, ctx) {
     let host;
     try {
       host = await proxmoxStore.getHost(hostId, { withSecret: true });
     } catch (error) {
+      ctx.resources.set(hostId, null);
       return hostBoxes.map((box) => record(box, { error: error.message }));
     }
-    if (!host) return healGroup(hostBoxes);
+    if (!host) { ctx.resources.set(hostId, null); return healGroup(hostBoxes, ctx); }
+    ctx.hosts.set(hostId, host);
     let guests;
     try {
       guests = await makeClient(host).clusterResources();
     } catch (error) {
+      ctx.resources.set(hostId, null);
       return hostBoxes.map((box) => record(box, { hostName: host.name, error: error.message }));
     }
+    ctx.resources.set(hostId, guests || []);
     const byVmid = new Map((guests || []).filter((g) => GUEST_TYPES.has(g.type)).map((g) => [Number(g.vmid), g]));
     return Promise.all(hostBoxes.map(async (box) => {
       const item = byVmid.get(Number(box.proxmox.vmid));
@@ -173,7 +189,58 @@ export function createProxmoxInventory({
     }));
   }
 
-  async function doRefresh(boxes) {
+  // Cross-cluster follow (spec 2026-10-05) matches on a fingerprint that can
+  // only be read while the guest exists, so it is stamped here — on the first
+  // poll after any link is made — and its name kept current for free from the
+  // resource list. This is the only writer of `fp`.
+  async function stampFingerprints(records, boxes, ctx) {
+    const byId = new Map(boxes.map((box) => [box.id, box]));
+    const work = [];
+    for (const item of records) {
+      if (item.state !== 'running' && item.state !== 'stopped') continue;
+      const box = byId.get(item.boxId);
+      if (!box || !box.proxmox || activeJobGuard(box.id)) continue;
+      // A record this refresh rebuilt for a different target (a healed or
+      // followed link) is not about the link the box object holds; the next
+      // poll stamps it.
+      if (item.hostId !== box.proxmox.hostId || item.vmid !== Number(box.proxmox.vmid)) continue;
+      const name = cleanGuestName(item.containerName);
+      const fp = box.proxmox.fp;
+      if (fingerprintComplete(fp)) {
+        if (name && name !== fp.name) work.push({ box, item, name, mac: fp.mac });
+        continue;
+      }
+      if (unusable.has(guestKey(item.hostId, item.vmid))) continue;
+      work.push({ box, item, name, mac: null });
+    }
+    await mapWithConcurrency(work, STAMP_CONCURRENCY, async ({ box, item, name, mac }) => {
+      let stampMac = mac;
+      if (!stampMac) {
+        const host = ctx.hosts.get(item.hostId);
+        if (!host) return;
+        let config;
+        // Best-effort and silent: a failed read is retried next poll.
+        try { config = await makeClient(host).guestConfig(item.kind, item.node, item.vmid); } catch { return; }
+        stampMac = macOfNet0(item.kind, config && config.net0);
+        if (!name || !stampMac) { unusable.add(guestKey(item.hostId, item.vmid)); return; }
+      }
+      try {
+        // CAS: re-read right before writing, same as the node auto-follow, so a
+        // link the user changed mid-poll is never stamped with this guest.
+        const fresh = await boxStore.getBox(box.id);
+        const link = fresh && fresh.proxmox;
+        if (!link || link.hostId !== item.hostId || Number(link.vmid) !== item.vmid || activeJobGuard(box.id)) return;
+        await boxStore.setProxmoxLink(box.id, { ...link, fp: { name, mac: stampMac } });
+      } catch (error) {
+        log(`[tmuxifier] box ${box.label}: could not stamp guest fingerprint: ${error.message}`);
+      }
+    });
+  }
+
+  async function doRefresh(boxes, { follow = true } = {}) {
+    // Per-refresh context: every host fetched and every profile's resource
+    // list read in this refresh, so later steps never ask a cluster twice.
+    const ctx = { hosts: new Map(), resources: new Map() };
     const groups = new Map();
     for (const box of boxes.filter((item) => item.proxmox)) {
       const hostId = box.proxmox.hostId;
@@ -181,8 +248,11 @@ export function createProxmoxInventory({
       groups.get(hostId).push(box);
     }
     const records = (await Promise.all(
-      [...groups.entries()].map(([hostId, hostBoxes]) => fetchHost(hostId, hostBoxes)),
+      [...groups.entries()].map(([hostId, hostBoxes]) => fetchHost(hostId, hostBoxes, ctx)),
     )).flat();
+    // follow:false (a lifecycle pre-check) is read-only beyond the node
+    // auto-follow fetchHost already did: no stamp, no cross-cluster re-home.
+    if (follow && boxStore) await stampFingerprints(records, boxes, ctx);
     for (const item of records) cache.set(item.boxId, item);
     return records;
   }
@@ -236,7 +306,7 @@ export function createProxmoxInventory({
     refreshLinked,
     listClusterNodes,
     setActiveJobGuard(fn) { activeJobGuard = fn; },
-    async refreshBox(box) { return (await doRefresh([box]))[0]; },
+    async refreshBox(box, opts = {}) { return (await doRefresh([box], opts))[0]; },
     async getLinkedGuests(boxes) { return refreshLinked(boxes); },
     async listNodeGuests(hostId, node, boxes) {
       const host = await proxmoxStore.getHost(hostId, { withSecret: true });
