@@ -218,15 +218,21 @@ export function createProxmoxLifecycleManager({
   // guest is alive elsewhere on the same address, and this path's cleanup would
   // release its NetBox record and forget its host key. A link without a
   // fingerprint was never followable and keeps the old behaviour.
+  // Precedence: one match, several matches, a fingerprint twin, an unreadable
+  // cluster, a locked same-name guest — anything inconclusive refuses.
   async function movedElsewhere(box) {
     if (!fingerprintComplete(box.proxmox && box.proxmox.fp)) return null;
-    const { found, unreachable } = await inventory.findFollowCandidates(box);
+    const { found = [], unreachable = [], locked = [], twins = [] } = await inventory.findFollowCandidates(box);
     if (found.length === 1) {
       return `guest found on ${found[0].hostName || found[0].hostId} as vmid ${found[0].vmid} — Tmuxifier will re-link it on the next poll`;
     }
     if (found.length > 1) return `${found.length} guests match this box's fingerprint — re-link it with Edit link`;
+    if (twins.length) return `box ${twins[0]} carries the same fingerprint — re-link or remove one of them first`;
     if (unreachable.length) {
       return `cannot rule out that this guest moved: ${unreachable.join(', ')} unreachable — retry, or remove the box instead`;
+    }
+    if (locked.length) {
+      return `guest may be mid-migration: ${locked[0].hostName || locked[0].hostId} vmid ${locked[0].vmid} is locked — retry shortly, or remove the box instead`;
     }
     return null;
   }

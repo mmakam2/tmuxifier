@@ -176,7 +176,9 @@ export function createProxmoxInventory({
             && freshLink.node === box.proxmox.node
             && Number(freshLink.vmid) === Number(box.proxmox.vmid);
           if (stillLinked) {
-            await boxStore.setProxmoxLink(box.id, { ...box.proxmox, node: item.node });
+            // From the fresh link, not the poll's snapshot: a concurrent
+            // refresh may have just stamped `fp`, and the snapshot predates it.
+            await boxStore.setProxmoxLink(box.id, { ...freshLink, node: item.node });
             log(`[tmuxifier] box ${box.label}: container ${box.proxmox.vmid} migrated ${box.proxmox.node} -> ${item.node}`);
           } // else: link changed underneath us — skip silently, that's a user action, not an error
         } catch (error) {
@@ -213,46 +215,76 @@ export function createProxmoxInventory({
     return guests;
   }
 
+  // Returns { found, unreachable, locked, twins }. Only `found` is a candidate
+  // to follow; any of the other three makes the search inconclusive.
   async function searchFingerprint(box, ctx) {
     const fp = box.proxmox && box.proxmox.fp;
-    if (!boxStore || !fingerprintComplete(fp)) return { found: [], unreachable: [] };
+    if (!boxStore || !fingerprintComplete(fp)) return { found: [], unreachable: [], locked: [], twins: [] };
     const kind = linkKind(box);
     // The whole fleet, not the refresh's box list: a single-box refresh is
     // handed one box, and "already linked elsewhere" needs every link.
     const [summaries, fleet] = await Promise.all([proxmoxStore.listHosts(), boxStore.listBoxes()]);
-    const linkedElsewhere = new Set((fleet || [])
-      .filter((other) => other.id !== box.id && other.proxmox)
-      .map((other) => guestKey(other.proxmox.hostId, other.proxmox.vmid)));
+    const others = (fleet || []).filter((other) => other && other.id !== box.id && other.proxmox);
+    // A guest another box links is never a match — keyed by profile id AND by
+    // the link's stamped endpoint, since a second profile for the same cluster
+    // (an alias) names the same guest under a different id.
+    const linkedElsewhere = new Set(others.map((other) => guestKey(other.proxmox.hostId, other.proxmox.vmid)));
+    const linkedAtEndpoint = new Set(others
+      .filter((other) => typeof other.proxmox.endpoint === 'string' && other.proxmox.endpoint)
+      .map((other) => guestKey(other.proxmox.endpoint, other.proxmox.vmid)));
+    // Another box carrying this very fingerprint makes the guest contested,
+    // whatever it is linked to: an alias profile on a different endpoint can
+    // still name the same guest, so only the fingerprint itself can tell.
+    const twins = others
+      .filter((other) => linkKind(other) === kind && fingerprintComplete(other.proxmox.fp) && other.proxmox.fp.mac === fp.mac)
+      .map((other) => other.label || other.id);
     const seen = new Set();
-    const named = [];
-    const unreachable = [];
+    const searched = [];
     for (const summary of summaries || []) {
       if (!summary || seen.has(summary.endpoint)) continue;
       seen.add(summary.endpoint);
-      const guests = await resourcesFor(summary, ctx);
+      searched.push(summary);
+    }
+    // Concurrently: an unreachable profile costs one API timeout per sweep,
+    // not one per profile in turn. Results keep the summaries' order.
+    const lists = await Promise.all(searched.map((summary) => resourcesFor(summary, ctx)));
+    const named = [];
+    const unreachable = [];
+    const locked = [];
+    searched.forEach((summary, index) => {
+      const guests = lists[index];
       // An unreadable cluster could hold a second match: the search is incomplete.
-      if (!guests) { unreachable.push(summary.name || summary.id); continue; }
+      if (!guests) { unreachable.push(summary.name || summary.id); return; }
       for (const g of guests) {
-        if (!g || g.type !== kind || g.template || g.lock) continue;
+        if (!g || g.type !== kind || g.template) continue;
         if (typeof g.node !== 'string' || !SAFE_NODE.test(g.node)) continue;
         const vmid = Number(g.vmid);
         if (!Number.isInteger(vmid) || vmid < 100 || vmid > 999999999) continue;
         if (cleanGuestName(g.name) !== fp.name) continue;
         if (linkedElsewhere.has(guestKey(summary.id, vmid))) continue;
+        if (summary.endpoint && linkedAtEndpoint.has(guestKey(summary.endpoint, vmid))) continue;
+        // A same-name guest mid-migration (or mid-backup) could be the real
+        // target: never followed, but reported so the search reads inconclusive.
+        if (g.lock) { locked.push({ hostId: summary.id, hostName: summary.name || null, vmid }); continue; }
         named.push({
           hostId: summary.id, hostName: summary.name || null, endpoint: summary.endpoint,
           node: g.node, vmid, kind, status: g.status, name: g.name,
         });
       }
-    }
+    });
+    const macs = await Promise.all(named.map(async (candidate) => {
+      try {
+        const config = await makeClient(ctx.hosts.get(candidate.hostId)).guestConfig(kind, candidate.node, candidate.vmid);
+        return { mac: macOfNet0(kind, config && config.net0) };
+      } catch { return { failed: true }; }
+    }));
     const found = [];
-    for (const candidate of named) {
-      let config;
-      try { config = await makeClient(ctx.hosts.get(candidate.hostId)).guestConfig(kind, candidate.node, candidate.vmid); }
-      catch { unreachable.push(candidate.hostName || candidate.hostId); continue; } // it might have been the match
-      if (macOfNet0(kind, config && config.net0) === fp.mac) found.push(candidate);
-    }
-    return { found, unreachable: [...new Set(unreachable)] };
+    named.forEach((candidate, index) => {
+      // A failed read might have been the match.
+      if (macs[index].failed) unreachable.push(candidate.hostName || candidate.hostId);
+      else if (macs[index].mac === fp.mac) found.push(candidate);
+    });
+    return { found, unreachable: [...new Set(unreachable)], locked, twins };
   }
 
   function noteNotFollowing(box, signature, message) {
@@ -296,12 +328,20 @@ export function createProxmoxInventory({
         noteNotFollowing(box, `error:${error.message}`, `search failed: ${error.message}`);
         continue;
       }
-      const { found, unreachable } = result;
-      if (found.length === 1 && unreachable.length === 0) { plans.push({ box, target: found[0] }); continue; }
-      if (found.length === 0 && unreachable.length === 0) { notFollowingLogged.delete(box.id); continue; }
-      const signature = [...found.map((c) => `${c.hostId}/${c.vmid}`), ...unreachable.map((n) => `!${n}`)].join(',');
-      noteNotFollowing(box, signature, `${found.length} fingerprint match(es)`
-        + (unreachable.length ? `; could not read: ${unreachable.join(', ')}` : ''));
+      const { found, unreachable, locked, twins } = result;
+      const inconclusive = unreachable.length + locked.length + twins.length;
+      if (found.length === 1 && inconclusive === 0) { plans.push({ box, target: found[0] }); continue; }
+      if (found.length === 0 && inconclusive === 0) { notFollowingLogged.delete(box.id); continue; }
+      const signature = [
+        ...found.map((c) => `${c.hostId}/${c.vmid}`), ...unreachable.map((n) => `!${n}`),
+        ...locked.map((c) => `#${c.hostId}/${c.vmid}`), ...twins.map((label) => `=${label}`),
+      ].join(',');
+      const named = (c) => `${c.hostName || c.hostId}/${c.vmid}`;
+      const reasons = [`${found.length} fingerprint match(es)${found.length ? `: ${found.map(named).join(', ')}` : ''}`];
+      if (twins.length) reasons.push(`box ${twins.join(', ')} carries the same fingerprint`);
+      if (unreachable.length) reasons.push(`could not read: ${unreachable.join(', ')}`);
+      if (locked.length) reasons.push(`locked: ${locked.map(named).join(', ')}`);
+      noteNotFollowing(box, signature, reasons.join('; '));
     }
     const claims = new Map();
     for (const { target } of plans) {
@@ -333,9 +373,9 @@ export function createProxmoxInventory({
       if (item.state !== 'running' && item.state !== 'stopped') continue;
       const box = byId.get(item.boxId);
       if (!box || !box.proxmox || activeJobGuard(box.id)) continue;
-      // A record this refresh rebuilt for a different target (a healed or
-      // followed link) is not about the link the box object holds; the next
-      // poll stamps it.
+      // A record this refresh rebuilt for a different target (a healed link;
+      // the cross-cluster follow runs after this step) is not about the link
+      // the box object holds; the next poll stamps it.
       if (item.hostId !== box.proxmox.hostId || item.vmid !== Number(box.proxmox.vmid)) continue;
       const name = cleanGuestName(item.containerName);
       const fp = box.proxmox.fp;
@@ -385,9 +425,13 @@ export function createProxmoxInventory({
     )).flat();
     // follow:false (a lifecycle pre-check) is read-only beyond the node
     // auto-follow fetchHost already did: no stamp, no cross-cluster re-home.
+    // Stamp BEFORE follow: a box linked in this same poll must already carry
+    // its fp when another box's search checks for fingerprint twins. The two
+    // steps touch disjoint records (stamp: running/stopped; follow: missing),
+    // and the search re-reads the fleet, so it sees the fresh stamp.
     if (follow && boxStore) {
-      records = await followAcrossClusters(records, boxes, ctx);
       await stampFingerprints(records, boxes, ctx);
+      records = await followAcrossClusters(records, boxes, ctx);
     }
     for (const item of records) cache.set(item.boxId, item);
     return records;
@@ -444,10 +488,11 @@ export function createProxmoxInventory({
     setActiveJobGuard(fn) { activeJobGuard = fn; },
     async refreshBox(box, opts = {}) { return (await doRefresh([box], opts))[0]; },
     // The deprovision guard's query (proxmoxLifecycle.js): the same search the
-    // follow runs, without writing anything.
+    // follow runs, without writing anything. Precondition: call it only for a
+    // box whose own guest reads `missing` — the box's own guest is not excluded.
     async findFollowCandidates(box) {
-      const { found, unreachable } = await searchFingerprint(box, { hosts: new Map(), resources: new Map() });
-      return { found: found.map(({ hostId, hostName, vmid, node }) => ({ hostId, hostName, vmid, node })), unreachable };
+      const { found, unreachable, locked, twins } = await searchFingerprint(box, { hosts: new Map(), resources: new Map() });
+      return { found: found.map(({ hostId, hostName, vmid, node }) => ({ hostId, hostName, vmid, node })), unreachable, locked, twins };
     },
     async getLinkedGuests(boxes) { return refreshLinked(boxes); },
     async listNodeGuests(hostId, node, boxes) {

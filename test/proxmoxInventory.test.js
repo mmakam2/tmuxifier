@@ -737,6 +737,7 @@ test.each([
   ['a malformed node', [movedGuest(305, { node: 'bad node' })], { 'H2:305': NET }],
   ['an out-of-range vmid', [movedGuest(42)], { 'H2:42': NET }],
   ['a candidate whose config read fails', [movedGuest(305)], { 'H2:305': new Error('500') }],
+  ['a locked same-name guest beside one clean match', [movedGuest(305), movedGuest(306, { lock: 'migrate' })], { 'H2:305': NET, 'H2:306': NET }],
 ])('no follow on %s: nothing written, record stays missing', async (_label, h2, configs) => {
   const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
   const { inventory, writes } = clusters({ boxes, resources: { H1: [], H2: h2 }, configs });
@@ -854,7 +855,7 @@ test('findFollowCandidates reports matches and unreadable profiles without writi
   });
   await expect(inventory.findFollowCandidates(boxes[0])).resolves.toEqual({
     found: [{ hostId: 'H2', hostName: 'cluster-b', vmid: 305, node: 'b1n' }],
-    unreachable: ['cluster-c'],
+    unreachable: ['cluster-c'], locked: [], twins: [],
   });
   expect(writes).toEqual([]);
 });
@@ -862,6 +863,189 @@ test('findFollowCandidates reports matches and unreadable profiles without writi
 test('findFollowCandidates is empty for a link without a fingerprint', async () => {
   const boxes = [linkedTo('b1', 'H1', 'a1n', 120)];
   const { inventory, calls } = clusters({ boxes, resources: { H1: [], H2: [movedGuest(305)] } });
-  await expect(inventory.findFollowCandidates(boxes[0])).resolves.toEqual({ found: [], unreachable: [] });
+  await expect(inventory.findFollowCandidates(boxes[0])).resolves.toEqual({ found: [], unreachable: [], locked: [], twins: [] });
   expect(calls.resources).toEqual([]);
+});
+
+// ── Final-review fixes (2026-10-05): aliases, twins, locked guests, concurrency ──
+const ALIAS_SAME = { ...HOSTS, H2b: { id: 'H2b', name: 'cluster-b-alias', endpoint: HOSTS.H2.endpoint, tokenSecret: 's4' } };
+const ALIAS_NODE = { ...HOSTS, H2c: { id: 'H2c', name: 'cluster-b-node2', endpoint: 'pve-b2.example.com:8006', tokenSecret: 's5' } };
+const linkedVia = (hosts, id, hostId, node, vmid, extra = {}) => ({
+  id, label: id, host: '192.168.1.51',
+  proxmox: { hostId, node, vmid, kind: 'lxc', endpoint: hosts[hostId].endpoint, ...extra },
+});
+
+test.each([
+  ['no fingerprint', {}],
+  ['a different fingerprint', { fp: { name: 'web01', mac: 'BC:24:11:00:00:02' } }],
+])('A(a) a guest linked through a same-endpoint alias profile (b2 with %s) is not a match', async (_label, extra) => {
+  const boxes = [
+    linkedTo('b1', 'H1', 'a1n', 120, { fp: FP }),
+    linkedVia(ALIAS_SAME, 'b2', 'H2b', 'b1n', 305, extra),
+  ];
+  const { inventory, writes } = clusters({
+    boxes, hosts: ALIAS_SAME,
+    resources: { H1: [], H2: [movedGuest(305)], H2b: [movedGuest(305)] },
+    configs: { 'H2:305': NET, 'H2b:305': NET },
+  });
+  const records = await inventory.refreshLinked([...boxes]);
+  expect(writes.filter(([id]) => id === 'b1')).toEqual([]);
+  expect(records.find((r) => r.boxId === 'b1')).toMatchObject({ hostId: 'H1', vmid: 120, state: 'missing' });
+});
+
+test('A(b) a guest linked through a different-endpoint alias by a box carrying the same fingerprint is not followed', async () => {
+  const boxes = [
+    linkedTo('b1', 'H1', 'a1n', 120, { fp: FP }),
+    linkedVia(ALIAS_NODE, 'b2', 'H2c', 'b1n', 305, { fp: FP }),
+  ];
+  const { inventory, writes, logs } = clusters({
+    boxes, hosts: ALIAS_NODE,
+    resources: { H1: [], H2: [movedGuest(305)], H2c: [movedGuest(305)] },
+    configs: { 'H2:305': NET, 'H2c:305': NET },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes.filter(([id]) => id === 'b1')).toEqual([]);
+  expect(logs.some((line) => line.includes('box b1') && line.includes('not following') && line.includes('b2'))).toBe(true);
+});
+
+test('A(b) another box carrying the same complete fingerprint makes the guest contested: no follow, logged by label', async () => {
+  const boxes = [
+    linkedTo('b1', 'H1', 'a1n', 120, { fp: FP }),
+    linkedTo('b2', 'H2', 'b1n', 400, { fp: FP }),
+  ];
+  const { inventory, writes, logs } = clusters({
+    boxes,
+    resources: { H1: [], H2: [movedGuest(305), movedGuest(400)] },
+    configs: { 'H2:305': NET, 'H2:400': NET },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes.filter(([id]) => id === 'b1')).toEqual([]);
+  expect(logs.some((line) => line.includes('box b1') && line.includes('box b2 carries the same fingerprint'))).toBe(true);
+});
+
+test('A(c) a box linked this poll is stamped before another box searches, so its twin does not follow', async () => {
+  const boxes = [
+    linkedTo('b1', 'H1', 'a1n', 120, { fp: FP }),
+    linkedVia(ALIAS_NODE, 'b2', 'H2c', 'b1n', 305), // no fp yet: stamped by this same refresh
+  ];
+  const { inventory, writes } = clusters({
+    boxes, hosts: ALIAS_NODE,
+    resources: { H1: [], H2: [movedGuest(305)], H2c: [movedGuest(305)] },
+    configs: { 'H2:305': NET, 'H2c:305': NET },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes.filter(([id]) => id === 'b1')).toEqual([]);
+  expect(writes.filter(([id]) => id === 'b2').map(([, link]) => link.fp)).toEqual([FP]);
+});
+
+test('A(b) a single-box refresh still sees a twin elsewhere in the fleet', async () => {
+  const boxes = [
+    linkedTo('b1', 'H1', 'a1n', 120, { fp: FP }),
+    linkedVia(ALIAS_NODE, 'b2', 'H2c', 'b1n', 305, { fp: FP }),
+  ];
+  const { inventory, writes } = clusters({
+    boxes, hosts: ALIAS_NODE,
+    resources: { H1: [], H2: [movedGuest(305)], H2c: [movedGuest(305)] },
+    configs: { 'H2:305': NET, 'H2c:305': NET },
+  });
+  const record = await inventory.refreshBox(boxes[0]);
+  expect(record).toMatchObject({ hostId: 'H1', vmid: 120, state: 'missing' });
+  expect(writes).toEqual([]);
+});
+
+test('A(b) findFollowCandidates reports a twin by label', async () => {
+  const boxes = [
+    linkedTo('b1', 'H1', 'a1n', 120, { fp: FP }),
+    linkedTo('b2', 'H2', 'b1n', 400, { fp: FP }),
+  ];
+  const { inventory, writes } = clusters({
+    boxes,
+    resources: { H1: [], H2: [movedGuest(305), movedGuest(400)] },
+    configs: { 'H2:305': NET, 'H2:400': NET },
+  });
+  await expect(inventory.findFollowCandidates(boxes[0])).resolves.toEqual({
+    found: [{ hostId: 'H2', hostName: 'cluster-b', vmid: 305, node: 'b1n' }],
+    unreachable: [], locked: [], twins: ['b2'],
+  });
+  expect(writes).toEqual([]);
+});
+
+test('A(b) a fingerprint of the other kind, or with another MAC, is not a twin', async () => {
+  const boxes = [
+    linkedTo('b1', 'H1', 'a1n', 120, { fp: FP }),
+    linkedTo('b2', 'H2', 'b1n', 400, { fp: FP, kind: 'qemu' }),
+    linkedTo('b3', 'H2', 'b1n', 401, { fp: { name: 'web01', mac: 'BC:24:11:00:00:03' } }),
+  ];
+  const { inventory } = clusters({ boxes, resources: { H1: [], H2: [] } });
+  await expect(inventory.findFollowCandidates(boxes[0])).resolves.toMatchObject({ twins: [] });
+});
+
+test('B a locked same-name guest blocks the follow and is reported in locked', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, writes, calls } = clusters({
+    boxes,
+    resources: { H1: [], H2: [movedGuest(305), movedGuest(306, { lock: 'migrate' }), movedGuest(307, { lock: 'backup', name: 'web02' })] },
+    configs: { 'H2:305': NET, 'H2:306': NET },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes).toEqual([]);
+  await expect(inventory.findFollowCandidates(boxes[0])).resolves.toEqual({
+    found: [{ hostId: 'H2', hostName: 'cluster-b', vmid: 305, node: 'b1n' }],
+    unreachable: [], locked: [{ hostId: 'H2', hostName: 'cluster-b', vmid: 306 }], twins: [],
+  });
+  expect(calls.config.every((c) => !c.endsWith(':306'))).toBe(true); // a locked guest is never read
+});
+
+test('C profiles are read concurrently, so a slow cluster does not serialize the search', async () => {
+  const hosts = { ...HOSTS, H3: { id: 'H3', name: 'cluster-c', endpoint: 'pve-c.example.com:8006', tokenSecret: 's3' } };
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, calls } = clusters({
+    boxes, hosts, resources: { H1: [], H2: gate.then(() => []), H3: gate.then(() => []) },
+  });
+  const done = inventory.refreshLinked([...boxes]);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const started = [...calls.resources];
+  release();
+  await done;
+  expect(started).toEqual(['H1', 'H2', 'H3']);
+});
+
+test('C candidate configs are read concurrently', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, calls, writes } = clusters({
+    boxes, resources: { H1: [], H2: [movedGuest(305), movedGuest(306)] },
+    configs: { 'H2:305': () => gate.then(() => NET), 'H2:306': () => gate.then(() => ({ net0: lxcNet0('BC:24:11:00:00:09') })) },
+  });
+  const done = inventory.refreshLinked([...boxes]);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const started = [...calls.config];
+  release();
+  await done;
+  expect(started).toEqual(['H2:lxc:b1n:305', 'H2:lxc:b1n:306']);
+  expect(writes.map(([, link]) => link.vmid)).toEqual([305]); // the match survives concurrency
+});
+
+test('D1 an ambiguous search names the matching profiles and vmids', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, logs } = clusters({
+    boxes, resources: { H1: [], H2: [movedGuest(305), movedGuest(306)] }, configs: { 'H2:305': NET, 'H2:306': NET },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(logs.some((line) => line.includes('2 fingerprint match(es): cluster-b/305, cluster-b/306'))).toBe(true);
+});
+
+test('D2 the node auto-follow writes from the fresh link, keeping a just-stamped fp', async () => {
+  const writes = [];
+  const snapshot = linked('b1', 'pve-n02', 165);
+  const fresh = { ...snapshot, proxmox: { ...snapshot.proxmox, fp: FP } };
+  const { inventory } = setup({
+    cluster: [{ vmid: 165, node: 'pve-n03', type: 'lxc', status: 'running', name: 'dev' }],
+    boxStore: { getBox: async () => fresh, setProxmoxLink: async (id, link) => writes.push([id, link]) },
+  });
+  await inventory.refreshBox(snapshot, { follow: false });
+  expect(writes).toEqual([['b1', { ...fresh.proxmox, node: 'pve-n03' }]]);
 });

@@ -1109,3 +1109,37 @@ test('createJob refreshes with follow:false so its pre-check can never re-home t
   await manager._settled(job.id);
   expect(refreshArgs[0]).toEqual({ follow: false }); // createJob's pre-check; the running job's own refreshes come later
 });
+
+test('deprovision from missing is refused while another box carries the same fingerprint', async () => {
+  const { manager, removed } = guardFixture([{ found: [], unreachable: [], locked: [], twins: ['web01', 'web02'] }]);
+  await expect(manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' }))
+    .rejects.toMatchObject({ statusCode: 409, message: 'box web01 carries the same fingerprint — re-link or remove one of them first' });
+  expect(removed).toEqual([]);
+});
+
+test('deprovision from missing is refused while a same-name guest is locked mid-migration', async () => {
+  const { manager, removed } = guardFixture([{ found: [], unreachable: [], locked: [{ hostId: 'H2', hostName: 'cluster-b', vmid: 305 }], twins: [] }]);
+  await expect(manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' }))
+    .rejects.toMatchObject({ statusCode: 409, message: 'guest may be mid-migration: cluster-b vmid 305 is locked — retry shortly, or remove the box instead' });
+  expect(removed).toEqual([]);
+});
+
+test('a locked guest appearing after createJob fails the job before any cleanup', async () => {
+  const { manager, removed, forgotten } = guardFixture([NONE, { found: [], unreachable: [], locked: [{ hostId: 'H2', hostName: 'cluster-b', vmid: 305 }], twins: [] }]);
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id)).toMatchObject({ status: 'error', error: 'guest may be mid-migration: cluster-b vmid 305 is locked — retry shortly, or remove the box instead' });
+  expect(removed).toEqual([]);
+  expect(forgotten).toEqual([]);
+});
+
+test.each([
+  ['a match outranks a twin', { found: ONE.found, unreachable: [], locked: [], twins: ['web01'] }, 'guest found on cluster-b as vmid 305 — Tmuxifier will re-link it on the next poll'],
+  ['a twin outranks an unreadable cluster', { found: [], unreachable: ['cluster-c'], locked: [], twins: ['web01'] }, 'box web01 carries the same fingerprint — re-link or remove one of them first'],
+  ['an unreadable cluster outranks a locked guest', { found: [], unreachable: ['cluster-c'], locked: [{ hostId: 'H2', hostName: 'cluster-b', vmid: 305 }], twins: [] }, 'cannot rule out that this guest moved: cluster-c unreachable — retry, or remove the box instead'],
+  ['a locked guest falls back to its host id', { found: [], unreachable: [], locked: [{ hostId: 'H2', hostName: null, vmid: 305 }], twins: [] }, 'guest may be mid-migration: H2 vmid 305 is locked — retry shortly, or remove the box instead'],
+])('refusal precedence: %s', async (_label, search, message) => {
+  const { manager } = guardFixture([search]);
+  await expect(manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' }))
+    .rejects.toMatchObject({ statusCode: 409, message });
+});
