@@ -275,3 +275,34 @@ Before merge, on the live app (the standing validate-on-live workflow):
 - Rewriting the box's address after a move.
 - NICs other than `net0`.
 - Health events or notifications for a move.
+
+## Amendments (final review, 2026-10-05)
+
+The whole-branch review found gaps in the design above; the sections above are left as written and
+these amend them.
+
+- **A(a) Endpoint exclusion.** "Already linked to another box" is keyed by the other link's stamped
+  `endpoint`+vmid as well as `hostId`+vmid. A second host profile for the same cluster (an alias,
+  same endpoint) otherwise names a linked guest under a different id, and two boxes could end up on
+  one guest — deprovisioning either would destroy the other's.
+- **A(b) Fingerprint twins.** Another box whose link carries a complete `fp` with the same kind and
+  MAC makes the guest contested, whatever that box is linked to — this is what covers an alias
+  profile reached through a *different* node endpoint, which no id or endpoint key can see. The
+  follow does not follow and logs the twin's label; `findFollowCandidates` returns it as `twins`,
+  and deprovision from missing refuses with `box <label> carries the same fingerprint — re-link or
+  remove one of them first`. Because the search reads the whole fleet, this also holds for a
+  single-box refresh, which never sees the per-refresh claims check.
+- **A(c) Stamp before follow.** Each refresh runs the stamp step before the follow, so a box linked
+  in the same poll already carries its `fp` when another box checks for twins.
+- **B Locked guests.** A same-kind, same-name, otherwise valid guest carrying a PVE `lock` is
+  reported as `locked: [{ hostId, hostName, vmid }]` rather than skipped silently. The follow
+  treats any as "do not follow" (it could be the real target, mid-migration), and deprovision from
+  missing refuses with `guest may be mid-migration: <hostName> vmid <vmid> is locked — retry
+  shortly, or remove the box instead`. Refusal precedence: one match, several matches, twins,
+  unreachable, locked.
+- **C Concurrency.** After the endpoint de-duplication, every profile's resource list is read
+  concurrently, then every candidate's config, so an unreachable profile costs one API timeout per
+  sweep instead of one per profile in turn. Result order is unchanged.
+- **D2 Node auto-follow writes from the fresh link.** The same-cluster node follow writes
+  `{ ...freshLink, node }` (the link it already re-reads for its CAS), not the poll's snapshot, so a
+  concurrently stamped `fp` is never erased.

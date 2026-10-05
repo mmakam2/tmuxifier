@@ -152,14 +152,25 @@ cluster. On the next status poll Tmuxifier searches every host profile for exact
 the same kind, the same name and the same `net0` MAC address — a fingerprint it records on the link
 from the guest's config on the first poll after the box is linked — and re-links the box to it.
 Anything less certain changes nothing: no match, two or more matches, a cluster it cannot read, a
-guest still locked mid-migration, or a link recorded before this feature and not yet fingerprinted
-all leave the box **missing** for you to re-link with **Edit link**. Only the link moves: if the
-guest's address changed on its new cluster, fix the box's host with Edit box. A migration that
-*keeps* the source (`qm remote-migrate`'s default) leaves the old guest stopped where it was and is
-not followed. While a moved guest is waiting for that poll, **Deprovision** on the missing box is
-refused with the cluster it was found on — deprovisioning a missing guest releases its NetBox
-address and forgets its host key, which would be wrong for a guest that is alive elsewhere. Plain
-box removal is still available.
+same-name guest still locked mid-migration, another box carrying the same fingerprint, or a link
+recorded before this feature and not yet fingerprinted all leave the box **missing** for you to
+re-link with **Edit link**. Only the link moves: if the guest's address changed on its new cluster,
+fix the box's host with Edit box. A migration that *keeps* the source (`qm remote-migrate`'s
+default) leaves the old guest stopped where it was and is not followed.
+
+**Deprovision waits while a missing guest might be alive elsewhere.** Deprovisioning a missing
+guest releases its NetBox address and forgets its host key, which would be wrong for a guest that
+is still running on another cluster. So for a fingerprinted link, **Deprovision** on a missing box
+is refused, with the reason, whenever the guest may still exist: it was found on another cluster
+(the next poll re-links it), several guests match, another box carries the same fingerprint, a
+cluster cannot be read, or a same-name guest is still locked mid-migration. Plain box removal is
+always available.
+
+**Keep the source cluster's host profile until moved boxes have re-linked.** The follow starts only
+from a link that reads **missing**, and only a readable source cluster can say its guest is gone.
+If the source cluster's host profile is removed, or cannot be read, before the poll that re-links a
+moved box, that box's link reads **unknown** instead of missing and never follows — re-link it with
+**Edit link**, or re-add the profile with the same endpoint so the link can heal and then follow.
 
 **A VMID that changed kind is never auto-corrected.** VMIDs get reused once a guest is destroyed, so
 if the number your box is linked to now belongs to a guest of the *other* kind — a container where
@@ -171,7 +182,8 @@ link changes on its own, even the node, until you resolve it by hand.
 the search box filters on it too — type `vm` or `ct` to narrow the list), gated by state: a stopped
 guest offers **Start** and **Deprovision**; a running one offers **Shutdown**, **Stop** (a forceful
 immediate stop), **Reboot**, and **Deprovision**; a guest PVE can't find offers **Deprovision** as a
-local-only link cleanup. Each action runs as a pollable job.
+local-only link cleanup, refused while the guest might have moved to another cluster (see above).
+Each action runs as a pollable job.
 
 **Shutdown on a VM needs a way to receive it.** Proxmox sends a shutdown request as an ACPI
 power-button event; any guest OS running `acpid` or a systemd equivalent handles that with no extra

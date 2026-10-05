@@ -749,10 +749,21 @@ pattern for new modules.
   resource lists reused) for exactly one unlocked, non-template, unlinked guest of the same kind
   and name whose MAC matches, and re-homes `hostId`/`node`/`vmid`/`endpoint` under the node
   auto-follow's CAS + active-job guards. It fails closed on 0 or 2+ matches, on an unreadable
-  profile (it could hold a second match), and on two missing boxes claiming one guest.
-  `refreshBox(box, { follow: false })` writes neither a re-home nor a stamp — `proxmoxLifecycle.js`'s
-  `createJob` uses it, since a re-home under its pre-check would desync the job's snapshot.
-  `findFollowCandidates(box)` is the same search, read-only.
+  profile (it could hold a second match), on two missing boxes claiming one guest, on a same-name
+  guest carrying a PVE `lock` (reported as `locked`: it may be the real target mid-migration), and
+  on a fingerprint twin — another box whose link carries the same kind and MAC (reported as
+  `twins`), which is what stops an alias host profile (a second profile for one cluster, even via a
+  different node endpoint) from handing one guest to two boxes; a guest another box links is also
+  excluded by its stamped `endpoint`+vmid, not only `hostId`+vmid. Each refresh stamps BEFORE it
+  follows, so a box linked this poll already carries its `fp` when a twin searches, and `fp.name`
+  is kept current from the resource list without a config read. Profiles' resource lists and the
+  candidates' configs are read concurrently, so a down profile costs one timeout per sweep.
+  `refreshBox(box, { follow: false })` writes neither a cross-cluster re-home nor a stamp (the
+  same-cluster node auto-follow still writes — from the freshly re-read link, so a just-stamped `fp`
+  survives) — `proxmoxLifecycle.js`'s `createJob` uses it, since a re-home under its pre-check
+  would desync the job's snapshot. `findFollowCandidates(box)` is the same search, read-only,
+  returning `{ found, unreachable, locked, twins }`; call it only for a box whose own guest reads
+  `missing` (its own guest is not excluded).
   `listClusterNodes` (served by `GET /api/proxmox/nodes`) reports each physical node's health from
   `/cluster/resources?type=node` — one call per distinct endpoint — for the standby dashboard's
   Proxmox readout.
@@ -770,9 +781,11 @@ pattern for new modules.
   and deletes any remaining NetBox records matching the box's current IP, so manually created
   records don't go stale (best-effort). Deprovision from `missing` of a fingerprinted link first
   asks `inventory.findFollowCandidates` — in `createJob` (409) and again in `runDeprovision`
-  (the migration can land in between) — and refuses when the guest was found elsewhere or a
-  cluster could not be read: that cleanup would otherwise release a live guest's NetBox record
-  and forget its host key during the window before the status poll re-links it.
+  (the migration can land in between) — and refuses when the guest was found elsewhere, several
+  guests match, another box carries the same fingerprint, a cluster could not be read, or a
+  same-name guest is locked (checked in that order): that cleanup would otherwise release a live
+  guest's NetBox record and forget its host key during the window before the status poll
+  re-links it.
   A third action, `readdress`, moves a linked LXC container to a new NetBox-managed VLAN/IP
   (spec: `docs/superpowers/specs/2026-09-02-container-readdress-design.md`). Phase order is the
   safety argument: `inspect` (read the live `net0` — `boxes.json` stores neither VLAN nor
