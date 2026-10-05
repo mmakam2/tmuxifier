@@ -55,6 +55,12 @@ If the MAC does not survive, this design is void and the fingerprint must be red
 `/cluster/resources` carries no `lock` field, the lock filter below is dropped (PVE unlocks the
 target before deleting the source, so the window it guards is expected to be empty anyway).
 
+**Verified 2026-10-05** on the candidate deploy: a stopped container PDM-migrated `cluster-a` →
+`cluster-b` with delete-source was re-linked automatically on the first poll after the move. The
+follow matches only on the MAC stamped from the source, so this proves the MAC and the name
+survive the migration. The `lock` question was not observed; the lock filter (and the
+deprovision guard's locked refusal) stay — both are harmless if the window never occurs.
+
 ## Design
 
 ### Data model
