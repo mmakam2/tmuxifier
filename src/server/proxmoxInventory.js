@@ -362,6 +362,52 @@ export function createProxmoxInventory({
     return records.map((item) => replaced.get(item.boxId) || item);
   }
 
+  // A link is found by vmid, so a different guest of the same kind that takes
+  // the vmid before Tmuxifier notices the original is gone would be adopted
+  // silently — the kind-mismatch rule's gap, one level down. A guest whose
+  // name no longer matches the stamped fingerprint is checked against the
+  // recorded MAC: same MAC is a plain rename (the stamp step refreshes fp.name),
+  // anything else is a stranger. Read-only, so it runs on every refresh —
+  // follow:false and an active job included: the lifecycle pre-check must see
+  // the mismatch, or a deprovision could destroy the stranger. The common
+  // case (name unchanged) costs no PVE call. Fails closed to `unknown`.
+  async function verifyIdentity(records, boxes, ctx) {
+    const byId = new Map(boxes.map((box) => [box.id, box]));
+    const work = [];
+    for (const item of records) {
+      if (item.state !== 'running' && item.state !== 'stopped') continue;
+      const box = byId.get(item.boxId);
+      if (!box || !box.proxmox || !fingerprintComplete(box.proxmox.fp)) continue;
+      // Same rule as the stamp step: a record rebuilt for a different target
+      // is not about the link the box object holds.
+      if (item.hostId !== box.proxmox.hostId || item.vmid !== Number(box.proxmox.vmid)) continue;
+      if (cleanGuestName(item.containerName) === box.proxmox.fp.name) continue;
+      work.push({ item, fp: box.proxmox.fp });
+    }
+    if (!work.length) return records;
+    const replaced = new Map();
+    await mapWithConcurrency(work, STAMP_CONCURRENCY, async ({ item, fp }) => {
+      let config;
+      try {
+        const host = ctx.hosts.get(item.hostId);
+        if (!host) throw new Error('host profile not available');
+        config = await makeClient(host).guestConfig(item.kind, item.node, item.vmid);
+      } catch (error) {
+        replaced.set(item.boxId, {
+          ...item, state: 'unknown',
+          error: `could not verify guest identity after a name change: ${error.message}`,
+        });
+        return;
+      }
+      if (macOfNet0(item.kind, config && config.net0) === fp.mac) return;
+      replaced.set(item.boxId, {
+        ...item, state: 'mismatch',
+        error: `vmid ${item.vmid} on ${item.hostName || item.hostId} is now a different guest (named ${cleanGuestName(item.containerName) || 'unnamed'}) — re-link the box`,
+      });
+    });
+    return records.map((item) => replaced.get(item.boxId) || item);
+  }
+
   // Cross-cluster follow (spec 2026-10-05) matches on a fingerprint that can
   // only be read while the guest exists, so it is stamped here — on the first
   // poll after any link is made — and its name kept current for free from the
@@ -423,6 +469,9 @@ export function createProxmoxInventory({
     let records = (await Promise.all(
       [...groups.entries()].map(([hostId, hostBoxes]) => fetchHost(hostId, hostBoxes, ctx)),
     )).flat();
+    // Identity check first and unconditionally (read-only — see verifyIdentity);
+    // a mismatch/unknown record is then skipped by stamp and follow below.
+    records = await verifyIdentity(records, boxes, ctx);
     // follow:false (a lifecycle pre-check) is read-only beyond the node
     // auto-follow fetchHost already did: no stamp, no cross-cluster re-home.
     // Stamp BEFORE follow: a box linked in this same poll must already carry

@@ -759,6 +759,13 @@ pattern for new modules.
   follows, so a box linked this poll already carries its `fp` when a twin searches, and `fp.name`
   is kept current from the resource list without a config read. Profiles' resource lists and the
   candidates' configs are read concurrently, so a down profile costs one timeout per sweep.
+  Every refresh, `follow:false` and an active job included, first runs the read-only
+  `verifyIdentity`: a stamped guest whose name no longer equals `fp.name` has its config read, and
+  a MAC other than the recorded one reports `mismatch` (a plain rename with the same MAC is kept
+  and `fp.name` refreshed by the stamp step; an unreadable config fails closed to `unknown`), so a
+  vmid recycled by a different same-kind guest is never adopted or deprovisioned; an unchanged
+  name costs no read. Accepted: the in-cluster node auto-follow in `fetchHost` runs first and may
+  still update `node` on such a link — it reads `mismatch` the same poll and re-linking overwrites it.
   `refreshBox(box, { follow: false })` writes neither a cross-cluster re-home nor a stamp (the
   same-cluster node auto-follow still writes — from the freshly re-read link, so a just-stamped `fp`
   survives) — `proxmoxLifecycle.js`'s `createJob` uses it, since a re-home under its pre-check

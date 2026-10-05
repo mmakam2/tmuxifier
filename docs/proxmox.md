@@ -178,6 +178,10 @@ you linked a VM, or vice versa — Tmuxifier shows a **mismatch** state with an 
 guessing, and the only action offered is **Edit link** to re-point the box. Nothing about the stored
 link changes on its own, even the node, until you resolve it by hand.
 
+The same applies when the linked VMID now holds a different guest of the *same* kind: when a linked
+guest's name changes, Tmuxifier checks its MAC against the one it recorded and shows **mismatch** if
+it differs (a plain rename of the same guest is just picked up).
+
 **Actions** live in the Proxmox hub's **Guests** tab (each row carries a **CT** or **VM** badge, and
 the search box filters on it too — type `vm` or `ct` to narrow the list), gated by state: a stopped
 guest offers **Start** and **Deprovision**; a running one offers **Shutdown**, **Stop** (a forceful

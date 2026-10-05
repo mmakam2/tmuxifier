@@ -312,3 +312,15 @@ these amend them.
 - **D2 Node auto-follow writes from the fresh link.** The same-cluster node follow writes
   `{ ...freshLink, node }` (the link it already re-reads for its CAS), not the poll's snapshot, so a
   concurrently stamped `fp` is never erased.
+
+## Amendments (operator follow-up, 2026-10-05)
+
+- **Identity check on a name change.** A new read-only step, `verifyIdentity`, runs on every refresh
+  (including `follow:false` and under the active-job guard) before the stamp and follow steps. For a
+  `running`/`stopped` guest whose link has a complete `fp` and whose cleaned name differs from
+  `fp.name`, it reads the guest config: a matching MAC is a genuine rename (the stamp step then
+  refreshes `fp.name`), a different or unusable MAC reports `mismatch`
+  (`vmid N on <host> is now a different guest (named <name>) — re-link the box`), and a failed read
+  reports `unknown`. An unchanged name costs no PVE call. Accepted: the in-cluster node auto-follow
+  in `fetchHost` runs first and may still update `node` on such a link; it reads `mismatch` the same
+  poll and re-linking overwrites it.

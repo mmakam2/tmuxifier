@@ -623,15 +623,87 @@ test('a complete fingerprint is never re-read', async () => {
   expect(writes).toEqual([]);
 });
 
-test('a rename refreshes fp.name from the resource list without reading config', async () => {
+test('a rename of the same guest is verified by one config read and refreshes fp.name', async () => {
   const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
   const { inventory, writes, calls } = clusters({
     boxes,
     resources: { H1: [{ vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'web01-new' }] },
+    configs: { 'H1:120': { net0: lxcNet0(FP.mac) } },
   });
-  await inventory.refreshLinked([...boxes]);
-  expect(calls.config).toEqual([]);
+  const [record] = await inventory.refreshLinked([...boxes]);
+  expect(record.state).toBe('running');
+  expect(calls.config).toEqual(['H1:lxc:a1n:120']);
   expect(writes.map(([, link]) => link.fp)).toEqual([{ name: 'web01-new', mac: FP.mac }]);
+});
+
+// ── Identity check on a name change (spec amendment, operator follow-up) ──
+const strangerBox = () => [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+const strangerResources = { H1: [{ vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'other-guest' }] };
+const strangerConfigs = { 'H1:120': { net0: lxcNet0('BC:24:11:00:00:99') } };
+
+test('an unchanged name costs no config read and stays running', async () => {
+  const boxes = strangerBox();
+  const { inventory, calls } = clusters({
+    boxes,
+    resources: { H1: [{ vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'web01' }] },
+  });
+  const [record] = await inventory.refreshLinked([...boxes]);
+  expect(record.state).toBe('running');
+  expect(calls.config).toEqual([]);
+});
+
+test('a vmid reused by a different guest reads mismatch and writes nothing', async () => {
+  const boxes = strangerBox();
+  const { inventory, writes } = clusters({ boxes, resources: strangerResources, configs: strangerConfigs });
+  const [record] = await inventory.refreshLinked([...boxes]);
+  expect(record.state).toBe('mismatch');
+  expect(record.error).toMatch(/is now a different guest .* re-link the box/);
+  expect(record.error).toContain('other-guest');
+  expect(record.error).not.toMatch(/BC:24/i);
+  expect(writes).toEqual([]);
+});
+
+test('a stranger with no usable net0 reads mismatch', async () => {
+  const boxes = strangerBox();
+  const { inventory, writes } = clusters({ boxes, resources: strangerResources, configs: { 'H1:120': { hostname: 'x' } } });
+  const [record] = await inventory.refreshLinked([...boxes]);
+  expect(record.state).toBe('mismatch');
+  expect(writes).toEqual([]);
+});
+
+test('a failed config read during verification fails closed as unknown', async () => {
+  const boxes = strangerBox();
+  const { inventory, writes } = clusters({
+    boxes, resources: strangerResources, configs: { 'H1:120': new Error('500 timeout') },
+  });
+  const [record] = await inventory.refreshLinked([...boxes]);
+  expect(record.state).toBe('unknown');
+  expect(record.error).toMatch(/^could not verify guest identity after a name change: /);
+  expect(writes).toEqual([]);
+});
+
+test('refreshBox with follow:false still reports the mismatch', async () => {
+  const boxes = strangerBox();
+  const { inventory, writes } = clusters({ boxes, resources: strangerResources, configs: strangerConfigs });
+  const record = await inventory.refreshBox(boxes[0], { follow: false });
+  expect(record.state).toBe('mismatch');
+  expect(writes).toEqual([]);
+});
+
+test('the active-job guard does not suppress the identity check', async () => {
+  const boxes = strangerBox();
+  const { inventory, writes } = clusters({ boxes, guard: () => true, resources: strangerResources, configs: strangerConfigs });
+  const [record] = await inventory.refreshLinked([...boxes]);
+  expect(record.state).toBe('mismatch');
+  expect(writes).toEqual([]);
+});
+
+test('a link without a complete fingerprint is not identity-checked', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120)];
+  const { inventory } = clusters({ boxes, resources: strangerResources, configs: strangerConfigs });
+  const [record] = await inventory.refreshLinked([...boxes]);
+  expect(record.state).not.toBe('mismatch');
+  expect(record.state).toBe('running');
 });
 
 test('a failed config read stamps nothing and is retried on the next poll', async () => {
