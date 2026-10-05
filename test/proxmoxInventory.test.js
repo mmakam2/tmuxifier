@@ -731,12 +731,15 @@ test.each([
   ['two matches', [movedGuest(305), movedGuest(306)], { 'H2:305': NET, 'H2:306': NET }],
   ['a locked candidate', [movedGuest(305, { lock: 'migrate' })], { 'H2:305': NET }],
   ['a template candidate', [movedGuest(305, { template: 1 })], { 'H2:305': NET }],
-  ['a kind mismatch', [movedGuest(305, { type: 'qemu' })], { 'H2:305': { net0: `virtio=${FP.mac},bridge=vmbr0` } }],
+  // The config carries the link's own lxc MAC, so only the type check can reject it.
+  ['a kind mismatch', [movedGuest(305, { type: 'qemu' })], { 'H2:305': { net0: lxcNet0(FP.mac) } }],
   ['a name mismatch', [movedGuest(305, { name: 'web02' })], { 'H2:305': NET }],
   ['a MAC mismatch', [movedGuest(305)], { 'H2:305': { net0: lxcNet0('BC:24:11:00:00:99') } }],
   ['a malformed node', [movedGuest(305, { node: 'bad node' })], { 'H2:305': NET }],
   ['an out-of-range vmid', [movedGuest(42)], { 'H2:42': NET }],
   ['a candidate whose config read fails', [movedGuest(305)], { 'H2:305': new Error('500') }],
+  // The unreadable one might have been the real match: one good match is not "exactly one".
+  ['one of two same-name candidates failing its config read', [movedGuest(305), movedGuest(306)], { 'H2:305': new Error('500'), 'H2:306': NET }],
   ['a locked same-name guest beside one clean match', [movedGuest(305), movedGuest(306, { lock: 'migrate' })], { 'H2:305': NET, 'H2:306': NET }],
 ])('no follow on %s: nothing written, record stays missing', async (_label, h2, configs) => {
   const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
@@ -1048,4 +1051,37 @@ test('D2 the node auto-follow writes from the fresh link, keeping a just-stamped
   });
   await inventory.refreshBox(snapshot, { follow: false });
   expect(writes).toEqual([['b1', { ...fresh.proxmox, node: 'pve-n03' }]]);
+});
+
+test('E1 stamping is skipped if a lifecycle job starts while the config is being read', async () => {
+  let active = false;
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120)];
+  const { inventory, writes } = clusters({
+    boxes, guard: () => active,
+    resources: { H1: [{ vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'web01' }] },
+    configs: { 'H1:120': () => { active = true; return { net0: lxcNet0(FP.mac) }; } },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes).toEqual([]);
+});
+
+test('E1 stamping is skipped if the box was re-linked to the same vmid on another host during the read', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120)];
+  const { inventory, writes } = clusters({
+    boxes,
+    resources: { H1: [{ vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'web01' }] },
+    configs: { 'H1:120': () => { boxes[0] = linkedTo('b1', 'H2', 'b1n', 120); return { net0: lxcNet0(FP.mac) }; } },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes).toEqual([]);
+});
+
+test('E3 findFollowCandidates names the profile whose candidate config could not be read', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory } = clusters({
+    boxes, resources: { H1: [], H2: [movedGuest(305)] }, configs: { 'H2:305': new Error('500') },
+  });
+  await expect(inventory.findFollowCandidates(boxes[0])).resolves.toEqual({
+    found: [], unreachable: ['cluster-b'], locked: [], twins: [],
+  });
 });
