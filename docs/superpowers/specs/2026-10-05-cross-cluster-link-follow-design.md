@@ -1,0 +1,268 @@
+# Cross-cluster link follow: keep a box linked when its guest moves to another cluster
+
+**Date:** 2026-10-05
+**Status:** approved design, awaiting implementation plan
+
+## Problem
+
+A box's Proxmox link is keyed on `hostId` (the host profile) + `vmid`, with `node` stored but
+drift-followed: `proxmoxInventory.js` finds the vmid in the profile's `/cluster/resources` and
+rewrites the link's node when a guest migrates *within* its cluster. A guest moved to a
+*different* cluster — Proxmox Datacenter Manager's remote migration, `qm remote-migrate` — is a
+new guest on a cluster the link does not point at, possibly under a new vmid. The link reads
+`missing` and stays that way until the operator re-links it by hand, even though Tmuxifier
+already holds a token for the destination cluster and can see the guest there.
+
+A vmid alone cannot carry identity across clusters: every cluster numbers its guests
+independently, so the same vmid on another cluster is usually a stranger, and a remote migration
+may assign a new vmid anyway. Following by vmid would repoint boxes at other people's guests —
+the exact outcome the existing `mismatch` rule exists to prevent.
+
+## Decisions
+
+- **Workflow supported: migrate with delete-source.** The operator moves guests with PDM's remote
+  migration with the source deleted, so the old link reads `missing` the moment the move
+  completes. That is the only trigger. A migration that keeps the source (the `qm remote-migrate`
+  default, `--delete 0`, leaves it stopped) leaves the link reading `stopped` on a guest that
+  still exists, and is deliberately not followed: two live configs share one identity, and
+  Tmuxifier cannot tell which one the operator means.
+- **Auto-follow, no confirmation.** Exactly one fingerprint match re-homes the link on the next
+  status poll and logs it, the same as the in-cluster node auto-follow. No health event.
+- **Identity is a fingerprint stamped on the link: kind + guest name + `net0` MAC.** Once the
+  source is deleted its config is gone, so the fingerprint cannot be read at follow time — it has
+  to have been recorded while the guest existed. All three must match; kind is the link's existing
+  `kind`.
+- **Read-only toward PVE.** The alternative — writing a `tmuxifier-<boxid>` tag into every linked
+  guest's config — was rejected: it makes Tmuxifier a writer to every linked guest (today only
+  provisioning and re-address write), needs `VM.Config.Options` on every token, is operator-
+  deletable in the PVE UI, and is copied by a backup restored as a copy, so it would not remove
+  the collision case it was meant to.
+- **Fail closed everywhere.** Zero matches, two or more matches, a link without a fingerprint, or
+  anything malformed: the link stays `missing` and nothing is written.
+
+## Prerequisite: verify the fingerprint survives (gates the plan)
+
+Proxmox does not document whether a remote migration preserves a guest's MAC address. Before any
+code is written, PDM-migrate a throwaway container from `cluster-a` to `cluster-b` with
+delete-source and record:
+
+1. the `net0` value on both sides — the MAC must be identical;
+2. the guest name on both sides;
+3. whether `/cluster/resources?type=vm` reports a `lock` on the target during the migration, and
+   whether the target is still locked at the moment the source disappears.
+
+If the MAC does not survive, this design is void and the fingerprint must be redesigned. If
+`/cluster/resources` carries no `lock` field, the lock filter below is dropped (PVE unlocks the
+target before deleting the source, so the window it guards is expected to be empty anyway).
+
+## Design
+
+### Data model
+
+The link (`box.proxmox`) gains an optional fingerprint:
+
+```js
+proxmox: { hostId, node, vmid, kind, endpoint, netboxIpId?, fp?: { name, mac } }
+```
+
+- `fp.name` — the guest's PVE name, allowlisted (`^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$`, the
+  shape PVE itself enforces on a guest name).
+- `fp.mac` — the `net0` MAC, normalized to uppercase colon form and matched against
+  `^([0-9A-F]{2}:){5}[0-9A-F]{2}$`.
+
+Both are optional, so every existing link stays valid. `linkKey` (`hostId` + `node` + `vmid`) is
+unchanged — the fingerprint is identity evidence, not a uniqueness key.
+
+### Extracting the MAC: `macOfNet0(kind, net0)` (`proxmoxParams.js`, pure)
+
+The two guest kinds write their MAC differently:
+
+- LXC: `name=eth0,bridge=vmbr0,hwaddr=BC:24:11:AA:BB:CC,ip=…` — the `hwaddr` key.
+- QEMU: `virtio=BC:24:11:AA:BB:CC,bridge=vmbr0,firewall=1` — the MAC is the *value* of the NIC
+  model key (`virtio`, `e1000`, `e1000e`, `rtl8139`, `vmxnet3`, …), which is the first pair.
+
+Built on the existing `parseNet0` pair parser (which throws on empty or unparseable input —
+`macOfNet0` catches and returns `null`). For QEMU it takes the first pair's value when that value
+matches the MAC pattern rather than allowlisting model names, so a new PVE NIC model needs no
+code change. Returns the normalized MAC, or `null` for anything absent or malformed — a `null`
+fingerprint half means the guest can never be followed, never that it matches anything.
+
+### Stamping the fingerprint
+
+- **At link time.** `PUT /api/boxes/:id/proxmox` and `proxmoxProvision.js`'s link phase read the
+  guest's config (`guestConfig(kind, node, vmid)`) and stamp `fp`. A failed or unusable read stamps
+  nothing and never fails the link — the backfill below catches up.
+- **Backfill.** During an inventory refresh, a link whose guest is present (and not `mismatch`)
+  but which lacks a complete `fp` gets one config read and a stamp, through the same CAS re-read
+  + active-job guard the node auto-follow uses. Bounded concurrency (the existing
+  `mapWithConcurrency`) so the first poll after deploy does not fire ~60 config reads at once. A
+  failed read stamps nothing and is retried on a later poll.
+- **Name kept current.** `fp.name` is rewritten when `/cluster/resources` (already fetched every
+  poll) reports a different name for the linked guest — free, and it keeps a renamed guest
+  followable. `fp.mac` is never re-read once stamped: a MAC changed after linking makes the guest
+  unfollowable (fail closed), and re-linking via Edit link re-stamps it.
+
+### The follow step (`proxmoxInventory.js`)
+
+After `doRefresh` has every profile's records, a `followAcrossClusters` step considers each record
+whose state is `missing`:
+
+1. **Eligible links only:** the link has a complete `fp`, and `activeJobGuard(box.id)` is false.
+2. **Search space: every host profile, including the link's own.** A guest restored under a new
+   vmid on its own cluster is the same identity; only the vmid that just went missing is excluded
+   on the own profile. Profiles are de-duplicated by identical `endpoint` before searching.
+   `/cluster/resources` results are cached per refresh: a profile already fetched for its own
+   linked boxes is not fetched again, and a profile with no linked boxes is fetched once.
+3. **Candidates from the resource list:** same `type` as the link's `kind`, same `name` as
+   `fp.name`, not a template, no `lock` (see prerequisite), a node passing `SAFE_NODE`, a vmid in
+   `100..999999999`, and not currently linked to another box.
+4. **MAC confirmation:** `guestConfig` for each surviving candidate only; keep those whose
+   `macOfNet0` equals `fp.mac`. In the common case — a guest that was deleted for good — step 3
+   leaves no candidates and no config is read.
+5. **Ambiguity across boxes:** if two `missing` boxes in the same refresh resolve to the same
+   candidate, neither follows.
+6. **Exactly one match:** CAS re-read the box (still linked to the same `hostId` + `vmid`, still
+   no active job), then `setProxmoxLink` with the new `hostId`, `node`, `vmid` and `endpoint`,
+   keeping `kind`, `fp` and `netboxIpId`. Log
+   `box <label>: guest moved <oldProfile>/<oldVmid> -> <newProfile>/<newVmid> (fingerprint <name> <mac>)`.
+   The record returned for this refresh is rebuilt from the new cluster's data, so the poll that
+   follows also reports the right state.
+7. **Zero or 2+ matches:** the record stays `missing`, nothing is written. Two-or-more is logged
+   once per state change (not every poll) naming the profiles involved.
+
+`setProxmoxLink` throwing `already linked` (a race with a manual link) is treated as "no follow"
+and logged, never surfaced.
+
+`healGroup` is unchanged. A box it re-homes goes through `fetchHost` and so reaches the follow
+step like any other record.
+
+### `refreshBox(box, { follow })`
+
+`refreshBox` gains `{ follow = true }`. With `follow: false` it never writes a cross-cluster
+re-home; it returns the record with a `followCandidates` count (0, 1, or more) instead. The node
+auto-follow inside `fetchHost` is unaffected — it stays exactly as today. Lifecycle callers pass
+`follow: false` (below); the status poller keeps the default.
+
+A new `findFollowCandidates(box)` runs steps 2-4 for one box and returns the candidates
+(`{ hostId, hostName, vmid, node }`) without writing — the deprovision guard's query.
+
+Both single-box paths are handed one box, but step 3's "not linked to another box" test needs the
+whole fleet: they read `boxStore.listBoxes()` for it rather than trusting the box list they were
+called with.
+
+### Deprovision guard (`proxmoxLifecycle.js`)
+
+Deprovision from `missing` today skips PVE and then forgets the box's `known_hosts` entry,
+releases its NetBox IP (by stamped id and by address) and removes the box. After a PDM migration
+there is a window — up to one `statusPollMs` — in which the box reads `missing` while the guest
+is alive on another cluster with the same address; deprovisioning then would release a live
+guest's NetBox record and forget a live host key.
+
+- `createJob`'s pre-check calls `refreshBox(box, { follow: false })`. A cross-cluster re-home
+  there would leave the job snapshotting the old `hostId` against the new link and abort at
+  `resolveTarget`; the existing comment ("only the node may follow") becomes true by construction.
+- When `action === 'deprovision'` and the state is `missing`, `createJob` calls
+  `findFollowCandidates(box)`; any candidate (one or several) refuses with `409`:
+  `guest found on <hostName> as vmid <vmid> — Tmuxifier will re-link it on the next poll` (or, for
+  several, `guest found on N clusters — re-link it with Edit link`).
+- `runDeprovision`'s `missing` branch repeats the check before touching `known_hosts` or NetBox
+  and fails the job with the same message, because the migration can land between `createJob` and
+  the job running.
+- Plain box removal (`DELETE /api/boxes/:id`) is unchanged and remains the escape hatch for an
+  operator who knowingly wants the box gone.
+
+### What follow does not touch
+
+- **The box's `host`.** If the guest's address changed on the destination cluster, the box reads
+  "PVE running, SSH unreachable" and the operator fixes the host with Edit box. Tmuxifier has not
+  proven the new address and does not guess one.
+- **`netboxIpId`** travels with the link unchanged: the NetBox record describes an address, not a
+  cluster.
+- **`known_hosts`.** A migrated guest keeps its host key; nothing is forgotten.
+- The `mismatch` rule, template refusal, in-cluster node auto-follow and `healGroup` behave
+  exactly as before.
+
+### UI
+
+One wording change, in `proxmoxGuests.ts`'s deprovision dialog for a `missing` guest:
+
+> Proxmox reports this guest missing on its linked cluster. If it moved to another cluster,
+> Tmuxifier re-links it automatically and deprovision will be refused. Otherwise only the stale
+> linked box is removed.
+
+The 409 renders in the dialog's existing error line. No other web change; a followed guest simply
+shows its new host profile, node and vmid in the Guests tab on the next poll.
+
+### Untrusted input
+
+Everything read from a cluster is treated as input, the posture `status.js` takes toward box
+output: candidate node via `SAFE_NODE`, vmid range-checked, name allowlisted before it is compared
+or stamped, MAC normalized and pattern-checked, a missing or malformed `net0` never matching.
+`proxmoxValidate.js` gains `fp` shape validation for the stamped value.
+
+## Files touched
+
+- `src/server/proxmoxParams.js` — `macOfNet0`.
+- `src/server/proxmoxValidate.js` — `fp` shape validation.
+- `src/server/proxmoxInventory.js` — per-refresh resource cache, `followAcrossClusters`, `fp`
+  backfill and name refresh, `refreshBox({ follow })`, `findFollowCandidates`.
+- `src/server/proxmoxLifecycle.js` — `follow: false` pre-check, deprovision-from-`missing` guard in
+  `createJob` and `runDeprovision`.
+- `src/server/server.js` — stamp `fp` in `PUT /api/boxes/:id/proxmox`.
+- `src/server/proxmoxProvision.js` — stamp `fp` in the link phase.
+- `src/server/store.js` — `fp` carried through `normalize` on the trusted-link path.
+- `src/web/proxmoxGuests.ts` — the dialog wording.
+- `docs/proxmox.md` — a "Moving guests between clusters" section: the delete-source PDM workflow,
+  what follows and what does not (the box address), and why deprovision may refuse.
+- `CLAUDE.md` / `AGENTS.md` — the `proxmoxInventory.js` and `proxmoxLifecycle.js` entries.
+
+## Testing
+
+TDD with real code. The inventory tests get a `makeClient(host)` returning per-cluster fake
+`clusterResources`/`guestConfig`, keyed by host id.
+
+- `macOfNet0`: LXC `hwaddr`; QEMU model-key form for `virtio`, `e1000`, `vmxnet3` and an unknown
+  model; lowercase normalized; empty, unparseable, missing and malformed values → `null`.
+- Follow, positive: exactly one match on another profile re-homes `hostId`/`node`/`vmid`/
+  `endpoint` and keeps `kind`/`fp`/`netboxIpId`; a match on the link's own profile under a new
+  vmid also follows; the refresh's returned record reflects the new cluster.
+- Follow, negative — each writes nothing: zero matches; two matches; a locked candidate; a
+  template; a candidate linked to another box; a kind mismatch; a name mismatch; a MAC mismatch;
+  a link without `fp` or with half an `fp`; an active lifecycle job; the box re-linked between
+  snapshot and write (CAS); `setProxmoxLink` throwing `already linked`.
+- De-duplication: the same guest seen through two profiles with identical endpoints counts once;
+  two `missing` boxes sharing one candidate both stay put.
+- Cost: a `missing` link with no name-matching candidate triggers no `guestConfig` call; a profile
+  fetched for its own boxes is not fetched again for the search.
+- Backfill: stamps `fp` once and never re-reads config once complete; refreshes `fp.name` on a
+  rename without reading config; a failed config read stamps nothing and retries next refresh;
+  respects the active-job guard and CAS.
+- Link-time stamping: the PUT route and the provision link phase stamp `fp`; a failing
+  `guestConfig` still links, without `fp`.
+- `refreshBox(box, { follow: false })` returns `followCandidates` and writes nothing.
+- Deprovision guard: `createJob` 409s with one candidate and with several; `runDeprovision`'s
+  `missing` branch fails the job without calling `knownHosts.forget`, the NetBox release, or box
+  removal when a candidate appears after the job was created; with no candidate, today's
+  behaviour is unchanged.
+- Untrusted input: malformed node, out-of-range vmid, disallowed name characters and malformed
+  MAC in candidate data are never matched or stamped.
+
+## Live validation
+
+Before merge, on the live app (the standing validate-on-live workflow):
+
+1. Link a throwaway container on `cluster-a`; confirm the backfill or link-time stamp wrote `fp`.
+2. PDM-migrate it to `cluster-b` with delete-source.
+3. During the window before the next poll, a Deprovision attempt is refused with the found-on
+   message.
+4. On the next poll the inventory log shows the move and the Guests tab shows the guest on
+   `cluster-b`; its terminal still connects.
+5. Clean up: deprovision the guest from its new cluster.
+
+## Out of scope
+
+- Following when the source is kept (`stopped` twin).
+- Proxmox Datacenter Manager as a host profile type (one PDM token instead of per-cluster tokens).
+- Rewriting the box's address after a move.
+- NICs other than `net0`.
+- Health events or notifications for a move.
