@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 import { createNetboxClient } from './netboxApi.js';
 import { newestFirst } from './jobOrder.js';
 import { pollPveTask } from './pveTask.js';
-import { parseNet0, describeNet0, buildNet0Readdress } from './proxmoxParams.js';
+import { parseNet0, describeNet0, buildNet0Readdress, fingerprintComplete } from './proxmoxParams.js';
 import { isCidr, isIp, isDnsLabel } from './proxmoxValidate.js';
 
 const ACTIONS = new Set(['start', 'shutdown', 'stop', 'reboot', 'deprovision', 'readdress']);
@@ -213,12 +213,34 @@ export function createProxmoxLifecycleManager({
     }
   }
 
+  // A box whose guest reads `missing` may only have been moved to another
+  // cluster by PDM (spec 2026-10-05). Until the status poll re-links it, that
+  // guest is alive elsewhere on the same address, and this path's cleanup would
+  // release its NetBox record and forget its host key. A link without a
+  // fingerprint was never followable and keeps the old behaviour.
+  async function movedElsewhere(box) {
+    if (!fingerprintComplete(box.proxmox && box.proxmox.fp)) return null;
+    const { found, unreachable } = await inventory.findFollowCandidates(box);
+    if (found.length === 1) {
+      return `guest found on ${found[0].hostName || found[0].hostId} as vmid ${found[0].vmid} — Tmuxifier will re-link it on the next poll`;
+    }
+    if (found.length > 1) return `${found.length} guests match this box's fingerprint — re-link it with Edit link`;
+    if (unreachable.length) {
+      return `cannot rule out that this guest moved: ${unreachable.join(', ')} unreachable — retry, or remove the box instead`;
+    }
+    return null;
+  }
+
   async function runDeprovision(job) {
     const { box, client } = await resolveTarget(job);
     let current = await inventory.refreshBox(box);
     if (current.state === 'unknown') throw new Error(current.error || 'Proxmox state unavailable');
     if (current.state === 'mismatch') throw new Error(current.error || 'proxmox guest kind mismatch');
     if (current.state === 'missing') {
+      // Re-checked here, not only in createJob: the migration can land
+      // between the job being created and it running.
+      const moved = await movedElsewhere(box);
+      if (moved) throw new Error(moved);
       job.phase = 'unlink'; persist();
       // The container is verifiably gone — its host key is dead by definition.
       // Best-effort: a failure here must never fail the deprovision.
@@ -382,7 +404,10 @@ export function createProxmoxLifecycleManager({
     assertTargetIdle(key);
     const host = await proxmoxStore.getHost(box.proxmox.hostId, { withSecret: true });
     if (!host) throw serviceError(404, 'proxmox host not found');
-    const current = await inventory.refreshBox(box).catch((error) => { throw serviceError(502, error.message); });
+    // follow:false — a cross-cluster re-home here would leave the job below
+    // snapshotting the old hostId against a new link. Only the status poll
+    // re-homes links.
+    const current = await inventory.refreshBox(box, { follow: false }).catch((error) => { throw serviceError(502, error.message); });
     if (current.state === 'unknown') throw serviceError(502, current.error || 'Proxmox state unavailable');
     // Checked explicitly rather than left to fall through to the REQUIRED test:
     // "start requires stopped" would send the operator debugging the wrong thing
@@ -395,6 +420,10 @@ export function createProxmoxLifecycleManager({
     if (action === 'deprovision') {
       if (input.confirmName !== box.label) throw serviceError(409, 'confirmation name does not match');
       if (!['running', 'stopped', 'missing'].includes(current.state)) throw serviceError(409, `deprovision cannot run from ${current.state}`);
+      if (current.state === 'missing') {
+        const moved = await movedElsewhere(box).catch((error) => { throw serviceError(502, error.message); });
+        if (moved) throw serviceError(409, moved);
+      }
     } else if (action === 'readdress') {
       if (jobKind(box.proxmox) !== 'lxc') throw serviceError(409, 'readdress is available for containers only');
       if (!['running', 'stopped'].includes(current.state)) throw serviceError(409, `readdress cannot run from ${current.state}`);

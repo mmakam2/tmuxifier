@@ -1034,3 +1034,78 @@ test('boot reconcile releases an allocation interrupted at allocate-ip and only 
   expect(manager.getJob('B').log).toContain('NetBox ip 121 may be in use');
   expect(manager.getJob('C')).toMatchObject({ status: 'interrupted', netboxIpId: null });
 });
+
+// ── Deprovision guard (cross-cluster follow, spec 2026-10-05) ──────────────
+const FP_BOX = { ...BOX, proxmox: { ...BOX.proxmox, fp: { name: 'dev-01', mac: 'BC:24:11:AA:BB:CC' } } };
+
+function guardFixture(searches, extra = {}) {
+  const searched = [];
+  const refreshArgs = [];
+  const removed = [];
+  const forgotten = [];
+  const queue = [...searches];
+  const { manager } = fixture('missing', {
+    boxStore: { getBox: async (id) => (id === 'B1' ? (extra.box || FP_BOX) : undefined) },
+    inventory: {
+      refreshBox: async (box, opts) => { refreshArgs.push(opts); return { boxId: 'B1', state: 'missing', node: 'pve', vmid: 131, kind: 'lxc' }; },
+      findFollowCandidates: async (box) => { searched.push(box.id); return queue.length > 1 ? queue.shift() : queue[0]; },
+    },
+    removeLinkedBox: async (id) => removed.push(id),
+    knownHosts: { forget: async (host) => forgotten.push(host) },
+  });
+  return { manager, searched, refreshArgs, removed, forgotten };
+}
+const NONE = { found: [], unreachable: [] };
+const ONE = { found: [{ hostId: 'H2', hostName: 'cluster-b', vmid: 305, node: 'b1n' }], unreachable: [] };
+
+test('deprovision from missing is refused while the guest is found on another cluster', async () => {
+  const { manager } = guardFixture([ONE]);
+  await expect(manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' }))
+    .rejects.toMatchObject({ statusCode: 409, message: 'guest found on cluster-b as vmid 305 — Tmuxifier will re-link it on the next poll' });
+  expect(manager.listJobs()).toEqual([]);
+});
+
+test('deprovision from missing is refused when several guests match', async () => {
+  const two = { found: [ONE.found[0], { hostId: 'H3', hostName: 'cluster-c', vmid: 410, node: 'c1n' }], unreachable: [] };
+  const { manager } = guardFixture([two]);
+  await expect(manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' }))
+    .rejects.toMatchObject({ statusCode: 409, message: "2 guests match this box's fingerprint — re-link it with Edit link" });
+});
+
+test('deprovision from missing is refused when a cluster cannot be read', async () => {
+  const { manager } = guardFixture([{ found: [], unreachable: ['cluster-b', 'cluster-c'] }]);
+  await expect(manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' }))
+    .rejects.toMatchObject({ statusCode: 409, message: 'cannot rule out that this guest moved: cluster-b, cluster-c unreachable — retry, or remove the box instead' });
+});
+
+test('deprovision from missing proceeds when the fingerprint is found nowhere', async () => {
+  const { manager, removed } = guardFixture([NONE]);
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id).status).toBe('done');
+  expect(removed).toEqual(['B1']);
+});
+
+test('a link without a fingerprint never searches — today\'s missing-deprovision path, unchanged', async () => {
+  const { manager, searched, removed } = guardFixture([ONE], { box: BOX });
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(searched).toEqual([]);
+  expect(removed).toEqual(['B1']);
+});
+
+test('a guest that appears elsewhere after createJob fails the job before any cleanup', async () => {
+  const { manager, removed, forgotten } = guardFixture([NONE, ONE]);
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(manager.getJob(job.id)).toMatchObject({ status: 'error', error: 'guest found on cluster-b as vmid 305 — Tmuxifier will re-link it on the next poll' });
+  expect(removed).toEqual([]);
+  expect(forgotten).toEqual([]);
+});
+
+test('createJob refreshes with follow:false so its pre-check can never re-home the link', async () => {
+  const { manager, refreshArgs } = guardFixture([NONE]);
+  const job = await manager.createJob({ boxId: 'B1', action: 'deprovision', confirmName: 'dev-01' });
+  await manager._settled(job.id);
+  expect(refreshArgs[0]).toEqual({ follow: false }); // createJob's pre-check; the running job's own refreshes come later
+});
