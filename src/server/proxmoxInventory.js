@@ -410,8 +410,8 @@ export function createProxmoxInventory({
 
   // Cross-cluster follow (spec 2026-10-05) matches on a fingerprint that can
   // only be read while the guest exists, so it is stamped here — on the first
-  // poll after any link is made — and its name kept current for free from the
-  // resource list. This is the only writer of `fp`.
+  // poll after any link is made — and when the name changes, it is refreshed
+  // from the resource list only after a config read verifies the MAC. This is the only writer of `fp`.
   async function stampFingerprints(records, boxes, ctx) {
     const byId = new Map(boxes.map((box) => [box.id, box]));
     const work = [];
