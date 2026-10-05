@@ -700,3 +700,168 @@ test('refreshBox with follow:false never stamps', async () => {
   expect(calls.config).toEqual([]);
   expect(writes).toEqual([]);
 });
+
+const movedGuest = (vmid, extra = {}) => ({ vmid, node: 'b1n', type: 'lxc', status: 'running', name: 'web01', ...extra });
+const NET = { net0: lxcNet0(FP.mac) };
+
+test('a missing guest found once on another cluster re-homes the link, keeping kind, fp and netboxIpId', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP, netboxIpId: 7 })];
+  const { inventory, writes, logs } = clusters({
+    boxes, resources: { H1: [], H2: [movedGuest(305)] }, configs: { 'H2:305': NET },
+  });
+  const [record] = await inventory.refreshLinked([...boxes]);
+  expect(writes).toEqual([['b1', {
+    hostId: 'H2', node: 'b1n', vmid: 305, kind: 'lxc', endpoint: HOSTS.H2.endpoint, fp: FP, netboxIpId: 7,
+  }]]);
+  expect(record).toMatchObject({ boxId: 'b1', hostId: 'H2', hostName: 'cluster-b', node: 'b1n', vmid: 305, state: 'running', error: null });
+  expect(logs.some((line) => line.includes('guest moved'))).toBe(true);
+});
+
+test('a guest restored under a new vmid on its own cluster follows too', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, writes } = clusters({
+    boxes, resources: { H1: [movedGuest(121, { node: 'a2n' })], H2: [] }, configs: { 'H1:121': NET },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes.map(([, link]) => [link.hostId, link.node, link.vmid])).toEqual([['H1', 'a2n', 121]]);
+});
+
+test.each([
+  ['no match anywhere', [], {}],
+  ['two matches', [movedGuest(305), movedGuest(306)], { 'H2:305': NET, 'H2:306': NET }],
+  ['a locked candidate', [movedGuest(305, { lock: 'migrate' })], { 'H2:305': NET }],
+  ['a template candidate', [movedGuest(305, { template: 1 })], { 'H2:305': NET }],
+  ['a kind mismatch', [movedGuest(305, { type: 'qemu' })], { 'H2:305': { net0: `virtio=${FP.mac},bridge=vmbr0` } }],
+  ['a name mismatch', [movedGuest(305, { name: 'web02' })], { 'H2:305': NET }],
+  ['a MAC mismatch', [movedGuest(305)], { 'H2:305': { net0: lxcNet0('BC:24:11:00:00:99') } }],
+  ['a malformed node', [movedGuest(305, { node: 'bad node' })], { 'H2:305': NET }],
+  ['an out-of-range vmid', [movedGuest(42)], { 'H2:42': NET }],
+  ['a candidate whose config read fails', [movedGuest(305)], { 'H2:305': new Error('500') }],
+])('no follow on %s: nothing written, record stays missing', async (_label, h2, configs) => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, writes } = clusters({ boxes, resources: { H1: [], H2: h2 }, configs });
+  const [record] = await inventory.refreshLinked([...boxes]);
+  expect(writes).toEqual([]);
+  expect(record).toMatchObject({ hostId: 'H1', vmid: 120, state: 'missing' });
+});
+
+test('a link without a complete fingerprint is never followed and searches nothing', async () => {
+  for (const extra of [{}, { fp: { name: 'web01' } }]) {
+    const boxes = [linkedTo('b1', 'H1', 'a1n', 120, extra)];
+    const { inventory, writes, calls } = clusters({ boxes, resources: { H1: [], H2: [movedGuest(305)] }, configs: { 'H2:305': NET } });
+    await inventory.refreshLinked([...boxes]);
+    expect(writes).toEqual([]);
+    expect(calls.resources).toEqual(['H1']); // H2 was never asked
+  }
+});
+
+test('a candidate already linked to another box is not a match', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP }), linkedTo('b2', 'H2', 'b1n', 305, { fp: { name: 'web01', mac: 'BC:24:11:00:00:02' } })];
+  const { inventory, writes } = clusters({ boxes, resources: { H1: [], H2: [movedGuest(305)] }, configs: { 'H2:305': NET } });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes.filter(([id]) => id === 'b1')).toEqual([]);
+});
+
+test('an unreadable host profile makes the search incomplete: no follow even with one match elsewhere', async () => {
+  const hosts = { ...HOSTS, H3: { id: 'H3', name: 'cluster-c', endpoint: 'pve-c.example.com:8006', tokenSecret: 's3' } };
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, writes } = clusters({
+    boxes, hosts, failResources: ['H3'], resources: { H1: [], H2: [movedGuest(305)] }, configs: { 'H2:305': NET },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes).toEqual([]);
+});
+
+test('two profiles with the same endpoint are searched once, so one guest is one match', async () => {
+  const hosts = { ...HOSTS, H2b: { id: 'H2b', name: 'cluster-b-alias', endpoint: HOSTS.H2.endpoint, tokenSecret: 's4' } };
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, writes } = clusters({
+    boxes, hosts, resources: { H1: [], H2: [movedGuest(305)], H2b: [movedGuest(305)] },
+    configs: { 'H2:305': NET, 'H2b:305': NET },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes.map(([, link]) => link.hostId)).toEqual(['H2']);
+});
+
+test('two missing boxes resolving to the same guest both stay put', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP }), linkedTo('b2', 'H1', 'a1n', 121, { fp: FP })];
+  const { inventory, writes } = clusters({ boxes, resources: { H1: [], H2: [movedGuest(305)] }, configs: { 'H2:305': NET } });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes).toEqual([]);
+});
+
+test('the follow is skipped while a lifecycle job is active on the box', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, writes } = clusters({
+    boxes, guard: () => true, resources: { H1: [], H2: [movedGuest(305)] }, configs: { 'H2:305': NET },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes).toEqual([]);
+});
+
+test('the follow is skipped if the box was re-linked mid-poll (CAS)', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, writes } = clusters({
+    boxes, resources: { H1: [], H2: [movedGuest(305)] },
+    configs: { 'H2:305': () => { boxes[0] = linkedTo('b1', 'H1', 'a1n', 130); return NET; } },
+  });
+  await inventory.refreshLinked([...boxes]);
+  expect(writes).toEqual([]);
+});
+
+test('a store refusal (already linked) is logged, never thrown, and the record stays missing', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, logs } = clusters({
+    boxes, failLink: 'proxmox guest is already linked',
+    resources: { H1: [], H2: [movedGuest(305)] }, configs: { 'H2:305': NET },
+  });
+  const [record] = await inventory.refreshLinked([...boxes]);
+  expect(record.state).toBe('missing');
+  expect(logs.some((line) => line.includes('could not follow'))).toBe(true);
+});
+
+test('a missing guest with no same-name candidate costs no config read and no repeat cluster call', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, calls } = clusters({ boxes, resources: { H1: [], H2: [movedGuest(305, { name: 'other' })] } });
+  await inventory.refreshLinked([...boxes]);
+  expect(calls.config).toEqual([]);
+  expect(calls.resources).toEqual(['H1', 'H2']);
+});
+
+test('an ambiguous search is logged once, not on every poll', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, logs } = clusters({
+    boxes, resources: { H1: [], H2: [movedGuest(305), movedGuest(306)] }, configs: { 'H2:305': NET, 'H2:306': NET },
+  });
+  await inventory.refreshLinked([...boxes]);
+  await inventory.refreshLinked([...boxes]);
+  expect(logs.filter((line) => line.includes('not following'))).toHaveLength(1);
+});
+
+test('refreshBox with follow:false never re-homes', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, writes } = clusters({ boxes, resources: { H1: [], H2: [movedGuest(305)] }, configs: { 'H2:305': NET } });
+  const record = await inventory.refreshBox(boxes[0], { follow: false });
+  expect(record.state).toBe('missing');
+  expect(writes).toEqual([]);
+});
+
+test('findFollowCandidates reports matches and unreadable profiles without writing', async () => {
+  const hosts = { ...HOSTS, H3: { id: 'H3', name: 'cluster-c', endpoint: 'pve-c.example.com:8006', tokenSecret: 's3' } };
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120, { fp: FP })];
+  const { inventory, writes } = clusters({
+    boxes, hosts, failResources: ['H3'], resources: { H1: [], H2: [movedGuest(305)] }, configs: { 'H2:305': NET },
+  });
+  await expect(inventory.findFollowCandidates(boxes[0])).resolves.toEqual({
+    found: [{ hostId: 'H2', hostName: 'cluster-b', vmid: 305, node: 'b1n' }],
+    unreachable: ['cluster-c'],
+  });
+  expect(writes).toEqual([]);
+});
+
+test('findFollowCandidates is empty for a link without a fingerprint', async () => {
+  const boxes = [linkedTo('b1', 'H1', 'a1n', 120)];
+  const { inventory, calls } = clusters({ boxes, resources: { H1: [], H2: [movedGuest(305)] } });
+  await expect(inventory.findFollowCandidates(boxes[0])).resolves.toEqual({ found: [], unreachable: [] });
+  expect(calls.resources).toEqual([]);
+});

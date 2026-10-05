@@ -54,6 +54,11 @@ export function createProxmoxInventory({
   // the life of the process so such a guest costs one read, not one per poll.
   const unusable = new Set();
 
+  // Box id -> signature of the last "not following" reason logged, so an
+  // ambiguous missing guest is reported when its situation changes, not on
+  // every poll.
+  const notFollowingLogged = new Map();
+
   const record = (box, fields) => ({
     boxId: box.id, boxLabel: box.label, hostId: box.proxmox.hostId, hostName: null,
     node: box.proxmox.node, vmid: Number(box.proxmox.vmid), kind: linkKind(box), containerName: null,
@@ -189,6 +194,134 @@ export function createProxmoxInventory({
     }));
   }
 
+  // Cross-cluster follow (spec 2026-10-05). PDM's remote migration with the
+  // source deleted leaves the link reading `missing`; if exactly one guest on
+  // any profile carries the link's stamped fingerprint, the link follows it —
+  // the node auto-follow's rule widened across clusters, with the mismatch
+  // rule's posture: anything short of one unambiguous match writes nothing.
+  async function resourcesFor(summary, ctx) {
+    if (ctx.resources.has(summary.id)) return ctx.resources.get(summary.id);
+    let guests = null;
+    try {
+      const host = await proxmoxStore.getHost(summary.id, { withSecret: true });
+      if (host) {
+        ctx.hosts.set(host.id, host);
+        guests = (await makeClient(host).clusterResources()) || [];
+      }
+    } catch { guests = null; }
+    ctx.resources.set(summary.id, guests);
+    return guests;
+  }
+
+  async function searchFingerprint(box, ctx) {
+    const fp = box.proxmox && box.proxmox.fp;
+    if (!boxStore || !fingerprintComplete(fp)) return { found: [], unreachable: [] };
+    const kind = linkKind(box);
+    // The whole fleet, not the refresh's box list: a single-box refresh is
+    // handed one box, and "already linked elsewhere" needs every link.
+    const [summaries, fleet] = await Promise.all([proxmoxStore.listHosts(), boxStore.listBoxes()]);
+    const linkedElsewhere = new Set((fleet || [])
+      .filter((other) => other.id !== box.id && other.proxmox)
+      .map((other) => guestKey(other.proxmox.hostId, other.proxmox.vmid)));
+    const seen = new Set();
+    const named = [];
+    const unreachable = [];
+    for (const summary of summaries || []) {
+      if (!summary || seen.has(summary.endpoint)) continue;
+      seen.add(summary.endpoint);
+      const guests = await resourcesFor(summary, ctx);
+      // An unreadable cluster could hold a second match: the search is incomplete.
+      if (!guests) { unreachable.push(summary.name || summary.id); continue; }
+      for (const g of guests) {
+        if (!g || g.type !== kind || g.template || g.lock) continue;
+        if (typeof g.node !== 'string' || !SAFE_NODE.test(g.node)) continue;
+        const vmid = Number(g.vmid);
+        if (!Number.isInteger(vmid) || vmid < 100 || vmid > 999999999) continue;
+        if (cleanGuestName(g.name) !== fp.name) continue;
+        if (linkedElsewhere.has(guestKey(summary.id, vmid))) continue;
+        named.push({
+          hostId: summary.id, hostName: summary.name || null, endpoint: summary.endpoint,
+          node: g.node, vmid, kind, status: g.status, name: g.name,
+        });
+      }
+    }
+    const found = [];
+    for (const candidate of named) {
+      let config;
+      try { config = await makeClient(ctx.hosts.get(candidate.hostId)).guestConfig(kind, candidate.node, candidate.vmid); }
+      catch { unreachable.push(candidate.hostName || candidate.hostId); continue; } // it might have been the match
+      if (macOfNet0(kind, config && config.net0) === fp.mac) found.push(candidate);
+    }
+    return { found, unreachable: [...new Set(unreachable)] };
+  }
+
+  function noteNotFollowing(box, signature, message) {
+    if (notFollowingLogged.get(box.id) === signature) return;
+    notFollowingLogged.set(box.id, signature);
+    log(`[tmuxifier] box ${box.label}: guest missing; not following — ${message}`);
+  }
+
+  async function rehome(box, target, ctx) {
+    try {
+      // CAS: the link must still be the one this refresh found missing.
+      const fresh = await boxStore.getBox(box.id);
+      const link = fresh && fresh.proxmox;
+      const stillOurs = link && link.hostId === box.proxmox.hostId
+        && Number(link.vmid) === Number(box.proxmox.vmid)
+        && fingerprintComplete(link.fp) && link.fp.mac === box.proxmox.fp.mac;
+      if (!stillOurs || activeJobGuard(box.id)) return null;
+      const next = { ...link, hostId: target.hostId, node: target.node, vmid: target.vmid, endpoint: target.endpoint };
+      await boxStore.setProxmoxLink(box.id, next);
+      const fromName = (ctx.hosts.get(link.hostId) || {}).name || link.hostId;
+      log(`[tmuxifier] box ${box.label}: guest moved ${fromName}/${link.vmid} -> ${target.hostName || target.hostId}/${target.vmid} (fingerprint ${link.fp.name} ${link.fp.mac})`);
+      return record({ ...box, proxmox: next }, {
+        hostName: target.hostName, node: target.node, kind: target.kind,
+        containerName: target.name || null, state: normalizeState(target.status), template: false,
+      });
+    } catch (error) {
+      log(`[tmuxifier] box ${box.label}: could not follow guest to ${target.hostName || target.hostId}/${target.vmid}: ${error.message}`);
+      return null;
+    }
+  }
+
+  async function followAcrossClusters(records, boxes, ctx) {
+    const byId = new Map(boxes.map((box) => [box.id, box]));
+    const plans = [];
+    for (const item of records) {
+      if (item.state !== 'missing') { notFollowingLogged.delete(item.boxId); continue; }
+      const box = byId.get(item.boxId);
+      if (!box || !box.proxmox || !fingerprintComplete(box.proxmox.fp) || activeJobGuard(box.id)) continue;
+      let result;
+      try { result = await searchFingerprint(box, ctx); } catch (error) {
+        noteNotFollowing(box, `error:${error.message}`, `search failed: ${error.message}`);
+        continue;
+      }
+      const { found, unreachable } = result;
+      if (found.length === 1 && unreachable.length === 0) { plans.push({ box, target: found[0] }); continue; }
+      if (found.length === 0 && unreachable.length === 0) { notFollowingLogged.delete(box.id); continue; }
+      const signature = [...found.map((c) => `${c.hostId}/${c.vmid}`), ...unreachable.map((n) => `!${n}`)].join(',');
+      noteNotFollowing(box, signature, `${found.length} fingerprint match(es)`
+        + (unreachable.length ? `; could not read: ${unreachable.join(', ')}` : ''));
+    }
+    const claims = new Map();
+    for (const { target } of plans) {
+      const key = guestKey(target.hostId, target.vmid);
+      claims.set(key, (claims.get(key) || 0) + 1);
+    }
+    const replaced = new Map();
+    for (const { box, target } of plans) {
+      const key = guestKey(target.hostId, target.vmid);
+      if (claims.get(key) > 1) {
+        noteNotFollowing(box, `shared:${key}`, `another missing box matches the same guest (${target.hostName || target.hostId}/${target.vmid})`);
+        continue;
+      }
+      notFollowingLogged.delete(box.id);
+      const moved = await rehome(box, target, ctx);
+      if (moved) replaced.set(box.id, moved);
+    }
+    return records.map((item) => replaced.get(item.boxId) || item);
+  }
+
   // Cross-cluster follow (spec 2026-10-05) matches on a fingerprint that can
   // only be read while the guest exists, so it is stamped here — on the first
   // poll after any link is made — and its name kept current for free from the
@@ -247,12 +380,15 @@ export function createProxmoxInventory({
       if (!groups.has(hostId)) groups.set(hostId, []);
       groups.get(hostId).push(box);
     }
-    const records = (await Promise.all(
+    let records = (await Promise.all(
       [...groups.entries()].map(([hostId, hostBoxes]) => fetchHost(hostId, hostBoxes, ctx)),
     )).flat();
     // follow:false (a lifecycle pre-check) is read-only beyond the node
     // auto-follow fetchHost already did: no stamp, no cross-cluster re-home.
-    if (follow && boxStore) await stampFingerprints(records, boxes, ctx);
+    if (follow && boxStore) {
+      records = await followAcrossClusters(records, boxes, ctx);
+      await stampFingerprints(records, boxes, ctx);
+    }
     for (const item of records) cache.set(item.boxId, item);
     return records;
   }
@@ -307,6 +443,12 @@ export function createProxmoxInventory({
     listClusterNodes,
     setActiveJobGuard(fn) { activeJobGuard = fn; },
     async refreshBox(box, opts = {}) { return (await doRefresh([box], opts))[0]; },
+    // The deprovision guard's query (proxmoxLifecycle.js): the same search the
+    // follow runs, without writing anything.
+    async findFollowCandidates(box) {
+      const { found, unreachable } = await searchFingerprint(box, { hosts: new Map(), resources: new Map() });
+      return { found: found.map(({ hostId, hostName, vmid, node }) => ({ hostId, hostName, vmid, node })), unreachable };
+    },
     async getLinkedGuests(boxes) { return refreshLinked(boxes); },
     async listNodeGuests(hostId, node, boxes) {
       const host = await proxmoxStore.getHost(hostId, { withSecret: true });
