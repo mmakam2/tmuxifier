@@ -64,6 +64,39 @@ export function net0Field(pairs, key) {
   return hit ? hit[1] : null;
 }
 
+// Cross-cluster follow fingerprint (spec 2026-10-05). Every input here is
+// cluster-supplied config, so each helper returns null rather than throwing,
+// and nothing it rejects can ever match.
+const MAC_RE = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/;
+const GUEST_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$/;
+
+export function normalizeMac(value) {
+  if (typeof value !== 'string') return null;
+  const mac = value.trim().toUpperCase();
+  return MAC_RE.test(mac) ? mac : null;
+}
+
+// LXC writes the MAC as `hwaddr=`; QEMU writes it as the VALUE of the leading
+// NIC-model pair (`virtio=…`, `e1000=…`). Taking the first pair's value rather
+// than allowlisting model names keeps a future PVE NIC model working.
+export function macOfNet0(kind, net0) {
+  let pairs;
+  try { pairs = parseNet0(net0); } catch { return null; }
+  if (kind === 'lxc') return normalizeMac(net0Field(pairs, 'hwaddr'));
+  if (kind === 'qemu') return normalizeMac(pairs[0][1]);
+  return null;
+}
+
+export function cleanGuestName(value) {
+  return typeof value === 'string' && GUEST_NAME_RE.test(value) ? value : null;
+}
+
+export function fingerprintComplete(fp) {
+  return !!fp && typeof fp === 'object'
+    && cleanGuestName(fp.name) === fp.name
+    && normalizeMac(fp.mac) === fp.mac;
+}
+
 // The IPv4 view the dialog shows and the job records. `ip=dhcp`/`ip=manual`
 // read as null: the interface has no static address for the job to "move".
 export function describeNet0(pairs) {

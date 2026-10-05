@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { buildNet0, buildCreateParams, parseNet0, net0Field, describeNet0, buildNet0Readdress } from '../src/server/proxmoxParams.js';
+import { buildNet0, buildCreateParams, parseNet0, net0Field, describeNet0, buildNet0Readdress, normalizeMac, macOfNet0, cleanGuestName, fingerprintComplete } from '../src/server/proxmoxParams.js';
 
 test('buildNet0 dhcp and static (with vlan + override)', () => {
   expect(buildNet0({ bridge: 'vmbr0', ipMode: 'dhcp' })).toBe('name=eth0,bridge=vmbr0,ip=dhcp');
@@ -84,4 +84,51 @@ test('describeNet0 reads the IPv4 view and nulls dhcp/absent fields', () => {
   expect(describeNet0(parseNet0(LINE))).toEqual({ bridge: 'vmbr0', vlan: 20, ip: '192.168.20.5/24', gateway: '192.168.20.1' });
   expect(describeNet0(parseNet0('name=eth0,bridge=vmbr0,ip=dhcp'))).toEqual({ bridge: 'vmbr0', vlan: null, ip: null, gateway: null });
   expect(describeNet0(parseNet0('name=eth0,bridge=vmbr1,ip=manual,tag=abc,gw=nope'))).toEqual({ bridge: 'vmbr1', vlan: null, ip: null, gateway: null });
+});
+
+test('macOfNet0 reads an LXC hwaddr and normalizes its case', () => {
+  expect(macOfNet0('lxc', 'name=eth0,bridge=vmbr0,hwaddr=bc:24:11:aa:bb:cc,ip=dhcp')).toBe('BC:24:11:AA:BB:CC');
+});
+
+test('macOfNet0 reads a QEMU MAC from the leading NIC-model key, whatever the model', () => {
+  for (const model of ['virtio', 'e1000', 'vmxnet3', 'some-future-nic']) {
+    expect(macOfNet0('qemu', `${model}=BC:24:11:00:00:01,bridge=vmbr0,firewall=1`)).toBe('BC:24:11:00:00:01');
+  }
+});
+
+test('macOfNet0 returns null for anything absent or malformed — it never throws', () => {
+  expect(macOfNet0('lxc', 'name=eth0,bridge=vmbr0,ip=dhcp')).toBeNull();
+  expect(macOfNet0('lxc', '')).toBeNull();
+  expect(macOfNet0('lxc', undefined)).toBeNull();
+  expect(macOfNet0('lxc', 'garbage')).toBeNull();
+  expect(macOfNet0('lxc', 'name=eth0,hwaddr=BC:24:11:AA:BB')).toBeNull();
+  expect(macOfNet0('lxc', 'name=eth0,hwaddr=BC:24:11:AA:BB:CC;touch x')).toBeNull();
+  expect(macOfNet0('qemu', 'bridge=vmbr0,virtio=BC:24:11:00:00:01')).toBeNull(); // the model key must lead
+  expect(macOfNet0('qemu', 'virtio=not-a-mac,bridge=vmbr0')).toBeNull();
+  expect(macOfNet0('other', 'hwaddr=BC:24:11:AA:BB:CC')).toBeNull();
+});
+
+test('normalizeMac accepts only a six-octet colon MAC', () => {
+  expect(normalizeMac(' bc:24:11:aa:bb:cc ')).toBe('BC:24:11:AA:BB:CC');
+  expect(normalizeMac('BC-24-11-AA-BB-CC')).toBeNull();
+  expect(normalizeMac(42)).toBeNull();
+});
+
+test('cleanGuestName allowlists the PVE guest-name shape', () => {
+  expect(cleanGuestName('web01')).toBe('web01');
+  expect(cleanGuestName('web-01.lab')).toBe('web-01.lab');
+  expect(cleanGuestName('web 01')).toBeNull();
+  expect(cleanGuestName('-web')).toBeNull();
+  expect(cleanGuestName('a'.repeat(64))).toBeNull();
+  expect(cleanGuestName(undefined)).toBeNull();
+});
+
+test('fingerprintComplete requires both halves, already canonical', () => {
+  expect(fingerprintComplete({ name: 'web01', mac: 'BC:24:11:AA:BB:CC' })).toBe(true);
+  expect(fingerprintComplete({ name: 'web01', mac: 'bc:24:11:aa:bb:cc' })).toBe(false); // not normalized
+  expect(fingerprintComplete({ name: 'web01' })).toBe(false);
+  expect(fingerprintComplete({ mac: 'BC:24:11:AA:BB:CC' })).toBe(false);
+  expect(fingerprintComplete({ name: 'web 01', mac: 'BC:24:11:AA:BB:CC' })).toBe(false);
+  expect(fingerprintComplete(null)).toBe(false);
+  expect(fingerprintComplete('web01')).toBe(false);
 });
