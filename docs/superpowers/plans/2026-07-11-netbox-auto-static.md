@@ -656,10 +656,10 @@ Append to `test/proxmoxInventory.test.js`:
 ```js
 test('the drift write preserves netboxIpId on the link', async () => {
   const writes = [];
-  const box = linked('b1', 'proxmox02', 165);
+  const box = linked('b1', 'pve-n02', 165);
   box.proxmox.netboxIpId = 99;
   const { inventory } = setup({
-    cluster: [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }],
+    cluster: [{ vmid: 165, node: 'pve-n03', type: 'lxc', status: 'running', name: 'dev' }],
     boxStore: { getBox: async () => box, setProxmoxLink: async (id, link) => writes.push([id, link]) },
   });
   await inventory.refreshLinked([box]);

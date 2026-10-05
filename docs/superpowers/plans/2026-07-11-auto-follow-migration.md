@@ -42,15 +42,15 @@ test('clusterResources lists cluster-wide guests with their current node', async
   const client = createProxmoxClient({
     host: { endpoint: 'pve.example.com:8006', tokenId: 'user@pam!t', tokenSecret: 'sek', verifyMode: 'insecure' },
     request: async (opts) => { calls.push(opts); return { status: 200, json: { data: [
-      { vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'mcmcreativedev01' },
-      { vmid: 200, node: 'proxmox02', type: 'qemu', status: 'running', name: 'a-vm' },
+      { vmid: 165, node: 'pve-n03', type: 'lxc', status: 'running', name: 'webdev01' },
+      { vmid: 200, node: 'pve-n02', type: 'qemu', status: 'running', name: 'a-vm' },
     ] } }; },
   });
   const list = await client.clusterResources();
   expect(calls[0].url).toBe('https://pve.example.com:8006/api2/json/cluster/resources?type=vm');
   expect(calls[0].method).toBe('GET');
   expect(list).toHaveLength(2);
-  expect(list[0]).toMatchObject({ vmid: 165, node: 'proxmox03', type: 'lxc' });
+  expect(list[0]).toMatchObject({ vmid: 165, node: 'pve-n03', type: 'lxc' });
 });
 ```
 
@@ -140,24 +140,24 @@ test('a migrated container stays healthy, reports its new node, and the link aut
   const writes = [];
   const boxStore = { setProxmoxLink: async (id, link) => writes.push([id, link]) };
   const { inventory } = setup({
-    cluster: [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }],
+    cluster: [{ vmid: 165, node: 'pve-n03', type: 'lxc', status: 'running', name: 'dev' }],
     boxStore,
   });
-  const [record] = await inventory.refreshLinked([linked('b1', 'proxmox02', 165)]);
+  const [record] = await inventory.refreshLinked([linked('b1', 'pve-n02', 165)]);
   expect(record.state).toBe('running');
-  expect(record.node).toBe('proxmox03');
-  expect(writes).toEqual([['b1', { hostId: 'H1', node: 'proxmox03', vmid: 165, endpoint: HOST.endpoint }]]);
+  expect(record.node).toBe('pve-n03');
+  expect(writes).toEqual([['b1', { hostId: 'H1', node: 'pve-n03', vmid: 165, endpoint: HOST.endpoint }]]);
 });
 
 test('the drift write is skipped while a lifecycle job is active on the box', async () => {
   const writes = [];
   const { inventory } = setup({
-    cluster: [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }],
+    cluster: [{ vmid: 165, node: 'pve-n03', type: 'lxc', status: 'running', name: 'dev' }],
     boxStore: { setProxmoxLink: async (id, link) => writes.push([id, link]) },
     guard: (boxId) => boxId === 'b1',
   });
-  const [record] = await inventory.refreshLinked([linked('b1', 'proxmox02', 165)]);
-  expect(record.node).toBe('proxmox03'); // display still follows
+  const [record] = await inventory.refreshLinked([linked('b1', 'pve-n02', 165)]);
+  expect(record.node).toBe('pve-n03'); // display still follows
   expect(writes).toEqual([]);            // store write deferred to a later poll
 });
 
@@ -165,11 +165,11 @@ test('a failing drift write is best-effort: logged, record still healthy', async
   const logged = [];
   const inventory = createProxmoxInventory({
     proxmoxStore: { getHost: async () => HOST },
-    makeClient: () => ({ clusterResources: async () => [{ vmid: 165, node: 'proxmox03', type: 'lxc', status: 'running', name: 'dev' }] }),
+    makeClient: () => ({ clusterResources: async () => [{ vmid: 165, node: 'pve-n03', type: 'lxc', status: 'running', name: 'dev' }] }),
     boxStore: { setProxmoxLink: async () => { throw new Error('disk full'); } },
     now: () => 1000, log: (...a) => logged.push(a.join(' ')),
   });
-  const [record] = await inventory.refreshLinked([linked('b1', 'proxmox02', 165)]);
+  const [record] = await inventory.refreshLinked([linked('b1', 'pve-n02', 165)]);
   expect(record.state).toBe('running');
   expect(logged.some((line) => line.includes('disk full'))).toBe(true);
 });

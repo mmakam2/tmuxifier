@@ -38,7 +38,7 @@ Update the import line in `test/proxmoxContainers.test.js` and append:
 ```js
 import { actionsForState, containerMatches } from '../src/web/proxmoxContainers.ts';
 
-const C = { boxId: 'B1', boxLabel: 'datumworks01', hostId: 'H1', hostName: 'lab', node: 'proxmox02', vmid: 160, state: 'running' };
+const C = { boxId: 'B1', boxLabel: 'app01', hostId: 'H1', hostName: 'lab', node: 'pve-n02', vmid: 160, state: 'running' };
 
 test('containerMatches: empty or blank term matches everything', () => {
   expect(containerMatches(C, '')).toBe(true);
@@ -48,7 +48,7 @@ test('containerMatches: empty or blank term matches everything', () => {
 test('containerMatches: label, host name, node, vmid, and state — case-insensitive substrings', () => {
   expect(containerMatches(C, 'DATUM')).toBe(true);
   expect(containerMatches(C, 'lab')).toBe(true);
-  expect(containerMatches(C, 'proxmox02')).toBe(true);
+  expect(containerMatches(C, 'pve-n02')).toBe(true);
   expect(containerMatches(C, '160')).toBe(true);
   expect(containerMatches(C, 'RUN')).toBe(true);
   expect(containerMatches(C, 'nomatch')).toBe(false);
@@ -137,7 +137,7 @@ Expected: 4 tests pass; typecheck + build clean.
 
 - [ ] **Step 5: Scripted browser check (throwaway, mocked APIs — the established pattern)**
 
-Script under `.superpowers/` (delete after): serve `dist/`, intercept `**/api/**`, mock `/api/proxmox/containers` with three containers across two nodes/states (e.g. `dev-01`/`proxmox02`/running, `db-01`/`proxmox03`/stopped, `web-01`/`proxmox02`/running; include hosts/boxes/status mocks so the dashboard renders and the hub opens). Drive: open hub → Containers tab → assert 3 rows visible; type `proxmox03` → assert exactly 1 row visible (offsetParent !== null test, which catches the `[hidden]`-vs-`display:grid` landmine); type `zzz` → 0 visible and the `No containers match.` line shown; clear → 3 visible; type `stopped` → 1 visible; click Refresh with `db` in the box → after re-render the input still reads `db` and 1 row is visible. Print each assertion result; take one screenshot and inspect it.
+Script under `.superpowers/` (delete after): serve `dist/`, intercept `**/api/**`, mock `/api/proxmox/containers` with three containers across two nodes/states (e.g. `dev-01`/`pve-n02`/running, `db-01`/`pve-n03`/stopped, `web-01`/`pve-n02`/running; include hosts/boxes/status mocks so the dashboard renders and the hub opens). Drive: open hub → Containers tab → assert 3 rows visible; type `pve-n03` → assert exactly 1 row visible (offsetParent !== null test, which catches the `[hidden]`-vs-`display:grid` landmine); type `zzz` → 0 visible and the `No containers match.` line shown; clear → 3 visible; type `stopped` → 1 visible; click Refresh with `db` in the box → after re-render the input still reads `db` and 1 row is visible. Print each assertion result; take one screenshot and inspect it.
 
 Expected: all assertions true.
 

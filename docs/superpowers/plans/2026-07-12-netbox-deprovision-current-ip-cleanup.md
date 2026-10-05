@@ -37,23 +37,23 @@ test('findIpsByAddress GETs the host-address filter and maps results', async () 
   const client = createNetboxClient(NB, { request: async (o) => {
     calls.push(o);
     return { status: 200, json: { count: 2, results: [
-      { id: 42, address: '192.168.3.7/24', status: { value: 'active' } },
-      { id: 43, address: '192.168.3.7/32' },
+      { id: 42, address: '192.168.1.7/24', status: { value: 'active' } },
+      { id: 43, address: '192.168.1.7/32' },
     ] }, text: '' };
   } });
-  await expect(client.findIpsByAddress('192.168.3.7')).resolves.toEqual([
-    { id: 42, address: '192.168.3.7/24' },
-    { id: 43, address: '192.168.3.7/32' },
+  await expect(client.findIpsByAddress('192.168.1.7')).resolves.toEqual([
+    { id: 42, address: '192.168.1.7/24' },
+    { id: 43, address: '192.168.1.7/32' },
   ]);
   expect(calls[0].method).toBe('GET');
-  expect(calls[0].url).toContain('/api/ipam/ip-addresses/?address=192.168.3.7');
+  expect(calls[0].url).toContain('/api/ipam/ip-addresses/?address=192.168.1.7');
 });
 
 test('findIpsByAddress returns [] on no match and throws on API errors', async () => {
   const empty = createNetboxClient(NB, { request: async () => ({ status: 200, json: { count: 0, results: [] }, text: '' }) });
-  await expect(empty.findIpsByAddress('192.168.3.9')).resolves.toEqual([]);
+  await expect(empty.findIpsByAddress('192.168.1.9')).resolves.toEqual([]);
   const down = createNetboxClient(NB, { request: async () => ({ status: 500, json: null, text: '' }) });
-  await expect(down.findIpsByAddress('192.168.3.9')).rejects.toThrow('NetBox API error 500');
+  await expect(down.findIpsByAddress('192.168.1.9')).rejects.toThrow('NetBox API error 500');
 });
 ```
 

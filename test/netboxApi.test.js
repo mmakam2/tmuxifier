@@ -123,12 +123,12 @@ test('findPrefixByVlan resolves exactly-one and throws on 0/many', async () => {
 });
 
 test('firstUsableIp: network + 1, and tiny prefixes are rejected', () => {
-  expect(firstUsableIp('192.168.3.0/24')).toBe('192.168.3.1');
+  expect(firstUsableIp('192.168.1.0/24')).toBe('192.168.1.1');
   expect(firstUsableIp('10.20.0.0/16')).toBe('10.20.0.1');
-  expect(firstUsableIp('192.168.3.128/30')).toBe('192.168.3.129');
-  expect(firstUsableIp('192.168.3.77/24')).toBe('192.168.3.1'); // non-canonical base normalizes
-  expect(() => firstUsableIp('192.168.3.0/31')).toThrow(/too small/);
-  expect(() => firstUsableIp('192.168.3.4/32')).toThrow(/too small/);
+  expect(firstUsableIp('192.168.1.128/30')).toBe('192.168.1.129');
+  expect(firstUsableIp('192.168.1.77/24')).toBe('192.168.1.1'); // non-canonical base normalizes
+  expect(() => firstUsableIp('192.168.1.0/31')).toThrow(/too small/);
+  expect(() => firstUsableIp('192.168.1.4/32')).toThrow(/too small/);
   expect(() => firstUsableIp('not-a-prefix')).toThrow(/unparseable/);
 });
 
@@ -136,23 +136,23 @@ test('allocateIp skips the gateway and reserves the first other available addres
   const calls = [];
   const client = createNetboxClient(NB, { request: async (o) => {
     calls.push(o);
-    if (o.method === 'GET') return { status: 200, json: [{ address: '192.168.3.1/24' }, { address: '192.168.3.5/24' }], text: '' };
-    return { status: 201, json: { id: 99, address: '192.168.3.5/24' }, text: '' };
+    if (o.method === 'GET') return { status: 200, json: [{ address: '192.168.1.1/24' }, { address: '192.168.1.5/24' }], text: '' };
+    return { status: 201, json: { id: 99, address: '192.168.1.5/24' }, text: '' };
   } });
-  const res = await client.allocateIp({ id: 7, prefix: '192.168.3.0/24' }, { status: 'active', description: 'tmuxifier: dev-01' });
-  expect(res).toEqual({ id: 99, address: '192.168.3.5/24', gateway: '192.168.3.1' });
+  const res = await client.allocateIp({ id: 7, prefix: '192.168.1.0/24' }, { status: 'active', description: 'tmuxifier: dev-01' });
+  expect(res).toEqual({ id: 99, address: '192.168.1.5/24', gateway: '192.168.1.1' });
   expect(calls[0].method).toBe('GET');
   expect(calls[0].url).toBe('https://netbox.example.com/api/ipam/prefixes/7/available-ips/');
   expect(calls[1].method).toBe('POST');
   expect(calls[1].url).toBe('https://netbox.example.com/api/ipam/ip-addresses/');
-  expect(calls[1].body).toEqual({ address: '192.168.3.5/24', status: 'active', description: 'tmuxifier: dev-01' });
+  expect(calls[1].body).toEqual({ address: '192.168.1.5/24', status: 'active', description: 'tmuxifier: dev-01' });
 });
 
 test('allocateIp: only the gateway left (or nothing) means prefix full', async () => {
-  const gwOnly = createNetboxClient(NB, { request: async () => ({ status: 200, json: [{ address: '192.168.3.1/24' }], text: '' }) });
-  await expect(gwOnly.allocateIp({ id: 7, prefix: '192.168.3.0/24' }, {})).rejects.toThrow('prefix 192.168.3.0/24 has no available IPs');
+  const gwOnly = createNetboxClient(NB, { request: async () => ({ status: 200, json: [{ address: '192.168.1.1/24' }], text: '' }) });
+  await expect(gwOnly.allocateIp({ id: 7, prefix: '192.168.1.0/24' }, {})).rejects.toThrow('prefix 192.168.1.0/24 has no available IPs');
   const empty = createNetboxClient(NB, { request: async () => ({ status: 200, json: [], text: '' }) });
-  await expect(empty.allocateIp({ id: 7, prefix: '192.168.3.0/24' }, {})).rejects.toThrow('has no available IPs');
+  await expect(empty.allocateIp({ id: 7, prefix: '192.168.1.0/24' }, {})).rejects.toThrow('has no available IPs');
 });
 
 test('nextIp previews the same pick allocateIp would make, without reserving', async () => {
@@ -190,23 +190,23 @@ test('findIpsByAddress GETs the host-address filter and maps results', async () 
   const client = createNetboxClient(NB, { request: async (o) => {
     calls.push(o);
     return { status: 200, json: { count: 2, results: [
-      { id: 42, address: '192.168.3.7/24', status: { value: 'active' } },
-      { id: 43, address: '192.168.3.7/32' },
+      { id: 42, address: '192.168.1.7/24', status: { value: 'active' } },
+      { id: 43, address: '192.168.1.7/32' },
     ] }, text: '' };
   } });
-  await expect(client.findIpsByAddress('192.168.3.7')).resolves.toEqual([
-    { id: 42, address: '192.168.3.7/24' },
-    { id: 43, address: '192.168.3.7/32' },
+  await expect(client.findIpsByAddress('192.168.1.7')).resolves.toEqual([
+    { id: 42, address: '192.168.1.7/24' },
+    { id: 43, address: '192.168.1.7/32' },
   ]);
   expect(calls[0].method).toBe('GET');
-  expect(calls[0].url).toBe('https://netbox.example.com/api/ipam/ip-addresses/?address=192.168.3.7');
+  expect(calls[0].url).toBe('https://netbox.example.com/api/ipam/ip-addresses/?address=192.168.1.7');
 });
 
 test('findIpsByAddress returns [] on no match and throws on API errors', async () => {
   const empty = createNetboxClient(NB, { request: async () => ({ status: 200, json: { count: 0, results: [] }, text: '' }) });
-  await expect(empty.findIpsByAddress('192.168.3.9')).resolves.toEqual([]);
+  await expect(empty.findIpsByAddress('192.168.1.9')).resolves.toEqual([]);
   const down = createNetboxClient(NB, { request: async () => ({ status: 500, json: null, text: '' }) });
-  await expect(down.findIpsByAddress('192.168.3.9')).rejects.toThrow('NetBox API error 500');
+  await expect(down.findIpsByAddress('192.168.1.9')).rejects.toThrow('NetBox API error 500');
 });
 
 test('client surfaces NetBox detail on 4xx and never embeds the token', async () => {
@@ -281,16 +281,16 @@ test('netboxSummary enumerates every v4 prefix with utilization, skipping v6', a
   const counted = [];
   const client = {
     listPrefixes: async () => [
-      { id: 1, prefix: '192.168.3.0/24' },
+      { id: 1, prefix: '192.168.1.0/24' },
       { id: 2, prefix: '192.168.7.0/24' },
       { id: 3, prefix: 'fd00::/64' }, // no v4 host math — skipped, never counted
     ],
     countIpsInPrefix: async (p) => { counted.push(p); return 12; },
   };
   const summary = await netboxSummary(NB, { makeClient: () => client });
-  expect(counted).toEqual(['192.168.3.0/24', '192.168.7.0/24']);
+  expect(counted).toEqual(['192.168.1.0/24', '192.168.7.0/24']);
   expect(summary).toEqual({ configured: true, ok: true, prefixes: [
-    { prefix: '192.168.3.0/24', used: 12, total: 254 },
+    { prefix: '192.168.1.0/24', used: 12, total: 254 },
     { prefix: '192.168.7.0/24', used: 12, total: 254 },
   ] });
 });

@@ -37,12 +37,12 @@ In `test/netboxApi.test.js`: REPLACE the two existing allocateIp tests (`'alloca
 
 ```js
 test('firstUsableIp: network + 1, and tiny prefixes are rejected', async () => {
-  expect(firstUsableIp('192.168.3.0/24')).toBe('192.168.3.1');
+  expect(firstUsableIp('192.168.1.0/24')).toBe('192.168.1.1');
   expect(firstUsableIp('10.20.0.0/16')).toBe('10.20.0.1');
-  expect(firstUsableIp('192.168.3.128/30')).toBe('192.168.3.129');
-  expect(firstUsableIp('192.168.3.77/24')).toBe('192.168.3.1'); // non-canonical base normalizes
-  expect(() => firstUsableIp('192.168.3.0/31')).toThrow(/too small/);
-  expect(() => firstUsableIp('192.168.3.4/32')).toThrow(/too small/);
+  expect(firstUsableIp('192.168.1.128/30')).toBe('192.168.1.129');
+  expect(firstUsableIp('192.168.1.77/24')).toBe('192.168.1.1'); // non-canonical base normalizes
+  expect(() => firstUsableIp('192.168.1.0/31')).toThrow(/too small/);
+  expect(() => firstUsableIp('192.168.1.4/32')).toThrow(/too small/);
   expect(() => firstUsableIp('not-a-prefix')).toThrow(/unparseable/);
 });
 
@@ -50,23 +50,23 @@ test('allocateIp skips the gateway and reserves the first other available addres
   const calls = [];
   const client = createNetboxClient(NB, { request: async (o) => {
     calls.push(o);
-    if (o.method === 'GET') return { status: 200, json: [{ address: '192.168.3.1/24' }, { address: '192.168.3.5/24' }], text: '' };
-    return { status: 201, json: { id: 99, address: '192.168.3.5/24' }, text: '' };
+    if (o.method === 'GET') return { status: 200, json: [{ address: '192.168.1.1/24' }, { address: '192.168.1.5/24' }], text: '' };
+    return { status: 201, json: { id: 99, address: '192.168.1.5/24' }, text: '' };
   } });
-  const res = await client.allocateIp({ id: 7, prefix: '192.168.3.0/24' }, { status: 'active', description: 'tmuxifier: dev-01' });
-  expect(res).toEqual({ id: 99, address: '192.168.3.5/24', gateway: '192.168.3.1' });
+  const res = await client.allocateIp({ id: 7, prefix: '192.168.1.0/24' }, { status: 'active', description: 'tmuxifier: dev-01' });
+  expect(res).toEqual({ id: 99, address: '192.168.1.5/24', gateway: '192.168.1.1' });
   expect(calls[0].method).toBe('GET');
   expect(calls[0].url).toBe('https://netbox.example.com/api/ipam/prefixes/7/available-ips/');
   expect(calls[1].method).toBe('POST');
   expect(calls[1].url).toBe('https://netbox.example.com/api/ipam/ip-addresses/');
-  expect(calls[1].body).toEqual({ address: '192.168.3.5/24', status: 'active', description: 'tmuxifier: dev-01' });
+  expect(calls[1].body).toEqual({ address: '192.168.1.5/24', status: 'active', description: 'tmuxifier: dev-01' });
 });
 
 test('allocateIp: only the gateway left (or nothing) means prefix full', async () => {
-  const gwOnly = createNetboxClient(NB, { request: async () => ({ status: 200, json: [{ address: '192.168.3.1/24' }], text: '' }) });
-  await expect(gwOnly.allocateIp({ id: 7, prefix: '192.168.3.0/24' }, {})).rejects.toThrow('prefix 192.168.3.0/24 has no available IPs');
+  const gwOnly = createNetboxClient(NB, { request: async () => ({ status: 200, json: [{ address: '192.168.1.1/24' }], text: '' }) });
+  await expect(gwOnly.allocateIp({ id: 7, prefix: '192.168.1.0/24' }, {})).rejects.toThrow('prefix 192.168.1.0/24 has no available IPs');
   const empty = createNetboxClient(NB, { request: async () => ({ status: 200, json: [], text: '' }) });
-  await expect(empty.allocateIp({ id: 7, prefix: '192.168.3.0/24' }, {})).rejects.toThrow('has no available IPs');
+  await expect(empty.allocateIp({ id: 7, prefix: '192.168.1.0/24' }, {})).rejects.toThrow('has no available IPs');
 });
 ```
 
@@ -151,8 +151,8 @@ git commit -m "fix(netbox): infer the prefix gateway and never allocate it"
 ```js
 test('auto-static net0 takes both overrides; static keeps its stored gateway', () => {
   const autoNet = { bridge: 'vmbr0', vlan: 3, ipMode: 'auto-static', cidr: null, gateway: null };
-  expect(buildNet0(autoNet, '192.168.3.5/24', '192.168.3.1'))
-    .toBe('name=eth0,bridge=vmbr0,tag=3,ip=192.168.3.5/24,gw=192.168.3.1');
+  expect(buildNet0(autoNet, '192.168.1.5/24', '192.168.1.1'))
+    .toBe('name=eth0,bridge=vmbr0,tag=3,ip=192.168.1.5/24,gw=192.168.1.1');
   const staticNet = { bridge: 'vmbr0', vlan: null, ipMode: 'static', cidr: '192.168.1.50/24', gateway: '192.168.1.1' };
   expect(buildNet0(staticNet, undefined, undefined))
     .toBe('name=eth0,bridge=vmbr0,ip=192.168.1.50/24,gw=192.168.1.1');

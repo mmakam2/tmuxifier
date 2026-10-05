@@ -2885,7 +2885,7 @@ function openBoxDialog(box?: Box) {
   submit.textContent = isEdit ? 'Save' : 'Add';
   actions.append(cancel, submit);
 
-  const hostWrap = field('host', 'Host or alias', { placeholder: 'e.g. 192.168.3.245' });
+  const hostWrap = field('host', 'Host or alias', { placeholder: 'e.g. 192.168.1.245' });
   if (isEdit) {
     const hInput = hostWrap.querySelector('input')!;
     hInput.value = box!.host;

@@ -115,7 +115,7 @@ submit.textContent = isEdit ? 'Save' : 'Add';
 For the host field, make it disabled in edit mode:
 
 ```typescript
-const hostInput = field('host', 'Host or alias', { placeholder: 'e.g. 192.168.3.245' });
+const hostInput = field('host', 'Host or alias', { placeholder: 'e.g. 192.168.1.245' });
 if (isEdit) {
   const input = hostInput.querySelector('input')!;
   input.value = box.label === box.host && isEdit ? box.host : box.host; // Always show actual host
@@ -127,7 +127,7 @@ if (isEdit) {
 Wait, simpler approach — just set the host field value and disable it if in edit mode. Replace the `field('host', ...)` call:
 
 ```typescript
-const hostWrap = field('host', 'Host or alias', { placeholder: 'e.g. 192.168.3.245' });
+const hostWrap = field('host', 'Host or alias', { placeholder: 'e.g. 192.168.1.245' });
 if (isEdit) {
   const hInput = hostWrap.querySelector('input')!;
   hInput.value = box.host;

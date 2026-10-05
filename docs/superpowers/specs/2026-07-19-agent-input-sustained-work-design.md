@@ -10,9 +10,9 @@ subagent-driven-development or a direct TDD pass.
 The shipped `agent-input` event fires on any `working → waiting` edge for the box's
 configured claude session (idle ≥ `agentIdleSec`, detached). This false-fires when claude was
 only *briefly* active before going idle — e.g. a fresh launch's welcome-banner repaint, a
-slash command, or a quick <30s query. Observed in the field: `mcmcreativedev01` pinged after
+slash command, or a quick <30s query. Observed in the field: `webdev01` pinged after
 an 11-second interaction (`✻ Baked for 11s`) the user had walked away from, while
-`mcmcreative01`'s real 60s+ tasks (`✻ Sautéed for 1m 7s`) are the ones worth a ping.
+`web01`'s real 60s+ tasks (`✻ Sautéed for 1m 7s`) are the ones worth a ping.
 
 Option A (screen-marker confirmation via `capture-pane`) was **rejected after evidence**: a
 "finished your task, awaiting reply" screen and a "quick poke then idle" screen are visually

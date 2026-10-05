@@ -25,7 +25,7 @@ you type, matching the main sidebar's search behavior. Web-client only.
 
   `containerMatches(container, term)` returns true when the trimmed, lowercased term is empty or
   is a substring of any of: `boxLabel`, `hostName ?? hostId`, `node`, `String(vmid)`, `state`.
-  (So `stopped` filters by state, `proxmox02` by node, `164` by VMID.)
+  (So `stopped` filters by state, `pve-n02` by node, `164` by VMID.)
 
 ## Files
 

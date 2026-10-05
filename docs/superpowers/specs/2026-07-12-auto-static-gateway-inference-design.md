@@ -4,7 +4,7 @@
 **Status:** Approved (brainstorm with owner)
 **Builds on / amends:** `2026-07-09-netbox-auto-static-provisioning-design.md` (the shipped
 auto-static feature). Found in the owner's first live test: NetBox's `available-ips` returned
-`192.168.3.1` — the network's gateway, unregistered in NetBox — so the container was created with
+`192.168.1.1` — the network's gateway, unregistered in NetBox — so the container was created with
 `ip` = `gw` = the gateway address, and a stray NetBox record was created for it.
 
 ## Goal
@@ -12,7 +12,7 @@ auto-static feature). Found in the owner's first live test: NetBox's `available-
 Two coupled changes to auto-static provisioning:
 
 1. **The gateway is inferred, not user-entered:** gateway = the **first usable IP** of the
-   NetBox prefix backing the preset's VLAN (`192.168.3.0/24` → `192.168.3.1`). The preset keeps
+   NetBox prefix backing the preset's VLAN (`192.168.1.0/24` → `192.168.1.1`). The preset keeps
    only the VLAN; the gateway field disappears from the auto-static form.
 2. **Allocation never selects the gateway:** the allocator picks the first *available* address
    in the prefix that is not the inferred gateway, whether or not the gateway is registered in
