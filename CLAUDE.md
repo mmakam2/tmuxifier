@@ -742,6 +742,17 @@ pattern for new modules.
   wearing a recycled number, and updating anything about the link would silently repoint the box at
   a stranger's container or VM. The same posture `knownHosts.js` takes toward a changed SSH host
   key: never auto-correct a possible identity change, only report it and let the operator re-link.
+  Cross-cluster follow (spec 2026-10-05): every link carries `fp: { name, mac }` — the guest name
+  and `net0` MAC (`macOfNet0` in `proxmoxParams.js`), stamped by the inventory alone on the first
+  poll a guest is present, because once PDM deletes a migrated source its config is gone. A link
+  reading `missing` searches every host profile (de-duplicated by endpoint, the refresh's own
+  resource lists reused) for exactly one unlocked, non-template, unlinked guest of the same kind
+  and name whose MAC matches, and re-homes `hostId`/`node`/`vmid`/`endpoint` under the node
+  auto-follow's CAS + active-job guards. It fails closed on 0 or 2+ matches, on an unreadable
+  profile (it could hold a second match), and on two missing boxes claiming one guest.
+  `refreshBox(box, { follow: false })` writes neither a re-home nor a stamp — `proxmoxLifecycle.js`'s
+  `createJob` uses it, since a re-home under its pre-check would desync the job's snapshot.
+  `findFollowCandidates(box)` is the same search, read-only.
   `listClusterNodes` (served by `GET /api/proxmox/nodes`) reports each physical node's health from
   `/cluster/resources?type=node` — one call per distinct endpoint — for the standby dashboard's
   Proxmox readout.
@@ -757,7 +768,11 @@ pattern for new modules.
   server-side escalation from graceful to forced shows up in the task log Tmuxifier already tails.
   This changed LXC deprovision too, not only VMs. Deprovision releases the box's NetBox-allocated IP
   and deletes any remaining NetBox records matching the box's current IP, so manually created
-  records don't go stale (best-effort).
+  records don't go stale (best-effort). Deprovision from `missing` of a fingerprinted link first
+  asks `inventory.findFollowCandidates` — in `createJob` (409) and again in `runDeprovision`
+  (the migration can land in between) — and refuses when the guest was found elsewhere or a
+  cluster could not be read: that cleanup would otherwise release a live guest's NetBox record
+  and forget its host key during the window before the status poll re-links it.
   A third action, `readdress`, moves a linked LXC container to a new NetBox-managed VLAN/IP
   (spec: `docs/superpowers/specs/2026-09-02-container-readdress-design.md`). Phase order is the
   safety argument: `inspect` (read the live `net0` — `boxes.json` stores neither VLAN nor

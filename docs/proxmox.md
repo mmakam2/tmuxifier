@@ -146,6 +146,21 @@ SSH, so a genuinely down box still shows red. Guests migrated between nodes are 
 automatically — Tmuxifier updates the stored node on its next status poll — and the same `PVEAuditor`
 grant also powers this cluster-wide inventory lookup.
 
+**Guests moved to another cluster follow their box.** When Proxmox Datacenter Manager migrates a
+guest to a different cluster with *delete source*, the box's link reads **missing** on its old
+cluster. On the next status poll Tmuxifier searches every host profile for exactly one guest with
+the same kind, the same name and the same `net0` MAC address — a fingerprint it records on the link
+from the guest's config on the first poll after the box is linked — and re-links the box to it.
+Anything less certain changes nothing: no match, two or more matches, a cluster it cannot read, a
+guest still locked mid-migration, or a link recorded before this feature and not yet fingerprinted
+all leave the box **missing** for you to re-link with **Edit link**. Only the link moves: if the
+guest's address changed on its new cluster, fix the box's host with Edit box. A migration that
+*keeps* the source (`qm remote-migrate`'s default) leaves the old guest stopped where it was and is
+not followed. While a moved guest is waiting for that poll, **Deprovision** on the missing box is
+refused with the cluster it was found on — deprovisioning a missing guest releases its NetBox
+address and forgets its host key, which would be wrong for a guest that is alive elsewhere. Plain
+box removal is still available.
+
 **A VMID that changed kind is never auto-corrected.** VMIDs get reused once a guest is destroyed, so
 if the number your box is linked to now belongs to a guest of the *other* kind — a container where
 you linked a VM, or vice versa — Tmuxifier shows a **mismatch** state with an explanation instead of

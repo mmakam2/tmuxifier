@@ -60,7 +60,7 @@ function openDeprovisionDialog(guest: PveLinkedGuest, onConfirm: (name: string) 
     el('h2', {}, ['Deprovision guest']),
     el('div', {}, [`${guest.boxLabel} | ${kindLabel(guest.kind)} | ${guest.hostName ?? guest.hostId} | ${guest.node} | VMID ${guest.vmid}`]),
     el('p', { class: 'pve-warning' }, [guest.state === 'missing'
-      ? 'Proxmox already reports this guest missing. Tmuxifier will remove only the stale linked box.'
+      ? 'Proxmox reports this guest missing on its linked cluster. If it moved to another cluster, Tmuxifier re-links it automatically and deprovision will be refused. Otherwise only the stale linked box is removed.'
       : `Tmuxifier will ask Proxmox to shut the guest down gracefully, force it off if it has not stopped within the grace period, then destroy it and its ${guest.kind === 'qemu' ? 'disks' : 'volumes'}, keep independent backups, and remove the linked box.`]),
     el('label', { class: 'field' }, [el('span', {}, [`Type ${guest.boxLabel} to confirm`]), typed]),
     errorLine,
