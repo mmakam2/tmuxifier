@@ -19,6 +19,7 @@ import { partitionJobs, jobLamp, jobReadout, jobClock, runningCount } from './fl
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { closeAllModals, registerModal } from './modalRegistry';
 import { openModal, makeRadio } from './dom';
+import { freshBoxFrom } from './freshBox';
 import { armReduce, ARM_MS, IDLE as ARM_IDLE, type ArmState } from './arming';
 import { createSetupJobPoller } from './setupPoller';
 import { openProxmoxHub } from './proxmoxUi';
@@ -2468,7 +2469,24 @@ function openProvisionPanel(box: Box, options: SetupOptionsValues) {
   void begin();
 }
 
+// Edit opens from a freshly fetched copy of the box: the server rewrites a
+// Proxmox link on its own (node auto-follow, cross-cluster follow), and the
+// cached `allBoxes` entry would otherwise show — and pre-select in the picker —
+// the cluster and node the guest has already left. A failed fetch opens the
+// cached copy, exactly as before. The refreshed entry replaces the cached one
+// so the next open, and anything else reading the box, sees it too.
 function openBoxDialog(box?: Box) {
+  if (!box) { buildBoxDialog(); return; }
+  void api.boxes()
+    .catch(() => null)
+    .then((list) => {
+      const fresh = freshBoxFrom(list, box);
+      allBoxes = allBoxes.map((item) => (item.id === fresh.id ? fresh : item));
+      buildBoxDialog(fresh);
+    });
+}
+
+function buildBoxDialog(box?: Box) {
   const isEdit = !!box;
   const fields: Record<string, HTMLInputElement> = {};
   function field(name: string, label: string, opts: { placeholder?: string; value?: string; type?: string; list?: string } = {}) {

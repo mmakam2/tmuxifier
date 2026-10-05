@@ -1388,7 +1388,11 @@ refetches the box list through `onBoxLinked`), `proxmoxActivity.ts`
 Add/Edit Box modals' manual Proxmox link/unlink picker — hidden until a Proxmox host profile
 exists, except for already-linked boxes; a template's option is `TEMPLATE`-marked and disabled,
 the same shown-but-unselectable treatment a guest already linked to another box gets, rather than
-vanishing from the list), `settingsUi.ts` (the ⚙ settings
+vanishing from the list), `freshBox.ts` (`freshBoxFrom`: Edit Box opens from a freshly fetched
+copy of the box, falling back to the cached one, because the server rewrites a Proxmox link on its
+own — the node auto-follow and the cross-cluster follow — and the page's box list is fetched only
+on boot and after its own edits, so the modal used to show the cluster and node a guest had left),
+`settingsUi.ts` (the ⚙ settings
 modal's tabbed shell — the `SECTIONS` object's key order builds the tab strip — with Boxes
 (`settingsBoxes.ts`: the leftmost tab — box-list JSON export/import moved out of the sidebar brand
 actions, which stay reserved for the routinely used controls, fronted by an export preview that
