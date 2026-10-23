@@ -58,7 +58,7 @@ usage.
 
 The Add/Edit Box modal (and the [Proxmox Provision form](proxmox.md)) also offer an **"Additional
 tools"** checklist that runs in the same provisioning step — a full system update/upgrade,
-curl, git, the GitHub CLI, Node.js 24 + npm, Bubblewrap, and the Codex, Claude Code, and
+curl, git, the GitHub CLI, Node.js 26 + npm, Bubblewrap, and the Codex, Claude Code, and
 Antigravity CLIs — using the same idempotent multi-distro install script, so re-running
 provisioning skips anything already installed.
 

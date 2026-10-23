@@ -496,7 +496,7 @@ test('buildEnsureTmuxRemote installs codex via npm with node implied', () => {
 // comes from NodeSource at a pinned major on the apt and rpm families.
 test('the node tool installs a pinned NodeSource major, download-then-execute, with curl implied', () => {
   expect(Number.isInteger(NODE_MAJOR)).toBe(true);
-  expect(NODE_MAJOR).toBeGreaterThanOrEqual(24);
+  expect(NODE_MAJOR).toBeGreaterThanOrEqual(26);
   expect(resolveTools(['node'])).toEqual(['curl', 'node']);
   const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['node'] });
   expect(remote).toContain(`curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x -o "$t"`);

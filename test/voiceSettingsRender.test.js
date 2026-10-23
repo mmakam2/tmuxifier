@@ -1,4 +1,4 @@
-import { test, expect, afterEach } from 'vitest';
+import { test, expect, afterEach, vi } from 'vitest';
 
 // Render-level coverage for Settings -> Voice. The repo convention is that
 // DOM-building modules are not unit-tested (settingsNetbox.ts, proxmoxUi.ts have
@@ -34,13 +34,12 @@ const modelRow = (root, id) => lines(root).find((l) => l.includes(id) && l.inclu
 const realFetch = globalThis.fetch;
 const realDocument = globalThis.document;
 const realWindow = globalThis.window;
-const realNavigator = globalThis.navigator;
 const realWorklet = globalThis.AudioWorkletNode;
 afterEach(() => {
   globalThis.fetch = realFetch;
   globalThis.document = realDocument;
   globalThis.window = realWindow;
-  globalThis.navigator = realNavigator;
+  vi.unstubAllGlobals();
   globalThis.AudioWorkletNode = realWorklet;
 });
 
@@ -54,7 +53,7 @@ function stubEnvironment() {
     clearTimeout: (t) => clearTimeout(t),
     isSecureContext: true,
   };
-  globalThis.navigator = { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [] }) } };
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [] }) } });
   globalThis.AudioWorkletNode = function AudioWorkletNode() {};
 
   const state = { jobStatus: 'idle', mediumInstalled: false, selected: 'small.en', postDone: 0 };

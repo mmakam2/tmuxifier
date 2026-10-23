@@ -7,7 +7,7 @@ export const PROVISION_TOOLS: { id: string; label: string }[] = [
   { id: 'git', label: 'git' },
   { id: 'gh', label: 'GitHub CLI (gh)' },
   // The major mirrors NODE_MAJOR in boxActions.js (pinned by the same test).
-  { id: 'node', label: 'Node.js 24 + npm' },
+  { id: 'node', label: 'Node.js 26 + npm' },
   { id: 'bubblewrap', label: 'Bubblewrap' },
   { id: 'codex', label: 'Codex CLI' },
   { id: 'claude', label: 'Claude Code (CLI + statusline + agent hooks)' },

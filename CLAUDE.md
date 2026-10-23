@@ -229,7 +229,7 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   exact-target remotes (`buildEnsureSessionRemote`, `buildSelectWindowRemote`,
   `buildKillSessionRemote`/`buildKillWindowRemote`). `buildKillTmuxRemote` is the separate
   best-effort teardown for box removal (sanitizes, `|| true`) — don't widen it.
-  The `node` tool installs NodeSource `NODE_MAJOR` (24) on apt/dnf/yum with a version-aware
+  The `node` tool installs NodeSource `NODE_MAJOR` (26) on apt/dnf/yum with a version-aware
   guard (upgrades an older Node, removing distro `npm`/`libnode-dev` first).
   `buildFrameworkUpdateClamps` disables shell-framework self-updaters on **every** setup, each
   guarded by evidence the framework is present (the oh-my-zsh guard's `^` anchor is load-bearing:

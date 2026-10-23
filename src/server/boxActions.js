@@ -34,7 +34,7 @@ export const TOOL_IDS = ['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', '
 // pinned major; the rolling distros (Arch, Alpine) track upstream and keep
 // their own package. Bump here and in provisionTools.ts's label —
 // test/provisionTools.test.js pins the two together.
-export const NODE_MAJOR = 24;
+export const NODE_MAJOR = 26;
 
 // gh and node fetch (GitHub's apt keyring, NodeSource's setup script) with
 // curl; codex is an npm global; claude/agy are curl installers.

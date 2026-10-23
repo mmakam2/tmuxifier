@@ -1,4 +1,4 @@
-import { test, expect, afterEach } from 'vitest';
+import { test, expect, afterEach, vi } from 'vitest';
 import { evaluateVoice, isVoiceHotkey, createVoiceHotkeyHandler, wireVoice, createVoiceController, idleTitle } from '../src/web/voiceUi';
 
 // wireVoice calls the global fetch (via api.uiConfig) and, once voice turns
@@ -7,16 +7,16 @@ import { evaluateVoice, isVoiceHotkey, createVoiceHotkeyHandler, wireVoice, crea
 // of them and restore after each test — same pattern as
 // webApi.test.js/proxmoxWebClient use for fetch; this repo's vitest
 // environment is plain 'node', so none of these globals exist unless a test
-// supplies them.
+// supplies them — except navigator, which Node 21+ defines as a getter-only
+// global (no mediaDevices), so it is swapped with vi.stubGlobal instead.
 const realFetch = globalThis.fetch;
 const realDocument = globalThis.document;
-const realNavigator = globalThis.navigator;
 const realWindow = globalThis.window;
 const realAudioWorkletNode = globalThis.AudioWorkletNode;
 afterEach(() => {
   globalThis.fetch = realFetch;
   globalThis.document = realDocument;
-  globalThis.navigator = realNavigator;
+  vi.unstubAllGlobals();
   globalThis.window = realWindow;
   globalThis.AudioWorkletNode = realAudioWorkletNode;
 });
@@ -50,7 +50,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 // add/removeEventListener since wireVoice installs a blur listener whenever
 // `window` is defined (used to stop an in-flight recording on alt-tab).
 function stubSupportedSecureEnv() {
-  globalThis.navigator = { mediaDevices: { getUserMedia: () => Promise.resolve() } };
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: () => Promise.resolve() } });
   globalThis.AudioWorkletNode = function AudioWorkletNode() {};
   globalThis.window = { isSecureContext: true, addEventListener() {}, removeEventListener() {} };
 }
@@ -359,7 +359,7 @@ test('wireVoice().ready() stays false when a controller mounts but the readiness
   stubDocument();
   // Capture support is present, but the context is not secure (plain HTTP,
   // non-localhost) — evaluateVoice fails on the secureContext check.
-  globalThis.navigator = { mediaDevices: { getUserMedia: () => Promise.resolve() } };
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: () => Promise.resolve() } });
   globalThis.AudioWorkletNode = function AudioWorkletNode() {};
   globalThis.window = { isSecureContext: false, addEventListener() {}, removeEventListener() {} };
   const parent = { appendChild() {} };
