@@ -1313,6 +1313,19 @@ test('login locks an ip out after 10 failures — even the right password gets 4
   expect(locked.json().error).toMatch(/too many/i);
 });
 
+// The limiter used to be checked before the scrypt await and charged only
+// after it, so a parallel burst all passed limited() before any failure was
+// recorded — the cap bounded nothing but scrypt throughput.
+test('a concurrent burst of wrong passwords from one ip cannot exceed the lockout cap', async () => {
+  const burst = await Promise.all(Array.from({ length: 25 }, () =>
+    app.inject({ method: 'POST', url: '/api/login', payload: { password: 'bad' } })));
+  const codes = burst.map((r) => r.statusCode);
+  expect(codes.filter((c) => c === 401)).toHaveLength(10);
+  expect(codes.filter((c) => c === 429)).toHaveLength(15);
+  const locked = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  expect(locked.statusCode).toBe(429);
+});
+
 test('a successful login clears the ip failure count', async () => {
   for (let i = 0; i < 9; i++) {
     await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'bad' } });

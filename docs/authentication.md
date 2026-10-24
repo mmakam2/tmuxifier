@@ -124,6 +124,10 @@ A few things worth knowing:
   just as immediate as logout's watermark revoking a browser session cookie. The real asymmetry is
   that a session cookie also expires on its own after 7 days, while a device token never does — it
   is a standing credential until someone revokes it from Settings → Devices.
+- **Some routes need a browser session.** A device token is refused (`403 browser session
+  required`) when minting pairing codes, starting an APK build, revoking devices, and managing
+  passkeys (enroll, remove, arm or disarm "require a passkey"), so a leaked token cannot leave
+  behind a credential that survives its own revocation.
 - Once enrolled, the device authenticates every request with `Authorization: Bearer <token>`; it
   never needs the password again unless it re-enrolls.
 

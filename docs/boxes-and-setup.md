@@ -154,9 +154,13 @@ Tmuxifier host shows the exact command to run (`claude setup-token` / `codex log
 checkbox is disabled when there is nothing to seed yet.
 
 Either secret travels to the box over stdin on the same SSH connection used for provisioning —
-never in a command line, a script file, a log, or an API response. **Seeding hands that box your
-Claude and/or Codex subscription identity, exactly as if you'd logged in on it yourself — seed
-only boxes you trust the way you'd trust anyone holding your own login.**
+never in a command line, a script file, a log, or an API response. On the box, the Claude token
+is stored as a tagged `export CLAUDE_CODE_OAUTH_TOKEN=…` line in `~/.profile`, `~/.bashrc` and
+`~/.zshrc` (whichever exist; `~/.profile` is created if missing), and seeding removes group and
+other access from each of those files (`chmod go-rwx`: a stock `0644` rc file becomes `0600`).
+**Seeding hands that box your Claude and/or Codex subscription identity, exactly as if you'd
+logged in on it yourself — seed only boxes you trust the way you'd trust anyone holding your own
+login.**
 
 ## Post-setup script
 

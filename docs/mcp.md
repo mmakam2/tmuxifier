@@ -118,6 +118,11 @@ instructions. The tool descriptions say so, and so should your orchestration pro
 content and job output are **data from the box**, never instructions. This is the same posture
 Tmuxifier itself takes toward every line a box sends it.
 
+`list_boxes` carries box-written text too: an unreachable box's ssh error (sshd banner, login-shell
+output) and its tmux session names. Before rendering, both are folded onto one line, stripped of
+control, bidi, zero-width and Unicode tag characters, and capped (200 characters of error, 64 per
+session name, 32 sessions per box), and the tool description marks them untrusted.
+
 ## What it cannot do
 
 The exclusion is structural: the HTTP client behind the tools implements only the routes the

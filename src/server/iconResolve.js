@@ -44,14 +44,27 @@ export function slugCandidates(svc) {
 }
 
 const LINK_RE = /<link\b[^>]*>/gi;
-const ATTR_RE = /([a-zA-Z-]+)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
+// The page is remote input scanned synchronously on the server's only thread,
+// so both patterns must stay linear. The lookbehind stops a name match from
+// starting inside a run of name characters. Without it, every position in a
+// long `aaaa...` run is a fresh start that scans to the end of the run and backs
+// off, which is quadratic. It changes no result: a start inside a run sees the
+// same characters after the run as the run's own start did, and the scan
+// always tries the run's start first. (No match ends right before a name
+// character, so the scan never resumes mid-run.)
+const ATTR_RE = /(?<![a-zA-Z-])([a-zA-Z-]+)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
 
 // Deliberately a scan rather than a parser: this reads at most the first chunk
 // of a page purely to find icon declarations, and pulling in an HTML parser to
 // do it would be a dependency for one regex's worth of work.
 export function parseIconLinks(html, baseUrl) {
   const found = [];
-  for (const tag of String(html).match(LINK_RE) ?? []) {
+  // Every LINK_RE match ends at a `>`, so nothing after the last `>` can match.
+  // Each `<link` there would still scan to the end of the input before failing,
+  // which is quadratic over many of them. Cutting at the last `>` keeps the
+  // matches identical and bounds every scan by a `>` that the match consumes.
+  const text = String(html);
+  for (const tag of text.slice(0, text.lastIndexOf('>') + 1).match(LINK_RE) ?? []) {
     const attrs = {};
     let m;
     ATTR_RE.lastIndex = 0;

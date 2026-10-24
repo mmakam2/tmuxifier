@@ -171,8 +171,10 @@ dictation, which never leaves the Tmuxifier host.
 Install it from **Settings → Voice**. The tab installs [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
 into a repo-local `vendor/whisper/` directory and downloads a speech model from a small pinned
 allowlist (verified by SHA-256 before it's written to disk — no user-supplied URL or path is ever
-accepted). The install runs on the server as a background job with a live log, so you can close
-the modal or navigate away while it works; it takes roughly two minutes and about 1.2 GB of disk.
+accepted). whisper.cpp itself is a pinned release, built only if its checkout is the exact commit
+recorded for that release, so a moved upstream tag fails the install. The install runs on the
+server as a background job with a live log, so you can close the modal or navigate away while it
+works; it takes roughly two minutes and about 1.2 GB of disk.
 The same tab has the on/off switch and the model picker, and both take effect immediately.
 
 Microphone access no longer depends on this switch: the browser grants it to Tmuxifier's origin

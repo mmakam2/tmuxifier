@@ -36,6 +36,47 @@ test('a successful login clears the ip history', () => {
   expect(rl.limited('a')).toBe(false); // count restarted, not accumulated
 });
 
+// attempt() is the check-and-charge for handlers that await (scrypt) before
+// they know the outcome: it charges in the same synchronous step as the check,
+// so attempts still in flight count against the cap.
+test('attempt() admits at most max in-flight attempts before any outcome is known', () => {
+  const { now } = makeClock();
+  const rl = createLoginRateLimiter({ max: 3, windowMs: 60000, now });
+  const admitted = Array.from({ length: 10 }, () => rl.attempt('a'));
+  expect(admitted).toEqual([true, true, true, false, false, false, false, false, false, false]);
+  expect(rl.limited('a')).toBe(true);
+});
+
+test('attempt() counts exactly like fail() for sequential traffic', () => {
+  const { now } = makeClock();
+  const rl = createLoginRateLimiter({ max: 3, windowMs: 60000, now });
+  rl.fail('a');
+  expect(rl.attempt('a')).toBe(true);
+  expect(rl.limited('a')).toBe(false);
+  expect(rl.attempt('a')).toBe(true);
+  expect(rl.limited('a')).toBe(true);
+});
+
+test('a success after attempt() clears the charge', () => {
+  const { now } = makeClock();
+  const rl = createLoginRateLimiter({ max: 2, windowMs: 60000, now });
+  rl.fail('a');
+  expect(rl.attempt('a')).toBe(true); // the right password at max - 1 is still admitted
+  rl.succeed('a');
+  expect(rl.attempt('a')).toBe(true);
+  expect(rl.limited('a')).toBe(false); // count restarted, not accumulated
+});
+
+test('attempt() is refused while locked out and admitted again once the window passes', () => {
+  const clock = makeClock();
+  const rl = createLoginRateLimiter({ max: 2, windowMs: 60000, now: clock.now });
+  rl.attempt('a'); rl.attempt('a');
+  expect(rl.attempt('a')).toBe(false);
+  clock.tick(60001);
+  expect(rl.attempt('a')).toBe(true); // a new window starts counting from one
+  expect(rl.limited('a')).toBe(false);
+});
+
 test('ips are tracked independently', () => {
   const { now } = makeClock();
   const rl = createLoginRateLimiter({ max: 2, windowMs: 60000, now });

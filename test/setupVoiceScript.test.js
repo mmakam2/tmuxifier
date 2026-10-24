@@ -42,3 +42,21 @@ test('setup-voice still reports a download failure as a clean CLI error', () => 
   expect(src).toMatch(/catch \(e\)[\s\S]{0,200}Download failed/);
   expect(src).toMatch(/Download failed[\s\S]{0,120}process\.exit\(1\)/);
 });
+
+// F9: the CLI clones the same mutable tag as the Settings installer, so it must
+// run the same commit check — and run it before cmake configures anything.
+test('setup-voice verifies the pinned whisper.cpp commit before building', () => {
+  expect(src).toMatch(/import \{[^}]*verifyWhisperCommit[^}]*\} from '\.\.\/src\/server\/voiceCatalog\.js'/);
+  const at = (needle) => {
+    const i = code.indexOf(needle);
+    expect(i, needle).toBeGreaterThanOrEqual(0); // a missing anchor must not pass vacuously
+    return i;
+  };
+  const revParse = at("'rev-parse', 'HEAD'");
+  const verify = at('verifyWhisperCommit(');
+  const configure = at("run('cmake', ['-B'");
+  expect(revParse).toBeGreaterThan(at("'checkout', WHISPER_REF"));
+  expect(revParse).toBeGreaterThan(at("'clone', '--depth', '1', '--branch', WHISPER_REF"));
+  expect(verify).toBeGreaterThan(revParse);
+  expect(configure).toBeGreaterThan(verify);
+});

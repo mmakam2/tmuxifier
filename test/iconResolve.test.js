@@ -66,6 +66,66 @@ test('parseIconLinks ignores non-icon links and non-http schemes', () => {
   expect(parseIconLinks(html, 'https://app.example.com/')).toEqual([]);
 });
 
+// The spellings real pages use, pinned so making the scan linear cannot quietly
+// change what it reads: case, quoting styles, spaces around `=`, attributes
+// butted against a closing quote, hyphenated names, `name=value` text inside a
+// quoted value, and a final tag the 64 KiB prefix cut off before its `>`.
+test('parseIconLinks reads real-world attribute spellings', () => {
+  const html = [
+    '<LINK REL="Shortcut Icon" HREF="/upper.ico">',
+    "<link rel='icon' href='/single.png' sizes='16x16 48x48'>",
+    '<link rel=icon href=/bare.png sizes=64x64>',
+    '<link rel = "icon" href = "/spaced.png" sizes = "96x96">',
+    '<link data-n-head="ssr" rel="icon" type="image/svg+xml" href="/nuxt.svg">',
+    '<link href="/tight.png"rel="icon"sizes="128x128"/>',
+    '<link title="rel=icon" rel="stylesheet" href="/app.css">',
+    '<link\n  rel="apple-touch-icon"\n  href="/multiline.png"\n  sizes="180x180"\n>',
+    '<link rel="mask-icon" href="/mask.svg" color="#5bbad5">',
+    '<link rel="icon" href="/cut.png" sizes="512x512"',
+  ].join('\n');
+  expect(parseIconLinks(html, 'https://app.example.com/')).toEqual([
+    'https://app.example.com/nuxt.svg',
+    'https://app.example.com/mask.svg',
+    'https://app.example.com/multiline.png',
+    'https://app.example.com/tight.png',
+    'https://app.example.com/spaced.png',
+    'https://app.example.com/bare.png',
+    'https://app.example.com/single.png',
+    'https://app.example.com/upper.ico',
+  ]);
+});
+
+// The page is whatever the tile's URL (or a redirect) serves, and the scan runs
+// synchronously on the server's only thread, so a super-linear pattern is a
+// remote stall of every terminal. Inputs are 4x the 64 KiB prefix iconStore
+// passes: a quadratic scan takes seconds on them, a linear one milliseconds.
+const HOSTILE = 256 * 1024;
+function timedParse(html) {
+  const start = performance.now();
+  const urls = parseIconLinks(html, 'https://app.example.com/');
+  return { urls, ms: performance.now() - start };
+}
+
+test('parseIconLinks stays linear on a long run of attribute-name characters', () => {
+  for (const html of [
+    `<link ${'a'.repeat(HOSTILE)}>`,
+    `<link ${'a-'.repeat(HOSTILE / 2)}>`,
+    `<link ${'a'.repeat(HOSTILE)}="${'b'.repeat(HOSTILE)}>`,
+  ]) {
+    const { urls, ms } = timedParse(html);
+    expect(urls).toEqual([]);
+    expect(ms).toBeLessThan(250);
+  }
+});
+
+test('parseIconLinks stays linear on many <link openings that never close', () => {
+  for (const tail of ['<link'.repeat(HOSTILE / 5), '<link rel="icon" '.repeat(HOSTILE / 17)]) {
+    const { urls, ms } = timedParse(`<link rel="icon" href="/ok.png">${tail}`);
+    expect(urls).toEqual(['https://app.example.com/ok.png']);
+    expect(ms).toBeLessThan(250);
+  }
+});
+
 // The kind declares the slug rather than the name guessing it, and an IP
 // literal contributes no candidate — an address is not a product.
 test('slugCandidates leads with immich for an immich check', () => {

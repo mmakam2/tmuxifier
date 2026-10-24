@@ -2,9 +2,12 @@ import { test, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createVoiceInstallStore } from '../src/server/voiceInstallStore.js';
 import { createVoiceInstallManager } from '../src/server/voiceInstall.js';
 import { createVoiceStore } from '../src/server/voiceStore.js';
+import { WHISPER_COMMIT, WHISPER_REF, WHISPER_REPO } from '../src/server/voiceCatalog.js';
 
 let dataDir;
 let repoRoot;
@@ -29,14 +32,19 @@ afterEach(async () => {
 // build step's existence check is satisfied by createBin() below, so a
 // "successful" fake run has to actually produce the binary the manager looks
 // for — otherwise the happy-path tests would pass against a manager that
-// never verified anything.
+// never verified anything. Likewise `git rev-parse HEAD` answers with the
+// pinned commit by default, so only a test that scripts a different answer
+// exercises the refusal.
 function fakeRun(outcomes = {}, onCall) {
   const calls = [];
   const fn = async (cmd, args = []) => {
     calls.push([cmd, ...args]);
     if (onCall) await onCall(cmd, args);
     const key = Object.keys(outcomes).find((k) => cmd === k || args.includes(k));
-    const o = key ? outcomes[key] : { code: 0 };
+    const fallback = cmd === 'git' && args.includes('rev-parse')
+      ? { code: 0, stdout: `${WHISPER_COMMIT}\n` }
+      : { code: 0 };
+    const o = key ? outcomes[key] : fallback;
     if (o.code !== 0) throw new Error(o.stderr || `${cmd} exited ${o.code}`);
     return { code: 0, stdout: o.stdout || '' };
   };
@@ -155,6 +163,119 @@ test('uses the pinned repo and tag, never a branch', async () => {
   expect(clone.join(' ')).toMatch(/--branch v\d+\.\d+\.\d+/);
 });
 
+// F9: a git tag can be force-moved upstream, so cloning `--branch v1.9.1`
+// alone is not a pin. The checkout must resolve to the recorded commit before
+// anything is configured or compiled (and later run as the service user).
+const MOVED_TAG = '0123456789abcdef0123456789abcdef01234567';
+
+function buildCalls(run) {
+  return run.calls.filter((c) => c[0] === 'cmake' && (c.includes('-B') || c.includes('--build')));
+}
+
+test('a fresh clone at the pinned commit is verified before it is built', async () => {
+  const run = fakeRun({}, async (cmd, args) => {
+    if (cmd === 'cmake' && args.includes('--build')) await createBin(repoRoot);
+  });
+  const { mgr } = makeManager({ run });
+  const settled = await mgr.whenSettled((await mgr.start('base.en')).id);
+  expect(settled.status).toBe('done');
+  const vendor = path.join(repoRoot, 'vendor', 'whisper');
+  const revParse = run.calls.findIndex((c) => c[0] === 'git' && c.includes('rev-parse'));
+  expect(run.calls[revParse]).toEqual(['git', '-C', vendor, 'rev-parse', 'HEAD']);
+  const clone = run.calls.findIndex((c) => c[0] === 'git' && c.includes('clone'));
+  const configure = run.calls.findIndex((c) => c[0] === 'cmake' && c.includes('-B'));
+  expect(clone).toBeGreaterThanOrEqual(0);
+  expect(revParse).toBeGreaterThan(clone);
+  expect(configure).toBeGreaterThan(revParse);
+});
+
+test('a clone whose tag resolves to a different commit is refused and never built', async () => {
+  const run = fakeRun({ 'rev-parse': { code: 0, stdout: `${MOVED_TAG}\n` } }, async (cmd, args) => {
+    if (cmd === 'cmake' && args.includes('--build')) await createBin(repoRoot);
+  });
+  const { mgr, voiceStore } = makeManager({ run });
+  const settled = await mgr.whenSettled((await mgr.start('base.en')).id);
+  expect(settled.status).toBe('error');
+  expect(settled.error).toContain(WHISPER_COMMIT);
+  expect(settled.error).toContain(MOVED_TAG);
+  expect(settled.error).toMatch(/refusing to build/i);
+  expect(buildCalls(run)).toEqual([]);
+  expect(await voiceStore.read()).toEqual({ enabled: false, model: 'small.en' });
+});
+
+test('an existing checkout is re-verified after fetch/checkout and refused on a mismatch', async () => {
+  const vendor = path.join(repoRoot, 'vendor', 'whisper');
+  await fs.mkdir(path.join(vendor, '.git'), { recursive: true });
+  const run = fakeRun({ 'rev-parse': { code: 0, stdout: `${MOVED_TAG}\n` } }, async (cmd, args) => {
+    if (cmd === 'cmake' && args.includes('--build')) await createBin(repoRoot);
+  });
+  const { mgr } = makeManager({ run });
+  const settled = await mgr.whenSettled((await mgr.start('base.en')).id);
+  expect(settled.status).toBe('error');
+  expect(settled.error).toMatch(/refusing to build/i);
+  const checkout = run.calls.findIndex((c) => c[0] === 'git' && c.includes('checkout'));
+  const revParse = run.calls.findIndex((c) => c[0] === 'git' && c.includes('rev-parse'));
+  expect(checkout).toBeGreaterThanOrEqual(0);
+  expect(revParse).toBeGreaterThan(checkout);
+  expect(run.calls.some((c) => c.includes('clone'))).toBe(false);
+  expect(buildCalls(run)).toEqual([]);
+});
+
+test('an existing checkout at the pinned commit still builds', async () => {
+  await fs.mkdir(path.join(repoRoot, 'vendor', 'whisper', '.git'), { recursive: true });
+  const run = fakeRun({}, async (cmd, args) => {
+    if (cmd === 'cmake' && args.includes('--build')) await createBin(repoRoot);
+  });
+  const { mgr } = makeManager({ run });
+  const settled = await mgr.whenSettled((await mgr.start('base.en')).id);
+  expect(settled.status).toBe('done');
+  expect(buildCalls(run).length).toBe(2);
+});
+
+test('a commit check that cannot run fails closed rather than building', async () => {
+  const run = fakeRun({ 'rev-parse': { code: 128, stderr: 'fatal: not a git repository' } }, async (cmd, args) => {
+    if (cmd === 'cmake' && args.includes('--build')) await createBin(repoRoot);
+  });
+  const { mgr } = makeManager({ run });
+  const settled = await mgr.whenSettled((await mgr.start('base.en')).id);
+  expect(settled.status).toBe('error');
+  expect(buildCalls(run)).toEqual([]);
+});
+
+test('with real git, a tag moved to another commit is refused before cmake runs', async () => {
+  // A local "upstream" whose WHISPER_REF tag names some other commit. git runs
+  // for real (clone over file:// so --depth applies, then rev-parse); only the
+  // repo URL is redirected and cmake stays fake.
+  const upstream = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-vupstream-'));
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  try {
+    const git = (...a) => execFileSync('git', a, { cwd: upstream, env, encoding: 'utf8' });
+    git('init', '-q');
+    git('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'moved tag');
+    git('tag', WHISPER_REF);
+    const moved = git('rev-parse', 'HEAD').trim();
+    const execFileP = promisify(execFile);
+    const calls = [];
+    const run = async (cmd, args = []) => {
+      calls.push([cmd, ...args]);
+      if (cmd !== 'git') return { code: 0, stdout: '' };
+      const real = args.map((a) => (a === WHISPER_REPO ? `file://${upstream}` : a));
+      const { stdout, stderr } = await execFileP('git', real, { env });
+      return { code: 0, stdout: String(stdout) + String(stderr) };
+    };
+    run.calls = calls;
+    const { mgr } = makeManager({ run });
+    const settled = await mgr.whenSettled((await mgr.start('base.en')).id);
+    expect(settled.status).toBe('error');
+    expect(settled.error).toContain(moved);
+    expect(settled.error).toMatch(/refusing to build/i);
+    expect(calls.some((c) => c[0] === 'git' && c.includes('rev-parse'))).toBe(true);
+    expect(buildCalls(run)).toEqual([]);
+  } finally {
+    await fs.rm(upstream, { recursive: true, force: true });
+  }
+});
+
 test('a failed download leaves the job in error and voice untouched', async () => {
   const { mgr, voiceStore } = makeManager({
     download: async () => { throw new Error('integrity check failed'); },
@@ -177,8 +298,12 @@ test('the log is capped so a noisy build cannot grow unbounded', async () => {
   const run = fakeRun({}, async (cmd, args) => {
     if (cmd === 'cmake' && args.includes('--build')) await createBin(repoRoot);
   });
-  // Every command returns 5 KB of output.
-  const noisy = async (cmd, args) => { await run(cmd, args); return { code: 0, stdout: 'x'.repeat(5000) }; };
+  // Every command returns 5 KB of output (except the commit check, which must
+  // still see the pinned commit for the run to reach the build).
+  const noisy = async (cmd, args) => {
+    const r = await run(cmd, args);
+    return args.includes('rev-parse') ? r : { code: 0, stdout: 'x'.repeat(5000) };
+  };
   const { mgr } = makeManager({ run: noisy, maxLogBytes: 1000 });
   const settled = await mgr.whenSettled((await mgr.start('base.en')).id);
   expect(settled.log.length).toBeLessThanOrEqual(1000);

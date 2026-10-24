@@ -165,6 +165,47 @@ test('checkBox: reaps the stale socket even when the probe still succeeds (key b
   expect(status.reachable).toBe(true); // box works; we just restore mux for next time
 });
 
+test('checkBox: still reaps on the other real stale-mux messages (muxclient fallback, case-insensitive)', async () => {
+  for (const stderr of [
+    'muxclient: master hello exchange failed, disabling multiplexing',
+    'banner line\r\ncontrolsocket /run/cm/abc ALREADY EXISTS\r\n',
+  ]) {
+    const reaped = [];
+    const run = async () => ({ code: 0, stdout: 'web:1:0:1718000000\n', stderr });
+    const reapStaleMaster = async (box) => { reaped.push(box); return { ok: true, reaped: true }; };
+    await createStatusChecker({ run, controlDir: '/run/cm', reapStaleMaster }).checkBox({ host: 'h' });
+    expect(reaped, stderr).toHaveLength(1);
+  }
+});
+
+test('checkBox: the stale-mux check stays the same line, so a later "already exists" line does not reap', async () => {
+  const reaped = [];
+  const run = async () => ({ code: 0, stdout: 'web:1:0:1718000000\n', stderr: 'ControlSocket\nfile already exists\nControlSocket /x\n already exists' });
+  const reapStaleMaster = async (box) => { reaped.push(box); return { ok: true, reaped: true }; };
+  await createStatusChecker({ run, controlDir: '/run/cm', reapStaleMaster }).checkBox({ host: 'h' });
+  expect(reaped).toHaveLength(0);
+});
+
+test('checkBox: box-controlled stderr cannot make the stale-mux check backtrack quadratically', async () => {
+  // The box's login shell writes to the probe's stderr (up to execFile's 1 MB
+  // maxBuffer). One line of `ControlSocket ` with no ` already exists` made the
+  // old `ControlSocket .* already exists` regex rescan to end-of-line from every
+  // occurrence -- ~14s of main-thread work per status poll at this size.
+  const hostile = 'ControlSocket '.repeat(70000);
+  for (const [stderr, reaps] of [
+    [hostile, 0],
+    [`${hostile}\nControlSocket /run/cm/abc already exists, disabling multiplexing`, 1],
+  ]) {
+    const reaped = [];
+    const run = async () => ({ code: 0, stdout: 'web:1:0:1718000000\n', stderr });
+    const reapStaleMaster = async (box) => { reaped.push(box); return { ok: true, reaped: true }; };
+    const started = performance.now();
+    await createStatusChecker({ run, controlDir: '/run/cm', reapStaleMaster }).checkBox({ host: 'h' });
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(reaped).toHaveLength(reaps);
+  }
+});
+
 test('checkBox: does not reap when multiplexing is healthy', async () => {
   const reaped = [];
   const run = async () => ({ code: 0, stdout: 'web:1:0:1718000000\n', stderr: '' });

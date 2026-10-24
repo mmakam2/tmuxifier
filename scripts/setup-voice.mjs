@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { resolveModel, MODEL_IDS, DEFAULT_MODEL_ID, WHISPER_REPO, WHISPER_REF } from '../src/server/voiceCatalog.js';
+import { resolveModel, MODEL_IDS, DEFAULT_MODEL_ID, WHISPER_REPO, WHISPER_REF, verifyWhisperCommit } from '../src/server/voiceCatalog.js';
 import { downloadVerified } from '../src/server/voiceDownload.js';
 import { createVoiceStore } from '../src/server/voiceStore.js';
 
@@ -60,6 +60,16 @@ if (!fs.existsSync(path.join(vendorDir, '.git'))) {
 } else {
   run('git', ['-C', vendorDir, 'fetch', '--depth', '1', 'origin', 'tag', WHISPER_REF]);
   run('git', ['-C', vendorDir, 'checkout', WHISPER_REF]);
+}
+
+// The tag can be moved upstream; refuse to build anything but the pinned
+// commit. Same check, from the same module, as the Settings -> Voice installer.
+const head = spawnSync('git', ['-C', vendorDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+try {
+  verifyWhisperCommit(head.status === 0 ? head.stdout : '');
+} catch (e) {
+  console.error(`\n${e.message}`);
+  process.exit(1);
 }
 
 // whisper.cpp translation units peak around 1 GB each; -j4 in a 4 GB container

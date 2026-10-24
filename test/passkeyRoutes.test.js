@@ -6,6 +6,7 @@ import { buildServer } from '../src/server/server.js';
 import { createStore } from '../src/server/store.js';
 import { createPasskeyStore } from '../src/server/passkeyStore.js';
 import { createPasskeyChallenges } from '../src/server/passkeyChallenges.js';
+import { createDeviceStore } from '../src/server/deviceStore.js';
 import { hashPassword } from '../src/server/auth.js';
 import { makeAuthenticator, makeRegistration, makeAssertion, b64u } from './helpers/webauthnFixtures.js';
 
@@ -48,6 +49,45 @@ test('passkey management routes require auth', async () => {
   expect((await app.inject({ method: 'POST', url: '/api/passkeys/register/begin' })).statusCode).toBe(401);
   expect((await app.inject({ method: 'POST', url: '/api/passkeys/register/finish', payload: {} })).statusCode).toBe(401);
   expect((await app.inject({ method: 'DELETE', url: '/api/passkeys/x' })).statusCode).toBe(401);
+});
+
+// A device token passes requireAuth, but a passkey it enrolled would outlive
+// the device's revocation (and mint browser sessions), and removing or
+// disarming would undo what the operator set from a browser.
+test('a device token cannot enroll, remove, arm or disarm passkeys', async () => {
+  app = await build({}, { deviceStore: createDeviceStore({ dataDir: dir }) });
+  const { token } = (await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'Fold' } })).json();
+  const bearer = { authorization: `Bearer ${token}` };
+  // The token itself is valid, so every 403 below is the browser-session gate.
+  expect((await app.inject({ method: 'GET', url: '/api/boxes', headers: bearer })).statusCode).toBe(200);
+  const refused = (res) => {
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: 'browser session required' });
+  };
+
+  const begin = await app.inject({ method: 'POST', url: '/api/passkeys/register/begin', headers: bearer });
+  refused(begin);
+  expect(pkCookie(begin)).toBe('');
+  // Even holding a live enrollment challenge, finish refuses and stores nothing.
+  const h = await headers();
+  const browserBegin = await app.inject({ method: 'POST', url: '/api/passkeys/register/begin', headers: h });
+  const reg = makeRegistration({
+    authenticator: makeAuthenticator(), challenge: Buffer.from(browserBegin.json().challenge, 'base64url'), origin: ORIGIN, rpId: RP,
+  });
+  refused(await app.inject({
+    method: 'POST', url: '/api/passkeys/register/finish',
+    headers: { ...bearer, cookie: pkCookie(browserBegin) },
+    payload: { label: 'Rogue', response: reg.response },
+  }));
+  expect(await passkeyStore.listRaw()).toEqual([]);
+
+  const auth = await enroll();
+  refused(await app.inject({ method: 'POST', url: '/api/passkeys/only/begin', headers: bearer }));
+  expect((await armWithAssertion(h, auth)).json()).toEqual({ passkeyOnly: true });
+  refused(await app.inject({ method: 'POST', url: '/api/passkeys/only', headers: bearer, payload: { enabled: false } }));
+  refused(await app.inject({ method: 'DELETE', url: `/api/passkeys/${encodeURIComponent(auth.id)}`, headers: bearer }));
+  expect(await passkeyStore.getPasskeyOnly()).toBe(true);
+  expect((await passkeyStore.listRaw()).map((c) => c.id)).toEqual([auth.id]);
 });
 
 test('GET /api/passkeys reports empty state before enrollment', async () => {

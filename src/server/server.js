@@ -284,7 +284,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     killSwitch: !!config.passkeyOnlyKillSwitch,
   }));
 
+  // Passkey management (enroll, remove, arm/disarm) is browser-session only,
+  // like /api/devices/pair: a passkey a device enrolled would outlive that
+  // device's revocation and mint browser sessions of its own.
   app.post('/api/passkeys/register/begin', { preHandler: requireAuth }, async (req, reply) => {
+    if (req.deviceId) return reply.code(403).send({ error: 'browser session required' });
     if (!(await pkReady(reply))) return reply;
     const challenge = issueChallenge(req, reply, 'reg');
     const enrolled = await passkeyStore.listRaw();
@@ -303,6 +307,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
 
   app.post('/api/passkeys/register/finish', { preHandler: requireAuth }, async (req, reply) => {
+    if (req.deviceId) return reply.code(403).send({ error: 'browser session required' });
     if (!(await pkReady(reply))) return reply;
     const label = String(req.body?.label ?? '').trim() || 'passkey';
     if (!LABEL_RE.test(label)) {
@@ -330,6 +335,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
 
   app.delete('/api/passkeys/:id', { preHandler: requireAuth }, async (req, reply) => {
+    if (req.deviceId) return reply.code(403).send({ error: 'browser session required' });
     if (!passkeyStore) return reply.code(503).send({ error: 'passkeys are not configured' });
     const result = await passkeyStore.remove(req.params.id);
     if (!result.removed) return reply.code(404).send({ error: 'passkey not found' });
@@ -343,6 +349,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   // challenge store (see challengeStoreFor), so anonymous login floods cannot
   // evict it, and take()'s kind check keeps login challenges unusable here.
   app.post('/api/passkeys/only/begin', { preHandler: requireAuth }, async (req, reply) => {
+    if (req.deviceId) return reply.code(403).send({ error: 'browser session required' });
     if (config.passkeyOnlyKillSwitch) {
       return reply.code(409).send({ error: 'TMUXIFIER_PASSKEY_ONLY=off is set in .env — remove it and restart before arming this' });
     }
@@ -361,6 +368,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
 
   app.post('/api/passkeys/only', { preHandler: requireAuth }, async (req, reply) => {
+    if (req.deviceId) return reply.code(403).send({ error: 'browser session required' });
     if (!passkeyStore) return reply.code(503).send({ error: 'passkeys are not configured' });
     if (config.passkeyOnlyKillSwitch) {
       return reply.code(409).send({ error: 'TMUXIFIER_PASSKEY_ONLY=off is set in .env — remove it and restart before arming this' });
@@ -621,9 +629,10 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     app.post('/api/login', async (req, reply) => {
       if (passkeyOnlyArmed(await passkeySnapshot())) return reply.code(403).send({ error: 'passkey required' });
       const ip = req.ip;
-      if (loginLimiter.limited(ip)) return reply.code(429).send({ error: 'too many attempts' });
+      // Charged before the scrypt await, so in-flight guesses count (rateLimit.js).
+      if (!loginLimiter.attempt(ip)) return reply.code(429).send({ error: 'too many attempts' });
       const ok = await verifyPassword(req.body?.password || '', config.passwordHash);
-      if (!ok) { loginLimiter.fail(ip); return reply.code(401).send({ error: 'invalid' }); }
+      if (!ok) return reply.code(401).send({ error: 'invalid' });
       loginLimiter.succeed(ip);
       reply.setCookie(COOKIE_NAME, sessionValue(), cookieOptions(config.secureCookie));
       return { ok: true };
@@ -705,8 +714,10 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       // Password branch: unchanged v1 semantics (password mode only).
       if (config.authMode === 'google') return reply.code(501).send({ error: 'device enrollment requires password mode or a pairing code' });
       if (passkeyOnlyArmed(await passkeySnapshot())) return reply.code(403).send({ error: 'passkey required' });
+      // Charged before the scrypt await, so in-flight guesses count (rateLimit.js).
+      if (!loginLimiter.attempt(ip)) return reply.code(429).send({ error: 'too many attempts' });
       const ok = await verifyPassword(body.password || '', config.passwordHash);
-      if (!ok) { loginLimiter.fail(ip); return reply.code(401).send({ error: 'invalid' }); }
+      if (!ok) return reply.code(401).send({ error: 'invalid' });
     }
     loginLimiter.succeed(ip);
     try {
@@ -795,8 +806,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return { devices: await deviceStore.list() };
   });
 
+  // Browser-session only: a (possibly leaked) device token must not be able
+  // to revoke the operator's other devices.
   app.delete('/api/devices/:id', { preHandler: requireAuth }, async (req, reply) => {
     if (!deviceStore) return reply.code(501).send({ error: 'devices not supported' });
+    if (req.deviceId) return reply.code(403).send({ error: 'browser session required' });
     return deviceStore.remove(String(req.params.id));
   });
 

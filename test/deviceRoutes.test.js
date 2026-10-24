@@ -47,6 +47,18 @@ test('enroll needs the correct password and feeds the login limiter', async () =
   expect(limited.statusCode).toBe(429);
 });
 
+// Same check-then-await race as /api/login: the password branch must charge
+// the attempt before awaiting scrypt, or a parallel burst outruns the cap.
+test('a concurrent burst of wrong enroll passwords from one ip cannot exceed the lockout cap', async () => {
+  const burst = await Promise.all(Array.from({ length: 25 }, () =>
+    app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'wrong', name: 'x' } })));
+  const codes = burst.map((r) => r.statusCode);
+  expect(codes.filter((c) => c === 401)).toHaveLength(10);
+  expect(codes.filter((c) => c === 429)).toHaveLength(15);
+  const limited = await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'x' } });
+  expect(limited.statusCode).toBe(429);
+});
+
 test('a Bearer token authenticates API routes; a bogus one does not', async () => {
   const { token } = (await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'Fold' } })).json();
   const authed = await app.inject({ method: 'GET', url: '/api/boxes', headers: { authorization: `Bearer ${token}` } });
@@ -99,6 +111,16 @@ test('pair mints only for a browser session; a device token gets 403', async () 
   const { token } = (await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'Fold' } })).json();
   const viaDevice = await app.inject({ method: 'POST', url: '/api/devices/pair', headers: { authorization: `Bearer ${token}` } });
   expect(viaDevice.statusCode).toBe(403);
+});
+
+test('revoking a device needs a browser session; a device token gets 403', async () => {
+  const a = (await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'Fold' } })).json();
+  const b = (await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'MCP' } })).json();
+  const viaDevice = await app.inject({ method: 'DELETE', url: `/api/devices/${b.id}`, headers: { authorization: `Bearer ${a.token}` } });
+  expect(viaDevice.statusCode).toBe(403);
+  expect(viaDevice.json()).toEqual({ error: 'browser session required' });
+  // b was not revoked
+  expect((await app.inject({ method: 'GET', url: '/api/boxes', headers: { authorization: `Bearer ${b.token}` } })).statusCode).toBe(200);
 });
 
 test('a minted code enrolls a device exactly once', async () => {

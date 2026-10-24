@@ -2,7 +2,7 @@ import path from 'node:path';
 import fsSync from 'node:fs';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
-import { resolveModel, WHISPER_REPO, WHISPER_REF } from './voiceCatalog.js';
+import { resolveModel, WHISPER_REPO, WHISPER_REF, verifyWhisperCommit } from './voiceCatalog.js';
 import { VENDOR_DIR, vendorBinPath, vendorModelPath } from './voicePaths.js';
 import { downloadVerified } from './voiceDownload.js';
 
@@ -127,6 +127,10 @@ export function createVoiceInstallManager({
       append(j, `+ git clone ${WHISPER_REPO} @ ${WHISPER_REF}\n`);
       append(j, (await run('git', ['clone', '--depth', '1', '--branch', WHISPER_REF, WHISPER_REPO, vendor])).stdout);
     }
+    // Both paths above trust a tag, which upstream can move. Nothing is
+    // configured or compiled until the checkout is the pinned commit.
+    const head = verifyWhisperCommit((await run('git', ['-C', vendor, 'rev-parse', 'HEAD'])).stdout);
+    append(j, `verified ${WHISPER_REF} at ${head}\n`);
 
     j.phase = 'build';
     persist();

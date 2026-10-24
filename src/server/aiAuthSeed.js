@@ -20,6 +20,13 @@ export function buildClaudeSeedScript() {
     'for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do',
     '  if [ -f "$rc" ]; then',
     "    sed -i '/# tmuxifier-claude-token$/d' \"$rc\" 2>/dev/null || true",
+    // The token is about to land in this file in plaintext. Pre-existing rc
+    // files are usually 0644 (/etc/skel, framework installers); `umask 077`
+    // covers only files this script creates and `sed -i` keeps the original
+    // mode, so strip group/other access explicitly, before the append so the
+    // token is never in a group/other-readable file. go-rwx leaves the owner's
+    // own bits as they were. Best-effort like the sed above.
+    '    chmod go-rwx "$rc" 2>/dev/null || true',
     // Appending to a file without a trailing newline merges onto its last
     // line: the export never parses as its own line (silent seeding
     // failure) and a later run's sed delete then eats that merged line too,

@@ -1,6 +1,7 @@
 import { test, expect } from 'vitest';
 import {
   resolveModel, MODEL_IDS, DEFAULT_MODEL_ID, WHISPER_REPO, WHISPER_REF,
+  WHISPER_COMMIT, verifyWhisperCommit,
 } from '../src/server/voiceCatalog.js';
 
 test('every catalog entry carries a verifiable download', () => {
@@ -60,6 +61,22 @@ test('resolveModel rejects non-string input', () => {
 test('the upstream repo and ref are pinned constants, not floating', () => {
   expect(WHISPER_REPO).toBe('https://github.com/ggerganov/whisper.cpp.git');
   expect(WHISPER_REF).toMatch(/^v\d+\.\d+\.\d+$/);
+});
+
+// F9: a tag can be force-moved upstream, so the ref is only a pin together
+// with the full commit it was recorded at.
+test('the ref is pinned to a full commit id', () => {
+  expect(WHISPER_COMMIT).toMatch(/^[0-9a-f]{40}$/);
+});
+
+test('verifyWhisperCommit accepts only the pinned commit', () => {
+  expect(verifyWhisperCommit(`${WHISPER_COMMIT}\n`)).toBe(WHISPER_COMMIT);
+  expect(() => verifyWhisperCommit('0123456789abcdef0123456789abcdef01234567\n')).toThrow(/refusing to build/i);
+  // An abbreviated id, an empty answer, or anything else is not a match.
+  expect(() => verifyWhisperCommit(WHISPER_COMMIT.slice(0, 12))).toThrow(/refusing to build/i);
+  expect(() => verifyWhisperCommit('')).toThrow(/refusing to build/i);
+  expect(() => verifyWhisperCommit(undefined)).toThrow(/refusing to build/i);
+  expect(() => verifyWhisperCommit(`${WHISPER_COMMIT}\nwarning: extra`)).toThrow(/refusing to build/i);
 });
 
 test('returned entries are copies — a caller cannot mutate the catalog', () => {

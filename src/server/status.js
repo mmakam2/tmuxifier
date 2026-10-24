@@ -153,7 +153,24 @@ const HOSTKEY_CHANGE_RE = /remote host identification has changed/i;
 // as a master and falls back to a direct connection. The orphan file then keeps
 // disabling multiplexing on every connect — for a password box that means the
 // dot is stuck red forever. Seeing this is our cue to reap the stale socket.
-const MUX_STALE_RE = /disabling multiplexing|ControlSocket .* already exists/i;
+// Matches what /disabling multiplexing|ControlSocket .* already exists/i did, but
+// in linear time: that stderr is box output (the box's login shell writes to it,
+// up to execFile's 1 MB maxBuffer), and V8 retried the `.*` to end-of-line from
+// every `ControlSocket ` on a line -- one hostile line froze the event loop for
+// seconds on every poll. So: one line at a time (`.` never crossed a line
+// terminator), the first `ControlSocket ` only (an earlier one leaves more room
+// for the tail), then a plain search for the tail in what follows it.
+const MUX_DISABLED_RE = /disabling multiplexing/i;
+const MUX_SOCKET_RE = /ControlSocket /i;
+const MUX_EXISTS_RE = / already exists/i;
+function muxStale(stderr) {
+  for (const line of String(stderr).split(/[\n\r\u2028\u2029]/)) {
+    if (MUX_DISABLED_RE.test(line)) return true;
+    const at = line.search(MUX_SOCKET_RE);
+    if (at >= 0 && MUX_EXISTS_RE.test(line.slice(at + 'ControlSocket '.length))) return true;
+  }
+  return false;
+}
 
 // A window name is a string on the box, so it is input: control characters are
 // stripped and the length capped before it can reach a <select> in the browser.
@@ -262,7 +279,7 @@ export function createStatusChecker({
       const res = await run(argv);
       // A leftover socket disables multiplexing; reap it so the next connect
       // re-establishes a clean master (regardless of this probe's outcome).
-      if (reapStaleMaster && MUX_STALE_RE.test(String(res.stderr || ''))) {
+      if (reapStaleMaster && muxStale(res.stderr || '')) {
         try { await reapStaleMaster(box); } catch {}
       }
       if (res.code !== 0 && !String(res.stdout).trim()) {

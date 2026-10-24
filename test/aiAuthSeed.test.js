@@ -77,6 +77,71 @@ test('claude rc append is safe when rc file lacks a trailing newline (real shell
   expect(tagged[0]).toBe("export CLAUDE_CODE_OAUTH_TOKEN='sk-ant-oat-EXAMPLE' # tmuxifier-claude-token");
 });
 
+// Pre-existing rc files are normally 0644 (/etc/skel, oh-my-zsh/oh-my-bash
+// installers); `umask 077` covers only files the script creates and `sed -i`
+// keeps the original mode, so the script itself must strip group/other access
+// from every rc file it writes the token into. Owner bits are left as they
+// were (go-rwx, not a blanket 600). Run under each shell a box's login shell
+// may be: the script text reaches the box through ssh argv, so it executes
+// under that shell, often zsh.
+const SEED_SHELLS = ['/bin/sh', '/bin/bash', '/usr/bin/bash', '/bin/zsh', '/usr/bin/zsh'];
+
+test('claude seed strips group/other access from every rc file holding the token (real shells)', async () => {
+  const shells = [];
+  for (const sh of SEED_SHELLS) {
+    try { await fs.access(sh); shells.push(sh); } catch { /* not installed */ }
+  }
+  expect(shells).toContain('/bin/sh');
+  const script = buildClaudeSeedScript();
+  for (const sh of shells) {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-seed-mode-'));
+    const profile = path.join(dir, '.profile');
+    const bashrc = path.join(dir, '.bashrc');
+    const zshrc = path.join(dir, '.zshrc');
+    await fs.writeFile(profile, '# profile\n');
+    await fs.writeFile(bashrc, '# bashrc\n');
+    await fs.writeFile(zshrc, '# zshrc\n');
+    await fs.chmod(profile, 0o644);
+    await fs.chmod(bashrc, 0o664);
+    await fs.chmod(zshrc, 0o755);
+    const res = await new Promise((resolve) => {
+      execFile(sh, ['-c', `printf %s 'sk-ant-oat-EXAMPLE' | ( ${script} )`], { env: { PATH: process.env.PATH, HOME: dir } }, (err, stdout, stderr) => {
+        resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stderr });
+      });
+    });
+    expect(res, sh).toMatchObject({ code: 0 });
+    const modeOf = async (p) => (await fs.stat(p)).mode & 0o777;
+    // Group/other bits gone; the owner's own bits (incl. a deliberate u+x) kept.
+    expect(await modeOf(profile), `${sh} .profile`).toBe(0o600);
+    expect(await modeOf(bashrc), `${sh} .bashrc`).toBe(0o600);
+    expect(await modeOf(zshrc), `${sh} .zshrc`).toBe(0o700);
+    for (const p of [profile, bashrc, zshrc]) {
+      expect(await fs.readFile(p, 'utf8'), `${sh} ${p}`).toContain("export CLAUDE_CODE_OAUTH_TOKEN='sk-ant-oat-EXAMPLE' # tmuxifier-claude-token");
+    }
+    // A re-run against already-seeded files keeps them owner-only.
+    await fs.chmod(bashrc, 0o644);
+    const again = await new Promise((resolve) => {
+      execFile(sh, ['-c', `printf %s 'sk-ant-oat-EXAMPLE' | ( ${script} )`], { env: { PATH: process.env.PATH, HOME: dir } }, (err) => resolve(err ? 1 : 0));
+    });
+    expect(again, sh).toBe(0);
+    expect(await modeOf(bashrc), `${sh} .bashrc rerun`).toBe(0o600);
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('claude seed does not create or touch rc files that hold no token (real shell)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-seed-absent-'));
+  const res = await runShell(`printf %s 'sk-ant-oat-EXAMPLE' | ( ${buildClaudeSeedScript()} )`, { HOME: dir });
+  expect(res.code).toBe(0);
+  // Only ~/.profile is created (owner-only via umask 077); .bashrc/.zshrc stay absent.
+  expect(((await fs.stat(path.join(dir, '.profile'))).mode & 0o777)).toBe(0o600);
+  await expect(fs.access(path.join(dir, '.bashrc'))).rejects.toThrow();
+  await expect(fs.access(path.join(dir, '.zshrc'))).rejects.toThrow();
+  // ~/.claude.json holds no secret and keeps the umask-derived mode it always had.
+  expect(((await fs.stat(path.join(dir, '.claude.json'))).mode & 0o777)).toBe(0o600);
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
 test('codex script round-trips bytes with 0600 (real shell)', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-seed-cx-'));
   const payload = JSON.stringify({ tokens: { refresh: 'r-EXAMPLE' } });

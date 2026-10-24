@@ -11,6 +11,23 @@ export const WHISPER_REPO = 'https://github.com/ggerganov/whisper.cpp.git';
 // Pinned release tag — never a branch. A moving ref would silently change what
 // gets compiled and run as root on the Tmuxifier host.
 export const WHISPER_REF = 'v1.9.1';
+// The commit WHISPER_REF named when it was pinned. A tag can be force-moved
+// upstream, so the tag alone is not a pin: both installers check it out, then
+// refuse to build unless HEAD is exactly this commit — the same discipline the
+// model SHA-256s below get. Bump it together with WHISPER_REF, never alone.
+export const WHISPER_COMMIT = 'f049fff95a089aa9969deb009cdd4892b3e74916';
+
+// The one check both installers run on `git rev-parse HEAD` output, before
+// cmake sees the tree. Exact match only: an abbreviated id, an empty answer or
+// any extra output is a refusal, never a best guess.
+export function verifyWhisperCommit(revParseOutput) {
+  const head = String(revParseOutput ?? '').trim();
+  if (head !== WHISPER_COMMIT) {
+    const got = head ? head.slice(0, 80) : 'nothing';
+    throw new Error(`whisper.cpp ${WHISPER_REF} resolved to ${got}, not the pinned commit ${WHISPER_COMMIT}; refusing to build`);
+  }
+  return head;
+}
 
 const HF_BASE = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/';
 

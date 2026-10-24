@@ -22,7 +22,7 @@ export function createLoginRateLimiter({ max = 10, windowMs = 60000, maxEntries 
     if (oldestKey !== undefined) attempts.delete(oldestKey);
   }
 
-  return {
+  const limiter = {
     // True while the ip is locked out (max failures within the current window).
     limited(ip) {
       const rec = attempts.get(ip);
@@ -38,10 +38,22 @@ export function createLoginRateLimiter({ max = 10, windowMs = 60000, maxEntries 
       if (!attempts.has(ip) && attempts.size >= maxEntries) evictOldest();
       attempts.set(ip, rec);
     },
+    // Check-and-charge for handlers that await (scrypt) before they know the
+    // outcome: false while locked out, otherwise counts this attempt as a
+    // failure up front and returns true. A success clears it via succeed(); a
+    // failure needs no further call. Checking with limited() and charging with
+    // fail() only after the await let a parallel burst all pass the check
+    // before any failure was recorded — the cap bounded only scrypt throughput.
+    attempt(ip) {
+      if (limiter.limited(ip)) return false;
+      limiter.fail(ip);
+      return true;
+    },
     // A successful login clears the ip's failure history.
     succeed(ip) {
       attempts.delete(ip);
     },
     _size: () => attempts.size,
   };
+  return limiter;
 }

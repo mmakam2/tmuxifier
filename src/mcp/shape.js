@@ -6,9 +6,31 @@ const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 const ESC2 = /\x1b[@-Z\\-_]/g;
 
 export function stripSgr(text) {
-  const lines = String(text ?? '').replace(OSC, '').replace(CSI, '').replace(ESC2, '').split('\n').map((l) => l.replace(/\s+$/, ''));
+  const lines = String(text ?? '').replace(OSC, '').replace(CSI, '').replace(ESC2, '').split('\n').map((l) => l.trimEnd()); // not /\s+$/: it backtracks O(n^2) on a long blank run ending in a non-space
   while (lines.length && lines[lines.length - 1] === '') lines.pop();
   return lines.join('\n');
+}
+
+// Box-controlled free text. A failed probe's ssh stderr (status.error: sshd
+// banners, the box's login-shell output) and any stray probe stdout line
+// (which status.js parses as a session name) are written by the box, so a
+// compromised box can aim them at the model reading list_boxes. Before such
+// text joins a line: drop escape sequences, C0/C1 controls, every Unicode
+// format character (bidi overrides/isolates, zero-width, BOM, soft hyphen),
+// lone surrogates and the tag block U+E0000-E007F (invisible "ASCII
+// smuggling"); fold each whitespace run, newlines included, to one space so
+// the text cannot fake extra output lines; then cap it with a visible marker.
+const INVISIBLE = /[\u0000-\u0008\u000e-\u001f\u007f-\u0084\u0086-\u009f\p{Cf}\p{Cs}\u{E0000}-\u{E007F}]/gu;
+const SPACE_RUN = /[\s\u0085]+/gu;
+export const ERROR_MAX = 200;
+export const SESSION_NAME_MAX = 64;
+export const SESSIONS_MAX = 32;
+
+export function untrustedText(text, max, { keep = 'head' } = {}) {
+  const s = String(text ?? '').replace(OSC, '').replace(CSI, '').replace(ESC2, '').replace(INVISIBLE, '').replace(SPACE_RUN, ' ').trim();
+  const cps = Array.from(s);
+  if (cps.length <= max) return s;
+  return keep === 'tail' ? `\u2026${cps.slice(-max).join('')}` : `${cps.slice(0, max).join('')}\u2026`;
 }
 
 export function agentOf(sample) { return sample?.agent ?? 'gone'; }
@@ -40,11 +62,15 @@ export function boxLine(box, status, sample) {
   const m = metricsSeg(sample);
   if (m) segs.push(m);
   if (Array.isArray(status?.sessions) && status.sessions.length) {
-    segs.push(`tmux: ${status.sessions.map((s) => `${s.name}${s.attached ? '*' : ''}(${s.windows}w)`).join(', ')}`);
+    const shown = status.sessions.slice(0, SESSIONS_MAX).map((s) => `${untrustedText(s.name, SESSION_NAME_MAX)}${s.attached ? '*' : ''}(${s.windows}w)`);
+    const more = status.sessions.length - shown.length;
+    segs.push(`tmux: ${shown.join(', ')}${more > 0 ? `, \u2026 +${more} more` : ''}`);
   }
   if (sample?.agent) segs.push(`agent: ${sample.agent}`);
   if (status?.metrics?.osId) segs.push(`os: ${status.metrics.osId}${status.metrics.osVer ? ` ${status.metrics.osVer}` : ''}`);
-  if (status && !status.reachable && status.error) segs.push(status.error);
+  // The tail: ssh prints any banner first and its own verdict last.
+  const err = status && !status.reachable && status.error ? untrustedText(status.error, ERROR_MAX, { keep: 'tail' }) : '';
+  if (err) segs.push(err);
   return segs.join(' · ');
 }
 
