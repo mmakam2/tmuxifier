@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseTmuxSessions, parseMeta, parseAgentMarks, createStatusChecker, PROBE_REMOTE, parseTmuxWindows, attachWindows } from '../src/server/status.js';
+import { parseTmuxSessions, parseMeta, parseAgentMarks, createStatusChecker, PROBE_REMOTE, parseTmuxWindows, attachWindows, SESSION_NAME_MAX, SESSION_ROWS_MAX, STATUS_ERROR_MAX } from '../src/server/status.js';
 
 test('parseTmuxSessions maps fields', () => {
   const out = 'web:3:1:1718000000\nbuild:1:0:1718000100\n';
@@ -786,4 +786,66 @@ test('the real sentinel line is still honoured', async () => {
   const run = async () => ({ code: 0, stdout: '__META__ load1=0.4\n__NO_TMUX__\n', stderr: '' });
   const status = await createStatusChecker({ run }).checkBox({ host: '192.168.1.10' });
   expect(status).toMatchObject({ reachable: true, tmux: false, sessions: [] });
+});
+
+// Session rows and the ssh error are written by the box: a login banner or a
+// stray rc echo lands in the probe's stdout, and stderr carries sshd banners
+// and shell noise. Neither may reach /api/status (and from there the browser,
+// health events, the app and the MCP server) unshaped or unbounded.
+test('parseTmuxSessions keeps only rows in the tmux status shape', () => {
+  const out = [
+    'Welcome to Ubuntu 26.04 LTS',
+    'Last login: Sat Oct 24 14:00:00 2026 from 192.168.1.5',
+    'web:2:1:1718000000:claude',
+    'not:a:row',
+    'x:1:0:notanumber',
+    ':1:0:1718000000',
+  ].join('\n');
+  expect(parseTmuxSessions(out)).toEqual([
+    { name: 'web', windows: 2, attached: true, activity: 1718000000, paneCmd: 'claude' },
+  ]);
+});
+
+test('parseTmuxSessions drops names carrying control or bidi characters, or over the length cap', () => {
+  const out = [
+    'ok name:1:0:1718000000',
+    'bad\u001b[31m:1:0:1718000000',
+    'bad\u0085c1:1:0:1718000000',
+    'evil‮:1:0:1718000000',
+    `${'n'.repeat(SESSION_NAME_MAX + 1)}:1:0:1718000000`,
+    `${'n'.repeat(SESSION_NAME_MAX)}:1:0:1718000000`,
+  ].join('\n');
+  expect(parseTmuxSessions(out).map((s) => s.name)).toEqual(['ok name', 'n'.repeat(SESSION_NAME_MAX)]);
+});
+
+test('parseTmuxSessions cleans the pane command and caps the row count', () => {
+  const rows = Array.from({ length: SESSION_ROWS_MAX + 50 }, (_, i) => `s${i}:1:0:1718000000:cmd\u0007${'x'.repeat(100)}`);
+  const sessions = parseTmuxSessions(rows.join('\n'));
+  expect(sessions).toHaveLength(SESSION_ROWS_MAX);
+  expect(sessions[0].paneCmd).toBe(`cmd${'x'.repeat(61)}`);
+});
+
+test('checkBox: a long ssh error keeps its last line and loses control characters', async () => {
+  const banner = `\u001b[1mWARNING\u001b[0m\r\n${'#'.repeat(5000)}\n`;
+  const run = async () => ({ code: 255, stdout: '', stderr: `${banner}ssh: connect to host h port 22: Connection refused\u0007\n` });
+  const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
+  expect(status.reachable).toBe(false);
+  expect(status.error.length).toBeLessThanOrEqual(STATUS_ERROR_MAX + 1);
+  expect(status.error.startsWith('…')).toBe(true);
+  expect(status.error.endsWith('Connection refused')).toBe(true);
+  expect(status.error).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
+});
+
+test('checkBox: host-key and auth detection still see the full stderr before it is capped', async () => {
+  const noise = 'x'.repeat(STATUS_ERROR_MAX * 3);
+  const hk = async () => ({ code: 255, stdout: '', stderr: `@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\n${noise}` });
+  expect((await createStatusChecker({ run: hk }).checkBox({ host: 'h' })).hostKeyChanged).toBe(true);
+  const auth = async () => ({ code: 255, stdout: '', stderr: `me@h: Permission denied (publickey,password).\n${noise}` });
+  expect((await createStatusChecker({ run: auth }).checkBox({ host: 'h' })).needsAuth).toBe(true);
+});
+
+test('parseTmuxSessions keeps sessions from tmux < 2.1, which expands #{window_activity} to empty', () => {
+  expect(parseTmuxSessions('main:1:0::bash\n')).toEqual([
+    { name: 'main', windows: 1, attached: false, activity: 0, paneCmd: 'bash' },
+  ]);
 });

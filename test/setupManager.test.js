@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { createSetupManager } from '../src/server/setupManager.js';
+import { createSetupManager, sudoPasswordPrompt, sshPasswordDenial } from '../src/server/setupManager.js';
 
 const BOX = { id: 'b1', label: 'web-1', host: '192.168.1.10', user: 'root', sessionName: 'web' };
 
@@ -797,4 +797,53 @@ test('voice-link runs before the saved script and before the session is created'
   const s = m.start(BOX, { tools: ['claude'], scriptId: 'fs-1' });
   await m._settled(s.id);
   expect(order).toEqual(['voice-link', 'script:fs-1', 'session']);
+});
+
+// The setup run's stderr is written by the box (sshd banners, login-shell and
+// script output), and the prompt sniffers run on every chunk. The regexes they
+// replace backtracked per start position (`sudo:[^\n]*…`, `\([^)]*…[^)]*\)`), so
+// a line of repeated `sudo:` or an unclosed `Permission denied (` was quadratic.
+const LEGACY_SUDO_PW_RE = /a terminal is required to read the password|sudo:[^\n]*password is required|askpass/i;
+const LEGACY_SSH_PW_RE = /Permission denied \([^)]*(?:password|keyboard-interactive)[^)]*\)/i;
+
+test('sudoPasswordPrompt and sshPasswordDenial agree with the regexes they replaced', () => {
+  const samples = [
+    'sudo: a terminal is required to read the password; either use the -S option',
+    'sudo: a password is required',
+    'SUDO: A PASSWORD IS REQUIRED',
+    'sudo: no askpass program specified, try setting SUDO_ASKPASS',
+    'sudo: some other failure\npassword is required',
+    'password is required sudo:',
+    'root@192.168.1.10: Permission denied (publickey,password).',
+    'Permission denied (publickey,keyboard-interactive).',
+    'permission denied (PUBLICKEY,PASSWORD)',
+    'Permission denied (publickey).',
+    'Permission denied (publickey,password',
+    'Permission denied (x) Permission denied (password)',
+    'Permission denied (Permission denied (password)',
+    'Permission denied (\npassword)',
+    'Permission denied  (password)',
+    '',
+  ];
+  const alphabet = ['sudo:', ' password is required', 'askpass', 'Permission denied (', 'password', 'keyboard-interactive', ')', '\n', 'x', ' ', 'a terminal is required to read the password', 'PASSWORD'];
+  let seed = 7;
+  const rand = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  for (let i = 0; i < 20000; i++) {
+    let s = '';
+    for (let k = rand(8); k > 0; k--) s += alphabet[rand(alphabet.length)];
+    samples.push(s);
+  }
+  for (const s of samples) {
+    expect(sudoPasswordPrompt(s), JSON.stringify(s)).toBe(LEGACY_SUDO_PW_RE.test(s));
+    expect(sshPasswordDenial(s), JSON.stringify(s)).toBe(LEGACY_SSH_PW_RE.test(s));
+  }
+});
+
+test('the prompt sniffers stay linear on hostile stderr', () => {
+  for (const s of ['sudo:'.repeat(100_000), 'Permission denied ('.repeat(20_000), `Permission denied (${'x'.repeat(400_000)}`]) {
+    const t0 = performance.now();
+    expect(sudoPasswordPrompt(s)).toBe(false);
+    expect(sshPasswordDenial(s)).toBe(false);
+    expect(performance.now() - t0).toBeLessThan(250);
+  }
 });

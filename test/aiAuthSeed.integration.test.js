@@ -4,7 +4,7 @@ import path from 'node:path';
 import { setupLocalBox } from './helpers/localBox.js';
 import { sshRun, sshRunStdin } from '../src/server/sshRun.js';
 import { createBoxActions } from '../src/server/boxActions.js';
-import { createAiAuthSeeder } from '../src/server/aiAuthSeed.js';
+import { createAiAuthSeeder, CLAUDE_TOKEN_FILE, CLAUDE_TOKEN_RC_LINE } from '../src/server/aiAuthSeed.js';
 
 let teardown;
 afterEach(async () => {
@@ -12,11 +12,11 @@ afterEach(async () => {
   teardown = null;
 });
 
-// The Claude token is written in plaintext into the box's rc files. Over the
-// real transport (ssh argv → the box's login shell, token on stdin), every rc
-// file that ends up holding it must have no group/other access, even though
-// the fixture's rc files start out at the usual 0644.
-test('claude seed over real ssh leaves every token-bearing rc file owner-only', async () => {
+// Over the real transport (ssh argv → the box's login shell, token on stdin):
+// the token lands only in its own owner-only file, no rc file holds it (so
+// dotfile sync or a world-readable rc cannot leak it), and a shell on the box
+// that reads its rc files still ends up with it in the environment.
+test('claude seed over real ssh keeps the token in its own file and out of every rc file', async () => {
   const lb = await setupLocalBox();
   teardown = lb.cleanup;
   const rcFiles = ['.profile', '.bashrc', '.zshrc'].map((f) => path.join(lb.home, f));
@@ -35,8 +35,15 @@ test('claude seed over real ssh leaves every token-bearing rc file owner-only', 
   const box = { id: 'b1', label: 'local', host: lb.box.host, sessionName: lb.session };
   const results = await seeder.seed(box);
   expect(results[0]).toEqual({ target: 'claude', ok: true });
+  const tokenFile = path.join(lb.home, CLAUDE_TOKEN_FILE);
+  expect(await fs.readFile(tokenFile, 'utf8')).toBe('sk-ant-oat-EXAMPLE\n');
+  expect((await fs.stat(tokenFile)).mode & 0o777).toBe(0o600);
+  expect((await fs.stat(path.dirname(tokenFile))).mode & 0o777).toBe(0o700);
   for (const p of rcFiles) {
-    expect(await fs.readFile(p, 'utf8'), p).toContain("export CLAUDE_CODE_OAUTH_TOKEN='sk-ant-oat-EXAMPLE' # tmuxifier-claude-token");
-    expect((await fs.stat(p)).mode & 0o777, p).toBe(0o600);
+    const text = await fs.readFile(p, 'utf8');
+    expect(text, p).not.toContain('sk-ant-oat-EXAMPLE');
+    expect(text.split('\n'), p).toContain(CLAUDE_TOKEN_RC_LINE);
   }
+  const read = await boxActions.execScriptStdin(box, '. "$HOME/.profile"; printf %s "$CLAUDE_CODE_OAUTH_TOKEN"', Buffer.from(''));
+  expect(read).toMatchObject({ ok: true, stdout: 'sk-ant-oat-EXAMPLE' });
 });

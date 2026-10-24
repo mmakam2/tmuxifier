@@ -223,17 +223,42 @@ export function attachWindows(sessions, windows) {
   return sessions.map((s) => (bySession.has(s.name) ? { ...s, windowList: bySession.get(s.name) } : s));
 }
 
+// Session rows share the probe's stdout with whatever the box's login shell
+// prints (a MOTD, `Last login: …`, an rc echo), so a row is kept only in the
+// STATUS_FMT shape: numeric windows/attached fields and a numeric-or-empty
+// activity (tmux < 2.1 has no #{window_activity} and expands it to ''). A name is an
+// identity the UI targets with `-t '=name'`, so it is never rewritten: one
+// carrying control or bidi characters, or longer than SESSION_NAME_MAX, drops
+// instead. The row count is capped like list-windows' `head -n 200`.
+export const SESSION_NAME_MAX = 256;
+export const SESSION_ROWS_MAX = 200;
+const UNSAFE_NAME_RE = /[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/;
+const DIGITS_RE = /^\d+$/;
+
 export function parseTmuxSessions(stdout) {
-  return String(stdout)
-    .split(/\r?\n/)
+  const out = [];
+  for (const line of String(stdout).split(/\r?\n/)) {
+    if (out.length >= SESSION_ROWS_MAX) break;
     // Whole-line match on the sentinel for the same reason noTmux() uses one: a
     // session may legitimately be NAMED `__NO_TMUX__`, and a substring test would
     // silently drop its row.
-    .filter((l) => l.trim() && l.trim() !== '__NO_TMUX__' && !l.startsWith('__META__') && !l.startsWith('__AGENT__') && !l.startsWith('__WIN__'))
-    .map((line) => {
-      const [name, windows, attached, activity, paneCmd] = line.split(':');
-      return { name, windows: Number(windows), attached: attached === '1', activity: Number(activity), paneCmd: paneCmd || '' };
-    });
+    if (!line.trim() || line.trim() === '__NO_TMUX__' || line.startsWith('__META__') || line.startsWith('__AGENT__') || line.startsWith('__WIN__')) continue;
+    const [name, windows, attached, activity, paneCmd] = line.split(':');
+    if (!name || name.length > SESSION_NAME_MAX || UNSAFE_NAME_RE.test(name)) continue;
+    if (!DIGITS_RE.test(windows || '') || !DIGITS_RE.test(attached || '') || !/^\d*$/.test(activity ?? '')) continue;
+    out.push({ name, windows: Number(windows), attached: attached === '1', activity: Number(activity), paneCmd: cleanWindowName(paneCmd || '') });
+  }
+  return out;
+}
+
+// ssh's stderr on a failed probe: sshd banners and login-shell noise come
+// first, ssh's own reason last, so the tail is kept. Newlines survive (the UI
+// shows this in a title); other controls and bidi overrides do not. The
+// host-key/auth classifiers run on the raw text before this cap.
+export const STATUS_ERROR_MAX = 1024;
+function cleanStatusError(err) {
+  const s = String(err).replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f‪-‮⁦-⁩]/g, '').trim();
+  return s.length > STATUS_ERROR_MAX ? `…${s.slice(-STATUS_ERROR_MAX)}` : s;
 }
 
 export function createStatusChecker({
@@ -284,13 +309,14 @@ export function createStatusChecker({
       }
       if (res.code !== 0 && !String(res.stdout).trim()) {
         const err = String(res.stderr || '').trim();
+        const shown = cleanStatusError(err);
         if (HOSTKEY_CHANGE_RE.test(err)) {
-          return { reachable: false, hostKeyChanged: true, error: err || 'host key changed' };
+          return { reachable: false, hostKeyChanged: true, error: shown || 'host key changed' };
         }
         if (AUTH_FAIL_RE.test(err)) {
-          return { reachable: false, needsAuth: true, error: err || 'authentication required' };
+          return { reachable: false, needsAuth: true, error: shown || 'authentication required' };
         }
-        return { reachable: false, error: err || 'unreachable' };
+        return { reachable: false, error: shown || 'unreachable' };
       }
       const metrics = parseMeta(res.stdout);
       deriveCpuPct(box, metrics);
@@ -301,7 +327,7 @@ export function createStatusChecker({
       const withMeta = metrics ? { ...base, metrics } : base;
       return agentMarks ? { ...withMeta, agentMarks } : withMeta;
     } catch (e) {
-      return { reachable: false, error: String((e && e.message) || e) };
+      return { reachable: false, error: cleanStatusError((e && e.message) || e) || 'unreachable' };
     }
   }
 

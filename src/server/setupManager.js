@@ -6,7 +6,25 @@ import { newestFirst } from './jobOrder.js';
 // across restarts (a paused, user-actionable state — no live process), so it is
 // NOT reconciled. Only `running` (a live ssh child that died with the process)
 // is converted to `interrupted` on load.
-const SUDO_PW_RE = /a terminal is required to read the password|sudo:[^\n]*password is required|askpass/i;
+//
+// Both sniffers below run on every stderr chunk, and stderr is written by the
+// box. They are literal searches rather than the regexes they replaced
+// (/a terminal is required to read the password|sudo:[^\n]*password is
+// required|askpass/i and /Permission denied \([^)]*(?:password|
+// keyboard-interactive)[^)]*\)/i), which backtracked per start position and
+// went quadratic on a run of `sudo:` or an unclosed `Permission denied (`.
+// Same matches, pinned against the old regexes by test/setupManager.test.js.
+// ASCII-only folding keeps indices stable, like the regexes' non-unicode /i.
+const asciiLower = (s) => s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
+
+export function sudoPasswordPrompt(text) {
+  const s = asciiLower(String(text));
+  if (s.includes('a terminal is required to read the password') || s.includes('askpass')) return true;
+  return s.split('\n').some((line) => {
+    const at = line.indexOf('sudo:');
+    return at >= 0 && line.indexOf('password is required', at + 5) >= 0;
+  });
+}
 
 // ssh's own auth failure, for a box whose sshd actually offers an interactive
 // method. The setup run is BatchMode (see buildSetupArgv), so ssh may not
@@ -20,7 +38,22 @@ const SUDO_PW_RE = /a terminal is required to read the password|sudo:[^\n]*passw
 // so it stays a hard error exactly as before. Anchored on the literal ssh
 // wording rather than a bare /password/ so unrelated script output that happens
 // to mention a password cannot park a job.
-const SSH_PW_RE = /Permission denied \([^)]*(?:password|keyboard-interactive)[^)]*\)/i;
+//
+// A later `Permission denied (` before the same `)` sees a suffix of the
+// earlier one's method list, so the scan resumes after each `)` and stops at
+// the first opener with no `)` after it.
+export function sshPasswordDenial(text) {
+  const s = asciiLower(String(text));
+  const open = 'permission denied (';
+  for (let at = s.indexOf(open); at >= 0; at = s.indexOf(open, at)) {
+    const close = s.indexOf(')', at + open.length);
+    if (close < 0) return false;
+    const methods = s.slice(at + open.length, close);
+    if (methods.includes('password') || methods.includes('keyboard-interactive')) return true;
+    at = close + 1;
+  }
+  return false;
+}
 
 // Statuses that will never change again on their own — used by prune() to
 // decide what is safe to evict from the in-memory jobs map. 'superseded' is a
@@ -304,8 +337,8 @@ export function createSetupManager({
           // Bounded stderr-only accumulator so a phrase split across chunks is
           // still detected, without matching sudo text that appeared on stdout.
           stderrTail = (stderrTail + chunk).slice(-4096);
-          if (!sawSudoPw && SUDO_PW_RE.test(stderrTail)) sawSudoPw = true;
-          if (!sawSshPw && SSH_PW_RE.test(stderrTail)) sawSshPw = true;
+          if (!sawSudoPw && sudoPasswordPrompt(stderrTail)) sawSudoPw = true;
+          if (!sawSshPw && sshPasswordDenial(stderrTail)) sawSshPw = true;
         },
       });
 

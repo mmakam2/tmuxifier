@@ -6,33 +6,45 @@ import path from 'node:path';
 // into ssh argv, so nothing secret may ever be interpolated into it (see
 // docs/superpowers/specs/2026-07-18-ai-auth-seeding-design.md).
 
-// stdin = the `claude setup-token` token. Same delete-then-append idiom as
-// LOCAL_BIN_PATH_BLOCK in boxActions.js: exactly one tagged line per rc file.
+// stdin = the `claude setup-token` token. It is written to its own file under
+// ~/.tmuxifier-auth/ (0700 dir, 0600 file), never into an rc file: rc files are
+// usually 0644 and are exactly what dotfile managers and backups copy around.
+// Each rc file instead gets one tagged line that exports the token FROM that
+// file — static text with no secret in it, inert (and exit status 0) once the
+// file is gone, or when HOME is unset under `set -u` (an `env -i` script that
+// sources ~/.profile). Same delete-then-append idiom as LOCAL_BIN_PATH_BLOCK in
+// boxActions.js: exactly one tagged line per rc file, and because the tag is
+// unchanged, re-seeding a box seeded before the move deletes its old
+// plaintext `export CLAUDE_CODE_OAUTH_TOKEN='…'` line.
 // ~/.claude.json is written only when absent so an existing config (theme,
 // onboarding state) is never clobbered.
+export const CLAUDE_TOKEN_FILE = '.tmuxifier-auth/claude-token';
+export const CLAUDE_TOKEN_RC_LINE = `if [ -n "\${HOME:-}" ] && [ -r "$HOME/${CLAUDE_TOKEN_FILE}" ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN_FILE}")"; fi # tmuxifier-claude-token`;
+
 export function buildClaudeSeedScript() {
   return [
     'set -eu',
     'umask 077',
     'token="$(cat)"',
     '[ -n "$token" ]',
+    'mkdir -p "$HOME/.tmuxifier-auth"',
+    'chmod 700 "$HOME/.tmuxifier-auth"',
+    // Temp + rename so a reader (a shell starting mid-seed) sees the old token
+    // or the new one, never a truncated file.
+    `tmp="$HOME/${CLAUDE_TOKEN_FILE}.tmp.$$"`,
+    'printf \'%s\\n\' "$token" > "$tmp"',
+    'chmod 600 "$tmp"',
+    `mv -f "$tmp" "$HOME/${CLAUDE_TOKEN_FILE}"`,
     'if [ ! -f "$HOME/.profile" ]; then touch "$HOME/.profile"; fi',
     'for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do',
     '  if [ -f "$rc" ]; then',
     "    sed -i '/# tmuxifier-claude-token$/d' \"$rc\" 2>/dev/null || true",
-    // The token is about to land in this file in plaintext. Pre-existing rc
-    // files are usually 0644 (/etc/skel, framework installers); `umask 077`
-    // covers only files this script creates and `sed -i` keeps the original
-    // mode, so strip group/other access explicitly, before the append so the
-    // token is never in a group/other-readable file. go-rwx leaves the owner's
-    // own bits as they were. Best-effort like the sed above.
-    '    chmod go-rwx "$rc" 2>/dev/null || true',
     // Appending to a file without a trailing newline merges onto its last
     // line: the export never parses as its own line (silent seeding
     // failure) and a later run's sed delete then eats that merged line too,
     // destroying the user's original content. Force a newline first.
     '    if [ -s "$rc" ] && [ -n "$(tail -c 1 "$rc")" ]; then printf \'\\n\' >> "$rc"; fi',
-    '    printf \'export CLAUDE_CODE_OAUTH_TOKEN=%s # tmuxifier-claude-token\\n\' "\'$token\'" >> "$rc"',
+    `    printf '%s\\n' '${CLAUDE_TOKEN_RC_LINE}' >> "$rc"`,
     '  fi',
     'done',
     // The onboarding flag must end up in ~/.claude.json even when the file

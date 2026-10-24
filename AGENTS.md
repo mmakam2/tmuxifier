@@ -272,7 +272,9 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   run sniffs stderr for prompts. Password-only boxes work only while a ControlMaster is alive.
 - `aiAuthSeed.js` — opt-in copy of the host's Claude (`TMUXIFIER_CLAUDE_OAUTH_TOKEN`) / Codex
   (`~/.codex/auth.json`, never stored) credentials. Secrets travel stdin-only — never in script
-  text, argv, logs, or responses. `status()` serves `GET /api/ai-auth/status`.
+  text, argv, logs, or responses. On the box the Claude token lives only in
+  `~/.tmuxifier-auth/claude-token` (0600); rc files get a secret-free tagged line that exports it
+  from there. `status()` serves `GET /api/ai-auth/status`.
 - `claudeStatusline.js` / `claudeAgentHooks.js` — push `src/server/assets/claude-statusline.sh`
   and `tmuxifier-agent-hook.sh`. Script text interpolates **nothing** (files arrive on stdin);
   the box decides via `command -v claude`; `settings.json` is merged in place (jq → node →
@@ -303,6 +305,8 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   clock, metrics, distro (`/etc/os-release` read with shell built-ins under the probe's bare PATH),
   agent markers (`parseAgentMarks`), and windows (`list-windows -a`, ≤200 rows, name field last).
   `cleanWindowName` strips C0/C1 and bidi controls; `__NO_TMUX__` matches as a whole line.
+  Session rows must have the `STATUS_FMT` shape (≤200; a name with controls or over 256 chars
+  drops, never rewritten); a failed probe's ssh error keeps its last 1024 chars, controls stripped.
 - `statusPoller.js` — the single server-side poll loop (`statusPollMs`) behind `/api/status`, so
   SSH volume is independent of open tabs; `probeOne` for on-demand refresh. Folds the Host Shell
   into history as `__local__` without putting it in the snapshot.

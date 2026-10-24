@@ -155,9 +155,13 @@ checkbox is disabled when there is nothing to seed yet.
 
 Either secret travels to the box over stdin on the same SSH connection used for provisioning —
 never in a command line, a script file, a log, or an API response. On the box, the Claude token
-is stored as a tagged `export CLAUDE_CODE_OAUTH_TOKEN=…` line in `~/.profile`, `~/.bashrc` and
-`~/.zshrc` (whichever exist; `~/.profile` is created if missing), and seeding removes group and
-other access from each of those files (`chmod go-rwx`: a stock `0644` rc file becomes `0600`).
+is stored in its own file, `~/.tmuxifier-auth/claude-token` (directory `0700`, file `0600`), and
+`~/.profile`, `~/.bashrc` and `~/.zshrc` (whichever exist; `~/.profile` is created if missing)
+each get one tagged line that exports `CLAUDE_CODE_OAUTH_TOKEN` from that file. The rc files
+themselves hold no secret, so a dotfile manager or backup that copies them carries nothing
+sensitive, and their permissions are left as they were. Boxes seeded before v1.24.68 kept the
+token as a plaintext `export` line in those rc files; seeding such a box again replaces that line.
+Deleting the token file un-seeds the box for new shells (the rc line does nothing without it).
 **Seeding hands that box your Claude and/or Codex subscription identity, exactly as if you'd
 logged in on it yourself — seed only boxes you trust the way you'd trust anyone holding your own
 login.**
