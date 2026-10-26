@@ -231,3 +231,49 @@ test('pane-local dropdown switch reattaches THIS pane to the picked session, lea
     await page.keyboard.press('Enter').catch(() => {});
   }
 });
+
+// A pasted file's path must land in the pane it was pasted into. The upload
+// route once typed into the box's CONFIGURED session regardless of pane, so a
+// paste into the duplicate (`<name>-2`) showed up in the first pane instead.
+// The paste is synthesized with a real File on the pane's own textarea —
+// wireUploads listens in capture phase on the terminal's parent.
+test('a file pasted into a duplicate pane types its path into that pane only', async ({ page }) => {
+  await login(page);
+  await page.locator('.box .name', { hasText: 'localhost' }).click();
+  const firstPane = page.locator('.stage-pane').first();
+  await promptIn(firstPane);
+  const configured = await readSessionName(page, firstPane);
+  await promptIn(firstPane);
+
+  const row = page.locator('.box', { has: page.locator('.name', { hasText: 'localhost' }) });
+  await row.locator('.dock').click();
+  await expect(page.locator('.stage-pane')).toHaveCount(2, { timeout: 10000 });
+  const secondPane = page.locator('.stage-pane').nth(1);
+  await promptIn(secondPane);
+  try {
+    expect(await readSessionName(page, secondPane)).toBe(`${configured}-2`);
+    await promptIn(secondPane);
+    await secondPane.locator('.xterm-helper-textarea').evaluate((el) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['e2e-bytes'], 'dupe-paste.txt', { type: 'text/plain' }));
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    });
+    await expect(secondPane.locator('.xterm-rows')).toContainText(/\.tmuxifier-uploads\/\S*dupe-paste\.txt/, { timeout: 15000 });
+    await expect(firstPane.locator('.xterm-rows')).not.toContainText('dupe-paste.txt');
+  } finally {
+    // The typed path sits unexecuted on the duplicate's prompt — wipe it so
+    // nothing runs it, then the same explicit-target, twice-issued kill as
+    // the first test (see the file-level comment).
+    await secondPane.click().catch(() => {});
+    await page.keyboard.press('Control+U').catch(() => {});
+    await secondPane.locator('.pane-undock').click().catch(() => {});
+    await firstPane.click().catch(() => {});
+    await page.keyboard.press('Control+U').catch(() => {});
+    await page.keyboard.type(`tmux kill-session -t '${configured}-2' 2>/dev/null`).catch(() => {});
+    await page.keyboard.press('Enter').catch(() => {});
+    await page.waitForTimeout(1200).catch(() => {});
+    await firstPane.click().catch(() => {});
+    await page.keyboard.type(`tmux kill-session -t '${configured}-2' 2>/dev/null`).catch(() => {});
+    await page.keyboard.press('Enter').catch(() => {});
+  }
+});

@@ -161,8 +161,10 @@ function wireClipboard(term: Terminal, voice?: VoiceHotkeyTarget): void {
 // pane itself when it's safe (Claude Code / shell prompt — see the spec); the
 // browser only reports uploads the server chose not to type. Text pastes take
 // the untouched native path (wireClipboard). Capture phase so the file case
-// wins before xterm's own paste handler sees the event.
-function wireUploads(parent: HTMLElement, term: Terminal, boxId: string): () => void {
+// wins before xterm's own paste handler sees the event. `session` names this
+// pane's own tmux session, read per upload: duplicate panes of one box attach
+// different sessions, and the box's configured one is the wrong pane.
+function wireUploads(parent: HTMLElement, term: Terminal, boxId: string, session?: () => string | undefined): () => void {
   // Batches are serialized on a promise chain so a second paste/drop while a
   // prior batch is uploading can't interleave status lines or path injections.
   let chain: Promise<void> = Promise.resolve();
@@ -180,7 +182,7 @@ function wireUploads(parent: HTMLElement, term: Terminal, boxId: string): () => 
       }
       term.write(`\r\n\x1b[2m[uploading ${termSafe(name)}…]\x1b[0m\r\n`);
       try {
-        const res = await api.uploadFile(boxId, name, f);
+        const res = await api.uploadFile(boxId, name, f, session?.());
         if (disposed) return;
         // The server typed the path into the pane (it arrives through the
         // normal attach stream) — only surface the cases where it didn't.
@@ -499,7 +501,7 @@ export function openTerminal(
     hint: opts?.voiceHint,
   });
   wireClipboard(term, voice);
-  const offUploads = wireUploads(parent, term, boxId);
+  const offUploads = wireUploads(parent, term, boxId, opts?.voiceSession);
   const offTouchScroll = wireTouchGestures(parent, {
     // Read live per gesture, the same pattern as the bar's DECCKM-aware arrows.
     guard: () => term.modes.mouseTrackingMode !== 'none',

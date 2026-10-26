@@ -1430,6 +1430,43 @@ test('POST /api/upload routes a box upload through boxActions.uploadFile', async
   expect(calls).toContainEqual(['inject', sessionName, '/root/.tmuxifier-uploads/1-aa-shot.png']);
 });
 
+// Duplicate panes attach per-pane sessions: the path must land in the session
+// of the pane that was pasted into, not the box's configured one.
+test('POST /api/upload injects into the pane session named by ?session=', async () => {
+  const calls = [];
+  app = await makeApp({
+    boxActions: {
+      uploadFile: async () => ({ ok: true, path: '/root/.tmuxifier-uploads/1-aa-shot.png' }),
+      injectUploadPath: async (box, session, p) => { calls.push([session, p]); return { injected: true, mode: 'shell' }; },
+    },
+  });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}`, 'content-type': 'application/octet-stream' };
+  const add = await app.inject({ method: 'POST', url: '/api/boxes', headers: { cookie: headers.cookie, 'content-type': 'application/json' }, payload: { label: 'b', host: 'h1' } });
+  expect(add.json().sessionName).not.toBe('work-2');
+  const res = await app.inject({ method: 'POST', url: `/api/upload?box=${add.json().id}&name=shot.png&session=work-2`, headers, payload: Buffer.from('bytes') });
+  expect(res.statusCode).toBe(200);
+  expect(calls).toEqual([['work-2', '/root/.tmuxifier-uploads/1-aa-shot.png']]);
+});
+
+test('POST /api/upload rejects an invalid ?session= before uploading anything', async () => {
+  const calls = [];
+  app = await makeApp({
+    boxActions: {
+      uploadFile: async () => { calls.push('upload'); return { ok: true, path: '/root/.tmuxifier-uploads/1-aa-x.png' }; },
+      injectUploadPath: async () => { calls.push('inject'); return { injected: true, mode: 'shell' }; },
+    },
+  });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}`, 'content-type': 'application/octet-stream' };
+  const add = await app.inject({ method: 'POST', url: '/api/boxes', headers: { cookie: headers.cookie, 'content-type': 'application/json' }, payload: { label: 'b', host: 'h1' } });
+  for (const bad of ['', 'a b', 'x;rm', 'web:1']) {
+    const res = await app.inject({ method: 'POST', url: `/api/upload?box=${add.json().id}&name=x.png&session=${encodeURIComponent(bad)}`, headers, payload: Buffer.from('x') });
+    expect(res.statusCode).toBe(400);
+  }
+  expect(calls).toEqual([]);
+});
+
 test('POST /api/upload succeeds even when injection is unavailable or fails', async () => {
   app = await makeApp({
     boxActions: {

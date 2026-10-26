@@ -258,3 +258,36 @@ test('inject=off returns the transcript without touching the pane', async () => 
   expect(res.json()).toEqual({ text: 'hello world', injected: false, mode: 'off' });
   expect(injected).toEqual([]); // the composer path must never type into the pane
 });
+
+// Duplicate panes attach per-pane sessions: dictation must land in the
+// session of the pane the mic belongs to, not the box's configured one.
+test('injects into the pane session named by ?session=', async () => {
+  const sessions = [];
+  const a = await makeApp({ server: { boxActions: {
+    injectText: async (_box, session) => { sessions.push(session); return { injected: true, mode: 'shell' }; },
+  } } });
+  const res = await post(a, await login(a), wav(), '/api/voice?box=b1&session=web-2');
+  expect(res.statusCode).toBe(200);
+  expect(sessions).toEqual(['web-2']);
+});
+
+test('without ?session= dictation still targets the box session', async () => {
+  const sessions = [];
+  const a = await makeApp({ server: { boxActions: {
+    injectText: async (_box, session) => { sessions.push(session); return { injected: true, mode: 'shell' }; },
+  } } });
+  await post(a, await login(a));
+  expect(sessions).toEqual(['web']);
+});
+
+test('rejects an invalid ?session= before transcribing', async () => {
+  let transcribed = 0;
+  const a = await makeApp({ server: { voiceEngine: { transcribe: async () => { transcribed++; return 'hi'; }, stop: async () => {}, state: () => 'ready' } } });
+  const cookie = await login(a);
+  for (const bad of ['', 'a b', 'x;rm', 'web:1']) {
+    const res = await post(a, cookie, wav(), `/api/voice?box=b1&session=${encodeURIComponent(bad)}`);
+    expect(res.statusCode).toBe(400);
+  }
+  expect(transcribed).toBe(0);
+  expect(injected).toEqual([]);
+});

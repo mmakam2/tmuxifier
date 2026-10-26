@@ -252,7 +252,8 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   out of the poller's import chain.
 - `uploads.js` — paste/drag-drop uploads: filename allowlist, remote
   `~/.tmuxifier-uploads/` writer (24h self-prune). Route `POST /api/upload`
-  (`TMUXIFIER_UPLOAD_MAX_MB`).
+  (`TMUXIFIER_UPLOAD_MAX_MB`); it and `POST /api/voice` take `?session=` (the pane's own session —
+  duplicate panes attach their own), validated, defaulting to the configured one.
 - `tmuxInject.js` — pane-aware path injection: `#{pane_current_command}` first (idle shell or
   `claude*`), screen heuristics as fallback; types via `send-keys -l`, never auto-Enter; busy
   panes get a `display-message`. Exports `NAMED_KEYS`, `sanitizeSendText`, `classifyPaneState`.

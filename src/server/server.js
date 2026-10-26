@@ -1785,11 +1785,18 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (!validUploadName(name)) return reply.code(400).send({ error: 'invalid filename' });
     const body = Buffer.isBuffer(req.body) ? req.body : null;
     if (!body || body.length === 0) return reply.code(400).send({ error: 'missing file body' });
+    // The pane's own session (duplicate panes attach per-pane sessions), so
+    // the path lands in the pane that was pasted into. Validated, never
+    // rewritten, and checked before anything is written to the box.
+    const requested = req.query?.session;
+    if (requested !== undefined && (typeof requested !== 'string' || !SESSION_NAME_RE.test(requested))) {
+      return reply.code(400).send({ error: 'session name must be letters, digits, _ or -' });
+    }
     const boxId = String(req.query?.box || '');
     if (boxId === '__local__') {
       try {
         const p = await saveUploadLocally(storedUploadName(name), body);
-        const inj = await injectLocalUpload(localSession, p).catch(() => ({ injected: false, mode: 'error' }));
+        const inj = await injectLocalUpload(requested ?? localSession, p).catch(() => ({ injected: false, mode: 'error' }));
         return { path: p, ...inj };
       } catch (e) {
         return reply.code(500).send({ error: e?.message || 'could not save upload' });
@@ -1806,7 +1813,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     }
     if (!res.ok) return reply.code(502).send({ error: `upload failed: ${res.error}` });
     const inj = typeof boxActions.injectUploadPath === 'function'
-      ? await boxActions.injectUploadPath(box, box.sessionName, res.path).catch(() => ({ injected: false, mode: 'error' }))
+      ? await boxActions.injectUploadPath(box, requested ?? box.sessionName, res.path).catch(() => ({ injected: false, mode: 'error' }))
       : { injected: false, mode: 'error' };
     return { path: res.path, ...inj };
   });
@@ -1890,6 +1897,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const boxId = String(req.query?.box || '');
     const box = boxId === '__local__' ? null : await store.getBox(boxId);
     if (boxId !== '__local__' && !box) return reply.code(400).send({ error: 'unknown box' });
+    // Same per-pane targeting as /api/upload; refused before transcribing.
+    const requested = req.query?.session;
+    if (requested !== undefined && (typeof requested !== 'string' || !SESSION_NAME_RE.test(requested))) {
+      return reply.code(400).send({ error: 'session name must be letters, digits, _ or -' });
+    }
 
     let raw;
     try {
@@ -1912,7 +1924,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       return { text, injected: false, mode: 'off' };
     }
 
-    const session = box ? box.sessionName : localSession;
+    const session = requested ?? (box ? box.sessionName : localSession);
     let inj = { injected: false, mode: 'error' };
     if (boxId === '__local__') {
       inj = typeof injectLocalText === 'function'

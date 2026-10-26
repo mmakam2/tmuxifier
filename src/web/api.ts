@@ -361,13 +361,17 @@ export const api = {
   async patchUiSettings(patch: Partial<UiSettings>) {
     return j<UiSettings>(await fetch('/api/ui-settings', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }));
   },
-  async uploadFile(boxId: string, name: string, blob: Blob) {
-    return j<{ path: string; injected: boolean; mode: 'claude' | 'codex' | 'shell' | 'busy' | 'error' }>(await fetch(`/api/upload?box=${encodeURIComponent(boxId)}&name=${encodeURIComponent(name)}`, {
+  // `session` is the pane's own tmux session (duplicate panes attach their
+  // own); omitted, the server falls back to the box's configured one.
+  async uploadFile(boxId: string, name: string, blob: Blob, session?: string) {
+    const s = session ? `&session=${encodeURIComponent(session)}` : '';
+    return j<{ path: string; injected: boolean; mode: 'claude' | 'codex' | 'shell' | 'busy' | 'error' }>(await fetch(`/api/upload?box=${encodeURIComponent(boxId)}&name=${encodeURIComponent(name)}${s}`, {
       method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: blob,
     }));
   },
-  async postVoice(boxId: string, blob: Blob, opts?: { inject?: boolean }) {
-    const q = opts?.inject === false ? '&inject=off' : '';
+  async postVoice(boxId: string, blob: Blob, opts?: { inject?: boolean; session?: string }) {
+    const q = (opts?.inject === false ? '&inject=off' : '')
+      + (opts?.session ? `&session=${encodeURIComponent(opts.session)}` : '');
     return j<{ text: string; injected: boolean; mode: 'claude' | 'codex' | 'shell' | 'busy' | 'error' | 'empty' | 'off' }>(
       await fetch(`/api/voice?box=${encodeURIComponent(boxId)}${q}`, {
         method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: blob,

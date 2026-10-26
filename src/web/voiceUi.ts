@@ -342,7 +342,8 @@ export function createVoiceController(
       // stop inside a single audio frame), so skip the round trip rather than
       // cold-spawning the whisper engine to transcribe silence.
       if (wav.byteLength <= 44) return;
-      const res = await api.postVoice(boxId, new Blob([wav], { type: 'audio/wav' }), sink ? { inject: false } : undefined);
+      // Typed dictation targets this pane's own session (duplicate panes).
+      const res = await api.postVoice(boxId, new Blob([wav], { type: 'audio/wav' }), sink ? { inject: false } : { session: host.session?.() });
       if (sink) {
         if (res.text) sink(res.text);
         else host.write('\r\n\x1b[2m[voice: nothing heard]\x1b[0m\r\n');
