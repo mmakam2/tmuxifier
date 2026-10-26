@@ -54,8 +54,46 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
   // background colour, so clearing while the client still carries a full-screen
   // program's background would flood the terminal instead of blanking it.
   const REPLAY_CLEAR = '\x1b[0m\x1b[H\x1b[2J';
+  // Terminal MODES ride ahead of the replay. A reloaded page reattaches with a
+  // fresh xterm (every mode off), and tmux announces mouse tracking, bracketed
+  // paste, cursor-key mode and the alternate screen only at attach or when one
+  // changes — after a busy session that announcement has long left the 64KB
+  // buffer. The attach() size nudge does not recover it over ssh: the two
+  // back-to-back resizes collapse into one unchanged size on the box, so tmux
+  // never redraws. Without mouse tracking xterm turns each wheel tick into an
+  // arrow key, and scrolling walks the prompt history instead of the pane; only
+  // a hard refresh's webfont refit (a REAL resize) used to bring it back.
+  // So each DEC private mode's last state is tracked from the live stream and
+  // re-encoded by us — never the box's bytes — in the order the stream last set
+  // them: in xterm any mouse-mode reset turns tracking off, so numeric order
+  // (…1002h, 1003l) would replay tmux's "reset all, set some" as mouse OFF.
+  // DECCKM, mouse tracking/encodings, focus events, alt screen, bracketed paste.
+  const REPLAY_MODES = new Set(['1', '1000', '1002', '1003', '1004', '1005', '1006', '1015', '47', '1047', '1049', '2004']);
+  const MODE_RE = /\x1b\[\?([0-9;]*)([hl])/g;
+  // A mode sequence cut off at a chunk boundary, carried into the next chunk.
+  const MODE_PARTIAL_RE = /\x1b(?:\[(?:\?[0-9;]*)?)?$/;
+  function trackModes(entry, d) {
+    const s = entry.modeTail + d;
+    for (const m of s.matchAll(MODE_RE)) {
+      for (const n of m[1].split(';')) {
+        if (!REPLAY_MODES.has(n)) continue;
+        entry.modes.delete(n); // re-insert so Map order = order of last set
+        entry.modes.set(n, m[2]);
+      }
+    }
+    const partial = s.slice(-32).match(MODE_PARTIAL_RE);
+    entry.modeTail = partial ? partial[0] : '';
+  }
+  function replayModes(entry) {
+    let out = '';
+    for (const [n, v] of entry.modes) out += `\x1b[?${n}${v}`;
+    return out;
+  }
   function pipeOutput(entry) {
+    entry.modes = new Map();
+    entry.modeTail = '';
     entry.pty.onData((d) => {
+      trackModes(entry, d);
       entry.buffer = (entry.buffer + d).slice(-REPLAY_MAX);
       for (const fn of entry.listeners) {
         try { fn(d); } catch { /* listener error must not break the fan-out */ }
@@ -205,7 +243,7 @@ export function createSessionManager({ hostKeyPolicy = 'accept-new', graceSecond
     // instead of a blank terminal until the next keystroke.
     if (entry.buffer) {
       const replay = entry.buffer.replace(QUERY_RE, '');
-      if (replay) { try { onData(REPLAY_CLEAR + replay); } catch { /* ignore */ } }
+      if (replay) { try { onData(replayModes(entry) + REPLAY_CLEAR + replay); } catch { /* ignore */ } }
     }
     entry.listeners.add(onData);
     if (!entry.exited) {

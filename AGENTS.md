@@ -237,8 +237,10 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
 - `sessions.js` — PTY lifecycle. PTYs are keyed per viewer; callers act on **groups**
   (`entry.group` = box id, `closeGroup(group, kind?)`). `safeClientId` falls back to `shared`.
   `maxViewersPerBox` (8) with grace-window slot reclamation. Refcounted listeners + `graceSeconds`
-  keep a dropped PTY for reconnects. Reattach replays the last 64KB prefixed with `REPLAY_CLEAR`
-  (SGR reset + clear) — don't rely on the size nudge to clean the screen.
+  keep a dropped PTY for reconnects. Reattach replays the last 64KB prefixed with the tracked
+  DEC private modes (mouse, DECCKM, alt screen, bracketed paste — in last-set order) and
+  `REPLAY_CLEAR` (SGR reset + clear) — don't rely on the size nudge to clean the screen or
+  re-announce modes: over ssh it usually collapses to no resize at all.
 - `localShellActions.js` — the optional Host Shell (`localShell` = `none`/`omz`/`omb`).
   `installAgentHooks()`/`installVoiceLink()` reuse the box pushers over a local `/bin/sh`
   transport, triggered only by `claudeHooks === true` on `PATCH /api/local-shell`.

@@ -196,3 +196,32 @@ test('openLocal reuses existing entry within grace period', async () => {
   await waitFor(() => e1.exited);
   mgr.close(e2);
 });
+
+// Over ssh the attach() size nudge (cols-1 then cols, back to back) usually
+// collapses: ssh reads the final size once, the box's kernel sees no change,
+// and tmux never redraws — so nothing re-announces mouse tracking to a freshly
+// reloaded page. The replay itself has to carry it (sessions.test.js has the
+// unit shape; this pins it against the real transport).
+test('a reattach after mouse mode scrolled out of the replay buffer still restores mouse tracking', async () => {
+  const { box, session, env, sshConfigFile, cleanup } = await setupLocalBox();
+  active = cleanup;
+  const mgr = createSessionManager({ sshConfigFile, spawnEnv: env, graceSeconds: 30 });
+  const e = mgr.open({ key: 'km', box, session, size: { cols: 100, rows: 30 } });
+  let first = '';
+  const off = mgr.attach(e, (d) => { first += d; });
+  await waitFor(() => first.length > 0);
+  await sshRun(buildProbeArgv(box, `tmux set -g mouse on`, { sshConfigFile }), { env });
+  await waitFor(() => first.includes('\x1b[?1000h'));
+  mgr.write(e, `for i in $(seq 1 3000); do echo line-$i-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done; echo FLOOD_""DONE\n`);
+  await waitFor(() => /FLOOD_DONE\r?\n/.test(first.slice(-4096)), 20000);
+  off();
+  mgr.detach(e);                                   // reload: WS gone, PTY kept
+
+  let replay = null;
+  mgr.attach(e, (d) => { if (replay === null) replay = d; });
+  expect(replay).not.toBeNull();
+  const lastSet = replay.lastIndexOf('\x1b[?1000h');
+  expect(lastSet).toBeGreaterThanOrEqual(0);
+  expect(replay.indexOf('\x1b[?1000l', lastSet)).toBe(-1); // nothing turns it back off
+  mgr.close(e);
+}, 40000);

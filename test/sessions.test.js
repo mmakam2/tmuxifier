@@ -475,3 +475,70 @@ test('sized viewers respect the per-box viewer cap when every slot is watched', 
   mgr.attach(browser, () => {});
   expect(() => mgr.ensureSizedViewer({ box: BOX, session: 'main', clientId: 'dev1', cols: 48, rows: 90 })).toThrow(/too many viewers/);
 });
+
+// A reloaded page brings a FRESH xterm (every mode off) to the same PTY inside
+// the grace window, and the replay is only the last 64KB of output. tmux
+// announces mouse tracking, bracketed paste, cursor-key mode and the alternate
+// screen once, at attach (and again only when they change), so after a busy
+// Claude session that announcement has scrolled out of the buffer. The fresh
+// xterm then never learns tmux wants the mouse and turns every wheel tick into
+// an arrow key: scrolling walks the prompt history instead of the pane. The
+// replay therefore leads with the modes the stream last set.
+const MODE_SET = '\x1b[?1049h\x1b[?1h\x1b[?2004h'
+  // tmux's own shape: reset every mouse mode, then set the ones it wants.
+  + '\x1b[?1006l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006h\x1b[?1000h\x1b[?1002h';
+
+test('attach replay restores terminal modes that scrolled out of the replay buffer', () => {
+  const pty = fakePty();
+  const mgr = createSessionManager({ spawn: () => pty });
+  const entry = mgr.open({ key: 'bm', box: { host: 'h' }, session: 'web', size: { cols: 80, rows: 24 } });
+  pty.emit(MODE_SET);
+  pty.emit('X'.repeat(200000)); // pushes the mode announcement out of the buffer
+
+  let got = '';
+  mgr.attach(entry, (d) => { got += d; });
+  const head = got.slice(0, got.indexOf('\x1b[0m\x1b[H\x1b[2J'));
+  expect(head).toBe('\x1b[?1049h\x1b[?1h\x1b[?2004h\x1b[?1003l\x1b[?1006h\x1b[?1000h\x1b[?1002h');
+});
+
+// Order is load-bearing: in xterm any mouse-mode reset turns tracking off, so
+// replaying the last state of each mode in NUMERIC order (…1002h, 1003l) would
+// leave the mouse off — the bug this restore exists to fix.
+test('restored mouse modes keep the order the stream last set them in', () => {
+  const pty = fakePty();
+  const mgr = createSessionManager({ spawn: () => pty });
+  const entry = mgr.open({ key: 'bo', box: { host: 'h' }, session: 'web', size: { cols: 80, rows: 24 } });
+  pty.emit('\x1b[?1000h\x1b[?1002h\x1b[?1000l'); // tracking ends OFF
+  pty.emit('text');
+
+  let got = '';
+  mgr.attach(entry, (d) => { got += d; });
+  expect(got.startsWith('\x1b[?1002h\x1b[?1000l\x1b[0m')).toBe(true);
+});
+
+test('a mode sequence split across PTY chunks is still tracked', () => {
+  const pty = fakePty();
+  const mgr = createSessionManager({ spawn: () => pty });
+  const entry = mgr.open({ key: 'bs', box: { host: 'h' }, session: 'web', size: { cols: 80, rows: 24 } });
+  pty.emit('abc\x1b[?10');
+  pty.emit('00h');
+  pty.emit('Y'.repeat(200000));
+
+  let got = '';
+  mgr.attach(entry, (d) => { got += d; });
+  expect(got.startsWith('\x1b[?1000h\x1b[0m')).toBe(true);
+});
+
+// Box output is untrusted: only an allowlist of modes is restored, each
+// re-encoded by us, never the box's own bytes.
+test('only allowlisted modes are restored', () => {
+  const pty = fakePty();
+  const mgr = createSessionManager({ spawn: () => pty });
+  const entry = mgr.open({ key: 'ba', box: { host: 'h' }, session: 'web', size: { cols: 80, rows: 24 } });
+  pty.emit('\x1b[?12h\x1b[?9999;1006h\x1b[?5h');
+  pty.emit('Z'.repeat(200000));
+
+  let got = '';
+  mgr.attach(entry, (d) => { got += d; });
+  expect(got.startsWith('\x1b[?1006h\x1b[0m')).toBe(true);
+});
