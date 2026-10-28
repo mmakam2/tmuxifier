@@ -498,7 +498,7 @@ untrusted data. Full-stack test: `test/helpers/mcpStdio.js`'s `spawnMcp`.
 
 ## Conventions
 
-- ESM everywhere (`"type": "module"`); Node 20+. Server is plain `.js`; web client is `.ts`.
+- ESM everywhere (`"type": "module"`); Node 20+ to run, 22.12+ to build and test (vite 8 / vitest 5). Server is plain `.js`; web client is `.ts`.
 - TDD: write the failing test first (see `test/`). Tests use **real code, not mocks** — enabled by
   the factories above. A green test over a fake transport proves nothing about the real one.
 - Integration and e2e suites run against an **isolated** box: `test/helpers/localBox.js` spawns

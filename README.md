@@ -42,7 +42,7 @@ back into the same state.
 | Select boxes by group, run a command or bash script with bounded concurrency, and inspect each result. | Provision from reusable presets, inject management keys, discover the container, and link it back as a Tmuxifier box. |
 
 ## Requirements
-- Node 20+
+- Node 20.19+ (the vite 8 build needs it; running the test suite needs 22.12+)
 - The OpenSSH client, with your keys/agent/`~/.ssh/config` already working from the shell
 - Tmuxifier installs `tmux` when a box is added if the remote user is root or has passwordless
   `sudo` for the system package manager
