@@ -60,23 +60,36 @@ test('retrying without an attempt count defaults to ×1', () => {
 
 const win = (id, index, name, active = false) => ({ id, index, name, active });
 
-test('sessionTargets lists the configured session first, its windows indented beneath it', () => {
+test('sessionTargets lists sessions by name, each with its windows indented beneath it', () => {
   const status = { reachable: true, tmux: true, sessions: [
-    { name: 'proj2', windows: 1, windowList: [win('@5', 1, 'zsh')] },
     { name: 'web', windows: 2, windowList: [win('@0', 1, 'zsh'), win('@1', 2, 'claude', true)] },
+    { name: 'proj2', windows: 1, windowList: [win('@5', 1, 'zsh')] },
   ] };
   expect(sessionTargets(status, 'web').map((t) => [t.kind, t.value, t.label])).toEqual([
+    ['session', 's:proj2', 'proj2'],
+    ['window', 'w:proj2:@5', `${WINDOW_INDENT}1: zsh`],
     ['session', 's:web', 'web'],
     ['window', 'w:web:@0', `${WINDOW_INDENT}1: zsh`],
     ['window', 'w:web:@1', `${WINDOW_INDENT}2: claude`],
-    ['session', 's:proj2', 'proj2'],
-    ['window', 'w:proj2:@5', `${WINDOW_INDENT}1: zsh`],
   ]);
 });
 
-test('sessionTargets keeps the configured session offered when tmux no longer lists it', () => {
-  const status = { reachable: true, tmux: true, sessions: [{ name: 'other', windows: 1 }] };
-  expect(sessionTargets(status, 'gone').map((t) => t.value)).toEqual(['s:gone', 's:other']);
+test('sessionTargets keeps one order whichever session the pane is on', () => {
+  // The pane's own session used to be hoisted to the top, so every pane (and
+  // every pane moved onto another session) showed the list in a different
+  // order and the operator had to re-scan it to find the row they wanted.
+  const status = { reachable: true, tmux: true, sessions: [
+    { name: 'alpha', windows: 1 }, { name: 'web', windows: 1 }, { name: 'web-2', windows: 1 },
+  ] };
+  const order = ['s:alpha', 's:web', 's:web-2'];
+  for (const current of ['alpha', 'web', 'web-2']) {
+    expect(sessionTargets(status, current).map((t) => t.value)).toEqual(order);
+  }
+});
+
+test('sessionTargets keeps the configured session offered, in name order, when tmux no longer lists it', () => {
+  const status = { reachable: true, tmux: true, sessions: [{ name: 'alpha', windows: 1 }, { name: 'other', windows: 1 }] };
+  expect(sessionTargets(status, 'gone').map((t) => t.value)).toEqual(['s:alpha', 's:gone', 's:other']);
 });
 
 test('sessionTargets with no snapshot still offers the configured session, defaulting to web', () => {

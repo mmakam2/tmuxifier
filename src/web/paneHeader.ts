@@ -116,18 +116,19 @@ export const WINDOW_INDENT = '  → ';
 
 const UNSWITCHABLE = 'name not switchable from here (allowed: letters, digits, _ -)';
 
-// The dropdown's rows: the box's configured session first (always present — it
-// is the selected value, and it must stay offered even when tmux no longer
-// lists it), its windows indented beneath it, then every other live session
-// followed by its own windows.
+// The dropdown's rows: every session in name order, each followed by its
+// windows indented beneath it. The pane's own session is always present (it is
+// the selected value, and it must stay offered even when tmux no longer lists
+// it) but is NOT hoisted to the top: the order must not depend on which session
+// the pane is on, or every pane shows a different list. Code-unit order, which
+// is tmux's own strcmp order for `tmux ls`.
 export function sessionTargets(status: Status | undefined, sessionName: string | undefined): SessionTarget[] {
   const current = sessionName || 'web'; // store.js defaults an absent name to 'web'
   const live = (status?.sessions ?? []).filter((s) => s.name);
-  const currentLive = live.find((s) => s.name === current);
-  const rows: { name: string; windowList?: TmuxWindow[] }[] = [
-    currentLive ?? { name: current },
-    ...live.filter((s) => s.name !== current),
-  ];
+  const rows: { name: string; windowList?: TmuxWindow[] }[] = live.some((s) => s.name === current)
+    ? [...live]
+    : [...live, { name: current }];
+  rows.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   const out: SessionTarget[] = [];
   for (const s of rows) {
     // Switching to a live session whose name is outside the charset would

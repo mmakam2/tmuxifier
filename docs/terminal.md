@@ -19,7 +19,8 @@ dropdown** on the left; on the
 right a state chip (agent **working**/**waiting** from the health poller, or connection
 state while the terminal reconnects) beside the voice, reconnect ↻, and — in a split —
 undock ✕ buttons, so nothing floats over the terminal itself. The dropdown lists the box's
-live tmux sessions with that session's windows indented beneath it, `→ 1: zsh`-style, and
+live tmux sessions in name order — the same order in every pane, whichever session it is
+on — with each session's windows indented beneath it, `→ 1: zsh`-style, and
 the selected row tracks whichever window the session actually has active — so the dropdown
 answers "which window am I looking at", not just which session. Its contents are re-read
 from the box the moment you reach for the control — hovering it, or tapping it on a phone —

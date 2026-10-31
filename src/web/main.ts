@@ -2714,7 +2714,8 @@ function buildBoxDialog(box?: Box) {
     // armed-row invariant, and a popup we own can be repopulated while it is
     // open — the lesson paneHeader.ts's own update() already learned for the
     // header's picker.
-    targets = sessionTargets(status, sessionInput.value.trim() || (isEdit ? box!.sessionName : '') || 'web');
+    const current = sessionInput.value.trim() || (isEdit ? box!.sessionName : '') || 'web';
+    targets = sessionTargets(status, current);
     // Add mode has no box to run select-window against, so a window is shown
     // for orientation but cannot be picked — disabled-not-hidden, the same
     // treatment an unswitchable session name gets: the window is real, just
@@ -2731,14 +2732,17 @@ function buildBoxDialog(box?: Box) {
     // Re-derive picked exactly like the old sessionSelect.value assignment
     // did: keep it if the row it names still exists (rows, not just targets,
     // so CUSTOM counts as "still exists" the same way `keep === CUSTOM` did),
-    // otherwise snap to the box's own session row (always targets[0] per
-    // sessionTargets' own ordering) or the first target. This runs on every
+    // otherwise snap to the box's own session row, else the row of the session
+    // the list was built for (sessionTargets always emits it, but in name
+    // order, not first), else the first target. This runs on every
     // probe/refresh, not only when picked is empty, so a session killed from
     // outside the picker (an ssh session exiting, someone killing it from a
     // terminal) cannot leave the trigger pointing at a row that no longer
     // exists.
     if (!rows.some((t) => t.value === picked)) {
-      picked = targets.find((t) => t.session === (isEdit ? box!.sessionName : ''))?.value ?? targets[0]?.value ?? '';
+      picked = targets.find((t) => t.session === (isEdit ? box!.sessionName : ''))?.value
+        ?? targets.find((t) => t.kind === 'session' && t.session === current)?.value
+        ?? targets[0]?.value ?? '';
     }
     if (!windowPending) lastPick = picked;
     renderPicker(rows);
