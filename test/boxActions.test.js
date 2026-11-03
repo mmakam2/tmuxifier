@@ -515,17 +515,12 @@ test('the node tool installs a pinned NodeSource major, download-then-execute, w
   expect(remote.indexOf('command -v curl')).toBeLessThan(remote.indexOf('deb.nodesource.com'));
 });
 
-// Unlike the other tools' install-if-missing guards, this one is version-aware:
-// a box that already carries the distro's Node is exactly the one that needs
-// the upgrade, and `command -v npm` would skip it forever.
-test('the node tool re-installs when the present node is older than the pinned major', () => {
+// NodeSource's nodejs Conflicts: with the distro's npm and libnode-dev, and a box
+// with no node can still carry them, so the install drops those first — remove,
+// never purge, and only when dpkg says they are installed.
+test('the node tool clears distro packages that conflict with a NodeSource install', () => {
   const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['node'] });
-  expect(remote).not.toContain('if ! command -v npm >/dev/null 2>&1; then');
-  expect(remote).toContain('node -v');
-  expect(remote).toContain(`-ge ${NODE_MAJOR}`);
-  // NodeSource's nodejs Conflicts: with the distro's npm and libnode-dev, so an
-  // in-place upgrade drops those first — remove, never purge, and only when
-  // dpkg says they are installed.
+  expect(remote).toContain('if ! command -v node >/dev/null 2>&1; then');
   expect(remote).toContain('for p in npm libnode-dev; do');
   expect(remote).toContain('if dpkg -s "$p" >/dev/null 2>&1; then $SUDO env DEBIAN_FRONTEND=noninteractive apt-get remove -y "$p"; fi');
   expect(remote).not.toContain('apt-get purge');

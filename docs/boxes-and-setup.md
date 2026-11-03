@@ -59,18 +59,21 @@ usage.
 The Add/Edit Box modal (and the [Proxmox Provision form](proxmox.md)) also offer an **"Additional
 tools"** checklist that runs in the same provisioning step — a full system update/upgrade,
 curl, git, the GitHub CLI, Node.js 26 + npm, Bubblewrap, and the Codex, Claude Code, and
-Antigravity CLIs — using the same idempotent multi-distro install script, so re-running
-provisioning skips anything already installed.
+Antigravity CLIs — using the same idempotent multi-distro install script.
 
-Node.js is the one entry that does more than install-if-missing. Debian and Ubuntu archives
-ship a Node several majors behind (both Debian 12 and Ubuntu 24.04 carry 18), older than the
-agent CLIs want, so on apt-, dnf- and yum-based boxes the tool installs the pinned major from
+Each tool is installed only if the box doesn't have it, at the newest version available from its
+source. A copy already on the box is never upgraded or reinstalled, including one older than the
+versions below, so re-running provisioning is not an upgrade path. To update packages already on
+a box, tick **System update & upgrade**, or use [Fleet Command](fleet-and-health.md).
+
+Debian and Ubuntu archives ship a Node several majors behind (both Debian 12 and Ubuntu 24.04
+carry 18), older than the agent CLIs want, so on apt-, dnf- and yum-based boxes the tool installs the pinned major from
 [NodeSource](https://github.com/nodesource/distributions) instead; Arch, Alpine and openSUSE
-keep their own current packages. The check is on the version, not just presence: re-running
-setup with Node.js ticked upgrades a box whose Node is older than the pin, removing the
-distro's `npm` and `libnode-dev` packages first (the NodeSource package bundles npm and
-ships the headers libnode-dev owns, so neither can stay). A box already at or above the pin
-is left alone.
+keep their own current packages.
+
+A fresh NodeSource install then moves npm from the version bundled with Node to its newest
+release. If that release doesn't support the box's Node, npm refuses the install and the bundled
+version stays. On Arch, Alpine and openSUSE, npm comes from the distro's own package instead.
 
 ## The Claude Code checkbox
 

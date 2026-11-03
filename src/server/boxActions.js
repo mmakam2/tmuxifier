@@ -157,26 +157,18 @@ const TOOLS = {
     'fi',
   ],
   node: () => [
-    // Version-aware guard, unlike the other tools' install-if-missing: a box
-    // that already carries the distro's Node is exactly the one that needs
-    // the upgrade, and `command -v npm` would skip it forever. Parameter
-    // expansion only (no word splitting — the remote may be zsh) and a
-    // `case` so a non-numeric `node -v` reads as "install" rather than
-    // tripping `[ -ge ]`.
-    'NODE_NEED=1',
-    'if command -v node >/dev/null 2>&1; then',
-    '  v="$(node -v 2>/dev/null || true)"; v="${v#v}"; v="${v%%.*}"',
-    `  case "$v" in ''|*[!0-9]*) ;; *) if [ "$v" -ge ${NODE_MAJOR} ]; then NODE_NEED=0; fi ;; esac`,
-    'fi',
-    'if [ "$NODE_NEED" = 1 ]; then',
+    // Install-if-missing like every tool: a box that already has any Node keeps
+    // it, because a major jump can break what runs there. Re-provisioning is not
+    // an upgrade path; the catalog exists to stand up new boxes.
+    'if ! command -v node >/dev/null 2>&1; then',
     "  SUDO=''",
     "  if [ \"$(id -u)\" != '0' ]; then SUDO='sudo'; fi",
     '  if command -v apt-get >/dev/null 2>&1; then',
     // NodeSource's nodejs bundles npm (a declared Conflicts: npm) and ships
-    // the headers libnode-dev owns (a dpkg file-overwrite failure), so an
-    // in-place upgrade has to drop those two first — remove, never purge or
-    // autoremove, and only when dpkg says they are installed, so a box
-    // without them is untouched.
+    // the headers libnode-dev owns (a dpkg file-overwrite failure), so a box
+    // with no node that still carries those two has to drop them first — remove,
+    // never purge or autoremove, and only when dpkg says they are installed, so
+    // a box without them is untouched.
     '    for p in npm libnode-dev; do',
     '      if dpkg -s "$p" >/dev/null 2>&1; then $SUDO env DEBIAN_FRONTEND=noninteractive apt-get remove -y "$p"; fi',
     '    done',
@@ -210,6 +202,15 @@ const TOOLS = {
     '  else',
     "    echo 'node is not installed and no supported package manager was found' >&2",
     '    exit 127',
+    '  fi',
+    // NodeSource bundles an npm a major behind the newest release, so a new box
+    // would start out of date. --engine-strict makes npm refuse a release this
+    // Node can't run rather than leave a broken npm, and that refusal is not worth
+    // failing setup over: the bundled npm works. Only where Node just came from
+    // NodeSource: on Arch, Alpine and openSUSE the distro's package owns npm, and
+    // overwriting its files would break that package's next upgrade.
+    '  if command -v apt-get >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then',
+    "    $SUDO npm install -g npm@latest --engine-strict || echo 'tmuxifier: keeping the npm bundled with Node' >&2",
     '  fi',
     'fi',
   ],
