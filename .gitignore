@@ -25,6 +25,9 @@ playwright-report/
 # Subagent-driven-development scratch (briefs, reports, diffs, ledger)
 .superpowers/
 
+# MCP server config: `claude mcp add --scope project` writes tokens into this
+.mcp.json
+
 # Claude Code local settings/worktrees (holds machine-specific paths, LAN IPs,
 # and approved-command patterns — never commit to the public repo)
 .claude/
