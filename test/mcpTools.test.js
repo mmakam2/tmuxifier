@@ -192,8 +192,11 @@ test('the operate tools post the camelCase bodies the routes expect', async () =
   const reg = createToolRegistry({ client });
   expect(text(await reg.call('add_box', { host: '192.168.1.20', label: 'db', port: 2222, proxy_jump: 'bastion', session_name: 'main', startup_command: 'claude' }))).toBe('added box db [b9] 192.168.1.20');
   expect(seen.addBox).toEqual({ host: '192.168.1.20', label: 'db', port: 2222, proxyJump: 'bastion', sessionName: 'main', startupCommand: 'claude' });
-  expect(text(await reg.call('start_setup', { box_id: 'b1', oh_my_zsh: true, tools: ['claude'], seed_ai_auth: true, script_id: 'fs-1', script_name: 'Upgrade' }))).toBe('setup s1 running web phase running · T\nwait with wait_for_job kind=setup id=s1');
-  expect(seen.startSetup).toEqual(['b1', { ohMyTmux: false, ohMyZsh: true, ohMyBash: false, tools: ['claude'], seedAiAuth: true, claudeStatusline: false, scriptId: 'fs-1', scriptName: 'Upgrade' }]);
+  expect(text(await reg.call('start_setup', { box_id: 'b1', oh_my_zsh: true, tools: ['claude'], script_id: 'fs-1', script_name: 'Upgrade' }))).toBe('setup s1 running web phase running · T\nwait with wait_for_job kind=setup id=s1');
+  expect(seen.startSetup).toEqual(['b1', { ohMyTmux: false, ohMyZsh: true, ohMyBash: false, tools: ['claude'], claudeStatusline: false, scriptId: 'fs-1', scriptName: 'Upgrade' }]);
+  // Seeding is browser-only (the server 403s it for a device), so a stale caller's flag never travels.
+  await reg.call('start_setup', { box_id: 'b1', seed_ai_auth: true });
+  expect(seen.startSetup[1]).not.toHaveProperty('seedAiAuth');
   expect(text(await reg.call('provision_guest', { preset_id: 'pr1', hostname: 'ct9', tags: ['x'] }))).toBe('provision p1 running ct9 phase allocate · T\nwait with wait_for_job kind=provision id=p1');
   expect(seen.createProvision).toEqual({ presetId: 'pr1', hostname: 'ct9', tags: ['x'] });
   expect(text(await reg.call('guest_power', { box_id: 'b1', action: 'reboot' }))).toBe('lifecycle l1 running reboot web phase resolve · T\nwait with wait_for_job kind=lifecycle id=l1');

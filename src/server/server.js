@@ -10,6 +10,7 @@ import { createLoginRateLimiter } from './rateLimit.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
 import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildSelectWindowRemote, buildKillSessionRemote, buildKillWindowRemote, resolveTools } from './boxActions.js';
 import { assertBoxSafe, SESSION_NAME_RE, WINDOW_ID_RE } from './sshCommand.js';
+import { createDeviceHostGuard } from './deviceHostGuard.js';
 import { provisionKey, terminalKey, localKey, LOCAL_GROUP } from './sessions.js';
 import { upsertConfigFile } from './configFile.js';
 import { readJsonSync, writeJsonSync } from './jsonFile.js';
@@ -114,7 +115,7 @@ const NO_FLEET_SCRIPTS = {
   removeScript: async () => {},
 };
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, paneKindLocal = paneKindLocalDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, uiSettingsStore = null, deviceStore = null, pairingCodes = null, apkBuildManager = null, voiceLinks = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, paneKindLocal = paneKindLocalDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, uiSettingsStore = null, deviceStore = null, deviceHostGuard = createDeviceHostGuard(), pairingCodes = null, apkBuildManager = null, voiceLinks = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -875,6 +876,17 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   app.get('/api/boxes', { preHandler: requireAuth }, async () => store.listBoxes());
   app.post('/api/boxes', { preHandler: requireAuth }, async (req, reply) => {
     try {
+      if (req.deviceId) {
+        const { host, proxyJump } = req.body || {};
+        // assertBoxSafe stringifies, so ['localhost'] would pass its regex; and
+        // only allowlisted text may reach the resolver.
+        if (typeof host !== 'string' || (proxyJump != null && typeof proxyJump !== 'string')) {
+          return reply.code(400).send({ error: 'host and proxyJump must be strings' });
+        }
+        assertBoxSafe({ host, proxyJump });
+        const refusal = await deviceHostGuard.refusal({ host, proxyJump });
+        if (refusal) return reply.code(403).send({ error: refusal });
+      }
       const box = await store.addBox(req.body || {});
       return reply.code(201).send(box);
     } catch (e) {
@@ -1549,6 +1561,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   app.delete('/api/proxmox/presets/:id', { preHandler: requireAuth }, async (req) => { await proxmoxStore.removePreset(req.params.id); return { ok: true }; });
 
   app.post('/api/proxmox/provisions', { preHandler: requireAuth }, async (req, reply) => {
+    // Seeding is browser-only: these options reach the same setup job, on a guest
+    // the token could then read the credentials back from with a Fleet Command.
+    if (req.deviceId && req.body?.setupOptions?.seedAiAuth) {
+      return reply.code(403).send({ error: 'browser session required' });
+    }
     try { return reply.code(201).send(await provisionManager.createProvision(req.body || {})); }
     catch (e) { return reply.code(400).send({ error: e.message }); }
   });
@@ -1564,6 +1581,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const box = await store.getBox(req.params.id);
     if (!box) return reply.code(404).send({ error: 'unknown box' });
     const b = req.body || {};
+    // Seeding copies the host's AI credentials to the box: browser-only, refused
+    // rather than dropped so the caller knows the box was not seeded.
+    if (req.deviceId && b.seedAiAuth) return reply.code(403).send({ error: 'browser session required' });
     let tools;
     try { tools = resolveTools(Array.isArray(b.tools) ? b.tools.join(',') : (typeof b.tools === 'string' ? b.tools : '')); }
     catch { return reply.code(400).send({ error: 'invalid tools' }); }

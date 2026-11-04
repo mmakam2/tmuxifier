@@ -342,3 +342,128 @@ test('Bearer device tokens are restricted to the Android + MCP allowlist; host, 
   expect(boxesAfter[0].host).toBe('192.168.1.50');
   expect(lifecycleCalls).toHaveLength(4);
 });
+
+// S1 follow-up: a stolen device token must not be able to point the host's SSH
+// identity at this machine, or have the host's AI credentials sent anywhere.
+async function buildGuardedApp() {
+  const setupCalls = [];
+  const provisionCalls = [];
+  const store = createStore({ dataDir: dir });
+  const guarded = buildServer({
+    config: {
+      bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
+      passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir,
+      localShell: 'none', configPath: path.join(dir, 'config.json'),
+    },
+    store,
+    sessions: { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, closeGroup() {}, onExit() {} },
+    statusChecker: { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) },
+    passkeyStore: createPasskeyStore({ dataDir: dir }),
+    deviceStore,
+    setupManager: {
+      start: (box, options) => { setupCalls.push(options); return { id: 's1', status: 'running' }; },
+      listJobs: () => [], getJob: () => null, currentForBox: () => null,
+    },
+    provisionManager: {
+      createProvision: async (body) => { provisionCalls.push(body); return { id: 'p1', status: 'running' }; },
+      listProvisions: () => [], getProvision: () => null,
+    },
+  });
+  const { token } = (await guarded.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'MCP' } })).json();
+  const login = await guarded.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === 'tmuxifier_session');
+  return {
+    app: guarded, store, setupCalls, provisionCalls,
+    bearer: { authorization: `Bearer ${token}` },
+    browser: { cookie: `${c.name}=${c.value}` },
+  };
+}
+
+test.each([
+  ['loopback host', { host: '127.0.0.1' }],
+  ['short loopback spelling', { host: '127.1' }],
+  ['loopback jump hop', { host: '192.168.1.50', proxyJump: 'root@localhost' }],
+])('a device token cannot add a box with a %s, and nothing is stored', async (_name, payload) => {
+  const t = await buildGuardedApp();
+  const res = await t.app.inject({ method: 'POST', url: '/api/boxes', headers: t.bearer, payload });
+  expect(res.statusCode).toBe(403);
+  expect(res.json().error).toMatch(/this machine/);
+  expect(await t.store.listBoxes()).toEqual([]);
+});
+
+// String(['127.0.0.1']) passes assertBoxSafe's regex, so a non-string host must
+// never reach the store or the resolver.
+test.each([
+  ['array host', { host: ['127.0.0.1'] }],
+  ['missing host', {}],
+  ['array proxyJump', { host: '192.168.1.50', proxyJump: ['localhost'] }],
+  ['host outside the ssh allowlist', { host: '-oProxyCommand=id' }],
+])('a device token gets a 400 for a %s, and nothing is stored', async (_name, payload) => {
+  const t = await buildGuardedApp();
+  const res = await t.app.inject({ method: 'POST', url: '/api/boxes', headers: t.bearer, payload });
+  expect(res.statusCode).toBe(400);
+  expect(await t.store.listBoxes()).toEqual([]);
+});
+
+test('a device token can still add a box on another machine', async () => {
+  const t = await buildGuardedApp();
+  const res = await t.app.inject({ method: 'POST', url: '/api/boxes', headers: t.bearer, payload: { host: '192.168.1.50' } });
+  expect(res.statusCode).toBe(201);
+  expect((await t.store.listBoxes()).map((b) => b.host)).toEqual(['192.168.1.50']);
+});
+
+test('a browser session can still add a loopback box', async () => {
+  const t = await buildGuardedApp();
+  const res = await t.app.inject({ method: 'POST', url: '/api/boxes', headers: t.browser, payload: { host: '127.0.0.1' } });
+  expect(res.statusCode).toBe(201);
+});
+
+// Truthy non-booleans count: the setup route coerces with !!, so 1 would seed.
+test.each([[true], [1], ['yes']])('a device token cannot start a setup with seedAiAuth=%j', async (seedAiAuth) => {
+  const t = await buildGuardedApp();
+  const box = await t.store.addBox({ host: '192.168.1.50' });
+  const res = await t.app.inject({ method: 'POST', url: `/api/boxes/${box.id}/setup`, headers: t.bearer, payload: { seedAiAuth } });
+  expect(res.statusCode).toBe(403);
+  expect(res.json()).toEqual({ error: 'browser session required' });
+  expect(t.setupCalls).toEqual([]);
+});
+
+test('a device token can start a setup without seeding', async () => {
+  const t = await buildGuardedApp();
+  const box = await t.store.addBox({ host: '192.168.1.50' });
+  const res = await t.app.inject({ method: 'POST', url: `/api/boxes/${box.id}/setup`, headers: t.bearer, payload: { seedAiAuth: false, ohMyTmux: true } });
+  expect(res.statusCode).toBe(201);
+  expect(t.setupCalls[0]).toMatchObject({ seedAiAuth: false, ohMyTmux: true });
+});
+
+test('a browser session can still seed from setup', async () => {
+  const t = await buildGuardedApp();
+  const box = await t.store.addBox({ host: '192.168.1.50' });
+  const res = await t.app.inject({ method: 'POST', url: `/api/boxes/${box.id}/setup`, headers: t.browser, payload: { seedAiAuth: true } });
+  expect(res.statusCode).toBe(201);
+  expect(t.setupCalls[0].seedAiAuth).toBe(true);
+});
+
+// Provisioning hands setupOptions straight to the setup job, so seeding here
+// would land the credentials on a guest the same token can then run commands on.
+test.each([[true], [1], ['yes']])('a device token cannot provision with setupOptions.seedAiAuth=%j', async (seedAiAuth) => {
+  const t = await buildGuardedApp();
+  const res = await t.app.inject({ method: 'POST', url: '/api/proxmox/provisions', headers: t.bearer, payload: { presetId: 'pr1', hostname: 'ct9', setupOptions: { seedAiAuth } } });
+  expect(res.statusCode).toBe(403);
+  expect(res.json()).toEqual({ error: 'browser session required' });
+  expect(t.provisionCalls).toEqual([]);
+});
+
+test('a device token can provision without seeding', async () => {
+  const t = await buildGuardedApp();
+  const res = await t.app.inject({ method: 'POST', url: '/api/proxmox/provisions', headers: t.bearer, payload: { presetId: 'pr1', hostname: 'ct9', setupOptions: { ohMyTmux: true } } });
+  expect(res.statusCode).toBe(201);
+  expect(t.provisionCalls).toHaveLength(1);
+});
+
+test('a browser session can still seed from provisioning', async () => {
+  const t = await buildGuardedApp();
+  const res = await t.app.inject({ method: 'POST', url: '/api/proxmox/provisions', headers: t.browser, payload: { presetId: 'pr1', hostname: 'ct9', setupOptions: { seedAiAuth: true } } });
+  expect(res.statusCode).toBe(201);
+  expect(t.provisionCalls[0].setupOptions.seedAiAuth).toBe(true);
+});

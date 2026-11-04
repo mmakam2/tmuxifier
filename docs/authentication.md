@@ -129,7 +129,10 @@ A few things worth knowing:
   `sessionName` and `POST /api/proxmox/lifecycle-jobs` to non-destructive power actions). Every
   other route — Host Shell, upload/voice, deletions, export/import, credential/settings
   administration, pairing codes, APK builds, device revocation, and passkey management — refuses a
-  device token with `403 browser session required`.
+  device token with `403 browser session required`. So does AI-auth seeding, on both setup and
+  provisioning. The allowlist limits a stolen token but doesn't make it harmless: it can still run
+  commands on every box and add new ones. See
+  [what a stolen token can still do](mcp.md#what-a-stolen-token-can-still-do).
 - Once enrolled, the device authenticates every request with `Authorization: Bearer <token>`; it
   never needs the password again unless it re-enrolls.
 

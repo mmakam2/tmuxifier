@@ -167,6 +167,8 @@ injected as arguments — that is what makes them testable without mocks. Follow
 - `passkeyStore.js` — `data/passkeys.json` CRUD, `passkeyOnly`, pinned RP id (pinned by first
   enrollment, cleared with the last credential, which also disarms `passkeyOnly`). A corrupt store
   fails **open** by design.
+- `deviceHostGuard.js` — refuses a device-token `POST /api/boxes` whose host or jump hop resolves
+  to this machine or can't be resolved. A speed bump, not a boundary (see its header).
 - `deviceStore.js` — Android/MCP device tokens: SHA-256 digests of 32-byte tokens, `timingSafeEqual`,
   `touch` throttled to once a minute, corrupt fails open.
 - `pairingCodes.js` — single-use 120s pairing codes (≤4 outstanding), minted only by a browser
@@ -184,7 +186,9 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
 - **Auth.** `requireAuth` is async: signed session cookie first, then `Authorization: Bearer
   <device token>` (sets `req.deviceId` and enforces the default-deny `DEVICE_ALLOWED_ROUTES`
   allowlist — Android + MCP routes only, with `PATCH /api/boxes/:id` restricted to `sessionName`
-  and `POST /api/proxmox/lifecycle-jobs` to power actions). Passkey routes mount in both auth modes.
+  and `POST /api/proxmox/lifecycle-jobs` to power actions; `seedAiAuth` is refused on setup and
+  provisioning, and `POST /api/boxes` goes through `deviceHostGuard`). Passkey routes mount in both
+  auth modes.
   `POST /api/devices/enroll` bypasses `requireAuth` — it authenticates with the password (403
   under armed passkey-only, 501 in OAuth mode) or a pairing code, over the login rate-limit bucket.
   `POST /api/devices/pair` is browser-session only (a device must not mint invites).

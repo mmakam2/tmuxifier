@@ -56,6 +56,15 @@ session-level `default-shell` on exact `=local:` only if `=local` exists) and us
 targets in `buildEnsureTmuxRemote`. Suites: unit/integration `2796/2796` across 204 files,
 typecheck clean, Android JVM `11/11` suites green.
 
+**Status note, 2026-11-04 (S1 follow-up, v1.24.75):** a post-release audit of v1.24.74 found the
+allowlist still let a device token reach the host and the host's AI credentials: `POST /api/boxes`
+accepted loopback, `POST /api/fleet/jobs` runs any command, and `seedAiAuth` was honored on setup
+and provisioning. Device tokens now get a `403` for `seedAiAuth` on both routes, and for a box whose
+host or jump hop resolves to this machine or can't be resolved (`deviceHostGuard.js`). The operator
+chose to keep `add_box`, so the host check is deliberately **partial**: a re-pointed name or a TCP
+forwarder still passes. `docs/mcp.md` now states that residual and the mitigation (the host's key
+out of its own `authorized_keys`).
+
 ---
 
 ## Findings and fix tracking

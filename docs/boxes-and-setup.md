@@ -167,7 +167,7 @@ token as a plaintext `export` line in those rc files; seeding such a box again r
 Deleting the token file un-seeds the box for new shells (the rc line does nothing without it).
 **Seeding hands that box your Claude and/or Codex subscription identity, exactly as if you'd
 logged in on it yourself — seed only boxes you trust the way you'd trust anyone holding your own
-login.**
+login.** Seeding needs a browser session: the Android app and the MCP server can't request it.
 
 ## Post-setup script
 

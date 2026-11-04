@@ -96,8 +96,8 @@ Every tool returns compact text. Ids come from `list_boxes` / `list_jobs` / `lis
 | `scroll_pane` | Scroll a mouse-aware TUI (a Claude transcript) by wheel events; refused, with an explanation, on a plain shell. |
 | `run_fleet_command` | Run a command or a saved script (`script_id`) on several boxes as a fleet job. |
 | `cancel_fleet_job` | Cancel a running fleet job. |
-| `add_box` | Register a new box. |
-| `start_setup` | Start a server-side setup job (tmux, shell frameworks, tools, AI-auth seeding, post-setup script). |
+| `add_box` | Register a new box. A host that resolves to the Tmuxifier machine, or doesn't resolve from it, is refused; add those from the browser. |
+| `start_setup` | Start a server-side setup job (tmux, shell frameworks, tools, post-setup script). AI-auth seeding is browser-only. |
 | `provision_guest` | Create an LXC container from a preset, link it, start its setup. |
 | `guest_power` | `start` / `shutdown` / `reboot` / `stop` the guest a box is linked to. |
 | `wait_for_agent` | Block until the box's agent state is one of `until` (default `waiting`) or `timeout_sec` (default 120, max 540) passes. |
@@ -128,12 +128,29 @@ session name, 32 sessions per box), and the tool description marks them untruste
 The exclusion is enforced on both sides: the HTTP client behind the tools implements only the
 routes the tools need, and the server's `requireAuth` enforces a default-deny device-token
 allowlist (`403 browser session required` outside the Android Console and MCP surface, with
-lifecycle jobs restricted to non-destructive power actions). There is no path — neither in
-`src/mcp/apiClient.js` nor on the server with the token from `data/mcp-token.json` — for
-deprovisioning or readdressing guests, touching the Host Shell, deleting boxes, devices, passkeys
-or scripts, forgetting SSH host keys, or any settings or credential administration (Proxmox hosts
-and keys, NetBox, services, voice, appearance, export/import, the Android APK). Widening that
-surface is a deliberate, reviewed edit to both `src/mcp/apiClient.js` and `src/server/server.js`.
+lifecycle jobs restricted to non-destructive power actions). Neither `src/mcp/apiClient.js` nor
+the server, with the token from `data/mcp-token.json`, offers a route for deprovisioning or
+readdressing guests, the Host Shell, deleting boxes, devices, passkeys or scripts, forgetting SSH
+host keys, AI-auth seeding, or any settings or credential administration (Proxmox hosts and keys,
+NetBox, services, voice, appearance, export/import, the Android APK). Widening that surface is a
+deliberate, reviewed edit to both `src/mcp/apiClient.js` and `src/server/server.js`.
+
+### What a stolen token can still do
+
+The routes above are closed, but the tools that remain are powerful, so treat
+`data/mcp-token.json` like SSH access to your fleet:
+
+- **It can run any command on every box**, through `run_fleet_command`. That includes reading
+  whatever a box holds, such as AI credentials seeded onto it earlier from the browser.
+- **It can add boxes.** `add_box` refuses a host or jump hop that resolves to the Tmuxifier machine
+  and any name it can't resolve, but that check is not a security boundary. It runs once, when the
+  box is added, and only sees what this host resolves. A name re-pointed afterwards, or a machine
+  that forwards TCP to this host's sshd, still gets through.
+- **So don't rely on the check to protect the host.** If the Tmuxifier host's own SSH key is in its
+  own `authorized_keys`, such a box gives the token a shell on the host, and with it `.env`, the
+  cookie secret and every credential sealed with it. Remove that entry unless you need it.
+
+If a token may have leaked, revoke it in Settings → Devices.
 
 ## Transport
 
