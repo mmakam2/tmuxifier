@@ -4,6 +4,7 @@ import os from 'node:os';
 import { buildEnsureTmuxRemote } from './boxActions.js';
 import { createAgentHooksPusher } from './claudeAgentHooks.js';
 import { createVoiceLinkPusher } from './claudeVoiceLink.js';
+import { sanitizeSession, shSingleQuote } from './sshCommand.js';
 import { sshPipe } from './sshRun.js';
 import { buildVoiceWriterRemote } from './voiceWriter.js';
 
@@ -11,8 +12,26 @@ const SETUP_TIMEOUT_MS = 120000;
 
 export function buildEnsureLocalShellScript(shell, sessionName = 'local') {
   if (shell === 'none') return '';
-  if (shell === 'omz') return buildEnsureTmuxRemote(sessionName, undefined, { installOhMyZsh: true });
-  if (shell === 'omb') return buildEnsureTmuxRemote(sessionName, undefined, { installOhMyBash: true });
+  // Never create or respawn the Host Shell session here: creating it inside
+  // the HTTP request lands the tmux server in tmuxifier.service's cgroup
+  // (defeating localTmuxScope's systemd-run --scope), and respawning window 1
+  // with -k SIGKILLs whatever the operator is running (e.g. a live Claude
+  // session while enabling Claude hooks). If =local already exists, update its
+  // session-level default-shell for newly opened windows; otherwise leave
+  // creation to localTmuxScope.ensure / openLocal on next attach.
+  const clean = sanitizeSession(sessionName);
+  const exact = shSingleQuote(`=${clean}`);
+  // set-option -t takes a target-pane, where a bare `=name` is parsed as a
+  // window name; the trailing `:` pins `=name:` to the exact session.
+  const exactTarget = shSingleQuote(`=${clean}:`);
+  if (shell === 'omz') {
+    const base = buildEnsureTmuxRemote(sessionName, undefined, { installOhMyZsh: true, createSession: false });
+    return `${base}\n[ -n "\${ZSH_BIN-}" ] && "$TMUX_BIN" has-session -t ${exact} 2>/dev/null && "$TMUX_BIN" set-option -t ${exactTarget} default-shell "$ZSH_BIN" 2>/dev/null || true`;
+  }
+  if (shell === 'omb') {
+    const base = buildEnsureTmuxRemote(sessionName, undefined, { installOhMyBash: true, createSession: false });
+    return `${base}\n[ -n "\${BASH_BIN-}" ] && "$TMUX_BIN" has-session -t ${exact} 2>/dev/null && "$TMUX_BIN" set-option -t ${exactTarget} default-shell "$BASH_BIN" 2>/dev/null || true`;
+  }
   throw new Error('invalid shell');
 }
 

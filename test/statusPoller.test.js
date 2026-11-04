@@ -1,5 +1,7 @@
 import { test, expect } from 'vitest';
 import { createStatusPoller } from '../src/server/statusPoller.js';
+import { createProxmoxInventory, mergeProxmoxStatus } from '../src/server/proxmoxInventory.js';
+import { createHealthHistory } from '../src/server/healthHistory.js';
 
 const fakeStore = (boxes) => ({ listBoxes: async () => boxes });
 
@@ -475,4 +477,59 @@ test('a throwing local sampler still records the real boxes', async () => {
   const [snap, bx] = calls[0];
   expect(snap.__local__).toBeUndefined();
   expect(bx.map((b) => b.id)).toEqual(['b1']);
+});
+
+test('probeOne overlapping pollOnce does not strip proxmoxState=stopped from other linked boxes or fire false down events', async () => {
+  let release;
+  let gated = false;
+  const gate = new Promise((r) => { release = r; });
+  const boxes = [
+    { id: 'b1', label: 'web-01', host: '192.168.1.10', proxmox: { hostId: 'H1', node: 'pve', vmid: 120, kind: 'lxc', fp: { name: 'web-01', mac: 'BC:24:11:00:00:01' } } },
+    { id: 'b2', label: 'db-off', host: '192.168.1.11', proxmox: { hostId: 'H1', node: 'pve', vmid: 121, kind: 'lxc', fp: { name: 'db-off', mac: 'BC:24:11:00:00:02' } } },
+  ];
+  const inventory = createProxmoxInventory({
+    proxmoxStore: {
+      getHost: async () => ({ id: 'H1', name: 'pve', endpoint: 'pve.example.com:8006', tokenSecret: 's' }),
+      listHosts: async () => [{ id: 'H1', name: 'pve', endpoint: 'pve.example.com:8006' }],
+    },
+    makeClient: () => ({
+      clusterResources: async () => {
+        if (gated) await gate;
+        return [
+          { vmid: 120, node: 'pve', type: 'lxc', status: 'running', name: 'web-01' },
+          { vmid: 121, node: 'pve', type: 'lxc', status: 'stopped', name: 'db-off' },
+        ];
+      },
+    }),
+    now: () => 1000, log: () => {},
+  });
+  const history = createHealthHistory({});
+  const probed = [];
+  const poller = createStatusPoller({
+    store: fakeStore(boxes),
+    statusChecker: {
+      checkBox: async (b) => {
+        probed.push(b.id);
+        return b.id === 'b1' ? { reachable: true } : { reachable: false, error: 'Connection timed out' };
+      },
+    },
+    statusEnricher: { collect: (bx) => inventory.refreshLinked(bx), merge: mergeProxmoxStatus },
+    history,
+  });
+
+  // Seed history cleanly: b1 running, b2 stopped.
+  await poller.pollOnce();
+  expect(probed).toEqual(['b1']);
+  probed.length = 0;
+
+  // Now probeOne('b1') starts while pollOnce() overlaps it on the same PVE sweep window.
+  gated = true;
+  const pOne = poller.probeOne('b1');
+  const pSweep = poller.pollOnce();
+  release();
+  await Promise.all([pOne, pSweep]);
+
+  expect(probed).not.toContain('b2'); // stopped linked container b2 was never SSH-probed
+  expect(poller.getSnapshot().b2.proxmoxState).toBe('stopped');
+  expect(history.getEvents({}).events).toEqual([]); // no false down event on b2
 });

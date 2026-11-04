@@ -205,3 +205,24 @@ test('the trust bundle adds the certificate to the system roots rather than repl
   expect(bundle.length).toBe(tls.rootCertificates.length + 1);
   for (const root of tls.rootCertificates) expect(bundle).toContain(root);
 });
+
+test('createLifecycleJob allows only power actions and refuses deprovision/readdress before any HTTP request', async () => {
+  const calls = [];
+  const c = createApiClient({
+    baseUrl: 'http://127.0.0.1:7437',
+    token: 'tok',
+    request: async (o) => { calls.push(o); return { status: 201, json: { id: 'lc-1' }, text: '{"id":"lc-1"}' }; },
+  });
+  for (const bad of ['deprovision', 'readdress', '', undefined, 'destroy']) {
+    await expect(c.createLifecycleJob({ boxId: 'b1', action: bad })).rejects.toMatchObject({
+      kind: 'http',
+      status: 400,
+      path: '/api/proxmox/lifecycle-jobs',
+    });
+  }
+  expect(calls).toEqual([]);
+  for (const ok of ['start', 'shutdown', 'reboot', 'stop']) {
+    await expect(c.createLifecycleJob({ boxId: 'b1', action: ok })).resolves.toEqual({ id: 'lc-1' });
+  }
+  expect(calls).toHaveLength(4);
+});

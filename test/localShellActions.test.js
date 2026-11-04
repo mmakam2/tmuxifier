@@ -1,27 +1,32 @@
 import { test, expect } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import { buildEnsureLocalShellScript, createLocalShellActions, runLocalScriptStdin } from '../src/server/localShellActions.js';
 import { buildAgentHooksInstallScript } from '../src/server/claudeAgentHooks.js';
 import { buildVoiceWriterRemote } from '../src/server/voiceWriter.js';
 import { buildVoiceLinkInstallScript } from '../src/server/claudeVoiceLink.js';
 
-test('buildEnsureLocalShellScript enables Oh My Zsh in local tmux session', () => {
+test('buildEnsureLocalShellScript installs Oh My Zsh without creating a session or killing live windows', () => {
   const script = buildEnsureLocalShellScript('omz');
 
   expect(script).toContain('https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh');
   expect(script).toContain('apt-get install -y --no-install-recommends zsh');
+  expect(script).not.toContain('new-session');
+  expect(script).not.toContain('respawn-window');
   expect(script).toContain('"$TMUX_BIN" has-session -t \'=local\'');
-  expect(script).toContain('"$TMUX_BIN" set-option -g default-shell "$ZSH_BIN"');
-  expect(script).toContain('respawn-window -t \'local\':$W -k "$ZSH_BIN"');
+  expect(script).toContain('"$TMUX_BIN" set-option -t \'=local:\' default-shell "$ZSH_BIN"');
 });
 
-test('buildEnsureLocalShellScript enables Oh My Bash in local tmux session', () => {
+test('buildEnsureLocalShellScript installs Oh My Bash without creating a session or killing live windows', () => {
   const script = buildEnsureLocalShellScript('omb');
 
   expect(script).toContain('https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh');
+  expect(script).not.toContain('new-session');
+  expect(script).not.toContain('respawn-window');
   expect(script).toContain('"$TMUX_BIN" has-session -t \'=local\'');
-  expect(script).toContain('"$TMUX_BIN" set-option -g default-shell "$BASH_BIN"');
-  expect(script).toContain('respawn-window -t \'local\':$W -k "$BASH_BIN"');
+  expect(script).toContain('"$TMUX_BIN" set-option -t \'=local:\' default-shell "$BASH_BIN"');
 });
 
 test('createLocalShellActions runs framework setup from the user home directory', async () => {
@@ -55,16 +60,65 @@ test('createLocalShellActions skips setup for none', async () => {
   expect(calls).toEqual([]);
 });
 
-test('the ensure script targets the configured tmux session name, not a hardcoded local', async () => {
+test('the ensure script targets the configured tmux session name with an exact = match', async () => {
   const custom = String(buildEnsureLocalShellScript('omz', 'sess42'));
-  expect(custom).toContain('sess42');
+  expect(custom).toContain("'=sess42'");
   const scripts = [];
   const actions = createLocalShellActions({
     run: async (script) => { scripts.push(String(script)); return { code: 0, stdout: '', stderr: '' }; },
     localSession: 'sess42',
   });
   await actions.ensureReady('omz');
-  expect(scripts[0]).toContain('sess42');
+  expect(scripts[0]).toContain("'=sess42'");
+});
+
+test('ensureReady against an isolated tmux socket neither spawns an un-scoped server nor kills a live window in =local', async () => {
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lsa-tmux-'));
+  const home = path.join(dir, 'home');
+  const tmuxTmp = path.join(dir, 'tmux');
+  await fs.promises.mkdir(home, { recursive: true });
+  await fs.promises.mkdir(tmuxTmp, { recursive: true, mode: 0o700 });
+  // Pre-seed framework dirs so ensureReady skips network clones and exercises
+  // the real shell + tmux commands end-to-end.
+  await fs.promises.mkdir(path.join(home, '.tmux'), { recursive: true });
+  await fs.promises.writeFile(path.join(home, '.tmux', '.tmux.conf'), '');
+  await fs.promises.writeFile(path.join(home, '.tmux.conf.local'), '');
+  await fs.promises.mkdir(path.join(home, '.oh-my-bash'), { recursive: true });
+  await fs.promises.writeFile(path.join(home, '.bashrc'), 'source "$OSH"/oh-my-bash.sh\n');
+  const { TMUX: _drop, ...cleanEnv } = process.env;
+  const env = { ...cleanEnv, HOME: home, TMUX_TMPDIR: tmuxTmp };
+  const actions = createLocalShellActions({ cwd: home, env, localSession: 'local' });
+
+  try {
+    // 1. With no =local session running, ensureReady must NOT start a tmux server
+    //    (that is localTmuxScope's job under systemd-run --scope).
+    await actions.ensureReady('omb');
+    expect(() => execFileSync('tmux', ['has-session', '-t', '=local'], { env, stdio: 'ignore' })).toThrow();
+
+    // 2. With only a prefix-twin =local2 running, ensureReady must not create
+    //    =local or touch =local2.
+    execFileSync('tmux', ['-f', '/dev/null', 'new-session', '-d', '-s', 'local2', 'sleep 60'], { env });
+    await actions.ensureReady('omb');
+    expect(() => execFileSync('tmux', ['has-session', '-t', '=local'], { env, stdio: 'ignore' })).toThrow();
+    expect(execFileSync('tmux', ['show-options', '-t', '=local2:', '-v', 'default-shell'], { env, encoding: 'utf8' }).trim()).toBe('');
+
+    // 3. With a live =local session, ensureReady leaves window 1's PID untouched
+    //    and sets default-shell only on =local.
+    execFileSync('tmux', ['new-session', '-d', '-s', 'local', 'sleep 60'], { env });
+    const pidBefore = execFileSync('tmux', ['list-panes', '-t', '=local', '-F', '#{pane_pid}'], { env, encoding: 'utf8' }).trim();
+
+    await actions.ensureReady('omb');
+
+    const pidAfter = execFileSync('tmux', ['list-panes', '-t', '=local', '-F', '#{pane_pid}'], { env, encoding: 'utf8' }).trim();
+    const localShellAfter = execFileSync('tmux', ['show-options', '-t', '=local:', '-v', 'default-shell'], { env, encoding: 'utf8' }).trim();
+    const local2ShellAfter = execFileSync('tmux', ['show-options', '-t', '=local2:', '-v', 'default-shell'], { env, encoding: 'utf8' }).trim();
+    expect(pidAfter).toBe(pidBefore);
+    expect(localShellAfter).toMatch(/bash$/);
+    expect(local2ShellAfter).toBe('');
+  } finally {
+    try { execFileSync('tmux', ['kill-server'], { env, stdio: 'ignore' }); } catch { /* already gone */ }
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('installAgentHooks runs the standard install script locally with the hook bytes on stdin', async () => {

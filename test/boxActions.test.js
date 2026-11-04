@@ -814,10 +814,14 @@ test('buildEnsureTmuxRemote can omit session creation, deferring it past the see
   expect(remote).toContain('command -v tmux'); // still installs tmux
 });
 
-test('buildEnsureTmuxRemote still creates the session by default', () => {
-  const remote = buildEnsureTmuxRemote('web', "echo 'hi'");
+test('buildEnsureTmuxRemote still creates the session by default and uses exact =session targets on window queries', () => {
+  const remote = buildEnsureTmuxRemote('web', "echo 'hi'", { installOhMyZsh: true, installOhMyBash: true });
   expect(remote).toContain("\"$TMUX_BIN\" has-session -t '=web'");
   expect(remote).toContain("\"$TMUX_BIN\" new-session -d -s 'web' 'echo '\\''hi'\\'''");
+  expect(remote).toContain("list-windows -t '=web'");
+  expect(remote).toContain("respawn-window -t '=web':$W");
+  expect(remote).not.toContain("list-windows -t 'web'");
+  expect(remote).not.toContain("respawn-window -t 'web':$W");
 });
 
 test('buildEnsureSessionRemote creates the session and quotes the startup command', () => {

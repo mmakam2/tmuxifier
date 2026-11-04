@@ -125,12 +125,15 @@ session name, 32 sessions per box), and the tool description marks them untruste
 
 ## What it cannot do
 
-The exclusion is structural: the HTTP client behind the tools implements only the routes the
-tools need. There is no code path — not a disabled one, none — for deprovisioning guests,
-deleting boxes, devices, passkeys or scripts, forgetting SSH host keys, or any settings or
-credential administration (Proxmox hosts and keys, NetBox, services, voice, appearance,
-export/import, the Android APK). Widening that surface is a deliberate, reviewed edit to
-`src/mcp/apiClient.js`.
+The exclusion is enforced on both sides: the HTTP client behind the tools implements only the
+routes the tools need, and the server's `requireAuth` enforces a default-deny device-token
+allowlist (`403 browser session required` outside the Android Console and MCP surface, with
+lifecycle jobs restricted to non-destructive power actions). There is no path — neither in
+`src/mcp/apiClient.js` nor on the server with the token from `data/mcp-token.json` — for
+deprovisioning or readdressing guests, touching the Host Shell, deleting boxes, devices, passkeys
+or scripts, forgetting SSH host keys, or any settings or credential administration (Proxmox hosts
+and keys, NetBox, services, voice, appearance, export/import, the Android APK). Widening that
+surface is a deliberate, reviewed edit to both `src/mcp/apiClient.js` and `src/server/server.js`.
 
 ## Transport
 

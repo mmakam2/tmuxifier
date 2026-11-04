@@ -13,6 +13,19 @@ test('parseTmuxSessions maps fields', () => {
   ]);
 });
 
+test('parseTmuxSessions treats #{session_attached} >= 2 as attached (multi-viewer panes)', () => {
+  // tmux's #{session_attached} is the count of attached clients (0, 1, 2, ...),
+  // not a 0/1 flag. Two open browser panes or browser + Android sizing viewer
+  // produce 2+, which must stay attached: true so agent notifications stay suppressed.
+  const out = 'none:1:0:1718000000:claude\none:1:1:1718000000:claude\ntwo:2:2:1718000000:claude\nthree:1:3:1718000000:zsh\n';
+  expect(parseTmuxSessions(out)).toEqual([
+    { name: 'none', windows: 1, attached: false, activity: 1718000000, paneCmd: 'claude' },
+    { name: 'one', windows: 1, attached: true, activity: 1718000000, paneCmd: 'claude' },
+    { name: 'two', windows: 2, attached: true, activity: 1718000000, paneCmd: 'claude' },
+    { name: 'three', windows: 1, attached: true, activity: 1718000000, paneCmd: 'zsh' },
+  ]);
+});
+
 test('the probe reads the active window last-output time, not the session key-input time', () => {
   // `#{session_activity}` is bumped by KEY INPUT and attach, not by pane output:
   // a claude that has been thinking for minutes without a keystroke reads as

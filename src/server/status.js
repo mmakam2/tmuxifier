@@ -246,7 +246,7 @@ export function parseTmuxSessions(stdout) {
     const [name, windows, attached, activity, paneCmd] = line.split(':');
     if (!name || name.length > SESSION_NAME_MAX || UNSAFE_NAME_RE.test(name)) continue;
     if (!DIGITS_RE.test(windows || '') || !DIGITS_RE.test(attached || '') || !/^\d*$/.test(activity ?? '')) continue;
-    out.push({ name, windows: Number(windows), attached: attached === '1', activity: Number(activity), paneCmd: cleanWindowName(paneCmd || '') });
+    out.push({ name, windows: Number(windows), attached: Number(attached) > 0, activity: Number(activity), paneCmd: cleanWindowName(paneCmd || '') });
   }
   return out;
 }

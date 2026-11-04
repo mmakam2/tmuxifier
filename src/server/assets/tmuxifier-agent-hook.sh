@@ -35,6 +35,7 @@ json_str() {
   printf '%s' "$IN" \
     | sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
     | head -n 1 \
+    | tr -d '\r\n' \
     | tr -c 'A-Za-z0-9._-' '_'
 }
 

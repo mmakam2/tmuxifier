@@ -221,6 +221,33 @@ test('agent_needs_input is never gated — a background agent asking for the ope
   expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/);
 });
 
+test('newline-terminated and multi-line JSON payloads keep exact notification_type and agent_id tokens', async () => {
+  // Real Claude Code hook stdin and POSIX/BusyBox sed emit newline-terminated
+  // lines; without stripping \r\n before tr -c, the trailing newline became `_`
+  // (`idle_prompt_`, `sub.sub-1_`), bypassing busy_live and breaking pairing.
+  const { dir, env } = await hookEnv('web');
+  await runHook('subagent-start', env, '{\n  "hook_event_name": "SubagentStart",\n  "agent_id": "sub-1",\n  "agent_type": "Explore"\n}\n');
+  await runHook('subagent-start', env, '{"hook_event_name":"SubagentStart","agent_id":"sub-2"}\r\n');
+  expect((await fs.readdir(busyDir(dir))).sort()).toEqual(['sub.sub-1', 'sub.sub-2']);
+
+  await runHook('stop', env, '{"hook_event_name":"Stop"}\n');
+  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/);
+
+  await runHook('notify', env, '{\n  "hook_event_name": "Notification",\n  "notification_type": "idle_prompt",\n  "message": "Claude is waiting"\n}\n');
+  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/);
+
+  // Pair multi-line SubagentStart with compact single-line SubagentStop.
+  await runHook('subagent-stop', env, SUBAGENT('sub-1'));
+  expect(await fs.readdir(busyDir(dir))).toEqual(['sub.sub-2']);
+
+  await runHook('notify', env, '{"hook_event_name":"Notification","notification_type":"agent_completed"}\r\n');
+  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/);
+
+  await runHook('subagent-stop', env, SUBAGENT('sub-2'));
+  await runHook('notify', env, '{\n  "hook_event_name": "Notification",\n  "notification_type": "agent_completed"\n}\n');
+  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/);
+});
+
 test('gate events write no marker of their own, and the busy dir stays invisible to the probe', async () => {
   const { dir, env } = await hookEnv('web');
   for (const [ev, stdin] of [['subagent-start', SUBAGENT('s')], ['subagent-stop', SUBAGENT('s')], ['pretool', BG_TOOL]]) {

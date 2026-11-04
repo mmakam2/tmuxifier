@@ -255,3 +255,90 @@ test('OAuth mode: password enroll still 501s but a pairing code enrolls', async 
   const ok = await app2.inject({ method: 'POST', url: '/api/devices/enroll', payload: { code, name: 'Fold' } });
   expect(ok.statusCode).toBe(200);
 });
+
+test('Bearer device tokens are restricted to the Android + MCP allowlist; host, destructive, and admin routes return 403', async () => {
+  const lifecycleCalls = [];
+  const appScoped = buildServer({
+    config: {
+      bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
+      passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir,
+      localShell: 'none', configPath: path.join(dir, 'config.json'),
+    },
+    store: createStore({ dataDir: dir }),
+    sessions: { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, closeGroup() {}, onExit() {} },
+    statusChecker: { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) },
+    passkeyStore: createPasskeyStore({ dataDir: dir }),
+    deviceStore,
+    lifecycleManager: {
+      createJob: async (body) => { lifecycleCalls.push(body); return { id: 'lc-1', ...body, status: 'running' }; },
+      listJobs: () => [],
+      getJob: () => null,
+      hasActiveJob: () => false,
+    },
+  });
+  const { token } = (await appScoped.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'MCP' } })).json();
+  const bearer = { authorization: `Bearer ${token}` };
+
+  // Allowed device/MCP routes pass auth:
+  expect((await appScoped.inject({ method: 'GET', url: '/api/me', headers: bearer })).statusCode).toBe(200);
+  const created = await appScoped.inject({ method: 'POST', url: '/api/boxes', headers: bearer, payload: { host: '192.168.1.50', sessionName: 'web' } });
+  expect(created.statusCode).toBe(201);
+  const boxId = created.json().id;
+  // Android setSession (sessionName-only PATCH) is allowed:
+  const setSess = await appScoped.inject({ method: 'PATCH', url: `/api/boxes/${boxId}`, headers: bearer, payload: { sessionName: 'ops' } });
+  expect(setSess.statusCode).toBe(200);
+  expect(setSess.json().sessionName).toBe('ops');
+  // MCP guest_power actions (start/shutdown/reboot/stop) reach lifecycleManager:
+  for (const action of ['start', 'shutdown', 'reboot', 'stop']) {
+    const lc = await appScoped.inject({ method: 'POST', url: '/api/proxmox/lifecycle-jobs', headers: bearer, payload: { boxId, action } });
+    expect(lc.statusCode).toBe(201);
+  }
+  expect(lifecycleCalls.map((c) => c.action)).toEqual(['start', 'shutdown', 'reboot', 'stop']);
+
+  // Forbidden routes (Host Shell, onRequest upload/voice, box deletion/SSH rewrite,
+  // deprovision/readdress, import/export, device list, script/credential CRUD) must 403:
+  const forbidden = [
+    { method: 'GET', url: '/api/local-shell' },
+    { method: 'PATCH', url: '/api/local-shell', payload: { shell: 'omz', claudeHooks: true } },
+    { method: 'POST', url: '/api/local-shell/reconnect' },
+    { method: 'POST', url: '/api/upload?box=__local__&filename=a.txt', headers: { ...bearer, 'content-type': 'application/octet-stream' }, payload: Buffer.from('hi') },
+    { method: 'POST', url: `/api/voice?box=${boxId}`, headers: { ...bearer, 'content-type': 'audio/webm' }, payload: Buffer.from('hi') },
+    { method: 'POST', url: '/api/voice/install', payload: { model: 'base.en' } },
+    { method: 'PATCH', url: '/api/voice/settings', payload: { enabled: true } },
+    { method: 'DELETE', url: `/api/boxes/${boxId}` },
+    { method: 'PATCH', url: `/api/boxes/${boxId}`, payload: { host: '10.0.0.99' } },
+    { method: 'PATCH', url: `/api/boxes/${boxId}`, payload: { sessionName: 'ops', startupCommand: 'id' } },
+    { method: 'POST', url: `/api/boxes/${boxId}/forget-hostkey` },
+    { method: 'POST', url: `/api/boxes/${boxId}/seed-ai-auth`, payload: {} },
+    { method: 'POST', url: `/api/boxes/${boxId}/reconnect` },
+    { method: 'POST', url: '/api/proxmox/lifecycle-jobs', payload: { boxId, action: 'deprovision' } },
+    { method: 'POST', url: '/api/proxmox/lifecycle-jobs', payload: { boxId, action: 'readdress', vlan: 10 } },
+    { method: 'GET', url: '/api/export' },
+    { method: 'POST', url: '/api/import', payload: { boxes: [] } },
+    { method: 'GET', url: '/api/devices' },
+    { method: 'GET', url: '/api/devices/apk/build' },
+    { method: 'POST', url: '/api/fleet/scripts', payload: { name: 's', command: 'uptime' } },
+    { method: 'PATCH', url: '/api/fleet/scripts/fs-1', payload: { command: 'id' } },
+    { method: 'DELETE', url: '/api/fleet/scripts/fs-1' },
+    { method: 'POST', url: '/api/proxmox/hosts', payload: {} },
+    { method: 'PUT', url: '/api/proxmox/root-password', payload: { password: 'secret' } },
+    { method: 'PUT', url: `/api/boxes/${boxId}/proxmox`, payload: {} },
+    { method: 'DELETE', url: `/api/boxes/${boxId}/proxmox` },
+    { method: 'PUT', url: '/api/netbox/settings', payload: {} },
+    { method: 'DELETE', url: '/api/netbox/settings' },
+    { method: 'POST', url: '/api/netbox/test', payload: {} },
+    { method: 'POST', url: '/api/services', payload: {} },
+    { method: 'PATCH', url: '/api/services/s1', payload: {} },
+    { method: 'DELETE', url: '/api/services/s1' },
+  ];
+  for (const spec of forbidden) {
+    const res = await appScoped.inject({ headers: bearer, ...spec });
+    expect(res.statusCode, `${spec.method} ${spec.url}`).toBe(403);
+    expect(res.json(), `${spec.method} ${spec.url}`).toEqual({ error: 'browser session required' });
+  }
+  // Box survived DELETE and SSH host rewrite attempts:
+  const boxesAfter = (await appScoped.inject({ method: 'GET', url: '/api/boxes', headers: bearer })).json();
+  expect(boxesAfter).toHaveLength(1);
+  expect(boxesAfter[0].host).toBe('192.168.1.50');
+  expect(lifecycleCalls).toHaveLength(4);
+});

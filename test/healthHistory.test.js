@@ -1,5 +1,6 @@
 import { test, expect } from 'vitest';
 import { sampleOf, classifyTransitions, initThresholdState, createHealthHistory } from '../src/server/healthHistory.js';
+import { parseTmuxSessions } from '../src/server/status.js';
 
 const TH = { cpu: 90, mem: 90, disk: 90, hysteresis: 5 };
 
@@ -232,6 +233,29 @@ test('classifyTransitions suppresses agent-input while attached', () => {
   const w = { up: true, agent: 'working', agentAttached: true };
   const idle = { up: true, agent: 'waiting', agentAttached: true };
   expect(classifyTransitions(w, idle, TH, initThresholdState()).events).not.toContainEqual({ kind: 'agent-input' });
+});
+
+test('multi-viewer tmux session (#{session_attached} >= 2) suppresses agent-input and agent-done', () => {
+  const h = createHealthHistory({});
+  const box = { id: 'b1', label: 'web-01', host: 'h1', sessionName: 'web' };
+  const working2 = {
+    reachable: true,
+    sessions: parseTmuxSessions('web:1:2:1000:claude\n'),
+    agentMarks: { web: { state: 'working', ts: 990 } },
+  };
+  const waiting2 = {
+    reachable: true,
+    sessions: parseTmuxSessions('web:1:2:1005:claude\n'),
+    agentMarks: { web: { state: 'waiting', ts: 1005 } },
+  };
+  const exited2 = {
+    reachable: true,
+    sessions: parseTmuxSessions('web:1:2:1010:zsh\n'),
+  };
+  h.record({ b1: working2 }, [box]);
+  h.record({ b1: waiting2 }, [box]);
+  h.record({ b1: exited2 }, [box]);
+  expect(h.getEvents({}).events).toEqual([]);
 });
 
 test('classifyTransitions emits agent-done when the agent disappears on an up box, detached', () => {

@@ -786,3 +786,79 @@ test('/term closes 1008 "invalid session" before opening a session', async () =>
   expect(code).toBe(1008);
   expect(openCalled).toBe(false);
 }, 10000);
+
+test('/term does not spawn or leak attached PTYs if the client disconnects during pre-open await (box, provision, and __local__)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-ws-race-'));
+  const config = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 60,
+    passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
+    sshConfigPath: path.join(dir, 'nope'), localShell: 'none',
+  };
+  const realStore = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
+  const saved = await realStore.addBox({ host: '192.168.1.10', sessionName: 'web' });
+
+  const pending = [];
+  const pause = () => {
+    let release;
+    const wait = new Promise((r) => { release = r; });
+    let resolveEntered;
+    const entered = new Promise((r) => { resolveEntered = r; });
+    const slot = { entered, release: () => release(), signalAndWait: async () => { resolveEntered(); await wait; } };
+    pending.push(slot);
+    return slot;
+  };
+  const gatedStore = {
+    ...realStore,
+    async getBox(id) {
+      await pending[pending.length - 1].signalAndWait();
+      return realStore.getBox(id);
+    },
+  };
+  const localTmuxScope = {
+    ensure: async () => {
+      await pending[pending.length - 1].signalAndWait();
+      return { created: false };
+    },
+  };
+
+  const spawned = [];
+  const sessions = createSessionManager({
+    graceSeconds: 60,
+    spawn: (cmd, argv) => {
+      const pty = { cmd, argv, killed: false, onData() {}, onExit() {}, write() {}, resize() {}, kill() { pty.killed = true; } };
+      spawned.push(pty);
+      return pty;
+    },
+  });
+
+  const app = buildServer({
+    config, store: gatedStore, sessions, localTmuxScope,
+    statusChecker: { checkBox: async () => ({ reachable: true }) },
+  });
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const { port } = app.server.address();
+  teardown = async () => { await app.close(); await fs.rm(dir, { recursive: true, force: true }); };
+
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === COOKIE_NAME);
+  const cookie = `${c.name}=${c.value}`;
+
+  for (const query of [
+    `box=${saved.id}&cols=80&rows=24&client=raceTerm`,
+    `box=${saved.id}&mode=provision&cols=80&rows=24&ohMyTmux=0&ohMyZsh=0&ohMyBash=0`,
+    'box=__local__&cols=80&rows=24&client=raceLocal',
+  ]) {
+    const slot = pause();
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/term?${query}`, { headers: { cookie } });
+    await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+    await slot.entered;
+    ws.close();
+    await new Promise((r) => ws.on('close', r));
+    await delay(30);
+    slot.release();
+    await delay(30);
+  }
+
+  expect(spawned).toEqual([]);
+  expect(sessions.hasLiveSessionForBox(saved.id)).toBe(false);
+}, 10000);

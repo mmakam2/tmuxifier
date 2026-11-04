@@ -599,10 +599,57 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     deviceStore.touch(device.id).catch(() => {});
     return true;
   }
+  // Default-deny route allowlist for Bearer device tokens (Android Console and
+  // the MCP server, whose token lives in plaintext data/mcp-token.json). Every
+  // host-shell, credential/settings, upload/voice, export/import, and deletion
+  // route requires an interactive browser session.
+  const DEVICE_LIFECYCLE_ACTIONS = new Set(['start', 'shutdown', 'reboot', 'stop']);
+  const DEVICE_ALLOWED_ROUTES = Object.freeze(new Set([
+    'GET /api/me',
+    'GET /api/devices/apk/info',
+    'GET /api/devices/apk',
+    'GET /api/devices/fcm-config',
+    'PATCH /api/devices/self',
+    'GET /api/boxes',
+    'POST /api/boxes',
+    'PATCH /api/boxes/:id',
+    'POST /api/boxes/:id/sessions',
+    'POST /api/boxes/:id/window',
+    'POST /api/boxes/:id/kill',
+    'POST /api/boxes/:id/probe',
+    'GET /api/boxes/:id/pane',
+    'POST /api/boxes/:id/keys',
+    'POST /api/boxes/:id/setup',
+    'GET /api/boxes/:id/setup',
+    'GET /api/setup',
+    'GET /api/setup/:id',
+    'GET /api/status',
+    'GET /api/health/series',
+    'GET /api/health/events',
+    'GET /api/fleet/scripts',
+    'POST /api/fleet/jobs',
+    'GET /api/fleet/jobs',
+    'GET /api/fleet/jobs/:id',
+    'POST /api/fleet/jobs/:id/cancel',
+    'GET /api/proxmox/hosts',
+    'GET /api/proxmox/presets',
+    'GET /api/proxmox/guests',
+    'POST /api/proxmox/provisions',
+    'GET /api/proxmox/provisions',
+    'GET /api/proxmox/provisions/:id',
+    'POST /api/proxmox/lifecycle-jobs',
+    'GET /api/proxmox/lifecycle-jobs',
+    'GET /api/proxmox/lifecycle-jobs/:id',
+  ]));
+
   // Async on purpose (Fastify dispatches on arity): cookie first — the common
   // browser case stays synchronous — then the device-token branch.
   async function requireAuth(req, reply) {
-    if (isAuthed(req) || (await deviceAuthed(req))) return;
+    if (isAuthed(req)) return;
+    if (await deviceAuthed(req)) {
+      if (DEVICE_ALLOWED_ROUTES.has(`${req.method} ${req.routeOptions?.url || ''}`)) return;
+      return reply.code(403).send({ error: 'browser session required' });
+    }
     return reply.code(401).send({ error: 'unauthorized' });
   }
 
@@ -836,7 +883,16 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
   app.patch('/api/boxes/:id', { preHandler: requireAuth }, async (req, reply) => {
     try {
-      const patch = req.body || {};
+      const patch = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+      if (req.deviceId) {
+        // Android Console uses PATCH /api/boxes/:id solely to repoint
+        // sessionName; rewriting SSH host/user/port/proxyJump/startupCommand
+        // requires a browser session.
+        const keys = Object.keys(patch);
+        if (keys.length === 0 || keys.some((k) => k !== 'sessionName')) {
+          return reply.code(403).send({ error: 'browser session required' });
+        }
+      }
       if ('source' in patch || 'proxmox' in patch) {
         return reply.code(400).send({ error: 'proxmox linkage must use the dedicated link route' });
       }
@@ -1630,6 +1686,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
 
   app.post('/api/proxmox/lifecycle-jobs', { preHandler: requireAuth }, async (req, reply) => {
+    if (req.deviceId && !DEVICE_LIFECYCLE_ACTIONS.has(req.body?.action)) {
+      return reply.code(403).send({ error: 'browser session required' });
+    }
     if (['hostId', 'node', 'vmid'].some((key) => key in (req.body || {}))) {
       return reply.code(400).send({ error: 'lifecycle targets are resolved from the box link' });
     }
@@ -1981,6 +2040,22 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     scope.get('/term', { websocket: true }, async (socket, req) => {
       if (!hasTrustedOrigin(req)) { socket.close(1008, 'forbidden origin'); return; }
       if (!isAuthed(req)) { socket.close(1008, 'unauthorized'); return; }
+      // Track close/error synchronously before the first await: a client that
+      // disconnects while localTmuxScope.ensure or store.getBox is in flight
+      // fires 'close' before we reach open/attach, which would otherwise leak
+      // the listener forever.
+      let socketClosed = socket.readyState !== 1;
+      let onSocketClose = null;
+      const markClosed = () => {
+        socketClosed = true;
+        if (onSocketClose) {
+          const fn = onSocketClose;
+          onSocketClose = null;
+          fn();
+        }
+      };
+      socket.once('close', markClosed);
+      socket.once('error', markClosed);
       const { box: boxId, cols, rows, mode } = req.query;
 
       // --- Local shell ---
@@ -1996,6 +2071,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         // lands in this service's cgroup and dies with the next restart.
         // ensure() never rejects — a host without systemd-run just falls back.
         if (localTmuxScope) await localTmuxScope.ensure(config.localShell);
+        if (socketClosed || socket.readyState !== 1) return;
 
         let entry;
         try {
@@ -2011,6 +2087,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
           try { if (socket.readyState === 1) socket.send(d); } catch {}
         });
         const offExit = sessions.onExit(entry, () => { try { socket.close(1000); } catch {} });
+        onSocketClose = () => {
+          if (typeof off === 'function') off();
+          if (typeof offExit === 'function') offExit();
+          sessions.detach(entry);
+        };
+        if (socketClosed || socket.readyState !== 1) { markClosed(); return; }
         socket.on('message', (raw) => {
           let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
           // Drop malformed frames: pty.write throws on non-strings, and that
@@ -2019,15 +2101,11 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
           if (msg.t === 'i' && typeof msg.d === 'string') sessions.write(entry, msg.d);
           else if (msg.t === 'r' && Number.isFinite(msg.c) && Number.isFinite(msg.r)) sessions.resize(entry, { cols: msg.c, rows: msg.r });
         });
-        socket.on('close', () => {
-          if (typeof off === 'function') off();
-          if (typeof offExit === 'function') offExit();
-          sessions.detach(entry);
-        });
         return;
       }
 
       const box = await store.getBox(boxId);
+      if (socketClosed || socket.readyState !== 1) return;
       if (!box) { socket.close(1008, 'unknown box'); return; }
 
       // --- Provision mode ---
@@ -2089,17 +2167,18 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
           try { setupManager?.markInteractiveResult(boxId, code); } catch {}
           try { socket.close(1000); } catch {}
         });
-        socket.on('message', (raw) => {
-          let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
-          if (msg.t === 'i' && typeof msg.d === 'string') sessions.write(entry, msg.d);
-        });
-        socket.on('close', () => {
+        onSocketClose = () => {
           if (typeof off === 'function') off();
           if (typeof offExit === 'function') offExit();
           // Kill the PTY only if this was the last socket watching the entry —
           // a replacement socket (same provision:<boxId> key) may be attached.
           if (sessions.closeIfUnwatched) sessions.closeIfUnwatched(entry);
           else sessions.close(entry);
+        };
+        if (socketClosed || socket.readyState !== 1) { markClosed(); return; }
+        socket.on('message', (raw) => {
+          let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
+          if (msg.t === 'i' && typeof msg.d === 'string') sessions.write(entry, msg.d);
         });
         return;
       }
@@ -2150,15 +2229,16 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         try { if (socket.readyState === 1) socket.send(d); } catch { /* socket closing */ }
       });
       const offExit = sessions.onExit(entry, () => { try { socket.close(1000); } catch {} });
+      onSocketClose = () => {
+        if (typeof off === 'function') off();
+        if (typeof offExit === 'function') offExit();
+        sessions.detach(entry);
+      };
+      if (socketClosed || socket.readyState !== 1) { markClosed(); return; }
       socket.on('message', (raw) => {
         let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
         if (msg.t === 'i' && typeof msg.d === 'string') sessions.write(entry, msg.d);
         else if (msg.t === 'r' && Number.isFinite(msg.c) && Number.isFinite(msg.r)) sessions.resize(entry, { cols: msg.c, rows: msg.r });
-      });
-      socket.on('close', () => {
-        if (typeof off === 'function') off();
-        if (typeof offExit === 'function') offExit();
-        sessions.detach(entry);
       });
     });
 
@@ -2170,8 +2250,21 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       if (!hasTrustedOrigin(req)) { socket.close(1008, 'forbidden origin'); return; }
       if (!isAuthed(req)) { socket.close(1008, 'unauthorized'); return; }
       if (!voiceLinks) { socket.close(1011, 'voice link unavailable'); return; }
+      let socketClosed = socket.readyState !== 1;
+      let onSocketClose = null;
+      const markClosed = () => {
+        socketClosed = true;
+        if (onSocketClose) {
+          const fn = onSocketClose;
+          onSocketClose = null;
+          fn();
+        }
+      };
+      socket.once('close', markClosed);
+      socket.once('error', markClosed);
       const boxId = String(req.query.box || '');
       const box = boxId === '__local__' ? null : await store.getBox(boxId);
+      if (socketClosed || socket.readyState !== 1) return;
       if (boxId !== '__local__' && !box) { socket.close(1008, 'unknown box'); return; }
       if (box && setupManager?.currentForBox(boxId)?.status === 'running') {
         socket.close(1008, 'setting up');
@@ -2181,9 +2274,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         onReady: () => { try { if (socket.readyState === 1) socket.send('ready'); } catch {} },
         onClose: (code, reason) => { try { socket.close(code, reason); } catch {} },
       });
+      onSocketClose = () => link.close(1000, 'closed');
+      if (socketClosed || socket.readyState !== 1) { markClosed(); return; }
       socket.on('message', (raw, isBinary) => { if (isBinary) link.write(raw); });
-      socket.on('close', () => link.close(1000, 'closed'));
-      socket.on('error', () => link.close(1000, 'closed'));
     });
   });
 

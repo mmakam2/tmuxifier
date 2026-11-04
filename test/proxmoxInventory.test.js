@@ -1157,3 +1157,45 @@ test('E3 findFollowCandidates names the profile whose candidate config could not
     found: [], unreachable: ['cluster-b'], locked: [], twins: [],
   });
 });
+
+test('a single-box refreshLinked does not poison a concurrent full-fleet refreshLinked, while identical fleet sweeps coalesce', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let clusterCalls = 0;
+  const boxes = [
+    linkedTo('b1', 'H1', 'a1n', 120, { fp: FP }),
+    linkedTo('b2', 'H1', 'a1n', 121, { fp: { name: 'web02', mac: 'BC:24:11:AA:BB:CD' } }),
+    linkedTo('b3', 'H1', 'a1n', 122, { fp: { name: 'web03', mac: 'BC:24:11:AA:BB:CE' } }),
+  ];
+  const inventory = createProxmoxInventory({
+    proxmoxStore: { getHost: async (id) => HOSTS[id], listHosts: async () => [HOSTS.H1] },
+    makeClient: () => ({
+      clusterResources: async () => {
+        clusterCalls += 1;
+        await gate;
+        return [
+          { vmid: 120, node: 'a1n', type: 'lxc', status: 'running', name: 'web01' },
+          { vmid: 121, node: 'a1n', type: 'lxc', status: 'stopped', name: 'web02' },
+          { vmid: 122, node: 'a1n', type: 'lxc', status: 'stopped', name: 'web03' },
+        ];
+      },
+    }),
+    now: () => 1000, log: () => {},
+  });
+
+  // Single-box probeOne([b1]) starts first; full-fleet pollOnce() and /api/proxmox/guests overlap it.
+  const single = inventory.refreshLinked([boxes[0]]);
+  const fleet1 = inventory.refreshLinked(boxes);
+  const fleet2 = inventory.getLinkedGuests(boxes);
+  release();
+  const [rSingle, rFleet1, rFleet2] = await Promise.all([single, fleet1, fleet2]);
+  expect(rSingle.map((r) => r.boxId)).toEqual(['b1']);
+  expect(rFleet1.map((r) => [r.boxId, r.state])).toEqual([
+    ['b1', 'running'],
+    ['b2', 'stopped'],
+    ['b3', 'stopped'],
+  ]);
+  expect(rFleet2).toBe(rFleet1);
+  // One call for the single-box subset + one coalesced call for both full-fleet readers.
+  expect(clusterCalls).toBe(2);
+});

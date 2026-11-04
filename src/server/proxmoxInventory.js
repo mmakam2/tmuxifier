@@ -43,7 +43,7 @@ export function createProxmoxInventory({
   log = (...args) => console.log(...args),
 }) {
   const cache = new Map();
-  let inFlight = null;
+  const inFlight = new Map();
   // Late-bound by index.js once the lifecycle manager exists: a drift write
   // must not rewrite a link that a running job snapshotted (resolveTarget
   // would abort the job). Defaults open so tests without jobs need no wiring.
@@ -486,10 +486,23 @@ export function createProxmoxInventory({
     return records;
   }
 
+  // Keyed by the requested linked-box set so full-fleet sweeps (`pollOnce()`
+  // and `GET /api/proxmox/guests`) still coalesce onto one PVE query while a
+  // single-box `statusPoller.probeOne([box])` never hands its 1-record array
+  // back to a concurrent full-fleet caller.
+  const refreshKey = (boxes) => (boxes || [])
+    .filter((item) => item && item.proxmox)
+    .map((item) => `${item.id}\u0000${item.label || ''}\u0000${item.proxmox.hostId}\u0000${item.proxmox.node}\u0000${Number(item.proxmox.vmid)}\u0000${linkKind(item)}`)
+    .sort()
+    .join('\u0001');
+
   function refreshLinked(boxes) {
-    if (inFlight) return inFlight;
-    inFlight = doRefresh(boxes).finally(() => { inFlight = null; });
-    return inFlight;
+    const key = refreshKey(boxes);
+    const existing = inFlight.get(key);
+    if (existing) return existing;
+    const run = doRefresh(boxes).finally(() => { inFlight.delete(key); });
+    inFlight.set(key, run);
+    return run;
   }
 
   // Physical-node health for the standby dashboard's Proxmox readout: one

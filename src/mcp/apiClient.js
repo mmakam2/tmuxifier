@@ -52,6 +52,8 @@ export const ROUTES = freezeRoutes({
 // or `a/b` id cannot normalize its way out of the template into a route the
 // table deliberately omits.
 export const ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+// Non-destructive power actions only — deprovision and readdress are browser-only.
+const LIFECYCLE_POWER_ACTIONS = new Set(['start', 'shutdown', 'reboot', 'stop']);
 
 export class ApiError extends Error {
   constructor(kind, message, { status, path, baseUrl } = {}) {
@@ -156,7 +158,14 @@ export function createApiClient({ baseUrl, token, insecure = false, ca, timeoutM
     createProvision: (body) => call('createProvision', { body }),
     listProvisions: () => call('listProvisions'),
     getProvision: (id) => call('getProvision', { id }),
-    createLifecycleJob: (body) => call('createLifecycleJob', { body }),
+    createLifecycleJob: (body) => {
+      if (!LIFECYCLE_POWER_ACTIONS.has(body?.action)) {
+        return Promise.reject(new ApiError('http', `unsupported lifecycle action: ${String(body?.action ?? '')}`, {
+          status: 400, path: ROUTES.createLifecycleJob[1], baseUrl: base,
+        }));
+      }
+      return call('createLifecycleJob', { body });
+    },
     listLifecycleJobs: () => call('listLifecycleJobs'),
     getLifecycleJob: (id) => call('getLifecycleJob', { id }),
   };

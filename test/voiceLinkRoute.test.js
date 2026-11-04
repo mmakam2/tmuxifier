@@ -146,3 +146,47 @@ test('the permissions policy allows the microphone for this origin regardless of
   const res = await app.inject({ method: 'GET', url: '/api/status' });
   expect(res.headers['permissions-policy']).toContain('microphone=(self)');
 });
+
+test('does not open or leak a voice link if the socket closes while store.getBox is in flight', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-vl-race-'));
+  const config = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
+    passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
+    sshConfigPath: path.join(dir, 'nope'), localShell: 'none',
+  };
+  const realStore = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
+  const saved = await realStore.addBox({ host: '192.168.1.10', sessionName: 'web' });
+  let resolveEntered;
+  const entered = new Promise((r) => { resolveEntered = r; });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const store = {
+    ...realStore,
+    async getBox(id) {
+      resolveEntered();
+      await gate;
+      return realStore.getBox(id);
+    },
+  };
+  const voiceLinks = fakeLinks();
+  const sessions = { open() { return {}; }, openLocal() { return {}; }, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
+  const app = buildServer({ config, store, sessions, voiceLinks, statusChecker: { checkBox: async () => ({ reachable: true }) } });
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const { port } = app.server.address();
+  teardown = async () => { await app.close(); await fs.rm(dir, { recursive: true, force: true }); };
+
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === COOKIE_NAME);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/voice-link?box=${saved.id}`, {
+    headers: { cookie: `${c.name}=${c.value}` },
+  });
+  await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+  await entered;
+  ws.close();
+  await closeOf(ws);
+  await tick(30);
+  release();
+  await tick(30);
+
+  expect(voiceLinks.opens).toHaveLength(0);
+});

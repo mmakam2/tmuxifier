@@ -182,7 +182,9 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
 (gates per the load-bearing rules above):
 
 - **Auth.** `requireAuth` is async: signed session cookie first, then `Authorization: Bearer
-  <device token>` (sets `req.deviceId`). Passkey routes mount in both auth modes.
+  <device token>` (sets `req.deviceId` and enforces the default-deny `DEVICE_ALLOWED_ROUTES`
+  allowlist — Android + MCP routes only, with `PATCH /api/boxes/:id` restricted to `sessionName`
+  and `POST /api/proxmox/lifecycle-jobs` to power actions). Passkey routes mount in both auth modes.
   `POST /api/devices/enroll` bypasses `requireAuth` — it authenticates with the password (403
   under armed passkey-only, 501 in OAuth mode) or a pairing code, over the login rate-limit bucket.
   `POST /api/devices/pair` is browser-session only (a device must not mint invites).

@@ -29,9 +29,25 @@ internal fun killBody(session: String, windowId: String?): String = buildJsonObj
     if (windowId != null) put("windowId", windowId)
 }.toString()
 
-class ApiClient(val baseUrl: String, private val token: String?) {
-    private val http = OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build()
+internal val defaultHttpClient: OkHttpClient =
+    OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build()
+
+class ApiClient(
+    val baseUrl: String,
+    private val token: String?,
+    internal val http: OkHttpClient = defaultHttpClient,
+) {
     private val jsonType = "application/json".toMediaType()
+
+    override fun equals(other: Any?): Boolean =
+        this === other || (other is ApiClient && baseUrl == other.baseUrl && token == other.token && http === other.http)
+
+    override fun hashCode(): Int {
+        var result = baseUrl.hashCode()
+        result = 31 * result + (token?.hashCode() ?: 0)
+        result = 31 * result + System.identityHashCode(http)
+        return result
+    }
 
     private fun errorOf(body: String, code: Int): String = try {
         ApiJson.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.content ?: "HTTP $code"
