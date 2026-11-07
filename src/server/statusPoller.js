@@ -76,9 +76,22 @@ export function createStatusPoller({
               Promise.resolve().then(() => localAgent.sample()),
               new Promise((r) => { const t = setTimeout(() => r(null), localSampleTimeoutMs); t.unref?.(); }),
             ]).catch(() => null);
+            // The pseudo-box is ALWAYS in `recorded` while a sampler is
+            // configured: record() prunes the seen watermark, series and last
+            // sample of every box absent from `recorded`, so dropping it on a
+            // lost race would wipe the Host Shell's acknowledgement and re-arm
+            // a `done` the operator already saw. With no sample the snapshot
+            // simply has no `__local__` key — record() skips a box with no
+            // status without pruning it.
+            recorded = [...boxes, { id: LOCAL_BOX_ID, label: 'Host Shell', host: 'localhost', sessionName: localSession }];
             if (local) {
-              snap = { ...snapshot, [LOCAL_BOX_ID]: local };
-              recorded = [...boxes, { id: LOCAL_BOX_ID, label: 'Host Shell', host: 'localhost', sessionName: localSession }];
+              // Only the Host Shell's own session is tracked. The client can
+              // open and acknowledge just that one, so any other host tmux
+              // session would latch `done` forever with no way to clear it.
+              const own = Array.isArray(local.sessions)
+                ? { ...local, sessions: local.sessions.filter((s) => s && s.name === localSession) }
+                : local;
+              snap = { ...snapshot, [LOCAL_BOX_ID]: own };
             }
           }
           history.record(snap, recorded);

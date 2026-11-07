@@ -128,7 +128,10 @@ export const AGENT_MARK_CAUSES = ['prompt', 'resume', 'stop', 'start', 'permissi
 // Colons cannot appear in tmux session names (the invariant STATUS_FMT
 // already relies on), so the split is unambiguous.
 export function parseAgentMarks(stdout) {
-  const out = {};
+  // Null-prototype: the keys are box-controlled tmux session names, so a
+  // session named `__proto__` must land as an own key rather than reassign
+  // the map's prototype (and `constructor` must not read as inherited).
+  const out = Object.create(null);
   for (const line of String(stdout).split(/\r?\n/)) {
     if (!line.startsWith('__AGENT__ ')) continue;
     const parts = line.slice('__AGENT__ '.length).split(':');

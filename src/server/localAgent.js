@@ -27,10 +27,28 @@ const TMUX_TIMEOUT_MS = 5000;
 
 function runTmuxDefault(args) {
   return new Promise((resolve) => {
-    execFile('tmux', args, { timeout: TMUX_TIMEOUT_MS, maxBuffer: 256 * 1024 }, (err, stdout) => {
-      resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stdout: String(stdout || '') });
+    execFile('tmux', args, { timeout: TMUX_TIMEOUT_MS, maxBuffer: 256 * 1024 }, (err, stdout, stderr) => {
+      resolve({
+        code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
+        stdout: String(stdout || ''),
+        stderr: String(stderr || ''),
+        // A spawn failure carries a string errno (ENOENT = tmux not installed);
+        // a non-zero exit carries a numeric code and no errno.
+        errno: err && typeof err.code === 'string' ? err.code : undefined,
+      });
     });
   });
+}
+
+// tmux's own wording when there is no server to list: `no server running on
+// <socket>` (nothing started) or `error connecting to <socket> (No such file
+// or directory)` (a stale socket path). Those, and tmux not being installed at
+// all, are a genuine EMPTY listing. Anything else — a timeout, a wedged or
+// crashing server, a permission error — is "listing unknown", which must not
+// read as "every session ended".
+const NO_SERVER_RE = /no server running|error connecting to/i;
+function isNoServer(res) {
+  return res.errno === 'ENOENT' || NO_SERVER_RE.test(String(res.stderr || ''));
 }
 
 // Mirror of the on-box AGENT_PROBE shell fragment: each marker file becomes
@@ -62,17 +80,26 @@ export function createLocalAgentSampler({ home = os.homedir(), runTmux = runTmux
   return {
     // Never rejects: a sampler failure must never disturb the poll loop.
     async sample() {
-      const out = { reachable: true, sessions: [] };
+      const out = { reachable: true };
       try {
         const res = await runTmux(['ls', '-F', STATUS_FMT]);
-        // Exit 1 covers both "no server running" and tmux absent — either
-        // way there are no sessions; the tmux flag is only asserted when the
-        // listing actually succeeded.
+        // Exit 1 is ambiguous on its own: tmux uses it for "no server
+        // running" AND for real failures, and a timed-out execFile reports
+        // a non-zero code too. The message resolves it. Only a genuine
+        // no-server (or tmux absent) is an empty listing; any other failure
+        // leaves `sessions` OUT of the sample, which sampleOf and record()
+        // treat as "not observed" — so a slow tmux cannot read as every
+        // session having exited, nor prune the Host Shell's seen watermark.
+        // The tmux flag is only asserted when the listing actually succeeded.
         if (res.code === 0) {
           out.tmux = true;
           out.sessions = parseTmuxSessions(res.stdout);
+        } else if (isNoServer(res)) {
+          out.sessions = [];
         }
-      } catch { /* no tmux: no sessions */ }
+      } catch (err) {
+        if (err && err.code === 'ENOENT') out.sessions = []; // tmux not installed
+      }
       try {
         const marks = await readAgentMarks(home);
         if (marks) out.agentMarks = marks;

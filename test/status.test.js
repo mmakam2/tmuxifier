@@ -689,6 +689,15 @@ test('parseAgentMarks drops bad state, bad ts, malformed lines, and returns null
   expect(parseAgentMarks('web:2:1:1718000000:claude\n')).toBeNull();           // no marker line at all
 });
 
+test('parseAgentMarks keeps a __proto__-named session as an own key without touching the prototype', () => {
+  const out = parseAgentMarks('__AGENT__ __proto__:blocked:1718000000:permission\n__AGENT__ constructor:ready:1718000001:stop\n');
+  expect(Object.keys(out).sort()).toEqual(['__proto__', 'constructor']);
+  expect(Object.hasOwn(out, '__proto__')).toBe(true);
+  expect(out.__proto__).toEqual({ state: 'blocked', cause: 'permission', ts: 1718000000 });
+  expect(out.constructor).toEqual({ state: 'ready', cause: 'stop', ts: 1718000001 });
+  expect(parseAgentMarks('__AGENT__ web:working:5\n').constructor).toBeUndefined();
+});
+
 test('parseTmuxSessions ignores __AGENT__ lines', () => {
   const out = '__AGENT__ web:working:1718000000\nweb:2:1:1718000000:claude\n';
   expect(parseTmuxSessions(out)).toEqual([

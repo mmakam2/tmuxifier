@@ -76,13 +76,17 @@ export function sampleOf(status, at, opts = {}) {
   // has already exited.
   const { sessionName, seenOf } = opts;
   if (Array.isArray(s.sessions)) {
-    const agents = {};
+    // Null-prototype and own-key reads for the same reason as
+    // parseAgentMarks: session names are box-controlled, and `__proto__` or
+    // `constructor` must neither vanish nor poison the map.
+    const agents = Object.create(null);
+    const marks = s.agentMarks && typeof s.agentMarks === 'object' ? s.agentMarks : null;
     for (const sess of s.sessions) {
       if (!sess || !SESSION_NAME_RE.test(String(sess.name))) continue;
       const present = /^claude(-|$)/.test(String(sess.paneCmd || ''));
       const entry = { present, attached: !!sess.attached };
       if (!present) { agents[sess.name] = entry; continue; }
-      const mark = s.agentMarks && s.agentMarks[sess.name];
+      const mark = marks && Object.hasOwn(marks, sess.name) ? marks[sess.name] : undefined;
       if (mark) {
         const seen = typeof seenOf === 'function' ? seenOf(sess.name) : undefined;
         entry.state = deriveAgentState(mark, seen);
@@ -98,7 +102,7 @@ export function sampleOf(status, at, opts = {}) {
         sample.agentAttached = !!sess.attached;
         if (/^claude(-|$)/.test(String(sess.paneCmd || ''))) {
           sample.agentPresent = true;
-          const st = agents[sessionName] && agents[sessionName].state;
+          const st = Object.hasOwn(agents, sessionName) ? agents[sessionName].state : undefined;
           if (st) sample.agent = st;
         }
       }
@@ -170,9 +174,9 @@ export function classifyTransitions(prev, next, thresholds, state) {
   // restarting in place) not an exit, and `!next.stopped` — a Proxmox-stopped
   // box carries no sessions, so absence there is not an observation.
   if (next.agents) {
-    const before = st.agents || {};
+    const before = st.agents || Object.create(null);
     for (const [session, now] of Object.entries(next.agents)) {
-      const was = before[session] && before[session].state;
+      const was = Object.hasOwn(before, session) ? before[session].state : undefined;
       if (!was || now.attached) continue;
       if (now.state === 'blocked' && (was === 'working' || was === 'done' || was === 'idle')) {
         events.push({ kind: 'agent-blocked', session, cause: now.cause });
@@ -182,7 +186,7 @@ export function classifyTransitions(prev, next, thresholds, state) {
     }
     if (next.up && !next.stopped) {
       for (const [session, was] of Object.entries(before)) {
-        const now = next.agents[session];
+        const now = Object.hasOwn(next.agents, session) ? next.agents[session] : undefined;
         if (!was.state || was.attached || (now && (now.present || now.attached))) continue;
         events.push({ kind: 'agent-done', session });
       }
@@ -336,7 +340,8 @@ export function createHealthHistory({
       if (seenChanged) persistSeen();
     },
     markSeen(boxId, session, ts) {
-      const cur = lastSample.get(boxId)?.agents?.[session];
+      const agents = lastSample.get(boxId)?.agents;
+      const cur = agents && Object.hasOwn(agents, session) ? agents[session] : undefined;
       if (!cur || !Number.isFinite(cur.ts) || !Number.isFinite(ts) || ts > cur.ts) return false;
       let m = seen.get(boxId);
       if (!m) { m = new Map(); seen.set(boxId, m); }

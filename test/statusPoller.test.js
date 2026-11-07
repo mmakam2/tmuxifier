@@ -459,7 +459,8 @@ test('a hung local sampler cannot wedge the poll cycle', async () => {
   await expect(poller.pollOnce()).resolves.toBeTruthy();
   const [snap, bx] = calls[0];
   expect(snap.__local__).toBeUndefined();
-  expect(bx.map((b) => b.id)).toEqual(['b1']);
+  // Still listed, so record() keeps (does not prune) the Host Shell's state.
+  expect(bx.map((b) => b.id)).toEqual(['b1', '__local__']);
   // inFlight was released, so the next interval tick is a real cycle again.
   await poller.pollOnce();
   expect(calls).toHaveLength(2);
@@ -476,7 +477,92 @@ test('a throwing local sampler still records the real boxes', async () => {
   await poller.pollOnce();
   const [snap, bx] = calls[0];
   expect(snap.__local__).toBeUndefined();
-  expect(bx.map((b) => b.id)).toEqual(['b1']);
+  expect(bx.map((b) => b.id)).toEqual(['b1', '__local__']);
+});
+
+// I1: the client can open and acknowledge only the Host Shell's own session,
+// so any other host tmux session would latch `done` with no way to clear it.
+const twoLocalSessions = () => ({
+  reachable: true,
+  tmux: true,
+  sessions: [
+    { name: 'local', windows: 1, attached: false, activity: 1, paneCmd: 'claude' },
+    { name: 'other', windows: 1, attached: false, activity: 1, paneCmd: 'claude' },
+  ],
+  agentMarks: { local: { state: 'ready', cause: 'stop', ts: 5 }, other: { state: 'ready', cause: 'stop', ts: 5 } },
+});
+
+test('the __local__ sample is narrowed to the Host Shell session before recording', async () => {
+  const calls = [];
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'b1', host: 'h1' }]),
+    statusChecker,
+    history: { record: (snap, bx) => calls.push([snap, bx]) },
+    localAgent: { sample: async () => twoLocalSessions() },
+  });
+  await poller.pollOnce();
+  const [snap] = calls[0];
+  expect(snap.__local__.sessions.map((x) => x.name)).toEqual(['local']);
+  // Markers are kept as-is; sampleOf ignores them for unlisted sessions.
+  expect(Object.keys(snap.__local__.agentMarks).sort()).toEqual(['local', 'other']);
+});
+
+test('a local sample with sessions local and other records an agents map of only local', async () => {
+  const history = createHealthHistory();
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'b1', host: 'h1' }]),
+    statusChecker,
+    history,
+    localAgent: { sample: async () => twoLocalSessions() },
+  });
+  await poller.pollOnce();
+  const last = history.getSeries('__local__').at(-1);
+  expect(Object.keys(last.agents)).toEqual(['local']);
+  expect(last.agents.local.state).toBe('done');
+});
+
+// I2a: a lost sampler race must not prune the Host Shell's seen watermark.
+test('a sampler that returns null keeps __local__ listed and absent from the snapshot', async () => {
+  const calls = [];
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'b1', host: 'h1' }]),
+    statusChecker,
+    history: { record: (snap, bx) => calls.push([snap, bx]) },
+    localAgent: { sample: async () => null },
+  });
+  await poller.pollOnce();
+  const [snap, bx] = calls[0];
+  expect(Object.hasOwn(snap, '__local__')).toBe(false);
+  expect(bx.map((b) => b.id)).toEqual(['b1', '__local__']);
+});
+
+test('a lost sampler race keeps the Host Shell seen watermark (real history)', async () => {
+  const saved = [];
+  const seenStore = { load: () => null, save: (v) => saved.push(JSON.parse(JSON.stringify(v))) };
+  const history = createHealthHistory({ seenStore });
+  let next = {
+    reachable: true,
+    sessions: [{ name: 'local', windows: 1, attached: false, activity: 1, paneCmd: 'claude' }],
+    agentMarks: { local: { state: 'ready', cause: 'stop', ts: 7 } },
+  };
+  const poller = createStatusPoller({
+    store: fakeStore([{ id: 'b1', host: 'h1' }]),
+    statusChecker,
+    history,
+    localAgent: { sample: async () => next },
+  });
+  await poller.pollOnce();
+  expect(history.markSeen('__local__', 'local', 7)).toBe(true);
+  next = null; // sampler loses its race / returns nothing
+  await poller.pollOnce();
+  next = {
+    reachable: true,
+    sessions: [{ name: 'local', windows: 1, attached: false, activity: 1, paneCmd: 'claude' }],
+    agentMarks: { local: { state: 'ready', cause: 'stop', ts: 7 } },
+  };
+  await poller.pollOnce();
+  expect(history.getSeries('__local__').at(-1).agents.local.state).toBe('idle');
+  expect(saved.at(-1)).toEqual({ __local__: { local: 7 } });
 });
 
 test('probeOne overlapping pollOnce does not strip proxmoxState=stopped from other linked boxes or fire false down events', async () => {

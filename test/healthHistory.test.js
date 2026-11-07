@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest';
 import { sampleOf, deriveAgentState, classifyTransitions, initThresholdState, createHealthHistory } from '../src/server/healthHistory.js';
-import { parseTmuxSessions } from '../src/server/status.js';
+import { parseTmuxSessions, parseAgentMarks } from '../src/server/status.js';
 
 const TH = { cpu: 90, mem: 90, disk: 90, hysteresis: 5 };
 
@@ -486,3 +486,50 @@ test('a removed box drops its seen entry', () => {
   h.record({ b2: claudeStatus({}) }, [{ id: 'b2', host: 'h', sessionName: 'web' }]);
   expect(store.data).toEqual({ b2: { web: 5 } });
 });
+
+// T7c: a watermark loaded at boot applies to the very first record() — the
+// restart must not flash `done` for a turn the operator already saw.
+test('a watermark loaded from seenStore.load() yields idle on the FIRST record of a ready/stop marker', () => {
+  const store = memSeenStore({ b1: { web: 100 } });
+  const h = createHealthHistory({ seenStore: store });
+  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }) }, [{ id: 'b1', host: 'h', sessionName: 'web' }]);
+  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('idle');
+});
+
+// A box listed in `boxes` with no status this pass (the Host Shell sampler
+// losing its race) is skipped, not pruned: its seen entry and series survive.
+test('a listed box with no status this pass keeps its seen entry and series', () => {
+  const store = memSeenStore({ b1: { web: 100 } });
+  const h = createHealthHistory({ seenStore: store });
+  const box = { id: 'b1', host: 'h', sessionName: 'web' };
+  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }) }, [box]);
+  h.record({}, [box]);
+  expect(store.data).toEqual({ b1: { web: 100 } });
+  expect(h.getSeries('b1')).toHaveLength(1);
+  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }) }, [box]);
+  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('idle');
+});
+
+// M6: session names are box-controlled; prototype keys must neither vanish
+// nor poison the agents map.
+test('sampleOf keeps __proto__ and constructor sessions as own agents entries', () => {
+  const marks = parseAgentMarksForTest();
+  const s = sampleOf({ reachable: true, sessions: [
+    { name: '__proto__', windows: 1, attached: false, paneCmd: 'claude' },
+    { name: 'constructor', windows: 1, attached: false, paneCmd: 'claude' },
+    { name: 'web', windows: 1, attached: false, paneCmd: 'claude' },
+  ], agentMarks: marks }, 1, { sessionName: '__proto__' });
+  expect(Object.keys(s.agents).sort()).toEqual(['__proto__', 'constructor', 'web']);
+  expect(Object.hasOwn(s.agents, '__proto__')).toBe(true);
+  expect(s.agents.__proto__).toMatchObject({ present: true, state: 'working', ts: 10 });
+  // `constructor` has no marker: no inherited Object.prototype.constructor read as one.
+  expect(s.agents.constructor).toEqual({ present: true, attached: false });
+  expect(s.agents.web.state).toBe('done');
+  expect(s.agent).toBe('working');
+  // The map round-trips through JSON (the /api/status boundary) intact.
+  expect(Object.keys(JSON.parse(JSON.stringify(s.agents))).sort()).toEqual(['__proto__', 'constructor', 'web']);
+});
+
+function parseAgentMarksForTest() {
+  return parseAgentMarks('__AGENT__ __proto__:working:10:prompt\n__AGENT__ web:ready:11:stop\n');
+}

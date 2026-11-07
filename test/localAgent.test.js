@@ -71,11 +71,46 @@ test('sample() reads tmux sessions via the shared STATUS_FMT parser', async () =
 });
 
 test('sample() degrades to no sessions when tmux is absent or has no server', async () => {
-  const noServer = createLocalAgentSampler({ home: tmpHome(), runTmux: async () => ({ code: 1, stdout: '' }) });
+  const noServer = createLocalAgentSampler({
+    home: tmpHome(),
+    runTmux: async () => ({ code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-0/default\n' }),
+  });
   expect(await noServer.sample()).toMatchObject({ reachable: true, sessions: [] });
 
-  const throwing = createLocalAgentSampler({ home: tmpHome(), runTmux: async () => { throw new Error('ENOENT'); } });
+  const staleSocket = createLocalAgentSampler({
+    home: tmpHome(),
+    runTmux: async () => ({ code: 1, stdout: '', stderr: 'error connecting to /tmp/tmux-0/default (No such file or directory)\n' }),
+  });
+  expect(await staleSocket.sample()).toMatchObject({ reachable: true, sessions: [] });
+
+  const absent = createLocalAgentSampler({ home: tmpHome(), runTmux: async () => ({ code: 1, stdout: '', stderr: '', errno: 'ENOENT' }) });
+  expect(await absent.sample()).toMatchObject({ reachable: true, sessions: [] });
+
+  const throwing = createLocalAgentSampler({
+    home: tmpHome(),
+    runTmux: async () => { throw Object.assign(new Error('spawn tmux ENOENT'), { code: 'ENOENT' }); },
+  });
   expect(await throwing.sample()).toMatchObject({ reachable: true, sessions: [] });
+});
+
+// Any OTHER failure is "listing unknown", not "no sessions": an empty list
+// would read as every session having exited (latching agent-done) and would
+// prune the Host Shell's seen watermark.
+test('sample() leaves sessions out when tmux ls fails for any other reason', async () => {
+  const cases = [
+    async () => ({ code: 1, stdout: '', stderr: '' }),                                 // timeout/kill: no message
+    async () => ({ code: 1, stdout: '', stderr: 'server exited unexpectedly\n' }),
+    async () => ({ code: 1, stdout: '', stderr: 'error creating /tmp/tmux-0 (Permission denied)\n' }),
+    async () => { throw new Error('boom'); },
+  ];
+  for (const runTmux of cases) {
+    const s = await createLocalAgentSampler({ home: tmpHome(), runTmux }).sample();
+    expect(s.reachable).toBe(true);
+    expect('sessions' in s).toBe(false);
+    expect('tmux' in s).toBe(false);
+    // ...and downstream that is "not observed": sampleOf sets no agents map.
+    expect('agents' in sampleOf(s, 1, { sessionName: 'local' })).toBe(false);
+  }
 });
 
 test('the sample shape drives sampleOf exactly like a box probe result', async () => {
