@@ -1,5 +1,5 @@
 import { api, onUnauthorized, type AddBoxSpec, type AgentState, type Box, type Status, type Sample, type HealthEvent, type PushResult, type SetupJob, type SetupSummary } from './api';
-import { AGENT_PRECEDENCE, agentCounts, latestAgents, worstAgent } from './agentState';
+import { AGENT_PRECEDENCE, agentCounts, latestAgents } from './agentState';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
 import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, formatVoiceLinkResult, blocksTerminal } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor, agentBadgeFor } from './statusDot';
@@ -107,7 +107,7 @@ let latestEvents: HealthEvent[] = [];
 let latestEventSeq = 0;
 let lastNotifiedSeq = -1; // -1 until the first poll seeds it (no startup flood)
 // The sidebar attention strip's filter: null shows every box; a state shows
-// only boxes whose WORST session is in it (the same fold the badge paints).
+// only boxes with at least one session in it (the basis the counts use).
 let agentFilter: AgentState | null = null;
 // What the last filterAndPaint showed under the agent filter, so a health
 // poll rebuilds the list only when the filtered membership actually moved.
@@ -183,7 +183,7 @@ function repaintAgentBadges() {
 
 // The attention strip above the box list: one segment per non-zero state, in
 // precedence order, counting SESSIONS across every series (Host Shell too).
-// A segment filters the list to boxes whose worst state it names; clicking the
+// A segment filters the list to boxes with a session in its state; clicking the
 // active one clears the filter. The strip hides, and the filter resets, the
 // moment nothing has a state — a filter on an empty category would otherwise
 // leave an empty list with no visible control to undo it.
@@ -191,8 +191,12 @@ function agentStripText(state: AgentState, n: number): string {
   return state === 'blocked' ? `${n} need${n === 1 ? 's' : ''} you` : `${n} ${state}`;
 }
 
+// ANY session in the filtered state keeps the box — the same per-session basis
+// agentCounts() uses, so "1 working" always finds the box holding that session
+// even when another of its sessions is blocked.
 function agentFilterMatches(b: Box): boolean {
-  return agentFilter === null || worstAgent(latestAgents(latestSeries[b.id]))?.state === agentFilter;
+  if (agentFilter === null) return true;
+  return Object.values(latestAgents(latestSeries[b.id])).some((e) => e?.state === agentFilter);
 }
 
 function agentFilterKey(): string {
@@ -246,7 +250,7 @@ function reportSeen() {
   for (const iid of tabs.keys()) {
     if (phone ? iid !== focusedPaneId : !docked.includes(iid)) continue;
     const box = boxOfInstance(iid);
-    const session = attachedSession(iid);
+    const session = paneAgentSession(iid);
     const entry = latestAgents(latestSeries[box])[session];
     if (entry?.state !== 'done' || !entry.ts) continue;
     const key = `${box}:${session}`;
@@ -961,6 +965,19 @@ const isLocalPane = (iid: string): boolean => boxOfInstance(iid) === '__local__'
 function attachedSession(iid: string): string {
   return paneSessions.get(iid) ?? (boxFor(iid)?.sessionName || 'web');
 }
+// The Host Shell's tmux session name. Mirrors the server's hardcoded default
+// (`localSession = 'local'` in sessions.js / localTmuxScope.js /
+// localShellActions.js), which is what the server keys the __local__ series'
+// agents map by. There is no knob today; if the server ever grows one it must
+// be surfaced through /api/ui-config and read here, not duplicated.
+const LOCAL_SESSION = 'local';
+// The session whose agent entry belongs to this pane. attachedSession() falls
+// back to 'web' for the Host Shell (no box, no override), which names nothing
+// in its agents map. Agent lookups only; the session picker keeps using
+// attachedSession, and the local pane has no picker anyway.
+function paneAgentSession(iid: string): string {
+  return isLocalPane(iid) ? LOCAL_SESSION : attachedSession(iid);
+}
 // Pre-press hint for the mic: the status snapshot already carries each
 // session's active-pane command (paneCmd), so the idle tooltip can say which
 // flow a press will take. A hint only, up to 30 s stale — the press-time
@@ -1018,7 +1035,9 @@ function paneHeaderModelFor(id: string): PaneHeaderModel {
     agents: latestAgents(latestSeries[boxId]),
     conn: connStates.get(id),
     state: paneState(id),
-    sessionName: attachedSession(id),
+    // The chip indexes `agents` by this; for a real box it is the attached
+    // session (which also drives the picker), for the Host Shell 'local'.
+    sessionName: paneAgentSession(id),
     // phoneCtl is created in start(); before that there is no stage to paint,
     // so the `?? false` is a boot-order guard, not a default policy.
     phone: phoneCtl?.matches() ?? false,
@@ -2054,6 +2073,9 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
   const list = app.querySelector('#boxes')!;
   list.innerHTML = '';
   const searching = !!searchTerm;
+  // An active agent filter expands groups exactly like a search does: a
+  // filtered-in box hidden behind a collapsed header would read as no match.
+  const filtering = searching || agentFilter !== null;
 
   // Fleet mode: a tri-state master checkbox that selects/clears every box
   // currently shown (respects the active search filter, like the group checks).
@@ -2087,7 +2109,7 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
   // A group tracks the BOX the focused pane belongs to, not the pane instance.
   const activeBoxId = focusedPaneId ? boxOfInstance(focusedPaneId) : null;
   for (const group of groupBoxes(boxes)) {
-    const collapsed = !searching && isGroupCollapsed(group.key);
+    const collapsed = !filtering && isGroupCollapsed(group.key);
     const containsActive = !!activeBoxId && group.boxes.some(b => b.id === activeBoxId);
 
     const groupItem = document.createElement('li');
@@ -2098,7 +2120,9 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
     header.type = 'button';
     header.className = 'group-header';
     header.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-    header.title = searching ? 'Clear search to collapse groups' : `${collapsed ? 'Expand' : 'Collapse'} ${group.label}`;
+    header.title = searching ? 'Clear search to collapse groups'
+      : filtering ? 'Clear the agent filter to collapse groups'
+      : `${collapsed ? 'Expand' : 'Collapse'} ${group.label}`;
 
     const chevron = document.createElement('span');
     chevron.className = 'group-chevron';
@@ -2127,7 +2151,7 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
 
     header.append(groupCheck, chevron, name, count);
     header.addEventListener('click', () => {
-      if (searching) return;
+      if (filtering) return;
       setGroupCollapsed(group.key, !collapsed);
       filterAndPaint();
     });
@@ -2141,11 +2165,15 @@ function paint(boxes: Box[], status: Record<string, Status>, searchTerm = getSea
     list.appendChild(groupItem);
   }
   // Empty states: a fresh install (no boxes at all) points at + Add box; a
-  // search that filtered everything out says so instead of a silent void.
+  // search or agent filter that emptied the list says so instead.
   if (!boxes.length) {
     const li = document.createElement('li');
     li.className = 'boxes-empty';
-    if (searching) {
+    // An agent filter that matched nothing is not a fresh install: the state
+    // it names may live only on the Host Shell, which is not in this list.
+    if (agentFilter !== null) {
+      li.textContent = `No boxes are ${agentFilter === 'blocked' ? 'waiting on you' : agentFilter}`;
+    } else if (searching) {
       li.textContent = `No boxes match “${searchTerm}”.`;
     } else {
       const kbd = document.createElement('span');
