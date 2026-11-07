@@ -9,7 +9,7 @@ const KEY = 'tmuxifier.notifyPrefs';
 export const NOTIFY_KINDS: { kind: HealthEventKind; label: string }[] = [
   { kind: 'agent-blocked', label: 'Claude needs you (permission or question)' },
   { kind: 'agent-input', label: 'Claude finished a turn' },
-  { kind: 'agent-done', label: 'Claude finished' },
+  { kind: 'agent-done', label: 'Claude exited' },
   { kind: 'down', label: 'Box unreachable' },
   { kind: 'up', label: 'Box recovered' },
   { kind: 'needs-auth', label: 'Box needs login' },

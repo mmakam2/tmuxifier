@@ -261,3 +261,39 @@ test('agent states reach badge, strip, board, chips; a seen done turns idle', as
     try { onBox(`tmux respawn-pane -k -t '=${session}:' "$(tmux show-options -gv default-shell)" -l`); } catch { /* no session */ }
   }
 });
+
+// A board card for a NON-configured session must dock the pane straight onto
+// that session: one /term attach, carrying `session=`. Building the pane on the
+// configured session first and switching after would attach there (which can
+// create that session and run its startupCommand) and then tear it down.
+test('a board card for another session docks the pane on it with a single /term attach', async ({ page }) => {
+  test.setTimeout(120000);
+  const terms: string[] = [];
+  page.on('websocket', (ws) => { if (/\/term\?/.test(ws.url())) terms.push(ws.url()); });
+  try {
+    onBox(`tmux has-session -t '=${session2}' 2>/dev/null || tmux new-session -d -s '${session2}' bash -c 'exec -a claude sleep 600'`);
+    expect(onBox(`tmux display-message -p -t '=${session2}:' '#{pane_current_command}'`).trim()).toBe('claude');
+    // blocked, not done: docking a done pane would acknowledge it.
+    writeMarker(session2, 'blocked', now(), 'question');
+
+    await login(page);
+    const row = page.locator('.box', { has: page.locator('.name', { hasText: /^localhost$/ }) }).first();
+    const boxId = (await row.getAttribute('data-id'))!;
+    const card = page.locator(`.dash-board .dash-board-col[data-state="blocked"] .dash-card[data-box-id="${boxId}"][data-session="${session2}"]`);
+    await reloadUntil(page, async () => { await expect(card).toHaveCount(1, { timeout: 5000 }); });
+    expect(terms).toEqual([]); // standby: nothing attached yet
+
+    await card.click();
+    const pane = page.locator('.stage-pane').first();
+    await expect(pane.locator('.session-picker-trigger')).toContainText(session2);
+    await expect(pane.locator('.pane-header .pane-chip.chip-agent-blocked')).toHaveText('blocked · question', { timeout: 15000 });
+    await expect.poll(() => terms.length).toBe(1);
+    // Give a would-be switch-after-attach every chance to show up.
+    await page.waitForTimeout(1500);
+    expect(terms).toHaveLength(1);
+    expect(new URL(terms[0]).searchParams.get('session')).toBe(session2);
+  } finally {
+    try { fs.rmSync(path.join(markerDir, session2), { force: true }); } catch { /* gone */ }
+    try { onBox(`tmux kill-session -t '=${session2}'`); } catch { /* gone */ }
+  }
+});

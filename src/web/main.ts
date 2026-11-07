@@ -241,8 +241,9 @@ function repaintAgentStrip(refilter = false) {
 // Tell the server the operator has SEEN a finished turn (spec §4): a done
 // marker counts as seen only when its pane is actually on screen in a visible,
 // focused window. Desktop renders every docked pane; phone renders only the
-// focused one. Fire-and-forget, once per marker ts: a failed POST is not
-// retried for that ts (the next done marker carries a new one).
+// focused one. Fire-and-forget, once per marker ts; a failed POST clears its
+// ack so the next poll retries. Also runs after every repaintStage, so docking
+// a `done` pane acknowledges it without waiting for the next health poll.
 function reportSeen() {
   if (typeof document === 'undefined' || document.visibilityState !== 'visible' || !document.hasFocus()) return;
   const docked = panesOf(stageRoot);
@@ -255,8 +256,11 @@ function reportSeen() {
     if (entry?.state !== 'done' || !entry.ts) continue;
     const key = `${box}:${session}`;
     if (ackedSeen.get(key) === entry.ts) continue;
-    ackedSeen.set(key, entry.ts);
-    void api.agentSeen(box, session, entry.ts).catch(() => {});
+    const ts = entry.ts;
+    ackedSeen.set(key, ts);
+    // A failed POST forgets the ack so the next poll (or repaint) retries it;
+    // only if nothing newer was recorded for the key in the meantime.
+    void api.agentSeen(box, session, ts).catch(() => { if (ackedSeen.get(key) === ts) ackedSeen.delete(key); });
   }
 }
 if (typeof document !== 'undefined') {
@@ -1322,6 +1326,7 @@ function repaintStage() {
   if (focusedPaneId) tabs.get(focusedPaneId)?.term.focus();
   filterAndPaint(); // dock-button visibility and row highlights track the layout
   syncPhoneSwitch();
+  reportSeen(); // a pane that just came on screen showing `done` is now seen
 }
 
 // Top-bar pane switcher: lists every docked pane; disabled when there is
@@ -2289,7 +2294,15 @@ function openBox(b: Box) { openPane(b.id); }
 // Plain activation (sidebar click): focus the pane if already docked, replace
 // the focused pane in a split, or become the single pane otherwise — the
 // confirmed "C replaces the focused pane" semantics.
-function openPane(boxId: string) {
+//
+// `session` (the agents board): when the box is NOT yet docked, the new pane is
+// born on that session — its override is set BEFORE the repaint, so the first
+// and only /term attach goes straight to it. Building it on the configured
+// session and switching afterwards would attach there first, which can CREATE
+// that session and run its startupCommand, only to tear the PTY down again.
+// Same rule as switchPaneSession: the configured name gets no override. When
+// the box is already docked this is ignored; openPaneOnSession re-points.
+function openPane(boxId: string, session?: string) {
   // Plain activation acts on the box: if any of its panes is already docked,
   // focus that one rather than hatching a second (docking a duplicate is the
   // drag gesture's job).
@@ -2311,6 +2324,10 @@ function openPane(boxId: string) {
     return;
   }
   const iid = instanceId(boxId, 1);
+  if (session !== undefined && boxId !== '__local__' && isSwitchableSession(session)) {
+    if (session === (boxFor(iid)?.sessionName || 'web')) paneSessions.delete(iid);
+    else paneSessions.set(iid, session);
+  }
   const panes = panesOf(stageRoot);
   stageRoot = panes.length === 0
     ? iid
@@ -2325,7 +2342,7 @@ function openPane(boxId: string) {
 // a session the operator also has open. The Host Shell has one session and no
 // picker, so it only opens. switchPaneSession is a no-op when already there.
 function openPaneOnSession(boxId: string, session: string) {
-  openPane(boxId);
+  openPane(boxId, session);
   if (boxId === '__local__') return;
   const onIt = panesOf(stageRoot).find((p) => boxOfInstance(p) === boxId && attachedSession(p) === session);
   if (onIt && onIt !== focusedPaneId) {

@@ -34,7 +34,7 @@ function pushBody(event) {
     return `${cause.charAt(0).toUpperCase()}${cause.slice(1)} prompt${where}`;
   }
   if (event.kind === 'agent-input') return `A Claude session wants your input${where}.`;
-  return 'A Claude session finished its turn.';
+  return 'A Claude session exited.';
 }
 
 export function buildFcmMessage({ projectId, fcmToken, event }) {

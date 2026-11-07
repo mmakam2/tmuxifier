@@ -2100,6 +2100,9 @@ button.empty-kbd:hover { color: var(--text); }
      this rule correct before the first visualViewport event and on any browser
      that has no visualViewport at all. */
   .layout { display: flex; flex-direction: column; height: var(--vvh, 100dvh); padding: 0; gap: 0; }
+  /* The agents board is a desktop surface: four state columns do not fit a
+     phone, and the drawer's box list already carries each agent's state. */
+  .dash-board { display: none; }
   .phone-bar {
     display: flex; align-items: center; gap: 8px;
     padding: calc(6px + env(safe-area-inset-top)) 10px 6px; /* clear any notch (viewport-fit=cover) */

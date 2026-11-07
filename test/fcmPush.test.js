@@ -84,3 +84,10 @@ test('buildFcmMessage: agent-blocked carries the cause and session', () => {
   expect(body.message.notification).toEqual({ title: 'workbox — Claude needs you', body: 'Permission prompt in web-2' });
   expect(body.message.data).toEqual({ boxId: 'b1', kind: 'agent-blocked', session: 'web-2' });
 });
+
+// agent-done is claude EXITING (the session is gone or no longer runs claude),
+// not a finished turn — that is agent-input.
+test('buildFcmMessage: agent-done says the session exited', () => {
+  const { body } = buildFcmMessage({ projectId: 'p', fcmToken: 'tok', event: { boxId: 'b1', label: 'workbox', kind: 'agent-done', session: 'web', t: 5 } });
+  expect(body.message.notification.body).toBe('A Claude session exited.');
+});
