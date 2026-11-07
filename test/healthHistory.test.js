@@ -429,3 +429,60 @@ test('sampleOf: a failed probe carries no agents map at all; an empty session li
   expect('agents' in sampleOf({ reachable: false }, 1)).toBe(false);
   expect(sampleOf({ reachable: true, sessions: [] }, 1).agents).toEqual({});
 });
+
+function memSeenStore(init = {}) { let data = init; return { load: () => data, save: (m) => { data = m; }, whenIdle: async () => {}, get data() { return data; } }; }
+const claudeStatus = (marks, sessions = ['web']) => ({ reachable: true, tmux: true, sessions: sessions.map((n) => ({ name: n, windows: 1, attached: false, paneCmd: 'claude' })), agentMarks: marks });
+
+test('markSeen turns done into idle on the next record and persists; a ts ahead of the marker is refused', () => {
+  const store = memSeenStore();
+  const h = createHealthHistory({ seenStore: store, now: () => 1 });
+  const box = { id: 'b1', host: 'h', sessionName: 'web' };
+  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }) }, [box]);
+  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('done');
+  expect(h.markSeen('b1', 'web', 101)).toBe(false);
+  expect(h.markSeen('b1', 'nope', 100)).toBe(false);
+  expect(h.markSeen('b1', 'web', 100)).toBe(true);
+  expect(store.data).toEqual({ b1: { web: 100 } });
+  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }) }, [box]);
+  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('idle');
+});
+
+test('seen survives a failed probe and a non-claude pane, and is dropped only when the session is gone from a successful listing', () => {
+  const store = memSeenStore({ b1: { web: 100 } });
+  const h = createHealthHistory({ seenStore: store });
+  const box = { id: 'b1', host: 'h', sessionName: 'web' };
+  h.record({ b1: { reachable: false } }, [box]);
+  expect(store.data).toEqual({ b1: { web: 100 } });
+  h.record({ b1: { reachable: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'zsh' }] } }, [box]);
+  expect(store.data).toEqual({ b1: { web: 100 } });
+  h.record({ b1: { reachable: true, sessions: [] } }, [box]);
+  expect(store.data).toEqual({ b1: {} });
+});
+
+test('a seen session that finishes a new turn is done again, and the event carries the session', () => {
+  const store = memSeenStore({ b1: { web: 100 } });
+  const seen = [];
+  const h = createHealthHistory({ seenStore: store, onEvent: (e) => seen.push(e) });
+  const box = { id: 'b1', host: 'h', sessionName: 'web' };
+  h.record({ b1: claudeStatus({ web: { state: 'working', cause: 'prompt', ts: 150 } }) }, [box]);
+  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 200 } }) }, [box]);
+  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('done');
+  expect(seen.map((e) => [e.kind, e.session])).toEqual([['agent-input', 'web']]);
+});
+
+test('a persisted agent-blocked event carries session and cause; whenIdle resolves without a store', async () => {
+  const h = createHealthHistory();
+  const box = { id: 'b1', host: 'h', sessionName: 'web' };
+  h.record({ b1: claudeStatus({ web: { state: 'working', cause: 'prompt', ts: 150 } }) }, [box]);
+  h.record({ b1: claudeStatus({ web: { state: 'blocked', cause: 'permission', ts: 160 } }) }, [box]);
+  const ev = h.getEvents().events.find((e) => e.kind === 'agent-blocked');
+  expect(ev).toMatchObject({ boxId: 'b1', session: 'web', cause: 'permission' });
+  await expect(h.whenIdle()).resolves.toBeUndefined();
+});
+
+test('a removed box drops its seen entry', () => {
+  const store = memSeenStore({ b1: { web: 100 }, b2: { web: 5 } });
+  const h = createHealthHistory({ seenStore: store });
+  h.record({ b2: claudeStatus({}) }, [{ id: 'b2', host: 'h', sessionName: 'web' }]);
+  expect(store.data).toEqual({ b2: { web: 5 } });
+});

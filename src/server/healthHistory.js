@@ -232,6 +232,14 @@ export function classifyTransitions(prev, next, thresholds, state) {
 // Settings → Notifications) — onEvent below is the server-push seam;
 // fcmPush.js subscribes to it when TMUXIFIER_FCM_CREDENTIALS is set, browser
 // notifications still poll client-side regardless.
+//
+// It also owns the agent "seen" watermarks (boxId -> session -> ts, persisted
+// through the optional seenStore): a session whose latest turn ended at or
+// before its watermark reads idle instead of done. markSeen() advances a
+// watermark (never past the live marker's ts). Entries are pruned only when a
+// SUCCESSFUL probe listed sessions and this one is absent — a failed probe, a
+// stopped guest or a non-Claude pane keeps them. Per-session edge events
+// persist their `session` and `cause`.
 export function createHealthHistory({
   maxSamples = 120,
   maxEvents = 200,
@@ -240,6 +248,7 @@ export function createHealthHistory({
   save = () => {},
   now = () => Date.now(),
   onEvent = null,
+  seenStore = null,
 } = {}) {
   const series = new Map();      // boxId -> Sample[]
   const lastSample = new Map();  // boxId -> Sample
@@ -247,6 +256,22 @@ export function createHealthHistory({
   const loaded = load();
   const events = Array.isArray(loaded) ? loaded.slice(-maxEvents) : []; // oldest first
   let seq = events.reduce((m, e) => Math.max(m, e.seq || 0), 0);
+  const seen = new Map();        // boxId -> Map<session, ts>
+  const loadedSeen = seenStore ? seenStore.load() : null;
+  if (loadedSeen && typeof loadedSeen === 'object') {
+    for (const [bid, m] of Object.entries(loadedSeen)) {
+      if (!m || typeof m !== 'object') continue;
+      const inner = new Map();
+      for (const [sess, ts] of Object.entries(m)) if (Number.isFinite(ts)) inner.set(sess, ts);
+      seen.set(bid, inner);
+    }
+  }
+  function persistSeen() {
+    if (!seenStore) return;
+    const out = {};
+    for (const [bid, m] of seen) out[bid] = Object.fromEntries(m);
+    seenStore.save(out);
+  }
   const listeners = new Set();
   if (typeof onEvent === 'function') listeners.add(onEvent);
 
@@ -267,11 +292,12 @@ export function createHealthHistory({
       const at = now();
       const present = new Set();
       let emitted = 0;
+      let seenChanged = false;
       for (const box of boxes) {
         present.add(box.id);
         const status = snapshot[box.id];
         if (!status) continue;
-        const sample = sampleOf(status, at, { sessionName: box.sessionName });
+        const sample = sampleOf(status, at, { sessionName: box.sessionName, seenOf: (s) => seen.get(box.id)?.get(s) });
         const ring = series.get(box.id) || [];
         ring.push(sample);
         while (ring.length > maxSamples) ring.shift();
@@ -281,8 +307,17 @@ export function createHealthHistory({
         const { events: evs, state } = classifyTransitions(prev, sample, thresholds, threshState.get(box.id));
         threshState.set(box.id, state);
         lastSample.set(box.id, sample);
+        const seenForBox = seen.get(box.id);
+        if (seenForBox && Array.isArray(status.sessions)) {
+          const listed = new Set(status.sessions.map((x) => x && x.name));
+          for (const name of [...seenForBox.keys()]) {
+            if (!listed.has(name)) { seenForBox.delete(name); seenChanged = true; }
+          }
+        }
         for (const ev of evs) {
           const out = { boxId: box.id, label: box.label || box.host, host: box.host, t: at, kind: ev.kind };
+          if (ev.session !== undefined) out.session = ev.session;
+          if (ev.cause !== undefined) out.cause = ev.cause;
           if (ev.metric) { out.metric = ev.metric; out.value = ev.value; }
           // Cap the reason: it is raw ssh stderr, which can be huge — the log
           // is persisted and re-served whole on every events poll.
@@ -295,7 +330,23 @@ export function createHealthHistory({
       for (const id of [...series.keys()]) {
         if (!present.has(id)) { series.delete(id); lastSample.delete(id); threshState.delete(id); }
       }
+      for (const id of [...seen.keys()]) {
+        if (!present.has(id)) { seen.delete(id); seenChanged = true; }
+      }
+      if (seenChanged) persistSeen();
     },
+    markSeen(boxId, session, ts) {
+      const cur = lastSample.get(boxId)?.agents?.[session];
+      if (!cur || !Number.isFinite(cur.ts) || !Number.isFinite(ts) || ts > cur.ts) return false;
+      let m = seen.get(boxId);
+      if (!m) { m = new Map(); seen.set(boxId, m); }
+      const prior = m.get(session);
+      if (prior !== undefined && prior >= ts) return true;
+      m.set(session, ts);
+      persistSeen();
+      return true;
+    },
+    whenIdle() { return seenStore?.whenIdle?.() ?? Promise.resolve(); },
     getSeries(boxId) {
       if (boxId) return series.get(boxId) || [];
       const out = {};
