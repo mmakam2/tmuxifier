@@ -15,6 +15,13 @@ const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fix
 
 export default async function globalSetup() {
   const lb = await setupLocalBox();
+  // Fixture handles for specs that drive the box directly (agentStates.spec.ts
+  // writes hook markers and fakes a claude pane). Playwright hands globalSetup's
+  // process.env to the workers.
+  process.env.E2E_SSH_CONFIG = lb.sshConfigFile;
+  process.env.E2E_BOX_HOST = lb.box.host;
+  process.env.E2E_BOX_HOME = lb.home;
+  process.env.E2E_BOX_SESSION = lb.session;
 
   // The voice link's box-side layout (spec 2026-09-04), exactly as
   // buildVoiceLinkInstallScript() leaves it: the real FIFO is `mic.fifo`, and
