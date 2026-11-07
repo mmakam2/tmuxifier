@@ -39,6 +39,16 @@ test('boxLine folds reachability, metrics, sessions and agent into one line', ()
   expect(boxLine(box, status, sample)).toBe('web [b1] 192.168.1.10 — up · cpu 12% mem 40% disk 70% · tmux: web*(2w), other(1w) · agent: waiting · os: debian 12');
 });
 
+test('agentOf with a session reads agents[session].state', () => {
+  expect(agentOf({ agents: { web: { state: 'blocked' } } }, 'web')).toBe('blocked');
+  expect(agentOf({ agents: { web: { state: 'blocked' } }, agent: 'blocked' }, 'other')).toBe('gone');
+});
+
+test('boxLine renders per-session agents with causes, falling back to the legacy agent', () => {
+  const sample = { up: true, agent: 'done', agents: { web: { state: 'done' }, 'web-2': { state: 'blocked', cause: 'permission' }, x: { present: false } } };
+  expect(boxLine(box, undefined, sample)).toContain(' · agents: web=done, web-2=blocked(permission)');
+});
+
 test('boxLine reports down boxes with their error and omits absent segments', () => {
   expect(boxLine(box, { reachable: false, error: 'connection refused' }, { up: false })).toBe('web [b1] 192.168.1.10 — down · connection refused');
   expect(boxLine(box, { reachable: false, needsAuth: true }, { up: false, needsAuth: true })).toBe('web [b1] 192.168.1.10 — needs-auth');
@@ -86,6 +96,11 @@ test('fleetOverview lists every box in order with a count header', () => {
 test('paneText carries geometry, flags, agent and stripped content', () => {
   const snap = { width: 80, height: 24, cursorX: 2, cursorY: 5, alt: true, mouse: true, content: '\x1b[31mhello\x1b[0m\n', agent: 'working', sessionName: 'web' };
   expect(paneText(snap, box)).toBe('pane web session web 80x24 cursor 2,5 alt:true mouse:true agent:working\n---\nhello');
+});
+
+test('paneText renders the blocked cause', () => {
+  const snap = { width: 80, height: 24, cursorX: 0, cursorY: 0, content: 'x', agent: 'blocked', agentCause: 'permission', sessionName: 'web' };
+  expect(paneText(snap, box)).toContain('agent:blocked(permission)\n');
 });
 
 test('healthText summarizes the latest sample and the box\'s events newest first', () => {

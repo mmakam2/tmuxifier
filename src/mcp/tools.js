@@ -4,7 +4,9 @@
 import { fleetOverview, paneText, healthText, jobLine, jobDetail, scriptsText, presetsText, guestsText, errorText, agentOf } from './shape.js';
 
 export const JOB_KINDS = ['fleet', 'setup', 'provision', 'lifecycle'];
-export const AGENT_STATES = ['waiting', 'working', 'gone'];
+// `waiting` is a deprecated alias that expands to ['done', 'idle'] before polling.
+export const AGENT_STATES = ['working', 'blocked', 'done', 'idle', 'waiting', 'gone'];
+const AGENT_STATES_DOC = 'Agent states: working (running), blocked (needs the operator: permission, question or elicitation), done (finished, not yet seen), idle (finished and seen). done becomes idle only when a person looks at the pane in the web app.';
 export const GUEST_ACTIONS = ['start', 'shutdown', 'reboot', 'stop'];
 // Mirrors src/server/tmuxInject.js's NAMED_KEYS — pinned by a test that imports
 // that Set directly, since src/mcp must not import from src/server itself.
@@ -32,9 +34,9 @@ const KIND = { type: 'string', enum: JOB_KINDS, description: 'Job kind' };
 const TIMEOUT = int(`Seconds to wait (default ${WAIT_DEFAULT_SEC}, max ${WAIT_MAX_SEC})`);
 
 export const TOOL_DEFS = [
-  { name: 'list_boxes', description: `Fleet overview: every box with reachability, cpu/mem/disk, tmux sessions (attached marked *) and the Claude agent state of its configured session (working/waiting/gone). Reads the server's cached status — costs no SSH. ${UNTRUSTED_STATUS}`, inputSchema: { type: 'object', properties: {} } },
+  { name: 'list_boxes', description: `Fleet overview: every box with reachability, cpu/mem/disk, tmux sessions (attached marked *) and the Claude agent state of each tmux session (working/blocked/done/idle). ${AGENT_STATES_DOC} Reads the server's cached status — costs no SSH. ${UNTRUSTED_STATUS}`, inputSchema: { type: 'object', properties: {} } },
   { name: 'read_pane', description: `Read the visible text of a box's configured tmux session (plus up to \`lines\` of scrollback; on an alternate-screen app like Claude Code only the visible screen is returned). ${UNTRUSTED_PANE}`, inputSchema: { type: 'object', required: ['box_id'], properties: { box_id: BOX_ID, lines: int('Scrollback lines to include (default 200, max 2000)') } } },
-  { name: 'box_health', description: `Latest health sample and recent health/agent events for one box. ${UNTRUSTED_HEALTH}`, inputSchema: { type: 'object', required: ['box_id'], properties: { box_id: BOX_ID, max_events: int('Events to include (default 20)') } } },
+  { name: 'box_health', description: `Latest health sample and recent health/agent events for one box, with the agent state of each tmux session. ${AGENT_STATES_DOC} ${UNTRUSTED_HEALTH}`, inputSchema: { type: 'object', required: ['box_id'], properties: { box_id: BOX_ID, max_events: int('Events to include (default 20)') } } },
   { name: 'list_fleet_scripts', description: 'Saved Fleet Command scripts with their ids, names, notes and bodies.', inputSchema: { type: 'object', properties: {} } },
   { name: 'list_presets', description: 'Proxmox provisioning presets (with their host and node) — everything needed to call provision_guest.', inputSchema: { type: 'object', properties: {} } },
   { name: 'list_guests', description: 'Proxmox guests linked to boxes: kind (CT/VM), vmid, node, power state, template flag, active job.', inputSchema: { type: 'object', properties: {} } },
@@ -49,7 +51,7 @@ export const TOOL_DEFS = [
   { name: 'start_setup', description: 'Start a server-side setup job on a box: tmux, optional shell frameworks, the tool catalog, the Claude Code statusline/hooks, and an optional post-setup saved script. AI-auth seeding needs a browser session.', inputSchema: { type: 'object', required: ['box_id'], properties: { box_id: BOX_ID, oh_my_tmux: bool('Install oh-my-tmux'), oh_my_zsh: bool('Install oh-my-zsh'), oh_my_bash: bool('Install oh-my-bash'), tools: { type: 'array', items: { type: 'string', enum: SETUP_TOOLS }, description: 'Tool ids from the setup catalog (agy is the Antigravity CLI)' }, claude_statusline: bool('Push the Claude Code statusline (legacy flag; the claude tool implies it)'), script_id: str('Saved script id to run last'), script_name: str('Display label for that script') } } },
   { name: 'provision_guest', description: 'Create a Proxmox LXC container from a preset, link it as a box and start its setup. Returns the provision job id; follow it with wait_for_job.', inputSchema: { type: 'object', required: ['preset_id', 'hostname'], properties: { preset_id: str('Preset id from list_presets'), hostname: str('DNS label; becomes the box label'), vmid: int('Explicit vmid (default: next free)'), ip: str('CIDR override for static presets'), tags: { type: 'array', items: { type: 'string' } }, setup_options: { type: 'object', description: 'Setup options forwarded to the post-link setup job (same keys as start_setup, camelCase; seedAiAuth is refused)' } } } },
   { name: 'guest_power', description: 'Start, shut down, reboot or stop the Proxmox guest a box is linked to. Deprovisioning is not available through MCP.', inputSchema: { type: 'object', required: ['box_id', 'action'], properties: { box_id: BOX_ID, action: { type: 'string', enum: GUEST_ACTIONS } } } },
-  { name: 'wait_for_agent', description: 'Block until the box\'s Claude agent state enters one of `until` (default: waiting — i.e. it finished and wants input) or the timeout passes. Timeout is not an error; the result reports timed_out.', inputSchema: { type: 'object', required: ['box_id'], properties: { box_id: BOX_ID, until: { type: 'array', items: { type: 'string', enum: AGENT_STATES }, description: 'Target states (default ["waiting"])' }, timeout_sec: TIMEOUT } } },
+  { name: 'wait_for_agent', description: `Block until a Claude agent session on the box enters one of \`until\` (default: blocked, done or idle — i.e. it needs input or finished) or the timeout passes. \`session\` picks the tmux session (default: the box's configured session). \`waiting\` is a deprecated alias for done+idle. ${AGENT_STATES_DOC} Timeout is not an error; the result reports timed_out.`, inputSchema: { type: 'object', required: ['box_id'], properties: { box_id: BOX_ID, session: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$', description: "tmux session to watch; defaults to the box's configured session" }, until: { type: 'array', items: { type: 'string', enum: AGENT_STATES }, description: 'Target states (default ["blocked","done","idle"])' }, timeout_sec: TIMEOUT } } },
   { name: 'wait_for_job', description: 'Block until a job leaves the running state or the timeout passes. Timeout is not an error; the result reports timed_out.', inputSchema: { type: 'object', required: ['kind', 'id'], properties: { kind: KIND, id: str('Job id'), timeout_sec: TIMEOUT } } },
 ];
 
@@ -68,6 +70,7 @@ export function validateArgs(schema, args) {
     const v = args[k];
     if (v === undefined) continue;
     if (def.type && !TYPE_OK[def.type](v)) return `${k} must be ${article(def.type)}`;
+    if (def.pattern && typeof v === 'string' && !new RegExp(def.pattern).test(v)) return `${k} must match ${def.pattern}`;
     if (def.enum && !def.enum.includes(v)) return `${k} must be one of ${def.enum.join(', ')}`;
     if (def.type === 'array' && def.items) {
       for (let i = 0; i < v.length; i++) {
@@ -177,9 +180,18 @@ export function createToolRegistry({ client, sleep = (ms) => new Promise((r) => 
       const job = await client.createLifecycleJob({ boxId: box_id, action });
       return ok(jobLine('lifecycle', job) + waitHint('lifecycle', job));
     },
-    async wait_for_agent({ box_id, until = ['waiting'], timeout_sec }) {
-      const r = await poll(async () => agentOf((await client.getSeries(box_id))?.[box_id]?.at(-1)), (s) => until.includes(s), timeout_sec);
-      return ok(`state: ${r.value}\ntimed_out: ${r.timedOut}\nwaited_sec: ${r.elapsed}`);
+    async wait_for_agent({ box_id, session, until = ['blocked', 'done', 'idle'], timeout_sec }) {
+      const targets = new Set(until.flatMap((s) => (s === 'waiting' ? ['done', 'idle'] : [s])));
+      let last;
+      const r = await poll(async () => {
+        last = (await client.getSeries(box_id))?.[box_id]?.at(-1);
+        return agentOf(last, session);
+      }, (s) => targets.has(s), timeout_sec);
+      const lines = [`state: ${r.value}`, `session: ${session ?? 'configured'}`];
+      const cause = session && r.value === 'blocked' ? last?.agents?.[session]?.cause : undefined;
+      if (cause) lines.push(`cause: ${cause}`);
+      lines.push(`timed_out: ${r.timedOut}`, `waited_sec: ${r.elapsed}`);
+      return ok(lines.join('\n'));
     },
     async wait_for_job({ kind, id, timeout_sec }) {
       const r = await poll(() => jobGet[kind](id), (job) => job?.status !== 'running', timeout_sec);

@@ -33,7 +33,23 @@ export function untrustedText(text, max, { keep = 'head' } = {}) {
   return keep === 'tail' ? `\u2026${cps.slice(-max).join('')}` : `${cps.slice(0, max).join('')}\u2026`;
 }
 
-export function agentOf(sample) { return sample?.agent ?? 'gone'; }
+export function agentOf(sample, session) {
+  return session ? (sample?.agents?.[session]?.state ?? 'gone') : (sample?.agent ?? 'gone');
+}
+
+// `agents: web=done, web-2=blocked(permission)` from a sample's per-session
+// map (sessions with no state omitted); the legacy single `agent: X` when the
+// server predates `agents`. Session names come from the box: sanitized.
+export function agentsSeg(sample) {
+  const a = sample?.agents;
+  if (a && typeof a === 'object') {
+    const entries = Object.entries(a)
+      .filter(([, v]) => v?.state)
+      .map(([name, v]) => `${untrustedText(name, SESSION_NAME_MAX)}=${v.state}${v.cause ? `(${v.cause})` : ''}`);
+    return entries.length ? `agents: ${entries.join(', ')}` : '';
+  }
+  return sample?.agent ? `agent: ${sample.agent}` : '';
+}
 
 export function clip(text, max) {
   const s = String(text ?? '');
@@ -66,7 +82,8 @@ export function boxLine(box, status, sample) {
     const more = status.sessions.length - shown.length;
     segs.push(`tmux: ${shown.join(', ')}${more > 0 ? `, \u2026 +${more} more` : ''}`);
   }
-  if (sample?.agent) segs.push(`agent: ${sample.agent}`);
+  const ag = agentsSeg(sample);
+  if (ag) segs.push(ag);
   if (status?.metrics?.osId) segs.push(`os: ${status.metrics.osId}${status.metrics.osVer ? ` ${status.metrics.osVer}` : ''}`);
   // The tail: ssh prints any banner first and its own verdict last.
   const err = status && !status.reachable && status.error ? untrustedText(status.error, ERROR_MAX, { keep: 'tail' }) : '';
@@ -80,14 +97,14 @@ export function fleetOverview(boxes, statusMap = {}, seriesMap = {}) {
 }
 
 export function paneText(snap, box) {
-  const head = `pane ${box.label || box.host} session ${snap.sessionName} ${snap.width}x${snap.height} cursor ${snap.cursorX},${snap.cursorY} alt:${!!snap.alt} mouse:${!!snap.mouse} agent:${agentOf({ agent: snap.agent })}`;
+  const head = `pane ${box.label || box.host} session ${snap.sessionName} ${snap.width}x${snap.height} cursor ${snap.cursorX},${snap.cursorY} alt:${!!snap.alt} mouse:${!!snap.mouse} agent:${agentOf({ agent: snap.agent })}${snap.agentCause ? `(${snap.agentCause})` : ''}`;
   return `${head}\n---\n${stripSgr(snap.content)}`;
 }
 
 export function healthText(boxId, series = [], events = [], { maxEvents = 20 } = {}) {
   const last = series.at(-1);
   const latest = last
-    ? ['latest: ' + upWord(undefined, last), metricsSeg(last), last.agent ? `agent: ${last.agent}` : ''].filter(Boolean).join(' · ')
+    ? ['latest: ' + upWord(undefined, last), metricsSeg(last), agentsSeg(last)].filter(Boolean).join(' · ')
     : 'latest: no samples';
   const mine = (events || []).filter((e) => e.boxId === boxId).slice(0, maxEvents);
   const lines = [latest, `events (${mine.length}):`];

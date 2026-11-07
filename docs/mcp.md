@@ -100,7 +100,7 @@ Every tool returns compact text. Ids come from `list_boxes` / `list_jobs` / `lis
 | `start_setup` | Start a server-side setup job (tmux, shell frameworks, tools, post-setup script). AI-auth seeding is browser-only. |
 | `provision_guest` | Create an LXC container from a preset, link it, start its setup. |
 | `guest_power` | `start` / `shutdown` / `reboot` / `stop` the guest a box is linked to. |
-| `wait_for_agent` | Block until the box's agent state is one of `until` (default `waiting`) or `timeout_sec` (default 120, max 540) passes. |
+| `wait_for_agent` | Block until an agent session's state is one of `until` (default `blocked`, `done`, `idle`; `waiting` is a deprecated alias for `done`+`idle`) or `timeout_sec` (default 120, max 540) passes. `session` picks the tmux session (default: the box's configured one); a `blocked` result adds its `cause`. States: `working`, `blocked`, `done` (finished, unseen), `idle`; `done` becomes `idle` only when a person looks at the pane in the web app. |
 | `wait_for_job` | Block until a job leaves `running` or the timeout passes. |
 
 Timing out is **not** an error: both wait tools return the current state with
