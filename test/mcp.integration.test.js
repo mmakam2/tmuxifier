@@ -132,7 +132,7 @@ test('run_fleet_command by script_id sends the saved body under its frozen name'
 test('wait_for_agent returns immediately for the gone state and box_health lists the sample', async () => {
   const r = await mcp.call('wait_for_agent', { box_id: box.id, until: ['gone'], timeout_sec: 5 });
   // A slow first round trip could round waited_sec up to 1.
-  expect(r.content[0].text).toMatch(/^state: gone\nsession: configured\ntimed_out: false\nwaited_sec: [01]$/);
+  expect(r.content[0].text).toMatch(/^state: gone\nsession: \S+\ntimed_out: false\nwaited_sec: [01]$/);
   const h = await mcp.call('box_health', { box_id: box.id });
   expect(h.content[0].text).toMatch(/^latest: up\nevents \(\d+\):/);
 });

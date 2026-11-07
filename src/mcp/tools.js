@@ -51,7 +51,7 @@ export const TOOL_DEFS = [
   { name: 'start_setup', description: 'Start a server-side setup job on a box: tmux, optional shell frameworks, the tool catalog, the Claude Code statusline/hooks, and an optional post-setup saved script. AI-auth seeding needs a browser session.', inputSchema: { type: 'object', required: ['box_id'], properties: { box_id: BOX_ID, oh_my_tmux: bool('Install oh-my-tmux'), oh_my_zsh: bool('Install oh-my-zsh'), oh_my_bash: bool('Install oh-my-bash'), tools: { type: 'array', items: { type: 'string', enum: SETUP_TOOLS }, description: 'Tool ids from the setup catalog (agy is the Antigravity CLI)' }, claude_statusline: bool('Push the Claude Code statusline (legacy flag; the claude tool implies it)'), script_id: str('Saved script id to run last'), script_name: str('Display label for that script') } } },
   { name: 'provision_guest', description: 'Create a Proxmox LXC container from a preset, link it as a box and start its setup. Returns the provision job id; follow it with wait_for_job.', inputSchema: { type: 'object', required: ['preset_id', 'hostname'], properties: { preset_id: str('Preset id from list_presets'), hostname: str('DNS label; becomes the box label'), vmid: int('Explicit vmid (default: next free)'), ip: str('CIDR override for static presets'), tags: { type: 'array', items: { type: 'string' } }, setup_options: { type: 'object', description: 'Setup options forwarded to the post-link setup job (same keys as start_setup, camelCase; seedAiAuth is refused)' } } } },
   { name: 'guest_power', description: 'Start, shut down, reboot or stop the Proxmox guest a box is linked to. Deprovisioning is not available through MCP.', inputSchema: { type: 'object', required: ['box_id', 'action'], properties: { box_id: BOX_ID, action: { type: 'string', enum: GUEST_ACTIONS } } } },
-  { name: 'wait_for_agent', description: `Block until a Claude agent session on the box enters one of \`until\` (default: blocked, done or idle — i.e. it needs input or finished) or the timeout passes. \`session\` picks the tmux session (default: the box's configured session). \`waiting\` is a deprecated alias for done+idle. ${AGENT_STATES_DOC} Timeout is not an error; the result reports timed_out.`, inputSchema: { type: 'object', required: ['box_id'], properties: { box_id: BOX_ID, session: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$', description: "tmux session to watch; defaults to the box's configured session" }, until: { type: 'array', items: { type: 'string', enum: AGENT_STATES }, description: 'Target states (default ["blocked","done","idle"])' }, timeout_sec: TIMEOUT } } },
+  { name: 'wait_for_agent', description: `Block until a Claude agent session on the box enters one of \`until\` (default: blocked, done or idle — i.e. it needs input or finished) or the timeout passes. \`session\` picks the tmux session (default: the box's configured session, named in the result's session line). \`waiting\` is a deprecated alias for done+idle. ${AGENT_STATES_DOC} Timeout is not an error; the result reports timed_out.`, inputSchema: { type: 'object', required: ['box_id'], properties: { box_id: BOX_ID, session: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$', description: "tmux session to watch; defaults to the box's configured session" }, until: { type: 'array', items: { type: 'string', enum: AGENT_STATES }, description: 'Target states (default ["blocked","done","idle"])' }, timeout_sec: TIMEOUT } } },
   { name: 'wait_for_job', description: 'Block until a job leaves the running state or the timeout passes. Timeout is not an error; the result reports timed_out.', inputSchema: { type: 'object', required: ['kind', 'id'], properties: { kind: KIND, id: str('Job id'), timeout_sec: TIMEOUT } } },
 ];
 
@@ -182,13 +182,14 @@ export function createToolRegistry({ client, sleep = (ms) => new Promise((r) => 
     },
     async wait_for_agent({ box_id, session, until = ['blocked', 'done', 'idle'], timeout_sec }) {
       const targets = new Set(until.flatMap((s) => (s === 'waiting' ? ['done', 'idle'] : [s])));
+      const name = session ?? (((await client.listBoxes()) || []).find((b) => b.id === box_id)?.sessionName || 'web');
       let last;
       const r = await poll(async () => {
         last = (await client.getSeries(box_id))?.[box_id]?.at(-1);
-        return agentOf(last, session);
+        return last?.agents ? agentOf(last, name) : agentOf(last);
       }, (s) => targets.has(s), timeout_sec);
-      const lines = [`state: ${r.value}`, `session: ${session ?? 'configured'}`];
-      const cause = session && r.value === 'blocked' ? last?.agents?.[session]?.cause : undefined;
+      const lines = [`state: ${r.value}`, `session: ${name}`];
+      const cause = r.value === 'blocked' ? last?.agents?.[name]?.cause : undefined;
       if (cause) lines.push(`cause: ${cause}`);
       lines.push(`timed_out: ${r.timedOut}`, `waited_sec: ${r.elapsed}`);
       return ok(lines.join('\n'));
