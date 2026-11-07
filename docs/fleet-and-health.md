@@ -82,7 +82,7 @@ The state shows in several places. The sidebar badge beside each box shows its w
 listing them. The **attention strip** above the box list shows counts (`2 need you · 3 working ·
 1 done`); each segment filters the list to boxes with any session in that state (click again to
 clear; it expands collapsed groups). The standby dashboard has an **Agents** board with Needs you /
-Working / Done / Idle columns, and a card opens that box on that session. The session picker shows
+Done / Working / Idle columns, and a card opens that box on that session. The session picker shows
 each session's state, and the pane header chip reads `working`, `blocked · <cause>`, `done` or
 `idle`. This is ground truth and the **only** source: a small Claude Code hook on the box records
 the state at the moment it changes, and the status probe reads that record. There is no
@@ -94,8 +94,8 @@ each session".
 Three event kinds go into the same timeline, each carrying its session: **claude needs you:
 <cause>** (blocked), **claude finished a turn** (done), and **claude exited**. All three are
 suppressed while you're attached to that session, since watching it is its own notification, and a
-session's first appearance never notifies. The first is also pushed to the Android app as "Claude
-needs you". Seen state is saved on the host in `data/agent-seen.json`.
+session's first appearance never notifies. All three are pushed to the Android app (the
+blocked one as "Claude needs you"). Seen state is saved on the host in `data/agent-seen.json`.
 
 The working chip carries a small animated indicator — Clawd, the Claude Code mascot, or the CLI's
 own star spinner. **Settings → Appearance** picks between six modes: Off (no indicator at all),

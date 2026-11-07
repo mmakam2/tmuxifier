@@ -150,8 +150,8 @@ injected as arguments — that is what makes them testable without mocks. Follow
   into `shutdown.js`'s `registerShutdownFlush` (SIGTERM/SIGINT), or a just-finished job reloads as
   `interrupted`.
 - `agentSeenStore.js` — `data/agent-seen.json`: per box, per session, the marker timestamp of the
-  newest finished turn a client has seen. Debounced, `0o600`, flushed on shutdown; a `ts` ahead of
-  the marker is refused.
+  newest finished turn a client has seen. Debounced, `0o600`, flushed on shutdown. The "`ts` ahead of the
+  marker is refused" rule lives in `healthHistory.markSeen`.
 - `concurrency.js` — `mapWithConcurrency`, bounded parallelism for status sweeps and Fleet.
 - `jobOrder.js` — `newestFirst` job comparator. `pveTask.js` — `pollPveTask`, the shared PVE task
   poller.
@@ -300,10 +300,14 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   The hook writes `<session>:<state>:<epoch>:<cause>` markers under `~/.tmuxifier-agent/`, the
   **sole** source of agent state. States `working|blocked|ready`; causes `prompt|resume|stop|start|
   permission|question|elicitation|unblock`. Old three-field markers still parse (`waiting` reads as
-  a finished turn). `PermissionRequest` is the `blocked` writer (the moment Claude asks); a sibling
+  a finished turn). `PermissionRequest` is the primary `permission` writer (fires the moment Claude asks);
+  `Notification` `permission_prompt` is a backstop that never downgrades an existing block; `ask`
+  (PreToolUse AskUserQuestion) and the elicitation / `agent_needs_input` notifications also write
+  `blocked`; a sibling
   `blocked/<session>` records which agent (main or a subagent id) raised the block, so only that
-  agent's next tool call clears it, and a `PostToolUse` that matches no owner short-circuits to
-  `unblock` (two forks per tool call). A plain "No" to a permission prompt fires no hook, so the
+  agent's next tool call clears it, and `unblock` (PostToolUse and PostToolUseFailure) exits before reading stdin
+  unless the marker is `blocked` (two forks, `sh` and `tmux`, per tool call); on a blocked marker it
+  writes `working/unblock` only when the payload's `agent_id` matches the recorded owner. A plain "No" to a permission prompt fires no hook, so the
   session stays `blocked` until a prompt or Claude Code's idle timer. Its background-work gate
   (`busy/<session>/` tokens: `sub.` bracketed by SubagentStart/Stop with a 120min TTL, `bg.` from
   PreToolUse `Bash` with a ~2min TTL) keeps `Stop`, `idle_prompt` and `agent_completed` from
@@ -337,13 +341,13 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   into history as `__local__` without putting it in the snapshot.
 - `healthHistory.js` / `healthEventsStore.js` — rolling samples per box and edge-triggered events
   (down/up/needs-auth/threshold/agent-blocked/agent-input/agent-done) in `data/health-events.json`.
-  Samples carry per-session `agents` (every tmux session with a Claude pane, plus the Host Shell as
-  `__local__`); displayed states are `working`, `blocked`, `done` (finished, not yet seen), `idle`.
-  The seen watermark (`markSeen`, fed by `agentSeenStore.js` via `POST /api/boxes/:id/agent-seen`)
-  turns `done` into `idle`. `agent-blocked` = "needs you: <cause>", `agent-input` = finished a turn
+  Samples carry per-session `agents` (every listed tmux session, non-Claude panes as
+  `present: false`; the Host Shell is the `__local__` box/series id); displayed states are `working`, `blocked`, `done` (finished, not yet seen), `idle`.
+  The seen watermark (`POST /api/boxes/:id/agent-seen` → `history.markSeen`, persisted through
+  `agentSeenStore.js`) turns `done` into `idle`. `agent-blocked` = "needs you: <cause>", `agent-input` = finished a turn
   (`done`), `agent-done` = claude exited; events carry the session, are suppressed while that
   session is attached, and a session's first appearance never notifies. Agent state is hook-only;
-  `agentPresent` (pane based) only guards agent-done. `onEvent(cb)` is the push seam
+  the per-session `present` flag guards agent-done. `onEvent(cb)` is the push seam
   (`fcmPush.js`; `agent-blocked` pushes as "Claude needs you"); browsers poll
   `GET /api/health/events`.
 
@@ -450,8 +454,8 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
 - **Stage & panes** — `stageLayout.ts` (pure split tree of instance leaves `${box}#${ordinal}`;
   v3 serialization with per-pane session overrides; v1/v2 migrate by appending `#1`;
   `phonePaneOf`), `stagePanes.ts` (split DOM, ARIA splitters, drop targets, `focusMove`),
-  `paneHeader.ts` (view-model: chip precedence pane-state > connection > agent, agent chip only
-  when the pane is on the box's configured session; session/window targets; `targets: null` in
+  `paneHeader.ts` (view-model: chip precedence pane-state > connection > agent, agent chip is the
+  state of the pane's OWN session; session/window targets; `targets: null` in
   phone mode), `sessionPicker.ts` (popup replacing native `<select>` so rows can carry a kill ×;
   never rebuilds while a row is armed; consumers **must** call `destroy()`), `paneLifecycle.ts`
   (Proxmox power caps: word face, one-family Nerd Font mark under 560px, CSS decides),
@@ -470,8 +474,11 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
   `voiceWorklet.js` (real asset, keeps CSP `script-src 'self'`), `pcmStream.ts`, `voicePress.ts`
   (press reducer: a `claude` verdict links, else dictates), `voiceLink.ts`, `voiceUi.ts`
   (`evaluateVoice`, Ctrl+Shift+Space hotkey swallowing the whole chord), `voice.ts`.
+- **Agent state** — `agentState.ts` (pure: `AGENT_PRECEDENCE`, `latestAgents`, `worstAgent`,
+  `agentChipText`, `agentCounts`, `agentCards`, `fmtAge`; every agent surface folds through it).
 - **Dashboard** — `dashboard.ts` (standby dashboard when no pane is docked; polls only while
-  mounted; fleet cards are a spec sheet, not live gauges), `truenasCard.ts`, `unifiCard.ts`,
+  mounted; AGENTS board `dash-board`, columns in precedence order, a card docks the box on that
+  session; fleet cards are a spec sheet, not live gauges), `truenasCard.ts`, `unifiCard.ts`,
   `immichCard.ts`, `serviceIcon.ts` (always `<img>`, hides on error), `sparkline.ts`,
   `healthEvents.ts`, `notifyPrefs.ts`.
 - **Themes** — `themes.ts` (pure catalog; `DEFAULT_THEME_ID` = `vercel`, `ROOT_THEME_ID` =

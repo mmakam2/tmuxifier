@@ -220,13 +220,14 @@ The two functional accents are the theme-facing pair: the token names are semant
   active tab's lit legend, a working agent, a running job, focus glow on inputs. Amber Deep
   (#e09600, `--accent-deep`) for borders/edges of lit elements.
 - **Safety Orange** (#ff6a1a, `--commit`): operator action needed — the one committing key on
-  any surface (Unlock, Run on N boxes, Create), the done/blocked chips (done = `--commit`, blocked = `--crit`, idle = `--dim`, working = `--accent`), needs-interactive
+  any surface (Unlock, Run on N boxes, Create), the done chip (a finished turn awaiting you), needs-interactive
   states. Text on solid orange is near-black (#1a0e05, `--commit-ink`), and the key's material
   ramp has its own `--commit-*` tokens.
 
 ### Status LEDs (semantic only)
 - **LED Green** (#3ecf6e, `--ok`): reachable, healthy, success.
-- **LED Red** (#ff5c47, `--crit`): down, error, destructive affordances.
+- **LED Red** (#ff5c47, `--crit`): down, error, a blocked agent chip, destructive affordances.
+  (Agent chips: done = `--commit`, idle = `--dim`, working = `--accent`.)
 - **LED Violet** (#a98bff, `--auth`): reachable but needs a login — actionable, not dead.
 - Warn/degraded uses **Amber** in lamp form (`--warn`, a dot or chip), distinct from
   amber-as-glow by shape, matching annunciator practice.
