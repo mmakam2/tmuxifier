@@ -7,7 +7,9 @@ import { readJsonSync, writeFileAtomic } from './jsonFile.js';
 // is in flight, later saves just replace `pending`, and flush() loops until
 // nothing is pending. whenIdle() resolves once no write is pending or in
 // flight — the graceful-shutdown seam registerShutdownFlush awaits.
-export function createDebouncedJsonStore({ dataDir, filename }) {
+// `fallback`/`validate` default to the job stores' array shape; a store of a
+// different shape (agentSeenStore: an object map) passes its own.
+export function createDebouncedJsonStore({ dataDir, filename, fallback = [], validate = Array.isArray }) {
   const file = path.join(dataDir, filename);
   let pending = null;        // latest serialized payload awaiting write, or null
   let flushing = false;
@@ -30,7 +32,7 @@ export function createDebouncedJsonStore({ dataDir, filename }) {
   }
   return {
     load() {
-      return readJsonSync(file, { fallback: [], validate: Array.isArray });
+      return readJsonSync(file, { fallback, validate });
     },
     save(jobs) {
       try { pending = JSON.stringify(jobs, null, 2); } catch { return; }
