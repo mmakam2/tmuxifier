@@ -10,7 +10,14 @@ beforeEach(() => {
 
 test('the catalog covers every event kind exactly once', () => {
   const kinds = NOTIFY_KINDS.map((k) => k.kind).sort();
-  expect(kinds).toEqual(['agent-done', 'agent-input', 'down', 'key-changed', 'needs-auth', 'threshold', 'threshold-clear', 'up']);
+  expect(kinds).toEqual(['agent-blocked', 'agent-done', 'agent-input', 'down', 'key-changed', 'needs-auth', 'threshold', 'threshold-clear', 'up']);
+});
+
+test('agent-blocked leads the catalog and defaults on', () => {
+  expect(NOTIFY_KINDS[0].kind).toBe('agent-blocked');
+  expect(NOTIFY_KINDS[0].label).toBe('Claude needs you (permission or question)');
+  expect(NOTIFY_KINDS.find((k) => k.kind === 'agent-input').label).toBe('Claude finished a turn');
+  expect(defaultNotifyPrefs()['agent-blocked']).toBe(true);
 });
 
 test('defaults enable everything except up and threshold-clear', () => {

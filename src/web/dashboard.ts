@@ -3,11 +3,12 @@
 // place on poll ticks — the sidebar's "the poll never rebuilds whole rows"
 // contract, so hover states and tooltips survive repaints. main.ts owns all
 // polling and calls update(); this module never fetches.
-import type { Box, BoxMetrics, Status, Sample, Service, ServiceStatusSnapshot } from './api';
+import type { AgentState, Box, BoxMetrics, Status, Sample, Service, ServiceStatusSnapshot } from './api';
 import type { NetboxSummary } from './netbox';
 import type { PveLinkedGuest, PveClusterNode } from './proxmox';
 import { dotClassFor, dotTitleFor } from './statusDot';
 import { buildClawd } from './clawd';
+import { AGENT_PRECEDENCE, agentCards, agentChipText, fmtAge, latestAgents, worstAgent, type AgentCard } from './agentState';
 import { fmtLatency, fmtCount, fmtCompact, fmtUptime, fmtBytes } from './fmt';
 import { buildTruenasCard, type TruenasCardEls } from './truenasCard';
 import { buildUnifiCard, type UnifiCardEls } from './unifiCard';
@@ -31,6 +32,8 @@ export interface DashboardData {
 
 export interface DashboardHooks {
   onOpenBox(id: string): void;
+  // An agents-board card: dock the box and point the pane at that session.
+  onOpenSession(boxId: string, session: string): void;
   onAddBox(): void;
   onAddService(): void;
 }
@@ -301,6 +304,27 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     standby.append(hero);
   }
 
+  // The agents board: every session with a state, one column per state in
+  // precedence order, so the operator's queue reads left to right — what needs
+  // them first. Above the fleet because it is the part that asks for action.
+  const board = document.createElement('section');
+  board.className = 'dash-board';
+  board.hidden = true;
+  const boardGrid = div('dash-board-grid');
+  const BOARD_HEADS: Record<AgentState, string> = { blocked: 'Needs you', working: 'Working', done: 'Done', idle: 'Idle' };
+  const boardCols = new Map<AgentState, { root: HTMLElement; cards: HTMLElement }>();
+  for (const st of AGENT_PRECEDENCE) {
+    const col = div('dash-board-col');
+    col.dataset.state = st;
+    const headEl = div('dash-board-head');
+    headEl.textContent = BOARD_HEADS[st];
+    const cards = div('dash-board-cards');
+    col.append(headEl, cards);
+    boardGrid.append(col);
+    boardCols.set(st, { root: col, cards });
+  }
+  board.append(legend('AGENTS'), boardGrid);
+
   const fleet = document.createElement('section');
   fleet.className = 'dash-fleet';
   const fleetGrid = div('dash-fleet-grid');
@@ -347,7 +371,7 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
   infraGroups.append(pveGroup, ipamGroup, infraExtra);
   infra.append(legend('INFRASTRUCTURE'), infraGroups);
 
-  el.append(head, standby, fleet, services, infra);
+  el.append(head, standby, board, fleet, services, infra);
 
   // Per-entity element caches: update() mutates and *moves* nodes (appendChild
   // reorders without recreating), so hover and focus survive poll repaints.
@@ -387,6 +411,61 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     return { root, lamp, name, chip, spec };
   }
 
+  // Cards are cached per box+session and moved between columns, like the
+  // fleet rows: a poll that changes nothing leaves hover and focus alone.
+  interface BoardCard { root: HTMLButtonElement; box: HTMLElement; session: HTMLElement; cause: HTMLElement; age: HTMLElement }
+  const boardCardEls = new Map<string, BoardCard>();
+
+  function makeBoardCard(boxId: string, session: string): BoardCard {
+    const root = document.createElement('button');
+    root.type = 'button';
+    root.className = 'dash-card';
+    root.dataset.boxId = boxId;
+    root.dataset.session = session;
+    root.addEventListener('click', () => hooks.onOpenSession(boxId, session));
+    const box = div('dash-card-box');
+    const sess = div('dash-card-session');
+    const cause = div('dash-card-cause');
+    const age = div('dash-card-age');
+    root.append(box, sess, age); // cause is inserted by paintBoard, blocked only
+    return { root, box, session: sess, cause, age };
+  }
+
+  function paintBoard() {
+    const cols = agentCards(data.boxes, data.series);
+    const seen = new Set<string>();
+    const now = Date.now();
+    let any = false;
+    for (const st of AGENT_PRECEDENCE) {
+      const col = boardCols.get(st)!;
+      const list: AgentCard[] = cols[st];
+      col.root.classList.toggle('empty', list.length === 0);
+      if (list.length) any = true;
+      for (const card of list) {
+        const key = `${card.boxId}\u0000${card.session}`;
+        seen.add(key);
+        let c = boardCardEls.get(key);
+        if (!c) { c = makeBoardCard(card.boxId, card.session); boardCardEls.set(key, c); }
+        c.root.dataset.state = st;
+        c.box.textContent = card.label;
+        c.session.textContent = card.session;
+        // The cause rides blocked cards only, and is absent (not hidden) on the
+        // rest, so a card that moved columns never carries a stale reason.
+        if (st === 'blocked' && card.cause) {
+          c.cause.textContent = card.cause;
+          if (!c.cause.isConnected) c.session.after(c.cause);
+        } else c.cause.remove();
+        c.age.textContent = fmtAge(card.ts, now);
+        c.root.title = `${card.label} · ${card.session} — ${agentChipText(card.state, card.cause)}`;
+        col.cards.appendChild(c.root); // moves into this column, newest first
+      }
+    }
+    for (const [key, c] of boardCardEls) {
+      if (!seen.has(key)) { c.root.remove(); boardCardEls.delete(key); }
+    }
+    board.hidden = !any;
+  }
+
   function paintFleet() {
     const seen = new Set<string>();
     for (const box of data.boxes) {
@@ -397,15 +476,15 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
       row.lamp.className = `dot ${dotClassFor(st)}`;
       row.root.title = dotTitleFor(st);
       row.name.textContent = box.label;
-      const samples = data.series[box.id] ?? [];
-      const agent = samples.length ? samples[samples.length - 1].agent : undefined;
-      const chipState = agent === 'working' || agent === 'waiting' ? agent : null;
-      row.chip.hidden = chipState === null;
-      if (chipState) {
-        row.chip.className = `dash-chip dash-chip-${chipState}`;
+      // The box's worst session, the same fold as the sidebar badge.
+      const worst = worstAgent(latestAgents(data.series[box.id]));
+      row.chip.hidden = worst === null;
+      if (worst) {
+        const top = worst.sessions[0];
+        row.chip.className = `dash-chip dash-chip-${worst.state}`;
         row.chip.textContent = '';
-        if (chipState === 'working') row.chip.append(buildClawd()); // Clawd rides working only
-        row.chip.append(document.createTextNode(chipState.toUpperCase()));
+        if (worst.state === 'working') row.chip.append(buildClawd()); // Clawd rides working only
+        row.chip.append(document.createTextNode(agentChipText(top.state, top.cause).toUpperCase()));
       }
       // An em dash in the first slot when the box reported no metrics at all
       // (unreachable, mid-setup, or a host the probe can't read) — the lamp and
@@ -683,6 +762,7 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
     }
     Object.assign(data, patch);
     repaint();
+    if ('series' in patch || 'boxes' in patch) paintBoard();
   }
 
   function destroy() {

@@ -28,11 +28,23 @@ test('unseenCount counts events past the last-seen seq', () => {
 
 test('formatEvent renders the agent kinds', () => {
   const input = formatEvent({ ...base, kind: 'agent-input' });
-  expect(input.text).toContain('waiting for input');
+  expect(input.text).toBe('web-01 — claude finished a turn');
   expect(input.level).toBe('warn');
   const done = formatEvent({ ...base, kind: 'agent-done' });
-  expect(done.text).toContain('finished');
+  expect(done.text).toBe('web-01 — claude exited');
   expect(done.level).toBe('ok');
+  const blocked = formatEvent({ ...base, kind: 'agent-blocked', cause: 'permission' });
+  expect(blocked.text).toBe('web-01 — claude needs you: permission');
+  expect(blocked.level).toBe('crit');
+  // No cause on the event: the line still says why it is red.
+  expect(formatEvent({ ...base, kind: 'agent-blocked' }).text).toBe('web-01 — claude needs you: blocked');
+});
+
+test('formatEvent names the session when the event carries one', () => {
+  expect(formatEvent({ ...base, kind: 'agent-blocked', session: 'main', cause: 'question' }).text)
+    .toBe('web-01 · main — claude needs you: question');
+  expect(formatEvent({ ...base, kind: 'agent-input', session: 'main' }).text).toBe('web-01 · main — claude finished a turn');
+  expect(formatEvent({ ...base, kind: 'agent-done', session: 'work-2' }).text).toBe('web-01 · work-2 — claude exited');
 });
 
 test('an unknown event kind from a newer server renders a generic line instead of breaking the panel', () => {

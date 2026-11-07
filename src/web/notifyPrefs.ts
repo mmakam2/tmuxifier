@@ -7,7 +7,8 @@ import type { HealthEventKind } from './api';
 const KEY = 'tmuxifier.notifyPrefs';
 
 export const NOTIFY_KINDS: { kind: HealthEventKind; label: string }[] = [
-  { kind: 'agent-input', label: 'Claude waiting for input' },
+  { kind: 'agent-blocked', label: 'Claude needs you (permission or question)' },
+  { kind: 'agent-input', label: 'Claude finished a turn' },
   { kind: 'agent-done', label: 'Claude finished' },
   { kind: 'down', label: 'Box unreachable' },
   { kind: 'up', label: 'Box recovered' },

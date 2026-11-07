@@ -427,6 +427,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .layout.sidebar-collapsed .fleet-actions,
 .layout.sidebar-collapsed .fleet-bar,
 .layout.sidebar-collapsed .search-wrap,
+.layout.sidebar-collapsed .agent-strip,
 .layout.sidebar-collapsed .boxes,
 .layout.sidebar-collapsed .local-shell { display: none; }
 .actions { display: flex; flex-direction: column; gap: 6px; }
@@ -485,6 +486,22 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .search-clear:hover { background: var(--panel-2); color: var(--text); }
 @media (prefers-reduced-motion: reduce) { .search-clear { transition: none; } }
 .boxes { list-style: none; margin: 0; padding: 0; flex: 1; overflow-y: auto; }
+/* Attention strip: lit chips, one per agent state with sessions in it, in
+   precedence order — the sidebar's answer to "does anything need me". Each is
+   a filter key; the engaged one takes a solid bezel in its own color and a
+   stronger fill, the chip vocabulary's "lit" pushed one step, not a commit key. */
+.agent-strip { display: flex; flex-wrap: wrap; gap: 4px; }
+.agent-strip-seg {
+  font-family: var(--face); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  line-height: 1.6; padding: 1px 7px; border-radius: 4px; cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--border); background: transparent; color: var(--dim);
+}
+.agent-strip-seg[data-state='blocked'] { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 50%, transparent); background: color-mix(in srgb, var(--crit) 12%, transparent); }
+.agent-strip-seg[data-state='done'] { color: var(--commit); border-color: color-mix(in srgb, var(--commit) 50%, transparent); background: color-mix(in srgb, var(--commit) 10%, transparent); }
+.agent-strip-seg[data-state='working'] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.agent-strip-seg:hover { filter: brightness(1.2); }
+.agent-strip-seg:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
+.agent-strip-seg.active { border-color: currentColor; background: color-mix(in srgb, currentColor 22%, transparent); }
 .boxes-empty { padding: 18px 10px; color: var(--dim); font-size: 12.5px; line-height: 1.55; text-align: center; }
 .box-group { list-style: none; margin: 0 0 4px; padding: 0; }
 /* Group headers speak the engraved-legend voice. */
@@ -556,9 +573,14 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .badge-info { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .badge-warn { color: var(--commit); border-color: color-mix(in srgb, var(--commit) 45%, transparent); background: color-mix(in srgb, var(--commit) 10%, transparent); }
 /* Agent state beside the box label — same recipes as the pane chip
-   (chip-agent-*): amber = working agent, orange = waiting on the operator. */
+   (chip-agent-*), one per state of the four-state model: LED red = blocked on
+   a permission or question (the operator must answer), orange = a finished
+   turn waiting on the operator (The Orange Means You Rule), amber = working
+   (Amber Means Alive), dim and unlit = idle. */
+.badge-agent-blocked { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 50%, transparent); background: color-mix(in srgb, var(--crit) 12%, transparent); }
+.badge-agent-done { color: var(--commit); border-color: color-mix(in srgb, var(--commit) 50%, transparent); background: color-mix(in srgb, var(--commit) 10%, transparent); }
 .badge-agent-working { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
-.badge-agent-waiting { color: var(--commit); border-color: color-mix(in srgb, var(--commit) 50%, transparent); background: color-mix(in srgb, var(--commit) 10%, transparent); }
+.badge-agent-idle { color: var(--dim); border-color: var(--border); background: transparent; }
 /* Clawd: the working-agent indicator, in the variant the Appearance tab
    picked (clawd-v-<id> from clawd.ts). currentColor glyphs, pure CSS — a
    fleet of working boxes costs no timers. clawd-v-static is the base rule
@@ -919,8 +941,61 @@ button.empty-kbd:hover { color: var(--text); }
   letter-spacing: 0.12em;
   white-space: nowrap;
 }
+.dash-chip-blocked { background: color-mix(in srgb, var(--crit) 16%, transparent); color: var(--crit); }
+.dash-chip-done { background: color-mix(in srgb, var(--commit) 16%, transparent); color: var(--commit); }
 .dash-chip-working { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
-.dash-chip-waiting { background: color-mix(in srgb, var(--commit) 16%, transparent); color: var(--commit); }
+.dash-chip-idle { background: transparent; color: var(--dim); }
+/* The agents board: the operator's queue, one column per state in precedence
+   order (blocked, done, working, idle). Flat display content on the glass like
+   the fleet strip — cards are bezel-lined cells, the column head engraves, and
+   the state color lives on a 2px seam down each card's left edge plus the head
+   legend, so a full column reads as one lit lane without filling the glass. */
+.dash-board-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.dash-board-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.dash-board-col.empty { opacity: 0.45; }
+.dash-board-head {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--dim); padding-bottom: 4px; border-bottom: 1px solid var(--border);
+}
+.dash-board-col[data-state='blocked'] .dash-board-head { color: var(--crit); }
+.dash-board-col[data-state='done'] .dash-board-head { color: var(--commit); }
+.dash-board-col[data-state='working'] .dash-board-head { color: var(--accent); }
+.dash-board-col.empty .dash-board-head { color: var(--dim); }
+.dash-board-cards { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.dash-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: 'box age' 'session session' 'cause cause';
+  gap: 2px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.015);
+  color: var(--muted);
+  font-family: var(--face);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.dash-card[data-state='blocked'] { border-left-color: var(--crit); }
+.dash-card[data-state='done'] { border-left-color: var(--commit); }
+.dash-card[data-state='working'] { border-left-color: var(--accent); }
+.dash-card:hover {
+  border-color: var(--accent-deep);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.dash-card:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
+.dash-card-box { grid-area: box; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-card-age { grid-area: age; color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.dash-card-session { grid-area: session; color: var(--dim); font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-card-cause { grid-area: cause; color: var(--crit); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .dash-tile-bottom { display: flex; align-items: center; gap: 8px; min-height: 16px; }
 /* Service logo. Fixed square so a tall or wide source cannot shift the row,
    and object-fit keeps the aspect ratio inside it. Hidden by serviceIcon.ts
@@ -1089,8 +1164,17 @@ button.empty-kbd:hover { color: var(--text); }
 .pane-header-actions { display: flex; align-items: center; gap: 6px; }
 /* State chips on the bezel: lit or dark. */
 .pane-chip { padding: 1px 7px; border-radius: 4px; border: 1px solid var(--border); background: rgba(255, 255, 255, 0.02); letter-spacing: 0.08em; }
-.pane-chip.chip-agent-waiting { color: var(--commit); border-color: color-mix(in srgb, var(--commit) 50%, transparent); background: color-mix(in srgb, var(--commit) 10%, transparent); }
-.pane-chip.chip-agent-working { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+/* The session picker's per-row chip wears the pane chip's recipe, so a row and
+   the header it would switch to read the same state the same way. */
+.session-picker-chip {
+  display: inline; margin-left: 6px;
+  padding: 1px 7px; border-radius: 4px; border: 1px solid var(--border); background: rgba(255, 255, 255, 0.02);
+  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.pane-chip.chip-agent-blocked, .session-picker-chip.chip-agent-blocked { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 50%, transparent); background: color-mix(in srgb, var(--crit) 12%, transparent); }
+.pane-chip.chip-agent-done, .session-picker-chip.chip-agent-done { color: var(--commit); border-color: color-mix(in srgb, var(--commit) 50%, transparent); background: color-mix(in srgb, var(--commit) 10%, transparent); }
+.pane-chip.chip-agent-working, .session-picker-chip.chip-agent-working { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.pane-chip.chip-agent-idle, .session-picker-chip.chip-agent-idle { color: var(--dim); border-color: var(--border); background: transparent; }
 .pane-chip.chip-conn, .pane-chip.chip-state { color: var(--dim); }
 .pane-header .pane-act {
   font-family: var(--face); font-size: 11px; padding: 1px 7px;

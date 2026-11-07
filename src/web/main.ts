@@ -1,4 +1,5 @@
-import { api, onUnauthorized, type AddBoxSpec, type Box, type Status, type Sample, type HealthEvent, type PushResult, type SetupJob, type SetupSummary } from './api';
+import { api, onUnauthorized, type AddBoxSpec, type AgentState, type Box, type Status, type Sample, type HealthEvent, type PushResult, type SetupJob, type SetupSummary } from './api';
+import { AGENT_PRECEDENCE, agentCounts, latestAgents, worstAgent } from './agentState';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
 import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, formatVoiceLinkResult, blocksTerminal } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor, agentBadgeFor } from './statusDot';
@@ -105,6 +106,16 @@ let latestSeries: Record<string, Sample[]> = {};
 let latestEvents: HealthEvent[] = [];
 let latestEventSeq = 0;
 let lastNotifiedSeq = -1; // -1 until the first poll seeds it (no startup flood)
+// The sidebar attention strip's filter: null shows every box; a state shows
+// only boxes whose WORST session is in it (the same fold the badge paints).
+let agentFilter: AgentState | null = null;
+// What the last filterAndPaint showed under the agent filter, so a health
+// poll rebuilds the list only when the filtered membership actually moved.
+let lastAgentFilterKey = '';
+// Seen acknowledgements already sent, `${box}:${session}` -> the marker ts.
+// One POST per done marker: the server's watermark is idempotent, but a poll
+// tick every few seconds must not re-send what it already said.
+const ackedSeen = new Map<string, number>();
 
 function sparkMetric(): SparkMetric {
   const v = localStorage.getItem(SPARK_METRIC_KEY) as SparkMetric | null;
@@ -149,11 +160,12 @@ function applyAgentBadge(badges: Element, id: string) {
   const el = (existing as HTMLElement | null) ?? document.createElement('span');
   el.className = `badge ${b.cls}`;
   el.dataset.agentBadge = '1';
+  el.title = b.title; // every session with a state, not just the worst
   // Children rebuilt every pass: the badge holds only the sprite and the text,
   // so a state flip can never strand a sprite beside the wrong label.
   el.textContent = '';
   if (b.sprite) el.append(buildClawd());
-  el.append(document.createTextNode(b.text));
+  el.append(document.createTextNode(b.count > 1 ? `${b.text} ×${b.count}` : b.text));
   if (!existing) badges.append(el);
 }
 
@@ -167,6 +179,85 @@ function repaintAgentBadges() {
   // the __local__ pseudo-box the poller feeds to health history.
   const localBadges = app.querySelector('.local-shell .box-badges');
   if (localBadges) applyAgentBadge(localBadges, '__local__');
+}
+
+// The attention strip above the box list: one segment per non-zero state, in
+// precedence order, counting SESSIONS across every series (Host Shell too).
+// A segment filters the list to boxes whose worst state it names; clicking the
+// active one clears the filter. The strip hides, and the filter resets, the
+// moment nothing has a state — a filter on an empty category would otherwise
+// leave an empty list with no visible control to undo it.
+function agentStripText(state: AgentState, n: number): string {
+  return state === 'blocked' ? `${n} need${n === 1 ? 's' : ''} you` : `${n} ${state}`;
+}
+
+function agentFilterMatches(b: Box): boolean {
+  return agentFilter === null || worstAgent(latestAgents(latestSeries[b.id]))?.state === agentFilter;
+}
+
+function agentFilterKey(): string {
+  return agentFilter === null ? '' : `${agentFilter}|${allBoxes.filter(agentFilterMatches).map((b) => b.id).join(',')}`;
+}
+
+function repaintAgentStrip(refilter = false) {
+  const strip = app.querySelector('#agent-strip') as HTMLElement | null;
+  if (!strip) return;
+  const counts = agentCounts(latestSeries);
+  const states = AGENT_PRECEDENCE.filter((st) => counts[st] > 0);
+  const active = document.activeElement as HTMLElement | null;
+  const refocus = active && strip.contains(active) ? active.dataset.state : undefined;
+  // A filter whose category emptied resets too, not only an all-zero strip:
+  // its segment is gone, so nothing on screen could clear it.
+  if (agentFilter && !states.includes(agentFilter)) agentFilter = null;
+  strip.hidden = states.length === 0;
+  strip.replaceChildren(...states.map((st) => {
+    const seg = document.createElement('button');
+    seg.type = 'button';
+    seg.className = 'agent-strip-seg';
+    seg.dataset.state = st;
+    seg.textContent = agentStripText(st, counts[st]);
+    seg.setAttribute('aria-pressed', agentFilter === st ? 'true' : 'false');
+    if (agentFilter === st) seg.classList.add('active');
+    seg.addEventListener('click', () => {
+      agentFilter = agentFilter === st ? null : st;
+      repaintAgentStrip(true);
+    });
+    return seg;
+  }));
+  // The rebuild drops the focused segment; hand focus to its replacement so a
+  // keyboard toggle (or a poll landing mid-tab) never strands focus on <body>.
+  if (refocus) (strip.querySelector(`.agent-strip-seg[data-state="${refocus}"]`) as HTMLElement | null)?.focus();
+  // A live filter re-applies on fresh data (a box may have changed state
+  // under it) and a reset repaints the now-unfiltered list — but only when the
+  // shown set moved: paint() rebuilds every row, and a poll that changed
+  // nothing must not strip hover and focus from the list.
+  if (refilter || agentFilterKey() !== lastAgentFilterKey) filterAndPaint();
+}
+
+// Tell the server the operator has SEEN a finished turn (spec §4): a done
+// marker counts as seen only when its pane is actually on screen in a visible,
+// focused window. Desktop renders every docked pane; phone renders only the
+// focused one. Fire-and-forget, once per marker ts: a failed POST is not
+// retried for that ts (the next done marker carries a new one).
+function reportSeen() {
+  if (typeof document === 'undefined' || document.visibilityState !== 'visible' || !document.hasFocus()) return;
+  const docked = panesOf(stageRoot);
+  const phone = phoneCtl?.matches() ?? false;
+  for (const iid of tabs.keys()) {
+    if (phone ? iid !== focusedPaneId : !docked.includes(iid)) continue;
+    const box = boxOfInstance(iid);
+    const session = attachedSession(iid);
+    const entry = latestAgents(latestSeries[box])[session];
+    if (entry?.state !== 'done' || !entry.ts) continue;
+    const key = `${box}:${session}`;
+    if (ackedSeen.get(key) === entry.ts) continue;
+    ackedSeen.set(key, entry.ts);
+    void api.agentSeen(box, session, entry.ts).catch(() => {});
+  }
+}
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', reportSeen);
+  window.addEventListener('focus', reportSeen);
 }
 
 // Paint a box row's metric sparkline from the cached series. Same in-place
@@ -362,7 +453,8 @@ function getSearchTerm(): string {
 
 function filterAndPaint() {
   const term = getSearchTerm();
-  const filtered = allBoxes.filter(b => boxMatchesSearch(b, term));
+  const filtered = allBoxes.filter(b => boxMatchesSearch(b, term) && agentFilterMatches(b));
+  lastAgentFilterKey = agentFilterKey();
   paint(filtered, latestStatus, term);
   // Every box-list change flows through here (boot refresh, add/edit/remove/
   // import), so a mounted dashboard tracks it immediately — without this the
@@ -664,8 +756,10 @@ async function pollHealth() {
     latestSeries = await api.healthSeries();
     repaintSparklines();
     repaintAgentBadges();
+    repaintAgentStrip();
     updatePaneHeaders(); // the agent chip's read arrives with the series
     if (dashTimer) dash?.update({ series: latestSeries });
+    reportSeen();
   } catch {}
   try {
     const { events, latestSeq } = await api.healthEvents();
@@ -733,6 +827,7 @@ function ensureDash() {
   if (!dash) {
     dash = createDashboard({
       onOpenBox: (id) => openPane(id),
+      onOpenSession: (id, session) => openPaneOnSession(id, session),
       onAddBox: () => openBoxDialog(),
       onAddService: () => openSettingsModal('services'),
     });
@@ -912,20 +1007,18 @@ function paneContentFor(id: string): HTMLElement {
 function paneHeaderModelFor(id: string): PaneHeaderModel {
   const box = boxFor(id);
   const boxId = boxOfInstance(id);
-  // Latest health sample carries the agent read (see the spec: the series
-  // already ships it; the bar is its first client consumer).
-  const series = latestSeries[boxId];
+  // Latest health sample carries every session's agent entry; the header picks
+  // its own pane's session out of it (and the picker rows carry the rest).
   return paneHeaderModel({
     local: isLocalPane(id),
     label: isLocalPane(id) ? 'Host Shell' : box?.label ?? boxId,
     user: box?.user,
     host: box?.host,
     status: latestStatus[boxId],
-    agent: series?.[series.length - 1]?.agent,
+    agents: latestAgents(latestSeries[boxId]),
     conn: connStates.get(id),
     state: paneState(id),
     sessionName: attachedSession(id),
-    configuredSession: boxFor(id)?.sessionName || 'web',
     // phoneCtl is created in start(); before that there is no stage to paint,
     // so the `?? false` is a boot-order guard, not a default policy.
     phone: phoneCtl?.matches() ?? false,
@@ -1313,6 +1406,7 @@ async function renderDashboard() {
           <input id="search" class="search" type="text" placeholder="Search…" aria-label="Search boxes" autocomplete="off" />
           <button id="search-clear" class="search-clear" type="button" title="Clear search" aria-label="Clear search" hidden>✕</button>
         </div>
+        <div id="agent-strip" class="agent-strip" hidden></div>
         <ul id="boxes" class="boxes"></ul>
         <div class="local-shell">
           <span class="local-dot"></span>
@@ -2195,6 +2289,25 @@ function openPane(boxId: string) {
     : replacePane(stageRoot, panes.length <= 1 || !focusedPaneId ? panes[0] : focusedPaneId, iid);
   focusedPaneId = iid;
   repaintStage();
+}
+
+// The agents board's card click: dock (or focus) the box, then point that pane
+// at the card's session. A duplicate pane already showing that session wins
+// over re-pointing the one openPane picked, so a click never yanks a pane off
+// a session the operator also has open. The Host Shell has one session and no
+// picker, so it only opens. switchPaneSession is a no-op when already there.
+function openPaneOnSession(boxId: string, session: string) {
+  openPane(boxId);
+  if (boxId === '__local__') return;
+  const onIt = panesOf(stageRoot).find((p) => boxOfInstance(p) === boxId && attachedSession(p) === session);
+  if (onIt && onIt !== focusedPaneId) {
+    focusedPaneId = onIt;
+    if (phoneCtl?.matches()) repaintStage(); // phone renders the focused pane only
+    else { syncPaneFocus(); persistStage(); }
+    tabs.get(onIt)?.term.focus();
+    return;
+  }
+  if (focusedPaneId && boxOfInstance(focusedPaneId) === boxId) switchPaneSession(focusedPaneId, session);
 }
 
 // keepPane tears down the terminal but leaves the pane in the layout — used
@@ -3476,7 +3589,7 @@ function renderEventsPanel() {
   if (!latestEvents.length) {
     const li = document.createElement('li');
     li.className = 'events-empty';
-    li.textContent = 'No events yet. Box transitions (down / up / needs login / metric thresholds / claude waiting for input / claude finished) will appear here.';
+    li.textContent = 'No events yet. Box transitions (down / up / needs login / metric thresholds / claude needs you / claude finished a turn / claude exited) will appear here.';
     list.appendChild(li);
   }
   const now = Date.now();
@@ -4031,6 +4144,10 @@ function teardownWorkspace(): void {
   for (const id of [...settingUpPollers.keys()]) clearSettingUpPanel(id);
   stageRoot = null;
   focusedPaneId = null;
+  // The strip that owned this filter is in the #app being dropped; a filter
+  // carried into the next login would hide boxes behind a control not yet painted.
+  agentFilter = null;
+  lastAgentFilterKey = '';
   phoneCtl?.dispose(); // bound to elements inside #app, which is about to be replaced
   phoneCtl = null;
   // Same reason: both point into the key bar #app is about to drop. renderDashboard

@@ -8,6 +8,7 @@
 // environment: 'node' with no jsdom).
 import type { SessionTarget, SessionTargetList } from './paneHeader';
 import { armReduce, IDLE, ARM_MS, type ArmState } from './arming';
+import { agentChipText } from './agentState';
 
 // tmux destroys a session when its last window is killed. This does not
 // special-case that — it just refuses to let it be a surprise, by letting the
@@ -161,7 +162,7 @@ export function buildSessionPicker(deps: SessionPickerDeps): SessionPicker {
     const key = JSON.stringify([
       current?.value ?? null,
       arm.armed ?? null,
-      opts.map((t) => [t.value, t.label, t.disabled ?? false, t.title ?? '']),
+      opts.map((t) => [t.value, t.label, t.disabled ?? false, t.title ?? '', t.agent ?? null, t.agentCause ?? null]),
     ]);
     if (key === lastKey) return;
     lastKey = key;
@@ -176,6 +177,14 @@ export function buildSessionPicker(deps: SessionPickerDeps): SessionPicker {
       pick.type = 'button';
       pick.className = 'session-picker-pick';
       pick.textContent = t.label;
+      // Each session row carries its own agent state, so the picker doubles as
+      // the per-box list of what every session's Claude is doing.
+      if (t.agent) {
+        const chip = document.createElement('span');
+        chip.className = `session-picker-chip chip-agent-${t.agent}`;
+        chip.textContent = agentChipText(t.agent, t.agentCause);
+        pick.append(chip);
+      }
       pick.tabIndex = -1;
       if (t.value === current?.value) { pick.setAttribute('aria-current', 'true'); li.classList.add('current'); }
       // A live session name outside SESSION_NAME_RE cannot round-trip a switch
