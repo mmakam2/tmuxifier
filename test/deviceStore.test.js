@@ -16,7 +16,7 @@ test('enroll returns the token once and never persists it', async () => {
   expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/); // 32 bytes base64url
   expect(device).toEqual({
     id: expect.stringMatching(/^[0-9a-f]{16}$/), name: 'Fold', created: 1_000_000,
-    lastSeen: null, hasFcmToken: false, notify: { 'agent-input': true, 'agent-done': true },
+    lastSeen: null, hasFcmToken: false, notify: { 'agent-blocked': true, 'agent-input': true, 'agent-done': true },
   });
   const raw = await fs.readFile(path.join(dir, 'devices.json'), 'utf8');
   expect(raw).not.toContain(token);
@@ -57,7 +57,7 @@ test('updateSelf merges notify, clears fcmToken on null, ignores unknown ids', a
   const { device } = await store.enroll({ name: 'Fold', fcmToken: 'fcm-abc' });
   expect((await store.list())[0].hasFcmToken).toBe(true);
   const upd = await store.updateSelf(device.id, { notify: { 'agent-done': false } });
-  expect(upd.notify).toEqual({ 'agent-input': true, 'agent-done': false });
+  expect(upd.notify).toEqual({ 'agent-blocked': true, 'agent-input': true, 'agent-done': false });
   // PATCH-merge rule: an omitted key keeps its stored value; the CLEARING case
   // must work explicitly (see memory: patch-merge-omitted-key-keeps-stored-value).
   const cleared = await store.updateSelf(device.id, { fcmToken: null });
@@ -72,7 +72,7 @@ test('listNotifiable filters by fcm token and per-kind toggle', async () => {
   await store.updateSelf(c.device.id, { notify: { 'agent-input': false } });
   const targets = await store.listNotifiable('agent-input');
   expect(targets).toEqual([{ id: a.device.id, fcmToken: 'fcm-a' }]);
-  expect(NOTIFY_KINDS).toEqual(['agent-input', 'agent-done']);
+  expect(NOTIFY_KINDS).toEqual(['agent-blocked', 'agent-input', 'agent-done']);
 });
 
 test('clearFcmToken drops delivery without revoking auth', async () => {

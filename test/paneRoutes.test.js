@@ -45,7 +45,7 @@ beforeEach(async () => {
   };
   const setupManager = { currentForBox: () => (setupRunning ? { status: 'running' } : null) };
   const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
-  const history = { getSeries: () => [{ t: 1, up: true, agent: 'waiting' }], getEvents: () => ({ events: [], latestSeq: 0 }), record() {}, onEvent() {} };
+  const history = { getSeries: () => [{ t: 1, up: true, agent: 'waiting', agents: { main: { cause: 'permission' } } }], getEvents: () => ({ events: [], latestSeq: 0 }), record() {}, onEvent() {} };
   app = buildServer({ config, store, sessions, statusChecker, boxActions, history, setupManager });
 });
 
@@ -61,7 +61,7 @@ test('GET pane returns parsed snapshot plus agent state', async () => {
   expect(res.statusCode).toBe(200);
   expect(res.json()).toEqual({
     ok: true, width: 80, height: 24, cursorX: 3, cursorY: 10, alt: false, mouse: false,
-    content: 'hello\nworld', agent: 'waiting', sessionName: 'main',
+    content: 'hello\nworld', agent: 'waiting', agentCause: 'permission', sessionName: 'main',
   });
 });
 

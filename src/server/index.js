@@ -27,6 +27,7 @@ import { createFleetManager } from './fleet.js';
 import { createFleetScriptsStore } from './fleetScriptsStore.js';
 import { createHealthEventsStore } from './healthEventsStore.js';
 import { createHealthHistory } from './healthHistory.js';
+import { createAgentSeenStore } from './agentSeenStore.js';
 import { createLocalShellActions } from './localShellActions.js';
 import { createBoxRemoval } from './boxRemoval.js';
 import { buildServer } from './server.js';
@@ -312,6 +313,7 @@ const history = createHealthHistory({
     disk: config.healthDiskWarnPct,
     hysteresis: config.healthThresholdHysteresisPct,
   },
+  seenStore: createAgentSeenStore({ dataDir: config.dataDir }),
   load: () => healthEventsStore.load(),
   save: (events) => healthEventsStore.save(events),
 });
@@ -390,6 +392,7 @@ app.listen({ host: config.bindAddress, port: config.port })
         // Revoke Pi-hole and TrueNAS sessions rather than leak one per configured
         // service across every restart — Pi-hole v6 caps how many can be live at
         // once, and a TrueNAS socket left open is a session left authenticated.
+        () => history.whenIdle(),
         () => piholeRegistry.closeAll(),
         () => truenasRegistry.closeAll(),
         // The UniFi client holds no server-side session, but retiring it here

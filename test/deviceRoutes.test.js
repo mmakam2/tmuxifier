@@ -86,7 +86,7 @@ test('PATCH /api/devices/self is Bearer-only and merges', async () => {
     payload: { notify: { 'agent-done': false } },
   });
   expect(upd.statusCode).toBe(200);
-  expect(upd.json().notify).toEqual({ 'agent-input': true, 'agent-done': false });
+  expect(upd.json().notify).toEqual({ 'agent-blocked': true, 'agent-input': true, 'agent-done': false });
 });
 
 test('device list is never served to an unauthenticated caller', async () => {
@@ -466,4 +466,25 @@ test('a browser session can still seed from provisioning', async () => {
   const res = await t.app.inject({ method: 'POST', url: '/api/proxmox/provisions', headers: t.browser, payload: { presetId: 'pr1', hostname: 'ct9', setupOptions: { seedAiAuth: true } } });
   expect(res.statusCode).toBe(201);
   expect(t.provisionCalls[0].setupOptions.seedAiAuth).toBe(true);
+});
+
+test('a device token may POST /api/boxes/:id/agent-seen', async () => {
+  const seen = [];
+  const appSeen = buildServer({
+    config: {
+      bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
+      passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir,
+      localShell: 'none', configPath: path.join(dir, 'config.json'),
+    },
+    store: createStore({ dataDir: dir }),
+    sessions: { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} },
+    statusChecker: { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) },
+    passkeyStore: createPasskeyStore({ dataDir: dir }),
+    deviceStore,
+    history: { getSeries: () => [], getEvents: () => ({ events: [], latestSeq: 0 }), record() {}, onEvent() {}, markSeen: (...a) => { seen.push(a); return true; } },
+  });
+  const { token } = (await appSeen.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'Fold' } })).json();
+  const res = await appSeen.inject({ method: 'POST', url: '/api/boxes/__local__/agent-seen', headers: { authorization: `Bearer ${token}` }, payload: { session: 'web', ts: 5 } });
+  expect(res.statusCode).toBe(200);
+  expect(seen).toEqual([['__local__', 'web', 5]]);
 });

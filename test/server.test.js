@@ -1556,3 +1556,20 @@ test('POST /api/proxmox/lifecycle-jobs passes a readdress vlan through to the ma
   expect(created.statusCode).toBe(201);
   expect(calls).toContainEqual(['createLifecycleJob', { boxId: 'B1', action: 'readdress', vlan: 30 }]);
 });
+
+test('POST /api/boxes/:id/agent-seen validates, acknowledges, and refuses a ts ahead of the marker', async () => {
+  app = await makeApp({ history: { ...historyStub(), markSeen: (id, s, ts) => s === 'web' && ts <= 100 } });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const box = (await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1' } })).json();
+  const post = (url, payload) => app.inject({ method: 'POST', url, headers, payload });
+  const ok = await post(`/api/boxes/${box.id}/agent-seen`, { session: 'web', ts: 100 });
+  expect(ok.statusCode).toBe(200);
+  expect(ok.json()).toEqual({ ok: true });
+  expect((await post(`/api/boxes/${box.id}/agent-seen`, { session: 'web', ts: 101 })).statusCode).toBe(400);
+  expect((await post(`/api/boxes/${box.id}/agent-seen`, { session: 'bad name', ts: 100 })).statusCode).toBe(400);
+  expect((await post(`/api/boxes/${box.id}/agent-seen`, { session: 'web', ts: -1 })).statusCode).toBe(400);
+  expect((await post(`/api/boxes/${box.id}/agent-seen`, { session: 'web', ts: 1.5 })).statusCode).toBe(400);
+  expect((await post(`/api/boxes/nope/agent-seen`, { session: 'web', ts: 100 })).statusCode).toBe(404);
+  expect((await post(`/api/boxes/__local__/agent-seen`, { session: 'web', ts: 100 })).statusCode).toBe(200);
+});

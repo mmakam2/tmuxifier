@@ -9,6 +9,7 @@ import { verifyPassword, COOKIE_NAME, cookieOptions, sessionValue, sessionValueV
 import { createLoginRateLimiter } from './rateLimit.js';
 import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
 import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildSelectWindowRemote, buildKillSessionRemote, buildKillWindowRemote, resolveTools } from './boxActions.js';
+import { LOCAL_BOX_ID } from './localAgent.js';
 import { assertBoxSafe, SESSION_NAME_RE, WINDOW_ID_RE } from './sshCommand.js';
 import { createDeviceHostGuard } from './deviceHostGuard.js';
 import { provisionKey, terminalKey, localKey, LOCAL_GROUP } from './sessions.js';
@@ -618,6 +619,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     'POST /api/boxes/:id/window',
     'POST /api/boxes/:id/kill',
     'POST /api/boxes/:id/probe',
+    'POST /api/boxes/:id/agent-seen',
     'GET /api/boxes/:id/pane',
     'POST /api/boxes/:id/keys',
     'POST /api/boxes/:id/setup',
@@ -1202,7 +1204,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       try { sessions.ensureSizedViewer({ box, session: box.sessionName, clientId: viewerId, cols, rows }); } catch {}
     }
     const last = history ? (history.getSeries(box.id).at(-1) || null) : null;
-    return { ...snap, agent: last?.agent ?? null, sessionName: box.sessionName };
+    return { ...snap, agent: last?.agent ?? null, agentCause: last?.agents?.[box.sessionName]?.cause ?? null, sessionName: box.sessionName };
   });
 
   app.post('/api/boxes/:id/keys', { preHandler: requireAuth }, async (req, reply) => {
@@ -1814,6 +1816,23 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const box = req.query?.box;
     return box ? { [box]: history.getSeries(box) } : history.getSeries();
   });
+  // Acknowledge a finished/waiting turn so its agent-done / agent-input state
+  // drops to idle. The history owns the watermark; it refuses a ts ahead of the
+  // session's latest marker.
+  app.post('/api/boxes/:id/agent-seen', { preHandler: requireAuth }, async (req, reply) => {
+    const { session, ts } = req.body || {};
+    if (typeof session !== 'string' || !SESSION_NAME_RE.test(session) || !Number.isSafeInteger(ts) || ts <= 0) {
+      return reply.code(400).send({ error: 'invalid session or ts' });
+    }
+    if (req.params.id !== LOCAL_BOX_ID && !(await store.getBox(req.params.id))) {
+      return reply.code(404).send({ error: 'box not found' });
+    }
+    if (!history?.markSeen(req.params.id, session, ts)) {
+      return reply.code(400).send({ error: 'nothing to acknowledge' });
+    }
+    return { ok: true };
+  });
+
   app.get('/api/health/events', { preHandler: requireAuth }, async (req) => {
     const since = Number(req.query?.since) || 0;
     return history.getEvents({ since });

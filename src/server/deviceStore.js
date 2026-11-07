@@ -3,7 +3,7 @@ import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { readJson, writeJson } from './jsonFile.js';
 
 const VERSION = 1;
-export const NOTIFY_KINDS = ['agent-input', 'agent-done'];
+export const NOTIFY_KINDS = ['agent-blocked', 'agent-input', 'agent-done'];
 
 // Enrolled Android devices (data/devices.json). The token itself is never
 // stored — only its SHA-256 digest. A device token is 32 random bytes

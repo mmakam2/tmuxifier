@@ -78,3 +78,9 @@ test('notify ignores non-agent kinds and never rejects on transport failure', as
   await expect(push.notify({ kind: 'down', boxId: 'b', label: 'x', t: 1 })).resolves.toBeUndefined();
   await expect(push.notify({ kind: 'agent-input', boxId: 'b', label: 'x', t: 1 })).resolves.toBeUndefined();
 });
+
+test('buildFcmMessage: agent-blocked carries the cause and session', () => {
+  const { body } = buildFcmMessage({ projectId: 'p', fcmToken: 'tok', event: { boxId: 'b1', label: 'workbox', kind: 'agent-blocked', session: 'web-2', cause: 'permission', t: 5 } });
+  expect(body.message.notification).toEqual({ title: 'workbox — Claude needs you', body: 'Permission prompt in web-2' });
+  expect(body.message.data).toEqual({ boxId: 'b1', kind: 'agent-blocked', session: 'web-2' });
+});

@@ -15,7 +15,7 @@ import { NOTIFY_KINDS } from './deviceStore.js';
 const SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 const GRANT = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
 const KINDS = new Set(NOTIFY_KINDS);
-const TITLES = { 'agent-input': 'Claude is waiting', 'agent-done': 'Agent finished' };
+const TITLES = { 'agent-blocked': 'Claude needs you', 'agent-input': 'Claude is waiting', 'agent-done': 'Agent finished' };
 
 const b64uJson = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
 
@@ -27,6 +27,16 @@ export function buildServiceJwt({ clientEmail, privateKeyPem, tokenUri, nowSec }
   return `${input}.${sig}`;
 }
 
+function pushBody(event) {
+  const where = event.session ? ` in ${event.session}` : '';
+  if (event.kind === 'agent-blocked') {
+    const cause = String(event.cause || 'permission');
+    return `${cause.charAt(0).toUpperCase()}${cause.slice(1)} prompt${where}`;
+  }
+  if (event.kind === 'agent-input') return `A Claude session wants your input${where}.`;
+  return 'A Claude session finished its turn.';
+}
+
 export function buildFcmMessage({ projectId, fcmToken, event }) {
   return {
     url: `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/messages:send`,
@@ -35,9 +45,9 @@ export function buildFcmMessage({ projectId, fcmToken, event }) {
         token: fcmToken,
         notification: {
           title: `${event.label} — ${TITLES[event.kind] || event.kind}`,
-          body: event.kind === 'agent-input' ? 'A Claude session wants your input.' : 'A Claude session finished its turn.',
+          body: pushBody(event),
         },
-        data: { boxId: String(event.boxId), kind: String(event.kind) },
+        data: { boxId: String(event.boxId), kind: String(event.kind), ...(event.session ? { session: String(event.session) } : {}) },
         android: { priority: 'HIGH' },
       },
     },
