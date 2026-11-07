@@ -333,6 +333,35 @@ test('unblock clears only a blocked marker, and leaves every other state alone',
   expect(await marker(dir)).toMatch(/^web:working:\d+:unblock\n$/);
 });
 
+test('unblock is owner-scoped: a subagent tool call cannot clear the main agent block', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('permission', env, '{"hook_event_name":"PermissionRequest","tool_name":"Bash"}');
+  const before = await marker(dir);
+  await runHook('unblock', env, '{"hook_event_name":"PostToolUse","tool_name":"Bash","agent_id":"sub1"}');
+  expect(await marker(dir)).toBe(before);
+  await runHook('unblock', env, '{"hook_event_name":"PostToolUse","tool_name":"Bash"}');
+  expect(await marker(dir)).toMatch(/^web:working:\d+:unblock\n$/);
+});
+
+test('unblock is owner-scoped: a subagent block is cleared only by that subagent', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('permission', env, '{"hook_event_name":"PermissionRequest","tool_name":"Bash","agent_id":"sub1"}');
+  const before = await marker(dir);
+  await runHook('unblock', env, '{"hook_event_name":"PostToolUse","tool_name":"Bash"}');
+  expect(await marker(dir)).toBe(before);
+  await runHook('unblock', env, '{"hook_event_name":"PostToolUse","tool_name":"Bash","agent_id":"sub1"}');
+  expect(await marker(dir)).toMatch(/^web:working:\d+:unblock\n$/);
+});
+
+test('the blocked-owner record never outlives the block', async () => {
+  const { dir, env } = await hookEnv('web');
+  const rec = path.join(dir, '.tmuxifier-agent', 'blocked', 'web');
+  await runHook('permission', env);
+  await fs.access(rec);
+  await runHook('prompt', env);
+  await expect(fs.access(rec)).rejects.toBeTruthy();
+});
+
 test('unblock with no marker at all writes nothing', async () => {
   const { dir, env } = await hookEnv('web');
   await runHook('unblock', env);

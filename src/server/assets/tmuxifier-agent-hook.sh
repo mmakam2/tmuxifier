@@ -25,6 +25,10 @@
 # A plain "No" to a permission prompt fires nothing afterwards: the marker stays
 # blocked until the operator's next prompt or the idle_prompt timer.
 #
+# blocked/<session> holds the blocker's agent_id (empty = main agent) so
+# `unblock` only clears a block its own agent raised. Like busy/, the directory
+# is invisible to the probe, which reads only `[ -f ]` entries of .tmuxifier-agent/*.
+#
 # `unblock` (PostToolUse / PostToolUseFailure) fires after EVERY tool call, so
 # it short-circuits before stdin is read: when the marker is not `blocked` it
 # exits 0 having spent two forks (`sh` and `tmux`) and no more.
@@ -155,7 +159,15 @@ case "${1:-}" in
     if [ "$(json_str tool_name)" = AskUserQuestion ]; then CAUSE=question; else CAUSE=permission; fi
     STATE=blocked ;;
   ask) STATE=blocked CAUSE=question ;;
-  unblock) STATE=working CAUSE=unblock ;;
+  unblock)
+    # Owner-scoped: only the agent that raised the block (main = empty
+    # agent_id) may clear it, so a running subagent's tool calls cannot dismiss
+    # the main agent's dialog, nor the reverse.
+    AID=$(json_str agent_id)
+    OWNER=''
+    [ -f "$DIR/blocked/$SAFE" ] && { IFS= read -r OWNER < "$DIR/blocked/$SAFE"; } 2>/dev/null
+    [ "$AID" = "$OWNER" ] || exit 0
+    STATE=working CAUSE=unblock ;;
   notify)
     # idle_prompt is a TIMER, not a request: it fires a fixed interval after
     # any turn ends, including one that ended awaiting background work.
@@ -178,10 +190,16 @@ case "${1:-}" in
       *) exit 0 ;;
     esac ;;
   start) STATE=ready CAUSE=start ;;
-  end) rm -f "$FILE"; rm -rf "$BUSY" 2>/dev/null; exit 0 ;;
+  end) rm -f "$FILE" "$DIR/blocked/$SAFE"; rm -rf "$BUSY" 2>/dev/null; exit 0 ;;
   *) exit 0 ;;
 esac
 mkdir -p "$DIR"
+# Record who raised a block (empty = main agent); drop the record otherwise.
+if [ "$STATE" = blocked ]; then
+  mkdir -p "$DIR/blocked" 2>/dev/null && printf '%s\n' "$(json_str agent_id)" > "$DIR/blocked/$SAFE" 2>/dev/null
+else
+  rm -f "$DIR/blocked/$SAFE" 2>/dev/null
+fi
 # Self-prune markers for sessions that died without a SessionEnd. Depth-capped:
 # the busy tokens below have their own, far shorter, TTL.
 find "$DIR" -maxdepth 1 -type f -mtime +7 -exec rm -f {} + 2>/dev/null || true
