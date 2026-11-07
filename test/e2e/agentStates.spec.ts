@@ -285,7 +285,11 @@ test('a board card for another session docks the pane on it with a single /term 
 
     await card.click();
     const pane = page.locator('.stage-pane').first();
-    await expect(pane.locator('.session-picker-trigger')).toContainText(session2);
+    // The trigger shows the active WINDOW's label; the picker's current row
+    // (value `w:<session>:@id`, or `s:<session>` before windows are listed)
+    // names the session the pane is on.
+    await expect(pane.locator('.session-picker .session-picker-row.current'))
+      .toHaveAttribute('data-key', new RegExp(`^[ws]:${session2}(:|$)`), { timeout: 15000 });
     await expect(pane.locator('.pane-header .pane-chip.chip-agent-blocked')).toHaveText('blocked · question', { timeout: 15000 });
     await expect.poll(() => terms.length).toBe(1);
     // Give a would-be switch-after-attach every chance to show up.
