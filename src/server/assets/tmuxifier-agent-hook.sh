@@ -20,10 +20,13 @@
 # not already blocked (the AskUserQuestion Notification must not downgrade
 # blocked/question); elicitation_dialog|elicitation_url_dialog ->
 # blocked/elicitation; agent_needs_input -> blocked/question; idle_prompt|
-# agent_completed -> ready/stop, a no-op over a ready marker (timers never mint
-# a new ts) and gated by the busy tokens; any other type writes nothing.
+# agent_completed -> ready/stop ONLY over a working marker (and gated by the
+# busy tokens): timers never clear `blocked` and never mint a new ts over
+# `ready` (or an absent marker); any other type writes nothing.
 # A plain "No" to a permission prompt fires nothing afterwards: the marker stays
-# blocked until the operator's next prompt or the idle_prompt timer.
+# blocked until the operator's next prompt or Claude's next tool call.
+# A GRANTED permission is not observable either: the block clears only on the
+# tool's PostToolUse, so a long granted command reads blocked until it ends.
 #
 # blocked/<session> holds the blocker's agent_id (empty = main agent) so
 # `unblock` only clears a block its own agent raised. Like busy/, the directory
@@ -174,13 +177,17 @@ case "${1:-}" in
     # agent_completed announces that ONE background agent finished, which is not
     # the operator's turn while its siblings are still running. Both are
     # therefore gated on outstanding work — and both still land once none is
-    # left. The blocked types — permission_prompt, agent_needs_input, … — are
+    # left. They only ever END a working turn: over `blocked` the operator
+    # still owes an answer (a timer firing past an open dialog, or after a
+    # plain "No", is not an answer), and over `ready` rewriting would mint a
+    # fresh ts that re-arms a `done` the operator already acknowledged.
+    # The blocked types — permission_prompt, agent_needs_input, … — are
     # Claude Code saying it genuinely wants the operator, so they always land.
     NT=$(json_str notification_type)
     case "$NT" in
       idle_prompt|agent_completed)
         busy_live && exit 0
-        cur_state; [ "$CUR" = ready ] && exit 0
+        cur_state; [ "$CUR" = working ] || exit 0
         STATE=ready CAUSE=stop ;;
       permission_prompt)
         cur_state; [ "$CUR" = blocked ] && exit 0

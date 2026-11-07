@@ -393,13 +393,23 @@ test('idle_prompt still lands over a working marker once nothing is busy', async
   expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
 });
 
-// A plain "No" denial fires nothing afterwards, so the marker stays blocked until
-// the operator's next prompt or this timer; the timer must land over blocked.
-test('idle_prompt lands over a blocked marker (a plain denial fires no hook)', async () => {
+// Timers never clear `blocked`: an open dialog nobody has answered, or a plain
+// "No" (which fires nothing afterwards), still owes the operator. The marker
+// stays blocked until the operator's next prompt or Claude's next tool call.
+test('idle_prompt and agent_completed leave a blocked marker unchanged', async () => {
   const { dir, env } = await hookEnv('web');
-  await runHook('permission', env);
+  await fs.mkdir(path.join(dir, '.tmuxifier-agent'), { recursive: true });
+  await fs.writeFile(path.join(dir, '.tmuxifier-agent', 'web'), 'web:blocked:1718000000:permission\n');
   await runHook('notify', env, '{"hook_event_name":"Notification","notification_type":"idle_prompt"}');
-  expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
+  expect(await marker(dir)).toBe('web:blocked:1718000000:permission\n');
+  await runHook('notify', env, '{"hook_event_name":"Notification","notification_type":"agent_completed"}');
+  expect(await marker(dir)).toBe('web:blocked:1718000000:permission\n');
+});
+
+test('idle_prompt over an absent marker writes nothing', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('notify', env, '{"hook_event_name":"Notification","notification_type":"idle_prompt"}');
+  await expect(marker(dir)).rejects.toThrow();
 });
 
 test('auth and quota notifications write nothing', async () => {

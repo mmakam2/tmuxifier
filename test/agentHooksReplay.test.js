@@ -37,7 +37,11 @@ test('the recorded trace drives the marker through blocked -> working -> ready w
   const payloads = (await fs.readFile(TRACE, 'utf8')).trim().split('\n').map((l) => JSON.parse(l));
   const states = [];
   for (const payload of payloads) {
-    for (const arg of hookArgsFor(payload)) await run(arg, e, JSON.stringify(payload));
+    for (const arg of hookArgsFor(payload)) {
+      // Every dispatch must exit 0: a non-zero hook exit surfaces into the
+      // Claude session, and a silently failing write would fake a green trail.
+      expect(await run(arg, e, JSON.stringify(payload)), `line ${states.length + 1} ${arg}`).toBe(0);
+    }
     const m = await fs.readFile(path.join(dir, '.tmuxifier-agent', 'rec'), 'utf8').catch(() => '');
     const parts = m.trim().split(':');
     states.push({
