@@ -17,7 +17,7 @@ test('readAgentMarks parses a valid marker through the probe allowlist', async (
   const home = tmpHome();
   fs.mkdirSync(path.join(home, '.tmuxifier-agent'));
   fs.writeFileSync(path.join(home, '.tmuxifier-agent', 'local'), 'local:working:1722600000\n');
-  expect(await readAgentMarks(home)).toEqual({ local: { state: 'working', ts: 1722600000 } });
+  expect(await readAgentMarks(home)).toEqual({ local: { state: 'working', cause: 'prompt', ts: 1722600000 } });
 });
 
 test('readAgentMarks returns null for a missing dir, malformed content, and bad state', async () => {
@@ -50,7 +50,7 @@ test('readAgentMarks skips directory and oversized entries, keeping the valid ma
   fs.writeFileSync(path.join(dir, 'local'), 'local:working:1722600000\n');
   fs.writeFileSync(path.join(dir, 'huge'), 'x'.repeat(2000)); // past the read guard
   fs.mkdirSync(path.join(dir, 'subdir'));                     // not a regular file
-  expect(await readAgentMarks(home)).toEqual({ local: { state: 'working', ts: 1722600000 } });
+  expect(await readAgentMarks(home)).toEqual({ local: { state: 'working', cause: 'prompt', ts: 1722600000 } });
 });
 
 test('sample() reads tmux sessions via the shared STATUS_FMT parser', async () => {

@@ -658,9 +658,26 @@ test('PROBE_REMOTE emits __AGENT__ lines from the marker dir, statically', () =>
 test('parseAgentMarks extracts allowlisted marker lines', () => {
   const out = '__META__ cpus=2\n__AGENT__ web:working:1718000000\n__AGENT__ ops:waiting:1718000001\nweb:2:1:1718000000:claude\n';
   expect(parseAgentMarks(out)).toEqual({
-    web: { state: 'working', ts: 1718000000 },
-    ops: { state: 'waiting', ts: 1718000001 },
+    web: { state: 'working', cause: 'prompt', ts: 1718000000 },
+    ops: { state: 'ready', cause: 'stop', ts: 1718000001 },
   });
+});
+
+test('parseAgentMarks reads four-field markers and maps three-field legacy ones', () => {
+  const out = '__AGENT__ web:blocked:1718000000:permission\n__AGENT__ dev:ready:1718000001:start\n__AGENT__ old:waiting:1718000002\n__AGENT__ old2:working:1718000003\n';
+  expect(parseAgentMarks(out)).toEqual({
+    web: { state: 'blocked', cause: 'permission', ts: 1718000000 },
+    dev: { state: 'ready', cause: 'start', ts: 1718000001 },
+    old: { state: 'ready', cause: 'stop', ts: 1718000002 },
+    old2: { state: 'working', cause: 'prompt', ts: 1718000003 },
+  });
+});
+
+test('parseAgentMarks drops unknown states and causes, and over-long lines', () => {
+  expect(parseAgentMarks('__AGENT__ web:waiting:1718000000:stop\n')).toBeNull();   // legacy word with a cause
+  expect(parseAgentMarks('__AGENT__ web:blocked:1718000000:sleepy\n')).toBeNull();
+  expect(parseAgentMarks('__AGENT__ web:blocked:1718000000:permission:extra\n')).toBeNull();
+  expect(parseAgentMarks('__AGENT__ web:done:1718000000:stop\n')).toBeNull();      // displayed states are not marker states
 });
 
 test('parseAgentMarks drops bad state, bad ts, malformed lines, and returns null when nothing survives', () => {
@@ -682,7 +699,7 @@ test('parseTmuxSessions ignores __AGENT__ lines', () => {
 test('checkBox: attaches agentMarks when the probe carries __AGENT__ lines, omits them otherwise', async () => {
   const withMark = async () => ({ code: 0, stdout: '__AGENT__ web:waiting:1718000000\nweb:1:0:1718000000:claude\n', stderr: '' });
   const st = await createStatusChecker({ run: withMark }).checkBox({ host: 'h' });
-  expect(st.agentMarks).toEqual({ web: { state: 'waiting', ts: 1718000000 } });
+  expect(st.agentMarks).toEqual({ web: { state: 'ready', cause: 'stop', ts: 1718000000 } });
   expect(st.sessions).toEqual([{ name: 'web', windows: 1, attached: false, activity: 1718000000, paneCmd: 'claude' }]);
   const without = async () => ({ code: 0, stdout: 'web:1:0:1718000000:claude\n', stderr: '' });
   const st2 = await createStatusChecker({ run: without }).checkBox({ host: 'h' });

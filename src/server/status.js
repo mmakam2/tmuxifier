@@ -114,9 +114,17 @@ export function parseMeta(stdout) {
   return Object.keys(out).length ? out : null;
 }
 
-// Pull `__AGENT__` marker lines into { session: { state, ts } }. Marker
-// content is a file on the box, so it is input — state is a closed two-value
-// allowlist and ts must be a finite positive number; anything else drops.
+// Closed sets for the on-box marker `<session>:<state>:<epoch>:<cause>`.
+export const AGENT_MARK_STATES = ['working', 'blocked', 'ready'];
+export const AGENT_MARK_CAUSES = ['prompt', 'resume', 'stop', 'start', 'permission', 'question', 'elicitation', 'unblock'];
+
+// Pull `__AGENT__` marker lines into { session: { state, cause, ts } }. Marker
+// content is a file on the box, so it is input: state and cause are closed
+// allowlists and ts must be a finite positive number; anything else drops
+// (never rewritten). Four fields is the current format. Three fields is the
+// legacy `<session>:<state>:<epoch>` a box writes until setup is rerun:
+// `working` maps to { working, prompt } and `waiting` to { ready, stop }.
+// Two fields, five or more, or a legacy word with a cause drop.
 // Colons cannot appear in tmux session names (the invariant STATUS_FMT
 // already relies on), so the split is unambiguous.
 export function parseAgentMarks(stdout) {
@@ -124,11 +132,22 @@ export function parseAgentMarks(stdout) {
   for (const line of String(stdout).split(/\r?\n/)) {
     if (!line.startsWith('__AGENT__ ')) continue;
     const parts = line.slice('__AGENT__ '.length).split(':');
-    if (parts.length !== 3) continue;
-    const [session, state, tsRaw] = parts;
+    if (parts.length !== 3 && parts.length !== 4) continue;
+    const [session, rawState, tsRaw, rawCause] = parts;
     const ts = Number(tsRaw);
-    if (!session || (state !== 'working' && state !== 'waiting') || !Number.isFinite(ts) || ts <= 0) continue;
-    out[session] = { state, ts };
+    if (!session || !Number.isFinite(ts) || ts <= 0) continue;
+    let state;
+    let cause;
+    if (parts.length === 3) {
+      if (rawState === 'working') { state = 'working'; cause = 'prompt'; }
+      else if (rawState === 'waiting') { state = 'ready'; cause = 'stop'; }
+      else continue;
+    } else {
+      if (!AGENT_MARK_STATES.includes(rawState) || !AGENT_MARK_CAUSES.includes(rawCause)) continue;
+      state = rawState;
+      cause = rawCause;
+    }
+    out[session] = { state, cause, ts };
   }
   return Object.keys(out).length ? out : null;
 }
