@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildAgentHooksInstallScript, createAgentHooksPusher } from '../src/server/claudeAgentHooks.js';
+import { buildAgentHooksInstallScript, createAgentHooksPusher, hookArgsFor } from '../src/server/claudeAgentHooks.js';
 
 const HOOK_ASSET = fileURLToPath(new URL('../src/server/assets/tmuxifier-agent-hook.sh', import.meta.url));
 
@@ -305,16 +305,37 @@ async function claudeBox() {
 
 const TMUXIFIER_CMD = 'tmuxifier-agent-hook.sh';
 
-test('builder emits the presence check, the literal config-dir command, and only the one matcher it needs', () => {
+test('builder emits the presence check and the literal config-dir command', () => {
   const s = buildAgentHooksInstallScript();
   expect(s).toContain('command -v claude');
   expect(s).toContain('AGENTHOOKS: skipped-no-claude');
   expect(s).toContain('AGENTHOOKS: applied');
   expect(s).toContain('${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tmuxifier-agent-hook.sh');
-  // PreToolUse is the one event that fires per tool call; the matcher keeps the
-  // hook from forking on every non-Bash call it can never care about.
-  expect(s.match(/"matcher"/g)).toHaveLength(1);
-  expect(s).toContain('"matcher":"Bash"');
+});
+
+test('builder wires every lifecycle event, with matchers only where a hook would otherwise fork per tool call', () => {
+  const s = buildAgentHooksInstallScript();
+  const json = JSON.parse(s.match(/TMUXIFIER_HOOKS_EOF'\n([\s\S]*?)\nTMUXIFIER_HOOKS_EOF/)[1]);
+  expect(Object.keys(json).sort()).toEqual(['Notification', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit']);
+  expect(json.PreToolUse.map((e) => e.matcher)).toEqual(['Bash', 'AskUserQuestion']);
+  expect(json.PostToolUse.map((e) => e.matcher)).toEqual(['AskUserQuestion', undefined]);
+  expect(json.SessionStart[0].matcher).toBe('startup|resume|clear|fork');
+  expect(json.Stop[0]).not.toHaveProperty('matcher');
+  expect(json.PermissionRequest[0].hooks[0].command).toMatch(/tmuxifier-agent-hook\.sh" permission$/);
+});
+
+test('hookArgsFor dispatches a payload the way Claude Code would', () => {
+  expect(hookArgsFor({ hook_event_name: 'PreToolUse', tool_name: 'Read' })).toEqual([]);
+  expect(hookArgsFor({ hook_event_name: 'PreToolUse', tool_name: 'Bash' })).toEqual(['pretool']);
+  expect(hookArgsFor({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion' })).toEqual(['ask']);
+  expect(hookArgsFor({ hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion' })).toEqual(['unblock', 'unblock']);
+  expect(hookArgsFor({ hook_event_name: 'PostToolUse', tool_name: 'Edit' })).toEqual(['unblock']);
+  expect(hookArgsFor({ hook_event_name: 'SessionStart', source: 'compact' })).toEqual([]);
+  expect(hookArgsFor({ hook_event_name: 'SessionStart', source: 'startup' })).toEqual(['start']);
+  expect(hookArgsFor({ hook_event_name: 'Notification', notification_type: 'permission_prompt' })).toEqual(['notify']);
+  expect(hookArgsFor({ hook_event_name: 'Elicitation' })).toEqual([]);
+  expect(hookArgsFor({ hook_event_name: 'PreToolUse' })).toEqual([]);
+  expect(hookArgsFor({ hook_event_name: 'SessionStart' })).toEqual([]);
 });
 
 test('installer without claude: drains stdin, writes nothing, prints skipped-no-claude', async () => {
@@ -333,14 +354,17 @@ test('installer with claude, no settings.json: writes hook script + fresh settin
   const hook = await fs.readFile(path.join(b.cfg, 'tmuxifier-agent-hook.sh'), 'utf8');
   expect(hook).toContain('echo hook');
   const settings = JSON.parse(await fs.readFile(path.join(b.cfg, 'settings.json'), 'utf8'));
-  for (const ev of ['UserPromptSubmit', 'Stop', 'Notification', 'SessionStart', 'SessionEnd', 'PreToolUse', 'SubagentStart', 'SubagentStop']) {
+  for (const ev of ['UserPromptSubmit', 'Stop', 'Notification', 'SessionStart', 'SessionEnd', 'PermissionRequest', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop']) {
     expect(settings.hooks[ev]).toHaveLength(1);
     expect(settings.hooks[ev][0].hooks[0].command).toContain(TMUXIFIER_CMD);
   }
+  expect(settings.hooks.PreToolUse).toHaveLength(2);
+  expect(settings.hooks.PostToolUse).toHaveLength(2);
   expect(settings.hooks.UserPromptSubmit[0].hooks[0].command).toMatch(/ prompt$/);
   expect(settings.hooks.SessionEnd[0].hooks[0].command).toMatch(/ end$/);
   expect(settings.hooks.SubagentStart[0].hooks[0].command).toMatch(/ subagent-start$/);
   expect(settings.hooks.PreToolUse[0].matcher).toBe('Bash');
+  expect(settings.hooks.PreToolUse[1].matcher).toBe('AskUserQuestion');
   // Stop and UserPromptSubmit support no matcher at all — Claude Code ignores
   // one silently, so carrying a dead field would only mislead a reader.
   expect(settings.hooks.Stop[0]).not.toHaveProperty('matcher');

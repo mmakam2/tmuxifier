@@ -13,26 +13,40 @@
 // append ours — idempotent across reruns, never touches the operator's own
 // hooks.
 //
-// The last three events exist only to feed the hook's background-work gate.
-// `Stop` fires when the main agent finishes responding, which INCLUDES a turn
-// that ended solely to await a background subagent or shell — work the harness
-// resumes on its own. Reading that as "waiting on the operator" is what sent
-// people back to a screen where nothing wanted them. SubagentStart/SubagentStop
-// bracket a subagent exactly (both carry agent_id); PreToolUse covers a
-// backgrounded shell, and is the ONE event here that fires per tool call, hence
-// the only `matcher` we carry — without it the hook would fork on every Read
-// and Edit too. `matcher` stays omitted elsewhere: unsupported on
-// UserPromptSubmit and Stop (Claude Code ignores one silently, so a dead field
-// would only mislead a reader), unnecessary on the rest.
-const HOOK_EVENTS = [
+// SubagentStart/SubagentStop and the `Bash` PreToolUse entry feed the hook's
+// background-work gate. `Stop` fires when the main agent finishes responding,
+// which INCLUDES a turn that ended solely to await a background subagent or
+// shell — work the harness resumes on its own. Reading that as "waiting on the
+// operator" is what sent people back to a screen where nothing wanted them.
+// SubagentStart/SubagentStop bracket a subagent exactly (both carry agent_id);
+// PreToolUse `Bash` covers a backgrounded shell.
+//
+// PermissionRequest, the AskUserQuestion PreToolUse entry and the PostToolUse*
+// entries carry the lifecycle states: a permission dialog or a question blocks
+// the agent, and PostToolUse / PostToolUseFailure say it was answered. Several
+// events therefore carry MORE than one entry. A `matcher` is a regex against the
+// tool name (SessionStart: the `source`) and is carried only where the hook
+// would otherwise fork on every tool call. The unmatched PostToolUse entry is
+// deliberate: it short-circuits cheaply in the script for every other tool and
+// is what clears a block when the tool ran without a dialog. `matcher` stays
+// omitted on UserPromptSubmit and Stop (unsupported — Claude Code ignores one
+// silently, so a dead field would only mislead a reader) and where unnecessary.
+//
+// HOOK_EVENTS is the single source for both the installer JSON and hookArgsFor.
+export const HOOK_EVENTS = [
+  ['SessionStart', 'start', 'startup|resume|clear|fork'],
   ['UserPromptSubmit', 'prompt'],
   ['Stop', 'stop'],
+  ['PermissionRequest', 'permission'],
   ['Notification', 'notify'],
-  ['SessionStart', 'start'],
   ['SessionEnd', 'end'],
   ['SubagentStart', 'subagent-start'],
   ['SubagentStop', 'subagent-stop'],
   ['PreToolUse', 'pretool', 'Bash'],
+  ['PreToolUse', 'ask', 'AskUserQuestion'],
+  ['PostToolUse', 'unblock', 'AskUserQuestion'],
+  ['PostToolUse', 'unblock'],
+  ['PostToolUseFailure', 'unblock'],
 ];
 
 // The command value, written LITERALLY — its ${...} is expanded later by the
@@ -42,7 +56,30 @@ const hookEntry = (arg, matcher) => {
   return matcher ? { matcher, ...entry } : entry;
 };
 
-const HOOKS_JSON = JSON.stringify(Object.fromEntries(HOOK_EVENTS.map(([ev, arg, matcher]) => [ev, [hookEntry(arg, matcher)]])));
+const grouped = new Map();
+for (const [ev, arg, matcher] of HOOK_EVENTS) {
+  if (!grouped.has(ev)) grouped.set(ev, []);
+  grouped.get(ev).push(hookEntry(arg, matcher));
+}
+const HOOKS_JSON = JSON.stringify(Object.fromEntries(grouped));
+
+// The hook args Claude Code would invoke for one recorded payload, in
+// HOOK_EVENTS order. Pure; a missing tool_name/source simply fails a matcher.
+const MATCH_FIELD = { PreToolUse: 'tool_name', PostToolUse: 'tool_name', PostToolUseFailure: 'tool_name', SessionStart: 'source' };
+export function hookArgsFor(payload) {
+  const ev = payload && payload.hook_event_name;
+  const field = MATCH_FIELD[ev];
+  const out = [];
+  for (const [e, arg, matcher] of HOOK_EVENTS) {
+    if (e !== ev) continue;
+    if (matcher) {
+      const v = field ? payload[field] : undefined;
+      if (typeof v !== 'string' || !new RegExp(`^(?:${matcher})$`).test(v)) continue;
+    }
+    out.push(arg);
+  }
+  return out;
+}
 
 export function buildAgentHooksInstallScript() {
   return [
