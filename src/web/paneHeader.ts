@@ -3,7 +3,8 @@
 // main.ts; everything arrives via PaneHeaderInput / PaneHeaderActions.
 import { dotClassFor, dotTitleFor } from './statusDot';
 import { buildClawd } from './clawd';
-import type { Status, TmuxWindow } from './api';
+import type { Status, TmuxWindow, AgentEntry, AgentState, AgentCause } from './api';
+import { agentChipText } from './agentState';
 import { buildSessionPicker, type SessionPicker } from './sessionPicker';
 
 export type ConnKind = 'connecting' | 'open' | 'retrying' | 'setup';
@@ -15,15 +16,15 @@ export interface PaneHeaderInput {
   user?: string;
   host?: string;
   status?: Status;
-  agent?: 'working' | 'waiting';
+  // The box's per-session agent map (latest health sample). The chip reads
+  // the entry for THIS pane's session, so duplicate panes on different
+  // sessions each show their own state.
+  agents?: Record<string, AgentEntry>;
   conn?: PaneConn;
   state: 'terminal' | 'stopped' | 'setup';
   sessionName?: string;
-  // sessionName is the session this PANE is attached to (per-pane since the
-  // duplicate-panes change); configuredSession is the box's stored name.
-  // Agent state is hook-only and keyed to the CONFIGURED session, so on any
-  // other session the chip would describe something the pane isn't showing.
-  configuredSession?: string;
+  // The session this PANE is attached to (per-pane since the duplicate-panes
+  // change); absent means the store's default, 'web'.
   // Phone mode (≤720px). The session picker is dropped entirely there: the
   // header row is the most contested space in the app, and sessions are
   // managed from the Edit Box modal off the box list instead.
@@ -51,18 +52,20 @@ export function isSwitchableSession(name: string): boolean {
 
 // One slot, strict precedence: a pane-level state (stopped container, box
 // mid-setup) outranks connection churn, which outranks the agent read — a
-// disconnected pane has no live agent worth reporting on. A claude with no
-// hook marker carries no `agent` at all, so it renders no chip: the silence
-// is the cue that the box needs a setup rerun, not a state to invent.
+// disconnected pane has no live agent worth reporting on. The agent chip reads
+// the state of THIS pane's own session. A session with no hook marker has no
+// state, so it renders no chip: the silence is the cue that the box needs a
+// setup rerun, not a state to invent.
 export function paneHeaderChip(i: PaneHeaderInput): PaneChip | null {
   if (i.state === 'stopped') return { kind: 'state', text: 'stopped', cls: 'chip-state' };
   if (i.state === 'setup') return { kind: 'state', text: 'setting up', cls: 'chip-state' };
   if (i.conn?.kind === 'retrying') return { kind: 'conn', text: `reconnecting ×${i.conn.attempt ?? 1}`, cls: 'chip-conn' };
   if (i.conn?.kind === 'connecting') return { kind: 'conn', text: 'connecting…', cls: 'chip-conn' };
   if (i.conn?.kind === 'setup') return { kind: 'conn', text: 'setting up…', cls: 'chip-conn' };
-  if (i.agent === 'working' || i.agent === 'waiting') {
-    const chip: PaneChip = { kind: 'agent', text: i.agent, cls: `chip-agent-${i.agent}` };
-    if (i.agent === 'working') chip.sprite = true; // Clawd rides working only
+  const entry = i.agents?.[i.sessionName || 'web'];
+  if (entry?.state) {
+    const chip: PaneChip = { kind: 'agent', text: agentChipText(entry.state, entry.cause), cls: `chip-agent-${entry.state}` };
+    if (entry.state === 'working') chip.sprite = true; // Clawd rides working only
     return chip;
   }
   return null;
@@ -73,8 +76,7 @@ export function paneHeaderModel(i: PaneHeaderInput): PaneHeaderModel {
   // way the sidebar's local dot does, not an SSH probe it will never have.
   const dotClass = i.local ? (i.conn?.kind === 'open' ? 'green' : 'gray') : dotClassFor(i.status);
   const dotTitle = i.local ? (i.conn?.kind === 'open' ? 'Connected' : 'Not connected') : dotTitleFor(i.status);
-  const onConfigured = (i.sessionName || 'web') === (i.configuredSession || 'web');
-  const chip = paneHeaderChip(onConfigured ? i : { ...i, agent: undefined });
+  const chip = paneHeaderChip(i);
   return {
     title: i.label,
     target: i.local ? 'this host' : (i.user ? `${i.user}@${i.host ?? ''}` : i.host ?? ''),
@@ -84,7 +86,7 @@ export function paneHeaderModel(i: PaneHeaderInput): PaneHeaderModel {
     // Only a live terminal pane on a real box offers the switch: the local
     // shell's session is config, and a stopped/setting-up pane has no attach to
     // move.
-    targets: !i.local && !i.phone && i.state === 'terminal' ? sessionTargetList(i.status, i.sessionName) : null,
+    targets: !i.local && !i.phone && i.state === 'terminal' ? sessionTargetList(i.status, i.sessionName, i.agents) : null,
   };
 }
 
@@ -106,6 +108,9 @@ export interface SessionTarget {
   windowId?: string;
   disabled?: boolean;
   title?: string;       // why it is disabled
+  // Session rows only: the session's agent state, for the row's dot/label.
+  agent?: AgentState;
+  agentCause?: AgentCause;
 }
 export interface SessionTargetList { options: SessionTarget[]; value: string }
 
@@ -122,7 +127,7 @@ const UNSWITCHABLE = 'name not switchable from here (allowed: letters, digits, _
 // it) but is NOT hoisted to the top: the order must not depend on which session
 // the pane is on, or every pane shows a different list. Code-unit order, which
 // is tmux's own strcmp order for `tmux ls`.
-export function sessionTargets(status: Status | undefined, sessionName: string | undefined): SessionTarget[] {
+export function sessionTargets(status: Status | undefined, sessionName: string | undefined, agents?: Record<string, AgentEntry>): SessionTarget[] {
   const current = sessionName || 'web'; // store.js defaults an absent name to 'web'
   const live = (status?.sessions ?? []).filter((s) => s.name);
   const rows: { name: string; windowList?: TmuxWindow[] }[] = live.some((s) => s.name === current)
@@ -138,7 +143,9 @@ export function sessionTargets(status: Status | undefined, sessionName: string |
     // inherit that, EXCEPT the current session's, which need no PATCH at all.
     const locked = s.name !== current && !isSwitchableSession(s.name);
     const lock = locked ? { disabled: true, title: UNSWITCHABLE } : {};
-    out.push({ kind: 'session', value: `s:${s.name}`, label: s.name, session: s.name, ...lock });
+    const a = agents?.[s.name];
+    const agent = a?.state ? { agent: a.state, ...(a.cause ? { agentCause: a.cause } : {}) } : {};
+    out.push({ kind: 'session', value: `s:${s.name}`, label: s.name, session: s.name, ...lock, ...agent });
     for (const w of s.windowList ?? []) {
       out.push({
         kind: 'window',
@@ -157,10 +164,10 @@ export function sessionTargets(status: Status | undefined, sessionName: string |
 // when the snapshot knows it, else the session row. This is what makes the
 // header answer "which window am I looking at" rather than only naming the
 // session the pane belongs to.
-export function sessionTargetList(status: Status | undefined, sessionName: string | undefined): SessionTargetList {
+export function sessionTargetList(status: Status | undefined, sessionName: string | undefined, agents?: Record<string, AgentEntry>): SessionTargetList {
   const current = sessionName || 'web';
   const active = (status?.sessions ?? []).find((s) => s.name === current)?.windowList?.find((w) => w.active);
-  return { options: sessionTargets(status, sessionName), value: active ? `w:${current}:${active.id}` : `s:${current}` };
+  return { options: sessionTargets(status, sessionName, agents), value: active ? `w:${current}:${active.id}` : `s:${current}` };
 }
 
 export interface PaneHeaderActions {

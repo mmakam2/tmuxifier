@@ -30,11 +30,11 @@ test('status delegation: unreachable box gets the red dot', () => {
 });
 
 test('chip precedence: pane state beats connection beats agent', () => {
-  expect(paneHeaderChip(box({ state: 'stopped', conn: { kind: 'retrying', attempt: 3 }, agent: 'waiting' })))
+  expect(paneHeaderChip(box({ state: 'stopped', conn: { kind: 'retrying', attempt: 3 }, agents: AG })))
     .toEqual({ kind: 'state', text: 'stopped', cls: 'chip-state' });
   expect(paneHeaderChip(box({ state: 'setup' })))
     .toEqual({ kind: 'state', text: 'setting up', cls: 'chip-state' });
-  expect(paneHeaderChip(box({ conn: { kind: 'retrying', attempt: 3 }, agent: 'waiting' })))
+  expect(paneHeaderChip(box({ conn: { kind: 'retrying', attempt: 3 }, agents: AG })))
     .toEqual({ kind: 'conn', text: 'reconnecting ×3', cls: 'chip-conn' });
   expect(paneHeaderChip(box({ conn: { kind: 'connecting' } })))
     .toEqual({ kind: 'conn', text: 'connecting…', cls: 'chip-conn' });
@@ -42,14 +42,34 @@ test('chip precedence: pane state beats connection beats agent', () => {
     .toEqual({ kind: 'conn', text: 'setting up…', cls: 'chip-conn' });
 });
 
-test('agent chip only when the connection is quiet, and only for a hook-sourced state', () => {
-  // working carries the Clawd sprite flag; waiting deliberately stays plain.
-  expect(paneHeaderChip(box({ conn: { kind: 'open' }, agent: 'working' })))
+const E = (state, cause) => ({ present: true, attached: false, state, cause, ts: 1 });
+const AG = { web: E('done'), 'web-2': E('blocked', 'permission'), idler: E('idle') };
+
+test('agent chip reads the pane\'s own session; working carries the sprite', () => {
+  expect(paneHeaderChip(box({ conn: { kind: 'open' }, sessionName: 'web-2', agents: AG })))
+    .toEqual({ kind: 'agent', text: 'blocked · permission', cls: 'chip-agent-blocked' });
+  expect(paneHeaderChip(box({ conn: { kind: 'open' }, sessionName: 'web', agents: AG })))
+    .toEqual({ kind: 'agent', text: 'done', cls: 'chip-agent-done' });
+  expect(paneHeaderChip(box({ conn: { kind: 'open' }, sessionName: undefined, agents: AG })))
+    .toEqual({ kind: 'agent', text: 'done', cls: 'chip-agent-done' });
+  expect(paneHeaderChip(box({ conn: { kind: 'open' }, sessionName: 'idler', agents: AG })))
+    .toEqual({ kind: 'agent', text: 'idle', cls: 'chip-agent-idle' });
+  expect(paneHeaderChip(box({ conn: { kind: 'open' }, sessionName: 'web', agents: { web: E('working') } })))
     .toEqual({ kind: 'agent', text: 'working', cls: 'chip-agent-working', sprite: true });
-  expect(paneHeaderChip(box({ conn: { kind: 'open' }, agent: 'waiting' })))
-    .toEqual({ kind: 'agent', text: 'waiting', cls: 'chip-agent-waiting' });
-  // No marker → no `agent` on the sample → no chip (the un-hooked-box cue).
+  // No entry (or no state) for the session -> no chip.
+  expect(paneHeaderChip(box({ conn: { kind: 'open' }, sessionName: 'other', agents: AG }))).toBeNull();
   expect(paneHeaderChip(box({ conn: { kind: 'open' } }))).toBeNull();
+});
+
+test('sessionTargets: session rows carry agent state, window rows do not', () => {
+  const status = { sessions: [{ name: 'web', windows: 1, windowList: [{ id: '@1', index: 0, name: 'sh', active: true }] }, { name: 'web-2', windows: 0 }] };
+  const rows = sessionTargets(status, 'web', AG);
+  expect(rows.find((r) => r.value === 's:web')).toMatchObject({ agent: 'done' });
+  expect(rows.find((r) => r.value === 's:web-2')).toMatchObject({ agent: 'blocked', agentCause: 'permission' });
+  const win = rows.find((r) => r.kind === 'window');
+  expect(win.agent).toBeUndefined();
+  expect(win.agentCause).toBeUndefined();
+  expect(sessionTargetList(status, 'web', AG).options.find((r) => r.value === 's:web-2').agent).toBe('blocked');
 });
 
 test('retrying without an attempt count defaults to ×1', () => {
@@ -209,20 +229,9 @@ test('phone mode changes nothing else about the header', () => {
   expect(phone.chip).toEqual(desktop.chip);
 });
 
-test('agent chip renders only when the pane shows the configured session', () => {
-  const base = { local: false, label: 'b', state: 'terminal', agent: 'working' };
-  const on = paneHeaderModel({ ...base, sessionName: 'web', configuredSession: 'web' });
-  expect(on.chip?.kind).toBe('agent');
-  const off = paneHeaderModel({ ...base, sessionName: 'web-2', configuredSession: 'web' });
-  expect(off.chip).toBeNull();
-  // Defaults ('web') keep every existing caller's behavior.
-  const dflt = paneHeaderModel({ ...base, sessionName: undefined, configuredSession: undefined });
-  expect(dflt.chip?.kind).toBe('agent');
-});
-
 test('the dropdown lists from the ATTACHED session as current', () => {
   const status = { sessions: [{ name: 'web' }, { name: 'dev-2' }] };
-  const m = paneHeaderModel({ local: false, label: 'b', state: 'terminal', status, sessionName: 'dev-2', configuredSession: 'web' });
+  const m = paneHeaderModel({ local: false, label: 'b', state: 'terminal', status, sessionName: 'dev-2' });
   expect(m.targets.options[0]).toMatchObject({ kind: 'session', session: 'dev-2' });
   expect(m.targets.value).toBe('s:dev-2');
 });

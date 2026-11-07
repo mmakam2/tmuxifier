@@ -47,16 +47,21 @@ export interface Status {
 // `stopped` marks a confirmed-by-Proxmox stopped box: `up` is true for it (see
 // sampleOf), so this flag is how the sparkline/health UI tells "healthy stopped"
 // apart from a genuinely reachable box.
+export type AgentState = 'working' | 'blocked' | 'done' | 'idle';
+export type AgentCause = 'prompt' | 'resume' | 'stop' | 'start' | 'permission' | 'question' | 'elicitation' | 'unblock';
+export interface AgentEntry { present: boolean; attached: boolean; state?: AgentState; cause?: AgentCause; ts?: number }
 export interface Sample {
   t: number; up: boolean; stopped?: boolean; tmux?: boolean; needsAuth?: boolean; keyChanged?: boolean;
   cpuPct?: number; memPct?: number; diskPct?: number;
-  // Agent state for the box's configured session (see healthHistory.js
-  // sampleOf): `agent` is hook-sourced ground truth only — a claude pane with
-  // no marker carries no agent at all. `agentPresent` is the pane-based
-  // presence flag (drives the agent-done edge server-side, never a chip), and
-  // agentAttached whether that session is attached. The pane header bar reads
-  // the latest sample's `agent` for its working/waiting chip (paneHeader.ts).
-  agent?: 'working' | 'waiting'; agentPresent?: boolean; agentAttached?: boolean;
+  // Agent state (see healthHistory.js sampleOf): hook-sourced ground truth
+  // only — a claude pane with no marker carries no state at all. `agent` is the
+  // legacy field for the box's configured session; `agentPresent` is the
+  // pane-based presence flag (server-side only, never a chip), agentAttached
+  // whether that session is attached.
+  agent?: AgentState; agentPresent?: boolean; agentAttached?: boolean;
+  // Every session's agent entry, keyed by session name (healthHistory.js).
+  // The pane chip, session rows, sidebar badge and standby strip read this.
+  agents?: Record<string, AgentEntry>;
 }
 export type ServiceCheckKind = 'http' | 'tcp' | 'none' | 'pihole' | 'truenas' | 'unifi' | 'immich';
 export type ServiceSection = 'services' | 'infrastructure';
@@ -172,10 +177,11 @@ export interface ServiceResult {
   immich?: ImmichMetrics;
 }
 export interface ServiceStatusSnapshot { checkedAt: string | null; results: Record<string, ServiceResult> }
-export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'key-changed' | 'threshold' | 'threshold-clear' | 'agent-input' | 'agent-done';
+export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'key-changed' | 'threshold' | 'threshold-clear' | 'agent-input' | 'agent-done' | 'agent-blocked';
 export interface HealthEvent {
   seq: number; boxId: string; label: string; host: string; t: number;
   kind: HealthEventKind; reason?: string; metric?: 'cpu' | 'mem' | 'disk'; value?: number;
+  session?: string; cause?: AgentCause;
 }
 export type FleetTargetStatus = 'pending' | 'running' | 'ok' | 'error' | 'skipped' | 'cancelled' | 'interrupted';
 export type FleetJobStatus = 'running' | 'done' | 'cancelled' | 'interrupted';
@@ -293,6 +299,11 @@ export const api = {
   // the returned promise means the switch actually happened.
   async selectWindow(id: string, session: string, windowId: string) {
     return j<{ ok: boolean; windowId: string }>(await fetch(`/api/boxes/${id}/window`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session, windowId }) }));
+  },
+  // Acknowledge a session's done state up to `ts` (its marker epoch), so the
+  // done chip clears everywhere. Server-owned watermark; this just posts it.
+  async agentSeen(id: string, session: string, ts: number) {
+    await j<{ ok: boolean }>(await fetch(`/api/boxes/${id}/agent-seen`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session, ts }) }));
   },
   // Kill a tmux session, or one window inside it, on the box. The session is
   // required in both forms — a grouped session shares its window objects, so an

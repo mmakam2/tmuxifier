@@ -221,17 +221,10 @@ test('needsAuth + mismatch: the login prompt wins — auth dot, auth title, need
   expect(metaLine(st)).not.toMatch(/mismatch/i);
 });
 
-test('agentBadgeFor: latest sample state maps to the badge, absence maps to null', () => {
-  // working carries the Clawd sprite flag; waiting deliberately does not —
-  // stillness plus orange is the "your turn" read.
-  expect(agentBadgeFor([{ t: 1, up: true, agent: 'waiting' }, { t: 2, up: true, agent: 'working' }]))
-    .toEqual({ text: 'working', cls: 'badge-agent-working', sprite: true });
-  expect(agentBadgeFor([{ t: 1, up: true, agent: 'working' }, { t: 2, up: true, agent: 'waiting' }]))
-    .toEqual({ text: 'waiting', cls: 'badge-agent-waiting' });
-  expect(agentBadgeFor([{ t: 1, up: true, agent: 'waiting' }])?.sprite).toBeUndefined();
-  // Hook-only rule: no agent on the latest sample (un-hooked box, no claude,
-  // or claude exited) renders nothing — even if an older sample had state.
-  expect(agentBadgeFor([{ t: 1, up: true, agent: 'working' }, { t: 2, up: true }])).toBeNull();
-  expect(agentBadgeFor([])).toBeNull();
+test('agentBadgeFor: worst state wins, count and title list the sessions, absence is null', () => {
+  const agents = { web: { present: true, attached: false, state: 'done', ts: 1 }, 'web-2': { present: true, attached: false, state: 'blocked', cause: 'question', ts: 2 } };
+  expect(agentBadgeFor([{ t: 1, up: true, agents }])).toEqual({ text: 'blocked', cls: 'badge-agent-blocked', count: 2, title: 'web-2: blocked · question · web: done' });
+  expect(agentBadgeFor([{ t: 1, up: true, agents: { web: { present: true, attached: false, state: 'working', ts: 1 } } }])).toMatchObject({ text: 'working', sprite: true, count: 1 });
+  expect(agentBadgeFor([{ t: 1, up: true, agents: {} }])).toBeNull();
   expect(agentBadgeFor(undefined)).toBeNull();
 });
