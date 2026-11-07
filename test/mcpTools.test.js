@@ -218,11 +218,22 @@ test('wait_for_agent polls the series until a target state, returning immediatel
   expect(sleeps).toEqual([]);
 });
 
-test('wait_for_agent: the waiting alias expands to done+idle, and blocked is a default target', async () => {
+test('wait_for_agent: the waiting alias expands to blocked+done+idle, and blocked is a default target', async () => {
   const mk = (agent) => createToolRegistry({ client: stubClient({ getSeries: async () => ({ b1: [{ t: 1, up: true, agent }] }) }), sleep: async () => {}, now: () => 0, pollMs: 1 });
   expect(text(await mk('idle').call('wait_for_agent', { box_id: 'b1', until: ['waiting'] }))).toMatch(/^state: idle\nsession: web\ntimed_out: false/);
   expect(text(await mk('done').call('wait_for_agent', { box_id: 'b1', until: ['waiting'] }))).toMatch(/^state: done\n/);
+  // The old `waiting` also covered permission prompts.
+  expect(text(await mk('blocked').call('wait_for_agent', { box_id: 'b1', until: ['waiting'] }))).toMatch(/^state: blocked\nsession: web\ntimed_out: false/);
   expect(text(await mk('blocked').call('wait_for_agent', { box_id: 'b1' }))).toMatch(/^state: blocked\nsession: web\ntimed_out: false/);
+});
+
+test('wait_for_agent: working does not satisfy the waiting alias (times out)', async () => {
+  let clock = 0;
+  const reg = createToolRegistry({
+    client: stubClient({ getSeries: async () => ({ b1: [{ t: 1, up: true, agent: 'working' }] }) }),
+    sleep: async (ms) => { clock += ms; }, now: () => clock, pollMs: 1000,
+  });
+  expect(text(await reg.call('wait_for_agent', { box_id: 'b1', until: ['waiting'], timeout_sec: 3 }))).toMatch(/^state: working\nsession: web\ntimed_out: true/);
 });
 
 test('wait_for_agent with session reads that session from agents and reports the blocked cause', async () => {
