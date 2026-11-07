@@ -15,6 +15,9 @@ function runHook(arg, env, stdin) {
     const child = execFile('/bin/sh', [HOOK_ASSET, arg], { env }, (err, stdout, stderr) => {
       resolve({ code: err && typeof err.code === 'number' ? err.code : err ? 1 : 0, stdout, stderr });
     });
+    // The script exits without draining stdin on its no-op paths (outside tmux,
+    // unblock over a non-blocked marker); Claude Code tolerates that, so EPIPE is fine.
+    child.stdin.on('error', () => {});
     child.stdin.end(stdin ?? '{"session_id":"x","hook_event_name":"Stop"}');
   });
 }
@@ -44,16 +47,19 @@ test('prompt writes a working marker named after the session', async () => {
   const res = await runHook('prompt', env);
   expect(res.code).toBe(0);
   const content = await fs.readFile(path.join(dir, '.tmuxifier-agent', 'web'), 'utf8');
-  expect(content).toMatch(/^web:working:\d+\n$/);
+  expect(content).toMatch(/^web:working:\d+:prompt\n$/);
 });
 
-test('stop, notify and start all write waiting', async () => {
+test('stop writes ready/stop; a typeless notify writes nothing; start writes ready/start', async () => {
   const { dir, env } = await hookEnv('web');
-  for (const ev of ['stop', 'notify', 'start']) {
-    await runHook(ev, env);
-    const content = await fs.readFile(path.join(dir, '.tmuxifier-agent', 'web'), 'utf8');
-    expect(content).toMatch(/^web:waiting:\d+\n$/);
-  }
+  await runHook('stop', env);
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
+  await runHook('prompt', env);
+  const before = await marker(dir);
+  await runHook('notify', env);
+  expect(await marker(dir)).toBe(before);
+  await runHook('start', env);
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:start\n$/);
 });
 
 test('end deletes the marker', async () => {
@@ -86,7 +92,7 @@ test('stop with a live subagent token writes working, not waiting', async () => 
   const { dir, env } = await hookEnv('web');
   await runHook('subagent-start', env, SUBAGENT('sub-1'));
   await runHook('stop', env);
-  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/);
+  expect(await marker(dir)).toMatch(/^web:working:\d+:prompt\n$/);
 });
 
 test('subagent-stop clears only its own token, by agent_id', async () => {
@@ -95,31 +101,31 @@ test('subagent-stop clears only its own token, by agent_id', async () => {
   await runHook('subagent-start', env, SUBAGENT('sub-2'));
   await runHook('subagent-stop', env, SUBAGENT('sub-1'));
   await runHook('stop', env);
-  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/); // sub-2 still outstanding
+  expect(await marker(dir)).toMatch(/^web:working:\d+:prompt\n$/); // sub-2 still outstanding
   await runHook('subagent-stop', env, SUBAGENT('sub-2'));
   await runHook('stop', env);
-  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/);
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
 });
 
 test('a backgrounded tool call gates stop; a foreground one does not', async () => {
   const fg = await hookEnv('web');
   await runHook('pretool', fg.env, FG_TOOL);
   await runHook('stop', fg.env);
-  expect(await marker(fg.dir)).toMatch(/^web:waiting:\d+\n$/);
+  expect(await marker(fg.dir)).toMatch(/^web:ready:\d+:stop\n$/);
 
   const bg = await hookEnv('web');
   await runHook('pretool', bg.env, BG_TOOL);
   await runHook('stop', bg.env);
-  expect(await marker(bg.dir)).toMatch(/^web:working:\d+\n$/);
+  expect(await marker(bg.dir)).toMatch(/^web:working:\d+:prompt\n$/);
 });
 
 test('a resume clears outstanding shell tokens — a re-invocation is the only completion signal a background shell gives', async () => {
   const { dir, env } = await hookEnv('web');
   await runHook('pretool', env, BG_TOOL);
   await runHook('prompt', env, RESUME);
-  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/);
+  expect(await marker(dir)).toMatch(/^web:working:\d+:resume\n$/);
   await runHook('stop', env);
-  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/);
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
 });
 
 // The defect this pair pins down: every background subagent that finishes
@@ -133,18 +139,18 @@ test('a harness resume leaves a live subagent token alone', async () => {
   await runHook('subagent-start', env, SUBAGENT('sub-1'));
   await runHook('subagent-start', env, SUBAGENT('sub-2'));
   await runHook('stop', env);
-  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/);
+  expect(await marker(dir)).toMatch(/^web:working:\d+:prompt\n$/);
 
   await runHook('subagent-stop', env, SUBAGENT('sub-1')); // one finishes...
   await runHook('prompt', env, RESUME); // ...and the harness resumes the main agent
   expect(await fs.readdir(busyDir(dir))).toEqual(['sub.sub-2']);
 
   await runHook('stop', env);
-  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/); // sub-2 is still running
+  expect(await marker(dir)).toMatch(/^web:working:\d+:prompt\n$/); // sub-2 is still running
 
   await runHook('subagent-stop', env, SUBAGENT('sub-2'));
   await runHook('stop', env);
-  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/); // now it really is the operator's turn
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/); // now it really is the operator's turn
 });
 
 test('the operator’s own prompt is a clean slate, so no token can go stale across turns', async () => {
@@ -154,7 +160,7 @@ test('the operator’s own prompt is a clean slate, so no token can go stale acr
   await runHook('prompt', env, OPERATOR);
   await expect(fs.readdir(busyDir(dir))).rejects.toBeTruthy();
   await runHook('stop', env);
-  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/);
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
 });
 
 test('a background-shell token expires on a far shorter clock than a subagent one', async () => {
@@ -168,14 +174,14 @@ test('a background-shell token expires on a far shorter clock than a subagent on
   const aged = new Date(Date.now() - 10 * 60 * 1000); // 10min: past bg's TTL, far inside the subagent's
   for (const f of await fs.readdir(busyDir(dir))) await fs.utimes(path.join(busyDir(dir), f), aged, aged);
   await runHook('stop', env);
-  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/); // the subagent still gates
+  expect(await marker(dir)).toMatch(/^web:working:\d+:prompt\n$/); // the subagent still gates
   expect(await fs.readdir(busyDir(dir))).toEqual(['sub.sub-1']); // the shell token is gone
 
   const solo = await hookEnv('web');
   await runHook('pretool', solo.env, BG_TOOL);
   for (const f of await fs.readdir(busyDir(solo.dir))) await fs.utimes(path.join(busyDir(solo.dir), f), aged, aged);
   await runHook('stop', solo.env);
-  expect(await marker(solo.dir)).toMatch(/^web:waiting:\d+\n$/); // stale shell token cannot suppress
+  expect(await marker(solo.dir)).toMatch(/^web:ready:\d+:stop\n$/); // stale shell token cannot suppress
 });
 
 test('a token past its TTL cannot suppress waiting forever', async () => {
@@ -184,7 +190,7 @@ test('a token past its TTL cannot suppress waiting forever', async () => {
   const stale = new Date(Date.now() - 3 * 60 * 60 * 1000);
   for (const f of await fs.readdir(busyDir(dir))) await fs.utimes(path.join(busyDir(dir), f), stale, stale);
   await runHook('stop', env);
-  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/);
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
 });
 
 test('idle_prompt is gated by outstanding work; every other notification still means the operator', async () => {
@@ -192,9 +198,9 @@ test('idle_prompt is gated by outstanding work; every other notification still m
   await runHook('subagent-start', env, SUBAGENT('sub-1'));
   await runHook('stop', env);
   await runHook('notify', env, NOTIFY('idle_prompt'));
-  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/); // the +60s timer must not ping
+  expect(await marker(dir)).toMatch(/^web:working:\d+:prompt\n$/); // the +60s timer must not ping
   await runHook('notify', env, NOTIFY('permission_prompt'));
-  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/); // a real request still does
+  expect(await marker(dir)).toMatch(/^web:blocked:\d+:permission\n$/); // a real request still does
 });
 
 // agent_completed announces that ONE background agent finished. While siblings
@@ -207,18 +213,18 @@ test('agent_completed is gated by outstanding work, and lands once nothing is', 
   await runHook('stop', env); // turn ends with both live -> working
   await runHook('subagent-stop', env, SUBAGENT('sub-1'));
   await runHook('notify', env, NOTIFY('agent_completed'));
-  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/); // sub-2 still running
+  expect(await marker(dir)).toMatch(/^web:working:\d+:prompt\n$/); // sub-2 still running
 
   await runHook('subagent-stop', env, SUBAGENT('sub-2'));
   await runHook('notify', env, NOTIFY('agent_completed'));
-  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/);
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
 });
 
 test('agent_needs_input is never gated — a background agent asking for the operator is real', async () => {
   const { dir, env } = await hookEnv('web');
   await runHook('subagent-start', env, SUBAGENT('sub-1'));
   await runHook('notify', env, NOTIFY('agent_needs_input'));
-  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/);
+  expect(await marker(dir)).toMatch(/^web:blocked:\d+:question\n$/);
 });
 
 test('newline-terminated and multi-line JSON payloads keep exact notification_type and agent_id tokens', async () => {
@@ -231,21 +237,21 @@ test('newline-terminated and multi-line JSON payloads keep exact notification_ty
   expect((await fs.readdir(busyDir(dir))).sort()).toEqual(['sub.sub-1', 'sub.sub-2']);
 
   await runHook('stop', env, '{"hook_event_name":"Stop"}\n');
-  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/);
+  expect(await marker(dir)).toMatch(/^web:working:\d+:prompt\n$/);
 
   await runHook('notify', env, '{\n  "hook_event_name": "Notification",\n  "notification_type": "idle_prompt",\n  "message": "Claude is waiting"\n}\n');
-  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/);
+  expect(await marker(dir)).toMatch(/^web:working:\d+:prompt\n$/);
 
   // Pair multi-line SubagentStart with compact single-line SubagentStop.
   await runHook('subagent-stop', env, SUBAGENT('sub-1'));
   expect(await fs.readdir(busyDir(dir))).toEqual(['sub.sub-2']);
 
   await runHook('notify', env, '{"hook_event_name":"Notification","notification_type":"agent_completed"}\r\n');
-  expect(await marker(dir)).toMatch(/^web:working:\d+\n$/);
+  expect(await marker(dir)).toMatch(/^web:working:\d+:prompt\n$/);
 
   await runHook('subagent-stop', env, SUBAGENT('sub-2'));
   await runHook('notify', env, '{\n  "hook_event_name": "Notification",\n  "notification_type": "agent_completed"\n}\n');
-  expect(await marker(dir)).toMatch(/^web:waiting:\d+\n$/);
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
 });
 
 test('gate events write no marker of their own, and the busy dir stays invisible to the probe', async () => {
@@ -279,7 +285,108 @@ test('unknown event is a no-op; session name is sanitized in the filename but ex
   await expect(fs.access(path.join(dir, '.tmuxifier-agent'))).rejects.toBeTruthy();
   await runHook('stop', env);
   const content = await fs.readFile(path.join(dir, '.tmuxifier-agent', 'a_b_c'), 'utf8');
-  expect(content).toMatch(/^a b\/c:waiting:\d+\n$/);
+  expect(content).toMatch(/^a b\/c:ready:\d+:stop\n$/);
+});
+
+// ---------------------------------------------------------------------------
+// Lifecycle states: ready / working / blocked, each with a cause.
+// ---------------------------------------------------------------------------
+
+test('start is idle-not-done: ready/start', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('start', env, '{"hook_event_name":"SessionStart","source":"startup"}');
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:start\n$/);
+});
+
+test('permission and ask write blocked with their cause; the notify backstop agrees', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('permission', env, '{"hook_event_name":"PermissionRequest","tool_name":"Bash"}');
+  expect(await marker(dir)).toMatch(/^web:blocked:\d+:permission\n$/);
+  await runHook('notify', env, '{"hook_event_name":"Notification","notification_type":"permission_prompt"}');
+  expect(await marker(dir)).toMatch(/^web:blocked:\d+:permission\n$/);
+  await runHook('ask', env, '{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}');
+  expect(await marker(dir)).toMatch(/^web:blocked:\d+:question\n$/);
+  await runHook('notify', env, '{"hook_event_name":"Notification","notification_type":"elicitation_dialog"}');
+  expect(await marker(dir)).toMatch(/^web:blocked:\d+:elicitation\n$/);
+});
+
+// Real Claude Code 2.1.319 fires PermissionRequest(tool_name AskUserQuestion) and a
+// permission_prompt Notification right after the ask's PreToolUse; neither may
+// downgrade the question.
+test('ask, then its PermissionRequest and permission_prompt, stays blocked/question', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('ask', env, '{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}');
+  await runHook('permission', env, '{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion"}');
+  expect(await marker(dir)).toMatch(/^web:blocked:\d+:question\n$/);
+  await runHook('notify', env, '{"hook_event_name":"Notification","notification_type":"permission_prompt"}');
+  expect(await marker(dir)).toMatch(/^web:blocked:\d+:question\n$/);
+});
+
+test('unblock clears only a blocked marker, and leaves every other state alone', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('prompt', env);
+  const before = await marker(dir);
+  await runHook('unblock', env, '{"hook_event_name":"PostToolUse","tool_name":"Read"}');
+  expect(await marker(dir)).toBe(before);
+  await runHook('permission', env);
+  await runHook('unblock', env, '{"hook_event_name":"PostToolUse","tool_name":"Read"}');
+  expect(await marker(dir)).toMatch(/^web:working:\d+:unblock\n$/);
+});
+
+test('unblock with no marker at all writes nothing', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('unblock', env);
+  await expect(marker(dir)).rejects.toBeTruthy();
+});
+
+test('a typed denial takes blocked to working through prompt', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('permission', env);
+  await runHook('prompt', env, '{"hook_event_name":"UserPromptSubmit","prompt":"no, stop"}');
+  expect(await marker(dir)).toMatch(/^web:working:\d+:prompt\n$/);
+});
+
+test('timers never mint a new ts: idle_prompt over a ready marker is a no-op', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('stop', env);
+  const before = await marker(dir);
+  await new Promise((r) => setTimeout(r, 1100));
+  await runHook('notify', env, '{"hook_event_name":"Notification","notification_type":"idle_prompt"}');
+  expect(await marker(dir)).toBe(before);
+  await runHook('notify', env, '{"hook_event_name":"Notification","notification_type":"agent_completed"}');
+  expect(await marker(dir)).toBe(before);
+});
+
+test('idle_prompt still lands over a working marker once nothing is busy', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('prompt', env);
+  await runHook('notify', env, '{"hook_event_name":"Notification","notification_type":"idle_prompt"}');
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
+});
+
+// A plain "No" denial fires nothing afterwards, so the marker stays blocked until
+// the operator's next prompt or this timer; the timer must land over blocked.
+test('idle_prompt lands over a blocked marker (a plain denial fires no hook)', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('permission', env);
+  await runHook('notify', env, '{"hook_event_name":"Notification","notification_type":"idle_prompt"}');
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
+});
+
+test('auth and quota notifications write nothing', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('prompt', env);
+  const before = await marker(dir);
+  for (const nt of ['auth_success', 'quota_auto_resume_fired', 'plugin_notification']) {
+    await runHook('notify', env, `{"hook_event_name":"Notification","notification_type":"${nt}"}`);
+    expect(await marker(dir)).toBe(before);
+  }
+});
+
+test('resume writes working/resume', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('prompt', env, '{"hook_event_name":"UserPromptSubmit","prompt":"<task-notification>done</task-notification>"}');
+  expect(await marker(dir)).toMatch(/^web:working:\d+:resume\n$/);
 });
 
 // ---------------------------------------------------------------------------

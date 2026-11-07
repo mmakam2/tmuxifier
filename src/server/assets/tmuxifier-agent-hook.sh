@@ -2,10 +2,32 @@
 # Tmuxifier agent-state hook (installed by box setup; safe to delete — the
 # next setup run reinstalls it). Claude Code invokes it with the event name
 # as $1 and the event JSON on stdin.
-# Writes one line — <session>:<state>:<epoch> — to ~/.tmuxifier-agent/<file>
-# for the Tmuxifier status probe. Colons are safe separators: tmux forbids
+# Writes one line — <session>:<state>:<epoch>:<cause> — to
+# ~/.tmuxifier-agent/<file> for the Tmuxifier status probe. Colons are safe separators: tmux forbids
 # them in session names. No set -e: a hook failure must never surface into
 # the Claude session, so every path is guarded instead.
+#
+# State vocabulary (state/cause):
+#   ready/start, ready/stop      idle at the prompt (session began / turn ended)
+#   working/prompt, /resume, /unblock   a turn is running
+#   blocked/permission, /question, /elicitation   Claude is waiting on the operator
+# Dispatch: start -> ready/start; stop -> ready/stop (working/prompt while
+# background work is outstanding); prompt -> working/prompt (working/resume for
+# a <task-notification>); permission -> blocked/question when the payload's
+# tool_name is AskUserQuestion (Claude Code also fires PermissionRequest for
+# it), else blocked/permission; ask -> blocked/question; unblock -> working;
+# notify: permission_prompt -> blocked/permission, but only when the marker is
+# not already blocked (the AskUserQuestion Notification must not downgrade
+# blocked/question); elicitation_dialog|elicitation_url_dialog ->
+# blocked/elicitation; agent_needs_input -> blocked/question; idle_prompt|
+# agent_completed -> ready/stop, a no-op over a ready marker (timers never mint
+# a new ts) and gated by the busy tokens; any other type writes nothing.
+# A plain "No" to a permission prompt fires nothing afterwards: the marker stays
+# blocked until the operator's next prompt or the idle_prompt timer.
+#
+# `unblock` (PostToolUse / PostToolUseFailure) fires after EVERY tool call, so
+# it short-circuits before stdin is read: when the marker is not `blocked` it
+# exits 0 having spent two forks (`sh` and `tmux`) and no more.
 #
 # `Stop` fires whenever the main agent finishes responding, which INCLUDES a
 # turn that ended only to await a background subagent or shell — work the
@@ -20,7 +42,6 @@
 # agent_id, run_in_background and notification_type. It is never eval'd —
 # only substring-matched — and every value taken from it is re-sanitized
 # before it reaches a path.
-IN=$(cat 2>/dev/null) || IN=''
 [ -n "${TMUX:-}" ] || exit 0
 SESSION=$(tmux display-message -p '#S' 2>/dev/null) || exit 0
 [ -n "$SESSION" ] || exit 0
@@ -28,6 +49,19 @@ DIR="$HOME/.tmuxifier-agent"
 SAFE=$(printf '%s' "$SESSION" | tr -c 'A-Za-z0-9._-' '_')
 FILE="$DIR/$SAFE"
 BUSY="$DIR/busy/$SAFE"
+
+# Sets CUR to the state field of this session's marker (empty when absent).
+# Sets a variable rather than printing, so no command substitution forks.
+cur_state() {
+  CUR=''
+  [ -f "$FILE" ] && { IFS=: read -r _ CUR _ < "$FILE"; } 2>/dev/null
+  return 0
+}
+
+# Runs BEFORE stdin is read: leaving a pipe unread is tolerated by Claude Code.
+if [ "${1:-}" = unblock ]; then cur_state; [ "$CUR" = blocked ] || exit 0; fi
+
+IN=$(cat 2>/dev/null) || IN=''
 
 # First "<key>":"<value>" string out of the event JSON, sanitized to the same
 # charset as a session name because both callers use it as a path component.
@@ -88,8 +122,8 @@ case "${1:-}" in
     # to contain the marker only costs that reset, since every token still
     # expires on its own clock.
     case "$IN" in
-      *'<task-notification>'*) rm -f "$BUSY"/bg.* 2>/dev/null ;;
-      *) rm -rf "$BUSY" 2>/dev/null ;;
+      *'<task-notification>'*) rm -f "$BUSY"/bg.* 2>/dev/null; CAUSE=resume ;;
+      *) rm -rf "$BUSY" 2>/dev/null; CAUSE=prompt ;;
     esac
     STATE=working ;;
   subagent-start)
@@ -114,19 +148,36 @@ case "${1:-}" in
     busy_add "bg.$$"
     exit 0 ;;
   stop)
-    if busy_live; then STATE=working; else STATE=waiting; fi ;;
+    if busy_live; then STATE=working CAUSE=prompt; else STATE=ready CAUSE=stop; fi ;;
+  permission)
+    # Claude Code also fires PermissionRequest for AskUserQuestion; that is a
+    # question, not a tool permission.
+    if [ "$(json_str tool_name)" = AskUserQuestion ]; then CAUSE=question; else CAUSE=permission; fi
+    STATE=blocked ;;
+  ask) STATE=blocked CAUSE=question ;;
+  unblock) STATE=working CAUSE=unblock ;;
   notify)
     # idle_prompt is a TIMER, not a request: it fires a fixed interval after
     # any turn ends, including one that ended awaiting background work.
     # agent_completed announces that ONE background agent finished, which is not
     # the operator's turn while its siblings are still running. Both are
     # therefore gated on outstanding work — and both still land once none is
-    # left. Every other type — permission_prompt, agent_needs_input, … — is
-    # Claude Code saying it genuinely wants the operator, so it always lands.
+    # left. The blocked types — permission_prompt, agent_needs_input, … — are
+    # Claude Code saying it genuinely wants the operator, so they always land.
     NT=$(json_str notification_type)
-    if { [ "$NT" = idle_prompt ] || [ "$NT" = agent_completed ]; } && busy_live; then exit 0; fi
-    STATE=waiting ;;
-  start) STATE=waiting ;;
+    case "$NT" in
+      idle_prompt|agent_completed)
+        busy_live && exit 0
+        cur_state; [ "$CUR" = ready ] && exit 0
+        STATE=ready CAUSE=stop ;;
+      permission_prompt)
+        cur_state; [ "$CUR" = blocked ] && exit 0
+        STATE=blocked CAUSE=permission ;;
+      elicitation_dialog|elicitation_url_dialog) STATE=blocked CAUSE=elicitation ;;
+      agent_needs_input) STATE=blocked CAUSE=question ;;
+      *) exit 0 ;;
+    esac ;;
+  start) STATE=ready CAUSE=start ;;
   end) rm -f "$FILE"; rm -rf "$BUSY" 2>/dev/null; exit 0 ;;
   *) exit 0 ;;
 esac
@@ -134,4 +185,4 @@ mkdir -p "$DIR"
 # Self-prune markers for sessions that died without a SessionEnd. Depth-capped:
 # the busy tokens below have their own, far shorter, TTL.
 find "$DIR" -maxdepth 1 -type f -mtime +7 -exec rm -f {} + 2>/dev/null || true
-printf '%s:%s:%s\n' "$SESSION" "$STATE" "$(date +%s)" > "$FILE.$$.tmp" && mv "$FILE.$$.tmp" "$FILE"
+printf '%s:%s:%s:%s\n' "$SESSION" "$STATE" "$(date +%s)" "$CAUSE" > "$FILE.$$.tmp" && mv "$FILE.$$.tmp" "$FILE"
