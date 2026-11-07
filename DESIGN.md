@@ -220,7 +220,7 @@ The two functional accents are the theme-facing pair: the token names are semant
   active tab's lit legend, a working agent, a running job, focus glow on inputs. Amber Deep
   (#e09600, `--accent-deep`) for borders/edges of lit elements.
 - **Safety Orange** (#ff6a1a, `--commit`): operator action needed — the one committing key on
-  any surface (Unlock, Run on N boxes, Create), the agent-waiting chip, needs-interactive
+  any surface (Unlock, Run on N boxes, Create), the done/blocked chips (done = `--commit`, blocked = `--crit`, idle = `--dim`, working = `--accent`), needs-interactive
   states. Text on solid orange is near-black (#1a0e05, `--commit-ink`), and the key's material
   ramp has its own `--commit-*` tokens.
 

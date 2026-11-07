@@ -39,6 +39,7 @@ Configuration, secrets, and runtime state all live **inside the repo** (all giti
   | `fleet-scripts.json` | Fleet Command saved scripts | plaintext by design |
   | `fleet-jobs.json`, `setup-jobs.json`, `provision-jobs.json`, `proxmox-lifecycle-jobs.json`, `voice-jobs.json`, `apk-build-jobs.json` | job histories | — |
   | `health-events.json` | health event log | — |
+  | `agent-seen.json` | per box, per session: marker ts of the newest finished turn the operator has seen | — |
   | `ui-settings.json` | theme + working-agent animation | — |
   | `voice.json` | voice enable flag + model choice | — |
   | `icons/`, `app/`, `cm/` | scraped favicons; the published APK (served by `GET /api/devices/apk`, never committed); SSH ControlMaster sockets | — |
@@ -122,6 +123,9 @@ Cross-cutting invariants that tests alone have repeatedly failed to protect:
   provable identity change or explicit consent; a Proxmox vmid that now reports a different guest
   is `mismatch` and nothing is written back. The server derives a link's `kind` from the cluster,
   never from the request body.
+- **Seen is a client claim.** Only `POST /api/boxes/:id/agent-seen` from a visible, focused client
+  raises the watermark (a `done` becomes `idle` only then); tmux `attached` suppresses a
+  notification and never marks seen, and MCP reads never acknowledge.
 - **Never auto-promote best-effort phases.** Setup's seed/statusline/hooks/voice-link/script
   phases record their result and never fail the job; a failed setup never removes the box.
 - **Every web fetch goes through `http.ts`** (the 401 → login seam); `test/webHttp.test.js`
@@ -145,6 +149,9 @@ injected as arguments — that is what makes them testable without mocks. Follow
   each a one-line wrapper). `whenIdle()` is the shutdown flush seam; every store must be wired
   into `shutdown.js`'s `registerShutdownFlush` (SIGTERM/SIGINT), or a just-finished job reloads as
   `interrupted`.
+- `agentSeenStore.js` — `data/agent-seen.json`: per box, per session, the marker timestamp of the
+  newest finished turn a client has seen. Debounced, `0o600`, flushed on shutdown; a `ts` ahead of
+  the marker is refused.
 - `concurrency.js` — `mapWithConcurrency`, bounded parallelism for status sweeps and Fleet.
 - `jobOrder.js` — `newestFirst` job comparator. `pveTask.js` — `pollPveTask`, the shared PVE task
   poller.
@@ -290,13 +297,20 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   and `tmuxifier-agent-hook.sh`. Script text interpolates **nothing** (files arrive on stdin);
   the box decides via `command -v claude`; `settings.json` is merged in place (jq → node →
   python3), hooks remove-then-append so reruns are idempotent and the operator's hooks survive.
-  The hook writes `<session>:<state>:<epoch>` markers under `~/.tmuxifier-agent/`, the **sole**
-  source of agent state. Its background-work gate (`busy/<session>/` tokens: `sub.` bracketed by
-  SubagentStart/Stop with a 120min TTL, `bg.` from PreToolUse `Bash` with a ~2min TTL) keeps
-  `Stop`, `idle_prompt` and `agent_completed` from reading `waiting` while background work runs; a
-  `<task-notification>` resume clears only `bg.` tokens, the operator's own prompt clears all.
-  Fails open. Unit tests have twice been green while this was broken live — test against a real
-  event trace.
+  The hook writes `<session>:<state>:<epoch>:<cause>` markers under `~/.tmuxifier-agent/`, the
+  **sole** source of agent state. States `working|blocked|ready`; causes `prompt|resume|stop|start|
+  permission|question|elicitation|unblock`. Old three-field markers still parse (`waiting` reads as
+  a finished turn). `PermissionRequest` is the `blocked` writer (the moment Claude asks); a sibling
+  `blocked/<session>` records which agent (main or a subagent id) raised the block, so only that
+  agent's next tool call clears it, and a `PostToolUse` that matches no owner short-circuits to
+  `unblock` (two forks per tool call). A plain "No" to a permission prompt fires no hook, so the
+  session stays `blocked` until a prompt or Claude Code's idle timer. Its background-work gate
+  (`busy/<session>/` tokens: `sub.` bracketed by SubagentStart/Stop with a 120min TTL, `bg.` from
+  PreToolUse `Bash` with a ~2min TTL) keeps `Stop`, `idle_prompt` and `agent_completed` from
+  reading as a finished turn while background work runs; a `<task-notification>` resume clears only
+  `bg.` tokens, the operator's own prompt clears all. Fails open. Unit tests have twice been green
+  while this was broken live — test against a real event trace;
+  `test/fixtures/claude-hook-trace.jsonl` + `test/agentHooksReplay.test.js` is the acceptance test.
 - `claudeVoiceLink.js` / `voiceWriter.js` / `voiceLinks.js` — Claude Code `/voice` on a box.
   Setup makes ALSA `default` capture a FIFO via a marker-guarded `~/.asoundrc` (a foreign one is
   never touched); `~/.tmuxifier-voice/mic` is a symlink to `mic.fifo` while fed, `mic.absent`
@@ -322,9 +336,15 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   SSH volume is independent of open tabs; `probeOne` for on-demand refresh. Folds the Host Shell
   into history as `__local__` without putting it in the snapshot.
 - `healthHistory.js` / `healthEventsStore.js` — rolling samples per box and edge-triggered events
-  (down/up/needs-auth/threshold/agent-input/agent-done) in `data/health-events.json`; agent events
-  are suppressed while the session is attached. Agent state is hook-only; `agentPresent` (pane
-  based) only guards agent-done. `onEvent(cb)` is the push seam (`fcmPush.js`); browsers poll
+  (down/up/needs-auth/threshold/agent-blocked/agent-input/agent-done) in `data/health-events.json`.
+  Samples carry per-session `agents` (every tmux session with a Claude pane, plus the Host Shell as
+  `__local__`); displayed states are `working`, `blocked`, `done` (finished, not yet seen), `idle`.
+  The seen watermark (`markSeen`, fed by `agentSeenStore.js` via `POST /api/boxes/:id/agent-seen`)
+  turns `done` into `idle`. `agent-blocked` = "needs you: <cause>", `agent-input` = finished a turn
+  (`done`), `agent-done` = claude exited; events carry the session, are suppressed while that
+  session is attached, and a session's first appearance never notifies. Agent state is hook-only;
+  `agentPresent` (pane based) only guards agent-done. `onEvent(cb)` is the push seam
+  (`fcmPush.js`; `agent-blocked` pushes as "Claude needs you"); browsers poll
   `GET /api/health/events`.
 
 ### Fleet Command

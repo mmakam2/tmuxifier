@@ -62,38 +62,59 @@ opened. Events survive restarts in `data/health-events.json`; the sample series 
 only. Tune with `TMUXIFIER_HEALTH_HISTORY_MAX`, `TMUXIFIER_HEALTH_EVENTS_MAX`,
 `TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT`, and `TMUXIFIER_HEALTH_HYSTERESIS_PCT`.
 
-Tmuxifier also watches each box's configured tmux session for Claude Code and raises **claude is
-waiting for input** / **claude finished** (the pane is no longer running Claude Code) events into
-the same timeline — suppressed while you're actively attached to that session, since watching it
-is its own notification. The state shows in three places: the pane header chip, the standby
-dashboard's fleet strip, and a small working/waiting badge next to the box label in the
-sidebar. This is ground truth, and it is the **only** source: a small Claude
-Code hook on the box records working/waiting at the moment it changes, and the status probe
-reads that record — so the "waiting" alert fires on the next poll and never false-positives on
-a parked session. There is no output-based fallback: a claude on a box whose setup has not been
-rerun since the hook was introduced (or a claude started before the hook landed and not yet
-restarted) shows **no** working/waiting chip and raises no agent events — that silence means
-"tick the Claude Code checkbox in the box's Edit dialog, save, then restart claude in the
-session", not "the agent is fine".
+Tmuxifier also tracks Claude Code on **every tmux session** of a box that has a Claude pane (not
+just the configured one), and on the Host Shell. Each session is in one of four states:
+
+- **working** — Claude is on a turn.
+- **blocked** — Claude needs you. The cause is shown: `permission` (a permission prompt, reported
+  the moment Claude asks), `question` (AskUserQuestion, or a background agent asking), or
+  `elicitation` (an MCP elicitation dialog).
+- **done** — a turn finished and you haven't looked at it yet.
+- **idle** — the session just started, or a finished turn you have looked at.
+
+A `done` becomes `idle` only when a Tmuxifier client shows that pane in a visible, focused tab
+(phone: the pane being shown). A raw `ssh` + `tmux attach` never clears it, and Claude's idle
+timers never re-arm it. A plain "No" to a permission prompt fires no hook in Claude Code, so the
+session reads `blocked` until you type a prompt or Claude Code's idle timer fires (about a minute).
+
+The state shows in several places. The sidebar badge beside each box shows its worst state
+(`blocked > done > working > idle`), with ` ×N` when several sessions carry a state and a tooltip
+listing them. The **attention strip** above the box list shows counts (`2 need you · 3 working ·
+1 done`); each segment filters the list to boxes with any session in that state (click again to
+clear; it expands collapsed groups). The standby dashboard has an **Agents** board with Needs you /
+Working / Done / Idle columns, and a card opens that box on that session. The session picker shows
+each session's state, and the pane header chip reads `working`, `blocked · <cause>`, `done` or
+`idle`. This is ground truth and the **only** source: a small Claude Code hook on the box records
+the state at the moment it changes, and the status probe reads that record. There is no
+output-based fallback. A box whose setup hasn't been rerun since the hook was upgraded (or a
+claude started before and not yet restarted) shows `done`/`idle` but **never** `blocked` — that
+silence means "tick the Claude Code checkbox in the box's Edit dialog, save, then restart claude in
+each session".
+
+Three event kinds go into the same timeline, each carrying its session: **claude needs you:
+<cause>** (blocked), **claude finished a turn** (done), and **claude exited**. All three are
+suppressed while you're attached to that session, since watching it is its own notification, and a
+session's first appearance never notifies. The first is also pushed to the Android app as "Claude
+needs you". Seen state is saved on the host in `data/agent-seen.json`.
 
 The working chip carries a small animated indicator — Clawd, the Claude Code mascot, or the CLI's
 own star spinner. **Settings → Appearance** picks between six modes: Off (no indicator at all),
 Static Clawd, CLI star (the default), Wiggle, Pace, and Big hop. The choice is saved on the
 Tmuxifier host, so every browser you sign in from follows it (see [Appearance](#appearance)), and
 the sidebar badge, pane chips, and dashboard fleet strip all pick it up on their next status
-refresh. Waiting chips
-stay still on purpose — stillness plus orange is what makes it read as your turn — and a browser
+refresh. Blocked chips
+stay still on purpose — stillness plus red is what makes it read as your turn — and a browser
 asking for reduced motion holds every mode on a single frame.
 
 The **Host Shell** takes part in this too, once you tick **Install Claude Code hooks** in its ✎
 dialog (see [Terminal features](terminal.md)). A claude running inside the host shell's tmux
-session raises the same two events, labelled "Host Shell", and they are suppressed the same way
+session raises the same events, labelled "Host Shell", and they are suppressed the same way
 while you're attached to that terminal; the state shows as a badge beside the **Host Shell**
 button and as the usual pane header chip. Agent events are the *only* kind it can raise — the
 host shell isn't probed over SSH, so it never reports down/recovered or CPU/memory/disk
 thresholds and has no card on the standby dashboard's fleet strip.
 
-Browser notifications for these agent events and for the box-health events above can be toggled
+Browser notifications for these agent events (a separate toggle for each kind, including the new blocked one, on by default) and for the box-health events above can be toggled
 per kind in **Settings → Notifications**: per-browser, and they only fire once you grant the browser's
 notification permission (which itself requires an HTTPS dashboard). All events always appear in
 the events log regardless of which kinds have notifications enabled.

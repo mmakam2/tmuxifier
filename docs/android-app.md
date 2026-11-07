@@ -43,7 +43,8 @@ Sign out only forgets the token locally.
 ## Screens
 
 - **Fleet** — box cards (status dot, distro + cores, RAM + disk, agent chip with "waiting 4m"
-  durations), waiting agents sorted to the top. Polls every 10 s while open; never in the
+  durations), waiting agents sorted to the top (the app shows a chip only for states it knows; the
+  new blocked/done/idle states arrive with issue #5). Polls every 10 s while open; never in the
   background. Tap a card to open its session. **Long-press** a card for its session sheet:
   every tmux session on the box with its windows beneath it, a ✓ on the one you're looking
   at. Tap a row to switch the box to that session or window, `×` to kill it (two taps — the
@@ -79,7 +80,7 @@ Push is **fully per-instance**: nothing Firebase is baked into the APK. Your ser
 app your own Firebase project's client config (`TMUXIFIER_FCM_APP_CONFIG`) and sends through
 your own service account (`TMUXIFIER_FCM_CREDENTIALS`) — see `android/README.md` for the
 four-step setup. With both set, an agent flipping to **waiting** (or finishing) buzzes the
-phone even when locked —
+phone ("Claude needs you" pushes for the new blocked state already arrive; the app's own states follow issue #5) even when locked —
 suppressed while that session is attached in a browser, and filtered by the per-kind toggles.
 Tapping the notification opens that box's session directly.
 
@@ -88,7 +89,7 @@ delivery path. On a de-googled phone (GrapheneOS, CalyxOS, LineageOS without GAp
 else works unchanged: the app is plain HTTPS polling of your server, and with no Firebase
 config on the server it never touches the messaging library. Leave `TMUXIFIER_FCM_APP_CONFIG`
 unset for such a deployment rather than pointing it at a project the phone can't register
-with; the fleet glance's waiting-first sort is the no-push way to see who needs you. A
+with; the fleet glance's waiting-first sort (until the app learns the new states, issue #5) is the no-push way to see who needs you. A
 Google-free sender (UnifiedPush/ntfy) is a planned follow-up, not a current feature.
 
 ## Building and releasing
