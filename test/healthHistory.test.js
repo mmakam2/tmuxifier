@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { sampleOf, classifyTransitions, initThresholdState, createHealthHistory } from '../src/server/healthHistory.js';
+import { sampleOf, deriveAgentState, classifyTransitions, initThresholdState, createHealthHistory } from '../src/server/healthHistory.js';
 import { parseTmuxSessions } from '../src/server/status.js';
 
 const TH = { cpu: 90, mem: 90, disk: 90, hysteresis: 5 };
@@ -198,7 +198,7 @@ test('sampleOf: no box clock changes nothing — the marker is the only source e
   const noMeta = withAgent({ metrics: undefined });
   expect(sampleOf(noMeta, 5, AGENT).agent).toBeUndefined();
   expect(sampleOf(noMeta, 5, AGENT).agentPresent).toBe(true);
-  const marked = withAgent({ metrics: undefined, agentMarks: { web: { state: 'working', ts: 990 } } });
+  const marked = withAgent({ metrics: undefined, agentMarks: { web: { state: 'working', cause: 'prompt', ts: 990 } } });
   expect(sampleOf(marked, 5, AGENT).agent).toBe('working');
 });
 
@@ -241,12 +241,12 @@ test('multi-viewer tmux session (#{session_attached} >= 2) suppresses agent-inpu
   const working2 = {
     reachable: true,
     sessions: parseTmuxSessions('web:1:2:1000:claude\n'),
-    agentMarks: { web: { state: 'working', ts: 990 } },
+    agentMarks: { web: { state: 'working', cause: 'prompt', ts: 990 } },
   };
   const waiting2 = {
     reachable: true,
     sessions: parseTmuxSessions('web:1:2:1005:claude\n'),
-    agentMarks: { web: { state: 'waiting', ts: 1005 } },
+    agentMarks: { web: { state: 'ready', cause: 'stop', ts: 1005 } },
   };
   const exited2 = {
     reachable: true,
@@ -349,28 +349,62 @@ test('a working->waiting edge with no prior history still fires (restart toleran
 
 test('sampleOf: the marker is the sole source of working/waiting, regardless of output timing', () => {
   // Marker says waiting although output is fresh (the parked-pane blip shape).
-  const busy = withAgent({ agentMarks: { web: { state: 'waiting', ts: 990 } } });
+  const busy = withAgent({ agentMarks: { web: { state: 'ready', cause: 'stop', ts: 990 } } });
   const s1 = sampleOf(busy, 5, AGENT);
-  expect(s1.agent).toBe('waiting');
+  expect(s1.agent).toBe('done');
   expect(s1.agentPresent).toBe(true);
   // Marker says working although output has been quiet for ages.
   const quiet = withAgent({
     sessions: [{ name: 'web', attached: false, activity: 100, paneCmd: 'claude' }],
-    agentMarks: { web: { state: 'working', ts: 90 } },
+    agentMarks: { web: { state: 'working', cause: 'prompt', ts: 90 } },
   });
   expect(sampleOf(quiet, 5, AGENT).agent).toBe('working');
 });
 
 test('sampleOf: a marker for another session is ignored, and a stale marker for an exited claude is inert', () => {
-  const otherSession = withAgent({ agentMarks: { ops: { state: 'waiting', ts: 990 } } });
+  const otherSession = withAgent({ agentMarks: { ops: { state: 'ready', cause: 'stop', ts: 990 } } });
   const s = sampleOf(otherSession, 5, AGENT);
   expect(s.agent).toBeUndefined();          // no marker for THIS session → no state
   expect(s.agentPresent).toBe(true);
   const noClaude = withAgent({
     sessions: [{ name: 'web', attached: false, activity: 100, paneCmd: 'bash' }],
-    agentMarks: { web: { state: 'working', ts: 90 } },
+    agentMarks: { web: { state: 'working', cause: 'prompt', ts: 90 } },
   });
   const dead = sampleOf(noClaude, 5, AGENT);
   expect(dead.agent).toBeUndefined();       // paneCmd gate: marker without a claude pane is inert
   expect(dead.agentPresent).toBeUndefined();
+});
+
+test('deriveAgentState: start is idle, stop is done until seen, blocked and working pass through', () => {
+  expect(deriveAgentState({ state: 'working', cause: 'prompt', ts: 10 })).toBe('working');
+  expect(deriveAgentState({ state: 'blocked', cause: 'permission', ts: 10 })).toBe('blocked');
+  expect(deriveAgentState({ state: 'ready', cause: 'start', ts: 10 })).toBe('idle');
+  expect(deriveAgentState({ state: 'ready', cause: 'stop', ts: 10 })).toBe('done');
+  expect(deriveAgentState({ state: 'ready', cause: 'stop', ts: 10 }, 9)).toBe('done');
+  expect(deriveAgentState({ state: 'ready', cause: 'stop', ts: 10 }, 10)).toBe('idle');
+});
+
+test('sampleOf builds a per-session agents map and keeps the legacy agent field for the configured session', () => {
+  const status = { reachable: true, tmux: true,
+    sessions: [
+      { name: 'web', windows: 1, attached: false, paneCmd: 'claude' },
+      { name: 'web-2', windows: 1, attached: true, paneCmd: 'claude' },
+      { name: 'build', windows: 1, attached: false, paneCmd: 'zsh' },
+      { name: 'bad name', windows: 1, attached: false, paneCmd: 'claude' },
+      { name: 'nomark', windows: 1, attached: false, paneCmd: 'claude' },
+    ],
+    agentMarks: { web: { state: 'ready', cause: 'stop', ts: 50 }, 'web-2': { state: 'blocked', cause: 'permission', ts: 60 }, 'bad name': { state: 'working', cause: 'prompt', ts: 1 }, stale: { state: 'working', cause: 'prompt', ts: 1 } } };
+  const s = sampleOf(status, 1, { sessionName: 'web', seenOf: (name) => (name === 'web' ? 50 : undefined) });
+  expect(s.agents).toEqual({
+    web: { present: true, attached: false, state: 'idle', cause: 'stop', ts: 50 },
+    'web-2': { present: true, attached: true, state: 'blocked', cause: 'permission', ts: 60 },
+    nomark: { present: true, attached: false },
+  });
+  expect(s.agent).toBe('idle');
+  expect(s.agentPresent).toBe(true);
+});
+
+test('sampleOf: a failed probe carries no agents map at all; an empty session list carries an empty one', () => {
+  expect('agents' in sampleOf({ reachable: false }, 1)).toBe(false);
+  expect(sampleOf({ reachable: true, sessions: [] }, 1).agents).toEqual({});
 });

@@ -1,9 +1,23 @@
+import { SESSION_NAME_RE } from './sshCommand.js';
+
 // Mirrors src/web/statusDot.ts `cpuLoadPct`: normalize load average by core count
 // to a percent, only usable when both are present. Kept in sync by hand (server
 // is .js, that helper is .ts) — the display and the sample must read the same.
 function cpuLoadPct(m) {
   if (!m || m.load1 == null || !m.cpus) return undefined;
   return Math.round((m.load1 / m.cpus) * 100);
+}
+
+export const AGENT_STATES = ['working', 'blocked', 'done', 'idle'];
+
+// Marker -> displayed state. `seenTs` is the operator's seen watermark for the
+// session (undefined = never seen).
+export function deriveAgentState(mark, seenTs) {
+  if (mark.state === 'working') return 'working';
+  if (mark.state === 'blocked') return 'blocked';
+  if (mark.cause === 'start') return 'idle';
+  if (seenTs != null && mark.ts <= seenTs) return 'idle';
+  return 'done';
 }
 
 // Project a status result (from the poll snapshot) into the compact numbers a
@@ -35,29 +49,55 @@ export function sampleOf(status, at, opts = {}) {
       : (m.diskTotalKb && m.diskUsedKb != null ? Math.round((m.diskUsedKb / m.diskTotalKb) * 100) : undefined);
     if (disk != null) sample.diskPct = disk;
   }
-  // Agent state for the box's configured session only (opts.sessionName).
-  // Hook-only statusing: `agent` (working/waiting) comes exclusively from the
-  // on-box Claude Code hook's marker (claudeAgentHooks.js) — pane output
-  // timing is never consulted, so a claude pane with no marker carries no
-  // agent state at all (the deliberate cue that the box needs a setup rerun).
-  // PRESENCE stays pane-based: `agentPresent` is set whenever the pane runs
-  // claude, marker or not. It drives nothing visible; its sole consumer is
-  // the agent-done edge, where it keeps a one-poll marker gap (a claude
-  // restarting in place — SessionEnd deleted the marker, SessionStart hasn't
-  // rewritten it yet) from reading as the agent exiting. A stale marker for
-  // an exited claude stays inert behind the same paneCmd gate.
-  // agentAttached is a SESSION property, set whenever the configured session
+  // Per-session agents. When the probe listed sessions, `sample.agents` is set
+  // (possibly {}), keyed by session name, one entry per session whose pane runs
+  // claude (`present`) and whose name passes SESSION_NAME_RE. A session with an
+  // unroundtrippable name is left out: every downstream route validates names
+  // and would reject it, so it must not become a key anyone acts on.
+  // `state`/`cause`/`ts` appear only when the on-box Claude Code hook wrote a
+  // marker (claudeAgentHooks.js) — hook-only statusing: pane output timing is
+  // never consulted, so a claude pane with no marker carries no state (the
+  // deliberate cue that the box needs a setup rerun). A marker for a session
+  // that is not listed, or whose pane is not claude, is stale and inert.
+  // The displayed state comes from deriveAgentState with the caller's seen
+  // watermark (`seenOf(session)`): `ready/stop` is `done` until the operator
+  // has looked at that turn's end, `ready/start` is `idle` (nothing finished,
+  // so nothing to acknowledge). The watermark is compared against the marker's
+  // own ts and never against a clock, so time passing can never re-arm `done`;
+  // only a new marker (a later ts) can.
+  // Legacy fields for the box's configured session (opts.sessionName):
+  // `agent` = agents[sessionName]?.state; `agentPresent` stays pane-based and
+  // its sole consumer is the agent-done edge, where it keeps a one-poll marker
+  // gap (claude restarting in place) from reading as the agent exiting.
+  // `agentAttached` is a SESSION property, set whenever the configured session
   // exists, so suppression still sees attachment on the sample where claude
   // has already exited.
-  const { sessionName } = opts;
-  if (sessionName && Array.isArray(s.sessions)) {
-    const sess = s.sessions.find((x) => x.name === sessionName);
-    if (sess) {
-      sample.agentAttached = !!sess.attached;
-      if (/^claude(-|$)/.test(String(sess.paneCmd || ''))) {
-        sample.agentPresent = true;
-        const mark = s.agentMarks && s.agentMarks[sessionName];
-        if (mark) sample.agent = mark.state;
+  const { sessionName, seenOf } = opts;
+  if (Array.isArray(s.sessions)) {
+    const agents = {};
+    for (const sess of s.sessions) {
+      if (!sess || !SESSION_NAME_RE.test(String(sess.name))) continue;
+      if (!/^claude(-|$)/.test(String(sess.paneCmd || ''))) continue;
+      const entry = { present: true, attached: !!sess.attached };
+      const mark = s.agentMarks && s.agentMarks[sess.name];
+      if (mark) {
+        const seen = typeof seenOf === 'function' ? seenOf(sess.name) : undefined;
+        entry.state = deriveAgentState(mark, seen);
+        entry.cause = mark.cause;
+        entry.ts = mark.ts;
+      }
+      agents[sess.name] = entry;
+    }
+    sample.agents = agents;
+    if (sessionName) {
+      const sess = s.sessions.find((x) => x.name === sessionName);
+      if (sess) {
+        sample.agentAttached = !!sess.attached;
+        if (/^claude(-|$)/.test(String(sess.paneCmd || ''))) {
+          sample.agentPresent = true;
+          const st = agents[sessionName] && agents[sessionName].state;
+          if (st) sample.agent = st;
+        }
       }
     }
   }
