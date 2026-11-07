@@ -32,12 +32,12 @@ test('hook script → marker file → PROBE_REMOTE → parseAgentMarks round tri
     await new Promise((r) => setTimeout(r, 200));
     content = await fs.readFile(marker, 'utf8').catch(() => '');
   }
-  expect(content).toMatch(/^agenthooks:waiting:\d+\n$/);
+  expect(content).toMatch(/^agenthooks:ready:\d+:stop\n$/);
   // Full probe over real ssh: the marker line and the session line coexist.
   const res = await sshRun(['-F', lb.sshConfigFile, lb.box.host, PROBE_REMOTE], { env: lb.env });
   const marks = parseAgentMarks(res.stdout);
   expect(marks).toBeTruthy();
-  expect(marks.agenthooks).toMatchObject({ state: 'waiting' });
+  expect(marks.agenthooks).toMatchObject({ state: 'ready', cause: 'stop' });
   // The same probe pins WINDOW_FMT against REAL tmux. Every other window test
   // feeds parseTmuxWindows a hand-written __WIN__ line, so a wrong field order or
   // a specifier that expands differently from what we assume would pass all of
