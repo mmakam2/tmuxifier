@@ -300,15 +300,19 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   The hook writes `<session>:<state>:<epoch>:<cause>` markers under `~/.tmuxifier-agent/`, the
   **sole** source of agent state. States `working|blocked|ready`; causes `prompt|resume|stop|start|
   permission|question|elicitation|unblock`. Old three-field markers still parse (`waiting` reads as
-  a finished turn). `PermissionRequest` is the primary `permission` writer (fires the moment Claude asks);
+  a finished turn); until setup is rerun and claude restarted, the old hook rewrites `waiting` with a
+  fresh ts on every notification (incl. the ~60s idle timer), so an acknowledged `done` re-arms within
+  a minute, and session start reads `done`, not `idle`. `PermissionRequest` is the primary `permission` writer (fires the moment Claude asks);
   `Notification` `permission_prompt` is a backstop that never downgrades an existing block; `ask`
   (PreToolUse AskUserQuestion) and the elicitation / `agent_needs_input` notifications also write
   `blocked`; a sibling
   `blocked/<session>` records which agent (main or a subagent id) raised the block, so only that
   agent's next tool call clears it, and `unblock` (PostToolUse and PostToolUseFailure) exits before reading stdin
   unless the marker is `blocked` (two forks, `sh` and `tmux`, per tool call); on a blocked marker it
-  writes `working/unblock` only when the payload's `agent_id` matches the recorded owner. A plain "No" to a permission prompt fires no hook, so the
-  session stays `blocked` until a prompt or Claude Code's idle timer. Its background-work gate
+  writes `working/unblock` only when the payload's `agent_id` matches the recorded owner. `idle_prompt`/`agent_completed` write `ready/stop` only over a `working`
+  marker — timers never clear `blocked` — so a plain "No" to a permission prompt (which fires no hook)
+  stays `blocked` until the operator's next prompt or Claude's next tool call, and a granted
+  permission stays `blocked` until that tool's PostToolUse. Its background-work gate
   (`busy/<session>/` tokens: `sub.` bracketed by SubagentStart/Stop with a 120min TTL, `bg.` from
   PreToolUse `Bash` with a ~2min TTL) keeps `Stop`, `idle_prompt` and `agent_completed` from
   reading as a finished turn while background work runs; a `<task-notification>` resume clears only

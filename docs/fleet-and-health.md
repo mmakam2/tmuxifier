@@ -74,8 +74,11 @@ just the configured one), and on the Host Shell. Each session is in one of four 
 
 A `done` becomes `idle` only when a Tmuxifier client shows that pane in a visible, focused tab
 (phone: the pane being shown). A raw `ssh` + `tmux attach` never clears it, and Claude's idle
-timers never re-arm it. A plain "No" to a permission prompt fires no hook in Claude Code, so the
-session reads `blocked` until you type a prompt or Claude Code's idle timer fires (about a minute).
+timers never re-arm it. Claude Code's idle timers only ever end a `working` turn: they never clear
+`blocked`, so a permission dialog left open stays `blocked` however long nobody answers. A plain
+"No" to a permission prompt fires no hook in Claude Code, so the session reads `blocked` until you
+type a prompt or Claude makes its next tool call. A granted permission stays `blocked` until that
+tool finishes; a long build reads Needs you for its duration.
 
 The state shows in several places. The sidebar badge beside each box shows its worst state
 (`blocked > done > working > idle`), with ` ×N` when several sessions carry a state and a tooltip
@@ -89,7 +92,9 @@ the state at the moment it changes, and the status probe reads that record. Ther
 output-based fallback. A box whose setup hasn't been rerun since the hook was upgraded (or a
 claude started before and not yet restarted) shows `done`/`idle` but **never** `blocked` — that
 silence means "tick the Claude Code checkbox in the box's Edit dialog, save, then restart claude in
-each session".
+each session". Until then the old hook also rewrites its marker with a fresh timestamp on every Claude Code
+notification, including the ~60-second idle timer, so a `done` you have already looked at can come
+back within a minute; and a session that just started reads `done`, not `idle`.
 
 Three event kinds go into the same timeline, each carrying its session: **claude needs you:
 <cause>** (blocked), **claude finished a turn** (done), and **claude exited**. All three are
