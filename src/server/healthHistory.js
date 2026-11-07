@@ -50,8 +50,10 @@ export function sampleOf(status, at, opts = {}) {
     if (disk != null) sample.diskPct = disk;
   }
   // Per-session agents. When the probe listed sessions, `sample.agents` is set
-  // (possibly {}), keyed by session name, one entry per session whose pane runs
-  // claude (`present`) and whose name passes SESSION_NAME_RE. A session with an
+  // (possibly {}), keyed by session name, one entry per LISTED session whose
+  // name passes SESSION_NAME_RE: `present` is whether its pane runs claude. A
+  // non-claude session still appears (`present: false`) so the agent-done edge
+  // can see its attachment on the very sample where claude has exited. A session with an
   // unroundtrippable name is left out: every downstream route validates names
   // and would reject it, so it must not become a key anyone acts on.
   // `state`/`cause`/`ts` appear only when the on-box Claude Code hook wrote a
@@ -77,8 +79,9 @@ export function sampleOf(status, at, opts = {}) {
     const agents = {};
     for (const sess of s.sessions) {
       if (!sess || !SESSION_NAME_RE.test(String(sess.name))) continue;
-      if (!/^claude(-|$)/.test(String(sess.paneCmd || ''))) continue;
-      const entry = { present: true, attached: !!sess.attached };
+      const present = /^claude(-|$)/.test(String(sess.paneCmd || ''));
+      const entry = { present, attached: !!sess.attached };
+      if (!present) { agents[sess.name] = entry; continue; }
       const mark = s.agentMarks && s.agentMarks[sess.name];
       if (mark) {
         const seen = typeof seenOf === 'function' ? seenOf(sess.name) : undefined;
@@ -156,7 +159,7 @@ export function classifyTransitions(prev, next, thresholds, state) {
   // A session with no previous entry (first appearance, restart) emits nothing.
   //   agent-blocked: working|done|idle -> blocked (carries `cause`)
   //   agent-input:   working|blocked   -> done
-  //   agent-done:    had a state, now absent from the map (claude exited)
+  //   agent-done:    had a state, now absent from the map or no longer present (claude exited)
   // Hook state is the sole source (a single-poll edge is a real transition; the
   // box's own background-work gate in claudeAgentHooks.js keeps `Stop` pauses
   // awaiting background work from reading as done, so there is no settle window
@@ -179,12 +182,18 @@ export function classifyTransitions(prev, next, thresholds, state) {
     }
     if (next.up && !next.stopped) {
       for (const [session, was] of Object.entries(before)) {
-        if (!was.state || was.attached || next.agents[session]) continue;
+        const now = next.agents[session];
+        if (!was.state || was.attached || (now && (now.present || now.attached))) continue;
         events.push({ kind: 'agent-done', session });
       }
     }
     st.agents = next.agents;
   }
+  // A confirmed-stopped guest is a positive observation that nothing runs: reset
+  // the map so the first probe after start is a first appearance, not a stale
+  // agent-done. (A plain down -> up keeps the map: a claude that vanished across
+  // a reboot does fire.)
+  if (next.stopped) st.agents = {};
 
   // mem / disk: immediate crossing with hysteresis clear
   for (const metric of ['mem', 'disk']) {

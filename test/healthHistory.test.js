@@ -294,15 +294,34 @@ test('multi-viewer tmux session (#{session_attached} >= 2) suppresses agent-inpu
   expect(run(0).map((e) => e.kind).sort()).toEqual(['agent-done', 'agent-input']);
 });
 
-test('agent-done fires when the session leaves the map on an up box, detached', () => {
-  const w = A({ web: E('working') });
-  expect(classifyTransitions(A({}), A({}), TH, seeded(w.agents)).events).toEqual([{ kind: 'agent-done', session: 'web' }]);
-  // suppressed if EITHER end of the edge was attached (watching = no ping)
-  expect(classifyTransitions(A({}), A({}), TH, seeded({ web: E('working', { attached: true }) })).events).toEqual([]);
+test('agent-done fires when claude exits on an up box, and either end attached silences it', () => {
+  const mk = (viewers, cmd) => ({ reachable: true, sessions: parseTmuxSessions(`web:1:${viewers}:1010:${cmd}\n`) });
+  const working = (viewers) => ({ reachable: true, sessions: parseTmuxSessions(`web:1:${viewers}:1000:claude\n`), agentMarks: { web: { state: 'working', cause: 'prompt', ts: 990 } } });
+  const run = (v0, v1) => classifyTransitions(sampleOf(working(v0), 5, {}), sampleOf(mk(v1, 'zsh'), 5, {}), TH, seeded(sampleOf(working(v0), 5, {}).agents)).events;
+  expect(run(0, 0)).toEqual([{ kind: 'agent-done', session: 'web' }]);
+  expect(run(1, 0)).toEqual([]); // prev attached
+  expect(run(0, 1)).toEqual([]); // next attached (session listed, pane now zsh)
+  // and the session vanishing entirely still fires
+  expect(classifyTransitions(A({}), A({}), TH, seeded({ web: E('working') })).events).toEqual([{ kind: 'agent-done', session: 'web' }]);
 });
 
-test('stopping a Proxmox box does not fire a false agent-done', () => {
-  expect(classifyTransitions(A({}), { up: true, stopped: true, agents: {} }, TH, seeded({ web: E('working') })).events).toEqual([]);
+test('stopping then starting a Proxmox box fires no stale agent-done', () => {
+  const ready = { reachable: true, sessions: parseTmuxSessions('web:1:0:1000:claude\n'), agentMarks: { web: { state: 'ready', cause: 'stop', ts: 990 } } };
+  const samples = [ready, { proxmoxState: 'stopped' }, { reachable: true, sessions: [] }].map((x) => sampleOf(x, 5, {}));
+  const st = classifyTransitions(null, samples[0], TH, initThresholdState()).state;
+  let r = classifyTransitions(samples[0], samples[1], TH, st);
+  expect(r.events.map((e) => e.kind)).not.toContain('agent-done');
+  r = classifyTransitions(samples[1], samples[2], TH, r.state);
+  expect(r.events.map((e) => e.kind)).not.toContain('agent-done');
+});
+
+test('a plain down -> up keeps the previous map, so a claude gone across a reboot fires agent-done', () => {
+  const ready = sampleOf({ reachable: true, sessions: parseTmuxSessions('web:1:0:1000:claude\n'), agentMarks: { web: { state: 'ready', cause: 'stop', ts: 990 } } }, 5, {});
+  const down = sampleOf({ reachable: false }, 5, {});
+  const back = sampleOf({ reachable: true, sessions: [] }, 5, {});
+  const st = classifyTransitions(null, ready, TH, initThresholdState()).state;
+  const r = classifyTransitions(ready, down, TH, st);
+  expect(classifyTransitions(down, back, TH, r.state).events.map((e) => e.kind)).toEqual(['up', 'agent-done']);
 });
 
 test('agent kinds never fire on the first sample (no prev)', () => {
@@ -400,6 +419,7 @@ test('sampleOf builds a per-session agents map and keeps the legacy agent field 
     web: { present: true, attached: false, state: 'idle', cause: 'stop', ts: 50 },
     'web-2': { present: true, attached: true, state: 'blocked', cause: 'permission', ts: 60 },
     nomark: { present: true, attached: false },
+    build: { present: false, attached: false },
   });
   expect(s.agent).toBe('idle');
   expect(s.agentPresent).toBe(true);
