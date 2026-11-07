@@ -218,133 +218,134 @@ test('sampleOf carries the configured session attached flag even without a claud
   expect(sampleOf(withAgent({ sessions: [{ name: 'web', attached: false, activity: 940, paneCmd: 'zsh' }] }), 5, AGENT).agent).toBeUndefined();
 });
 
-test('classifyTransitions emits agent-input on working->waiting when detached, once', () => {
-  const th = TH;
-  const w = { up: true, agent: 'working', agentAttached: false };
-  const idle = { up: true, agent: 'waiting', agentAttached: false };
-  const r1 = classifyTransitions(w, idle, th, initThresholdState());
-  expect(r1.events).toContainEqual({ kind: 'agent-input' });
-  // still waiting → no re-fire
-  const r2 = classifyTransitions(idle, idle, th, r1.state);
-  expect(r2.events).not.toContainEqual({ kind: 'agent-input' });
+const A = (agents) => ({ up: true, agents });
+const E = (state, extra = {}) => ({ present: true, attached: false, state, ts: 1, ...extra });
+
+test('agent edges run per session and carry the session name', () => {
+  let st = initThresholdState();
+  let r = classifyTransitions(A({ web: E('working'), 'web-2': E('working') }), A({ web: E('working'), 'web-2': E('working') }), TH, st); st = r.state;
+  r = classifyTransitions(A({}), A({ web: E('blocked', { cause: 'permission' }), 'web-2': E('done') }), TH, st);
+  expect(r.events).toEqual([{ kind: 'agent-blocked', session: 'web', cause: 'permission' }, { kind: 'agent-input', session: 'web-2' }]);
 });
 
-test('classifyTransitions suppresses agent-input while attached', () => {
-  const w = { up: true, agent: 'working', agentAttached: true };
-  const idle = { up: true, agent: 'waiting', agentAttached: true };
-  expect(classifyTransitions(w, idle, TH, initThresholdState()).events).not.toContainEqual({ kind: 'agent-input' });
+test('first appearance of a session emits nothing, even when it appears blocked', () => {
+  const r = classifyTransitions(A({}), A({ web: E('blocked', { cause: 'permission' }) }), TH, initThresholdState());
+  expect(r.events).toEqual([]);
+});
+
+test('a failed probe does not replace the previous map, so the box coming back is not a first appearance', () => {
+  let st = initThresholdState();
+  st = classifyTransitions(A({}), A({ web: E('working') }), TH, st).state;
+  st = classifyTransitions(A({ web: E('working') }), { up: false }, TH, st).state;   // no agents key
+  const r = classifyTransitions({ up: false }, A({ web: E('done') }), TH, st);
+  expect(r.events).toEqual([{ kind: 'up' }, { kind: 'agent-input', session: 'web' }]); // reachability edge first, as today
+});
+
+test('blocked → done without a working in between still fires agent-input', () => {
+  let st = initThresholdState();
+  st = classifyTransitions(A({}), A({ web: E('blocked') }), TH, st).state;
+  expect(classifyTransitions(A({}), A({ web: E('done') }), TH, st).events).toEqual([{ kind: 'agent-input', session: 'web' }]);
+});
+
+test('attached suppresses agent-blocked and agent-input but is not a seen mark (the state stays done)', () => {
+  let st = initThresholdState();
+  st = classifyTransitions(A({}), A({ web: E('working') }), TH, st).state;
+  expect(classifyTransitions(A({}), A({ web: E('done', { attached: true }) }), TH, st).events).toEqual([]);
+});
+
+test('a marker gap with the claude pane still present fires no agent-done; an exited claude does', () => {
+  let st = initThresholdState();
+  st = classifyTransitions(A({}), A({ web: E('done') }), TH, st).state;
+  expect(classifyTransitions(A({}), A({ web: { present: true, attached: false } }), TH, st).events).toEqual([]);
+  expect(classifyTransitions(A({}), A({}), TH, st).events).toEqual([{ kind: 'agent-done', session: 'web' }]);
+});
+
+test('a persisting blocker emits once', () => {
+  let st = initThresholdState();
+  st = classifyTransitions(A({}), A({ web: E('working') }), TH, st).state;
+  let r = classifyTransitions(A({}), A({ web: E('blocked', { cause: 'question' }) }), TH, st); st = r.state;
+  expect(r.events).toHaveLength(1);
+  expect(classifyTransitions(A({}), A({ web: E('blocked', { cause: 'question' }) }), TH, st).events).toEqual([]);
+});
+
+const seeded = (agents) => ({ ...initThresholdState(), agents });
+
+test('agent-input fires once on working to done when detached', () => {
+  const r1 = classifyTransitions(A({}), A({ web: E('done') }), TH, seeded({ web: E('working') }));
+  expect(r1.events).toContainEqual({ kind: 'agent-input', session: 'web' });
+  const r2 = classifyTransitions(A({}), A({ web: E('done') }), TH, r1.state);
+  expect(r2.events).toEqual([]);
 });
 
 test('multi-viewer tmux session (#{session_attached} >= 2) suppresses agent-input and agent-done', () => {
-  const h = createHealthHistory({});
   const box = { id: 'b1', label: 'web-01', host: 'h1', sessionName: 'web' };
-  const working2 = {
-    reachable: true,
-    sessions: parseTmuxSessions('web:1:2:1000:claude\n'),
-    agentMarks: { web: { state: 'working', cause: 'prompt', ts: 990 } },
+  const run = (viewers) => {
+    const h = createHealthHistory({});
+    const working = { reachable: true, sessions: parseTmuxSessions(`web:1:${viewers}:1000:claude\n`), agentMarks: { web: { state: 'working', cause: 'prompt', ts: 990 } } };
+    const done = { reachable: true, sessions: parseTmuxSessions(`web:1:${viewers}:1005:claude\n`), agentMarks: { web: { state: 'ready', cause: 'stop', ts: 1005 } } };
+    const exited = { reachable: true, sessions: parseTmuxSessions(`web:1:${viewers}:1010:zsh\n`) };
+    h.record({ b1: working }, [box]);
+    h.record({ b1: done }, [box]);
+    h.record({ b1: exited }, [box]);
+    return h.getEvents({}).events;
   };
-  const waiting2 = {
-    reachable: true,
-    sessions: parseTmuxSessions('web:1:2:1005:claude\n'),
-    agentMarks: { web: { state: 'ready', cause: 'stop', ts: 1005 } },
-  };
-  const exited2 = {
-    reachable: true,
-    sessions: parseTmuxSessions('web:1:2:1010:zsh\n'),
-  };
-  h.record({ b1: working2 }, [box]);
-  h.record({ b1: waiting2 }, [box]);
-  h.record({ b1: exited2 }, [box]);
-  expect(h.getEvents({}).events).toEqual([]);
+  expect(run(2)).toEqual([]);
+  // the same transitions with nobody attached DO fire, so the line above proves suppression
+  expect(run(0).map((e) => e.kind).sort()).toEqual(['agent-done', 'agent-input']);
 });
 
-test('classifyTransitions emits agent-done when the agent disappears on an up box, detached', () => {
-  const w = { up: true, agent: 'working', agentAttached: false };
-  const gone = { up: true, agentAttached: false };
-  expect(classifyTransitions(w, gone, TH, initThresholdState()).events).toContainEqual({ kind: 'agent-done' });
+test('agent-done fires when the session leaves the map on an up box, detached', () => {
+  const w = A({ web: E('working') });
+  expect(classifyTransitions(A({}), A({}), TH, seeded(w.agents)).events).toEqual([{ kind: 'agent-done', session: 'web' }]);
   // suppressed if EITHER end of the edge was attached (watching = no ping)
-  const wA = { up: true, agent: 'working', agentAttached: true };
-  expect(classifyTransitions(wA, { up: true, agentAttached: false }, TH, initThresholdState()).events).not.toContainEqual({ kind: 'agent-done' });
-  expect(classifyTransitions(w, { up: true, agentAttached: true }, TH, initThresholdState()).events).not.toContainEqual({ kind: 'agent-done' });
+  expect(classifyTransitions(A({}), A({}), TH, seeded({ web: E('working', { attached: true }) })).events).toEqual([]);
 });
 
 test('stopping a Proxmox box does not fire a false agent-done', () => {
-  const w = { up: true, agent: 'working', agentAttached: false };
-  const stoppedBox = { up: true, stopped: true };
-  expect(classifyTransitions(w, stoppedBox, TH, initThresholdState()).events).toEqual([]);
+  expect(classifyTransitions(A({}), { up: true, stopped: true, agents: {} }, TH, seeded({ web: E('working') })).events).toEqual([]);
 });
 
 test('agent kinds never fire on the first sample (no prev)', () => {
-  const idle = { up: true, agent: 'waiting', agentAttached: false };
-  expect(classifyTransitions(null, idle, TH, initThresholdState()).events).toEqual([]);
+  expect(classifyTransitions(null, A({ web: E('done') }), TH, initThresholdState()).events).toEqual([]);
 });
 
-// The old anti-blip streak (AGENT_WORK_MIN_SAMPLES) is gone with the output
-// heuristic: only a hook marker can produce 'working' now, so a single-poll
-// working->waiting edge is always a real turn ending and must fire at once.
-test('a single-poll working sample followed by waiting fires agent-input immediately', () => {
-  const waiting = { up: true, agent: 'waiting', agentAttached: false };
-  const working = { up: true, agent: 'working', agentAttached: false };
-  let st = classifyTransitions(waiting, waiting, TH, initThresholdState()).state;
-  st = classifyTransitions(waiting, working, TH, st).state;
-  const end = classifyTransitions(working, waiting, TH, st);
-  expect(end.events).toContainEqual({ kind: 'agent-input' });
+// The old anti-blip streak is gone: only a hook marker produces 'working', so a
+// single-poll working -> done edge is a real turn ending and fires at once.
+test('a single-poll working sample followed by done fires agent-input immediately', () => {
+  let st = classifyTransitions(A({}), A({ web: E('done') }), TH, initThresholdState()).state;
+  st = classifyTransitions(A({}), A({ web: E('working') }), TH, st).state;
+  expect(classifyTransitions(A({}), A({ web: E('done') }), TH, st).events).toEqual([{ kind: 'agent-input', session: 'web' }]);
 });
 
-// A hooked claude restarting in place: SessionEnd deletes the marker before
-// the new claude's SessionStart rewrites it, so one poll can see the pane
-// still running claude with no marker. Presence (agentPresent) gates
-// agent-done so that gap stays silent; the claude actually exiting (no pane,
-// no agentPresent) still fires.
-test('a marker gap while the claude pane is still present fires no agent-done', () => {
-  const marked = { up: true, agent: 'waiting', agentAttached: false, agentPresent: true };
-  const gapped = { up: true, agentAttached: false, agentPresent: true };
-  expect(classifyTransitions(marked, gapped, TH, initThresholdState()).events).toEqual([]);
-  const gone = { up: true, agentAttached: false };
-  expect(classifyTransitions(marked, gone, TH, initThresholdState()).events).toContainEqual({ kind: 'agent-done' });
-});
-
-test('sustained work followed by quiet still fires agent-input exactly once', () => {
-  const waiting = { up: true, agent: 'waiting', agentAttached: false };
-  const working = { up: true, agent: 'working', agentAttached: false };
-
-  let st = classifyTransitions(waiting, waiting, TH, initThresholdState()).state;
-  // A real task: output observed across consecutive polls.
-  st = classifyTransitions(waiting, working, TH, st).state;
-  const second = classifyTransitions(working, working, TH, st);
-  expect(second.events).not.toContainEqual({ kind: 'agent-input' });
-  // Now it goes quiet — the agent genuinely handed control back.
-  const done = classifyTransitions(working, waiting, TH, second.state);
-  expect(done.events).toContainEqual({ kind: 'agent-input' });
-  // ...and does not repeat while it stays quiet.
-  const still = classifyTransitions(waiting, waiting, TH, done.state);
-  expect(still.events).not.toContainEqual({ kind: 'agent-input' });
+test('sustained work followed by quiet fires agent-input exactly once', () => {
+  let st = classifyTransitions(A({}), A({ web: E('done') }), TH, initThresholdState()).state;
+  st = classifyTransitions(A({}), A({ web: E('working') }), TH, st).state;
+  const second = classifyTransitions(A({}), A({ web: E('working') }), TH, st);
+  expect(second.events).toEqual([]);
+  const done = classifyTransitions(A({}), A({ web: E('done') }), TH, second.state);
+  expect(done.events).toEqual([{ kind: 'agent-input', session: 'web' }]);
+  expect(classifyTransitions(A({}), A({ web: E('done') }), TH, done.state).events).toEqual([]);
 });
 
 test('a long task fires once, not once per poll', () => {
-  const waiting = { up: true, agent: 'waiting', agentAttached: false };
-  const working = { up: true, agent: 'working', agentAttached: false };
-  let st = classifyTransitions(waiting, working, TH, initThresholdState()).state;
+  let st = classifyTransitions(A({}), A({ web: E('working') }), TH, initThresholdState()).state;
   let fired = 0;
   for (let poll = 0; poll < 10; poll += 1) {
-    const r = classifyTransitions(working, working, TH, st);
+    const r = classifyTransitions(A({}), A({ web: E('working') }), TH, st);
     st = r.state;
-    fired += r.events.filter((e) => e.kind === 'agent-input').length;
+    fired += r.events.length;
   }
-  const end = classifyTransitions(working, waiting, TH, st);
-  fired += end.events.filter((e) => e.kind === 'agent-input').length;
+  fired += classifyTransitions(A({}), A({ web: E('done') }), TH, st).events.length;
   expect(fired).toBe(1);
 });
 
-// A restart loses the sample series, so the first edge after it has no observed
-// run behind it. That must still notify: dropping a real "waiting for input"
-// is worse than one unconfirmed ping, and it is what the pre-existing
-// fresh-state edge test relies on.
-test('a working->waiting edge with no prior history still fires (restart tolerance)', () => {
-  const working = { up: true, agent: 'working', agentAttached: false };
-  const waiting = { up: true, agent: 'waiting', agentAttached: false };
-  expect(classifyTransitions(working, waiting, TH, initThresholdState()).events)
-    .toContainEqual({ kind: 'agent-input' });
+// Was "no prior history still fires (restart tolerance)". Per session, an edge
+// needs a previous entry: with one (working) a done fires; with none it is a
+// first appearance and stays silent.
+test('first appearance as done emits nothing, but a previous working entry makes done fire', () => {
+  expect(classifyTransitions(A({}), A({ web: E('done') }), TH, initThresholdState()).events).toEqual([]);
+  expect(classifyTransitions(A({}), A({ web: E('done') }), TH, seeded({ web: E('working') })).events)
+    .toEqual([{ kind: 'agent-input', session: 'web' }]);
 });
 
 test('sampleOf: the marker is the sole source of working/waiting, regardless of output timing', () => {

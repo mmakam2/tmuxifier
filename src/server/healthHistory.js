@@ -109,7 +109,7 @@ export function initThresholdState() {
   // a restart carries no cpuPct. Seeding defers to the first sample that
   // actually observes one — otherwise a persistently-hot box would look like a
   // fresh crossing and replay a threshold event on every restart.
-  return { cpu: false, cpuStreak: 0, cpuSeeded: true, mem: false, disk: false };
+  return { cpu: false, cpuStreak: 0, cpuSeeded: true, mem: false, disk: false, agents: undefined };
 }
 
 // Pure edge detector. Reachability/auth edges compare prev↔next (stateless).
@@ -130,6 +130,7 @@ export function classifyTransitions(prev, next, thresholds, state) {
     st.cpu = !!(next.up && next.cpuPct != null && next.cpuPct >= warn.cpu);
     st.cpuStreak = st.cpu ? 2 : 0;
     st.cpuSeeded = !!(next.up && next.cpuPct != null);
+    st.agents = next.agents;
     return { events, state: st };
   }
 
@@ -147,31 +148,42 @@ export function classifyTransitions(prev, next, thresholds, state) {
     events.push({ kind: 'down' });
   }
 
-  // Agent edges (box's configured session only). Both sides of an agent-input
-  // edge are hook-sourced (sampleOf sets `agent` only from a marker), so a
-  // single-sample working→waiting is a real turn ending — the old anti-blip
-  // streak guarded a heuristic that no longer exists. NOTE this rests entirely
-  // on the hook's own background-work gate (claudeAgentHooks.js): Claude Code's
-  // `Stop` also fires on a turn that ended merely to await a background
-  // subagent or shell, and until that was gated ON THE BOX, every such pause
-  // arrived here as a genuine-looking edge and paged the operator. There is
-  // deliberately no second settle window on this side — it would only catch
-  // sub-poll flicker, and a background job runs for minutes. Suppressed
-  // while that session is attached — watching the terminal is its own
-  // notification; agent-done checks BOTH ends of the edge, since the user may
-  // attach in the final poll interval. agent-done additionally requires
-  // !next.agentPresent — a claude pane still running with no marker is a
-  // restart gap (SessionEnd deleted the marker before the new SessionStart
-  // rewrote it), not an exit — and !next.stopped: a Proxmox-stopped box
-  // carries no `sessions` (see sampleOf), so it always looks like "agent
-  // disappeared" — but that absence is a stopped container, not a live
-  // probe's observation, so it must not read as the agent finishing.
-  if (prev) {
-    if (prev.agent === 'working' && next.agent === 'waiting' && !next.agentAttached) {
-      events.push({ kind: 'agent-input' });
-    } else if (prev.agent && !next.agent && !next.agentPresent && next.up && !next.stopped && !prev.agentAttached && !next.agentAttached) {
-      events.push({ kind: 'agent-done' });
+  // Agent edges, per session over `sample.agents` (see sampleOf). `st.agents`
+  // is the PREVIOUS map and is always the last one taken from a successful
+  // probe: a failed probe's sample has no `agents` key, so it neither emits
+  // nor replaces it, and the box coming back is compared against what it
+  // looked like before it went away rather than read as a first appearance.
+  // A session with no previous entry (first appearance, restart) emits nothing.
+  //   agent-blocked: working|done|idle -> blocked (carries `cause`)
+  //   agent-input:   working|blocked   -> done
+  //   agent-done:    had a state, now absent from the map (claude exited)
+  // Hook state is the sole source (a single-poll edge is a real transition; the
+  // box's own background-work gate in claudeAgentHooks.js keeps `Stop` pauses
+  // awaiting background work from reading as done, so there is no settle window
+  // here). blocked/input are suppressed while the session is attached — watching
+  // the terminal is its own notification; agent-done checks BOTH ends, since the
+  // user may attach in the final poll interval. agent-done also requires the
+  // session to be ABSENT: a present entry with no state is a marker gap (claude
+  // restarting in place) not an exit, and `!next.stopped` — a Proxmox-stopped
+  // box carries no sessions, so absence there is not an observation.
+  if (next.agents) {
+    const before = st.agents || {};
+    for (const [session, now] of Object.entries(next.agents)) {
+      const was = before[session] && before[session].state;
+      if (!was || now.attached) continue;
+      if (now.state === 'blocked' && (was === 'working' || was === 'done' || was === 'idle')) {
+        events.push({ kind: 'agent-blocked', session, cause: now.cause });
+      } else if (now.state === 'done' && (was === 'working' || was === 'blocked')) {
+        events.push({ kind: 'agent-input', session });
+      }
     }
+    if (next.up && !next.stopped) {
+      for (const [session, was] of Object.entries(before)) {
+        if (!was.state || was.attached || next.agents[session]) continue;
+        events.push({ kind: 'agent-done', session });
+      }
+    }
+    st.agents = next.agents;
   }
 
   // mem / disk: immediate crossing with hysteresis clear
