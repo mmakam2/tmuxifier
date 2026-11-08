@@ -207,6 +207,34 @@ Deleting the token file un-seeds the box for new shells (the rc line does nothin
 logged in on it yourself — seed only boxes you trust the way you'd trust anyone holding your own
 login.** Seeding needs a browser session: the Android app and the MCP server can't request it.
 
+## The OSC reporter (Codex, pi)
+
+Every setup run also pushes a small python3 reporter to `~/.tmuxifier-osc/reporter.py`. There is
+no checkbox: it is always on, and it records the same one-line state files under
+`~/.tmuxifier-agent/` that the Claude Code hook writes. It listens to the raw output of tmux
+panes (`tmux pipe-pane`) for **OSC 7501 "Program Status"** reports, which agents emit as they
+change state. One resident process per box attaches a listener to any pane whose command is
+`codex` or `pi` (and `opencode`, but only when the OpenCode plugin file above is absent: the
+plugin always wins), and detaches after three polls in a row that no longer match. The status
+probe starts it (and keeps the current version running) on every poll, so a setup rerun upgrades
+it live. A box without python3 or tmux reports `osc-reporter skipped (no python3 on the box)` /
+`(no tmux on the box)` and the setup still succeeds.
+
+- **Claude Code is not covered.** It probes with `OSC 7501;?` and then DA1; tmux answers DA1
+  itself, so Claude concludes the terminal doesn't support the sequence and never reports inside
+  tmux. Its hook stays its source.
+- **pi** probes the same way, so setup adds one tagged line, `export PI_PROGRAM_STATUS=1
+  # tmuxifier-osc-pi`, to `~/.profile`, `~/.bashrc` and `~/.zshrc` (a re-run replaces it); that
+  makes pi report unprompted. Restart pi in a new shell to pick it up.
+- **Codex** reports natively from 0.163 on. On a box whose Node predates `process.execve`, Codex
+  runs as `node` and is not detected.
+- **OpenCode** without the plugin: its root record aggregates **every session of the user's
+  shared server**, so a pending permission in another TUI reads as `blocked` here. Tick the
+  OpenCode checkbox for the plugin.
+
+To remove it: `rm -rf ~/.tmuxifier-osc` and delete the tagged rc line; the next setup run
+reinstalls it.
+
 ## Post-setup script
 
 The setup form's last section picks one of Fleet Command's **saved scripts** to run
@@ -214,7 +242,7 @@ on the box once everything else is installed. The order is deliberate:
 
 ```
 tools & shell framework → AI-auth seeding → Claude statusline → agent hooks
-  → voice link → OpenCode plugin → your saved script → tmux session created
+  → voice link → OpenCode plugin → OSC reporter → your saved script → tmux session created
 ```
 
 Your script runs *before* the box's tmux session exists, so anything it writes to

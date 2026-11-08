@@ -58,3 +58,5 @@ Notes
   `msg` is "Permission needs input" / "N sessions need input". No `done`, `error` or `progress`
   was emitted by any agent here.
 - `/exit` emits a bare `state=clear`. Process death without `/exit` (session killed) emits nothing.
+
+Replayed by `test/osc7501Replay.test.js`, the acceptance test for the box-side reporter.

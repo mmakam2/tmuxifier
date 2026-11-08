@@ -262,7 +262,8 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
 - `localShellActions.js` — the optional Host Shell (`localShell` = `none`/`omz`/`omb`).
   `installAgentHooks()`/`installVoiceLink()` reuse the box pushers over a local `/bin/sh`
   transport, triggered only by `claudeHooks === true` on `PATCH /api/local-shell`;
-  `installOpencodePlugin()` likewise, only on `opencodePlugin === true`.
+  `installOpencodePlugin()` likewise, only on `opencodePlugin === true`. `installOscReporter()`
+  (the OSC reporter, below) rides the same `claudeHooks === true` knob.
 - `localTmuxScope.js` — creates the `=local` session under `systemd-run --scope` so service
   restarts (`KillMode=control-group`) don't kill the Host Shell's tmux; falls back without
   `systemd-run`.
@@ -290,7 +291,7 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   `superseded`; `running` reconciles to `interrupted` on restart. `needs-interactive` records
   `job.needs`: `'sudo'` (password prompt) or `'ssh'` (`Permission denied (publickey,password)` —
   a key-only denial stays `error`). Phase order after the install script: `seeding` → `statusline`
-  → `agent-hooks` → `voice-link` → `opencode-plugin` → `script` → `ensureSession` (last). The
+  → `agent-hooks` → `voice-link` → `opencode-plugin` → `osc-reporter` → `script` → `ensureSession` (last). The
   Claude phases are all gated by the one `claude` tools selection (a stale bundle's
   `claudeStatusline` flag still counts); `opencode-plugin` by the `opencode` one (job field
   `opencodePlugin`). `streamRemote` is shared by the install run and the script phase; only the install
@@ -354,10 +355,29 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   OpenCode (nothing stays `blocked`); ctrl+b background shells keep `working`. Acceptance test:
   `test/fixtures/opencode-event-trace.jsonl` (a real 2.2.6 recording) replayed by
   `test/opencodeAgentReplay.test.js`. Design: `docs/superpowers/specs/2026-11-07-opencode-agent-state-design.md`.
+- `oscReporter.js` + `src/server/assets/tmuxifier-osc-reporter.py` — the OSC 7501 ("Program
+  Status") reporter for agents that emit it: Codex (native from 0.163), pi (only with the
+  `export PI_PROGRAM_STATUS=1 # tmuxifier-osc-pi` rc line the pusher adds), and OpenCode only
+  when its plugin file is absent (the plugin wins; without it the root record aggregates every
+  session of the shared `opencode serve`). **Claude Code is excluded**: it probes with
+  `OSC 7501;?` then DA1, tmux answers DA1 itself, so it never reports inside tmux and its hook
+  stays the source. `buildOscReporterInstallScript()`/`createOscReporterPusher()` write
+  `~/.tmuxifier-osc/reporter.py` (stdin, nothing interpolated), skip `no python3`/`no tmux`, and
+  run one sweep; always on (setup phase `osc-reporter`, job field `oscReporter`). The asset is
+  stdlib python with roles `listen %N` (a `tmux pipe-pane` reader: tmux feeds pipe-pane the raw
+  bytes before its own parser, so the sequence arrives intact; folds records, writes the same
+  `<session>:<state>:<epoch>:<cause>` markers), `loop` (one resident per box under a
+  `loop.lock` flock, 2 s passes, attaches by `pane_current_command`, detaches after 3
+  non-matching passes, registry in `~/.tmuxifier-osc/panes/`, version handover on setup rerun)
+  and `sweep [--once]` (one pass + ensure a current-version loop; what the probe runs). Never
+  writes to the pane. A Codex whose Node predates `process.execve` runs as `node` and is not
+  detected. Acceptance test: `test/fixtures/osc7501-pane-trace.jsonl` replayed by
+  `test/osc7501Replay.test.js`. Design: `docs/superpowers/specs/2026-11-08-osc7501-pane-reporter-design.md`.
 
 ### Status and health
 
-- `status.js` — per-box probes with in-flight coalescing. Reports sessions, active-pane command,
+- `status.js` — per-box probes with in-flight coalescing. `OSC_SWEEP` (in `PROBE_REMOTE`) runs
+  the OSC reporter's `sweep` each poll when `~/.tmuxifier-osc/reporter.py` exists, fully redirected. Reports sessions, active-pane command,
   `#{window_activity}` (the output clock — **not** `#{session_activity}`, a key-input clock), box
   clock, metrics, distro (`/etc/os-release` read with shell built-ins under the probe's bare PATH),
   agent markers (`parseAgentMarks`), and windows (`list-windows -a`, ≤200 rows, name field last).
@@ -370,7 +390,7 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
 - `healthHistory.js` / `healthEventsStore.js` — rolling samples per box and edge-triggered events
   (down/up/needs-auth/threshold/agent-blocked/agent-input/agent-done) in `data/health-events.json`.
   Samples carry per-session `agents` (every listed tmux session; `agentKindOf(paneCmd)` →
-  `claude`|`opencode`|`null` sets `present` and the entry's and events' `agent`, which event and
+  `claude`|`opencode`|`codex`|`pi`|`null` sets `present` and the entry's and events' `agent`, which event and
   push copy name; non-agent panes are `present: false`; the Host Shell is the `__local__` box/series id); displayed states are `working`, `blocked`, `done` (finished, not yet seen), `idle`.
   The seen watermark (`POST /api/boxes/:id/agent-seen` → `history.markSeen`, persisted through
   `agentSeenStore.js`) turns `done` into `idle`. `agent-blocked` = "needs you: <cause>", `agent-input` = finished a turn

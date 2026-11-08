@@ -177,7 +177,8 @@ interactively** when a password prompt is the blocker). The same setup can push 
 Claude Code statusline and **seed the box with this host's Claude/Codex subscription
 credentials** — a deliberate, unchecked-by-default handover of your CLI identity to that box.
 Ticking **OpenCode** in the tools checklist installs it plus an agent-state plugin, so OpenCode
-panes report the same working / needs-you / done states as Claude Code ones.
+panes report the same working / needs-you / done states as Claude Code ones. Every setup also
+installs an OSC 7501 reporter so Codex and pi panes report them too.
 A saved Fleet Command script can also be selected to run as the last step of setup — after the
 tools and credentials, before the tmux session. The setup-job lifecycle, the tools checklist,
 and the seeding security model are in [boxes & setup jobs](docs/boxes-and-setup.md).
