@@ -1,4 +1,4 @@
-import type { HealthEvent, HealthEventKind } from './api';
+import type { AgentKind, HealthEvent, HealthEventKind } from './api';
 import { AGENT_LABEL } from './agentState';
 import { classifyError, CPU_ICON, MEM_ICON, DISK_ICON } from './statusDot';
 
@@ -9,6 +9,11 @@ export type EventLevel = 'ok' | 'warn' | 'crit' | 'auth';
 export interface EventLine { icon: string; text: string; level: EventLevel; }
 
 const METRIC_LABEL = { cpu: 'CPU', mem: 'memory', disk: 'disk' } as const;
+
+// An agent kind this bundle does not know (a newer server) reads as Claude,
+// the kind every event had before agents were named.
+const agentLabel = (agent: unknown): string =>
+  typeof agent === 'string' && Object.hasOwn(AGENT_LABEL, agent) ? AGENT_LABEL[agent as AgentKind] : AGENT_LABEL.claude;
 // Nerd Font glyphs from the bundled face (Bench Instrument world: the chrome
 // speaks one face, and state color comes from the row's LED level, not from
 // color emoji). These render only in the in-app panel — browser notifications
@@ -62,9 +67,9 @@ export function formatEvent(e: HealthEvent): EventLine {
       return { icon: METRIC_ICON[e.metric!], text: `${name} — ${METRIC_LABEL[e.metric!]} ${e.value}%`, level: 'warn' };
     case 'threshold-clear':
       return { icon: '', text: `${name} — ${METRIC_LABEL[e.metric!]} back to ${e.value}%`, level: 'ok' };
-    case 'agent-blocked': return { icon: '', text: `${name}${sess} — ${AGENT_LABEL[e.agent ?? 'claude']} needs you: ${e.cause ?? 'blocked'}`, level: 'crit' };
-    case 'agent-input': return { icon: '', text: `${name}${sess} — ${AGENT_LABEL[e.agent ?? 'claude']} finished a turn`, level: 'warn' };
-    case 'agent-done': return { icon: '', text: `${name}${sess} — ${AGENT_LABEL[e.agent ?? 'claude']} exited`, level: 'ok' };
+    case 'agent-blocked': return { icon: '', text: `${name}${sess} — ${agentLabel(e.agent)} needs you: ${e.cause ?? 'blocked'}`, level: 'crit' };
+    case 'agent-input': return { icon: '', text: `${name}${sess} — ${agentLabel(e.agent)} finished a turn`, level: 'warn' };
+    case 'agent-done': return { icon: '', text: `${name}${sess} — ${agentLabel(e.agent)} exited`, level: 'ok' };
     default:
       // A newer server may ship event kinds this bundle doesn't know yet — one
       // unknown kind must degrade to a generic line, not brick the panel.

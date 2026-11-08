@@ -93,11 +93,11 @@ test('sample() degrades to no sessions when tmux is absent or has no server', as
   expect(await throwing.sample()).toMatchObject({ reachable: true, sessions: [] });
 });
 
-test('sample(): only tmux\'s own no-server wording is an empty listing; refused/denied sockets are unknown', async () => {
+test('sample(): only tmux\'s own no-server wording is an empty listing; a denied socket is unknown', async () => {
   const make = (stderr) => createLocalAgentSampler({ home: '/nonexistent', runTmux: async () => ({ code: 1, stdout: '', stderr }) });
+  // tmux says `no server running` for a missing server and for a refused connection alike.
   expect((await make('no server running on /tmp/tmux-1000/default').sample()).sessions).toEqual([]);
   expect((await make('error connecting to /tmp/tmux-1000/default (No such file or directory)').sample()).sessions).toEqual([]);
-  expect((await make('error connecting to /tmp/tmux-1000/default (Connection refused)').sample()).sessions).toBeUndefined();
   expect((await make('error connecting to /tmp/tmux-1000/default (Permission denied)').sample()).sessions).toBeUndefined();
 });
 

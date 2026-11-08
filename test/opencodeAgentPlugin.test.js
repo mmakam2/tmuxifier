@@ -209,8 +209,8 @@ test('listPanes failing (null), hanging past the timeout, or returning garbage l
   expect(log).not.toHaveBeenCalled();
 });
 
-test('defaultListPanes runs tmux list-panes -a -F PANE_FORMAT and resolves null on ENOENT, timeout or a non-zero exit', async () => {
-  const { defaultListPanes, PANE_FORMAT } = await import(ASSET);
+test('defaultListPanes runs tmux list-panes -a -F PANE_FORMAT, resolves TMUX_MISSING on ENOENT and null on a timeout or a non-zero exit', async () => {
+  const { defaultListPanes, PANE_FORMAT, TMUX_MISSING } = await import(ASSET);
   const bin = tmp();
   const script = (name, body) => {
     const p = path.join(bin, name);
@@ -220,13 +220,77 @@ test('defaultListPanes runs tmux list-panes -a -F PANE_FORMAT and resolves null 
   };
   const echo = script('echo', 'printf "%s|" "$@"');
   expect(await defaultListPanes({ file: echo })).toBe(`list-panes|-a|-F|${PANE_FORMAT}|`);
-  expect(await defaultListPanes({ file: path.join(bin, 'missing') })).toBeNull();
+  expect(await defaultListPanes({ file: path.join(bin, 'missing') })).toBe(TMUX_MISSING);
   expect(await defaultListPanes({ file: script('fail', 'echo partial; exit 1') })).toBeNull();
   expect(await defaultListPanes({ file: script('hang', 'exec sleep 30'), timeout: 200 })).toBeNull();
   // The default looks tmux up on PATH.
   const env = fakeTmuxEnv();
   env.setPanes(row('web', 'opencode', '/p'));
   expect(await defaultListPanes()).toBe(row('web', 'opencode', '/p'));
+  // A PATH without tmux at all.
+  vi.stubEnv('PATH', tmp());
+  expect(await defaultListPanes()).toBe(TMUX_MISSING);
+});
+
+test('tmux missing (ENOENT) makes the core inert: the timer stops and nothing sweeps again', async () => {
+  const { TMUX_MISSING } = await import(ASSET);
+  const timers = [];
+  const cleared = [];
+  let calls = 0;
+  const { core, home } = await rig({
+    listPanes: async () => { calls++; return TMUX_MISSING; },
+    setInterval: (fn, ms) => { const t = { fn, ms, unref() {} }; timers.push(t); return t; },
+    clearInterval: (t) => cleared.push(t),
+  });
+  const ctx = fakeCtx();
+  core.attach(ctx);
+  await flush();
+  expect(calls).toBe(1);
+  expect(timers).toHaveLength(1);
+  expect(cleared).toEqual([timers[0]]);
+  ctx.push(ev('session.created', 1000, { sessionID: 'ses_a' }, '/proj'));
+  ctx.push(ev('session.execution.started', 1001, { sessionID: 'ses_a' }));
+  await flush();
+  await core.sweep();
+  timers[0].fn();
+  await flush();
+  expect(calls).toBe(1);
+  expect(existsSync(markerDir(home))).toBe(false);
+  expect(core.reducer.derive('ses_a').state).toBe('working'); // still listening, for a hand-over
+  core.abort();
+
+  // Any other failure stays a retry: the timer keeps running.
+  let other = 0;
+  const otherCleared = [];
+  const n = await rig({ listPanes: async () => { other++; return null; }, setInterval: (fn, ms) => ({ fn, ms, unref() {} }), clearInterval: (t) => otherCleared.push(t) });
+  n.core.attach(fakeCtx());
+  await flush();
+  await n.core.sweep();
+  expect(other).toBe(2);
+  expect(otherCleared).toEqual([]);
+  n.core.abort();
+});
+
+test('setup on a PATH without tmux stops its sweep timer and writes nothing', async () => {
+  const mod = await import(ASSET);
+  const home = tmp();
+  vi.stubEnv('HOME', home);
+  vi.stubEnv('PATH', tmp());
+  const started = [];
+  const stopped = [];
+  const realSet = globalThis.setInterval;
+  const realClear = globalThis.clearInterval;
+  vi.spyOn(globalThis, 'setInterval').mockImplementation((fn, ms) => { const t = realSet(fn, ms); if (ms === 15000) started.push(t); return t; });
+  vi.spyOn(globalThis, 'clearInterval').mockImplementation((t) => { if (started.includes(t)) stopped.push(t); return realClear(t); });
+  const ctx = fakeCtx();
+  const cleanup = await mod.default.setup(ctx);
+  await vi.waitFor(() => expect(stopped).toEqual([started[0]]));
+  ctx.push(ev('session.created', null, { sessionID: 'ses_a' }, '/proj'));
+  ctx.push(ev('session.execution.started', null, { sessionID: 'ses_a' }));
+  await flush(100);
+  expect(existsSync(markerDir(home))).toBe(false);
+  expect(started).toHaveLength(1);
+  await cleanup();
 });
 
 test('the pane listing is cached for a second', async () => {

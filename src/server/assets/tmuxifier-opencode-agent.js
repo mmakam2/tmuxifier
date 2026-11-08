@@ -543,17 +543,25 @@ export function safeName(session) {
   return Buffer.from(session, 'utf8').toString('latin1').replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
-// `tmux list-panes -a` for every pane of every session. null on ENOENT (no
-// tmux on PATH: the core stays inert), a timeout, a non-zero exit or
-// non-string output; never rejects. `file`/`timeout` exist for tests.
+// What a listPanes resolves when there is no tmux to run at all (ENOENT):
+// the core stops sweeping for good (spec §4.1 "Inert conditions").
+export const TMUX_MISSING = Symbol.for('tmuxifier.opencode-agent.tmux-missing');
+
+// `tmux list-panes -a` for every pane of every session. TMUX_MISSING on
+// ENOENT (no tmux on PATH); null on a timeout, a non-zero exit or non-string
+// output (worth retrying next sweep); never rejects. `file`/`timeout` exist
+// for tests.
 export function defaultListPanes({ file = 'tmux', timeout = LIST_TIMEOUT_MS } = {}) {
   return new Promise((resolve) => {
     try {
       execFile(file, ['list-panes', '-a', '-F', PANE_FORMAT],
         { timeout, killSignal: 'SIGKILL', maxBuffer: 1 << 20, encoding: 'utf8', windowsHide: true },
-        (err, stdout) => resolve(!err && typeof stdout === 'string' ? stdout : null));
-    } catch {
-      resolve(null);
+        (err, stdout) => {
+          if (err && err.code === 'ENOENT') resolve(TMUX_MISSING);
+          else resolve(!err && typeof stdout === 'string' ? stdout : null);
+        });
+    } catch (e) {
+      resolve(e && e.code === 'ENOENT' ? TMUX_MISSING : null);
     }
   });
 }
@@ -583,6 +591,8 @@ export function createCore({
   // The event stream ended on its own: the reducer is frozen, nothing more
   // is written (a hand-over can still take what this core knows).
   let ended = false;
+  // listPanes reported no tmux at all: never sweep again (this core).
+  let tmuxMissing = false;
   let attached = false;
   let timer = null;
   let inflight = null;
@@ -604,8 +614,8 @@ export function createCore({
     owner: Symbol('tmuxifier.opencode-agent.core'),
   };
 
-  // { text, listAt }: the listing (null when unusable) and now() taken just
-  // before it was requested.
+  // { text, listAt, missing }: the listing (null when unusable), now() taken
+  // just before it was requested, and whether tmux is missing altogether.
   async function listing() {
     const t = Date.now();
     if (cache && t >= cache.at && t - cache.at < paneCacheMs) return cache.result;
@@ -616,8 +626,9 @@ export function createCore({
     } catch (e) {
       debug('listPanes', e);
     }
+    const missing = text === TMUX_MISSING;
     if (typeof text !== 'string') text = null;
-    const result = { text, listAt };
+    const result = { text, listAt, missing };
     cache = { at: Date.now(), result };
     return result;
   }
@@ -651,7 +662,12 @@ export function createCore({
   }
 
   async function sweepOnce() {
-    const { text, listAt } = await listing();
+    const { text, listAt, missing } = await listing();
+    if (missing && !tmuxMissing) {
+      tmuxMissing = true;
+      debug('tmux not found; sweeps stopped until the next setup');
+      stopSweeping();
+    }
     if (aborted || ended || text === null) return; // handed over, stopped, or tmux unusable: touch nothing
     // A tmux session that starts hosting opencode in this listing did so after
     // the previous listing, the last one that showed it not hosting: that is
@@ -685,6 +701,7 @@ export function createCore({
   // after. The returned promise settles when the rerun is done too; it never
   // rejects.
   function sweep() {
+    if (tmuxMissing) return Promise.resolve();
     if (inflight) {
       rerun = true;
       return inflight;
@@ -694,7 +711,7 @@ export function createCore({
         do {
           rerun = false;
           await sweepOnce();
-        } while (rerun && !aborted && !ended);
+        } while (rerun && !aborted && !ended && !tmuxMissing);
       } catch (e) {
         debug('sweep', e);
       } finally {

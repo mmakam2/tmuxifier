@@ -454,6 +454,22 @@ test('the opencode tool downloads the v2 installer, runs it with --no-modify-pat
   expect(resolveTools(['opencode'])).toEqual(['curl', 'opencode']);
 });
 
+test('each bin dir gets exactly its own tagged PATH line, and claude + opencode emit both', () => {
+  const LOCAL = `echo 'export PATH="$HOME/.local/bin:$PATH" # tmuxifier-local-bin' >> "$rc"`;
+  const OPENCODE = `echo 'export PATH="$HOME/.opencode/bin:$PATH" # tmuxifier-opencode-bin' >> "$rc"`;
+  const count = (hay, needle) => hay.split(needle).length - 1;
+  const claude = buildEnsureTmuxRemote('web', undefined, { tools: ['claude'] });
+  expect(count(claude, LOCAL)).toBe(1);
+  expect(claude).toContain(`sed -i '/# tmuxifier-local-bin$/d' "$rc"`);
+  expect(claude).not.toContain('tmuxifier-opencode-bin');
+  const opencode = buildEnsureTmuxRemote('web', undefined, { tools: ['opencode'] });
+  expect(count(opencode, OPENCODE)).toBe(1);
+  expect(opencode).toContain(`sed -i '/# tmuxifier-opencode-bin$/d' "$rc"`);
+  const both = buildEnsureTmuxRemote('web', undefined, { tools: ['claude', 'opencode'] });
+  expect(count(both, LOCAL)).toBe(1);
+  expect(count(both, OPENCODE)).toBe(1);
+});
+
 test('buildEnsureTmuxRemote includes system upgrade block when requested', () => {
   const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['upgrade'] });
   expect(remote).toContain('apt-get -y upgrade');
