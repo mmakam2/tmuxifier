@@ -55,6 +55,15 @@ const AGENT_PROBE =
   `if [ -d "$HOME/.tmuxifier-agent" ]; then for f in "$HOME"/.tmuxifier-agent/*; do ` +
   `[ -f "$f" ] && { printf '__AGENT__ '; head -c 200 "$f" | tr -d '\\n'; echo; }; done; fi 2>/dev/null; `;
 
+// Triggers the OSC 7501 reporter's `sweep` role (the box-side python3 asset the
+// setup `osc-reporter` phase pushes) on every poll when the file exists. Static
+// text like AGENT_PROBE — nothing from a box field reaches it — and fully
+// redirected with `|| true`: its stdout would corrupt the parsers and its stderr
+// feeds the reachability classifier, so a missing python3 or a crashing
+// reporter must never be visible to either.
+export const OSC_SWEEP =
+  'if [ -f "$HOME/.tmuxifier-osc/reporter.py" ] && command -v python3 >/dev/null 2>&1; then python3 "$HOME/.tmuxifier-osc/reporter.py" sweep >/dev/null 2>&1 || true; fi; ';
+
 // One line per window on the box, appended to the same probe so windows cost no
 // extra SSH. The name is LAST because window names may contain colons (verified
 // on tmux 3.5a: "we:ird name") while session names may not — the invariant
@@ -73,7 +82,7 @@ export const WINDOW_FMT = '#{session_name}:#{window_index}:#{window_id}:#{window
 // stderr, where the reachability classifier reads. `|| true` covers the whole
 // pipeline: head closing the pipe early can leave tmux with a SIGPIPE exit.
 export const PROBE_REMOTE =
-  `${META_PROBE} ${AGENT_PROBE}if command -v tmux >/dev/null 2>&1; then tmux ls -F '${STATUS_FMT}' 2>/dev/null || true; ` +
+  `${META_PROBE} ${AGENT_PROBE}${OSC_SWEEP}if command -v tmux >/dev/null 2>&1; then tmux ls -F '${STATUS_FMT}' 2>/dev/null || true; ` +
   `{ tmux list-windows -a -F '__WIN__ ${WINDOW_FMT}' | head -n 200; } 2>/dev/null || true; else echo __NO_TMUX__; fi`;
 
 const META_KEYS = new Set([

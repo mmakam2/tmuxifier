@@ -1,4 +1,5 @@
 import { test, expect } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { agentKindOf, sampleOf, deriveAgentState, classifyTransitions, initThresholdState, createHealthHistory } from '../src/server/healthHistory.js';
 import { parseTmuxSessions, parseAgentMarks } from '../src/server/status.js';
 
@@ -578,4 +579,20 @@ test('record() keeps the agent kind on emitted and persisted agent events, and n
     for (const ev of [r.emitted, r.persisted]) expect(ev).toMatchObject({ agent: kind, session: 'web', cause: 'permission' });
   }
   expect('agent' in run('claude').down).toBe(false);
+});
+
+test('agentKindOf: codex and pi are agents, lookalikes are not', () => {
+  expect(agentKindOf('codex')).toBe('codex'); expect(agentKindOf('codex-x')).toBe('codex');
+  expect(agentKindOf('pi')).toBe('pi'); expect(agentKindOf('pi-dev')).toBe('pi');
+  expect(agentKindOf('pip')).toBeNull(); expect(agentKindOf('node')).toBeNull();
+});
+
+test('agentKindOf: pinned to the OSC reporter asset OSC_AGENTS keys', () => {
+  const asset = new URL('../src/server/assets/tmuxifier-osc-reporter.py', import.meta.url).pathname;
+  const script = 'import importlib.util,json,sys\nsys.dont_write_bytecode=True\n'
+    + 'spec=importlib.util.spec_from_file_location("r",sys.argv[1])\nm=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(m)\n'
+    + 'print(json.dumps(sorted(m.OSC_AGENTS)))';
+  const keys = JSON.parse(execFileSync('python3', ['-c', script, asset], { encoding: 'utf8' }));
+  expect(keys).toEqual(['codex', 'opencode', 'pi']);
+  for (const k of keys) expect(agentKindOf(k)).toBe(k);
 });

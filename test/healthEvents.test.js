@@ -116,9 +116,10 @@ test('agent event lines name the agent and default to claude', () => {
   expect(formatEvent({ ...base, kind: 'agent-done', agent: 'opencode' }).text).toBe('web-01 — OpenCode exited');
   expect(formatEvent({ ...base, kind: 'agent-blocked', agent: 'opencode', cause: 'question' }).text).toBe('web-01 — OpenCode needs you: question');
   expect(formatEvent({ ...base, kind: 'agent-input' }).text).toBe('web-01 — Claude finished a turn');
+  expect(formatEvent({ ...base, kind: 'agent-input', agent: 'codex' }).text).toBe('web-01 — Codex finished a turn');
   // An agent kind this bundle does not know (a newer server), or a prototype
   // key, reads as Claude rather than `undefined` or `function Object()...`.
-  for (const agent of ['codex', 'constructor', '__proto__', 'toString']) {
+  for (const agent of ['gemini', 'constructor', '__proto__', 'toString']) {
     expect(formatEvent({ ...base, kind: 'agent-input', agent }).text, agent).toBe('web-01 — Claude finished a turn');
   }
 });

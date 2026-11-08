@@ -28,11 +28,14 @@ export function deriveAgentState(mark, seenTs) {
 // not a failure, so classifyTransitions must not fire a false down/up pair
 // around the moment it stops or starts back up.
 // Which agent runs in a pane, by its foreground command. Keep the opencode
-// pattern identical to the plugin's own pane check.
+// pattern identical to the plugin's own pane check, and the codex/pi patterns
+// identical to the OSC reporter asset's `OSC_AGENTS` (pinned by a test).
 export function agentKindOf(paneCmd) {
   const c = String(paneCmd || '');
   if (/^claude(-|$)/.test(c)) return 'claude';
   if (/^opencode(-|$)/.test(c)) return 'opencode';
+  if (/^codex(-|$)/.test(c)) return 'codex';
+  if (/^pi(-|$)/.test(c)) return 'pi';
   return null;
 }
 

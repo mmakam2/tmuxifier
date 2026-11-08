@@ -1,9 +1,9 @@
 import { test, expect } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseTmuxSessions, parseMeta, parseAgentMarks, createStatusChecker, PROBE_REMOTE, parseTmuxWindows, attachWindows, SESSION_NAME_MAX, SESSION_ROWS_MAX, STATUS_ERROR_MAX } from '../src/server/status.js';
+import { parseTmuxSessions, parseMeta, parseAgentMarks, createStatusChecker, PROBE_REMOTE, OSC_SWEEP, parseTmuxWindows, attachWindows, SESSION_NAME_MAX, SESSION_ROWS_MAX, STATUS_ERROR_MAX } from '../src/server/status.js';
 
 test('parseTmuxSessions maps fields', () => {
   const out = 'web:3:1:1718000000\nbuild:1:0:1718000100\n';
@@ -887,4 +887,34 @@ test('parseTmuxSessions keeps sessions from tmux < 2.1, which expands #{window_a
   expect(parseTmuxSessions('main:1:0::bash\n')).toEqual([
     { name: 'main', windows: 1, attached: false, activity: 0, paneCmd: 'bash' },
   ]);
+});
+
+test('OSC_SWEEP: static, silenced, never fails the probe', () => {
+  expect(PROBE_REMOTE).toContain(OSC_SWEEP);
+  expect(OSC_SWEEP).toContain('>/dev/null 2>&1 || true');
+  expect(OSC_SWEEP.replace(/\$HOME/g, '')).not.toContain('$');
+  expect(PROBE_REMOTE.indexOf(OSC_SWEEP)).toBeGreaterThan(PROBE_REMOTE.indexOf('__AGENT__'));
+  expect(PROBE_REMOTE.indexOf(OSC_SWEEP)).toBeLessThan(PROBE_REMOTE.indexOf('if command -v tmux'));
+});
+
+test('PROBE_REMOTE: a failing noisy python3 reporter changes neither stdout nor stderr', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-osc-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-oschome-'));
+  writeFakeTmux(dir, `[ "$1" = "list-windows" ] && exit 0\necho 'web:2:1:123'`);
+  const py = path.join(dir, 'python3');
+  fs.writeFileSync(py, '#!/bin/sh\necho NOISE >&2\necho NOISE\nexit 7\n');
+  fs.chmodSync(py, 0o755);
+  const run = () => {
+    const r = spawnSync('/bin/sh', ['-c', PROBE_REMOTE], { env: { PATH: dir, HOME: home }, encoding: 'utf8' });
+    return { out: r.stdout.split(/\r?\n/).filter((l) => !l.startsWith('__META__')).join('\n').trim(), err: r.stderr };
+  };
+  const before = run();
+  fs.mkdirSync(path.join(home, '.tmuxifier-osc'));
+  fs.writeFileSync(path.join(home, '.tmuxifier-osc', 'reporter.py'), '# stub\n');
+  const after = run();
+  expect(after.out).toBe(before.out);
+  expect(after.out).toBe('web:2:1:123');
+  expect(after.err).toBe('');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
 });

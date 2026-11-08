@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { worstAgent, agentChipText, agentCounts, agentCards, fmtAge, latestAgents } from '../src/web/agentState.ts';
+import { AGENT_LABEL, worstAgent, agentChipText, agentCounts, agentCards, fmtAge, latestAgents } from '../src/web/agentState.ts';
 
 const S = (agents) => [{ t: 1, up: true, agents }];
 test('worstAgent folds by precedence and counts stateful sessions', () => {
@@ -29,4 +29,8 @@ test('fmtAge', () => {
   expect(fmtAge(1000, 1000 * 1000 + 4 * 60_000)).toBe('4m');
   expect(fmtAge(1000, 1000 * 1000 + 2 * 3600_000)).toBe('2h');
   expect(fmtAge(1000, 1000 * 1000 + 3 * 86400_000)).toBe('3d');
+});
+
+test('AGENT_LABEL names codex and pi', () => {
+  expect(AGENT_LABEL.codex).toBe('Codex'); expect(AGENT_LABEL.pi).toBe('pi');
 });
