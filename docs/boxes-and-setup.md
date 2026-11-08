@@ -215,7 +215,8 @@ no checkbox: it is always on, and it records the same one-line state files under
 panes (`tmux pipe-pane`) for **OSC 7501 "Program Status"** reports, which agents emit as they
 change state. One resident process per box attaches a listener to any pane whose command is
 `codex` or `pi` (and `opencode`, but only when the OpenCode plugin file above is absent: the
-plugin always wins), and detaches after three polls in a row that no longer match. The status
+plugin always wins), and detaches after three consecutive 2-second passes that no longer match, so a new agent pane is
+picked up within about 2 seconds. The status
 probe starts it (and keeps the current version running) on every poll, so a setup rerun upgrades
 it live. A box without python3 or tmux reports `osc-reporter skipped (no python3 on the box)` /
 `(no tmux on the box)` and the setup still succeeds.
@@ -224,13 +225,17 @@ it live. A box without python3 or tmux reports `osc-reporter skipped (no python3
   itself, so Claude concludes the terminal doesn't support the sequence and never reports inside
   tmux. Its hook stays its source.
 - **pi** probes the same way, so setup adds one tagged line, `export PI_PROGRAM_STATUS=1
-  # tmuxifier-osc-pi`, to `~/.profile`, `~/.bashrc` and `~/.zshrc` (a re-run replaces it); that
+  # tmuxifier-osc-pi`, to `~/.profile` (created if missing) and to `~/.bashrc` / `~/.zshrc` only when they already
+  exist (a re-run replaces it); that
   makes pi report unprompted. Restart pi in a new shell to pick it up.
-- **Codex** reports natively from 0.163 on. On a box whose Node predates `process.execve`, Codex
+- **Codex** reports natively from 0.163 on (the 0.167 binary carries the sequences), but this
+  has **not been captured live yet**: it still needs a Codex sign-in on the test box. On a box whose Node predates `process.execve`, Codex
   runs as `node` and is not detected.
 - **OpenCode** without the plugin: its root record aggregates **every session of the user's
   shared server**, so a pending permission in another TUI reads as `blocked` here. Tick the
   OpenCode checkbox for the plugin.
+
+The Host Shell gets the reporter through its Claude hooks knob (`PATCH /api/local-shell`).
 
 To remove it: `rm -rf ~/.tmuxifier-osc` and delete the tagged rc line; the next setup run
 reinstalls it.

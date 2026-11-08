@@ -356,7 +356,8 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   `test/fixtures/opencode-event-trace.jsonl` (a real 2.2.6 recording) replayed by
   `test/opencodeAgentReplay.test.js`. Design: `docs/superpowers/specs/2026-11-07-opencode-agent-state-design.md`.
 - `oscReporter.js` + `src/server/assets/tmuxifier-osc-reporter.py` — the OSC 7501 ("Program
-  Status") reporter for agents that emit it: Codex (native from 0.163), pi (only with the
+  Status") reporter for agents that emit it: Codex (native from 0.163; the 0.167 binary carries the sequences, but no live capture exists yet — the
+  test box needs a Codex sign-in; append its stream to the fixture when captured), pi (only with the
   `export PI_PROGRAM_STATUS=1 # tmuxifier-osc-pi` rc line the pusher adds), and OpenCode only
   when its plugin file is absent (the plugin wins; without it the root record aggregates every
   session of the shared `opencode serve`). **Claude Code is excluded**: it probes with
