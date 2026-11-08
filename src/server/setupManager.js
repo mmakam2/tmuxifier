@@ -97,6 +97,7 @@ export function createSetupManager({
   // Default null: an unwired manager skips the step. Its own one knob, the
   // `opencode` tool selection; the box decides via its own command -v check.
   pushOpencodePlugin = null,
+  pushOscReporter = null,
   // Post-setup saved Fleet Command script (fleetScriptsStore.getScript). Default
   // null: an unwired manager skips the phase entirely, which is what every
   // existing test constructs — same pattern as seed/pushStatusline/pushAgentHooks.
@@ -147,7 +148,7 @@ export function createSetupManager({
   }
   function persist() { prune(); save(ordered()); }
   function summary(j) {
-    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, needs: j.needs ?? null, seed: j.seed ?? null, statusline: j.statusline ?? null, agentHooks: j.agentHooks ?? null, voiceLink: j.voiceLink ?? null, opencodePlugin: j.opencodePlugin ?? null, postScript: j.postScript ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
+    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, needs: j.needs ?? null, seed: j.seed ?? null, statusline: j.statusline ?? null, agentHooks: j.agentHooks ?? null, voiceLink: j.voiceLink ?? null, opencodePlugin: j.opencodePlugin ?? null, oscReporter: j.oscReporter ?? null, postScript: j.postScript ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
   }
   function appendLog(j, text) { if (text) j.log = (j.log + text).slice(-maxLogBytes); }
   function normalizeOptions(o = {}) {
@@ -268,6 +269,15 @@ export function createSetupManager({
       persist();
       try { j.opencodePlugin = await pushOpencodePlugin(box); }
       catch { j.opencodePlugin = { target: 'opencode-plugin', ok: false, error: 'opencode plugin push failed' }; }
+    }
+    // OSC 7501 pane reporter: the box decides (python3 + tmux presence), so no
+    // option gate. Recorded, never promoted; runs before the saved script and
+    // ensureSession like every other asset push.
+    if (pushOscReporter && box && !j.cancelled) {
+      j.phase = 'osc-reporter';
+      persist();
+      try { j.oscReporter = await pushOscReporter(box); }
+      catch { j.oscReporter = { target: 'osc-reporter', ok: false, error: 'osc reporter push failed' }; }
     }
     // The operator's own bootstrap: last of the installs, and strictly BEFORE
     // ensureSession. A shell reads its rc files once at startup, so a script

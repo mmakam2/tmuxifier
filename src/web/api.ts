@@ -229,6 +229,7 @@ export interface SetupSummary {
   // agent-state plugin push. Absent (or null) on jobs persisted before the
   // phase existed and on jobs that never selected opencode.
   opencodePlugin?: SeedResult | null;
+  oscReporter?: SeedResult | null;
   // Present once a job that selected a saved Fleet Command script has attempted
   // it. Absent (or null) on jobs that predate the phase or never selected one.
   postScript?: PushResult | null;

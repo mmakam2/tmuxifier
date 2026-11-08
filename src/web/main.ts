@@ -2552,10 +2552,12 @@ function openProvisionPanel(box: Box, options: SetupOptionsValues) {
         if (vlTxt) status.textContent = `${status.textContent} · ${vlTxt}`;
         const ocTxt = formatStatuslineResult(job.opencodePlugin);
         if (ocTxt) status.textContent = `${status.textContent} · ${ocTxt}`;
+        const orTxt = formatStatuslineResult(job.oscReporter);
+        if (orTxt) status.textContent = `${status.textContent} · ${orTxt}`;
         const psTxt = formatStatuslineResult(job.postScript);
         if (psTxt) status.textContent = `${status.textContent} · ${psTxt}`;
         // An outcome deserves longer on screen than a bare success.
-        autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), (seedTxt || slTxt || ahTxt || vlTxt || ocTxt || psTxt) ? 5000 : 2000);
+        autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), (seedTxt || slTxt || ahTxt || vlTxt || ocTxt || orTxt || psTxt) ? 5000 : 2000);
         return null;
       }
       if (job.status === 'needs-interactive') return 2500;

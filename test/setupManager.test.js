@@ -892,3 +892,52 @@ test('the prompt sniffers stay linear on hostile stderr', () => {
     expect(performance.now() - t0).toBeLessThan(250);
   }
 });
+
+// --- osc-reporter phase ------------------------------------------------------
+
+test('osc-reporter phase runs after opencode-plugin and before the saved script, with no tools selected, and lands on the job', async () => {
+  const order = [];
+  let phaseSeen = null;
+  const m = make({
+    pushOpencodePlugin: async () => { order.push('opencode-plugin'); return { target: 'opencode-plugin', ok: true }; },
+    pushOscReporter: async (box) => {
+      phaseSeen = m.listJobs()[0].phase;
+      order.push(`osc-reporter:${box.id}`);
+      return { target: 'osc-reporter', ok: true };
+    },
+    getScript: async (id) => { order.push(`script:${id}`); return SCRIPT_REC; },
+    ensureSession: async () => { order.push('session'); },
+  });
+  const s = m.start(BOX, { tools: ['claude', 'opencode'], scriptId: 'fs-1' });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(order).toEqual(['opencode-plugin', `osc-reporter:${BOX.id}`, 'script:fs-1', 'session']);
+  expect(phaseSeen).toBe('osc-reporter');
+  expect(job.oscReporter).toEqual({ target: 'osc-reporter', ok: true });
+  expect(m.listJobs()[0].oscReporter).toEqual({ target: 'osc-reporter', ok: true });
+
+  let calls = 0;
+  const m2 = make({ pushOscReporter: async () => { calls += 1; return { target: 'osc-reporter', ok: true }; } });
+  const s2 = m2.start(BOX, { tools: [] });
+  await m2._settled(s2.id);
+  expect(calls).toBe(1);
+});
+
+test('osc-reporter unwired: the job field is absent and listJobs reports null', async () => {
+  const m = make({});
+  const s = m.start(BOX, { tools: ['git'] });
+  await m._settled(s.id);
+  expect(m.getJob(s.id).oscReporter).toBeUndefined();
+  expect(m.listJobs()[0].oscReporter).toBe(null);
+  expect(m.getJob(s.id).status).toBe('done');
+});
+
+test('a throwing osc-reporter push is recorded, never promoted to a job failure', async () => {
+  const m = make({ pushOscReporter: async () => { throw new Error('boom'); } });
+  const s = m.start(BOX, { tools: [] });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(job.oscReporter).toEqual({ target: 'osc-reporter', ok: false, error: 'osc reporter push failed' });
+});
