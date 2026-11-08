@@ -41,8 +41,8 @@ function pushBody(event) {
     const cause = String(event.cause || 'permission');
     return `${cause.charAt(0).toUpperCase()}${cause.slice(1)} prompt${where}`;
   }
-  if (event.kind === 'agent-input') return `A ${agentLabel(event)} session wants your input${where}.`;
-  return `A ${agentLabel(event)} session exited.`;
+  if (event.kind === 'agent-input') return `${agentLabel(event)} wants your input${where}.`;
+  return `${agentLabel(event)} exited${where}.`;
 }
 
 export function buildFcmMessage({ projectId, fcmToken, event }) {
