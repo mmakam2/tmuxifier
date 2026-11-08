@@ -231,7 +231,7 @@ or the session resumed.
 - e2e: setup with `opencode` ticked on the isolated box records `opencodePlugin.skipped` (no OpenCode
   there) and the job stays `done`; `PATCH /api/local-shell { opencodePlugin: true }` returns the
   pusher result.
-- Live (before merge, per CLAUDE.md): rerun setup on a test box with OpenCode ticked, open an
+- Live (before merge, per CLAUDE.md): rerun setup on the test box with OpenCode ticked, open an
   `opencode` TUI in its `web` session, drive a permission prompt and watch the chip/board/events.
 
 ## 5. Non-goals
