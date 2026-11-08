@@ -2039,7 +2039,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
 
   app.patch('/api/local-shell', { preHandler: requireAuth }, async (req, reply) => {
-    const { shell, claudeHooks } = req.body || {};
+    const { shell, claudeHooks, opencodePlugin } = req.body || {};
     if (!shell || !['none', 'omz', 'omb'].includes(shell)) {
       return reply.code(400).send({ error: 'invalid shell' });
     }
@@ -2058,13 +2058,17 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     // Opt-in Claude Code hook install on the host itself (spec 2026-08-02).
     // Strictly === true: absent/false touches nothing. A failed install is
     // reported, never promoted — the shell change above already persisted.
+    const result = { ok: true };
     if (claudeHooks === true && localShellActions?.installAgentHooks) {
-      const agentHooks = await localShellActions.installAgentHooks();
+      result.agentHooks = await localShellActions.installAgentHooks();
       // The voice link rides the same knob on the host as on a box.
-      const voiceLink = localShellActions.installVoiceLink ? await localShellActions.installVoiceLink() : null;
-      return { ok: true, agentHooks, voiceLink };
+      result.voiceLink = localShellActions.installVoiceLink ? await localShellActions.installVoiceLink() : null;
     }
-    return { ok: true };
+    // Independent opt-in for the OpenCode reporter; same strict === true.
+    if (opencodePlugin === true && localShellActions?.installOpencodePlugin) {
+      result.opencodePlugin = await localShellActions.installOpencodePlugin();
+    }
+    return result;
   });
 
   app.post('/api/local-shell/reconnect', { preHandler: requireAuth }, async () => {

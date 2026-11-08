@@ -2406,6 +2406,13 @@ async function openLocalShellEditModal() {
   const hooksText = document.createElement('span');
   hooksText.textContent = 'Install Claude Code hooks and voice link (agent badge, notifications, and mic link for this host)';
   hooksLine.append(hooksCheck, hooksText);
+  const ocLine = document.createElement('label');
+  ocLine.className = 'check-field';
+  const ocCheck = document.createElement('input');
+  ocCheck.type = 'checkbox';
+  const ocText = document.createElement('span');
+  ocText.textContent = 'Also install the OpenCode agent-state plugin on this host';
+  ocLine.append(ocCheck, ocText);
 
   const err = document.createElement('p');
   err.className = 'err';
@@ -2420,7 +2427,7 @@ async function openLocalShellEditModal() {
   submit.textContent = 'Save';
   actions.append(cancel, submit);
 
-  form.append(title, shellGroup, hooksLine, err, actions);
+  form.append(title, shellGroup, hooksLine, ocLine, err, actions);
   const { close } = openModal({ modal: form, mount: app });
   cancel.addEventListener('click', close);
 
@@ -2430,11 +2437,11 @@ async function openLocalShellEditModal() {
     const selected = (form.querySelector('input[name="localShellFramework"]:checked') as HTMLInputElement)?.value;
     if (!selected) { submit.disabled = false; return; }
     try {
-      const res = await api.updateLocalShell(selected, hooksCheck.checked);
+      const res = await api.updateLocalShell(selected, hooksCheck.checked, ocCheck.checked);
       // The checkbox installs two things on this host now — the agent-state
       // hooks and the voice link's capture device — so report whichever did
       // not land, not just the first.
-      const missed = [res.agentHooks, res.voiceLink].filter((r): r is PushResult => !!r && !r.ok);
+      const missed = [res.agentHooks, res.voiceLink, res.opencodePlugin].filter((r): r is PushResult => !!r && !r.ok);
       if (missed.length) {
         // The shell change saved; only the install needs attention. Keep the
         // dialog open so the message is actually seen.
@@ -2442,11 +2449,12 @@ async function openLocalShellEditModal() {
         // about "the box"; here the target is this host. Reworded at the seam
         // rather than in the server strings, which both paths read.
         const here = (t: string) => t.replace('on the box', 'on this host').replace('the box has', 'this host has');
-        const what = (r: PushResult) => (r.target === 'voice-link' ? 'voice link' : 'hooks');
+        const what = (r: PushResult) => (r.target === 'voice-link' ? 'voice link' : r.target === 'opencode-plugin' ? 'OpenCode plugin' : 'hooks');
         err.textContent = `Shell saved; ${missed.map((r) => (r.skipped
           ? `${what(r)} skipped: ${here(r.skipped)}`
           : `${what(r)} install failed: ${r.error || 'unknown error'}`)).join('; ')}`;
         hooksCheck.checked = false;
+        ocCheck.checked = false;
         submit.disabled = false;
         return;
       }

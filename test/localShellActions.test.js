@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildEnsureLocalShellScript, createLocalShellActions, runLocalScriptStdin } from '../src/server/localShellActions.js';
 import { buildAgentHooksInstallScript } from '../src/server/claudeAgentHooks.js';
+import { buildOpencodePluginInstallScript } from '../src/server/opencodeAgentPlugin.js';
 import { buildVoiceWriterRemote } from '../src/server/voiceWriter.js';
 import { buildVoiceLinkInstallScript } from '../src/server/claudeVoiceLink.js';
 
@@ -157,6 +158,33 @@ test('installAgentHooks reports a failed run as an error result, never a throw',
   const res = await actions.installAgentHooks();
   expect(res.ok).toBe(false);
   expect(res.error).toBeTruthy();
+});
+
+test('installOpencodePlugin runs the install script locally with the plugin bytes on stdin', async () => {
+  const calls = [];
+  const actions = createLocalShellActions({
+    runStdin: async (script, input, opts) => {
+      calls.push({ script, input, opts });
+      return { code: 0, stdout: 'OPENCODEPLUGIN: applied\n', stderr: '' };
+    },
+    readOpencodeAsset: async () => Buffer.from('plugin-body'),
+  });
+
+  await expect(actions.installOpencodePlugin()).resolves.toEqual({ target: 'opencode-plugin', ok: true });
+  expect(calls).toHaveLength(1);
+  expect(calls[0].script).toBe(buildOpencodePluginInstallScript());
+  expect(calls[0].input.toString()).toContain('plugin-body');
+  expect(calls[0].opts.cwd).toBe(os.homedir());
+});
+
+test('installOpencodePlugin maps skipped-no-opencode', async () => {
+  const actions = createLocalShellActions({
+    runStdin: async () => ({ code: 0, stdout: 'OPENCODEPLUGIN: skipped-no-opencode\n', stderr: '' }),
+    readOpencodeAsset: async () => Buffer.from('x'),
+  });
+  const res = await actions.installOpencodePlugin();
+  expect(res.ok).toBe(false);
+  expect(res.skipped).toBeTruthy();
 });
 
 // --- the default spawn transport --------------------------------------------

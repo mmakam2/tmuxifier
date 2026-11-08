@@ -772,6 +772,32 @@ test('PATCH /api/local-shell claudeHooks:true also installs the voice link and r
   });
 });
 
+test('PATCH /api/local-shell with opencodePlugin: true returns the pusher result and still saves the shell', async () => {
+  const localShellActions = {
+    async ensureReady() {},
+    async installAgentHooks() { return { target: 'agent-hooks', ok: true }; },
+    async installOpencodePlugin() { return { target: 'opencode-plugin', ok: true }; },
+  };
+  app = await makeApp({ localShellActions });
+  const cookie = await login();
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+
+  const res = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: 'omz', opencodePlugin: true } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true, opencodePlugin: { target: 'opencode-plugin', ok: true } });
+  const get = await app.inject({ method: 'GET', url: '/api/local-shell', headers });
+  expect(get.json()).toEqual({ shell: 'omz' });
+
+  const both = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: 'omz', claudeHooks: true, opencodePlugin: true } });
+  expect(both.json()).toMatchObject({ ok: true, agentHooks: { ok: true }, opencodePlugin: { ok: true } });
+
+  const hooksOnly = await app.inject({ method: 'PATCH', url: '/api/local-shell', headers, payload: { shell: 'omz', claudeHooks: true } });
+  const body = hooksOnly.json();
+  expect(body.agentHooks).toEqual({ target: 'agent-hooks', ok: true });
+  expect('voiceLink' in body).toBe(true);
+  expect('opencodePlugin' in body).toBe(false);
+});
+
 test('PATCH /api/local-shell without claudeHooks never touches the installer', async () => {
   const localShellActions = {
     async ensureReady() { return { ok: true }; },
