@@ -156,7 +156,7 @@ dashboard tabs are open. The full per-module map lives in [AGENTS.md](AGENTS.md)
 | --- | --- |
 | [Configuration reference](docs/configuration.md) | every option, `config.json`, terminal fonts, the settings modal |
 | [Authentication](docs/authentication.md) | password & OAuth modes, passkeys, require-a-passkey |
-| [Boxes & setup jobs](docs/boxes-and-setup.md) | setup jobs, tools checklist, statusline push, AI CLI auth seeding, post-setup script |
+| [Boxes & setup jobs](docs/boxes-and-setup.md) | setup jobs, tools checklist, the Claude Code and OpenCode checkboxes, AI CLI auth seeding, post-setup script |
 | [Terminal features](docs/terminal.md) | splits, uploads & clipboard, voice dictation, voice link, host shell, reconnect |
 | [Standby dashboard](docs/dashboard.md) | service tiles, icons, Pi-hole/TrueNAS/UniFi/Immich cards |
 | [Status, health & Fleet Command](docs/fleet-and-health.md) | rate-limit-safe probing, health events, fleet jobs, themes |
@@ -176,6 +176,8 @@ interrupt it, and a failed setup keeps the box and offers **Retry** (or **Finish
 interactively** when a password prompt is the blocker). The same setup can push this host's
 Claude Code statusline and **seed the box with this host's Claude/Codex subscription
 credentials** — a deliberate, unchecked-by-default handover of your CLI identity to that box.
+Ticking **OpenCode** in the tools checklist installs it plus an agent-state plugin, so OpenCode
+panes report the same working / needs-you / done states as Claude Code ones.
 A saved Fleet Command script can also be selected to run as the last step of setup — after the
 tools and credentials, before the tmux session. The setup-job lifecycle, the tools checklist,
 and the seeding security model are in [boxes & setup jobs](docs/boxes-and-setup.md).
@@ -229,9 +231,9 @@ phone gets everything else. Details in [the Android app guide](docs/android-app.
 
 ## MCP server
 `src/mcp/index.js` is a dependency-free stdio [MCP](https://modelcontextprotocol.io) server
-that lets Claude Code (or any MCP client) operate the fleet: list boxes and their Claude agent
-states, read panes, send prompts and keys to the Claude sessions on boxes, run fleet commands,
-start setup jobs, provision guests and operate guest power — with blocking `wait_for_agent` /
+that lets Claude Code (or any MCP client) operate the fleet: list boxes and their agent states
+(Claude Code or OpenCode), read panes, send prompts and keys to the agent sessions on boxes, run
+fleet commands, start setup jobs, provision guests and operate guest power — with blocking `wait_for_agent` /
 `wait_for_job` tools so one call replaces a polling loop. Register that file as the command —
 `claude mcp add tmuxifier -- node /path/to/tmuxifier/src/mcp/index.js` — from any directory;
 `npm run mcp` is for a manual smoke test only, and then as `npm run -s mcp`, because npm prints
@@ -245,7 +247,7 @@ A single server-side loop probes every box over a shared SSH ControlMaster with 
 backoff and bounded fan-out, so status traffic stays low enough never to trip a box's
 `fail2ban`-style brute-force protection — no matter how many dashboard tabs are open. The same
 samples feed per-box health sparklines and an event timeline (down/up transitions, resource
-thresholds, and **Claude Code waiting/finished** agent events, with optional browser
+thresholds, and **Claude Code / OpenCode needs-you/finished** agent events, with optional browser
 notifications). **Fleet Command** runs a command or saved script across any selection of boxes
 as a persisted server-side job with per-box results. The full rate-limit-safety design is in
 [status, health & Fleet Command](docs/fleet-and-health.md).

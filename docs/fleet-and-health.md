@@ -62,23 +62,35 @@ opened. Events survive restarts in `data/health-events.json`; the sample series 
 only. Tune with `TMUXIFIER_HEALTH_HISTORY_MAX`, `TMUXIFIER_HEALTH_EVENTS_MAX`,
 `TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT`, and `TMUXIFIER_HEALTH_HYSTERESIS_PCT`.
 
-Tmuxifier also tracks Claude Code on **every tmux session** of a box that has a Claude pane (not
-just the configured one), and on the Host Shell. Each session is in one of four states:
+Tmuxifier also tracks the coding agent — Claude Code or OpenCode — on **every tmux session** of a
+box that has an agent pane (not just the configured one), and on the Host Shell. A session counts
+when the active pane of its current window runs `claude` or `opencode`. Both agents report the same
+four states:
 
-- **working** — Claude is on a turn.
-- **blocked** — Claude needs you. The cause is shown: `permission` (a permission prompt, reported
-  the moment Claude asks), `question` (AskUserQuestion, or a background agent asking), or
-  `elicitation` (an MCP elicitation dialog).
+- **working** — the agent is on a turn.
+- **blocked** — the agent needs you. The cause is shown: `permission` (a permission prompt,
+  reported the moment the agent asks), `question` (Claude's AskUserQuestion or OpenCode's question
+  tool, or a background agent asking), or `elicitation` (an MCP elicitation dialog).
 - **done** — a turn finished and you haven't looked at it yet.
 - **idle** — the session just started, or a finished turn you have looked at.
 
 A `done` becomes `idle` only when a Tmuxifier client shows that pane in a visible, focused tab
-(phone: the pane being shown). A raw `ssh` + `tmux attach` never clears it, and Claude's idle
+(phone: the pane being shown). A raw `ssh` + `tmux attach` never clears it, and the agent's idle
 timers never re-arm it. Claude Code's idle timers only ever end a `working` turn: they never clear
 `blocked`, so a permission dialog left open stays `blocked` however long nobody answers. A plain
 "No" to a permission prompt fires no hook in Claude Code, so the session reads `blocked` until you
 type a prompt or Claude makes its next tool call. A granted permission stays `blocked` until that
 tool finishes; a long build reads Needs you for its duration.
+
+OpenCode differs in two places, both because of how OpenCode itself behaves. Rejecting a
+permission or dismissing a question **ends the turn** in OpenCode, so the session moves on to
+`done` right away; nothing stays `blocked` after a "No". A shell moved to the background with ctrl+b keeps the
+session `working` until that shell exits, even though OpenCode has already ended the turn, and its
+completion starts a new turn. Every OpenCode TUI on a box talks to one shared OpenCode server, so
+the state is matched to tmux sessions by directory: two TUIs in the same directory in different
+tmux sessions show the same combined state (see
+[The OpenCode checkbox](boxes-and-setup.md#the-opencode-checkbox)). When a TUI exits, its state is
+cleared within about 15 seconds.
 
 The state shows in several places. The sidebar badge beside each box shows its worst state
 (`blocked > done > working > idle`), with ` ×N` when several sessions carry a state and a tooltip
@@ -87,20 +99,21 @@ listing them. The **attention strip** above the box list shows counts (`2 need y
 clear; it expands collapsed groups). The standby dashboard has an **Agents** board with Needs you /
 Done / Working / Idle columns, and a card opens that box on that session. The session picker shows
 each session's state, and the pane header chip reads `working`, `blocked · <cause>`, `done` or
-`idle`. This is ground truth and the **only** source: a small Claude Code hook on the box records
-the state at the moment it changes, and the status probe reads that record. There is no
-output-based fallback. A box whose setup hasn't been rerun since the hook was upgraded (or a
+`idle`. This is ground truth and the **only** source: a small Claude Code hook (or, for OpenCode,
+a plugin) on the box records the state at the moment it changes, and the status probe reads that
+record. There is no output-based fallback. A box whose setup hasn't been rerun since the hook was upgraded (or a
 claude started before and not yet restarted) shows `done`/`idle` but **never** `blocked` — that
 silence means "tick the Claude Code checkbox in the box's Edit dialog, save, then restart claude in
 each session". Until then the old hook also rewrites its marker with a fresh timestamp on every Claude Code
 notification, including the ~60-second idle timer, so a `done` you have already looked at can come
 back within a minute; and a session that just started reads `done`, not `idle`.
 
-Three event kinds go into the same timeline, each carrying its session: **claude needs you:
-<cause>** (blocked), **claude finished a turn** (done), and **claude exited**. All three are
-suppressed while you're attached to that session, since watching it is its own notification, and a
-session's first appearance never notifies. All three are pushed to the Android app (the
-blocked one as "Claude needs you"). Seen state is saved on the host in `data/agent-seen.json`.
+Three event kinds go into the same timeline, each carrying its session and naming the agent:
+**Claude needs you: <cause>** (blocked), **Claude finished a turn** (done), and **Claude exited**
+(**OpenCode needs you: <cause>** and so on for an OpenCode pane). All three are suppressed while you're attached to
+that session, since watching it is its own notification, and a session's first appearance never
+notifies. All three are pushed to the Android app (the blocked one as "Claude needs you" or
+"OpenCode needs you"). Seen state is saved on the host in `data/agent-seen.json`.
 
 The working chip carries a small animated indicator — Clawd, the Claude Code mascot, or the CLI's
 own star spinner. **Settings → Appearance** picks between six modes: Off (no indicator at all),
@@ -111,9 +124,10 @@ refresh. Blocked chips
 stay still on purpose — stillness plus red is what makes it read as your turn — and a browser
 asking for reduced motion holds every mode on a single frame.
 
-The **Host Shell** takes part in this too, once you tick **Install Claude Code hooks** in its ✎
-dialog (see [Terminal features](terminal.md)). A claude running inside the host shell's tmux
-session raises the same events, labelled "Host Shell", and they are suppressed the same way
+The **Host Shell** takes part in this too, once you tick **Install Claude Code hooks** (for
+OpenCode, **Also install the OpenCode agent-state plugin**) in its ✎ dialog (see
+[Terminal features](terminal.md)). An agent running inside the host shell's tmux session raises
+the same events, labelled "Host Shell", and they are suppressed the same way
 while you're attached to that terminal; the state shows as a badge beside the **Host Shell**
 button and as the usual pane header chip. Agent events are the *only* kind it can raise — the
 host shell isn't probed over SSH, so it never reports down/recovered or CPU/memory/disk

@@ -1,9 +1,9 @@
 # MCP server
 
 Tmuxifier ships a [Model Context Protocol](https://modelcontextprotocol.io) server so an MCP
-client — Claude Code first — can operate the fleet: see every box and its Claude agent state,
-read panes, type into the Claude sessions running on boxes, run fleet commands, start setup
-jobs, provision Proxmox guests and operate guest power. It is a **renderer of the server
+client — Claude Code first — can operate the fleet: see every box and the state of its coding
+agents (Claude Code or OpenCode), read panes, type into the agent sessions running on boxes, run
+fleet commands, start setup jobs, provision Proxmox guests and operate guest power. It is a **renderer of the server
 APIs**, exactly like the Android app: it speaks only HTTP to the running Tmuxifier, never SSH,
 and holds no credential other than a device token. Everything the web UI can *operate* is
 available; nothing it *administers* is (see [What it cannot do](#what-it-cannot-do)).
@@ -83,7 +83,7 @@ Every tool returns compact text. Ids come from `list_boxes` / `list_jobs` / `lis
 
 | Tool | What it does |
 | --- | --- |
-| `list_boxes` | Fleet overview: reachability, cpu/mem/disk, tmux sessions, Claude agent state per box. Reads the server's cached status — no SSH. |
+| `list_boxes` | Fleet overview: reachability, cpu/mem/disk, tmux sessions, agent state (Claude Code or OpenCode) per box. Reads the server's cached status — no SSH. |
 | `read_pane` | The visible text of a box's configured session plus scrollback (`lines`, default 200). On an alternate-screen app like Claude Code only the visible screen is returned. |
 | `box_health` | Latest health sample and recent events for one box. |
 | `list_fleet_scripts` | Saved Fleet Command scripts with their bodies. |
@@ -91,16 +91,16 @@ Every tool returns compact text. Ids come from `list_boxes` / `list_jobs` / `lis
 | `list_guests` | Linked Proxmox guests: CT/VM, vmid, node, state, template flag. |
 | `list_jobs` | Fleet, setup, provision and lifecycle jobs newest first (`kind` filters). |
 | `job_status` | One job with its log tail; fleet jobs show per-target stdout/stderr. |
-| `send_text` | Type literal text — whitespace runs, newlines included, collapse to single spaces server-side, so a multi-line prompt arrives as one line. `submit: true` presses Enter afterwards — how you send a prompt to a Claude session. |
+| `send_text` | Type literal text — whitespace runs, newlines included, collapse to single spaces server-side, so a multi-line prompt arrives as one line. `submit: true` presses Enter afterwards — how you send a prompt to an agent session. |
 | `send_key` | Press one named key: Enter, Escape, Tab, BSpace, Up, Down, Left, Right or C-c — the server's allowlist, mirrored as the tool's enum so an unsupported key is refused without a round trip. |
-| `scroll_pane` | Scroll a mouse-aware TUI (a Claude transcript) by wheel events; refused, with an explanation, on a plain shell. |
+| `scroll_pane` | Scroll a mouse-aware TUI (a Claude or OpenCode transcript) by wheel events; refused, with an explanation, on a plain shell. |
 | `run_fleet_command` | Run a command or a saved script (`script_id`) on several boxes as a fleet job. |
 | `cancel_fleet_job` | Cancel a running fleet job. |
 | `add_box` | Register a new box. A host that resolves to the Tmuxifier machine, or doesn't resolve from it, is refused; add those from the browser. |
 | `start_setup` | Start a server-side setup job (tmux, shell frameworks, tools, post-setup script). AI-auth seeding is browser-only. |
 | `provision_guest` | Create an LXC container from a preset, link it, start its setup. |
 | `guest_power` | `start` / `shutdown` / `reboot` / `stop` the guest a box is linked to. |
-| `wait_for_agent` | Block until an agent session's state is one of `until` (default `blocked`, `done`, `idle`; `waiting` is a deprecated alias for `blocked`+`done`+`idle` — the old `waiting` also covered permission prompts) or `timeout_sec` (default 120, max 540) passes. `session` picks the tmux session (default: the box's configured one); a `blocked` result adds its `cause`. States: `working`, `blocked`, `done` (finished, unseen), `idle`; `done` becomes `idle` only when a person looks at the pane in the web app. |
+| `wait_for_agent` | Block until a Claude Code or OpenCode session's state is one of `until` (default `blocked`, `done`, `idle`; `waiting` is a deprecated alias for `blocked`+`done`+`idle` — the old `waiting` also covered permission prompts) or `timeout_sec` (default 120, max 540) passes. `session` picks the tmux session (default: the box's configured one); a `blocked` result adds its `cause`. States: `working`, `blocked`, `done` (finished, unseen), `idle`; `done` becomes `idle` only when a person looks at the pane in the web app. |
 | `wait_for_job` | Block until a job leaves `running` or the timeout passes. |
 
 Timing out is **not** an error: both wait tools return the current state with

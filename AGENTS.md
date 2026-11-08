@@ -245,7 +245,10 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   Every catalog tool is install-if-missing: a copy already on the box is never upgraded, even a
   Node older than the pin (only the `upgrade` tool upgrades). The `node` tool installs NodeSource
   `NODE_MAJOR` (26) on apt/dnf/yum, removing distro `npm`/`libnode-dev` first, then moves npm to
-  its newest release (`--engine-strict`, best-effort).
+  its newest release (`--engine-strict`, best-effort). The `opencode` tool runs the native v2
+  installer with `--no-modify-path` (binary in `~/.opencode/bin`); the PATH line is ours, one
+  tagged line per rc file via `binPathBlock` (`# tmuxifier-opencode-bin`, beside claude/agy's
+  `# tmuxifier-local-bin`).
   `buildFrameworkUpdateClamps` disables shell-framework self-updaters on **every** setup, each
   guarded by evidence the framework is present (the oh-my-zsh guard's `^` anchor is load-bearing:
   stock `.zshrc` contains the commented template line).
@@ -258,13 +261,16 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   re-announce modes: over ssh it usually collapses to no resize at all.
 - `localShellActions.js` — the optional Host Shell (`localShell` = `none`/`omz`/`omb`).
   `installAgentHooks()`/`installVoiceLink()` reuse the box pushers over a local `/bin/sh`
-  transport, triggered only by `claudeHooks === true` on `PATCH /api/local-shell`.
+  transport, triggered only by `claudeHooks === true` on `PATCH /api/local-shell`;
+  `installOpencodePlugin()` likewise, only on `opencodePlugin === true`.
 - `localTmuxScope.js` — creates the `=local` session under `systemd-run --scope` so service
   restarts (`KillMode=control-group`) don't kill the Host Shell's tmux; falls back without
   `systemd-run`.
 - `localAgent.js` — Host Shell stand-in for the status probe, shaped like a box probe and parsed
   by `status.js`'s own allowlisting parsers. `LOCAL_BOX_ID` is declared here to keep node-pty
-  out of the poller's import chain.
+  out of the poller's import chain. `NO_SERVER_RE` reads only "no server running" or a socket
+  that does not exist as an empty listing; any other tmux error (refused, permission denied) is
+  "listing unknown", never "every session ended".
 - `uploads.js` — paste/drag-drop uploads: filename allowlist, remote
   `~/.tmuxifier-uploads/` writer (24h self-prune). Route `POST /api/upload`
   (`TMUXIFIER_UPLOAD_MAX_MB`); it and `POST /api/voice` take `?session=` (the pane's own session —
@@ -277,16 +283,17 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   `POST /api/boxes/:id/forget-hostkey`.
 - `boxRemoval.js` — shared cleanup for removal and verified deprovision.
 
-### Setup jobs and the Claude stack
+### Setup jobs and the agent stacks
 
 - `setupManager.js` / `setupStore.js` — persisted, pollable, resumable on-box setup over the
   ControlMaster (`BatchMode`). Statuses `running`/`done`/`error`/`needs-interactive`/`interrupted`/
   `superseded`; `running` reconciles to `interrupted` on restart. `needs-interactive` records
   `job.needs`: `'sudo'` (password prompt) or `'ssh'` (`Permission denied (publickey,password)` —
   a key-only denial stays `error`). Phase order after the install script: `seeding` → `statusline`
-  → `agent-hooks` → `voice-link` → `script` → `ensureSession` (last). The Claude phases are all
-  gated by the one `claude` tools selection (a stale bundle's `claudeStatusline` flag still
-  counts). `streamRemote` is shared by the install run and the script phase; only the install
+  → `agent-hooks` → `voice-link` → `opencode-plugin` → `script` → `ensureSession` (last). The
+  Claude phases are all gated by the one `claude` tools selection (a stale bundle's
+  `claudeStatusline` flag still counts); `opencode-plugin` by the `opencode` one (job field
+  `opencodePlugin`). `streamRemote` is shared by the install run and the script phase; only the install
   run sniffs stderr for prompts. Password-only boxes work only while a ControlMaster is alive.
 - `aiAuthSeed.js` — opt-in copy of the host's Claude (`TMUXIFIER_CLAUDE_OAUTH_TOKEN`) / Codex
   (`~/.codex/auth.json`, never stored) credentials. Secrets travel stdin-only — never in script
@@ -330,6 +337,21 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   holds one writer per box (`4001` newest wins, `4002` not set up, `4003` failed, `4004` idle),
   never queues audio. Read the file headers before touching any of this; test by replaying audio
   into a real `claude --debug`.
+- `opencodeAgentPlugin.js` + `src/server/assets/tmuxifier-opencode-agent.js` — the OpenCode
+  counterpart of the agent hook. The pusher writes the asset (stdin, tmp + `mv`) to
+  `${OPENCODE_CONFIG_DIR:-~/.config/opencode}/plugins/tmuxifier-agent.js` when the box has
+  `opencode` (on PATH or `~/.opencode/bin`), else `skipped`; no settings merge (OpenCode
+  auto-loads the directory) and no restart (its server hot-loads it). The asset is a V2 plugin
+  (`default { id, setup }`, node builtins only) that runs inside OpenCode's **one shared
+  `opencode serve` per user**, which outlives every TUI and gives no per-TUI handle — so it is an
+  events-only reducer (no hooks) attributed by directory to the tmux sessions whose active pane
+  of the active window runs `opencode` there (two TUIs in one directory fold to one state), writes
+  the same `<session>:<state>:<epoch>:<cause>` markers, and sweeps every 15 s (deletes a marker
+  only if it still holds what this core wrote). A process-wide singleton (`Symbol.for`) hands
+  over to the newest `setup`, so a setup rerun upgrades it live. A reject/dismiss ends the turn in
+  OpenCode (nothing stays `blocked`); ctrl+b background shells keep `working`. Acceptance test:
+  `test/fixtures/opencode-event-trace.jsonl` (a real 2.2.6 recording) replayed by
+  `test/opencodeAgentReplay.test.js`. Design: `docs/superpowers/specs/2026-11-07-opencode-agent-state-design.md`.
 
 ### Status and health
 
@@ -345,14 +367,16 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   into history as `__local__` without putting it in the snapshot.
 - `healthHistory.js` / `healthEventsStore.js` — rolling samples per box and edge-triggered events
   (down/up/needs-auth/threshold/agent-blocked/agent-input/agent-done) in `data/health-events.json`.
-  Samples carry per-session `agents` (every listed tmux session, non-Claude panes as
-  `present: false`; the Host Shell is the `__local__` box/series id); displayed states are `working`, `blocked`, `done` (finished, not yet seen), `idle`.
+  Samples carry per-session `agents` (every listed tmux session; `agentKindOf(paneCmd)` →
+  `claude`|`opencode`|`null` sets `present` and the entry's and events' `agent`, which event and
+  push copy name; non-agent panes are `present: false`; the Host Shell is the `__local__` box/series id); displayed states are `working`, `blocked`, `done` (finished, not yet seen), `idle`.
   The seen watermark (`POST /api/boxes/:id/agent-seen` → `history.markSeen`, persisted through
   `agentSeenStore.js`) turns `done` into `idle`. `agent-blocked` = "needs you: <cause>", `agent-input` = finished a turn
-  (`done`), `agent-done` = claude exited; events carry the session, are suppressed while that
-  session is attached, and a session's first appearance never notifies. Agent state is hook-only;
+  (`done`), `agent-done` = the agent exited; events carry the session, are suppressed while that
+  session is attached, and a session's first appearance never notifies. Agent state is marker-only
+  (the Claude hook or the OpenCode plugin);
   the per-session `present` flag guards agent-done. `onEvent(cb)` is the push seam
-  (`fcmPush.js`; `agent-blocked` pushes as "Claude needs you"); browsers poll
+  (`fcmPush.js`; `agent-blocked` pushes as "Claude needs you" / "OpenCode needs you"); browsers poll
   `GET /api/health/events`.
 
 ### Fleet Command

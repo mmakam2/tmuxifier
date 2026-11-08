@@ -12,7 +12,7 @@ import path from 'node:path';
 // Each rc file instead gets one tagged line that exports the token FROM that
 // file — static text with no secret in it, inert (and exit status 0) once the
 // file is gone, or when HOME is unset under `set -u` (an `env -i` script that
-// sources ~/.profile). Same delete-then-append idiom as LOCAL_BIN_PATH_BLOCK in
+// sources ~/.profile). Same delete-then-append idiom as binPathBlock in
 // boxActions.js: exactly one tagged line per rc file, and because the tag is
 // unchanged, re-seeding a box seeded before the move deletes its old
 // plaintext `export CLAUDE_CODE_OAUTH_TOKEN='…'` line.

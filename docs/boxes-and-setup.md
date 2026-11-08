@@ -58,8 +58,8 @@ usage.
 
 The Add/Edit Box modal (and the [Proxmox Provision form](proxmox.md)) also offer an **"Additional
 tools"** checklist that runs in the same provisioning step — a full system update/upgrade,
-curl, git, the GitHub CLI, Node.js 26 + npm, Bubblewrap, and the Codex, Claude Code, and
-Antigravity CLIs — using the same idempotent multi-distro install script.
+curl, git, the GitHub CLI, Node.js 26 + npm, Bubblewrap, and the Codex, Claude Code,
+Antigravity and OpenCode CLIs — using the same idempotent multi-distro install script.
 
 Each tool is installed only if the box doesn't have it, at the newest version available from its
 source. A copy already on the box is never upgraded or reinstalled, including one older than the
@@ -140,6 +140,44 @@ To remove the hook from a box: delete the five `tmuxifier-agent-hook` entries fr
 `~/.claude/settings.json` and `rm -rf ~/.tmuxifier-agent`. With it removed, that box reports
 no agent state at all; the next setup run with Claude Code ticked reinstalls it.
 
+## The OpenCode checkbox
+
+The **OpenCode** entry in the tools checklist is the same kind of one knob for OpenCode. Ticking
+it makes the setup run do two things, each skipping cleanly when already present:
+
+- **Install the CLI** if the box doesn't have it, with OpenCode's official installer. The binary
+  lands in `~/.opencode/bin/opencode`. The installer is told not to edit your rc files; setup
+  adds its own single PATH line instead, tagged `# tmuxifier-opencode-bin`, to `~/.profile`,
+  `~/.bashrc` and `~/.zshrc`, and a re-run replaces that line rather than adding another. An
+  existing install (on PATH or in `~/.opencode/bin`) is left untouched. Installing it from npm
+  works the same for Tmuxifier: both report `opencode` as the pane's command.
+- **Install the agent-state plugin**: a small OpenCode plugin that records whether the agent
+  is working, needs you, or has finished, in the same one-line state files under
+  `~/.tmuxifier-agent/` that the Claude Code hook writes. Like the hook, it is the **only**
+  source of OpenCode's state: nothing is read off the screen. It is written to
+  `~/.config/opencode/plugins/tmuxifier-agent.js` (or under `$OPENCODE_CONFIG_DIR` when that is
+  set). OpenCode loads every file in that directory on its own, so there is no settings file to
+  merge and nothing of yours is touched. A box without OpenCode reports
+  `opencode-plugin skipped (no OpenCode on the box)` and the setup still succeeds.
+
+There is no restart step. OpenCode runs **one shared server process per user**
+(`opencode serve`), which every `opencode` TUI on the box connects to and which keeps running
+after the last TUI exits. The plugin runs inside that server, and the server watches its plugin
+directory, so it picks up a freshly written (or updated) plugin within seconds, even with TUIs
+already open.
+
+That shared server is also why the plugin can't tell two TUIs in the same directory apart: it
+matches each OpenCode session to the tmux session whose **active pane runs `opencode` in the same
+directory**. Two TUIs started in one directory, in different tmux sessions, therefore both show
+the combined state of everything OpenCode is doing there. TUIs in different directories are
+tracked separately. When a TUI exits, its session's state is cleared within about 15 seconds.
+
+Unchecked means setup touches nothing OpenCode-related — no install, no plugin refresh. To
+remove the plugin from a box: `rm ~/.config/opencode/plugins/tmuxifier-agent.js`, then stop
+the `opencode serve` process so the copy it already loaded stops reporting (it clears its own
+state files on the way out, and the next TUI starts a fresh server). With it removed, that box
+reports no OpenCode state at all; the next setup run with OpenCode ticked reinstalls it.
+
 ## Seeding AI CLI auth
 
 Both surfaces also offer a **"Seed AI CLI auth (claude/codex) from this host"** checkbox
@@ -176,7 +214,7 @@ on the box once everything else is installed. The order is deliberate:
 
 ```
 tools & shell framework → AI-auth seeding → Claude statusline → agent hooks
-  → voice link → your saved script → tmux session created
+  → voice link → OpenCode plugin → your saved script → tmux session created
 ```
 
 Your script runs *before* the box's tmux session exists, so anything it writes to

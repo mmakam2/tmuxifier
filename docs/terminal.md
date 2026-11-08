@@ -245,6 +245,14 @@ audio hardware this shadows it: capture becomes your browser microphone and play
 never touched and the step reports `skipped` — writing your own config is how you keep a real
 sound card.
 
+The dialog's second checkbox, **Also install the OpenCode agent-state plugin on this host**,
+puts the plugin a box gets from a setup run with **OpenCode** ticked into the host account's
+`~/.config/opencode/plugins/` (or `$OPENCODE_CONFIG_DIR/plugins/`), so an `opencode` TUI in the
+Host Shell's tmux session reports its state the same way (see
+[The OpenCode checkbox](boxes-and-setup.md#the-opencode-checkbox)). It needs OpenCode installed on
+the host, and reports `skipped` otherwise. No restart is needed: a running OpenCode server loads
+the plugin within seconds.
+
 Once a hook-aware claude runs **inside the Host Shell's own tmux session** (`local`), its
 working/waiting state shows as a badge next to the **Host Shell** button in the sidebar and as
 the usual chip in the pane header, exactly like a box. Only that session is tracked: a claude
