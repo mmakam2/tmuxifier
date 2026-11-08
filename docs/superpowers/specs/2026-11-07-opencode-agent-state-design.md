@@ -111,7 +111,7 @@ the epoch **in seconds** (the sh hook's unit) of the session's last derived-stat
 | `permission.replied` / `form.replied` / `form.cancelled` | delete the block; if any block was deleted and `executing` → `cause = 'unblock'` |
 | `shell.created` | `shells.add(info.id)` on `S[info.metadata.sessionID]` |
 | `shell.exited` | remove from whichever `S` holds it |
-| `session.execution.succeeded` / `interrupted` / `failed` | `executing = false`, `blocks.clear()` (a reject interrupts; nothing survives a turn end in 2.2.6 — and the Claude rule "timers never clear blocked" does not apply because this is the agent's own end-of-turn, not a timer) |
+| `session.execution.succeeded` / `interrupted` / `failed` | `executing = false`, `blocks.clear()`, `cause = 'prompt'` (a reject interrupts; nothing survives a turn end in 2.2.6 — and the Claude rule "timers never clear blocked" does not apply because this is the agent's own end-of-turn, not a timer. Resetting the cause is what makes a turn that ends while a background shell runs read `working/prompt`, as the Claude hook's Stop-while-busy write does, instead of a stale `working/unblock`) |
 | `session.deleted` | drop `S` |
 
 **Derived state of one session**: `blocked` (its cause) if `blocks` non-empty **or any child
