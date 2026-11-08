@@ -580,6 +580,9 @@ export function createCore({
   const controller = new AbortController();
   const dir = path.join(home, '.tmuxifier-agent');
   let aborted = false;
+  // The event stream ended on its own: the reducer is frozen, nothing more
+  // is written (a hand-over can still take what this core knows).
+  let ended = false;
   let attached = false;
   let timer = null;
   let inflight = null;
@@ -649,7 +652,7 @@ export function createCore({
 
   async function sweepOnce() {
     const { text, listAt } = await listing();
-    if (aborted || text === null) return; // handed over, or tmux unusable: touch nothing
+    if (aborted || ended || text === null) return; // handed over, stopped, or tmux unusable: touch nothing
     // A tmux session that starts hosting opencode in this listing did so after
     // the previous listing, the last one that showed it not hosting: that is
     // its `since`. Stamping this sweep's own time instead would exclude a
@@ -691,7 +694,7 @@ export function createCore({
         do {
           rerun = false;
           await sweepOnce();
-        } while (rerun && !aborted);
+        } while (rerun && !aborted && !ended);
       } catch (e) {
         debug('sweep', e);
       } finally {
@@ -708,7 +711,7 @@ export function createCore({
     } catch (e) {
       debug('apply', e);
     }
-    if (changed && !aborted) await sweep();
+    if (changed && !aborted && !ended) await sweep();
   }
 
   // Sweep now and every sweepMs, and feed the event stream into handle()
@@ -734,10 +737,15 @@ export function createCore({
     }
     // The stream ended or threw on its own. The reducer is frozen from here
     // on, so sweeping would keep republishing a stale working/blocked: stop
-    // the timer, never re-subscribe, and keep written/since for a hand-over.
+    // the timer, never re-subscribe, let an in-flight sweep finish (it writes
+    // nothing now), then delete our markers under the content rule. The core
+    // stays the global: a later setup takes over since and the reducer state.
     if (!aborted) {
-      debug('event stream ended; sweeps stopped until the next setup');
+      ended = true;
+      debug('event stream ended; markers cleared, sweeps stopped until the next setup');
       stopSweeping();
+      try { await inflight; } catch { /* sweeps never reject */ }
+      if (!aborted) clear();
     }
   }
 

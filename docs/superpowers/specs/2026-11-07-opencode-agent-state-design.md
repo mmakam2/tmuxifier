@@ -95,8 +95,10 @@ operator's execution while an event consumer cannot. Live upgrade without an Ope
 requirement and is validated on a test box by rerunning setup over a running server.
 
 **Inert conditions.** `tmux` not on PATH (`execFile` ENOENT) → the core never writes and never
-sweeps. No matching pane → no write for that session. Every write and every tmux call is wrapped;
-nothing propagates.
+sweeps. No matching pane → no write for that session. An event stream that ends without an abort →
+the sweep timer stops and the core deletes its markers (content rule), so no stale `working`/`blocked`
+lingers; it stays the global so the next `setup` still takes over. Every write and every tmux call is
+wrapped; nothing propagates.
 
 **Per-OpenCode-session state** (`Map<sessionID, S>`), `S = { dir, parent, executing, cause,
 blocks: Map<id, cause>, shells: Set<shellID>, lastInbox: 'user'|'synthetic', ts }` where `ts` is

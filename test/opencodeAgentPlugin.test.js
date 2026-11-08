@@ -564,10 +564,10 @@ test('a previous core with a different STATE_VERSION hands over nothing of its r
   expect(err).not.toHaveBeenCalled();
 });
 
-test('an event stream that ends without an abort stops the sweep timer and keeps the core for a later hand-over', async () => {
+test('an event stream that ends without an abort stops the sweep timer, deletes its markers, and keeps the core for a later hand-over', async () => {
   const mod = await import(ASSET);
   const env = fakeTmuxEnv();
-  env.setPanes(row('web', 'opencode', '/proj'));
+  env.setPanes(row('web', 'opencode', '/proj') + row('dev', 'opencode', '/other'));
   vi.stubEnv('TMUXIFIER_OPENCODE_DEBUG', '1');
   const err = vi.spyOn(console, 'error').mockImplementation(() => {});
   const started = [];
@@ -578,24 +578,53 @@ test('an event stream that ends without an abort stops the sweep timer and keeps
   vi.spyOn(globalThis, 'clearInterval').mockImplementation((t) => { if (started.includes(t)) stopped.push(t); return realClear(t); });
 
   let signal = null;
-  const ctx = { event: { async *subscribe(opts) { signal = opts.signal; yield ev('session.created', null, { sessionID: 'ses_a' }, '/proj'); } } };
+  let endStream;
+  const ended = new Promise((r) => { endStream = r; });
+  const T = Math.floor(Date.now() / 1000) + 10;
+  const ctx = { event: { async *subscribe(opts) {
+    signal = opts.signal;
+    yield ev('session.created', T, { sessionID: 'ses_a' }, '/proj');
+    yield ev('session.execution.started', T + 1, { sessionID: 'ses_a' });
+    await ended;
+  } } };
   await mod.default.setup(ctx);
   const core1 = globalThis[KEY];
+  await vi.waitFor(() => expect(read(env.home, 'web')).toBe(`web:working:${T + 1}:prompt\n`));
+  writeFileSync(marker(env.home, 'dev'), 'dev:blocked:1:permission\n'); // the Claude hook took it over
+  endStream();
   await vi.waitFor(() => expect(stopped).toEqual([started[0]]));
   expect(signal.aborted).toBe(false); // ended on its own, not aborted
   expect(err.mock.calls.some((c) => c.join(' ').includes('stream ended'))).toBe(true);
-  await vi.waitFor(() => expect(existsSync(marker(env.home, 'web'))).toBe(true));
+  // The frozen reducer would republish a stale working: its marker is gone,
+  // a marker someone else rewrote is kept.
+  await vi.waitFor(() => expect(existsSync(marker(env.home, 'web'))).toBe(false));
+  expect(read(env.home, 'dev')).toBe('dev:blocked:1:permission\n');
   expect(globalThis[KEY]).toBe(core1);
-  expect(core1.written.size).toBe(1);
+  expect(core1.written.size).toBe(0);
+  await core1.sweep(); // a stopped core writes nothing
+  expect(existsSync(marker(env.home, 'web'))).toBe(false);
 
-  // A later setup still hands over what the stopped core wrote.
+  // A later setup still hands over: since, and the reducer state.
   const cleanup2 = await mod.default.setup(fakeCtx());
   const core2 = globalThis[KEY];
   expect(core2).not.toBe(core1);
   expect(core2.written).toBe(core1.written);
   expect(core2.since).toBe(core1.since);
+  expect(core2.state.sessions).toBe(core1.state.sessions);
+  await vi.waitFor(() => expect(read(env.home, 'web')).toBe(`web:working:${T + 1}:prompt\n`));
   await cleanup2();
   expect(existsSync(marker(env.home, 'web'))).toBe(false);
+});
+
+test('a stream that ends while the first sweep is still listing leaves no marker behind', async () => {
+  const mod = await import(ASSET);
+  const env = fakeTmuxEnv();
+  env.setPanes(row('web', 'opencode', '/proj'));
+  const ctx = { event: { async *subscribe() { yield ev('session.created', null, { sessionID: 'ses_a' }, '/proj'); } } };
+  await mod.default.setup(ctx);
+  await flush(300); // the in-flight sweep's listing has come back
+  expect(existsSync(marker(env.home, 'web'))).toBe(false);
+  expect(globalThis[KEY].written.size).toBe(0);
 });
 
 test('cleanup deletes only markers whose content still equals the last write', async () => {
