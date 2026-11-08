@@ -11,6 +11,8 @@ import json
 import os
 import sys
 
+sys.dont_write_bytecode = True
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSET = os.path.join(HERE, '..', '..', 'src', 'server', 'assets', 'tmuxifier-osc-reporter.py')
 spec = importlib.util.spec_from_file_location('tmuxifier_osc_reporter', ASSET)

@@ -51,3 +51,5 @@ vendor/
 # sidecar the skill regenerates. DESIGN.md itself stays committed: it is the
 # project's visual authority and contains nothing machine-specific.
 .impeccable/
+
+__pycache__/
