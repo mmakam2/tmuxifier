@@ -560,3 +560,22 @@ test('agent events carry the agent kind, including agent-done after the pane is 
   const gone = { up: true, agents: {} };
   expect(classifyTransitions(b, gone, TH, st).events).toEqual([{ kind: 'agent-done', session: 'web', agent: 'opencode' }]);
 });
+
+test('record() keeps the agent kind on emitted and persisted agent events, and none on others', () => {
+  const run = (cmd) => {
+    const emitted = [];
+    const h = createHealthHistory({ onEvent: (e) => emitted.push(e) });
+    const box = { id: 'b1', host: 'h', sessionName: 'web' };
+    const st = (marks) => ({ reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: cmd }], agentMarks: marks });
+    h.record({ b1: st({ web: { state: 'working', cause: 'prompt', ts: 150 } }) }, [box]);
+    h.record({ b1: st({ web: { state: 'blocked', cause: 'permission', ts: 160 } }) }, [box]);
+    h.record({ b1: { reachable: false, error: 'x' } }, [box]);
+    const persisted = h.getEvents().events.find((e) => e.kind === 'agent-blocked');
+    return { emitted: emitted.find((e) => e.kind === 'agent-blocked'), persisted, down: emitted.find((e) => e.kind === 'down') };
+  };
+  for (const kind of ['opencode', 'claude']) {
+    const r = run(kind);
+    for (const ev of [r.emitted, r.persisted]) expect(ev).toMatchObject({ agent: kind, session: 'web', cause: 'permission' });
+  }
+  expect('agent' in run('claude').down).toBe(false);
+});

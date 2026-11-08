@@ -334,6 +334,7 @@ export function createHealthHistory({
           const out = { boxId: box.id, label: box.label || box.host, host: box.host, t: at, kind: ev.kind };
           if (ev.session !== undefined) out.session = ev.session;
           if (ev.cause !== undefined) out.cause = ev.cause;
+          if (ev.agent !== undefined) out.agent = ev.agent;
           if (ev.metric) { out.metric = ev.metric; out.value = ev.value; }
           // Cap the reason: it is raw ssh stderr, which can be huge — the log
           // is persisted and re-served whole on every events poll.
