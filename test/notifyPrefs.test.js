@@ -15,9 +15,9 @@ test('the catalog covers every event kind exactly once', () => {
 
 test('agent-blocked leads the catalog and defaults on', () => {
   expect(NOTIFY_KINDS[0].kind).toBe('agent-blocked');
-  expect(NOTIFY_KINDS[0].label).toBe('Claude needs you (permission or question)');
-  expect(NOTIFY_KINDS.find((k) => k.kind === 'agent-input').label).toBe('Claude finished a turn');
-  expect(NOTIFY_KINDS.find((k) => k.kind === 'agent-done').label).toBe('Claude exited');
+  expect(NOTIFY_KINDS[0].label).toBe('Agent needs you (permission or question)');
+  expect(NOTIFY_KINDS.find((k) => k.kind === 'agent-input').label).toBe('Agent finished a turn');
+  expect(NOTIFY_KINDS.find((k) => k.kind === 'agent-done').label).toBe('Agent exited');
   expect(defaultNotifyPrefs()['agent-blocked']).toBe(true);
 });
 

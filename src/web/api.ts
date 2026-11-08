@@ -49,7 +49,8 @@ export interface Status {
 // apart from a genuinely reachable box.
 export type AgentState = 'working' | 'blocked' | 'done' | 'idle';
 export type AgentCause = 'prompt' | 'resume' | 'stop' | 'start' | 'permission' | 'question' | 'elicitation' | 'unblock';
-export interface AgentEntry { present: boolean; attached: boolean; state?: AgentState; cause?: AgentCause; ts?: number }
+export type AgentKind = 'claude' | 'opencode';
+export interface AgentEntry { present: boolean; agent?: AgentKind; attached: boolean; state?: AgentState; cause?: AgentCause; ts?: number }
 export interface Sample {
   t: number; up: boolean; stopped?: boolean; tmux?: boolean; needsAuth?: boolean; keyChanged?: boolean;
   cpuPct?: number; memPct?: number; diskPct?: number;
@@ -181,7 +182,7 @@ export type HealthEventKind = 'down' | 'up' | 'needs-auth' | 'key-changed' | 'th
 export interface HealthEvent {
   seq: number; boxId: string; label: string; host: string; t: number;
   kind: HealthEventKind; reason?: string; metric?: 'cpu' | 'mem' | 'disk'; value?: number;
-  session?: string; cause?: AgentCause;
+  session?: string; cause?: AgentCause; agent?: AgentKind;
 }
 export type FleetTargetStatus = 'pending' | 'running' | 'ok' | 'error' | 'skipped' | 'cancelled' | 'interrupted';
 export type FleetJobStatus = 'running' | 'done' | 'cancelled' | 'interrupted';

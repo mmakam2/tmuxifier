@@ -91,3 +91,10 @@ test('buildFcmMessage: agent-done says the session exited', () => {
   const { body } = buildFcmMessage({ projectId: 'p', fcmToken: 'tok', event: { boxId: 'b1', label: 'workbox', kind: 'agent-done', session: 'web', t: 5 } });
   expect(body.message.notification.body).toBe('A Claude session exited.');
 });
+
+test('buildFcmMessage: titles and bodies name the agent', () => {
+  const m = (event) => buildFcmMessage({ projectId: 'p', fcmToken: 't', event: { boxId: 'b1', label: 'workbox', t: 5, ...event } }).body.message.notification;
+  expect(m({ kind: 'agent-blocked', session: 'web-2', cause: 'permission', agent: 'opencode' }).title).toBe('workbox — OpenCode needs you');
+  expect(m({ kind: 'agent-input', session: 'web-2' })).toEqual({ title: 'workbox — Claude is waiting', body: 'A Claude session wants your input in web-2.' });
+  expect(m({ kind: 'agent-done', session: 'web', agent: 'opencode' }).body).toBe('A OpenCode session exited.');
+});

@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { sampleOf, deriveAgentState, classifyTransitions, initThresholdState, createHealthHistory } from '../src/server/healthHistory.js';
+import { agentKindOf, sampleOf, deriveAgentState, classifyTransitions, initThresholdState, createHealthHistory } from '../src/server/healthHistory.js';
 import { parseTmuxSessions, parseAgentMarks } from '../src/server/status.js';
 
 const TH = { cpu: 90, mem: 90, disk: 90, hysteresis: 5 };
@@ -298,7 +298,7 @@ test('agent-done fires when claude exits on an up box, and either end attached s
   const mk = (viewers, cmd) => ({ reachable: true, sessions: parseTmuxSessions(`web:1:${viewers}:1010:${cmd}\n`) });
   const working = (viewers) => ({ reachable: true, sessions: parseTmuxSessions(`web:1:${viewers}:1000:claude\n`), agentMarks: { web: { state: 'working', cause: 'prompt', ts: 990 } } });
   const run = (v0, v1) => classifyTransitions(sampleOf(working(v0), 5, {}), sampleOf(mk(v1, 'zsh'), 5, {}), TH, seeded(sampleOf(working(v0), 5, {}).agents)).events;
-  expect(run(0, 0)).toEqual([{ kind: 'agent-done', session: 'web' }]);
+  expect(run(0, 0)).toEqual([{ kind: 'agent-done', session: 'web', agent: 'claude' }]);
   expect(run(1, 0)).toEqual([]); // prev attached
   expect(run(0, 1)).toEqual([]); // next attached (session listed, pane now zsh)
   // and the session vanishing entirely still fires
@@ -416,9 +416,9 @@ test('sampleOf builds a per-session agents map and keeps the legacy agent field 
     agentMarks: { web: { state: 'ready', cause: 'stop', ts: 50 }, 'web-2': { state: 'blocked', cause: 'permission', ts: 60 }, 'bad name': { state: 'working', cause: 'prompt', ts: 1 }, stale: { state: 'working', cause: 'prompt', ts: 1 } } };
   const s = sampleOf(status, 1, { sessionName: 'web', seenOf: (name) => (name === 'web' ? 50 : undefined) });
   expect(s.agents).toEqual({
-    web: { present: true, attached: false, state: 'idle', cause: 'stop', ts: 50 },
-    'web-2': { present: true, attached: true, state: 'blocked', cause: 'permission', ts: 60 },
-    nomark: { present: true, attached: false },
+    web: { present: true, agent: 'claude', attached: false, state: 'idle', cause: 'stop', ts: 50 },
+    'web-2': { present: true, agent: 'claude', attached: true, state: 'blocked', cause: 'permission', ts: 60 },
+    nomark: { present: true, agent: 'claude', attached: false },
     build: { present: false, attached: false },
   });
   expect(s.agent).toBe('idle');
@@ -523,7 +523,7 @@ test('sampleOf keeps __proto__ and constructor sessions as own agents entries', 
   expect(Object.hasOwn(s.agents, '__proto__')).toBe(true);
   expect(s.agents.__proto__).toMatchObject({ present: true, state: 'working', ts: 10 });
   // `constructor` has no marker: no inherited Object.prototype.constructor read as one.
-  expect(s.agents.constructor).toEqual({ present: true, attached: false });
+  expect(s.agents.constructor).toEqual({ present: true, agent: 'claude', attached: false });
   expect(s.agents.web.state).toBe('done');
   expect(s.agent).toBe('working');
   // The map round-trips through JSON (the /api/status boundary) intact.
@@ -533,3 +533,30 @@ test('sampleOf keeps __proto__ and constructor sessions as own agents entries', 
 function parseAgentMarksForTest() {
   return parseAgentMarks('__AGENT__ __proto__:working:10:prompt\n__AGENT__ web:ready:11:stop\n');
 }
+
+test('agentKindOf: claude and opencode panes are agents, shells and node are not', () => {
+  expect(agentKindOf('claude')).toBe('claude'); expect(agentKindOf('claude-code')).toBe('claude');
+  expect(agentKindOf('opencode')).toBe('opencode'); expect(agentKindOf('opencode-x')).toBe('opencode');
+  expect(agentKindOf('node')).toBeNull(); expect(agentKindOf('zsh')).toBeNull(); expect(agentKindOf('')).toBeNull();
+});
+
+test('sampleOf: an opencode pane with a marker carries state and agent: opencode', () => {
+  const s = sampleOf(withAgent({
+    sessions: [{ name: 'web', attached: false, activity: 1000, paneCmd: 'opencode' }],
+    agentMarks: { web: { state: 'blocked', cause: 'permission', ts: 990 } },
+  }), 5, AGENT);
+  expect(s.agents.web).toEqual({ present: true, agent: 'opencode', state: 'blocked', cause: 'permission', ts: 990, attached: false });
+  expect(s.agent).toBe('blocked');
+});
+
+test('agent events carry the agent kind, including agent-done after the pane is gone', () => {
+  const mk = (cmd, mark) => sampleOf({ reachable: true, sessions: [{ name: 'web', attached: false, paneCmd: cmd }], agentMarks: mark }, 5, AGENT);
+  const a = mk('opencode', { web: { state: 'working', cause: 'prompt', ts: 1 } });
+  const b = mk('opencode', { web: { state: 'blocked', cause: 'permission', ts: 2 } });
+  let st = initThresholdState();
+  st = classifyTransitions(null, a, TH, st).state;
+  const r = classifyTransitions(a, b, TH, st); st = r.state;
+  expect(r.events).toEqual([{ kind: 'agent-blocked', session: 'web', cause: 'permission', agent: 'opencode' }]);
+  const gone = { up: true, agents: {} };
+  expect(classifyTransitions(b, gone, TH, st).events).toEqual([{ kind: 'agent-done', session: 'web', agent: 'opencode' }]);
+});

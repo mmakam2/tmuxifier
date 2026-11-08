@@ -3,10 +3,11 @@
 // sample; every client surface (pane chip, session rows, sidebar badge, the
 // standby strip) folds that map through here so they cannot disagree about
 // precedence. No DOM access: this half is unit-tested in node.
-import type { AgentState, AgentCause, AgentEntry, Sample } from './api';
+import type { AgentState, AgentCause, AgentEntry, AgentKind, Sample } from './api';
 
 // The single precedence list, worst (most attention-demanding) first. A box
 // with one blocked and one working session reads blocked.
+export const AGENT_LABEL: Record<AgentKind, string> = { claude: 'Claude', opencode: 'OpenCode' };
 export const AGENT_PRECEDENCE: AgentState[] = ['blocked', 'done', 'working', 'idle'];
 
 const rank = (s: AgentState): number => AGENT_PRECEDENCE.indexOf(s);

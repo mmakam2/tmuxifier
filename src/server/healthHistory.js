@@ -27,6 +27,15 @@ export function deriveAgentState(mark, seenTs) {
 // true`) even though SSH can't reach it: an intentionally-stopped container is
 // not a failure, so classifyTransitions must not fire a false down/up pair
 // around the moment it stops or starts back up.
+// Which agent runs in a pane, by its foreground command. Keep the opencode
+// pattern identical to the plugin's own pane check.
+export function agentKindOf(paneCmd) {
+  const c = String(paneCmd || '');
+  if (/^claude(-|$)/.test(c)) return 'claude';
+  if (/^opencode(-|$)/.test(c)) return 'opencode';
+  return null;
+}
+
 export function sampleOf(status, at, opts = {}) {
   const s = status || {};
   const stopped = s.proxmoxState === 'stopped';
@@ -83,8 +92,10 @@ export function sampleOf(status, at, opts = {}) {
     const marks = s.agentMarks && typeof s.agentMarks === 'object' ? s.agentMarks : null;
     for (const sess of s.sessions) {
       if (!sess || !SESSION_NAME_RE.test(String(sess.name))) continue;
-      const present = /^claude(-|$)/.test(String(sess.paneCmd || ''));
+      const kind = agentKindOf(sess.paneCmd);
+      const present = kind !== null;
       const entry = { present, attached: !!sess.attached };
+      if (present) entry.agent = kind;
       if (!present) { agents[sess.name] = entry; continue; }
       const mark = marks && Object.hasOwn(marks, sess.name) ? marks[sess.name] : undefined;
       if (mark) {
@@ -100,7 +111,7 @@ export function sampleOf(status, at, opts = {}) {
       const sess = s.sessions.find((x) => x.name === sessionName);
       if (sess) {
         sample.agentAttached = !!sess.attached;
-        if (/^claude(-|$)/.test(String(sess.paneCmd || ''))) {
+        if (agentKindOf(sess.paneCmd)) {
           sample.agentPresent = true;
           const st = Object.hasOwn(agents, sessionName) ? agents[sessionName].state : undefined;
           if (st) sample.agent = st;
@@ -178,17 +189,18 @@ export function classifyTransitions(prev, next, thresholds, state) {
     for (const [session, now] of Object.entries(next.agents)) {
       const was = Object.hasOwn(before, session) ? before[session].state : undefined;
       if (!was || now.attached) continue;
+      const agent = now.agent ? { agent: now.agent } : {};
       if (now.state === 'blocked' && (was === 'working' || was === 'done' || was === 'idle')) {
-        events.push({ kind: 'agent-blocked', session, cause: now.cause });
+        events.push({ kind: 'agent-blocked', session, cause: now.cause, ...agent });
       } else if (now.state === 'done' && (was === 'working' || was === 'blocked')) {
-        events.push({ kind: 'agent-input', session });
+        events.push({ kind: 'agent-input', session, ...agent });
       }
     }
     if (next.up && !next.stopped) {
       for (const [session, was] of Object.entries(before)) {
         const now = Object.hasOwn(next.agents, session) ? next.agents[session] : undefined;
         if (!was.state || was.attached || (now && (now.present || now.attached))) continue;
-        events.push({ kind: 'agent-done', session });
+        events.push({ kind: 'agent-done', session, ...(was.agent ? { agent: was.agent } : {}) });
       }
     }
     st.agents = next.agents;

@@ -1,4 +1,5 @@
 import type { HealthEvent, HealthEventKind } from './api';
+import { AGENT_LABEL } from './agentState';
 import { classifyError, CPU_ICON, MEM_ICON, DISK_ICON } from './statusDot';
 
 // Pure formatting for the in-app Events panel. Levels reuse the meta-line tiers
@@ -61,9 +62,9 @@ export function formatEvent(e: HealthEvent): EventLine {
       return { icon: METRIC_ICON[e.metric!], text: `${name} — ${METRIC_LABEL[e.metric!]} ${e.value}%`, level: 'warn' };
     case 'threshold-clear':
       return { icon: '', text: `${name} — ${METRIC_LABEL[e.metric!]} back to ${e.value}%`, level: 'ok' };
-    case 'agent-blocked': return { icon: '', text: `${name}${sess} — claude needs you: ${e.cause ?? 'blocked'}`, level: 'crit' };
-    case 'agent-input': return { icon: '', text: `${name}${sess} — claude finished a turn`, level: 'warn' };
-    case 'agent-done': return { icon: '', text: `${name}${sess} — claude exited`, level: 'ok' };
+    case 'agent-blocked': return { icon: '', text: `${name}${sess} — ${AGENT_LABEL[e.agent ?? 'claude']} needs you: ${e.cause ?? 'blocked'}`, level: 'crit' };
+    case 'agent-input': return { icon: '', text: `${name}${sess} — ${AGENT_LABEL[e.agent ?? 'claude']} finished a turn`, level: 'warn' };
+    case 'agent-done': return { icon: '', text: `${name}${sess} — ${AGENT_LABEL[e.agent ?? 'claude']} exited`, level: 'ok' };
     default:
       // A newer server may ship event kinds this bundle doesn't know yet — one
       // unknown kind must degrade to a generic line, not brick the panel.
