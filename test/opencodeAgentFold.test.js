@@ -109,6 +109,22 @@ test('foldForPanes: blocked beats working beats ready; ties go to the newest ts;
   expect(foldForPanes(n.r, panes, since, 999).get('web')).toEqual({ state: 'ready', cause: 'start', ts: 300 });
 });
 
+test('foldForPanes: a finished turn outranks a newer session that has not started (fixture lines 336-342)', () => {
+  const w = world();
+  w.created('ses_done', 100, '/proj'); w.start('ses_done', 110); w.end('ses_done', 120); // ready/stop @120
+  w.created('ses_fresh', 200, '/proj'); // ready/start @200, newer
+  const panes = [pane('web', '/proj')];
+  expect(foldForPanes(w.r, panes, new Map([['web', 0]]), 999).get('web')).toEqual({ state: 'ready', cause: 'stop', ts: 120 });
+  // Once the fresh session starts, it wins as working.
+  w.start('ses_fresh', 210);
+  expect(foldForPanes(w.r, panes, new Map([['web', 0]]), 999).get('web')).toEqual({ state: 'working', cause: 'prompt', ts: 210 });
+  // A finished turn older than since is still excluded: the fresh session's ready/start shows.
+  const x = world();
+  x.created('ses_done', 100, '/proj'); x.start('ses_done', 110); x.end('ses_done', 120);
+  x.created('ses_fresh', 200, '/proj');
+  expect(foldForPanes(x.r, panes, new Map([['web', 150]]), 999).get('web')).toEqual({ state: 'ready', cause: 'start', ts: 200 });
+});
+
 test('foldForPanes: a session finished before the pane\'s since is excluded and the pane reads ready/start at since', () => {
   const w = world();
   w.created('ses_a', 100, '/proj'); w.start('ses_a', 110); w.end('ses_a', 120);

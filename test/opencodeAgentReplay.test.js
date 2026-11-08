@@ -78,6 +78,9 @@ test('the recorded OpenCode trace drives the per-pane markers through every scen
   // (k)/(l) a second session in proj folds into both proj panes; proj2 has none.
   expect(trail2(343)).toBe('working/prompt'); expect(at(343)).toBe('working/prompt'); expect(trail3(343)).toBe('ready/start');
   expect(at(344)).toBe(at(343)); // duplicate changes nothing
+  // The second session's session.created (336) must not hide octest's finished turn from 313.
+  for (let n = 313; n <= 342; n++) expect(at(n), `line ${n}`).toBe('ready/stop');
+  expect(trail[341].fold.get('octest').ts).toBe(Math.floor(trail[312].created / 1000));
   // (q) `opencode -c` in a fresh server: no session.created, directory learned at 415.
   expect(at(416)).toBe('working/prompt'); expect(at(426)).toBe('ready/stop');
 

@@ -36,9 +36,18 @@
 //    (except the synthetic ctrl+b notices), `permission.*`, `form.*`,
 //    `shell.*`; never on `session.execution.*`. A resumed session
 //    (`opencode -c`) has no `session.created`, but its first `inbox.enqueued`
-//    names the directory before `execution.started`.
+//    names the directory before `execution.started`. An inbox item for a
+//    session the reducer does not know yet creates no session; it leaves a
+//    hint (directory + inbox kind, at most 500, oldest dropped first) that
+//    seeds the session when it is created.
 //
-// Clock: an event's own `created` (ms) when present, else the injected
+// Hot reload (fact 3) can hand a fresh reducer a session mid-turn. Replies
+// and inbox items for unknown sessions create nothing, so no phantom finished
+// session is minted; accepted edge: a session first seen at its
+// `execution.succeeded` reads ready/start, so that one turn's done is not
+// reported.
+//
+// Clock: an event's own `created` (ms) when it is a finite number, else the injected
 // `now()`; every `ts` here is epoch SECONDS, the sh hook's unit.
 
 // ---------------------------------------------------------------------------
@@ -390,33 +399,38 @@ export function dirMatches(dir, panePath) {
   return d === p || p.startsWith(d + '/') || d.startsWith(p + '/');
 }
 
-const RANK = { blocked: 3, working: 2, ready: 1 };
+// blocked > working > ready/stop > ready/start: a fresh session that has not
+// started yet must never hide a finished, possibly unseen turn in the same
+// directory (fixture lines 336-342).
+const rankOf = (d) => (d.state === 'blocked' ? 4 : d.state === 'working' ? 3
+  : d.state === 'ready' ? (d.cause === 'start' ? 1 : 2) : 0);
 
 // tmux session -> { state, cause, ts } for every opencode pane. Candidates are
 // root sessions (children roll up into their parent) in the pane's directory
 // whose ts is not older than `since` (the moment this tmux session's active
 // pane became opencode, seconds), which keeps a previous TUI's finished turns
-// from making a relaunch read done. blocked > working > ready, ties to the
-// newest ts; the written ts is the chosen session's own, not the fold time.
+// from making a relaunch read done. blocked > working > ready/stop >
+// ready/start, ties to the
+// newest ts within a rank; the written ts is the chosen session's own, not the fold time.
 // No candidate: ready/start at `since` (else `now`, seconds).
 export function foldForPanes(reducer, panes, since = new Map(), now = Math.floor(Date.now() / 1000)) {
   const roots = [];
   for (const s of reducer.sessions.values()) {
     if (s.parent !== null || !s.dir) continue;
     const d = reducer.derive(s.id);
-    if (d && RANK[d.state]) roots.push({ dir: s.dir, d });
+    if (d && rankOf(d)) roots.push({ dir: s.dir, d, rank: rankOf(d) });
   }
   const out = new Map();
   for (const pane of panes) {
     if (!isOpencodeCmd(pane.cmd)) continue;
     const floor = since.get(pane.session);
     let best = null;
-    for (const { dir, d } of roots) {
-      if (d.ts < (floor ?? 0) || !dirMatches(dir, pane.path)) continue;
-      if (!best || RANK[d.state] > RANK[best.state] || (RANK[d.state] === RANK[best.state] && d.ts > best.ts)) best = d;
+    for (const c of roots) {
+      if (c.d.ts < (floor ?? 0) || !dirMatches(c.dir, pane.path)) continue;
+      if (!best || c.rank > best.rank || (c.rank === best.rank && c.d.ts > best.d.ts)) best = c;
     }
     out.set(pane.session, best
-      ? { state: best.state, cause: best.cause, ts: best.ts }
+      ? { state: best.d.state, cause: best.d.cause, ts: best.d.ts }
       : { state: 'ready', cause: 'start', ts: floor ?? now });
   }
   return out;
