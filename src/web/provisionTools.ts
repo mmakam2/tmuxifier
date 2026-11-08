@@ -12,6 +12,7 @@ export const PROVISION_TOOLS: { id: string; label: string }[] = [
   { id: 'codex', label: 'Codex CLI' },
   { id: 'claude', label: 'Claude Code (CLI + statusline + agent hooks)' },
   { id: 'agy', label: 'Antigravity CLI (agy)' },
+  { id: 'opencode', label: 'OpenCode (CLI + agent-state plugin)' },
 ];
 
 // Shared "Additional tools" checkbox group for the provision form and the

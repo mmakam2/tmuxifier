@@ -25,7 +25,7 @@ import { buildVoiceWriterRemote } from './voiceWriter.js';
 // Curated provision-time tools. Ids are the ONLY strings that ever reach the
 // generated shell script — resolveTools throws on anything not in the catalog,
 // which is what keeps the tools= query param out of command-injection territory.
-export const TOOL_IDS = ['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy'];
+export const TOOL_IDS = ['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy', 'opencode'];
 
 // The Node major the `node` tool installs. Distro archives lag by years
 // (Ubuntu 24.04 and Debian 12 both ship 18) and the agent CLIs this catalog
@@ -38,7 +38,7 @@ export const NODE_MAJOR = 26;
 
 // gh and node fetch (GitHub's apt keyring, NodeSource's setup script) with
 // curl; codex is an npm global; claude/agy are curl installers.
-const TOOL_IMPLIES = { gh: ['curl'], node: ['curl'], codex: ['node'], claude: ['curl'], agy: ['curl'] };
+const TOOL_IMPLIES = { gh: ['curl'], node: ['curl'], codex: ['node'], claude: ['curl'], agy: ['curl'], opencode: ['curl'] };
 
 export function resolveTools(ids) {
   if (ids == null || ids === '') return [];
@@ -248,17 +248,28 @@ const TOOLS = {
     '  rm -f "$t"',
     'fi',
   ],
+  // The v2 installer edits rc files unless told not to; --no-modify-path hands
+  // the PATH line to binPathBlock below, so there is exactly one owner.
+  opencode: () => [
+    'if ! command -v opencode >/dev/null 2>&1 && [ ! -x "$HOME/.opencode/bin/opencode" ]; then',
+    '  t="$(mktemp)"',
+    '  curl -fsSL https://opencode.ai/v2/install -o "$t"',
+    '  bash "$t" --no-modify-path',
+    '  rm -f "$t"',
+    'fi',
+  ],
 };
 
-// claude/agy land in ~/.local/bin. Same delete-then-append pattern as the
-// default-shell line in .tmux.conf.local: exactly one PATH line per rc file,
-// no matter how many times setup re-runs.
-const LOCAL_BIN_PATH_BLOCK = [
+// claude/agy land in ~/.local/bin, opencode in ~/.opencode/bin. Same
+// delete-then-append pattern as the default-shell line in .tmux.conf.local:
+// exactly one PATH line per rc file per tag, no matter how many times setup
+// re-runs. `dir` and `tag` are code constants, never user input.
+const binPathBlock = (dir, tag) => [
   'if [ ! -f "$HOME/.profile" ]; then touch "$HOME/.profile"; fi',
   'for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do',
   '  if [ -f "$rc" ]; then',
-  "    sed -i '/# tmuxifier-local-bin$/d' \"$rc\" 2>/dev/null || true",
-  '    echo \'export PATH="$HOME/.local/bin:$PATH" # tmuxifier-local-bin\' >> "$rc"',
+  `    sed -i '/# ${tag}$/d' "$rc" 2>/dev/null || true`,
+  `    echo 'export PATH="${dir}:$PATH" # ${tag}' >> "$rc"`,
   '  fi',
   'done',
 ];
@@ -323,7 +334,10 @@ export function buildEnsureTmuxRemote(session, startupCommand, options = {}) {
   const startup = startupCommand ? ` ${shSingleQuote(startupCommand)}` : '';
   const tools = resolveTools(options.tools);
   const toolBlocks = tools.flatMap((id) => TOOLS[id]());
-  const localBinPath = tools.includes('claude') || tools.includes('agy') ? LOCAL_BIN_PATH_BLOCK : [];
+  const localBinPath = [
+    ...(tools.includes('claude') || tools.includes('agy') ? binPathBlock('$HOME/.local/bin', 'tmuxifier-local-bin') : []),
+    ...(tools.includes('opencode') ? binPathBlock('$HOME/.opencode/bin', 'tmuxifier-opencode-bin') : []),
+  ];
   const ohMyTmux = options.installOhMyTmux ? [
     'cd',
     'if [ ! -f .tmux/.tmux.conf ]; then',

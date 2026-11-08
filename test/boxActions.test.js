@@ -442,7 +442,16 @@ test('resolveTools applies dependency implications', () => {
 });
 
 test('TOOL_IDS lists every tool in install order', () => {
-  expect(TOOL_IDS).toEqual(['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy']);
+  expect(TOOL_IDS).toEqual(['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy', 'opencode']);
+});
+
+test('the opencode tool downloads the v2 installer, runs it with --no-modify-path only when opencode is missing, and owns the PATH line', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['opencode'] });
+  expect(remote).toContain('command -v opencode'); expect(remote).toContain('"$HOME/.opencode/bin/opencode"');
+  expect(remote).toContain('https://opencode.ai/v2/install'); expect(remote).toContain('--no-modify-path');
+  expect(remote).toContain('# tmuxifier-opencode-bin'); expect(remote).toContain('$HOME/.opencode/bin:$PATH');
+  expect(remote).not.toContain('tmuxifier-local-bin'); // claude/agy block not dragged in
+  expect(resolveTools(['opencode'])).toEqual(['curl', 'opencode']);
 });
 
 test('buildEnsureTmuxRemote includes system upgrade block when requested', () => {

@@ -15,7 +15,7 @@ export const SEND_KEYS = ['Enter', 'Escape', 'Tab', 'BSpace', 'Up', 'Down', 'Lef
 // Mirrors src/server/boxActions.js's TOOL_IDS the same way (the setup
 // catalog; `agy` is the Antigravity CLI — the description once said
 // `antigravity`, which the server rejects as an unknown tool).
-export const SETUP_TOOLS = ['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy'];
+export const SETUP_TOOLS = ['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy', 'opencode'];
 export const WAIT_DEFAULT_SEC = 120;
 export const WAIT_MAX_SEC = 540;
 
