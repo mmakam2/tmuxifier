@@ -457,7 +457,10 @@ def run_listen(pane_id, *, home, stdin_fd=0):
     try:
         cur = read_entry(epath)
         if cur.get('handover') is True:
-            # A successor that already wrote its own pid owns the entry.
+            # A successor that already wrote its own pid owns the entry. This
+            # read-then-write has a narrow TOCTOU window (a successor persisting
+            # between the read and the write is clobbered); it is tolerated
+            # because the next sweep sees the dead pid and re-hands-over.
             if cur.get('pid') in (None, os.getpid()):
                 persist()
             return 0
@@ -533,16 +536,36 @@ def _reporter_cmd(home, role):
     return "exec python3 '%s' %s" % (os.path.join(osc_dir(home), 'reporter.py'), role)
 
 
-def attach(pane_id, home):
-    """Pipe the pane's output to a listener; register it unless already registered."""
-    if not _tmux('pipe-pane', '-o', '-t', pane_id, _reporter_cmd(home, 'listen ' + pane_id)):
+def _create_entry(path, entry):
+    """Create the entry only if absent (tmp + link, so readers never see a
+    partial file). Returns True when this call created it."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = '%s.%d.new' % (path, os.getpid())
+    with open(tmp, 'w') as f:
+        f.write(json.dumps(entry))
+    try:
+        os.link(tmp, path)
+        return True
+    except FileExistsError:
         return False
+    finally:
+        _unlink(tmp)
+
+
+def attach(pane_id, home):
+    """Pipe the pane's output to a listener. The entry is registered BEFORE the
+    pipe starts, so the listener's own first write can never be overwritten by
+    ours; an existing entry is never touched."""
     epath = entry_path(home, pane_id)
-    if not os.path.exists(epath):
-        try:
-            write_entry(epath, {'sha': asset_sha(), 'attachedAt': time.time(), 'handover': False})
-        except Exception as e:
-            debug(home, 'attach entry: %r' % (e,))
+    created = False
+    try:
+        created = _create_entry(epath, {'sha': asset_sha(), 'attachedAt': time.time(), 'handover': False})
+    except Exception as e:
+        debug(home, 'attach entry: %r' % (e,))
+    if not _tmux('pipe-pane', '-o', '-t', pane_id, _reporter_cmd(home, 'listen ' + pane_id)):
+        if created:
+            _unlink(epath)
+        return False
     return True
 
 
@@ -611,15 +634,15 @@ def pass_once(home):
             if agent_kind(row[2], home):
                 # A successor may already be reading the pane: flag the handover
                 # so its predecessor's EOF is not taken for "agent exited".
-                detach(pid_id, home, True)  # -o would be a no-op on a piped pane
-                if attach(pid_id, home):
-                    fresh = dict(e)
-                    fresh.pop('pid', None)
-                    fresh.update({'sha': asset_sha(), 'attachedAt': time.time(), 'handover': True})
-                    try:
-                        write_entry(epath, fresh)
-                    except Exception as ex:
-                        debug(home, 'reattach entry: %r' % (ex,))
+                fresh = dict(e)
+                fresh.pop('pid', None)
+                fresh.update({'sha': asset_sha(), 'attachedAt': time.time(), 'handover': True})
+                try:
+                    write_entry(epath, fresh)  # before any pipe-pane: see attach()
+                except Exception as ex:
+                    debug(home, 'reattach entry: %r' % (ex,))
+                _tmux('pipe-pane', '-t', pid_id)  # -o would be a no-op on a piped pane
+                attach(pid_id, home)
                 active = True
             else:
                 _unlink(epath)

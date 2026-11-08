@@ -201,3 +201,18 @@ test('a dead listener on a piped matching pane is handed over, not torn down', (
   expect(e.sha).toBe(SHA);
   expect(e.session).toBe('web');
 });
+
+test('the entry exists (pid-less, current sha) before pipe-pane -o runs', () => {
+  const t = setup(rows('%2\t0\tcodex\tweb', '%3\t1\tcodex\tweb'));
+  t.putEntry(3, { pid: 999999, sha: 'old', session: 'web', records: {}, lastWritten: null, handover: false, attachedAt: 1 });
+  t.run('sweep', '--once');
+  const l = t.log();
+  for (const n of [2, 3]) {
+    const i = l.findIndex((x) => x.startsWith(`pipe-pane -o -t %${n} `));
+    expect(i).toBeGreaterThan(-1);
+    expect(l[i + 1].startsWith(`ENTRY ${n} `)).toBe(true);
+    const e = JSON.parse(l[i + 1].replace(/^ENTRY \d+ /, ''));
+    expect(e.pid).toBeUndefined();
+    expect(e.sha).toBe(SHA);
+  }
+});
