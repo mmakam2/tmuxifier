@@ -141,7 +141,7 @@ test('a child already running when its session.created arrives moves its parent\
   const r = createReducer();
   r.apply({ id: 'k1', type: 'session.created', created: 10_000, data: { sessionID: 'ses_p' } });
   r.apply({ id: 'k2', type: 'session.execution.started', created: 20_000, data: { sessionID: 'ses_c' } });
-  expect(sc(r.derive('ses_p'))).toBe('ready/stop');
+  expect(sc(r.derive('ses_p'))).toBe('ready/start'); // the parent itself never started
   expect(r.apply({ id: 'k3', type: 'session.created', created: 30_000, data: { sessionID: 'ses_c', parentID: 'ses_p' } })).toBe(true);
   expect(r.derive('ses_p')).toEqual({ state: 'working', cause: 'prompt', ts: 30 });
 });
@@ -211,4 +211,65 @@ test('deriveState folds a session with the reducer\'s children and survives a pa
   r.apply({ id: 'c3', type: 'permission.asked', data: { id: 'per_x', sessionID: 'b' } });
   expect(deriveState(r.sessions.get('a'), r)).toEqual({ state: 'blocked', cause: 'permission' });
   expect(deriveState(r.sessions.get('b'), r)).toEqual({ state: 'blocked', cause: 'permission' });
+});
+
+test('a session that never started reads ready/start, not a finished turn', () => {
+  expect(at(15).d).toMatchObject({ state: 'ready', cause: 'start' });
+  expect(at(15).d.ts).toBe(Math.floor(lineEvent(15).created / 1000));
+  expect(at(17).d).toMatchObject({ state: 'ready', cause: 'start' }); // inbox.enqueued is not a start
+  expect(sc(at(18).d)).toBe('working/prompt');
+  expect(sc(at(46).d)).toBe('ready/stop');
+  // A block or a running shell still wins over a session that never started.
+  const r = createReducer({ now: () => 7 });
+  r.apply({ id: 's1', type: 'session.created', data: { sessionID: 'ses_n' } });
+  r.apply({ id: 's2', type: 'shell.created', data: { info: { id: 'sh_n', metadata: { sessionID: 'ses_n' } } } });
+  expect(sc(r.derive('ses_n'))).toBe('working/prompt');
+  r.apply({ id: 's3', type: 'shell.exited', data: { id: 'sh_n' } });
+  expect(sc(r.derive('ses_n'))).toBe('ready/start');
+  r.apply({ id: 's4', type: 'permission.asked', data: { id: 'per_n', sessionID: 'ses_n' } });
+  expect(sc(r.derive('ses_n'))).toBe('blocked/permission');
+});
+
+test('a non-finite created falls back to the injected clock', () => {
+  const r = createReducer({ now: () => 4242 });
+  for (const [k, created] of [[1, NaN], [2, Infinity], [3, -Infinity], [4, '1700000000000']]) {
+    r.apply({ id: `nf${k}a`, type: 'session.execution.started', created, data: { sessionID: `ses_nf${k}` } });
+    expect(r.derive(`ses_nf${k}`).ts, String(created)).toBe(4242);
+  }
+});
+
+test('a reply or an inbox item for a session the reducer does not know creates nothing', () => {
+  const r = createReducer({ now: () => 9 });
+  const loc = { location: { directory: '/home/user/proj' } };
+  expect(r.apply({ id: 'u1', type: 'permission.replied', data: { requestID: 'per_u', sessionID: 'ses_u', reply: 'once' }, ...loc })).toBe(false);
+  expect(r.apply({ id: 'u2', type: 'form.replied', data: { id: 'que_u', sessionID: 'ses_u' }, ...loc })).toBe(false);
+  expect(r.apply({ id: 'u3', type: 'form.cancelled', data: { id: 'que_u', sessionID: 'ses_u' }, ...loc })).toBe(false);
+  expect(r.apply({ id: 'u4', type: 'session.inbox.enqueued', data: { sessionID: 'ses_u', item: { type: 'synthetic' } }, ...loc })).toBe(false);
+  expect(r.sessions.size).toBe(0);
+  // The inbox item is still remembered as a hint: a resumed session's first
+  // execution.started carries no directory, so the hint is how it is attributed.
+  expect(r.apply({ id: 'u5', type: 'session.execution.started', data: { sessionID: 'ses_u' } })).toBe(true);
+  expect(r.sessions.get('ses_u').dir).toBe('/home/user/proj');
+  expect(sc(r.derive('ses_u'))).toBe('working/resume');
+  // A reply for a known session but an unknown request changes nothing.
+  expect(r.apply({ id: 'u6', type: 'permission.replied', data: { requestID: 'per_zz', sessionID: 'ses_u', reply: 'once' } })).toBe(false);
+  expect(sc(r.derive('ses_u'))).toBe('working/resume');
+  // The real resumed-session lines: 415 creates nothing, 416 lands attributed.
+  const fresh = createReducer();
+  expect(fresh.apply(lineEvent(415))).toBe(false);
+  expect(fresh.sessions.size).toBe(0);
+  expect(fresh.apply(lineEvent(416))).toBe(true);
+  expect(fresh.sessions.get(MAIN).dir).toBe('/home/user/proj');
+});
+
+test('directory hints for unknown sessions stay bounded', () => {
+  const r = createReducer({ now: () => 1 });
+  for (let k = 0; k < 600; k++) {
+    r.apply({ id: `h${k}`, type: 'session.inbox.enqueued', data: { sessionID: `ses_h${k}`, item: { type: 'user' } }, location: { directory: `/d${k}` } });
+  }
+  expect(r.sessions.size).toBe(0);
+  r.apply({ id: 'h-old', type: 'session.execution.started', data: { sessionID: 'ses_h0' } });
+  expect(r.sessions.get('ses_h0').dir).toBe(null); // evicted
+  r.apply({ id: 'h-new', type: 'session.execution.started', data: { sessionID: 'ses_h599' } });
+  expect(r.sessions.get('ses_h599').dir).toBe('/d599');
 });

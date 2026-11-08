@@ -46,6 +46,17 @@
 // ---------------------------------------------------------------------------
 
 const SEEN_MAX = 5000;
+const HINT_MAX = 500;
+
+// Events that only ever act on a session the reducer already knows: a reply
+// to a request it never saw, or an inbox item for a session it never saw (a
+// plugin hot-reloaded mid-turn), must not mint a session of its own.
+const NEVER_CREATES = new Set([
+  'permission.replied',
+  'form.replied',
+  'form.cancelled',
+  'session.inbox.enqueued',
+]);
 
 const RELEVANT = new Set([
   'session.created',
@@ -83,6 +94,7 @@ function newSession(id) {
     dir: null,
     parent: null,
     executing: false,
+    started: false,
     cause: 'prompt',
     blocks: new Map(),
     shells: new Set(),
@@ -93,8 +105,11 @@ function newSession(id) {
 
 // Derived state of one session (spec §4.1): blocked if it or any child is
 // blocked; else working if it is executing, holds a running shell, or has a
-// working child; else ready/stop. Children are sessions whose `parent` is
-// this one; `visiting` keeps a malformed parent cycle from recursing forever.
+// working child; else ready/stop, or ready/start for a session that has never
+// seen `session.execution.started` (between `session.created` and its first
+// turn it has finished nothing, so it must not read as a finished turn).
+// Children are sessions whose `parent` is this one; `visiting` keeps a
+// malformed parent cycle from recursing forever.
 export function deriveState(session, reducer, visiting = new Set()) {
   visiting.add(session.id);
   const children = [];
@@ -113,12 +128,17 @@ export function deriveState(session, reducer, visiting = new Set()) {
   }
   const workingChild = childStates.find((d) => d.state === 'working');
   if (workingChild) return { state: 'working', cause: workingChild.cause };
-  return { state: 'ready', cause: 'stop' };
+  return { state: 'ready', cause: session.started ? 'stop' : 'start' };
 }
 
 export function createReducer({ now = () => Math.floor(Date.now() / 1000) } = {}) {
   const sessions = new Map();
   const seenIds = new Set();
+  // sessionID -> { dir, lastInbox } from inbox items of sessions not (yet)
+  // known: a resumed session (`opencode -c`) has no session.created, and its
+  // execution.started carries no directory, so its first inbox item is the
+  // only place its directory is named (fact 7).
+  const hints = new Map();
   const reducer = { sessions, seenIds, apply, derive };
 
   function derive(sessionID) {
@@ -154,6 +174,16 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000) } = {}
   function remember(id) {
     seenIds.add(id);
     if (seenIds.size > SEEN_MAX) seenIds.delete(seenIds.values().next().value);
+  }
+
+  function hint(sid, dir, kind) {
+    const prev = hints.get(sid);
+    hints.delete(sid);
+    hints.set(sid, {
+      dir: prev?.dir ?? dir,
+      lastInbox: kind === 'user' || kind === 'synthetic' ? kind : prev?.lastInbox ?? null,
+    });
+    if (hints.size > HINT_MAX) hints.delete(hints.keys().next().value);
   }
 
   function findHolder(field, key) {
@@ -203,9 +233,14 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000) } = {}
       if (holder) sid = holder.id;
     }
     if (!sid) return false;
+    if (type === 'session.deleted') hints.delete(sid);
     if (type === 'session.deleted' && !sessions.has(sid)) return false;
+    if (NEVER_CREATES.has(type) && !sessions.has(sid)) {
+      if (type === 'session.inbox.enqueued') hint(sid, dir, data.item?.type);
+      return false;
+    }
 
-    const ts = typeof event.created === 'number' ? Math.floor(event.created / 1000) : now();
+    const ts = Number.isFinite(event.created) ? Math.floor(event.created / 1000) : now();
     const affected = chainOf(sid);
     // A session.created that names a parent links this session under it: the
     // parent's chain must be compared too, or an already-running child would
@@ -220,6 +255,12 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000) } = {}
     if (!s) {
       s = newSession(sid);
       sessions.set(sid, s);
+      const h = hints.get(sid);
+      if (h) {
+        hints.delete(sid);
+        s.dir = h.dir;
+        s.lastInbox = h.lastInbox;
+      }
     }
     if (!s.dir && dir) s.dir = dir;
 
@@ -237,6 +278,7 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000) } = {}
       }
       case 'session.execution.started':
         s.executing = true;
+        s.started = true;
         s.cause = s.lastInbox === 'synthetic' ? 'resume' : 'prompt';
         break;
       case 'permission.asked': {
@@ -291,4 +333,96 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000) } = {}
   }
 
   return reducer;
+}
+
+// ---------------------------------------------------------------------------
+// Pane attribution: which tmux session shows which OpenCode session's state.
+// ---------------------------------------------------------------------------
+//
+// One server serves every TUI (fact 1) and no event names a tmux session, so a
+// session is attributed by directory: its `dir` against the pane path of each
+// tmux session's active pane of its active window, the pane the probe's
+// STATUS_FMT reports (a tmux session whose current window runs Claude is never
+// touched here). Two TUIs in one directory in two tmux sessions therefore show
+// the same folded state, a documented limitation (spec §4.1).
+
+// The `tmux list-panes -a -F` argument parsePanes reads.
+export const PANE_FORMAT = '#{session_name}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}';
+
+const PANES_MAX = 500;
+const NAME_MAX = 256;
+const PATH_MAX = 4096;
+const CONTROL_RE = /[\x00-\x1f\x7f]/;
+
+// tmux output is box output: untrusted. Rows with the wrong field count, any
+// C0 control or DEL, an empty or over-long name or path are dropped, never
+// repaired; only the active pane of the active window survives.
+export function parsePanes(text) {
+  if (typeof text !== 'string') return [];
+  const out = [];
+  for (const line of text.split('\n')) {
+    if (out.length >= PANES_MAX) break;
+    const f = line.split('\t');
+    if (f.length !== 5) continue;
+    const [session, windowActive, paneActive, cmd, path] = f;
+    if (windowActive !== '1' || paneActive !== '1') continue;
+    if (!session || session.length > NAME_MAX || CONTROL_RE.test(session)) continue;
+    if (cmd.length > NAME_MAX || CONTROL_RE.test(cmd)) continue;
+    if (!path || path.length > PATH_MAX || CONTROL_RE.test(path)) continue;
+    out.push({ session, cmd, path });
+  }
+  return out;
+}
+
+// The TUI's #{pane_current_command}; the server's agentKindOf uses the same rule.
+export function isOpencodeCmd(cmd) {
+  return typeof cmd === 'string' && /^opencode(-|$)/.test(cmd);
+}
+
+const trimSlash = (p) => (p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p);
+
+// Same directory, or one under the other (a TUI started in a subdirectory of
+// the project it reports). `/` matches only itself, never everything below it.
+export function dirMatches(dir, panePath) {
+  if (typeof dir !== 'string' || typeof panePath !== 'string' || !dir || !panePath) return false;
+  const d = trimSlash(dir);
+  const p = trimSlash(panePath);
+  return d === p || p.startsWith(d + '/') || d.startsWith(p + '/');
+}
+
+const RANK = { blocked: 3, working: 2, ready: 1 };
+
+// tmux session -> { state, cause, ts } for every opencode pane. Candidates are
+// root sessions (children roll up into their parent) in the pane's directory
+// whose ts is not older than `since` (the moment this tmux session's active
+// pane became opencode, seconds), which keeps a previous TUI's finished turns
+// from making a relaunch read done. blocked > working > ready, ties to the
+// newest ts; the written ts is the chosen session's own, not the fold time.
+// No candidate: ready/start at `since` (else `now`, seconds).
+export function foldForPanes(reducer, panes, since = new Map(), now = Math.floor(Date.now() / 1000)) {
+  const roots = [];
+  for (const s of reducer.sessions.values()) {
+    if (s.parent !== null || !s.dir) continue;
+    const d = reducer.derive(s.id);
+    if (d && RANK[d.state]) roots.push({ dir: s.dir, d });
+  }
+  const out = new Map();
+  for (const pane of panes) {
+    if (!isOpencodeCmd(pane.cmd)) continue;
+    const floor = since.get(pane.session);
+    let best = null;
+    for (const { dir, d } of roots) {
+      if (d.ts < (floor ?? 0) || !dirMatches(dir, pane.path)) continue;
+      if (!best || RANK[d.state] > RANK[best.state] || (RANK[d.state] === RANK[best.state] && d.ts > best.ts)) best = d;
+    }
+    out.set(pane.session, best
+      ? { state: best.state, cause: best.cause, ts: best.ts }
+      : { state: 'ready', cause: 'start', ts: floor ?? now });
+  }
+  return out;
+}
+
+// The marker the sh hook writes: `<tmux-session>:<state>:<epoch>:<cause>`.
+export function markerLine(tmuxSession, fold) {
+  return `${tmuxSession}:${fold.state}:${fold.ts}:${fold.cause}\n`;
 }
