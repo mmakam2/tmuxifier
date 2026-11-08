@@ -456,6 +456,24 @@ def _bare_clear(home, pane_id, session, own_fold, last_written):
 # a marker it cannot prove it owns, and a double handover inside one python
 # start-up (two reruns within ~50 ms) ends with the middle listener seeing a
 # foreign generation and exiting silently.
+#
+# Attach seed. An OSC agent emits its start-up `idle` 0.4-1.2 s after it
+# starts, before the loop's 2 s attach, so a fresh listener usually sees
+# nothing until the first `working`; if that first turn runs working →
+# blocked inside one ~30 s probe poll, the server's edge detector
+# (healthHistory: an event needs a PREVIOUS state) first sees the session
+# already `blocked` and never pushes "needs you" for that prompt. The Claude
+# hook has no such gap because SessionStart writes ready/start. So a FRESH
+# attach — the entry it seeds from has no records and no lastWritten — whose
+# session resolves and has NO marker file writes the first observation at
+# start-up through the normal fold path (idle folded with the live siblings:
+# ready/start, or the siblings' blocked/working). It sets lastWritten, so the
+# bare-clear and EOF ownership rules apply to it like any other write. A
+# marker file that exists (the hook's, a sibling's, a predecessor's) is never
+# touched, and a seeded start (handover, or a listener restarted on a pane
+# whose entry still holds records/lastWritten) never writes before its first
+# chunk. The replay harness models the chunk gate only, so its trail shows
+# ready/start at the agent's own idle report, not at attach.
 # --------------------------------------------------------------------------
 
 class PaneReader:
@@ -534,6 +552,21 @@ def run_listen(pane_id, *, home, stdin_fd=0):
         except Exception as e:
             debug(home, 'persist: %r' % (e,))
 
+    # Attach seed (protocol block): a FRESH attach — no records and no
+    # lastWritten to seed from — whose session has no marker file yet writes
+    # the first observation itself, through the normal fold path.
+    if not entry.get('records') and last_written is None:
+        try:
+            s = resolve_session(pane_id)
+            if s is not None:
+                session = s
+                mpath = marker_path(home, s)
+                if not os.path.exists(mpath):
+                    act = next_action(None, session_fold([('idle', None)] + _sibling_folds(home, s, pane_id)))
+                    if act:
+                        last_written = write_marker(mpath, s, act[1], act[2])
+        except Exception as e:
+            debug(home, 'attach seed: %r' % (e,))
     persist()
 
     while True:

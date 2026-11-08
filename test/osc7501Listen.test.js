@@ -209,3 +209,43 @@ test('the loop dropped the entry for a gone pane before EOF: the listener still 
   expect(await t.exited).toBe(0);
   expect(existsSync(t.markerOf('web'))).toBe(false);
 });
+
+test('attach seed: a fresh listener on a session with no marker writes ready/start before any chunk', async () => {
+  const t = setup();
+  const c = await waitMarker(t, 'web', /^web:ready:\d+:start\n$/);
+  const entry = await waitFor(() => { const e = JSON.parse(readFileSync(t.entryFile, 'utf8')); return e.lastWritten === c ? e : null; });
+  expect(entry.pid).toBe(t.child.pid);
+  expect(entry.session).toBe('web');
+  t.send(osc('state=idle'));
+  await new Promise((r) => setTimeout(r, 300));
+  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe(c); // the agent's own idle changes nothing
+  t.child.stdin.end();
+  expect(await t.exited).toBe(0);
+  expect(existsSync(t.markerOf('web'))).toBe(false); // ours: removed at a real EOF
+});
+
+test('attach seed: an existing marker (the hook\'s) is untouched before any chunk', async () => {
+  const t = setup();
+  mkdirSync(path.dirname(t.markerOf('web')), { recursive: true });
+  writeFileSync(t.markerOf('web'), 'web:working:1:prompt\n');
+  await waitFor(() => JSON.parse(readFileSync(t.entryFile, 'utf8')).pid === t.child.pid);
+  await new Promise((r) => setTimeout(r, 300));
+  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe('web:working:1:prompt\n');
+  expect(JSON.parse(readFileSync(t.entryFile, 'utf8')).lastWritten).toBe(null);
+  t.child.stdin.end();
+  await t.exited;
+});
+
+test('attach seed: a seeded start (entry with records/lastWritten) writes nothing before its first chunk', async () => {
+  const t = setup();
+  mkdirSync(path.dirname(t.entryFile), { recursive: true });
+  writeFileSync(t.entryFile, JSON.stringify({
+    sha: 'x', session: 'web', records: { '': { state: 'idle', kind: null } },
+    lastWritten: 'web:ready:1:start\n', handover: true, attachedAt: 1,
+  }));
+  await waitFor(() => JSON.parse(readFileSync(t.entryFile, 'utf8')).pid === t.child.pid);
+  await new Promise((r) => setTimeout(r, 300));
+  expect(existsSync(t.markerOf('web'))).toBe(false);
+  t.child.stdin.end();
+  await t.exited;
+});
