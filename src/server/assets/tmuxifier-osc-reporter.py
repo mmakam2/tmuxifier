@@ -13,7 +13,11 @@
 #   sweep       what the status probe runs each poll: one attach pass, and keeps
 #               a loop of the current asset version alive.
 # This file's pure core (extract, parse_report, Records, next_action,
-# session_fold) is importable with no side effects; the roles live in main().
+# session_fold, PaneReader) is importable with no side effects; the roles live
+# in main(). The registry entry shared by loop and listener, and the version
+# handover that moves a pane from one listener to the next without losing the
+# fold, are specified in the "handover protocol" block above run_listen; the
+# loop's rules for whose pipe it may open or close are above the loop role.
 #
 # Why pipe-pane: tmux receives the pane bytes through pipe-pane BEFORE its own
 # parser, so OSC 7501 arrives intact (either terminator), while tmux itself
@@ -271,7 +275,10 @@ def write_entry(path, entry):
 
 
 def resolve_session(pane_id):
-    """The pane's current tmux session name, or None on any failure."""
+    """The pane's current tmux session name, or None on any failure. A pane of
+    a window shared by grouped sessions resolves to the most recently used of
+    them (tmux's own choice for a bare pane target): the marker then follows
+    whichever grouped session the operator last touched."""
     try:
         r = subprocess.run(['tmux', 'display-message', '-p', '-t', pane_id, '#{session_name}'],
                            capture_output=True, timeout=5)
@@ -333,7 +340,8 @@ def pid_alive(pid):
 
 
 def live_entries(home, session, exclude_pane):
-    """Registry entries of other panes in `session` whose listener is alive."""
+    """Registry entries of other panes in `session` whose listener is alive
+    (or being handed over / just attached: unclaimed but inside the grace)."""
     d = os.path.join(home, '.tmuxifier-osc', 'panes')
     out = []
     try:
@@ -345,8 +353,8 @@ def live_entries(home, session, exclude_pane):
         if n == skip or not n.isdigit():
             continue
         e = read_entry(os.path.join(d, n))
-        if e.get('session') != session or not pid_alive(e.get('pid')):
-            continue
+        if e.get('session') != session or not entry_live(e):
+            continue  # a handed-over entry in grace still carries its pane's records
         out.append(e)
     return out
 
@@ -375,36 +383,149 @@ def _bare_clear(home, pane_id, session, own_fold, last_written):
     return last_written
 
 
+# ------------------------------------------------------ handover protocol
+#
+# A pane's registry entry (~/.tmuxifier-osc/panes/<N>) is shared by the loop,
+# which decides WHICH process reads the pane, and the listener, which reads it.
+# A version handover (setup rerun) replaces the listener mid-turn and must lose
+# nothing but the bytes in one pipe-pane round trip; the marker file is the
+# only memory of the fold, so a predecessor that mistakes the handover for
+# "the agent exited" deletes the very state the successor needs.
+#
+# Fields and who writes them:
+#   handover    the LOOP only. True = "I am about to close this pipe on
+#               purpose and attach a successor"; written BEFORE the pipe is
+#               closed. The listener never sets it True; it clears it (False)
+#               only by claiming the entry (below).
+#   pid         the LISTENER only, by claiming. The loop never writes a pid;
+#               it strips the pid when it hands over (the predecessor's pid is
+#               about to be dead and must not look like a corpse to heal).
+#   attachedAt  the LOOP stamps it when it creates the entry (attach) and
+#               restamps it on a handover; it is the listener's GENERATION
+#               token. A listener keeps the stamp it read at start-up and
+#               never changes it.
+#   sha         both: the loop writes the asset sha it expects the next
+#               listener to run; the listener writes the sha it runs.
+#   session, records, lastWritten   the listener's fold memory, rewritten on
+#               every change; the loop copies them through a handover
+#               untouched so the successor seeds from them.
+#
+# Claiming: at start-up and after every fold change the listener persists its
+# state (pid, handover False, attachedAt = its generation) — but under the
+# entries lock and only if the entry on disk still carries its generation. An
+# entry restamped by the loop (a handover in flight) is never written again
+# by that listener. Every read-modify-write of an entry, by loop or listener,
+# holds ~/.tmuxifier-osc/entries.lock, so a claim cannot land between the
+# loop's read and its handover write.
+#
+# Handover, loop side, in this order and nothing after step 3:
+#   1. write the entry pid-less, handover True, new sha, fresh attachedAt
+#      (records/session/lastWritten carried over)        — under the lock
+#   2. pipe-pane -t %N        the predecessor reads EOF
+#   3. pipe-pane -o %N listen the successor starts, seeds from the entry and
+#                             claims it (pid, handover False, same attachedAt)
+# The loop's next pass cannot misread the successor as dead: between 1 and the
+# claim the entry is pid-less with a fresh attachedAt, which counts as live
+# for ATTACH_GRACE_S (30 s, a python start-up is ~30 ms); after the claim the
+# pid is alive. The old post-attach "fix up the sha" rewrite is gone: it could
+# re-plant the dead predecessor's pid over the successor's claim.
+#
+# EOF, listener side — re-read the entry under the lock and act on what the
+# loop left there, never on the listener's own idea of it:
+#   handover True                      a successor is coming (or already
+#                                      claimed): keep marker, touch nothing.
+#   pid is not mine (absent/another)   superseded: the loop stripped me, or
+#                                      a successor claimed — keep marker,
+#                                      touch nothing.
+#   attachedAt is not my generation    same, even if the pid were still mine.
+#   otherwise (pid mine, handover False, my generation)
+#                                      a real end (pane gone, detached after
+#                                      three non-matching passes): bare-clear
+#                                      rule on the marker, delete the entry.
+# A listener whose start-up claim failed (disk full) therefore never deletes
+# a marker it cannot prove it owns, and a double handover inside one python
+# start-up (two reruns within ~50 ms) ends with the middle listener seeing a
+# foreign generation and exiting silently.
+# --------------------------------------------------------------------------
+
+class PaneReader:
+    """One pane's chunk gate, shared by run_listen and the replay harness so
+    the two cannot drift. feed(data) applies every parseable report in the
+    chunk and returns None when nothing changed, ('clear', fold) when the last
+    applied report was a bare clear that emptied the records (the program
+    exited), or ('fold', fold) when the pane fold changed. A chunk whose
+    bodies all fail parse_report (the `?` probe OpenCode, pi and Claude send
+    first) is NOT an observation and must never become a first idle."""
+
+    def __init__(self, records=None):
+        self.recs = records if records is not None else Records()
+        self.tail = b''
+        self.last_fold = None
+
+    def feed(self, data):
+        bodies, self.tail = extract(self.tail + data)
+        applied = 0
+        cleared = False
+        for body in bodies:
+            rep = parse_report(body)
+            if rep is None:
+                continue
+            applied += 1
+            self.recs.apply(rep)
+            cleared = rep['state'] == 'clear' and rep['id'] == ''
+        if not applied:
+            return None
+        fold = self.recs.fold()
+        if cleared and not self.recs.recs:
+            self.last_fold = None  # the next report is a first observation
+            return ('clear', fold)
+        if fold == self.last_fold:
+            return None
+        self.last_fold = fold
+        return ('fold', fold)
+
+
+def _is_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
 def run_listen(pane_id, *, home, stdin_fd=0):
-    """Read one pane's raw output, fold its OSC 7501 reports, write the marker."""
+    """Read one pane's raw output, fold its OSC 7501 reports, write the marker.
+    Protocol: the comment block above."""
     epath = entry_path(home, pane_id)
     entry = read_entry(epath)
-    recs = Records.from_json(entry.get('records'))
+    reader = PaneReader(Records.from_json(entry.get('records')))
     lw = entry.get('lastWritten')
     last_written = lw if isinstance(lw, str) else None
     ses = entry.get('session')
     session = ses if isinstance(ses, str) else None
+    gen = entry.get('attachedAt') if _is_num(entry.get('attachedAt')) else time.time()
     sha = ''
     try:
         sha = asset_sha()
     except Exception:
         pass
-    state = {'pid': os.getpid(), 'sha': sha, 'session': session, 'records': recs.to_json(),
-             'lastWritten': last_written, 'handover': False, 'attachedAt': time.time()}
+    state = {'pid': os.getpid(), 'sha': sha, 'session': session, 'records': reader.recs.to_json(),
+             'lastWritten': last_written, 'handover': False, 'attachedAt': gen}
+
+    def superseded(cur):
+        return _is_num(cur.get('attachedAt')) and cur.get('attachedAt') != gen
 
     def persist():
-        state['records'] = recs.to_json()
+        """Claim the entry unless the loop restamped it since we started."""
+        state['records'] = reader.recs.to_json()
         state['session'] = session
         state['lastWritten'] = last_written
-        write_entry(epath, state)
+        try:
+            with entries_locked(home):
+                if superseded(read_entry(epath)):
+                    return
+                write_entry(epath, state)
+        except Exception as e:
+            debug(home, 'persist: %r' % (e,))
 
-    try:
-        persist()
-    except Exception as e:
-        debug(home, 'initial persist: %r' % (e,))
+    persist()
 
-    tail = b''
-    last_fold = None
     while True:
         try:
             data = os.read(stdin_fd, 65536)
@@ -415,30 +536,16 @@ def run_listen(pane_id, *, home, stdin_fd=0):
         if not data:
             break
         try:
-            bodies, tail = extract(tail + data)
-            cleared = False
-            for body in bodies:
-                rep = parse_report(body)
-                if rep is None:
-                    continue
-                recs.apply(rep)
-                if rep['state'] == 'clear' and rep['id'] == '':
-                    cleared = True
-                else:
-                    cleared = False
-            if not bodies:
+            got = reader.feed(data)
+            if got is None:
                 continue
-            fold = recs.fold()
-            if cleared and not recs.recs:
+            what, fold = got
+            if what == 'clear':
                 s = resolve_session(pane_id) or session
                 last_written = _bare_clear(home, pane_id, s, fold, last_written)
                 session = s
-                last_fold = None  # next report is a first observation
                 persist()
                 continue
-            if fold == last_fold:
-                continue
-            last_fold = fold
             s = resolve_session(pane_id)
             if s is None:
                 persist()
@@ -453,29 +560,46 @@ def run_listen(pane_id, *, home, stdin_fd=0):
         except Exception as e:
             debug(home, 'chunk: %r' % (e,))
 
-    # EOF: the pane is gone or this listener was detached.
+    # EOF: the pane is gone, this listener was detached, or it was handed over.
     try:
-        cur = read_entry(epath)
-        if cur.get('handover') is True:
-            # A successor that already wrote its own pid owns the entry. This
-            # read-then-write has a narrow TOCTOU window (a successor persisting
-            # between the read and the write is clobbered); it is tolerated
-            # because the next sweep sees the dead pid and re-hands-over.
-            if cur.get('pid') in (None, os.getpid()):
-                persist()
-            return 0
-        s = resolve_session(pane_id) or session
-        _bare_clear(home, pane_id, s, ('idle', None), last_written)
-        try:
-            os.unlink(epath)
-        except FileNotFoundError:
-            pass
+        s = resolve_session(pane_id) or session  # tmux call outside the lock
+        with entries_locked(home):
+            cur = read_entry(epath)
+            if cur.get('handover') is True or cur.get('pid') != os.getpid() or superseded(cur):
+                return 0
+            _bare_clear(home, pane_id, s, ('idle', None), last_written)
+            _unlink(epath)
     except Exception as e:
         debug(home, 'eof: %r' % (e,))
     return 0
 
 
 # ------------------------------------------------------- loop and sweep roles
+#
+# Both `sweep` (the probe, every poll) and `loop` (every 2 s) run pass_once,
+# so the "three consecutive passes" behind a detach are three passes of EITHER
+# and can complete in about 4 s when a probe lands between two loop ticks;
+# the miss counter lives in miss.json so the two share it. Only the loop hands
+# listeners over to a new asset version (pass_once gets the loop's sha): a
+# sweep of the new version racing a still-running loop of the old one would
+# otherwise ping-pong listeners until the loop is replaced.
+#
+# Whose pipe is it (the foreign-pipe window)? tmux has no format naming a
+# pipe's owner, only #{pane_pipe}. The loop therefore only ever
+#   - OPENS a pipe on a pane it just listed with pane_pipe = 0 (`-o`, so a
+#     pipe that appeared in between wins silently), and
+#   - CLOSES a pipe whose entry holds a LIVE pid — a listener that is reading
+#     this pane right now, which is the one proof that the pipe is ours (an
+#     operator pipe replacing ours ends our listener within milliseconds,
+#     and its EOF path deletes the entry).
+# An entry that never got a pid (our -o lost to a foreign pipe, or python
+# failed to start) is dropped after ATTACH_GRACE_S and its pipe left alone; a
+# dead pid's entry is dropped and its pipe left alone too — a dead listener's
+# pipe closes itself on the pane's next output byte (tmux gets EPIPE), after
+# which the pane lists as pane_pipe = 0 and is re-attached. Residual window:
+# an operator who replaces a DEAD listener's pipe (`pipe-pane cmd` without
+# -o) before that next byte gets left alone as well, so nothing is ever
+# closed on evidence weaker than a live pid.
 
 LOOP_INTERVAL = 2.0
 MISS_LIMIT = 3
@@ -486,6 +610,35 @@ _NO_SERVER_RE = re.compile(r'no server running|error connecting to .*\(No such f
 
 def osc_dir(home):
     return os.path.join(home, '.tmuxifier-osc')
+
+
+class entries_locked:
+    """Context manager: hold ~/.tmuxifier-osc/entries.lock around a
+    read-modify-write of a registry entry. Fails open (runs unlocked) when
+    the lock file cannot be opened."""
+
+    def __init__(self, home):
+        self.home = home
+        self.fd = None
+
+    def __enter__(self):
+        try:
+            os.makedirs(osc_dir(self.home), exist_ok=True)
+            fd = os.open(os.path.join(osc_dir(self.home), 'entries.lock'), os.O_RDWR | os.O_CREAT, 0o644)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except Exception:
+                os.close(fd)
+                raise
+            self.fd = fd
+        except Exception as e:
+            debug(self.home, 'entries lock: %r' % (e,))
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            os.close(self.fd)  # releases the flock
+        return False
 
 
 def agent_kind(cmd, home):
@@ -532,8 +685,26 @@ def _tmux(*args):
         return False
 
 
-def _reporter_cmd(home, role):
-    return "exec python3 '%s' %s" % (os.path.join(osc_dir(home), 'reporter.py'), role)
+def _asset_path(home):
+    return os.path.join(osc_dir(home), 'reporter.py')
+
+
+def _listen_cmd(home, pane_id):
+    """The pipe-pane command. tmux gives a pipe job stdin = the pane's output
+    and /dev/null for stderr, and never reports its exit, so no wrapper."""
+    return "exec python3 '%s' listen %s" % (_asset_path(home), pane_id)
+
+
+def _loop_cmd(home):
+    """The run-shell -b command. tmux prints a run-shell job's output, a
+    non-zero exit ('returned 127') or a signal death ('terminated by signal
+    15') into the current pane as a view-mode overlay that swallows the
+    operator's keystrokes until `q` — so: no python3 on the server's PATH
+    (which is not the probe's PATH) exits 0 before exec, python's output goes
+    to /dev/null, and run_loop turns SIGTERM (the sweep's replace path) into
+    exit 0."""
+    return ("command -v python3 >/dev/null 2>&1 || exit 0; "
+            "exec python3 '%s' loop >/dev/null 2>&1" % _asset_path(home))
 
 
 def _create_entry(path, entry):
@@ -555,39 +726,52 @@ def _create_entry(path, entry):
 def attach(pane_id, home):
     """Pipe the pane's output to a listener. The entry is registered BEFORE the
     pipe starts, so the listener's own first write can never be overwritten by
-    ours; an existing entry is never touched."""
+    ours; an existing entry (a handover's step 1) is never touched."""
     epath = entry_path(home, pane_id)
     created = False
     try:
         created = _create_entry(epath, {'sha': asset_sha(), 'attachedAt': time.time(), 'handover': False})
     except Exception as e:
         debug(home, 'attach entry: %r' % (e,))
-    if not _tmux('pipe-pane', '-o', '-t', pane_id, _reporter_cmd(home, 'listen ' + pane_id)):
+    if not _tmux('pipe-pane', '-o', '-t', pane_id, _listen_cmd(home, pane_id)):
         if created:
             _unlink(epath)
         return False
     return True
 
 
-def detach(pane_id, home, handover):
-    """Stop the pane's pipe; with handover the listener keeps its marker."""
-    epath = entry_path(home, pane_id)
-    if handover:
-        e = read_entry(epath)
-        if e:
-            e['handover'] = True
-            try:
-                write_entry(epath, e)
-            except Exception as ex:
-                debug(home, 'detach entry: %r' % (ex,))
+def detach(pane_id, home):
+    """Close the pane's pipe; the listener reads EOF with handover False and
+    applies the bare-clear rule."""
     return _tmux('pipe-pane', '-t', pane_id)
 
 
-def _entry_live(e):
+def hand_over(pane_id, home, e):
+    """Replace a live listener with one of this asset version: steps 1-3 of
+    the protocol above run_listen. Nothing touches the entry after step 3."""
+    epath = entry_path(home, pane_id)
+    fresh = {k: v for k, v in e.items() if k != 'pid'}
+    fresh.update({'sha': asset_sha(), 'attachedAt': time.time(), 'handover': True})
+    try:
+        with entries_locked(home):
+            write_entry(epath, fresh)
+    except Exception as ex:
+        debug(home, 'handover entry: %r' % (ex,))
+        return False  # without the flag the predecessor would read a real EOF
+    _tmux('pipe-pane', '-t', pane_id)
+    return attach(pane_id, home)
+
+
+def _in_grace(e):
+    at = e.get('attachedAt')
+    return _is_num(at) and time.time() - at < ATTACH_GRACE_S
+
+
+def entry_live(e):
+    """A claimed entry with a live pid, or an unclaimed one still in grace."""
     pid = e.get('pid')
     if pid is None:
-        at = e.get('attachedAt')
-        return isinstance(at, (int, float)) and not isinstance(at, bool) and time.time() - at < ATTACH_GRACE_S
+        return _in_grace(e)
     return pid_alive(pid)
 
 
@@ -607,16 +791,19 @@ def _load_miss(home):
         return {}
 
 
-def pass_once(home):
+def pass_once(home, loop_sha=None):
     """One attach/detach/staleness pass. Returns (no_server, active); active
-    means an agent pane or a registered listener exists."""
+    means a tmux pane exists (spec 5.2: the loop idles out only with no agent
+    pane AND no session, which in practice means the server is gone, the
+    no_server path). loop_sha, passed by the loop only, hands live listeners
+    of another asset version over."""
     rows, no_server = list_panes()
     if rows is None:
         return no_server, True  # unknown: do not count toward the idle exit
     panes = {r[0]: r for r in rows}
     miss = _load_miss(home)
     new_miss = {}
-    active = False
+    active = bool(rows)
     d = os.path.join(osc_dir(home), 'panes')
     try:
         names = [n for n in os.listdir(d) if n.isdigit()]
@@ -627,38 +814,31 @@ def pass_once(home):
         epath = os.path.join(d, n)
         row = panes.get(pid_id)
         if row is None or not row[1]:
-            _unlink(epath)
+            _unlink(epath)  # pane gone, or its pipe gone: re-attached below if it still matches
             continue
         e = read_entry(epath)
-        if not _entry_live(e):
-            if agent_kind(row[2], home):
-                # A successor may already be reading the pane: flag the handover
-                # so its predecessor's EOF is not taken for "agent exited".
-                fresh = dict(e)
-                fresh.pop('pid', None)
-                fresh.update({'sha': asset_sha(), 'attachedAt': time.time(), 'handover': True})
-                try:
-                    write_entry(epath, fresh)  # before any pipe-pane: see attach()
-                except Exception as ex:
-                    debug(home, 'reattach entry: %r' % (ex,))
-                _tmux('pipe-pane', '-t', pid_id)  # -o would be a no-op on a piped pane
-                attach(pid_id, home)
-                active = True
-            else:
-                _unlink(epath)
+        pid = e.get('pid')
+        if pid is None:
+            if not _in_grace(e):
+                _unlink(epath)  # never claimed: that pipe is not provably ours
             continue
-        active = True
-        if agent_kind(row[2], home):
+        if not pid_alive(pid):
+            _unlink(epath)  # died; its pipe closes on the pane's next byte
+            continue
+        kind = agent_kind(row[2], home)
+        if kind and loop_sha is not None and e.get('sha') not in (None, loop_sha):
+            hand_over(pid_id, home, e)
+            continue
+        if kind:
             continue
         count = miss.get(pid_id, 0) + 1
         if count >= MISS_LIMIT:
-            detach(pid_id, home, False)
+            detach(pid_id, home)
         else:
             new_miss[pid_id] = count
     for pid_id, piped, cmd, _s in rows:
         if piped or not agent_kind(cmd, home):
             continue
-        active = True
         if not os.path.exists(os.path.join(d, pid_id.lstrip('%'))):
             attach(pid_id, home)
     if new_miss != miss:
@@ -669,40 +849,19 @@ def pass_once(home):
     return False, active
 
 
-def _handover(home, sha):
-    """Replace listeners left by an older asset version."""
-    rows, _ = list_panes()
-    if not rows:
-        return
-    piped = {r[0] for r in rows if r[1]}
-    d = os.path.join(osc_dir(home), 'panes')
-    try:
-        names = [n for n in os.listdir(d) if n.isdigit()]
-    except Exception:
-        return
-    for n in names:
-        pid_id = '%' + n
-        epath = os.path.join(d, n)
-        e = read_entry(epath)
-        if pid_id not in piped or not _entry_live(e) or e.get('sha') in (None, sha):
-            continue
-        detach(pid_id, home, True)
-        if attach(pid_id, home):
-            cur = read_entry(epath)
-            if cur:
-                cur['sha'] = sha
-                try:
-                    write_entry(epath, cur)
-                except Exception as ex:
-                    debug(home, 'handover entry: %r' % (ex,))
-
-
 def _open_lock(home):
     os.makedirs(osc_dir(home), exist_ok=True)
     return os.open(os.path.join(osc_dir(home), 'loop.lock'), os.O_RDWR | os.O_CREAT, 0o644)
 
 
 def run_loop(home):
+    # The sweep replaces an outdated loop with SIGTERM; tmux would report the
+    # default disposition ("terminated by signal 15") into the operator's
+    # pane. Exit 0 at once, from anywhere (even the lock wait below).
+    try:
+        signal.signal(signal.SIGTERM, lambda *_a: os._exit(0))
+    except Exception:
+        pass
     try:
         fd = _open_lock(home)
     except Exception as e:
@@ -725,13 +884,9 @@ def run_loop(home):
         debug(home, 'lock write: %r' % (e,))
     once = os.environ.get('TMUXIFIER_OSC_LOOP_ONCE') == '1'
     idle_since = time.time()
-    try:
-        _handover(home, sha)
-    except Exception as e:
-        debug(home, 'handover: %r' % (e,))
     while True:
         try:
-            no_server, active = pass_once(home)
+            no_server, active = pass_once(home, loop_sha=sha)
         except Exception as e:
             debug(home, 'pass: %r' % (e,))
             no_server, active = False, True
@@ -745,7 +900,7 @@ def run_loop(home):
 
 
 def _start_loop(home):
-    _tmux('run-shell', '-b', _reporter_cmd(home, 'loop'))
+    _tmux('run-shell', '-b', _loop_cmd(home))
 
 
 def run_sweep(home, once):

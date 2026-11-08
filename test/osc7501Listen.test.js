@@ -171,3 +171,31 @@ test('a successor that owns the entry is not overwritten by the handed-over list
   expect(readFileSync(t.entryFile, 'utf8')).toBe(successor);
   expect(existsSync(t.markerOf('web'))).toBe(true);
 });
+
+test('a probe-only chunk is not an observation: a foreign working marker is untouched and survives EOF', async () => {
+  const t = setup();
+  mkdirSync(path.dirname(t.markerOf('web')), { recursive: true });
+  writeFileSync(t.markerOf('web'), 'web:working:1:prompt\n'); // the Claude hook's
+  t.send(osc('?'));
+  await waitFor(() => JSON.parse(readFileSync(t.entryFile, 'utf8')).pid === t.child.pid);
+  await new Promise((r) => setTimeout(r, 300));
+  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe('web:working:1:prompt\n');
+  t.child.stdin.end();
+  expect(await t.exited).toBe(0);
+  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe('web:working:1:prompt\n');
+  expect(existsSync(t.entryFile)).toBe(false);
+});
+
+test('a listener the loop restamped (handover in flight) touches neither marker nor entry at EOF', async () => {
+  const t = setup();
+  t.send(osc('state=working'));
+  await waitMarker(t, 'web', /^web:working:\d+:prompt\n$/);
+  // The loop's pre-attach write: pid stripped, attachedAt restamped, handover set.
+  const cur = JSON.parse(readFileSync(t.entryFile, 'utf8'));
+  const restamped = JSON.stringify({ ...cur, pid: undefined, attachedAt: cur.attachedAt + 1, handover: true });
+  writeFileSync(t.entryFile, restamped);
+  t.child.stdin.end();
+  expect(await t.exited).toBe(0);
+  expect(readFileSync(t.entryFile, 'utf8')).toBe(restamped);
+  expect(existsSync(t.markerOf('web'))).toBe(true);
+});

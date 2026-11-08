@@ -99,7 +99,10 @@ test('stale entries are deleted; a dead listener on a matching pane is re-attach
   expect(JSON.parse(readFileSync(t.entryFile(2), 'utf8')).sha).toBe(SHA);
 });
 
-test('an entry with no pid yet is live for 30 s, then stale', () => {
+test('an entry with no pid yet is live for 30 s; past that it is dropped and its pipe left alone', () => {
+  // Our `pipe-pane -o` lost to a pipe that appeared between list-panes and the
+  // attach, or python never started: either way nothing proves the pipe is
+  // ours, so it is never closed (I2a).
   const t = setup(rows('%2\t1\tcodex\tweb'));
   t.putEntry(2, { sha: SHA, handover: false, attachedAt: Date.now() / 1000 });
   t.run('sweep', '--once');
@@ -107,7 +110,8 @@ test('an entry with no pid yet is live for 30 s, then stale', () => {
   expect(t.pipeLines()).toEqual([]);
   t.putEntry(2, { sha: SHA, handover: false, attachedAt: Date.now() / 1000 - 60 });
   t.run('sweep', '--once');
-  expect(t.pipeLines().map((l) => l.replace(/ exec python3.*/, ''))).toEqual(['pipe-pane -t %2', 'pipe-pane -o -t %2']);
+  expect(existsSync(t.entryFile(2))).toBe(false);
+  expect(t.pipeLines()).toEqual([]);
 });
 
 test('no tmux, or no server: exit 0 and silent', () => {
@@ -188,23 +192,41 @@ test('loop upgrade: stale-sha listener is handed over (flag set before detach)',
   expect(readFileSync(path.join(t.oscDir, 'loop.lock'), 'utf8')).toMatch(new RegExp(`^\\d+ ${SHA}\\n$`));
 });
 
-test('a dead listener on a piped matching pane is handed over, not torn down', () => {
+test('a dead listener on a still-piped pane: entry dropped, pipe untouched, re-attached once the pipe drops', () => {
+  // A dead listener's pipe closes itself on the pane's next output byte; an
+  // operator pipe that replaced it in that window looks identical and must
+  // survive (I2b). Only a LIVE pid is proof the pipe is ours.
   const t = setup(rows('%2\t1\tcodex\tweb'));
   t.putEntry(2, { pid: 999999, sha: 'old', session: 'web', records: {}, lastWritten: null, handover: false, attachedAt: 1 });
   t.run('sweep', '--once');
-  const l = t.log().filter((x) => x.startsWith('pipe-pane') || x.startsWith('ENTRY'));
-  expect(l[0]).toBe('pipe-pane -t %2');
-  expect(JSON.parse(l[1].replace(/^ENTRY 2 /, '')).handover).toBe(true);
-  expect(l[2]).toMatch(/^pipe-pane -o -t %2 .*listen %2$/);
+  expect(existsSync(t.entryFile(2))).toBe(false);
+  expect(t.pipeLines()).toEqual([]);
+  writeFileSync(t.stub.panesFile, '%2\t0\tcodex\tweb\n');
+  t.run('sweep', '--once');
+  expect(t.pipeLines().map((l) => l.replace(/ exec python3.*/, ''))).toEqual(['pipe-pane -o -t %2']);
   const e = JSON.parse(readFileSync(t.entryFile(2), 'utf8'));
   expect(e.pid).toBeUndefined();
   expect(e.sha).toBe(SHA);
-  expect(e.session).toBe('web');
+});
+
+test('sweep never hands over; only the loop does (no ping-pong with a not-yet-replaced loop)', () => {
+  const t = setup(rows('%2\t1\tcodex\tweb'));
+  t.putEntry(2, { pid: process.pid, sha: 'old', session: 'web', records: {}, lastWritten: null, handover: false, attachedAt: 1 });
+  t.run('sweep', '--once');
+  expect(t.pipeLines()).toEqual([]);
+  expect(JSON.parse(readFileSync(t.entryFile(2), 'utf8')).sha).toBe('old');
+});
+
+test('the loop hands over only a claimed entry; an unclaimed one in grace waits', () => {
+  const t = setup(rows('%2\t1\tcodex\tweb'));
+  t.putEntry(2, { sha: 'old', session: 'web', records: {}, lastWritten: null, handover: false, attachedAt: Date.now() / 1000 });
+  execFileSync('python3', [ASSET, 'loop'], { env: { ...t.env, TMUXIFIER_OSC_LOOP_ONCE: '1' }, encoding: 'utf8' });
+  expect(t.pipeLines()).toEqual([]);
+  expect(existsSync(t.entryFile(2))).toBe(true);
 });
 
 test('the entry exists (pid-less, current sha) before pipe-pane -o runs', () => {
-  const t = setup(rows('%2\t0\tcodex\tweb', '%3\t1\tcodex\tweb'));
-  t.putEntry(3, { pid: 999999, sha: 'old', session: 'web', records: {}, lastWritten: null, handover: false, attachedAt: 1 });
+  const t = setup(rows('%2\t0\tcodex\tweb', '%3\t0\tpi\tweb'));
   t.run('sweep', '--once');
   const l = t.log();
   for (const n of [2, 3]) {
@@ -214,5 +236,40 @@ test('the entry exists (pid-less, current sha) before pipe-pane -o runs', () => 
     const e = JSON.parse(l[i + 1].replace(/^ENTRY \d+ /, ''));
     expect(e.pid).toBeUndefined();
     expect(e.sha).toBe(SHA);
+    expect(e.handover).toBe(false);
   }
+});
+
+test('the loop upgrade entry is pid-less at both pipe-pane calls and never rewritten after the attach', async () => {
+  const t = setup(rows('%2\t1\tcodex\tweb'));
+  const holder = spawn('sleep', ['30']);
+  kids.push(holder);
+  t.putEntry(2, { pid: holder.pid, sha: 'old', session: 'web', records: { '': { state: 'working', kind: null } }, lastWritten: 'web:working:1:prompt\n', handover: false, attachedAt: 1 });
+  execFileSync('python3', [ASSET, 'loop'], { env: { ...t.env, TMUXIFIER_OSC_LOOP_ONCE: '1' }, encoding: 'utf8' });
+  const entries = t.log().filter((x) => x.startsWith('ENTRY 2 ')).map((x) => JSON.parse(x.replace(/^ENTRY 2 /, '')));
+  expect(entries).toHaveLength(2); // one per pipe-pane call: -t then -o
+  for (const e of entries) {
+    expect(e.pid).toBeUndefined();
+    expect(e.handover).toBe(true);
+    expect(e.sha).toBe(SHA);
+    expect(e.records).toEqual({ '': { state: 'working', kind: null } });
+    expect(e.lastWritten).toBe('web:working:1:prompt\n');
+    expect(e.session).toBe('web');
+  }
+  expect(entries[1].attachedAt).toBe(entries[0].attachedAt);
+  expect(JSON.parse(readFileSync(t.entryFile(2), 'utf8'))).toEqual(entries[1]);
+});
+
+test('the loop command exits 0 without python3 and silences python (no run-shell overlay)', () => {
+  const t = setup([]);
+  t.run('sweep');
+  const l = t.log().filter((x) => x.startsWith('run-shell -b'));
+  expect(l).toHaveLength(1);
+  const cmd = l[0].replace(/^run-shell -b /, '');
+  expect(cmd).toBe(`command -v python3 >/dev/null 2>&1 || exit 0; exec python3 '${t.home}/.tmuxifier-osc/reporter.py' loop >/dev/null 2>&1`);
+  const noPython = path.join(t.home, 'nopython');
+  mkdirSync(noPython);
+  const r = spawnSync('/bin/sh', ['-c', cmd], { env: { PATH: noPython, HOME: t.home }, encoding: 'utf8' });
+  expect(r.status).toBe(0);
+  expect(r.stdout + r.stderr).toBe('');
 });

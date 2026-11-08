@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -88,5 +89,25 @@ describe('osc7501 reporter core', () => {
   it('repeated working reports emit one line', () => {
     const rows = run([osc('state=working'), osc('state=working:app=x'), osc('state=working')]);
     expect(rows).toHaveLength(1);
+  });
+
+  it('gates per chunk like the real listener: all reports in a chunk fold once', () => {
+    // run_listen applies every report in a chunk and folds once; the harness
+    // shares that gate (PaneReader), so a chunk carrying working then idle is
+    // one first observation of idle, never a working/prompt + ready/stop pair.
+    expect(trail(run([osc('state=working') + osc('state=idle')]))).toEqual(['ready/start']);
+    expect(trail(run([osc('state=working') + osc('state=clear')]))).toEqual([]);
+  });
+
+  it('a chunk of only probes or unparseable bodies is not an observation', () => {
+    expect(trail(run([osc('?')], 'working/prompt'))).toEqual([]);
+    expect(trail(run([osc('?') + osc('state=bogus')], 'working/prompt'))).toEqual([]);
+    expect(trail(run([osc('?'), osc('state=idle')], 'working/prompt'))).toEqual(['ready/stop']);
+  });
+
+  it('the harness feeds chunks through the asset\'s own PaneReader (the mirror is structural)', () => {
+    const src = readFileSync(HELPER, 'utf8');
+    expect(src).toMatch(/rep\.PaneReader\(/);
+    expect(src).not.toMatch(/rep\.extract\(|rep\.parse_report\(/);
   });
 });

@@ -25,32 +25,29 @@ class Replay:
         self.session_of = session_of
         self.markers = dict(markers or {})   # session -> (state, cause)
         self.written = {}                    # session -> (state, cause) this reporter last wrote
-        self.panes = {}                      # pane -> {'rec','tail','active'}
+        self.panes = {}                      # pane -> {'reader','active'}
 
     def _pane(self, name):
-        return self.panes.setdefault(name, {'rec': rep.Records(), 'tail': b'', 'active': False})
+        return self.panes.setdefault(name, {'reader': rep.PaneReader(), 'active': False})
 
     def feed(self, line, pane, data):
+        """One pipe chunk through the asset's own chunk gate (PaneReader), so
+        the harness folds exactly as run_listen does: every report in the
+        chunk, one fold, and a probe-only chunk is not an observation."""
         p = self._pane(pane)
-        bodies, p['tail'] = rep.extract(p['tail'] + data)
-        out = []
-        for body in bodies:
-            r = rep.parse_report(body)
-            if r is None:
-                continue
-            session = self.session_of(pane)
-            if r['state'] == 'clear' and r['id'] == '':
-                p['rec'].apply(r)
-                p['active'] = False
-                out.extend(self._after_clear(line, session))
-                continue
-            p['rec'].apply(r)
-            p['active'] = True
-            out.extend(self._evaluate(line, session))
-        return out
+        got = p['reader'].feed(data)
+        if got is None:
+            return []
+        what, _fold = got
+        session = self.session_of(pane)
+        if what == 'clear':
+            p['active'] = False
+            return self._after_clear(line, session)
+        p['active'] = True
+        return self._evaluate(line, session)
 
     def _session_fold(self, session):
-        folds = [q['rec'].fold() for name, q in self.panes.items()
+        folds = [q['reader'].recs.fold() for name, q in self.panes.items()
                  if q['active'] and self.session_of(name) == session]
         return rep.session_fold(folds), bool(folds)
 
