@@ -1,4 +1,6 @@
 import { test, expect } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // Acceptance test for the whole feature: box "setup" (installing tmux etc.
 // over SSH) used to run as a WebSocket-tied PTY, so closing the setup panel
@@ -144,6 +146,104 @@ test('setup continues server-side after the panel is closed mid-run', async ({ p
     }
     // Also kills the box's tmux session on the box in the background — see
     // boxRemoval.js — so repeated runs don't pile up sessions on the fixture host.
+    if (boxId) await page.request.delete(`/api/boxes/${boxId}`);
+  }
+});
+
+// The opencode-plugin phase end to end, on a box WITHOUT OpenCode: the phase is
+// gated on the `opencode` tool, the box decides by its own presence check
+// (opencodeAgentPlugin.js), and a box that has no OpenCode records a skip that
+// never fails the job — then the setup viewer renders that result.
+//
+// Network: ticking `opencode` runs the catalog block (boxActions.js), which
+// fetches https://opencode.ai/v2/install with curl and runs it. The fixture box
+// puts its own bin/ first on PATH (test/helpers/localBox.js — the same place
+// its inert chsh/sudo live), so this test parks a stub `curl` there for its
+// duration: for exactly that URL it writes an installer that exits 0 and
+// installs nothing; any other URL fails loudly, so nothing else can quietly
+// "succeed" offline. Nothing leaves the machine. The stub also satisfies the
+// implied `curl` tool's `command -v curl` guard, so no package install runs.
+// The result is the real catalog block, the real phase and the real pusher
+// over the real ssh transport, with OpenCode genuinely absent afterwards.
+//
+// The PATH line the catalog block appends (# tmuxifier-opencode-bin) lands in
+// the fixture's shared rc files, so they are restored afterwards along with the
+// stub.
+test('the opencode-plugin phase records a skip on a box without OpenCode', async ({ page }) => {
+  const home = process.env.E2E_BOX_HOME!;
+  const stub = path.join(home, 'bin', 'curl');
+  const rcFiles = ['.profile', '.bashrc', '.zshrc'].map((f) => path.join(home, f));
+  const rcBefore = new Map(rcFiles.map((f) => [f, fs.existsSync(f) ? fs.readFileSync(f) : null]));
+  // A box that already had OpenCode would take the applied path instead.
+  expect(fs.existsSync(path.join(home, '.opencode'))).toBe(false);
+  expect(fs.existsSync(stub)).toBe(false);
+  fs.writeFileSync(stub, [
+    '#!/bin/sh',
+    'out=; url=',
+    'while [ $# -gt 0 ]; do',
+    '  case "$1" in',
+    '    -o) out="$2"; shift 2 ;;',
+    '    -*) shift ;;',
+    '    *) url="$1"; shift ;;',
+    '  esac',
+    'done',
+    'if [ "$url" = "https://opencode.ai/v2/install" ] && [ -n "$out" ]; then',
+    "  printf '#!/bin/sh\\nexit 0\\n' > \"$out\"",
+    '  exit 0',
+    'fi',
+    'echo "e2e curl stub: refusing $url" >&2',
+    'exit 22',
+    '',
+  ].join('\n'), { mode: 0o755 });
+
+  const label = `setup-opencode-e2e-${Date.now()}`;
+  let boxId: string | undefined;
+  try {
+    await page.goto('/');
+    await page.fill('#pw', 'e2e');
+    await page.click('button:has-text("Unlock")');
+    await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
+
+    await page.locator('#add').click();
+    await expect(page.getByRole('heading', { name: 'Add box' })).toBeVisible();
+    // The alias reserved for this spec file (see the test above).
+    await page.getByLabel('Host or alias').fill('tmuxifierlocal-setupjob');
+    await page.getByLabel('Label (optional)').fill(label);
+    await page.getByLabel('User').fill('');
+    await page.getByLabel('Install Oh My Tmux if missing').uncheck();
+    await page.getByLabel('OpenCode (CLI + agent-state plugin)').check();
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
+
+    const panel = page.locator('#provision-panel');
+    await expect(panel).toHaveClass(/open/);
+    // The viewer appends each phase result to the status line on 'done' (and
+    // auto-closes the panel 5 s later, so this is read while it is open).
+    await expect(panel.locator('.provision-status')).toContainText('opencode-plugin skipped (no OpenCode on the box)', { timeout: 30000 });
+
+    const boxes: Array<{ id: string; label: string }> = await (await page.request.get('/api/boxes')).json();
+    boxId = boxes.find((b) => b.label === label)?.id;
+    expect(boxId).toBeTruthy();
+    const jobs: Array<{ boxId: string; status: string; options: { tools?: string[] }; opencodePlugin: unknown }> =
+      await (await page.request.get('/api/setup')).json();
+    const job = jobs.find((j) => j.boxId === boxId);
+    expect(job?.status).toBe('done');
+    expect(job?.options.tools).toContain('opencode');
+    expect(job?.opencodePlugin).toEqual({ target: 'opencode-plugin', ok: false, skipped: 'no OpenCode on the box' });
+    // Skipped means nothing was written.
+    expect(fs.existsSync(path.join(home, '.config', 'opencode', 'plugins', 'tmuxifier-agent.js'))).toBe(false);
+  } finally {
+    fs.rmSync(stub, { force: true });
+    for (const [f, before] of rcBefore) {
+      if (before === null) fs.rmSync(f, { force: true });
+      else fs.writeFileSync(f, before);
+    }
+    if (!boxId) {
+      const res = await page.request.get('/api/boxes').catch(() => null);
+      if (res) {
+        const boxes: Array<{ id: string; label: string }> = await res.json();
+        boxId = boxes.find((b) => b.label === label)?.id;
+      }
+    }
     if (boxId) await page.request.delete(`/api/boxes/${boxId}`);
   }
 });
