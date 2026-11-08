@@ -415,8 +415,10 @@ def _bare_clear(home, pane_id, session, own_fold, last_written):
 # entries lock and only if the entry on disk still carries its generation. An
 # entry restamped by the loop (a handover in flight) is never written again
 # by that listener. Every read-modify-write of an entry, by loop or listener,
-# holds ~/.tmuxifier-osc/entries.lock, so a claim cannot land between the
-# loop's read and its handover write.
+# holds ~/.tmuxifier-osc/entries.lock, and the loop builds its handover
+# write from an entry re-read INSIDE the lock (never from the pass's earlier
+# unlocked listing), so a claim cannot land between the loop's read and its
+# handover write and a predecessor's last persist is never seeded stale.
 #
 # Handover, loop side, in this order and nothing after step 3:
 #   1. write the entry pid-less, handover True, new sha, fresh attachedAt
@@ -424,6 +426,12 @@ def _bare_clear(home, pane_id, session, own_fold, last_written):
 #   2. pipe-pane -t %N        the predecessor reads EOF
 #   3. pipe-pane -o %N listen the successor starts, seeds from the entry and
 #                             claims it (pid, handover False, same attachedAt)
+# If step 2 or 3 fails (tmux refused mid-handover) the entry stays pid-less
+# with handover True: it is dropped after ATTACH_GRACE_S and, if the pane
+# still matches, re-attached cold (the marker file is consulted as usual).
+# Should the pane vanish inside that window, its marker leaks until the
+# session's next agent rewrites it — accepted: the alternative is the loop
+# deleting markers, which only a listener that wrote one may do.
 # The loop's next pass cannot misread the successor as dead: between 1 and the
 # claim the entry is pid-less with a fresh attachedAt, which counts as live
 # for ATTACH_GRACE_S (30 s, a python start-up is ~30 ms); after the claim the
@@ -438,7 +446,9 @@ def _bare_clear(home, pane_id, session, own_fold, last_written):
 #                                      a successor claimed — keep marker,
 #                                      touch nothing.
 #   attachedAt is not my generation    same, even if the pid were still mine.
-#   otherwise (pid mine, handover False, my generation)
+#   otherwise (pid mine, handover False, my generation) — or NO entry at all
+#   (the loop already dropped it for a gone/unpiped pane; it never deletes an
+#   entry during a handover)
 #                                      a real end (pane gone, detached after
 #                                      three non-matching passes): bare-clear
 #                                      rule on the marker, delete the entry.
@@ -565,7 +575,9 @@ def run_listen(pane_id, *, home, stdin_fd=0):
         s = resolve_session(pane_id) or session  # tmux call outside the lock
         with entries_locked(home):
             cur = read_entry(epath)
-            if cur.get('handover') is True or cur.get('pid') != os.getpid() or superseded(cur):
+            # An absent entry is a real end: the loop already dropped it for a
+            # gone/unpiped pane (it never deletes an entry during a handover).
+            if cur and (cur.get('handover') is True or cur.get('pid') != os.getpid() or superseded(cur)):
                 return 0
             _bare_clear(home, pane_id, s, ('idle', None), last_written)
             _unlink(epath)
@@ -750,10 +762,15 @@ def hand_over(pane_id, home, e):
     """Replace a live listener with one of this asset version: steps 1-3 of
     the protocol above run_listen. Nothing touches the entry after step 3."""
     epath = entry_path(home, pane_id)
-    fresh = {k: v for k, v in e.items() if k != 'pid'}
-    fresh.update({'sha': asset_sha(), 'attachedAt': time.time(), 'handover': True})
     try:
         with entries_locked(home):
+            # Re-read under the lock: `e` came from pass_once's unlocked read
+            # and a predecessor persist since then must not be seeded stale.
+            cur = read_entry(epath)
+            if not cur or cur.get('pid') != e.get('pid'):
+                return False  # gone or already someone else's: next pass decides
+            fresh = {k: v for k, v in cur.items() if k != 'pid'}
+            fresh.update({'sha': asset_sha(), 'attachedAt': time.time(), 'handover': True})
             write_entry(epath, fresh)
     except Exception as ex:
         debug(home, 'handover entry: %r' % (ex,))

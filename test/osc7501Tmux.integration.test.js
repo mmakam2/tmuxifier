@@ -160,7 +160,7 @@ test('a setup rerun hands the listener over live: marker kept, fold continues, o
   expect(second.records).toEqual({ '': { state: 'working', kind: null } });
   expect(second.lastWritten).toBe(working);
   await waitFor(() => !alive(first.pid), { what: 'predecessor exit' });
-  await sleep(500); // a wrong heal would re-pipe within the loop's first pass
+  await sleep(2500); // past the new loop's next 2 s pass: a wrong heal would re-pipe there
   expect(readIf(h.marker)).toBe(working);
   expect(h.procs('listen %0')).toEqual([second.pid]);
   await waitFor(() => h.procs('loop').length === 1 && (readIf(h.lock) || '').includes(sha2), { what: 'one new loop' });

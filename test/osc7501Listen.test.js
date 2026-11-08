@@ -199,3 +199,13 @@ test('a listener the loop restamped (handover in flight) touches neither marker 
   expect(readFileSync(t.entryFile, 'utf8')).toBe(restamped);
   expect(existsSync(t.markerOf('web'))).toBe(true);
 });
+
+test('the loop dropped the entry for a gone pane before EOF: the listener still removes its own marker', async () => {
+  const t = setup();
+  t.send(osc('state=working'));
+  await waitMarker(t, 'web', /^web:working:\d+:prompt\n$/);
+  rmSync(t.entryFile); // pass_once: pane gone / pipe gone, concurrent with the pane's death
+  t.child.stdin.end();
+  expect(await t.exited).toBe(0);
+  expect(existsSync(t.markerOf('web'))).toBe(false);
+});
