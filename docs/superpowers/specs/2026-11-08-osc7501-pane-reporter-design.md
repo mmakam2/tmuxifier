@@ -202,7 +202,7 @@ last write a consistent one. Marker writes happen only when the session fold cha
 | working → idle | `ready:stop` |
 | blocked → idle | `ready:stop` (a reject ends the turn like a success, per the recording) |
 | unknown → idle (first observation) | existing marker `working`/`blocked` → `ready:stop` (the turn ended unobserved); existing `ready` → untouched; no marker → `ready:start` |
-| bare `clear` (the program exited) | this pane's records drop; if no other live entry for the session remains, the marker is removed **if its content is what this reporter last wrote**; otherwise the session fold is rewritten |
+| bare `clear` (the program exited) | this pane's records drop; if no other live entry for the session remains, the marker is removed **if its content is what this reporter last wrote** and otherwise left untouched (it belongs to another writer, e.g. the Claude hook — never rewritten); if live siblings remain, the session fold is rewritten |
 | EOF on stdin | with `handover` set in the entry: keep marker and entry, exit. Otherwise (pane gone, detached after three non-matching passes): the bare-`clear` rule, then delete the entry and exit |
 
 `ready:start` is what `deriveAgentState` shows as `idle` with no notification; `ready:stop`
