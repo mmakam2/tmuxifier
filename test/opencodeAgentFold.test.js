@@ -27,22 +27,26 @@ function world() {
   };
 }
 
-const pane = (session, path, cmd = 'opencode') => ({ session, cmd, path });
+const pane = (session, path, cmd = 'opencode', active = true) => ({ session, cmd, path, active });
 const sc = (f) => `${f.state}/${f.cause}`;
 
 test('PANE_FORMAT lists session, active flags, command and path, tab-separated', () => {
   expect(PANE_FORMAT).toBe('#{session_name}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}');
 });
 
-test('parsePanes keeps only the active pane of the active window and rejects malformed rows', () => {
+test('parsePanes returns every well-formed row, active only for the active pane of the active window, and rejects malformed rows', () => {
   const text = 'web\t1\t1\topencode\t/home/user/proj\n' + 'web\t0\t1\tclaude\t/home/user/other\n' + 'dev\t1\t0\topencode\t/x\n' + 'bad\x01name\t1\t1\topencode\t/x\n' + 'short\t1\t1\n' + 'odd\t1\t1\tzsh\t/a\tb\n';
-  expect(parsePanes(text)).toEqual([{ session: 'web', cmd: 'opencode', path: '/home/user/proj' }]);
+  expect(parsePanes(text)).toEqual([
+    { session: 'web', cmd: 'opencode', path: '/home/user/proj', active: true },
+    { session: 'web', cmd: 'claude', path: '/home/user/other', active: false },
+    { session: 'dev', cmd: 'opencode', path: '/x', active: false },
+  ]);
 });
 
 test('parsePanes rejects controls in any field, over-long names and paths, and caps the rows', () => {
   const ok = (s, p = '/p') => `${s}\t1\t1\topencode\t${p}\n`;
   expect(parsePanes(ok('a b.c-d_e') + ok('x', '/a\x1bb') + ok('y\x7f') + ok('\t'.slice(1)))).toEqual([
-    { session: 'a b.c-d_e', cmd: 'opencode', path: '/p' },
+    { session: 'a b.c-d_e', cmd: 'opencode', path: '/p', active: true },
   ]);
   expect(parsePanes(ok('n'.repeat(256)))).toHaveLength(1);
   expect(parsePanes(ok('n'.repeat(257)))).toEqual([]);
@@ -56,9 +60,14 @@ test('parsePanes rejects controls in any field, over-long names and paths, and c
   for (const bad of [undefined, null, 42, {}]) expect(parsePanes(bad)).toEqual([]);
 });
 
-test('a session whose active window runs claude is not an opencode session even if another window is', () => {
+test('a session whose active window runs claude is not folded even if another window runs opencode', () => {
   const text = 'web\t1\t1\tclaude\t/home/user/proj\nweb\t0\t1\topencode\t/home/user/proj\n';
-  expect(parsePanes(text).filter((p) => isOpencodeCmd(p.cmd))).toEqual([]);
+  const panes = parsePanes(text);
+  expect(panes.filter((p) => isOpencodeCmd(p.cmd)).map((p) => p.active)).toEqual([false]);
+  expect(foldForPanes(createReducer(), panes, new Map(), 1).has('web')).toBe(false);
+  // The opencode window becoming the active one is what makes it read opencode.
+  const back = parsePanes('web\t0\t1\tclaude\t/home/user/proj\nweb\t1\t1\topencode\t/home/user/proj\n');
+  expect(foldForPanes(createReducer(), back, new Map(), 1).get('web')).toEqual({ state: 'ready', cause: 'start', ts: 1 });
 });
 
 test('isOpencodeCmd accepts opencode and opencode-<suffix>, rejects node, bun, opencodex', () => {
@@ -149,6 +158,8 @@ test('foldForPanes: two tmux sessions in the same directory get the same fold; a
   expect(fold.get('two')).toEqual(fold.get('one'));
   expect(fold.get('other')).toEqual({ state: 'ready', cause: 'start', ts: 999 });
   expect(fold.has('shell')).toBe(false); // not an opencode pane: never written
+  // An opencode pane that is not the active pane of the active window is never folded.
+  expect(foldForPanes(w.r, [pane('bg', '/proj', 'opencode', false)], new Map(), 999).has('bg')).toBe(false);
   // A session with no directory is attributed nowhere.
   const u = createReducer({ now: () => 50 });
   u.apply({ id: 'x', type: 'session.execution.started', data: { sessionID: 'ses_u' } });
@@ -175,4 +186,13 @@ test('foldForPanes: child sessions are never chosen directly', () => {
 test('markerLine writes session:state:ts:cause with a trailing newline', () => {
   expect(markerLine('web', { state: 'blocked', cause: 'permission', ts: 1794098652 })).toBe('web:blocked:1794098652:permission\n');
   expect(markerLine('octest', { state: 'ready', cause: 'start', ts: 0 })).toBe('octest:ready:0:start\n');
+});
+
+test('foldForPanes treats a missing or non-Map since as empty', () => {
+  const w = world();
+  w.created('ses_a', 100, '/proj'); w.start('ses_a', 110);
+  const panes = [pane('web', '/proj')];
+  for (const since of [undefined, null, {}, [['web', 500]], 'web']) {
+    expect(foldForPanes(w.r, panes, since, 999).get('web'), String(since)).toEqual({ state: 'working', cause: 'prompt', ts: 110 });
+  }
 });

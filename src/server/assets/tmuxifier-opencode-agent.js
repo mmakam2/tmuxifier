@@ -50,6 +50,11 @@
 // Clock: an event's own `created` (ms) when it is a finite number, else the injected
 // `now()`; every `ts` here is epoch SECONDS, the sh hook's unit.
 
+import { execFile } from 'node:child_process';
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 // ---------------------------------------------------------------------------
 // The pure reducer: OpenCode events -> per-OpenCode-session derived state.
 // ---------------------------------------------------------------------------
@@ -354,6 +359,13 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000) } = {}
 // STATUS_FMT reports (a tmux session whose current window runs Claude is never
 // touched here). Two TUIs in one directory in two tmux sessions therefore show
 // the same folded state, a documented limitation (spec §4.1).
+//
+// Two notions per tmux session, kept apart on purpose:
+// - it HOSTS opencode while any pane in any window runs it; `since` (below)
+//   follows hosting, so switching to another window and back neither resets
+//   it nor hides a block raised meanwhile;
+// - it READS opencode while its active pane of the active window runs it;
+//   only then is a marker written, and a marker it no longer reads is deleted.
 
 // The `tmux list-panes -a -F` argument parsePanes reads.
 export const PANE_FORMAT = '#{session_name}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}';
@@ -365,7 +377,8 @@ const CONTROL_RE = /[\x00-\x1f\x7f]/;
 
 // tmux output is box output: untrusted. Rows with the wrong field count, any
 // C0 control or DEL, an empty or over-long name or path are dropped, never
-// repaired; only the active pane of the active window survives.
+// repaired. Every surviving row is kept, `active` marking the active pane of
+// the active window (hosting needs the others).
 export function parsePanes(text) {
   if (typeof text !== 'string') return [];
   const out = [];
@@ -374,11 +387,10 @@ export function parsePanes(text) {
     const f = line.split('\t');
     if (f.length !== 5) continue;
     const [session, windowActive, paneActive, cmd, path] = f;
-    if (windowActive !== '1' || paneActive !== '1') continue;
     if (!session || session.length > NAME_MAX || CONTROL_RE.test(session)) continue;
     if (cmd.length > NAME_MAX || CONTROL_RE.test(cmd)) continue;
     if (!path || path.length > PATH_MAX || CONTROL_RE.test(path)) continue;
-    out.push({ session, cmd, path });
+    out.push({ session, cmd, path, active: windowActive === '1' && paneActive === '1' });
   }
   return out;
 }
@@ -405,15 +417,16 @@ export function dirMatches(dir, panePath) {
 const rankOf = (d) => (d.state === 'blocked' ? 4 : d.state === 'working' ? 3
   : d.state === 'ready' ? (d.cause === 'start' ? 1 : 2) : 0);
 
-// tmux session -> { state, cause, ts } for every opencode pane. Candidates are
-// root sessions (children roll up into their parent) in the pane's directory
-// whose ts is not older than `since` (the moment this tmux session's active
-// pane became opencode, seconds), which keeps a previous TUI's finished turns
-// from making a relaunch read done. blocked > working > ready/stop >
-// ready/start, ties to the
-// newest ts within a rank; the written ts is the chosen session's own, not the fold time.
-// No candidate: ready/start at `since` (else `now`, seconds).
+// tmux session -> { state, cause, ts } for every active opencode pane (a tmux
+// session that reads opencode). Candidates are root sessions (children roll
+// up into their parent) in the pane's directory whose ts is not older than
+// `since` (the moment this tmux session started hosting opencode, seconds),
+// which keeps a previous TUI's finished turns from making a relaunch read
+// done. blocked > working > ready/stop > ready/start, ties to the newest ts
+// within a rank; the written ts is the chosen session's own, not the fold
+// time. No candidate: ready/start at `since` (else `now`, seconds).
 export function foldForPanes(reducer, panes, since = new Map(), now = Math.floor(Date.now() / 1000)) {
+  if (!(since instanceof Map)) since = new Map();
   const roots = [];
   for (const s of reducer.sessions.values()) {
     if (s.parent !== null || !s.dir) continue;
@@ -422,7 +435,7 @@ export function foldForPanes(reducer, panes, since = new Map(), now = Math.floor
   }
   const out = new Map();
   for (const pane of panes) {
-    if (!isOpencodeCmd(pane.cmd)) continue;
+    if (!pane.active || !isOpencodeCmd(pane.cmd)) continue;
     const floor = since.get(pane.session);
     let best = null;
     for (const c of roots) {
@@ -440,3 +453,259 @@ export function foldForPanes(reducer, panes, since = new Map(), now = Math.floor
 export function markerLine(tmuxSession, fold) {
   return `${tmuxSession}:${fold.state}:${fold.ts}:${fold.cause}\n`;
 }
+
+// ---------------------------------------------------------------------------
+// The writer: sweep, marker files, the process-wide singleton, the entry point.
+// ---------------------------------------------------------------------------
+//
+// Nothing here may throw into OpenCode: every tmux call, every fs call and the
+// parse -> fold -> markerLine pipeline is wrapped; the plugin speaks only
+// through one console.error when TMUXIFIER_OPENCODE_DEBUG is set.
+
+const SWEEP_MS = 15000;
+const PANE_CACHE_MS = 1000;
+const LIST_TIMEOUT_MS = 2000;
+
+function debug(...args) {
+  try {
+    if (typeof process !== 'undefined' && process.env?.TMUXIFIER_OPENCODE_DEBUG) {
+      console.error('[tmuxifier-opencode-agent]', ...args);
+    }
+  } catch { /* never surface */ }
+}
+
+// The marker file name, like the sh hook's `tr -c 'A-Za-z0-9._-' '_'`; the
+// content keeps the exact tmux session name.
+export function safeName(session) {
+  return session.replace(/[^A-Za-z0-9._-]/g, '_');
+}
+
+// `tmux list-panes -a` for every pane of every session. null on ENOENT (no
+// tmux on PATH: the core stays inert), a timeout, a non-zero exit or
+// non-string output; never rejects. `file`/`timeout` exist for tests.
+export function defaultListPanes({ file = 'tmux', timeout = LIST_TIMEOUT_MS } = {}) {
+  return new Promise((resolve) => {
+    try {
+      execFile(file, ['list-panes', '-a', '-F', PANE_FORMAT],
+        { timeout, killSignal: 'SIGKILL', maxBuffer: 1 << 20, encoding: 'utf8', windowsHide: true },
+        (err, stdout) => resolve(!err && typeof stdout === 'string' ? stdout : null));
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export const GLOBAL_KEY = Symbol.for('tmuxifier.opencode-agent');
+
+// One live reporter: a reducer fed by the event stream, and a sweep that
+// lists panes and writes the folded markers. `written` (marker name -> the
+// content this core last wrote) and `since` (tmux session -> epoch seconds it
+// started hosting opencode) are plain properties so a hand-over can pass them
+// on to the next core.
+export function createCore({
+  home = os.homedir(),
+  listPanes = defaultListPanes,
+  now = () => Math.floor(Date.now() / 1000),
+  sweepMs = SWEEP_MS,
+  paneCacheMs = PANE_CACHE_MS,
+  setInterval: startTimer = globalThis.setInterval,
+  clearInterval: stopTimer = globalThis.clearInterval,
+} = {}) {
+  const reducer = createReducer({ now });
+  const controller = new AbortController();
+  const dir = path.join(home, '.tmuxifier-agent');
+  let aborted = false;
+  let attached = false;
+  let timer = null;
+  let inflight = null;
+  let rerun = false;
+  let cache = null;
+
+  const core = {
+    reducer,
+    attach,
+    handle,
+    sweep,
+    abort,
+    clear,
+    written: new Map(),
+    since: new Map(),
+    owner: Symbol('tmuxifier.opencode-agent.core'),
+  };
+
+  async function panesText() {
+    const t = Date.now();
+    if (cache && t >= cache.at && t - cache.at < paneCacheMs) return cache.value;
+    let value = null;
+    try {
+      value = await listPanes();
+    } catch (e) {
+      debug('listPanes', e);
+    }
+    if (typeof value !== 'string') value = null;
+    cache = { at: Date.now(), value };
+    return value;
+  }
+
+  function write(name, content) {
+    // `.`/`..` cannot be tmux session names (tmux forbids '.'), but the
+    // listing is untrusted: never let one name the directory or its parent.
+    if (!name || name === '.' || name === '..') return false;
+    const file = path.join(dir, name);
+    const tmp = `${file}.${process.pid}.tmp`;
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(tmp, content, { mode: 0o644 });
+      renameSync(tmp, file);
+      return true;
+    } catch (e) {
+      debug('write', name, e);
+      try { unlinkSync(tmp); } catch { /* nothing left behind, or nothing to do */ }
+      return false;
+    }
+  }
+
+  // Delete a marker this core wrote, unless someone (the Claude hook) has
+  // rewritten it since; forget it either way.
+  function release(name) {
+    try {
+      const file = path.join(dir, name);
+      if (readFileSync(file, 'utf8') === core.written.get(name)) unlinkSync(file);
+    } catch { /* already gone or unreadable: nothing of ours to delete */ }
+    core.written.delete(name);
+  }
+
+  async function sweepOnce() {
+    const text = await panesText();
+    if (aborted || text === null) return; // handed over, or tmux unusable: touch nothing
+    try {
+      const panes = parsePanes(text);
+      const t = now();
+      const hosting = new Set();
+      for (const p of panes) if (isOpencodeCmd(p.cmd)) hosting.add(p.session);
+      for (const s of hosting) if (!core.since.has(s)) core.since.set(s, t);
+      for (const s of [...core.since.keys()]) if (!hosting.has(s)) core.since.delete(s);
+
+      const live = new Set();
+      for (const [session, fold] of foldForPanes(reducer, panes, core.since, t)) {
+        const name = safeName(session);
+        const content = markerLine(session, fold);
+        live.add(name);
+        if (core.written.get(name) !== content && write(name, content)) core.written.set(name, content);
+      }
+      for (const name of [...core.written.keys()]) if (!live.has(name)) release(name);
+    } catch (e) {
+      debug('sweep', e);
+    }
+  }
+
+  // At most one sweep in flight; any request made meanwhile reruns it once
+  // after. The returned promise settles when the rerun is done too; it never
+  // rejects.
+  function sweep() {
+    if (inflight) {
+      rerun = true;
+      return inflight;
+    }
+    inflight = (async () => {
+      try {
+        do {
+          rerun = false;
+          await sweepOnce();
+        } while (rerun && !aborted);
+      } catch (e) {
+        debug('sweep', e);
+      } finally {
+        inflight = null;
+      }
+    })();
+    return inflight;
+  }
+
+  async function handle(event) {
+    let changed = false;
+    try {
+      changed = reducer.apply(event);
+    } catch (e) {
+      debug('apply', e);
+    }
+    if (changed && !aborted) await sweep();
+  }
+
+  // Sweep now and every sweepMs, and feed the event stream into handle()
+  // until abort(). handle() is not awaited per event: the reducer applies
+  // each event synchronously, in order, and the sweeps coalesce.
+  async function attach(ctx) {
+    if (aborted || attached) return;
+    attached = true;
+    sweep();
+    try {
+      timer = startTimer(() => { sweep(); }, sweepMs);
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    } catch (e) {
+      debug('timer', e);
+    }
+    try {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        if (aborted) break;
+        handle(event);
+      }
+    } catch (e) {
+      if (!aborted) debug('subscribe', e);
+    }
+  }
+
+  // Stop the subscription and the timer. Markers stay: the next core
+  // inherits them, or clear() deletes them.
+  function abort() {
+    aborted = true;
+    try { controller.abort(); } catch { /* already aborted */ }
+    if (timer !== null) {
+      try { stopTimer(timer); } catch { /* best effort */ }
+      timer = null;
+    }
+  }
+
+  // Delete every marker this core wrote, under the content-equality rule.
+  function clear() {
+    for (const name of [...core.written.keys()]) release(name);
+  }
+
+  return core;
+}
+
+// The OpenCode V2 entry point. OpenCode sets the plugin up once per project
+// directory in one long-lived server and reloads a rewritten plugin file
+// without necessarily cleaning up the old instance (facts 1-3), so the core
+// is a process-wide singleton: every setup aborts whichever core holds the
+// global, inherits what it wrote, and becomes the owner. A cleanup acts only
+// while its core still owns the global.
+export default {
+  id: 'tmuxifier-agent',
+  async setup(ctx) {
+    let core = null;
+    try {
+      core = createCore();
+      const prev = globalThis[GLOBAL_KEY];
+      if (prev && typeof prev === 'object') {
+        try { prev.abort(); } catch { /* a foreign or older object */ }
+        if (prev.written instanceof Map) core.written = prev.written;
+        if (prev.since instanceof Map) core.since = prev.since;
+      }
+      globalThis[GLOBAL_KEY] = core;
+      core.attach(ctx).catch((e) => debug('attach', e));
+    } catch (e) {
+      debug('setup', e);
+    }
+    return async function cleanup() {
+      try {
+        if (!core || globalThis[GLOBAL_KEY] !== core) return;
+        core.abort();
+        core.clear();
+        delete globalThis[GLOBAL_KEY];
+      } catch (e) {
+        debug('cleanup', e);
+      }
+    };
+  },
+};
