@@ -7,9 +7,10 @@ import path from 'node:path';
 //   STUB_TMUX_SESSIONS  `N=name` lines; display-message -p -t %N prints name
 //   STUB_TMUX_PANES     printed verbatim by list-panes
 //   STUB_TMUX_NOSERVER  =1 -> every call fails "no server running"
+//   STUB_TMUX_ENTRY_DIR pipe-pane appends `ENTRY <N> <entry json>` to the log
 // pipe-pane / run-shell print nothing and succeed (they are only logged).
 const SCRIPT = `#!/bin/sh
-echo "$*" >> "$STUB_TMUX_LOG"
+printf '%s\\n' "$*" >> "$STUB_TMUX_LOG"
 if [ "$STUB_TMUX_NOSERVER" = 1 ]; then
   echo "no server running on /tmp/x" >&2
   exit 1
@@ -34,7 +35,18 @@ case "$1" in
   list-panes)
     [ -f "$STUB_TMUX_PANES" ] && cat "$STUB_TMUX_PANES"
     exit 0 ;;
-  pipe-pane|run-shell)
+  pipe-pane)
+    if [ -n "$STUB_TMUX_ENTRY_DIR" ]; then
+      pane=""
+      while [ $# -gt 0 ]; do
+        if [ "$1" = "-t" ]; then pane="$2"; fi
+        shift
+      done
+      n="\${pane#%}"
+      [ -f "$STUB_TMUX_ENTRY_DIR/$n" ] && { printf 'ENTRY %s ' "$n"; cat "$STUB_TMUX_ENTRY_DIR/$n"; echo; } >> "$STUB_TMUX_LOG"
+    fi
+    exit 0 ;;
+  run-shell)
     exit 0 ;;
   *)
     echo "no server running on /tmp/x" >&2

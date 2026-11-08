@@ -29,10 +29,12 @@
 #
 # Fail open: the reporter never writes to the pane, never raises out of its
 # loops, and prints nothing unless TMUXIFIER_OSC_DEBUG=1.
+import fcntl
 import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -317,6 +319,19 @@ def _read_text(path):
         return None
 
 
+def pid_alive(pid):
+    """True when pid is a positive int naming a process that exists."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except Exception:
+        pass  # EPERM: alive, owned by someone else
+    return True
+
+
 def live_entries(home, session, exclude_pane):
     """Registry entries of other panes in `session` whose listener is alive."""
     d = os.path.join(home, '.tmuxifier-osc', 'panes')
@@ -330,15 +345,8 @@ def live_entries(home, session, exclude_pane):
         if n == skip or not n.isdigit():
             continue
         e = read_entry(os.path.join(d, n))
-        pid = e.get('pid')
-        if e.get('session') != session or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        if e.get('session') != session or not pid_alive(e.get('pid')):
             continue
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            continue
-        except Exception:
-            pass  # EPERM: alive, owned by someone else
         out.append(e)
     return out
 
@@ -462,12 +470,289 @@ def run_listen(pane_id, *, home, stdin_fd=0):
     return 0
 
 
-def main(argv):
-    # Roles loop and sweep are added by later tasks; unknown roles are a no-op.
+# ------------------------------------------------------- loop and sweep roles
+
+LOOP_INTERVAL = 2.0
+MISS_LIMIT = 3
+IDLE_EXIT_S = 3600
+ATTACH_GRACE_S = 30
+_NO_SERVER_RE = re.compile(r'no server running|error connecting to .*\(No such file or directory\)')
+
+
+def osc_dir(home):
+    return os.path.join(home, '.tmuxifier-osc')
+
+
+def agent_kind(cmd, home):
+    """The OSC agent a pane command names, or None. opencode yields to the
+    OpenCode plugin whenever its plugin file is installed."""
+    for kind, rx in OSC_AGENTS.items():
+        if re.match(rx, cmd):
+            if kind == 'opencode':
+                cfg = os.environ.get('OPENCODE_CONFIG_DIR') or os.path.join(home, '.config', 'opencode')
+                if os.path.exists(os.path.join(cfg, 'plugins', 'tmuxifier-agent.js')):
+                    return None
+            return kind
+    return None
+
+
+def list_panes():
+    """(rows, no_server): rows is [(pane_id, piped, cmd, session)] or None when
+    tmux could not be listed; no_server is True when there is no tmux server
+    (or no tmux at all)."""
     try:
+        r = subprocess.run(['tmux', 'list-panes', '-a', '-F',
+                            '#{pane_id}\t#{pane_pipe}\t#{pane_current_command}\t#{session_name}'],
+                           capture_output=True, timeout=5)
+    except FileNotFoundError:
+        return None, True
+    except Exception:
+        return None, False
+    if r.returncode != 0:
+        err = r.stderr.decode('utf-8', 'replace')
+        return None, bool(_NO_SERVER_RE.search(err))
+    rows = []
+    for line in r.stdout.decode('utf-8', 'replace').split('\n'):
+        f = line.split('\t', 3)
+        if len(f) < 4 or not re.match(r'^%[0-9]+$', f[0]):
+            continue
+        rows.append((f[0], f[1] == '1', f[2], f[3]))
+    return rows, False
+
+
+def _tmux(*args):
+    try:
+        return subprocess.run(['tmux'] + list(args), capture_output=True, timeout=5).returncode == 0
+    except Exception:
+        return False
+
+
+def _reporter_cmd(home, role):
+    return "exec python3 '%s' %s" % (os.path.join(osc_dir(home), 'reporter.py'), role)
+
+
+def attach(pane_id, home):
+    """Pipe the pane's output to a listener; register it unless already registered."""
+    if not _tmux('pipe-pane', '-o', '-t', pane_id, _reporter_cmd(home, 'listen ' + pane_id)):
+        return False
+    epath = entry_path(home, pane_id)
+    if not os.path.exists(epath):
+        try:
+            write_entry(epath, {'sha': asset_sha(), 'attachedAt': time.time(), 'handover': False})
+        except Exception as e:
+            debug(home, 'attach entry: %r' % (e,))
+    return True
+
+
+def detach(pane_id, home, handover):
+    """Stop the pane's pipe; with handover the listener keeps its marker."""
+    epath = entry_path(home, pane_id)
+    if handover:
+        e = read_entry(epath)
+        if e:
+            e['handover'] = True
+            try:
+                write_entry(epath, e)
+            except Exception as ex:
+                debug(home, 'detach entry: %r' % (ex,))
+    return _tmux('pipe-pane', '-t', pane_id)
+
+
+def _entry_live(e):
+    pid = e.get('pid')
+    if pid is None:
+        at = e.get('attachedAt')
+        return isinstance(at, (int, float)) and not isinstance(at, bool) and time.time() - at < ATTACH_GRACE_S
+    return pid_alive(pid)
+
+
+def _unlink(path):
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+def _load_miss(home):
+    try:
+        with open(os.path.join(osc_dir(home), 'miss.json')) as f:
+            d = json.load(f)
+        return {k: v for k, v in d.items() if isinstance(v, int) and not isinstance(v, bool)} if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def pass_once(home):
+    """One attach/detach/staleness pass. Returns (no_server, active); active
+    means an agent pane or a registered listener exists."""
+    rows, no_server = list_panes()
+    if rows is None:
+        return no_server, True  # unknown: do not count toward the idle exit
+    panes = {r[0]: r for r in rows}
+    miss = _load_miss(home)
+    new_miss = {}
+    active = False
+    d = os.path.join(osc_dir(home), 'panes')
+    try:
+        names = [n for n in os.listdir(d) if n.isdigit()]
+    except Exception:
+        names = []
+    for n in names:
+        pid_id = '%' + n
+        epath = os.path.join(d, n)
+        row = panes.get(pid_id)
+        if row is None or not row[1]:
+            _unlink(epath)
+            continue
+        e = read_entry(epath)
+        if not _entry_live(e):
+            _unlink(epath)
+            if agent_kind(row[2], home):
+                _tmux('pipe-pane', '-t', pid_id)  # -o would be a no-op on a piped pane
+                attach(pid_id, home)
+                active = True
+            continue
+        active = True
+        if agent_kind(row[2], home):
+            continue
+        count = miss.get(pid_id, 0) + 1
+        if count >= MISS_LIMIT:
+            detach(pid_id, home, False)
+        else:
+            new_miss[pid_id] = count
+    for pid_id, piped, cmd, _s in rows:
+        if piped or not agent_kind(cmd, home):
+            continue
+        active = True
+        if not os.path.exists(os.path.join(d, pid_id.lstrip('%'))):
+            attach(pid_id, home)
+    if new_miss != miss:
+        try:
+            _atomic_write(os.path.join(osc_dir(home), 'miss.json'), json.dumps(new_miss))
+        except Exception as e:
+            debug(home, 'miss: %r' % (e,))
+    return False, active
+
+
+def _handover(home, sha):
+    """Replace listeners left by an older asset version."""
+    rows, _ = list_panes()
+    if not rows:
+        return
+    piped = {r[0] for r in rows if r[1]}
+    d = os.path.join(osc_dir(home), 'panes')
+    try:
+        names = [n for n in os.listdir(d) if n.isdigit()]
+    except Exception:
+        return
+    for n in names:
+        pid_id = '%' + n
+        epath = os.path.join(d, n)
+        e = read_entry(epath)
+        if pid_id not in piped or not _entry_live(e) or e.get('sha') in (None, sha):
+            continue
+        detach(pid_id, home, True)
+        if attach(pid_id, home):
+            cur = read_entry(epath)
+            if cur:
+                cur['sha'] = sha
+                try:
+                    write_entry(epath, cur)
+                except Exception as ex:
+                    debug(home, 'handover entry: %r' % (ex,))
+
+
+def _open_lock(home):
+    os.makedirs(osc_dir(home), exist_ok=True)
+    return os.open(os.path.join(osc_dir(home), 'loop.lock'), os.O_RDWR | os.O_CREAT, 0o644)
+
+
+def run_loop(home):
+    try:
+        fd = _open_lock(home)
+    except Exception as e:
+        debug(home, 'lock open: %r' % (e,))
+        return 0
+    deadline = time.time() + 5  # a replaced loop may still be dying
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:
+            if time.time() > deadline:
+                return 0
+            time.sleep(0.1)
+    sha = asset_sha()
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, ('%d %s\n' % (os.getpid(), sha)).encode())
+    except Exception as e:
+        debug(home, 'lock write: %r' % (e,))
+    once = os.environ.get('TMUXIFIER_OSC_LOOP_ONCE') == '1'
+    idle_since = time.time()
+    try:
+        _handover(home, sha)
+    except Exception as e:
+        debug(home, 'handover: %r' % (e,))
+    while True:
+        try:
+            no_server, active = pass_once(home)
+        except Exception as e:
+            debug(home, 'pass: %r' % (e,))
+            no_server, active = False, True
+        if once or no_server:
+            return 0
+        if active:
+            idle_since = time.time()
+        elif time.time() - idle_since >= IDLE_EXIT_S:
+            return 0
+        time.sleep(LOOP_INTERVAL)
+
+
+def _start_loop(home):
+    _tmux('run-shell', '-b', _reporter_cmd(home, 'loop'))
+
+
+def run_sweep(home, once):
+    try:
+        no_server, _ = pass_once(home)
+    except Exception as e:
+        debug(home, 'sweep pass: %r' % (e,))
+        no_server = False
+    if once or no_server:
+        return 0
+    try:
+        fd = _open_lock(home)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            held = _read_text(os.path.join(osc_dir(home), 'loop.lock')) or ''
+            parts = held.split()
+            if len(parts) == 2 and parts[0].isdigit() and parts[1] != asset_sha():
+                try:
+                    os.kill(int(parts[0]), signal.SIGTERM)
+                except Exception:
+                    pass
+                _start_loop(home)
+            return 0
+        finally:
+            os.close(fd)  # releases our flock if we took it
+        _start_loop(home)
+    except Exception as e:
+        debug(home, 'sweep: %r' % (e,))
+    return 0
+
+
+def main(argv):
+    # Unknown roles are a no-op.
+    try:
+        home = os.environ.get('HOME') or os.path.expanduser('~')
         if len(argv) >= 3 and argv[1] == 'listen' and re.match(r'^%[0-9]+$', argv[2]):
-            home = os.environ.get('HOME') or os.path.expanduser('~')
             return run_listen(argv[2], home=home)
+        if len(argv) >= 2 and argv[1] == 'loop':
+            return run_loop(home)
+        if len(argv) >= 2 and argv[1] == 'sweep':
+            return run_sweep(home, '--once' in argv[2:])
     except Exception:
         pass
     return 0
