@@ -48,6 +48,7 @@ import { createAiAuthSeeder } from './aiAuthSeed.js';
 import { createStatuslinePusher } from './claudeStatusline.js';
 import { createAgentHooksPusher } from './claudeAgentHooks.js';
 import { createVoiceLinkPusher } from './claudeVoiceLink.js';
+import { createOpencodePluginPusher } from './opencodeAgentPlugin.js';
 import { readDefaultPublicKey, createDefaultKeyProvider } from './defaultKey.js';
 import os from 'node:os';
 import { registerShutdownFlush } from './shutdown.js';
@@ -151,6 +152,10 @@ const agentHooksPusher = createAgentHooksPusher({
 const voiceLinkPusher = createVoiceLinkPusher({
   runStdin: (box, script, input) => boxActions.execScriptStdin(box, script, input),
 });
+const opencodePluginPusher = createOpencodePluginPusher({
+  runStdin: (box, script, input) => boxActions.execScriptStdin(box, script, input),
+  readAsset: () => fs.promises.readFile(new URL('./assets/tmuxifier-opencode-agent.js', import.meta.url)),
+});
 const setupStore = createSetupStore({ dataDir: config.dataDir });
 const setupManager = createSetupManager({
   sshStream: (argv, opts) => sshStream(argv, opts),
@@ -179,6 +184,7 @@ const setupManager = createSetupManager({
   pushStatusline: (box) => statuslinePusher.push(box),
   pushAgentHooks: (box) => agentHooksPusher.push(box),
   pushVoiceLink: (box) => voiceLinkPusher.push(box),
+  pushOpencodePlugin: (box) => opencodePluginPusher.push(box),
   // Late-bound on purpose: fleetScriptsStore is constructed further down this
   // file, so this cannot be a direct reference. The arrow body only runs when a
   // job reaches the script phase, long after both exist — the same trick the

@@ -93,6 +93,10 @@ export function createSetupManager({
   // unwired manager skips the step. Same one-knob gate as the statusline and
   // the hooks; the box decides via its own command -v claude check.
   pushVoiceLink = null,
+  // Post-setup OpenCode agent-state plugin push (opencodeAgentPlugin.js).
+  // Default null: an unwired manager skips the step. Its own one knob, the
+  // `opencode` tool selection; the box decides via its own command -v check.
+  pushOpencodePlugin = null,
   // Post-setup saved Fleet Command script (fleetScriptsStore.getScript). Default
   // null: an unwired manager skips the phase entirely, which is what every
   // existing test constructs — same pattern as seed/pushStatusline/pushAgentHooks.
@@ -143,7 +147,7 @@ export function createSetupManager({
   }
   function persist() { prune(); save(ordered()); }
   function summary(j) {
-    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, needs: j.needs ?? null, seed: j.seed ?? null, statusline: j.statusline ?? null, agentHooks: j.agentHooks ?? null, voiceLink: j.voiceLink ?? null, postScript: j.postScript ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
+    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, needs: j.needs ?? null, seed: j.seed ?? null, statusline: j.statusline ?? null, agentHooks: j.agentHooks ?? null, voiceLink: j.voiceLink ?? null, opencodePlugin: j.opencodePlugin ?? null, postScript: j.postScript ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
   }
   function appendLog(j, text) { if (text) j.log = (j.log + text).slice(-maxLogBytes); }
   function normalizeOptions(o = {}) {
@@ -252,6 +256,18 @@ export function createSetupManager({
       persist();
       try { j.voiceLink = await pushVoiceLink(box); }
       catch { j.voiceLink = { target: 'voice-link', ok: false, error: 'voice link push failed' }; }
+    }
+    // The OpenCode agent-state plugin: the `opencode` tool selection is its one
+    // knob, the same strict rule as the Claude stack (unchecked touches nothing
+    // opencode-related). The catalog install ran earlier in this job, and the
+    // box decides via its own presence check, so an opencode-less box records a
+    // skip. Recorded, never promoted. A running OpenCode server hot-loads the
+    // file, so there is no restart to arrange.
+    if (pushOpencodePlugin && (j.options.tools || []).includes('opencode') && box && !j.cancelled) {
+      j.phase = 'opencode-plugin';
+      persist();
+      try { j.opencodePlugin = await pushOpencodePlugin(box); }
+      catch { j.opencodePlugin = { target: 'opencode-plugin', ok: false, error: 'opencode plugin push failed' }; }
     }
     // The operator's own bootstrap: last of the installs, and strictly BEFORE
     // ensureSession. A shell reads its rc files once at startup, so a script

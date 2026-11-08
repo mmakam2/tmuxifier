@@ -458,6 +458,51 @@ test('claude stack order: statusline, then agent-hooks, then ensureSession', asy
   expect(order).toEqual(['statusline', 'agent-hooks', 'session']);
 });
 
+// --- opencode-plugin phase ---------------------------------------------------
+
+test('opencode tool selected: the opencode-plugin phase runs after voice-link, before the saved script, and lands on the job', async () => {
+  const order = [];
+  let phaseSeen = null;
+  const m = make({
+    pushVoiceLink: async () => { order.push('voice-link'); return { target: 'voice-link', ok: true }; },
+    pushOpencodePlugin: async (box) => {
+      phaseSeen = m.listJobs()[0].phase;
+      order.push(`opencode-plugin:${box.id}`);
+      return { target: 'opencode-plugin', ok: true };
+    },
+    getScript: async (id) => { order.push(`script:${id}`); return SCRIPT_REC; },
+    ensureSession: async () => { order.push('session'); },
+  });
+  const s = m.start(BOX, { tools: ['claude', 'opencode'], scriptId: 'fs-1' });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(order).toEqual(['voice-link', `opencode-plugin:${BOX.id}`, 'script:fs-1', 'session']);
+  expect(phaseSeen).toBe('opencode-plugin');
+  expect(job.opencodePlugin).toEqual({ target: 'opencode-plugin', ok: true });
+  expect(m.listJobs()[0].opencodePlugin).toEqual({ target: 'opencode-plugin', ok: true });
+});
+
+test('opencode tool NOT selected: the opencode-plugin phase never runs', async () => {
+  let calls = 0;
+  const m = make({ pushOpencodePlugin: async () => { calls += 1; return { target: 'opencode-plugin', ok: true }; } });
+  const s = m.start(BOX, { tools: ['claude', 'git'] });
+  await m._settled(s.id);
+  expect(calls).toBe(0);
+  expect(m.getJob(s.id).opencodePlugin).toBeUndefined();
+  expect(m.listJobs()[0].opencodePlugin).toBe(null);
+  expect(m.getJob(s.id).status).toBe('done');
+});
+
+test('a throwing opencode-plugin push is recorded, never promoted to a job failure', async () => {
+  const m = make({ pushOpencodePlugin: async () => { throw new Error('boom'); } });
+  const s = m.start(BOX, { tools: ['opencode'] });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(job.opencodePlugin).toEqual({ target: 'opencode-plugin', ok: false, error: 'opencode plugin push failed' });
+});
+
 const SUDO = 'sudo: a terminal is required to read the password; see below\n';
 
 test('interactive finish seeds via getBox, then reaches done', async () => {

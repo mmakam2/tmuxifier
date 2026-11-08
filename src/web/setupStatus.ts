@@ -8,6 +8,7 @@ export function setupStatusText(job: Pick<SetupJob, 'status' | 'phase' | 'error'
         : job.phase === 'statusline' ? 'Configuring statusline…'
         : job.phase === 'agent-hooks' ? 'Installing agent hooks…'
         : job.phase === 'voice-link' ? 'Preparing the voice link…'
+        : job.phase === 'opencode-plugin' ? 'Installing OpenCode plugin…'
         : job.phase === 'script' ? 'Running saved script…'
         : 'Running setup…';
     case 'done': return 'Setup complete ✓';

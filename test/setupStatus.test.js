@@ -97,6 +97,17 @@ test('the agent-hooks result renders through the shared push formatter', () => {
   expect(formatStatuslineResult({ target: 'agent-hooks', ok: false, skipped: 'no Claude on the box' })).toBe('agent-hooks skipped (no Claude on the box)');
 });
 
+test('running job in the opencode-plugin phase reads as installing the OpenCode plugin', () => {
+  expect(setupStatusText({ status: 'running', phase: 'opencode-plugin', error: null, needs: null }))
+    .toBe('Installing OpenCode plugin…');
+});
+
+test('the opencode-plugin result renders through the shared push formatter', () => {
+  expect(formatStatuslineResult({ target: 'opencode-plugin', ok: true })).toBe('opencode-plugin ✓');
+  expect(formatStatuslineResult({ target: 'opencode-plugin', ok: false, skipped: 'no OpenCode on the box' })).toBe('opencode-plugin skipped (no OpenCode on the box)');
+  expect(formatStatuslineResult({ target: 'opencode-plugin', ok: false, error: 'opencode plugin push failed' })).toBe('opencode-plugin failed (opencode plugin push failed)');
+});
+
 test('statusline result renders applied / skipped / failed / empty', () => {
   expect(formatStatuslineResult({ target: 'statusline', ok: true })).toBe('statusline ✓');
   expect(formatStatuslineResult({ target: 'statusline', ok: false, skipped: 'no Claude on the box' })).toBe('statusline skipped (no Claude on the box)');
