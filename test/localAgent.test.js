@@ -93,6 +93,14 @@ test('sample() degrades to no sessions when tmux is absent or has no server', as
   expect(await throwing.sample()).toMatchObject({ reachable: true, sessions: [] });
 });
 
+test('sample(): only tmux\'s own no-server wording is an empty listing; refused/denied sockets are unknown', async () => {
+  const make = (stderr) => createLocalAgentSampler({ home: '/nonexistent', runTmux: async () => ({ code: 1, stdout: '', stderr }) });
+  expect((await make('no server running on /tmp/tmux-1000/default').sample()).sessions).toEqual([]);
+  expect((await make('error connecting to /tmp/tmux-1000/default (No such file or directory)').sample()).sessions).toEqual([]);
+  expect((await make('error connecting to /tmp/tmux-1000/default (Connection refused)').sample()).sessions).toBeUndefined();
+  expect((await make('error connecting to /tmp/tmux-1000/default (Permission denied)').sample()).sessions).toBeUndefined();
+});
+
 // Any OTHER failure is "listing unknown", not "no sessions": an empty list
 // would read as every session having exited (latching agent-done) and would
 // prune the Host Shell's seen watermark.

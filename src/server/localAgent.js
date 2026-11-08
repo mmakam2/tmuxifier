@@ -44,9 +44,10 @@ function runTmuxDefault(args) {
 // <socket>` (nothing started) or `error connecting to <socket> (No such file
 // or directory)` (a stale socket path). Those, and tmux not being installed at
 // all, are a genuine EMPTY listing. Anything else — a timeout, a wedged or
-// crashing server, a permission error — is "listing unknown", which must not
-// read as "every session ended".
-const NO_SERVER_RE = /no server running|error connecting to/i;
+// crashing server, a permission error, a refused connection (`error connecting
+// to <socket> (Connection refused)`: the server is wedged or foreign, not gone)
+// — is "listing unknown", which must not read as "every session ended".
+const NO_SERVER_RE = /no server running|error connecting to .*\(No such file or directory\)/i;
 function isNoServer(res) {
   return res.errno === 'ENOENT' || NO_SERVER_RE.test(String(res.stderr || ''));
 }
