@@ -129,9 +129,11 @@ on their own — they roll up into the parent. `ts` moves whenever the derived s
 session — exactly the pane the probe's `STATUS_FMT` reports, so the reporter and the server agree
 on which agent owns the session right now, and a tmux session whose current window runs Claude is
 never touched by this reporter. For each tmux session whose active pane command matches
-`/^opencode(-|$)/`: candidates = sessions whose `dir` equals the pane path, else whose `dir` is a
-prefix of the pane path or vice-versa (TUI started in a subdirectory of the project it reports — my
-call, not exercised by the trace), **and whose `ts` is not older than `since[tmux-session]`**, the
+`/^opencode(-|$)/`: candidates = sessions whose `dir` equals the pane path, else — only when no
+session has that exact `dir` — whose `dir` is a prefix of the pane path (TUI started in a
+subdirectory of the project it reports — my call, not exercised by the trace; the parent direction,
+a pane above the session's `dir`, is never matched, so a TUI in `~` does not absorb every project
+below it), **and whose `ts` is not older than `since[tmux-session]`**, the
 moment the sweep first saw this tmux session's active pane become opencode (reset whenever it
 stops being opencode). This is what keeps finished sessions of a previous TUI, which live on in the
 server for its whole life, from making every relaunch read `done`. Fold: `blocked` > `working` >

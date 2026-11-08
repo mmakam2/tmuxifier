@@ -448,13 +448,22 @@ export function isOpencodeCmd(cmd) {
 
 const trimSlash = (p) => (p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p);
 
-// Same directory, or one under the other (a TUI started in a subdirectory of
-// the project it reports). `/` matches only itself, never everything below it.
-export function dirMatches(dir, panePath) {
-  if (typeof dir !== 'string' || typeof panePath !== 'string' || !dir || !panePath) return false;
+const bothPaths = (dir, panePath) =>
+  typeof dir === 'string' && typeof panePath === 'string' && !!dir && !!panePath;
+
+// The directory OpenCode reports is the pane's own path.
+export function dirExact(dir, panePath) {
+  return bothPaths(dir, panePath) && trimSlash(dir) === trimSlash(panePath);
+}
+
+// The pane is deeper than the directory OpenCode reports (a TUI started in a
+// subdirectory of the project it reports). Never the reverse: a pane in a
+// parent directory (a TUI in `~`) must not absorb every project below it.
+// `/` matches only itself (dirExact), never everything below it.
+export function dirUnder(dir, panePath) {
+  if (!bothPaths(dir, panePath)) return false;
   const d = trimSlash(dir);
-  const p = trimSlash(panePath);
-  return d === p || p.startsWith(d + '/') || d.startsWith(p + '/');
+  return d !== '/' && trimSlash(panePath).startsWith(d + '/');
 }
 
 // blocked > working > ready/stop > ready/start: a fresh session that has not
@@ -465,8 +474,12 @@ const rankOf = (d) => (d.state === 'blocked' ? 4 : d.state === 'working' ? 3
 
 // tmux session -> { state, cause, ts } for every active opencode pane (a tmux
 // session that reads opencode). Candidates are root sessions (children roll
-// up into their parent) in the pane's directory whose ts is not older than
-// `since` (the moment this tmux session started hosting opencode, seconds),
+// up into their parent) whose directory is the pane's path (dirExact) or,
+// only when no root session has that directory at all, one above it
+// (dirUnder); the tier is chosen before the `since` filter, so a pane whose
+// own directory has only stale sessions reads ready/start instead of a parent
+// project's state. Within the tier, candidates are those whose ts is not
+// older than `since` (the moment this tmux session started hosting opencode, seconds),
 // which keeps a previous TUI's finished turns from making a relaunch read
 // done. blocked > working > ready/stop > ready/start, ties to the newest ts
 // within a rank; the written ts is the chosen session's own, not the fold
@@ -483,9 +496,11 @@ export function foldForPanes(reducer, panes, since = new Map(), now = Math.floor
   for (const pane of panes) {
     if (!pane.active || !isOpencodeCmd(pane.cmd)) continue;
     const floor = since.get(pane.session);
+    const exact = roots.some((c) => dirExact(c.dir, pane.path));
+    const inTier = exact ? dirExact : dirUnder;
     let best = null;
     for (const c of roots) {
-      if (c.d.ts < (floor ?? 0) || !dirMatches(c.dir, pane.path)) continue;
+      if (c.d.ts < (floor ?? 0) || !inTier(c.dir, pane.path)) continue;
       if (!best || c.rank > best.rank || (c.rank === best.rank && c.d.ts > best.d.ts)) best = c;
     }
     out.set(pane.session, best

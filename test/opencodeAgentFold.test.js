@@ -4,7 +4,8 @@ import {
   PANE_FORMAT,
   parsePanes,
   isOpencodeCmd,
-  dirMatches,
+  dirExact,
+  dirUnder,
   foldForPanes,
   markerLine,
 } from '../src/server/assets/tmuxifier-opencode-agent.js';
@@ -76,22 +77,28 @@ test('isOpencodeCmd accepts opencode and opencode-<suffix>, rejects node, bun, o
   for (const cmd of ['node', 'bun', 'opencodex', 'xopencode', '', 'claude']) expect(isOpencodeCmd(cmd), cmd).toBe(false);
 });
 
-test('dirMatches: exact, trailing slash, pane under dir, dir under pane, unrelated', () => {
-  expect(dirMatches('/a/b', '/a/b')).toBe(true);
-  expect(dirMatches('/a/b', '/a/b/')).toBe(true);
-  expect(dirMatches('/a/b/', '/a/b')).toBe(true);
-  expect(dirMatches('/a/b', '/a/b/sub')).toBe(true);
-  expect(dirMatches('/a/b/sub', '/a/b')).toBe(true);
-  expect(dirMatches('/a/b', '/a/bc')).toBe(false);
-  expect(dirMatches('/a/bc', '/a/b')).toBe(false);
-  expect(dirMatches('/x', '/a/b')).toBe(false);
-  expect(dirMatches(null, '/a/b')).toBe(false);
+test('dirExact and dirUnder: trailing slashes, the pane deeper than the directory only, never the reverse, `/` only itself', () => {
+  expect(dirExact('/a/b', '/a/b')).toBe(true);
+  expect(dirExact('/a/b', '/a/b/')).toBe(true);
+  expect(dirExact('/a/b/', '/a/b')).toBe(true);
+  expect(dirExact('/a/b', '/a/b/sub')).toBe(false);
+  expect(dirUnder('/a/b', '/a/b/sub')).toBe(true); // a pane deeper than the directory OpenCode reports
+  expect(dirUnder('/a/b/', '/a/b/sub/x')).toBe(true);
+  expect(dirUnder('/a/b', '/a/b')).toBe(false); // exact is its own tier
+  expect(dirUnder('/a/b/sub', '/a/b')).toBe(false); // a parent pane never absorbs a child project
+  for (const f of [dirExact, dirUnder]) {
+    expect(f('/a/b', '/a/bc')).toBe(false);
+    expect(f('/a/bc', '/a/b')).toBe(false);
+    expect(f('/x', '/a/b')).toBe(false);
+    expect(f(null, '/a/b')).toBe(false);
+    expect(f('', '/a')).toBe(false);
+    expect(f('/a', '')).toBe(false);
+    expect(f('/a', undefined)).toBe(false);
+  }
   // The filesystem root matches only itself, never everything under it.
-  expect(dirMatches('/', '/')).toBe(true);
-  expect(dirMatches('/', '/a')).toBe(false);
-  expect(dirMatches('/a', '/')).toBe(false);
-  expect(dirMatches('', '/a')).toBe(false);
-  expect(dirMatches('/a', '')).toBe(false);
+  expect(dirExact('/', '/')).toBe(true);
+  expect(dirUnder('/', '/a')).toBe(false);
+  expect(dirUnder('/a', '/')).toBe(false);
 });
 
 test('foldForPanes: blocked beats working beats ready; ties go to the newest ts; the cause and ts are the chosen session\'s', () => {
@@ -164,6 +171,30 @@ test('foldForPanes: two tmux sessions in the same directory get the same fold; a
   const u = createReducer({ now: () => 50 });
   u.apply({ id: 'x', type: 'session.execution.started', data: { sessionID: 'ses_u' } });
   expect(sc(foldForPanes(u, [pane('one', '/proj')], new Map(), 999).get('one'))).toBe('ready/start');
+});
+
+test('foldForPanes: an exact directory match wins over a nested project; a parent pane never folds a child project', () => {
+  const w = world();
+  w.created('ses_top', 100, '/home/user/repo'); w.start('ses_top', 110); w.end('ses_top', 120); // ready/stop @120
+  w.created('ses_sub', 130, '/home/user/repo/sub'); w.start('ses_sub', 140); w.ask('ses_sub', 150, 'per_s'); // blocked @150
+  const panes = [pane('top', '/home/user/repo'), pane('sub', '/home/user/repo/sub')];
+  const fold = foldForPanes(w.r, panes, new Map(), 999);
+  expect(fold.get('top')).toEqual({ state: 'ready', cause: 'stop', ts: 120 });
+  expect(fold.get('sub')).toEqual({ state: 'blocked', cause: 'permission', ts: 150 });
+  // A parent pane with no session of its own still does not absorb the child project.
+  const c = world();
+  c.created('ses_sub', 130, '/home/user/repo/sub'); c.start('ses_sub', 140);
+  expect(foldForPanes(c.r, [pane('top', '/home/user/repo')], new Map(), 999).get('top')).toEqual({ state: 'ready', cause: 'start', ts: 999 });
+  // A pane deeper than every reported directory falls back to the directories above it.
+  const d = world();
+  d.created('ses_top', 100, '/home/user/repo'); d.start('ses_top', 110);
+  expect(foldForPanes(d.r, [pane('deep', '/home/user/repo/sub/x')], new Map(), 999).get('deep')).toEqual({ state: 'working', cause: 'prompt', ts: 110 });
+  // An exact session, even a finished one before since, keeps the prefix tier out:
+  // the pane's own directory is the one OpenCode reports for it.
+  d.created('ses_deep', 200, '/home/user/repo/sub/x'); d.start('ses_deep', 210); d.end('ses_deep', 220);
+  d.ask('ses_top', 600, 'per_t'); // the parent directory's session is blocked, and newer
+  expect(foldForPanes(d.r, [pane('deep', '/home/user/repo/sub/x')], new Map(), 999).get('deep')).toEqual({ state: 'ready', cause: 'stop', ts: 220 });
+  expect(foldForPanes(d.r, [pane('deep', '/home/user/repo/sub/x')], new Map([['deep', 500]]), 999).get('deep')).toEqual({ state: 'ready', cause: 'start', ts: 500 });
 });
 
 test('foldForPanes: child sessions are never chosen directly', () => {
