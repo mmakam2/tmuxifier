@@ -50,6 +50,7 @@
 // Clock: an event's own `created` (ms) when it is a finite number, else the injected
 // `now()`; every `ts` here is epoch SECONDS, the sh hook's unit.
 
+import { Buffer } from 'node:buffer';
 import { execFile } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -474,10 +475,12 @@ function debug(...args) {
   } catch { /* never surface */ }
 }
 
-// The marker file name, like the sh hook's `tr -c 'A-Za-z0-9._-' '_'`; the
-// content keeps the exact tmux session name.
+// The marker file name, byte for byte the sh hook's `tr -c 'A-Za-z0-9._-' '_'`
+// (tr works on bytes, so every byte of a non-ASCII character becomes one `_`;
+// the latin1 view maps each UTF-8 byte to one char). Both writers must name a
+// session's file identically. The content keeps the exact tmux session name.
 export function safeName(session) {
-  return session.replace(/[^A-Za-z0-9._-]/g, '_');
+  return Buffer.from(session, 'utf8').toString('latin1').replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
 // `tmux list-panes -a` for every pane of every session. null on ENOENT (no
@@ -520,6 +523,8 @@ export function createCore({
   let inflight = null;
   let rerun = false;
   let cache = null;
+  // now() taken just before the last usable listing was requested.
+  let lastListAt = null;
 
   const core = {
     reducer,
@@ -533,18 +538,22 @@ export function createCore({
     owner: Symbol('tmuxifier.opencode-agent.core'),
   };
 
-  async function panesText() {
+  // { text, listAt }: the listing (null when unusable) and now() taken just
+  // before it was requested.
+  async function listing() {
     const t = Date.now();
-    if (cache && t >= cache.at && t - cache.at < paneCacheMs) return cache.value;
-    let value = null;
+    if (cache && t >= cache.at && t - cache.at < paneCacheMs) return cache.result;
+    const listAt = now();
+    let text = null;
     try {
-      value = await listPanes();
+      text = await listPanes();
     } catch (e) {
       debug('listPanes', e);
     }
-    if (typeof value !== 'string') value = null;
-    cache = { at: Date.now(), value };
-    return value;
+    if (typeof text !== 'string') text = null;
+    const result = { text, listAt };
+    cache = { at: Date.now(), result };
+    return result;
   }
 
   function write(name, content) {
@@ -576,14 +585,21 @@ export function createCore({
   }
 
   async function sweepOnce() {
-    const text = await panesText();
+    const { text, listAt } = await listing();
     if (aborted || text === null) return; // handed over, or tmux unusable: touch nothing
+    // A tmux session that starts hosting opencode in this listing did so after
+    // the previous listing, the last one that showed it not hosting: that is
+    // its `since`. Stamping this sweep's own time instead would exclude a
+    // TUI's whole first turn whenever the listing is slower than the turn's
+    // start (`ts >= since`). A core's first sweep has no previous listing.
+    const sinceFloor = lastListAt ?? listAt - 2;
+    lastListAt = listAt;
     try {
       const panes = parsePanes(text);
       const t = now();
       const hosting = new Set();
       for (const p of panes) if (isOpencodeCmd(p.cmd)) hosting.add(p.session);
-      for (const s of hosting) if (!core.since.has(s)) core.since.set(s, t);
+      for (const s of hosting) if (!core.since.has(s)) core.since.set(s, sinceFloor);
       for (const s of [...core.since.keys()]) if (!hosting.has(s)) core.since.delete(s);
 
       const live = new Set();
@@ -653,6 +669,20 @@ export function createCore({
     } catch (e) {
       if (!aborted) debug('subscribe', e);
     }
+    // The stream ended or threw on its own. The reducer is frozen from here
+    // on, so sweeping would keep republishing a stale working/blocked: stop
+    // the timer, never re-subscribe, and keep written/since for a hand-over.
+    if (!aborted) {
+      debug('event stream ended; sweeps stopped until the next setup');
+      stopSweeping();
+    }
+  }
+
+  function stopSweeping() {
+    if (timer !== null) {
+      try { stopTimer(timer); } catch { /* best effort */ }
+      timer = null;
+    }
   }
 
   // Stop the subscription and the timer. Markers stay: the next core
@@ -660,10 +690,7 @@ export function createCore({
   function abort() {
     aborted = true;
     try { controller.abort(); } catch { /* already aborted */ }
-    if (timer !== null) {
-      try { stopTimer(timer); } catch { /* best effort */ }
-      timer = null;
-    }
+    stopSweeping();
   }
 
   // Delete every marker this core wrote, under the content-equality rule.

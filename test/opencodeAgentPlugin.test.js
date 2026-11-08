@@ -2,6 +2,7 @@ import { test, expect, vi, afterEach } from 'vitest';
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // The writer half of the OpenCode reporter: sweep, marker files, the
@@ -106,11 +107,11 @@ test('sweep writes ready/start for a fresh opencode pane and nothing for a claud
   const { core, home, state } = await rig();
   state.panes = row('web', 'opencode', '/home/user/proj') + row('dev', 'claude', '/x');
   await core.sweep();
-  expect(read(home, 'web')).toBe('web:ready:1000:start\n');
+  expect(read(home, 'web')).toBe('web:ready:998:start\n');
   expect(existsSync(marker(home, 'dev'))).toBe(false);
   expect(readdirSync(markerDir(home))).toEqual(['web']); // no temp file left behind
-  expect(core.written.get('web')).toBe('web:ready:1000:start\n');
-  expect(core.since.get('web')).toBe(1000);
+  expect(core.written.get('web')).toBe('web:ready:998:start\n');
+  expect(core.since.get('web')).toBe(998);
 });
 
 test('a state change rewrites the marker atomically with the session\'s ts; an unchanged fold does not rewrite', async () => {
@@ -193,8 +194,8 @@ test('listPanes failing (null), hanging past the timeout, or returning garbage l
   await r.core.sweep();
   r.state.panes = null;
   await r.core.sweep();
-  expect(read(r.home, 'web')).toBe('web:ready:1000:start\n');
-  expect(r.core.since.get('web')).toBe(1000);
+  expect(read(r.home, 'web')).toBe('web:ready:998:start\n');
+  expect(r.core.since.get('web')).toBe(998);
 
   // An unwritable HOME (a regular file) swallows the fs error.
   const file = path.join(tmp(), 'not-a-dir');
@@ -243,13 +244,15 @@ test('the pane listing is cached for a second', async () => {
 
 test('since: a session finished before the pane appeared reads ready/start; a new turn after it reads its own state', async () => {
   const { core, home, state } = await rig();
+  state.t = 130; // the listings these events trigger: no opencode pane yet
   await core.handle(ev('session.created', 100, { sessionID: 'ses_a' }, '/proj'));
   await core.handle(ev('session.execution.started', 110, { sessionID: 'ses_a' }));
   await core.handle(ev('session.execution.succeeded', 120, { sessionID: 'ses_a' }));
   state.t = 500;
   state.panes = row('web', 'opencode', '/proj');
   await core.sweep();
-  expect(read(home, 'web')).toBe('web:ready:500:start\n');
+  expect(core.since.get('web')).toBe(130); // the last listing without the pane
+  expect(read(home, 'web')).toBe('web:ready:130:start\n');
   await core.handle(ev('session.execution.started', 600, { sessionID: 'ses_a' }));
   expect(read(home, 'web')).toBe('web:working:600:prompt\n');
   await core.handle(ev('session.execution.succeeded', 650, { sessionID: 'ses_a' }));
@@ -300,18 +303,52 @@ test('since tracks hosting: a TUI exit removes since, so a relaunch excludes the
   state.t = 2000;
   state.panes = row('web', 'opencode', '/proj');
   await core.sweep();
-  expect(core.since.get('web')).toBe(2000);
-  expect(read(home, 'web')).toBe('web:ready:2000:start\n');
+  expect(core.since.get('web')).toBe(1300); // the previous listing, the last one without opencode
+  expect(read(home, 'web')).toBe('web:ready:1300:start\n');
 });
 
 test('session names are sanitized in the filename but exact in the content', async () => {
   const { core, home, state } = await rig();
   state.panes = row('my session/x', 'opencode', '/p') + row('..', 'opencode', '/p');
   await core.sweep();
-  expect(readFileSync(marker(home, 'my_session_x'), 'utf8')).toBe('my session/x:ready:1000:start\n');
+  expect(readFileSync(marker(home, 'my_session_x'), 'utf8')).toBe('my session/x:ready:998:start\n');
   expect(readdirSync(markerDir(home))).toEqual(['my_session_x']); // `..` never escapes the directory
   const { safeName } = await import(ASSET);
   expect(safeName('a b/c:d.e-f_g')).toBe('a_b_c_d.e-f_g');
+});
+
+test('safeName sanitises byte-wise, exactly like the sh hook\'s tr -c', async () => {
+  const { safeName } = await import(ASSET);
+  expect(safeName('café😀')).toBe('caf______'); // é is 2 UTF-8 bytes, 😀 is 4
+  for (const ascii of ['web', 'A-Za-z0-9._-', 'my_session']) expect(safeName(ascii)).toBe(ascii);
+  // The hook's own pipeline, byte for byte.
+  const hook = (name) => execFileSync('sh', ['-c', `printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'`, 'sh', name], { encoding: 'latin1' });
+  for (const name of ['café😀', 'naïve ses/x', 'web', '日本']) expect(safeName(name), name).toBe(hook(name));
+});
+
+test('since is the previous listing\'s time, so a slow listing never excludes the first turn', async () => {
+  let slow = false;
+  const { core, home, state } = await rig({ listPanes: async () => { if (slow) state.t += 2; return state.panes; } });
+  state.t = 1000;
+  await core.sweep(); // no opencode pane yet
+  state.t = 1100;
+  core.reducer.apply(ev('session.created', 1100, { sessionID: 'ses_a' }, '/proj'));
+  core.reducer.apply(ev('session.execution.started', 1100, { sessionID: 'ses_a' }));
+  state.panes = row('web', 'opencode', '/proj');
+  slow = true; // this listing takes 2 s
+  await core.sweep();
+  expect(core.since.get('web')).toBe(1000);
+  expect(read(home, 'web')).toBe('web:working:1100:prompt\n');
+
+  // A core's very first sweep has no previous listing: its pre-listing time - 2.
+  const f = await rig({ listPanes: async () => { f.state.t += 2; return f.state.panes; } });
+  f.state.t = 1100;
+  f.core.reducer.apply(ev('session.created', 1099, { sessionID: 'ses_b' }, '/proj'));
+  f.core.reducer.apply(ev('session.execution.started', 1099, { sessionID: 'ses_b' }));
+  f.state.panes = row('web', 'opencode', '/proj');
+  await f.core.sweep();
+  expect(f.core.since.get('web')).toBe(1098);
+  expect(read(f.home, 'web')).toBe('web:working:1099:prompt\n');
 });
 
 test('state changes coalesce: one sweep in flight, at most one rerun after it; an unchanged state sweeps nothing', async () => {
@@ -349,7 +386,7 @@ test('abort stops the timer and the subscription, keeps the markers, and an in-f
   const ctx = fakeCtx();
   const done = core.attach(ctx);
   await flush();
-  expect(read(home, 'web')).toBe('web:ready:1000:start\n');
+  expect(read(home, 'web')).toBe('web:ready:998:start\n');
   expect(timers).toHaveLength(1);
   expect(timers[0].ms).toBe(15000);
 
@@ -364,11 +401,11 @@ test('abort stops the timer and the subscription, keeps the markers, and an in-f
   await done; // the event loop ended
   expect(ctx.signal.aborted).toBe(true);
   expect(cleared).toEqual([timers[0]]);
-  expect(read(home, 'web')).toBe('web:ready:1000:start\n'); // abort never deletes
+  expect(read(home, 'web')).toBe('web:ready:998:start\n'); // abort never deletes
   await core.sweep();
   ctx.push(ev('session.created', 2000, { sessionID: 'ses_z' }, '/proj'));
   await flush();
-  expect(read(home, 'web')).toBe('web:ready:1000:start\n');
+  expect(read(home, 'web')).toBe('web:ready:998:start\n');
 });
 
 test('the sweep timer is unref\'d so the plugin never keeps the server alive', async () => {
@@ -436,6 +473,40 @@ test('setup twice hands over: the second core inherits written/since, the first 
   expect(globalThis[KEY]).toBeUndefined();
   expect(ctx2.signal.aborted).toBe(true);
   expect(stopped).toEqual([started[0], started[1]]);
+});
+
+test('an event stream that ends without an abort stops the sweep timer and keeps the core for a later hand-over', async () => {
+  const mod = await import(ASSET);
+  const env = fakeTmuxEnv();
+  env.setPanes(row('web', 'opencode', '/proj'));
+  vi.stubEnv('TMUXIFIER_OPENCODE_DEBUG', '1');
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const started = [];
+  const stopped = [];
+  const realSet = globalThis.setInterval;
+  const realClear = globalThis.clearInterval;
+  vi.spyOn(globalThis, 'setInterval').mockImplementation((fn, ms) => { const t = realSet(fn, ms); if (ms === 15000) started.push(t); return t; });
+  vi.spyOn(globalThis, 'clearInterval').mockImplementation((t) => { if (started.includes(t)) stopped.push(t); return realClear(t); });
+
+  let signal = null;
+  const ctx = { event: { async *subscribe(opts) { signal = opts.signal; yield ev('session.created', null, { sessionID: 'ses_a' }, '/proj'); } } };
+  await mod.default.setup(ctx);
+  const core1 = globalThis[KEY];
+  await vi.waitFor(() => expect(stopped).toEqual([started[0]]));
+  expect(signal.aborted).toBe(false); // ended on its own, not aborted
+  expect(err.mock.calls.some((c) => c.join(' ').includes('stream ended'))).toBe(true);
+  await vi.waitFor(() => expect(existsSync(marker(env.home, 'web'))).toBe(true));
+  expect(globalThis[KEY]).toBe(core1);
+  expect(core1.written.size).toBe(1);
+
+  // A later setup still hands over what the stopped core wrote.
+  const cleanup2 = await mod.default.setup(fakeCtx());
+  const core2 = globalThis[KEY];
+  expect(core2).not.toBe(core1);
+  expect(core2.written).toBe(core1.written);
+  expect(core2.since).toBe(core1.since);
+  await cleanup2();
+  expect(existsSync(marker(env.home, 'web'))).toBe(false);
 });
 
 test('cleanup deletes only markers whose content still equals the last write', async () => {
