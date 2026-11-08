@@ -218,7 +218,11 @@ change state. One resident process per box attaches a listener to any pane whose
 plugin always wins), and detaches after three consecutive 2-second passes that no longer match, so a new agent pane is
 picked up within about 2 seconds. The status
 probe starts it (and keeps the current version running) on every poll, so a setup rerun upgrades
-it live. A box without python3 or tmux reports `osc-reporter skipped (no python3 on the box)` /
+it live: running listeners are handed over to the new version mid-turn and keep their state, so
+nothing but the output of one pipe round-trip is lost. The reporter only ever opens a pipe on a
+pane that has none and only ever closes one its own live listener is reading, so a `pipe-pane` of
+your own on an agent pane is left alone (it also stops the reporter for that pane). A box without
+python3 or tmux reports `osc-reporter skipped (no python3 on the box)` /
 `(no tmux on the box)` and the setup still succeeds.
 
 - **Claude Code is not covered.** It probes with `OSC 7501;?` and then DA1; tmux answers DA1

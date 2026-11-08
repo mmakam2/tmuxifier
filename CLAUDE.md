@@ -371,9 +371,19 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   `loop.lock` flock, 2 s passes, attaches by `pane_current_command`, detaches after 3
   non-matching passes, registry in `~/.tmuxifier-osc/panes/`, version handover on setup rerun)
   and `sweep [--once]` (one pass + ensure a current-version loop; what the probe runs). Never
-  writes to the pane. A Codex whose Node predates `process.execve` runs as `node` and is not
-  detected. Acceptance test: `test/fixtures/osc7501-pane-trace.jsonl` replayed by
-  `test/osc7501Replay.test.js`. Design: `docs/superpowers/specs/2026-11-08-osc7501-pane-reporter-design.md`.
+  writes to the pane. The handover protocol is the comment block above `run_listen` — read it
+  before touching the entry: only the loop writes `handover`, only the listener writes `pid`,
+  `attachedAt` is the listener's generation token, every entry read-modify-write holds
+  `entries.lock`, and nothing touches the entry after the successor's `pipe-pane -o`. The loop
+  closes a pipe only on a LIVE pid (a dead listener's pipe closes itself on the pane's next
+  byte; there is no heal path — it could take over an operator's pipe), exits 0 on SIGTERM, and
+  its `run-shell` command self-silences: any output, non-zero exit or signal death would pop a
+  view-mode overlay into the operator's pane. A Codex whose Node predates `process.execve` runs
+  as `node` and is not detected. Tests: `test/fixtures/osc7501-pane-trace.jsonl` replayed by
+  `test/osc7501Replay.test.js` (acceptance), and `test/osc7501Tmux.integration.test.js` against a
+  real, private tmux server (the only place a handover's cross-process ordering is observable;
+  the stub-tmux suites never spawn a listener). Design:
+  `docs/superpowers/specs/2026-11-08-osc7501-pane-reporter-design.md`.
 
 ### Status and health
 
