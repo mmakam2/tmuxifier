@@ -81,7 +81,9 @@ pieces the tests drive: `createReducer()`, `foldForPanes(sessions, panes)`, `par
 
 **Process-wide singleton with unconditional hand-over.** `setup` looks up
 `globalThis[Symbol.for('tmuxifier.opencode-agent')]`. If a core exists it is **aborted** (event
-subscription and sweep timer stopped; its marker memory — what it wrote where — is inherited) and
+subscription and sweep timer stopped; its marker memory — what it wrote where — and its reducer
+state — sessions, hints, seen event ids, guarded by an exported `STATE_VERSION` so incompatible
+hot-loaded bytes start fresh — are inherited) and
 the new `setup` installs itself as the owner; so a setup rerun that overwrites the plugin file
 (OpenCode reloads on digest change, fact 3.3) always ends with exactly one live core running the
 new bytes, whether or not OpenCode calls the old instance's cleanup. A further `setup` for another
@@ -104,6 +106,7 @@ the epoch **in seconds** (the sh hook's unit) of the session's last derived-stat
 |---|---|
 | any event with `location.directory` + `data.sessionID` | `S.dir = directory` (first wins) |
 | `session.created` | create `S`; `parent = data.parentID` if present **[source]** |
+| `session.step.*` / `session.tool.*` / `session.text.*` with `location.directory`, on a session not `executing` | `executing = true`, `cause = 'prompt'` (a core that loaded mid-turn missed `execution.started`) |
 | `session.inbox.enqueued` | `lastInbox = item.type` |
 | `session.execution.started` | `executing = true`; `cause = lastInbox === 'synthetic' ? 'resume' : 'prompt'` |
 | `permission.asked` | `blocks.set(id, 'permission')` |

@@ -475,6 +475,95 @@ test('setup twice hands over: the second core inherits written/since, the first 
   expect(stopped).toEqual([started[0], started[1]]);
 });
 
+test('a block raised in one directory survives a setup for another directory in the same process', async () => {
+  const mod = await import(ASSET);
+  const env = fakeTmuxEnv();
+  env.setPanes(row('web', 'opencode', '/proj'));
+  const T = Math.floor(Date.now() / 1000) + 10; // after the pane's since (real clock)
+  const ctx1 = fakeCtx();
+  await mod.default.setup(ctx1);
+  const core1 = globalThis[KEY];
+  ctx1.push(ev('session.created', T, { sessionID: 'ses_a' }, '/proj'));
+  ctx1.push(ev('session.execution.started', T + 1, { sessionID: 'ses_a' }));
+  ctx1.push(ev('permission.asked', T + 2, { id: 'per_1', sessionID: 'ses_a' }, '/proj'));
+  await vi.waitFor(() => expect(read(env.home, 'web')).toBe(`web:blocked:${T + 2}:permission\n`));
+
+  // OpenCode opens a TUI in /proj2: a second setup in the same process.
+  const ctx2 = fakeCtx();
+  const cleanup2 = await mod.default.setup(ctx2);
+  const core2 = globalThis[KEY];
+  expect(core2).not.toBe(core1);
+  expect(core2.state.version).toBe(mod.STATE_VERSION);
+  expect(core2.state.sessions).toBe(core1.state.sessions);
+  await flush(100); // core2's first sweep has run
+  expect(read(env.home, 'web')).toBe(`web:blocked:${T + 2}:permission\n`);
+  // core2 knows the block: its reply unblocks, and the turn end reads done.
+  ctx2.push(ev('permission.replied', T + 3, { requestID: 'per_1', sessionID: 'ses_a', reply: 'once' }, '/proj'));
+  await vi.waitFor(() => expect(read(env.home, 'web')).toBe(`web:working:${T + 3}:unblock\n`));
+  ctx2.push(ev('session.execution.succeeded', T + 4, { sessionID: 'ses_a' }));
+  await vi.waitFor(() => expect(read(env.home, 'web')).toBe(`web:ready:${T + 4}:stop\n`));
+  await cleanup2();
+});
+
+test('a core that loads mid-turn learns the turn from its step events: working/prompt, then ready/stop at the end', async () => {
+  const { core, home, state } = await rig();
+  state.t = 1794098600;
+  state.panes = row('web', 'opencode', '/home/user/proj');
+  await core.sweep();
+  // Fixture (a) from its first step on: session.created, the inbox item and
+  // execution.started (15-18) happened before this core existed.
+  const step = traceEvent(21);
+  expect(step.type).toBe('session.step.started');
+  await core.handle(step);
+  expect(read(home, 'web')).toBe(`web:working:${Math.floor(step.created / 1000)}:prompt\n`);
+  for (let n = 22; n <= 45; n++) {
+    const e = traceEvent(n);
+    if (e) await core.handle(e);
+  }
+  expect(read(home, 'web')).toBe(`web:working:${Math.floor(step.created / 1000)}:prompt\n`);
+  const end = traceEvent(46);
+  expect(end.type).toBe('session.execution.succeeded');
+  await core.handle(end);
+  expect(read(home, 'web')).toBe(`web:ready:${Math.floor(end.created / 1000)}:stop\n`);
+  // After the turn, a rename (no turn activity) changes nothing.
+  expect(core.reducer.apply({ id: 'rn', type: 'session.renamed', created: end.created + 5, data: { sessionID: end.data.sessionID }, location: { directory: '/home/user/proj' } })).toBe(false);
+});
+
+test('a previous core with a different STATE_VERSION hands over nothing of its reducer and nothing throws', async () => {
+  const mod = await import(ASSET);
+  fakeTmuxEnv();
+  const err = vi.spyOn(console, 'error');
+  const blocked = { id: 'ses_x', dir: '/proj', parent: null, executing: true, started: true, cause: 'prompt', blocks: new Map([['per_x', 'permission']]), shells: new Set(), lastInbox: null, ts: 5 };
+  const foreign = (version) => ({
+    abort() {},
+    written: new Map(),
+    since: new Map(),
+    state: { version, sessions: new Map([['ses_x', blocked]]), hints: new Map(), seenIds: new Set() },
+  });
+  for (const version of [mod.STATE_VERSION + 1, undefined, '1']) {
+    globalThis[KEY] = foreign(version);
+    const cleanup = await mod.default.setup(fakeCtx());
+    expect(globalThis[KEY].reducer.sessions.size, String(version)).toBe(0);
+    expect(globalThis[KEY].state.version).toBe(mod.STATE_VERSION);
+    await cleanup();
+  }
+  // A state whose getter throws, or half a state, starts fresh too.
+  globalThis[KEY] = { abort() {}, get state() { throw new Error('boom'); } };
+  const c1 = await mod.default.setup(fakeCtx());
+  expect(globalThis[KEY].reducer.sessions.size).toBe(0);
+  await c1();
+  globalThis[KEY] = { abort() {}, state: { version: mod.STATE_VERSION, sessions: new Map([['ses_x', blocked]]) } };
+  const c2 = await mod.default.setup(fakeCtx());
+  expect(globalThis[KEY].reducer.sessions.size).toBe(0);
+  await c2();
+  // The matching version is adopted.
+  globalThis[KEY] = foreign(mod.STATE_VERSION);
+  const c3 = await mod.default.setup(fakeCtx());
+  expect(globalThis[KEY].reducer.derive('ses_x')).toEqual({ state: 'blocked', cause: 'permission', ts: 5 });
+  await c3();
+  expect(err).not.toHaveBeenCalled();
+});
+
 test('an event stream that ends without an abort stops the sweep timer and keeps the core for a later hand-over', async () => {
   const mod = await import(ASSET);
   const env = fakeTmuxEnv();

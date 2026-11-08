@@ -41,11 +41,15 @@
 //    hint (directory + inbox kind, at most 500, oldest dropped first) that
 //    seeds the session when it is created.
 //
-// Hot reload (fact 3) can hand a fresh reducer a session mid-turn. Replies
-// and inbox items for unknown sessions create nothing, so no phantom finished
-// session is minted; accepted edge: a session first seen at its
-// `execution.succeeded` reads ready/start, so that one turn's done is not
-// reported.
+// A setup for another directory in the same process (fact 2, fixture line
+// 316) or a hot reload (fact 3) hands the reducer's state over to the next
+// core (`STATE_VERSION` guards the shape; an incompatible one starts fresh).
+// A core that does start fresh mid-turn still learns the turn from its next
+// step/tool/text event, which names the session and its directory (the
+// `execution.*` events name no directory): such an event on a session that is
+// not executing marks it executing with cause `prompt`, so the turn's end reads
+// ready/stop. Replies and inbox items for unknown sessions create nothing, so
+// no phantom finished session is minted.
 //
 // Clock: an event's own `created` (ms) when it is a finite number, else the injected
 // `now()`; every `ts` here is epoch SECONDS, the sh hook's unit.
@@ -62,6 +66,18 @@ import path from 'node:path';
 
 const SEEN_MAX = 5000;
 const HINT_MAX = 500;
+
+// The shape of the state a reducer hands over (`reducer.state`: sessions,
+// hints, seenIds and the session objects in them). Bump it whenever that shape
+// changes: a core loaded from newer bytes then starts fresh instead of reading
+// an older core's state it does not understand.
+export const STATE_VERSION = 1;
+
+// Turn activity: these `session.*` events only happen inside a turn, carry
+// `location.directory` and `data.sessionID`, and never follow the turn's end
+// in the 2.2.6 trace (unlike `session.renamed`, `session.viewed`). For a
+// session not executing they mean the core missed `execution.started`.
+const TURN_ACTIVITY_RE = /^session\.(step|tool|text)\./;
 
 // Events that only ever act on a session the reducer already knows: a reply
 // to a request it never saw, or an inbox item for a session it never saw (a
@@ -146,15 +162,34 @@ export function deriveState(session, reducer, visiting = new Set()) {
   return { state: 'ready', cause: session.started ? 'stop' : 'start' };
 }
 
-export function createReducer({ now = () => Math.floor(Date.now() / 1000) } = {}) {
-  const sessions = new Map();
-  const seenIds = new Set();
+// The state a previous core's reducer handed over, if it is this version's.
+function adoptable(state) {
+  try {
+    return !!state && typeof state === 'object' && state.version === STATE_VERSION
+      && state.sessions instanceof Map && state.hints instanceof Map && state.seenIds instanceof Set;
+  } catch {
+    return false;
+  }
+}
+
+// `state`: a previous reducer's `reducer.state`, adopted as-is when its
+// version matches (the previous core is aborted and never applies again).
+export function createReducer({ now = () => Math.floor(Date.now() / 1000), state = null } = {}) {
+  const adopt = adoptable(state);
+  const sessions = adopt ? state.sessions : new Map();
+  const seenIds = adopt ? state.seenIds : new Set();
   // sessionID -> { dir, lastInbox } from inbox items of sessions not (yet)
   // known: a resumed session (`opencode -c`) has no session.created, and its
   // execution.started carries no directory, so its first inbox item is the
   // only place its directory is named (fact 7).
-  const hints = new Map();
-  const reducer = { sessions, seenIds, apply, derive };
+  const hints = adopt ? state.hints : new Map();
+  const reducer = {
+    sessions,
+    seenIds,
+    state: { version: STATE_VERSION, sessions, hints, seenIds },
+    apply,
+    derive,
+  };
 
   function derive(sessionID) {
     const s = sessions.get(sessionID);
@@ -226,7 +261,8 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000) } = {}
     const dir = str(event.location?.directory);
     let sid = sessionIdOf(event);
 
-    if (!RELEVANT.has(type)) {
+    const midTurn = TURN_ACTIVITY_RE.test(type) && !!sid && !!dir && !sessions.get(sid)?.executing;
+    if (!RELEVANT.has(type) && !midTurn) {
       // Not state, but still a directory hint for a session we know.
       const s = sid ? sessions.get(sid) : null;
       if (s && !s.dir && dir) s.dir = dir;
@@ -295,6 +331,15 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000) } = {}
         s.executing = true;
         s.started = true;
         s.cause = s.lastInbox === 'synthetic' ? 'resume' : 'prompt';
+        break;
+      default:
+        // Turn activity on a session not executing (midTurn): the turn's
+        // execution.started happened before this core existed.
+        if (midTurn) {
+          s.executing = true;
+          s.started = true;
+          s.cause = 'prompt';
+        }
         break;
       case 'permission.asked': {
         const id = str(data.id);
@@ -502,9 +547,10 @@ export const GLOBAL_KEY = Symbol.for('tmuxifier.opencode-agent');
 
 // One live reporter: a reducer fed by the event stream, and a sweep that
 // lists panes and writes the folded markers. `written` (marker name -> the
-// content this core last wrote) and `since` (tmux session -> epoch seconds it
-// started hosting opencode) are plain properties so a hand-over can pass them
-// on to the next core.
+// content this core last wrote), `since` (tmux session -> epoch seconds it
+// started hosting opencode) and `state` (the reducer's, see STATE_VERSION)
+// are plain properties so a hand-over can pass them on to the next core;
+// `state` (a previous core's) seeds this core's reducer.
 export function createCore({
   home = os.homedir(),
   listPanes = defaultListPanes,
@@ -513,8 +559,9 @@ export function createCore({
   paneCacheMs = PANE_CACHE_MS,
   setInterval: startTimer = globalThis.setInterval,
   clearInterval: stopTimer = globalThis.clearInterval,
+  state = null,
 } = {}) {
-  const reducer = createReducer({ now });
+  const reducer = createReducer({ now, state });
   const controller = new AbortController();
   const dir = path.join(home, '.tmuxifier-agent');
   let aborted = false;
@@ -528,6 +575,7 @@ export function createCore({
 
   const core = {
     reducer,
+    state: reducer.state,
     attach,
     handle,
     sweep,
@@ -701,24 +749,43 @@ export function createCore({
   return core;
 }
 
+// The hand-over every setup performs: abort whichever core `prev` is (a
+// foreign or older object is never trusted to have abort()), then build the
+// next core inheriting what `prev` wrote, when each tmux session started
+// hosting, and everything its reducer knows (a pending block or a mid-turn
+// session in another directory must survive OpenCode setting the plugin up
+// for a new one; an incompatible STATE_VERSION starts fresh). `opts` are
+// createCore's.
+export function takeOver(prev, opts = {}) {
+  let written = null;
+  let since = null;
+  let state = null;
+  if (prev && typeof prev === 'object') {
+    try { prev.abort(); } catch { /* a foreign or older object */ }
+    try {
+      if (prev.written instanceof Map) written = prev.written;
+      if (prev.since instanceof Map) since = prev.since;
+      state = prev.state ?? null;
+    } catch { /* a throwing getter: inherit nothing more */ }
+  }
+  const core = createCore({ ...opts, state });
+  if (written) core.written = written;
+  if (since) core.since = since;
+  return core;
+}
+
 // The OpenCode V2 entry point. OpenCode sets the plugin up once per project
 // directory in one long-lived server and reloads a rewritten plugin file
 // without necessarily cleaning up the old instance (facts 1-3), so the core
-// is a process-wide singleton: every setup aborts whichever core holds the
-// global, inherits what it wrote, and becomes the owner. A cleanup acts only
-// while its core still owns the global.
+// is a process-wide singleton: every setup takes over from whichever core
+// holds the global and becomes the owner. A cleanup acts only while its core
+// still owns the global.
 export default {
   id: 'tmuxifier-agent',
   async setup(ctx) {
     let core = null;
     try {
-      core = createCore();
-      const prev = globalThis[GLOBAL_KEY];
-      if (prev && typeof prev === 'object') {
-        try { prev.abort(); } catch { /* a foreign or older object */ }
-        if (prev.written instanceof Map) core.written = prev.written;
-        if (prev.since instanceof Map) core.since = prev.since;
-      }
+      core = takeOver(globalThis[GLOBAL_KEY]);
       globalThis[GLOBAL_KEY] = core;
       core.attach(ctx).catch((e) => debug('attach', e));
     } catch (e) {

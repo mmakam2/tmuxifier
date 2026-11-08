@@ -273,3 +273,43 @@ test('directory hints for unknown sessions stay bounded', () => {
   r.apply({ id: 'h-new', type: 'session.execution.started', data: { sessionID: 'ses_h599' } });
   expect(r.sessions.get('ses_h599').dir).toBe('/d599');
 });
+
+test('turn activity on a session not executing marks it executing; on an executing one it changes nothing', () => {
+  const r = createReducer({ now: () => 1 });
+  const loc = { location: { directory: '/home/user/proj' } };
+  // No directory: nothing to attribute, nothing created.
+  expect(r.apply({ id: 'm1', type: 'session.step.started', created: 10_000, data: { sessionID: 'ses_m' } })).toBe(false);
+  expect(r.sessions.size).toBe(0);
+  // A directory-carrying step on an unknown session: the core missed execution.started.
+  expect(r.apply({ id: 'm2', type: 'session.tool.called', created: 11_000, data: { sessionID: 'ses_m' }, ...loc })).toBe(true);
+  expect(r.sessions.get('ses_m').dir).toBe('/home/user/proj');
+  expect(r.derive('ses_m')).toEqual({ state: 'working', cause: 'prompt', ts: 11 });
+  // Mid-turn, a step after an unblock keeps the unblock cause.
+  r.apply({ id: 'm3', type: 'permission.asked', created: 12_000, data: { id: 'per_m', sessionID: 'ses_m' }, ...loc });
+  r.apply({ id: 'm4', type: 'permission.replied', created: 13_000, data: { requestID: 'per_m', sessionID: 'ses_m', reply: 'once' }, ...loc });
+  expect(r.apply({ id: 'm5', type: 'session.text.started', created: 14_000, data: { sessionID: 'ses_m' }, ...loc })).toBe(false);
+  expect(r.derive('ses_m')).toEqual({ state: 'working', cause: 'unblock', ts: 13 });
+  r.apply({ id: 'm6', type: 'session.execution.succeeded', created: 15_000, data: { sessionID: 'ses_m' } });
+  expect(r.derive('ses_m')).toEqual({ state: 'ready', cause: 'stop', ts: 15 });
+  // After the turn, non-activity session events (rename, view) leave it done.
+  expect(r.apply({ id: 'm7', type: 'session.renamed', created: 16_000, data: { sessionID: 'ses_m' }, ...loc })).toBe(false);
+  expect(r.apply({ id: 'm8', type: 'session.inbox.delivered', created: 16_000, data: { sessionID: 'ses_m' }, ...loc })).toBe(false);
+  expect(r.derive('ses_m')).toEqual({ state: 'ready', cause: 'stop', ts: 15 });
+});
+
+test('createReducer adopts a same-version state as-is and starts fresh from anything else', async () => {
+  const { STATE_VERSION } = await import('../src/server/assets/tmuxifier-opencode-agent.js');
+  const a = createReducer({ now: () => 1 });
+  for (const l of LINES) if (l.n <= 60) a.apply(l.event); // blocked/permission
+  expect(a.state.version).toBe(STATE_VERSION);
+  const b = createReducer({ now: () => 1, state: a.state });
+  expect(b.sessions).toBe(a.sessions);
+  expect(b.state.hints).toBe(a.state.hints);
+  expect(b.seenIds).toBe(a.seenIds);
+  expect(b.derive(MAIN)).toEqual(a.derive(MAIN));
+  expect(b.derive(MAIN).state).toBe('blocked');
+  expect(b.apply(lineEvent(60))).toBe(false); // already seen
+  for (const state of [{ ...a.state, version: STATE_VERSION + 1 }, { ...a.state, hints: {} }, 'x', null]) {
+    expect(createReducer({ state }).sessions.size).toBe(0);
+  }
+});

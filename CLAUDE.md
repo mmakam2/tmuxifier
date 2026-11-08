@@ -348,7 +348,9 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   of the active window runs `opencode` there (two TUIs in one directory fold to one state), writes
   the same `<session>:<state>:<epoch>:<cause>` markers, and sweeps every 15 s (deletes a marker
   only if it still holds what this core wrote). A process-wide singleton (`Symbol.for`) hands
-  over to the newest `setup`, so a setup rerun upgrades it live. A reject/dismiss ends the turn in
+  over to the newest `setup` (what it wrote, and its reducer state under `STATE_VERSION` — OpenCode
+  re-runs `setup` in the same process for every new project directory), so a setup rerun upgrades
+  it live. A reject/dismiss ends the turn in
   OpenCode (nothing stays `blocked`); ctrl+b background shells keep `working`. Acceptance test:
   `test/fixtures/opencode-event-trace.jsonl` (a real 2.2.6 recording) replayed by
   `test/opencodeAgentReplay.test.js`. Design: `docs/superpowers/specs/2026-11-07-opencode-agent-state-design.md`.

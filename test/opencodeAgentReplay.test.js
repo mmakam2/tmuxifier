@@ -1,16 +1,20 @@
 import { test, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { createReducer, parsePanes, foldForPanes, markerLine } from '../src/server/assets/tmuxifier-opencode-agent.js';
+import { takeOver, parsePanes, foldForPanes, markerLine } from '../src/server/assets/tmuxifier-opencode-agent.js';
 
 // The acceptance test: replays every line of the real OpenCode 2.2.6
 // recording (test/fixtures/opencode-event-trace.jsonl) through the real
 // asset's reducer and pane fold, with a fixed pane listing, and asserts the
 // marker trail of each tmux session by fixture line. Lines are the 1-based
 // physical lines of the fixture, matching
-// test/fixtures/README-opencode-event-trace.md. A `plugin.setup` with a new
-// pid is a new server process, so it starts a fresh reducer; non-event lines
-// are otherwise only counted. REPLAY_TRAIL=1 prints the whole trail.
+// test/fixtures/README-opencode-event-trace.md. Every `plugin.setup` line runs
+// the real hand-over (`takeOver`, what the default export's setup does): one
+// in the same pid takes over from the live core (line 316: OpenCode sets the
+// plugin up again for proj2 in the same server), one with a new pid is a new
+// server process with nothing to take over from (line 403). The cores are
+// never attached or swept: events go straight to the core's reducer. Other
+// non-event lines are only counted. REPLAY_TRAIL=1 prints the whole trail.
 
 const TRACE = fileURLToPath(new URL('./fixtures/opencode-event-trace.jsonl', import.meta.url));
 
@@ -27,18 +31,21 @@ test('the recorded OpenCode trace drives the per-pane markers through every scen
   const lines = readFileSync(TRACE, 'utf8').split('\n');
   if (lines.at(-1) === '') lines.pop();
 
-  let reducer = null;
+  const opts = { home: '/nonexistent', listPanes: async () => null, now: () => 0 };
+  let core = null;
   let setupPid = null;
+  const setups = [];
   const trail = [];
   lines.forEach((text, i) => {
     const n = i + 1;
     const rec = JSON.parse(text);
-    if (rec.kind === 'plugin.setup' && rec.pid !== setupPid) {
+    if (rec.kind === 'plugin.setup') {
+      core = takeOver(rec.pid === setupPid ? core : null, opts);
+      setups.push({ n, samePid: rec.pid === setupPid });
       setupPid = rec.pid;
-      reducer = createReducer({ now: () => 0 });
     }
-    if (rec.kind === 'event') reducer.apply(rec.event);
-    const fold = foldForPanes(reducer, PANES, SINCE, 0);
+    if (rec.kind === 'event') core.reducer.apply(rec.event);
+    const fold = foldForPanes(core.reducer, PANES, SINCE, 0);
     trail.push({ n, kind: rec.kind, type: rec.event?.type ?? '', fold, created: rec.event?.created });
   });
   expect(trail).toHaveLength(427);
@@ -75,6 +82,10 @@ test('the recorded OpenCode trace drives the per-pane markers through every scen
   // (j) clean background shell: the turn ends at 298 while the shell runs.
   expect(at(280)).toBe('blocked/permission'); expect(at(298)).toBe('working/prompt'); // background gate
   expect(at(303)).toBe('working/resume'); expect(at(313)).toBe('ready/stop');
+  // (k) the same-pid setup for proj2 at 316 is a hand-over: everything known
+  // about proj survives it, so octest keeps its finished turn from 313.
+  expect(setups).toEqual([{ n: 1, samePid: false }, { n: 316, samePid: true }, { n: 403, samePid: false }]);
+  expect(at(316)).toBe('ready/stop'); expect(trail[315].fold.get('octest').ts).toBe(Math.floor(trail[312].created / 1000));
   // (k)/(l) a second session in proj folds into both proj panes; proj2 has none.
   expect(trail2(343)).toBe('working/prompt'); expect(at(343)).toBe('working/prompt'); expect(trail3(343)).toBe('ready/start');
   expect(at(344)).toBe(at(343)); // duplicate changes nothing
