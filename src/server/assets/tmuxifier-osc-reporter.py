@@ -457,7 +457,9 @@ def run_listen(pane_id, *, home, stdin_fd=0):
     try:
         cur = read_entry(epath)
         if cur.get('handover') is True:
-            persist()
+            # A successor that already wrote its own pid owns the entry.
+            if cur.get('pid') in (None, os.getpid()):
+                persist()
             return 0
         s = resolve_session(pane_id) or session
         _bare_clear(home, pane_id, s, ('idle', None), last_written)
@@ -606,11 +608,21 @@ def pass_once(home):
             continue
         e = read_entry(epath)
         if not _entry_live(e):
-            _unlink(epath)
             if agent_kind(row[2], home):
-                _tmux('pipe-pane', '-t', pid_id)  # -o would be a no-op on a piped pane
-                attach(pid_id, home)
+                # A successor may already be reading the pane: flag the handover
+                # so its predecessor's EOF is not taken for "agent exited".
+                detach(pid_id, home, True)  # -o would be a no-op on a piped pane
+                if attach(pid_id, home):
+                    fresh = dict(e)
+                    fresh.pop('pid', None)
+                    fresh.update({'sha': asset_sha(), 'attachedAt': time.time(), 'handover': True})
+                    try:
+                        write_entry(epath, fresh)
+                    except Exception as ex:
+                        debug(home, 'reattach entry: %r' % (ex,))
                 active = True
+            else:
+                _unlink(epath)
             continue
         active = True
         if agent_kind(row[2], home):

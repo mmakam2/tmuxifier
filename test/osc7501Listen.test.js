@@ -157,3 +157,17 @@ test('a bare clear removes the marker this reporter wrote, and the next idle is 
   t.child.stdin.end();
   await t.exited;
 });
+
+test('a successor that owns the entry is not overwritten by the handed-over listener at EOF', async () => {
+  const t = setup();
+  t.send(osc('state=working'));
+  await waitMarker(t, 'web', /^web:working:\d+:prompt\n$/);
+  const successor = JSON.stringify({
+    pid: t.child.pid + 100000, sha: 'new', session: 'web', records: {}, lastWritten: null, handover: true, attachedAt: 2,
+  });
+  writeFileSync(t.entryFile, successor);
+  t.child.stdin.end();
+  expect(await t.exited).toBe(0);
+  expect(readFileSync(t.entryFile, 'utf8')).toBe(successor);
+  expect(existsSync(t.markerOf('web'))).toBe(true);
+});

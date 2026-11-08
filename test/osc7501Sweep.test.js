@@ -187,3 +187,17 @@ test('loop upgrade: stale-sha listener is handed over (flag set before detach)',
   expect(JSON.parse(readFileSync(t.entryFile(2), 'utf8')).sha).toBe(SHA);
   expect(readFileSync(path.join(t.oscDir, 'loop.lock'), 'utf8')).toMatch(new RegExp(`^\\d+ ${SHA}\\n$`));
 });
+
+test('a dead listener on a piped matching pane is handed over, not torn down', () => {
+  const t = setup(rows('%2\t1\tcodex\tweb'));
+  t.putEntry(2, { pid: 999999, sha: 'old', session: 'web', records: {}, lastWritten: null, handover: false, attachedAt: 1 });
+  t.run('sweep', '--once');
+  const l = t.log().filter((x) => x.startsWith('pipe-pane') || x.startsWith('ENTRY'));
+  expect(l[0]).toBe('pipe-pane -t %2');
+  expect(JSON.parse(l[1].replace(/^ENTRY 2 /, '')).handover).toBe(true);
+  expect(l[2]).toMatch(/^pipe-pane -o -t %2 .*listen %2$/);
+  const e = JSON.parse(readFileSync(t.entryFile(2), 'utf8'));
+  expect(e.pid).toBeUndefined();
+  expect(e.sha).toBe(SHA);
+  expect(e.session).toBe('web');
+});
