@@ -29,7 +29,13 @@
 #
 # Fail open: the reporter never writes to the pane, never raises out of its
 # loops, and prints nothing unless TMUXIFIER_OSC_DEBUG=1.
+import hashlib
+import json
+import os
+import re
+import subprocess
 import sys
+import time
 
 # Spec 0.4 limits (see the plan's Global Constraints).
 TAIL_CAP = 4096
@@ -211,8 +217,259 @@ def next_action(marker, new):
     return ('write', 'ready', 'start')
 
 
+# ---------------------------------------------------------------- box I/O
+
+def debug(home, msg):
+    """Append a line to ~/.tmuxifier-osc/log, only under TMUXIFIER_OSC_DEBUG=1."""
+    if os.environ.get('TMUXIFIER_OSC_DEBUG') != '1':
+        return
+    try:
+        d = os.path.join(home, '.tmuxifier-osc')
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, 'log'), 'a') as f:
+            f.write('%d %s\n' % (time.time(), msg))
+    except Exception:
+        pass
+
+
+def asset_sha():
+    """sha256 hex of this asset's own bytes."""
+    with open(os.path.abspath(__file__), 'rb') as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def entry_path(home, pane_id):
+    return os.path.join(home, '.tmuxifier-osc', 'panes', pane_id.lstrip('%'))
+
+
+def read_entry(path):
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _atomic_write(path, text, mode=None):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = '%s.%d.tmp' % (path, os.getpid())
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644 if mode is None else mode)
+    try:
+        if mode is not None:
+            os.fchmod(fd, mode)
+        os.write(fd, text.encode())
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+
+
+def write_entry(path, entry):
+    _atomic_write(path, json.dumps(entry))
+
+
+def resolve_session(pane_id):
+    """The pane's current tmux session name, or None on any failure."""
+    try:
+        r = subprocess.run(['tmux', 'display-message', '-p', '-t', pane_id, '#{session_name}'],
+                           capture_output=True, timeout=5)
+        if r.returncode != 0:
+            return None
+        name = r.stdout.decode('utf-8', 'replace').rstrip('\n')
+        return name or None
+    except Exception:
+        return None
+
+
+def marker_path(home, session):
+    return os.path.join(home, '.tmuxifier-agent', re.sub(r'[^A-Za-z0-9._-]', '_', session))
+
+
+def read_marker(path):
+    """(state, cause) from the marker's first line, or None."""
+    try:
+        with open(path) as f:
+            parts = f.readline().rstrip('\n').split(':')
+        if len(parts) >= 4:
+            return (parts[1], parts[3])
+    except Exception:
+        pass
+    return None
+
+
+def read_marker_state(path):
+    m = read_marker(path)
+    return m[0] if m else None
+
+
+def write_marker(path, session, state, cause):
+    """Write the hook's marker format byte for byte; returns the content."""
+    content = '%s:%s:%d:%s\n' % (session, state, int(time.time()), cause)
+    _atomic_write(path, content, 0o644)
+    return content
+
+
+def _read_text(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except Exception:
+        return None
+
+
+def live_entries(home, session, exclude_pane):
+    """Registry entries of other panes in `session` whose listener is alive."""
+    d = os.path.join(home, '.tmuxifier-osc', 'panes')
+    out = []
+    try:
+        names = os.listdir(d)
+    except Exception:
+        return out
+    skip = exclude_pane.lstrip('%')
+    for n in names:
+        if n == skip or not n.isdigit():
+            continue
+        e = read_entry(os.path.join(d, n))
+        pid = e.get('pid')
+        if e.get('session') != session or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            continue
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        except Exception:
+            pass  # EPERM: alive, owned by someone else
+        out.append(e)
+    return out
+
+
+def _sibling_folds(home, session, pane_id):
+    return [Records.from_json(e.get('records')).fold() for e in live_entries(home, session, pane_id)]
+
+
+def _bare_clear(home, pane_id, session, own_fold, last_written):
+    """The program exited. Returns the new lastWritten."""
+    if not session:
+        return last_written
+    mpath = marker_path(home, session)
+    sibs = _sibling_folds(home, session, pane_id)
+    if not sibs:
+        if last_written is not None and _read_text(mpath) == last_written:
+            try:
+                os.unlink(mpath)
+            except FileNotFoundError:
+                pass
+            return None
+        return last_written  # not ours: leave it alone
+    act = next_action(read_marker(mpath), session_fold([own_fold] + sibs))
+    if act:
+        return write_marker(mpath, session, act[1], act[2])
+    return last_written
+
+
+def run_listen(pane_id, *, home, stdin_fd=0):
+    """Read one pane's raw output, fold its OSC 7501 reports, write the marker."""
+    epath = entry_path(home, pane_id)
+    entry = read_entry(epath)
+    recs = Records.from_json(entry.get('records'))
+    lw = entry.get('lastWritten')
+    last_written = lw if isinstance(lw, str) else None
+    ses = entry.get('session')
+    session = ses if isinstance(ses, str) else None
+    sha = ''
+    try:
+        sha = asset_sha()
+    except Exception:
+        pass
+    state = {'pid': os.getpid(), 'sha': sha, 'session': session, 'records': recs.to_json(),
+             'lastWritten': last_written, 'handover': False, 'attachedAt': time.time()}
+
+    def persist():
+        state['records'] = recs.to_json()
+        state['session'] = session
+        state['lastWritten'] = last_written
+        write_entry(epath, state)
+
+    try:
+        persist()
+    except Exception as e:
+        debug(home, 'initial persist: %r' % (e,))
+
+    tail = b''
+    last_fold = None
+    while True:
+        try:
+            data = os.read(stdin_fd, 65536)
+        except InterruptedError:
+            continue
+        except OSError:
+            data = b''
+        if not data:
+            break
+        try:
+            bodies, tail = extract(tail + data)
+            cleared = False
+            for body in bodies:
+                rep = parse_report(body)
+                if rep is None:
+                    continue
+                recs.apply(rep)
+                if rep['state'] == 'clear' and rep['id'] == '':
+                    cleared = True
+                else:
+                    cleared = False
+            if not bodies:
+                continue
+            fold = recs.fold()
+            if cleared and not recs.recs:
+                s = resolve_session(pane_id) or session
+                last_written = _bare_clear(home, pane_id, s, fold, last_written)
+                session = s
+                last_fold = None  # next report is a first observation
+                persist()
+                continue
+            if fold == last_fold:
+                continue
+            last_fold = fold
+            s = resolve_session(pane_id)
+            if s is None:
+                persist()
+                continue
+            session = s
+            new = session_fold([fold] + _sibling_folds(home, s, pane_id))
+            mpath = marker_path(home, s)
+            act = next_action(read_marker(mpath), new)
+            if act:
+                last_written = write_marker(mpath, s, act[1], act[2])
+            persist()
+        except Exception as e:
+            debug(home, 'chunk: %r' % (e,))
+
+    # EOF: the pane is gone or this listener was detached.
+    try:
+        cur = read_entry(epath)
+        if cur.get('handover') is True:
+            persist()
+            return 0
+        s = resolve_session(pane_id) or session
+        _bare_clear(home, pane_id, s, ('idle', None), last_written)
+        try:
+            os.unlink(epath)
+        except FileNotFoundError:
+            pass
+    except Exception as e:
+        debug(home, 'eof: %r' % (e,))
+    return 0
+
+
 def main(argv):
-    # Roles (listen, loop, sweep) are added by later tasks; unknown roles are a no-op.
+    # Roles loop and sweep are added by later tasks; unknown roles are a no-op.
+    try:
+        if len(argv) >= 3 and argv[1] == 'listen' and re.match(r'^%[0-9]+$', argv[2]):
+            home = os.environ.get('HOME') or os.path.expanduser('~')
+            return run_listen(argv[2], home=home)
+    except Exception:
+        pass
     return 0
 
 
