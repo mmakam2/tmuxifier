@@ -6,6 +6,7 @@ import path from 'node:path';
 import { buildEnsureLocalShellScript, createLocalShellActions, runLocalScriptStdin } from '../src/server/localShellActions.js';
 import { buildAgentHooksInstallScript } from '../src/server/claudeAgentHooks.js';
 import { buildOpencodePluginInstallScript } from '../src/server/opencodeAgentPlugin.js';
+import { buildOscReporterInstallScript } from '../src/server/oscReporter.js';
 import { buildVoiceWriterRemote } from '../src/server/voiceWriter.js';
 import { buildVoiceLinkInstallScript } from '../src/server/claudeVoiceLink.js';
 
@@ -227,4 +228,20 @@ test('openAudioSink runs the writer remote under /bin/sh with the factory env', 
   expect(calls[0].argv).toEqual(['-c', buildVoiceWriterRemote()]);
   expect(calls[0].opts.cmd).toBe('/bin/sh');
   expect(calls[0].opts.env).toEqual({ HOME: '/tmp/x', PATH: '/usr/bin' });
+});
+
+test('installOscReporter runs the OSC reporter install script locally with the asset on stdin', async () => {
+  const calls = [];
+  const actions = createLocalShellActions({
+    runStdin: async (script, input, opts) => {
+      calls.push({ script, input, opts });
+      return { code: 0, stdout: 'OSCREPORTER: applied\n', stderr: '' };
+    },
+    readOscAsset: async () => Buffer.from('osc-body'),
+  });
+  await expect(actions.installOscReporter()).resolves.toEqual({ target: 'osc-reporter', ok: true });
+  expect(calls).toHaveLength(1);
+  expect(calls[0].script).toBe(buildOscReporterInstallScript());
+  expect(calls[0].input.toString()).toContain('osc-body');
+  expect(calls[0].opts.cwd).toBe(os.homedir());
 });

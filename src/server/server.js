@@ -2063,6 +2063,8 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       result.agentHooks = await localShellActions.installAgentHooks();
       // The voice link rides the same knob on the host as on a box.
       result.voiceLink = localShellActions.installVoiceLink ? await localShellActions.installVoiceLink() : null;
+      // So does the OSC 7501 pane reporter (Codex / Pi state).
+      result.oscReporter = localShellActions.installOscReporter ? await localShellActions.installOscReporter() : null;
     }
     // Independent opt-in for the OpenCode reporter; same strict === true.
     if (opencodePlugin === true && localShellActions?.installOpencodePlugin) {

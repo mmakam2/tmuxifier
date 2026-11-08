@@ -4,6 +4,7 @@ import os from 'node:os';
 import { buildEnsureTmuxRemote } from './boxActions.js';
 import { createAgentHooksPusher } from './claudeAgentHooks.js';
 import { createOpencodePluginPusher } from './opencodeAgentPlugin.js';
+import { createOscReporterPusher } from './oscReporter.js';
 import { createVoiceLinkPusher } from './claudeVoiceLink.js';
 import { sanitizeSession, shSingleQuote } from './sshCommand.js';
 import { sshPipe } from './sshRun.js';
@@ -82,12 +83,13 @@ export function runLocalScriptStdin(script, input, { cwd = os.homedir(), env = p
 }
 
 const readOpencodeAssetDefault = () => fs.promises.readFile(new URL('./assets/tmuxifier-opencode-agent.js', import.meta.url));
+const readOscAssetDefault = () => fs.promises.readFile(new URL('./assets/tmuxifier-osc-reporter.py', import.meta.url));
 const readHookAssetDefault = () => fs.promises.readFile(new URL('./assets/tmuxifier-agent-hook.sh', import.meta.url));
 
 // localSession must match the session name the session manager attaches
 // (sessions.openLocal) — threading it here keeps the two from silently
 // diverging if the knob is ever set to a non-default value.
-export function createLocalShellActions({ run = runLocalShellScript, runStdin = runLocalScriptStdin, readHookAsset = readHookAssetDefault, readOpencodeAsset = readOpencodeAssetDefault, pipe = sshPipe, cwd = os.homedir(), env = process.env, localSession = 'local' } = {}) {
+export function createLocalShellActions({ run = runLocalShellScript, runStdin = runLocalScriptStdin, readHookAsset = readHookAssetDefault, readOpencodeAsset = readOpencodeAssetDefault, readOscAsset = readOscAssetDefault, pipe = sshPipe, cwd = os.homedir(), env = process.env, localSession = 'local' } = {}) {
   // The SSH pusher's transport signature is (box, script, bytes); the host has
   // no box, so the local transport drops that argument. Everything else —
   // installer script, result parsing, skip/error mapping — is the pusher's,
@@ -102,6 +104,10 @@ export function createLocalShellActions({ run = runLocalShellScript, runStdin = 
   const opencodePluginPusher = createOpencodePluginPusher({
     runStdin: (_box, script, bytes) => runStdin(script, bytes, { cwd, env }),
     readAsset: readOpencodeAsset,
+  });
+  const oscReporterPusher = createOscReporterPusher({
+    runStdin: (_box, script, bytes) => runStdin(script, bytes, { cwd, env }),
+    readAsset: readOscAsset,
   });
   return {
     async ensureReady(shell) {
@@ -119,6 +125,9 @@ export function createLocalShellActions({ run = runLocalShellScript, runStdin = 
     },
     async installOpencodePlugin() {
       return opencodePluginPusher.push(null);
+    },
+    async installOscReporter() {
+      return oscReporterPusher.push(null);
     },
     async installVoiceLink() {
       return voiceLinkPusher.push(null);

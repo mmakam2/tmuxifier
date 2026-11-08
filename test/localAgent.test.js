@@ -135,3 +135,42 @@ test('the sample shape drives sampleOf exactly like a box probe result', async (
   expect(sample.agent).toBe('working');
   expect(sample.agentAttached).toBe(false);
 });
+
+function withReporter(home) {
+  fs.mkdirSync(path.join(home, '.tmuxifier-osc'));
+  fs.writeFileSync(path.join(home, '.tmuxifier-osc', 'reporter.py'), '# stub\n');
+}
+
+test('sample() runs the OSC sweep once, before the tmux listing, when the reporter is installed', async () => {
+  const home = tmpHome();
+  withReporter(home);
+  const order = [];
+  const sampler = createLocalAgentSampler({
+    home,
+    runSweep: async (h) => { order.push(['sweep', h]); },
+    runTmux: async () => { order.push(['tmux']); return { code: 0, stdout: '' }; },
+  });
+  await sampler.sample();
+  expect(order).toEqual([['sweep', home], ['tmux']]);
+});
+
+test('sample() never runs the OSC sweep when the reporter is absent', async () => {
+  let swept = 0;
+  const sampler = createLocalAgentSampler({
+    home: tmpHome(),
+    runSweep: async () => { swept++; },
+    runTmux: async () => ({ code: 0, stdout: 'local:1:0:1722600000:claude\n' }),
+  });
+  await sampler.sample();
+  expect(swept).toBe(0);
+});
+
+test('a rejecting or synchronously throwing runSweep leaves the sample unchanged', async () => {
+  const home = tmpHome();
+  withReporter(home);
+  const runTmux = async () => ({ code: 0, stdout: 'local:1:0:1722600000:claude\n' });
+  const base = await createLocalAgentSampler({ home: tmpHome(), runTmux }).sample();
+  for (const runSweep of [async () => { throw new Error('boom'); }, () => { throw new Error('sync'); }]) {
+    expect(await createLocalAgentSampler({ home, runTmux, runSweep }).sample()).toEqual(base);
+  }
+});

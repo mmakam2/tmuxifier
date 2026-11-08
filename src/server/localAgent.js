@@ -78,11 +78,29 @@ export async function readAgentMarks(home) {
   return parseAgentMarks(lines.join('\n'));
 }
 
-export function createLocalAgentSampler({ home = os.homedir(), runTmux = runTmuxDefault } = {}) {
+// The OSC reporter's `sweep` role (see oscReporter.js): attaches listeners to
+// the host's agent panes. Resolves on every outcome — a missing python3, a
+// timeout or a non-zero exit are all swallowed; the sweep is best-effort.
+function runSweepDefault(home) {
+  return new Promise((resolve) => {
+    try {
+      execFile('python3', [path.join(home, '.tmuxifier-osc', 'reporter.py'), 'sweep'], { timeout: 5000 }, () => resolve());
+    } catch { resolve(); }
+  });
+}
+
+export function createLocalAgentSampler({ home = os.homedir(), runTmux = runTmuxDefault, runSweep = runSweepDefault } = {}) {
   return {
     // Never rejects: a sampler failure must never disturb the poll loop.
     async sample() {
       const out = { reachable: true };
+      // Host Shell parity with the SSH probe's sweep fragment: when the OSC
+      // reporter is installed, let it (re)attach to agent panes before we list.
+      // It can never affect the sample: any failure, even a synchronous throw,
+      // is swallowed.
+      try {
+        if (fs.existsSync(path.join(home, '.tmuxifier-osc', 'reporter.py'))) await runSweep(home);
+      } catch { /* sweep is best-effort */ }
       try {
         const res = await runTmux(['ls', '-F', STATUS_FMT]);
         // Exit 1 is ambiguous on its own: tmux uses it for "no server

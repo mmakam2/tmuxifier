@@ -2441,7 +2441,7 @@ async function openLocalShellEditModal() {
       // The checkbox installs two things on this host now — the agent-state
       // hooks and the voice link's capture device — so report whichever did
       // not land, not just the first.
-      const missed = [res.agentHooks, res.voiceLink, res.opencodePlugin].filter((r): r is PushResult => !!r && !r.ok);
+      const missed = [res.agentHooks, res.voiceLink, res.opencodePlugin, res.oscReporter].filter((r): r is PushResult => !!r && !r.ok);
       if (missed.length) {
         // The shell change saved; only the install needs attention. Keep the
         // dialog open so the message is actually seen.
@@ -2449,7 +2449,7 @@ async function openLocalShellEditModal() {
         // about "the box"; here the target is this host. Reworded at the seam
         // rather than in the server strings, which both paths read.
         const here = (t: string) => t.replace('on the box', 'on this host').replace('the box has', 'this host has');
-        const what = (r: PushResult) => (r.target === 'voice-link' ? 'voice link' : r.target === 'opencode-plugin' ? 'OpenCode plugin' : 'hooks');
+        const what = (r: PushResult) => (r.target === 'voice-link' ? 'voice link' : r.target === 'opencode-plugin' ? 'OpenCode plugin' : r.target === 'osc-reporter' ? 'pane reporter' : 'hooks');
         err.textContent = `Shell saved; ${missed.map((r) => (r.skipped
           ? `${what(r)} skipped: ${here(r.skipped)}`
           : `${what(r)} install failed: ${r.error || 'unknown error'}`)).join('; ')}`;

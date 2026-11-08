@@ -405,7 +405,7 @@ export const api = {
   },
   async getLocalShell() { return j<{ shell: string }>(await fetch('/api/local-shell')); },
   async updateLocalShell(shell: string, claudeHooks = false, opencodePlugin = false) {
-    return j<{ ok: boolean; agentHooks?: PushResult | null; voiceLink?: VoiceLinkResult | null; opencodePlugin?: PushResult | null }>(
+    return j<{ ok: boolean; agentHooks?: PushResult | null; voiceLink?: VoiceLinkResult | null; opencodePlugin?: PushResult | null; oscReporter?: PushResult | null }>(
       await fetch('/api/local-shell', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
