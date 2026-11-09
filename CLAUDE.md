@@ -129,9 +129,10 @@ Cross-cutting invariants that tests alone have repeatedly failed to protect:
 - **Real-time paths are triggers, never data.** The box watch stream's whole vocabulary is `c`/`h`
   and `/live` sends only `{"box":"<id>"}`: state still arrives through the allowlisting probe and
   the ordinary routes, and the 30 s sweep and client polls remain the backstop. Only the sweep
-  decides reachability — a failed light probe changes nothing. The sweep and `refreshAgents` are
-  ordered (`probeStart`/`agentFresh`/`swapGen` in `statusPoller.js`) so an older read never
-  overwrites a newer one; breaking that shows up as a duplicate "needs you" push.
+  decides reachability — a failed light probe changes nothing. The sweep, `probeOne` and
+  `refreshAgents` all read a box's agent state and can finish in any order, so one rule orders
+  them (`seq`/`applied`/`readBox`/`settle` in `statusPoller.js`): a read is applied only if it
+  started after the previously applied one. Breaking that shows up as a duplicate "needs you" push.
 - **Never auto-promote best-effort phases.** Setup's seed/statusline/hooks/voice-link/script
   phases record their result and never fail the job; a failed setup never removes the box.
 - **Every web fetch goes through `http.ts`** (the 401 → login seam); `test/webHttp.test.js`
@@ -427,7 +428,9 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   Session rows must have the `STATUS_FMT` shape (≤200; a name with controls or over 256 chars
   drops, never rewritten); a failed probe's ssh error keeps its last 1024 chars, controls stripped.
   `checkAgents` runs `AGENT_REMOTE` — the probe minus the metrics block and the OSC sweep — and
-  returns sessions, windows and markers or `null`; it never touches the backoff.
+  returns sessions, windows and markers or `null`; it never touches the backoff. The marker
+  directory is listed (`command ls -1 | while read`), never globbed: under a zsh login shell an
+  unmatched glob aborts the whole probe line (pinned under sh, bash and zsh in `test/status.test.js`).
 - `statusPoller.js` — the single server-side poll loop (`statusPollMs`) behind `/api/status`, so
   SSH volume is independent of open tabs; `probeOne` for on-demand refresh. Folds the Host Shell
   into history as `__local__` without putting it in the snapshot. `refreshAgents(boxId)` is the
@@ -442,8 +445,12 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   and what proves the stream is not hung; `[ -f ]` keeps a FIFO from blocking it forever. A `c`
   calls `refreshAgents`, one at a time and at most once a second per box, with a rerun for a
   change that lands mid-probe. Streams start and stop only in `sync()`, called from `onCycle`;
-  one that dies young backs off (30 s doubling to 30 min). `createLocalMarkWatch` is the Host
-  Shell's `fs.watch` on `~/.tmuxifier-agent`. `TMUXIFIER_AGENT_WATCH=off` removes both.
+  one that dies young backs off (30 s doubling to 30 min). The stream costs one of sshd's
+  `MaxSessions` slots per box; when ssh reports `Session open refused by peer` (on the stream's
+  stderr, or from the light probe via `yield`) the stream is dropped and held 5 min rather than
+  left on the private connection ssh silently falls back to. `createLocalMarkWatch` is the Host
+  Shell's `fs.watch` on `~/.tmuxifier-agent`, serialised, holding a directory fd so a
+  removed-and-recreated directory is noticed. `TMUXIFIER_AGENT_WATCH=off` removes both.
 - `liveHub.js` — real-time, server → browser: the `/live` clients (≤32), pinged every 25 s,
   closed for renewal after 15 min so a stream is re-authenticated. `publish(boxId)` sends
   `{"box":id}`. A WebSocket, not SSE: an EventSource would hold one of the six HTTP/1.1
@@ -453,7 +460,10 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   (down/up/needs-auth/threshold/agent-blocked/agent-input/agent-done) in `data/health-events.json`.
   `recordAgents(box, status)` is the between-sweeps update: it rewrites the box's latest sample
   in place (no new point, metrics and time kept) and runs only `agentEdges`, never the metric
-  thresholds (cpu needs two consecutive *sweep* samples). `onChange(cb)` fires when a box's agent
+  thresholds (cpu needs two consecutive *sweep* samples). Its edge baseline is bridged across a
+  marker gap: an exiting agent removes its marker while still in the foreground, which is what
+  triggers the probe, so a session that had a state keeps it in the baseline (not in the sample)
+  or the exit would never raise `agent-done`. `onChange(cb)` fires when a box's agent
   map changes, event or not. `markSeen` turns the latest sample `idle` immediately.
   Samples carry per-session `agents` (every listed tmux session; `agentKindOf(paneCmd)` →
   `claude`|`opencode`|`codex`|`pi`|`agy`|`null` sets `present` and the entry's and events' `agent`, which event and
@@ -594,7 +604,8 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
   at most one refresh a second, more than four at once becomes a full poll — and `openLiveLink`,
   whose backoff resets only after 10 s of uptime because the server accepts an upgrade before
   refusing it). `main.ts` `liveRefresh` fetches just the nudged boxes (`api.statusOf`,
-  `api.healthSeriesOf`) and waits for a full poll already in flight; a reconnect polls everything.
+  `api.healthSeriesOf`) and waits for fleet-wide reads already in flight (`fleetReads`); a
+  reconnect polls everything. `pollEvents` is single-flight.
 - **Agent state** — `agentState.ts` (pure: `AGENT_PRECEDENCE`, `latestAgents`, `worstAgent`,
   `agentChipText`, `agentCounts`, `agentCards`, `fmtAge`; every agent surface folds through it).
 - **Dashboard** — `dashboard.ts` (standby dashboard when no pane is docked; polls only while

@@ -711,12 +711,23 @@ const freshProbe = createFreshProbe({
   },
 });
 
-// The in-flight full poll, so a /live refresh can wait for it instead of
-// racing it (see liveRefresh).
+// Fleet-wide reads in flight: the full poll, the boot's series fetch, and
+// refresh()'s status fetch. Each replaces latestStatus / latestSeries
+// wholesale, so one that was answered BEFORE a change but lands AFTER a /live
+// refresh of that box would paint the older state back until the next tick.
+// liveRefresh waits for them instead of racing them.
+const fleetReads = new Set<Promise<unknown>>();
+function trackFleet<T>(p: Promise<T>): Promise<T> {
+  fleetReads.add(p);
+  const done = () => { fleetReads.delete(p); };
+  p.then(done, done);
+  return p;
+}
+
 let pollPromise: Promise<void> | null = null;
 function pollStatus(): Promise<void> {
   if (pollPromise) return pollPromise;
-  pollPromise = pollStatusOnce().finally(() => { pollPromise = null; });
+  pollPromise = trackFleet(pollStatusOnce().finally(() => { pollPromise = null; }));
   return pollPromise;
 }
 
@@ -791,11 +802,9 @@ async function pollHealth() {
 // fetch just them — one status entry and one series each — instead of the
 // whole fleet's. `null` means "everything" (too many at once, or the link just
 // came back and whatever changed meanwhile was never announced).
-// It waits for a full poll already in flight: that poll's responses may have
-// been read before the change, and landing after this one they would paint the
-// older state back until the next tick.
+// It waits for any fleet-wide read already in flight (see fleetReads).
 async function liveRefresh(ids: string[] | null) {
-  if (pollPromise) { try { await pollPromise; } catch { /* its own business */ } }
+  while (fleetReads.size) await Promise.allSettled([...fleetReads]);
   if (ids === null) { await pollStatus(); return; }
   const known = new Set([...allBoxes.map((b) => b.id), '__local__']);
   const wanted = ids.filter((id) => known.has(id));
@@ -844,7 +853,22 @@ function stopLive() {
   liveQueue = null;
 }
 
-async function pollEvents() {
+// One events fetch at a time. A tick and a /live refresh can both ask; two
+// overlapping fetches answered out of order would roll the notification
+// cursor back (the self-heal below reads an older latestSeq as a log reset)
+// and fire the newest notification a second time. A request made while one is
+// in flight is folded into exactly one more afterwards.
+let eventsInFlight: Promise<void> | null = null;
+let eventsAgain = false;
+function pollEvents(): Promise<void> {
+  if (eventsInFlight) { eventsAgain = true; return eventsInFlight; }
+  eventsInFlight = (async () => {
+    do { eventsAgain = false; await pollEventsOnce(); } while (eventsAgain);
+  })().finally(() => { eventsInFlight = null; });
+  return eventsInFlight;
+}
+
+async function pollEventsOnce() {
   try {
     const { events, latestSeq } = await api.healthEvents();
     latestEvents = events;
@@ -1887,7 +1911,7 @@ async function renderDashboard() {
   }
   pollInterval = setInterval(pollStatus, POLL_MS);
   startLive(); // real-time nudges between the ticks above; they stay as the backstop
-  void pollHealth(); // seed sparklines + events badge without waiting a tick
+  void trackFleet(pollHealth()); // seed sparklines + events badge without waiting a tick
   void pollFleetBadge(); // and the running-jobs count on the Fleet Jobs key
 
   // Escape closes whichever drawer is open. Both used to be inescapable while
@@ -1907,7 +1931,7 @@ async function refresh() {
   // Keep the previous status/setup caches until fresh responses land — wiping
   // them here flashed every dot gray and dropped setup badges on each add/
   // edit/remove/import.
-  api.status().then((s) => { latestStatus = s; filterAndPaint(); }).catch(() => {});
+  void trackFleet(api.status().then((s) => { latestStatus = s; filterAndPaint(); }).catch(() => {}));
   api.listSetups().then((s) => { latestSetups = s; filterAndPaint(); }).catch(() => {});
   filterAndPaint();
 }
