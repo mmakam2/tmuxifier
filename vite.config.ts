@@ -30,6 +30,7 @@ export default defineConfig({
       // secure:false so a self-signed local TLS cert doesn't break the proxy.
       '/api': { target: http, secure: false },
       '/term': { target: ws, ws: true, secure: false },
+      '/live': { target: ws, ws: true, secure: false },
     },
   },
 });

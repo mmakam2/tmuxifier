@@ -6,7 +6,9 @@ import { loadConfig, requiredConfigError } from './config.js';
 import { createStore } from './store.js';
 import { createStatusChecker } from './status.js';
 import { createStatusPoller } from './statusPoller.js';
-import { createLocalAgentSampler } from './localAgent.js';
+import { createLocalAgentSampler, LOCAL_BOX_ID } from './localAgent.js';
+import { createAgentWatch, createLocalMarkWatch, WATCH_REMOTE } from './agentWatch.js';
+import { createLiveHub } from './liveHub.js';
 import { createServicesStore } from './servicesStore.js';
 import { createServiceChecker } from './serviceChecker.js';
 import { createIconStore } from './iconStore.js';
@@ -19,7 +21,7 @@ import { createLocalTmuxScope } from './localTmuxScope.js';
 import { sshRun, sshRunStdin, sshStream, sshPipe } from './sshRun.js';
 import { createVoiceLinks } from './voiceLinks.js';
 import { createBoxActions, buildEnsureSessionRemote } from './boxActions.js';
-import { buildSetupArgv } from './sshCommand.js';
+import { buildSetupArgv, buildProbeArgv } from './sshCommand.js';
 import { createSetupStore } from './setupStore.js';
 import { createSetupManager } from './setupManager.js';
 import { createFleetStore } from './fleetStore.js';
@@ -336,6 +338,39 @@ if (config.fcmCredentials) {
   const fcmPush = createFcmPush({ credentialsPath: config.fcmCredentials, deviceStore });
   history.onEvent((e) => { fcmPush.notify(e).catch(() => {}); });
 }
+// Real-time nudges to open tabs (liveHub.js, the /live WebSocket): every
+// health event names its box, so a tab refreshes that box at once instead of
+// at its next 30 s poll.
+const liveHub = createLiveHub();
+history.onEvent((e) => { liveHub.publish(e.boxId); });
+// Real-time agent state from the boxes (agentWatch.js): one resident stream
+// per reachable box that reports a marker change; the answer is one light
+// probe of that box and a nudge to the tabs. The Host Shell's markers are this
+// machine's own files, watched directly. TMUXIFIER_AGENT_WATCH=off removes
+// both and leaves agent state on the sweep's cadence.
+const refreshAgents = async (boxId) => {
+  if (await statusPoller.refreshAgents(boxId)) liveHub.publish(boxId);
+};
+const agentWatch = config.agentWatch
+  ? createAgentWatch({
+    spawnStream: (box, { onData }) => sshStream(
+      buildProbeArgv(box, WATCH_REMOTE, {
+        hostKeyPolicy: config.hostKeyPolicy,
+        sshConfigFile: config.sshConfigFile,
+        controlDir: config.controlDir,
+        controlPersist: config.controlPersist,
+      }),
+      { timeout: 0, onData },
+    ),
+    onChange: refreshAgents,
+  })
+  : null;
+const localMarkWatch = config.agentWatch
+  ? createLocalMarkWatch({
+    dir: path.join(os.homedir(), '.tmuxifier-agent'),
+    onChange: () => refreshAgents(LOCAL_BOX_ID),
+  })
+  : null;
 // One server-side poll loop drives all status probing; the /api/status handler
 // just serves its snapshot, so SSH volume no longer scales with open tab count.
 const statusPoller = createStatusPoller({
@@ -348,6 +383,12 @@ const statusPoller = createStatusPoller({
   // host's tmux sessions and agent markers directly and rides the history
   // rails as a `__local__` pseudo-box — history only, never /api/status.
   localAgent: createLocalAgentSampler(),
+  // Streams start and stop here and nowhere else, so their connection rate is
+  // the sweep's: a box the sweep found up gets a watch, any other loses it.
+  onCycle: (boxes, snapshot) => {
+    agentWatch?.sync(boxes, snapshot);
+    localMarkWatch?.ensure();
+  },
   // Runs the PVE inventory refresh alongside each SSH probe cycle so linked
   // boxes get grey "Stopped" status instead of a red connection failure. See
   // mergeProxmoxStatus in proxmoxInventory.js for the merge truth table.
@@ -377,12 +418,12 @@ const iconStore = createIconStore({
   cacheDir: path.join(config.dataDir, 'icons'),
 });
 
-const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, uiSettingsStore, deviceStore, apkBuildManager, voiceLinks });
+const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, uiSettingsStore, deviceStore, apkBuildManager, voiceLinks, liveHub });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
 app.setNotFoundHandler((req, reply) => {
-  if (req.raw.url?.startsWith('/api') || req.raw.url?.startsWith('/term') || req.raw.url?.startsWith('/voice-link')) return reply.code(404).send({ error: 'not found' });
+  if (req.raw.url?.startsWith('/api') || req.raw.url?.startsWith('/term') || req.raw.url?.startsWith('/voice-link') || req.raw.url?.startsWith('/live')) return reply.code(404).send({ error: 'not found' });
   return reply.sendFile('index.html');
 });
 
@@ -415,6 +456,9 @@ app.listen({ host: config.bindAddress, port: config.port })
         () => immichRegistry.closeAll(),
         // Drop every voice link so no box-side writer outlives the server.
         () => { voiceLinks.closeAll(); return Promise.resolve(); },
+        // End the agent watch streams (each box-side loop then exits at its
+        // next beat) and tell the tabs to reconnect rather than time out.
+        () => { agentWatch?.stopAll(); localMarkWatch?.close(); liveHub.closeAll(1001, 'restarting'); return Promise.resolve(); },
       ],
       voiceEngine: { stop: async () => { if (voiceEngine) await voiceEngine.stop(); } },
     });

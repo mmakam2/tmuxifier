@@ -116,7 +116,7 @@ const NO_FLEET_SCRIPTS = {
   removeScript: async () => {},
 };
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, paneKindLocal = paneKindLocalDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, uiSettingsStore = null, deviceStore = null, deviceHostGuard = createDeviceHostGuard(), pairingCodes = null, apkBuildManager = null, voiceLinks = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, paneKindLocal = paneKindLocalDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, uiSettingsStore = null, deviceStore = null, deviceHostGuard = createDeviceHostGuard(), pairingCodes = null, apkBuildManager = null, voiceLinks = null, liveHub = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -739,6 +739,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     // active, so the revocation holds for this process either way.
     sessionsInvalidBeforeMs = Date.now();
     try { writeJsonSync(authStateFile, { sessionsInvalidBeforeMs }); } catch { /* keep in-memory watermark */ }
+    // A /live stream is authenticated once, at its upgrade, so the sessions
+    // just revoked would otherwise keep receiving nudges until their renewal.
+    try { liveHub?.closeAll(1008, 'logged out'); } catch { /* best-effort */ }
     return { ok: true };
   });
 
@@ -1806,7 +1809,15 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     // src/server/statusPoller.js. index.js always wires a poller; tests stub
     // one — there is no on-demand probing fallback anymore.
     if (!statusPoller) return reply.code(503).send({ error: 'status poller unavailable' });
-    return statusPoller.getSnapshot();
+    const snapshot = statusPoller.getSnapshot();
+    // `?box=` narrows to one entry, in the same `{ [id]: entry }` shape as the
+    // health series route — what a tab fetches when /live names a box, so a
+    // nudge costs one small response instead of the whole fleet's.
+    const box = req.query?.box;
+    if (typeof box === 'string' && box) {
+      return Object.hasOwn(snapshot, box) ? { [box]: snapshot[box] } : {};
+    }
+    return snapshot;
   });
 
   // Rolling per-box health series (for row sparklines) and the in-app events
@@ -1830,6 +1841,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (!history?.markSeen(req.params.id, session, ts)) {
       return reply.code(400).send({ error: 'nothing to acknowledge' });
     }
+    // markSeen already turned the latest sample idle; tell the other tabs so
+    // looking at a finished turn in one place clears it everywhere at once.
+    liveHub?.publish(req.params.id);
     return { ok: true };
   });
 
@@ -2322,6 +2336,29 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       onSocketClose = () => link.close(1000, 'closed');
       if (socketClosed || socket.readyState !== 1) { markClosed(); return; }
       socket.on('message', (raw, isBinary) => { if (isBinary) link.write(raw); });
+    });
+
+    // Real-time nudges (liveHub.js): "box X changed", nothing more. The tab
+    // answers by fetching that box through the ordinary routes. Browser
+    // sessions only — isAuthed is the cookie check, so a device token cannot
+    // open it — with the same Origin gate as /term. Nothing a tab sends is
+    // read; the stream is one-way.
+    scope.get('/live', { websocket: true }, (socket, req) => {
+      if (!hasTrustedOrigin(req)) { socket.close(1008, 'forbidden origin'); return; }
+      if (!isAuthed(req)) { socket.close(1008, 'unauthorized'); return; }
+      if (!liveHub) { socket.close(1011, 'live unavailable'); return; }
+      const client = {
+        send: (text) => { if (socket.readyState === 1) socket.send(text); },
+        ping: () => { if (socket.readyState === 1) socket.ping(); },
+        close: (code, reason) => socket.close(code, reason),
+        terminate: () => socket.terminate(),
+      };
+      const remove = liveHub.add(client);
+      if (!remove) { socket.close(1013, 'too many live clients'); return; }
+      socket.on('pong', () => liveHub.alive(client));
+      socket.once('close', remove);
+      socket.once('error', remove);
+      socket.on('message', () => { /* one-way: ignored */ });
     });
   });
 

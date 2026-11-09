@@ -17,6 +17,7 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | host-key policy | `TMUXIFIER_HOSTKEY_POLICY` | `accept-new` |
 | status probe concurrency | `TMUXIFIER_STATUS_CONCURRENCY` | `4` |
 | status poll interval (ms) | `TMUXIFIER_STATUS_POLL_MS` | `30000` |
+| real-time agent state (`on`/`off`) | `TMUXIFIER_AGENT_WATCH` | `on` |
 | service check sweep interval (ms, min 5000) | `TMUXIFIER_SERVICE_POLL_MS` | `30000` |
 | SSH ControlPersist seconds | `TMUXIFIER_CONTROL_PERSIST` | `600` |
 | terminal font family | `TMUXIFIER_TERM_FONT` | (bundled font) |
@@ -74,7 +75,7 @@ their IP.
 
 As an alternative to `.env`, a `config.json` in the repo root works too, using camelCase keys
 (`passwordHash`, `cookieSecret`, `bindAddress`, `port`, `graceSeconds`, `hostKeyPolicy`, `trustProxy`,
-`statusConcurrency`, `statusPollMs`, `servicePollMs`, `controlPersist`, `termFont`, `termFontSize`, `fleetConcurrency`, `fleetTimeoutMs`,
+`statusConcurrency`, `statusPollMs`, `agentWatch`, `servicePollMs`, `controlPersist`, `termFont`, `termFontSize`, `fleetConcurrency`, `fleetTimeoutMs`,
 `fleetMaxJobs`, `fleetMaxOutputBytes`, `healthHistoryMax`, `healthEventsMax`, `healthCpuWarnPct`,
 `healthMemWarnPct`, `healthDiskWarnPct`, `healthThresholdHysteresisPct`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
 `pveLeaseTimeoutMs`, `pveMaxJobs`, `pveDefaultPubKeyPath`, `authMode`, `publicUrl`, `rpId`,

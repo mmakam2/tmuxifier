@@ -614,3 +614,16 @@ test('servicePollMs defaults to 30000, reads TMUXIFIER_SERVICE_POLL_MS, and reje
   // direct construction.
   expect(loadConfig({}, { env: { TMUXIFIER_SERVICE_POLL_MS: '10' }, cwd: '/nonexistent' }).servicePollMs).toBe(30000);
 });
+
+// Real-time agent state (agentWatch.js): on unless explicitly switched off.
+test('agentWatch defaults on and TMUXIFIER_AGENT_WATCH=off disables it', () => {
+  const at = (env, over = {}) => loadConfig(over, { env, cwd: '/app' }).agentWatch;
+  expect(at({})).toBe(true);
+  for (const v of ['off', 'OFF', ' off ', 'false', '0', 'no']) expect(at({ TMUXIFIER_AGENT_WATCH: v })).toBe(false);
+  for (const v of ['on', 'true', '1', '', 'banana']) expect(at({ TMUXIFIER_AGENT_WATCH: v })).toBe(true);
+  // config.json / overrides hand it through raw: a real boolean, or the same words.
+  expect(at({}, { agentWatch: false })).toBe(false);
+  expect(at({}, { agentWatch: 'off' })).toBe(false);
+  expect(at({}, { agentWatch: true })).toBe(true);
+  expect(at({ TMUXIFIER_AGENT_WATCH: 'off' }, { agentWatch: true })).toBe(true); // overrides win
+});
