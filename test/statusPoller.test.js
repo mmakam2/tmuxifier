@@ -619,3 +619,195 @@ test('probeOne overlapping pollOnce does not strip proxmoxState=stopped from oth
   expect(poller.getSnapshot().b2.proxmoxState).toBe('stopped');
   expect(history.getEvents({}).events).toEqual([]); // no false down event on b2
 });
+
+// --- refreshAgents: the real-time path (agentWatch.js -> one light probe) ----
+
+const rtBox = { id: 'a', label: 'A', host: 'ha', sessionName: 'web' };
+const sess = (cmd = 'claude', attached = false) => [{ name: 'web', windows: 1, attached, paneCmd: cmd }];
+const full = (state, cause, ts, extra = {}) => ({
+  reachable: true, tmux: true, sessions: sess(), agentMarks: { web: { state, cause, ts } }, metrics: { cpus: 2 }, ...extra,
+});
+const light = (state, cause, ts) => ({ tmux: true, sessions: sess(), agentMarks: { web: { state, cause, ts } } });
+const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+
+test('refreshAgents patches sessions and markers into the snapshot and records the edge', async () => {
+  const history = createHealthHistory({ now: () => 5 });
+  const statusChecker = {
+    checkBox: async () => full('working', 'prompt', 100),
+    checkAgents: async () => light('blocked', 'permission', 101),
+  };
+  const poller = createStatusPoller({ store: fakeStore([rtBox]), statusChecker, history });
+  await poller.pollOnce();
+  const before = poller.getSnapshot();
+  expect(await poller.refreshAgents('a')).toBe(true);
+  const after = poller.getSnapshot();
+  expect(after).not.toBe(before);                    // readers never see a snapshot mutate
+  expect(before.a.agentMarks.web.state).toBe('working');
+  expect(after.a.agentMarks.web).toEqual({ state: 'blocked', cause: 'permission', ts: 101 });
+  expect(after.a.metrics).toEqual({ cpus: 2 });      // the sweep's fields survive
+  expect(after.a.reachable).toBe(true);
+  expect(history.getSeries('a')).toHaveLength(1);
+  expect(history.getSeries('a')[0].agents.web.state).toBe('blocked');
+  expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
+});
+
+test('refreshAgents drops markers the box no longer has', async () => {
+  const statusChecker = {
+    checkBox: async () => full('ready', 'stop', 100),
+    checkAgents: async () => ({ tmux: true, sessions: sess('zsh') }),
+  };
+  const poller = createStatusPoller({ store: fakeStore([rtBox]), statusChecker });
+  await poller.pollOnce();
+  expect(await poller.refreshAgents('a')).toBe(true);
+  expect(poller.getSnapshot().a).not.toHaveProperty('agentMarks');
+  expect(poller.getSnapshot().a.sessions[0].paneCmd).toBe('zsh');
+});
+
+test('refreshAgents never probes or marks down: unknown, unreachable and failed boxes are left to the sweep', async () => {
+  let light1 = 0;
+  let mode = 'down';
+  const statusChecker = {
+    checkBox: async () => (mode === 'down' ? { reachable: false, error: 'refused' } : full('working', 'prompt', 1)),
+    checkAgents: async () => { light1 += 1; return null; },
+  };
+  const poller = createStatusPoller({ store: fakeStore([rtBox]), statusChecker });
+  expect(await poller.refreshAgents('nope')).toBe(false);
+  expect(await poller.refreshAgents('a')).toBe(false);   // never swept
+  await poller.pollOnce();
+  expect(await poller.refreshAgents('a')).toBe(false);   // swept, and down
+  expect(light1).toBe(0);
+  mode = 'up';
+  await poller.pollOnce();
+  const snap = poller.getSnapshot();
+  expect(await poller.refreshAgents('a')).toBe(false);   // light probe failed
+  expect(light1).toBe(1);
+  expect(poller.getSnapshot()).toBe(snap);               // and nothing was touched
+});
+
+test('a sweep that read the box BEFORE a refresh cannot overwrite the refresh with older state', async () => {
+  // The sweep probes `a` (still working), a marker changes, the refresh reads
+  // blocked and records it — and only then does the sweep, held up by a slow
+  // box, swap its snapshot in. Without the guard the board would flip back to
+  // working and the NEXT sweep would notify "blocked" a second time.
+  const history = createHealthHistory({ now: () => 5 });
+  const slow = deferred();
+  let sweeps = 0;
+  const statusChecker = {
+    checkBox: async (b) => {
+      if (b.id === 'slow') { sweeps += 1; if (sweeps === 2) await slow.promise; return { reachable: true, tmux: true, sessions: [] }; }
+      return full('working', 'prompt', 100);
+    },
+    checkAgents: async () => light('blocked', 'permission', 101),
+  };
+  const poller = createStatusPoller({ store: fakeStore([rtBox, { id: 'slow', host: 'hs' }]), statusChecker, history, concurrency: 4 });
+  await poller.pollOnce();
+  const sweep = poller.pollOnce();
+  await new Promise((r) => setTimeout(r, 10));        // `a` has been read; `slow` is pending
+  expect(await poller.refreshAgents('a')).toBe(true);
+  slow.resolve();
+  await sweep;
+  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('blocked');
+  expect(poller.getSnapshot().a.metrics).toEqual({ cpus: 2 }); // the sweep's own fields still land
+  expect(history.getSeries('a').at(-1).agents.web.state).toBe('blocked');
+  expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
+});
+
+test('a sweep that read the box AFTER a refresh wins: it is the newer read', async () => {
+  let state = ['working', 'prompt', 100];
+  const statusChecker = {
+    checkBox: async () => full(...state),
+    checkAgents: async () => light('blocked', 'permission', 101),
+  };
+  const poller = createStatusPoller({ store: fakeStore([rtBox]), statusChecker });
+  await poller.pollOnce();
+  await poller.refreshAgents('a');
+  state = ['ready', 'stop', 102];
+  await poller.pollOnce();
+  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('ready');
+});
+
+test('a refresh overtaken by a sweep re-reads instead of applying its older answer', async () => {
+  // The refresh's probe is in flight while a whole sweep runs and swaps. Its
+  // answer predates the sweep's, so applying it would move state backwards.
+  const history = createHealthHistory({ now: () => 5 });
+  const first = deferred();
+  let lights = 0;
+  let state = ['working', 'prompt', 100];
+  const statusChecker = {
+    checkBox: async () => full(...state),
+    checkAgents: async () => {
+      lights += 1;
+      if (lights === 1) { await first.promise; return light('blocked', 'permission', 101); }
+      return light('ready', 'stop', 102);
+    },
+  };
+  const poller = createStatusPoller({ store: fakeStore([rtBox]), statusChecker, history });
+  await poller.pollOnce();
+  const refresh = poller.refreshAgents('a');
+  await new Promise((r) => setTimeout(r, 5));
+  state = ['ready', 'stop', 102];
+  await poller.pollOnce();                            // sweep sees the turn finish
+  first.resolve();
+  expect(await refresh).toBe(true);
+  expect(lights).toBe(2);
+  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('ready');
+  // working -> done once. Never a stale "blocked" after the fact.
+  expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']);
+});
+
+test('onCycle runs after every sweep with the boxes and the fresh snapshot, and cannot break the sweep', async () => {
+  const seen = [];
+  const statusChecker = { checkBox: async () => ({ reachable: true }) };
+  const poller = createStatusPoller({
+    store: fakeStore([rtBox]), statusChecker,
+    onCycle: (boxes, snap) => { seen.push([boxes.map((b) => b.id), snap]); throw new Error('boom'); },
+  });
+  const snap = await poller.pollOnce();
+  expect(seen).toEqual([[['a'], snap]]);
+  await poller.pollOnce();
+  expect(seen).toHaveLength(2);
+});
+
+test('refreshAgents for the Host Shell samples locally and records without touching the snapshot', async () => {
+  const history = createHealthHistory({ now: () => 5 });
+  let local = { reachable: true, tmux: true, sessions: [{ name: 'local', windows: 1, attached: false, paneCmd: 'claude' }, { name: 'other', windows: 1, attached: false, paneCmd: 'claude' }], agentMarks: { local: { state: 'working', cause: 'prompt', ts: 100 }, other: { state: 'working', cause: 'prompt', ts: 100 } } };
+  const poller = createStatusPoller({
+    store: fakeStore([]), statusChecker: { checkBox: async () => ({ reachable: true }) }, history,
+    localAgent: { sample: async () => local },
+  });
+  await poller.pollOnce();
+  local = { ...local, agentMarks: { local: { state: 'blocked', cause: 'question', ts: 101 }, other: { state: 'blocked', cause: 'question', ts: 101 } } };
+  expect(await poller.refreshAgents('__local__')).toBe(true);
+  expect(poller.getSnapshot()).toEqual({});           // the Host Shell never enters /api/status
+  const last = history.getSeries('__local__').at(-1);
+  expect(last.agents.local.state).toBe('blocked');
+  expect(last.agents).not.toHaveProperty('other');    // only the Host Shell's own session is tracked
+  expect(history.getEvents().events.map((e) => [e.kind, e.boxId, e.session])).toEqual([['agent-blocked', '__local__', 'local']]);
+});
+
+test('a sweep whose Host Shell sample predates a local refresh does not move it backwards', async () => {
+  const history = createHealthHistory({ now: () => 5 });
+  const mk = (state, cause, ts) => ({ reachable: true, tmux: true, sessions: [{ name: 'local', windows: 1, attached: false, paneCmd: 'claude' }], agentMarks: { local: { state, cause, ts } } });
+  const held = deferred();
+  let n = 0;
+  const poller = createStatusPoller({
+    store: fakeStore([]), statusChecker: { checkBox: async () => ({ reachable: true }) }, history,
+    localAgent: { sample: async () => { n += 1; if (n === 2) { await held.promise; return mk('working', 'prompt', 100); } return n === 1 ? mk('working', 'prompt', 100) : mk('blocked', 'question', 101); } },
+  });
+  await poller.pollOnce();                            // n=1: working
+  const sweep = poller.pollOnce();                    // n=2: reads working, held
+  await new Promise((r) => setTimeout(r, 5));
+  expect(await poller.refreshAgents('__local__')).toBe(true); // n=3: blocked
+  held.resolve();
+  await sweep;
+  expect(history.getSeries('__local__').at(-1).agents.local.state).toBe('blocked');
+  expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
+});
+
+test('refreshAgents for the Host Shell is false when no sampler is configured or it yields nothing', async () => {
+  const none = createStatusPoller({ store: fakeStore([]), statusChecker: { checkBox: async () => ({}) } });
+  expect(await none.refreshAgents('__local__')).toBe(false);
+  const empty = createStatusPoller({ store: fakeStore([]), statusChecker: { checkBox: async () => ({}) }, history: createHealthHistory(), localAgent: { sample: async () => null } });
+  await empty.pollOnce();
+  expect(await empty.refreshAgents('__local__')).toBe(false);
+});
