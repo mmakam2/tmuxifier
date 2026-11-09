@@ -587,12 +587,26 @@ test('agentKindOf: codex and pi are agents, lookalikes are not', () => {
   expect(agentKindOf('pip')).toBeNull(); expect(agentKindOf('node')).toBeNull();
 });
 
+test('agentKindOf: agy is an agent, lookalikes are not', () => {
+  expect(agentKindOf('agy')).toBe('agy'); expect(agentKindOf('agy-x')).toBe('agy');
+  expect(agentKindOf('agyx')).toBeNull(); expect(agentKindOf('agy2')).toBeNull();
+  expect(agentKindOf('mcp-agy')).toBeNull();
+});
+
+test('OSC reporter asset agent_kind: agy matches like agentKindOf', () => {
+  const asset = new URL('../src/server/assets/tmuxifier-osc-reporter.py', import.meta.url).pathname;
+  const script = 'import importlib.util,json,sys\nsys.dont_write_bytecode=True\n'
+    + 'spec=importlib.util.spec_from_file_location("r",sys.argv[1])\nm=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(m)\n'
+    + "print(json.dumps([m.agent_kind(c, '/nonexistent') for c in ['agy','agy-x','agyx','mcp-agy']]))";
+  expect(JSON.parse(execFileSync('python3', ['-c', script, asset], { encoding: 'utf8' }))).toEqual(['agy', 'agy', null, null]);
+});
+
 test('agentKindOf: pinned to the OSC reporter asset OSC_AGENTS keys', () => {
   const asset = new URL('../src/server/assets/tmuxifier-osc-reporter.py', import.meta.url).pathname;
   const script = 'import importlib.util,json,sys\nsys.dont_write_bytecode=True\n'
     + 'spec=importlib.util.spec_from_file_location("r",sys.argv[1])\nm=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(m)\n'
     + 'print(json.dumps(sorted(m.OSC_AGENTS)))';
   const keys = JSON.parse(execFileSync('python3', ['-c', script, asset], { encoding: 'utf8' }));
-  expect(keys).toEqual(['codex', 'opencode', 'pi']);
+  expect(keys).toEqual(['agy', 'codex', 'opencode', 'pi']);
   for (const k of keys) expect(agentKindOf(k)).toBe(k);
 });

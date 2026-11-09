@@ -97,6 +97,8 @@ test('buildFcmMessage: titles and bodies name the agent', () => {
   expect(m({ kind: 'agent-blocked', session: 'web-2', cause: 'permission', agent: 'opencode' }).title).toBe('workbox — OpenCode needs you');
   expect(m({ kind: 'agent-blocked', session: 'w', cause: 'permission', agent: 'codex' }).title).toBe('workbox — Codex needs you');
   expect(m({ kind: 'agent-blocked', session: 'w', cause: 'permission', agent: 'pi' }).title).toBe('workbox — pi needs you');
+  expect(m({ kind: 'agent-blocked', session: 'w', cause: 'question', agent: 'agy' })).toEqual({ title: 'workbox — Antigravity needs you', body: 'Question prompt in w' });
+  expect(m({ kind: 'agent-done', session: 'w', agent: 'agy' }).body).toBe('Antigravity exited in w.');
   expect(m({ kind: 'agent-input', session: 'web-2' })).toEqual({ title: 'workbox — Claude is waiting', body: 'Claude wants your input in web-2.' });
   expect(m({ kind: 'agent-done', session: 'web-2', agent: 'opencode' }).body).toBe('OpenCode exited in web-2.');
 });

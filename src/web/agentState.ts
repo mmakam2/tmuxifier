@@ -7,7 +7,7 @@ import type { AgentState, AgentCause, AgentEntry, AgentKind, Sample } from './ap
 
 // The single precedence list, worst (most attention-demanding) first. A box
 // with one blocked and one working session reads blocked.
-export const AGENT_LABEL: Record<AgentKind, string> = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', pi: 'pi' };
+export const AGENT_LABEL: Record<AgentKind, string> = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', pi: 'pi', agy: 'Antigravity' };
 export const AGENT_PRECEDENCE: AgentState[] = ['blocked', 'done', 'working', 'idle'];
 
 const rank = (s: AgentState): number => AGENT_PRECEDENCE.indexOf(s);

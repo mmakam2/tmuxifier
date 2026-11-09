@@ -49,7 +49,7 @@ export interface Status {
 // apart from a genuinely reachable box.
 export type AgentState = 'working' | 'blocked' | 'done' | 'idle';
 export type AgentCause = 'prompt' | 'resume' | 'stop' | 'start' | 'permission' | 'question' | 'elicitation' | 'unblock';
-export type AgentKind = 'claude' | 'opencode' | 'codex' | 'pi';
+export type AgentKind = 'claude' | 'opencode' | 'codex' | 'pi' | 'agy';
 export interface AgentEntry { present: boolean; agent?: AgentKind; attached: boolean; state?: AgentState; cause?: AgentCause; ts?: number }
 export interface Sample {
   t: number; up: boolean; stopped?: boolean; tmux?: boolean; needsAuth?: boolean; keyChanged?: boolean;

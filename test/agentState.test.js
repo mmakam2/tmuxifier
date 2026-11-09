@@ -31,6 +31,10 @@ test('fmtAge', () => {
   expect(fmtAge(1000, 1000 * 1000 + 3 * 86400_000)).toBe('3d');
 });
 
+test('AGENT_LABEL names agy Antigravity', () => {
+  expect(AGENT_LABEL.agy).toBe('Antigravity');
+});
+
 test('AGENT_LABEL names codex and pi', () => {
   expect(AGENT_LABEL.codex).toBe('Codex'); expect(AGENT_LABEL.pi).toBe('pi');
 });

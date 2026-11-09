@@ -16,7 +16,7 @@ const SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 const GRANT = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
 const KINDS = new Set(NOTIFY_KINDS);
 // Inline on purpose: the server must not import web code.
-const AGENT_LABEL = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', pi: 'pi' };
+const AGENT_LABEL = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', pi: 'pi', agy: 'Antigravity' };
 const agentLabel = (event) => (Object.hasOwn(AGENT_LABEL, event.agent) ? AGENT_LABEL[event.agent] : 'Claude');
 const titleOf = (event) => {
   if (event.kind === 'agent-blocked') return `${agentLabel(event)} needs you`;

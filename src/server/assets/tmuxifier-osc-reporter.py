@@ -24,7 +24,7 @@
 # drops the sequence and answers DA1 on its own. Programs that probe first
 # (OSC 7501 ; ? then DA1) therefore conclude "unsupported" inside tmux and stay
 # silent — Claude Code is one; its state belongs to the hook. Programs that
-# report unprobed (Codex, pi with PI_PROGRAM_STATUS=1, OpenCode) are visible.
+# report unprobed (Codex, pi with PI_PROGRAM_STATUS=1, OpenCode, agy with AGY_CLI_OSC7501=on) are visible.
 #
 # Caveat: OpenCode's root record aggregates EVERY session of the user's shared
 # `opencode serve`, so a root `blocked` may belong to a pane that no longer
@@ -47,7 +47,8 @@ import time
 TAIL_CAP = 4096
 STATES = frozenset(('idle', 'working', 'done', 'blocked', 'error', 'clear'))
 KINDS = frozenset(('permission', 'question', 'auth'))
-OSC_AGENTS = {'codex': r'^codex(-|$)', 'pi': r'^pi(-|$)', 'opencode': r'^opencode(-|$)'}
+OSC_AGENTS = {'codex': r'^codex(-|$)', 'pi': r'^pi(-|$)', 'opencode': r'^opencode(-|$)',
+              'agy': r'^agy(-|$)'}
 
 KIND_CAUSE = {'permission': 'permission', 'question': 'question', 'auth': 'elicitation', None: 'permission'}
 CAUSE_KIND = {'permission': 'permission', 'question': 'question', 'elicitation': 'auth'}
