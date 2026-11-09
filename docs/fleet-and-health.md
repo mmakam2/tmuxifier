@@ -62,15 +62,16 @@ opened. Events survive restarts in `data/health-events.json`; the sample series 
 only. Tune with `TMUXIFIER_HEALTH_HISTORY_MAX`, `TMUXIFIER_HEALTH_EVENTS_MAX`,
 `TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT`, and `TMUXIFIER_HEALTH_HYSTERESIS_PCT`.
 
-Tmuxifier also tracks the coding agent — Claude Code, OpenCode, Codex, pi or Antigravity — on **every tmux session** of a
-box that has an agent pane (not just the configured one), and on the Host Shell. A session counts
-when the active pane of its current window runs `claude` or `opencode`. Both agents report the same
-four states:
+Tmuxifier also tracks the coding agent — Claude Code, OpenCode, Codex, pi or Antigravity — on
+**every tmux session** of a box that has an agent pane (not just the configured one), and on the
+Host Shell. A session counts when the active pane of its current window runs `claude`,
+`opencode`, `codex`, `pi` or `agy`. They all report the same four states:
 
 - **working** — the agent is on a turn.
 - **blocked** — the agent needs you. The cause is shown: `permission` (a permission prompt,
-  reported the moment the agent asks), `question` (Claude's AskUserQuestion or OpenCode's question
-  tool, or a background agent asking), or `elicitation` (an MCP elicitation dialog).
+  reported the moment the agent asks), `question` (Claude's AskUserQuestion, OpenCode's or
+  Antigravity's question tool, or a background agent asking), or `elicitation` (an MCP
+  elicitation dialog, or Antigravity's sign-in menu).
 - **done** — a turn finished and you haven't looked at it yet.
 - **idle** — the session just started, or a finished turn you have looked at.
 
