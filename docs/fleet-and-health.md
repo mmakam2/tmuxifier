@@ -62,7 +62,7 @@ opened. Events survive restarts in `data/health-events.json`; the sample series 
 only. Tune with `TMUXIFIER_HEALTH_HISTORY_MAX`, `TMUXIFIER_HEALTH_EVENTS_MAX`,
 `TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT`, and `TMUXIFIER_HEALTH_HYSTERESIS_PCT`.
 
-Tmuxifier also tracks the coding agent — Claude Code or OpenCode — on **every tmux session** of a
+Tmuxifier also tracks the coding agent — Claude Code, OpenCode, Codex, pi or Antigravity — on **every tmux session** of a
 box that has an agent pane (not just the configured one), and on the Host Shell. A session counts
 when the active pane of its current window runs `claude` or `opencode`. Both agents report the same
 four states:

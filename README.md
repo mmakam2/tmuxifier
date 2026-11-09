@@ -233,7 +233,7 @@ phone gets everything else. Details in [the Android app guide](docs/android-app.
 ## MCP server
 `src/mcp/index.js` is a dependency-free stdio [MCP](https://modelcontextprotocol.io) server
 that lets Claude Code (or any MCP client) operate the fleet: list boxes and their agent states
-(Claude Code or OpenCode), read panes, send prompts and keys to the agent sessions on boxes, run
+(Claude Code, OpenCode, Codex, pi or Antigravity), read panes, send prompts and keys to the agent sessions on boxes, run
 fleet commands, start setup jobs, provision guests and operate guest power — with blocking `wait_for_agent` /
 `wait_for_job` tools so one call replaces a polling loop. Register that file as the command —
 `claude mcp add tmuxifier -- node /path/to/tmuxifier/src/mcp/index.js` — from any directory;
