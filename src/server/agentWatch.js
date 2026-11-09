@@ -23,9 +23,14 @@ import fs from 'node:fs';
 // Known cost: the stream holds one session on the box's multiplexed connection
 // for as long as it lives, and sshd allows `MaxSessions` (default 10) per
 // connection. Terminals, probes, uploads and Fleet runs share that budget, so a
-// box with eight viewers attached has one slot less than it used to. A stream
-// that is itself refused just dies and backs off; agent state for that box
-// falls back to the sweep.
+// box with eight viewers attached has one slot less than it used to. When the
+// connection is full, ssh does not fail: it says "Session open refused by peer"
+// and quietly opens a connection of its own, so a refused stream would sit on
+// a private TCP connection for good and every probe behind it would pay a
+// fresh handshake. Seeing that message — on the stream's own stderr, or
+// reported by the light probe through yield() — drops the box's stream and
+// holds it for a few minutes, handing the slot back. Agent state for that box
+// rides the sweep meanwhile.
 
 const TICK_MAX = 60;
 const BEAT_MAX = 100000;
@@ -68,6 +73,11 @@ export const WATCH_REMOTE = `exec sh -c '${buildWatchScript()}'`;
 
 // Longest partial line kept between chunks. A real line is one character.
 const LINE_MAX = 64;
+
+// ssh's own words when the multiplexed connection has no session slot left.
+export const MUX_REFUSED_RE = /Session open refused by peer/i;
+// How much stderr is remembered to match that across chunk boundaries.
+const STDERR_TAIL = 512;
 
 // Serialises a box's refreshes: one at a time, starts at least `minGapMs`
 // apart, and a request that arrives while one runs is folded into exactly one
@@ -129,11 +139,14 @@ export function createAgentWatch({
   // A stream that dies young (no `sh`, no `head`, a refused channel) is held
   // off for retryBaseMs, doubling per consecutive failure up to retryCapMs.
   retryBaseMs = 30000, retryCapMs = 30 * 60 * 1000, healthyMs = 60000,
+  // How long a box is left alone after its connection was found saturated.
+  yieldMs = 5 * 60 * 1000,
   now = () => Date.now(),
   setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout,
 }) {
   const watchers = new Map(); // boxId -> entry
   const holds = new Map();    // boxId -> { fails, until }
+  let closed = false;         // stopAll() is final: a late sync starts nothing
 
   function failed(boxId) {
     const fails = (holds.get(boxId)?.fails ?? 0) + 1;
@@ -161,16 +174,29 @@ export function createAgentWatch({
     try { entry.handle?.kill(); } catch { /* already gone */ }
   }
 
+  // Give the box its session slot back and leave it alone for a while.
+  function yieldBox(boxId) {
+    const entry = watchers.get(boxId);
+    if (entry) stop(boxId, entry);
+    holds.set(boxId, { fails: holds.get(boxId)?.fails ?? 0, until: now() + yieldMs });
+  }
+
   function start(box) {
     const boxId = box.id;
     const entry = {
-      sig: sigOf(box), buf: '', stopped: false, handle: null,
+      sig: sigOf(box), buf: '', err: '', stopped: false, handle: null,
       startedAt: now(), lastBeat: now(),
       trigger: createTrigger({ run: () => onChange(boxId), minGapMs, now, setTimeoutFn, clearTimeoutFn }),
     };
     try {
       entry.handle = spawnStream(box, {
-        onData: (chunk, stream) => { if (stream === 'stdout') feed(entry, String(chunk)); },
+        onData: (chunk, stream) => {
+          if (stream === 'stdout') { feed(entry, String(chunk)); return; }
+          // stderr is never a report. It is read for one thing only.
+          if (entry.stopped) return;
+          entry.err = (entry.err + String(chunk)).slice(-STDERR_TAIL);
+          if (MUX_REFUSED_RE.test(entry.err)) yieldBox(boxId);
+        },
       });
     } catch {
       entry.trigger.stop();
@@ -193,6 +219,7 @@ export function createAgentWatch({
   return {
     // boxes: the store's list; snapshot: the sweep's result keyed by box id.
     sync(boxes, snapshot) {
+      if (closed) return;
       const want = new Map();
       for (const b of boxes || []) {
         const s = snapshot?.[b.id];
@@ -211,7 +238,10 @@ export function createAgentWatch({
       const known = new Set((boxes || []).map((b) => b.id));
       for (const id of [...holds.keys()]) if (!known.has(id)) holds.delete(id);
     },
+    // The light probe saw the box's connection refuse a session.
+    yield(boxId) { if (!closed) yieldBox(boxId); },
     stopAll() {
+      closed = true;
       for (const [id, entry] of [...watchers]) stop(id, entry);
       holds.clear();
     },
@@ -222,40 +252,64 @@ export function createAgentWatch({
 // The Host Shell has no ssh channel: its markers are this machine's own files,
 // so the directory is watched directly. `ensure()` is called after every sweep
 // — the directory does not exist until the hook first runs, and a watch dies
-// with the directory it was on. Events are debounced: one marker write is a
-// temp file plus a rename.
+// with the directory it was on. Events are debounced (one marker write is a
+// temp file plus a rename) and then serialised like a box's: the Host Shell
+// sampler runs a python sweep first and easily outlasts the debounce, so
+// without the trigger two refreshes would overlap.
+//
+// A directory fd is held for as long as the watch lives. It is how `ensure()`
+// tells a directory that was removed and recreated — same path, different
+// directory, and a watch that will never fire again — from the one it is
+// watching: while the fd is open the old inode number cannot be reused.
 export function createLocalMarkWatch({
-  dir, onChange, debounceMs = 250, watch = fs.watch, exists = fs.existsSync,
+  dir, onChange, debounceMs = 250, minGapMs = 1000, watch = fs.watch,
+  now = () => Date.now(),
   setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout,
 }) {
   let watcher = null;
+  let fd = null;
   let timer = null;
-  function close() {
+  const trigger = createTrigger({ run: () => onChange(), minGapMs, now, setTimeoutFn, clearTimeoutFn });
+  function release() {
     if (timer) { clearTimeoutFn(timer); timer = null; }
     if (watcher) { try { watcher.close(); } catch { /* already closed */ } watcher = null; }
+    if (fd !== null) { try { fs.closeSync(fd); } catch { /* already closed */ } fd = null; }
+  }
+  // True while `dir` is still the directory the watch was put on.
+  function same() {
+    if (!watcher || fd === null) return false;
+    try {
+      const mine = fs.fstatSync(fd);
+      const there = fs.statSync(dir);
+      return mine.nlink > 0 && mine.ino === there.ino && mine.dev === there.dev;
+    } catch {
+      return false;
+    }
   }
   function onEvent() {
-    if (!exists(dir)) { close(); return; }
+    if (!same()) { release(); return; }
     if (timer) return;
-    timer = setTimeoutFn(() => {
-      timer = null;
-      try { Promise.resolve(onChange()).catch(() => {}); } catch { /* never break the watch */ }
-    }, debounceMs);
+    timer = setTimeoutFn(() => { timer = null; trigger.fire(); }, debounceMs);
     timer?.unref?.();
   }
   return {
     ensure() {
-      if (watcher && exists(dir)) return true;
-      close();
+      if (same()) return true;
+      release();
       try {
+        fd = fs.openSync(dir, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY);
         const w = watch(dir, { persistent: false }, onEvent);
-        w.on('error', () => { if (watcher === w) close(); });
+        w.on('error', () => { if (watcher === w) release(); });
         watcher = w;
         return true;
       } catch {
+        release();
         return false;
       }
     },
-    close,
+    close() {
+      release();
+      trigger.stop();
+    },
   };
 }

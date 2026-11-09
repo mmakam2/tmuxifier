@@ -1,4 +1,5 @@
 import { buildProbeArgv, WINDOW_ID_RE } from './sshCommand.js';
+import { MUX_REFUSED_RE } from './agentWatch.js';
 
 // The activity field is `#{window_activity}` — the last time the session's
 // current window produced OUTPUT — and deliberately not `#{session_activity}`,
@@ -459,7 +460,8 @@ export function createStatusChecker({
     // a marker change. It deliberately has no say over reachability: a failure
     // returns null and leaves the backoff alone, so only the sweep ever marks a
     // box down. Same mid-login stand-down as checkBox — a BatchMode probe must
-    // not race a password prompt on the shared socket.
+    // not race a password prompt on the shared socket. `muxRefused: true` on
+    // the result means the box's shared connection is out of session slots.
     async checkAgents(box) {
       try {
         if (hasLiveSession && hasLiveSession(box)) {
@@ -473,7 +475,12 @@ export function createStatusChecker({
           ? { tmux: false, sessions: [] }
           : { tmux: true, sessions: attachWindows(parseTmuxSessions(res.stdout), parseTmuxWindows(res.stdout)) };
         const agentMarks = parseAgentMarks(res.stdout);
-        return agentMarks ? { ...out, agentMarks } : out;
+        if (agentMarks) out.agentMarks = agentMarks;
+        // The connection had no session slot left and ssh went around it (see
+        // agentWatch.js). The answer stands; the flag tells the caller to stop
+        // watching this box for a while.
+        if (MUX_REFUSED_RE.test(String(res.stderr || ''))) out.muxRefused = true;
+        return out;
       } catch {
         return null;
       }

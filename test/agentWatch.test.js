@@ -307,20 +307,38 @@ test('a stream that stops beating is killed and replaced', async () => {
   expect(h.streams.length).toBe(2);
 });
 
-test('a spawn that throws (an unsafe box) is a failure, not a crash', async () => {
-  const h = harness({ spawnStream: () => { throw new Error('unsafe box'); } });
+test('a spawn that throws (an unsafe box) is a failure, not a crash, and is not retried every sweep', async () => {
+  let spawns = 0;
+  const h = harness({ spawnStream: () => { spawns += 1; throw new Error('unsafe box'); } });
   expect(() => h.watch.sync([boxA], { a: up })).not.toThrow();
   expect(h.watch.size()).toBe(0);
+  h.watch.sync([boxA], { a: up });
+  h.watch.sync([boxA], { a: up });
+  expect(spawns).toBe(1);               // held off, like any stream that dies at once
+  await h.advance(30000);
+  h.watch.sync([boxA], { a: up });
+  expect(spawns).toBe(2);
 });
 
-test('an onChange that throws does not break the stream', async () => {
-  const h = harness({ onChange: () => { throw new Error('boom'); } });
+test('an onChange that throws does not break the stream: the next change still runs', async () => {
+  let calls = 0;
+  const h = harness({ onChange: () => { calls += 1; throw new Error('boom'); } });
   h.watch.sync([boxA], { a: up });
   h.streams[0].onData('c\n', 'stdout');
   await h.advance(1000);
+  expect(calls).toBe(1);
   h.streams[0].onData('c\n', 'stdout');
-  await flush();
+  await h.advance(1000);
+  expect(calls).toBe(2);
   expect(h.streams[0].killed).toBe(false);
+  // Rejecting asynchronously is no different.
+  const h2 = harness({ onChange: async () => { calls += 1; throw new Error('later'); } });
+  h2.watch.sync([boxA], { a: up });
+  h2.streams[0].onData('c\n', 'stdout');
+  await h2.advance(1000);
+  h2.streams[0].onData('c\n', 'stdout');
+  await h2.advance(1000);
+  expect(calls).toBe(4);
 });
 
 test('stopAll kills every stream and nothing restarts by itself', async () => {
@@ -334,6 +352,47 @@ test('stopAll kills every stream and nothing restarts by itself', async () => {
   h.streams[0].onData('c\n', 'stdout');
   await flush();
   expect(h.changes).toEqual([]);
+  // A sweep still in flight at shutdown calls sync once more: it must not
+  // bring the streams back just as the process is leaving.
+  const before = h.streams.length;
+  h.watch.sync([boxA, boxB], { a: up, b: up });
+  expect(h.streams.length).toBe(before);
+  expect(h.watch.size()).toBe(0);
+});
+
+test('a stream that fell back off the shared connection is dropped and held, not kept resident', async () => {
+  // The box's multiplexed connection is out of session slots (sshd MaxSessions).
+  // ssh then says so and silently opens a connection of its own — which this
+  // stream would hold open for good. It must give the box its slots back.
+  const h = harness();
+  h.watch.sync([boxA], { a: up });
+  h.streams[0].onData('mux_client_request_session: session request failed: Session open refused by peer\r\n', 'stderr');
+  await flush();
+  expect(h.streams[0].killed).toBe(true);
+  expect(h.watch.size()).toBe(0);
+  h.watch.sync([boxA], { a: up });
+  expect(h.streams.length).toBe(1);     // held
+  await h.advance(5 * 60 * 1000);
+  h.watch.sync([boxA], { a: up });
+  expect(h.streams.length).toBe(2);     // tried again later
+  // Any other stderr noise (a login banner, a locale warning) is not that.
+  h.streams[1].onData('Warning: Permanently added host to the list of known hosts.\n', 'stderr');
+  await flush();
+  expect(h.streams[1].killed).toBe(false);
+});
+
+test('yield() drops a box\'s stream and holds it, for a caller that saw the connection saturated', async () => {
+  const h = harness();
+  h.watch.sync([boxA, boxB], { a: up, b: up });
+  h.watch.yield('a');
+  expect(h.streams[0].killed).toBe(true);
+  expect(h.streams[1].killed).toBe(false);
+  h.watch.sync([boxA, boxB], { a: up, b: up });
+  expect(h.live().map((s) => s.box.id)).toEqual(['b']);
+  await h.advance(5 * 60 * 1000);
+  h.watch.sync([boxA, boxB], { a: up, b: up });
+  expect(h.live().map((s) => s.box.id).sort()).toEqual(['a', 'b']);
+  h.watch.yield('nope');                // unknown box: harmless
 });
 
 // --- the Host Shell's own marker directory --------------------------------
@@ -381,6 +440,57 @@ test('the local watch re-arms after its directory is removed and recreated', asy
   await new Promise((r) => setTimeout(r, 300));
   fs.mkdirSync(dir);
   expect(await until(() => w.ensure(), 3000)).toBe(true);
+  const before = fired;
+  fs.writeFileSync(path.join(dir, 'local'), 'local:working:1:prompt\n');
+  expect(await until(() => fired > before, 3000)).toBe(true);
+});
+
+test('local refreshes never overlap: a change during one runs exactly one more afterwards', async () => {
+  const home = tempHome();
+  const dir = path.join(home, '.tmuxifier-agent');
+  fs.mkdirSync(dir);
+  let running = 0;
+  let peak = 0;
+  let runs = 0;
+  let release;
+  let gate = new Promise((r) => { release = r; });
+  const w = createLocalMarkWatch({
+    dir, debounceMs: 30, minGapMs: 0,
+    onChange: async () => { runs += 1; running += 1; peak = Math.max(peak, running); await gate; running -= 1; },
+  });
+  cleanups.push(() => w.close());
+  w.ensure();
+  fs.writeFileSync(path.join(dir, 'local'), 'local:working:1:prompt\n');
+  expect(await until(() => runs === 1, 3000)).toBe(true);
+  // The Host Shell sampler runs a python sweep first, so it easily outlasts
+  // the debounce. Changes that arrive meanwhile wait for it.
+  fs.writeFileSync(path.join(dir, 'local'), 'local:blocked:2:permission\n');
+  await new Promise((r) => setTimeout(r, 200));
+  fs.writeFileSync(path.join(dir, 'local'), 'local:ready:3:stop\n');
+  await new Promise((r) => setTimeout(r, 200));
+  expect(runs).toBe(1);
+  gate = Promise.resolve();
+  release();
+  expect(await until(() => runs === 2, 3000)).toBe(true);
+  await new Promise((r) => setTimeout(r, 300));
+  expect(runs).toBe(2);
+  expect(peak).toBe(1);
+});
+
+test('the local watch notices a directory swapped out from under it, even with no delete event seen', async () => {
+  const home = tempHome();
+  const dir = path.join(home, '.tmuxifier-agent');
+  fs.mkdirSync(dir);
+  let fired = 0;
+  const w = createLocalMarkWatch({ dir, onChange: () => { fired += 1; }, debounceMs: 30, minGapMs: 0 });
+  cleanups.push(() => w.close());
+  expect(w.ensure()).toBe(true);
+  // Removed and recreated back to back: the path exists again before anything
+  // could react, but it is a different directory and the old watch is deaf.
+  fs.rmSync(dir, { recursive: true });
+  fs.mkdirSync(dir);
+  expect(w.ensure()).toBe(true);
+  await new Promise((r) => setTimeout(r, 150));
   const before = fired;
   fs.writeFileSync(path.join(dir, 'local'), 'local:working:1:prompt\n');
   expect(await until(() => fired > before, 3000)).toBe(true);

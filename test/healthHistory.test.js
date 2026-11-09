@@ -789,3 +789,39 @@ test('a throwing onChange listener never breaks a record', () => {
   expect(h.recordAgents(RT_BOX, claudeStatus(mark('ready', 'stop', 101)))).toBe(true);
   expect(h.getSeries('b1').at(-1).agents.web.state).toBe('done');
 });
+
+test('recordAgents landing in an exiting agent\'s marker gap does not lose the exit', () => {
+  // Claude's SessionEnd hook removes the marker while `claude` is still the
+  // pane's foreground command, and the marker removal is exactly what triggers
+  // the real-time probe — so it lands in that gap every time. The session is
+  // present with no state there. If that wiped the edge baseline, the pane
+  // flipping to the shell a moment later (no marker change, so only the sweep
+  // sees it) would have nothing to compare against and never report the exit.
+  const { h, tick } = rtHistory();
+  const noMarker = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'claude' }] };
+  const shell = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'zsh' }] };
+  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)) }, [RT_BOX]);
+  expect(h.recordAgents(RT_BOX, noMarker)).toBe(true);
+  // What is shown is the truth: an agent pane with no state.
+  expect(h.getSeries('b1').at(-1).agents.web).toEqual({ present: true, attached: false, agent: 'claude' });
+  expect(h.getEvents().events).toEqual([]);
+  tick(30000);
+  h.record({ b1: shell }, [RT_BOX]);
+  expect(h.getEvents().events.map((e) => [e.kind, e.session, e.agent])).toEqual([['agent-done', 'web', 'claude']]);
+});
+
+test('a marker gap bridged by recordAgents still edges correctly when the agent carries on', () => {
+  const { h } = rtHistory();
+  const noMarker = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'claude' }] };
+  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)) }, [RT_BOX]);
+  h.recordAgents(RT_BOX, noMarker);                 // restarting in place
+  h.recordAgents(RT_BOX, noMarker);                 // still in the gap: the bridge holds
+  h.recordAgents(RT_BOX, claudeStatus(mark('ready', 'start', 101)));
+  expect(h.getEvents().events).toEqual([]);         // a fresh start is idle: nothing to announce
+  h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 102)));
+  expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
+  // A session that never had a state gains none from the bridge.
+  h.recordAgents(RT_BOX, { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'claude' }, { name: 'new', windows: 1, attached: false, paneCmd: 'claude' }], agentMarks: mark('blocked', 'permission', 102) });
+  h.recordAgents(RT_BOX, { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'claude' }, { name: 'new', windows: 1, attached: false, paneCmd: 'zsh' }], agentMarks: mark('blocked', 'permission', 102) });
+  expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
+});

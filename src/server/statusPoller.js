@@ -16,6 +16,9 @@ export function createStatusPoller({
   // the real-time agent watch streams in step with what the sweep found
   // (agentWatch.js): streams start and stop on the sweep's cadence only.
   onCycle = null,
+  // Called with a box id when that box's light probe found its shared ssh
+  // connection out of session slots (agentWatch.yield in index.js).
+  onMuxRefused = null,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   now = () => Date.now(),
 }) {
@@ -24,28 +27,58 @@ export function createStatusPoller({
   let inFlight = null;
   const fastTracking = new Map();
 
-  // Ordering between the sweep and refreshAgents. Both read the same box and
-  // either can finish first, so "last writer wins" would let an OLDER read
-  // overwrite a newer one — the board flips back, and the next sweep then
-  // reports the same transition a second time (a duplicate push). One counter
-  // orders the events that matter:
-  //   probeStart[id]  when the current sweep began probing that box
-  //   agentFresh[id]  when a refresh last applied its answer
-  // A refresh applied AFTER the sweep started reading the box is at least as
-  // new as the sweep's read, so its agent fields are carried over the swap;
-  // one applied before is older and the sweep's read stands. `swapGen` covers
-  // the opposite overlap: a refresh still in flight when a sweep swaps must not
-  // apply an answer that predates the sweep's, so it probes again. A marker
-  // that changes after either read raises its own trigger, so whichever way a
-  // race falls the state converges on the newest marker and only moves forward.
+  // Ordering. Three things read a box's agent state — the sweep, an on-demand
+  // probeOne, and refreshAgents — and any of them can finish in any order. If
+  // "last to finish wins", an OLDER read overwrites a newer one: the board
+  // flips back, and when the next read restores the truth the history sees the
+  // same transition a second time (a duplicate push). So agent state only ever
+  // moves forward, by one rule:
+  //
+  //   a read may be applied only if it STARTED after the previously applied
+  //   read was applied.
+  //
+  // Such a read is certainly newer. Any other read overlapped the one already
+  // applied and cannot be ordered against it, so it is not used: the sweep and
+  // probeOne keep the agent fields the snapshot already has, a refresh simply
+  // reads again. Nothing is lost by declining — a marker that changed after the
+  // applied read raises its own trigger, and the next sweep reads afresh.
+  // `seq` is the clock; `applied` holds, per box, when its agent fields were
+  // last written. Full probes go through readBox so that two callers sharing
+  // one in-flight probe also share its true start, not their own later one.
   let seq = 0;
-  let swapGen = 0;
-  const probeStart = new Map();
-  const agentFresh = new Map();
+  const applied = new Map();
+  const reading = new Map(); // boxId -> { start, promise }: a full probe in flight
+  function readBox(box) {
+    let cur = reading.get(box.id);
+    if (!cur) {
+      cur = { start: ++seq };
+      // checkBox is called right here, as it was before readBox existed; the
+      // async wrapper only turns a synchronous throw into a rejection.
+      cur.promise = (async () => statusChecker.checkBox(box))()
+        .finally(() => { if (reading.get(box.id) === cur) reading.delete(box.id); });
+      reading.set(box.id, cur);
+    }
+    return cur.promise.then((status) => ({ start: cur.start, status }));
+  }
+  // The full-probe result to store for a box: `status` itself when its read
+  // may be applied, otherwise `status` with the snapshot's current agent
+  // fields kept. Reachability and metrics are always the probe's own. Returns
+  // a new object when it changes anything — checkBox may hand the same result
+  // to a coalesced caller or keep it as a backoff's last-known status.
+  function settle(boxId, start, status) {
+    const live = snapshot[boxId];
+    if ((applied.get(boxId) ?? 0) > start && status?.reachable && live?.reachable) {
+      const kept = { ...status, tmux: live.tmux, sessions: live.sessions };
+      if (live.agentMarks) kept.agentMarks = live.agentMarks; else delete kept.agentMarks;
+      return kept;
+    }
+    applied.set(boxId, ++seq);
+    return status;
+  }
   // The Host Shell's equivalents (it is sampled, not probed, and lives only in
   // the history).
-  let localGen = 0;
-  let localFresh = null; // { seq, status }
+  let localApplied = 0;
+  let localLast = null;
 
   const localBox = () => ({ id: LOCAL_BOX_ID, label: 'Host Shell', host: 'localhost', sessionName: localSession });
   // Deadline-raced, not merely try/caught. `inFlight` clears only in the
@@ -90,34 +123,28 @@ export function createStatusPoller({
       // snapshot in wholesale so readers never see a half-built map and a removed
       // box drops out.
       const next = {};
+      const starts = new Map();
       await mapWithConcurrency(boxes, concurrency, async (b) => {
-        probeStart.set(b.id, ++seq);
         // The merge below stamps this entry's proxmox fields either way, so a
         // skipped box still reports its state — it just reports it for free.
-        next[b.id] = stopped.has(b.id) ? { reachable: false } : await statusChecker.checkBox(b);
+        if (stopped.has(b.id)) { next[b.id] = { reachable: false }; return; }
+        const { start, status } = await readBox(b);
+        starts.set(b.id, start);
+        next[b.id] = status;
       });
-      // A refresh that applied after this sweep began reading its box holds
-      // the newer agent state (see the ordering note above): carry it across.
-      // A new object, never a mutation — checkBox may hand the same result to
-      // a coalesced caller or keep it as a backoff's last-known status.
-      for (const [id, appliedAt] of agentFresh) {
-        const mine = next[id];
-        const live = snapshot[id];
-        if (mine && mine.reachable && live && live.reachable && appliedAt > (probeStart.get(id) ?? 0)) {
-          const carried = { ...mine, tmux: live.tmux, sessions: live.sessions };
-          if (live.agentMarks) carried.agentMarks = live.agentMarks; else delete carried.agentMarks;
-          next[id] = carried;
-        }
+      // Apply each box's read under the ordering rule above: a box whose agent
+      // state was written after this sweep began reading it keeps that state.
+      for (const b of boxes) {
+        next[b.id] = starts.has(b.id) ? settle(b.id, starts.get(b.id), next[b.id]) : next[b.id];
+        if (!starts.has(b.id)) applied.set(b.id, ++seq);
       }
-      agentFresh.clear();
-      for (const id of [...probeStart.keys()]) if (!(id in next)) probeStart.delete(id);
+      for (const id of [...applied.keys()]) if (!(id in next)) applied.delete(id);
       // Only defer to the enricher's merge when it actually produced something —
       // a null `pve` (no enricher, or one that threw) leaves the plain SSH
       // snapshot as the wholesale swap, same single-assignment shape as before.
       snapshot = pve && statusEnricher
         ? statusEnricher.merge(next, boxes, pve)
         : next;
-      swapGen += 1;
       if (history) {
         // History must never affect status availability: the snapshot is already
         // swapped, so a bug here can't blank /api/status.
@@ -138,17 +165,19 @@ export function createStatusPoller({
             // simply has no `__local__` key — record() skips a box with no
             // status without pruning it.
             recorded = [...boxes, localBox()];
-            if (local) own = ownOnly(local);
-            // Same rule as agentFresh: a local refresh applied after this
-            // sample was started is the newer read.
-            if (localFresh && localFresh.seq > localStart) own = localFresh.status;
+            if (local) {
+              own = ownOnly(local);
+              // The ordering rule, for the Host Shell: a refresh applied
+              // after this sample was started holds the state to keep.
+              if (localApplied > localStart && localLast) own = localLast;
+              else { localApplied = ++seq; localLast = own; }
+            }
           }
           // Read `snapshot` only now, after the await above: a refreshAgents
           // that landed while the Host Shell was being sampled has already
           // recorded its state, and recording the pre-await object would move
           // that box backwards.
           const snap = own ? { ...snapshot, [LOCAL_BOX_ID]: own } : snapshot;
-          localGen += 1;
           history.record(snap, recorded);
         } catch { /* swallowed on purpose */ }
       }
@@ -183,7 +212,16 @@ export function createStatusPoller({
       ? await Promise.resolve().then(() => statusEnricher.collect([box])).catch(() => null)
       : null;
     const stopped = new Set((pve || []).filter((r) => r && r.state === 'stopped').map((r) => r.boxId));
-    const one = { [box.id]: stopped.has(box.id) ? { reachable: false } : await statusChecker.checkBox(box) };
+    let status = { reachable: false };
+    if (stopped.has(box.id)) applied.set(box.id, ++seq);
+    else {
+      // Under the ordering rule: an answer that overlapped a newer applied
+      // read keeps the snapshot's agent fields instead of putting older ones
+      // back. Everything from here to the assignment is synchronous.
+      const read = await readBox(box);
+      status = settle(box.id, read.start, read.status);
+    }
+    const one = { [box.id]: status };
     const merged = pve && statusEnricher ? statusEnricher.merge(one, [box], pve) : one;
     // A new object rather than a mutation, so a reader holding the previous
     // snapshot never observes it change underneath — the same invariant the
@@ -207,19 +245,20 @@ export function createStatusPoller({
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const box = (await store.listBoxes()).find((b) => b.id === boxId);
       if (!box || !snapshot[box.id]?.reachable) return false;
-      const gen = swapGen;
+      const start = ++seq;
       const res = await statusChecker.checkAgents(box);
       if (!res) return false;
-      // A whole sweep swapped while this probe was out: its read is the newer
-      // one. Ask again rather than apply an answer from before it.
-      if (gen !== swapGen) continue;
+      if (res.muxRefused && onMuxRefused) { try { onMuxRefused(box.id); } catch { /* advisory */ } }
+      // Something else was applied while this probe was out (a sweep, another
+      // refresh): this answer cannot be ordered against it. Ask again.
+      if ((applied.get(box.id) ?? 0) > start) continue;
       const cur = snapshot[box.id];
       if (!cur?.reachable) return false;
       const entry = { ...cur, tmux: res.tmux, sessions: res.sessions };
       if (res.agentMarks) entry.agentMarks = res.agentMarks; else delete entry.agentMarks;
       // A new object rather than a mutation, as in probeOne.
       snapshot = { ...snapshot, [box.id]: entry };
-      agentFresh.set(box.id, ++seq);
+      applied.set(box.id, ++seq);
       if (history) { try { history.recordAgents(box, entry); } catch { /* history never affects status */ } }
       return true;
     }
@@ -231,12 +270,13 @@ export function createStatusPoller({
   async function refreshLocal() {
     if (!localAgent || !history) return false;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const gen = localGen;
+      const start = ++seq;
       const local = await sampleLocal();
       if (!local) return false;
-      if (gen !== localGen) continue;
+      if (localApplied > start) continue;
       const own = ownOnly(local);
-      localFresh = { seq: ++seq, status: own };
+      localApplied = ++seq;
+      localLast = own;
       try { return history.recordAgents(localBox(), own); } catch { return false; }
     }
     return false;

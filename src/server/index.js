@@ -397,6 +397,9 @@ const statusPoller = createStatusPoller({
     agentWatch?.sync(boxes, snapshot);
     localMarkWatch?.ensure();
   },
+  // A box whose shared connection has no session slot left gets its watch
+  // stream's slot back, and no more light probes for a while.
+  onMuxRefused: (boxId) => agentWatch?.yield(boxId),
   // Runs the PVE inventory refresh alongside each SSH probe cycle so linked
   // boxes get grey "Stopped" status instead of a red connection failure. See
   // mergeProxmoxStatus in proxmoxInventory.js for the merge truth table.

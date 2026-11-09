@@ -998,3 +998,17 @@ test('checkAgents stands down while an interactive login holds the box', async (
   expect(await connected.checkAgents({ id: 'b1', host: 'h' })).toEqual({ tmux: true, sessions: [] });
   expect(calls).toBe(1);
 });
+
+test('checkAgents flags a probe that fell off the saturated shared connection, and still returns its data', async () => {
+  // ssh does not fail when the ControlMaster is out of session slots: it says
+  // so on stderr and opens a connection of its own. The answer is good; the
+  // flag is what lets the caller stop adding to the pressure.
+  const refused = 'mux_client_request_session: session request failed: Session open refused by peer\r\nControlSocket /x/cm/abc already exists, disabling multiplexing\r\n';
+  const run = async () => ({ code: 0, stdout: 'main:1:0:1:zsh\n', stderr: refused });
+  const res = await createStatusChecker({ run }).checkAgents({ id: 'b1', host: 'h' });
+  expect(res.muxRefused).toBe(true);
+  expect(res.sessions).toHaveLength(1);
+  const fine = await createStatusChecker({ run: async () => ({ code: 0, stdout: 'main:1:0:1:zsh\n', stderr: 'Warning: Permanently added\n' }) })
+    .checkAgents({ id: 'b1', host: 'h' });
+  expect(fine).not.toHaveProperty('muxRefused');
+});

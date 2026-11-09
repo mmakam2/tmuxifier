@@ -416,7 +416,24 @@ export function createHealthHistory({
       }
       const st = threshState.get(box.id) || initThresholdState();
       const evs = agentEdges(st.agents, next);
-      threshState.set(box.id, { ...st, agents: next.agents });
+      // The edge baseline, bridged across a marker gap. An agent pane with no
+      // marker is a gap, not an exit (agentEdges says so too), and this path
+      // lands in one systematically: an exiting agent removes its marker
+      // while it is still the pane's foreground command, and that removal is
+      // what triggered this very probe. Taking the gap as the baseline would
+      // erase the session's state, and the exit itself — the pane becoming a
+      // shell, no marker change, seen only by the next sweep — would then go
+      // unreported. So a session that had a state and now shows none keeps
+      // its previous state in the BASELINE only; the sample shows the truth.
+      const before = st.agents || Object.create(null);
+      const baseline = Object.create(null);
+      for (const [session, now] of Object.entries(next.agents)) {
+        const was = Object.hasOwn(before, session) ? before[session] : undefined;
+        baseline[session] = now.present && !now.state && was && was.state
+          ? { ...now, state: was.state, cause: was.cause, ts: was.ts }
+          : now;
+      }
+      threshState.set(box.id, { ...st, agents: baseline });
       replaceLast(box.id, next);
       if (agentsKey(prev) !== agentsKey(next)) changed(box.id);
       const seenForBox = seen.get(box.id);
@@ -459,8 +476,14 @@ export function createHealthHistory({
         const nextAgents = Object.assign(Object.create(null), agents, { [session]: { ...cur, state: 'idle' } });
         const next = { ...last, agents: nextAgents };
         if (configured.get(boxId) === session && next.agent === 'done') next.agent = 'idle';
+        // Only this session moves in the baseline: another one may be bridged
+        // across a marker gap there (see recordAgents) and must stay so.
         const st = threshState.get(boxId);
-        if (st) threshState.set(boxId, { ...st, agents: nextAgents });
+        if (st) {
+          const base = Object.assign(Object.create(null), st.agents);
+          if (Object.hasOwn(base, session)) base[session] = { ...base[session], state: 'idle' };
+          threshState.set(boxId, { ...st, agents: base });
+        }
         replaceLast(boxId, next);
       }
       return true;
