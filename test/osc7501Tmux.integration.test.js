@@ -8,6 +8,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { AGY_ATTACH_RC_LINE } from '../src/server/oscReporter.js';
 
 // The OSC 7501 reporter against a REAL tmux server. The stub-tmux suites make
 // pipe-pane a no-op, so no listener process ever exists there and the
@@ -218,6 +219,22 @@ test('pre-attach catches a report sent the moment the agent starts', async () =>
   await waitFor(() => /^web:blocked:\d+:permission\n$/.test(readIf(h.marker) || ''), { what: 'blocked marker' });
   expect(h.fmt('#{pane_current_command}')).toBe('agy');
   expect(h.fmt('#{pane_pipe}')).toBe('1');
+  const e = await waitFor(() => { const x = h.readEntry(); return x && typeof x.pid === 'number' ? x : null; }, { what: 'listener pid' });
+  expect(alive(e.pid)).toBe(true);
+  expect(h.procs('loop')).toEqual([]);
+});
+
+test('the installed agy function pre-attaches', async () => {
+  const h = await harness({ shell: true });
+  const payload = path.join(h.tmp, 'agent.sh');
+  writeFileSync(payload, "printf '\\033]7501;state=blocked:kind=permission:app=antigravity\\007'; sleep 30; true\n");
+  writeFileSync(path.join(h.home, '.bashrc'), AGY_ATTACH_RC_LINE + '\n');
+  h.tmux('send-keys', '-t', 'web', '-l', '. "$HOME/.bashrc"');
+  h.tmux('send-keys', '-t', 'web', 'Enter');
+  h.tmux('send-keys', '-t', 'web', '-l', `agy --norc --noprofile ${payload}`);
+  h.tmux('send-keys', '-t', 'web', 'Enter');
+  await waitFor(() => /^web:blocked:\d+:permission\n$/.test(readIf(h.marker) || ''), { what: 'blocked marker' });
+  expect(h.fmt('#{pane_current_command}')).toBe('agy');
   const e = await waitFor(() => { const x = h.readEntry(); return x && typeof x.pid === 'number' ? x : null; }, { what: 'listener pid' });
   expect(alive(e.pid)).toBe(true);
   expect(h.procs('loop')).toEqual([]);
