@@ -6,6 +6,7 @@ import path from 'node:path';
 import { buildOscReporterInstallScript, createOscReporterPusher } from '../src/server/oscReporter.js';
 
 const TAG = 'export PI_PROGRAM_STATUS=1 # tmuxifier-osc-pi';
+const AGY_TAG = 'export AGY_CLI_OSC7501=on # tmuxifier-osc-agy';
 const dirs = [];
 afterEach(async () => { while (dirs.length) await fs.rm(dirs.pop(), { recursive: true, force: true }); });
 
@@ -51,6 +52,7 @@ test('script text: static, checks python3 and tmux, interpolates nothing', () =>
   expect(s).toContain('command -v python3');
   expect(s).toContain('command -v tmux');
   expect(s).toContain('tmuxifier-osc-pi');
+  expect(s).toContain('tmuxifier-osc-agy');
   expect(s).not.toMatch(/\$\{/);
   const vars = new Set(s.match(/\$[A-Za-z_$]+/g));
   for (const v of vars) expect(['$HOME', '$DIR', '$$', '$rc']).toContain(v);
@@ -72,12 +74,21 @@ test('applies: writes stdin exactly (mode 644), panes dir, one rc line after two
   const left = (await fs.readdir(path.join(b.home, '.tmuxifier-osc'))).filter((n) => n.includes('.tmp'));
   expect(left).toEqual([]);
   const zshrc = await fs.readFile(path.join(b.home, '.zshrc'), 'utf8');
-  expect(zshrc).toBe(`alias a=b\n${TAG}\n`);
+  expect(zshrc).toBe(`alias a=b\n${TAG}\n${AGY_TAG}\n`);
   const profile = await fs.readFile(path.join(b.home, '.profile'), 'utf8');
   expect(profile.split('\n').filter((l) => l === TAG).length).toBe(1);
+  expect(profile.split('\n').filter((l) => l === AGY_TAG).length).toBe(1);
   await expect(fs.access(path.join(b.home, '.bashrc'))).rejects.toBeTruthy();
   const log = await fs.readFile(b.log, 'utf8');
   expect(log).toContain(`${f} sweep`);
+});
+
+test("an operator's own untagged AGY_CLI_OSC7501 line is left alone", async () => {
+  const b = await box();
+  await fs.writeFile(path.join(b.home, '.zshrc'), 'export AGY_CLI_OSC7501=off\n');
+  await run(b);
+  await run(b);
+  expect(await fs.readFile(path.join(b.home, '.zshrc'), 'utf8')).toBe(`export AGY_CLI_OSC7501=off\n${TAG}\n${AGY_TAG}\n`);
 });
 
 test('a failing sweep never fails the install', async () => {

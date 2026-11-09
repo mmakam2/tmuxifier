@@ -5,9 +5,12 @@
 //
 // The installer script text goes into ssh argv and interpolates NO input; the
 // reporter bytes (src/server/assets/tmuxifier-osc-reporter.py) arrive on stdin
-// and are written to a temp file and renamed into place. The rc line
-// (PI_PROGRAM_STATUS=1, which makes Pi emit OSC 7501) mirrors binPathBlock in
-// boxActions.js: delete-then-append under one tag, so reruns leave exactly one.
+// and are written to a temp file and renamed into place. Two rc lines follow,
+// pi's then agy's: PI_PROGRAM_STATUS=1 makes Pi emit OSC 7501, and
+// AGY_CLI_OSC7501=on makes Antigravity CLI (agy) report without probing (inside
+// tmux its probe never gets an answer). Each mirrors binPathBlock in
+// boxActions.js: delete-then-append under its own tag, so reruns leave exactly
+// one of each.
 export function buildOscReporterInstallScript() {
   return [
     'set -eu',
@@ -37,6 +40,8 @@ export function buildOscReporterInstallScript() {
     '  if [ -f "$rc" ]; then',
     "    sed -i '/# tmuxifier-osc-pi$/d' \"$rc\" 2>/dev/null || true",
     "    echo 'export PI_PROGRAM_STATUS=1 # tmuxifier-osc-pi' >> \"$rc\"",
+    "    sed -i '/# tmuxifier-osc-agy$/d' \"$rc\" 2>/dev/null || true",
+    "    echo 'export AGY_CLI_OSC7501=on # tmuxifier-osc-agy' >> \"$rc\"",
     '  fi',
     'done',
     '',
