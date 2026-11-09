@@ -126,6 +126,12 @@ Cross-cutting invariants that tests alone have repeatedly failed to protect:
 - **Seen is a client claim.** Only `POST /api/boxes/:id/agent-seen` from a visible, focused client
   raises the watermark (a `done` becomes `idle` only then); tmux `attached` suppresses a
   notification and never marks seen, and MCP reads never acknowledge.
+- **Real-time paths are triggers, never data.** The box watch stream's whole vocabulary is `c`/`h`
+  and `/live` sends only `{"box":"<id>"}`: state still arrives through the allowlisting probe and
+  the ordinary routes, and the 30 s sweep and client polls remain the backstop. Only the sweep
+  decides reachability — a failed light probe changes nothing. The sweep and `refreshAgents` are
+  ordered (`probeStart`/`agentFresh`/`swapGen` in `statusPoller.js`) so an older read never
+  overwrites a newer one; breaking that shows up as a duplicate "needs you" push.
 - **Never auto-promote best-effort phases.** Setup's seed/statusline/hooks/voice-link/script
   phases record their result and never fail the job; a failed setup never removes the box.
 - **Every web fetch goes through `http.ts`** (the 401 → login seam); `test/webHttp.test.js`
@@ -187,7 +193,7 @@ injected as arguments — that is what makes them testable without mocks. Follow
 
 ### `server.js` — Fastify app
 
-Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSockets. Notable routes
+Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live` WebSockets. Notable routes
 (gates per the load-bearing rules above):
 
 - **Auth.** `requireAuth` is async: signed session cookie first, then `Authorization: Bearer
@@ -223,6 +229,10 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   Play-signed build it swaps the signature).
 - **Proxmox.** `PUT /api/boxes/:id/proxmox` writes `kind` from what the cluster reports.
   `GET /api/boxes/:id/proxmox/net` reads a linked container's live `net0`.
+- **Live.** `/live` (WebSocket, browser session + trusted Origin only, one-way) registers the tab
+  with `liveHub.js`; logout closes every stream. `GET /api/status?box=` and
+  `GET /api/health/series?box=` return one box in `{ [id]: … }` shape, which is what a nudged tab
+  fetches. `POST /api/boxes/:id/agent-seen` publishes its box so other tabs drop `done` at once.
 - **Responses.** `/api/` sets `Cache-Control: no-store` unless a route already set its own (the
   icon routes do). Permissions-policy `microphone` is always `self`.
 
@@ -235,7 +245,8 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
 - `sshCommand.js` — ssh argv builders; **every box field passes `assertBoxSafe` and is never
   shell-interpolated unquoted** (the command-injection surface). ControlMaster args,
   `SESSION_NAME_RE`, `sanitizeSession`.
-- `sshRun.js` — one-shot ssh, `sshStream` (streaming), `sshRunStdin`, `sshPipe`.
+- `sshRun.js` — one-shot ssh, `sshStream` (streaming; `timeout: 0` = resident, no kill timer),
+  `sshRunStdin`, `sshPipe`.
 - `boxActions.js` — per-box ops over the ControlMaster: tmux/framework/tool install
   (`TOOL_IDS`/`resolveTools`, mirrored by `provisionTools.ts` and the MCP `SETUP_TOOLS` enum,
   pinned by tests), `execCommand` for Fleet, master liveness/stale-socket reaping, and the
@@ -415,11 +426,35 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   `cleanWindowName` strips C0/C1 and bidi controls; `__NO_TMUX__` matches as a whole line.
   Session rows must have the `STATUS_FMT` shape (≤200; a name with controls or over 256 chars
   drops, never rewritten); a failed probe's ssh error keeps its last 1024 chars, controls stripped.
+  `checkAgents` runs `AGENT_REMOTE` — the probe minus the metrics block and the OSC sweep — and
+  returns sessions, windows and markers or `null`; it never touches the backoff.
 - `statusPoller.js` — the single server-side poll loop (`statusPollMs`) behind `/api/status`, so
   SSH volume is independent of open tabs; `probeOne` for on-demand refresh. Folds the Host Shell
-  into history as `__local__` without putting it in the snapshot.
+  into history as `__local__` without putting it in the snapshot. `refreshAgents(boxId)` is the
+  real-time path: one light probe patched into the snapshot and recorded with
+  `history.recordAgents` (the Host Shell re-samples locally). `onCycle(boxes, snapshot)` runs
+  after every sweep.
+- `agentWatch.js` — real-time agent state, box → server. `createAgentWatch` keeps one resident ssh
+  stream per reachable box over the ControlMaster, running `WATCH_REMOTE`: a POSIX `sh` loop
+  (inline remote command, nothing installed, no setup rerun) that reads the same marker files
+  with the same 200-byte cap as the probe, prints `c` when their content changes and `h` every
+  20 s. The beat is what ends an orphan (no PTY, so no hangup — the loop dies on a failed write)
+  and what proves the stream is not hung; `[ -f ]` keeps a FIFO from blocking it forever. A `c`
+  calls `refreshAgents`, one at a time and at most once a second per box, with a rerun for a
+  change that lands mid-probe. Streams start and stop only in `sync()`, called from `onCycle`;
+  one that dies young backs off (30 s doubling to 30 min). `createLocalMarkWatch` is the Host
+  Shell's `fs.watch` on `~/.tmuxifier-agent`. `TMUXIFIER_AGENT_WATCH=off` removes both.
+- `liveHub.js` — real-time, server → browser: the `/live` clients (≤32), pinged every 25 s,
+  closed for renewal after 15 min so a stream is re-authenticated. `publish(boxId)` sends
+  `{"box":id}`. A WebSocket, not SSE: an EventSource would hold one of the six HTTP/1.1
+  connections per origin for every open tab. `index.js` publishes on `history.onEvent` and
+  `history.onChange`, deduped per event-loop turn.
 - `healthHistory.js` / `healthEventsStore.js` — rolling samples per box and edge-triggered events
   (down/up/needs-auth/threshold/agent-blocked/agent-input/agent-done) in `data/health-events.json`.
+  `recordAgents(box, status)` is the between-sweeps update: it rewrites the box's latest sample
+  in place (no new point, metrics and time kept) and runs only `agentEdges`, never the metric
+  thresholds (cpu needs two consecutive *sweep* samples). `onChange(cb)` fires when a box's agent
+  map changes, event or not. `markSeen` turns the latest sample `idle` immediately.
   Samples carry per-session `agents` (every listed tmux session; `agentKindOf(paneCmd)` →
   `claude`|`opencode`|`codex`|`pi`|`agy`|`null` sets `present` and the entry's and events' `agent`, which event and
   push copy name; non-agent panes are `present: false`; the Host Shell is the `__local__` box/series id); displayed states are `working`, `blocked`, `done` (finished, not yet seen), `idle`.
@@ -555,6 +590,11 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
   `voiceWorklet.js` (real asset, keeps CSP `script-src 'self'`), `pcmStream.ts`, `voicePress.ts`
   (press reducer: a `claude` verdict links, else dictates), `voiceLink.ts`, `voiceUi.ts`
   (`evaluateVoice`, Ctrl+Shift+Space hotkey swallowing the whole chord), `voice.ts`.
+- **Live** — `liveLink.ts` (pure: `parseLiveMessage`, `createLiveQueue` — nudged ids folded into
+  at most one refresh a second, more than four at once becomes a full poll — and `openLiveLink`,
+  whose backoff resets only after 10 s of uptime because the server accepts an upgrade before
+  refusing it). `main.ts` `liveRefresh` fetches just the nudged boxes (`api.statusOf`,
+  `api.healthSeriesOf`) and waits for a full poll already in flight; a reconnect polls everything.
 - **Agent state** — `agentState.ts` (pure: `AGENT_PRECEDENCE`, `latestAgents`, `worstAgent`,
   `agentChipText`, `agentCounts`, `agentCards`, `fmtAge`; every agent surface folds through it).
 - **Dashboard** — `dashboard.ts` (standby dashboard when no pane is docked; polls only while

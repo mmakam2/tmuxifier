@@ -75,13 +75,25 @@ Host Shell. A session counts when the active pane of its current window runs `cl
 - **done** — a turn finished and you haven't looked at it yet.
 - **idle** — the session just started, or a finished turn you have looked at.
 
+State changes arrive in about a second. The server keeps one quiet SSH channel open per reachable
+box, over the connection it already holds; a small shell loop on the box reports the moment an
+agent's state changes, and the server re-reads that box right away. Open tabs are told which box
+changed and refresh just that one, and a push notification goes out at the same moment. Nothing is
+installed on the box for this and no setup rerun is needed; the cost is one resident `sh` that
+wakes once a second, and one of the SSH sessions sshd allows per connection (`MaxSessions`,
+default 10, shared with that box's terminals and probes). The 30-second status poll still runs as the backstop, and it is still what
+notices everything that is not an agent state change: an agent exiting without a final report, a
+box going down, metrics. Set `TMUXIFIER_AGENT_WATCH=off` to drop the channel and return agent
+state to the poll's cadence.
+
 A `done` becomes `idle` only when a Tmuxifier client shows that pane in a visible, focused tab
 (phone: the pane being shown). A raw `ssh` + `tmux attach` never clears it, and the agent's idle
 timers never re-arm it. Claude Code's idle timers only ever end a `working` turn: they never clear
 `blocked`, so a permission dialog left open stays `blocked` however long nobody answers. A plain
 "No" to a permission prompt fires no hook in Claude Code, so the session reads `blocked` until you
 type a prompt or Claude makes its next tool call. A granted permission stays `blocked` until that
-tool finishes; a long build reads Needs you for its duration.
+tool finishes; a long build reads Needs you for its duration. Looking at a finished turn in one
+tab or on one device clears it in every other open tab at once.
 
 OpenCode differs in two places, both because of how OpenCode itself behaves. Rejecting a
 permission or dismissing a question **ends the turn** in OpenCode, so the session moves on to

@@ -19,6 +19,13 @@ import fs from 'node:fs';
 //
 // Nothing is installed on the box and no setup rerun is needed: the loop is the
 // ssh remote command itself, like the probe.
+//
+// Known cost: the stream holds one session on the box's multiplexed connection
+// for as long as it lives, and sshd allows `MaxSessions` (default 10) per
+// connection. Terminals, probes, uploads and Fleet runs share that budget, so a
+// box with eight viewers attached has one slot less than it used to. A stream
+// that is itself refused just dies and backs off; agent state for that box
+// falls back to the sweep.
 
 const TICK_MAX = 60;
 const BEAT_MAX = 100000;
