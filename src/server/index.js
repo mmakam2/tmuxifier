@@ -338,19 +338,27 @@ if (config.fcmCredentials) {
   const fcmPush = createFcmPush({ credentialsPath: config.fcmCredentials, deviceStore });
   history.onEvent((e) => { fcmPush.notify(e).catch(() => {}); });
 }
-// Real-time nudges to open tabs (liveHub.js, the /live WebSocket): every
-// health event names its box, so a tab refreshes that box at once instead of
-// at its next 30 s poll.
+// Real-time nudges to open tabs (liveHub.js, the /live WebSocket): a health
+// event, or any change to a box's agents, names that box, so a tab refreshes
+// it at once instead of at its next 30 s poll.
 const liveHub = createLiveHub();
-history.onEvent((e) => { liveHub.publish(e.boxId); });
+// One nudge per box per turn of the event loop: a single record can report
+// both "agents changed" and an event for the same box.
+const nudged = new Set();
+const nudge = (boxId) => {
+  if (nudged.size === 0) queueMicrotask(() => { for (const id of nudged) liveHub.publish(id); nudged.clear(); });
+  nudged.add(boxId);
+};
+history.onEvent((e) => nudge(e.boxId));
+history.onChange(nudge);
 // Real-time agent state from the boxes (agentWatch.js): one resident stream
 // per reachable box that reports a marker change; the answer is one light
 // probe of that box and a nudge to the tabs. The Host Shell's markers are this
 // machine's own files, watched directly. TMUXIFIER_AGENT_WATCH=off removes
 // both and leaves agent state on the sweep's cadence.
-const refreshAgents = async (boxId) => {
-  if (await statusPoller.refreshAgents(boxId)) liveHub.publish(boxId);
-};
+// The nudge to the tabs is history.onChange's: it fires only when the refresh
+// actually changed what the box's agents look like.
+const refreshAgents = (boxId) => statusPoller.refreshAgents(boxId);
 const agentWatch = config.agentWatch
   ? createAgentWatch({
     spawnStream: (box, { onData }) => sshStream(

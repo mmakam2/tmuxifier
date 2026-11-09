@@ -752,3 +752,40 @@ test('markSeen below the marker ts leaves done alone', () => {
   expect(h.markSeen('b1', 'web', 90)).toBe(true); // an older turn's ack, accepted and inert
   expect(h.getSeries('b1').at(-1).agents.web.state).toBe('done');
 });
+
+// --- onChange: "this box's agents look different now" (the /live nudge seam) ---
+
+test('onChange names a box whenever its agent map changes, from the sweep or the real-time path', () => {
+  const { h } = rtHistory();
+  const changed = [];
+  const off = h.onChange((id) => changed.push(id));
+  const b2 = { id: 'b2', label: 'db-01', host: 'h2' };
+  const plain = { reachable: true, tmux: true, sessions: [] };
+  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)), b2: plain }, [RT_BOX, b2]);
+  expect(changed.sort()).toEqual(['b1', 'b2']);          // first sight of each
+  changed.length = 0;
+  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)), b2: plain }, [RT_BOX, b2]);
+  expect(changed).toEqual([]);                           // nothing moved
+  // A change that raises no event (-> working) still has to reach the tabs.
+  h.record({ b1: claudeStatus(mark('ready', 'stop', 101)), b2: plain }, [RT_BOX, b2]);
+  h.recordAgents(RT_BOX, claudeStatus(mark('working', 'prompt', 102)));
+  expect(changed).toEqual(['b1', 'b1']);
+  expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']);
+  changed.length = 0;
+  h.recordAgents(RT_BOX, claudeStatus(mark('working', 'prompt', 102)));
+  expect(changed).toEqual([]);                           // same again: no nudge
+  // A viewer attaching changes what the board shows too.
+  h.recordAgents(RT_BOX, { ...claudeStatus(mark('working', 'prompt', 102)), sessions: [{ name: 'web', windows: 1, attached: true, paneCmd: 'claude' }] });
+  expect(changed).toEqual(['b1']);
+  off();
+  h.recordAgents(RT_BOX, claudeStatus(mark('ready', 'stop', 103)));
+  expect(changed).toEqual(['b1']);
+});
+
+test('a throwing onChange listener never breaks a record', () => {
+  const { h } = rtHistory();
+  h.onChange(() => { throw new Error('boom'); });
+  expect(() => h.record({ b1: claudeStatus(mark('working', 'prompt', 100)) }, [RT_BOX])).not.toThrow();
+  expect(h.recordAgents(RT_BOX, claudeStatus(mark('ready', 'stop', 101)))).toBe(true);
+  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('done');
+});

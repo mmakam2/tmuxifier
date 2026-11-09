@@ -310,6 +310,16 @@ export function createHealthHistory({
   const listeners = new Set();
   if (typeof onEvent === 'function') listeners.add(onEvent);
   const configured = new Map();  // boxId -> the box's configured session name
+  // "This box's agents look different now": fired from record() and
+  // recordAgents() whenever a box's agent map changed, whether or not the
+  // change raised an event (-> working, an attach, a first appearance raise
+  // none). The /live nudge (liveHub.js) subscribes so an open tab refetches
+  // that box. A listener error must never break a record.
+  const changeListeners = new Set();
+  const agentsKey = (sample) => (sample && sample.agents ? JSON.stringify(sample.agents) : '');
+  function changed(boxId) {
+    for (const fn of changeListeners) { try { fn(boxId); } catch { /* ignore */ } }
+  }
 
   // Swap a box's latest sample for `next`, in the ring and as the edge
   // baseline's sample, without adding a point to the series.
@@ -352,6 +362,7 @@ export function createHealthHistory({
         const { events: evs, state } = classifyTransitions(prev, sample, thresholds, threshState.get(box.id));
         threshState.set(box.id, state);
         lastSample.set(box.id, sample);
+        if (agentsKey(prev) !== agentsKey(sample)) changed(box.id);
         const seenForBox = seen.get(box.id);
         if (seenForBox && Array.isArray(status.sessions)) {
           const listed = new Set(status.sessions.map((x) => x && x.name));
@@ -407,6 +418,7 @@ export function createHealthHistory({
       const evs = agentEdges(st.agents, next);
       threshState.set(box.id, { ...st, agents: next.agents });
       replaceLast(box.id, next);
+      if (agentsKey(prev) !== agentsKey(next)) changed(box.id);
       const seenForBox = seen.get(box.id);
       if (seenForBox && Array.isArray(status.sessions)) {
         const listed = new Set(status.sessions.map((x) => x && x.name));
@@ -465,5 +477,6 @@ export function createHealthHistory({
       return { events: filtered.reverse(), latestSeq: seq };
     },
     onEvent(cb) { listeners.add(cb); return () => listeners.delete(cb); },
+    onChange(cb) { changeListeners.add(cb); return () => changeListeners.delete(cb); },
   };
 }
