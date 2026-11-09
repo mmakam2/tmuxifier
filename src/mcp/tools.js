@@ -7,7 +7,7 @@ export const JOB_KINDS = ['fleet', 'setup', 'provision', 'lifecycle'];
 // `waiting` is a deprecated alias that expands to ['blocked', 'done', 'idle']
 // before polling: the old `waiting` state also covered permission prompts.
 export const AGENT_STATES = ['working', 'blocked', 'done', 'idle', 'waiting', 'gone'];
-const AGENT_STATES_DOC = 'Agents: Claude Code or OpenCode. Agent states: working (running), blocked (needs the operator: permission, question or elicitation), done (finished, not yet seen), idle (finished and seen). done becomes idle only when a person looks at the pane in the web app.';
+const AGENT_STATES_DOC = 'Agents: Claude Code, OpenCode, Codex, pi or Antigravity. Agent states: working (running), blocked (needs the operator: permission, question or elicitation), done (finished, not yet seen), idle (finished and seen). done becomes idle only when a person looks at the pane in the web app.';
 export const GUEST_ACTIONS = ['start', 'shutdown', 'reboot', 'stop'];
 // Mirrors src/server/tmuxInject.js's NAMED_KEYS — pinned by a test that imports
 // that Set directly, since src/mcp must not import from src/server itself.

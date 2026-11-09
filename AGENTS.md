@@ -358,7 +358,10 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
 - `oscReporter.js` + `src/server/assets/tmuxifier-osc-reporter.py` — the OSC 7501 ("Program
   Status") reporter for agents that emit it: Codex (native from 0.163; the 0.167 binary carries the sequences, but no live capture exists yet — the
   test box needs a Codex sign-in; append its stream to the fixture when captured), pi (only with the
-  `export PI_PROGRAM_STATUS=1 # tmuxifier-osc-pi` rc line the pusher adds), and OpenCode only
+  `export PI_PROGRAM_STATUS=1 # tmuxifier-osc-pi` rc line the pusher adds), agy (only with the
+  `export AGY_CLI_OSC7501=on # tmuxifier-osc-agy` rc line the pusher adds; recorded live, agy 1.5.3,
+  fixture lines 1491-2321; it never sends `clear`, so its marker goes at the loop's detach, and
+  `kind=auth`, the sign-in menu, is cause `elicitation`), and OpenCode only
   when its plugin file is absent (the plugin wins; without it the root record aggregates every
   session of the shared `opencode serve`). **Claude Code is excluded**: it probes with
   `OSC 7501;?` then DA1, tmux answers DA1 itself, so it never reports inside tmux and its hook
@@ -401,7 +404,7 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
 - `healthHistory.js` / `healthEventsStore.js` — rolling samples per box and edge-triggered events
   (down/up/needs-auth/threshold/agent-blocked/agent-input/agent-done) in `data/health-events.json`.
   Samples carry per-session `agents` (every listed tmux session; `agentKindOf(paneCmd)` →
-  `claude`|`opencode`|`codex`|`pi`|`null` sets `present` and the entry's and events' `agent`, which event and
+  `claude`|`opencode`|`codex`|`pi`|`agy`|`null` sets `present` and the entry's and events' `agent`, which event and
   push copy name; non-agent panes are `present: false`; the Host Shell is the `__local__` box/series id); displayed states are `working`, `blocked`, `done` (finished, not yet seen), `idle`.
   The seen watermark (`POST /api/boxes/:id/agent-seen` → `history.markSeen`, persisted through
   `agentSeenStore.js`) turns `done` into `idle`. `agent-blocked` = "needs you: <cause>", `agent-input` = finished a turn

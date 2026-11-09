@@ -207,14 +207,14 @@ Deleting the token file un-seeds the box for new shells (the rc line does nothin
 logged in on it yourself — seed only boxes you trust the way you'd trust anyone holding your own
 login.** Seeding needs a browser session: the Android app and the MCP server can't request it.
 
-## The OSC reporter (Codex, pi)
+## The OSC reporter (Codex, pi, Antigravity)
 
 Every setup run also pushes a small python3 reporter to `~/.tmuxifier-osc/reporter.py`. There is
 no checkbox: it is always on, and it records the same one-line state files under
 `~/.tmuxifier-agent/` that the Claude Code hook writes. It listens to the raw output of tmux
 panes (`tmux pipe-pane`) for **OSC 7501 "Program Status"** reports, which agents emit as they
 change state. One resident process per box attaches a listener to any pane whose command is
-`codex` or `pi` (and `opencode`, but only when the OpenCode plugin file above is absent: the
+`codex`, `pi` or `agy` (and `opencode`, but only when the OpenCode plugin file above is absent: the
 plugin always wins), and detaches after three consecutive 2-second passes that no longer match, so a new agent pane is
 picked up within about 2 seconds. The status
 probe starts it (and keeps the current version running) on every poll, so a setup rerun upgrades
@@ -232,6 +232,13 @@ python3 or tmux reports `osc-reporter skipped (no python3 on the box)` /
   # tmuxifier-osc-pi`, to `~/.profile` (created if missing) and to `~/.bashrc` / `~/.zshrc` only when they already
   exist (a re-run replaces it); that
   makes pi report unprompted. Restart pi in a new shell to pick it up.
+- **Antigravity CLI (`agy`)** probes the same way as Claude Code and pi, so setup adds one tagged
+  line, `export AGY_CLI_OSC7501=on # tmuxifier-osc-agy`, to the same files under the same rule as
+  the pi line. Restart agy in a new shell to pick it up. Verified against agy 1.5.3. It reports
+  the folder-trust prompt and tool approvals as `blocked` (permission), its own questions as
+  `blocked` (question) and the sign-in menu as `blocked` (elicitation). agy sends nothing on
+  exit, so the pane's state clears a few seconds after it quits (when the reporter sees the
+  pane's command change).
 - **Codex** reports natively from 0.163 on (the 0.167 binary carries the sequences), but this
   has **not been captured live yet**: it still needs a Codex sign-in on the test box. On a box whose Node predates `process.execve`, Codex
   runs as `node` and is not detected.

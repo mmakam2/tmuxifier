@@ -100,8 +100,8 @@ clear; it expands collapsed groups). The standby dashboard has an **Agents** boa
 Done / Working / Idle columns, and a card opens that box on that session. The session picker shows
 each session's state, and the pane header chip reads `working`, `blocked · <cause>`, `done` or
 `idle`. This is ground truth and the **only** source: a small Claude Code hook (or, for OpenCode,
-a plugin; for Codex and pi, a reporter that reads their OSC 7501 status reports, see
-[The OSC reporter](boxes-and-setup.md#the-osc-reporter-codex-pi)) on the box records the state at the moment it changes, and the status probe reads that
+a plugin; for Codex, pi and Antigravity, a reporter that reads their OSC 7501 status reports, see
+[The OSC reporter](boxes-and-setup.md#the-osc-reporter-codex-pi-antigravity)) on the box records the state at the moment it changes, and the status probe reads that
 record. There is no output-based fallback. A box whose setup hasn't been rerun since the hook was upgraded (or a
 claude started before and not yet restarted) shows `done`/`idle` but **never** `blocked` — that
 silence means "tick the Claude Code checkbox in the box's Edit dialog, save, then restart claude in
@@ -109,13 +109,13 @@ each session". Until then the old hook also rewrites its marker with a fresh tim
 notification, including the ~60-second idle timer, so a `done` you have already looked at can come
 back within a minute; and a session that just started reads `done`, not `idle`.
 
-The OSC reporter is the third source. It attaches by the pane's command (`codex`, `pi`, and
+The OSC reporter is the third source. It attaches by the pane's command (`codex`, `pi`, `agy`, and
 `opencode` only when the OpenCode plugin file is absent). Claude Code is excluded because it
-never reports inside tmux (the hook stays its source); pi needs `PI_PROGRAM_STATUS=1`, which
+never reports inside tmux (the hook stays its source); pi needs `PI_PROGRAM_STATUS=1` and agy needs `AGY_CLI_OSC7501=on`, which
 setup adds to the rc files; a Codex on a Node without `process.execve` runs as `node` and is not
 detected. Without the plugin, OpenCode's state aggregates every session of the user's shared
 server, so another TUI's pending permission shows as `blocked`. Pane headers, chips and events
-name these agents "Codex" and "pi".
+name these agents "Codex", "pi" and "Antigravity".
 
 Three event kinds go into the same timeline, each carrying its session and naming the agent:
 **Claude needs you: <cause>** (blocked), **Claude finished a turn** (done), and **Claude exited**
