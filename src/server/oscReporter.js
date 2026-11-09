@@ -34,7 +34,7 @@ export function buildOscReporterInstallScript() {
     'chmod 644 "$DIR/reporter.py.$$.tmp"',
     'mv -f "$DIR/reporter.py.$$.tmp" "$DIR/reporter.py"',
     '',
-    '# 3. One tagged rc line per file, idempotent.',
+    '# 3. One tagged rc line per variable per file, idempotent.',
     'if [ ! -f "$HOME/.profile" ]; then touch "$HOME/.profile"; fi',
     'for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do',
     '  if [ -f "$rc" ]; then',

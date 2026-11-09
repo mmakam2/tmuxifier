@@ -71,7 +71,7 @@ Host Shell. A session counts when the active pane of its current window runs `cl
 - **blocked** — the agent needs you. The cause is shown: `permission` (a permission prompt,
   reported the moment the agent asks), `question` (Claude's AskUserQuestion, OpenCode's or
   Antigravity's question tool, or a background agent asking), or `elicitation` (an MCP
-  elicitation dialog, or Antigravity's sign-in menu).
+  elicitation dialog).
 - **done** — a turn finished and you haven't looked at it yet.
 - **idle** — the session just started, or a finished turn you have looked at.
 
@@ -115,8 +115,10 @@ The OSC reporter is the third source. It attaches by the pane's command (`codex`
 never reports inside tmux (the hook stays its source); pi needs `PI_PROGRAM_STATUS=1` and agy needs `AGY_CLI_OSC7501=on`, which
 setup adds to the rc files; a Codex on a Node without `process.execve` runs as `node` and is not
 detected. Without the plugin, OpenCode's state aggregates every session of the user's shared
-server, so another TUI's pending permission shows as `blocked`. Pane headers, chips and events
-name these agents "Codex", "pi" and "Antigravity".
+server, so another TUI's pending permission shows as `blocked`. Antigravity's start-up prompts
+(folder trust, sign-in) are reported before the reporter attaches and usually read `idle`; see
+the section linked above. Pane chips show only the state; events and push notifications name
+these agents "Codex", "pi" and "Antigravity".
 
 Three event kinds go into the same timeline, each carrying its session and naming the agent:
 **Claude needs you: <cause>** (blocked), **Claude finished a turn** (done), and **Claude exited**

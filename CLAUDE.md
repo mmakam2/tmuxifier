@@ -361,7 +361,9 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   `export PI_PROGRAM_STATUS=1 # tmuxifier-osc-pi` rc line the pusher adds), agy (only with the
   `export AGY_CLI_OSC7501=on # tmuxifier-osc-agy` rc line the pusher adds; recorded live, agy 1.5.3,
   fixture lines 1491-2321; it never sends `clear`, so its marker goes at the loop's detach, and
-  `kind=auth`, the sign-in menu, is cause `elicitation`), and OpenCode only
+  `kind=auth`, the sign-in menu, is cause `elicitation`; its start-up prompts, folder trust and
+  sign-in, are emitted ~0.15 s after launch, before the 2 s attach, and usually read `ready/start`
+  — only mid-turn approvals and questions are reliably seen), and OpenCode only
   when its plugin file is absent (the plugin wins; without it the root record aggregates every
   session of the shared `opencode serve`). **Claude Code is excluded**: it probes with
   `OSC 7501;?` then DA1, tmux answers DA1 itself, so it never reports inside tmux and its hook
@@ -410,7 +412,7 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   `agentSeenStore.js`) turns `done` into `idle`. `agent-blocked` = "needs you: <cause>", `agent-input` = finished a turn
   (`done`), `agent-done` = the agent exited; events carry the session, are suppressed while that
   session is attached, and a session's first appearance never notifies. Agent state is marker-only
-  (the Claude hook or the OpenCode plugin);
+  (the Claude hook, the OpenCode plugin or the OSC reporter);
   the per-session `present` flag guards agent-done. `onEvent(cb)` is the push seam
   (`fcmPush.js`; `agent-blocked` pushes as "Claude needs you" / "OpenCode needs you"); browsers poll
   `GET /api/health/events`.

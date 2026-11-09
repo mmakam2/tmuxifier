@@ -234,11 +234,18 @@ python3 or tmux reports `osc-reporter skipped (no python3 on the box)` /
   makes pi report unprompted. Restart pi in a new shell to pick it up.
 - **Antigravity CLI (`agy`)** probes the same way as Claude Code and pi, so setup adds one tagged
   line, `export AGY_CLI_OSC7501=on # tmuxifier-osc-agy`, to the same files under the same rule as
-  the pi line. Restart agy in a new shell to pick it up. Verified against agy 1.5.3. It reports
-  the folder-trust prompt and tool approvals as `blocked` (permission), its own questions as
-  `blocked` (question) and the sign-in menu as `blocked` (elicitation). agy sends nothing on
-  exit, so the pane's state clears a few seconds after it quits (when the reporter sees the
-  pane's command change).
+  the pi line. Restart agy in a new shell to pick it up. Verified against agy 1.5.3. Tool
+  approvals read `blocked` (permission) and agy's own questions `blocked` (question). The two
+  start-up prompts, folder trust and the sign-in menu, are sent a fraction of a second after
+  launch and never repeated, before the reporter's 2-second loop has attached, so they usually
+  read `idle`: answer those in the pane.
+  The tagged line is appended after anything already in the rc file and moved back to the end on
+  every setup run, so your own `export AGY_CLI_OSC7501=off` earlier in the file is kept but
+  overridden. agy never sends a clear, and its last report on `/exit` or ctrl-c is `idle`: the pane
+  stops counting as an agent at the next status poll and its marker is removed about 4-6 seconds
+  after agy quits, when the reporter detaches the pane. agy moves a long-running shell command to
+  the background, reporting the turn as finished and then working again when the command ends, so
+  one prompt can read as two finished turns.
 - **Codex** reports natively from 0.163 on (the 0.167 binary carries the sequences), but this
   has **not been captured live yet**: it still needs a Codex sign-in on the test box. On a box whose Node predates `process.execve`, Codex
   runs as `node` and is not detected.
@@ -248,8 +255,8 @@ python3 or tmux reports `osc-reporter skipped (no python3 on the box)` /
 
 The Host Shell gets the reporter through its Claude hooks knob (`PATCH /api/local-shell`).
 
-To remove it: `rm -rf ~/.tmuxifier-osc` and delete the tagged rc line; the next setup run
-reinstalls it.
+To remove it: `rm -rf ~/.tmuxifier-osc` and delete the tagged rc lines (`# tmuxifier-osc-pi`,
+`# tmuxifier-osc-agy`); the next setup run reinstalls them.
 
 ## Post-setup script
 

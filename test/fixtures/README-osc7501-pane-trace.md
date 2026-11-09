@@ -88,6 +88,8 @@ Notes
   kinds of the spec occur: `permission` (folder trust, tool approval), `question` and `auth` (the
   sign-in menu, which waits for the operator to pick a login method). agy never sends `clear`:
   leaving it, by `/exit` or ctrl-c, ends on `idle`, so a listener learns that the agent is gone
-  only from the pane's command.
+  only from the pane's command. The start-up records (trust prompt at line 1516, sign-in at 2263)
+  arrive about 0.15 s after launch (the recorder here was piped before agy started), so a listener
+  that attaches by the pane's command usually misses them.
 
 Replayed by `test/osc7501Replay.test.js`, the acceptance test for the box-side reporter.
