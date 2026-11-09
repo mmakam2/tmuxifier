@@ -126,12 +126,57 @@ export function sampleOf(status, at, opts = {}) {
   return sample;
 }
 
+// The fields of a sample that describe agents and tmux, i.e. everything the
+// light probe behind recordAgents can refresh. All else (reachability, metrics,
+// time) belongs to the sweep.
+const AGENT_SAMPLE_KEYS = ['tmux', 'agents', 'agent', 'agentPresent', 'agentAttached'];
+
 export function initThresholdState() {
   // cpuSeeded: cpu% is delta-derived on cgroup hosts, so the sample right after
   // a restart carries no cpuPct. Seeding defers to the first sample that
   // actually observes one — otherwise a persistently-hot box would look like a
   // fresh crossing and replay a threshold event on every restart.
   return { cpu: false, cpuStreak: 0, cpuSeeded: true, mem: false, disk: false, agents: undefined };
+}
+
+// Pure agent edge detector, per session over `sample.agents` (see sampleOf).
+// `before` is the previous map, `next` the new sample (which must carry
+// `agents`). Shared by the sweep (classifyTransitions) and the real-time path
+// (recordAgents), so a marker change reads the same whichever one sees it.
+// A session with no previous entry (first appearance, restart) emits nothing.
+//   agent-blocked: working|done|idle -> blocked (carries `cause`)
+//   agent-input:   working|blocked   -> done
+//   agent-done:    had a state, now absent from the map or no longer present (claude exited)
+// Hook state is the sole source (a single-poll edge is a real transition; the
+// box's own background-work gate in claudeAgentHooks.js keeps `Stop` pauses
+// awaiting background work from reading as done, so there is no settle window
+// here). blocked/input are suppressed while the session is attached — watching
+// the terminal is its own notification; agent-done checks BOTH ends, since the
+// user may attach in the final poll interval. agent-done also requires the
+// session to be ABSENT: a present entry with no state is a marker gap (claude
+// restarting in place) not an exit, and `!next.stopped` — a Proxmox-stopped
+// box carries no sessions, so absence there is not an observation.
+export function agentEdges(before, next) {
+  const events = [];
+  const prev = before || Object.create(null);
+  for (const [session, now] of Object.entries(next.agents)) {
+    const was = Object.hasOwn(prev, session) ? prev[session].state : undefined;
+    if (!was || now.attached) continue;
+    const agent = now.agent ? { agent: now.agent } : {};
+    if (now.state === 'blocked' && (was === 'working' || was === 'done' || was === 'idle')) {
+      events.push({ kind: 'agent-blocked', session, cause: now.cause, ...agent });
+    } else if (now.state === 'done' && (was === 'working' || was === 'blocked')) {
+      events.push({ kind: 'agent-input', session, ...agent });
+    }
+  }
+  if (next.up && !next.stopped) {
+    for (const [session, was] of Object.entries(prev)) {
+      const now = Object.hasOwn(next.agents, session) ? next.agents[session] : undefined;
+      if (!was.state || was.attached || (now && (now.present || now.attached))) continue;
+      events.push({ kind: 'agent-done', session, ...(was.agent ? { agent: was.agent } : {}) });
+    }
+  }
+  return events;
 }
 
 // Pure edge detector. Reachability/auth edges compare prev↔next (stateless).
@@ -170,43 +215,13 @@ export function classifyTransitions(prev, next, thresholds, state) {
     events.push({ kind: 'down' });
   }
 
-  // Agent edges, per session over `sample.agents` (see sampleOf). `st.agents`
-  // is the PREVIOUS map and is always the last one taken from a successful
-  // probe: a failed probe's sample has no `agents` key, so it neither emits
-  // nor replaces it, and the box coming back is compared against what it
-  // looked like before it went away rather than read as a first appearance.
-  // A session with no previous entry (first appearance, restart) emits nothing.
-  //   agent-blocked: working|done|idle -> blocked (carries `cause`)
-  //   agent-input:   working|blocked   -> done
-  //   agent-done:    had a state, now absent from the map or no longer present (claude exited)
-  // Hook state is the sole source (a single-poll edge is a real transition; the
-  // box's own background-work gate in claudeAgentHooks.js keeps `Stop` pauses
-  // awaiting background work from reading as done, so there is no settle window
-  // here). blocked/input are suppressed while the session is attached — watching
-  // the terminal is its own notification; agent-done checks BOTH ends, since the
-  // user may attach in the final poll interval. agent-done also requires the
-  // session to be ABSENT: a present entry with no state is a marker gap (claude
-  // restarting in place) not an exit, and `!next.stopped` — a Proxmox-stopped
-  // box carries no sessions, so absence there is not an observation.
+  // Agent edges: see agentEdges above. `st.agents` is the PREVIOUS map and is
+  // always the last one taken from a successful probe: a failed probe's sample
+  // has no `agents` key, so it neither emits nor replaces it, and the box
+  // coming back is compared against what it looked like before it went away
+  // rather than read as a first appearance.
   if (next.agents) {
-    const before = st.agents || Object.create(null);
-    for (const [session, now] of Object.entries(next.agents)) {
-      const was = Object.hasOwn(before, session) ? before[session].state : undefined;
-      if (!was || now.attached) continue;
-      const agent = now.agent ? { agent: now.agent } : {};
-      if (now.state === 'blocked' && (was === 'working' || was === 'done' || was === 'idle')) {
-        events.push({ kind: 'agent-blocked', session, cause: now.cause, ...agent });
-      } else if (now.state === 'done' && (was === 'working' || was === 'blocked')) {
-        events.push({ kind: 'agent-input', session, ...agent });
-      }
-    }
-    if (next.up && !next.stopped) {
-      for (const [session, was] of Object.entries(before)) {
-        const now = Object.hasOwn(next.agents, session) ? next.agents[session] : undefined;
-        if (!was.state || was.attached || (now && (now.present || now.attached))) continue;
-        events.push({ kind: 'agent-done', session, ...(was.agent ? { agent: was.agent } : {}) });
-      }
-    }
+    events.push(...agentEdges(st.agents, next));
     st.agents = next.agents;
   }
   // A confirmed-stopped guest is a positive observation that nothing runs: reset
@@ -294,6 +309,15 @@ export function createHealthHistory({
   }
   const listeners = new Set();
   if (typeof onEvent === 'function') listeners.add(onEvent);
+  const configured = new Map();  // boxId -> the box's configured session name
+
+  // Swap a box's latest sample for `next`, in the ring and as the edge
+  // baseline's sample, without adding a point to the series.
+  function replaceLast(boxId, next) {
+    lastSample.set(boxId, next);
+    const ring = series.get(boxId);
+    if (ring && ring.length) ring[ring.length - 1] = next;
+  }
 
   // Persistence happens once per record() pass, not here — a 30-box outage
   // would otherwise do 30 back-to-back synchronous full-file writes.
@@ -318,6 +342,7 @@ export function createHealthHistory({
         const status = snapshot[box.id];
         if (!status) continue;
         const sample = sampleOf(status, at, { sessionName: box.sessionName, seenOf: (s) => seen.get(box.id)?.get(s) });
+        configured.set(box.id, box.sessionName);
         const ring = series.get(box.id) || [];
         ring.push(sample);
         while (ring.length > maxSamples) ring.shift();
@@ -349,15 +374,62 @@ export function createHealthHistory({
       }
       if (emitted) save(events);
       for (const id of [...series.keys()]) {
-        if (!present.has(id)) { series.delete(id); lastSample.delete(id); threshState.delete(id); }
+        if (!present.has(id)) { series.delete(id); lastSample.delete(id); threshState.delete(id); configured.delete(id); }
       }
       for (const id of [...seen.keys()]) {
         if (!present.has(id)) { seen.delete(id); seenChanged = true; }
       }
       if (seenChanged) persistSeen();
     },
+    // The real-time path: one box's agent state changed between two sweeps
+    // (statusPoller.refreshAgents, driven by agentWatch.js). `status` is that
+    // box's snapshot entry with fresh sessions and markers. This is NOT a
+    // sample: the series keeps the sweep's cadence, so the box's latest sample
+    // is rewritten in place — its time and metrics stay, only the agent fields
+    // move — and only the agent edges run. The metric thresholds are left
+    // alone on purpose: cpu needs two consecutive SWEEP samples, and a burst of
+    // marker changes must neither supply the second nor reset the streak.
+    // Nothing is pruned (record() prunes boxes absent from its list; this one
+    // is given a single box). Returns false, changing nothing, without a sweep
+    // baseline, for a box whose last sample was down or stopped, or when the
+    // status carries no session listing.
+    recordAgents(box, status) {
+      const prev = lastSample.get(box.id);
+      if (!prev || !prev.up || prev.stopped || !status) return false;
+      const fresh = sampleOf(status, prev.t, { sessionName: box.sessionName, seenOf: (s) => seen.get(box.id)?.get(s) });
+      if (!fresh.agents) return false;
+      configured.set(box.id, box.sessionName);
+      const next = { ...prev };
+      for (const k of AGENT_SAMPLE_KEYS) {
+        if (fresh[k] !== undefined) next[k] = fresh[k]; else delete next[k];
+      }
+      const st = threshState.get(box.id) || initThresholdState();
+      const evs = agentEdges(st.agents, next);
+      threshState.set(box.id, { ...st, agents: next.agents });
+      replaceLast(box.id, next);
+      const seenForBox = seen.get(box.id);
+      if (seenForBox && Array.isArray(status.sessions)) {
+        const listed = new Set(status.sessions.map((x) => x && x.name));
+        let dropped = false;
+        for (const name of [...seenForBox.keys()]) {
+          if (!listed.has(name)) { seenForBox.delete(name); dropped = true; }
+        }
+        if (dropped) persistSeen();
+      }
+      const at = now();
+      for (const ev of evs) {
+        const out = { boxId: box.id, label: box.label || box.host, host: box.host, t: at, kind: ev.kind };
+        if (ev.session !== undefined) out.session = ev.session;
+        if (ev.cause !== undefined) out.cause = ev.cause;
+        if (ev.agent !== undefined) out.agent = ev.agent;
+        emit(out);
+      }
+      if (evs.length) save(events);
+      return true;
+    },
     markSeen(boxId, session, ts) {
-      const agents = lastSample.get(boxId)?.agents;
+      const last = lastSample.get(boxId);
+      const agents = last?.agents;
       const cur = agents && Object.hasOwn(agents, session) ? agents[session] : undefined;
       if (!cur || !Number.isFinite(cur.ts) || !Number.isFinite(ts) || ts > cur.ts) return false;
       let m = seen.get(boxId);
@@ -366,6 +438,19 @@ export function createHealthHistory({
       if (prior !== undefined && prior >= ts) return true;
       m.set(session, ts);
       persistSeen();
+      // Apply the acknowledgement to the latest sample now rather than at the
+      // next sweep, so every client reading the series (the other tab, the
+      // phone) sees `idle` as soon as it asks. The same rule sampleOf applies:
+      // a finished turn at or below the watermark is idle. The edge baseline
+      // moves with it — done -> idle emits nothing either way.
+      if (cur.state === 'done' && cur.ts <= ts) {
+        const nextAgents = Object.assign(Object.create(null), agents, { [session]: { ...cur, state: 'idle' } });
+        const next = { ...last, agents: nextAgents };
+        if (configured.get(boxId) === session && next.agent === 'done') next.agent = 'idle';
+        const st = threshState.get(boxId);
+        if (st) threshState.set(boxId, { ...st, agents: nextAgents });
+        replaceLast(boxId, next);
+      }
       return true;
     },
     whenIdle() { return seenStore?.whenIdle?.() ?? Promise.resolve(); },

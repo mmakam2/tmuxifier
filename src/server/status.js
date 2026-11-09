@@ -81,9 +81,18 @@ export const WINDOW_FMT = '#{session_name}:#{window_index}:#{window_id}:#{window
 // depends on for the agent markers), neither of which may reach the probe's
 // stderr, where the reachability classifier reads. `|| true` covers the whole
 // pipeline: head closing the pipe early can leave tmux with a SIGPIPE exit.
-export const PROBE_REMOTE =
-  `${META_PROBE} ${AGENT_PROBE}${OSC_SWEEP}if command -v tmux >/dev/null 2>&1; then tmux ls -F '${STATUS_FMT}' 2>/dev/null || true; ` +
+const TMUX_PROBE =
+  `if command -v tmux >/dev/null 2>&1; then tmux ls -F '${STATUS_FMT}' 2>/dev/null || true; ` +
   `{ tmux list-windows -a -F '__WIN__ ${WINDOW_FMT}' | head -n 200; } 2>/dev/null || true; else echo __NO_TMUX__; fi`;
+
+export const PROBE_REMOTE = `${META_PROBE} ${AGENT_PROBE}${OSC_SWEEP}${TMUX_PROBE}`;
+
+// The light probe behind the real-time agent watch (agentWatch.js): markers,
+// sessions and windows, read exactly as PROBE_REMOTE reads them, and nothing
+// else. No metrics block — a probe fired by a marker change must not shorten
+// the window the sweep's cgroup CPU delta is taken over — and no OSC sweep,
+// which only (re)attaches listeners and is the sweep's job.
+export const AGENT_REMOTE = `${AGENT_PROBE}${TMUX_PROBE}`;
 
 const META_KEYS = new Set([
   'load1', 'load5', 'load15', 'cpus', 'cpuUsageUsec',
@@ -443,6 +452,31 @@ export function createStatusChecker({
         sessInflight.set(key, pending);
       }
       return pending;
+    },
+    // One light probe (AGENT_REMOTE) for a box the sweep already knows is up:
+    // its sessions, windows and agent markers, or null when it cannot say.
+    // Called by statusPoller.refreshAgents when the box's watch stream reports
+    // a marker change. It deliberately has no say over reachability: a failure
+    // returns null and leaves the backoff alone, so only the sweep ever marks a
+    // box down. Same mid-login stand-down as checkBox — a BatchMode probe must
+    // not race a password prompt on the shared socket.
+    async checkAgents(box) {
+      try {
+        if (hasLiveSession && hasLiveSession(box)) {
+          const alive = masterAlive ? await masterAlive(box) : false;
+          if (!alive) return null;
+        }
+        const argv = buildProbeArgv(box, AGENT_REMOTE, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
+        const res = await run(argv);
+        if (!res || res.code !== 0) return null;
+        const out = noTmux(res.stdout)
+          ? { tmux: false, sessions: [] }
+          : { tmux: true, sessions: attachWindows(parseTmuxSessions(res.stdout), parseTmuxWindows(res.stdout)) };
+        const agentMarks = parseAgentMarks(res.stdout);
+        return agentMarks ? { ...out, agentMarks } : out;
+      } catch {
+        return null;
+      }
     },
     resetBackoff(box) {
       backoff.delete(typeof box === 'string' ? box : keyFor(box));

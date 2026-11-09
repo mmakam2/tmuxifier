@@ -91,3 +91,18 @@ test('sshRun resolves code 124 with timedOut set when killed by its timeout', as
   expect(res.timedOut).toBe(true);
   await fs.rm(dir, { recursive: true, force: true });
 });
+
+test('sshStream with timeout 0 never times out (a resident stream)', async () => {
+  // The default 10 min kill would end every agent watch stream on a schedule.
+  // 0 means no timer at all: the stream ends only when the child does.
+  const chunks = [];
+  const started = Date.now();
+  const { done, kill } = sshStream(['-c', 'sleep 0.4; echo late'], {
+    cmd: '/bin/sh', timeout: 0, onData: (c) => chunks.push(c),
+  });
+  const { code } = await done;
+  expect(code).toBe(0);
+  expect(chunks.join('')).toContain('late');
+  expect(Date.now() - started).toBeGreaterThanOrEqual(350);
+  kill(); // idempotent after exit
+});

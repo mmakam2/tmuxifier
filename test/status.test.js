@@ -918,3 +918,83 @@ test('PROBE_REMOTE: a failing noisy python3 reporter changes neither stdout nor 
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+// --- checkAgents: the light probe behind the real-time agent watch ---------
+
+test('AGENT_REMOTE is the probe without the metrics block or the OSC sweep', async () => {
+  const { AGENT_REMOTE, PROBE_REMOTE, OSC_SWEEP } = await import('../src/server/status.js');
+  expect(AGENT_REMOTE).toContain('.tmuxifier-agent');
+  expect(AGENT_REMOTE).toContain('tmux ls -F');
+  expect(AGENT_REMOTE).toContain('__WIN__');
+  // No /proc reads: a triggered probe must not disturb the cgroup CPU delta the
+  // sweep derives, and must stay cheap enough to run on every marker change.
+  expect(AGENT_REMOTE).not.toContain('__META__');
+  expect(AGENT_REMOTE).not.toContain(OSC_SWEEP);
+  // The full probe still ends with exactly this text, so both read sessions,
+  // windows and markers the same way.
+  expect(PROBE_REMOTE.endsWith(AGENT_REMOTE.replace(/^.*?(if command -v tmux)/s, '$1'))).toBe(true);
+});
+
+test('checkAgents returns sessions, windows and markers from one light probe', async () => {
+  const seen = [];
+  const run = async (argv) => {
+    seen.push(argv[argv.length - 1]);
+    return {
+      code: 0, stderr: '',
+      stdout: '__AGENT__ main:blocked:1700000000:permission\nmain:1:0:1700000001:claude\n__WIN__ main:0:@1:1:work\n',
+    };
+  };
+  const { AGENT_REMOTE } = await import('../src/server/status.js');
+  const res = await createStatusChecker({ run }).checkAgents({ id: 'b1', host: 'h' });
+  expect(seen).toEqual([AGENT_REMOTE]);
+  expect(res.tmux).toBe(true);
+  expect(res.sessions).toHaveLength(1);
+  expect(res.sessions[0]).toMatchObject({ name: 'main', paneCmd: 'claude' });
+  expect(res.sessions[0].windowList).toEqual([{ index: 0, id: '@1', active: true, name: 'work' }]);
+  expect(res.agentMarks.main).toEqual({ state: 'blocked', ts: 1700000000, cause: 'permission' });
+  expect(res).not.toHaveProperty('metrics');
+});
+
+test('checkAgents reports a box without tmux and one with no markers', async () => {
+  const none = await createStatusChecker({ run: async () => ({ code: 0, stdout: '__NO_TMUX__\n', stderr: '' }) })
+    .checkAgents({ id: 'b1', host: 'h' });
+  expect(none).toEqual({ tmux: false, sessions: [] });
+  const idle = await createStatusChecker({ run: async () => ({ code: 0, stdout: '', stderr: '' }) })
+    .checkAgents({ id: 'b1', host: 'h' });
+  expect(idle).toEqual({ tmux: true, sessions: [] });
+});
+
+test('checkAgents answers null on any failure and never touches the sweep backoff', async () => {
+  let fail = true;
+  let calls = 0;
+  const run = async () => {
+    calls += 1;
+    return fail
+      ? { code: 255, stdout: '', stderr: 'ssh: connect to host h port 22: Connection refused' }
+      : { code: 0, stdout: 'main:1:0:1:zsh\n', stderr: '' };
+  };
+  const checker = createStatusChecker({ run });
+  expect(await checker.checkAgents({ id: 'b1', host: 'h' })).toBeNull();
+  // A failed light probe must not open a backoff window: reachability is the
+  // sweep's call, and the very next checkBox still probes for real.
+  fail = false;
+  const status = await checker.checkBox({ id: 'b1', host: 'h' });
+  expect(status.reachable).toBe(true);
+  expect(calls).toBe(2);
+  // A thrown run and an unsafe box are null too, never an exception.
+  expect(await createStatusChecker({ run: async () => { throw new Error('x'); } }).checkAgents({ id: 'b1', host: 'h' })).toBeNull();
+  expect(await createStatusChecker({ run }).checkAgents({ id: 'b1', host: 'h; rm -rf /' })).toBeNull();
+});
+
+test('checkAgents stands down while an interactive login holds the box', async () => {
+  let calls = 0;
+  const run = async () => { calls += 1; return { code: 0, stdout: '', stderr: '' }; };
+  // Session open but no master yet: a BatchMode probe would race the password
+  // prompt on the shared socket, exactly as checkBox refuses to.
+  const midLogin = createStatusChecker({ run, hasLiveSession: () => true, masterAlive: async () => false });
+  expect(await midLogin.checkAgents({ id: 'b1', host: 'h' })).toBeNull();
+  expect(calls).toBe(0);
+  const connected = createStatusChecker({ run, hasLiveSession: () => true, masterAlive: async () => true });
+  expect(await connected.checkAgents({ id: 'b1', host: 'h' })).toEqual({ tmux: true, sessions: [] });
+  expect(calls).toBe(1);
+});

@@ -60,7 +60,9 @@ export function sshRunStdin(argv, input, { env = process.env, timeout = 60000, c
 // log is never missing a trailing chunk. A timeout SIGKILLs and resolves 124
 // (shell timeout convention) directly, without waiting for `close`; `kill()`
 // force-stops and resolves 137 the same way, since an explicit abort (cancel
-// / box removed) doesn't need trailing-data completeness.
+// / box removed) doesn't need trailing-data completeness. `timeout: 0` means
+// no timer at all — a resident stream (agentWatch.js) that ends only when the
+// child does or the caller kills it.
 export function sshStream(argv, { env = process.env, timeout = 600000, onData, cmd = 'ssh' } = {}) {
   const child = spawn(cmd, argv, { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let done = false;
@@ -72,7 +74,9 @@ export function sshStream(argv, { env = process.env, timeout = 600000, onData, c
     clearTimeout(timer);
     resolveDone({ code });
   };
-  const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} finish(124); }, timeout);
+  const timer = timeout > 0
+    ? setTimeout(() => { try { child.kill('SIGKILL'); } catch {} finish(124); }, timeout)
+    : null;
   // Same split-character safety as sshRunStdin: apt/npm progress output is full
   // of multi-byte glyphs that land on chunk boundaries.
   const outDec = new StringDecoder('utf8');

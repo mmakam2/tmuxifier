@@ -610,3 +610,145 @@ test('agentKindOf: pinned to the OSC reporter asset OSC_AGENTS keys', () => {
   expect(keys).toEqual(['agy', 'codex', 'opencode', 'pi']);
   for (const k of keys) expect(agentKindOf(k)).toBe(k);
 });
+
+// --- recordAgents: the real-time path (a marker change between two sweeps) ---
+
+const RT_BOX = { id: 'b1', label: 'web-01', host: 'h1', sessionName: 'web' };
+const mark = (state, cause, ts) => ({ web: { state, cause, ts } });
+function rtHistory(extra = {}) {
+  let t = 1000;
+  const saved = [];
+  const pushed = [];
+  const h = createHealthHistory({ now: () => t, save: (e) => saved.push(e.length), onEvent: (e) => pushed.push(e), ...extra });
+  return { h, saved, pushed, tick: (ms) => { t += ms; } };
+}
+
+test('recordAgents rewrites the latest sample in place and emits the edge at once', () => {
+  const { h, saved, pushed, tick } = rtHistory();
+  h.record({ b1: { ...claudeStatus(mark('working', 'prompt', 100)), metrics: { memTotalKb: 100, memAvailKb: 40 } } }, [RT_BOX]);
+  tick(3000);
+  expect(h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 101)))).toBe(true);
+  const ring = h.getSeries('b1');
+  // Not a new sample: the series keeps the sweep's cadence, time and metrics.
+  expect(ring).toHaveLength(1);
+  expect(ring[0].t).toBe(1000);
+  expect(ring[0].memPct).toBe(60);
+  expect(ring[0].agents.web).toMatchObject({ state: 'blocked', cause: 'permission', ts: 101, agent: 'claude' });
+  expect(ring[0].agent).toBe('blocked');
+  const { events } = h.getEvents();
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({ kind: 'agent-blocked', boxId: 'b1', label: 'web-01', session: 'web', cause: 'permission', agent: 'claude', t: 4000 });
+  expect(pushed).toHaveLength(1);
+  expect(saved).toEqual([1]);
+});
+
+test('the sweep after a recordAgents sees the same state and does not notify twice', () => {
+  const { h, tick } = rtHistory();
+  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)) }, [RT_BOX]);
+  h.recordAgents(RT_BOX, claudeStatus(mark('ready', 'stop', 105)));
+  expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']);
+  tick(30000);
+  h.record({ b1: claudeStatus(mark('ready', 'stop', 105)) }, [RT_BOX]);
+  expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']);
+  expect(h.getSeries('b1')).toHaveLength(2);
+});
+
+test('recordAgents needs a sweep baseline and an up, running box', () => {
+  const { h } = rtHistory();
+  // Never swept: there is no sample to rewrite and no previous state to edge from.
+  expect(h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 1)))).toBe(false);
+  expect(h.getSeries('b1')).toEqual([]);
+  h.record({ b1: { reachable: false } }, [RT_BOX]);
+  expect(h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 1)))).toBe(false);
+  h.record({ b1: { reachable: false, proxmoxState: 'stopped' } }, [RT_BOX]);
+  expect(h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 1)))).toBe(false);
+  expect(h.getEvents().events.filter((e) => e.kind.startsWith('agent'))).toEqual([]);
+});
+
+test('recordAgents ignores a status whose session listing is unknown', () => {
+  const { h } = rtHistory();
+  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)) }, [RT_BOX]);
+  // No `sessions` key = tmux could not be listed. That is not "every session
+  // ended", so nothing may change and no agent-done may fire.
+  expect(h.recordAgents(RT_BOX, { reachable: true, agentMarks: mark('ready', 'stop', 101) })).toBe(false);
+  expect(h.getSeries('b1')[0].agents.web.state).toBe('working');
+  expect(h.getEvents().events).toEqual([]);
+});
+
+test('recordAgents keeps the suppression and first-appearance rules', () => {
+  const { h } = rtHistory();
+  const attached = (marks) => ({ ...claudeStatus(marks), sessions: [{ name: 'web', windows: 1, attached: true, paneCmd: 'claude' }] });
+  h.record({ b1: attached(mark('working', 'prompt', 100)) }, [RT_BOX]);
+  h.recordAgents(RT_BOX, attached(mark('blocked', 'permission', 101)));
+  expect(h.getEvents().events).toEqual([]); // the operator is looking at it
+  // A session that was not there at the last sample has no previous state.
+  h.recordAgents(RT_BOX, claudeStatus({ web: { state: 'working', cause: 'prompt', ts: 102 }, two: { state: 'blocked', cause: 'question', ts: 103 } }, ['web', 'two']));
+  expect(h.getEvents().events).toEqual([]);
+  // ...but from then on it edges like any other.
+  h.recordAgents(RT_BOX, claudeStatus({ web: { state: 'working', cause: 'prompt', ts: 102 }, two: { state: 'working', cause: 'unblock', ts: 104 } }, ['web', 'two']));
+  h.recordAgents(RT_BOX, claudeStatus({ web: { state: 'working', cause: 'prompt', ts: 102 }, two: { state: 'ready', cause: 'stop', ts: 105 } }, ['web', 'two']));
+  expect(h.getEvents().events.map((e) => [e.kind, e.session])).toEqual([['agent-input', 'two']]);
+});
+
+test('recordAgents reports an agent that exited', () => {
+  const { h } = rtHistory();
+  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)) }, [RT_BOX]);
+  const shell = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'zsh' }] };
+  expect(h.recordAgents(RT_BOX, shell)).toBe(true);
+  expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-done']);
+  expect(h.getSeries('b1')[0]).not.toHaveProperty('agent');
+  expect(h.getSeries('b1')[0]).not.toHaveProperty('agentPresent');
+});
+
+test('recordAgents leaves the metric thresholds and every other box alone', () => {
+  const { h, tick } = rtHistory();
+  const hot = (marks) => ({ ...claudeStatus(marks), metrics: { cpuPct: 99 } });
+  const b2 = { id: 'b2', label: 'db-01', host: 'h2' };
+  const cool = { reachable: true, tmux: true, sessions: [], metrics: { cpuPct: 5 } };
+  h.record({ b1: { ...claudeStatus(mark('working', 'prompt', 100)), metrics: { cpuPct: 5 } }, b2: cool }, [RT_BOX, b2]);
+  tick(30000);
+  h.record({ b1: hot(mark('working', 'prompt', 100)), b2: cool }, [RT_BOX, b2]); // first over-sample: no event yet
+  // Three marker changes inside the interval. None is a CPU sample: the streak
+  // must neither reach two (a false alarm) nor reset (a missed one).
+  h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 101)));
+  h.recordAgents(RT_BOX, claudeStatus(mark('working', 'unblock', 102)));
+  h.recordAgents(RT_BOX, claudeStatus(mark('ready', 'stop', 103)));
+  expect(h.getEvents().events.filter((e) => e.kind === 'threshold')).toEqual([]);
+  expect(h.getSeries('b1').at(-1).cpuPct).toBe(99);
+  expect(h.getSeries('b2')).toHaveLength(2); // a single-box update prunes nobody
+  tick(30000);
+  h.record({ b1: hot(mark('ready', 'stop', 103)), b2: cool }, [RT_BOX, b2]);
+  expect(h.getEvents().events.filter((e) => e.kind === 'threshold')).toHaveLength(1);
+});
+
+test('recordAgents drops the seen watermark of a session that is gone', () => {
+  const store = memSeenStore({ b1: { web: 100, old: 50 } });
+  const h = createHealthHistory({ seenStore: store, now: () => 1 });
+  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }, ['web', 'old']) }, [RT_BOX]);
+  h.recordAgents(RT_BOX, claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }, ['web']));
+  expect(store.data).toEqual({ b1: { web: 100 } });
+  // The watermark is honoured on this path too.
+  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('idle');
+});
+
+test('markSeen turns done into idle immediately, for every client reading the series', () => {
+  const store = memSeenStore();
+  const { h } = rtHistory({ seenStore: store });
+  h.record({ b1: claudeStatus(mark('ready', 'stop', 100)) }, [RT_BOX]);
+  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('done');
+  expect(h.markSeen('b1', 'web', 100)).toBe(true);
+  const last = h.getSeries('b1').at(-1);
+  expect(last.agents.web.state).toBe('idle');
+  expect(last.agent).toBe('idle');
+  expect(h.getSeries('b1')).toHaveLength(1);
+  // The acknowledged turn is the baseline now: a later prompt still notifies.
+  h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 110)));
+  expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
+});
+
+test('markSeen below the marker ts leaves done alone', () => {
+  const { h } = rtHistory({ seenStore: memSeenStore() });
+  h.record({ b1: claudeStatus(mark('ready', 'stop', 100)) }, [RT_BOX]);
+  expect(h.markSeen('b1', 'web', 90)).toBe(true); // an older turn's ack, accepted and inert
+  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('done');
+});
