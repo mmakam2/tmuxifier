@@ -930,9 +930,14 @@ test('AGENT_REMOTE is the probe without the metrics block or the OSC sweep', asy
   // sweep derives, and must stay cheap enough to run on every marker change.
   expect(AGENT_REMOTE).not.toContain('__META__');
   expect(AGENT_REMOTE).not.toContain(OSC_SWEEP);
-  // The full probe still ends with exactly this text, so both read sessions,
-  // windows and markers the same way.
-  expect(PROBE_REMOTE.endsWith(AGENT_REMOTE.replace(/^.*?(if command -v tmux)/s, '$1'))).toBe(true);
+  // The full probe carries both halves verbatim — the marker fragment and the
+  // tmux fragment it ends with — so the two read markers, sessions and windows
+  // from the very same text.
+  const cut = AGENT_REMOTE.indexOf('if command -v tmux');
+  expect(cut).toBeGreaterThan(0);
+  expect(AGENT_REMOTE.slice(0, cut)).toContain('__AGENT__');
+  expect(PROBE_REMOTE).toContain(AGENT_REMOTE.slice(0, cut));
+  expect(PROBE_REMOTE.endsWith(AGENT_REMOTE.slice(cut))).toBe(true);
 });
 
 test('checkAgents returns sessions, windows and markers from one light probe', async () => {
@@ -1012,3 +1017,81 @@ test('checkAgents flags a probe that fell off the saturated shared connection, a
     .checkAgents({ id: 'b1', host: 'h' });
   expect(fine).not.toHaveProperty('muxRefused');
 });
+
+// --- the probe text under the shells it actually runs in ---------------------
+// The remote command runs under the box's LOGIN shell, which is often zsh. A
+// green run under sh says nothing about zsh: an unmatched glob is a fatal
+// error there, and it aborts the whole command line, not just the loop.
+
+{
+  const { execFileSync, spawnSync } = await import('node:child_process');
+  const fsSync = await import('node:fs');
+  const osMod = await import('node:os');
+  const pathMod = await import('node:path');
+  const { AGENT_REMOTE, PROBE_REMOTE } = await import('../src/server/status.js');
+  const has = (bin) => spawnSync('sh', ['-c', `command -v ${bin}`]).status === 0;
+  const shells = ['sh', 'bash', 'zsh'].filter(has);
+
+  // A fixture HOME plus a stub `tmux` first on PATH, so "the rest of the probe
+  // still ran" is observable as the stub's session row.
+  function fixture(prepare) {
+    const home = fsSync.mkdtempSync(pathMod.join(osMod.tmpdir(), 'tmuxifier-probe-'));
+    const bin = pathMod.join(home, 'bin');
+    fsSync.mkdirSync(bin);
+    fsSync.writeFileSync(pathMod.join(bin, 'tmux'), '#!/bin/sh\n[ "$1" = ls ] && echo "main:1:0:1700000000:zsh"\nexit 0\n', { mode: 0o755 });
+    prepare(pathMod.join(home, '.tmuxifier-agent'));
+    const run = (shell, remote) => spawnSync(shell, ['-c', remote], {
+      env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 10000,
+    });
+    return { home, run, cleanup: () => fsSync.rmSync(home, { recursive: true, force: true }) };
+  }
+  const cases = {
+    'no marker directory': () => {},
+    'an empty marker directory': (d) => { fsSync.mkdirSync(d); },
+    'only subdirectories': (d) => { fsSync.mkdirSync(pathMod.join(d, 'busy'), { recursive: true }); },
+  };
+
+  for (const shell of shells) {
+    for (const [name, prepare] of Object.entries(cases)) {
+      test(`${shell}: with ${name} the probe still lists sessions and reports no markers`, () => {
+        const f = fixture(prepare);
+        try {
+          for (const remote of [AGENT_REMOTE, PROBE_REMOTE]) {
+            const res = f.run(shell, remote);
+            expect(res.status).toBe(0);
+            expect(res.stderr).toBe('');
+            expect(parseTmuxSessions(res.stdout).map((s) => s.name)).toEqual(['main']);
+            expect(parseAgentMarks(res.stdout)).toBeNull();
+          }
+        } finally { f.cleanup(); }
+      });
+    }
+
+    test(`${shell}: markers are read capped, and a FIFO or directory beside them is skipped`, () => {
+      const f = fixture((d) => {
+        fsSync.mkdirSync(pathMod.join(d, 'blocked'), { recursive: true });
+        fsSync.writeFileSync(pathMod.join(d, 'main'), 'main:blocked:1700000001:permission\n');
+        fsSync.writeFileSync(pathMod.join(d, 'two'), 'two:ready:1700000002:stop\n');
+        fsSync.writeFileSync(pathMod.join(d, 'huge'), `huge:working:1700000003:prompt${'x'.repeat(5000)}\n`);
+        execFileSync('mkfifo', [pathMod.join(d, 'trap')]);
+      });
+      try {
+        for (const remote of [AGENT_REMOTE, PROBE_REMOTE]) {
+          const res = f.run(shell, remote);
+          expect(res.status).toBe(0);
+          expect(res.stderr).toBe('');
+          const marks = parseAgentMarks(res.stdout);
+          expect(Object.keys(marks).sort()).toEqual(['main', 'two']); // `huge` overflows its cause and drops
+          expect(marks.main).toEqual({ state: 'blocked', cause: 'permission', ts: 1700000001 });
+          const longest = Math.max(...res.stdout.split('\n').filter((l) => l.startsWith('__AGENT__ ')).map((l) => l.length));
+          expect(longest).toBeLessThanOrEqual('__AGENT__ '.length + 200);
+          expect(parseTmuxSessions(res.stdout).map((s) => s.name)).toEqual(['main']);
+        }
+      } finally { f.cleanup(); }
+    });
+  }
+
+  test('the probe text was exercised under zsh, the usual login shell', () => {
+    expect(shells).toContain('zsh');
+  });
+}

@@ -2341,8 +2341,8 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     // Real-time nudges (liveHub.js): "box X changed", nothing more. The tab
     // answers by fetching that box through the ordinary routes. Browser
     // sessions only — isAuthed is the cookie check, so a device token cannot
-    // open it — with the same Origin gate as /term. Nothing a tab sends is
-    // read; the stream is one-way.
+    // open it — with the same Origin gate as /term. One-way: no message
+    // listener is attached, so whatever a tab sends is dropped unread.
     scope.get('/live', { websocket: true }, (socket, req) => {
       if (!hasTrustedOrigin(req)) { socket.close(1008, 'forbidden origin'); return; }
       if (!isAuthed(req)) { socket.close(1008, 'unauthorized'); return; }
@@ -2358,7 +2358,6 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       socket.on('pong', () => liveHub.alive(client));
       socket.once('close', remove);
       socket.once('error', remove);
-      socket.on('message', () => { /* one-way: ignored */ });
     });
   });
 

@@ -52,9 +52,17 @@ const META_PROBE =
 // stderr-silenced so a missing dir or unreadable file can't disturb the
 // reachability classifier. head caps a corrupted marker before it can flood
 // probe stdout; tr strips the trailing newline so each marker is one line.
+// The directory is LISTED, never globbed. This text runs under the box's login
+// shell, and in zsh an unmatched glob is a fatal error that aborts the whole
+// command line, not just the loop: with `for f in dir/*`, a marker directory
+// that existed but was empty (the last agent on an OpenCode- or agy-only box
+// exiting) cut the probe off before `tmux ls`, and every session on the box
+// vanished from the status until a marker appeared again. `command ls` steps
+// around an alias or function; a name with a newline splits into pieces that
+// fail `[ -f ]` and drop.
 const AGENT_PROBE =
-  `if [ -d "$HOME/.tmuxifier-agent" ]; then for f in "$HOME"/.tmuxifier-agent/*; do ` +
-  `[ -f "$f" ] && { printf '__AGENT__ '; head -c 200 "$f" | tr -d '\\n'; echo; }; done; fi 2>/dev/null; `;
+  `if [ -d "$HOME/.tmuxifier-agent" ]; then command ls -1 "$HOME/.tmuxifier-agent" | while IFS= read -r n; do ` +
+  `f="$HOME/.tmuxifier-agent/$n"; [ -f "$f" ] && { printf '__AGENT__ '; head -c 200 "$f" | tr -d '\\n'; echo; }; done; fi 2>/dev/null; `;
 
 // Triggers the OSC 7501 reporter's `sweep` role (the box-side python3 asset the
 // setup `osc-reporter` phase pushes) on every poll when the file exists. Static

@@ -69,11 +69,8 @@ test('a marker change reaches the open page in seconds, without a reload or a fu
     });
 
     // ── working -> blocked
-    const t0 = Date.now();
     writeMarker('blocked', now(), 'permission');
     await titled(new RegExp(`${session}: blocked · permission`), 10000);
-    const took = Date.now() - t0;
-    expect(took).toBeLessThan(10000);
     // It was the nudge, not the interval: no whole-fleet series fetch happened,
     // and at least one single-box fetch did.
     expect(fullPolls).toBe(0);
