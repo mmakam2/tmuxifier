@@ -34,7 +34,9 @@ function setup(panes) {
   const pipeLines = () => log().filter((l) => l.startsWith('pipe-pane'));
   const entryFile = (n) => path.join(entries, String(n));
   const putEntry = (n, e) => writeFileSync(entryFile(n), JSON.stringify(e));
-  return { home, stub, env, run, log, pipeLines, entryFile, putEntry, oscDir };
+  const runWith = (extraEnv, ...args) => spawnSync('python3', [ASSET, ...args],
+    { env: { ...env, ...extraEnv }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return { home, stub, env, run, runWith, log, pipeLines, entryFile, putEntry, oscDir };
 }
 
 const rows = (...r) => r.map((x) => x + '\n');
@@ -272,4 +274,68 @@ test('the loop command exits 0 without python3 and silences python (no run-shell
   const r = spawnSync('/bin/sh', ['-c', cmd], { env: { PATH: noPython, HOME: t.home }, encoding: 'utf8' });
   expect(r.status).toBe(0);
   expect(r.stdout + r.stderr).toBe('');
+});
+
+// ------------------------------------------------------------- attach %N role
+
+const SOCK = '/sock/default';
+const TMUX_ENV = { TMUX: `${SOCK},123,0` };
+const info = (sock, pane, piped) => ({ 5: `${sock}\t${pane}\t${piped}` });
+
+function attachCase(paneInfo, extraEnv = TMUX_ENV, args = ['attach', '%5']) {
+  const t = setup([]);
+  t.stub.setPaneInfo(paneInfo);
+  const r = t.runWith(extraEnv, ...args);
+  return { t, r };
+}
+
+test('attach opens the listener pipe on an unpiped pane of the pane\'s own server', () => {
+  const { t, r } = attachCase(info(SOCK, '%5', 0));
+  expect(r.status).toBe(0);
+  expect(r.stdout + r.stderr).toBe('');
+  expect(t.pipeLines()).toEqual([`pipe-pane -o -t %5 exec python3 '${t.home}/.tmuxifier-osc/reporter.py' listen %5`]);
+  const e = JSON.parse(readFileSync(t.entryFile(5), 'utf8'));
+  expect(e.sha).toBe(SHA);
+  expect(e.handover).toBe(false);
+  expect(typeof e.attachedAt).toBe('number');
+  expect(e).not.toHaveProperty('pid');
+  const envLines = readFileSync(t.stub.envLogFile, 'utf8').split('\n').filter(Boolean);
+  expect(envLines.length).toBeGreaterThan(0);
+  for (const l of envLines) expect(l).toBe('TMUX=unset');
+});
+
+test.each([
+  ['a pane that already has a pipe', info(SOCK, '%5', 1)],
+  ['a pane of another tmux server', info('/other/sock', '%5', 0)],
+  ['a reply naming another pane', info(SOCK, '%6', 0)],
+])('attach does nothing for %s', (_n, paneInfo) => {
+  const { t, r } = attachCase(paneInfo);
+  expect(r.status).toBe(0);
+  expect(r.stdout + r.stderr).toBe('');
+  expect(t.pipeLines()).toEqual([]);
+  expect(existsSync(t.entryFile(5))).toBe(false);
+});
+
+test('attach does nothing when tmux cannot find the pane or has no server', () => {
+  const a = attachCase({});
+  expect(a.r.status).toBe(0);
+  expect(a.r.stdout + a.r.stderr).toBe('');
+  expect(a.t.pipeLines()).toEqual([]);
+  const b = attachCase(info(SOCK, '%5', 0), { ...TMUX_ENV, STUB_TMUX_NOSERVER: '1' });
+  expect(b.r.status).toBe(0);
+  expect(b.r.stdout + b.r.stderr).toBe('');
+  expect(b.t.pipeLines()).toEqual([]);
+});
+
+test('attach outside tmux makes no tmux call', () => {
+  const { t, r } = attachCase(info(SOCK, '%5', 0), {});
+  expect(r.status).toBe(0);
+  expect(r.stdout + r.stderr).toBe('');
+  expect(t.log()).toEqual([]);
+});
+
+test.each([['5'], ['%5x'], []])('attach with a bad pane argument (%s) makes no tmux call', (...a) => {
+  const { t, r } = attachCase(info(SOCK, '%5', 0), TMUX_ENV, ['attach', ...a]);
+  expect(r.status).toBe(0);
+  expect(t.log()).toEqual([]);
 });

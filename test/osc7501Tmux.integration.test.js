@@ -67,7 +67,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const readIf = (f) => (existsSync(f) ? readFileSync(f, 'utf8') : null);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
-async function harness() {
+async function harness({ shell = false } = {}) {
   const tmuxBin = requireBinary('tmux');
   requireBinary('python3');
   const tmp = mkdtempSync(path.join(tmpdir(), 'osc-tmux-'));
@@ -81,6 +81,10 @@ async function harness() {
   const codex = path.join(bin, 'codex');
   copyFileSync('/bin/bash', codex);
   chmodSync(codex, 0o755);
+  if (shell) {
+    copyFileSync('/bin/bash', path.join(bin, 'agy'));
+    chmodSync(path.join(bin, 'agy'), 0o755);
+  }
   writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nexec '${tmuxBin}' -L '${socket}' "$@"\n`);
   chmodSync(path.join(bin, 'tmux'), 0o755);
   const installed = path.join(home, '.tmuxifier-osc', 'reporter.py');
@@ -98,6 +102,12 @@ async function harness() {
     lock: path.join(home, '.tmuxifier-osc', 'loop.lock'),
     sweep() {
       const r = spawnSync('python3', [installed, 'sweep'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      expect(r.status).toBe(0);
+      expect(r.stdout + r.stderr).toBe('');
+    },
+    // The attach role as the agy shell function runs it; tmuxEnv is the $TMUX it sees.
+    attachRole(paneId, tmuxEnv) {
+      const r = spawnSync('python3', [installed, 'attach', paneId], { env: { ...env, TMUX: tmuxEnv }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
       expect(r.status).toBe(0);
       expect(r.stdout + r.stderr).toBe('');
     },
@@ -122,8 +132,10 @@ async function harness() {
   };
   harnesses.push(h);
   // -f /dev/null: no tmux.conf of any kind; the pane runs the codex "agent".
-  tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'web', '-x', '120', '-y', '30', `exec '${codex}'`);
-  await waitFor(() => h.fmt('#{pane_current_command}') === 'codex', { what: 'codex pane' });
+  tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'web', '-x', '120', '-y', '30',
+    shell ? 'exec /bin/bash --norc --noprofile' : `exec '${codex}'`);
+  const first = shell ? 'bash' : 'codex';
+  await waitFor(() => h.fmt('#{pane_current_command}') === first, { what: `${first} pane` });
   return h;
 }
 
@@ -195,4 +207,48 @@ test('a probe-only chunk is not an observation: a foreign working marker survive
   h.tmux('send-keys', '-t', 'web', 'Enter');
   await waitFor(() => h.procs('listen %0').length === 0, { what: 'listener exit' });
   expect(readIf(h.marker)).toBe('web:working:1:prompt\n');
+});
+
+test('pre-attach catches a report sent the moment the agent starts', async () => {
+  const h = await harness({ shell: true });
+  const payload = path.join(h.tmp, 'agent.sh');
+  writeFileSync(payload, "printf '\\033]7501;state=blocked:kind=permission:app=antigravity\\007'; sleep 30; true\n");
+  h.tmux('send-keys', '-t', 'web', '-l', `python3 "$HOME/.tmuxifier-osc/reporter.py" attach "$TMUX_PANE"; agy --norc --noprofile ${payload}`);
+  h.tmux('send-keys', '-t', 'web', 'Enter');
+  await waitFor(() => /^web:blocked:\d+:permission\n$/.test(readIf(h.marker) || ''), { what: 'blocked marker' });
+  expect(h.fmt('#{pane_current_command}')).toBe('agy');
+  expect(h.fmt('#{pane_pipe}')).toBe('1');
+  const e = await waitFor(() => { const x = h.readEntry(); return x && typeof x.pid === 'number' ? x : null; }, { what: 'listener pid' });
+  expect(alive(e.pid)).toBe(true);
+  expect(h.procs('loop')).toEqual([]);
+});
+
+test("an operator's pipe is left alone", async () => {
+  const h = await harness({ shell: true });
+  const log = path.join(h.tmp, 'op.log');
+  h.tmux('pipe-pane', '-t', '%0', `cat > '${log}'`);
+  expect(h.fmt('#{pane_pipe}')).toBe('1');
+  h.attachRole('%0', h.fmt('#{socket_path}') + ',1,0');
+  expect(h.fmt('#{pane_pipe}')).toBe('1');
+  expect(existsSync(h.entry)).toBe(false);
+  h.tmux('send-keys', '-t', 'web', '-l', 'echo hello-operator');
+  h.tmux('send-keys', '-t', 'web', 'Enter');
+  await waitFor(() => (readIf(log) || '').includes('hello-operator'), { what: 'operator log' });
+});
+
+test('a pane of another tmux server is refused', async () => {
+  const h = await harness({ shell: true });
+  const tmuxBin = requireBinary('tmux');
+  const other = `osc7501-other-${randomUUID().slice(0, 8)}`;
+  const run = (...a) => execFileSync(tmuxBin, ['-L', other, ...a], { env: h.env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    run('-f', '/dev/null', 'new-session', '-d', '-s', 'elsewhere', 'sleep 60');
+    const otherSock = run('display-message', '-p', '#{socket_path}').trim();
+    expect(otherSock).not.toBe(h.fmt('#{socket_path}'));
+    h.attachRole('%0', otherSock + ',1,0');
+    expect(h.fmt('#{pane_pipe}')).toBe('0');
+    expect(existsSync(h.entry)).toBe(false);
+  } finally {
+    try { run('kill-server'); } catch {}
+  }
 });

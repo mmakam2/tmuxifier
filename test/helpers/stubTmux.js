@@ -8,15 +8,38 @@ import path from 'node:path';
 //   STUB_TMUX_PANES     printed verbatim by list-panes
 //   STUB_TMUX_NOSERVER  =1 -> every call fails "no server running"
 //   STUB_TMUX_ENTRY_DIR pipe-pane appends `ENTRY <N> <entry json>` to the log
+//   STUB_TMUX_PANEINFO  `N=<text>` lines; display-message whose format contains
+//                       #{socket_path} prints the text for -t %N (no line: fails)
+//   STUB_TMUX_ENVLOG    every call appends `TMUX=<value or unset>` (the env the
+//                       reporter handed tmux)
 // pipe-pane / run-shell print nothing and succeed (they are only logged).
 const SCRIPT = `#!/bin/sh
 printf '%s\\n' "$*" >> "$STUB_TMUX_LOG"
+[ -n "$STUB_TMUX_ENVLOG" ] && printf 'TMUX=%s\\n' "\${TMUX-unset}" >> "$STUB_TMUX_ENVLOG"
 if [ "$STUB_TMUX_NOSERVER" = 1 ]; then
   echo "no server running on /tmp/x" >&2
   exit 1
 fi
 case "$1" in
   display-message)
+    case "$*" in
+      *'#{socket_path}'*)
+        pane=""
+        while [ $# -gt 0 ]; do
+          if [ "$1" = "-t" ]; then pane="$2"; fi
+          shift
+        done
+        n="\${pane#%}"
+        if [ -f "$STUB_TMUX_PANEINFO" ]; then
+          while IFS= read -r line; do
+            case "$line" in
+              "$n="*) printf '%s\\n' "\${line#*=}"; exit 0 ;;
+            esac
+          done < "$STUB_TMUX_PANEINFO"
+        fi
+        echo "can't find pane: $pane" >&2
+        exit 1 ;;
+    esac
     pane=""
     while [ $# -gt 0 ]; do
       if [ "$1" = "-t" ]; then pane="$2"; fi
@@ -55,18 +78,25 @@ esac
 `;
 
 /** Write dir/tmux and its state files; returns the env to merge into a child. */
-export function makeStubTmux(dir, { sessionOf = {}, panes = [] } = {}) {
+export function makeStubTmux(dir, { sessionOf = {}, panes = [], paneInfo = {} } = {}) {
   const sessionsFile = path.join(dir, 'stub-sessions');
   const panesFile = path.join(dir, 'stub-panes');
   const logFile = path.join(dir, 'stub-log');
+  const paneInfoFile = path.join(dir, 'stub-paneinfo');
+  const envLogFile = path.join(dir, 'stub-envlog');
+  const lines = (map) => Object.entries(map).map(([n, s]) => `${n}=${s}\n`).join('');
   writeFileSync(path.join(dir, 'tmux'), SCRIPT);
   chmodSync(path.join(dir, 'tmux'), 0o755);
   writeFileSync(sessionsFile, Object.entries(sessionOf).map(([n, s]) => `${n}=${s}\n`).join(''));
   writeFileSync(panesFile, panes.join(''));
   writeFileSync(logFile, '');
+  writeFileSync(paneInfoFile, lines(paneInfo));
+  writeFileSync(envLogFile, '');
   return {
-    sessionsFile, panesFile, logFile,
+    sessionsFile, panesFile, logFile, paneInfoFile, envLogFile,
+    setPaneInfo: (map) => writeFileSync(paneInfoFile, lines(map)),
     setSessions: (map) => writeFileSync(sessionsFile, Object.entries(map).map(([n, s]) => `${n}=${s}\n`).join('')),
-    env: { STUB_TMUX_LOG: logFile, STUB_TMUX_SESSIONS: sessionsFile, STUB_TMUX_PANES: panesFile },
+    env: { STUB_TMUX_LOG: logFile, STUB_TMUX_SESSIONS: sessionsFile, STUB_TMUX_PANES: panesFile,
+      STUB_TMUX_PANEINFO: paneInfoFile, STUB_TMUX_ENVLOG: envLogFile },
   };
 }

@@ -10,6 +10,12 @@
 #               pane's raw bytes, folds the records, writes the session marker.
 #   loop        one resident process per box: attaches/detaches listeners by
 #               pane_current_command every 2 s.
+#   attach %N   what the `agy` shell function setup adds runs for its own pane
+#               before it starts the agent: opens the listener pipe at once, so
+#               reports sent in the first two seconds (agy's folder-trust and
+#               sign-in prompts, ~0.15 s after launch) are not lost to the
+#               loop's 2 s cadence. Only on the default tmux server and only on
+#               a pane that has no pipe.
 #   sweep       what the status probe runs each poll: one attach pass, and keeps
 #               a loop of the current asset version alive.
 # This file's pure core (extract, parse_report, Records, next_action,
@@ -632,8 +638,15 @@ def run_listen(pane_id, *, home, stdin_fd=0):
 #
 # Whose pipe is it (the foreign-pipe window)? tmux has no format naming a
 # pipe's owner, only #{pane_pipe}. The loop therefore only ever
-#   - OPENS a pipe on a pane it just listed with pane_pipe = 0 (`-o`, so a
-#     pipe that appeared in between wins silently), and
+#   - OPENS a pipe on a pane it just listed with pane_pipe = 0. `-o` opens
+#     nothing over an existing pipe but CLOSES that pipe (tmux's toggle), so a
+#     pipe that appears between the listing and the `-o` is closed; the window
+#     is the few milliseconds between the two tmux calls. The `attach` role is
+#     the second opener, under the same rule: it reads pane_pipe = 0 for that
+#     one pane immediately before. What follows it: the pane's command is
+#     still the shell for a moment, which is at most one miss of three, and if
+#     the agent never starts the loop detaches the listener after three passes
+#     and its EOF path removes the ready/start it seeded, and
 #   - CLOSES a pipe whose entry holds a LIVE pid — a listener that is reading
 #     this pane right now, which is the one proof that the pipe is ours (an
 #     operator pipe replacing ours ends our listener within milliseconds,
@@ -984,12 +997,49 @@ def run_sweep(home, once):
     return 0
 
 
+def run_attach(pane_id, home):
+    """Open the listener pipe on ONE pane, now. Run by the agy shell function
+    just before it starts the agent. Only on the default tmux server (the one
+    the loop and the listener talk to) and only on a pane with no pipe: it
+    must never close a pipe, and `pipe-pane -o` over an existing one does."""
+    # Popped, not read: $TMUX must not reach the tmux calls below, so they ask
+    # the default server. Left in place they would ask the pane's own server
+    # and always agree with themselves.
+    sock = os.environ.pop('TMUX', '').rsplit(',', 2)[0]
+    if not sock:
+        return 0
+    try:
+        r = subprocess.run(['tmux', 'display-message', '-p', '-t', pane_id,
+                            '#{socket_path}\t#{pane_id}\t#{pane_pipe}'],
+                           capture_output=True, timeout=5)
+    except Exception as e:
+        debug(home, 'attach display-message: %r' % (e,))
+        return 0
+    if r.returncode != 0:
+        debug(home, 'attach %s: tmux failed' % pane_id)
+        return 0
+    fields = r.stdout.decode('utf-8', 'replace').rstrip('\n').split('\t')
+    if len(fields) != 3 or fields[1] != pane_id:
+        debug(home, 'attach %s: unexpected reply' % pane_id)
+        return 0
+    if os.path.realpath(fields[0]) != os.path.realpath(sock):
+        debug(home, 'attach %s: pane is on another tmux server' % pane_id)
+        return 0
+    if fields[2] != '0':
+        debug(home, 'attach %s: pane already has a pipe' % pane_id)
+        return 0
+    attach(pane_id, home)
+    return 0
+
+
 def main(argv):
     # Unknown roles are a no-op.
     try:
         home = os.environ.get('HOME') or os.path.expanduser('~')
         if len(argv) >= 3 and argv[1] == 'listen' and re.match(r'^%[0-9]+$', argv[2]):
             return run_listen(argv[2], home=home)
+        if len(argv) >= 3 and argv[1] == 'attach' and re.match(r'^%[0-9]+$', argv[2]):
+            return run_attach(argv[2], home)
         if len(argv) >= 2 and argv[1] == 'loop':
             return run_loop(home)
         if len(argv) >= 2 and argv[1] == 'sweep':
