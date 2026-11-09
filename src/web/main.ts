@@ -16,6 +16,7 @@ import { buildFleetScriptRail } from './fleetScriptRail';
 import { statusOf } from './http';
 import { createFleetPoller } from './fleetPoll';
 import { createFreshProbe } from './freshProbe';
+import { createLiveQueue, openLiveLink, type LiveSocket } from './liveLink';
 import { partitionJobs, jobLamp, jobReadout, jobClock, runningCount } from './fleetJobs';
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { closeAllModals, registerModal } from './modalRegistry';
@@ -710,7 +711,16 @@ const freshProbe = createFreshProbe({
   },
 });
 
-async function pollStatus() {
+// The in-flight full poll, so a /live refresh can wait for it instead of
+// racing it (see liveRefresh).
+let pollPromise: Promise<void> | null = null;
+function pollStatus(): Promise<void> {
+  if (pollPromise) return pollPromise;
+  pollPromise = pollStatusOnce().finally(() => { pollPromise = null; });
+  return pollPromise;
+}
+
+async function pollStatusOnce() {
   if (polling) return;
   polling = true;
   // Only while the drawer is shut — an open drawer runs its own faster loop.
@@ -759,16 +769,82 @@ async function pollStatus() {
   }
 }
 
+// Everything that renders from the health series, after it changed.
+function repaintFromSeries() {
+  repaintSparklines();
+  repaintAgentBadges();
+  repaintAgentStrip();
+  updatePaneHeaders(); // the agent chip's read arrives with the series
+  if (dashTimer) dash?.update({ series: latestSeries });
+  reportSeen();
+}
+
 async function pollHealth() {
   try {
     latestSeries = await api.healthSeries();
-    repaintSparklines();
-    repaintAgentBadges();
-    repaintAgentStrip();
-    updatePaneHeaders(); // the agent chip's read arrives with the series
-    if (dashTimer) dash?.update({ series: latestSeries });
-    reportSeen();
+    repaintFromSeries();
   } catch {}
+  await pollEvents();
+}
+
+// Real-time refresh (liveLink.ts): the server said these boxes changed, so
+// fetch just them — one status entry and one series each — instead of the
+// whole fleet's. `null` means "everything" (too many at once, or the link just
+// came back and whatever changed meanwhile was never announced).
+// It waits for a full poll already in flight: that poll's responses may have
+// been read before the change, and landing after this one they would paint the
+// older state back until the next tick.
+async function liveRefresh(ids: string[] | null) {
+  if (pollPromise) { try { await pollPromise; } catch { /* its own business */ } }
+  if (ids === null) { await pollStatus(); return; }
+  const known = new Set([...allBoxes.map((b) => b.id), '__local__']);
+  const wanted = ids.filter((id) => known.has(id));
+  if (!wanted.length) return;
+  let statusChanged = false;
+  await Promise.all(wanted.map(async (id) => {
+    // The Host Shell lives in the history only, never in /api/status.
+    if (id !== '__local__') {
+      try {
+        const one = await api.statusOf(id);
+        if (Object.hasOwn(one, id)) {
+          latestStatus = { ...latestStatus, [id]: one[id] };
+          statusChanged = true;
+          const row = app.querySelector<HTMLElement>(`.box[data-id="${CSS.escape(id)}"]`);
+          if (row) applyRowStatus(row, id, latestStatus[id]);
+        }
+      } catch {}
+    }
+    try {
+      const one = await api.healthSeriesOf(id);
+      if (Array.isArray(one[id])) latestSeries = { ...latestSeries, [id]: one[id] };
+    } catch {}
+  }));
+  if (statusChanged && dashTimer) dash?.update({ boxes: allBoxes, status: latestStatus, series: latestSeries });
+  repaintFromSeries();
+  await pollEvents();
+}
+
+let liveLink: { close(): void } | null = null;
+let liveQueue: ReturnType<typeof createLiveQueue> | null = null;
+function startLive() {
+  stopLive();
+  const queue = createLiveQueue({ run: liveRefresh });
+  liveQueue = queue;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  liveLink = openLiveLink({
+    makeSocket: () => new WebSocket(`${proto}://${location.host}/live`) as unknown as LiveSocket,
+    onBox: (id) => queue.push(id),
+    onReconnect: () => queue.pushAll(),
+  });
+}
+function stopLive() {
+  liveLink?.close();
+  liveLink = null;
+  liveQueue?.stop();
+  liveQueue = null;
+}
+
+async function pollEvents() {
   try {
     const { events, latestSeq } = await api.healthEvents();
     latestEvents = events;
@@ -1810,6 +1886,7 @@ async function renderDashboard() {
     repaintStage();
   }
   pollInterval = setInterval(pollStatus, POLL_MS);
+  startLive(); // real-time nudges between the ticks above; they stay as the backstop
   void pollHealth(); // seed sparklines + events badge without waiting a tick
   void pollFleetBadge(); // and the running-jobs count on the Fleet Jobs key
 
@@ -4172,6 +4249,7 @@ window.addEventListener('tmuxifier:services-changed', () => {
 // and be restored on the way back in.
 function teardownWorkspace(): void {
   if (pollInterval) clearInterval(pollInterval);
+  stopLive();
   stopFleetPoll();
   stopFleetListPoll();
   // #app is about to be replaced, so the drawer's cached element refs and the

@@ -372,6 +372,10 @@ export const api = {
   },
   async status() { return j<Record<string, Status>>(await fetch(`/api/status?t=${Date.now()}`)); },
   async healthSeries() { return j<Record<string, Sample[]>>(await fetch(`/api/health/series?t=${Date.now()}`)); },
+  // One box's status entry / health series, in the same `{ [id]: … }` shape
+  // as the fleet-wide reads: what a /live nudge fetches (liveLink.ts).
+  async statusOf(id: string) { return j<Record<string, Status>>(await fetch(`/api/status?box=${encodeURIComponent(id)}&t=${Date.now()}`)); },
+  async healthSeriesOf(id: string) { return j<Record<string, Sample[]>>(await fetch(`/api/health/series?box=${encodeURIComponent(id)}&t=${Date.now()}`)); },
   async healthEvents() { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?t=${Date.now()}`)); },
   async uiConfig() { return j<{ termFont: string | null; termFontSize: number; uploadMaxBytes: number; voice: boolean; voiceMaxSeconds: number }>(await fetch('/api/ui-config')); },
   async uiSettings() { return j<UiSettings>(await fetch('/api/ui-settings')); },
