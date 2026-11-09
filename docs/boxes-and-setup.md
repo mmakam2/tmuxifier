@@ -240,18 +240,23 @@ python3 or tmux reports `osc-reporter skipped (no python3 on the box)` /
   trust and the sign-in menu, are sent a fraction of a second after launch and never repeated,
   before the reporter's 2-second loop has attached. Inside tmux the `agy` function attaches the
   reporter's listener to its own pane and then runs the real agy, so both prompts are seen: folder
-  trust reads `blocked` (permission) and the sign-in menu `blocked` (elicitation), about 0.2
-  seconds after launch. This covers only `agy` typed in an interactive shell started after setup
-  ran. `command agy`, a script, a box whose startup command is `agy` (tmux runs it through
-  `sh -c`, which reads no rc function), and a pane on a tmux server other than the default one
-  behave as before: the loop attaches within 2 seconds, the start-up prompt usually reads
-  `idle`, and you answer it in the pane. If you define your own alias named `agy`, the line
-  defines nothing; an `alias agy=agy` anywhere in the rc file is the opt-out that survives setup
-  reruns. The function costs one Python start per launch (about 25 ms), never touches a pane that
-  already has a pipe, and if agy does not start the listener is detached after three passes
-  (4-6 seconds).
-  The tagged line is appended after anything already in the rc file and moved back to the end on
-  every setup run, so your own `export AGY_CLI_OSC7501=off` earlier in the file is kept but
+  trust reads `blocked` (permission) and the sign-in menu `blocked` (elicitation). The box-side
+  marker is written about 0.2 seconds after launch, and the app shows it at its next status poll.
+  Outside tmux, or when python3 or the reporter is missing or fails, the function just runs agy.
+  The function is defined only in interactive shells, and only when no alias or function named
+  `agy` exists when the line is read (your own is kept as it is). In those shells
+  `command -v agy` and `type agy` report a function; scripts and non-interactive shells, setup's
+  own tool check among them, see the binary. `command agy`, a box whose startup command
+  is `agy` (tmux runs it through the default shell's `-c`, which reads no rc function), and a pane
+  on a tmux server other than the default one get no pre-attach: the loop attaches within 2
+  seconds, the start-up prompt usually reads `idle`, and you answer it in the pane. The opt-out is
+  `alias agy='command agy'` in any rc file your shell reads; it works above or below the tagged
+  line and survives setup runs. The function costs one Python start per launch (about 25 ms) and
+  never touches a pane that already has a pipe. If agy does not start, the listener is detached
+  and its `ready/start` removed within about 10 seconds: the `attach` role starts the reporter's
+  loop when none is running, so this holds even when Tmuxifier is not polling the box.
+  The tagged lines are appended after anything already in the rc file and moved back to the end
+  on every setup run, so your own `export AGY_CLI_OSC7501=off` earlier in the file is kept but
   overridden. agy never sends a clear, and its last report on `/exit` or ctrl-c is `idle`: the pane
   stops counting as an agent at the next status poll and its marker is removed about 4-6 seconds
   after agy quits, when the reporter detaches the pane. agy moves a long-running shell command to

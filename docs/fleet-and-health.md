@@ -117,8 +117,12 @@ setup adds to the rc files; a Codex on a Node without `process.execve` runs as `
 detected. Without the plugin, OpenCode's state aggregates every session of the user's shared
 server, so another TUI's pending permission shows as `blocked`. Antigravity's start-up prompts
 (folder trust, sign-in) read `blocked` when agy is launched through the shell function setup
-adds, and usually `idle` otherwise; see the section linked above. Pane chips show only the state; events and push notifications name
-these agents "Codex", "pi" and "Antigravity".
+adds, and usually `idle` otherwise; see the section linked above. Such a start-up prompt shows as
+`blocked` on the chip and the board but raises no "needs you" notification (an event needs a
+previous agent state for the session, and the status poll never sees the fraction of a second
+before the prompt), and answering it makes agy report `idle`, which reads as a finished turn:
+`done` until seen, and a "finished a turn" notification when nobody is attached. Pane chips show
+only the state; events and push notifications name these agents "Codex", "pi" and "Antigravity".
 
 Three event kinds go into the same timeline, each carrying its session and naming the agent:
 **Claude needs you: <cause>** (blocked), **Claude finished a turn** (done), and **Claude exited**

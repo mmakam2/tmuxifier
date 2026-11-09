@@ -302,6 +302,20 @@ test('attach opens the listener pipe on an unpiped pane of the pane\'s own serve
   const envLines = readFileSync(t.stub.envLogFile, 'utf8').split('\n').filter(Boolean);
   expect(envLines.length).toBeGreaterThan(0);
   for (const l of envLines) expect(l).toBe('TMUX=unset');
+  const loops = t.log().filter((x) => x.startsWith('run-shell'));
+  expect(loops).toHaveLength(1);
+  expect(loops[0]).toMatch(/^run-shell -b .* loop/);
+});
+
+test('attach starts no loop while another process holds loop.lock', async () => {
+  const t = setup([]);
+  await holdLock(t, `PID ${SHA}`);
+  t.stub.setPaneInfo(info(SOCK, '%5', 0));
+  const r = t.runWith(TMUX_ENV, 'attach', '%5');
+  expect(r.status).toBe(0);
+  expect(r.stdout + r.stderr).toBe('');
+  expect(t.pipeLines()).toEqual([`pipe-pane -o -t %5 exec python3 '${t.home}/.tmuxifier-osc/reporter.py' listen %5`]);
+  expect(t.log().some((x) => x.startsWith('run-shell'))).toBe(false);
 });
 
 test.each([
@@ -314,6 +328,7 @@ test.each([
   expect(r.stdout + r.stderr).toBe('');
   expect(t.pipeLines()).toEqual([]);
   expect(existsSync(t.entryFile(5))).toBe(false);
+  expect(t.log().some((x) => x.startsWith('run-shell'))).toBe(false);
 });
 
 test('attach does nothing when tmux cannot find the pane or has no server', () => {
@@ -321,10 +336,12 @@ test('attach does nothing when tmux cannot find the pane or has no server', () =
   expect(a.r.status).toBe(0);
   expect(a.r.stdout + a.r.stderr).toBe('');
   expect(a.t.pipeLines()).toEqual([]);
+  expect(a.t.log().some((x) => x.startsWith('run-shell'))).toBe(false);
   const b = attachCase(info(SOCK, '%5', 0), { ...TMUX_ENV, STUB_TMUX_NOSERVER: '1' });
   expect(b.r.status).toBe(0);
   expect(b.r.stdout + b.r.stderr).toBe('');
   expect(b.t.pipeLines()).toEqual([]);
+  expect(b.t.log().some((x) => x.startsWith('run-shell'))).toBe(false);
 });
 
 test('attach outside tmux makes no tmux call', () => {
@@ -334,7 +351,11 @@ test('attach outside tmux makes no tmux call', () => {
   expect(t.log()).toEqual([]);
 });
 
-test.each([['5'], ['%5x'], []])('attach with a bad pane argument (%s) makes no tmux call', (...a) => {
+test.each([
+  ['5', ['5']],
+  ['%5x', ['%5x']],
+  ['none', []],
+])('attach with a bad pane argument (%s) makes no tmux call', (_n, a) => {
   const { t, r } = attachCase(info(SOCK, '%5', 0), TMUX_ENV, ['attach', ...a]);
   expect(r.status).toBe(0);
   expect(t.log()).toEqual([]);

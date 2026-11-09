@@ -221,7 +221,7 @@ test('pre-attach catches a report sent the moment the agent starts', async () =>
   expect(h.fmt('#{pane_pipe}')).toBe('1');
   const e = await waitFor(() => { const x = h.readEntry(); return x && typeof x.pid === 'number' ? x : null; }, { what: 'listener pid' });
   expect(alive(e.pid)).toBe(true);
-  expect(h.procs('loop')).toEqual([]);
+  await waitFor(() => h.procs('loop').length === 1, { what: 'one loop, started by the role' });
 });
 
 test('the installed agy function pre-attaches', async () => {
@@ -237,8 +237,17 @@ test('the installed agy function pre-attaches', async () => {
   expect(h.fmt('#{pane_current_command}')).toBe('agy');
   const e = await waitFor(() => { const x = h.readEntry(); return x && typeof x.pid === 'number' ? x : null; }, { what: 'listener pid' });
   expect(alive(e.pid)).toBe(true);
-  expect(h.procs('loop')).toEqual([]);
+  await waitFor(() => h.procs('loop').length === 1, { what: 'one loop, started by the role' });
 });
+
+test('an agent that never starts: the loop the role started detaches the listener and the seeded marker goes', async () => {
+  const h = await harness({ shell: true });
+  h.attachRole('%0', h.fmt('#{socket_path}') + ',1,0');
+  await waitFor(() => { const e = h.readEntry(); return e && typeof e.pid === 'number'; }, { what: 'listener claim' });
+  await waitFor(() => /^web:ready:\d+:start\n$/.test(readIf(h.marker) || ''), { what: 'seeded ready/start' });
+  await waitFor(() => h.fmt('#{pane_pipe}') === '0' && !existsSync(h.marker) && !existsSync(h.entry)
+    && h.procs('listen %0').length === 0, { ms: 20000, what: 'listener detached, marker and entry gone' });
+}, 30000);
 
 test("an operator's pipe is left alone", async () => {
   const h = await harness({ shell: true });
@@ -251,6 +260,7 @@ test("an operator's pipe is left alone", async () => {
   h.tmux('send-keys', '-t', 'web', '-l', 'echo hello-operator');
   h.tmux('send-keys', '-t', 'web', 'Enter');
   await waitFor(() => (readIf(log) || '').includes('hello-operator'), { what: 'operator log' });
+  expect(h.procs('loop')).toEqual([]);
 });
 
 test('a pane of another tmux server is refused', async () => {
@@ -265,6 +275,7 @@ test('a pane of another tmux server is refused', async () => {
     h.attachRole('%0', otherSock + ',1,0');
     expect(h.fmt('#{pane_pipe}')).toBe('0');
     expect(existsSync(h.entry)).toBe(false);
+    expect(h.procs('loop')).toEqual([]);
   } finally {
     try { run('kill-server'); } catch {}
   }

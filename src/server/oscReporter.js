@@ -15,13 +15,26 @@
 // The third line (AGY_ATTACH_RC_LINE) defines an `agy` shell function that runs
 // the reporter's `attach` role on the current tmux pane before the real agy
 // starts, so agy's start-up prompt (sent ~0.15 s after launch, before the
-// loop's 2 s attach) is not missed. It is `alias agy … || eval '…'` because a
-// function definition is parsed with aliases expanded: defining `agy()` under
-// an operator alias named `agy` is a syntax error in bash and zsh. The eval
-// defers the parse until after the alias check, so an existing alias wins and
-// nothing is defined or printed. Outside tmux, or with python3 or the reporter
-// missing, the function just runs `command agy "$@"`.
-export const AGY_ATTACH_RC_LINE = `alias agy >/dev/null 2>&1 || eval 'agy() { [ -z "\${TMUX_PANE:-}" ] || python3 "$HOME/.tmuxifier-osc/reporter.py" attach "$TMUX_PANE" </dev/null >/dev/null 2>&1; command agy "$@"; }' # tmuxifier-osc-agy-attach`;
+// loop's 2 s attach) is not missed. Each part has a reason:
+//   - `case $- in *i*)`: interactive shells only. Setup's own tool check
+//     (`command -v agy` in boxActions.js) runs under the box's login shell as
+//     an ssh remote command, and a Debian bash reads ~/.bashrc even for
+//     `bash -c`; a function defined there would make setup believe agy is
+//     installed and skip the install.
+//   - `alias agy`, then `[ "$(command -v agy)" = agy ]`: nothing is defined
+//     when an alias or a function named `agy` already exists (the operator's
+//     own wins; a second read of the file sees our function and does nothing).
+//   - `eval`: a function definition is parsed with aliases expanded, so
+//     `agy()` under an alias is a syntax error; the eval defers the parse
+//     until after the checks.
+//   - `{ …; } 2>/dev/null`: nothing is ever printed at shell start-up (a zsh
+//     global alias named agy would otherwise make the test and the eval print
+//     errors).
+//   - `|| :` after the python call: under `set -e` a failing or missing
+//     python3/reporter must not stop the function before `command agy`.
+// Outside tmux, or with python3 or the reporter missing or failing, the
+// function just runs `command agy "$@"`.
+export const AGY_ATTACH_RC_LINE = `case $- in *i*) { alias agy >/dev/null || [ "$(command -v agy)" = agy ] || eval 'agy() { [ -z "\${TMUX_PANE:-}" ] || python3 "$HOME/.tmuxifier-osc/reporter.py" attach "$TMUX_PANE" </dev/null >/dev/null 2>&1 || :; command agy "$@"; }'; } 2>/dev/null ;; esac # tmuxifier-osc-agy-attach`;
 // The same line as one single-quoted sh word (every ' written as '\'').
 const AGY_ATTACH_RC_LINE_QUOTED = `'${AGY_ATTACH_RC_LINE.replaceAll("'", "'\\''")}'`;
 

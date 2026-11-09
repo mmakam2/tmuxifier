@@ -15,7 +15,8 @@
 #               reports sent in the first two seconds (agy's folder-trust and
 #               sign-in prompts, ~0.15 s after launch) are not lost to the
 #               loop's 2 s cadence. Only on the default tmux server and only on
-#               a pane that has no pipe.
+#               a pane that has no pipe. Starts a loop when none holds
+#               loop.lock, so the listener is always detached again.
 #   sweep       what the status probe runs each poll: one attach pass, and keeps
 #               a loop of the current asset version alive.
 # This file's pure core (extract, parse_report, Records, next_action,
@@ -644,9 +645,10 @@ def run_listen(pane_id, *, home, stdin_fd=0):
 #     is the few milliseconds between the two tmux calls. The `attach` role is
 #     the second opener, under the same rule: it reads pane_pipe = 0 for that
 #     one pane immediately before. What follows it: the pane's command is
-#     still the shell for a moment, which is at most one miss of three, and if
-#     the agent never starts the loop detaches the listener after three passes
-#     and its EOF path removes the ready/start it seeded, and
+#     still the shell for a moment, which is at most one miss of three; if the
+#     agent never starts, the loop (which the role starts when none is
+#     running) detaches the listener after three passes and its EOF path
+#     removes the ready/start it seeded.
 #   - CLOSES a pipe whose entry holds a LIVE pid — a listener that is reading
 #     this pane right now, which is the one proof that the pipe is ours (an
 #     operator pipe replacing ours ends our listener within milliseconds,
@@ -967,6 +969,26 @@ def _start_loop(home):
     _tmux('run-shell', '-b', _loop_cmd(home))
 
 
+def _start_loop_if_none(home):
+    """Start a loop when no process holds loop.lock. Never kills anything
+    (replacing an outdated loop is the sweep's job)."""
+    fd = None
+    try:
+        fd = _open_lock(home)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return  # a loop is running
+        os.close(fd)  # releases the flock before the loop takes it
+        fd = None
+        _start_loop(home)
+    except Exception as e:
+        debug(home, 'attach loop: %r' % (e,))
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
 def run_sweep(home, once):
     try:
         no_server, _ = pass_once(home)
@@ -1028,7 +1050,14 @@ def run_attach(pane_id, home):
     if fields[2] != '0':
         debug(home, 'attach %s: pane already has a pipe' % pane_id)
         return 0
-    attach(pane_id, home)
+    # $TMUX_PANE can be stale (a shell that inherited it but is not in that
+    # pane): the listener then sits on the named pane, seeds at most a
+    # ready/start the server ignores on a non-agent pane, and is detached
+    # after three passes.
+    if attach(pane_id, home):
+        # attach is the one opener that does not guarantee a loop; without
+        # one nothing would ever detach this listener.
+        _start_loop_if_none(home)
     return 0
 
 
