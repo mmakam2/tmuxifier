@@ -232,13 +232,24 @@ python3 or tmux reports `osc-reporter skipped (no python3 on the box)` /
   # tmuxifier-osc-pi`, to `~/.profile` (created if missing) and to `~/.bashrc` / `~/.zshrc` only when they already
   exist (a re-run replaces it); that
   makes pi report unprompted. Restart pi in a new shell to pick it up.
-- **Antigravity CLI (`agy`)** probes the same way as Claude Code and pi, so setup adds one tagged
-  line, `export AGY_CLI_OSC7501=on # tmuxifier-osc-agy`, to the same files under the same rule as
-  the pi line. Restart agy in a new shell to pick it up. Verified against agy 1.5.3. Tool
-  approvals read `blocked` (permission) and agy's own questions `blocked` (question). The two
-  start-up prompts, folder trust and the sign-in menu, are sent a fraction of a second after
-  launch and never repeated, before the reporter's 2-second loop has attached, so they usually
-  read `idle`: answer those in the pane.
+- **Antigravity CLI (`agy`)** probes the same way as Claude Code and pi, so setup adds two tagged
+  lines, `export AGY_CLI_OSC7501=on # tmuxifier-osc-agy` and a shell function named `agy`
+  (`# tmuxifier-osc-agy-attach`), to the same files under the same rule as the pi line. Restart
+  agy in a new shell to pick them up. Verified against agy 1.5.3. Tool approvals read `blocked`
+  (permission) and agy's own questions `blocked` (question). The two start-up prompts, folder
+  trust and the sign-in menu, are sent a fraction of a second after launch and never repeated,
+  before the reporter's 2-second loop has attached. Inside tmux the `agy` function attaches the
+  reporter's listener to its own pane and then runs the real agy, so both prompts are seen: folder
+  trust reads `blocked` (permission) and the sign-in menu `blocked` (elicitation), about 0.2
+  seconds after launch. This covers only `agy` typed in an interactive shell started after setup
+  ran. `command agy`, a script, a box whose startup command is `agy` (tmux runs it through
+  `sh -c`, which reads no rc function), and a pane on a tmux server other than the default one
+  behave as before: the loop attaches within 2 seconds, the start-up prompt usually reads
+  `idle`, and you answer it in the pane. If you define your own alias named `agy`, the line
+  defines nothing; an `alias agy=agy` anywhere in the rc file is the opt-out that survives setup
+  reruns. The function costs one Python start per launch (about 25 ms), never touches a pane that
+  already has a pipe, and if agy does not start the listener is detached after three passes
+  (4-6 seconds).
   The tagged line is appended after anything already in the rc file and moved back to the end on
   every setup run, so your own `export AGY_CLI_OSC7501=off` earlier in the file is kept but
   overridden. agy never sends a clear, and its last report on `/exit` or ctrl-c is `idle`: the pane
@@ -256,7 +267,7 @@ python3 or tmux reports `osc-reporter skipped (no python3 on the box)` /
 The Host Shell gets the reporter through its Claude hooks knob (`PATCH /api/local-shell`).
 
 To remove it: `rm -rf ~/.tmuxifier-osc` and delete the tagged rc lines (`# tmuxifier-osc-pi`,
-`# tmuxifier-osc-agy`); the next setup run reinstalls them.
+`# tmuxifier-osc-agy`, `# tmuxifier-osc-agy-attach`); the next setup run reinstalls them.
 
 ## Post-setup script
 

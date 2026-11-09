@@ -116,8 +116,8 @@ never reports inside tmux (the hook stays its source); pi needs `PI_PROGRAM_STAT
 setup adds to the rc files; a Codex on a Node without `process.execve` runs as `node` and is not
 detected. Without the plugin, OpenCode's state aggregates every session of the user's shared
 server, so another TUI's pending permission shows as `blocked`. Antigravity's start-up prompts
-(folder trust, sign-in) are reported before the reporter attaches and usually read `idle`; see
-the section linked above. Pane chips show only the state; events and push notifications name
+(folder trust, sign-in) read `blocked` when agy is launched through the shell function setup
+adds, and usually `idle` otherwise; see the section linked above. Pane chips show only the state; events and push notifications name
 these agents "Codex", "pi" and "Antigravity".
 
 Three event kinds go into the same timeline, each carrying its session and naming the agent:

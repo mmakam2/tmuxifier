@@ -362,8 +362,11 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   `export AGY_CLI_OSC7501=on # tmuxifier-osc-agy` rc line the pusher adds; recorded live, agy 1.5.3,
   fixture lines 1491-2321; it never sends `clear`, so its marker goes at the loop's detach, and
   `kind=auth`, the sign-in menu, is cause `elicitation`; its start-up prompts, folder trust and
-  sign-in, are emitted ~0.15 s after launch, before the 2 s attach, and usually read `ready/start`
-  — only mid-turn approvals and questions are reliably seen), and OpenCode only
+  sign-in, are emitted ~0.15 s after launch, before the 2 s attach, so the pusher also adds the
+  `AGY_ATTACH_RC_LINE` `agy` shell function (`# tmuxifier-osc-agy-attach`, skipped when an
+  `agy` alias exists) that runs `attach %N` before the real agy; a launch that bypasses the
+  function — `command agy`, a script, a startup command run via `sh -c`, a non-default tmux
+  server — still races the 2 s attach and usually reads `ready/start`), and OpenCode only
   when its plugin file is absent (the plugin wins; without it the root record aggregates every
   session of the shared `opencode serve`). **Claude Code is excluded**: it probes with
   `OSC 7501;?` then DA1, tmux answers DA1 itself, so it never reports inside tmux and its hook
@@ -374,8 +377,10 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   bytes before its own parser, so the sequence arrives intact; folds records, writes the same
   `<session>:<state>:<epoch>:<cause>` markers), `loop` (one resident per box under a
   `loop.lock` flock, 2 s passes, attaches by `pane_current_command`, detaches after 3
-  non-matching passes, registry in `~/.tmuxifier-osc/panes/`, version handover on setup rerun)
-  and `sweep [--once]` (one pass + ensure a current-version loop; what the probe runs). Never
+  non-matching passes, registry in `~/.tmuxifier-osc/panes/`, version handover on setup rerun),
+  `attach %N` (the function's one-shot: default server only, and only a pane whose `pane_pipe`
+  is 0, because `pipe-pane -o` on a piped pane closes the pipe; prints nothing, exits 0) and
+  `sweep [--once]` (one pass + ensure a current-version loop; what the probe runs). Never
   writes to the pane. The handover protocol is the comment block above `run_listen` — read it
   before touching the entry: only the loop writes `handover`, only the listener writes `pid`,
   `attachedAt` is the listener's generation token, every entry read-modify-write holds
@@ -387,7 +392,9 @@ Login rate limiting, REST under `/api/*`, the `/term` and `/voice-link` WebSocke
   as `node` and is not detected. Tests: `test/fixtures/osc7501-pane-trace.jsonl` replayed by
   `test/osc7501Replay.test.js` (acceptance), and `test/osc7501Tmux.integration.test.js` against a
   real, private tmux server (the only place a handover's cross-process ordering is observable;
-  the stub-tmux suites never spawn a listener). Design:
+  the stub-tmux suites never spawn a listener; it also pins pre-attach catching a report sent at
+  agent start, an operator's pipe left alone, a foreign-server pane refused, and the installed
+  `agy` function end to end). Design:
   `docs/superpowers/specs/2026-11-08-osc7501-pane-reporter-design.md`.
 
 ### Status and health
