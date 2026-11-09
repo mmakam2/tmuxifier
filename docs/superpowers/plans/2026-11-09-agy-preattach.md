@@ -167,3 +167,20 @@ Facts every edit must agree with:
 - [ ] **Step 4: `CLAUDE.md` and `AGENTS.md`.** In the `oscReporter.js` entry: replace the clause "its start-up prompts, folder trust and sign-in, are emitted ~0.15 s after launch, before the 2 s attach, and usually read `ready/start` — only mid-turn approvals and questions are reliably seen" with the new mechanism and its limit in the same compressed style (the `AGY_ATTACH_RC_LINE` function line, tag `# tmuxifier-osc-agy-attach`, runs `attach %N` before agy; launches that bypass the function still race the 2 s attach); add `attach %N` to the roles sentence (default server only, only a pane with `pane_pipe` 0, because `pipe-pane -o` closes an existing pipe); mention the three new real-tmux tests where the entry lists the tests. Then confirm the two edits are identical: `diff <(git diff CLAUDE.md | grep '^[+-][^+-]') <(git diff AGENTS.md | grep '^[+-][^+-]')` prints nothing.
 - [ ] **Step 5: Check.** `grep -rn "usually read" README.md docs/*.md CLAUDE.md AGENTS.md` shows no leftover claim that contradicts the facts above; `npm run typecheck` passes; `npx vitest run test/oscReporter.test.js test/osc7501Sweep.test.js` passes.
 - [ ] **Step 6: Commit.** `docs(osc7501): agy start-up prompts are caught by the pre-attach function`.
+
+---
+
+## Revisions after the whole-branch review
+
+The review ran the first form of the rc line against real shells and the rest of setup, and three things changed. Everything above describes the first form; this section is what shipped.
+
+- **The rc line is interactive-only and yields to an operator's own `agy`.** Setup's tool check (`command -v agy`) runs under the box's login shell as an ssh remote command, and a Debian bash reads `~/.bashrc` even for `bash -c`: the function made setup believe agy was installed. The line also replaced an operator's own `agy` function on every setup run. The line that shipped:
+
+  ```
+  case $- in *i*) { alias agy >/dev/null || [ "$(command -v agy)" = agy ] || eval 'agy() { [ -z "${TMUX_PANE:-}" ] || python3 "$HOME/.tmuxifier-osc/reporter.py" attach "$TMUX_PANE" </dev/null >/dev/null 2>&1 || :; command agy "$@"; }'; } 2>/dev/null ;; esac # tmuxifier-osc-agy-attach
+  ```
+
+- **The opt-out is `alias agy='command agy'`**, which works above or below the tagged line. `alias agy=agy` only works above it.
+- **The `attach` role starts a loop when none holds `loop.lock`.** It was the first opener with no loop guaranteed behind it, so a listener on a box Tmuxifier is not polling was never detached.
+
+Known and left for a separate decision: a start-up prompt reads `blocked` but raises no "needs you" event (the server's edge detector needs a previous agent state for the session), and answering it reads as a finished turn.
