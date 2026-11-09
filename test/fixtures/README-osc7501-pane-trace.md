@@ -16,8 +16,15 @@ Agents: **OpenCode 2.2.6** (free "Big Pickle" model, so turns are real but non-d
 on the box and emitted nothing there; its binary does contain `]7501;state=`, `:app=codex` and
 `]7501;state=clear`, so record it once the box is re-seeded.
 
-Scrubbed: the box hostname in the zsh prompt -> `box01`. Session ids, titles (`msg`/`title` are
-base64 UTF-8 per the spec) and timestamps are the real ones.
+Lines 1491-2321 were appended on 2026-11-09 from the same box: **Antigravity CLI 1.5.3** (`agy`,
+signed in, model "Gemini 4 Argon", so turns are real), recorded the same way in a private tmux
+server (`tmux -L`), three panes: `agy` (the walk), `agyauth` (an empty `HOME`, so not signed in)
+and `agyplain` (no `AGY_CLI_OSC7501`). The last two overlap in time, so their chunks interleave
+from line 2272 on.
+
+Scrubbed: the box hostname in the zsh prompt -> `box01`; in the agy lines also the account email
+in agy's banner -> `you@example.com` and the conversation id in its exit hint -> a zero UUID.
+Session ids, titles (`msg`/`title` are base64 UTF-8 per the spec) and timestamps are the real ones.
 
 | Scenario | Lines | OSC 7501 seen (body after `ESC ] 7501 ;`, all `ST`-terminated unless noted) |
 |---|---|---|
@@ -37,6 +44,20 @@ base64 UTF-8 per the spec) and timestamps are the real ones.
 | (n) bash prompt, auto-allowed | 1035-1132 | `working` root+id (1037-1038); `clear:id` (1107); root `idle` (1108). No `blocked` |
 | (o) long prompt, Escape after 3 s | 1133-1474 | `working` root+id (1135-1136); ~300 chunks of streamed text; `clear:id` (1447); root `idle` (1448). Whether Escape cut the turn short or it finished on its own is not distinguishable in the stream |
 | (p) `/exit` | 1475-1490 | `state=clear` (1477) |
+| (q) `AGY_CLI_OSC7501=on agy` in a new directory: the folder-trust prompt | 1491-1525 | **no probe**; `state=blocked:kind=permission:app=antigravity:msg=` "Trust this folder?" (1516). Every agy record is a root record (no `id`) and **BEL-terminated** |
+| (r) trust accepted (Enter) | 1526-1532 | `state=idle:app=antigravity` (1527) |
+| (s) plain prompt, no tools | 1533-1601 | `state=working:app=antigravity` (1538); `state=done:app=antigravity:msg=` "pong" (1590): `msg` is the reply text |
+| (t) shell-command prompt -> permission asked | 1602-1682 | `idle` on the first keystroke after a `done` (1603); `working` (1607); `state=blocked:kind=permission:app=antigravity:msg=` "Approve RunCommand: touch rec-probe.txt" (1670) |
+| (u) **Yes, run command** (Enter) | 1683-1757 | `working` (1684); `done` (1751) |
+| (v) shell-command prompt -> permission asked again | 1758-1853 | `idle` (1760); `working` (1763); `blocked:kind=permission` (1843) |
+| (w) **No, cancel** (Down x3, Enter) | 1854-1870 | `idle` (1859), with no `working` or `done` in between: a decline ends the turn |
+| (x) prompt that makes agy ask the user a question | 1871-1972 | `working` (1878); `state=blocked:kind=question:app=antigravity:msg=` "Please pick a color:" (1962) |
+| (y) answer picked (Down, Enter) | 1973-2186 | `working` (1976); the turn was still running when (z) was marked |
+| (z) `/exit` | 2187-2203 | the turn's `done`, msg "blue" (2196); then `idle` twice (2198, 2199). **No `state=clear`**: agy's last word on exit is `idle` |
+| (aa) `AGY_CLI_OSC7501=on agy` with an empty `HOME` (pane `agyauth`, from 2204): the "Select login method" menu | 2208-2270 | `state=blocked:kind=auth:app=antigravity:msg=` "Sign in required" (2263) |
+| (ab) ctrl-c at the sign-in menu | 2271-2278 | nothing (agy asks for a second ctrl-c) |
+| (ac) plain `agy`, signed in, then `/exit` (pane `agyplain`, from 2274) | 2279-2309 | probe `?` only, BEL-terminated, followed by an OSC 11 query (2283). Like Claude and unforced pi, agy stays silent inside tmux without the variable |
+| (ad) second ctrl-c in the sign-in pane (`agyauth`) | 2310-2321 | `state=idle:app=antigravity` (2312), again no `clear` |
 
 Notes
 - **tmux behavior (3.5a).** `pipe-pane` receives the pane's raw bytes before tmux's parser, so OSC
@@ -54,9 +75,19 @@ Notes
   `blocked` for a session that belonged to a dead pane, with `msg` "2 sessions need input". A
   listener cannot tell from the stream which child id is "this pane's" session (the TUI's own
   session exists only after its first prompt).
-- `kind=permission` is the only `blocked` kind recorded; `title` is OpenCode's session title,
-  `msg` is "Permission needs input" / "N sessions need input". No `done`, `error` or `progress`
-  was emitted by any agent here.
-- `/exit` emits a bare `state=clear`. Process death without `/exit` (session killed) emits nothing.
+- OpenCode and pi (lines 1-1490): `kind=permission` is the only `blocked` kind; `title` is
+  OpenCode's session title, `msg` is "Permission needs input" / "N sessions need input"; neither
+  emitted `done`. No agent in the trace emitted `error` or `progress`.
+- `/exit` emits a bare `state=clear` in OpenCode. Process death without `/exit` (session killed)
+  emits nothing.
+- **agy's record model.** One root record, no `id`, no `title`, always `app=antigravity`, BEL
+  terminator. `AGY_CLI_OSC7501=on` skips the probe entirely (the variable is documented in the
+  binary's own release note: `off|on`, "on" for a terminal that supports the sequence but does not
+  answer the check). A turn is `working` -> `done` (`msg` = the reply, so the stream carries model
+  output), and the `done` turns into `idle` at the operator's next keystroke. All three `blocked`
+  kinds of the spec occur: `permission` (folder trust, tool approval), `question` and `auth` (the
+  sign-in menu, which waits for the operator to pick a login method). agy never sends `clear`:
+  leaving it, by `/exit` or ctrl-c, ends on `idle`, so a listener learns that the agent is gone
+  only from the pane's command.
 
 Replayed by `test/osc7501Replay.test.js`, the acceptance test for the box-side reporter.
