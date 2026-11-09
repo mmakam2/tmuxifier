@@ -192,8 +192,10 @@ for (const [name, shellPath, optional] of cases) {
     expect(noise(r.stderr)).toBe('');
   });
   t(`agy function (${name}): under set -e a failing python3 still runs agy`, async () => {
-    const { b, lines, r } = await fn(name, shellPath, { tmuxPane: '%5', first: 'set -e', pyExit: 2, body: 'agy x || echo rc=$?\n' });
-    expect(r.stdout).toBe('rc=7\n');
+    // A plain call: `agy x || …` would switch errexit off inside the function.
+    // agy's own exit 7 then ends the script, so the echo must never run.
+    const { b, lines, r } = await fn(name, shellPath, { tmuxPane: '%5', first: 'set -e', pyExit: 2, body: 'agy x\necho unreachable\n' });
+    expect(r.stdout).toBe('');
     expect(lines).toEqual([attachLine(b), 'agy 1 [x]']);
     expect(noise(r.stderr)).toBe('');
   });
