@@ -151,7 +151,9 @@ test('sample() runs the OSC sweep once, before the tmux listing, when the report
     runTmux: async () => { order.push(['tmux']); return { code: 0, stdout: '' }; },
   });
   await sampler.sample();
-  expect(order).toEqual([['sweep', home], ['tmux']]);
+  expect(order[0]).toEqual(['sweep', home]);
+  expect(order.slice(1).every(([k]) => k === 'tmux')).toBe(true);
+  expect(order.filter(([k]) => k === 'sweep')).toHaveLength(1);
 });
 
 test('sample() never runs the OSC sweep when the reporter is absent', async () => {
@@ -173,4 +175,20 @@ test('a rejecting or synchronously throwing runSweep leaves the sample unchanged
   for (const runSweep of [async () => { throw new Error('boom'); }, () => { throw new Error('sync'); }]) {
     expect(await createLocalAgentSampler({ home, runTmux, runSweep }).sample()).toEqual(base);
   }
+});
+
+test('sample() folds Host Shell split panes and ignores a closed pane', async () => {
+  const home = tmpHome();
+  const dir = path.join(home, '.tmuxifier-agent');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'local%1'), 'local:working:100:prompt:%1\n');
+  fs.writeFileSync(path.join(dir, 'local%2'), 'local:ready:200:stop:%2\n');
+  fs.writeFileSync(path.join(dir, 'local%9'), 'local:blocked:300:question:%9\n');
+  const sampler = createLocalAgentSampler({
+    home,
+    runTmux: async (args) => (args[0] === 'list-panes'
+      ? { code: 0, stdout: '__PANE__ local:%1:claude\n__PANE__ local:%2:claude\n' }
+      : { code: 0, stdout: 'local:1:0:1722600000:claude\n' }),
+  });
+  expect((await sampler.sample()).agentMarks.local).toEqual({ state: 'working', cause: 'prompt', ts: 100 });
 });

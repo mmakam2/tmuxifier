@@ -317,7 +317,9 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   and `tmuxifier-agent-hook.sh`. Script text interpolates **nothing** (files arrive on stdin);
   the box decides via `command -v claude`; `settings.json` is merged in place (jq → node →
   python3), hooks remove-then-append so reruns are idempotent and the operator's hooks survive.
-  The hook writes `<session>:<state>:<epoch>:<cause>` markers under `~/.tmuxifier-agent/`, the
+  The hook writes one `<session>:<state>:<epoch>:<cause>:<%pane>` marker per pane (file
+  `<session><%pane>`; split panes share a session, and without `$TMUX_PANE` it falls back to a
+  four-field session-wide file) under `~/.tmuxifier-agent/`, the
   **sole** source of agent state. States `working|blocked|ready`; causes `prompt|resume|stop|start|
   permission|question|elicitation|unblock`. Old three-field markers still parse (`waiting` reads as
   a finished turn); until setup is rerun and claude restarted, the old hook rewrites `waiting` with a
@@ -326,14 +328,14 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   `Notification` `permission_prompt` is a backstop that never downgrades an existing block; `ask`
   (PreToolUse AskUserQuestion) and the elicitation / `agent_needs_input` notifications also write
   `blocked`; a sibling
-  `blocked/<session>` records which agent (main or a subagent id) raised the block, so only that
+  `blocked/<session><%pane>` records which agent (main or a subagent id) raised the block, so only that
   agent's next tool call clears it, and `unblock` (PostToolUse and PostToolUseFailure) exits before reading stdin
   unless the marker is `blocked` (two forks, `sh` and `tmux`, per tool call); on a blocked marker it
   writes `working/unblock` only when the payload's `agent_id` matches the recorded owner. `idle_prompt`/`agent_completed` write `ready/stop` only over a `working`
   marker — timers never clear `blocked` — so a plain "No" to a permission prompt (which fires no hook)
   stays `blocked` until the operator's next prompt or Claude's next tool call, and a granted
   permission stays `blocked` until that tool's PostToolUse. Its background-work gate
-  (`busy/<session>/` tokens: `sub.` bracketed by SubagentStart/Stop with a 120min TTL, `bg.` from
+  (`busy/<session><%pane>/` tokens: `sub.` bracketed by SubagentStart/Stop with a 120min TTL, `bg.` from
   PreToolUse `Bash` with a ~2min TTL) keeps `Stop`, `idle_prompt` and `agent_completed` from
   reading as a finished turn while background work runs; a `<task-notification>` resume clears only
   `bg.` tokens, the operator's own prompt clears all. Fails open. Unit tests have twice been green
@@ -423,7 +425,11 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   the OSC reporter's `sweep` each poll when `~/.tmuxifier-osc/reporter.py` exists, fully redirected. Reports sessions, active-pane command,
   `#{window_activity}` (the output clock — **not** `#{session_activity}`, a key-input clock), box
   clock, metrics, distro (`/etc/os-release` read with shell built-ins under the probe's bare PATH),
-  agent markers (`parseAgentMarks`), and windows (`list-windows -a`, ≤200 rows, name field last).
+  agent markers (`parseAgentMarks`), windows (`list-windows -a`, ≤200 rows, name field last) and
+  panes (`__PANE__`, ≤400 rows). `parseAgentMarks` folds a session's pane markers (blocked >
+  working > finished > just started, newest first within a rank) and drops a pane marker whose
+  pane is gone, moved to another session, or back at a shell; an absent or row-capped pane
+  listing fails open. A session-wide marker older than the newest live pane marker is ignored.
   `cleanWindowName` strips C0/C1 and bidi controls; `__NO_TMUX__` matches as a whole line.
   Session rows must have the `STATUS_FMT` shape (≤200; a name with controls or over 256 chars
   drops, never rewritten); a failed probe's ssh error keeps its last 1024 chars, controls stripped.

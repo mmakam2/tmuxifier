@@ -20,7 +20,7 @@ async function env() {
   const bin = path.join(dir, 'bin');
   await fs.mkdir(bin, { recursive: true });
   await fs.writeFile(path.join(bin, 'tmux'), "#!/bin/sh\nprintf '%s\\n' 'rec'\n", { mode: 0o755 });
-  return { dir, e: { HOME: dir, TMUX: '/tmp/tmux-0/default,123,0', PATH: `${bin}:/usr/bin:/bin` } };
+  return { dir, e: { HOME: dir, TMUX: '/tmp/tmux-0/default,123,0', TMUX_PANE: '%3', PATH: `${bin}:/usr/bin:/bin` } };
 }
 
 function run(arg, e, stdin) {
@@ -42,7 +42,7 @@ test('the recorded trace drives the marker through blocked -> working -> ready w
       // Claude session, and a silently failing write would fake a green trail.
       expect(await run(arg, e, JSON.stringify(payload)), `line ${states.length + 1} ${arg}`).toBe(0);
     }
-    const m = await fs.readFile(path.join(dir, '.tmuxifier-agent', 'rec'), 'utf8').catch(() => '');
+    const m = await fs.readFile(path.join(dir, '.tmuxifier-agent', 'rec%3'), 'utf8').catch(() => '');
     const parts = m.trim().split(':');
     states.push({
       line: states.length + 1,

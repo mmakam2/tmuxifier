@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { execFile } from 'node:child_process';
-import { STATUS_FMT, parseTmuxSessions, parseAgentMarks } from './status.js';
+import { STATUS_FMT, PANE_FMT, PANE_ROWS_MAX, parseTmuxSessions, parseAgentMarks } from './status.js';
 
 // Matches LOCAL_GROUP in sessions.js and the client's pane id. Defined here
 // rather than imported from sessions.js so statusPoller's import chain stays
@@ -56,8 +56,9 @@ function isNoServer(res) {
 // Mirror of the on-box AGENT_PROBE shell fragment: each marker file becomes
 // one `__AGENT__ <content>` line — capped, newline-stripped — then the same
 // parser that handles probe stdout applies its closed state set and numeric
-// timestamp allowlist.
-export async function readAgentMarks(home) {
+// timestamp allowlist. `paneRows` are the `__PANE__` lines the on-box probe would
+// have printed, which is how the parser knows which per-pane markers are live.
+export async function readAgentMarks(home, paneRows = []) {
   const dir = path.join(home, '.tmuxifier-agent');
   let names;
   try { names = await fs.promises.readdir(dir); } catch { return null; }
@@ -75,7 +76,7 @@ export async function readAgentMarks(home) {
       lines.push('__AGENT__ ' + buf.subarray(0, MARK_MAX_BYTES).toString('utf8').replace(/\n/g, ''));
     } catch { /* unreadable marker: skip it, keep the rest */ }
   }
-  return parseAgentMarks(lines.join('\n'));
+  return parseAgentMarks([...lines, ...paneRows].join('\n'));
 }
 
 // The OSC reporter's `sweep` role (see oscReporter.js): attaches listeners to
@@ -120,8 +121,14 @@ export function createLocalAgentSampler({ home = os.homedir(), runTmux = runTmux
       } catch (err) {
         if (err && err.code === 'ENOENT') out.sessions = []; // tmux not installed
       }
+      // Best-effort: with no rows the parser keeps every pane marker.
+      let paneRows = [];
       try {
-        const marks = await readAgentMarks(home);
+        const res = await runTmux(['list-panes', '-a', '-F', `__PANE__ ${PANE_FMT}`]);
+        if (res.code === 0) paneRows = String(res.stdout).split('\n').filter(Boolean).slice(0, PANE_ROWS_MAX);
+      } catch { /* no listing: no pane is ruled out */ }
+      try {
+        const marks = await readAgentMarks(home, paneRows);
         if (marks) out.agentMarks = marks;
       } catch { /* marker dir unreadable: no agent state */ }
       return out;

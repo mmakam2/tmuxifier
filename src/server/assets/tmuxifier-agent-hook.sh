@@ -2,9 +2,13 @@
 # Tmuxifier agent-state hook (installed by box setup; safe to delete — the
 # next setup run reinstalls it). Claude Code invokes it with the event name
 # as $1 and the event JSON on stdin.
-# Writes one line — <session>:<state>:<epoch>:<cause> — to
-# ~/.tmuxifier-agent/<file> for the Tmuxifier status probe. Colons are safe separators: tmux forbids
-# them in session names. No set -e: a hook failure must never surface into
+# Writes one line — <session>:<state>:<epoch>:<cause>:<pane> — to
+# ~/.tmuxifier-agent/<session><pane> (e.g. web%12) for the Tmuxifier status probe.
+# Colons are safe separators: tmux forbids them in session names. Each pane keeps
+# its own marker, busy tokens and blocked record, because split panes share a
+# session and a single file would make the last writer win; the server folds a
+# session's panes. Without a usable $TMUX_PANE it falls back to the four-field
+# session-wide marker. No set -e: a hook failure must never surface into
 # the Claude session, so every path is guarded instead.
 #
 # State vocabulary (state/cause):
@@ -28,7 +32,7 @@
 # A GRANTED permission is not observable either: the block clears only on the
 # tool's PostToolUse, so a long granted command reads blocked until it ends.
 #
-# blocked/<session> holds the blocker's agent_id (empty = main agent) so
+# blocked/<session><pane> holds the blocker's agent_id (empty = main agent) so
 # `unblock` only clears a block its own agent raised. Like busy/, the directory
 # is invisible to the probe, which reads only `[ -f ]` entries of .tmuxifier-agent/*.
 #
@@ -40,7 +44,7 @@
 # turn that ended only to await a background subagent or shell — work the
 # harness resumes on its own, with nobody waiting on the operator. So
 # outstanding background work is tracked as token files under
-# .tmuxifier-agent/busy/<session>/ and gates the two events that would
+# .tmuxifier-agent/busy/<session><pane>/ and gates the two events that would
 # otherwise announce a turn that isn't really over. The probe enumerates
 # .tmuxifier-agent/* and reads each `[ -f ]` entry, so the busy DIRECTORY is
 # invisible to it.
@@ -54,8 +58,16 @@ SESSION=$(tmux display-message -p '#S' 2>/dev/null) || exit 0
 [ -n "$SESSION" ] || exit 0
 DIR="$HOME/.tmuxifier-agent"
 SAFE=$(printf '%s' "$SESSION" | tr -c 'A-Za-z0-9._-' '_')
-FILE="$DIR/$SAFE"
-BUSY="$DIR/busy/$SAFE"
+# Allowlisted because it becomes part of a path and of the marker line.
+PANE=${TMUX_PANE:-}
+case "$PANE" in
+  %|%*[!0-9]*) PANE='' ;;
+  %*) ;;
+  *) PANE='' ;;
+esac
+KEY="$SAFE$PANE"
+FILE="$DIR/$KEY"
+BUSY="$DIR/busy/$KEY"
 
 # Sets CUR to the state field of this session's marker (empty when absent).
 # Sets a variable rather than printing, so no command substitution forks.
@@ -168,7 +180,7 @@ case "${1:-}" in
     # the main agent's dialog, nor the reverse.
     AID=$(json_str agent_id)
     OWNER=''
-    [ -f "$DIR/blocked/$SAFE" ] && { IFS= read -r OWNER < "$DIR/blocked/$SAFE"; } 2>/dev/null
+    [ -f "$DIR/blocked/$KEY" ] && { IFS= read -r OWNER < "$DIR/blocked/$KEY"; } 2>/dev/null
     [ "$AID" = "$OWNER" ] || exit 0
     STATE=working CAUSE=unblock ;;
   notify)
@@ -197,17 +209,17 @@ case "${1:-}" in
       *) exit 0 ;;
     esac ;;
   start) STATE=ready CAUSE=start ;;
-  end) rm -f "$FILE" "$DIR/blocked/$SAFE"; rm -rf "$BUSY" 2>/dev/null; exit 0 ;;
+  end) rm -f "$FILE" "$DIR/blocked/$KEY"; rm -rf "$BUSY" 2>/dev/null; exit 0 ;;
   *) exit 0 ;;
 esac
 mkdir -p "$DIR"
 # Record who raised a block (empty = main agent); drop the record otherwise.
 if [ "$STATE" = blocked ]; then
-  mkdir -p "$DIR/blocked" 2>/dev/null && printf '%s\n' "$(json_str agent_id)" > "$DIR/blocked/$SAFE" 2>/dev/null
+  mkdir -p "$DIR/blocked" 2>/dev/null && printf '%s\n' "$(json_str agent_id)" > "$DIR/blocked/$KEY" 2>/dev/null
 else
-  rm -f "$DIR/blocked/$SAFE" 2>/dev/null
+  rm -f "$DIR/blocked/$KEY" 2>/dev/null
 fi
 # Self-prune markers for sessions that died without a SessionEnd. Depth-capped:
 # the busy tokens below have their own, far shorter, TTL.
 find "$DIR" -maxdepth 1 -type f -mtime +7 -exec rm -f {} + 2>/dev/null || true
-printf '%s:%s:%s:%s\n' "$SESSION" "$STATE" "$(date +%s)" "$CAUSE" > "$FILE.$$.tmp" && mv "$FILE.$$.tmp" "$FILE"
+printf '%s:%s:%s:%s%s\n' "$SESSION" "$STATE" "$(date +%s)" "$CAUSE" "${PANE:+:$PANE}" > "$FILE.$$.tmp" && mv "$FILE.$$.tmp" "$FILE"

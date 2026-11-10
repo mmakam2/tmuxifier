@@ -47,7 +47,7 @@ const META_PROBE =
   `echo; } 2>/dev/null;`;
 
 // Marker files written by the on-box Claude Code hook (claudeAgentHooks.js):
-// one `__AGENT__ <session>:<state>:<epoch>` line each. Static and
+// one `__AGENT__ <marker contents>` line each (see parseAgentMarks). Static and
 // non-interpolated like META_PROBE — no box field reaches it — and fully
 // stderr-silenced so a missing dir or unreadable file can't disturb the
 // reachability classifier. head caps a corrupted marker before it can flood
@@ -73,6 +73,12 @@ const AGENT_PROBE =
 export const OSC_SWEEP =
   'if [ -f "$HOME/.tmuxifier-osc/reporter.py" ] && command -v python3 >/dev/null 2>&1; then python3 "$HOME/.tmuxifier-osc/reporter.py" sweep >/dev/null 2>&1 || true; fi; ';
 
+// One line per pane on the box. parseAgentMarks reads these to decide which
+// per-pane markers still describe a running agent. Session first and the command
+// last, because session names cannot contain a colon and commands can.
+export const PANE_FMT = '#{session_name}:#{pane_id}:#{pane_current_command}';
+export const PANE_ROWS_MAX = 400;
+
 // One line per window on the box, appended to the same probe so windows cost no
 // extra SSH. The name is LAST because window names may contain colons (verified
 // on tmux 3.5a: "we:ird name") while session names may not — the invariant
@@ -92,7 +98,8 @@ export const WINDOW_FMT = '#{session_name}:#{window_index}:#{window_id}:#{window
 // pipeline: head closing the pipe early can leave tmux with a SIGPIPE exit.
 const TMUX_PROBE =
   `if command -v tmux >/dev/null 2>&1; then tmux ls -F '${STATUS_FMT}' 2>/dev/null || true; ` +
-  `{ tmux list-windows -a -F '__WIN__ ${WINDOW_FMT}' | head -n 200; } 2>/dev/null || true; else echo __NO_TMUX__; fi`;
+  `{ tmux list-windows -a -F '__WIN__ ${WINDOW_FMT}' | head -n 200; } 2>/dev/null || true; ` +
+  `{ tmux list-panes -a -F '__PANE__ ${PANE_FMT}' | head -n ${PANE_ROWS_MAX}; } 2>/dev/null || true; else echo __NO_TMUX__; fi`;
 
 export const PROBE_REMOTE = `${META_PROBE} ${AGENT_PROBE}${OSC_SWEEP}${TMUX_PROBE}`;
 
@@ -145,25 +152,63 @@ export function parseMeta(stdout) {
 export const AGENT_MARK_STATES = ['working', 'blocked', 'ready'];
 export const AGENT_MARK_CAUSES = ['prompt', 'resume', 'stop', 'start', 'permission', 'question', 'elicitation', 'unblock'];
 
+// A pane whose foreground process is one of these has no agent in it any more,
+// whatever its marker says: the agent was killed before its SessionEnd hook ran.
+const SHELL_CMD_RE = /^-?(?:(?:ba|z|da|fi|k|a|tc|c|pw)?sh|nu)$/;
+const PANE_ID_RE = /^%\d+$/;
+
+// `__PANE__` rows as a set of "<session>:<pane>" keys for panes that can still
+// hold an agent. null means the listing cannot be trusted to be complete (absent
+// or at the row cap), and then no marker is discarded for being absent from it.
+function parseLivePanes(lines) {
+  const rows = lines.filter((l) => l.startsWith('__PANE__ '));
+  if (!rows.length || rows.length >= PANE_ROWS_MAX) return null;
+  const live = new Set();
+  for (const row of rows) {
+    const parts = row.slice('__PANE__ '.length).split(':');
+    if (parts.length < 3 || !PANE_ID_RE.test(parts[1])) continue;
+    if (!SHELL_CMD_RE.test(parts.slice(2).join(':'))) live.add(`${parts[0]}:${parts[1]}`);
+  }
+  return live;
+}
+
+// Lower is more urgent. A finished turn outranks a session that merely started
+// so a pane opening next to a finished one cannot hide that it finished.
+const markRank = (m) => (m.state === 'blocked' ? 0 : m.state === 'working' ? 1 : m.cause === 'start' ? 3 : 2);
+const foldMarks = (marks) => marks.reduce((best, m) => {
+  const d = markRank(m) - markRank(best);
+  return d < 0 || (d === 0 && m.ts > best.ts) ? m : best;
+});
+
 // Pull `__AGENT__` marker lines into { session: { state, cause, ts } }. Marker
 // content is a file on the box, so it is input: state and cause are closed
 // allowlists and ts must be a finite positive number; anything else drops
-// (never rewritten). Four fields is the current format. Three fields is the
-// legacy `<session>:<state>:<epoch>` a box writes until setup is rerun:
-// `working` maps to { working, prompt } and `waiting` to { ready, stop }.
-// Two fields, five or more, or a legacy word with a cause drop.
+// (never rewritten). Five fields is the Claude hook's per-pane format
+// (`...:<cause>:%<pane>`). Four fields is a session-wide marker: the OpenCode
+// plugin and OSC reporter, or the Claude hook without a usable $TMUX_PANE. Three
+// fields is the legacy `<session>:<state>:<epoch>` a box writes until setup is
+// rerun: `working` maps to { working, prompt } and `waiting` to { ready, stop }.
+// Two fields, six or more, or a legacy word with a cause drop.
 // Colons cannot appear in tmux session names (the invariant STATUS_FMT
 // already relies on), so the split is unambiguous.
+//
+// Split panes share a session, so a session reads as the fold of its panes:
+// blocked, then working, then finished, newest first within a state. A pane
+// marker counts only while `__PANE__` shows that pane in that session with
+// something other than a shell in the foreground. A session-wide marker older
+// than the newest live pane marker is a leftover from before setup was rerun and
+// is ignored; otherwise it folds in with the panes.
 export function parseAgentMarks(stdout) {
-  // Null-prototype: the keys are box-controlled tmux session names, so a
-  // session named `__proto__` must land as an own key rather than reassign
-  // the map's prototype (and `constructor` must not read as inherited).
-  const out = Object.create(null);
-  for (const line of String(stdout).split(/\r?\n/)) {
+  const lines = String(stdout).split(/\r?\n/);
+  const live = parseLivePanes(lines);
+  // Maps, not objects: the keys are box-controlled tmux session names.
+  const sessionWide = new Map();
+  const perPane = new Map();
+  for (const line of lines) {
     if (!line.startsWith('__AGENT__ ')) continue;
     const parts = line.slice('__AGENT__ '.length).split(':');
-    if (parts.length !== 3 && parts.length !== 4) continue;
-    const [session, rawState, tsRaw, rawCause] = parts;
+    if (parts.length < 3 || parts.length > 5) continue;
+    const [session, rawState, tsRaw, rawCause, pane] = parts;
     const ts = Number(tsRaw);
     if (!session || !Number.isFinite(ts) || ts <= 0) continue;
     let state;
@@ -177,7 +222,23 @@ export function parseAgentMarks(stdout) {
       state = rawState;
       cause = rawCause;
     }
-    out[session] = { state, cause, ts };
+    if (parts.length === 5) {
+      if (!PANE_ID_RE.test(pane)) continue;
+      if (live && !live.has(`${session}:${pane}`)) continue;
+      if (!perPane.has(session)) perPane.set(session, []);
+      perPane.get(session).push({ state, cause, ts });
+    } else {
+      sessionWide.set(session, { state, cause, ts });
+    }
+  }
+  // Null-prototype: a session named `__proto__` must land as an own key rather
+  // than reassign the map's prototype (and `constructor` must not read as inherited).
+  const out = Object.create(null);
+  for (const session of new Set([...sessionWide.keys(), ...perPane.keys()])) {
+    const marks = [...(perPane.get(session) ?? [])];
+    const wide = sessionWide.get(session);
+    if (wide && (!marks.length || wide.ts >= Math.max(...marks.map((m) => m.ts)))) marks.push(wide);
+    out[session] = foldMarks(marks);
   }
   return Object.keys(out).length ? out : null;
 }
@@ -291,7 +352,7 @@ export function parseTmuxSessions(stdout) {
     // Whole-line match on the sentinel for the same reason noTmux() uses one: a
     // session may legitimately be NAMED `__NO_TMUX__`, and a substring test would
     // silently drop its row.
-    if (!line.trim() || line.trim() === '__NO_TMUX__' || line.startsWith('__META__') || line.startsWith('__AGENT__') || line.startsWith('__WIN__')) continue;
+    if (!line.trim() || line.trim() === '__NO_TMUX__' || line.startsWith('__META__') || line.startsWith('__AGENT__') || line.startsWith('__WIN__') || line.startsWith('__PANE__')) continue;
     const [name, windows, attached, activity, paneCmd] = line.split(':');
     if (!name || name.length > SESSION_NAME_MAX || UNSAFE_NAME_RE.test(name)) continue;
     if (!DIGITS_RE.test(windows || '') || !DIGITS_RE.test(attached || '') || !/^\d*$/.test(activity ?? '')) continue;

@@ -75,6 +75,11 @@ Host Shell. A session counts when the active pane of its current window runs `cl
 - **done** — a turn finished and you haven't looked at it yet.
 - **idle** — the session just started, or a finished turn you have looked at.
 
+Split panes in one tmux session each report separately, and the session shows the most urgent:
+needs you, then working, then done, then idle. A session with one finished Claude pane and one
+still running reads working, and its "finished a turn" notification waits until both are done.
+Boxes need setup rerun with Claude Code ticked to get this.
+
 State changes arrive in about a second. The server keeps one quiet SSH channel open per reachable
 box, over the connection it already holds; a small shell loop on the box reports the moment an
 agent's state changes, and the server re-reads that box right away. Open tabs are told which box
