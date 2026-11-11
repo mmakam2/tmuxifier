@@ -71,6 +71,7 @@ if (cfgError) {
   console.error(cfgError);
   process.exit(1);
 }
+for (const w of config.oidcConfigWarnings ?? []) console.error(`OIDC config: ${w}`);
 
 fs.mkdirSync(config.controlDir, { recursive: true, mode: 0o700 });
 
