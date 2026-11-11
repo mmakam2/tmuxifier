@@ -1,4 +1,5 @@
-import { api, onUnauthorized, type AddBoxSpec, type AgentState, type Box, type Status, type Sample, type HealthEvent, type PushResult, type SetupJob, type SetupSummary } from './api';
+import { decideLogin, SIGNED_OUT_KEY } from './loginRoute';
+import { api, onUnauthorized, type AddBoxSpec, type AuthInfo, type AgentState, type Box, type Status, type Sample, type HealthEvent, type PushResult, type SetupJob, type SetupSummary } from './api';
 import { AGENT_PRECEDENCE, agentCounts, latestAgents } from './agentState';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
 import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, formatVoiceLinkResult, blocksTerminal } from './setupStatus';
@@ -529,6 +530,7 @@ async function loadUiSettings(): Promise<void> {
 
 async function start() {
   if (await api.me()) {
+    clearSignedOut();
     // Apply the configured terminal font before any box opens. Best-effort: on
     // failure the bundled font stack stays in effect.
     try {
@@ -541,26 +543,47 @@ async function start() {
   } else await renderLogin();
 }
 
-function readLoginError(): string {
-  const code = new URLSearchParams(location.search).get('error');
+function clearSignedOut() {
+  try { sessionStorage.removeItem(SIGNED_OUT_KEY); } catch {}
+}
+
+function loginErrorText(code: string | null): string {
   if (!code) return '';
-  history.replaceState(null, '', location.pathname);
-  return code === 'forbidden' ? 'This Google account is not allowed.'
-    : code === 'google' ? 'Google sign-in failed. Please try again.'
+  return code === 'forbidden' ? 'This account is not allowed.'
+    : code === 'provider' || code === 'google' ? 'Sign-in with the identity provider failed. Please try again.'
     : code === 'state' ? 'Login session expired. Please try again.'
-    : code === 'passkey-only' ? 'This Tmuxifier requires a passkey. Password and Google sign-in are disabled.'
+    : code === 'passkey-only' ? 'This Tmuxifier requires a passkey. Other sign-in methods are disabled.'
     : 'Sign-in failed. Please try again.';
 }
 
+function stripLoginError() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has('error')) return;
+  q.delete('error');
+  const rest = q.toString().replace(/=(?=&|$)/g, '');
+  history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : ''));
+}
+
+const GOOGLE_MARK = `<svg class="google-mark" viewBox="0 0 18 18" aria-hidden="true">
+            <path fill="#4285f4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.91c1.7-1.57 2.69-3.88 2.69-6.62z"/>
+            <path fill="#34a853" d="M9 18c2.43 0 4.47-.81 5.96-2.18l-2.91-2.26c-.8.54-1.84.86-3.05.86-2.34 0-4.33-1.58-5.04-3.71H.96v2.33A9 9 0 0 0 9 18z"/>
+            <path fill="#fbbc05" d="M3.96 10.71a5.41 5.41 0 0 1 0-3.42V4.96H.96a9 9 0 0 0 0 8.08l3-2.33z"/>
+            <path fill="#ea4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58A8.65 8.65 0 0 0 9 0 9 9 0 0 0 .96 4.96l3 2.33C4.67 5.16 6.66 3.58 9 3.58z"/>
+          </svg>`;
+
 async function renderLogin() {
-  let mode: 'password' | 'google' = 'password';
+  let info: AuthInfo = { mode: 'password' };
   let passkey = { enrolled: 0, rpId: null as string | null, only: false };
   try {
-    const info = await api.authInfo();
-    mode = info.mode;
+    info = await api.authInfo();
     if (info.passkey) passkey = info.passkey;
   } catch {}
-  const err = readLoginError();
+  const decision = decideLogin(info, location.search, (() => {
+    try { return sessionStorage.getItem(SIGNED_OUT_KEY) === '1'; } catch { return false; }
+  })());
+  if (decision.kind === 'redirect') { location.assign(decision.href); return; }
+  const err = loginErrorText(decision.errorCode);
+  stripLoginError();
   // "No usable passkey" has two triggers, not one: no WebAuthn support, and a
   // mismatched origin (this hostname/protocol doesn't match the configured
   // rpId). evaluateOrigin (passkeys.ts) is the single source of truth for
@@ -605,30 +628,29 @@ async function renderLogin() {
     return;
   }
 
-  if (passkey.only || mode === 'google') {
-    const google = passkey.only ? '' : `<a id="gsignin" class="gbtn" href="/api/auth/google/login">
-          <svg class="google-mark" viewBox="0 0 18 18" aria-hidden="true">
-            <path fill="#4285f4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.91c1.7-1.57 2.69-3.88 2.69-6.62z"/>
-            <path fill="#34a853" d="M9 18c2.43 0 4.47-.81 5.96-2.18l-2.91-2.26c-.8.54-1.84.86-3.05.86-2.34 0-4.33-1.58-5.04-3.71H.96v2.33A9 9 0 0 0 9 18z"/>
-            <path fill="#fbbc05" d="M3.96 10.71a5.41 5.41 0 0 1 0-3.42V4.96H.96a9 9 0 0 0 0 8.08l3-2.33z"/>
-            <path fill="#ea4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58A8.65 8.65 0 0 0 9 0 9 9 0 0 0 .96 4.96l3 2.33C4.67 5.16 6.66 3.58 9 3.58z"/>
-          </svg>
-          <span>Sign in with Google</span>
-        </a>`;
-    app.innerHTML = `<div class="login">${brand}${google}${passkeyBtn}<p id="err" class="err" role="alert">${err}</p></div>`;
-    wirePasskeyButton();
-    return;
-  }
-
-  app.innerHTML = `<form id="login" class="login">${brand}
-      <input id="pw" type="password" placeholder="Password" aria-label="Password" autofocus />
-      <button>Unlock</button>
-      ${passkeyBtn}
-      <p id="err" class="err" role="alert">${err}</p>
-    </form>`;
+  const heading = decision.signedOut
+    ? '<p class="login-note">You have been signed out.</p>' : '';
+  const providerBtns = decision.providers.map((p, i) => p.id === 'google'
+    ? `<a id="gsignin" class="gbtn" href="${p.href}">${GOOGLE_MARK}<span>Sign in with Google</span></a>`
+    : `<a class="gbtn" data-provider="${i}" href="${p.href}"><span></span></a>`).join('');
+  const pwForm = decision.showPassword
+    ? `<input id="pw" type="password" placeholder="Password" aria-label="Password" autofocus />
+      <button>Unlock</button>` : '';
+  const inner = `${brand}${heading}${providerBtns}${pwForm}${passkeyBtn}
+      <p id="err" class="err" role="alert">${err}</p>`;
+  const withForm = decision.showPassword;
+  app.innerHTML = withForm
+    ? `<form id="login" class="login">${inner}</form>`
+    : `<div class="login">${inner}</div>`;
+  decision.providers.forEach((p, i) => {
+    if (p.id === 'google') return;
+    const span = app.querySelector(`[data-provider="${i}"] span`) as HTMLElement | null;
+    if (span) span.textContent = `Sign in with ${p.label}`;
+  });
+  if (!withForm) { wirePasskeyButton(); return; }
   app.querySelector('#login')!.addEventListener('submit', async (e) => {
     e.preventDefault();
-    try { await api.login((app.querySelector('#pw') as HTMLInputElement).value); await loadUiSettings(); renderDashboard(); }
+    try { await api.login((app.querySelector('#pw') as HTMLInputElement).value); clearSignedOut(); await loadUiSettings(); renderDashboard(); }
     catch (ex) {
       // The server's error is always a fixed string on this route (e.g.
       // "invalid", "too many attempts", or "passkey required" against a
@@ -653,6 +675,7 @@ function wirePasskeyButton() {
       const options = await pk.loginBegin();
       const credential = await getPasskey(options);
       await pk.loginFinish(serializeAssertion(credential));
+      clearSignedOut();
       await loadUiSettings();
       renderDashboard();
     } catch (e) {
@@ -1621,7 +1644,9 @@ async function renderDashboard() {
   repaintStage();
   app.querySelector('#logout')!.addEventListener('click', async () => {
     teardownWorkspace();
-    await api.logout(); await renderLogin();
+    await api.logout();
+    try { sessionStorage.setItem(SIGNED_OUT_KEY, '1'); } catch {}
+    await renderLogin();
   });
   app.querySelector('#sidebar-toggle')!.addEventListener('click', () => {
     const layout = app.querySelector('.layout') as HTMLElement;
