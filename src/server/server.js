@@ -7,7 +7,7 @@ import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import { verifyPassword, COOKIE_NAME, cookieOptions, sessionValue, sessionValueValid } from './auth.js';
 import { createLoginRateLimiter } from './rateLimit.js';
-import { createGoogleAuth, pkcePair, randomState } from './googleAuth.js';
+import { createOidcClient, OidcError, pkcePair, randomState } from './oidcAuth.js';
 import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildSelectWindowRemote, buildKillSessionRemote, buildKillWindowRemote, resolveTools } from './boxActions.js';
 import { LOCAL_BOX_ID } from './localAgent.js';
 import { assertBoxSafe, SESSION_NAME_RE, WINDOW_ID_RE } from './sshCommand.js';
@@ -116,7 +116,7 @@ const NO_FLEET_SCRIPTS = {
   removeScript: async () => {},
 };
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, googleAuth, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, paneKindLocal = paneKindLocalDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, uiSettingsStore = null, deviceStore = null, deviceHostGuard = createDeviceHostGuard(), pairingCodes = null, apkBuildManager = null, voiceLinks = null, liveHub = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, oidcClients = null, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, paneKindLocal = paneKindLocalDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, uiSettingsStore = null, deviceStore = null, deviceHostGuard = createDeviceHostGuard(), pairingCodes = null, apkBuildManager = null, voiceLinks = null, liveHub = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -163,20 +163,21 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   }
 
   const OAUTH_COOKIE = 'tmuxifier_oauth';
-  let google = googleAuth;
-  if (config.authMode === 'google' && !google) {
-    google = createGoogleAuth({
-      clientId: config.googleClientId,
-      clientSecret: config.googleClientSecret,
-      redirectUri: `${String(config.publicUrl).replace(/\/+$/, '')}/api/auth/google/callback`,
-      allowedEmails: config.allowedEmails,
-    });
+  const providers = config.authMode === 'oidc' ? (config.oidcProviders ?? []) : [];
+  const clients = oidcClients ?? new Map();
+  if (!oidcClients) {
+    const base = String(config.publicUrl).replace(/\/+$/, '');
+    for (const p of providers) {
+      const path = p.id === 'google' ? '/api/auth/google/callback' : `/api/auth/oidc/${p.id}/callback`;
+      clients.set(p.id, createOidcClient({ provider: p, redirectUri: `${base}${path}`, allowedEmails: config.allowedEmails }));
+    }
   }
 
+  const passwordLoginEnabled = config.authMode === 'password' || !!config.passwordHash;
   const loginLimiter = createLoginRateLimiter(); // per-ip lockout for POST /api/login
 
   // --- passkeys (WebAuthn) ---
-  // A third login path alongside password/Google. It mints exactly the same
+  // A third login path alongside password/OIDC. It mints exactly the same
   // session cookie, so the session TTL, revocation watermark and WebSocket auth
   // all apply unchanged.
   const PK_COOKIE = 'tmuxifier_pk';
@@ -657,13 +658,16 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   }
 
   app.get('/api/auth/info', async () => {
-    // Same fetch-and-fail-open logic as the login gate and Google routes
+    // Same fetch-and-fail-open logic as the login gate and OIDC routes
     // below, via the shared passkeySnapshot() helper (see its comment) — one
     // disk read + JSON parse instead of a hand-rolled second copy. A read
     // failure degrades to "no passkeys" rather than 500ing the login page.
     const pk = await passkeySnapshot();
     return {
-      mode: config.authMode === 'google' ? 'google' : 'password',
+      mode: config.authMode === 'oidc' ? 'oidc' : 'password',
+      // Display fields only: never the issuer or any secret.
+      providers: providers.map((p) => ({ id: p.id, label: p.label, legacy: !!p.legacyGoogle })),
+      password: passwordLoginEnabled,
       // Unauthenticated on purpose: the login screen needs to know whether to
       // draw the passkey button. It exposes only the hostname the client is
       // already talking to, plus a count.
@@ -675,7 +679,8 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     };
   });
 
-  if (config.authMode !== 'google') {
+  // In oidc mode a configured password hash is the break-glass login.
+  if (passwordLoginEnabled) {
     app.post('/api/login', async (req, reply) => {
       if (passkeyOnlyArmed(await passkeySnapshot())) return reply.code(403).send({ error: 'passkey required' });
       const ip = req.ip;
@@ -689,38 +694,55 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     });
   }
 
-  if (config.authMode === 'google') {
-    app.get('/api/auth/google/login', async (req, reply) => {
+  if (config.authMode === 'oidc') {
+    async function oidcLogin(id, req, reply) {
+      const client = clients.get(id);
+      if (!client) return reply.code(404).send({ error: 'unknown provider' });
       if (passkeyOnlyArmed(await passkeySnapshot())) return reply.redirect('/?error=passkey-only');
       const state = randomState();
+      const nonce = randomState();
       const { verifier, challenge } = pkcePair();
-      // SameSite=lax lets this short-lived state cookie survive Google's top-level redirect back.
-      reply.setCookie(OAUTH_COOKIE, `${state}.${verifier}`, {
+      let url;
+      try {
+        url = await client.authorizationUrl({ state, nonce, codeChallenge: challenge });
+      } catch {
+        return reply.redirect('/?error=provider');
+      }
+      // SameSite=lax lets this short-lived state cookie survive the provider's top-level redirect back.
+      reply.setCookie(OAUTH_COOKIE, `${id}.${state}.${nonce}.${verifier}`, {
         httpOnly: true, sameSite: 'lax', secure: config.secureCookie, path: '/', signed: true, maxAge: 300,
       });
-      return reply.redirect(google.authorizationUrl({ state, codeChallenge: challenge }));
-    });
+      return reply.redirect(url);
+    }
 
-    app.get('/api/auth/google/callback', async (req, reply) => {
+    async function oidcCallback(id, req, reply) {
+      const client = clients.get(id);
+      if (!client) return reply.code(404).send({ error: 'unknown provider' });
       if (passkeyOnlyArmed(await passkeySnapshot())) return reply.redirect('/?error=passkey-only');
       const raw = req.cookies?.[OAUTH_COOKIE];
       reply.clearCookie(OAUTH_COOKIE, { path: '/' });
       if (!raw) return reply.redirect('/?error=state');
       const unsigned = app.unsignCookie(raw);
       if (!unsigned.valid || !unsigned.value) return reply.redirect('/?error=state');
-      const [savedState, verifier] = unsigned.value.split('.');
+      const [savedId, savedState, nonce, verifier] = unsigned.value.split('.');
       const { code, state } = req.query;
-      if (!code || !state || state !== savedState) return reply.redirect('/?error=state');
+      if (savedId !== id || !code || !state || state !== savedState || !nonce || !verifier) return reply.redirect('/?error=state');
       let result;
       try {
-        result = await google.exchangeCodeForEmail({ code, codeVerifier: verifier });
-      } catch {
-        return reply.redirect('/?error=google');
+        result = await client.exchangeCode({ code, codeVerifier: verifier, nonce });
+      } catch (e) {
+        return reply.redirect(e instanceof OidcError && e.code === 'forbidden' ? '/?error=forbidden' : '/?error=provider');
       }
-      if (!result.emailVerified || !google.isAllowed(result.email)) return reply.redirect('/?error=forbidden');
+      if (!client.isAllowed(result.email)) return reply.redirect('/?error=forbidden');
       reply.setCookie(COOKIE_NAME, sessionValue(), cookieOptions(config.secureCookie));
       return reply.redirect('/');
-    });
+    }
+
+    app.get('/api/auth/oidc/:id/login', (req, reply) => oidcLogin(req.params.id, req, reply));
+    app.get('/api/auth/oidc/:id/callback', (req, reply) => oidcCallback(req.params.id, req, reply));
+    // Pre-OIDC Google URLs stay registered as redirect-URI-compatible aliases.
+    app.get('/api/auth/google/login', (req, reply) => oidcLogin('google', req, reply));
+    app.get('/api/auth/google/callback', (req, reply) => oidcCallback('google', req, reply));
   }
 
   app.post('/api/logout', async (req, reply) => {
@@ -765,7 +787,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       if (!devicePairing.take(body.code)) { loginLimiter.fail(ip); return reply.code(401).send({ error: 'invalid or expired code' }); }
     } else {
       // Password branch: unchanged v1 semantics (password mode only).
-      if (config.authMode === 'google') return reply.code(501).send({ error: 'device enrollment requires password mode or a pairing code' });
+      if (config.authMode === 'oidc') return reply.code(501).send({ error: 'device enrollment requires password mode or a pairing code' });
       if (passkeyOnlyArmed(await passkeySnapshot())) return reply.code(403).send({ error: 'passkey required' });
       // Charged before the scrypt await, so in-flight guesses count (rateLimit.js).
       if (!loginLimiter.attempt(ip)) return reply.code(429).send({ error: 'too many attempts' });

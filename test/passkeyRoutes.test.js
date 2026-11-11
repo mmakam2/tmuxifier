@@ -209,7 +209,7 @@ async function armWithAssertion(h, auth, { signCount = 5 } = {}) {
 
 test('auth/info reports passkey state without authentication', async () => {
   expect((await app.inject({ method: 'GET', url: '/api/auth/info' })).json())
-    .toEqual({ mode: 'password', passkey: { enrolled: 0, rpId: RP, only: false } });
+    .toEqual({ mode: 'password', providers: [], password: true, passkey: { enrolled: 0, rpId: RP, only: false } });
   await enroll();
   expect((await app.inject({ method: 'GET', url: '/api/auth/info' })).json().passkey.enrolled).toBe(1);
 });
@@ -386,16 +386,17 @@ test('disarming passkey-only restores password login', async () => {
 test('arming passkey-only blocks both Google routes, callback included', async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-pkg-'));
   passkeyStore = createPasskeyStore({ dataDir: dir });
-  const google = { authorizationUrl: () => 'https://accounts.google.com/x', exchangeCodeForEmail: async () => ({ email: 'you@example.com', emailVerified: true }), isAllowed: () => true };
+  const google = { id: 'google', label: 'Google', authorizationUrl: async () => 'https://accounts.google.com/x', exchangeCode: async () => ({ email: 'you@example.com' }), isAllowed: () => true };
   const config = {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
-    cookieSecret: 'test-secret', dataDir: dir, localShell: 'none', authMode: 'google',
+    cookieSecret: 'test-secret', dataDir: dir, localShell: 'none', authMode: 'oidc',
+    oidcProviders: [{ id: 'google', label: 'Google', issuer: 'https://accounts.google.com', clientId: 'cid', clientSecret: 's', allowUnverifiedEmail: false, legacyGoogle: true }],
     secureCookie: false, publicUrl: 'https://tmux.example.com',
     rpId: RP, rpIdError: null, passkeyOnlyKillSwitch: false,
   };
   const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
   const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
-  const gapp = buildServer({ config, store: createStore({ dataDir: dir }), sessions, statusChecker, passkeyStore, googleAuth: google });
+  const gapp = buildServer({ config, store: createStore({ dataDir: dir }), sessions, statusChecker, passkeyStore, oidcClients: new Map([['google', google]]) });
   await enroll(passkeyStore);
   await passkeyStore.setPasskeyOnly(true);
   const login = await gapp.inject({ method: 'GET', url: '/api/auth/google/login' });
@@ -564,7 +565,7 @@ test('auth/info still fails open when the passkey store cannot be read', async (
   app = await build({}, { passkeyStore: brokenStore });
   const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
   expect(res.statusCode).toBe(200);
-  expect(res.json()).toEqual({ mode: 'password', passkey: { enrolled: 0, rpId: RP, only: false } });
+  expect(res.json()).toEqual({ mode: 'password', providers: [], password: true, passkey: { enrolled: 0, rpId: RP, only: false } });
 });
 
 // Finding 4: arming/disarming is the fleet's most consequential auth
