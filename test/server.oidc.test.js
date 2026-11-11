@@ -21,7 +21,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { await stub.close(); await stub2.close(); });
 
-const prov = (id, issuer, extra = {}) => ({ id, label: id, issuer, clientId: 'cid', clientSecret: 'sec', allowUnverifiedEmail: false, legacyGoogle: false, ...extra });
+const prov = (id, issuer, extra = {}) => ({ id, label: id, issuer, clientId: 'cid', clientSecret: 's3cr3t-oidc', allowUnverifiedEmail: false, legacyGoogle: false, ...extra });
 
 async function makeApp({ providers, config: extra = {}, ...overrides } = {}) {
   const config = {
@@ -92,6 +92,18 @@ test('tampered state, disallowed email, token failure map to error codes', async
   expect(session(r.cb)).toBeFalsy();
 });
 
+test('unverified email and nonce mismatch are forbidden', async () => {
+  const app = await makeApp();
+  const L = '/api/auth/oidc/authentik/login', C = '/api/auth/oidc/authentik/callback';
+  stub.set({ claims: { email_verified: false } });
+  expect((await flow(app, L, C)).cb.headers.location).toBe('/?error=forbidden');
+  stub.set({ claims: {} });
+  stub.set({ nonce: 'other' });
+  const r2 = await flow(app, L, C, { setNonce: false });
+  expect(r2.cb.headers.location).toBe('/?error=forbidden');
+  expect(session(r2.cb)).toBeFalsy();
+});
+
 test('unreachable discovery builds and redirects to provider error', async () => {
   const app = await makeApp({ providers: [prov('x', 'http://127.0.0.1:1')] });
   const res = await app.inject({ method: 'GET', url: '/api/auth/oidc/x/login' });
@@ -122,6 +134,14 @@ test('break-glass password matrix', async () => {
   expect((await withHash.inject({ method: 'POST', url: '/api/login', payload: { password: 'bad' } })).statusCode).toBe(401);
   expect((await withHash.inject({ method: 'GET', url: '/api/auth/info' })).json().password).toBe(true);
 
+  const pk = createPasskeyStore({ dataDir: dir });
+  await pk.add({ id: 'cred', publicKey: 'AA', alg: -7, signCount: 0, label: 'k', transports: [] }, { rpId: 'tmux.example.com' });
+  const armed = await makeApp({ passkeyStore: pk, config: { passwordHash, rpId: 'tmux.example.com', rpIdError: null, passkeyOnlyKillSwitch: false } });
+  await pk.setPasskeyOnly(true);
+  const denied = await armed.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  expect(denied.statusCode).toBe(403);
+  expect(session(denied)).toBeFalsy();
+
   const pwMode = await makeApp({ config: { authMode: 'password', passwordHash, oidcProviders: [] } });
   expect((await pwMode.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(200);
   expect((await pwMode.inject({ method: 'GET', url: '/api/auth/info' })).json()).toMatchObject({ mode: 'password', providers: [], password: true });
@@ -134,7 +154,7 @@ test('auth info lists providers without issuer or secret', async () => {
   expect(body.mode).toBe('oidc');
   expect(body.providers).toEqual([{ id: 'authentik', label: 'Authentik', legacy: false }, { id: 'google', label: 'Google', legacy: true }]);
   expect(res.body).not.toContain('127.0.0.1:');
-  expect(res.body).not.toContain('sec');
+  expect(res.body).not.toContain('s3cr3t-oidc');
 });
 
 test('device password enroll is 501 in oidc mode', async () => {

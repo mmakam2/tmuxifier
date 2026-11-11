@@ -168,8 +168,8 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   if (!oidcClients) {
     const base = String(config.publicUrl).replace(/\/+$/, '');
     for (const p of providers) {
-      const path = p.id === 'google' ? '/api/auth/google/callback' : `/api/auth/oidc/${p.id}/callback`;
-      clients.set(p.id, createOidcClient({ provider: p, redirectUri: `${base}${path}`, allowedEmails: config.allowedEmails }));
+      const cbPath = p.id === 'google' ? '/api/auth/google/callback' : `/api/auth/oidc/${p.id}/callback`;
+      clients.set(p.id, createOidcClient({ provider: p, redirectUri: `${base}${cbPath}`, allowedEmails: config.allowedEmails }));
     }
   }
 
