@@ -1,12 +1,12 @@
 # Authentication
 
-How to sign in to Tmuxifier: password mode, Google OAuth mode, and passkeys. Part of the
-[Tmuxifier docs](../README.md).
+How to sign in to Tmuxifier: password mode, OpenID Connect (OIDC) mode with authentik, Google or
+any other provider, and passkeys. Part of the [Tmuxifier docs](../README.md).
 
-`TMUXIFIER_AUTH_MODE` selects the primary login method: `password` (default) or `oauth`, which
-replaces the password form with Google sign-in. These two remain mutually exclusive with each
-other — pick one. A passkey (below) is a separate, additive third way in, available under
-**either** setting.
+`TMUXIFIER_AUTH_MODE` selects the primary login method: `password` (default) or `oidc`, which
+replaces the password form with sign-in through one or more OIDC providers. `oauth` and `google`
+remain accepted aliases of `oidc`. The two modes are mutually exclusive — pick one. A passkey
+(below) is a separate, additive way in, available under **either** setting.
 
 Password mode:
 ```bash
@@ -14,33 +14,94 @@ npm run set-password
 ```
 This writes `TMUXIFIER_PASSWORD_HASH` and, if absent, `TMUXIFIER_COOKIE_SECRET` to `.env`.
 
-OAuth mode:
+## OIDC mode
+
 ```bash
 npm run gen-secret
 ```
-Then set these `.env` keys:
+Then set these `.env` keys (or the `config.json` equivalents below):
 ```ini
-TMUXIFIER_AUTH_MODE=oauth
+TMUXIFIER_AUTH_MODE=oidc
+TMUXIFIER_BASE_EXTERNAL_URL=tmuxifier.example.com
+TMUXIFIER_ALLOWED_EMAILS=you@example.com,teammate@example.com
+TMUXIFIER_OIDC_PROVIDERS=authentik
+TMUXIFIER_OIDC_AUTHENTIK_ISSUER=https://auth.example.com/application/o/tmuxifier/
+TMUXIFIER_OIDC_AUTHENTIK_CLIENT_ID=...
+TMUXIFIER_OIDC_AUTHENTIK_CLIENT_SECRET=...
+```
+Tmuxifier treats a scheme-less public URL as HTTPS.
+
+- `TMUXIFIER_OIDC_PROVIDERS` is an ordered, comma-separated list of provider ids (lowercase
+  letters, digits and `-`, up to 32 characters). Each id takes `TMUXIFIER_OIDC_<ID>_ISSUER`,
+  `_CLIENT_ID`, `_CLIENT_SECRET`, and optionally `_LABEL` (button text) and
+  `_ALLOW_UNVERIFIED_EMAIL=on`; `<ID>` is the id upper-cased with `-` as `_`. The issuer must be
+  an `https://` URL.
+- `config.json` can instead carry an `oidcProviders` array of `{ id, label, issuer, clientId,
+  clientSecret }`. When `TMUXIFIER_OIDC_PROVIDERS` is set it defines the list and order, and
+  `TMUXIFIER_OIDC_<ID>_*` values override the matching `config.json` entry field by field; a
+  `config.json` provider not in that list is ignored (boot logs it).
+- Sign-in requires a verified email (`email_verified`) that is in `TMUXIFIER_ALLOWED_EMAILS`
+  (exact addresses, case-insensitive; no domain wildcards).
+- The redirect URI to register at the provider is
+  `https://tmuxifier.example.com/api/auth/oidc/<id>/callback`. The provider with id `google`
+  always uses `https://tmuxifier.example.com/api/auth/google/callback`.
+
+### What the login page does
+
+- **Exactly one provider, configured explicitly:** opening Tmuxifier signed out redirects straight to that provider.
+  An expired session does the same, so a still-live provider session signs you back in silently.
+- **Two or more providers, or Google via the legacy keys:** the login page shows one button per
+  provider (plus the passkey button when one is enrolled). No auto-redirect.
+- **Sign out** shows a "Signed out" page instead of bouncing you back in. Logout is local only:
+  it ends the Tmuxifier session but not your session at the provider (the authentik session
+  survives). The page has a Sign in button and a link to `/?login`.
+- **`/?login`** always shows the full login page: every provider, the passkey button, and — if
+  `TMUXIFIER_PASSWORD_HASH` is set — the password form, which acts as a break-glass login in OIDC
+  mode (same rate limit; refused while "Require a passkey" is armed). Remove the hash to disable
+  it. A Google deployment that still has an old hash in `.env` gets this password login too.
+
+### authentik
+
+1. In authentik, **Applications → Providers → Create** an **OAuth2/OpenID Provider**. Client
+   type **Confidential**.
+2. Set the redirect URI (strict) to
+   `https://tmuxifier.example.com/api/auth/oidc/authentik/callback`.
+3. Scopes: `openid` and `email`.
+4. Create an **Application** using that provider and bind it to the user(s) allowed in
+   (policy/group bindings). The issuer is the provider's OpenID Configuration Issuer, like
+   `https://auth.example.com/application/o/tmuxifier/`.
+5. Copy the client id and secret into the `TMUXIFIER_OIDC_AUTHENTIK_*` keys above.
+
+authentik's default `email` claim reports `email_verified: false`. Recommended: add a custom
+scope mapping that returns `email_verified: true` and attach it to the provider. The alternative
+is `TMUXIFIER_OIDC_AUTHENTIK_ALLOW_UNVERIFIED_EMAIL=on`.
+
+> **Warning.** Either way, Tmuxifier trusts the email authentik reports. authentik's default
+> user-settings flow lets users edit their own email, so any authentik user could claim an
+> allowlisted address. Disable email editing in the user-settings flow, or make sure you are
+> the only user.
+
+### Google
+
+Google is now one provider of many. In Google Cloud Console, create an OAuth client ID for a web
+application and register `https://tmuxifier.example.com/api/auth/google/callback`. The older
+keys keep working unchanged and create an implicit `google` provider in OIDC mode:
+```ini
+TMUXIFIER_AUTH_MODE=oidc
 TMUXIFIER_BASE_EXTERNAL_URL=tmuxifier.example.com
 TMUXIFIER_OAUTH_CLIENT_ID=...
 TMUXIFIER_OAUTH_CLIENT_SECRET=...
-TMUXIFIER_ALLOWED_EMAILS=you@example.com,teammate@example.com
+TMUXIFIER_ALLOWED_EMAILS=you@example.com
 ```
-Tmuxifier treats a scheme-less public URL as HTTPS. In Google Cloud Console, create an OAuth
-client ID for a web application and register this
-authorized redirect URI:
-```text
-https://tmuxifier.example.com/api/auth/google/callback
-```
-The allowlist is exact email addresses only, matched case-insensitively. Domain wildcards are
-not supported. The older `TMUXIFIER_PUBLIC_URL`, `TMUXIFIER_GOOGLE_CLIENT_ID`,
-`TMUXIFIER_GOOGLE_CLIENT_SECRET`, and `TMUXIFIER_AUTH_MODE=google` names are still accepted.
+(`TMUXIFIER_GOOGLE_CLIENT_ID`/`_SECRET`, `TMUXIFIER_PUBLIC_URL`, and `config.json`
+`googleClientId`/`googleClientSecret` are accepted too.) If a provider with id `google` is also
+listed explicitly, it wins and boot logs a warning that the legacy keys are ignored.
 
 ## Passkeys
 
 A passkey is an additional way in, available in **either** auth mode alongside password or
-Google — it does not replace `TMUXIFIER_AUTH_MODE`. Enroll one from **Settings → Passkeys**
-while already signed in (enrolling requires an existing session, so password/Google remains the
+OIDC — it does not replace `TMUXIFIER_AUTH_MODE`. Enroll one from **Settings → Passkeys**
+while already signed in (enrolling requires an existing session, so password/OIDC remains the
 bootstrap and the recovery route); afterwards the login screen also offers **Sign in with a
 passkey**.
 
@@ -50,14 +111,14 @@ from `TMUXIFIER_RP_ID` if set, else the hostname of `TMUXIFIER_BASE_EXTERNAL_URL
 
 - The browser must reach Tmuxifier at `https://<hostname>` or `http://localhost`. **An IP
   address cannot be a relying party id** — a deployment reached by IP simply shows passkeys as
-  unavailable, with password/Google sign-in unaffected. That's only true when the id is
+  unavailable, with password/OIDC sign-in unaffected. That's only true when the id is
   *derived* this way, though: an explicit `TMUXIFIER_RP_ID` that isn't a valid domain name is
   instead treated as a configuration mistake and **fails startup** with an explanatory message.
 - Changing that hostname invalidates every enrolled passkey. Settings → Passkeys detects the
   mismatch and names the hostname the existing passkeys belong to.
 
 Optionally, **Require a passkey** (Settings → Passkeys → sign-in policy) disables password and
-Google sign-in entirely. Arming it is guarded against locking you out by accident: arming asks
+OIDC sign-in and the break-glass password entirely. Arming it is guarded against locking you out by accident: arming asks
 your browser for a fresh passkey confirmation first (so it only succeeds where a passkey
 actually works right now), it's refused (409) unless at least one passkey is enrolled *and*
 usable against the server's current relying party id, and removing your last passkey turns it
@@ -75,9 +136,9 @@ out — so keep it in mind before arming it.
 
 Two more things worth knowing about the security model:
 
-- In OAuth mode, a passkey login never checks `TMUXIFIER_ALLOWED_EMAILS` — it authenticates a
-  device credential, not the Google identity used to enroll it. Removing an email from the
-  allowlist stops that person from signing in with Google again, but it does **not** revoke a
+- In OIDC mode, a passkey login never checks `TMUXIFIER_ALLOWED_EMAILS` — it authenticates a
+  device credential, not the OIDC identity used to enroll it. Removing an email from the
+  allowlist stops that person from signing in through OIDC again, but it does **not** revoke a
   passkey they already enrolled; remove that passkey from Settings → Passkeys to revoke it.
   (Only an already-authenticated user can enroll one, so this isn't a privilege-escalation path —
   just a separate revocation step to remember.)
@@ -111,10 +172,10 @@ accepts the password directly in place of a code (the original v1 flow, useful f
 A few things worth knowing:
 
 - **Pairing codes work in every auth mode.** Minting one requires an authenticated browser
-  session, so the code inherits whatever gate that session passed — password, Google, or a
+  session, so the code inherits whatever gate that session passed — password, OIDC, or a
   passkey. That is why enrollment-by-code is allowed even while "require a passkey" is armed
   (the password branch still 403s there, exactly like the login form), and why it works on
-  OAuth-mode servers where the password branch returns 501. Arming passkey-only does **not**
+  OIDC-mode servers where the password branch returns 501 (a break-glass password hash does not change that). Arming passkey-only does **not**
   revoke devices already enrolled — a device token never expires and ignores the logout
   watermark, so an existing token keeps working until it is explicitly revoked from
   Settings → Devices.

@@ -37,13 +37,14 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | Proxmox provision job history kept | `TMUXIFIER_PVE_MAX_JOBS` | `50` |
 | Proxmox default management pubkey | `TMUXIFIER_PVE_DEFAULT_PUBKEY` | auto-detect `~/.ssh/*.pub` |
 | trust reverse-proxy X-Forwarded-For | `TMUXIFIER_TRUST_PROXY` | off |
-| auth mode | `TMUXIFIER_AUTH_MODE` | `password` |
+| auth mode (`password` or `oidc`; `oauth`/`google` are aliases) | `TMUXIFIER_AUTH_MODE` | `password` |
 | password hash | `TMUXIFIER_PASSWORD_HASH` | — (required) |
 | cookie secret | `TMUXIFIER_COOKIE_SECRET` | — (required) |
 | base external URL | `TMUXIFIER_BASE_EXTERNAL_URL` | (none) |
-| OAuth client id | `TMUXIFIER_OAUTH_CLIENT_ID` | (none) |
-| OAuth client secret | `TMUXIFIER_OAUTH_CLIENT_SECRET` | (none) |
-| allowed Google emails | `TMUXIFIER_ALLOWED_EMAILS` | (none) |
+| OIDC provider ids (ordered) | `TMUXIFIER_OIDC_PROVIDERS` | (none) |
+| OIDC provider settings | `TMUXIFIER_OIDC_<ID>_{ISSUER,CLIENT_ID,CLIENT_SECRET,LABEL,ALLOW_UNVERIFIED_EMAIL}` | (none) |
+| legacy Google client id/secret | `TMUXIFIER_OAUTH_CLIENT_ID` / `_SECRET` (or `TMUXIFIER_GOOGLE_CLIENT_ID` / `_SECRET`) | (none) |
+| allowed sign-in emails | `TMUXIFIER_ALLOWED_EMAILS` | (none) |
 | passkey relying party id | `TMUXIFIER_RP_ID` | derived from base external URL, else `localhost` |
 | passkey-only break-glass | `TMUXIFIER_PASSKEY_ONLY` | (unset) |
 | data dir | `TMUXIFIER_DATA_DIR` | `<repo>/data` |
@@ -79,7 +80,7 @@ As an alternative to `.env`, a `config.json` in the repo root works too, using c
 `fleetMaxJobs`, `fleetMaxOutputBytes`, `healthHistoryMax`, `healthEventsMax`, `healthCpuWarnPct`,
 `healthMemWarnPct`, `healthDiskWarnPct`, `healthThresholdHysteresisPct`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
 `pveLeaseTimeoutMs`, `pveMaxJobs`, `pveDefaultPubKeyPath`, `authMode`, `publicUrl`, `rpId`,
-`passkeyOnlyKillSwitch`, `googleClientId`, `googleClientSecret`, `allowedEmails`, `dataDir`,
+`passkeyOnlyKillSwitch`, `oidcProviders` (array of `{ id, label, issuer, clientId, clientSecret }`), `googleClientId`, `googleClientSecret`, `allowedEmails`, `dataDir`,
 `controlDir`, `sshConfigFile`, `tlsCert`, `tlsKey`, `uploadMaxMb`, `claudeOauthToken`,
 `whisperBin`, `whisperModel`, `voiceIdleMs`, `voiceMaxMb`, `voiceMaxSeconds`, `voiceOff`).
 `config.json` is merged wholesale rather than filtered through an allowlist, so any documented

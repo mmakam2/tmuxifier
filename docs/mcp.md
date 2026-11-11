@@ -13,7 +13,7 @@ available; nothing it *administers* is (see [What it cannot do](#what-it-cannot-
 The MCP server is a **device**, on the same credential path as the Android app. Enroll it once:
 
 ```bash
-# Any auth mode (password, OAuth, or with "require a passkey" armed):
+# Any auth mode (password, OIDC, or with "require a passkey" armed):
 #   Settings → Devices → Pair new device, then within two minutes
 npm run mcp-enroll -- --code XXXX-XXXX
 

@@ -66,18 +66,20 @@ TLS keys makes Tmuxifier serve HTTPS directly and marks the session cookie `Secu
 TLS, keep `TMUXIFIER_BIND` on `127.0.0.1` — serving the login over plain HTTP on a routable
 address sends the password in cleartext.
 
-### Google OAuth behind a Cloudflare tunnel
+### OIDC (authentik, Google) behind a Cloudflare tunnel
 
 For a Cloudflare tunnel such as `https://tmuxifier.example.com`, TLS terminates at
 Cloudflare and the local Tmuxifier process can still speak plain HTTP. Set the public URL so
-OAuth redirect URIs are correct and the browser receives a `Secure` session cookie:
+redirect URIs are correct and the browser receives a `Secure` session cookie:
 
 ```ini
-TMUXIFIER_AUTH_MODE=oauth
+TMUXIFIER_AUTH_MODE=oidc
 TMUXIFIER_BASE_EXTERNAL_URL=tmuxifier.example.com
-TMUXIFIER_OAUTH_CLIENT_ID=...
-TMUXIFIER_OAUTH_CLIENT_SECRET=...
 TMUXIFIER_ALLOWED_EMAILS=you@example.com
+TMUXIFIER_OIDC_PROVIDERS=authentik
+TMUXIFIER_OIDC_AUTHENTIK_ISSUER=https://auth.example.com/application/o/tmuxifier/
+TMUXIFIER_OIDC_AUTHENTIK_CLIENT_ID=...
+TMUXIFIER_OIDC_AUTHENTIK_CLIENT_SECRET=...
 ```
 
 Generate the cookie secret without creating a password login:
@@ -86,16 +88,22 @@ Generate the cookie secret without creating a password login:
 npm run gen-secret
 ```
 
-In Google Cloud Console, go to **APIs & Services → Credentials**, create an **OAuth client
-ID** with application type **Web application**, and add this authorized redirect URI:
+Register this redirect URI at the provider (authentik walkthrough and the email-verification
+warning: [authentication guide](authentication.md#authentik)):
 
 ```text
-https://tmuxifier.example.com/api/auth/google/callback
+https://tmuxifier.example.com/api/auth/oidc/authentik/callback
 ```
 
-Copy the client id and secret into `.env`, restart the service, and the login page will show
-Google sign-in instead of the password form. `TMUXIFIER_ALLOWED_EMAILS` is a comma-separated
-exact-email allowlist, matched case-insensitively.
+For Google, go to **APIs & Services → Credentials** in Google Cloud Console, create an **OAuth
+client ID** with application type **Web application**, and register
+`https://tmuxifier.example.com/api/auth/google/callback`. The legacy keys
+`TMUXIFIER_OAUTH_CLIENT_ID`/`_SECRET` still work and define the `google` provider.
+
+Restart the service and the login page shows the provider sign-in. With exactly one non-legacy
+provider, visitors are redirected to it automatically; `/?login` shows the full login page,
+including the password form when `TMUXIFIER_PASSWORD_HASH` is set. `TMUXIFIER_ALLOWED_EMAILS` is a
+comma-separated exact-email allowlist, matched case-insensitively.
 
 ## Passkeys and the relying party id
 
@@ -108,7 +116,7 @@ hostname WebAuthn binds every passkey to. Tmuxifier derives it from the hostname
 
 - Serve over `https://<hostname>`. Plain `http` works only for `localhost`.
 - An IP address cannot be a relying party id. Reaching Tmuxifier at `https://192.168.1.10`
-  leaves passkeys unavailable — Settings → Passkeys explains why — while password/Google
+  leaves passkeys unavailable — Settings → Passkeys explains why — while password/OIDC
   sign-in and everything else keep working. That quiet fallback only happens when the RP id is
   *derived* this way, though: an explicit `TMUXIFIER_RP_ID` that isn't a valid domain name is
   instead treated as a configuration mistake and **fails startup** with an explanatory message,
@@ -116,9 +124,9 @@ hostname WebAuthn binds every passkey to. Tmuxifier derives it from the hostname
 - Changing the hostname invalidates every enrolled passkey. Remove them from
   Settings → Passkeys and enroll again on the new hostname.
 
-Enrolling a passkey requires an authenticated session (Settings → Passkeys), so password/Google
+Enrolling a passkey requires an authenticated session (Settings → Passkeys), so password/OIDC
 sign-in is always the bootstrap. Once enrolled, an operator can optionally arm **Require a
-passkey** there too, which disables password and Google sign-in entirely — arming is refused
+passkey** there too, which disables password, OIDC and the break-glass password entirely — arming is refused
 unless at least one passkey is both enrolled and usable against the current RP id, and removing
 the last passkey turns the requirement back off automatically. Even so, keep the break-glass in
 mind before arming it: if every enrolled authenticator is ever lost while it's armed, set
@@ -127,7 +135,7 @@ mind before arming it: if every enrolled authenticator is ever lost while it's a
 TMUXIFIER_PASSKEY_ONLY=off
 ```
 
-in `.env` and restart the service to force password/Google sign-in back on. This is the only
+in `.env` and restart the service to force password/OIDC sign-in back on. This is the only
 recovery path — there is no admin override reachable from the UI once you're signed out.
 
 ## SSH access to your boxes (passwordless)
