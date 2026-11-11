@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import https from 'node:https';
 import { NOTIFY_KINDS } from './deviceStore.js';
 
-// FCM HTTP v1 sender, dependency-free in the googleAuth.js mold: sign the
+// FCM HTTP v1 sender, dependency-free in the oidcAuth.js mold: sign the
 // service-account JWT with node:crypto, trade it for an OAuth2 access token
 // (cached until near expiry), POST the message. Subscribed to
 // healthHistory.onEvent — the server-push seam (see healthHistory.js): this
