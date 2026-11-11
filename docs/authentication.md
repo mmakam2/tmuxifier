@@ -35,16 +35,17 @@ Tmuxifier treats a scheme-less public URL as HTTPS.
   letters, digits and `-`, up to 32 characters). Each id takes `TMUXIFIER_OIDC_<ID>_ISSUER`,
   `_CLIENT_ID`, `_CLIENT_SECRET`, and optionally `_LABEL` (button text) and
   `_ALLOW_UNVERIFIED_EMAIL=on`; `<ID>` is the id upper-cased with `-` as `_`. The issuer must be
-  an `https://` URL.
+  an `https://` URL (`http://` is accepted only for a loopback host: `127.0.0.1`, `localhost`,
+  `[::1]`).
 - `config.json` can instead carry an `oidcProviders` array of `{ id, label, issuer, clientId,
-  clientSecret }`. When `TMUXIFIER_OIDC_PROVIDERS` is set it defines the list and order, and
+  clientSecret, allowUnverifiedEmail }` (`allowUnverifiedEmail` is a boolean). When `TMUXIFIER_OIDC_PROVIDERS` is set it defines the list and order, and
   `TMUXIFIER_OIDC_<ID>_*` values override the matching `config.json` entry field by field; a
   `config.json` provider not in that list is ignored (boot logs it).
 - Sign-in requires a verified email (`email_verified`) that is in `TMUXIFIER_ALLOWED_EMAILS`
   (exact addresses, case-insensitive; no domain wildcards).
 - The redirect URI to register at the provider is
-  `https://tmuxifier.example.com/api/auth/oidc/<id>/callback`. The provider with id `google`
-  always uses `https://tmuxifier.example.com/api/auth/google/callback`.
+  `https://tmuxifier.example.com/api/auth/oidc/<id>/callback`. A provider with id `google`,
+  explicit or from the legacy keys, always uses `https://tmuxifier.example.com/api/auth/google/callback`.
 
 ### What the login page does
 
@@ -52,6 +53,8 @@ Tmuxifier treats a scheme-less public URL as HTTPS.
   An expired session does the same, so a still-live provider session signs you back in silently.
 - **Two or more providers, or Google via the legacy keys:** the login page shows one button per
   provider (plus the passkey button when one is enrolled). No auto-redirect.
+- **A failed sign-in** returns to `/?error=<code>`. A page with an `?error=` query shows the login
+  page with the error instead of auto-redirecting, so failures do not loop.
 - **Sign out** shows a "Signed out" page instead of bouncing you back in. Logout is local only:
   it ends the Tmuxifier session but not your session at the provider (the authentik session
   survives). The page has a Sign in button and a link to `/?login`.
@@ -74,7 +77,9 @@ Tmuxifier treats a scheme-less public URL as HTTPS.
 
 authentik's default `email` claim reports `email_verified: false`. Recommended: add a custom
 scope mapping that returns `email_verified: true` and attach it to the provider. The alternative
-is `TMUXIFIER_OIDC_AUTHENTIK_ALLOW_UNVERIFIED_EMAIL=on`.
+is `TMUXIFIER_OIDC_AUTHENTIK_ALLOW_UNVERIFIED_EMAIL=on`. With it on, anyone who can set the
+allowlisted email at that provider can sign in, because `TMUXIFIER_ALLOWED_EMAILS` is shared
+across all providers.
 
 > **Warning.** Either way, Tmuxifier trusts the email authentik reports. authentik's default
 > user-settings flow lets users edit their own email, so any authentik user could claim an

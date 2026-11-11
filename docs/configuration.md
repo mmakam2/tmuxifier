@@ -80,7 +80,7 @@ As an alternative to `.env`, a `config.json` in the repo root works too, using c
 `fleetMaxJobs`, `fleetMaxOutputBytes`, `healthHistoryMax`, `healthEventsMax`, `healthCpuWarnPct`,
 `healthMemWarnPct`, `healthDiskWarnPct`, `healthThresholdHysteresisPct`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
 `pveLeaseTimeoutMs`, `pveMaxJobs`, `pveDefaultPubKeyPath`, `authMode`, `publicUrl`, `rpId`,
-`passkeyOnlyKillSwitch`, `oidcProviders` (array of `{ id, label, issuer, clientId, clientSecret }`), `googleClientId`, `googleClientSecret`, `allowedEmails`, `dataDir`,
+`passkeyOnlyKillSwitch`, `oidcProviders` (array of `{ id, label, issuer, clientId, clientSecret, allowUnverifiedEmail }`; `issuer` is `https://`, or `http://` only for `127.0.0.1`/`localhost`/`[::1]`), `googleClientId`, `googleClientSecret`, `allowedEmails`, `dataDir`,
 `controlDir`, `sshConfigFile`, `tlsCert`, `tlsKey`, `uploadMaxMb`, `claudeOauthToken`,
 `whisperBin`, `whisperModel`, `voiceIdleMs`, `voiceMaxMb`, `voiceMaxSeconds`, `voiceOff`).
 `config.json` is merged wholesale rather than filtered through an allowlist, so any documented
