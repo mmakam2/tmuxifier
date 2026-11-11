@@ -168,3 +168,13 @@ test.each([undefined, ''])('missing expected nonce (%j) is forbidden even if the
   const e = await c.exchangeCode({ code: 'abc', codeVerifier: 'ver', nonce: n }).catch((x) => x);
   expect(e.code).toBe('forbidden');
 });
+
+test('stub /authorize 302s back with code+state and records the nonce for the id_token', async () => {
+  const url = `${stub.issuer}/authorize?redirect_uri=${encodeURIComponent('http://127.0.0.1:1/cb')}&state=st1&nonce=n1`;
+  const res = await fetch(url, { redirect: 'manual' });
+  expect(res.status).toBe(302);
+  expect(res.headers.get('location')).toBe('http://127.0.0.1:1/cb?code=c&state=st1');
+  await fetch(`${stub.issuer}/token`, { method: 'POST', body: 'grant_type=authorization_code' });
+  const idToken = (await (await fetch(`${stub.issuer}/token`, { method: 'POST', body: 'x=1' })).json()).id_token;
+  expect(JSON.parse(Buffer.from(idToken.split('.')[1], 'base64url')).nonce).toBe('n1');
+});

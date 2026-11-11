@@ -22,6 +22,17 @@ export async function startOidcStub(initial = {}) {
     });
   };
 
+  stub.routes['/authorize'] = (req, res) => {
+    const q = new URL(req.url, 'http://x').searchParams;
+    const nonce = q.get('nonce');
+    if (nonce) opts.nonce = nonce;
+    const back = new URL(q.get('redirect_uri'));
+    back.searchParams.set('code', 'c');
+    back.searchParams.set('state', q.get('state') || '');
+    res.writeHead(302, { location: back.toString() });
+    res.end();
+  };
+
   stub.routes['/token'] = async (req, res) => {
     const chunks = [];
     for await (const c of req) chunks.push(c);
