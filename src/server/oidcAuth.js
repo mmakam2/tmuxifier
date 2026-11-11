@@ -16,6 +16,25 @@ import { createHash, randomBytes } from 'node:crypto';
 const GOOGLE_ISSUER = 'https://accounts.google.com';
 const SKEW_SECONDS = 60;
 const TIMEOUT_MS = 10000;
+const MAX_BODY_BYTES = 65536;
+
+async function readJsonBounded(res) {
+  if (!res.body || typeof res.body.getReader !== 'function') return res.json();
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      reader.cancel().catch(() => {});
+      throw new Error('response body too large');
+    }
+    chunks.push(value);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
 
 export class OidcError extends Error {
   constructor(code, message) {
@@ -71,7 +90,7 @@ export function createOidcClient({ provider, redirectUri, allowedEmails = [], fe
     try {
       const res = await fetchImpl(`${trimSlash(issuer)}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
       if (!res.ok) throw new Error(`status ${res.status}`);
-      doc = await res.json();
+      doc = await readJsonBounded(res);
     } catch (e) {
       throw new OidcError('provider', `discovery failed: ${e.message}`);
     }
@@ -114,6 +133,7 @@ export function createOidcClient({ provider, redirectUri, allowedEmails = [], fe
       return u.toString();
     },
     async exchangeCode({ code, codeVerifier, nonce }) {
+      if (typeof nonce !== 'string' || !nonce) throw forbid('missing expected nonce');
       const { tokenEndpoint } = await discover();
       let data;
       try {
@@ -133,7 +153,7 @@ export function createOidcClient({ provider, redirectUri, allowedEmails = [], fe
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
         if (!res.ok) throw new Error(`token exchange failed: ${res.status}`);
-        data = await res.json();
+        data = await readJsonBounded(res);
       } catch (e) {
         throw new OidcError('provider', e.message);
       }

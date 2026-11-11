@@ -148,3 +148,23 @@ test('isAllowed is case-insensitive and rejects unlisted addresses', () => {
   expect(c.isAllowed('bob@example.com')).toBe(false);
   expect(c.isAllowed(undefined)).toBe(false);
 });
+
+test('an oversized discovery body is a provider error', async () => {
+  stub.set({ discovery: { pad: 'x'.repeat(70000) } });
+  expect(await code(mk().authorizationUrl({ state: 's', nonce: 'n', codeChallenge: 'c' }))).toBe('provider');
+});
+
+test('an oversized token body is a provider error', async () => {
+  const fetchImpl = async (u, o) => {
+    if (!String(u).endsWith('/token')) return fetch(u, o);
+    return new Response(JSON.stringify({ id_token: 'x', pad: 'x'.repeat(70000) }), { status: 200 });
+  };
+  expect(await code(exchange(mk({ fetchImpl })))).toBe('provider');
+});
+
+test.each([undefined, ''])('missing expected nonce (%j) is forbidden even if the token has none', async (n) => {
+  const c = mk();
+  stub.set({ nonce: undefined });
+  const e = await c.exchangeCode({ code: 'abc', codeVerifier: 'ver', nonce: n }).catch((x) => x);
+  expect(e.code).toBe('forbidden');
+});
