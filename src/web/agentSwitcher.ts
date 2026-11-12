@@ -13,8 +13,14 @@
 //    reducer's drain phase it would reset to idle and let held-key repeats type into the
 //    new pane.
 //  - The overlay never takes DOM focus. The terminal keeps it, so keys keep arriving and
-//    the seen acknowledgement (which needs document.hasFocus()) is unaffected; rows
-//    preventDefault their mousedown for the same reason.
+//    the seen acknowledgement (which needs document.hasFocus()) is unaffected; the root
+//    preventDefaults every mousedown for the same reason.
+//  - Once painted, the full-screen root is a backdrop: it takes the pointer, refuses the
+//    native context menu everywhere, and a click or secondary click on the backdrop itself
+//    cancels (fed as a click on no row: the commit effect commits nothing and the reducer
+//    keeps swallowing the held keys). A click-through would open Settings under the
+//    overlay, and on macOS a missed Ctrl+click would raise the native menu, which eats
+//    the modifiers' keyups and leaves the overlay stuck open.
 //  - The row order is frozen when it opens; refresh() repaints values in place only.
 //  - Every string goes in through textContent. The preview is untrusted box output
 //    (agentSwitcherPreview.ts schedules it, ansiStrip.ts flattens it): plain text only.
@@ -62,7 +68,10 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
   let previewBody: HTMLElement | null = null;
 
   function feed(input: ChordInput, ev?: Event) {
-    const r = chordReduce(state, input, { combo: deps.combo(), enabled: deps.enabled() });
+    // `enabled` is a getter: main.ts's check queries the DOM and matchMedia, and this
+    // runs for every key in the app, while the reducer reads it only on a keydown
+    // that could open the overlay (or swallow a stale repeat).
+    const r = chordReduce(state, input, { combo: deps.combo(), get enabled() { return deps.enabled(); } });
     state = r.state;
     if (r.swallow && ev) {
       ev.preventDefault();
@@ -125,14 +134,12 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
     );
     if (r.here) el.append(span('agent-switcher-here', 'this pane'));
     paintRow(el, r);
-    // The terminal keeps focus through a click on the overlay.
-    el.addEventListener('mousedown', (ev) => ev.preventDefault());
     el.addEventListener('click', () => feed({ t: 'click', index: i }));
     // Every row click happens with Ctrl+Shift held, and on macOS a Ctrl+click is
-    // the secondary action: `contextmenu`, no `click`. It commits the same way;
-    // a platform that fires both cannot double-commit, as the reducer ignores a
-    // click once it has left `open`.
-    el.addEventListener('contextmenu', (ev) => { ev.preventDefault(); feed({ t: 'click', index: i }); });
+    // the secondary action: `contextmenu`, no `click`. It commits the same way
+    // (the root refuses the native menu); a platform that fires both cannot
+    // double-commit, as the reducer ignores a click once it has left `open`.
+    el.addEventListener('contextmenu', () => feed({ t: 'click', index: i }));
     return el;
   }
 
@@ -182,8 +189,15 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
     root = document.createElement('div');
     root.id = 'agent-switcher';
     root.className = 'agent-switcher pending';
-    // No native context menu over the overlay (see the rows' own listener).
-    root.addEventListener('contextmenu', (ev) => ev.preventDefault());
+    const backdrop = root;
+    // The terminal keeps focus through a click anywhere on the overlay.
+    backdrop.addEventListener('mousedown', (ev) => ev.preventDefault());
+    // A click on the backdrop itself (outside the panel) cancels: index -1 is a
+    // commit to no row. A click inside the panel but not on a row does nothing.
+    const onBackdrop = (ev: MouseEvent) => { if (ev.target === backdrop) feed({ t: 'click', index: -1 }); };
+    backdrop.addEventListener('click', onBackdrop);
+    // No native context menu anywhere over the overlay (rows commit on it).
+    backdrop.addEventListener('contextmenu', (ev) => { ev.preventDefault(); onBackdrop(ev); });
     const panel = document.createElement('div');
     panel.className = 'agent-switcher-panel';
     const list = document.createElement('div');

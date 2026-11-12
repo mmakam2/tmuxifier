@@ -147,22 +147,25 @@ Jump to whichever agent needs you without reaching for the sidebar. **Hold Ctrl+
 K**: a list of agent sessions opens with the previous one highlighted. Tap K again, or press
 **↑/↓**, to step through the list, then **release** to jump. A quick tap-and-release flips
 straight back to the session you were just in, and the list only paints if you keep holding.
-**Esc**, or switching away from the browser window, cancels. Clicking a row also jumps to it
-(on macOS the click is Ctrl+click, which the browser reports as a right click; the switcher
-takes it and keeps the context menu away).
+**Esc**, switching away from the browser window, or clicking outside the switcher's panel
+cancels (on Windows Ctrl+Shift+Esc belongs to the system, which opens Task Manager, so there the
+way to cancel is to click outside the panel). Clicking a row also jumps to it (on macOS the click
+is Ctrl+click, which the browser reports as a right click; the switcher takes it and keeps the
+context menu away). While the list is showing, a click never reaches the page underneath.
 
 **What's listed.** Every tmux session with an agent state (working, needs you, done, idle) on a
 reachable box, plus the Host Shell's `local` session. The session you're in is first, then the
 ones you visited most recently, then the rest by urgency (needs you, done, working, idle), newest
 first. The order is fixed while the list is open; states and ages keep updating.
 
-**What release does.** If the session is already on screen, its pane takes focus. If a pane
-shows the same box on another session, that pane switches in place. Otherwise the focused pane
-is replaced (or a pane opens when the stage is empty), and the terminal it replaces is closed
-and released at once, so the session you left stops counting as attached and its next
-notification isn't suppressed. Undocking, the sidebar and the AGENTS board keep the usual
-grace window instead. Jumping never marks a finished turn as seen on its own; the pane you land
-in does that once it is visible and focused.
+**What release does.** If the session is already open in a docked pane, that pane takes focus.
+Otherwise, if the focused pane shows the same box on another session, it switches session in
+place. Otherwise the focused pane is replaced (or a pane opens when the stage is empty), and
+the terminal it replaces is closed and released at once, so the session you left stops counting
+as attached and its next notification isn't suppressed. Only the pane the switcher replaces is
+released this way: a terminal parked by the home button or replaced from the sidebar stays
+connected, and its session attached, as before. Jumping never marks a finished turn as seen on
+its own; the pane you land in does that once it is visible and focused.
 
 **Preview.** Rest on a row for a moment and the right-hand side shows a plain-text snapshot of
 that session's screen. It is read-only: it doesn't resize anything and doesn't mark anything

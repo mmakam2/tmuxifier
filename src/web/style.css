@@ -1240,18 +1240,19 @@ button.empty-kbd:hover { color: var(--text); }
   font-size: 10px; padding: 3px 5px; white-space: nowrap;
 }
 /* Agent switcher (agentSwitcher.ts): a service panel lifted above the stage and
-   the drawers (50), below every modal backdrop (55+). The full-screen root takes
-   no pointer events, so nothing under it is blocked; only the panel is a target.
-   It paints only after the chord has been held 150 ms (`.pending`), so a quick
-   tap never flashes it. List left, preview right. */
+   the drawers (50), below every modal backdrop (55+). Once painted, the
+   full-screen root is a transparent backdrop that takes the pointer: a click
+   outside the panel cancels and never reaches the app underneath. It paints only
+   after the chord has been held 150 ms (`.pending`, which also takes no pointer
+   events), so a quick tap never flashes it and blocks nothing. List left,
+   preview right. */
 .agent-switcher {
   position: fixed; inset: 0; z-index: 52;
   display: flex; align-items: center; justify-content: center;
-  padding: 16px; pointer-events: none;
+  padding: 16px; pointer-events: auto;
 }
-.agent-switcher.pending { visibility: hidden; }
+.agent-switcher.pending { visibility: hidden; pointer-events: none; }
 .agent-switcher-panel {
-  pointer-events: auto;
   display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
   width: min(880px, 100%); height: min(440px, 100%);
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-card);

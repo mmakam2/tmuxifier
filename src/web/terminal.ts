@@ -86,7 +86,7 @@ function isMacPlatform(): boolean {
 // Cmd/Ctrl+Shift+C to copy and Ctrl+Shift+V to paste. Decisions about which
 // key combos count live in the pure ./clipboard module; this only supplies the
 // browser objects and forwards the result. See the diagnosis in clipboard.ts.
-// Also handles the voice hotkey (the voice hotkey): xterm's
+// Also handles the voice hotkey: xterm's
 // attachCustomKeyEventHandler keeps only ONE handler, so voice must be checked
 // in this same callback rather than attaching a second one, which would
 // silently replace this handler and disable copy/paste.

@@ -615,10 +615,10 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
   `sendTextOf` collapses newlines, clears only when the send was accepted; mic dictates into it via
   `inject=off`).
 - **Agent switcher** — `agentSwitcher.ts` (DOM half: overlay, capture-phase document key listeners; the
-  overlay never takes focus) over pure halves `agentSwitcherList.ts` (rows, MRU, highlight),
-  `agentSwitcherChord.ts` (idle/open/drain reducer), `agentSwitcherPreview.ts` (250 ms rest, abort,
-  5 s cache), `agentSwitcherCommit.ts` (`planCommit`: focus / switch in place / replace / open) and
-  `ansiStrip.ts`. `hotkeys.ts` is the combo model, validation and per-browser store. `termClose.ts`
+  overlay never takes focus; its root is a backdrop — a click outside the panel cancels) over pure
+  halves `agentSwitcherList.ts` (rows, MRU, highlight), `agentSwitcherChord.ts` (idle/open/drain
+  reducer), `agentSwitcherPreview.ts` (250 ms rest, abort, 5 s cache), `agentSwitcherCommit.ts`
+  (`planCommit`: focus / switch in place / replace / open) and `ansiStrip.ts`. `hotkeys.ts` is the combo model, validation and per-browser store. `termClose.ts`
   mirrors `TERM_RELEASE_CODE`, sent for the pane a jump replaces. The MRU is fed by `noteFocusedSession`,
   called only from `repaintStage` and `syncPaneFocus`. Inert in phone mode, under a coarse pointer,
   with a modal open or while Settings records a combo. `settingsHotkeys.ts` is the Hotkeys tab.

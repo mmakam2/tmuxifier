@@ -600,6 +600,105 @@ test('a secondary click on a row commits to it (Ctrl+click on macOS)', async ({ 
   await expect(pane.locator('.xterm-rows')).toContainText('SWPREVIEW_A', { timeout: 15000 });
 });
 
+// The overlay root is a backdrop: a click outside the panel cancels and never
+// reaches the app underneath (a Ctrl+Shift+click on the gear opening Settings
+// under the switcher; on macOS a missed Ctrl+click raising the native menu,
+// which eats the modifiers' keyups and leaves the overlay stuck open).
+// Each test seeds the MRU so a release that wrongly commits lands on sw-b, a
+// fixture row, never on the real Host Shell.
+async function seedOnA(page: Page): Promise<Locator> {
+  const loc = await boxIdOf(page, 'localhost');
+  const pane = await dock(page, 'localhost');
+  await chordTo(page, loc, B);
+  await expectOnSession(pane, B);
+  await chordTo(page, loc, A);
+  await expectOnSession(pane, A);
+  // The A socket is up (callers count sockets from here on).
+  await expect(pane.locator('.xterm-rows')).toContainText('SWPREVIEW_A', { timeout: 15000 });
+  return pane;
+}
+
+test('clicking outside the panel cancels and does not reach the app underneath', async ({ page }) => {
+  const frames = termFrames(page);
+  await fresh(page);
+  const pane = await seedOnA(page);
+  const gear = (await page.locator('#settings').boundingBox())!;
+  const sockets = frames.sockets.length;
+  await holdMods(page);
+  try {
+    await page.keyboard.press('KeyK');
+    await expect(page.locator('#agent-switcher')).toBeVisible();
+    await page.waitForTimeout(200); // past the 150 ms paint
+    await page.mouse.click(gear.x + gear.width / 2, gear.y + gear.height / 2);
+    await expect(page.locator('#agent-switcher')).toHaveCount(0);
+  } finally {
+    await releaseMods(page);
+  }
+  await expect(page.locator('.settings-modal')).toHaveCount(0);
+  await expect(page.locator('#agent-switcher')).toHaveCount(0);
+  await expect(page.locator('.stage-pane')).toHaveCount(1);
+  await expectOnSession(pane, A);
+  await page.waitForTimeout(1000); // give a would-be commit every chance to reattach
+  expect(frames.sockets.length).toBe(sockets);
+});
+
+test('a secondary click outside the panel is refused and cancels', async ({ page }) => {
+  const frames = termFrames(page);
+  await fresh(page);
+  const pane = await seedOnA(page);
+  const gear = (await page.locator('#settings').boundingBox())!;
+  await page.evaluate(() => {
+    const w = window as unknown as { __cm: boolean[] };
+    w.__cm = [];
+    window.addEventListener('contextmenu', (ev) => { w.__cm.push(ev.defaultPrevented); });
+  });
+  const sockets = frames.sockets.length;
+  await holdMods(page);
+  try {
+    await page.keyboard.press('KeyK');
+    await expect(page.locator('#agent-switcher')).toBeVisible();
+    await page.waitForTimeout(200);
+    await page.mouse.click(gear.x + gear.width / 2, gear.y + gear.height / 2, { button: 'right' });
+    await expect(page.locator('#agent-switcher')).toHaveCount(0);
+  } finally {
+    await releaseMods(page);
+  }
+  expect(await page.evaluate(() => (window as unknown as { __cm: boolean[] }).__cm)).toEqual([true]);
+  await expect(page.locator('#agent-switcher')).toHaveCount(0);
+  await expect(page.locator('.settings-modal')).toHaveCount(0);
+  await expect(page.locator('.stage-pane')).toHaveCount(1);
+  await expectOnSession(pane, A);
+  await page.waitForTimeout(1000);
+  expect(frames.sockets.length).toBe(sockets);
+});
+
+// `.pending` (visibility: hidden, no pointer events) must be on the root from
+// the moment it is attached, so the quick-tap window never blocks a click.
+test('the overlay starts hidden', async ({ page }) => {
+  await fresh(page);
+  await page.evaluate(() => {
+    const w = window as unknown as { __swClass: string[] | null };
+    w.__swClass = null;
+    new MutationObserver((recs) => {
+      for (const r of recs) {
+        for (const n of r.addedNodes) {
+          if ((n as Element).id === 'agent-switcher' && w.__swClass === null) w.__swClass = [...(n as Element).classList];
+        }
+      }
+    }).observe(document.body, { childList: true });
+  });
+  await holdMods(page);
+  try {
+    await page.keyboard.down('KeyK');
+    await expect(page.locator('#agent-switcher')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.keyboard.up('KeyK');
+  } finally {
+    await releaseMods(page);
+  }
+  expect(await page.evaluate(() => (window as unknown as { __swClass: string[] | null }).__swClass)).toContain('pending');
+});
+
 test('the order is frozen while open and a state change repaints the chip in place', async ({ page }) => {
   test.setTimeout(90000);
   await fresh(page);
