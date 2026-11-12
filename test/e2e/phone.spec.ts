@@ -387,3 +387,24 @@ test('phone mode gives the pane header no session control', async ({ page }) => 
   // managed from the Edit Box modal off the box list instead.
   await expect(page.locator('.stage-pane .session-picker')).toHaveCount(0);
 });
+
+test('the agent switcher is off on a phone', async ({ page }) => {
+  await login(page);
+  await openLocalhost(page);
+  // Whether #agent-switcher was EVER attached, read off the mutation records so
+  // a mount and unmount within one task still counts.
+  await page.evaluate(() => {
+    const w = window as unknown as { __swAttached: boolean };
+    w.__swAttached = false;
+    new MutationObserver((recs) => {
+      for (const r of recs) for (const n of r.addedNodes) if ((n as Element).id === 'agent-switcher') w.__swAttached = true;
+    }).observe(document.body, { childList: true });
+  });
+  await page.keyboard.down('Control');
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('KeyK');
+  await page.keyboard.up('Shift');
+  await page.keyboard.up('Control');
+  expect(await page.evaluate(() => (window as unknown as { __swAttached: boolean }).__swAttached)).toBe(false);
+  await expect(page.locator('#agent-switcher')).toHaveCount(0);
+});

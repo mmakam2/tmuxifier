@@ -20,7 +20,7 @@ import { createLiveQueue, openLiveLink, type LiveSocket } from './liveLink';
 import { partitionJobs, jobLamp, jobReadout, jobClock, runningCount } from './fleetJobs';
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { closeAllModals, registerModal } from './modalRegistry';
-import { openModal, makeRadio } from './dom';
+import { openModal, makeRadio, modalOpen } from './dom';
 import { freshBoxFrom } from './freshBox';
 import { armReduce, ARM_MS, IDLE as ARM_IDLE, type ArmState } from './arming';
 import { createSetupJobPoller } from './setupPoller';
@@ -41,6 +41,10 @@ import { buildSessionPicker } from './sessionPicker';
 import { buildPaneLifecycle } from './paneLifecycle';
 import { createPhoneMode, type PhoneMode } from './phoneMode';
 import { buildTouchKeyBar, createStickyCtrl } from './touchKeys';
+import { hotkeys } from './hotkeys';
+import { createAgentSwitcher } from './agentSwitcher';
+import { bumpMru, liveRows, parseMru, rowKey, switcherRows, LOCAL_BOX, LOCAL_SESSION, MRU_STORAGE_KEY, type SwitcherRow } from './agentSwitcherList';
+import { planCommit } from './agentSwitcherCommit';
 
 const app = document.getElementById('app')!;
 // Reconcile whatever theme-boot.js stamped pre-paint: applyTheme normalizes
@@ -117,6 +121,15 @@ let lastAgentFilterKey = '';
 // One POST per done marker: the server's watermark is idempotent, but a poll
 // tick every few seconds must not re-send what it already said.
 const ackedSeen = new Map<string, number>();
+// The agent switcher (agentSwitcher.ts). Its document listeners live for the
+// page's lifetime, so it is created once (renderDashboard re-runs on re-login).
+// agentMru is the per-browser most-recently-used order of (box, session) keys;
+// lastFocusPair is the (focused pane, its session) pair last bumped into it.
+let agentSwitcher: ReturnType<typeof createAgentSwitcher> | null = null;
+let agentMru: string[] = (() => {
+  try { return parseMru(localStorage.getItem(MRU_STORAGE_KEY)); } catch { return []; }
+})();
+let lastFocusPair = '';
 
 function sparkMetric(): SparkMetric {
   const v = localStorage.getItem(SPARK_METRIC_KEY) as SparkMetric | null;
@@ -793,6 +806,7 @@ function repaintFromSeries() {
 async function pollHealth() {
   try {
     latestSeries = await api.healthSeries();
+    agentSwitcher?.refresh();
     repaintFromSeries();
   } catch {}
   await pollEvents();
@@ -825,7 +839,10 @@ async function liveRefresh(ids: string[] | null) {
     }
     try {
       const one = await api.healthSeriesOf(id);
-      if (Array.isArray(one[id])) latestSeries = { ...latestSeries, [id]: one[id] };
+      if (Array.isArray(one[id])) {
+        latestSeries = { ...latestSeries, [id]: one[id] };
+        agentSwitcher?.refresh();
+      }
     } catch {}
   }));
   if (statusChanged && dashTimer) dash?.update({ boxes: allBoxes, status: latestStatus, series: latestSeries });
@@ -1069,13 +1086,9 @@ const isLocalPane = (iid: string): boolean => boxOfInstance(iid) === '__local__'
 function attachedSession(iid: string): string {
   return paneSessions.get(iid) ?? (boxFor(iid)?.sessionName || 'web');
 }
-// The Host Shell's tmux session name. Mirrors the server's hardcoded default
-// (`localSession = 'local'` in sessions.js / localTmuxScope.js /
-// localShellActions.js), which is what the server keys the __local__ series'
-// agents map by. There is no knob today; if the server ever grows one it must
-// be surfaced through /api/ui-config and read here, not duplicated.
-const LOCAL_SESSION = 'local';
-// The session whose agent entry belongs to this pane. attachedSession() falls
+// The session whose agent entry belongs to this pane (LOCAL_SESSION, from
+// agentSwitcherList.ts, mirrors the server's hardcoded Host Shell session
+// `local`, which keys the __local__ series' agents map). attachedSession() falls
 // back to 'web' for the Host Shell (no box, no override), which names nothing
 // in its agents map. Agent lookups only; the session picker keeps using
 // attachedSession, and the local pane has no picker anyway.
@@ -1336,6 +1349,21 @@ function syncPaneFocus() {
     p.classList.toggle('focused', split && p.dataset.paneId === focusedPaneId);
   });
   highlightStage();
+  noteFocusedSession();
+}
+
+// The switcher's MRU "use": the (focused pane, its session) pair changed, by any
+// path. focusedPaneId is assigned in many places, so this runs in exactly two:
+// the last line of repaintStage() and of syncPaneFocus().
+function noteFocusedSession() {
+  const iid = focusedPaneId;
+  if (!iid || !panesOf(stageRoot).includes(iid)) { lastFocusPair = ''; return; }
+  const session = paneAgentSession(iid);
+  const pair = `${iid}\n${session}`;
+  if (pair === lastFocusPair) return;
+  lastFocusPair = pair;
+  agentMru = bumpMru(agentMru, rowKey(boxOfInstance(iid), session));
+  try { localStorage.setItem(MRU_STORAGE_KEY, JSON.stringify(agentMru)); } catch { /* per-viewer convenience only */ }
 }
 
 function destroyPaneLifecycles() {
@@ -1427,6 +1455,7 @@ function repaintStage() {
   filterAndPaint(); // dock-button visibility and row highlights track the layout
   syncPhoneSwitch();
   reportSeen(); // a pane that just came on screen showing `done` is now seen
+  noteFocusedSession();
 }
 
 // Top-bar pane switcher: lists every docked pane; disabled when there is
@@ -1876,6 +1905,9 @@ async function renderDashboard() {
   if (!chordWired) {
     chordWired = true;
     document.addEventListener('keydown', (e) => {
+      // Both chords listen in document capture, so the switcher's own
+      // stopPropagation cannot stop this one: while it is open, its arrows step.
+      if (agentSwitcher?.isOpen()) return;
       if (!(e.ctrlKey && e.shiftKey) || panesOf(stageRoot).length < 2) return;
       if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
       e.preventDefault();
@@ -1892,6 +1924,29 @@ async function renderDashboard() {
         tabs.get(target)?.term.focus();
       }
     }, true);
+  }
+  if (!agentSwitcher) {
+    agentSwitcher = createAgentSwitcher({
+      // Inert on the login screen, under a modal, while Settings records a
+      // combo, and on a phone (narrow layout or a coarse pointer).
+      enabled: () => !!app.querySelector('.layout') && !modalOpen() && !hotkeys.recording()
+        && !(phoneCtl?.matches() ?? false) && !window.matchMedia('(pointer: coarse)').matches,
+      combo: () => hotkeys.get('switcher'),
+      rows: () => {
+        const iid = focusedPaneId && panesOf(stageRoot).includes(focusedPaneId) ? focusedPaneId : null;
+        return switcherRows({
+          boxes: allBoxes,
+          series: latestSeries,
+          mru: agentMru,
+          focused: iid ? { boxId: boxOfInstance(iid), session: paneAgentSession(iid) } : null,
+        });
+      },
+      live: (frozen) => liveRows(frozen, latestSeries),
+      onOpen: () => { for (const h of paneHeaders.values()) h.closePicker(); },
+      commit: commitSwitcherRow,
+      fetchPreview: () => Promise.reject(new Error('preview not wired')),
+      now: () => Date.now(),
+    });
   }
 
   syncSparkMetricClass();
@@ -2456,13 +2511,57 @@ function openPaneOnSession(boxId: string, session: string) {
   if (focusedPaneId && boxOfInstance(focusedPaneId) === boxId) switchPaneSession(focusedPaneId, session);
 }
 
+// The agent switcher's commit (agentSwitcherCommit.ts plans it). Unlike
+// openPaneOnSession it replaces the FOCUSED pane and closes the occupant for good
+// (a release close, so its session stops counting as attached and repeated hops
+// cannot pile parked instances up against the server's per-box viewer cap).
+// The switcher is off on a phone, so there is no phone branch here.
+function commitSwitcherRow(row: SwitcherRow) {
+  const panes = panesOf(stageRoot);
+  const plan = planCommit({
+    target: { boxId: row.boxId, session: row.session },
+    panes,
+    focused: focusedPaneId,
+    parked: [...tabs.keys()].filter((iid) => !panes.includes(iid)),
+    sessionOf: paneAgentSession,
+  });
+  if (plan.kind === 'focus') {
+    focusedPaneId = plan.paneId;
+    syncPaneFocus();
+    persistStage();
+    tabs.get(plan.paneId)?.term.focus();
+    return;
+  }
+  if (plan.kind === 'switch') {
+    focusedPaneId = plan.paneId;
+    switchPaneSession(plan.paneId, row.session);
+    return;
+  }
+  const { iid } = plan;
+  // /term refuses a name outside the charset; switchPaneSession refuses it too.
+  if (row.boxId !== LOCAL_BOX && !isSwitchableSession(row.session)) return;
+  // A parked terminal on another session would be reused as is by ensureTab.
+  if (plan.resetTab) closeTab(iid, { keepPane: true });
+  if (row.boxId !== LOCAL_BOX) {
+    if (row.session === (boxFor(iid)?.sessionName || 'web')) paneSessions.delete(iid);
+    else paneSessions.set(iid, row.session);
+  }
+  stageRoot = plan.kind === 'open' ? iid : replacePane(stageRoot, plan.occupant, iid);
+  focusedPaneId = iid;
+  // After replacePane: the occupant is off the layout, so closeTab does not undock.
+  if (plan.kind === 'replace') closeTab(plan.occupant, { release: true });
+  repaintStage();
+}
+
 // keepPane tears down the terminal but leaves the pane in the layout — used
 // when the pane is about to show a stopped/setting-up panel, or when a
 // reconnect will immediately rebuild the terminal in place.
-function closeTab(id: string, opts?: { keepPane?: boolean }) {
+// `release` is only for the pane the agent switcher replaces: its socket closes
+// with TERM_RELEASE_CODE so the server drops the PTY at once (see termClose.ts).
+function closeTab(id: string, opts?: { keepPane?: boolean; release?: boolean }) {
   const t = tabs.get(id);
   if (t) {
-    t.term.dispose(); t.el.remove(); tabs.delete(id); connStates.delete(id);
+    t.term.dispose({ release: opts?.release }); t.el.remove(); tabs.delete(id); connStates.delete(id);
   }
   // A keepPane teardown is a reconnect/switch that rebuilds this very pane, so
   // its session override must survive; a full teardown retires the instance —
@@ -4273,6 +4372,8 @@ window.addEventListener('tmuxifier:services-changed', () => {
 // and be restored on the way back in.
 function teardownWorkspace(): void {
   if (pollInterval) clearInterval(pollInterval);
+  agentSwitcher?.cancel(); // body-mounted, so the #app re-render would not drop it
+  lastFocusPair = '';
   stopLive();
   stopFleetPoll();
   stopFleetListPoll();

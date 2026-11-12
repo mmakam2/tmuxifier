@@ -27,6 +27,11 @@ function focusables(root: HTMLElement): HTMLElement[] {
 // stacked modal (disk modal over the Proxmox hub) closed BOTH on one press.
 const openBackdrops: HTMLElement[] = [];
 
+// Whether any openModal backdrop is up: the agent switcher's hotkey is inert then.
+export function modalOpen(): boolean {
+  return openBackdrops.length > 0;
+}
+
 // Shared modal scaffold — the backdrop, the genuine-backdrop-click guard, the
 // Escape handler, dialog semantics (role/aria-modal, initial focus, Tab trap,
 // focus restore), and one idempotent teardown path. Previously copy-pasted at

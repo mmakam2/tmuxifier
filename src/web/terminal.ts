@@ -11,6 +11,7 @@ import { createTouchGesture, holdKeepsFocus, HOLD_MS, type GestureAction } from 
 import { keyboardOpen } from './phoneMode';
 import { resolveScreenTheme, onThemeChange } from './theme';
 import type { PaneConn } from './paneHeader';
+import { TERM_RELEASE_CODE } from './termClose';
 
 // Phone mode raises the terminal font two steps for touch legibility. Checked
 // once per openTerminal call: a mid-session flip across the breakpoint keeps
@@ -596,7 +597,14 @@ export function openTerminal(
 
   return {
     focus: () => term.focus(),
-    dispose: () => { offUploads(); offTouchScroll(); offTheme(); voice.dispose(); closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
+    // `release`: this pane is leaving for good (the agent switcher replaced it),
+    // so the server drops the PTY at once instead of holding its grace window.
+    // Every other caller closes without a code, so a reload still reattaches.
+    dispose: (opts?: { release?: boolean }) => {
+      offUploads(); offTouchScroll(); offTheme(); voice.dispose(); closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize);
+      if (opts?.release) ws?.close(TERM_RELEASE_CODE, 'release'); else ws?.close();
+      term.dispose();
+    },
     refit: onResize,
     input: sendInput,
     appCursor: () => term.modes.applicationCursorKeysMode,
