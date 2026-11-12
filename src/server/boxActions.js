@@ -764,10 +764,14 @@ export function createBoxActions({ run, runStdin, pipe = null, hostKeyPolicy = '
     // Read-only snapshot of the box session's active pane: tmux is the
     // terminal emulator, this just ships its screen. Never attaches a client,
     // so it can never resize the window under a desktop viewer.
-    // Concurrent captures of one box, session and depth share one ssh run: a
-    // client abort does not stop the server's ssh, so previews would pile up.
-    paneSnapshot(box, session, { lines = 200, timeoutMs = 8000 } = {}) {
-      return paneFlight(`${box.id}\n${session}\n${lines}`, async () => {
+    // `shared` is the browser preview's opt-in (the pane route's `session`
+    // branch): concurrent captures of one box, session and depth then share one
+    // ssh run, because a client abort does not stop the server's ssh and
+    // previews would pile up. Every other caller runs its own capture. A device
+    // read (the app, MCP read_pane) that joined one already in flight could
+    // return a screen from before the keys that caller had just sent.
+    paneSnapshot(box, session, { lines = 200, timeoutMs = 8000, shared = false } = {}) {
+      const capture = async () => {
         const res = await runRemote(box, buildPaneSnapshotRemote(session, { lines }), timeoutMs);
         if (!res || res.code !== 0) {
           const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
@@ -776,7 +780,8 @@ export function createBoxActions({ run, runStdin, pipe = null, hostKeyPolicy = '
         const snap = parsePaneSnapshot(res.stdout);
         if (!snap) return { ok: false, error: 'unparseable snapshot' };
         return { ok: true, ...snap };
-      });
+      };
+      return shared ? paneFlight(`${box.id}\n${session}\n${lines}`, capture) : capture();
     },
     // Text goes literal (-l) via the same builder dictation uses; a named key
     // must already be validated against NAMED_KEYS by the route — the builder

@@ -1200,7 +1200,8 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       if (typeof wanted !== 'string' || !SESSION_NAME_RE.test(wanted)) {
         return reply.code(400).send({ error: 'session name must be letters, digits, _ or -' });
       }
-      const picked = await boxActions.paneSnapshot(box, wanted, { lines });
+      // Previews share an in-flight capture; the device read below never does.
+      const picked = await boxActions.paneSnapshot(box, wanted, { lines, shared: true });
       if (!picked.ok) return reply.code(502).send({ error: picked.error });
       const latest = history ? (history.getSeries(box.id).at(-1) || null) : null;
       // The agents map is box-controlled: own keys only.

@@ -164,8 +164,10 @@ injected as arguments — that is what makes them testable without mocks. Follow
   marker is refused" rule lives in `healthHistory.markSeen`.
 - `concurrency.js` — `mapWithConcurrency`, bounded parallelism for status sweeps and Fleet.
 - `singleFlight.js` — `createSingleFlight`: concurrent calls for one key share one promise, nothing cached.
-  `paneSnapshot` in `boxActions.js` and `localShellActions.js` runs through it per box, session and line
-  count (a browser abort doesn't stop the ssh run).
+  The browser preview's captures run through it per box, session and line count (a browser abort
+  doesn't stop the ssh run): `boxActions.paneSnapshot` only with `shared: true`, which the pane route's
+  `session` branch passes, and `localShellActions.paneSnapshot` always. A device read (app, MCP) runs
+  its own capture, so it can never return a screen from before keys the caller just sent.
 - `jobOrder.js` — `newestFirst` job comparator. `pveTask.js` — `pollPveTask`, the shared PVE task
   poller.
 - `secretBox.js` — AES-256-GCM seal/open, key HKDF-derived from `cookieSecret`.

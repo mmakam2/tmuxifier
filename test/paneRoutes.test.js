@@ -29,8 +29,11 @@ beforeEach(async () => {
     if (noMouseNext) { noMouseNext = false; return { code: 93, stdout: '', stderr: '' }; }
     const remote = argv[argv.length - 1];
     if (remote.includes('capture-pane')) {
+      // The screen is read when the capture STARTS, as tmux does: a capture
+      // held at the gate still returns what was on screen before it.
+      const out = captureOut;
       if (gate) await gate;
-      return { code: 0, stdout: captureOut, stderr: '' };
+      return { code: 0, stdout: out, stderr: '' };
     }
     if (remote.includes('send-keys')) return { code: 0, stdout: '', stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
@@ -277,6 +280,47 @@ test('captures of two sessions on one box are not coalesced', async () => {
   let open; gate = new Promise((r) => { open = r; });
   const get = (s) => app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=${s}&lines=40`, headers: h });
   const both = Promise.all([get('side'), get('main')]);
+  await new Promise((r) => setTimeout(r, 50));
+  expect(calls.filter((a) => a.at(-1).includes('capture-pane')).length).toBe(2);
+  open();
+  expect((await both).map((r) => r.statusCode)).toEqual([200, 200]);
+});
+
+// Issue #9 item 3. The single flight is for the browser preview only. A device
+// read (the Android app, MCP read_pane) that joined a capture already in flight
+// could get a screen from before the keys it had just sent.
+test('a device read after send-keys runs its own capture instead of joining one in flight', async () => {
+  const app1 = await bearer();
+  const mcp = await bearer();
+  const captures = () => calls.filter((a) => a.at(-1).includes('capture-pane')).length;
+  const url = `/api/boxes/${boxId}/pane`;
+  let open; gate = new Promise((r) => { open = r; });
+  const early = app.inject({ method: 'GET', url, headers: app1 }); // the app's poll, held mid-capture
+  await new Promise((r) => setTimeout(r, 50));
+  expect(captures()).toBe(1);
+  gate = null; // only the early capture stays held
+
+  const sent = await app.inject({ method: 'POST', url: `/api/boxes/${boxId}/keys`, headers: mcp, payload: { text: 'typed' } });
+  expect(sent.statusCode).toBe(200);
+  captureOut = '80 24 3 10 0 0 0\ntyped\n'; // the box's screen now shows the keys
+  const late = app.inject({ method: 'GET', url, headers: mcp });
+  await new Promise((r) => setTimeout(r, 50));
+  expect(captures()).toBe(2);
+
+  open();
+  expect((await late).json().content).toBe('typed');
+  expect((await early).json().content).toBe('hello\nworld');
+});
+
+test('a device read does not join a browser preview of the same session and depth', async () => {
+  const h = await headers();
+  const b = await bearer();
+  let open; gate = new Promise((r) => { open = r; });
+  // Same box, same session (the configured `main`), same depth: one key in the single flight.
+  const both = Promise.all([
+    app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=main&lines=200`, headers: h }),
+    app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?lines=200`, headers: b }),
+  ]);
   await new Promise((r) => setTimeout(r, 50));
   expect(calls.filter((a) => a.at(-1).includes('capture-pane')).length).toBe(2);
   open();

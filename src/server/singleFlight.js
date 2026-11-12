@@ -3,6 +3,8 @@
 // freed when the promise settles, fulfilled or rejected, so nothing is cached.
 // Why: a browser abort does not stop the server's ssh run (up to 8 s), so
 // repeated pane previews of one box and session would otherwise pile up ssh.
+// Only for reads where a result that STARTED before the call is acceptable: a
+// read that must reflect the caller's own earlier write runs on its own.
 export function createSingleFlight() {
   const pending = new Map();
   return function flight(key, fn) {
