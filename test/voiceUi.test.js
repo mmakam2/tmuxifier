@@ -823,3 +823,61 @@ test('a close landing in the same tick as ready refuses rather than going live',
   expect(writes.join('')).toMatch(/the box-side writer failed/);
   expect(writes.join('')).toMatch(/dictating instead/);
 });
+
+// Data-driven hotkey: the combo is read through a getter at event time.
+const evk = (over) => ({ type: 'keydown', key: ' ', code: 'Space', ctrlKey: true, shiftKey: true,
+                          metaKey: false, altKey: false, repeat: false, ...over });
+
+test('the voice hotkey follows the configured combo, checked exactly', () => {
+  const combo = { alt: true, code: 'KeyD' };
+  expect(isVoiceHotkey(evk({ code: 'KeyD', altKey: true }), combo)).toBe(true);
+  expect(isVoiceHotkey(evk({ code: 'KeyD' }), combo)).toBe(false);          // Alt missing
+  expect(isVoiceHotkey(evk({ code: 'Space', altKey: true }), combo)).toBe(false);
+  expect(isVoiceHotkey(evk({ code: 'Space', altKey: true }))).toBe(false);  // default combo has no Alt
+});
+test('a handler created once sees a combo changed afterwards', () => {
+  const voice = fakeVoiceTarget();
+  let combo = { alt: false, code: 'Space' };
+  const handle = createVoiceHotkeyHandler(voice, { combo: () => combo, suppressed: () => false });
+  combo = { alt: false, code: 'KeyD' };
+  expect(handle(down({ code: 'Space' }))).toBe(false);   // old combo passes through
+  expect(handle(down({ code: 'KeyD' }))).toBe(true);
+  expect(voice.calls).toEqual(['begin']);
+});
+test('the chord swallows its own key and modifiers, and ends on its own keyup', () => {
+  const voice = fakeVoiceTarget();
+  const handle = createVoiceHotkeyHandler(voice, { combo: () => ({ alt: false, code: 'KeyD' }), suppressed: () => false });
+  expect(handle(down({ code: 'KeyD' }))).toBe(true);
+  expect(handle(down({ code: 'KeyD', repeat: true }))).toBe(true);
+  expect(handle(up({ code: 'ShiftLeft' }))).toBe(true);
+  expect(handle(down({ code: 'Space' }))).toBe(false);   // not in the chord set
+  expect(handle(up({ code: 'KeyD' }))).toBe(true);
+  expect(handle(up({ code: 'ShiftLeft' }))).toBe(false); // chord is over
+  expect(voice.calls).toEqual(['begin']);
+});
+test('a combo changed mid-chord does not strand the chord in flight', () => {
+  const voice = fakeVoiceTarget();
+  let combo = { alt: false, code: 'KeyD' };
+  const handle = createVoiceHotkeyHandler(voice, { combo: () => combo, suppressed: () => false });
+  handle(down({ code: 'KeyD' }));
+  combo = { alt: false, code: 'KeyY' };
+  expect(handle(up({ code: 'KeyD' }))).toBe(true);       // ends the held chord
+  expect(handle(up({ code: 'ShiftLeft' }))).toBe(false); // and it is over
+});
+test('an Alt combo swallows Alt keyups too', () => {
+  const voice = fakeVoiceTarget();
+  const handle = createVoiceHotkeyHandler(voice, { combo: () => ({ alt: true, code: 'KeyD' }), suppressed: () => false });
+  expect(handle(down({ code: 'KeyD', altKey: true }))).toBe(true);
+  expect(handle(up({ code: 'AltLeft' }))).toBe(true);
+  expect(handle(up({ code: 'KeyD', altKey: true }))).toBe(true);
+  expect(handle(up({ code: 'AltLeft' }))).toBe(false);
+});
+test('suppressed: a fresh chord passes through untouched', () => {
+  const voice = fakeVoiceTarget();
+  const handle = createVoiceHotkeyHandler(voice, { combo: () => ({ alt: false, code: 'Space' }), suppressed: () => true });
+  expect(handle(down({}))).toBe(false);
+  expect(voice.calls).toEqual([]);
+});
+test('tooltips name the configured combo', () => {
+  expect(idleTitle(null, true, 'Ctrl+Shift+D')).toBe('Hold to dictate (or tap Ctrl+Shift+D to start/stop)');
+});
