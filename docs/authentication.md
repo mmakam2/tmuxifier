@@ -65,26 +65,65 @@ Tmuxifier treats a scheme-less public URL as HTTPS.
 
 ### authentik
 
-1. In authentik, **Applications → Providers → Create** an **OAuth2/OpenID Provider**. Client
-   type **Confidential**.
-2. Set the redirect URI (strict) to
-   `https://tmuxifier.example.com/api/auth/oidc/authentik/callback`.
-3. Scopes: `openid` and `email`.
-4. Create an **Application** using that provider and bind it to the user(s) allowed in
-   (policy/group bindings). The issuer is the provider's OpenID Configuration Issuer, like
-   `https://auth.example.com/application/o/tmuxifier/`.
-5. Copy the client id and secret into the `TMUXIFIER_OIDC_AUTHENTIK_*` keys above.
+**1. Provider.** In authentik, **Applications → Providers → Create** an **OAuth2/OpenID
+Provider**:
 
-authentik's default `email` claim reports `email_verified: false`. Recommended: add a custom
-scope mapping that returns `email_verified: true` and attach it to the provider. The alternative
-is `TMUXIFIER_OIDC_AUTHENTIK_ALLOW_UNVERIFIED_EMAIL=on`. With it on, anyone who can set the
-allowlisted email at that provider can sign in, because `TMUXIFIER_ALLOWED_EMAILS` is shared
-across all providers.
+- Client type **Confidential**.
+- Redirect URIs: **Strict**, `https://tmuxifier.example.com/api/auth/oidc/authentik/callback`.
+  It must match `TMUXIFIER_BASE_EXTERNAL_URL` exactly (scheme, host, port).
+- Scopes: `openid` and `email` (Tmuxifier reads only `email`).
+- Signing key: any. Tmuxifier takes the id_token straight from the token endpoint over TLS and
+  doesn't verify its signature.
+
+Note the **Client ID**, **Client Secret** and the **OpenID Configuration Issuer**
+(e.g. `https://auth.example.com/application/o/tmuxifier/`, trailing slash included) and put them
+in the `TMUXIFIER_OIDC_AUTHENTIK_*` keys above.
+
+**2. Verified email (recommended).** authentik's default `email` mapping reports
+`email_verified: false`, which Tmuxifier rejects. Under **Customization → Property Mappings →
+Create**, add a **Scope Mapping** with scope name `email` and the expression:
+
+```python
+return {"email": request.user.email, "email_verified": True}
+```
+
+Then on the provider, under **Advanced protocol settings → Scopes**, replace the default `email`
+mapping with this one. The alternative is `TMUXIFIER_OIDC_AUTHENTIK_ALLOW_UNVERIFIED_EMAIL=on`.
+With it on, anyone who can set the allowlisted email at that provider can sign in, because
+`TMUXIFIER_ALLOWED_EMAILS` is shared across all providers.
+
+**3. Application and bindings.** **Applications → Create** an application using the provider and
+add **Policy / Group / User Bindings** for only the user(s) or group allowed in. Without a
+binding, every authentik user can obtain a token for it (the allowlist still applies).
 
 > **Warning.** Either way, Tmuxifier trusts the email authentik reports. authentik's default
 > user-settings flow lets users edit their own email, so any authentik user could claim an
-> allowlisted address. Disable email editing in the user-settings flow, or make sure you are
-> the only user.
+> allowlisted address. Under **Flows → default-user-settings-flow**, remove the email field
+> from its prompt stage (or make it read-only), or make sure you are the only user.
+
+**Testing on a LAN address.** For a throwaway instance you can skip the public hostname: the
+redirect is followed by your browser, so authentik never has to reach Tmuxifier. Use the same
+address everywhere, e.g. `TMUXIFIER_BIND=192.168.1.10`, `TMUXIFIER_PORT=7440`,
+`TMUXIFIER_BASE_EXTERNAL_URL=http://192.168.1.10:7440`, redirect URI
+`http://192.168.1.10:7440/api/auth/oidc/authentik/callback`, and open Tmuxifier at that exact
+address (the session cookie is per host). Plain `http` works but leaves the session cookie
+non-`Secure`; use it for testing only. The issuer still has to be `https` (unless authentik runs
+on loopback) and reachable from the Tmuxifier host. Passkeys are unavailable on an IP-address
+URL, so set `TMUXIFIER_PASSWORD_HASH` for the `/?login` fallback and don't arm "Require a
+passkey" there.
+
+**Troubleshooting.**
+
+- Boot fails: the log line names the missing or invalid key (non-`https` issuer, bad provider
+  id, empty allowlist, missing `TMUXIFIER_BASE_EXTERNAL_URL`).
+- `?error=provider`: discovery or the token exchange failed — wrong issuer or client secret,
+  or the Tmuxifier host can't reach `<issuer>/.well-known/openid-configuration`.
+- `?error=forbidden`: the email isn't in `TMUXIFIER_ALLOWED_EMAILS`, or `email_verified` is still
+  false (step 2).
+- `?error=state`: the sign-in took over 5 minutes or started on a different address than the
+  callback; start again from the same URL.
+- authentik shows "redirect URI mismatch": its redirect URI and `TMUXIFIER_BASE_EXTERNAL_URL`
+  differ.
 
 ### Google
 
