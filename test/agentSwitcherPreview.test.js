@@ -186,3 +186,26 @@ test('never two live requests at once', async () => {
   await tick();
   expect(live()).toBe(0);
 });
+
+const pending = (r) => r.timers.filter((x) => !x.cleared && !x.fired).length;
+
+test('a shown preview stays shown while its row stays highlighted, past the cache lifetime', async () => {
+  const r = rig();
+  r.s.highlight(A); r.advance(250);
+  r.fetches[0].resolve('one'); await tick();
+  r.advance(5001);
+  expect(r.s.view()).toEqual({ t: 'text', text: 'one' });
+  expect(r.fetches.length).toBe(1);
+  expect(pending(r)).toBe(0);
+});
+
+test('re-highlighting the same row after its snapshot aged out is still a no-op while it is shown', async () => {
+  const r = rig();
+  r.s.highlight(A); r.advance(250);
+  r.fetches[0].resolve('one'); await tick();
+  r.advance(5001);
+  r.s.highlight({ ...A });
+  expect(r.s.view()).toEqual({ t: 'text', text: 'one' });
+  expect(r.fetches.length).toBe(1);
+  expect(pending(r)).toBe(0);
+});

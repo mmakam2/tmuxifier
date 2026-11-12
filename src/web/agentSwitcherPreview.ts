@@ -22,6 +22,9 @@ export function createPreviewScheduler(deps: PreviewDeps) {
   const cache = new Map<string, { text: string; at: number }>();
   let current: PreviewTarget | null = null;
   let failed = false;
+  // The text on screen for the highlighted target. Held as state so view() never
+  // depends on the clock; cache age is consulted only when a target is highlighted.
+  let shown: string | null = null;
   let timer: unknown = null;
   let hasTimer = false;
   let ctl: AbortController | null = null;
@@ -44,7 +47,7 @@ export function createPreviewScheduler(deps: PreviewDeps) {
         // A resolved result is cached even if the request was aborted meanwhile.
         if (ctl === mine) ctl = null;
         cache.set(k, { text, at: deps.now() });
-        if (current && keyOf(current) === k) deps.onChange();
+        if (current && keyOf(current) === k) { shown = text; deps.onChange(); }
       },
       () => {
         if (mine.signal.aborted) return;
@@ -55,11 +58,12 @@ export function createPreviewScheduler(deps: PreviewDeps) {
   }
 
   function highlight(target: PreviewTarget | null) {
-    if (target && current && keyOf(target) === keyOf(current) && (hasTimer || ctl || fresh(target))) return;
+    if (target && current && keyOf(target) === keyOf(current) && (hasTimer || ctl || shown !== null)) return;
     cancel();
     failed = false;
     current = target;
-    if (target && !fresh(target)) {
+    shown = target ? (fresh(target)?.text ?? null) : null;
+    if (target && shown === null) {
       timer = deps.setTimer(() => start(target), PREVIEW_REST_MS);
       hasTimer = true;
     }
@@ -68,14 +72,14 @@ export function createPreviewScheduler(deps: PreviewDeps) {
 
   function view(): PreviewView {
     if (!current) return { t: 'idle' };
-    const hit = fresh(current);
-    if (hit) return { t: 'text', text: hit.text };
+    if (shown !== null) return { t: 'text', text: shown };
     return failed ? { t: 'error' } : { t: 'loading' };
   }
 
   function dispose() {
     cancel();
     current = null;
+    shown = null;
     cache.clear();
   }
 
