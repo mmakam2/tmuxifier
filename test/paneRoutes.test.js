@@ -9,6 +9,7 @@ import { hashPassword } from '../src/server/auth.js';
 import { createDeviceStore } from '../src/server/deviceStore.js';
 import { createPasskeyStore } from '../src/server/passkeyStore.js';
 
+let gate = null;
 let app, dir, calls, boxId, failNext, noMouseNext, captureOut, sizedCalls, setupRunning;
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-pane-'));
@@ -16,6 +17,7 @@ beforeEach(async () => {
   // Tests flip this to exercise the routes' 502 mapping — consumed by the very
   // next call so a test can fail exactly one ssh round trip.
   failNext = false;
+  gate = null;
   // The wheel script's own box-side refusal (exit 93): pane not mouse-aware.
   noMouseNext = false;
   captureOut = '80 24 3 10 0 0 0\nhello\nworld\n';
@@ -26,7 +28,10 @@ beforeEach(async () => {
     if (failNext) { failNext = false; return { code: 1, stdout: '', stderr: 'boom' }; }
     if (noMouseNext) { noMouseNext = false; return { code: 93, stdout: '', stderr: '' }; }
     const remote = argv[argv.length - 1];
-    if (remote.includes('capture-pane')) return { code: 0, stdout: captureOut, stderr: '' };
+    if (remote.includes('capture-pane')) {
+      if (gate) await gate;
+      return { code: 0, stdout: captureOut, stderr: '' };
+    }
     if (remote.includes('send-keys')) return { code: 0, stdout: '', stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
   };
@@ -254,4 +259,26 @@ test('GET pane with session stays ungated while the box setup job runs', async (
   setupRunning = true;
   const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=side`, headers: await headers() });
   expect(res.statusCode).toBe(200);
+});
+
+test('concurrent captures of one box and session share one ssh', async () => {
+  const h = await headers();
+  let open; gate = new Promise((r) => { open = r; });
+  const url = `/api/boxes/${boxId}/pane?session=side&lines=40`;
+  const both = Promise.all([app.inject({ method: 'GET', url, headers: h }), app.inject({ method: 'GET', url, headers: h })]);
+  await new Promise((r) => setTimeout(r, 50));
+  expect(calls.filter((a) => a.at(-1).includes('capture-pane')).length).toBe(1);
+  open();
+  expect((await both).map((r) => r.statusCode)).toEqual([200, 200]);
+});
+
+test('captures of two sessions on one box are not coalesced', async () => {
+  const h = await headers();
+  let open; gate = new Promise((r) => { open = r; });
+  const get = (s) => app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=${s}&lines=40`, headers: h });
+  const both = Promise.all([get('side'), get('main')]);
+  await new Promise((r) => setTimeout(r, 50));
+  expect(calls.filter((a) => a.at(-1).includes('capture-pane')).length).toBe(2);
+  open();
+  expect((await both).map((r) => r.statusCode)).toEqual([200, 200]);
 });
