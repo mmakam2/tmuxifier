@@ -41,6 +41,9 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
   let state: ChordState = CHORD_IDLE;
   let frozen: SwitcherRow[] = [];
   let index = -1;
+  // Nothing to go to (initialIndex was -1 at open): the chord cannot step onto
+  // the pinned "this pane" row, so the release commits nothing.
+  let stuck = false;
   let root: HTMLElement | null = null;
   let rowEls: HTMLElement[] = [];
   let paintTimer: ReturnType<typeof setTimeout> | null = null;
@@ -60,9 +63,10 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
       deps.onOpen();
       frozen = deps.rows();
       index = initialIndex(frozen);
+      stuck = index === -1;
       mount();
     } else if (e.t === 'step') {
-      if (!frozen.length) return;
+      if (stuck || !frozen.length) return;
       index = stepIndex(index, e.delta, frozen.length);
       paintSelection();
       rowEls[index]?.scrollIntoView({ block: 'nearest' });
@@ -110,6 +114,11 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
     // The terminal keeps focus through a click on the overlay.
     el.addEventListener('mousedown', (ev) => ev.preventDefault());
     el.addEventListener('click', () => feed({ t: 'click', index: i }));
+    // Every row click happens with Ctrl+Shift held, and on macOS a Ctrl+click is
+    // the secondary action: `contextmenu`, no `click`. It commits the same way;
+    // a platform that fires both cannot double-commit, as the reducer ignores a
+    // click once it has left `open`.
+    el.addEventListener('contextmenu', (ev) => { ev.preventDefault(); feed({ t: 'click', index: i }); });
     return el;
   }
 
@@ -122,6 +131,8 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
     root = document.createElement('div');
     root.id = 'agent-switcher';
     root.className = 'agent-switcher pending';
+    // No native context menu over the overlay (see the rows' own listener).
+    root.addEventListener('contextmenu', (ev) => ev.preventDefault());
     const panel = document.createElement('div');
     panel.className = 'agent-switcher-panel';
     const list = document.createElement('div');

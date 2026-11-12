@@ -567,6 +567,39 @@ test('clicking a row commits to it', async ({ page }) => {
   await expect(pane.locator('.xterm-rows')).toContainText('SWPREVIEW_A', { timeout: 15000 });
 });
 
+// The overlay exists only while Ctrl+Shift is held, so every row click is a
+// Ctrl+click — which macOS browsers turn into `contextmenu`, with no `click`.
+test('a secondary click on a row commits to it (Ctrl+click on macOS)', async ({ page }) => {
+  await fresh(page);
+  const db = await boxIdOf(page, 'db-primary');
+  await dock(page, 'localhost');
+  await page.evaluate(() => {
+    const w = window as unknown as { __cm: boolean[] };
+    w.__cm = [];
+    window.addEventListener('contextmenu', (ev) => { w.__cm.push(ev.defaultPrevented); });
+  });
+  await holdMods(page);
+  try {
+    await page.keyboard.press('KeyK');
+    await expect(page.locator('#agent-switcher')).toBeVisible();
+    expect((await selected(page)).key).not.toBe(`${db}\n${A}`);
+    // Anywhere else inside the overlay, the native menu is refused too.
+    const notCancelled = await page.evaluate(() => document.querySelector('.agent-switcher-preview')!
+      .dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })));
+    expect(notCancelled).toBe(false);
+    await page.locator(`.agent-switcher-row[data-box="${db}"][data-session="${A}"]`).click({ button: 'right' });
+    await expect(page.locator('#agent-switcher')).toHaveCount(0);
+  } finally {
+    await releaseMods(page);
+  }
+  expect(await page.evaluate(() => (window as unknown as { __cm: boolean[] }).__cm)).toEqual([true, true]);
+  const pane = page.locator('.stage-pane');
+  await expect(pane).toHaveCount(1);
+  await expect(pane.locator('.pane-title')).toHaveText('db-primary');
+  await expectOnSession(pane, A);
+  await expect(pane.locator('.xterm-rows')).toContainText('SWPREVIEW_A', { timeout: 15000 });
+});
+
 test('the order is frozen while open and a state change repaints the chip in place', async ({ page }) => {
   test.setTimeout(90000);
   await fresh(page);
