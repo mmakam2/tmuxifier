@@ -223,4 +223,41 @@ describe('chordReduce', () => {
     expect(JSON.stringify(open)).toBe(before);
     expect(JSON.stringify(CHORD_IDLE)).toBe('{"phase":"idle","combo":null,"held":[]}');
   });
+  test('a disabled chord is fully inert: an idle repeat of the chord key passes (pins existing behaviour)', () => {
+    const off = run([key('keydown', 'KeyK', { repeat: true })], { enabled: false });
+    expect(off.swallowed).toEqual([false]);
+    expect(off.state.phase).toBe('idle');
+    expect(off.effects).toEqual([]);
+    const on = run([key('keydown', 'KeyK', { repeat: true })]);
+    expect(on.swallowed).toEqual([true]);
+  });
+
+  test('a reopen from drain keeps the keyups still owed', () => {
+    const r = run([
+      key('keydown', 'KeyK'),
+      key('keydown', 'Escape'),
+      key('keyup', 'KeyK'),
+      key('keydown', 'KeyK'),
+      key('keyup', 'ControlLeft', { ctrlKey: false }),
+      key('keyup', 'Escape', { ctrlKey: false }),
+      key('keyup', 'KeyK', { ctrlKey: false }),
+      key('keyup', 'ShiftLeft', { ctrlKey: false, shiftKey: false }),
+    ]);
+    expect(r.effects.map((e) => e.t)).toEqual(['open', 'cancel', 'open', 'commit']);
+    expect(r.swallowed).toEqual([true, true, true, true, true, true, true, true]);
+    expect(r.state.phase).toBe('idle');
+    expect(r.state.held).toEqual([]);
+  });
+
+  test('in drain, a non-repeat keydown of a held code is swallowed and does not reopen (pins existing behaviour)', () => {
+    const r = run([
+      key('keydown', 'KeyK'),
+      key('keyup', 'ControlLeft', { ctrlKey: false }),
+      key('keydown', 'KeyK'),
+    ]);
+    expect(r.effects.map((e) => e.t)).toEqual(['open', 'commit']);
+    expect(r.swallowed).toEqual([true, true, true]);
+    expect(r.state.phase).toBe('drain');
+    expect(r.state.held).toEqual(['KeyK']);
+  });
 });

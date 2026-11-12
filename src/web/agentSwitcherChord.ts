@@ -50,13 +50,14 @@ function opens(ev: KeyLike, held: string[], ctx: { combo: Combo; enabled: boolea
   return ev.type === 'keydown' && !ev.repeat && ctx.enabled && matchesCombo(ev, ctx.combo) && !held.includes(ev.code);
 }
 
-const openResult = (code: string, ctx: { combo: Combo }): ChordResult =>
-  take({ phase: 'open', combo: ctx.combo, held: [code] }, [{ t: 'open' }]);
+// A reopen from drain keeps the codes still owed a keyup, so their repeats and keyups stay swallowed.
+const openResult = (held: string[], code: string, ctx: { combo: Combo }): ChordResult =>
+  take({ phase: 'open', combo: ctx.combo, held: add(held, code) }, [{ t: 'open' }]);
 
 function reduceIdle(state: ChordState, input: ChordInput, ctx: { combo: Combo; enabled: boolean }): ChordResult {
   if (input.t !== 'key') return pass(state);
   const ev = input.ev;
-  if (opens(ev, [], ctx)) return openResult(ev.code, ctx);
+  if (opens(ev, [], ctx)) return openResult([], ev.code, ctx);
   // A key still held from before a blur must not type its repeats.
   if (ev.type === 'keydown' && ev.repeat && ctx.enabled && matchesCombo(ev, ctx.combo)) return take(state);
   return pass(state);
@@ -88,7 +89,7 @@ function reduceDrain(state: ChordState, input: ChordInput, ctx: { combo: Combo; 
   if (input.t === 'blur') return { state: CHORD_IDLE, swallow: false, effects: [] };
   if (input.t === 'click') return pass(state);
   const ev = input.ev;
-  if (opens(ev, state.held, ctx)) return openResult(ev.code, ctx);
+  if (opens(ev, state.held, ctx)) return openResult(state.held, ev.code, ctx);
   let r: ChordResult;
   if (state.held.includes(ev.code)) {
     r = take(ev.type === 'keyup' ? { ...state, held: drop(state.held, ev.code) } : state);
