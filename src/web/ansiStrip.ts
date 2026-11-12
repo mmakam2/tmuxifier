@@ -2,7 +2,7 @@
 // `tmux capture-pane -e` and is untrusted box output: it is shown only as plain text.
 // The three expressions mirror src/mcp/shape.js (stripSgr); a test compares the two.
 
-const CSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+const CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 const ESC2 = /\x1b[@-Z\\-_]/g;
 // Every C0 control except \t (0x09) and \n (0x0a), DEL, and C1. This also removes the

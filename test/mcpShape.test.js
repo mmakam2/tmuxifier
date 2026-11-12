@@ -8,6 +8,10 @@ test('stripSgr removes SGR/CSI/OSC and trailing blank lines', () => {
   expect(stripSgr(raw)).toBe('$ ls\nplain');
 });
 
+test('stripSgr removes colon-parameter SGR (tmux capture-pane -e, e.g. curly underline)', () => {
+  expect(stripSgr('A\x1b[4:3mcurly\x1b[4:0m')).toBe('Acurly');
+});
+
 test('stripSgr trims trailing whitespace exactly as the /\\s+$/ it replaced, keeping leading and inner runs', () => {
   const raw = '  lead\tinner  \t\r\n\u00a0nbsp\u00a0\u3000\ufeff\n\u2028\u2029\u202f\u205f\u1680\u2000\u200a\x0b\x0c\nkeep\u200bzwsp\u200b\n x \n';
   const legacy = (t) => {
