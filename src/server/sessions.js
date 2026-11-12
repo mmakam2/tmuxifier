@@ -24,6 +24,14 @@ export const safeClientId = (raw) => (CLIENT_ID.test(String(raw ?? '')) ? String
 export const terminalKey = (boxId, clientId) => `term:${boxId}:${safeClientId(clientId)}`;
 export const localKey = (clientId) => `local:${safeClientId(clientId)}`;
 
+// The close code a /term client sends when its viewer is leaving for good (the
+// pane is being replaced, not reloaded): the handler then drops that viewer's PTY
+// at once — if no other socket still watches it — instead of holding it for the
+// grace window, during which tmux reports the session attached and its agent
+// notifications stay suppressed. Every other close keeps the grace window.
+// Mirrored by src/web/termClose.ts (pinned by test/termClose.test.js).
+export const TERM_RELEASE_CODE = 4000;
+
 // The group a PTY belongs to: a box id for terminals and provisions, this
 // constant for the host's own shell. Callers act on groups ("drop this box's
 // terminals", "is any login live for this box?") because a single box now spans

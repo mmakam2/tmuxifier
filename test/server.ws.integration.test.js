@@ -3,6 +3,7 @@ import { WebSocket } from 'ws';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { buildServer } from '../src/server/server.js';
 import { createStore } from '../src/server/store.js';
 import { createSessionManager, terminalKey, localKey } from '../src/server/sessions.js';
@@ -862,3 +863,181 @@ test('/term does not spawn or leak attached PTYs if the client disconnects durin
   expect(spawned).toEqual([]);
   expect(sessions.hasLiveSessionForBox(saved.id)).toBe(false);
 }, 10000);
+
+// --- Release close (code 4000) -------------------------------------------------
+// A pane the operator replaces on purpose closes its socket with the release
+// code: that viewer's PTY goes at once instead of holding a tmux client (and so
+// suppressing the session's agent notifications) for the grace window. Every
+// other close keeps the grace window a reload or network drop relies on.
+
+// Polls fn every 50 ms until it returns truthy; a throw counts as "not yet".
+async function until(fn, ms = 3000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    let ok = false;
+    try { ok = await fn(); } catch { ok = false; }
+    if (ok) return;
+    if (Date.now() > deadline) throw new Error(`until: condition not met within ${ms} ms`);
+    await delay(50);
+  }
+}
+
+// Opens an authenticated /term socket and resolves once it is open (and, when
+// `ready` is given, once that also holds — the server's handler is async, so a
+// socket can be open before the handler has attached it).
+function termOpener(port, cookie, ready) {
+  return async (query) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/term?${query}&cols=80&rows=24`, { headers: { cookie } });
+    ws.chunks = [];
+    ws.on('message', (d) => ws.chunks.push(d.toString()));
+    const before = ready ? ready.count() : 0;
+    await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+    if (ready) await until(() => ready.count() > before);
+    return ws;
+  };
+}
+
+// Fake session manager that records how each socket's close was handled.
+async function releaseFixture() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-release-'));
+  const config = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 5,
+    passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
+    sshConfigPath: path.join(dir, 'nope'), localShell: 'omz',
+  };
+  const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
+  const saved = await store.addBox({ host: '192.168.1.10', sessionName: 'web' });
+  const entries = { open: { kind: 'terminal' }, local: { kind: 'local' }, provision: { kind: 'provision' } };
+  const log = [];
+  let attaches = 0;
+  const sessions = {
+    open() { return entries.open; },
+    openLocal() { return entries.local; },
+    provision() { return entries.provision; },
+    attach() { attaches += 1; return () => {}; },
+    onExit() { return () => {}; },
+    write() {}, resize() {},
+    detach(e) { log.push(['detach', e]); },
+    closeIfUnwatched(e) { log.push(['release', e]); return true; },
+    close(e) { log.push(['close', e]); },
+  };
+  const app = buildServer({ config, store, sessions, statusChecker: { checkBox: async () => ({ reachable: true }) } });
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const { port } = app.server.address();
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === COOKIE_NAME);
+  teardown = async () => { await app.close(); await fs.rm(dir, { recursive: true, force: true }); };
+  const openTerm = termOpener(port, `${c.name}=${c.value}`, { count: () => attaches });
+  return { saved, log, entries, openTerm };
+}
+
+test('/term closed with the release code drops the PTY instead of starting the grace window', async () => {
+  const { saved, log, entries, openTerm } = await releaseFixture();
+  const ws = await openTerm(`box=${saved.id}&client=v1`);
+  ws.close(4000, 'release');
+  await until(() => log.length === 1);
+  expect(log[0][0]).toBe('release');
+  expect(log).toEqual([['release', entries.open]]);
+}, 10000);
+
+test('/term closed normally still detaches into the grace window', async () => {
+  const { saved, log, entries, openTerm } = await releaseFixture();
+  const ws = await openTerm(`box=${saved.id}&client=v1`);
+  ws.close();
+  await until(() => log.length === 1);
+  await delay(100);
+  expect(log).toEqual([['detach', entries.open]]);
+}, 10000);
+
+test('/term closed with a different application code still detaches', async () => {
+  const { saved, log, entries, openTerm } = await releaseFixture();
+  const ws = await openTerm(`box=${saved.id}&client=v1`);
+  ws.close(4001, 'not release');
+  await until(() => log.length === 1);
+  expect(log).toEqual([['detach', entries.open]]);
+}, 10000);
+
+test('/term host shell honours the release code too', async () => {
+  const { log, entries, openTerm } = await releaseFixture();
+  const released = await openTerm('box=__local__&client=v1');
+  released.close(4000, 'release');
+  await until(() => log.length === 1);
+  const plain = await openTerm('box=__local__&client=v1');
+  plain.close();
+  await until(() => log.length === 2);
+  expect(log).toEqual([['release', entries.local], ['detach', entries.local]]);
+}, 10000);
+
+test('/term provision mode is untouched by the release code', async () => {
+  const { saved, log, entries, openTerm } = await releaseFixture();
+  const q = `box=${saved.id}&mode=provision&ohMyTmux=0&ohMyZsh=0&ohMyBash=0`;
+  const released = await openTerm(q);
+  released.close(4000, 'release');
+  await until(() => log.length === 1);
+  const plain = await openTerm(q);
+  plain.close();
+  await until(() => log.length === 2);
+  await delay(100);
+  // Provision already closes an unwatched entry on every close; the code changes nothing.
+  expect(log).toEqual([['release', entries.provision], ['release', entries.provision]]);
+}, 10000);
+
+// Real session manager over the isolated sshd fixture, with the production grace window.
+async function realReleaseFixture() {
+  const { box, session, env, sshConfigFile, cleanup } = await setupLocalBox();
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-release-real-'));
+  const config = {
+    bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
+    passwordHash: await hashPassword('pw'), cookieSecret: 'sek', dataDir: dir,
+    sshConfigPath: path.join(dir, 'nope'),
+  };
+  const store = createStore({ dataDir: dir, sshConfigPath: config.sshConfigPath });
+  const saved = await store.addBox({ host: box.host, sessionName: session });
+  const sessions = createSessionManager({ graceSeconds: 45, spawnEnv: env, sshConfigFile });
+  const app = buildServer({ config, store, sessions, statusChecker: { checkBox: async () => ({ reachable: true }) } });
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const { port } = app.server.address();
+  teardown = async () => {
+    sessions.closeGroup(saved.id);
+    await app.close(); await cleanup(); await fs.rm(dir, { recursive: true, force: true });
+  };
+  const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === COOKIE_NAME);
+  const listClients = () => execFileSync(
+    'ssh', ['-F', sshConfigFile, box.host, `tmux list-clients -t '=${session}' -F x`],
+    // stderr dropped: before the first attach the fixture's tmux server does not
+    // exist yet, which until() treats as "not yet".
+    { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'ignore'] },
+  ).trim();
+  return { saved, listClients, openTerm: termOpener(port, `${c.name}=${c.value}`) };
+}
+
+test('a release close detaches the tmux client at once; a plain close keeps it for the grace window', async () => {
+  const { saved, listClients, openTerm } = await realReleaseFixture();
+  const a = await openTerm(`box=${saved.id}&client=keep`);
+  await until(() => listClients() === 'x', 8000);
+  a.close();
+  await delay(1500);
+  expect(listClients()).toBe('x'); // still attached: grace window
+  const b = await openTerm(`box=${saved.id}&client=keep`);
+  await delay(500);
+  b.close(4000, 'release');
+  await until(() => listClients() === '', 5000); // gone well inside 45 s
+}, 30000);
+
+test('a release close leaves the PTY alone while a second socket on the same viewer key is attached', async () => {
+  const { saved, listClients, openTerm } = await realReleaseFixture();
+  const a = await openTerm(`box=${saved.id}&client=pair`);
+  await until(() => listClients() === 'x', 8000);
+  const b = await openTerm(`box=${saved.id}&client=pair`);
+  await until(() => b.chunks.length > 0, 5000); // attached: the replay arrived
+  a.close(4000, 'release');
+  await new Promise((r) => a.on('close', r));
+  await delay(500);
+  expect(b.readyState).toBe(WebSocket.OPEN);
+  b.chunks.length = 0;
+  b.send(JSON.stringify({ t: 'i', d: 'echo STILL_HERE_$((40+2))\n' }));
+  await until(() => b.chunks.join('').includes('STILL_HERE_42'), 5000);
+  expect(listClients()).toBe('x');
+  b.close();
+}, 30000);
