@@ -45,6 +45,7 @@ import { hotkeys } from './hotkeys';
 import { createAgentSwitcher } from './agentSwitcher';
 import { bumpMru, liveRows, parseMru, rowKey, switcherRows, LOCAL_BOX, LOCAL_SESSION, MRU_STORAGE_KEY, type SwitcherRow } from './agentSwitcherList';
 import { planCommit } from './agentSwitcherCommit';
+import { previewText } from './ansiStrip';
 
 const app = document.getElementById('app')!;
 // Reconcile whatever theme-boot.js stamped pre-paint: applyTheme normalizes
@@ -1944,7 +1945,10 @@ async function renderDashboard() {
       live: (frozen) => liveRows(frozen, latestSeries),
       onOpen: () => { for (const h of paneHeaders.values()) h.closePicker(); },
       commit: commitSwitcherRow,
-      fetchPreview: () => Promise.reject(new Error('preview not wired')),
+      // Read-only captures: no cols/rows (never sizes a viewer), no seen ack.
+      fetchPreview: async (t, signal) => previewText((t.boxId === LOCAL_BOX
+        ? await api.localPanePreview(signal)
+        : await api.panePreview(t.boxId, t.session, signal)).content, 40),
       now: () => Date.now(),
     });
   }

@@ -713,3 +713,223 @@ test('held past 150 ms the overlay is visible; after a quick tap nothing is left
   await expect(page.locator('#agent-switcher')).toHaveCount(0);
   await expectOnSession(pane, B);
 });
+
+// The preview (agentSwitcherPreview.ts scheduler, painted by agentSwitcher.ts):
+// the highlighted session's last screen lines as plain text, fetched only once
+// the highlight rests 250 ms, cached 5 s per open of the overlay.
+test.describe('preview', () => {
+  const M = 'sw-m';
+  const scriptM = path.join(home, 'sw-m.sh');
+
+  // Every pane capture this page asks for (the box route and the Host Shell's).
+  function paneRequests(page: Page): string[] {
+    const out: string[] = [];
+    page.on('request', (req) => { if (/\/pane\?/.test(req.url())) out.push(req.url()); });
+    return out;
+  }
+  function seenPosts(page: Page): string[] {
+    const out: string[] = [];
+    page.on('request', (req) => { if (req.method() === 'POST' && req.url().includes('/agent-seen')) out.push(req.url()); });
+    return out;
+  }
+  // Box-route captures of one (box, session); unrelated requests are ignored.
+  const capturesOf = (reqs: string[], boxId: string, session: string) => reqs.filter((u) => {
+    const url = new URL(u);
+    return url.pathname === `/api/boxes/${encodeURIComponent(boxId)}/pane` && url.searchParams.get('session') === session;
+  });
+
+  const body = (page: Page) => page.locator('#agent-switcher .agent-switcher-preview-body');
+  const head = (page: Page) => page.locator('#agent-switcher .agent-switcher-preview-head');
+
+  // With the chord held: step until the highlight is on (boxId, session),
+  // tapping fast enough (well under the 250 ms rest) that nothing in between
+  // is fetched.
+  async function stepTo(page: Page, boxId: string, session: string) {
+    for (let i = 0; i < 24; i++) {
+      if ((await selected(page)).key === `${boxId}\n${session}`) return;
+      await page.keyboard.press('KeyK');
+    }
+    expect((await selected(page)).key, `no switcher row for ${boxId} / ${session}`).toBe(`${boxId}\n${session}`);
+  }
+
+  test('tapping through rows fetches nothing; resting fetches once and shows the screen', async ({ page }) => {
+    const reqs = paneRequests(page);
+    await fresh(page);
+    const loc = await boxIdOf(page, 'localhost');
+    await holdMods(page);
+    try {
+      for (let i = 0; i < 6; i++) {
+        await page.keyboard.press('KeyK');
+        await page.waitForTimeout(60);
+      }
+      expect(reqs).toEqual([]);
+      await stepTo(page, loc, A);
+      await expect(body(page)).toContainText('SWPREVIEW_A', { timeout: 15000 });
+      await expect(body(page)).toHaveAttribute('data-view', 'text');
+      await expect(head(page)).toContainText('localhost');
+      await expect(head(page)).toContainText(A);
+      await expect(head(page).locator('.agent-switcher-chip')).toHaveClass(/chip-agent-working/);
+      await page.waitForTimeout(600); // a second request would have shown by now
+      expect(capturesOf(reqs, loc, A)).toHaveLength(1);
+      await page.keyboard.press('Escape');
+    } finally {
+      await releaseMods(page);
+    }
+  });
+
+  test('the request names the session and 40 lines and never sizes anything', async ({ page }) => {
+    const reqs = paneRequests(page);
+    await fresh(page);
+    const loc = await boxIdOf(page, 'localhost');
+    await holdMods(page);
+    try {
+      await page.keyboard.press('KeyK');
+      await stepTo(page, loc, A);
+      await expect.poll(() => capturesOf(reqs, loc, A).length, { timeout: 5000 }).toBe(1);
+      const q = new URL(capturesOf(reqs, loc, A)[0]).searchParams;
+      expect(q.get('session')).toBe(A);
+      expect(q.get('lines')).toBe('40');
+      expect(q.has('cols')).toBe(false);
+      expect(q.has('rows')).toBe(false);
+      expect(q.has('client')).toBe(false);
+      await page.keyboard.press('Escape');
+    } finally {
+      await releaseMods(page);
+    }
+  });
+
+  test('the preview is text, not markup, with escapes stripped', async ({ page }) => {
+    test.setTimeout(90000);
+    try {
+      fs.writeFileSync(scriptM, "printf '<b>bold</b> \\033[31mred\\033[0m\\n'\nexec -a claude sleep 600\n", { mode: 0o700 });
+      onBox(`tmux kill-session -t '=${M}' 2>/dev/null; tmux new-session -d -s '${M}' 'bash ${scriptM}'`);
+      await expect.poll(() => onBox(`tmux display-message -p -t '=${M}:' '#{pane_current_command}'`).trim()).toBe('claude');
+      writeMarker(M, 'working', now() - 30, 'prompt');
+      await login(page);
+      const loc = await boxIdOf(page, 'localhost');
+      await expect(async () => {
+        await page.reload();
+        await expect(boxRow(page, 'localhost').locator('.badge[class*="badge-agent-"]'))
+          .toHaveAttribute('title', new RegExp(`${M}: working`), { timeout: 4000 });
+      }).toPass({ timeout: 45000 });
+      await holdMods(page);
+      try {
+        await page.keyboard.press('KeyK');
+        await stepTo(page, loc, M);
+        await expect(body(page)).toContainText('<b>bold</b> red', { timeout: 15000 });
+        expect(await body(page).evaluate((el) => el.querySelector('b'))).toBeNull();
+        expect(await body(page).evaluate((el) => el.textContent)).not.toContain('\x1b');
+        await page.keyboard.press('Escape');
+      } finally {
+        await releaseMods(page);
+      }
+    } finally {
+      try { fs.rmSync(path.join(markerDir, M), { force: true }); } catch { /* gone */ }
+      try { onBox(`tmux kill-session -t '=${M}'`); } catch { /* gone */ }
+      try { fs.rmSync(scriptM, { force: true }); } catch { /* gone */ }
+    }
+  });
+
+  test('highlighting and previewing a done session never marks it seen', async ({ page }) => {
+    test.setTimeout(90000);
+    const seen = seenPosts(page);
+    const reqs = paneRequests(page);
+    const badgeReadsDone = async () => {
+      await expect(async () => {
+        await page.reload();
+        await expect(boxRow(page, 'localhost').locator('.badge[class*="badge-agent-"]'))
+          .toHaveAttribute('title', new RegExp(`${A}: done`), { timeout: 4000 });
+      }).toPass({ timeout: 45000 });
+    };
+    try {
+      writeMarker(A, 'ready', now(), 'stop'); // ready/stop = done until seen
+      await login(page);
+      const loc = await boxIdOf(page, 'localhost');
+      await page.evaluate(() => localStorage.removeItem('tmuxifier.stageLayout'));
+      await badgeReadsDone();
+      const pane = await dock(page, 'localhost'); // on the configured session, not sw-a
+      await expectOnSession(pane, configured);
+      await holdMods(page);
+      try {
+        await page.keyboard.press('KeyK');
+        await stepTo(page, loc, A);
+        await expect(body(page)).toContainText('SWPREVIEW_A', { timeout: 15000 });
+        await expect(head(page).locator('.agent-switcher-chip')).toHaveClass(/chip-agent-done/);
+        await page.waitForTimeout(1500);
+        await page.keyboard.press('Escape');
+      } finally {
+        await releaseMods(page);
+      }
+      expect(capturesOf(reqs, loc, A)).toHaveLength(1); // the preview did happen
+      await page.waitForTimeout(1000);
+      expect(seen).toEqual([]);
+      await expect(boxRow(page, 'localhost').locator('.badge[class*="badge-agent-"]'))
+        .toHaveAttribute('title', new RegExp(`${A}: done`));
+      await badgeReadsDone(); // the server agrees: still done after a reload
+      expect(seen).toEqual([]);
+    } finally {
+      writeMarker(A, 'working', now() - 60, 'prompt');
+    }
+  });
+
+  test('coming back to a row inside 5 s reuses the snapshot', async ({ page }) => {
+    const reqs = paneRequests(page);
+    await fresh(page);
+    const loc = await boxIdOf(page, 'localhost');
+    await holdMods(page);
+    try {
+      await page.keyboard.press('KeyK');
+      await stepTo(page, loc, A);
+      await expect(body(page)).toContainText('SWPREVIEW_A', { timeout: 15000 });
+      await stepTo(page, loc, B);
+      await expect(body(page)).toContainText('SWPREVIEW_B', { timeout: 15000 });
+      await stepTo(page, loc, A);
+      await expect(body(page)).toContainText('SWPREVIEW_A', { timeout: 1000 });
+      await page.waitForTimeout(600); // a refetch would have shown by now
+      expect(capturesOf(reqs, loc, A)).toHaveLength(1);
+      expect(capturesOf(reqs, loc, B)).toHaveLength(1);
+      expect([...capturesOf(reqs, loc, A), ...capturesOf(reqs, loc, B)]).toHaveLength(2);
+      await page.keyboard.press('Escape');
+    } finally {
+      await releaseMods(page);
+    }
+  });
+
+  test('a failed capture shows one line and the switcher still commits', async ({ page }) => {
+    await fresh(page);
+    const db = await boxIdOf(page, 'db-primary');
+    await dock(page, 'localhost');
+    await page.route((u) => u.pathname.endsWith('/pane'), (r) => r.fulfill({ status: 502, json: { error: 'boom' } }));
+    await holdMods(page);
+    try {
+      await page.keyboard.press('KeyK');
+      await stepTo(page, db, A);
+      await expect(body(page)).toHaveText('Preview unavailable', { timeout: 15000 });
+      await expect(body(page)).toHaveAttribute('data-view', 'error');
+    } finally {
+      await releaseMods(page);
+    }
+    await expect(page.locator('#agent-switcher')).toHaveCount(0);
+    const pane = page.locator('.stage-pane');
+    await expect(pane).toHaveCount(1);
+    await expect(pane.locator('.pane-title')).toHaveText('db-primary');
+    await expectOnSession(pane, A);
+  });
+
+  test('a quick tap never fetches a preview', async ({ page }) => {
+    const reqs = paneRequests(page);
+    await fresh(page);
+    const loc = await boxIdOf(page, 'localhost');
+    const pane = await dock(page, 'localhost');
+    // Seed the MRU so the tap lands on a fixture row.
+    await chordTo(page, loc, B);
+    await expectOnSession(pane, B);
+    await chordTo(page, loc, A);
+    await expectOnSession(pane, A);
+    reqs.length = 0;
+    await tap(page);
+    await expectOnSession(pane, B);
+    await page.waitForTimeout(600); // past the 250 ms rest
+    expect(reqs).toEqual([]);
+  });
+});

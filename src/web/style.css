@@ -1299,13 +1299,35 @@ button.empty-kbd:hover { color: var(--text); }
 .agent-switcher-row.gone { opacity: 0.45; cursor: default; }
 .agent-switcher-row.gone .agent-switcher-session { text-decoration: line-through; }
 .agent-switcher-empty { display: block; padding: 10px; font-size: 12.5px; color: var(--dim); }
+/* The preview: a screen well holding the highlighted session's last lines. The head
+   repeats who and what; the body is plain text (untrusted box output, textContent
+   only), wrapped, and scrolled to its end so the newest lines show. */
 .agent-switcher-preview {
-  min-width: 0; overflow: hidden; margin: 8px; padding: 10px 12px;
+  min-width: 0; min-height: 0; overflow: hidden; margin: 8px;
+  display: flex; flex-direction: column;
   background: var(--screen); border: 1px solid var(--border); border-radius: var(--r-well);
   box-shadow: var(--recess);
+}
+.agent-switcher-preview-head {
+  display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
+  padding: 7px 12px; border-bottom: 1px solid var(--border);
+  font-family: var(--face); font-size: 12px; color: var(--muted);
+}
+.agent-switcher-preview-head[hidden] { display: none; }
+.agent-switcher-preview-box {
+  flex: 0 1 auto; min-width: 0; font-weight: 700; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.agent-switcher-preview-session {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.agent-switcher-preview-head .agent-switcher-chip { flex: 0 0 auto; margin-left: auto; }
+.agent-switcher-preview-body {
+  flex: 1 1 auto; min-height: 0; margin: 0; padding: 10px 12px; overflow: hidden;
   font-family: var(--face-code); font-size: 11px; line-height: 1.4; color: var(--text);
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
+.agent-switcher-preview-body[data-view='error'] { font-family: var(--face); font-size: 12px; color: var(--dim); }
 /* Proxmox lifecycle keys: icon keys per DESIGN.md — flat legend-dim glyphs on
    small hit pads, hover raises a step and brightens, destructive hover LED red. */
 /* flex: 0 0 auto is load-bearing. Without it flexbox shrinks the caps below their
