@@ -301,3 +301,75 @@ test('a board card for another session docks the pane on it with a single /term 
     try { onBox(`tmux kill-session -t '=${session2}'`); } catch { /* gone */ }
   }
 });
+
+// Issue #11. A pane parked on session X keeps its terminal attached to X. A
+// board card for the same box on session Y re-docks that instance; the parked
+// terminal must not come back under a header that says Y, or every keystroke
+// goes to a session the header does not show. The steps are the issue's own.
+test('a board card does not reuse a parked terminal that is attached to another session', async ({ page }) => {
+  test.setTimeout(150000);
+  const sessionX = `${session}-px`;
+  const terms: string[] = [];
+  page.on('websocket', (ws) => { if (/\/term\?/.test(ws.url())) terms.push(ws.url()); });
+  const paneOf = (label: string) =>
+    page.locator('.stage-pane', { has: page.locator('.pane-title', { hasText: new RegExp(`^${label}$`) }) });
+  const onSession = (pane: ReturnType<typeof paneOf>, name: string) =>
+    expect(pane.locator('.session-picker .session-picker-row.current'))
+      .toHaveAttribute('data-key', new RegExp(`^[ws]:${name}(:|$)`), { timeout: 15000 });
+  const clients = (name: string): number => {
+    try { return onBox(`tmux list-clients -t '=${name}' -F x`).split('\n').filter(Boolean).length; } catch { return -1; }
+  };
+  try {
+    onBox(`tmux has-session -t '=${sessionX}' 2>/dev/null || tmux new-session -d -s '${sessionX}' bash -c 'echo PARKED_X_SCREEN; exec sleep 600'`);
+    onBox(`tmux has-session -t '=${session2}' 2>/dev/null || tmux new-session -d -s '${session2}' bash -c 'echo BOARD_Y_SCREEN; exec -a claude sleep 600'`);
+    // blocked, not done: docking a done pane would acknowledge it.
+    writeMarker(session2, 'blocked', now(), 'question');
+
+    await login(page);
+    const row = page.locator('.box', { has: page.locator('.name', { hasText: /^localhost$/ }) }).first();
+    const boxId = (await row.getAttribute('data-id'))!;
+    const card = page.locator(`.dash-board .dash-board-col[data-state="blocked"] .dash-card[data-box-id="${boxId}"][data-session="${session2}"]`);
+    // Reloads happen only here, before anything is docked: a reload later would
+    // throw the parked terminal away and with it the case under test.
+    await reloadUntil(page, async () => { await expect(card).toHaveCount(1, { timeout: 5000 }); });
+
+    // 1. Dock box A and point its pane at session X.
+    await page.locator('.box .name', { hasText: /^localhost$/ }).click();
+    const paneA = paneOf('localhost');
+    await expect(paneA).toHaveCount(1);
+    const picker = paneA.locator('.session-picker');
+    await picker.locator('.session-picker-trigger').click();
+    const rowX = picker.locator(`.session-picker-row[data-key="s:${sessionX}"], .session-picker-row[data-key^="w:${sessionX}:"]`).first();
+    await expect(rowX).toHaveCount(1, { timeout: 10000 });
+    await rowX.locator('.session-picker-pick').click();
+    await onSession(paneA, sessionX);
+    await expect(paneA.locator('.xterm-rows')).toContainText('PARKED_X_SCREEN', { timeout: 15000 });
+
+    // 2. Dock box B in A's place: A's pane is parked, still attached to X.
+    await page.locator('.box .name', { hasText: /^db-primary$/ }).click();
+    await expect(page.locator('.stage-pane')).toHaveCount(1);
+    const paneB = paneOf('db-primary');
+    await expect(paneB).toHaveCount(1);
+
+    // 3. Close B's pane: the standby dashboard shows. A lone pane has no
+    // undock cap (that is a split's), so the way out is the nameplate.
+    await page.click('#home');
+    await expect(page.locator('.stage-pane')).toHaveCount(0);
+    await expect(card).toHaveCount(1, { timeout: 15000 });
+    expect(clients(session2)).toBe(0); // nothing has attached Y yet
+
+    // 4. Click the card for box A on session Y.
+    await card.click();
+    const pane = paneOf('localhost');
+    await expect(pane).toHaveCount(1);
+    await onSession(pane, session2); // what the header says
+    // What the terminal is: Y's screen, a /term attach naming Y, a tmux client on Y.
+    await expect(pane.locator('.xterm-rows')).toContainText('BOARD_Y_SCREEN', { timeout: 15000 });
+    await expect(pane.locator('.xterm-rows')).not.toContainText('PARKED_X_SCREEN');
+    expect(new URL(terms[terms.length - 1]).searchParams.get('session')).toBe(session2);
+    await expect.poll(() => clients(session2), { timeout: 10000 }).toBe(1);
+  } finally {
+    try { fs.rmSync(path.join(markerDir, session2), { force: true }); } catch { /* gone */ }
+    for (const s of [session2, sessionX]) { try { onBox(`tmux kill-session -t '=${s}'`); } catch { /* gone */ } }
+  }
+});

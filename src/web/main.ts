@@ -2485,6 +2485,11 @@ function openPane(boxId: string, session?: string) {
   }
   const iid = instanceId(boxId, 1);
   if (session !== undefined && boxId !== '__local__' && isSwitchableSession(session)) {
+    // A parked terminal on another session would be reused as is by ensureTab,
+    // under a header naming this one (the switcher's resetTab, same case). It
+    // has to go BEFORE the override moves: attachedSession reads the override,
+    // and afterwards it would name `session` and the terminal would look right.
+    if (tabs.has(iid) && attachedSession(iid) !== session) closeTab(iid, { keepPane: true });
     if (session === (boxFor(iid)?.sessionName || 'web')) paneSessions.delete(iid);
     else paneSessions.set(iid, session);
   }
