@@ -153,7 +153,7 @@ takes it and keeps the context menu away).
 
 **What's listed.** Every tmux session with an agent state (working, needs you, done, idle) on a
 reachable box, plus the Host Shell's `local` session. The session you're in is first, then the
-ones you visited most recently, then the rest by urgency (needs you, working, done, idle), newest
+ones you visited most recently, then the rest by urgency (needs you, done, working, idle), newest
 first. The order is fixed while the list is open; states and ages keep updating.
 
 **What release does.** If the session is already on screen, its pane takes focus. If a pane
@@ -177,8 +177,9 @@ while Settings is recording a hotkey. Off means fully inert: the keys reach the 
 **Settings → Hotkeys** (the last tab) remaps the switcher and the voice hotkey. Every combo is
 Ctrl+Shift plus an optional Alt plus one letter, digit, Space or punctuation key. Press
 **Record**, then the combo; **Reset to default** restores it. Refused: Cmd/Win in the combo,
-Ctrl+Shift+C and +V (copy and paste), keys browsers keep for themselves (T, N, W, Q, J, I, B, M,
-E, Z, Delete), and a combo already used by the other action. Mappings are stored per browser,
+C and V (copy and paste, with or without Alt), T, N, W, Q, J, I, B, M, E and Z as plain
+Ctrl+Shift combos because browsers keep them for themselves (adding Alt makes them available),
+and a combo already used by the other action. Mappings are stored per browser,
 not on the server. Some browsers reserve combos: Edge and Firefox on Windows use Ctrl+Shift+K
 for "duplicate tab" and the web console, so if the switcher doesn't respond there, record
 another combo.
