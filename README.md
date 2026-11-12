@@ -196,7 +196,7 @@ with each secret AES-256-GCM encrypted at rest. Per-integration setup walkthroug
 Up to four terminals share the stage in nested, resizable splits. Pasting an image or dropping a
 file onto a terminal uploads it to the box over the existing SSH connection and types the quoted
 path at a Claude Code or shell prompt (never into a busy pane); selections and in-app OSC 52
-copies land on your clipboard. **Voice dictation** (Ctrl+Shift+Space) records in your browser and
+copies land on your clipboard. An **agent switcher** (hold Ctrl+Shift, tap K) jumps to any agent session across your boxes, with a preview and remappable hotkeys — see [agent switcher and hotkeys](docs/terminal.md#agent-switcher-and-hotkeys). **Voice dictation** (Ctrl+Shift+Space by default) records in your browser and
 transcribes on the Tmuxifier host with local whisper.cpp — audio never leaves the host — and on a
 pane running Claude Code the same button **links your mic to the box** so Claude Code's own
 `/voice` works there. A **Host Shell** opens a terminal on the Tmuxifier host itself, and every

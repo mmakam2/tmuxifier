@@ -123,6 +123,9 @@ Cross-cutting invariants that tests alone have repeatedly failed to protect:
   provable identity change or explicit consent; a Proxmox vmid that now reports a different guest
   is `mismatch` and nothing is written back. The server derives a link's `kind` from the cluster,
   never from the request body.
+- **The switcher never acknowledges and never sizes.** Its preview sends no `cols`/`rows`, renders
+  `textContent` only, and only `reportSeen` after the jump raises the watermark. While it is open it
+  owns Ctrl+Shift+↑/↓ and the pane-focus chord is inert.
 - **Seen is a client claim.** Only `POST /api/boxes/:id/agent-seen` from a visible, focused client
   raises the watermark (a `done` becomes `idle` only then); tmux `attached` suppresses a
   notification and never marks seen, and MCP reads never acknowledge.
@@ -160,6 +163,9 @@ injected as arguments — that is what makes them testable without mocks. Follow
   newest finished turn a client has seen. Debounced, `0o600`, flushed on shutdown. The "`ts` ahead of the
   marker is refused" rule lives in `healthHistory.markSeen`.
 - `concurrency.js` — `mapWithConcurrency`, bounded parallelism for status sweeps and Fleet.
+- `singleFlight.js` — `createSingleFlight`: concurrent calls for one key share one promise, nothing cached.
+  `paneSnapshot` in `boxActions.js` and `localShellActions.js` runs through it per box, session and line
+  count (a browser abort doesn't stop the ssh run).
 - `jobOrder.js` — `newestFirst` job comparator. `pveTask.js` — `pollPveTask`, the shared PVE task
   poller.
 - `secretBox.js` — AES-256-GCM seal/open, key HKDF-derived from `cookieSecret`.
@@ -224,12 +230,18 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   capture). `POST /api/boxes/:id/keys` — exactly one of literal text (`sanitizeSendText`), a
   `NAMED_KEYS` key, or `wheel` (SGR wheel reports; `exit 93` → 409 unless the pane has SGR mouse
   tracking on). `POST /api/boxes/:id/pane-kind` is the mic button's link-vs-dictate verdict.
+  An optional `session` (validated with `SESSION_NAME_RE`, 400 otherwise; 403 for a device token)
+  captures that session instead, ignores `cols`/`rows` and takes agent state from it.
+  `GET /api/local-shell/pane` is the Host Shell's counterpart: browser session only, captures the
+  `local` session, never creates it, 502 on a failed capture.
 - **Devices.** `GET /api/devices/apk[/info]` (absent = `available: false`),
   `GET /api/devices/fcm-config`, `POST/GET /api/devices/apk/build` (`apkBuild.js`: single-flight
   Gradle build, browser-session only; overwrites `data/app/`, so on a server serving the
   Play-signed build it swaps the signature).
 - **Proxmox.** `PUT /api/boxes/:id/proxmox` writes `kind` from what the cluster reports.
   `GET /api/boxes/:id/proxmox/net` reads a linked container's live `net0`.
+- **Term close.** A `/term` close with code `4000` (`TERM_RELEASE_CODE`, `sessions.js`) drops the viewer's
+  PTY at once via `closeIfUnwatched`; every other close keeps the grace window.
 - **Live.** `/live` (WebSocket, browser session + trusted Origin only, one-way) registers the tab
   with `liveHub.js`; logout closes every stream. `GET /api/status?box=` and
   `GET /api/health/series?box=` return one box in `{ [id]: … }` shape, which is what a nudged tab
@@ -602,10 +614,18 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
   `createStickyCtrl` folds raw ASCII only, never `toUpperCase()`), `composer.ts` (✏️ composer:
   `sendTextOf` collapses newlines, clears only when the send was accepted; mic dictates into it via
   `inject=off`).
+- **Agent switcher** — `agentSwitcher.ts` (DOM half: overlay, capture-phase document key listeners; the
+  overlay never takes focus) over pure halves `agentSwitcherList.ts` (rows, MRU, highlight),
+  `agentSwitcherChord.ts` (idle/open/drain reducer), `agentSwitcherPreview.ts` (250 ms rest, abort,
+  5 s cache), `agentSwitcherCommit.ts` (`planCommit`: focus / switch in place / replace / open) and
+  `ansiStrip.ts`. `hotkeys.ts` is the combo model, validation and per-browser store. `termClose.ts`
+  mirrors `TERM_RELEASE_CODE`, sent for the pane a jump replaces. The MRU is fed by `noteFocusedSession`,
+  called only from `repaintStage` and `syncPaneFocus`. Inert in phone mode, under a coarse pointer,
+  with a modal open or while Settings records a combo. `settingsHotkeys.ts` is the Hotkeys tab.
 - **Voice** — `wavEncode.ts` (16 kHz mono WAV, so no ffmpeg), `voiceRecorder.ts`,
   `voiceWorklet.js` (real asset, keeps CSP `script-src 'self'`), `pcmStream.ts`, `voicePress.ts`
   (press reducer: a `claude` verdict links, else dictates), `voiceLink.ts`, `voiceUi.ts`
-  (`evaluateVoice`, Ctrl+Shift+Space hotkey swallowing the whole chord), `voice.ts`.
+  (`evaluateVoice`, the voice hotkey — Ctrl+Shift+Space by default, read through a getter at event time — swallowing the whole chord), `voice.ts`.
 - **Live** — `liveLink.ts` (pure: `parseLiveMessage`, `createLiveQueue` — nudged ids folded into
   at most one refresh a second, more than four at once becomes a full poll — and `openLiveLink`,
   whose backoff resets only after 10 s of uptime because the server accepts an upgrade before
@@ -637,7 +657,7 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
   `proxmoxReaddress.ts`, `proxmoxActivity.ts`, `proxmoxAssociation.ts`, `lifecyclePoll.ts`,
   `freshBox.ts` (Edit Box opens from a freshly fetched box — the server moves links on its own).
 - **Settings** — `settingsUi.ts` (tab order = `SECTIONS` key order: Boxes, Services, NetBox,
-  Proxmox, Passkeys, Devices, Voice, Notifications, Appearance), one `settings*.ts` per tab,
+  Proxmox, Passkeys, Devices, Voice, Notifications, Appearance, Hotkeys), one `settings*.ts` per tab,
   `settingsForm.ts`, and fetch layers `netbox.ts`, `devices.ts`, `passkeys.ts` (also
   `evaluateOrigin`, shared by login and Settings).
 
@@ -748,7 +768,8 @@ Passkeys mount in both modes.
   fresh successful assertion in the arming browser and a usable RP id (409 when it is `null`,
   i.e. IP-derived, or doesn't match the enrolled credentials); removing the last credential
   disarms it; `TMUXIFIER_PASSKEY_ONLY=off` in `.env` is the break-glass (takes effect on restart).
-- **Device tokens** (Android app, MCP): enrollment uses the password (403 under passkey-only, 501
+- **Device tokens** (Android app, MCP): the pane route's `session` parameter and `GET /api/local-shell/pane`
+  are refused for them; enrollment uses the password (403 under passkey-only, 501
   in OAuth mode) or a single-use 2-minute pairing code (works in every mode; minting needs a
   browser session, so it inherits that session's gate), over the login bucket. Only digests are
   stored; the plaintext is shown once. Revocation applies on the device's next request. A device
