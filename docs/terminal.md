@@ -141,9 +141,55 @@ copy-mode — a plain drag goes to the app instead of selecting: either hold
 copy — Tmuxifier understands OSC 52, so in-app copies (a tmux copy-mode yank,
 Claude Code's selection copy) land on your system clipboard too.
 
+## Agent switcher and hotkeys
+
+Jump to whichever agent needs you without reaching for the sidebar. **Hold Ctrl+Shift and tap
+K**: a list of agent sessions opens with the previous one highlighted. Tap K again, or press
+**↑/↓**, to step through the list, then **release** to jump. A quick tap-and-release flips
+straight back to the session you were just in, and the list only paints if you keep holding.
+**Esc**, switching away from the browser window, or clicking outside the switcher's panel
+cancels (on Windows Ctrl+Shift+Esc belongs to the system, which opens Task Manager, so there the
+way to cancel is to click outside the panel). Clicking a row also jumps to it (on macOS the click
+is Ctrl+click, which the browser reports as a right click; the switcher takes it and keeps the
+context menu away). While the list is showing, a click never reaches the page underneath.
+
+**What's listed.** Every tmux session with an agent state (working, needs you, done, idle) on a
+reachable box, plus the Host Shell's `local` session. The session you're in is first, then the
+ones you visited most recently, then the rest by urgency (needs you, done, working, idle), newest
+first. The order is fixed while the list is open; states and ages keep updating.
+
+**What release does.** If the session is already open in a docked pane, that pane takes focus.
+Otherwise, if the focused pane shows the same box on another session, it switches session in
+place. Otherwise the focused pane is replaced (or a pane opens when the stage is empty), and
+the terminal it replaces is closed and released at once, so the session you left stops counting
+as attached and its next notification isn't suppressed. Only the pane the switcher replaces is
+released this way: a terminal parked by the home button or replaced from the sidebar stays
+connected, and its session attached, as before. Jumping never marks a finished turn as seen on
+its own; the pane you land in does that once it is visible and focused.
+
+**Preview.** Rest on a row for a moment and the right-hand side shows a plain-text snapshot of
+that session's screen. It is read-only: it doesn't resize anything and doesn't mark anything
+seen. Stepping never waits for it.
+
+**While the switcher is open**, Ctrl+Shift+↑/↓ steps the list instead of moving pane focus;
+Ctrl+Shift+Arrow moves focus again once it closes.
+
+**Where it's off.** Phone mode, touch (coarse-pointer) devices, while any dialog is open, and
+while Settings is recording a hotkey. Off means fully inert: the keys reach the terminal.
+
+**Settings → Hotkeys** (the last tab) remaps the switcher and the voice hotkey. Every combo is
+Ctrl+Shift plus an optional Alt plus one letter, digit, Space or punctuation key. Press
+**Record**, then the combo; **Reset to default** restores it. Refused: Cmd/Win in the combo,
+C and V (copy and paste, with or without Alt), T, N, W, Q, J, I, B, M, E and Z as plain
+Ctrl+Shift combos because browsers keep them for themselves (adding Alt makes them available),
+and a combo already used by the other action. Mappings are stored per browser,
+not on the server. Some browsers reserve combos: Edge and Firefox on Windows use Ctrl+Shift+K
+for "duplicate tab" and the web console, so if the switcher doesn't respond there, record
+another combo.
+
 ## Voice dictation
 
-Tap **Ctrl+Shift+Space** in any terminal to start dictating, and tap it again to stop: your
+Tap the voice hotkey (**Ctrl+Shift+Space** by default, remappable in [Settings → Hotkeys](#agent-switcher-and-hotkeys)) in any terminal to start dictating, and tap it again to stop: your
 browser records audio from your microphone in between, sends it to Tmuxifier on the second tap,
 and the transcribed text is typed into the pane — the same way a pasted file path is typed in
 (see [Pasting images & files](#pasting-images--files) above). The mic button next to the terminal

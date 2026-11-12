@@ -11,6 +11,7 @@ import { createTouchGesture, holdKeepsFocus, HOLD_MS, type GestureAction } from 
 import { keyboardOpen } from './phoneMode';
 import { resolveScreenTheme, onThemeChange } from './theme';
 import type { PaneConn } from './paneHeader';
+import { TERM_RELEASE_CODE } from './termClose';
 
 // Phone mode raises the terminal font two steps for touch legibility. Checked
 // once per openTerminal call: a mid-session flip across the breakpoint keeps
@@ -85,7 +86,7 @@ function isMacPlatform(): boolean {
 // Cmd/Ctrl+Shift+C to copy and Ctrl+Shift+V to paste. Decisions about which
 // key combos count live in the pure ./clipboard module; this only supplies the
 // browser objects and forwards the result. See the diagnosis in clipboard.ts.
-// Also handles the voice hotkey (Ctrl+Shift+Space): xterm's
+// Also handles the voice hotkey: xterm's
 // attachCustomKeyEventHandler keeps only ONE handler, so voice must be checked
 // in this same callback rather than attaching a second one, which would
 // silently replace this handler and disable copy/paste.
@@ -121,7 +122,7 @@ function wireClipboard(term: Terminal, voice?: VoiceHotkeyTarget): void {
 
   term.attachCustomKeyEventHandler((ev) => {
     // Voice is checked first and returns false so nothing belonging to the
-    // Ctrl+Shift+Space chord ever reaches the PTY. xterm keeps only ONE
+    // voice-hotkey chord ever reaches the PTY. xterm keeps only ONE
     // custom key handler, so this must live in the same callback as the
     // clipboard bindings — a second attach call would silently replace them.
     // createVoiceHotkeyHandler (voiceUi.ts) owns the whole chord state
@@ -596,7 +597,14 @@ export function openTerminal(
 
   return {
     focus: () => term.focus(),
-    dispose: () => { offUploads(); offTouchScroll(); offTheme(); voice.dispose(); closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize); ws?.close(); term.dispose(); },
+    // `release`: this pane is leaving for good (the agent switcher replaced it),
+    // so the server drops the PTY at once instead of holding its grace window.
+    // Every other caller closes without a code, so a reload still reattaches.
+    dispose: (opts?: { release?: boolean }) => {
+      offUploads(); offTouchScroll(); offTheme(); voice.dispose(); closedByUser = true; clearTimeout(stableTimer); clearTimeout(retryTimer); window.removeEventListener('resize', onResize);
+      if (opts?.release) ws?.close(TERM_RELEASE_CODE, 'release'); else ws?.close();
+      term.dispose();
+    },
     refit: onResize,
     input: sendInput,
     appCursor: () => term.modes.applicationCursorKeysMode,

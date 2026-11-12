@@ -11,8 +11,9 @@ import { renderDevicesSection, stopDevicesWatch } from './settingsDevices';
 import { renderVoiceSection, stopVoiceWatch } from './settingsVoice';
 import { renderNotificationsSection } from './settingsNotifications';
 import { renderAppearanceSection } from './settingsAppearance';
+import { renderHotkeysSection, stopHotkeyRecording } from './settingsHotkeys';
 
-export type SettingsTab = 'boxes' | 'services' | 'netbox' | 'proxmox' | 'passkeys' | 'devices' | 'voice' | 'notifications' | 'appearance';
+export type SettingsTab = 'boxes' | 'services' | 'netbox' | 'proxmox' | 'passkeys' | 'devices' | 'voice' | 'notifications' | 'appearance' | 'hotkeys';
 
 // `dispose` tears down anything a section leaves running after its content is
 // replaced. Sections are otherwise stateless: Voice owns a background job
@@ -38,6 +39,9 @@ const SECTIONS: Record<SettingsTab, Section> = {
   voice: { label: 'Voice', render: async (content) => { await renderVoiceSection(content); }, dispose: stopVoiceWatch },
   notifications: { label: 'Notifications', render: (content) => renderNotificationsSection(content) },
   appearance: { label: 'Appearance', render: (content) => renderAppearanceSection(content) },
+  // Hotkeys' dispose ends a recording left running, so its capture listener
+  // and the switcher/voice suppression never outlive the tab.
+  hotkeys: { label: 'Hotkeys', render: (content) => renderHotkeysSection(content), dispose: stopHotkeyRecording },
 };
 
 export function openSettingsModal(tab: SettingsTab = 'boxes', onClose?: () => void): void {

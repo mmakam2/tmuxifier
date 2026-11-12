@@ -21,6 +21,7 @@ import {
   buildSendWheelRemote,
 } from './tmuxInject.js';
 import { buildVoiceWriterRemote } from './voiceWriter.js';
+import { createSingleFlight } from './singleFlight.js';
 
 // Curated provision-time tools. Ids are the ONLY strings that ever reach the
 // generated shell script — resolveTools throws on anything not in the catalog,
@@ -642,6 +643,7 @@ export function buildKillTmuxRemote(session) {
 }
 
 export function createBoxActions({ run, runStdin, pipe = null, hostKeyPolicy = 'accept-new', sshConfigFile, controlDir, controlPersist }) {
+  const paneFlight = createSingleFlight();
   async function runRemote(box, remote, timeout) {
     const argv = buildProbeArgv(box, remote, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
     return run(argv, { timeout });
@@ -762,15 +764,19 @@ export function createBoxActions({ run, runStdin, pipe = null, hostKeyPolicy = '
     // Read-only snapshot of the box session's active pane: tmux is the
     // terminal emulator, this just ships its screen. Never attaches a client,
     // so it can never resize the window under a desktop viewer.
-    async paneSnapshot(box, session, { lines = 200, timeoutMs = 8000 } = {}) {
-      const res = await runRemote(box, buildPaneSnapshotRemote(session, { lines }), timeoutMs);
-      if (!res || res.code !== 0) {
-        const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
-        return { ok: false, error: msg || 'capture failed' };
-      }
-      const snap = parsePaneSnapshot(res.stdout);
-      if (!snap) return { ok: false, error: 'unparseable snapshot' };
-      return { ok: true, ...snap };
+    // Concurrent captures of one box, session and depth share one ssh run: a
+    // client abort does not stop the server's ssh, so previews would pile up.
+    paneSnapshot(box, session, { lines = 200, timeoutMs = 8000 } = {}) {
+      return paneFlight(`${box.id}\n${session}\n${lines}`, async () => {
+        const res = await runRemote(box, buildPaneSnapshotRemote(session, { lines }), timeoutMs);
+        if (!res || res.code !== 0) {
+          const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
+          return { ok: false, error: msg || 'capture failed' };
+        }
+        const snap = parsePaneSnapshot(res.stdout);
+        if (!snap) return { ok: false, error: 'unparseable snapshot' };
+        return { ok: true, ...snap };
+      });
     },
     // Text goes literal (-l) via the same builder dictation uses; a named key
     // must already be validated against NAMED_KEYS by the route — the builder

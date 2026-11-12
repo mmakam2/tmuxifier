@@ -50,6 +50,7 @@ export interface Status {
 export type AgentState = 'working' | 'blocked' | 'done' | 'idle';
 export type AgentCause = 'prompt' | 'resume' | 'stop' | 'start' | 'permission' | 'question' | 'elicitation' | 'unblock';
 export type AgentKind = 'claude' | 'opencode' | 'codex' | 'pi' | 'agy';
+export interface PaneSnapshot { ok: true; width: number; height: number; cursorX: number; cursorY: number; alt: boolean; mouse: boolean; content: string; agent: AgentState | null; agentCause: AgentCause | null; sessionName: string }
 export interface AgentEntry { present: boolean; agent?: AgentKind; attached: boolean; state?: AgentState; cause?: AgentCause; ts?: number }
 export interface Sample {
   t: number; up: boolean; stopped?: boolean; tmux?: boolean; needsAuth?: boolean; keyChanged?: boolean;
@@ -376,6 +377,8 @@ export const api = {
   // as the fleet-wide reads: what a /live nudge fetches (liveLink.ts).
   async statusOf(id: string) { return j<Record<string, Status>>(await fetch(`/api/status?box=${encodeURIComponent(id)}&t=${Date.now()}`)); },
   async healthSeriesOf(id: string) { return j<Record<string, Sample[]>>(await fetch(`/api/health/series?box=${encodeURIComponent(id)}&t=${Date.now()}`)); },
+  async panePreview(boxId: string, session: string, signal?: AbortSignal) { return j<PaneSnapshot>(await fetch(`/api/boxes/${encodeURIComponent(boxId)}/pane?session=${encodeURIComponent(session)}&lines=40`, { signal })); },
+  async localPanePreview(signal?: AbortSignal) { return j<PaneSnapshot>(await fetch('/api/local-shell/pane?lines=40', { signal })); },
   async healthEvents() { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?t=${Date.now()}`)); },
   async uiConfig() { return j<{ termFont: string | null; termFontSize: number; uploadMaxBytes: number; voice: boolean; voiceMaxSeconds: number }>(await fetch('/api/ui-config')); },
   async uiSettings() { return j<UiSettings>(await fetch('/api/ui-settings')); },

@@ -208,6 +208,8 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
   // session-expiry — must call this or the listener (and the detached popup
   // subtree it closes over) outlives the DOM it was built for.
   destroy(): void;
+  // Closes an open session picker (the agent switcher does on open); focus stays put.
+  closePicker(): void;
 } {
   const el = document.createElement('div');
   el.className = 'pane-header';
@@ -299,5 +301,5 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
     }
   };
   update(model);
-  return { el, voiceSlot, lifecycleSlot, refreshBtn, update, destroy: () => picker?.destroy() };
+  return { el, voiceSlot, lifecycleSlot, refreshBtn, update, destroy: () => picker?.destroy(), closePicker: () => picker?.close() };
 }

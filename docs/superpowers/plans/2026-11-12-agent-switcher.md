@@ -651,9 +651,9 @@ export function chordReduce(state: ChordState, input: ChordInput, ctx: { combo: 
 | Phase | Input | Result |
 |---|---|---|
 | idle | non-repeat keydown, `ctx.enabled`, `matchesCombo(ev, ctx.combo)` | → open, `combo = ctx.combo`, `held = [code]`, swallow, `[open]` |
-| idle | repeat keydown that `matchesCombo` | swallow, no effect (a key held across a blur must not type) |
+| idle | repeat keydown that `matchesCombo`, `ctx.enabled` | swallow, no effect (a key held across a blur must not type; a disabled chord is fully inert) |
 | idle | anything else, `blur`, `click` | pass |
-| open | key event with mods **not** down (covers Ctrl/Shift keyup) | → drain, swallow, `[commit]`; a keyup also leaves `held` |
+| open | key event with mods **not** down (covers Ctrl/Shift keyup) | → drain, swallow, `[commit]`; a keyup also leaves `held`, a non-modifier keydown joins it |
 | open | keydown `Escape` | → drain, `held += Escape`, swallow, `[cancel]` |
 | open | keydown `combo.code` (repeat or not), or `ArrowDown` | `held +=`, swallow, `[step +1]` |
 | open | keydown `ArrowUp` | `held +=`, swallow, `[step -1]` |
@@ -661,11 +661,11 @@ export function chordReduce(state: ChordState, input: ChordInput, ctx: { combo: 
 | open | any keyup with mods down | `held -=`, swallow |
 | open | `click(index)` | → drain, `[commit index]` |
 | open | `blur` | → idle (`held` cleared), `[cancel]` |
-| drain | non-repeat keydown, `ctx.enabled`, `matchesCombo`, code not in `held` | → open as from idle |
+| drain | non-repeat keydown, `ctx.enabled`, `matchesCombo`, code not in `held` | → open as from idle, except `held` keeps the codes still owed a keyup and gains this one |
 | drain | key event whose code is in `held` | swallow; a keyup leaves `held` |
 | drain | keyup of a modifier code | swallow |
 | drain | anything else | pass |
-| drain | after any of the above: `held` empty and mods not down | → idle |
+| drain | after any of the above: `held` empty and **neither** Ctrl nor Shift down (`!ev.ctrlKey && !ev.shiftKey`) | → idle |
 | drain | `blur` | → idle |
 
   `Alt` plays no part after opening: releasing it does nothing, and stepping matches on `code` with Ctrl+Shift down.

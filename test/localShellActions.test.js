@@ -245,3 +245,39 @@ test('installOscReporter runs the OSC reporter install script locally with the a
   expect(calls[0].input.toString()).toContain('osc-body');
   expect(calls[0].opts.cwd).toBe(os.homedir());
 });
+
+test('paneSnapshot reads the local session of the tmux server its env points at', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-lsp-'));
+  const env = { ...process.env, TMUX_TMPDIR: tmp };
+  delete env.TMUX;
+  execFileSync('tmux', ['new-session', '-d', '-s', 'local', '-x', '80', '-y', '24', "printf 'SWITCHER_PREVIEW_OK\\n'; sleep 30"], { env });
+  try {
+    let snap;
+    // The pane's printf races the first capture: poll up to 2 s.
+    await expect.poll(async () => {
+      snap = await createLocalShellActions({ env }).paneSnapshot({ lines: 40 });
+      return snap.content;
+    }, { timeout: 2000 }).toContain('SWITCHER_PREVIEW_OK');
+    expect(snap.ok).toBe(true);
+    expect(snap.width).toBe(80);
+  } finally {
+    try { execFileSync('tmux', ['kill-server'], { env }); } catch { /* already gone */ }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('paneSnapshot with no local session fails cleanly and does not create one', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-lsp-'));
+  const env = { ...process.env, TMUX_TMPDIR: tmp };
+  delete env.TMUX;
+  try {
+    const snap = await createLocalShellActions({ env }).paneSnapshot({ lines: 40 });
+    expect(snap.ok).toBe(false);
+    let listing = '';
+    try { listing = execFileSync('tmux', ['ls'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch { /* no server: nothing listed */ }
+    expect(listing).toBe('');
+  } finally {
+    try { execFileSync('tmux', ['kill-server'], { env, stdio: 'ignore' }); } catch { /* none running */ }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

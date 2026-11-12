@@ -299,6 +299,7 @@ test('Bearer device tokens are restricted to the Android + MCP allowlist; host, 
   // deprovision/readdress, import/export, device list, script/credential CRUD) must 403:
   const forbidden = [
     { method: 'GET', url: '/api/local-shell' },
+    { method: 'GET', url: '/api/local-shell/pane' },
     { method: 'PATCH', url: '/api/local-shell', payload: { shell: 'omz', claudeHooks: true } },
     { method: 'POST', url: '/api/local-shell/reconnect' },
     { method: 'POST', url: '/api/upload?box=__local__&filename=a.txt', headers: { ...bearer, 'content-type': 'application/octet-stream' }, payload: Buffer.from('hi') },

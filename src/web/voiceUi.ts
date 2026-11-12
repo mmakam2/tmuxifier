@@ -10,6 +10,7 @@ import { api } from './api';
 import { createVoiceRecorder, type VoiceRecorder } from './voiceRecorder';
 import { termSafe } from './upload';
 import { reducePress, IDLE, inFlight, endInFlight, type PressModel, type PressEvent, type PressEffect, type PaneKind } from './voicePress';
+import { hotkeys, matchesCombo, chordCodes, comboLabel, type Combo } from './hotkeys';
 import { openVoiceLink, type VoiceLink, type LinkCloseWhy } from './voiceLink';
 
 export interface VoiceEnv {
@@ -44,7 +45,7 @@ export function evaluateVoice(env: VoiceEnv): VoiceVerdict {
   return { ok: true, reason: '', hint: '' };
 }
 
-// Ctrl+Shift+Space TOGGLES recording: this same non-repeat keydown match is
+// The voice hotkey (default Ctrl+Shift+Space) TOGGLES recording: this same non-repeat keydown match is
 // used both to start (no recording in flight) and to stop (one already is) —
 // see createVoiceHotkeyHandler below, which is what actually decides which.
 // Deliberately not Ctrl+Shift+V — clipboard.ts already claims that for paste.
@@ -53,27 +54,10 @@ export function evaluateVoice(env: VoiceEnv): VoiceVerdict {
 // has to swallow those repeats (and the eventual keyups) so a held chord
 // can't leak Space characters into the terminal, it just doesn't treat them
 // as a second toggle.
-export function isVoiceHotkey(ev: KeyboardEvent): boolean {
+export function isVoiceHotkey(ev: KeyboardEvent, combo: Combo = hotkeys.get('voice')): boolean {
   if (ev.type !== 'keydown') return false;
   if (ev.repeat) return false;
-  if (!ev.ctrlKey || !ev.shiftKey || ev.metaKey || ev.altKey) return false;
-  return ev.code === 'Space';
-}
-
-// The three physical keys of the Ctrl+Shift+Space chord (either Control,
-// either Shift, Space), matched on `code` regardless of event type or repeat.
-// Used only by createVoiceHotkeyHandler while a chord press is already in
-// progress, to swallow every remaining event that belongs to it. Matching on
-// physical key identity rather than re-checking modifier state is
-// deliberate: this used to matter for deciding when to STOP (the old
-// hold-to-talk design), where a release order like "Ctrl up, then Space up"
-// already reports ctrlKey: false on the Space keyup, which made a naive
-// require-all-three check unreliable. Toggling removed that decision
-// entirely, but the same reasoning still applies here for a different
-// purpose — swallowing must not depend on which modifier let go first either.
-function isVoiceHotkeyChordKey(ev: KeyboardEvent): boolean {
-  return ev.code === 'Space' || ev.code === 'ControlLeft' || ev.code === 'ControlRight'
-    || ev.code === 'ShiftLeft' || ev.code === 'ShiftRight';
+  return matchesCombo(ev, combo);
 }
 
 export interface VoiceHotkeyTarget {
@@ -83,7 +67,7 @@ export interface VoiceHotkeyTarget {
   finish(): void;
 }
 
-// Wires the Ctrl+Shift+Space chord as a toggle for terminal.ts's single xterm
+// Wires the voice-hotkey chord as a toggle for terminal.ts's single xterm
 // custom key event handler: the first non-repeat keydown of the chord starts
 // a recording, or finishes one already in flight, depending on
 // voice.recording() at that instant. Every other event belonging to that same
@@ -99,20 +83,33 @@ export interface VoiceHotkeyTarget {
 // HTTP) — a controller that isn't there can't be handed a begin()/finish()
 // call anyway. A server with whisper OFF is no longer one of those cases: the
 // press can still link a Claude pane, and a non-Claude one explains itself.
-export function createVoiceHotkeyHandler(voice: VoiceHotkeyTarget): (ev: KeyboardEvent) => boolean {
-  let chordActive = false;
+export function createVoiceHotkeyHandler(
+  voice: VoiceHotkeyTarget,
+  opts: { combo?: () => Combo; suppressed?: () => boolean } = {},
+): (ev: KeyboardEvent) => boolean {
+  // The combo is read at event time, so a Settings change reaches terminals
+  // that already exist. The combo that STARTED a chord is held for that chord:
+  // its swallow set is the physical keys of that combo (matched on `code`, not
+  // modifier state, since release order varies) and the chord ends on the
+  // keyup of its key. While `suppressed()` (the Settings recorder is
+  // capturing) a fresh chord passes through; one in progress still drains.
+  const getCombo = opts.combo ?? (() => hotkeys.get('voice'));
+  const suppressed = opts.suppressed ?? (() => hotkeys.recording());
+  let chord: { code: string; keys: Set<string> } | null = null;
   return (ev: KeyboardEvent): boolean => {
     if (!voice.ready()) return false;
-    if (chordActive) {
-      if (!isVoiceHotkeyChordKey(ev)) return false;
-      // Space coming back up is what ends this physical press — regardless
-      // of whether Ctrl/Shift already let go earlier or haven't yet, since a
-      // released modifier doesn't stop Space's auto-repeat by itself.
-      if (ev.type === 'keyup' && ev.code === 'Space') chordActive = false;
+    if (chord) {
+      if (!chord.keys.has(ev.code)) return false;
+      // The combo key coming back up ends this physical press, whether or not
+      // a modifier already let go: a released modifier doesn't stop the key's
+      // auto-repeat by itself.
+      if (ev.type === 'keyup' && ev.code === chord.code) chord = null;
       return true;
     }
-    if (ev.type === 'keydown' && isVoiceHotkey(ev)) {
-      chordActive = true;
+    if (suppressed()) return false;
+    const combo = getCombo();
+    if (ev.type === 'keydown' && isVoiceHotkey(ev, combo)) {
+      chord = { code: combo.code, keys: chordCodes(combo) };
       if (voice.recording()) voice.finish(); else voice.begin();
       return true;
     }
@@ -170,10 +167,10 @@ async function probeDefault(boxId: string, session: string | undefined): Promise
   }
 }
 
-export function idleTitle(hint: 'claude' | null, dictationEnabled: boolean): string {
+export function idleTitle(hint: 'claude' | null, dictationEnabled: boolean, label: string = comboLabel(hotkeys.get('voice'))): string {
   if (hint === 'claude') return 'Tap to link your mic to Claude Code (then hold Space in the pane)';
   if (!dictationEnabled) return 'Dictation is not enabled on this server (npm run setup-voice); tap on a Claude Code pane to link your mic';
-  return 'Hold to dictate (or tap Ctrl+Shift+Space to start/stop)';
+  return `Hold to dictate (or tap ${label} to start/stop)`;
 }
 
 function refusedText(why: string): string {
@@ -235,7 +232,7 @@ export function createVoiceController(
     // on a mic that cannot dictate at all.
     button.title = verdict && !verdict.ok ? `${verdict.reason} ${verdict.hint}`.trim()
       : s === 'idle' ? idleTitle(host.hint?.() ?? null, dictationEnabled)
-      : s === 'recording' ? 'Release to transcribe (or tap Ctrl+Shift+Space to stop)'
+      : s === 'recording' ? `Release to transcribe (or tap ${comboLabel(hotkeys.get('voice'))} to stop)`
       : s === 'live' ? 'Linked to Claude Code — hold Space in the pane to talk. Tap to unlink.'
       : 'Working…';
     // The visible label is a glyph — mirror the tooltip into the accessible

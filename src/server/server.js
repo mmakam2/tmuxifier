@@ -12,7 +12,7 @@ import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildSelectWindowRemot
 import { LOCAL_BOX_ID } from './localAgent.js';
 import { assertBoxSafe, SESSION_NAME_RE, WINDOW_ID_RE } from './sshCommand.js';
 import { createDeviceHostGuard } from './deviceHostGuard.js';
-import { provisionKey, terminalKey, localKey, LOCAL_GROUP } from './sessions.js';
+import { provisionKey, terminalKey, localKey, LOCAL_GROUP, TERM_RELEASE_CODE } from './sessions.js';
 import { upsertConfigFile } from './configFile.js';
 import { readJsonSync, writeJsonSync } from './jsonFile.js';
 import { parseEndpoint, assertProxmoxLinkInput } from './proxmoxValidate.js';
@@ -1190,6 +1190,23 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const box = await store.getBox(req.params.id);
     if (!box) return reply.code(404).send({ error: 'not found' });
     const lines = req.query?.lines != null ? Number(req.query.lines) : 200;
+    // Browser-only `session`: the agent switcher previews any session's screen.
+    // Validated, never rewritten; a device token (app, MCP) keeps today's
+    // box.sessionName-only contract. Read-only, so ungated by setup jobs, and
+    // it never sizes a viewer (the preview must not resize anyone's tmux).
+    const wanted = req.query?.session;
+    if (wanted !== undefined) {
+      if (req.deviceId) return reply.code(403).send({ error: 'browser session required' });
+      if (typeof wanted !== 'string' || !SESSION_NAME_RE.test(wanted)) {
+        return reply.code(400).send({ error: 'session name must be letters, digits, _ or -' });
+      }
+      const picked = await boxActions.paneSnapshot(box, wanted, { lines });
+      if (!picked.ok) return reply.code(502).send({ error: picked.error });
+      const latest = history ? (history.getSeries(box.id).at(-1) || null) : null;
+      // The agents map is box-controlled: own keys only.
+      const entry = latest?.agents && Object.hasOwn(latest.agents, wanted) ? latest.agents[wanted] : null;
+      return { ...picked, agent: entry?.state ?? null, agentCause: entry?.cause ?? null, sessionName: wanted };
+    }
     const snap = await boxActions.paneSnapshot(box, box.sessionName, { lines });
     if (!snap.ok) return reply.code(502).send({ error: snap.error });
     // Viewer geometry: the app asks for a phone-shaped window by keeping an
@@ -2052,6 +2069,19 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return { shell: config.localShell || 'none' };
   });
 
+  // Browser-only (deliberately absent from DEVICE_ALLOWED_ROUTES): the agent
+  // switcher's Host Shell preview. Read-only; always the local session, any
+  // `session` query is ignored; never creates the session.
+  app.get('/api/local-shell/pane', { preHandler: requireAuth }, async (req, reply) => {
+    if (typeof localShellActions?.paneSnapshot !== 'function') return reply.code(503).send({ error: 'capture unavailable' });
+    const lines = req.query?.lines != null ? Number(req.query.lines) : 200;
+    const snap = await localShellActions.paneSnapshot({ lines });
+    if (!snap.ok) return reply.code(502).send({ error: snap.error });
+    const latest = history ? (history.getSeries(LOCAL_BOX_ID).at(-1) || null) : null;
+    const entry = latest?.agents && Object.hasOwn(latest.agents, localSession) ? latest.agents[localSession] : null;
+    return { ...snap, agent: entry?.state ?? null, agentCause: entry?.cause ?? null, sessionName: localSession };
+  });
+
   app.patch('/api/local-shell', { preHandler: requireAuth }, async (req, reply) => {
     const { shell, claudeHooks, opencodePlugin } = req.body || {};
     if (!shell || !['none', 'omz', 'omb'].includes(shell)) {
@@ -2105,12 +2135,14 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       // the listener forever.
       let socketClosed = socket.readyState !== 1;
       let onSocketClose = null;
-      const markClosed = () => {
+      // 'close' passes the close code; 'error' passes an Error, and the early
+      // direct calls pass nothing — only the exact release code releases.
+      const markClosed = (code) => {
         socketClosed = true;
         if (onSocketClose) {
           const fn = onSocketClose;
           onSocketClose = null;
-          fn();
+          fn(code === TERM_RELEASE_CODE);
         }
       };
       socket.once('close', markClosed);
@@ -2146,10 +2178,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
           try { if (socket.readyState === 1) socket.send(d); } catch {}
         });
         const offExit = sessions.onExit(entry, () => { try { socket.close(1000); } catch {} });
-        onSocketClose = () => {
+        onSocketClose = (release) => {
           if (typeof off === 'function') off();
           if (typeof offExit === 'function') offExit();
-          sessions.detach(entry);
+          // After off(): closeIfUnwatched counts the remaining listeners.
+          if (release && sessions.closeIfUnwatched) sessions.closeIfUnwatched(entry);
+          else sessions.detach(entry);
         };
         if (socketClosed || socket.readyState !== 1) { markClosed(); return; }
         socket.on('message', (raw) => {
@@ -2288,10 +2322,15 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         try { if (socket.readyState === 1) socket.send(d); } catch { /* socket closing */ }
       });
       const offExit = sessions.onExit(entry, () => { try { socket.close(1000); } catch {} });
-      onSocketClose = () => {
+      onSocketClose = (release) => {
         if (typeof off === 'function') off();
         if (typeof offExit === 'function') offExit();
-        sessions.detach(entry);
+        // A release close (the pane is being replaced) drops the PTY now unless
+        // another socket on the same viewer key still watches it; any other
+        // close keeps it for the grace window a reload reattaches within.
+        // After off(): closeIfUnwatched counts the remaining listeners.
+        if (release && sessions.closeIfUnwatched) sessions.closeIfUnwatched(entry);
+        else sessions.detach(entry);
       };
       if (socketClosed || socket.readyState !== 1) { markClosed(); return; }
       socket.on('message', (raw) => {

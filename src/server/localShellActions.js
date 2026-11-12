@@ -6,8 +6,10 @@ import { createAgentHooksPusher } from './claudeAgentHooks.js';
 import { createOpencodePluginPusher } from './opencodeAgentPlugin.js';
 import { createOscReporterPusher } from './oscReporter.js';
 import { createVoiceLinkPusher } from './claudeVoiceLink.js';
+import { createSingleFlight } from './singleFlight.js';
 import { sanitizeSession, shSingleQuote } from './sshCommand.js';
 import { sshPipe } from './sshRun.js';
+import { buildPaneSnapshotRemote, parsePaneSnapshot } from './tmuxInject.js';
 import { buildVoiceWriterRemote } from './voiceWriter.js';
 
 const SETUP_TIMEOUT_MS = 120000;
@@ -109,7 +111,23 @@ export function createLocalShellActions({ run = runLocalShellScript, runStdin = 
     runStdin: (_box, script, bytes) => runStdin(script, bytes, { cwd, env }),
     readAsset: readOscAsset,
   });
+  const paneFlight = createSingleFlight();
   return {
+    // Read-only capture of the Host Shell session. Always the configured
+    // localSession, never created here (creation is localTmuxScope's job).
+    // Concurrent captures of one depth share one run.
+    paneSnapshot({ lines = 200, timeoutMs = 8000 } = {}) {
+      return paneFlight(String(lines), async () => {
+        const res = await run(buildPaneSnapshotRemote(localSession, { lines }), { cwd, env, timeout: timeoutMs });
+        if (!res || res.code !== 0) {
+          const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
+          return { ok: false, error: msg || 'capture failed' };
+        }
+        const snap = parsePaneSnapshot(res.stdout);
+        if (!snap) return { ok: false, error: 'unparseable snapshot' };
+        return { ok: true, ...snap };
+      });
+    },
     async ensureReady(shell) {
       const script = buildEnsureLocalShellScript(shell, localSession);
       if (!script) return { ok: true };

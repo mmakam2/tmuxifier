@@ -1,7 +1,7 @@
 // Pure formatters: wire shapes in, compact model-readable text out. Raw JSON is
 // not a UI. No I/O here — every function is unit-tested in isolation.
 
-const CSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+const CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 const ESC2 = /\x1b[@-Z\\-_]/g;
 
