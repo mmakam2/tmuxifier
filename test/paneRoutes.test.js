@@ -6,6 +6,8 @@ import { buildServer } from '../src/server/server.js';
 import { createStore } from '../src/server/store.js';
 import { createBoxActions } from '../src/server/boxActions.js';
 import { hashPassword } from '../src/server/auth.js';
+import { createDeviceStore } from '../src/server/deviceStore.js';
+import { createPasskeyStore } from '../src/server/passkeyStore.js';
 
 let app, dir, calls, boxId, failNext, noMouseNext, captureOut, sizedCalls, setupRunning;
 beforeEach(async () => {
@@ -45,14 +47,22 @@ beforeEach(async () => {
   };
   const setupManager = { currentForBox: () => (setupRunning ? { status: 'running' } : null) };
   const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
-  const history = { getSeries: () => [{ t: 1, up: true, agent: 'waiting', agents: { main: { cause: 'permission' } } }], getEvents: () => ({ events: [], latestSeq: 0 }), record() {}, onEvent() {} };
-  app = buildServer({ config, store, sessions, statusChecker, boxActions, history, setupManager });
+  const history = { getSeries: () => [{ t: 1, up: true, agent: 'waiting', agents: { main: { cause: 'permission' }, side: { state: 'blocked', cause: 'question' } } }], getEvents: () => ({ events: [], latestSeq: 0 }), record() {}, onEvent() {} };
+  app = buildServer({
+    config, store, sessions, statusChecker, boxActions, history, setupManager,
+    deviceStore: createDeviceStore({ dataDir: dir }), passkeyStore: createPasskeyStore({ dataDir: dir }),
+  });
 });
 
 async function headers() {
   const res = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
   const c = res.cookies.find((x) => x.name === 'tmuxifier_session');
   return { cookie: `${c.name}=${c.value}` };
+}
+
+async function bearer() {
+  const res = await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'MCP' } });
+  return { authorization: `Bearer ${res.json().token}` };
 }
 
 test('GET pane returns parsed snapshot plus agent state', async () => {
@@ -199,4 +209,49 @@ test('POST keys with whitespace-only text is a no-op: 200 skipped, no send-keys 
   // been made at all.
   expect(calls.some((argv) => argv[argv.length - 1].includes('send-keys'))).toBe(false);
   expect(calls.length).toBe(0);
+});
+
+test('GET pane with session captures that session and reports its agent state', async () => {
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=side&lines=40`, headers: await headers() });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toMatchObject({ content: 'hello\nworld', agent: 'blocked', agentCause: 'question', sessionName: 'side' });
+  const remote = calls.at(-1).at(-1);
+  expect(remote).toContain("capture-pane -e -p -t '=side:' -S -40");
+});
+
+test('GET pane with session: a session with no agent entry reports null state', async () => {
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=other`, headers: await headers() });
+  expect(res.json()).toMatchObject({ agent: null, agentCause: null, sessionName: 'other' });
+});
+
+test('GET pane with an invalid session is 400 and never reaches ssh', async () => {
+  const h = await headers();
+  for (const s of ['bad name', 'a;b', '', 'x'.repeat(65)]) {
+    const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=${encodeURIComponent(s)}`, headers: h });
+    expect(res.statusCode, s).toBe(400);
+  }
+  const twice = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=a&session=b`, headers: h });
+  expect(twice.statusCode).toBe(400);
+  expect(calls.length).toBe(0);
+});
+
+test('GET pane with session from a device token is 403; without session it still works', async () => {
+  const b = await bearer();
+  const refused = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=main`, headers: b });
+  expect(refused.statusCode).toBe(403);
+  expect(refused.json()).toEqual({ error: 'browser session required' });
+  expect(calls.length).toBe(0);
+  expect((await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane`, headers: b })).statusCode).toBe(200);
+});
+
+test('GET pane with session ignores cols/rows: the switcher never sizes anything', async () => {
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=side&cols=48&rows=90&client=c`, headers: await headers() });
+  expect(res.statusCode).toBe(200);
+  expect(sizedCalls.length).toBe(0);
+});
+
+test('GET pane with session stays ungated while the box setup job runs', async () => {
+  setupRunning = true;
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=side`, headers: await headers() });
+  expect(res.statusCode).toBe(200);
 });

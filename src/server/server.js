@@ -1190,6 +1190,23 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const box = await store.getBox(req.params.id);
     if (!box) return reply.code(404).send({ error: 'not found' });
     const lines = req.query?.lines != null ? Number(req.query.lines) : 200;
+    // Browser-only `session`: the agent switcher previews any session's screen.
+    // Validated, never rewritten; a device token (app, MCP) keeps today's
+    // box.sessionName-only contract. Read-only, so ungated by setup jobs, and
+    // it never sizes a viewer (the preview must not resize anyone's tmux).
+    const wanted = req.query?.session;
+    if (wanted !== undefined) {
+      if (req.deviceId) return reply.code(403).send({ error: 'browser session required' });
+      if (typeof wanted !== 'string' || !SESSION_NAME_RE.test(wanted)) {
+        return reply.code(400).send({ error: 'session name must be letters, digits, _ or -' });
+      }
+      const picked = await boxActions.paneSnapshot(box, wanted, { lines });
+      if (!picked.ok) return reply.code(502).send({ error: picked.error });
+      const latest = history ? (history.getSeries(box.id).at(-1) || null) : null;
+      // The agents map is box-controlled: own keys only.
+      const entry = latest?.agents && Object.hasOwn(latest.agents, wanted) ? latest.agents[wanted] : null;
+      return { ...picked, agent: entry?.state ?? null, agentCause: entry?.cause ?? null, sessionName: wanted };
+    }
     const snap = await boxActions.paneSnapshot(box, box.sessionName, { lines });
     if (!snap.ok) return reply.code(502).send({ error: snap.error });
     // Viewer geometry: the app asks for a phone-shaped window by keeping an
