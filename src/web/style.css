@@ -2173,6 +2173,17 @@ button.empty-kbd:hover { color: var(--text); }
 .appearance-prev .clawd-v-star { font-size: 13px; }
 .appearance-desc { color: var(--dim); font-size: 11px; margin-left: auto; }
 
+/* Settings → Hotkeys: one row per action — name, the combo as a keycap
+   readout, Record and Reset keys; a refusal wraps onto its own line. */
+.hotkey-list { display: flex; flex-direction: column; }
+.hotkey-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--border); }
+.hotkey-row:first-child { border-top: 0; }
+.hotkey-name { flex: 1 1 140px; color: var(--text); font-size: 12.5px; }
+.hotkey-combo { padding: 3px 8px; border: 1px solid var(--key-border); border-bottom-color: var(--bg); border-radius: 4px; background: var(--key-face); color: var(--accent); font-family: var(--face-code); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hotkey-record[aria-pressed='true'] { color: var(--accent); border-color: var(--accent-deep); }
+.hotkey-error { flex-basis: 100%; margin: 0; color: var(--warn); font-size: 11px; }
+.hotkey-error:empty { display: none; }
+
 /* --- Phone mode (max-width: 720px): drawer sidebar, one full-screen pane --- */
 /* Desktop is untouched: everything here lives inside the media queries. The
    phone bar exists in the DOM on desktop too but never displays. */
