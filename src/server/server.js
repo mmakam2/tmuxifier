@@ -2069,6 +2069,19 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return { shell: config.localShell || 'none' };
   });
 
+  // Browser-only (deliberately absent from DEVICE_ALLOWED_ROUTES): the agent
+  // switcher's Host Shell preview. Read-only; always the local session, any
+  // `session` query is ignored; never creates the session.
+  app.get('/api/local-shell/pane', { preHandler: requireAuth }, async (req, reply) => {
+    if (typeof localShellActions?.paneSnapshot !== 'function') return reply.code(503).send({ error: 'capture unavailable' });
+    const lines = req.query?.lines != null ? Number(req.query.lines) : 200;
+    const snap = await localShellActions.paneSnapshot({ lines });
+    if (!snap.ok) return reply.code(502).send({ error: snap.error });
+    const latest = history ? (history.getSeries(LOCAL_BOX_ID).at(-1) || null) : null;
+    const entry = latest?.agents && Object.hasOwn(latest.agents, localSession) ? latest.agents[localSession] : null;
+    return { ...snap, agent: entry?.state ?? null, agentCause: entry?.cause ?? null, sessionName: localSession };
+  });
+
   app.patch('/api/local-shell', { preHandler: requireAuth }, async (req, reply) => {
     const { shell, claudeHooks, opencodePlugin } = req.body || {};
     if (!shell || !['none', 'omz', 'omb'].includes(shell)) {
