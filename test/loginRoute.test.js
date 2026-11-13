@@ -4,7 +4,7 @@ import { decideLogin } from '../src/web/loginRoute';
 const pk = { enrolled: 0, rpId: null, only: false };
 const ak = { id: 'authentik', label: 'authentik', legacy: false, google: false };
 const goog = { id: 'google', label: 'Google', legacy: true, google: true };
-const oidc = (o = {}) => ({ mode: 'oidc', providers: [ak], password: true, passkey: pk, ...o });
+const oidc = (o = {}) => ({ mode: 'oidc', providers: [ak], passkey: pk, ...o });
 
 describe('decideLogin', () => {
   it('redirects for a single non-legacy provider', () => {

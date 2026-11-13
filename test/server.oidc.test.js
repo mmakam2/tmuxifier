@@ -138,9 +138,10 @@ test('password mode login is unchanged', async () => {
   const pwMode = await makeApp({ config: { authMode: 'password', passwordHash, oidcProviders: [] } });
   expect((await pwMode.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(200);
   expect((await pwMode.inject({ method: 'POST', url: '/api/login', payload: { password: 'bad' } })).statusCode).toBe(401);
-  expect((await pwMode.inject({ method: 'GET', url: '/api/auth/info' })).json()).toMatchObject({ mode: 'password', providers: [], password: true });
+  expect((await pwMode.inject({ method: 'GET', url: '/api/auth/info' })).json()).toMatchObject({ mode: 'password', providers: [] });
+  expect((await pwMode.inject({ method: 'GET', url: '/api/auth/info' })).json()).not.toHaveProperty('password');
   const oidc = await makeApp({ config: { passwordHash } });
-  expect((await oidc.inject({ method: 'GET', url: '/api/auth/info' })).json().password).toBe(false);
+  expect((await oidc.inject({ method: 'GET', url: '/api/auth/info' })).json()).not.toHaveProperty('password');
 });
 
 test('auth info lists providers without issuer or secret', async () => {
@@ -187,5 +188,10 @@ test('legacy oauth env with a password hash has no /api/login', async () => {
     TMUXIFIER_PASSWORD_HASH: await hashPassword('pw'),
   }, cwd: dir });
   const app = await makeApp({ config });
+  expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(404);
+});
+
+test('an un-normalized auth mode fails closed: no /api/login', async () => {
+  const app = await makeApp({ config: { authMode: 'oauth', passwordHash: await hashPassword('pw') } });
   expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(404);
 });

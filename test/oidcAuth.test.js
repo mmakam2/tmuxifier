@@ -211,3 +211,15 @@ test('discovery failures are negative-cached for 30s, successes for 1h', async (
   await url();
   expect(hits).toBe(3);
 });
+
+test('the negative cache window starts when the failure lands, not when the fetch started', async () => {
+  let t = 0;
+  let hits = 0;
+  const fetchImpl = async () => { hits++; await Promise.resolve(); t += 10_000; throw new Error('hang'); };
+  const c = mk({ fetchImpl, now: () => t });
+  const url = () => c.authorizationUrl({ state: 's', nonce: 'n', codeChallenge: 'c' });
+  expect(await code(url())).toBe('provider');
+  t += 29_000;
+  expect(await code(url())).toBe('provider');
+  expect(hits).toBe(1);
+});

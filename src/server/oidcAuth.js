@@ -89,6 +89,7 @@ export function createOidcClient({ provider, redirectUri, allowedEmails = [], fe
   let discovered = null;
   let discoveredAt = 0;
   let discoveredOk = false;
+  let discoveredSettled = false;
 
   async function fetchDiscovery() {
     let doc;
@@ -108,15 +109,16 @@ export function createOidcClient({ provider, redirectUri, allowedEmails = [], fe
 
   async function discover() {
     const age = now() - discoveredAt;
-    if (discovered && (discoveredOk ? age >= DISCOVERY_TTL_MS : age >= DISCOVERY_FAIL_TTL_MS)) {
+    if (discovered && discoveredSettled && age >= (discoveredOk ? DISCOVERY_TTL_MS : DISCOVERY_FAIL_TTL_MS)) {
       discovered = null;
     }
     if (!discovered) {
       const p = fetchDiscovery();
       discovered = p;
-      discoveredAt = now();
+      discoveredSettled = false;
       discoveredOk = false;
-      p.then(() => { if (discovered === p) { discoveredOk = true; discoveredAt = now(); } }, () => {});
+      const settle = (ok) => { if (discovered === p) { discoveredOk = ok; discoveredSettled = true; discoveredAt = now(); } };
+      p.then(() => settle(true), () => settle(false));
     }
     return discovered;
   }

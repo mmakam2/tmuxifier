@@ -209,7 +209,7 @@ async function armWithAssertion(h, auth, { signCount = 5 } = {}) {
 
 test('auth/info reports passkey state without authentication', async () => {
   expect((await app.inject({ method: 'GET', url: '/api/auth/info' })).json())
-    .toEqual({ mode: 'password', providers: [], password: true, passkey: { enrolled: 0, rpId: RP, only: false } });
+    .toEqual({ mode: 'password', providers: [], passkey: { enrolled: 0, rpId: RP, only: false } });
   await enroll();
   expect((await app.inject({ method: 'GET', url: '/api/auth/info' })).json().passkey.enrolled).toBe(1);
 });
@@ -565,7 +565,7 @@ test('auth/info still fails open when the passkey store cannot be read', async (
   app = await build({}, { passkeyStore: brokenStore });
   const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
   expect(res.statusCode).toBe(200);
-  expect(res.json()).toEqual({ mode: 'password', providers: [], password: true, passkey: { enrolled: 0, rpId: RP, only: false } });
+  expect(res.json()).toEqual({ mode: 'password', providers: [], passkey: { enrolled: 0, rpId: RP, only: false } });
 });
 
 // Finding 4: arming/disarming is the fleet's most consequential auth
