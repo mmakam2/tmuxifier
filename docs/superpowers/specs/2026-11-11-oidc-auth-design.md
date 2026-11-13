@@ -247,3 +247,47 @@ and (on a Google config) unchanged Google sign-in.
   and always keeps the legacy callback, `?error=google` aliasing, no rate limiting on OIDC
   routes (corrected — the doc wrongly claimed today's callback charges it), validator name
   `requiredConfigError`, extra files to migrate.
+
+## Revision 2026-11-12 (PR #8 review)
+
+Supersedes the earlier sections where they conflict (notably section 4 "Break-glass password in
+OIDC mode", the break-glass upgrade note, and "Session expiry auto-redirects").
+
+### Part S — server
+
+- **No break-glass password.** `POST /api/login` mounts only when `authMode === 'password'`. In
+  OIDC mode a leftover `TMUXIFIER_PASSWORD_HASH` is ignored (404), with or without
+  `TMUXIFIER_PASSKEY_ONLY=off`, matching main's behaviour for the legacy Google mode. Recovery for
+  a locked-out operator is editing `.env` (`TMUXIFIER_AUTH_MODE=password`, `npm run set-password`)
+  and restarting. `/api/auth/info` reports `password: false` in OIDC mode; the client keys off `mode`.
+- Device enrollment by password in OIDC mode answers 501 "device enrollment by password is off in
+  OIDC mode; use a pairing code".
+- `index.js` prints `oidcConfigWarnings` before the `requiredConfigError` exit.
+- `isSecureUrl` (https, or http only for `127.0.0.1`/`localhost`/`[::1]`) is exported from
+  `oidcAuth.js` and shared with `config.js`.
+- Discovery is cached: successes for 1 hour, failures for 30 seconds (injected `now`), with
+  concurrent calls sharing one in-flight promise, so an IdP outage does not cost a 10 s outbound
+  fetch per login attempt.
+- `/api/auth/info` providers gain `google: boolean` (issuer is `https://accounts.google.com`).
+
+### Part W — web, e2e, docs
+
+- `decideLogin` takes a `reason: 'boot' | 'expired' | 'logout'`; only `'boot'` may auto-redirect.
+  The 401 handler renders the login page (with the "Session expired" toast); logout renders it too.
+  This reverses "session expiry auto-redirects".
+- The signed-out flag (`tmuxifier.signedOut`) moves from `sessionStorage` to `localStorage` so every
+  tab, including new ones, shows the signed-out page. Logout sets it; every successful sign-in
+  (password, passkey, or `start()` finding a session after an OIDC callback) clears it.
+- `showPassword` is true only in password mode. `/?login` shows the full page (providers +
+  passkey), never redirects, and has no password form.
+- Only providers flagged `google` get the brand-fixed `.gbtn` Google button; every other provider
+  (including an explicit id `google` at another issuer) is a themed `pkbtn` link labelled
+  "Sign in with <label>".
+- Copy: Settings → Passkeys says "single sign-on" instead of "Google sign-in". Docs drop every
+  break-glass-password mention and the leftover-hash upgrade note, state that the modes are mutually
+  exclusive, and fix the signed-out page description (no `/?login` link). `.env.example` notes the
+  `google` provider's callback path.
+- e2e (`test/e2e/oidcLogin.spec.ts`): legacy Google env keys blanked, no password hash; logout +
+  reload asserts the signed-out text and provider button positively; a two-tab case covers logout
+  in tab A, tab B after reload, and a fresh third tab; `/?login` shows the provider button and no
+  `#pw`, and the provider button signs back in.

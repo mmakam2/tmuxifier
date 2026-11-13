@@ -38,7 +38,7 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | Proxmox default management pubkey | `TMUXIFIER_PVE_DEFAULT_PUBKEY` | auto-detect `~/.ssh/*.pub` |
 | trust reverse-proxy X-Forwarded-For | `TMUXIFIER_TRUST_PROXY` | off |
 | auth mode (`password` or `oidc`; `oauth`/`google` are aliases) | `TMUXIFIER_AUTH_MODE` | `password` |
-| password hash | `TMUXIFIER_PASSWORD_HASH` | — (required) |
+| password hash (password mode only; ignored in OIDC mode) | `TMUXIFIER_PASSWORD_HASH` | — (required in password mode) |
 | cookie secret | `TMUXIFIER_COOKIE_SECRET` | — (required) |
 | base external URL | `TMUXIFIER_BASE_EXTERNAL_URL` | (none) |
 | OIDC provider ids (ordered) | `TMUXIFIER_OIDC_PROVIDERS` | (none) |

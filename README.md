@@ -97,7 +97,7 @@ the full `config.json` key list, and a tour of the ⚙ settings modal — is in 
 with sign-in through authentik, Google or any OIDC provider against an exact-email allowlist. A **passkey** is a separate, additive third way in, available
 under either mode: enroll one from **Settings → Passkeys** while signed in, and optionally arm
 **Require a passkey** to disable password/OIDC sign-in entirely — guarded against lockouts,
-with `TMUXIFIER_PASSKEY_ONLY=off` in `.env` as the break-glass. OIDC setup (authentik walkthrough), the
+with `TMUXIFIER_PASSKEY_ONLY=off` in `.env` as the break-glass. The two modes are mutually exclusive and OIDC mode has no password login — if the provider is down, set `TMUXIFIER_AUTH_MODE=password`, run `npm run set-password` and restart; passkeys still work in OIDC mode. OIDC setup (authentik walkthrough), the
 relying-party-id rules passkeys live by, and the passkey security model are covered in the
 [authentication guide](docs/authentication.md).
 

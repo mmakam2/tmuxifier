@@ -101,8 +101,10 @@ client ID** with application type **Web application**, and register
 `TMUXIFIER_OAUTH_CLIENT_ID`/`_SECRET` still work and define the `google` provider.
 
 Restart the service and the login page shows the provider sign-in. With exactly one non-legacy
-provider, visitors are redirected to it automatically; `/?login` shows the full login page,
-including the password form when `TMUXIFIER_PASSWORD_HASH` is set. `TMUXIFIER_ALLOWED_EMAILS` is a
+provider, visitors opening the page are redirected to it automatically; `/?login` shows the full
+login page without redirecting. OIDC and password modes are mutually exclusive and OIDC mode has
+no password login: if the provider is unavailable, edit `.env`, set `TMUXIFIER_AUTH_MODE=password`,
+run `npm run set-password`, and restart. Passkeys still work in OIDC mode. `TMUXIFIER_ALLOWED_EMAILS` is a
 comma-separated exact-email allowlist, matched case-insensitively.
 
 ## Passkeys and the relying party id
@@ -126,9 +128,9 @@ hostname WebAuthn binds every passkey to. Tmuxifier derives it from the hostname
 
 Enrolling a passkey requires an authenticated session (Settings → Passkeys), so password/OIDC
 sign-in is always the bootstrap. Once enrolled, an operator can optionally arm **Require a
-passkey** there too, which disables password, OIDC and the break-glass password entirely — arming is refused
+passkey** there too, which disables password and OIDC sign-in entirely — arming is refused
 unless at least one passkey is both enrolled and usable against the current RP id, and removing
-the last passkey turns the requirement back off automatically. Even so, keep the break-glass in
+the last passkey turns the requirement back off automatically. Even so, keep the `.env` switch in
 mind before arming it: if every enrolled authenticator is ever lost while it's armed, set
 
 ```ini

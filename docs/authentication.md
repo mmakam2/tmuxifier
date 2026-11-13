@@ -5,8 +5,10 @@ any other provider, and passkeys. Part of the [Tmuxifier docs](../README.md).
 
 `TMUXIFIER_AUTH_MODE` selects the primary login method: `password` (default) or `oidc`, which
 replaces the password form with sign-in through one or more OIDC providers. `oauth` and `google`
-remain accepted aliases of `oidc`. The two modes are mutually exclusive — pick one. A passkey
-(below) is a separate, additive way in, available under **either** setting.
+remain accepted aliases of `oidc`. The two modes are mutually exclusive — pick one; OIDC mode has
+no password login at all. If the provider is unavailable or misconfigured, edit `.env`, set
+`TMUXIFIER_AUTH_MODE=password`, run `npm run set-password`, and restart. A passkey (below) is a
+separate, additive way in, available under **either** setting.
 
 Password mode:
 ```bash
@@ -46,22 +48,26 @@ Tmuxifier treats a scheme-less public URL as HTTPS.
 - The redirect URI to register at the provider is
   `https://tmuxifier.example.com/api/auth/oidc/<id>/callback`. A provider with id `google`,
   explicit or from the legacy keys, always uses `https://tmuxifier.example.com/api/auth/google/callback`.
+  The branded "Sign in with Google" button appears only for a provider whose issuer is
+  `https://accounts.google.com`; every other provider gets a plain button with its own label.
 
 ### What the login page does
 
 - **Exactly one provider, configured explicitly:** opening Tmuxifier signed out redirects straight to that provider.
-  An expired session does the same, so a still-live provider session signs you back in silently.
+  Only a fresh page load redirects: an expired session (a 401 while the app is open) shows the
+  login page with a "Session expired" message and never redirects, so it cannot loop through the provider.
 - **Two or more providers, or Google via the legacy keys:** the login page shows one button per
   provider (plus the passkey button when one is enrolled). No auto-redirect.
 - **A failed sign-in** returns to `/?error=<code>`. A page with an `?error=` query shows the login
   page with the error instead of auto-redirecting, so failures do not loop.
 - **Sign out** shows a "Signed out" page instead of bouncing you back in. Logout is local only:
   it ends the Tmuxifier session but not your session at the provider (the authentik session
-  survives). The page has a Sign in button and a link to `/?login`.
-- **`/?login`** always shows the full login page: every provider, the passkey button, and — if
-  `TMUXIFIER_PASSWORD_HASH` is set — the password form, which acts as a break-glass login in OIDC
-  mode (same rate limit; refused while "Require a passkey" is armed). Remove the hash to disable
-  it. A Google deployment that still has an old hash in `.env` gets this password login too.
+  survives). A "signed out" flag in the browser's `localStorage` makes every tab, including a
+  newly opened one, show the signed-out page (with the provider buttons) until you sign in again.
+  The signed-out page has no `/?login` link.
+- **`/?login`** always shows the full login page without redirecting: every provider and the
+  passkey button. There is no password form in OIDC mode, even if `TMUXIFIER_PASSWORD_HASH` is
+  still in `.env` — it is ignored.
 
 ### authentik
 
@@ -109,8 +115,7 @@ address everywhere, e.g. `TMUXIFIER_BIND=192.168.1.10`, `TMUXIFIER_PORT=7440`,
 address (the session cookie is per host). Plain `http` works but leaves the session cookie
 non-`Secure`; use it for testing only. The issuer still has to be `https` (unless authentik runs
 on loopback) and reachable from the Tmuxifier host. Passkeys are unavailable on an IP-address
-URL, so set `TMUXIFIER_PASSWORD_HASH` for the `/?login` fallback and don't arm "Require a
-passkey" there.
+URL, so don't arm "Require a passkey" there.
 
 **Troubleshooting.**
 
@@ -162,7 +167,7 @@ from `TMUXIFIER_RP_ID` if set, else the hostname of `TMUXIFIER_BASE_EXTERNAL_URL
   mismatch and names the hostname the existing passkeys belong to.
 
 Optionally, **Require a passkey** (Settings → Passkeys → sign-in policy) disables password and
-OIDC sign-in and the break-glass password entirely. Arming it is guarded against locking you out by accident: arming asks
+OIDC sign-in entirely. Arming it is guarded against locking you out by accident: arming asks
 your browser for a fresh passkey confirmation first (so it only succeeds where a passkey
 actually works right now), it's refused (409) unless at least one passkey is enrolled *and*
 usable against the server's current relying party id, and removing your last passkey turns it
@@ -189,8 +194,8 @@ Two more things worth knowing about the security model:
 - Passkey sign-in challenges are bounded per client address, the same way login attempts are
   rate-limited per IP. That stops a single flooding source from evicting another user's in-flight
   sign-in, but an attacker spread across many source addresses could still exhaust the bound and
-  deny sign-in — under **Require a passkey** that would deny everyone, and the break-glass above
-  is the remedy.
+  deny sign-in — under **Require a passkey** that would deny everyone, and the
+  `TMUXIFIER_PASSKEY_ONLY=off` switch above is the remedy.
 
 ## Device tokens (Android app)
 
@@ -219,7 +224,7 @@ A few things worth knowing:
   session, so the code inherits whatever gate that session passed — password, OIDC, or a
   passkey. That is why enrollment-by-code is allowed even while "require a passkey" is armed
   (the password branch still 403s there, exactly like the login form), and why it works on
-  OIDC-mode servers where the password branch returns 501 (a break-glass password hash does not change that). Arming passkey-only does **not**
+  OIDC-mode servers where the password branch returns 501 ("device enrollment by password is off in OIDC mode; use a pairing code"). Arming passkey-only does **not**
   revoke devices already enrolled — a device token never expires and ignores the logout
   watermark, so an existing token keeps working until it is explicitly revoked from
   Settings → Devices.

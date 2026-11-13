@@ -4,7 +4,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { startOidcStub } from '../helpers/oidcStub.js';
-import { hashPassword } from '../../src/server/auth.js';
 
 const PORT = 7439;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -29,7 +28,11 @@ test.beforeAll(async () => {
       TMUXIFIER_ALLOWED_EMAILS: 'you@example.com',
       TMUXIFIER_BASE_EXTERNAL_URL: BASE,
       TMUXIFIER_PUBLIC_URL: '',
-      TMUXIFIER_PASSWORD_HASH: await hashPassword('e2e'),
+      TMUXIFIER_PASSWORD_HASH: '',
+      TMUXIFIER_OAUTH_CLIENT_ID: '',
+      TMUXIFIER_OAUTH_CLIENT_SECRET: '',
+      TMUXIFIER_GOOGLE_CLIENT_ID: '',
+      TMUXIFIER_GOOGLE_CLIENT_SECRET: '',
       TMUXIFIER_COOKIE_SECRET: 'e2e-oidc-secret',
       TMUXIFIER_BIND: '127.0.0.1',
       TMUXIFIER_PORT: String(PORT),
@@ -53,17 +56,46 @@ test.afterAll(async () => {
   await fs.rm(dataDir, { recursive: true, force: true });
 });
 
-test('auto-redirect signs in, logout shows signed-out page, ?login password break-glass works', async ({ page }) => {
+const SIGNED_OUT = 'You have been signed out.';
+const PROVIDER_BTN = 'a[data-provider="0"]';
+
+test('auto-redirect signs in, logout shows signed-out page, ?login shows provider and signs back in', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.layout')).toBeVisible({ timeout: 15000 });
 
   await page.click('#logout');
   await expect(page.locator('.layout')).toHaveCount(0);
   await page.reload();
+  await expect(page.getByText(SIGNED_OUT)).toBeVisible();
+  await expect(page.locator(PROVIDER_BTN)).toBeVisible();
   await expect(page.locator('.layout')).toHaveCount(0);
 
   await page.goto('/?login');
-  await page.fill('#pw', 'e2e');
-  await page.click('button:has-text("Unlock")');
+  await expect(page.locator(PROVIDER_BTN)).toBeVisible();
+  await expect(page.locator('#pw')).toHaveCount(0);
+  await page.click(PROVIDER_BTN);
   await expect(page.locator('.layout')).toBeVisible({ timeout: 15000 });
+  expect(await page.evaluate(() => localStorage.getItem('tmuxifier.signedOut'))).toBeNull();
+});
+
+test('logout in one tab keeps other and new tabs signed out', async ({ context }) => {
+  const a = await context.newPage();
+  await a.goto('/');
+  await expect(a.locator('.layout')).toBeVisible({ timeout: 15000 });
+  const b = await context.newPage();
+  await b.goto('/');
+  await expect(b.locator('.layout')).toBeVisible({ timeout: 15000 });
+
+  await a.click('#logout');
+  await expect(a.getByText(SIGNED_OUT)).toBeVisible();
+
+  await b.reload();
+  await expect(b.getByText(SIGNED_OUT)).toBeVisible();
+  await expect(b.locator(PROVIDER_BTN)).toBeVisible();
+  await expect(b.locator('.layout')).toHaveCount(0);
+
+  const c = await context.newPage();
+  await c.goto('/');
+  await expect(c.getByText(SIGNED_OUT)).toBeVisible();
+  await expect(c.locator('.layout')).toHaveCount(0);
 });

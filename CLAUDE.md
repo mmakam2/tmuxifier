@@ -56,7 +56,7 @@ secrets or PII is gitignored **and ships with a placeholder counterpart** in the
 npm install
 npm run build        # vite build -> dist/ (server serves this statically; build before start)
 npm run set-password # writes TMUXIFIER_PASSWORD_HASH + TMUXIFIER_COOKIE_SECRET into ./.env
-npm run gen-secret   # writes only TMUXIFIER_COOKIE_SECRET for OAuth mode
+npm run gen-secret   # writes only TMUXIFIER_COOKIE_SECRET for OIDC mode
 npm start            # node src/server/index.js
 npm run dev          # vite + node --watch, proxies /api and /term to the backend
 npm run typecheck    # tsc --noEmit over src/web only (vite/vitest strip types unchecked)
@@ -87,10 +87,13 @@ defaults  →  config.json  →  .env file  →  shell env  →  overrides
   tests; tests pass explicit `{ env, cwd }`.
 - `set-password` rewrites the hash every run but generates a cookie secret only when absent, so
   a password change doesn't log everyone out.
-- `TMUXIFIER_AUTH_MODE` is `password` (default) or `oauth` (`google` is a legacy alias) —
-  mutually exclusive. Passkeys are an additive third login path mounted in **both** modes.
-- OAuth mode builds its callback from `TMUXIFIER_BASE_EXTERNAL_URL` (legacy alias
-  `TMUXIFIER_PUBLIC_URL`); a scheme-less value becomes HTTPS, and `https://` marks the session
+- `TMUXIFIER_AUTH_MODE` is `password` (default) or `oidc` (`oauth`/`google` are legacy aliases) —
+  mutually exclusive, and OIDC mode has no password login (a leftover hash is ignored; the way back
+  is editing `.env` to `password` mode). Passkeys are an additive third login path mounted in **both** modes.
+- OIDC providers are an ordered list (`TMUXIFIER_OIDC_PROVIDERS`, per-id `TMUXIFIER_OIDC_<ID>_*`,
+  or `oidcProviders` in `config.json`); the legacy Google keys become an implicit `google`
+  provider. Callbacks are `<base>/api/auth/oidc/<id>/callback` (`google`: `/api/auth/google/callback`),
+  built from `TMUXIFIER_BASE_EXTERNAL_URL` (legacy alias `TMUXIFIER_PUBLIC_URL`); a scheme-less value becomes HTTPS, and `https://` marks the session
   cookie `Secure` even without local TLS.
 
 ## Load-bearing rules
@@ -180,7 +183,7 @@ injected as arguments — that is what makes them testable without mocks. Follow
   (rejected after `SESSION_TTL_SECONDS`).
 - `rateLimit.js` — per-IP login lockout, bounded map (overflow evicts oldest). Shared by
   password, passkey, and device enrollment.
-- `googleAuth.js` — dependency-free OIDC: code flow, PKCE, exact-email allowlist.
+- `oidcAuth.js` — dependency-free multi-provider OIDC: discovery (cached), code flow, PKCE, exact-email allowlist.
 - `webauthn.js` — dependency-free WebAuthn: minimal CBOR reader (fed only registration
   attestation or previously validated stored keys), COSE→`KeyObject` (ES256/RS256/EdDSA),
   `verifyRegistration`/`verifyAssertion`. Attestation `none` only.
@@ -212,7 +215,7 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   provisioning, and `POST /api/boxes` goes through `deviceHostGuard`). Passkey routes mount in both
   auth modes.
   `POST /api/devices/enroll` bypasses `requireAuth` — it authenticates with the password (403
-  under armed passkey-only, 501 in OAuth mode) or a pairing code, over the login rate-limit bucket.
+  under armed passkey-only, 501 in OIDC mode) or a pairing code, over the login rate-limit bucket.
   `POST /api/devices/pair` is browser-session only (a device must not mint invites).
 - **Setup.** `POST /api/boxes/:id/setup`, `GET /api/setup[/:id]`, `GET /api/boxes/:id/setup`;
   `/term?mode=provision` is the interactive fallback for sudo/password boxes, reporting via
@@ -748,9 +751,13 @@ test "$(gh release view "$VERSION" --json tagName --jq .tagName)" = "$VERSION"
 The login gate is the crown jewel — Tmuxifier can SSH into your whole fleet. It binds to
 `127.0.0.1` by default; expose it only behind TLS.
 
-**Login paths.** Password mode mounts `POST /api/login`; OAuth mode mounts `/api/auth/google/*`
-instead (hand-rolled OIDC: state cookie + PKCE, server-to-server token exchange, exact-email
-allowlist; the id_token is trusted because it comes straight from Google's token endpoint).
+**Login paths.** Password mode mounts `POST /api/login`; OIDC mode mounts `/api/auth/oidc/<id>/*`
+(and `/api/auth/google/*` for the `google` provider) instead — there is no password login in OIDC
+mode and no break-glass (hand-rolled OIDC: state cookie + PKCE, server-to-server token exchange,
+exact-email allowlist; the id_token is trusted because it comes straight from the provider's token
+endpoint). Only a fresh page load may auto-redirect to a single provider: session expiry (401) and
+logout render the login page. Logout is local-only and sets a `tmuxifier.signedOut` flag in
+`localStorage` (cleared on any successful sign-in) so every tab shows the signed-out page.
 Passkeys mount in both modes.
 
 - Passwords are scrypt-hashed; login is rate-limited per IP. Set `TMUXIFIER_TRUST_PROXY` only
@@ -762,11 +769,11 @@ Passkeys mount in both modes.
 - WebSocket auth rides the normal cookie path (`@fastify/websocket` v11); `isAuthed` keeps a manual
   cookie-header parse as a backstop.
 - **Passkeys** share the login rate-limit bucket and return one generic 401 (no credential-id
-  enumeration). In OAuth mode a passkey never consults `TMUXIFIER_ALLOWED_EMAILS`, so removing an
+  enumeration). In OIDC mode a passkey never consults `TMUXIFIER_ALLOWED_EMAILS`, so removing an
   email does **not** revoke that user's passkey — remove it in Settings → Passkeys. Enrollment
   requires an authenticated session. Challenge storage is bounded per client address, so a
   many-address attacker can still evict challenges (same residual limit as the rate limiter).
-- **"Require a passkey"** (`passkeyOnly`) disables password and Google sign-in. Arming requires a
+- **"Require a passkey"** (`passkeyOnly`) disables password and OIDC sign-in. Arming requires a
   fresh successful assertion in the arming browser and a usable RP id (409 when it is `null`,
   i.e. IP-derived, or doesn't match the enrolled credentials); removing the last credential
   disarms it; `TMUXIFIER_PASSKEY_ONLY=off` in `.env` is the break-glass (takes effect on restart).
