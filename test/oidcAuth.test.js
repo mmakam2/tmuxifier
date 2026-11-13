@@ -1,6 +1,6 @@
 import { test, expect, beforeEach, afterEach } from 'vitest';
 import { createHash } from 'node:crypto';
-import { createOidcClient, OidcError, pkcePair, randomState, base64url } from '../src/server/oidcAuth.js';
+import { createOidcClient, isSecureUrl, OidcError, pkcePair, randomState, base64url } from '../src/server/oidcAuth.js';
 import { startOidcStub } from './helpers/oidcStub.js';
 
 let stub;
@@ -93,11 +93,13 @@ test('token endpoint 500 is a provider error', async () => {
   expect(e.code).toBe('provider');
 });
 
-test('a discovery failure is not cached', async () => {
+test('a discovery failure is retried once the negative cache expires', async () => {
   let n = 0;
+  let t = 0;
   const fetchImpl = (u, o) => (n++ === 0 ? Promise.reject(new Error('down')) : fetch(u, o));
-  const c = mk({ fetchImpl });
+  const c = mk({ fetchImpl, now: () => t });
   expect(await code(c.authorizationUrl({ state: 's', nonce: 'n', codeChallenge: 'c' }))).toBe('provider');
+  t += 31_000;
   await expect(c.authorizationUrl({ state: 's', nonce: 'n', codeChallenge: 'c' })).resolves.toContain('/authorize');
 });
 
@@ -177,4 +179,35 @@ test('stub /authorize 302s back with code+state and records the nonce for the id
   await fetch(`${stub.issuer}/token`, { method: 'POST', body: 'grant_type=authorization_code' });
   const idToken = (await (await fetch(`${stub.issuer}/token`, { method: 'POST', body: 'x=1' })).json()).id_token;
   expect(JSON.parse(Buffer.from(idToken.split('.')[1], 'base64url')).nonce).toBe('n1');
+});
+
+test('isSecureUrl: https or loopback http only', () => {
+  expect(isSecureUrl('https://a.example.com')).toBe(true);
+  expect(isSecureUrl('http://127.0.0.1:1')).toBe(true);
+  expect(isSecureUrl('http://[::1]:1')).toBe(true);
+  expect(isSecureUrl('http://a.example.com')).toBe(false);
+  expect(isSecureUrl('nope')).toBe(false);
+});
+
+test('discovery failures are negative-cached for 30s, successes for 1h', async () => {
+  let t = 1_000_000;
+  let hits = 0;
+  let fail = true;
+  const fetchImpl = (u, o) => { hits++; return fail ? Promise.reject(new Error('down')) : fetch(u, o); };
+  const c = mk({ fetchImpl, now: () => t });
+  const url = () => c.authorizationUrl({ state: 's', nonce: 'n', codeChallenge: 'c' });
+  expect(await code(url())).toBe('provider');
+  t += 29_000;
+  expect(await code(url())).toBe('provider');
+  expect(hits).toBe(1);
+  t += 2_000;
+  fail = false;
+  await expect(url()).resolves.toContain('/authorize');
+  expect(hits).toBe(2);
+  t += 3_599_000;
+  await url();
+  expect(hits).toBe(2);
+  t += 2_000;
+  await url();
+  expect(hits).toBe(3);
 });

@@ -123,28 +123,24 @@ test('passkey-only armed blocks login and callback', async () => {
   expect(cb.headers.location).toBe('/?error=passkey-only');
 });
 
-test('break-glass password matrix', async () => {
+test('oidc mode has no password login route, with or without a hash or the passkey kill switch', async () => {
   const passwordHash = await hashPassword('pw');
-  const without = await makeApp();
-  expect((await without.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(404);
-  expect((await without.inject({ method: 'GET', url: '/api/auth/info' })).json().password).toBe(false);
+  for (const config of [{}, { passwordHash }, { passwordHash, passkeyOnlyKillSwitch: true }]) {
+    const app = await makeApp({ config });
+    const res = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+    expect(res.statusCode).toBe(404);
+    expect(session(res)).toBeFalsy();
+  }
+});
 
-  const withHash = await makeApp({ config: { passwordHash } });
-  expect((await withHash.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(200);
-  expect((await withHash.inject({ method: 'POST', url: '/api/login', payload: { password: 'bad' } })).statusCode).toBe(401);
-  expect((await withHash.inject({ method: 'GET', url: '/api/auth/info' })).json().password).toBe(true);
-
-  const pk = createPasskeyStore({ dataDir: dir });
-  await pk.add({ id: 'cred', publicKey: 'AA', alg: -7, signCount: 0, label: 'k', transports: [] }, { rpId: 'tmux.example.com' });
-  const armed = await makeApp({ passkeyStore: pk, config: { passwordHash, rpId: 'tmux.example.com', rpIdError: null, passkeyOnlyKillSwitch: false } });
-  await pk.setPasskeyOnly(true);
-  const denied = await armed.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
-  expect(denied.statusCode).toBe(403);
-  expect(session(denied)).toBeFalsy();
-
+test('password mode login is unchanged', async () => {
+  const passwordHash = await hashPassword('pw');
   const pwMode = await makeApp({ config: { authMode: 'password', passwordHash, oidcProviders: [] } });
   expect((await pwMode.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(200);
+  expect((await pwMode.inject({ method: 'POST', url: '/api/login', payload: { password: 'bad' } })).statusCode).toBe(401);
   expect((await pwMode.inject({ method: 'GET', url: '/api/auth/info' })).json()).toMatchObject({ mode: 'password', providers: [], password: true });
+  const oidc = await makeApp({ config: { passwordHash } });
+  expect((await oidc.inject({ method: 'GET', url: '/api/auth/info' })).json().password).toBe(false);
 });
 
 test('auth info lists providers without issuer or secret', async () => {
@@ -162,6 +158,7 @@ test('device password enroll is 501 in oidc mode', async () => {
   const app = await makeApp({ config: { passwordHash }, deviceStore: createDeviceStore({ dataDir: dir }) });
   const res = await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'x' } });
   expect(res.statusCode).toBe(501);
+  expect(res.json().error).toBe('device enrollment by password is off in OIDC mode; use a pairing code');
 });
 
 test('legacy google env config boots and keeps the old redirect URI', async () => {
@@ -181,4 +178,14 @@ test('legacy google env config boots and keeps the old redirect URI', async () =
   expect((await app.inject({ method: 'GET', url: '/api/auth/info' })).json().providers).toEqual([{ id: 'google', label: 'Google', legacy: true }]);
   const res = await app.inject({ method: 'GET', url: '/api/auth/google/login' });
   expect(new URL(res.headers.location).searchParams.get('redirect_uri')).toBe(`${PUBLIC}/api/auth/google/callback`);
+});
+
+test('legacy oauth env with a password hash has no /api/login', async () => {
+  const config = loadConfig({}, { env: {
+    TMUXIFIER_AUTH_MODE: 'oauth', TMUXIFIER_GOOGLE_CLIENT_ID: 'cid', TMUXIFIER_GOOGLE_CLIENT_SECRET: 's',
+    TMUXIFIER_PUBLIC_URL: 'tmux.example.com', TMUXIFIER_ALLOWED_EMAILS: 'you@example.com', TMUXIFIER_COOKIE_SECRET: 'x',
+    TMUXIFIER_PASSWORD_HASH: await hashPassword('pw'),
+  }, cwd: dir });
+  const app = await makeApp({ config });
+  expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(404);
 });

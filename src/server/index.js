@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
-import { loadConfig, requiredConfigError } from './config.js';
+import { loadConfig, reportConfig } from './config.js';
 import { createStore } from './store.js';
 import { createStatusChecker } from './status.js';
 import { createStatusPoller } from './statusPoller.js';
@@ -66,12 +66,11 @@ import { resolveVoicePaths } from './voicePaths.js';
 
 const config = loadConfig();
 config.configPath = path.resolve('config.json');
-const cfgError = requiredConfigError(config);
+const cfgError = reportConfig(config);
 if (cfgError) {
   console.error(cfgError);
   process.exit(1);
 }
-for (const w of config.oidcConfigWarnings ?? []) console.error(`OIDC config: ${w}`);
 
 fs.mkdirSync(config.controlDir, { recursive: true, mode: 0o700 });
 

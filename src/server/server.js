@@ -173,7 +173,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     }
   }
 
-  const passwordLoginEnabled = config.authMode === 'password' || !!config.passwordHash;
+  const passwordLoginEnabled = config.authMode !== 'oidc';
   const loginLimiter = createLoginRateLimiter(); // per-ip lockout for POST /api/login
 
   // --- passkeys (WebAuthn) ---
@@ -679,7 +679,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     };
   });
 
-  // In oidc mode a configured password hash is the break-glass login.
+  // OIDC mode has no password login; a leftover hash is ignored.
   if (passwordLoginEnabled) {
     app.post('/api/login', async (req, reply) => {
       if (passkeyOnlyArmed(await passkeySnapshot())) return reply.code(403).send({ error: 'passkey required' });
@@ -787,7 +787,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       if (!devicePairing.take(body.code)) { loginLimiter.fail(ip); return reply.code(401).send({ error: 'invalid or expired code' }); }
     } else {
       // Password branch: unchanged v1 semantics (password mode only).
-      if (config.authMode === 'oidc') return reply.code(501).send({ error: 'device enrollment requires password mode or a pairing code' });
+      if (config.authMode === 'oidc') return reply.code(501).send({ error: 'device enrollment by password is off in OIDC mode; use a pairing code' });
       if (passkeyOnlyArmed(await passkeySnapshot())) return reply.code(403).send({ error: 'passkey required' });
       // Charged before the scrypt await, so in-flight guesses count (rateLimit.js).
       if (!loginLimiter.attempt(ip)) return reply.code(429).send({ error: 'too many attempts' });

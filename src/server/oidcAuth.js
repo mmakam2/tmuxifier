@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 
 // Hand-rolled, dependency-free generic OpenID Connect client (authorization
 // code + PKCE + nonce). Endpoints come from `<issuer>/.well-known/openid-configuration`,
-// fetched lazily and cached on success only (a failed discovery is retried).
+// fetched lazily and cached for 1 hour on success and 30 seconds on failure.
 //
 // Trust argument: the id_token is fetched server-to-server from the token
 // endpoint over TLS, so its payload is trusted without a JWKS signature check
@@ -58,9 +58,12 @@ export function randomState() {
   return base64url(randomBytes(16));
 }
 
+const DISCOVERY_TTL_MS = 60 * 60 * 1000;
+const DISCOVERY_FAIL_TTL_MS = 30 * 1000;
+
 const trimSlash = (s) => String(s).replace(/\/+$/, '');
 
-function isSecureUrl(value) {
+export function isSecureUrl(value) {
   let u;
   try { u = new URL(value); } catch { return false; }
   if (u.protocol === 'https:') return true;
@@ -84,6 +87,8 @@ export function createOidcClient({ provider, redirectUri, allowedEmails = [], fe
   const allow = new Set(allowedEmails.map((e) => String(e).toLowerCase()));
   const isGoogle = trimSlash(issuer) === GOOGLE_ISSUER;
   let discovered = null;
+  let discoveredAt = 0;
+  let discoveredOk = false;
 
   async function fetchDiscovery() {
     let doc;
@@ -102,10 +107,16 @@ export function createOidcClient({ provider, redirectUri, allowedEmails = [], fe
   }
 
   async function discover() {
+    const age = now() - discoveredAt;
+    if (discovered && (discoveredOk ? age >= DISCOVERY_TTL_MS : age >= DISCOVERY_FAIL_TTL_MS)) {
+      discovered = null;
+    }
     if (!discovered) {
       const p = fetchDiscovery();
       discovered = p;
-      p.catch(() => { if (discovered === p) discovered = null; });
+      discoveredAt = now();
+      discoveredOk = false;
+      p.then(() => { if (discovered === p) { discoveredOk = true; discoveredAt = now(); } }, () => {});
     }
     return discovered;
   }

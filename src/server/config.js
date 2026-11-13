@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readEnvFile } from './envFile.js';
 import { readConfigFile } from './configFile.js';
+import { isSecureUrl } from './oidcAuth.js';
 
 const DEFAULTS = {
   bindAddress: '127.0.0.1',
@@ -189,13 +190,6 @@ export function parseOidcProviders({ env = {}, fileProviders, googleClientId, go
     }
   }
   return { providers, warnings };
-}
-
-function oidcIssuerOk(issuer) {
-  let u;
-  try { u = new URL(issuer); } catch { return false; }
-  if (u.protocol === 'https:') return true;
-  return u.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname);
 }
 
 export function loadConfig(overrides = {}, { env = process.env, cwd = process.cwd() } = {}) {
@@ -415,7 +409,7 @@ export function requiredConfigError(config) {
       if (!OIDC_ID_RE.test(p.id)) return `OIDC provider id "${p.id}" is invalid: use lowercase letters, digits and hyphens (max 32, starting with a letter or digit)`;
       if (seen.has(p.id)) return `OIDC provider id "${p.id}" is listed more than once`;
       seen.add(p.id);
-      if (!oidcIssuerOk(p.issuer)) return `OIDC provider "${p.id}" needs an absolute https:// issuer URL`;
+      if (!isSecureUrl(p.issuer)) return `OIDC provider "${p.id}" needs an absolute https:// issuer URL`;
       if (!p.clientId) return `OIDC provider "${p.id}" requires a client id`;
       if (!p.clientSecret) return `OIDC provider "${p.id}" requires a client secret`;
     }
@@ -426,4 +420,10 @@ export function requiredConfigError(config) {
   }
   if (!config.passwordHash) return 'Tmuxifier is not configured. Run: npm run set-password';
   return null;
+}
+
+// Startup check: OIDC warnings are logged first so they explain a fatal error.
+export function reportConfig(config, log = console.error) {
+  for (const w of config.oidcConfigWarnings ?? []) log(`OIDC config: ${w}`);
+  return requiredConfigError(config);
 }
