@@ -21,7 +21,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { await stub.close(); await stub2.close(); });
 
-const prov = (id, issuer, extra = {}) => ({ id, label: id, issuer, clientId: 'cid', clientSecret: 's3cr3t-oidc', allowUnverifiedEmail: false, legacyGoogle: false, ...extra });
+const prov = (id, issuer, extra = {}) => ({ id, label: id, issuer, clientId: 'cid', clientSecret: 's3cr3t-oidc', allowUnverifiedEmail: false, legacyGoogle: false, allowedEmails: ['you@example.com'], ...extra });
 
 async function makeApp({ providers, config: extra = {}, ...overrides } = {}) {
   const config = {
@@ -90,6 +90,20 @@ test('tampered state, disallowed email, token failure map to error codes', async
   const r = await flow(app, L, C);
   expect(r.cb.headers.location).toBe('/?error=provider');
   expect(session(r.cb)).toBeFalsy();
+});
+
+test('allowlist is per provider', async () => {
+  const app = await makeApp({ providers: [prov('a', stub.issuer, { allowedEmails: ['a@example.com'] }), prov('b', stub2.issuer, { allowedEmails: ['g@example.com'] })] });
+  const run = async (id, email, stubObj) => {
+    stubObj.set({ claims: { email } });
+    return flow(app, `/api/auth/oidc/${id}/login`, `/api/auth/oidc/${id}/callback`, { stubObj });
+  };
+  const ok = await run('a', 'a@example.com', stub);
+  expect(ok.cb.headers.location).toBe('/');
+  expect(session(ok.cb)).toBeTruthy();
+  expect((await run('b', 'a@example.com', stub2)).cb.headers.location).toBe('/?error=forbidden');
+  expect((await run('a', 'g@example.com', stub)).cb.headers.location).toBe('/?error=forbidden');
+  expect(session((await run('b', 'g@example.com', stub2)).cb)).toBeTruthy();
 });
 
 test('unverified email and nonce mismatch are forbidden', async () => {

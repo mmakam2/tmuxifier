@@ -169,7 +169,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const base = String(config.publicUrl).replace(/\/+$/, '');
     for (const p of providers) {
       const cbPath = p.id === 'google' ? '/api/auth/google/callback' : `/api/auth/oidc/${p.id}/callback`;
-      clients.set(p.id, createOidcClient({ provider: p, redirectUri: `${base}${cbPath}`, allowedEmails: config.allowedEmails }));
+      clients.set(p.id, createOidcClient({ provider: p, redirectUri: `${base}${cbPath}`, allowedEmails: p.allowedEmails }));
     }
   }
 
