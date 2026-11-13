@@ -16,6 +16,35 @@ npm run set-password
 ```
 This writes `TMUXIFIER_PASSWORD_HASH` and, if absent, `TMUXIFIER_COOKIE_SECRET` to `.env`.
 
+## Any OIDC provider
+
+OIDC mode works with any standards-compliant provider. Choose an id for each one (lowercase
+letters, digits, `-`) and list them in `TMUXIFIER_OIDC_PROVIDERS`; the keys below use `<ID>`, the
+id upper-cased with `-` as `_`. The values here use `authentik` only as the example id.
+
+```ini
+TMUXIFIER_OIDC_PROVIDERS=authentik
+TMUXIFIER_OIDC_AUTHENTIK_ISSUER=https://auth.example.com/application/o/tmuxifier/
+TMUXIFIER_OIDC_AUTHENTIK_CLIENT_ID=...
+TMUXIFIER_OIDC_AUTHENTIK_CLIENT_SECRET=...
+TMUXIFIER_OIDC_AUTHENTIK_ALLOWED_EMAILS=you@example.com
+```
+
+- Keys: `_ISSUER` (`https://`), `_CLIENT_ID`, `_CLIENT_SECRET`, and optionally `_LABEL`,
+  `_ALLOW_UNVERIFIED_EMAIL` and `_ALLOWED_EMAILS`.
+- Redirect URI to register: `<TMUXIFIER_BASE_EXTERNAL_URL>/api/auth/oidc/<id>/callback`.
+- Tmuxifier requests the `openid` and `email` scopes and requires `email_verified=true` unless
+  the provider sets `_ALLOW_UNVERIFIED_EMAIL=on`.
+- **Allowlist.** `_ALLOWED_EMAILS` is a comma-separated list of exact emails (case-insensitive)
+  for that provider only. A provider's own list **replaces** `TMUXIFIER_ALLOWED_EMAILS` for it
+  (no union); a provider without one falls back to the global list. In `config.json` use
+  `allowedEmails` (array or comma string); the env key overrides the file. The legacy Google keys
+  always use the global list. Boot fails if any provider ends up with no allowed emails. With more
+  than one provider, set a per-provider list, so an address trusted at one provider can't sign in
+  through another.
+
+Provider-specific notes follow (authentik, then Google).
+
 ## OIDC mode
 
 ```bash
@@ -40,11 +69,12 @@ Tmuxifier treats a scheme-less public URL as HTTPS.
   an `https://` URL (`http://` is accepted only for a loopback host: `127.0.0.1`, `localhost`,
   `[::1]`).
 - `config.json` can instead carry an `oidcProviders` array of `{ id, label, issuer, clientId,
-  clientSecret, allowUnverifiedEmail }` (`allowUnverifiedEmail` is a boolean). When `TMUXIFIER_OIDC_PROVIDERS` is set it defines the list and order, and
+  clientSecret, allowUnverifiedEmail, allowedEmails }` (`allowUnverifiedEmail` is a boolean; `allowedEmails` an array or comma string). When `TMUXIFIER_OIDC_PROVIDERS` is set it defines the list and order, and
   `TMUXIFIER_OIDC_<ID>_*` values override the matching `config.json` entry field by field; a
   `config.json` provider not in that list is ignored (boot logs it).
-- Sign-in requires a verified email (`email_verified`) that is in `TMUXIFIER_ALLOWED_EMAILS`
-  (exact addresses, case-insensitive; no domain wildcards).
+- Sign-in requires a verified email (`email_verified`) that is in the provider's allowlist: its
+  own `TMUXIFIER_OIDC_<ID>_ALLOWED_EMAILS`, else `TMUXIFIER_ALLOWED_EMAILS` (exact addresses,
+  case-insensitive; no domain wildcards).
 - The redirect URI to register at the provider is
   `https://tmuxifier.example.com/api/auth/oidc/<id>/callback`. A provider with id `google`,
   explicit or from the legacy keys, always uses `https://tmuxifier.example.com/api/auth/google/callback`.
@@ -95,8 +125,8 @@ return {"email": request.user.email, "email_verified": True}
 
 Then on the provider, under **Advanced protocol settings → Scopes**, replace the default `email`
 mapping with this one. The alternative is `TMUXIFIER_OIDC_AUTHENTIK_ALLOW_UNVERIFIED_EMAIL=on`.
-With it on, anyone who can set the allowlisted email at that provider can sign in, because
-`TMUXIFIER_ALLOWED_EMAILS` is shared across all providers.
+With it on, anyone who can set the allowlisted email at that provider can sign in, so give
+each provider its own `_ALLOWED_EMAILS` when you run more than one.
 
 **3. Application and bindings.** **Applications → Create** an application using the provider and
 add **Policy / Group / User Bindings** for only the user(s) or group allowed in. Without a
@@ -120,10 +150,10 @@ URL, so don't arm "Require a passkey" there.
 **Troubleshooting.**
 
 - Boot fails: the log line names the missing or invalid key (non-`https` issuer, bad provider
-  id, empty allowlist, missing `TMUXIFIER_BASE_EXTERNAL_URL`).
+  id, a provider with no allowed emails, missing `TMUXIFIER_BASE_EXTERNAL_URL`).
 - `?error=provider`: discovery or the token exchange failed — wrong issuer or client secret,
   or the Tmuxifier host can't reach `<issuer>/.well-known/openid-configuration`.
-- `?error=forbidden`: the email isn't in `TMUXIFIER_ALLOWED_EMAILS`, or `email_verified` is still
+- `?error=forbidden`: the email isn't in that provider's allowlist, or `email_verified` is still
   false (step 2).
 - `?error=state`: the sign-in took over 5 minutes or started on a different address than the
   callback; start again from the same URL.
@@ -185,7 +215,7 @@ out — so keep it in mind before arming it.
 
 Two more things worth knowing about the security model:
 
-- In OIDC mode, a passkey login never checks `TMUXIFIER_ALLOWED_EMAILS` — it authenticates a
+- In OIDC mode, a passkey login never checks any OIDC allowlist — it authenticates a
   device credential, not the OIDC identity used to enroll it. Removing an email from the
   allowlist stops that person from signing in through OIDC again, but it does **not** revoke a
   passkey they already enrolled; remove that passkey from Settings → Passkeys to revoke it.

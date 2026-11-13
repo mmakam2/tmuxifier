@@ -94,7 +94,7 @@ the full `config.json` key list, and a tour of the ⚙ settings modal — is in 
 ## Authentication
 `TMUXIFIER_AUTH_MODE` selects the primary login method: `password` (default, set up by
 `npm run set-password`) or `oidc` (aliases `oauth`, `google`), which replaces the password form
-with sign-in through authentik, Google or any OIDC provider against an exact-email allowlist. A **passkey** is a separate, additive third way in, available
+with sign-in through authentik, Google or any OIDC provider against a per-provider exact-email allowlist. A **passkey** is a separate, additive third way in, available
 under either mode: enroll one from **Settings → Passkeys** while signed in, and optionally arm
 **Require a passkey** to disable password/OIDC sign-in entirely — guarded against lockouts,
 with `TMUXIFIER_PASSKEY_ONLY=off` in `.env` as the break-glass. The two modes are mutually exclusive and OIDC mode has no password login — if the provider is down, set `TMUXIFIER_AUTH_MODE=password`, run `npm run set-password` and restart; passkeys still work in OIDC mode. OIDC setup (authentik walkthrough), the
@@ -272,7 +272,7 @@ show a one-time warning), or front it with a TLS reverse proxy — and set `TMUX
 accordingly. Serving the login over plain HTTP on a non-loopback address sends credentials
 in cleartext. Passwords are scrypt-hashed and login attempts are rate-limited per IP (set
 `TMUXIFIER_TRUST_PROXY` behind a proxy so the limiter sees real client IPs); OIDC mode uses an
-exact-email allowlist; the session cookie is signed, httpOnly, SameSite=lax, expires after 7 days
+per-provider exact-email allowlist; the session cookie is signed, httpOnly, SameSite=lax, expires after 7 days
 (server-enforced), and is marked `Secure` for local TLS or an `https://` base external URL.
 
 Tmuxifier stores no SSH secrets — your keys and agent stay in the OS. The credentials it does

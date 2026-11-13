@@ -42,9 +42,9 @@ high: built-in defaults → `config.json` → `.env` → shell environment.
 | cookie secret | `TMUXIFIER_COOKIE_SECRET` | — (required) |
 | base external URL | `TMUXIFIER_BASE_EXTERNAL_URL` | (none) |
 | OIDC provider ids (ordered) | `TMUXIFIER_OIDC_PROVIDERS` | (none) |
-| OIDC provider settings | `TMUXIFIER_OIDC_<ID>_{ISSUER,CLIENT_ID,CLIENT_SECRET,LABEL,ALLOW_UNVERIFIED_EMAIL}` | (none) |
+| OIDC provider settings | `TMUXIFIER_OIDC_<ID>_{ISSUER,CLIENT_ID,CLIENT_SECRET,LABEL,ALLOW_UNVERIFIED_EMAIL,ALLOWED_EMAILS}` | (none) |
 | legacy Google client id/secret | `TMUXIFIER_OAUTH_CLIENT_ID` / `_SECRET` (or `TMUXIFIER_GOOGLE_CLIENT_ID` / `_SECRET`) | (none) |
-| allowed sign-in emails | `TMUXIFIER_ALLOWED_EMAILS` | (none) |
+| allowed sign-in emails (fallback for providers without their own list) | `TMUXIFIER_ALLOWED_EMAILS` | (none) |
 | passkey relying party id | `TMUXIFIER_RP_ID` | derived from base external URL, else `localhost` |
 | passkey-only break-glass | `TMUXIFIER_PASSKEY_ONLY` | (unset) |
 | data dir | `TMUXIFIER_DATA_DIR` | `<repo>/data` |
@@ -80,7 +80,7 @@ As an alternative to `.env`, a `config.json` in the repo root works too, using c
 `fleetMaxJobs`, `fleetMaxOutputBytes`, `healthHistoryMax`, `healthEventsMax`, `healthCpuWarnPct`,
 `healthMemWarnPct`, `healthDiskWarnPct`, `healthThresholdHysteresisPct`, `pvePollMs`, `pveTimeoutMs`, `pveProvisionTimeoutMs`,
 `pveLeaseTimeoutMs`, `pveMaxJobs`, `pveDefaultPubKeyPath`, `authMode`, `publicUrl`, `rpId`,
-`passkeyOnlyKillSwitch`, `oidcProviders` (array of `{ id, label, issuer, clientId, clientSecret, allowUnverifiedEmail }`; `issuer` is `https://`, or `http://` only for `127.0.0.1`/`localhost`/`[::1]`), `googleClientId`, `googleClientSecret`, `allowedEmails`, `dataDir`,
+`passkeyOnlyKillSwitch`, `oidcProviders` (array of `{ id, label, issuer, clientId, clientSecret, allowUnverifiedEmail, allowedEmails }`; `issuer` is `https://`, or `http://` only for `127.0.0.1`/`localhost`/`[::1]`), `googleClientId`, `googleClientSecret`, `allowedEmails`, `dataDir`,
 `controlDir`, `sshConfigFile`, `tlsCert`, `tlsKey`, `uploadMaxMb`, `claudeOauthToken`,
 `whisperBin`, `whisperModel`, `voiceIdleMs`, `voiceMaxMb`, `voiceMaxSeconds`, `voiceOff`).
 `config.json` is merged wholesale rather than filtered through an allowlist, so any documented

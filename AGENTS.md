@@ -91,7 +91,7 @@ defaults  →  config.json  →  .env file  →  shell env  →  overrides
   mutually exclusive, and OIDC mode has no password login (a leftover hash is ignored; the way back
   is editing `.env` to `password` mode). Passkeys are an additive third login path mounted in **both** modes.
 - OIDC providers are an ordered list (`TMUXIFIER_OIDC_PROVIDERS`, per-id `TMUXIFIER_OIDC_<ID>_*`,
-  or `oidcProviders` in `config.json`); the legacy Google keys become an implicit `google`
+  or `oidcProviders` in `config.json`; each may carry its own `_ALLOWED_EMAILS`, which replaces the global `TMUXIFIER_ALLOWED_EMAILS` for it); the legacy Google keys become an implicit `google`
   provider. Callbacks are `<base>/api/auth/oidc/<id>/callback` (`google`: `/api/auth/google/callback`),
   built from `TMUXIFIER_BASE_EXTERNAL_URL` (legacy alias `TMUXIFIER_PUBLIC_URL`); a scheme-less value becomes HTTPS, and `https://` marks the session
   cookie `Secure` even without local TLS.
@@ -183,7 +183,7 @@ injected as arguments — that is what makes them testable without mocks. Follow
   (rejected after `SESSION_TTL_SECONDS`).
 - `rateLimit.js` — per-IP login lockout, bounded map (overflow evicts oldest). Shared by
   password, passkey, and device enrollment.
-- `oidcAuth.js` — dependency-free multi-provider OIDC: discovery (cached), code flow, PKCE, exact-email allowlist.
+- `oidcAuth.js` — dependency-free multi-provider OIDC: discovery (cached), code flow, PKCE, per-provider exact-email allowlist.
 - `webauthn.js` — dependency-free WebAuthn: minimal CBOR reader (fed only registration
   attestation or previously validated stored keys), COSE→`KeyObject` (ES256/RS256/EdDSA),
   `verifyRegistration`/`verifyAssertion`. Attestation `none` only.
@@ -754,7 +754,7 @@ The login gate is the crown jewel — Tmuxifier can SSH into your whole fleet. I
 **Login paths.** Password mode mounts `POST /api/login`; OIDC mode mounts `/api/auth/oidc/<id>/*`
 (and `/api/auth/google/*` for the `google` provider) instead — there is no password login in OIDC
 mode and no break-glass (hand-rolled OIDC: state cookie + PKCE, server-to-server token exchange,
-exact-email allowlist; the id_token is trusted because it comes straight from the provider's token
+per-provider exact-email allowlist; the id_token is trusted because it comes straight from the provider's token
 endpoint). Only a fresh page load may auto-redirect to a single provider: session expiry (401) and
 logout render the login page. Logout is local-only and sets a `tmuxifier.signedOut` flag in
 `localStorage` (cleared on any successful sign-in) so every tab shows the signed-out page.
@@ -769,7 +769,7 @@ Passkeys mount in both modes.
 - WebSocket auth rides the normal cookie path (`@fastify/websocket` v11); `isAuthed` keeps a manual
   cookie-header parse as a backstop.
 - **Passkeys** share the login rate-limit bucket and return one generic 401 (no credential-id
-  enumeration). In OIDC mode a passkey never consults `TMUXIFIER_ALLOWED_EMAILS`, so removing an
+  enumeration). In OIDC mode a passkey never consults any OIDC allowlist, so removing an
   email does **not** revoke that user's passkey — remove it in Settings → Passkeys. Enrollment
   requires an authenticated session. Challenge storage is bounded per client address, so a
   many-address attacker can still evict challenges (same residual limit as the rate limiter).

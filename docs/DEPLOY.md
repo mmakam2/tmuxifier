@@ -105,7 +105,8 @@ provider, visitors opening the page are redirected to it automatically; `/?login
 login page without redirecting. OIDC and password modes are mutually exclusive and OIDC mode has
 no password login: if the provider is unavailable, edit `.env`, set `TMUXIFIER_AUTH_MODE=password`,
 run `npm run set-password`, and restart. Passkeys still work in OIDC mode. `TMUXIFIER_ALLOWED_EMAILS` is a
-comma-separated exact-email allowlist, matched case-insensitively.
+comma-separated exact-email allowlist, matched case-insensitively; a provider can set its own with
+`TMUXIFIER_OIDC_<ID>_ALLOWED_EMAILS`, which replaces the global list for that provider.
 
 ## Passkeys and the relying party id
 

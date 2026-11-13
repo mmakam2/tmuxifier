@@ -291,3 +291,13 @@ OIDC mode", the break-glass upgrade note, and "Session expiry auto-redirects").
   reload asserts the signed-out text and provider button positively; a two-tab case covers logout
   in tab A, tab B after reload, and a fresh third tab; `/?login` shows the provider button and no
   `#pw`, and the provider button signs back in.
+
+### Per-provider allowlist (2026-11-12)
+
+- `TMUXIFIER_OIDC_<ID>_ALLOWED_EMAILS` (or `allowedEmails` in a `config.json` entry; env wins) gives a
+  provider its own exact-email list, which **replaces** the global `TMUXIFIER_ALLOWED_EMAILS` for it
+  (no union). Providers without one fall back to the global list; the implicit legacy Google
+  provider always uses the global list. Normalized providers carry the effective `allowedEmails`,
+  and `server.js` builds each client with it, so an email allowed at provider A is `forbidden` at B.
+- `requiredConfigError` no longer requires the global list on its own; it fails naming any provider
+  whose effective list is empty. Passkeys are unaffected.
