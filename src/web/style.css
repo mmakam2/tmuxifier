@@ -342,8 +342,8 @@ body {
    Selector is `button.pkbtn`, not `.pkbtn`, on purpose: specificity (0,1,1)
    ties the `.login button` commit-key rule above and, being later in the
    file, wins the tie. */
-button.pkbtn {
-  display: flex; align-items: center; justify-content: center; gap: .5rem;
+button.pkbtn, a.pkbtn {
+  display: flex; box-sizing: border-box; text-decoration: none; align-items: center; justify-content: center; gap: .5rem;
   width: 100%; padding: 10px 1rem; margin-top: .5rem;
   border: 1px solid var(--key-border); border-bottom-color: var(--bg); border-radius: 6px;
   background: var(--key-face); color: var(--muted);
@@ -357,8 +357,8 @@ button.pkbtn {
    outguns the base `button.pkbtn` (0,1,1), so without a background here the
    commit-key hover gradient leaked onto the passkey key — safety orange under
    Instrument, and white-under-white text under Vercel's white commit ramp. */
-button.pkbtn:hover:not(:disabled) { color: var(--text); background: var(--panel-2); }
-button.pkbtn:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--key-edge-down); }
+button.pkbtn:hover:not(:disabled), a.pkbtn:hover { color: var(--text); background: var(--panel-2); }
+button.pkbtn:active:not(:disabled), a.pkbtn:active { transform: translateY(1px); box-shadow: var(--key-edge-down); }
 button.pkbtn:disabled { opacity: .5; cursor: default; }
 .login-note { font-size: .85em; color: var(--dim); text-align: center; }
 .login-note code { font-family: var(--face-code); color: var(--muted); }

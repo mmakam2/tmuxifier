@@ -8,9 +8,9 @@ const when = (t: number | null) => (t ? new Date(t).toLocaleString() : 'never');
 
 // Shown after a remove that flipped the server's stored passkeyOnly flag off —
 // see the disarmed handling in confirmRemove below.
-const DISARM_NOTICE = 'Removed. That was your last enrolled passkey, so “require a passkey” was turned off — password and Google sign-in are available again.';
+const DISARM_NOTICE = 'Removed. That was your last enrolled passkey, so “require a passkey” was turned off — password or single sign-on is available again.';
 
-// Settings → Passkeys. A passkey is an additional way in; the password/Google
+// Settings → Passkeys. A passkey is an additional way in; the password or single sign-on
 // path stays available unless "passkey only" is explicitly armed.
 export async function renderPasskeysSection(content: HTMLElement, notice?: string): Promise<void> {
   content.replaceChildren(el('div', { class: 'pve-sub' }, ['Loading…']));
@@ -107,7 +107,7 @@ export async function renderPasskeysSection(content: HTMLElement, notice?: strin
     list,
     addBtn,
     el('div', { class: 'pve-eyebrow' }, ['Sign-in policy']),
-    el('label', { class: 'check-field' }, [onlyBox, el('span', {}, ['Require a passkey (disable password and Google sign-in)'])]),
+    el('label', { class: 'check-field' }, [onlyBox, el('span', {}, ['Require a passkey (disable password and single sign-on)'])]),
     ...(onlyReason ? [el('div', { class: 'pve-sub' }, [onlyReason])] : []),
     el('p', { class: 'pve-sub' }, ['If you lose your authenticator, set TMUXIFIER_PASSKEY_ONLY=off in .env and restart Tmuxifier to sign in the old way.']),
     errLine,
@@ -189,7 +189,7 @@ function confirmArm(onConfirm: () => void, onCancel: () => void): void {
   const unregister = registerModal(close);
   modal.append(
     el('h2', {}, ['Require a passkey?']),
-    el('p', {}, ['Password and Google sign-in will be refused. Only an enrolled passkey will get you in.']),
+    el('p', {}, ['Password and single sign-on will be refused. Only an enrolled passkey will get you in.']),
     el('p', { class: 'pve-sub' }, ['If you lose your authenticator: set TMUXIFIER_PASSKEY_ONLY=off in .env and restart Tmuxifier.']),
     el('p', { class: 'pve-sub' }, ['Your browser will ask you to confirm with your fingerprint, face, PIN or security key.']),
     el('div', { class: 'modal-actions' }, [

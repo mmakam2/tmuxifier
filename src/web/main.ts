@@ -1,4 +1,4 @@
-import { decideLogin, SIGNED_OUT_KEY } from './loginRoute';
+import { decideLogin, SIGNED_OUT_KEY, type LoginReason } from './loginRoute';
 import { api, onUnauthorized, type AddBoxSpec, type AuthInfo, type AgentState, type Box, type Status, type Sample, type HealthEvent, type PushResult, type SetupJob, type SetupSummary } from './api';
 import { AGENT_PRECEDENCE, agentCounts, latestAgents } from './agentState';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
@@ -544,7 +544,7 @@ async function start() {
 }
 
 function clearSignedOut() {
-  try { sessionStorage.removeItem(SIGNED_OUT_KEY); } catch {}
+  try { localStorage.removeItem(SIGNED_OUT_KEY); } catch {}
 }
 
 function loginErrorText(code: string | null): string {
@@ -571,7 +571,7 @@ const GOOGLE_MARK = `<svg class="google-mark" viewBox="0 0 18 18" aria-hidden="t
             <path fill="#ea4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58A8.65 8.65 0 0 0 9 0 9 9 0 0 0 .96 4.96l3 2.33C4.67 5.16 6.66 3.58 9 3.58z"/>
           </svg>`;
 
-async function renderLogin() {
+async function renderLogin(reason: LoginReason = 'boot') {
   let info: AuthInfo = { mode: 'password' };
   let passkey = { enrolled: 0, rpId: null as string | null, only: false };
   try {
@@ -579,8 +579,8 @@ async function renderLogin() {
     if (info.passkey) passkey = info.passkey;
   } catch {}
   const decision = decideLogin(info, location.search, (() => {
-    try { return sessionStorage.getItem(SIGNED_OUT_KEY) === '1'; } catch { return false; }
-  })());
+    try { return localStorage.getItem(SIGNED_OUT_KEY) === '1'; } catch { return false; }
+  })(), reason);
   if (decision.kind === 'redirect') { location.assign(decision.href); return; }
   const err = loginErrorText(decision.errorCode);
   stripLoginError();
@@ -630,9 +630,9 @@ async function renderLogin() {
 
   const heading = decision.signedOut
     ? '<p class="login-note">You have been signed out.</p>' : '';
-  const providerBtns = decision.providers.map((p, i) => p.id === 'google'
+  const providerBtns = decision.providers.map((p, i) => p.google
     ? `<a id="gsignin" class="gbtn" href="${p.href}">${GOOGLE_MARK}<span>Sign in with Google</span></a>`
-    : `<a class="gbtn" data-provider="${i}" href="${p.href}"><span></span></a>`).join('');
+    : `<a class="pkbtn" data-provider="${i}" href="${p.href}"><span></span></a>`).join('');
   const pwForm = decision.showPassword
     ? `<input id="pw" type="password" placeholder="Password" aria-label="Password" autofocus />
       <button>Unlock</button>` : '';
@@ -643,7 +643,7 @@ async function renderLogin() {
     ? `<form id="login" class="login">${inner}</form>`
     : `<div class="login">${inner}</div>`;
   decision.providers.forEach((p, i) => {
-    if (p.id === 'google') return;
+    if (p.google) return;
     const span = app.querySelector(`[data-provider="${i}"] span`) as HTMLElement | null;
     if (span) span.textContent = `Sign in with ${p.label}`;
   });
@@ -1645,8 +1645,8 @@ async function renderDashboard() {
   app.querySelector('#logout')!.addEventListener('click', async () => {
     teardownWorkspace();
     await api.logout();
-    try { sessionStorage.setItem(SIGNED_OUT_KEY, '1'); } catch {}
-    await renderLogin();
+    try { localStorage.setItem(SIGNED_OUT_KEY, '1'); } catch {}
+    await renderLogin('logout');
   });
   app.querySelector('#sidebar-toggle')!.addEventListener('click', () => {
     const layout = app.querySelector('.layout') as HTMLElement;
@@ -4470,7 +4470,7 @@ onUnauthorized(() => {
   // dashboard and restarting its 10s poll AFTER teardownDash() — 401s firing on
   // the login screen until re-login.
   teardownWorkspace();
-  void renderLogin();
+  void renderLogin('expired');
   showToast('Session expired — please log in again.', 'error');
 });
 

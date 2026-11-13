@@ -262,8 +262,7 @@ export { onUnauthorized } from './http';
 import { jsonOf as j, textFetch } from './http';
 export type AuthInfo = {
   mode: 'password' | 'oidc';
-  providers?: Array<{ id: string; label: string; legacy: boolean }>;
-  password?: boolean;
+  providers?: Array<{ id: string; label: string; legacy: boolean; google?: boolean }>;
   passkey?: { enrolled: number; rpId: string | null; only: boolean };
 };
 export const api = {
