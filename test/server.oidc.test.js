@@ -148,7 +148,7 @@ test('auth info lists providers without issuer or secret', async () => {
   const res = await app.inject({ method: 'GET', url: '/api/auth/info' });
   const body = res.json();
   expect(body.mode).toBe('oidc');
-  expect(body.providers).toEqual([{ id: 'authentik', label: 'Authentik', legacy: false }, { id: 'google', label: 'Google', legacy: true }]);
+  expect(body.providers).toEqual([{ id: 'authentik', label: 'Authentik', legacy: false, google: false }, { id: 'google', label: 'Google', legacy: true, google: false }]);
   expect(res.body).not.toContain('127.0.0.1:');
   expect(res.body).not.toContain('s3cr3t-oidc');
 });
@@ -175,7 +175,7 @@ test('legacy google env config boots and keeps the old redirect URI', async () =
   const store = createStore({ dataDir: dir, sshConfigPath: path.join(dir, 'nope') });
   const sessions = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };
   const app = buildServer({ config: { ...config, dataDir: dir }, store, sessions, statusChecker: { checkBox: async () => ({ reachable: true }) }, oidcClients: new Map([['google', client]]) });
-  expect((await app.inject({ method: 'GET', url: '/api/auth/info' })).json().providers).toEqual([{ id: 'google', label: 'Google', legacy: true }]);
+  expect((await app.inject({ method: 'GET', url: '/api/auth/info' })).json().providers).toEqual([{ id: 'google', label: 'Google', legacy: true, google: true }]);
   const res = await app.inject({ method: 'GET', url: '/api/auth/google/login' });
   expect(new URL(res.headers.location).searchParams.get('redirect_uri')).toBe(`${PUBLIC}/api/auth/google/callback`);
 });

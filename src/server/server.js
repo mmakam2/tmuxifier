@@ -666,7 +666,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return {
       mode: config.authMode === 'oidc' ? 'oidc' : 'password',
       // Display fields only: never the issuer or any secret.
-      providers: providers.map((p) => ({ id: p.id, label: p.label, legacy: !!p.legacyGoogle })),
+      providers: providers.map((p) => ({ id: p.id, label: p.label, legacy: !!p.legacyGoogle, google: String(p.issuer || '').replace(/\/+$/, '') === 'https://accounts.google.com' })),
       password: passwordLoginEnabled,
       // Unauthenticated on purpose: the login screen needs to know whether to
       // draw the passkey button. It exposes only the hostname the client is
