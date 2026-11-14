@@ -38,13 +38,13 @@ async function makeApp({ providers, config: extra = {}, ...overrides } = {}) {
 
 async function flow(app, loginUrl, callbackUrl, { tamperState = false, setNonce = true, stubObj = stub } = {}) {
   const login = await app.inject({ method: 'GET', url: loginUrl });
-  const cookie = login.cookies.find((c) => c.name === 'tmuxifier_oauth');
+  const cookie = login.cookies.find((c) => c.name.startsWith('tmuxifier_oauth_'));
   const loc = new URL(login.headers.location);
   if (setNonce) stubObj.set({ nonce: loc.searchParams.get('nonce') });
   const state = tamperState ? 'WRONG' : loc.searchParams.get('state');
   const cb = await app.inject({
     method: 'GET', url: `${callbackUrl}?code=abc&state=${encodeURIComponent(state)}`,
-    headers: cookie ? { cookie: `tmuxifier_oauth=${cookie.value}` } : {},
+    headers: cookie ? { cookie: `${cookie.name}=${cookie.value}` } : {},
   });
   return { login, loc, cookie, cb };
 }
@@ -205,7 +205,60 @@ test('legacy oauth env with a password hash has no /api/login', async () => {
   expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(404);
 });
 
-test('an un-normalized auth mode fails closed: no /api/login', async () => {
-  const app = await makeApp({ config: { authMode: 'oauth', passwordHash: await hashPassword('pw') } });
-  expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(404);
+test('an un-normalized auth mode fails closed: no /api/login, no password device enroll', async () => {
+  const passwordHash = await hashPassword('pw');
+  for (const authMode of ['oauth', 'google']) {
+    const app = await makeApp({ config: { authMode, passwordHash }, deviceStore: createDeviceStore({ dataDir: dir }) });
+    expect((await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } })).statusCode).toBe(404);
+    const enroll = await app.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'x' } });
+    expect(enroll.statusCode).toBe(501);
+    expect(enroll.json()).not.toHaveProperty('token');
+  }
+});
+
+test('two sign-ins started together both complete', async () => {
+  const app = await makeApp();
+  const L = '/api/auth/oidc/authentik/login', C = '/api/auth/oidc/authentik/callback';
+  const start = async () => {
+    const login = await app.inject({ method: 'GET', url: L });
+    const cookie = login.cookies.find((c) => c.name.startsWith('tmuxifier_oauth_'));
+    const loc = new URL(login.headers.location);
+    return { cookie, state: loc.searchParams.get('state'), nonce: loc.searchParams.get('nonce') };
+  };
+  // Both logins land before either callback, as with two restored tabs.
+  const a = await start();
+  const b = await start();
+  expect(a.cookie.name).not.toBe(b.cookie.name);
+  // The browser holds both cookies and sends both to each callback.
+  const jar = `${a.cookie.name}=${a.cookie.value}; ${b.cookie.name}=${b.cookie.value}`;
+  for (const f of [a, b]) {
+    stub.set({ nonce: f.nonce });
+    const cb = await app.inject({ method: 'GET', url: `${C}?code=abc&state=${encodeURIComponent(f.state)}`, headers: { cookie: jar } });
+    expect(cb.headers.location).toBe('/');
+    expect(session(cb)).toBeTruthy();
+    // Only this flow's cookie is cleared.
+    const cleared = cb.cookies.filter((c) => c.name.startsWith('tmuxifier_oauth_')).map((c) => c.name);
+    expect(cleared).toEqual([f.cookie.name]);
+  }
+});
+
+test('a provider error on the callback maps to a fixed code, never echoed', async () => {
+  const app = await makeApp();
+  const login = await app.inject({ method: 'GET', url: '/api/auth/oidc/authentik/login' });
+  const cookie = login.cookies.find((c) => c.name.startsWith('tmuxifier_oauth_'));
+  const state = new URL(login.headers.location).searchParams.get('state');
+  const headers = { cookie: `${cookie.name}=${cookie.value}` };
+  const denied = await app.inject({ method: 'GET', url: `/api/auth/oidc/authentik/callback?error=access_denied&state=${state}`, headers });
+  expect(denied.headers.location).toBe('/?error=forbidden');
+  expect(session(denied)).toBeFalsy();
+  expect(denied.cookies.find((c) => c.name === cookie.name)).toBeTruthy(); // cleared
+  const other = await app.inject({ method: 'GET', url: '/api/auth/oidc/authentik/callback?error=%3Cscript%3E', headers });
+  expect(other.headers.location).toBe('/?error=provider');
+});
+
+test('a state that is not randomState-shaped never names a cookie', async () => {
+  const app = await makeApp();
+  const res = await app.inject({ method: 'GET', url: '/api/auth/oidc/authentik/callback?code=abc&state=..%2F..' });
+  expect(res.headers.location).toBe('/?error=state');
+  expect(res.cookies.filter((c) => c.name.startsWith('tmuxifier_oauth'))).toEqual([]);
 });

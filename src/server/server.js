@@ -162,7 +162,14 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return getVoiceEngine ? getVoiceEngine() : voiceEngine;
   }
 
-  const OAUTH_COOKIE = 'tmuxifier_oauth';
+  // One state cookie per sign-in flow, named after a prefix of its `state`, so
+  // two tabs that start a sign-in together (a restored session auto-redirecting
+  // each of them) don't overwrite each other's state/nonce/verifier. The
+  // callback finds its cookie from the `state` query parameter; abandoned
+  // flows expire on their own (maxAge 300).
+  const OAUTH_COOKIE_PREFIX = 'tmuxifier_oauth_';
+  const STATE_RE = /^[A-Za-z0-9_-]{22}$/; // randomState(): 16 bytes, base64url
+  const oauthCookieName = (state) => `${OAUTH_COOKIE_PREFIX}${state.slice(0, 16)}`;
   const providers = config.authMode === 'oidc' ? (config.oidcProviders ?? []) : [];
   const clients = oidcClients ?? new Map();
   if (!oidcClients) {
@@ -708,7 +715,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         return reply.redirect('/?error=provider');
       }
       // SameSite=lax lets this short-lived state cookie survive the provider's top-level redirect back.
-      reply.setCookie(OAUTH_COOKIE, `${id}.${state}.${nonce}.${verifier}`, {
+      reply.setCookie(oauthCookieName(state), `${id}.${state}.${nonce}.${verifier}`, {
         httpOnly: true, sameSite: 'lax', secure: config.secureCookie, path: '/', signed: true, maxAge: 300,
       });
       return reply.redirect(url);
@@ -718,14 +725,20 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       const client = clients.get(id);
       if (!client) return reply.code(404).send({ error: 'unknown provider' });
       if (passkeyOnlyArmed(await passkeySnapshot())) return reply.redirect('/?error=passkey-only');
-      const raw = req.cookies?.[OAUTH_COOKIE];
-      reply.clearCookie(OAUTH_COOKIE, { path: '/' });
+      const { code, state, error } = req.query ?? {};
+      // `state` names the cookie, so it is shape-checked before it is used as a key.
+      const cookieName = typeof state === 'string' && STATE_RE.test(state) ? oauthCookieName(state) : null;
+      if (cookieName) reply.clearCookie(cookieName, { path: '/' });
+      // The provider refused (consent cancelled, user not assigned to the
+      // application): report that, not an expired login. The value is mapped
+      // to a fixed code and never echoed.
+      if (error !== undefined) return reply.redirect(error === 'access_denied' ? '/?error=forbidden' : '/?error=provider');
+      const raw = cookieName ? req.cookies?.[cookieName] : null;
       if (!raw) return reply.redirect('/?error=state');
       const unsigned = app.unsignCookie(raw);
       if (!unsigned.valid || !unsigned.value) return reply.redirect('/?error=state');
       const [savedId, savedState, nonce, verifier] = unsigned.value.split('.');
-      const { code, state } = req.query;
-      if (savedId !== id || !code || !state || state !== savedState || !nonce || !verifier) return reply.redirect('/?error=state');
+      if (savedId !== id || typeof code !== 'string' || !code || state !== savedState || !nonce || !verifier) return reply.redirect('/?error=state');
       let result;
       try {
         result = await client.exchangeCode({ code, codeVerifier: verifier, nonce });
@@ -785,8 +798,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       // under an armed passkey-only flag was itself passkey-authenticated.
       if (!devicePairing.take(body.code)) { loginLimiter.fail(ip); return reply.code(401).send({ error: 'invalid or expired code' }); }
     } else {
-      // Password branch: unchanged v1 semantics (password mode only).
-      if (config.authMode === 'oidc') return reply.code(501).send({ error: 'device enrollment by password is off in OIDC mode; use a pairing code' });
+      // Password branch: password mode only, gated exactly like /api/login
+      // (any mode that is not exactly 'password' fails closed).
+      if (!passwordLoginEnabled) return reply.code(501).send({ error: 'device enrollment by password is off in OIDC mode; use a pairing code' });
       if (passkeyOnlyArmed(await passkeySnapshot())) return reply.code(403).send({ error: 'passkey required' });
       // Charged before the scrypt await, so in-flight guesses count (rateLimit.js).
       if (!loginLimiter.attempt(ip)) return reply.code(429).send({ error: 'too many attempts' });
