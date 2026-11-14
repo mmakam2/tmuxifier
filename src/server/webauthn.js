@@ -1,4 +1,4 @@
-// Dependency-free WebAuthn verification, in the spirit of googleAuth.js. Scope
+// Dependency-free WebAuthn verification, in the spirit of oidcAuth.js. Scope
 // is deliberately bounded: we request attestation "none", so no attestation
 // statement is ever parsed — which is what keeps this small enough to own.
 //

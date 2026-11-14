@@ -103,8 +103,9 @@ test('config.json overrides defaults and sits below env', async () => {
 
 test('auth mode defaults to password; oauth/google are selectable; unknown falls back', () => {
   expect(loadConfig({}, { env: {}, cwd: '/app' }).authMode).toBe('password');
-  expect(loadConfig({}, { env: { TMUXIFIER_AUTH_MODE: 'oauth' }, cwd: '/app' }).authMode).toBe('google');
-  expect(loadConfig({}, { env: { TMUXIFIER_AUTH_MODE: 'google' }, cwd: '/app' }).authMode).toBe('google');
+  expect(loadConfig({}, { env: { TMUXIFIER_AUTH_MODE: 'oauth' }, cwd: '/app' }).authMode).toBe('oidc');
+  expect(loadConfig({}, { env: { TMUXIFIER_AUTH_MODE: 'google' }, cwd: '/app' }).authMode).toBe('oidc');
+  expect(loadConfig({}, { env: { TMUXIFIER_AUTH_MODE: 'oidc' }, cwd: '/app' }).authMode).toBe('oidc');
   expect(loadConfig({}, { env: { TMUXIFIER_AUTH_MODE: 'banana' }, cwd: '/app' }).authMode).toBe('password');
 });
 
@@ -190,16 +191,140 @@ test('localShell invalid values are normalized to none', () => {
   expect(loadConfig({ localShell: 'invalid' }, { env: {}, cwd: '/app' }).localShell).toBe('none');
 });
 
-test('requiredConfigError: oauth mode lists every missing field', () => {
-  const msg = requiredConfigError({ authMode: 'google', cookieSecret: 's', allowedEmails: [] });
-  expect(msg).toMatch(/TMUXIFIER_OAUTH_CLIENT_ID/);
-  expect(msg).toMatch(/TMUXIFIER_OAUTH_CLIENT_SECRET/);
-  expect(msg).toMatch(/TMUXIFIER_BASE_EXTERNAL_URL/);
-  expect(msg).toMatch(/TMUXIFIER_ALLOWED_EMAILS/);
-  expect(requiredConfigError({
-    authMode: 'google', cookieSecret: 's',
-    googleClientId: 'a', googleClientSecret: 'b', publicUrl: 'https://x', allowedEmails: ['a@b.com'],
-  })).toBeNull();
+const GOOGLE_PROVIDER = { id: 'google', label: 'Google', issuer: 'https://accounts.google.com', clientId: 'cid', clientSecret: 'sec', allowUnverifiedEmail: false, legacyGoogle: true, allowedEmails: [] };
+
+async function oidcCfg(env, fileCfg) {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-oidc-'));
+  try {
+    if (fileCfg) fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(fileCfg));
+    return loadConfig({}, { env: { TMUXIFIER_AUTH_MODE: 'oidc', ...env }, cwd: dir });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('legacy Google keys build the implicit provider (env oauth, env google, config.json)', async () => {
+  const a = await oidcCfg({ TMUXIFIER_AUTH_MODE: 'oauth', TMUXIFIER_OAUTH_CLIENT_ID: 'cid', TMUXIFIER_OAUTH_CLIENT_SECRET: 'sec' });
+  expect(a.oidcProviders).toEqual([GOOGLE_PROVIDER]);
+  const b = await oidcCfg({ TMUXIFIER_GOOGLE_CLIENT_ID: 'cid', TMUXIFIER_GOOGLE_CLIENT_SECRET: 'sec' });
+  expect(b.oidcProviders).toEqual([GOOGLE_PROVIDER]);
+  const c = await oidcCfg({}, { googleClientId: 'cid', googleClientSecret: 'sec' });
+  expect(c.oidcProviders).toEqual([GOOGLE_PROVIDER]);
+});
+
+test('password mode has no OIDC providers', async () => {
+  const c = await oidcCfg({ TMUXIFIER_AUTH_MODE: 'password', TMUXIFIER_OAUTH_CLIENT_ID: 'cid', TMUXIFIER_OAUTH_CLIENT_SECRET: 'sec' });
+  expect(c.oidcProviders).toEqual([]);
+  expect(c.oidcConfigWarnings).toEqual([]);
+});
+
+test('env provider list builds providers from TMUXIFIER_OIDC_<ID>_* keys', async () => {
+  const issuer = 'https://auth.example.com/application/o/tmuxifier/';
+  const c = await oidcCfg({
+    TMUXIFIER_OIDC_PROVIDERS: 'authentik',
+    TMUXIFIER_OIDC_AUTHENTIK_ISSUER: issuer,
+    TMUXIFIER_OIDC_AUTHENTIK_CLIENT_ID: 'a',
+    TMUXIFIER_OIDC_AUTHENTIK_CLIENT_SECRET: 'b',
+    TMUXIFIER_OIDC_AUTHENTIK_LABEL: 'authentik',
+    TMUXIFIER_OIDC_AUTHENTIK_ALLOW_UNVERIFIED_EMAIL: 'on',
+  });
+  expect(c.oidcProviders).toEqual([{ id: 'authentik', label: 'authentik', issuer, clientId: 'a', clientSecret: 'b', allowUnverifiedEmail: true, legacyGoogle: false, allowedEmails: [] }]);
+});
+
+test('config.json providers merge with per-field env overrides; label defaults to id', async () => {
+  const issuer = 'https://auth.example.com/application/o/tmuxifier/';
+  const c = await oidcCfg(
+    { TMUXIFIER_OIDC_AUTHENTIK_CLIENT_SECRET: 'override' },
+    { oidcProviders: [{ id: 'authentik', issuer, clientId: 'a', clientSecret: 'file' }] },
+  );
+  expect(c.oidcProviders).toEqual([{ id: 'authentik', label: 'authentik', issuer, clientId: 'a', clientSecret: 'override', allowUnverifiedEmail: false, legacyGoogle: false, allowedEmails: [] }]);
+});
+
+test('a set env list defines the providers; file-only entries are dropped with a warning', async () => {
+  const issuer = 'https://auth.example.com/';
+  const c = await oidcCfg(
+    { TMUXIFIER_OIDC_PROVIDERS: 'a,b', TMUXIFIER_OIDC_A_ISSUER: issuer, TMUXIFIER_OIDC_A_CLIENT_ID: 'x', TMUXIFIER_OIDC_A_CLIENT_SECRET: 'y' },
+    { oidcProviders: [{ id: 'b', issuer, clientId: 'bx', clientSecret: 'by' }, { id: 'c', issuer, clientId: 'cx', clientSecret: 'cy' }] },
+  );
+  expect(c.oidcProviders.map((p) => p.id)).toEqual(['a', 'b']);
+  expect(c.oidcProviders[1].clientId).toBe('bx');
+  expect(c.oidcConfigWarnings.join('\n')).toMatch(/"c"/);
+});
+
+test('explicit google provider wins over legacy keys, with a warning', async () => {
+  const c = await oidcCfg({
+    TMUXIFIER_OIDC_PROVIDERS: 'google',
+    TMUXIFIER_OIDC_GOOGLE_ISSUER: 'https://accounts.google.com',
+    TMUXIFIER_OIDC_GOOGLE_CLIENT_ID: 'new',
+    TMUXIFIER_OIDC_GOOGLE_CLIENT_SECRET: 'newsec',
+    TMUXIFIER_OAUTH_CLIENT_ID: 'cid',
+    TMUXIFIER_OAUTH_CLIENT_SECRET: 'sec',
+  });
+  expect(c.oidcProviders).toHaveLength(1);
+  expect(c.oidcProviders[0]).toMatchObject({ id: 'google', clientId: 'new', legacyGoogle: false });
+  expect(c.oidcConfigWarnings.join('\n')).toMatch(/legacy/i);
+});
+
+test('requiredConfigError validates OIDC mode', () => {
+  const ok = { id: 'authentik', label: 'authentik', issuer: 'https://auth.example.com/', clientId: 'a', clientSecret: 'b', allowUnverifiedEmail: false, legacyGoogle: false, allowedEmails: ['you@example.com'] };
+  const base = { authMode: 'oidc', cookieSecret: 's', publicUrl: 'https://x.example.com', oidcProviders: [ok] };
+  expect(requiredConfigError(base)).toBeNull();
+  expect(requiredConfigError({ ...base, oidcProviders: [] })).toMatch(/provider/);
+  expect(requiredConfigError({ ...base, oidcProviders: [{ ...ok, id: 'Auth!' }] })).toMatch(/Auth!/);
+  expect(requiredConfigError({ ...base, oidcProviders: [ok, ok] })).toMatch(/more than once/);
+  expect(requiredConfigError({ ...base, oidcProviders: [{ ...ok, issuer: 'http://auth.example.com' }] })).toMatch(/https/);
+  expect(requiredConfigError({ ...base, oidcProviders: [{ ...ok, issuer: 'http://127.0.0.1:9999/' }] })).toBeNull();
+  expect(requiredConfigError({ ...base, oidcProviders: [{ ...ok, clientSecret: '' }] })).toMatch(/secret/);
+  expect(requiredConfigError({ ...base, oidcProviders: [{ ...ok, allowedEmails: [] }] })).toBe('OIDC provider "authentik" has no allowed emails: set TMUXIFIER_OIDC_AUTHENTIK_ALLOWED_EMAILS or TMUXIFIER_ALLOWED_EMAILS');
+  const two = [ok, { ...ok, id: 'other', allowedEmails: [] }];
+  expect(requiredConfigError({ ...base, oidcProviders: two })).toMatch(/"other" has no allowed emails/);
+  expect(requiredConfigError({ ...base, publicUrl: '' })).toMatch(/TMUXIFIER_BASE_EXTERNAL_URL/);
+  expect(requiredConfigError({ ...base, cookieSecret: '' })).toMatch(/COOKIE_SECRET/);
+  expect(requiredConfigError({ authMode: 'password', cookieSecret: 's', passwordHash: 'h' })).toBeNull();
+});
+
+const P = (id) => `TMUXIFIER_OIDC_${id}_`;
+const provEnv = (id, extra = {}) => ({
+  [`${P(id)}ISSUER`]: 'https://auth.example.com/', [`${P(id)}CLIENT_ID`]: 'x', [`${P(id)}CLIENT_SECRET`]: 'y', ...extra,
+});
+
+test('per-provider allowed emails: own list from env replaces the global list', async () => {
+  const c = await oidcCfg({ TMUXIFIER_OIDC_PROVIDERS: 'my-idp', TMUXIFIER_ALLOWED_EMAILS: 'g@example.com', ...provEnv('MY_IDP', { TMUXIFIER_OIDC_MY_IDP_ALLOWED_EMAILS: ' A@Example.com, b@example.com,' }) });
+  expect(c.oidcProviders[0].allowedEmails).toEqual(['a@example.com', 'b@example.com']);
+});
+
+test('per-provider allowed emails: config.json array and string; env overrides file', async () => {
+  const issuer = 'https://auth.example.com/';
+  const file = { oidcProviders: [
+    { id: 'a', issuer, clientId: 'x', clientSecret: 'y', allowedEmails: ['A@example.com', 'a2@example.com'] },
+    { id: 'b', issuer, clientId: 'x', clientSecret: 'y', allowedEmails: 'B@example.com, b2@example.com' },
+  ] };
+  const c = await oidcCfg({}, file);
+  expect(c.oidcProviders[0].allowedEmails).toEqual(['a@example.com', 'a2@example.com']);
+  expect(c.oidcProviders[1].allowedEmails).toEqual(['b@example.com', 'b2@example.com']);
+  const o = await oidcCfg({ TMUXIFIER_OIDC_A_ALLOWED_EMAILS: 'env@example.com' }, file);
+  expect(o.oidcProviders[0].allowedEmails).toEqual(['env@example.com']);
+});
+
+test('per-provider allowed emails: falls back to the global list', async () => {
+  const c = await oidcCfg({ TMUXIFIER_OIDC_PROVIDERS: 'a', TMUXIFIER_ALLOWED_EMAILS: 'G@example.com', ...provEnv('A') });
+  expect(c.oidcProviders[0].allowedEmails).toEqual(['g@example.com']);
+});
+
+test('legacy Google provider always uses the global list; an explicit google provider reads its own key', async () => {
+  const legacy = await oidcCfg({ TMUXIFIER_OAUTH_CLIENT_ID: 'cid', TMUXIFIER_OAUTH_CLIENT_SECRET: 'sec', TMUXIFIER_ALLOWED_EMAILS: 'g@example.com', TMUXIFIER_OIDC_GOOGLE_ALLOWED_EMAILS: 'own@example.com' });
+  expect(legacy.oidcProviders[0]).toMatchObject({ legacyGoogle: true, allowedEmails: ['g@example.com'] });
+  const explicit = await oidcCfg({ TMUXIFIER_OIDC_PROVIDERS: 'google', TMUXIFIER_ALLOWED_EMAILS: 'g@example.com', ...provEnv('GOOGLE', { TMUXIFIER_OIDC_GOOGLE_ALLOWED_EMAILS: 'own@example.com' }) });
+  expect(explicit.oidcProviders[0]).toMatchObject({ legacyGoogle: false, allowedEmails: ['own@example.com'] });
+});
+
+test('empty global list is fine when every provider has its own; otherwise names the provider', async () => {
+  const ok = await oidcCfg({ TMUXIFIER_OIDC_PROVIDERS: 'a,b', TMUXIFIER_BASE_EXTERNAL_URL: 'https://x.example.com', TMUXIFIER_COOKIE_SECRET: 's', ...provEnv('A', { TMUXIFIER_OIDC_A_ALLOWED_EMAILS: 'a@example.com' }), ...provEnv('B', { TMUXIFIER_OIDC_B_ALLOWED_EMAILS: 'b@example.com' }) });
+  expect(requiredConfigError(ok)).toBeNull();
+  const bad = await oidcCfg({ TMUXIFIER_OIDC_PROVIDERS: 'a,b', TMUXIFIER_BASE_EXTERNAL_URL: 'https://x.example.com', TMUXIFIER_COOKIE_SECRET: 's', ...provEnv('A', { TMUXIFIER_OIDC_A_ALLOWED_EMAILS: 'a@example.com' }), ...provEnv('B') });
+  expect(requiredConfigError(bad)).toMatch(/provider "b" has no allowed emails.*TMUXIFIER_OIDC_B_ALLOWED_EMAILS/);
 });
 
 test('fleet command knobs have defaults and are overridable via env', () => {

@@ -260,11 +260,15 @@ export interface AiAuthStatus { claude: AiAuthCliStatus; codex: AiAuthCliStatus 
 // through api.ts — it is the same handler slot, not a second one.
 export { onUnauthorized } from './http';
 import { jsonOf as j, textFetch } from './http';
+export type AuthInfo = {
+  mode: 'password' | 'oidc';
+  providers?: Array<{ id: string; label: string; legacy: boolean; google?: boolean }>;
+  passkey?: { enrolled: number; rpId: string | null; only: boolean };
+};
 export const api = {
   async me() { return (await fetch('/api/me')).ok; },
   async authInfo() {
-    return j<{ mode: 'password' | 'google'; passkey?: { enrolled: number; rpId: string | null; only: boolean } }>(
-      await fetch('/api/auth/info'));
+    return j<AuthInfo>(await fetch('/api/auth/info'));
   },
   async login(password: string) { return j<{ ok: boolean }>(await fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })); },
   async logout() { await fetch('/api/logout', { method: 'POST' }); },

@@ -93,11 +93,11 @@ the full `config.json` key list, and a tour of the ⚙ settings modal — is in 
 
 ## Authentication
 `TMUXIFIER_AUTH_MODE` selects the primary login method: `password` (default, set up by
-`npm run set-password`) or `oauth`, which replaces the password form with Google sign-in
-against an exact-email allowlist. A **passkey** is a separate, additive third way in, available
+`npm run set-password`) or `oidc` (aliases `oauth`, `google`), which replaces the password form
+with sign-in through authentik, Google or any OIDC provider against a per-provider exact-email allowlist. A **passkey** is a separate, additive third way in, available
 under either mode: enroll one from **Settings → Passkeys** while signed in, and optionally arm
-**Require a passkey** to disable password/Google sign-in entirely — guarded against lockouts,
-with `TMUXIFIER_PASSKEY_ONLY=off` in `.env` as the break-glass. OAuth setup, the
+**Require a passkey** to disable password/OIDC sign-in entirely — guarded against lockouts,
+with `TMUXIFIER_PASSKEY_ONLY=off` in `.env` as the break-glass. The two modes are mutually exclusive and OIDC mode has no password login — if the provider is down, set `TMUXIFIER_AUTH_MODE=password`, run `npm run set-password` and restart; passkeys still work in OIDC mode. OIDC setup (authentik walkthrough), the
 relying-party-id rules passkeys live by, and the passkey security model are covered in the
 [authentication guide](docs/authentication.md).
 
@@ -117,7 +117,7 @@ flowchart LR
 
   subgraph host["Tmuxifier host (self-contained in the repo folder)"]
     subgraph fastify["Fastify server"]
-      AUTH["Auth gate<br/>password / Google / passkeys"]
+      AUTH["Auth gate<br/>password / OIDC / passkeys"]
       TERM["Per-viewer terminal PTYs"]
       JOBS["Persisted job managers<br/>box setup · Fleet Command ·<br/>provision · lifecycle · voice install"]
       POLL["Status poller · health events ·<br/>service checks (HTTP/TCP, Pi-hole,<br/>TrueNAS, UniFi, Immich)"]
@@ -155,14 +155,14 @@ dashboard tabs are open. The full per-module map lives in [AGENTS.md](AGENTS.md)
 | Guide | Covers |
 | --- | --- |
 | [Configuration reference](docs/configuration.md) | every option, `config.json`, terminal fonts, the settings modal |
-| [Authentication](docs/authentication.md) | password & OAuth modes, passkeys, require-a-passkey |
+| [Authentication](docs/authentication.md) | password & OIDC modes, passkeys, require-a-passkey |
 | [Boxes & setup jobs](docs/boxes-and-setup.md) | setup jobs, tools checklist, the Claude Code and OpenCode checkboxes, AI CLI auth seeding, post-setup script |
 | [Terminal features](docs/terminal.md) | splits, uploads & clipboard, voice dictation, voice link, host shell, reconnect |
 | [Standby dashboard](docs/dashboard.md) | service tiles, icons, Pi-hole/TrueNAS/UniFi/Immich cards |
 | [Status, health & Fleet Command](docs/fleet-and-health.md) | rate-limit-safe probing, health events, fleet jobs, themes |
 | [Proxmox](docs/proxmox.md) | LXC provisioning, guest lifecycle, deprovision |
 | [MCP server](docs/mcp.md) | enrolling, registering with Claude Code, the tool reference, what it cannot do |
-| [Deployment](docs/DEPLOY.md) | systemd, passwordless SSH keys, TLS, OAuth behind a tunnel |
+| [Deployment](docs/DEPLOY.md) | systemd, passwordless SSH keys, TLS, OIDC behind a tunnel |
 
 ## How persistence works
 Each terminal runs `ssh -tt <box> "tmux -u new-session -A -s <session>"`, so the session
@@ -271,8 +271,8 @@ Tmuxifier can SSH into your whole fleet, so the login gate is the crown jewel. I
 show a one-time warning), or front it with a TLS reverse proxy — and set `TMUXIFIER_BIND`
 accordingly. Serving the login over plain HTTP on a non-loopback address sends credentials
 in cleartext. Passwords are scrypt-hashed and login attempts are rate-limited per IP (set
-`TMUXIFIER_TRUST_PROXY` behind a proxy so the limiter sees real client IPs); OAuth mode uses an
-exact-email allowlist; the session cookie is signed, httpOnly, SameSite=lax, expires after 7 days
+`TMUXIFIER_TRUST_PROXY` behind a proxy so the limiter sees real client IPs); OIDC mode uses an
+per-provider exact-email allowlist; the session cookie is signed, httpOnly, SameSite=lax, expires after 7 days
 (server-enforced), and is marked `Secure` for local TLS or an `https://` base external URL.
 
 Tmuxifier stores no SSH secrets — your keys and agent stay in the OS. The credentials it does
@@ -295,7 +295,7 @@ Run Tmuxifier as a long-lived **systemd** service. A deployment is just a checko
 plus the sample unit at [deploy/tmuxifier.service](deploy/tmuxifier.service) — config (`.env`),
 certs (`tls/`), and state (`data/`) all stay inside the repo folder, so `git pull` never touches
 your secrets. The full guide — the unit walkthrough, passwordless SSH key setup for the service
-user, TLS certs, Google OAuth behind a Cloudflare tunnel, the file-layout table, and password
+user, TLS certs, OIDC behind a Cloudflare tunnel, the file-layout table, and password
 rotation — is [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Attributions

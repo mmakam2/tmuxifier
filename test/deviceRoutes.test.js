@@ -233,13 +233,14 @@ test('fcm-config serves the operator client config, auth-gated, absent-fails-sof
 });
 
 test('OAuth mode: password enroll still 501s but a pairing code enrolls', async () => {
-  // Google-mode app has no /api/login; forge the session cookie the way the
+  // OIDC-mode app has no /api/login; forge the session cookie the way the
   // server would sign it (same secret) — the only test in the file needing it.
   const config2 = {
     bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45,
     cookieSecret: 'test-secret', dataDir: dir, localShell: 'none',
-    configPath: path.join(dir, 'config.json'), authMode: 'google',
-    googleClientId: 'id', googleClientSecret: 'secret', allowedEmails: ['a@example.com'],
+    configPath: path.join(dir, 'config.json'), authMode: 'oidc',
+    oidcProviders: [{ id: 'google', label: 'Google', issuer: 'https://accounts.google.com', clientId: 'id', clientSecret: 'secret', allowUnverifiedEmail: false, legacyGoogle: true }],
+    allowedEmails: ['a@example.com'],
     baseExternalUrl: 'https://tmuxifier.example.com',
   };
   const sessions2 = { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} };

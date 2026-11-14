@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readEnvFile } from './envFile.js';
 import { readConfigFile } from './configFile.js';
+import { isSecureUrl } from './oidcAuth.js';
 
 const DEFAULTS = {
   bindAddress: '127.0.0.1',
@@ -124,6 +125,76 @@ export function resolveRpId({ explicit, publicUrl }) {
   try { host = publicUrl ? new URL(publicUrl).hostname.toLowerCase() : ''; } catch { host = ''; }
   if (!host) return { rpId: 'localhost', error: null };
   return { rpId: isValidRpId(host) ? host : null, error: null };
+}
+
+const OIDC_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const TRUTHY_RE = /^(on|true|1|yes)$/i;
+
+const str = (v) => (v === undefined || v === null ? '' : String(v).trim());
+
+// Builds the normalized OIDC provider list. An env id list, when set, defines
+// the providers and their order; otherwise the config.json array does. Each
+// field comes from the config.json entry of that id, overridden per field by
+// TMUXIFIER_OIDC_<ID>_*. Values are not validated here (requiredConfigError does).
+export function parseOidcProviders({ env = {}, fileProviders, googleClientId, googleClientSecret, allowedEmails = [] } = {}) {
+  const warnings = [];
+  const globalEmails = parseEmails(allowedEmails);
+  const fileList = Array.isArray(fileProviders)
+    ? fileProviders.filter((p) => p && typeof p === 'object')
+    : [];
+  const fileById = new Map(fileList.map((p) => [str(p.id), p]));
+  const envIds = str(env.TMUXIFIER_OIDC_PROVIDERS).split(',').map((x) => x.trim()).filter(Boolean);
+  const ids = envIds.length ? envIds : fileList.map((p) => str(p.id));
+  if (envIds.length) {
+    for (const id of fileById.keys()) {
+      if (!envIds.includes(id)) {
+        warnings.push(`config.json oidcProviders entry "${id}" ignored: not listed in TMUXIFIER_OIDC_PROVIDERS`);
+      }
+    }
+  }
+  const providers = ids.map((id) => {
+    const f = fileById.get(id) ?? {};
+    const k = `TMUXIFIER_OIDC_${id.toUpperCase().replace(/-/g, '_')}_`;
+    const pick = (suffix, fileVal) => {
+      const v = env[k + suffix];
+      return v !== undefined && v !== '' ? str(v) : str(fileVal);
+    };
+    const unverifiedEnv = env[k + 'ALLOW_UNVERIFIED_EMAIL'];
+    const allowUnverifiedEmail = unverifiedEnv !== undefined && unverifiedEnv !== ''
+      ? TRUTHY_RE.test(str(unverifiedEnv))
+      : typeof f.allowUnverifiedEmail === 'boolean'
+        ? f.allowUnverifiedEmail
+        : TRUTHY_RE.test(str(f.allowUnverifiedEmail));
+    const envEmails = parseEmails(env[k + 'ALLOWED_EMAILS']);
+    const ownEmails = envEmails.length ? envEmails : parseEmails(f.allowedEmails);
+    return {
+      id,
+      label: pick('LABEL', f.label) || id,
+      issuer: pick('ISSUER', f.issuer),
+      clientId: pick('CLIENT_ID', f.clientId),
+      clientSecret: pick('CLIENT_SECRET', f.clientSecret),
+      allowUnverifiedEmail,
+      legacyGoogle: false,
+      allowedEmails: ownEmails.length ? ownEmails : globalEmails,
+    };
+  });
+  if (str(googleClientId) || str(googleClientSecret)) {
+    if (providers.some((p) => p.id === 'google')) {
+      warnings.push('legacy Google keys (TMUXIFIER_OAUTH_CLIENT_ID/_SECRET, TMUXIFIER_GOOGLE_CLIENT_ID/_SECRET, googleClientId/googleClientSecret) ignored: an explicit "google" provider is configured');
+    } else {
+      providers.push({
+        id: 'google',
+        label: 'Google',
+        issuer: 'https://accounts.google.com',
+        clientId: str(googleClientId),
+        clientSecret: str(googleClientSecret),
+        allowUnverifiedEmail: false,
+        legacyGoogle: true,
+        allowedEmails: globalEmails,
+      });
+    }
+  }
+  return { providers, warnings };
 }
 
 export function loadConfig(overrides = {}, { env = process.env, cwd = process.cwd() } = {}) {
@@ -269,8 +340,8 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     if (/^\d+$/.test(s)) return Number(s);
     return s; // address/CIDR list, passed through to Fastify
   })();
-  // Auth mode: password (default) or oauth. "google" is accepted as a legacy alias.
-  merged.authMode = ['oauth', 'google'].includes(merged.authMode) ? 'google' : 'password';
+  // Auth mode: password (default) or oidc. "oauth" and "google" are accepted aliases.
+  merged.authMode = ['oidc', 'oauth', 'google'].includes(merged.authMode) ? 'oidc' : 'password';
   merged.publicUrl = normalizePublicUrl(merged.publicUrl);
   // rpId === null means passkeys are unavailable at this deployment (an
   // IP-addressed one). rpIdError is set only for an explicit unusable value.
@@ -287,6 +358,20 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     ? merged.passkeyOnlyKillSwitch
     : /^(off|0|no|false)$/i.test(String(merged.passkeyOnlyKillSwitch ?? '').trim());
   merged.allowedEmails = parseEmails(merged.allowedEmails);
+  if (merged.authMode === 'oidc') {
+    const parsed = parseOidcProviders({
+      env: e,
+      fileProviders: merged.oidcProviders,
+      googleClientId: merged.googleClientId,
+      googleClientSecret: merged.googleClientSecret,
+      allowedEmails: merged.allowedEmails,
+    });
+    merged.oidcProviders = parsed.providers;
+    merged.oidcConfigWarnings = parsed.warnings;
+  } else {
+    merged.oidcProviders = [];
+    merged.oidcConfigWarnings = [];
+  }
   // Mark the session cookie Secure when we serve HTTPS locally OR sit behind an
   // HTTPS public URL, for example a TLS-terminating Cloudflare tunnel.
   merged.secureCookie = !!(merged.tlsCert && merged.tlsKey) || /^https:/i.test(String(merged.publicUrl || ''));
@@ -320,14 +405,33 @@ export function requiredConfigError(config) {
     return 'Missing TMUXIFIER_COOKIE_SECRET. Run: npm run set-password (password mode) or npm run gen-secret (oauth mode).';
   }
   if (config.rpIdError) return config.rpIdError;
-  if (config.authMode === 'google') {
+  if (config.authMode === 'oidc') {
+    const providers = config.oidcProviders ?? [];
+    if (providers.length === 0) {
+      return 'OIDC auth mode requires: at least one provider (TMUXIFIER_OIDC_PROVIDERS with TMUXIFIER_OIDC_<ID>_ISSUER/_CLIENT_ID/_CLIENT_SECRET, or TMUXIFIER_OAUTH_CLIENT_ID/_SECRET for Google)';
+    }
+    const seen = new Set();
+    for (const p of providers) {
+      if (!OIDC_ID_RE.test(p.id)) return `OIDC provider id "${p.id}" is invalid: use lowercase letters, digits and hyphens (max 32, starting with a letter or digit)`;
+      if (seen.has(p.id)) return `OIDC provider id "${p.id}" is listed more than once`;
+      seen.add(p.id);
+      if (!isSecureUrl(p.issuer)) return `OIDC provider "${p.id}" needs an absolute https:// issuer URL`;
+      if (!p.clientId) return `OIDC provider "${p.id}" requires a client id`;
+      if (!p.clientSecret) return `OIDC provider "${p.id}" requires a client secret`;
+      if (!p.allowedEmails || p.allowedEmails.length === 0) {
+        return `OIDC provider "${p.id}" has no allowed emails: set TMUXIFIER_OIDC_${p.id.toUpperCase().replace(/-/g, '_')}_ALLOWED_EMAILS or TMUXIFIER_ALLOWED_EMAILS`;
+      }
+    }
     const missing = [];
-    if (!config.googleClientId) missing.push('TMUXIFIER_OAUTH_CLIENT_ID');
-    if (!config.googleClientSecret) missing.push('TMUXIFIER_OAUTH_CLIENT_SECRET');
     if (!config.publicUrl) missing.push('TMUXIFIER_BASE_EXTERNAL_URL');
-    if (!config.allowedEmails || config.allowedEmails.length === 0) missing.push('TMUXIFIER_ALLOWED_EMAILS');
-    return missing.length ? `Google auth mode requires: ${missing.join(', ')}` : null;
+    return missing.length ? `OIDC auth mode requires: ${missing.join(', ')}` : null;
   }
   if (!config.passwordHash) return 'Tmuxifier is not configured. Run: npm run set-password';
   return null;
+}
+
+// Startup check: OIDC warnings are logged first so they explain a fatal error.
+export function reportConfig(config, log = console.error) {
+  for (const w of config.oidcConfigWarnings ?? []) log(`OIDC config: ${w}`);
+  return requiredConfigError(config);
 }
