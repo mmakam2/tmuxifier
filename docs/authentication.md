@@ -153,10 +153,12 @@ URL, so don't arm "Require a passkey" there.
   id, a provider with no allowed emails, missing `TMUXIFIER_BASE_EXTERNAL_URL`).
 - `?error=provider`: discovery or the token exchange failed — wrong issuer or client secret,
   or the Tmuxifier host can't reach `<issuer>/.well-known/openid-configuration`.
-- `?error=forbidden`: the email isn't in that provider's allowlist, or `email_verified` is still
-  false (step 2).
+- `?error=forbidden`: the email isn't in that provider's allowlist, `email_verified` is still
+  false (step 2), or the provider itself refused (`access_denied`: consent cancelled, or the user
+  isn't allowed to use the application there).
 - `?error=state`: the sign-in took over 5 minutes or started on a different address than the
-  callback; start again from the same URL.
+  callback; start again from the same URL. Each sign-in has its own state cookie, so several tabs
+  signing in at once don't interfere.
 - authentik shows "redirect URI mismatch": its redirect URI and `TMUXIFIER_BASE_EXTERNAL_URL`
   differ.
 

@@ -753,7 +753,8 @@ The login gate is the crown jewel — Tmuxifier can SSH into your whole fleet. I
 
 **Login paths.** Password mode mounts `POST /api/login`; OIDC mode mounts `/api/auth/oidc/<id>/*`
 (and `/api/auth/google/*` for the `google` provider) instead — there is no password login in OIDC
-mode and no break-glass (hand-rolled OIDC: state cookie + PKCE, server-to-server token exchange,
+mode and no break-glass (hand-rolled OIDC: a per-flow state cookie `tmuxifier_oauth_<state prefix>` + PKCE,
+server-to-server token exchange that refuses redirects,
 per-provider exact-email allowlist; the id_token is trusted because it comes straight from the provider's token
 endpoint). Only a fresh page load may auto-redirect to a single provider: session expiry (401) and
 logout render the login page. Logout is local-only and sets a `tmuxifier.signedOut` flag in

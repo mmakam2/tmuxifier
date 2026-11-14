@@ -301,3 +301,18 @@ OIDC mode", the break-glass upgrade note, and "Session expiry auto-redirects").
   and `server.js` builds each client with it, so an email allowed at provider A is `forbidden` at B.
 - `requiredConfigError` no longer requires the global list on its own; it fails naming any provider
   whose effective list is empty. Passkeys are unaffected.
+
+### Revision 2026-11-14 (PR #8 second review)
+
+- State cookie is per flow: `tmuxifier_oauth_<first 16 chars of state>`, value unchanged, 300 s
+  `maxAge`. The callback shape-checks `state` (`randomState()`: 22 base64url chars) before using it
+  as a cookie key and clears only that flow's cookie, so two tabs auto-redirecting together no
+  longer overwrite each other (supersedes the single `tmuxifier_oauth` in §4).
+- A callback carrying `error` (no `code`) maps `access_denied` to `?error=forbidden` and anything
+  else to `?error=provider`; the value is never echoed.
+- Password device enrollment uses the same `passwordLoginEnabled` gate as `/api/login`, so an
+  un-normalized mode fails closed there too.
+- The token request sets `redirect: 'error'`; discovery still follows redirects.
+- The stored signed-out flag is shown as the "signed out" note only in OIDC mode; password mode
+  shows it only right after a logout.
+- e2e uses the provider id `e2e-stub`, which no real `.env` configures.
