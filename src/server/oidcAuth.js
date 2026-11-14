@@ -9,6 +9,8 @@ import { createHash, randomBytes } from 'node:crypto';
 // for this single-user gate. Claims are still checked (iss, aud, exp, nonce,
 // email, email_verified). Discovered endpoints must be https (loopback http is
 // allowed for tests) and the discovered `issuer` must equal the configured one.
+// The token request refuses redirects, so the secret and the id_token never
+// travel through a hop that check did not cover.
 //
 // Google quirk: its id_tokens may carry `iss: accounts.google.com` (no scheme),
 // accepted only when the configured issuer is https://accounts.google.com.
@@ -164,6 +166,10 @@ export function createOidcClient({ provider, redirectUri, allowedEmails = [], fe
           // fetch has no default timeout — without this, a hung token endpoint
           // pins the callback request forever.
           signal: AbortSignal.timeout(TIMEOUT_MS),
+          // A 307/308 would re-send client_secret, code and code_verifier to a
+          // URL isSecureUrl never checked (possibly plain http), and the
+          // id_token would come back from a hop outside the trust argument.
+          redirect: 'error',
         });
         if (!res.ok) throw new Error(`token exchange failed: ${res.status}`);
         data = await readJsonBounded(res);

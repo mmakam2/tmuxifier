@@ -223,3 +223,12 @@ test('the negative cache window starts when the failure lands, not when the fetc
   expect(await code(url())).toBe('provider');
   expect(hits).toBe(1);
 });
+
+test('the token request refuses a redirect instead of re-posting the secret', async () => {
+  let reposted = false;
+  stub.routes['/token-moved'] = (req, res) => { res.writeHead(307, { location: `${stub.issuer}/token-elsewhere` }); res.end(); };
+  stub.routes['/token-elsewhere'] = (req, res) => { reposted = true; stub.routes['/token'](req, res); };
+  stub.set({ discovery: { token_endpoint: `${stub.issuer}/token-moved` } });
+  expect(await code(exchange(mk()))).toBe('provider');
+  expect(reposted).toBe(false);
+});
