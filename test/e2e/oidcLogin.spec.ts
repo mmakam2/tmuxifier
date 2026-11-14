@@ -21,10 +21,13 @@ test.beforeAll(async () => {
     env: {
       ...process.env,
       TMUXIFIER_AUTH_MODE: 'oidc',
-      TMUXIFIER_OIDC_PROVIDERS: 'authentik',
-      TMUXIFIER_OIDC_AUTHENTIK_ISSUER: stub.issuer,
-      TMUXIFIER_OIDC_AUTHENTIK_CLIENT_ID: 'cid',
-      TMUXIFIER_OIDC_AUTHENTIK_CLIENT_SECRET: 'secret',
+      // An id no real deployment configures: the spawned server still reads the
+      // checkout's .env, and a real provider's _ALLOWED_EMAILS/_LABEL/
+      // _ALLOW_UNVERIFIED_EMAIL under a shared id would leak into this one.
+      TMUXIFIER_OIDC_PROVIDERS: 'e2e-stub',
+      TMUXIFIER_OIDC_E2E_STUB_ISSUER: stub.issuer,
+      TMUXIFIER_OIDC_E2E_STUB_CLIENT_ID: 'cid',
+      TMUXIFIER_OIDC_E2E_STUB_CLIENT_SECRET: 'secret',
       TMUXIFIER_ALLOWED_EMAILS: 'you@example.com',
       TMUXIFIER_BASE_EXTERNAL_URL: BASE,
       TMUXIFIER_PUBLIC_URL: '',
