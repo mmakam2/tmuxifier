@@ -33,5 +33,8 @@ export function decideLogin(info: AuthInfo, search: string, signedOut: boolean, 
     reason === 'boot' && !forcedLogin && !errorCode && !signedOut
   ) return { kind: 'redirect', href: providers[0].href };
 
-  return { kind: 'page', providers, showPassword, signedOut, errorCode };
+  // The stored flag exists to stop the redirect, so only OIDC mode shows it as
+  // a note; password mode shows "signed out" only right after a logout.
+  const note = reason === 'logout' || (info.mode === 'oidc' && signedOut);
+  return { kind: 'page', providers, showPassword, signedOut: note, errorCode };
 }

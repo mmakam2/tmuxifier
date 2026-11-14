@@ -62,6 +62,16 @@ describe('decideLogin', () => {
     expect(d.showPassword).toBe(true);
     expect(d.providers).toEqual([]);
   });
+  it('password mode ignores a stale stored flag; the note shows only right after logout', () => {
+    const pw = { mode: 'password', passkey: pk };
+    expect(decideLogin(pw, '', true, 'boot')).toMatchObject({ kind: 'page', signedOut: false, showPassword: true });
+    expect(decideLogin(pw, '', true, 'expired').signedOut).toBe(false);
+    expect(decideLogin(pw, '', true, 'logout').signedOut).toBe(true);
+  });
+  it('oidc mode keeps the stored flag as the signed-out note on later loads', () => {
+    expect(decideLogin(oidc({ providers: [ak, goog] }), '', true, 'boot').signedOut).toBe(true);
+    expect(decideLogin(oidc(), '', false, 'expired').signedOut).toBe(false);
+  });
   it('oidc never shows password', () => {
     expect(decideLogin(oidc({ providers: [ak, goog] }), '', false).showPassword).toBe(false);
   });
