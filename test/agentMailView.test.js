@@ -1,6 +1,7 @@
 import { test, expect } from 'vitest';
 import {
   nameOf, participant, pairLine, statusLine, threadRow, messageRow, refusalRow, policyChanged, relAge, mailEnabledFrom,
+  NO_MIRROR, mirrorOnAdd, mirrorOnRemove, mirrorToSend,
 } from '../src/web/agentMailView.ts';
 
 const boxes = [
@@ -131,4 +132,42 @@ test('mailEnabledFrom: only an explicit true from /api/ui-config turns messaging
   expect(mailEnabledFrom({ agentMail: 'true' })).toBe(false);
   expect(mailEnabledFrom(null)).toBe(false);
   expect(mailEnabledFrom(undefined)).toBe(false);
+});
+
+// The Edit Box section's "also write the matching entry" choice, per list entry.
+// `listed` is the list as it was when the modal opened.
+test('mirror: a box added with the tick on is mirrored; one added with it off is not', () => {
+  const draft = { sendTo: ['b'], receiveFrom: [] };
+  expect(mirrorToSend(mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: true, listed: [] }), draft)).toEqual(['b']);
+  expect(mirrorToSend(mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: false, listed: [] }), draft)).toEqual([]);
+  // A box that was in the list when the modal opened has nothing new to mirror.
+  expect(mirrorToSend(mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: true, listed: ['b'] }), draft)).toEqual([]);
+});
+
+test('mirror: removed, then added again with the tick off, is not mirrored', () => {
+  let marks = mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: true, listed: [] });
+  marks = mirrorOnRemove(marks, 'sendTo', 'b');
+  expect(mirrorToSend(marks, { sendTo: [], receiveFrom: [] })).toEqual([]);
+  marks = mirrorOnAdd(marks, 'sendTo', 'b', { tick: false, listed: [] });
+  expect(mirrorToSend(marks, { sendTo: ['b'], receiveFrom: [] })).toEqual([]);
+  // ...and added again with the tick back on, it is mirrored again.
+  expect(mirrorToSend(mirrorOnAdd(marks, 'sendTo', 'b', { tick: true, listed: [] }), { sendTo: ['b'], receiveFrom: [] })).toEqual(['b']);
+});
+
+test('mirror: added to one list with the tick on and to the other with it off, the id is sent once', () => {
+  // The server applies `mirror` per box id, writing the counterpart of every
+  // list the id is in; the ticked addition is the operator's explicit request,
+  // so the id is sent and the unticked list's counterpart is written with it.
+  let marks = mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: true, listed: [] });
+  marks = mirrorOnAdd(marks, 'receiveFrom', 'b', { tick: false, listed: [] });
+  expect(mirrorToSend(marks, { sendTo: ['b'], receiveFrom: ['b'] })).toEqual(['b']);
+  // Removing it from the ticked list leaves only the unticked entry: nothing to mirror.
+  marks = mirrorOnRemove(marks, 'sendTo', 'b');
+  expect(mirrorToSend(marks, { sendTo: [], receiveFrom: ['b'] })).toEqual([]);
+  // A mark on one list never survives in the other: removing from the other list
+  // leaves the ticked one standing.
+  let both = mirrorOnAdd(NO_MIRROR, 'sendTo', 's', { tick: true, listed: [] });
+  both = mirrorOnAdd(both, 'receiveFrom', 's', { tick: true, listed: [] });
+  both = mirrorOnRemove(both, 'receiveFrom', 's');
+  expect(mirrorToSend(both, { sendTo: ['s'], receiveFrom: [] })).toEqual(['s']);
 });

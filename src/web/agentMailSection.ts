@@ -11,10 +11,13 @@
 // children only.
 import type { Box } from './api';
 import { mailApi, type MailBoxView, type MailPolicy } from './agentMail';
-import { nameOf, pairLine, policyChanged, statusLine, type MailBoxRef } from './agentMailView';
+import {
+  mirrorOnAdd, mirrorOnRemove, mirrorToSend, nameOf, NO_MIRROR, pairLine, policyChanged, statusLine,
+  type MailBoxRef, type MailListKey, type MailMirrorMarks,
+} from './agentMailView';
 import { el } from './dom';
 
-type ListKey = 'sendTo' | 'receiveFrom';
+type ListKey = MailListKey;
 
 const copyPolicy = (p: MailPolicy): MailPolicy => ({ send: p.send, sendTo: [...p.sendTo], receive: p.receive, receiveFrom: [...p.receiveFrom] });
 
@@ -25,8 +28,9 @@ export function createAgentMailSection(box: Box, boxes: readonly MailBoxRef[]) {
 
   let loaded: MailPolicy | null = null;
   let draft: MailPolicy | null = null;
-  // Ids added while the tick was on, and not in that list when the modal opened.
-  const mirror = new Set<string>();
+  // Per list: ids added while the tick was on, and not in that list when the
+  // modal opened. A removal drops the id's mark in that list (agentMailView.ts).
+  let mirror: MailMirrorMarks = NO_MIRROR;
 
   function listRow(switchKey: 'send' | 'receive', listKey: ListKey, label: string, lead: string, listName: string) {
     const toggle = el('input', { type: 'checkbox' }) as HTMLInputElement;
@@ -44,6 +48,7 @@ export function createAgentMailSection(box: Box, boxes: readonly MailBoxRef[]) {
             type: 'button', class: 'mail-chip-x', 'aria-label': `Remove ${name} from the ${listName}`,
             onclick: () => {
               draft![listKey] = draft![listKey].filter((x) => x !== id);
+              mirror = mirrorOnRemove(mirror, listKey, id);
               paint();
             },
           }, ['×']),
@@ -60,7 +65,7 @@ export function createAgentMailSection(box: Box, boxes: readonly MailBoxRef[]) {
         const id = add.value;
         if (!id || draft![listKey].includes(id)) return;
         draft![listKey] = [...draft![listKey], id];
-        if (mirrorTick.checked && !loaded![listKey].includes(id)) mirror.add(id);
+        mirror = mirrorOnAdd(mirror, listKey, id, { tick: mirrorTick.checked, listed: loaded![listKey] });
         paint();
       });
       list.replaceChildren(el('span', { class: 'mail-lead' }, [lead]), ...chips, add);
@@ -98,8 +103,7 @@ export function createAgentMailSection(box: Box, boxes: readonly MailBoxRef[]) {
     element: section,
     async commit(boxId: string) {
       if (!loaded || !draft || !policyChanged(loaded, draft)) return;
-      const listed = new Set([...draft.sendTo, ...draft.receiveFrom]);
-      const body = { ...copyPolicy(draft), mirror: [...mirror].filter((id) => listed.has(id)) };
+      const body = { ...copyPolicy(draft), mirror: mirrorToSend(mirror, draft) };
       try {
         await mailApi.saveBoxMail(boxId, body);
       } catch (error) {
@@ -107,7 +111,7 @@ export function createAgentMailSection(box: Box, boxes: readonly MailBoxRef[]) {
         throw new Error(`Box saved, but the agent messaging settings were not: ${why}`);
       }
       loaded = copyPolicy(draft);
-      mirror.clear();
+      mirror = NO_MIRROR;
     },
   };
 }

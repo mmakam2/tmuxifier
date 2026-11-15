@@ -136,6 +136,35 @@ export function policyChanged(a: MailPolicy, b: MailPolicy): boolean {
     || !sameSet(a.sendTo, b.sendTo) || !sameSet(a.receiveFrom, b.receiveFrom);
 }
 
+// The "also write the matching entry" choice, kept per list entry: it follows
+// the tick at the moment the box is added to that list, and leaves with the box
+// when it is removed. A single set of ids used to outlive a removal, so a box
+// added back with the tick off still had its counterpart written.
+export type MailListKey = 'sendTo' | 'receiveFrom';
+export type MailMirrorMarks = Readonly<Record<MailListKey, readonly string[]>>;
+export const NO_MIRROR: MailMirrorMarks = { sendTo: [], receiveFrom: [] };
+
+/** `listed` is that list as the modal opened it: a box already there has no new entry to mirror. */
+export function mirrorOnAdd(marks: MailMirrorMarks, list: MailListKey, id: string, at: { tick: boolean; listed: readonly string[] }): MailMirrorMarks {
+  const rest = marks[list].filter((x) => x !== id);
+  return { ...marks, [list]: at.tick && !at.listed.includes(id) ? [...rest, id] : rest };
+}
+
+export function mirrorOnRemove(marks: MailMirrorMarks, list: MailListKey, id: string): MailMirrorMarks {
+  return { ...marks, [list]: marks[list].filter((x) => x !== id) };
+}
+
+/** The `mirror` ids to save: marked in a list and still in it. The server applies
+ *  `mirror` per box id (the counterpart of every list the id is in), so an id
+ *  marked in one list is sent once. */
+export function mirrorToSend(marks: MailMirrorMarks, draft: Pick<MailPolicy, MailListKey>): string[] {
+  const out = new Set<string>();
+  for (const list of ['sendTo', 'receiveFrom'] as const) {
+    for (const id of marks[list]) if (draft[list].includes(id)) out.add(id);
+  }
+  return [...out];
+}
+
 /** Whether GET /api/ui-config says the server runs agent messaging. Only an
  *  explicit `true` counts: an older server, a malformed value or a failed read is off. */
 export function mailEnabledFrom(cfg: unknown): boolean {
