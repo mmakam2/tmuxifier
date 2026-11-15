@@ -21,8 +21,10 @@ import path from 'node:path';
 // is the same and they share ONE ControlMaster. On a shared master the second `-O forward` for
 // that path routes to the FIRST box's listener (so it never verifies), and its failure path
 // (`rm -f` of the box-side file, then `-O cancel`) leaves no listener behind at all: with two box
-// entries switched on, nobody's socket works. So a socket that works needs exactly one box entry
-// switched on. The tests that send from the box therefore switch on localhost alone: the drawer
+// entries switched on, nobody's socket works. The forward keeper now refuses the second entry on
+// a shared master (state `error`, `shares a connection with <first box>`) and leaves the first
+// one's socket alone; the last test here pins that. The other tests that send from the box
+// switch on localhost alone: the drawer
 // thread is between two sessions of localhost (send and receive on, no list entry, design 6.2),
 // and the refusal is a send localhost is not allowed. The cross-box pair is covered where it
 // needs no working socket: the policy editor test's pair lines. The thread's participants are
@@ -45,8 +47,8 @@ async function login(page: Page) {
   await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
 }
 
-async function openEditModal(page: Page) {
-  await page.locator('.box', { hasText: 'localhost' }).locator('.edit').click();
+async function openEditModal(page: Page, label = 'localhost') {
+  await page.locator('.box', { has: page.locator('.name', { hasText: new RegExp(`^${label}$`) }) }).first().locator('.edit').click();
   await expect(page.getByRole('heading', { name: 'Edit box' })).toBeVisible();
   return page.locator('.modal.box-modal');
 }
@@ -129,6 +131,16 @@ function sendFromBox(session: string, to: string, body: string): { code: number;
   const out = execFileSync('ssh', ['-F', cfg, host, cmd], { encoding: 'utf8' });
   const cut = out.lastIndexOf('\n');
   return { code: Number(out.slice(cut + 1).trim()), text: out.slice(0, cut).replace(/\n$/, '') };
+}
+
+// Until the server has sampled `id` on `n` more status sweeps (2 s apart in e2e).
+async function waitSweeps(page: Page, id: string, n: number) {
+  const last = async () => {
+    const series = (await (await page.request.get(`/api/health/series?box=${encodeURIComponent(id)}`)).json())?.[id] ?? [];
+    return Number(series.at(-1)?.t) || 0;
+  };
+  const t0 = await last();
+  await expect.poll(async () => (await last()) - t0, { timeout: 30000, intervals: [500, 1000] }).toBeGreaterThanOrEqual(n * 2000 - 500);
 }
 
 const textOf = (page: Page, selector: string) => page.locator(selector).first().evaluate((n) => n.textContent);
@@ -321,6 +333,55 @@ test('with messaging off on a box the modal says "Messaging is off" and the draw
     await expect(panel).not.toHaveClass(/\bopen\b/);
     await expect(page.locator('#messages')).not.toHaveClass(/\bactive\b/);
   } finally {
+    await resetMail(page, ids);
+  }
+});
+
+test('two box entries on one machine: the second reads that it shares a connection, and the first one\'s socket still works', async ({ page }) => {
+  test.setTimeout(150000);
+  await login(page);
+  const ids = await boxIds(page);
+  let threadId: string | null = null;
+  try {
+    await resetMail(page, ids);
+    writeMarker('mailA', 'ready', 'stop');
+    writeMarker(boxSession, 'working', 'prompt');
+    await waitMarks(page, ids.localhost, { mailA: 'ready', [boxSession]: 'working' });
+
+    // localhost first: it holds the shared ssh master's forward.
+    await putMail(page, ids.localhost, { send: true, sendTo: [], receive: true, receiveFrom: [] });
+    await waitMailState(page, ids.localhost, 'up');
+    // Then db-primary, an ssh alias of the same machine: refused, naming the holder.
+    await putMail(page, ids['db-primary'], { send: false, sendTo: [], receive: true, receiveFrom: [ids.localhost] });
+    await waitMailState(page, ids['db-primary'], 'error');
+    expect((await mailView(page, ids['db-primary'])).status.error).toBe('shares a connection with localhost');
+
+    const modal = await openEditModal(page, 'db-primary');
+    await expect(modal.locator('.box-mail .mail-status')).toHaveText('Socket not connected: shares a connection with localhost', { timeout: 10000 });
+    await cancelModal(page);
+    // The holder is untouched.
+    expect((await mailView(page, ids.localhost)).status.state).toBe('up');
+
+    const sent = sendFromBox('mailA', 'localhost', 'ping');
+    expect(sent.code, sent.text).toBe(200);
+    threadId = /Thread (t-[a-z2-9]{8})\./.exec(sent.text)?.[1] ?? null;
+    expect(threadId, sent.text).toBeTruthy();
+    const api = await (await page.request.get(`/api/mail/threads/${threadId}`)).json();
+    expect(api.thread.starter).toEqual({ boxId: ids.localhost, session: 'mailA' });
+    // Three more sweeps (each runs the forward keeper): still refused, and the socket still the
+    // holder's. A second thread is closed in finally too.
+    await page.request.post(`/api/mail/threads/${threadId}/close`);
+    await waitSweeps(page, ids.localhost, 3);
+    expect((await mailView(page, ids['db-primary'])).status).toMatchObject({ state: 'error', error: 'shares a connection with localhost' });
+    expect((await mailView(page, ids.localhost)).status.state).toBe('up');
+    const again = sendFromBox('mailA', 'localhost', 'ping again');
+    expect(again.code, again.text).toBe(200);
+    threadId = /Thread (t-[a-z2-9]{8})\./.exec(again.text)?.[1] ?? null;
+    expect((await (await page.request.get(`/api/mail/threads/${threadId}`)).json()).thread.starter).toEqual({ boxId: ids.localhost, session: 'mailA' });
+  } finally {
+    if (threadId) await page.request.post(`/api/mail/threads/${threadId}/close`).catch(() => {});
+    removeMarker('mailA');
+    removeMarker(boxSession);
     await resetMail(page, ids);
   }
 });
