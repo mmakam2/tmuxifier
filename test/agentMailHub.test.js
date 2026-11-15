@@ -1,46 +1,15 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { createAgentMailHub, resolveTarget } from '../src/server/agentMailHub.js';
-import { createAgentMailStore } from '../src/server/agentMailStore.js';
-import { createAgentMailPolicyStore } from '../src/server/agentMailPolicyStore.js';
+import { resolveTarget } from '../src/server/agentMailHub.js';
 import { refusalText, renderThread, renderWho } from '../src/server/agentMailText.js';
+import { createMailHarness, O, B, mark } from './helpers/agentMailHarness.js';
 
-const O = { boxId: 'o', session: 'main' };
-const B = { boxId: 'b', session: 'main' };
-const mark = (state, cause = state === 'ready' ? 'stop' : 'prompt') => ({ state, cause, ts: 1 });
+let h; let boxes; let marks; let store; let hub; let setPolicy; let names;
 
-let dir; let clock; let boxes; let marks; let store; let policyStore; let hub;
-
-const knownIds = () => new Set(boxes.map((b) => b.id));
-const setPolicy = (id, raw) => policyStore.set(id, raw, { knownIds: knownIds() });
-const names = (id) => boxes.find((b) => b.id === id)?.label;
-
-async function harness() {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mailhub-'));
-  clock = 1_000_000;
-  boxes = [
-    { id: 'o', label: 'orders', sessionName: 'main' },
-    { id: 'b', label: 'billing', sessionName: 'main' },
-  ];
-  marks = { o: { main: mark('working') }, b: { main: mark('working') } };
-  store = createAgentMailStore({ dataDir: dir, now: () => clock });
-  await store.load();
-  policyStore = createAgentMailPolicyStore({ dataDir: dir });
-  await setPolicy('o', { send: true, sendTo: ['b'] });
-  await setPolicy('b', { receive: true, receiveFrom: ['o'] });
-  hub = createAgentMailHub({
-    store,
-    policyStore,
-    listBoxes: async () => boxes.map((b) => ({ ...b })),
-    marksOf: (id) => (Object.hasOwn(marks, id) ? marks[id] : null),
-    now: () => clock,
-  });
-}
-
-beforeEach(harness);
-afterEach(async () => { await store.whenIdle(); fs.rmSync(dir, { recursive: true, force: true }); });
+beforeEach(async () => {
+  h = await createMailHarness();
+  ({ boxes, marks, store, hub, setPolicy, names } = h);
+});
+afterEach(() => h.cleanup());
 
 describe('agentMailHub: send', () => {
   test('send creates a thread and queues the first message', async () => {
@@ -113,7 +82,7 @@ describe('agentMailHub: send', () => {
   });
 
   test('unknown box, own session, empty body, 65537-byte body are refused and logged', async () => {
-    const typed = `no\x1b[2Jsuch‮${'x'.repeat(300)}`;
+    const typed = `no\x1b[2Jsuch\u202e${'x'.repeat(300)}`;
     const cleanTyped = `no[2Jsuch${'x'.repeat(191)}`;
     expect(cleanTyped).toHaveLength(200);
     const unknown = await hub.send(O, typed, 'ping');
@@ -133,11 +102,11 @@ describe('agentMailHub: send', () => {
 
     expect(store.threads()).toHaveLength(1);
     expect(store.refusals().reverse()).toEqual([
-      { at: clock, from: O, target: cleanTyped, reason: refusalText('unknown-box', { target: cleanTyped }) },
-      { at: clock, from: O, target: 'orders', reason: refusalText('own-session') },
-      { at: clock, from: O, target: '.', reason: refusalText('own-session') },
-      { at: clock, from: O, target: 'billing', reason: refusalText('empty') },
-      { at: clock, from: O, target: 'billing', reason: refusalText('too-large') },
+      { at: h.clock, from: O, target: cleanTyped, reason: refusalText('unknown-box', { target: cleanTyped }) },
+      { at: h.clock, from: O, target: 'orders', reason: refusalText('own-session') },
+      { at: h.clock, from: O, target: '.', reason: refusalText('own-session') },
+      { at: h.clock, from: O, target: 'billing', reason: refusalText('empty') },
+      { at: h.clock, from: O, target: 'billing', reason: refusalText('too-large') },
     ]);
   });
 
@@ -154,7 +123,7 @@ describe('agentMailHub: send', () => {
       await change();
       const r = await hub.send(O, 'Billing', 'ping');
       expect(r).toEqual({ ok: false, text: refusalText(code, { target: 'Billing' }) });
-      expect(store.refusals()[0]).toEqual({ at: clock, from: O, target: 'Billing', reason: r.text });
+      expect(store.refusals()[0]).toEqual({ at: h.clock, from: O, target: 'Billing', reason: r.text });
     }
     expect(new Set(store.refusals().map((x) => x.reason)).size).toBe(4);
     expect(store.threads()).toEqual([]);
@@ -268,7 +237,7 @@ describe('agentMailHub: reply', () => {
     const closed = await hub.reply(B, s.threadId, 'pong');
     expect(closed.ok).toBe(false);
     expect(closed.text).toBe(`${refusalText('closed')}\nclosed by the operator`);
-    expect(store.refusals()[0]).toEqual({ at: clock, from: B, target: s.threadId, reason: closed.text });
+    expect(store.refusals()[0]).toEqual({ at: h.clock, from: B, target: s.threadId, reason: closed.text });
     expect(store.thread(s.threadId).messages).toHaveLength(1);
   });
 
@@ -300,15 +269,15 @@ describe('agentMailHub: reply', () => {
 describe('agentMailHub: read and inbox', () => {
   test('read marks the caller messages delivered and returns the whole thread; inbox does the same for undelivered ones', async () => {
     const s = await hub.send(O, 'billing', 'ping');
-    clock += 1000;
+    h.clock += 1000;
     await hub.reply(B, s.threadId, 'pong');
-    clock += 1000;
+    h.clock += 1000;
 
     const r = await hub.read(B, s.threadId);
     expect(r.ok).toBe(true);
     const t = store.thread(s.threadId);
     expect(t.messages.map((m) => m.state)).toEqual(['delivered', 'queued']);
-    expect(t.messages[0].deliveredAt).toBe(clock);
+    expect(t.messages[0].deliveredAt).toBe(h.clock);
     expect(r.text).toBe(renderThread(t, names));
     expect(r.text).toContain('ping');
     expect(r.text).toContain('pong');
@@ -317,7 +286,7 @@ describe('agentMailHub: read and inbox', () => {
     // billing has nothing left; orders gets the pong once
     expect(await hub.inbox(B)).toEqual({ ok: true, text: 'inbox empty' });
     const s2 = await hub.send(O, 'billing', 'second task');
-    clock += 1000;
+    h.clock += 1000;
     await hub.reply(B, s2.threadId, 'second answer');
     const inbox = await hub.inbox(O);
     expect(inbox.ok).toBe(true);
@@ -330,7 +299,7 @@ describe('agentMailHub: read and inbox', () => {
     expect(await hub.inbox(O)).toEqual({ ok: true, text: 'inbox empty' });
 
     // a handed message counts as undelivered
-    store.setMessageState(s2.threadId, store.thread(s2.threadId).messages[0].id, 'handed', { handedAt: clock, handedPane: '%1' });
+    store.setMessageState(s2.threadId, store.thread(s2.threadId).messages[0].id, 'handed', { handedAt: h.clock, handedPane: '%1' });
     expect((await hub.inbox(B)).text).toContain('second task');
     expect(store.thread(s2.threadId).messages[0].state).toBe('delivered');
   });
