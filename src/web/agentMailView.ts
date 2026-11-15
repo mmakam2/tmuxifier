@@ -5,10 +5,11 @@
 //
 // Box ids from the server are looked up, never trusted to be current: a box
 // removed since reads "removed box". Server phrases (a thread's status, a
-// refusal's reason) are already worded for people and pass through unchanged.
+// refusal's reason) are already worded for people and pass through unchanged,
+// except that a status says `waiting` where agents read `queued` (operatorStatus).
 import type {
   MailMessage, MailPair, MailPairResult, MailParticipant, MailPolicy, MailRefusal, MailStatus,
-  MailThread, MailThreadSummary,
+  MailMirror, MailThread, MailThreadSummary,
 } from './agentMail';
 
 export interface MailBoxRef { id: string; label: string }
@@ -84,6 +85,14 @@ function threadState(state: string, reason: string | null | undefined): string {
   return reason && Object.hasOwn(CLOSED, reason) ? CLOSED[reason] : 'closed';
 }
 
+/** A server status phrase as the operator reads it. The phrases are written for
+ *  agents (`queued: billing/main is working`, agentMailText.js); the drawer says
+ *  `waiting` where they say `queued`, as the per-message states do. Only that
+ *  leading word changes; test/agentMailView.test.js builds every server phrase. */
+export function operatorStatus(phrase: string): string {
+  return /^queued(?=$|:)/.test(phrase) ? `waiting${phrase.slice('queued'.length)}` : phrase;
+}
+
 export interface MailThreadRow { title: string; meta: string; state: string; status: string }
 
 export function threadRow(t: MailThreadSummary, boxes: readonly MailBoxRef[], now: number): MailThreadRow {
@@ -93,7 +102,7 @@ export function threadRow(t: MailThreadSummary, boxes: readonly MailBoxRef[], no
     title: `${participant(t.starter, boxes)} → ${participant(t.peer, boxes)}`,
     meta: `${count}${older} · ${relAge(t.activeAt, now)}`,
     state: threadState(t.state, t.reason),
-    status: t.status,
+    status: operatorStatus(t.status),
   };
 }
 
@@ -174,15 +183,14 @@ export function mirrorOnRemove(marks: MailMirrorMarks, list: MailListKey, id: st
   return { ...marks, [list]: marks[list].filter((x) => x !== id) };
 }
 
-/** The `mirror` ids to save: marked in a list and still in it. The server applies
- *  `mirror` per box id (the counterpart of every list the id is in), so an id
- *  marked in one list is sent once. */
-export function mirrorToSend(marks: MailMirrorMarks, draft: Pick<MailPolicy, MailListKey>): string[] {
-  const out = new Set<string>();
-  for (const list of ['sendTo', 'receiveFrom'] as const) {
-    for (const id of marks[list]) if (draft[list].includes(id)) out.add(id);
-  }
-  return [...out];
+/** The PUT's `mirror`: per list, the ids marked there and still in that list. The
+ *  server mirrors each list only from its own key, so an entry added with the tick
+ *  off (or already listed when the modal opened) is never mirrored. */
+export function mirrorToSend(marks: MailMirrorMarks, draft: Pick<MailPolicy, MailListKey>): MailMirror {
+  return {
+    sendTo: marks.sendTo.filter((id) => draft.sendTo.includes(id)),
+    receiveFrom: marks.receiveFrom.filter((id) => draft.receiveFrom.includes(id)),
+  };
 }
 
 /** Whether GET /api/ui-config says the server runs agent messaging. Only an

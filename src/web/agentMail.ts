@@ -15,7 +15,10 @@ export interface MailPolicy {
 }
 
 /** PUT body: the policy plus the ids whose counterpart entry the server also writes. */
-export interface MailPolicyUpdate extends MailPolicy { mirror: string[] }
+/** Per list, the ids whose counterpart entry the save also writes on that box:
+ *  `sendTo` ids gain this box in their receiveFrom, `receiveFrom` ids in their sendTo. */
+export interface MailMirror { sendTo: string[]; receiveFrom: string[] }
+export interface MailPolicyUpdate extends MailPolicy { mirror: MailMirror }
 
 /** The four codes agentMailPolicy.mayStart returns. */
 export type MailPairCode = 'send-off' | 'not-in-send-list' | 'receive-off' | 'not-in-receive-list';

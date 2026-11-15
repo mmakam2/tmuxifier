@@ -72,22 +72,26 @@ export function createAgentMailPolicyStore({ dataDir }) {
       const m = await load();
       return Object.hasOwn(m, id) ? clone(m[id]) : EMPTY_POLICY;
     },
-    // Save `id`'s policy. `mirror` lists box ids whose counterpart entry should also learn about
-    // this box: B in my sendTo gets me in its receiveFrom, B in my receiveFrom gets me in its
-    // sendTo. Switches of the other box are never touched.
-    set(id, raw, { knownIds, mirror = [] }) {
+    // Save `id`'s policy. `mirror` names, per list, the box ids whose counterpart entry should
+    // also learn about this box: an id under `mirror.sendTo` that is in my saved sendTo gets me
+    // in its receiveFrom; an id under `mirror.receiveFrom` that is in my saved receiveFrom gets
+    // me in its sendTo. Per list, because the operator's "also write the matching entry" tick
+    // is chosen per list entry: an entry added with the tick off must never be mirrored, even
+    // when the same box sits ticked in the other list. Switches of the other box are never touched.
+    set(id, raw, { knownIds, mirror = { sendTo: [], receiveFrom: [] } }) {
       return mutate((m) => {
         const policy = normalizePolicy(raw, { selfId: id, knownIds });
         m[id] = policy;
-        for (const other of Array.isArray(mirror) ? mirror : []) {
-          if (typeof other !== 'string' || other === id || !knownIds.has(other)) continue;
-          const wantsRecv = policy.sendTo.includes(other);
-          const wantsSend = policy.receiveFrom.includes(other);
-          if (!wantsRecv && !wantsSend) continue;
-          const theirs = Object.hasOwn(m, other) ? m[other] : clone(EMPTY_POLICY);
-          if (wantsRecv && !theirs.receiveFrom.includes(id)) theirs.receiveFrom.push(id);
-          if (wantsSend && !theirs.sendTo.includes(id)) theirs.sendTo.push(id);
-          m[other] = theirs;
+        const named = (key) => (mirror && Array.isArray(mirror[key]) ? mirror[key] : []);
+        // [my list, the ids the operator ticked in it, the other box's counterpart list]
+        for (const [mine, ticked, theirsKey] of [['sendTo', named('sendTo'), 'receiveFrom'], ['receiveFrom', named('receiveFrom'), 'sendTo']]) {
+          for (const other of ticked) {
+            if (typeof other !== 'string' || other === id || !knownIds.has(other)) continue;
+            if (!policy[mine].includes(other)) continue;
+            const theirs = Object.hasOwn(m, other) ? m[other] : clone(EMPTY_POLICY);
+            if (!theirs[theirsKey].includes(id)) theirs[theirsKey].push(id);
+            m[other] = theirs;
+          }
         }
         prune(m, knownIds);
         return snapshot(m);

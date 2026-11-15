@@ -2,8 +2,9 @@ import { test, expect } from 'vitest';
 import {
   nameOf, participant, pairLine, statusLine, threadRow, messageRow, refusalRow, policyChanged, relAge, mailEnabledFrom,
   NO_MIRROR, mirrorOnAdd, mirrorOnRemove, mirrorToSend,
-  threadHead, MAIL_NO_THREADS, MAIL_NO_REFUSALS, messagesLoadError, stopFailedLine,
+  threadHead, operatorStatus, MAIL_NO_THREADS, MAIL_NO_REFUSALS, messagesLoadError, stopFailedLine,
 } from '../src/web/agentMailView.ts';
+import { STATUS_KINDS, statusPhrase } from '../src/server/agentMailText.js';
 
 const boxes = [
   { id: 'o', label: 'orders' },
@@ -68,7 +69,7 @@ test('threadRow: title "orders/main → billing/main", message count, relative t
     title: 'orders/main → billing/main',
     meta: '4 messages · 2 min ago',
     state: 'open',
-    status: 'queued: billing/main is working',
+    status: 'waiting: billing/main is working', // the server's 'queued: …', in operator words
   });
   expect(threadRow(thread({ count: 1 }), boxes, now).meta).toBe('1 message · 2 min ago');
   expect(threadRow(thread({ count: 3, dropped: 5 }), boxes, now).meta).toBe('3 messages, 5 older dropped · 2 min ago');
@@ -172,39 +173,67 @@ test('mailEnabledFrom: only an explicit true from /api/ui-config turns messaging
 });
 
 // The Edit Box section's "also write the matching entry" choice, per list entry.
-// `listed` is the list as it was when the modal opened.
+// `listed` is the list as it was when the modal opened. mirrorToSend returns the
+// per-list object the PUT carries; the server mirrors each list only from its own key.
+const none = { sendTo: [], receiveFrom: [] };
 test('mirror: a box added with the tick on is mirrored; one added with it off is not', () => {
   const draft = { sendTo: ['b'], receiveFrom: [] };
-  expect(mirrorToSend(mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: true, listed: [] }), draft)).toEqual(['b']);
-  expect(mirrorToSend(mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: false, listed: [] }), draft)).toEqual([]);
+  expect(mirrorToSend(mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: true, listed: [] }), draft)).toEqual({ sendTo: ['b'], receiveFrom: [] });
+  expect(mirrorToSend(mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: false, listed: [] }), draft)).toEqual(none);
   // A box that was in the list when the modal opened has nothing new to mirror.
-  expect(mirrorToSend(mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: true, listed: ['b'] }), draft)).toEqual([]);
+  expect(mirrorToSend(mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: true, listed: ['b'] }), draft)).toEqual(none);
 });
 
 test('mirror: removed, then added again with the tick off, is not mirrored', () => {
   let marks = mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: true, listed: [] });
   marks = mirrorOnRemove(marks, 'sendTo', 'b');
-  expect(mirrorToSend(marks, { sendTo: [], receiveFrom: [] })).toEqual([]);
+  expect(mirrorToSend(marks, { sendTo: [], receiveFrom: [] })).toEqual(none);
   marks = mirrorOnAdd(marks, 'sendTo', 'b', { tick: false, listed: [] });
-  expect(mirrorToSend(marks, { sendTo: ['b'], receiveFrom: [] })).toEqual([]);
+  expect(mirrorToSend(marks, { sendTo: ['b'], receiveFrom: [] })).toEqual(none);
   // ...and added again with the tick back on, it is mirrored again.
-  expect(mirrorToSend(mirrorOnAdd(marks, 'sendTo', 'b', { tick: true, listed: [] }), { sendTo: ['b'], receiveFrom: [] })).toEqual(['b']);
+  expect(mirrorToSend(mirrorOnAdd(marks, 'sendTo', 'b', { tick: true, listed: [] }), { sendTo: ['b'], receiveFrom: [] })).toEqual({ sendTo: ['b'], receiveFrom: [] });
 });
 
-test('mirror: added to one list with the tick on and to the other with it off, the id is sent once', () => {
-  // The server applies `mirror` per box id, writing the counterpart of every
-  // list the id is in; the ticked addition is the operator's explicit request,
-  // so the id is sent and the unticked list's counterpart is written with it.
+test('mirror: added to one list with the tick on and to the other with it off, only the ticked list is mirrored', () => {
   let marks = mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: true, listed: [] });
   marks = mirrorOnAdd(marks, 'receiveFrom', 'b', { tick: false, listed: [] });
-  expect(mirrorToSend(marks, { sendTo: ['b'], receiveFrom: ['b'] })).toEqual(['b']);
-  // Removing it from the ticked list leaves only the unticked entry: nothing to mirror.
+  expect(mirrorToSend(marks, { sendTo: ['b'], receiveFrom: ['b'] })).toEqual({ sendTo: ['b'], receiveFrom: [] });
+  // The reverse.
+  let rev = mirrorOnAdd(NO_MIRROR, 'sendTo', 'b', { tick: false, listed: [] });
+  rev = mirrorOnAdd(rev, 'receiveFrom', 'b', { tick: true, listed: [] });
+  expect(mirrorToSend(rev, { sendTo: ['b'], receiveFrom: ['b'] })).toEqual({ sendTo: [], receiveFrom: ['b'] });
+  // Ticked in the send list while already in the receive list when the modal opened:
+  // the receive entry is not touched.
+  const pre = mirrorOnAdd(NO_MIRROR, 'sendTo', 's', { tick: true, listed: [] });
+  expect(mirrorToSend(pre, { sendTo: ['s'], receiveFrom: ['s'] })).toEqual({ sendTo: ['s'], receiveFrom: [] });
+  // Removing it from the ticked list leaves nothing to mirror.
   marks = mirrorOnRemove(marks, 'sendTo', 'b');
-  expect(mirrorToSend(marks, { sendTo: [], receiveFrom: ['b'] })).toEqual([]);
+  expect(mirrorToSend(marks, { sendTo: [], receiveFrom: ['b'] })).toEqual(none);
   // A mark on one list never survives in the other: removing from the other list
   // leaves the ticked one standing.
   let both = mirrorOnAdd(NO_MIRROR, 'sendTo', 's', { tick: true, listed: [] });
   both = mirrorOnAdd(both, 'receiveFrom', 's', { tick: true, listed: [] });
   both = mirrorOnRemove(both, 'receiveFrom', 's');
-  expect(mirrorToSend(both, { sendTo: ['s'], receiveFrom: [] })).toEqual(['s']);
+  expect(mirrorToSend(both, { sendTo: ['s'], receiveFrom: [] })).toEqual({ sendTo: ['s'], receiveFrom: [] });
+});
+
+test('operatorStatus: every server status phrase reads "waiting" where agents read "queued", the rest unchanged', () => {
+  const ctx = { who: 'billing/main', seconds: 12 };
+  for (const kind of STATUS_KINDS) {
+    const phrase = statusPhrase(kind, ctx);
+    const shown = operatorStatus(phrase);
+    if (kind === 'queued' || kind.startsWith('queued-')) {
+      expect(phrase.startsWith('queued')).toBe(true);
+      expect(shown).toBe(`waiting${phrase.slice('queued'.length)}`);
+    } else {
+      expect(shown).toBe(phrase);
+    }
+  }
+  expect(operatorStatus(statusPhrase('queued-working', ctx))).toBe('waiting: billing/main is working');
+  expect(operatorStatus('queued')).toBe('waiting');
+  // Only a leading word is replaced: a box or session named "queued" is left alone.
+  expect(operatorStatus('delivered 3 s ago, no reply yet')).toBe('delivered 3 s ago, no reply yet');
+  expect(operatorStatus('queuedx: odd')).toBe('queuedx: odd');
+  // The thread row shows the operator form.
+  expect(threadRow(thread(), boxes, 1_000_000).status).toBe('waiting: billing/main is working');
 });

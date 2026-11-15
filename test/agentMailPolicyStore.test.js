@@ -19,15 +19,27 @@ describe('agentMailPolicyStore', () => {
     expect(JSON.parse(fs.readFileSync(file(), 'utf8')).version).toBe(1);
     expect(await s.get('a')).toEqual({ send: true, sendTo: ['b'], receive: false, receiveFrom: [] });
   });
-  test('mirror writes the counterpart entry and never flips the other switch', async () => {
-    const out = await s.set('a', { send: true, sendTo: ['b'], receive: true, receiveFrom: ['b'] }, { knownIds: new Set(['a', 'b']), mirror: ['b'] });
+  test('mirror writes the counterpart entry of each list it names and never flips the other switch', async () => {
+    const out = await s.set('a', { send: true, sendTo: ['b'], receive: true, receiveFrom: ['b'] }, { knownIds: new Set(['a', 'b']), mirror: { sendTo: ['b'], receiveFrom: ['b'] } });
     expect(out.b).toEqual({ send: false, sendTo: ['a'], receive: false, receiveFrom: ['a'] });
     expect(await s.get('b')).toEqual(out.b);
   });
-  test('mirror ignores ids that are not in the saved lists', async () => {
-    const out = await s.set('a', { send: true, sendTo: ['b'] }, { knownIds: new Set(['a', 'b', 'c']), mirror: ['c', 'b'] });
-    expect(out.c).toBeUndefined();
+  test('mirror is per list: ticked in sendTo only, the other box gains only receiveFrom', async () => {
+    const out = await s.set('a', { send: true, sendTo: ['b'], receive: true, receiveFrom: ['b'] }, { knownIds: new Set(['a', 'b']), mirror: { sendTo: ['b'] } });
     expect(out.b).toEqual({ send: false, sendTo: [], receive: false, receiveFrom: ['a'] });
+  });
+  test('mirror is per list: ticked in receiveFrom only, the other box gains only sendTo', async () => {
+    const out = await s.set('a', { send: true, sendTo: ['b'], receive: true, receiveFrom: ['b'] }, { knownIds: new Set(['a', 'b']), mirror: { sendTo: [], receiveFrom: ['b'] } });
+    expect(out.b).toEqual({ send: false, sendTo: ['a'], receive: false, receiveFrom: [] });
+  });
+  test('mirror ignores ids that are not in the corresponding saved list', async () => {
+    // c is in no list; b is named under receiveFrom but saved only in sendTo.
+    const out = await s.set('a', { send: true, sendTo: ['b'] }, { knownIds: new Set(['a', 'b', 'c']), mirror: { sendTo: ['c'], receiveFrom: ['b'] } });
+    expect(out.c).toBeUndefined();
+    expect(out.b).toBeUndefined();
+    const out2 = await s.set('a', { send: true, sendTo: ['b'] }, { knownIds: new Set(['a', 'b', 'c']), mirror: { sendTo: ['c', 'b'] } });
+    expect(out2.c).toBeUndefined();
+    expect(out2.b).toEqual({ send: false, sendTo: [], receive: false, receiveFrom: ['a'] });
   });
   test('removeBox deletes the entry and strips the id from every list', async () => {
     await s.set('a', { send: true, sendTo: ['b', 'c'] }, known('a', 'b', 'c'));

@@ -103,10 +103,22 @@ test('PUT then GET round-trips the policy and returns pairs with the missing hal
 
 test('PUT with mirror writes the counterpart on the other box in the same request', async () => {
   const { orders, billing } = await boot();
-  const res = await route('PUT', `/api/boxes/${orders.id}/mail`, { payload: { send: true, sendTo: [billing.id], mirror: [billing.id] } });
+  const res = await route('PUT', `/api/boxes/${orders.id}/mail`, { payload: { send: true, sendTo: [billing.id], mirror: { sendTo: [billing.id] } } });
   expect(res.statusCode).toBe(200);
   expect((await h.policyStore.get(billing.id)).receiveFrom).toEqual([orders.id]);
   expect((await h.policyStore.get(billing.id)).receive).toBe(false);
+});
+
+test('PUT mirror is per list: a box ticked in sendTo and unticked in receiveFrom gains only the receive entry', async () => {
+  const { orders, billing } = await boot();
+  const payload = { send: true, sendTo: [billing.id], receive: true, receiveFrom: [billing.id], mirror: { sendTo: [billing.id], receiveFrom: [] } };
+  expect((await route('PUT', `/api/boxes/${orders.id}/mail`, { payload })).statusCode).toBe(200);
+  expect(await h.policyStore.get(billing.id)).toEqual({ send: false, sendTo: [], receive: false, receiveFrom: [orders.id] });
+  // ...and the reverse, from billing's side towards orders.
+  const back = { send: true, sendTo: [orders.id], receive: true, receiveFrom: [orders.id], mirror: { receiveFrom: [orders.id] } };
+  expect((await route('PUT', `/api/boxes/${billing.id}/mail`, { payload: back })).statusCode).toBe(200);
+  expect((await h.policyStore.get(orders.id)).sendTo).toEqual([billing.id]);
+  expect((await h.policyStore.get(orders.id)).receiveFrom).toEqual([billing.id]); // unchanged from the first save
 });
 
 test('PUT with an unknown box id in a list is 400 and writes nothing; a bad mirror is 400', async () => {
@@ -115,7 +127,8 @@ test('PUT with an unknown box id in a list is 400 and writes nothing; a bad mirr
   expect(bad.statusCode).toBe(400);
   expect(bad.json().error).toMatch(/unknown box: ghost/);
   expect(await h.policyStore.all()).toEqual({});
-  for (const mirror of ['x', [1], { a: 1 }]) {
+  // The bare-array form is refused too, as is a wrong inner type or an unknown key.
+  for (const mirror of ['x', [1], [billing.id], null, { sendTo: 'x' }, { sendTo: [1] }, { receiveFrom: [billing.id, 2] }, { a: [] }]) {
     expect((await route('PUT', `/api/boxes/${orders.id}/mail`, { payload: { send: true, sendTo: [billing.id], mirror } })).statusCode).toBe(400);
   }
   expect((await route('PUT', `/api/boxes/${orders.id}/mail`, { payload: { send: 'yes', sendTo: 'x' } })).statusCode).toBe(400);
@@ -125,7 +138,7 @@ test('PUT with an unknown box id in a list is 400 and writes nothing; a bad mirr
 
 test('PUT that removes a permission closes the thread it allowed', async () => {
   const { orders, billing } = await boot();
-  await route('PUT', `/api/boxes/${orders.id}/mail`, { payload: { send: true, sendTo: [billing.id], mirror: [billing.id] } });
+  await route('PUT', `/api/boxes/${orders.id}/mail`, { payload: { send: true, sendTo: [billing.id], mirror: { sendTo: [billing.id] } } });
   await route('PUT', `/api/boxes/${billing.id}/mail`, { payload: { receive: true, receiveFrom: [orders.id] } });
   const t = h.store.createThread({ starter: { boxId: orders.id, session: 'main' }, peer: { boxId: billing.id, session: 'main' } });
   h.store.addMessage(t.id, { from: 'starter', body: 'hi' });

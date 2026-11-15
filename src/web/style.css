@@ -1970,8 +1970,11 @@ button.empty-kbd:hover { color: var(--text); }
 /* The .fleet-panel chrome with a Threads | Refused strip in its header. The body
    never scrolls: the list, or the thread's message list, is the one scroller,
    so the thread head with Back and Stop stays on screen. */
-.messages-tabs { margin-left: auto; border-bottom: 0; }
-.messages-tab { padding: 4px 10px; }
+/* Doubled with the reused .pve-tabs/.pve-tab classes: those rules come later in
+   the file, so a single class here lost and the strip drew a second seam above
+   the header's own border. */
+.pve-tabs.messages-tabs { margin-left: auto; border-bottom: 0; }
+.pve-tab.messages-tab { padding: 4px 10px; }
 .messages-error { flex: 0 0 auto; margin: 8px 14px 0; color: var(--crit); font-size: 12.5px; line-height: 1.5; }
 .messages-content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .messages-empty { margin: 0; padding: 12px 16px; color: var(--dim); font-size: 12.5px; list-style: none; }

@@ -1964,11 +1964,18 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (!(await store.getBox(id))) return reply.code(404).send({ error: 'unknown box' });
     const body = req.body;
     if (body === null || typeof body !== 'object' || Array.isArray(body)) return reply.code(400).send({ error: 'policy must be an object' });
-    const { mirror = [] } = body;
-    if (!Array.isArray(mirror) || !mirror.every((x) => typeof x === 'string')) return reply.code(400).send({ error: 'mirror must be an array of box ids' });
+    // `mirror` is per list: { sendTo?: string[], receiveFrom?: string[] }, the ids whose
+    // counterpart entry to write for that list (agentMailPolicyStore.set). Anything else is 400.
+    const mirror = body.mirror === undefined ? {} : body.mirror;
+    const idList = (v) => v === undefined || (Array.isArray(v) && v.every((x) => typeof x === 'string'));
+    if (mirror === null || typeof mirror !== 'object' || Array.isArray(mirror)
+      || !Object.keys(mirror).every((k) => k === 'sendTo' || k === 'receiveFrom')
+      || !idList(mirror.sendTo) || !idList(mirror.receiveFrom)) {
+      return reply.code(400).send({ error: 'mirror must be { sendTo?: [box ids], receiveFrom?: [box ids] }' });
+    }
     const knownIds = new Set((await store.listBoxes()).map((b) => b.id));
     try {
-      await agentMail.policyStore.set(id, { send: body.send, sendTo: body.sendTo, receive: body.receive, receiveFrom: body.receiveFrom }, { knownIds, mirror });
+      await agentMail.policyStore.set(id, { send: body.send, sendTo: body.sendTo, receive: body.receive, receiveFrom: body.receiveFrom }, { knownIds, mirror: { sendTo: mirror.sendTo ?? [], receiveFrom: mirror.receiveFrom ?? [] } });
     } catch (e) {
       return reply.code(400).send({ error: e?.message || 'invalid policy' });
     }
