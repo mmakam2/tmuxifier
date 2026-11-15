@@ -21,6 +21,7 @@ const SSH = { controlDir: '/run/cm', sshConfigFile: '/etc/test-ssh-config' };
 //   file     a socket file exists at ~/.tmuxifier-mail/sock on the box
 //   linked   that file is the live forward's listener (a deleted-and-recreated or stale file is not)
 //   cp       the ControlPath `ssh -G` resolves for it (an alias shares it: one master)
+//   cancelDead  `-O cancel` on this master times out and removes nothing
 function createWorld() {
   const boxes = new Map();
   const calls = [];
@@ -81,6 +82,8 @@ function createWorld() {
         const [remote, local] = spec.split(':');
         expect(remote).toBe(`${b.home}/.tmuxifier-mail/sock`);
         if (op === 'cancel') {
+          // A cancel that does not take effect (a hung master: the mux call times out).
+          if (b.cancelDead) return { code: 124, timedOut: true, stdout: '', stderr: '' };
           // Found by the whole spec; the server's listener at the box path closes with it.
           if (!b.forwards.includes(local)) return { code: 255, stdout: '', stderr: 'mux_client_forward: forwarding request failed: port forwarding not found\r\n' };
           b.forwards = b.forwards.filter((x) => x !== local); b.linked = false; // the file stays behind
@@ -144,7 +147,44 @@ function viaBoxSocket(world, host) {
   return b.file && b.linked && b.forward ? ping(b.forward, 'abcdef0123456789') : Promise.resolve(null);
 }
 
-const sockOf = (dataDir, id) => path.join(dataDir, 'mail', `${crypto.createHash('sha256').update(id).digest('hex').slice(0, 12)}.sock`);
+// The bench's box records. A box's local socket is named from its id AND its connection fields
+// (host, user, port, proxyJump), so `sockOf` takes the record, or the id of one of these.
+const BOXES = {
+  o: { id: 'o', label: 'orders', host: 'orders.example.com', user: 'me', sessionName: 'main' },
+  b: { id: 'b', label: 'billing', host: 'billing.example.com', sessionName: 'main' },
+  c: { id: 'c', label: 'third', host: 'c.example.com', sessionName: 'main' },
+};
+const sockOf = (dataDir, idOrBox) => {
+  const box = typeof idOrBox === 'string' ? BOXES[idOrBox] : idOrBox;
+  const sig = JSON.stringify([box.host ?? null, box.user ?? null, box.port ?? null, box.proxyJump ?? null]);
+  const name = crypto.createHash('sha256').update(JSON.stringify([box.id, sig])).digest('hex').slice(0, 12);
+  return path.join(dataDir, 'mail', `${name}.sock`);
+};
+
+// One GET /v1/wait held on a unix socket, as a box-side waiter's connection through a forward is.
+// Resolves with { status, body } when it is answered, or { gone: true } when the connection ends
+// without an answer.
+function holdWait(socketPath, session = 'main') {
+  return new Promise((resolve) => {
+    const req = http.request({ socketPath, path: `/v1/wait?session=${session}&pane=%251`, method: 'GET' }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body }));
+      res.on('error', () => resolve({ gone: true }));
+    });
+    req.on('error', () => resolve({ gone: true }));
+    req.end();
+  });
+}
+const settledWithin = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(() => r('still held'), ms))]);
+const until = async (fn, ms = 2000) => {
+  const end = Date.now() + ms;
+  while (!fn()) {
+    if (Date.now() > end) throw new Error('condition never held');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+};
 
 let cleanups = [];
 afterEach(async () => {
@@ -160,11 +200,7 @@ async function bench(opts = {}) {
   world.add('orders.example.com');
   world.add('billing.example.com');
   world.add('c.example.com');
-  const boxes = [
-    { id: 'o', label: 'orders', host: 'orders.example.com', user: 'me', sessionName: 'main' },
-    { id: 'b', label: 'billing', host: 'billing.example.com', sessionName: 'main' },
-    { id: 'c', label: 'third', host: 'c.example.com', sessionName: 'main' },
-  ];
+  const boxes = [{ ...BOXES.o }, { ...BOXES.b }, { ...BOXES.c }];
   const clock = { t: 1_000_000 };
   const up = { o: { reachable: true }, b: { reachable: true }, c: { reachable: true } };
   const fwd = createAgentMailForward({
@@ -396,13 +432,28 @@ test('switches turned off: cancel, remote rm, listener closed, state off', async
   await fwd.sync(boxes, up);
   expect(world.calls.slice(n2).filter((c) => c.host === 'orders.example.com')).toEqual([]);
 
-  // A box removed from the list is torn down the same way.
-  const n3 = world.calls.length;
+});
+
+test('a box removed from the list: its listener is closed and its forward cancelled locally; no remote command is run on it', async () => {
+  const { dataDir, world, boxes, up, fwd } = await bench();
+  await fwd.sync(boxes, up);
+  const local = sockOf(dataDir, 'b');
+  expect(await ping(local, 'abcdef0123456789')).toBe(200);
+  const n = world.calls.length;
   await fwd.sync([boxes[0], boxes[2]], up);
-  expect(world.ops(n3)).toEqual(['cancel', 'rm']);
-  expect(world.calls[n3].host).toBe('billing.example.com');
-  expect(fwd.status('b').state).toBe('off');
-  expect(fs.existsSync(sockOf(dataDir, 'b'))).toBe(false);
+  const mine = world.calls.slice(n).filter((c) => c.host === 'billing.example.com');
+  // `-O cancel` talks to the local master only; an `rm` would open an ssh connection to a box
+  // the operator has just removed.
+  expect(mine.map((c) => c.op)).toEqual(['cancel']);
+  expect(mine[0].spec).toBe(`/home/billing/.tmuxifier-mail/sock:${local}`);
+  expect(world.box('billing.example.com').forwards).toEqual([]);
+  expect(fwd.status('b')).toEqual({ state: 'off', installed: null, listening: 0 });
+  expect(fs.existsSync(local)).toBe(false);
+  expect(await ping(local, 'abcdef0123456789')).toBe(null);
+  // Once: nothing more is sent for it.
+  const n2 = world.calls.length;
+  await fwd.sync([boxes[0], boxes[2]], up);
+  expect(world.calls.slice(n2).filter((c) => c.host === 'billing.example.com')).toEqual([]);
 });
 
 test('an unreachable box keeps its listener and reads down', async () => {
@@ -549,8 +600,81 @@ test('changed connection fields are a new master: the old forward is cancelled, 
     'forward@orders2.example.com', 'verify@orders2.example.com',
   ]);
   expect(world.box('orders.example.com').forward).toBe(null);
-  expect(world.box('orders2.example.com').forward).toBe(sockOf(dataDir, 'o'));
+  // The socket path follows the connection fields: the new machine is forwarded to a new path,
+  // and nothing is left at the old one.
+  expect(sockOf(dataDir, moved)).not.toBe(sockOf(dataDir, 'o'));
+  expect(world.box('orders2.example.com').forward).toBe(sockOf(dataDir, moved));
+  expect(world.calls[n].spec).toBe(`/home/orders/.tmuxifier-mail/sock:${sockOf(dataDir, 'o')}`); // the old spec
+  expect(fs.existsSync(sockOf(dataDir, 'o'))).toBe(false);
+  expect(fs.readdirSync(path.join(dataDir, 'mail'))).toEqual([path.basename(sockOf(dataDir, moved))]);
   expect(fwd.status('o').state).toBe('up');
+});
+
+test('a request held through the old machine is ended at the sync after a re-address, and no longer counts as listening', async () => {
+  for (const field of ['host', 'user', 'port', 'proxyJump']) {
+    const { h, dataDir, world, boxes, fwd } = await bench();
+    await fwd.sync([boxes[0]], { o: { reachable: true } });
+    // A waiter on the old machine, connected through the old master's forward.
+    const held = holdWait(sockOf(dataDir, 'o'));
+    await until(() => h.hub.listening('o').main === 1);
+    expect(fwd.status('o').listening).toBe(1);
+    // The operator re-addresses the box. A new `host` is a machine with a master of its own; a
+    // new `user` here reaches the same master (the model keys masters by host name); a new
+    // `port` or jump host is made not to resolve. The listener goes before anything else is
+    // done for the box in every case, resolved or not.
+    const moved = { ...boxes[0], [field]: { host: 'orders2.example.com', user: 'other', port: 2222, proxyJump: 'jump.example.com' }[field] };
+    if (field === 'host') world.add('orders2.example.com', { home: '/home/orders' });
+    if (field === 'port' || field === 'proxyJump') world.resolveFails = true;
+    await fwd.sync([moved], { o: { reachable: true } });
+    expect(fwd.status('o').state, field).toBe(field === 'port' || field === 'proxyJump' ? 'error' : 'up');
+    // The held request has ended: idle (204, no text) or the connection closed. Never a wake.
+    const ended = await settledWithin(held, 500);
+    expect(ended, field).not.toBe('still held');
+    if (!ended.gone) expect(ended, field).toEqual({ status: 204, body: '' });
+    expect(h.hub.listening('o'), field).toEqual({});
+    expect(fwd.status('o').listening, field).toBe(0);
+    // Nothing of this process is bound at the old path any more.
+    expect(fs.existsSync(sockOf(dataDir, 'o')), field).toBe(false);
+    expect(await ping(sockOf(dataDir, 'o'), 'abcdef0123456789'), field).toBe(null);
+    // Where the move resolved, the box answers again, at the path of its new connection fields.
+    if (field === 'host' || field === 'user') {
+      const host = field === 'host' ? 'orders2.example.com' : O_HOST;
+      expect(world.box(host).forwards, field).toEqual([sockOf(dataDir, moved)]);
+      expect(await viaBoxSocket(world, host), field).toBe(200);
+    }
+  }
+});
+
+test('a re-address whose cancel on the old master does not take effect: the old machine\'s surviving forward entry reaches no listener of this process', async () => {
+  const { h, dataDir, world, boxes, fwd } = await bench();
+  await fwd.sync([boxes[0]], { o: { reachable: true } });
+  const oldLocal = sockOf(dataDir, 'o');
+  expect(await viaBoxSocket(world, O_HOST)).toBe(200);
+  world.add('orders2.example.com', { home: '/home/orders' });
+  world.box(O_HOST).cancelDead = true;
+  const moved = { ...boxes[0], host: 'orders2.example.com' };
+  const n = world.calls.length;
+  await fwd.sync([moved], { o: { reachable: true } });
+  // The one cancel went out with the old spec and removed nothing: the old master keeps its entry.
+  expect(world.calls.slice(n).map((c) => `${c.op}@${c.host.split('.')[0]}`)).toEqual([
+    'cancel@orders', 'check@orders2', 'ensure@orders2', 'cancel@orders2', 'forward@orders2', 'verify@orders2',
+  ]);
+  expect(world.box(O_HOST)).toMatchObject({ forwards: [oldLocal], file: true, linked: true });
+  expect(fwd.status('o').state).toBe('up');
+  // ... and it leads to a path nothing binds: the old machine cannot speak as this box, on this
+  // sync or any later one, for as long as that master lives.
+  for (let i = 0; i < 3; i++) {
+    expect(await viaBoxSocket(world, O_HOST)).toBe(null);
+    expect(await ping(oldLocal, 'abcdef0123456789')).toBe(null);
+    expect(fs.existsSync(oldLocal)).toBe(false);
+    expect(h.hub.listening('o')).toEqual({});
+    const n2 = world.calls.length;
+    await fwd.sync([moved], { o: { reachable: true } });
+    expect(opsOn(world, O_HOST, n2)).toEqual([]); // the cancel is not sent again
+  }
+  // The new machine is the box.
+  expect(await viaBoxSocket(world, 'orders2.example.com')).toBe(200);
+  expect(world.box('orders2.example.com').forwards).toEqual([sockOf(dataDir, moved)]);
 });
 
 test('a sync that overlaps a running one is skipped; a throwing run never rejects sync', async () => {
@@ -932,7 +1056,9 @@ test('a box re-addressed to a connection that does not resolve stops answering a
     'check@billing2', 'ensure@billing2', 'cancel@billing2', 'forward@billing2', 'verify@billing2',
   ]);
   expect(world.box(B_HOST).forwards).toEqual([]);
-  expect(world.box(NEW_HOST).forwards).toEqual([local]);
+  expect(world.box(NEW_HOST).forwards).toEqual([sockOf(dataDir, moved[1])]);
+  expect(sockOf(dataDir, moved[1])).not.toBe(local);
+  expect(fs.existsSync(local)).toBe(false);
   expect(fwd.status('b')).toEqual({ state: 'up', installed: true, listening: 0 });
   expect(await viaBoxSocket(world, B_HOST)).toBe(null);
   expect(await viaBoxSocket(world, NEW_HOST)).toBe(200);

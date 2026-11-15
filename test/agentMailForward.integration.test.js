@@ -35,11 +35,17 @@ const until = async (fn, ms) => {
 
 // `second`: a second box record for the SAME machine under another ssh name (as the e2e setup's
 // aliases are), with both switches on: same HostName, port and user, so one ControlMaster.
-async function harness(forwardOptions = {}, { second = false } = {}) {
+// `other`: an ssh name, OTHER_HOST, that reaches the same sshd over a connection of its own: a
+// different HostName (`localhost`, IPv4 only, for the fixture's 127.0.0.1), so a different
+// ControlPath (%C) and a second ControlMaster. It stands for the machine a box is re-addressed to.
+const OTHER_HOST = 'tmuxifierlocal-other';
+async function harness(forwardOptions = {}, { second = false, other = false } = {}) {
   const lb = await setupLocalBox();
-  if (second) {
-    const opts = fs.readFileSync(lb.sshConfigFile, 'utf8').split('\n').filter((l) => l.trim() && !l.startsWith('Host ')).join('\n');
-    fs.appendFileSync(lb.sshConfigFile, `\nHost tmuxifierlocal-b\n${opts}\n`);
+  const hostOpts = fs.readFileSync(lb.sshConfigFile, 'utf8').split('\n').filter((l) => l.trim() && !l.startsWith('Host '));
+  if (second) fs.appendFileSync(lb.sshConfigFile, `\nHost tmuxifierlocal-b\n${hostOpts.join('\n')}\n`);
+  if (other) {
+    const opts = hostOpts.map((l) => (/^\s*HostName\s/.test(l) ? '  HostName localhost\n  AddressFamily inet' : l));
+    fs.appendFileSync(lb.sshConfigFile, `\nHost ${OTHER_HOST}\n${opts.join('\n')}\n`);
   }
   const controlDir = path.join(lb.tmp, 'cm');
   fs.mkdirSync(controlDir, { mode: 0o700 });
@@ -103,13 +109,15 @@ async function harness(forwardOptions = {}, { second = false } = {}) {
     const argv = buildProbeArgv(lb.box, cmd, sshOpts);
     return input === undefined ? run(argv, { timeout }) : sshRunStdin(argv, input, { env: lb.env, timeout });
   };
-  const masterPid = async () => /pid=(\d+)/.exec((await run(buildControlCheckArgv(lb.box, sshOpts), { timeout: 6000 })).stderr)?.[1] ?? null;
+  const masterPid = async (b = lb.box) => /pid=(\d+)/.exec((await run(buildControlCheckArgv(b, sshOpts), { timeout: 6000 })).stderr)?.[1] ?? null;
   const boxSock = path.join(mailDir, 'sock');
 
   teardown = async () => {
     for (const f of forwards) await f.stopAll();
     try { await remote('tmux kill-server', 5000); } catch { /* none */ }
-    try { await run(['-F', lb.sshConfigFile, '-o', `ControlPath=${path.join(controlDir, '%C')}`, '-O', 'exit', lb.box.host]); } catch { /* no master */ }
+    for (const name of other ? [lb.box.host, OTHER_HOST] : [lb.box.host]) {
+      try { await run(['-F', lb.sshConfigFile, '-o', `ControlPath=${path.join(controlDir, '%C')}`, '-O', 'exit', name]); } catch { /* no master */ }
+    }
     await lb.cleanup();
     await h.cleanup();
     fs.rmSync(dataDir, { recursive: true, force: true });
@@ -350,4 +358,56 @@ test('two box records for one machine through a master kill and a keeper restart
   expect(await masterPid()).toBe(pid2);
   holds(fwd2);
   expect(await starterOf('after the restart')).toEqual({ boxId: 'b1', session: 'a' });
+}, 120000);
+
+test('a re-addressed box: a request held through the old connection ends at the next sync and gets no mail; the new connection is the box', async () => {
+  const { h, box, snapshot, fwd, tmx, remote, masterPid, dataDir } = await harness({}, { other: true });
+  await fwd.sync([box], snapshot);
+  expect(fwd.status('b1')).toEqual({ state: 'up', installed: true, listening: 0 });
+  const [oldSock] = fs.readdirSync(path.join(dataDir, 'mail'));
+  const oldPid = await masterPid();
+  expect(oldPid).toMatch(/^\d+$/);
+
+  // A waiter of session b on the box, connected through the OLD connection's forward. A bare
+  // curl, not tmx hook-wait, so this one connection is what is observed: hook-wait would ask
+  // again on a 204, through whatever forward is on the box by then.
+  const held = remote(
+    'curl -s -m 40 -G --unix-socket "$HOME/.tmuxifier-mail/sock" --data-urlencode session=b '
+      + "--data-urlencode 'pane=%1' -w '\\n%{http_code}' http://mail/v1/wait",
+    60000,
+  );
+  expect(await until(() => fwd.status('b1').listening === 1, 10000)).toBe(true);
+
+  // The operator re-addresses the record: the same box id now names another ssh connection.
+  const moved = { ...box, host: OTHER_HOST };
+  await fwd.sync([moved], snapshot);
+  expect(fwd.status('b1')).toEqual({ state: 'up', installed: true, listening: 0 });
+  const newPid = await masterPid(moved);
+  expect(newPid).toMatch(/^\d+$/);
+  expect(newPid).not.toBe(oldPid);
+  expect(await masterPid()).toBe(oldPid); // the old master lives on; only its forward is gone
+
+  // The old connection was closed: answered idle (204) or cut (curl reports 000), with no text.
+  const ended = await held;
+  expect(ended.stdout).toMatch(/^\n(204|000)$/);
+  expect(h.hub.listening('b1')).toEqual({});
+
+  // Mail for that session now waits for a listener of the box as it is addressed now.
+  const sent = await h.hub.send({ boxId: 'b1', session: 'a' }, './b', 'for the box, not for whoever held the old connection');
+  expect(sent.ok, sent.text).toBe(true);
+  expect(sent.text).toMatch(/queued: local\/b is not listening$/);
+  expect(h.store.thread(sent.threadId).messages.map((m) => m.state)).toEqual(['queued']);
+
+  // The listener moved to a new path (named from the new connection fields); nothing is bound at
+  // the old one, so an entry a master might still hold for it would lead nowhere.
+  const socks = fs.readdirSync(path.join(dataDir, 'mail'));
+  expect(socks).toHaveLength(1);
+  expect(socks[0]).not.toBe(oldSock);
+  // And the box, reached over its new connection, is the box: tmx on it answers as b1.
+  const who = await tmx('a', ['who']);
+  expect(who.stderr).toBe('');
+  expect(who.code).toBe(0);
+  const viaNew = await tmx('a', ['send', './b', 'through the new connection']);
+  expect(viaNew.code).toBe(0);
+  expect(h.store.thread(/Thread (t-[a-z2-9]{8})\./.exec(viaNew.stdout)[1]).starter).toEqual({ boxId: 'b1', session: 'a' });
 }, 120000);

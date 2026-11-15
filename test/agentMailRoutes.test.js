@@ -11,11 +11,11 @@ import { createMailHarness, mark } from './helpers/agentMailHarness.js';
 // The browser routes over the real mail store, policy store and hub (the harness) and a real
 // box store; only `forward` and `kick` are stubs, as they belong to the ssh layer.
 
-let dir, h, store, app, kicks;
+let dir, h, store, app, kicks, logs;
 const route = (m, url, extra = {}) => app.inject({ method: m, url, headers: browser, ...extra });
 let browser, bearer;
 
-async function boot({ withMail = true } = {}) {
+async function boot({ withMail = true, kick = async () => { kicks++; } } = {}) {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-mailr-'));
   h = await createMailHarness({}, { boxes: [], policies: {} });
   store = createStore({ dataDir: dir });
@@ -35,12 +35,14 @@ async function boot({ withMail = true } = {}) {
   };
   const deviceStore = createDeviceStore({ dataDir: dir });
   kicks = 0;
+  logs = [];
   const forward = { status: () => ({ state: 'up', installed: true, listening: 1 }) };
   app = buildServer({
     config, store, deviceStore,
     sessions: { open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {} },
     statusChecker: { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) },
-    agentMail: withMail ? { hub: h.hub, store: h.store, policyStore: h.policyStore, forward, kick: async () => { kicks++; } } : null,
+    agentMail: withMail ? { hub: h.hub, store: h.store, policyStore: h.policyStore, forward, kick } : null,
+    log: (line) => logs.push(line),
   });
   const login = await app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
   const c = login.cookies.find((x) => x.name === 'tmuxifier_session');
@@ -232,4 +234,38 @@ test('GET /api/boxes carries no mail policy', async () => {
   await route('PUT', `/api/boxes/${orders.id}/mail`, { payload: { send: true, sendTo: [billing.id] } });
   const body = (await route('GET', '/api/boxes')).body;
   expect(body).not.toMatch(/sendTo|receiveFrom|"send"|mail/i);
+});
+
+test('a box PATCH that changes a connection field kicks a mail sync at once; any other change does not', async () => {
+  const { orders } = await boot();
+  const patch = (payload) => route('PATCH', `/api/boxes/${orders.id}`, { payload });
+  expect((await patch({ label: 'orders-renamed' })).statusCode).toBe(200);
+  expect((await patch({ sessionName: 'work' })).statusCode).toBe(200);
+  expect((await patch({ host: '192.168.1.10' })).statusCode).toBe(200); // the same host: not a change
+  await new Promise((r) => setImmediate(r));
+  expect(kicks).toBe(0);
+  let n = 0;
+  for (const change of [{ host: '192.168.1.20' }, { user: 'deploy' }, { port: 2222 }, { proxyJump: 'jump.example.com' }]) {
+    const res = await patch(change);
+    expect(res.statusCode, JSON.stringify(change)).toBe(200);
+    await new Promise((r) => setImmediate(r));
+    expect(kicks, JSON.stringify(change)).toBe(++n);
+  }
+  // A rejected patch changes nothing and kicks nothing.
+  expect((await patch({ host: 'bad host;id' })).statusCode).toBe(400);
+  await new Promise((r) => setImmediate(r));
+  expect(kicks).toBe(4);
+});
+
+test('a box PATCH answers normally when the mail kick fails, and when messaging is off', async () => {
+  const { orders: o2 } = await boot({ kick: async () => { kicks++; throw new Error('boxes unreadable'); } });
+  const res = await route('PATCH', `/api/boxes/${o2.id}`, { payload: { host: '192.168.1.21' } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json().host).toBe('192.168.1.21');
+  await new Promise((r) => setImmediate(r));
+  expect(kicks).toBe(1);
+  expect(logs).toEqual(['[tmuxifier] agent mail kick failed: boxes unreadable']);
+  await app.close(); await h.cleanup();
+  const { orders: o3 } = await boot({ withMail: false });
+  expect((await route('PATCH', `/api/boxes/${o3.id}`, { payload: { host: '192.168.1.22' } })).statusCode).toBe(200);
 });

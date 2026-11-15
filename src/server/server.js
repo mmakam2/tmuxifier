@@ -967,6 +967,12 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       if (before && sessions?.closeGroup && connectionFields.some((f) => updated[f] !== before[f])) {
         sessions.closeGroup(req.params.id, 'terminal');
       }
+      // A changed address is another machine for agent mail: the forward keeper drops the box's
+      // listener (and every connection made through the old machine) on its next sync, so run
+      // one now instead of at the next sweep. Not awaited; a failure is the next sweep's to redo.
+      if (agentMail && before && ['host', 'user', 'port', 'proxyJump'].some((f) => updated[f] !== before[f])) {
+        Promise.resolve().then(() => agentMail.kick()).catch((e) => log(`[tmuxifier] agent mail kick failed: ${e?.message || e}`));
+      }
       return updated;
     }
     catch (e) { return reply.code(400).send({ error: e.message }); }

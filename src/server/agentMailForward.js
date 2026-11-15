@@ -8,15 +8,21 @@ import { createAgentMailListener } from './agentMailListener.js';
 import { mapWithConcurrency } from './concurrency.js';
 
 // The forward (design 6.4): for every box with a messaging switch on, the backend's per-box
-// listener (agentMailListener.js, data/mail/<12 hex of sha256(box id)>.sock) is put on the box as
-// ~/.tmuxifier-mail/sock by a remote unix-socket forward on the box's ControlMaster
-// (`ssh -O forward -R <box path>:<local path>`). The socket a request arrives on is the box's
-// identity, so a forward exists only on the master of the box it names.
+// listener (agentMailListener.js, data/mail/<12 hex>.sock, the hex being of a sha256 over the box
+// id and its connection fields) is put on the box as ~/.tmuxifier-mail/sock by a remote
+// unix-socket forward on the box's ControlMaster (`ssh -O forward -R <box path>:<local path>`).
+// The socket a request arrives on is the box's identity, so a forward exists only on the master
+// of the box it names, and a local path is bound only while the box names that machine (below,
+// "A re-addressed box").
 //
-// `sync(boxes, snapshot)` is called after every status sweep, beside agentWatch.sync(). Per box:
-//   - switches off, or the box gone from the list: if a forward was ever made, `-O cancel` and a
-//     remote `rm -f` of the box-side file (only when no enabled box shares the connection, below);
-//     the listener is closed; state `off` (entry dropped).
+// `sync(boxes, snapshot)` is called after every status sweep, beside agentWatch.sync(), and at
+// once (`kick`) after a policy save or a box edit that changed a connection field. Per box:
+//   - switches off, or the box gone from the list: the listener is closed first; then, if a
+//     forward was ever made, `-O cancel`, and for a box still in the list a remote `rm -f` of the
+//     box-side file (only when no enabled box shares the connection, below). A box that is gone
+//     from the list gets no remote command: the cancel talks to the local master only, and an
+//     `rm` would open an ssh connection to a machine the operator has just removed. State `off`
+//     (entry dropped).
 //   - switches on, not reachable in the sweep's snapshot: the listener stays, state `down`.
 //   - switches on, reachable: listener up, then `-O check` for the master's pid. The same pid the
 //     forward was last made on means nothing to do, except a recheck every `recheckMs` when the
@@ -76,9 +82,10 @@ import { mapWithConcurrency } from './concurrency.js';
 // resolve`, `waiting for <a> and <b>'s connections to resolve`, `waiting for <a>, <b> and N
 // more's connections to resolve`; except that one with a failure of its own since its last
 // success (`not verified`, `forward failed`, ...) keeps showing that failure.
-// The remote rm of the box-side file, in a teardown, runs only when the leaving box's ControlPath
-// is known and no enabled box has it (and every enabled box's ControlPath resolved): the file is
-// reachable only through a forward on that master, and no box that could forward there remains.
+// The remote rm of the box-side file, in a teardown, runs only for a box still in the list whose
+// ControlPath is known and which no enabled box has (and every enabled box's ControlPath
+// resolved): the file is reachable only through a forward on that master, and no box that could
+// forward there remains.
 //
 // Everything that reaches a shell is a constant except the nonce, generated here and re-validated
 // immediately before it is interpolated. The box's $HOME is box output: it is accepted only as an
@@ -87,12 +94,32 @@ import { mapWithConcurrency } from './concurrency.js';
 // characters is refused there). Remote commands run under the box's login shell, often zsh: every
 // expansion is quoted and there is no glob.
 //
+// A re-addressed box. State is keyed by box id; a box whose connection fields (host, user, port,
+// proxyJump) changed names another machine, and three things keep the old one from speaking as it:
+//   1. The first thing a sync does for such a box, before its new fields are even resolved, is
+//      close its listener. That destroys every connection made through the old machine and ends
+//      every request held on them (a waiter is answered idle, never handed mail), so nothing
+//      established before the edit survives it, a keep-alive connection included.
+//   2. The local socket path is named from the box id AND the connection fields, so the listener
+//      the box gets for its new machine is at a new path. The old master may keep its forward
+//      entry (its one cancel, with the old spec, is sent once and may not take effect on a hung
+//      master; or the edit happened while this process was down): that entry names the old path,
+//      which nothing binds again unless the box is given those same fields back, i.e. names that
+//      machine again. A box edit kicks a sync (server.js), so this takes effect at once, not at
+//      the next sweep.
+//   3. Every local path computed for ANOTHER box (the cancels of siblings' leftover entries in
+//      the holder's ensure) is computed from that box's record as it is now. A leftover entry a
+//      previous process made under the same fields names that same path and is cancelled as
+//      before; a box's own forward is always cancelled by the spec it was made with, kept in
+//      its entry (`made`), never recomputed.
+// What this costs: an entry that survives under OLD fields on a master the box's NEW fields
+// also resolve to (a re-address between two ssh names of one connection whose cancel failed, or
+// one made while this process was down) stays first on that master, which routes the box path
+// to it, so the box reads `not verified` until that master exits. It fails closed.
+//
 // Bounded: boxes are handled four at a time, every ssh call has a timeout (6 s for a control
 // command, 10 s for a remote one), one box's failure is its own, and a sync that arrives while one
-// runs is skipped. State is keyed by box id; a box whose connection fields (host, user, port,
-// proxyJump) changed is a new machine: the old master's forward is cancelled and the new one is
-// ensured, and until the new fields resolve the box's listener is closed (above), so the old
-// host can never keep speaking as this box.
+// runs is skipped.
 
 // Prints whether setup's tools are on the box, as one line. Part of the ensure and of every verify.
 const TOOLS_REMOTE = 'if [ -x "$HOME/.tmuxifier-mail/tmx" ]; then echo \'__MAILTOOLS__ yes\'; else echo \'__MAILTOOLS__ no\'; fi';
@@ -169,13 +196,17 @@ export function createAgentMailForward({
     }
   }
 
-  function socketPathOf(boxId) {
-    return path.join(mailDir, `${crypto.createHash('sha256').update(boxId).digest('hex').slice(0, 12)}.sock`);
+  // The box's local socket: named from its id AND its connection fields (see the header, "A
+  // re-addressed box"), so the path a forward entry names is bound only while the box still
+  // names the machine that entry is on.
+  function socketPathOf(box) {
+    const name = crypto.createHash('sha256').update(JSON.stringify([box.id, sigOf(box)])).digest('hex').slice(0, 12);
+    return path.join(mailDir, `${name}.sock`);
   }
 
   function newEntry(box) {
     return {
-      sig: sigOf(box), socketPath: socketPathOf(box.id), listener: null,
+      sig: sigOf(box), socketPath: socketPathOf(box), listener: null,
       state: 'down', error: undefined, installed: null,
       // Why nothing was run for this box in the last sync, when that was not its own doing
       // (unresolved, or waiting for an unresolved box); shown in place of `error`, which stays
@@ -184,6 +215,15 @@ export function createAgentMailForward({
       pid: null, checkedAt: 0, checkedWall: 0, fails: 0, retryAt: 0,
       made: null, // { cancelArgv, removeArgv } once a forward was attempted on this machine
     };
+  }
+
+  // Closes the box's listener: every connection made through its forward is destroyed and every
+  // request held on it ends (a waiter idle, a reply wait with its status lines). Local only.
+  async function closeListener(e) {
+    if (!e.listener) return;
+    const l = e.listener;
+    e.listener = null;
+    try { await l.close(); } catch { /* already gone */ }
   }
 
   // Cancels this box's own forward entry once: a later teardown or refusal does not send it again.
@@ -286,10 +326,7 @@ export function createAgentMailForward({
 
   // A box that is not its group's holder: nothing answers as it, and nothing is run for it.
   async function refuse(e, holder) {
-    if (e.listener) {
-      try { await e.listener.close(); } catch { /* already gone */ }
-      e.listener = null;
-    }
+    await closeListener(e);
     Object.assign(e, {
       state: 'error', error: `shares a connection with ${nameOf(holder)}`,
       pid: null, made: null, fails: 0, retryAt: 0,
@@ -330,16 +367,17 @@ export function createAgentMailForward({
     }
   }
 
-  // `removeFile`: see the header for when a teardown may remove the box-side file.
+  // A box turned off or removed. The listener goes first, so nothing answers as that box while
+  // the ssh calls run. `removeFile`: see the header for when a teardown may remove the box-side
+  // file (never for a box that is no longer in the list: the cancel talks to the local master
+  // only, the rm would open an ssh connection to a machine the operator has just removed).
   async function teardown(boxId, e, { removeFile }) {
     entries.delete(boxId);
     cps.delete(boxId);
+    await closeListener(e);
     if (e.made) {
       await cancelOwn(e);
       if (removeFile) await call(e.made.removeArgv, REMOTE_TIMEOUT_MS);
-    }
-    if (e.listener) {
-      try { await e.listener.close(); } catch { /* already gone */ }
     }
   }
 
@@ -358,9 +396,18 @@ export function createAgentMailForward({
       if (isEnabled(policy)) want.set(b.id, b);
     }
     const wanted = [...want.values()];
+    const listed = new Set(boxes.filter((b) => b && typeof b.id === 'string').map((b) => b.id));
     const each = (jobs) => mapWithConcurrency(jobs, CONCURRENCY, async (job) => {
       try { await job(); } catch { /* one box's failure is its own */ }
     });
+
+    // A re-addressed box (its connection fields changed) names another machine now. Before
+    // anything else is done for it in this sync, whether or not its new fields resolve, its
+    // listener is closed: nothing established through the old machine keeps speaking as it.
+    await each(wanted.map((b) => async () => {
+      const e = entries.get(b.id);
+      if (e && e.sig !== sigOf(b)) await closeListener(e);
+    }));
 
     // Groups and holders. A box whose ControlPath did not resolve belongs to no group and runs
     // nothing; while any enabled box is unresolved, no forward STARTS (see the header).
@@ -385,7 +432,7 @@ export function createAgentMailForward({
       if (want.has(id)) continue;
       const c = cps.get(id);
       const cp = c && c.sig === e.sig ? c.cp : null;
-      jobs.push(() => teardown(id, e, { removeFile: Boolean(cp) && allResolved && !holderOfCp.has(cp) }));
+      jobs.push(() => teardown(id, e, { removeFile: listed.has(id) && Boolean(cp) && allResolved && !holderOfCp.has(cp) }));
     }
     for (const b of wanted) {
       let e = entries.get(b.id);
@@ -399,7 +446,13 @@ export function createAgentMailForward({
       jobs.push(async () => {
         await cancelOwn(e);
         e.made = null;
-        if (moved) Object.assign(e, { sig: sigOf(b), pid: null, installed: null, fails: 0, retryAt: 0, state: 'down', error: undefined });
+        if (moved) {
+          // The listener was closed at the top of this sync; the next one opens at the new path.
+          Object.assign(e, {
+            sig: sigOf(b), socketPath: socketPathOf(b),
+            pid: null, installed: null, fails: 0, retryAt: 0, state: 'down', error: undefined,
+          });
+        }
       });
     }
     await each(jobs);
@@ -414,10 +467,7 @@ export function createAgentMailForward({
         // forward this box verified is on a machine it no longer names (see the header). Nothing
         // answers as it: the listener is closed, which is local, and the forward counts for
         // nothing from here on.
-        if (e.listener) {
-          try { await e.listener.close(); } catch { /* already gone */ }
-          e.listener = null;
-        }
+        await closeListener(e);
         e.pid = null;
         e.state = 'error';
         e.gate = 'connection not resolved';
@@ -436,7 +486,9 @@ export function createAgentMailForward({
         continue;
       }
       const cp = cpOf.get(b.id);
-      const stale = wanted.filter((x) => x.id !== b.id && cpOf.get(x.id) === cp).map((x) => entries.get(x.id).socketPath);
+      // Each sibling's path from its record as it is now: the path an entry it left under these
+      // same connection fields (a previous process) names.
+      const stale = wanted.filter((x) => x.id !== b.id && cpOf.get(x.id) === cp).map((x) => socketPathOf(x));
       const snap = snapshot && typeof snapshot === 'object' && Object.hasOwn(snapshot, b.id) ? snapshot[b.id] : undefined;
       work.push(() => syncBox(b, e, snap, stale));
     }
@@ -479,11 +531,7 @@ export function createAgentMailForward({
       if (running) await running;
       const all = [...entries.values()];
       entries.clear();
-      await Promise.all(all.map(async (e) => {
-        if (e.listener) {
-          try { await e.listener.close(); } catch { /* already gone */ }
-        }
-      }));
+      await Promise.all(all.map((e) => closeListener(e)));
     },
   };
 }
