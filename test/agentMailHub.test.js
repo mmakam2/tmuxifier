@@ -129,6 +129,21 @@ describe('agentMailHub: send', () => {
     expect(store.threads()).toEqual([]);
   });
 
+  test('a box with send off learns nothing about which boxes exist: send-off comes before the target is looked up', async () => {
+    await setPolicy('o', { send: false, sendTo: ['b'] });
+    const off = refusalText('send-off');
+    for (const target of ['billing', 'nosuchbox', 'nosuchbox/main', 'orders', '.', '']) {
+      expect(await hub.send(O, target, 'ping'), target).toEqual({ ok: false, text: off });
+    }
+    expect(store.refusals().map((r) => [r.target, r.reason])).toEqual(
+      ['', '.', 'orders', 'nosuchbox/main', 'nosuchbox', 'billing'].map((t) => [t, off]),
+    );
+    expect(store.threads()).toEqual([]);
+    // With send on, an unknown name is still told apart.
+    await setPolicy('o', { send: true, sendTo: ['b'] });
+    expect((await hub.send(O, 'nosuchbox', 'ping')).text).toBe(refusalText('unknown-box', { target: 'nosuchbox' }));
+  });
+
   test('target box unreachable (marksOf null) and target session without a marker are refused', async () => {
     delete marks.b;
     const down = await hub.send(O, 'Billing', 'ping');
@@ -236,7 +251,7 @@ describe('agentMailHub: reply', () => {
     store.closeThread(s.threadId, 'operator');
     const closed = await hub.reply(B, s.threadId, 'pong');
     expect(closed.ok).toBe(false);
-    expect(closed.text).toBe(`${refusalText('closed')}\nclosed by the operator`);
+    expect(closed.text).toBe('refused: this thread is closed. Do not start a new thread for the same matter; tell your operator instead.\nclosed by the operator');
     expect(store.refusals()[0]).toEqual({ at: h.clock, from: B, target: s.threadId, reason: closed.text });
     expect(store.thread(s.threadId).messages).toHaveLength(1);
   });

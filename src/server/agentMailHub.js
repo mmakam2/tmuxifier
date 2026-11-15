@@ -1,7 +1,7 @@
 import { SESSION_NAME_RE } from './sshCommand.js';
 import { mayStart } from './agentMailPolicy.js';
 import {
-  cleanBody, bodyProblem, statusPhrase, refusalText, renderThread, renderWho, renderInbox, renderReply, wakeText,
+  cleanBody, bodyProblem, statusPhrase, agentStatusPhrase, refusalText, renderThread, renderWho, renderInbox, renderReply, wakeText,
 } from './agentMailText.js';
 
 // The agent-mail hub: what a coding agent on a box can ask of the backend (design 6.5). The
@@ -27,7 +27,10 @@ import {
 //   boxRemoved(boxId)              closes the box's threads, ends its waiters
 //   closeThread(threadId, reason)  the operator's close; false for an unknown or closed thread
 //   listening(boxId)               { [session]: connected waiters }
-//   threadStatus(thread, viewer)   where a thread stands, as one status phrase
+//   threadStatus(thread, viewer)   where a thread stands, as one status phrase. `viewer` is
+//                                  'starter' or 'peer' for that participant (an agent: the phrase
+//                                  is about ITS newest message, see the function), anything else
+//                                  for the operator (the thread's newest message, short phrases)
 //
 // "Running an agent" means `Object.hasOwn(marksOf(boxId), session)`: a live marker, not the
 // dashboard's `present` flag (design 6.5). `marksOf` returning null means the box is
@@ -82,6 +85,7 @@ const UNDELIVERED = ['queued', 'handed'];
 // What a recipient sees in place of a message that was dropped before it reached it.
 const NOT_DELIVERED = '[not delivered]';
 const SIDES = ['starter', 'peer'];
+const OPERATOR = 'operator'; // threadStatus's viewer for the browser
 const PANE_RE = /^%\d{1,9}$/; // a tmux pane id; it only tells one session's waiters apart
 const MSG_ID_RE = /^m-[a-hj-km-np-z2-9]{8}$/;
 // A handed message no ack confirmed is offered to any waiter of its session after this long.
@@ -271,13 +275,17 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
     return false;
   }
 
-  // The status phrase of a closed thread, or null.
-  function closedPhrase(thread) {
-    return thread && Object.hasOwn(CLOSED_KIND, thread.reason) ? statusPhrase(CLOSED_KIND[thread.reason]) : null;
+  // The status phrase of a closed thread: short for the operator, and with what to do next for
+  // an agent (`forAgent`).
+  function closedPhrase(thread, forAgent = false) {
+    const kind = thread && Object.hasOwn(CLOSED_KIND, thread.reason) ? CLOSED_KIND[thread.reason] : 'closed';
+    return forAgent ? agentStatusPhrase(kind) : statusPhrase(kind);
   }
+  // The refusal of a reply to a closed thread: the refusal says what to do, then why it closed.
   function closedText(thread) {
-    const why = closedPhrase(thread);
-    return why ? `${refusalText('closed')}\n${why}` : refusalText('closed');
+    return thread && Object.hasOwn(CLOSED_KIND, thread.reason)
+      ? `${refusalText('closed')}\n${statusPhrase(CLOSED_KIND[thread.reason])}`
+      : refusalText('closed');
   }
 
   // Where a queued message for `recipient` stands.
@@ -294,7 +302,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
   // Where one message stands: queued (with why), handed to a listening waiter and not yet
   // confirmed (plain `queued`), delivered, or its thread's close.
   function messageStatus(thread, m, boxes) {
-    if (thread.state !== 'open') return closedPhrase(thread) ?? refusalText('closed');
+    if (thread.state !== 'open') return closedPhrase(thread);
     if (m.state === 'queued') return queuedStatus(boxes, thread[otherSide(m.from)]);
     if (m.state === 'delivered') {
       const seconds = Math.max(0, Math.floor((now() - (m.deliveredAt ?? m.at)) / 1000));
@@ -303,13 +311,23 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
     return statusPhrase('queued');
   }
 
-  // Where a thread stands: its newest message's status. With the phrases there are, that reads
-  // the same from either side, so `viewer` changes nothing today. `boxes` (for names) defaults
-  // to the list the hub read last.
+  // Where a thread stands, for `viewer`. `boxes` (for names) defaults to the list the hub read
+  // last.
+  //   the operator (the browser's list): the thread's newest message, whoever sent it.
+  //   a participant ('starter' | 'peer', an agent reading `tmx wait`'s lines): the newest message
+  //   IT sent. When the thread's newest message is the other side's and the viewer has it
+  //   (`delivered`, or `handed` to its waiter), there is nothing of the viewer's left to report
+  //   on: `nothing new since the last reply`, never "no reply yet" about a message that was
+  //   answered. A viewer that has sent nothing reads the newest message, which is addressed to it.
   function threadStatus(thread, viewer, boxes = lastBoxes) {
-    if (thread.state !== 'open') return closedPhrase(thread) ?? refusalText('closed');
+    const side = SIDES.includes(viewer) ? viewer : null;
+    if (thread.state !== 'open') return closedPhrase(thread, side !== null);
     const last = thread.messages[thread.messages.length - 1];
-    return last ? messageStatus(thread, last, boxes) : statusPhrase('queued');
+    if (!last) return statusPhrase('queued');
+    if (!side || last.from === side) return messageStatus(thread, last, boxes);
+    if (last.state === 'delivered' || last.state === 'handed') return statusPhrase('nothing-new');
+    const mine = thread.messages.findLast((m) => m.from === side);
+    return messageStatus(thread, mine ?? last, boxes);
   }
 
   // One `thread <id>: <status>` line per thread id, for `me` (a participant of each).
@@ -325,7 +343,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
   function sentText(boxes, threadId, messageId) {
     const t = store.thread(threadId);
     const m = t.messages.find((x) => x.id === messageId);
-    return `Sent. Thread ${threadId}. ${m ? messageStatus(t, m, boxes) : threadStatus(t, 'starter', boxes)}`;
+    return `Sent. Thread ${threadId}. ${m ? messageStatus(t, m, boxes) : threadStatus(t, OPERATOR, boxes)}`;
   }
 
   // The thread as the participant on `side` may read it: a dropped message it did not send never
@@ -475,6 +493,10 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
     const policies = await readPolicies();
     const denied = agentCheck(me, boxes);
     if (denied) return refuse(me, typed, denied);
+    // The caller's own send switch first: a box that may not send learns nothing from a
+    // refusal about which boxes exist.
+    const mine = Object.hasOwn(policies, me.boxId) ? policies[me.boxId] : null;
+    if (mine?.send !== true) return refuse(me, typed, refusalText('send-off'));
     const to = resolveTarget(target, boxes, me.boxId);
     if (!to) return refuse(me, typed, refusalText('unknown-box', { target: typed }));
     const peer = { boxId: to.box.id, session: to.session };

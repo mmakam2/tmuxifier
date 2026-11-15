@@ -57,16 +57,31 @@ const STATUS = Object.assign(Object.create(null), {
   'queued-no-agent': ({ who }) => `queued: ${who} is not running an agent`,
   'queued': () => 'queued',
   'delivered-no-reply': ({ seconds }) => `delivered ${seconds} s ago, no reply yet`,
+  // For a participant whose own newest message has been answered and who has that answer.
+  'nothing-new': () => 'nothing new since the last reply',
   'closed-operator': () => 'closed by the operator',
   'closed-withdrawn': () => 'closed: permission withdrawn',
   'closed-box-removed': () => 'closed: box removed',
+  'closed': () => 'closed', // a close whose reason this build does not know
 });
 export const STATUS_KINDS = Object.freeze(Object.keys(STATUS));
 
+// These phrases are also what the operator's Messages drawer shows, so they stay short.
 export function statusPhrase(kind, ctx = {}) {
   const f = STATUS[kind];
   if (!f) throw new Error(`unknown status kind: ${String(kind)}`);
   return f(ctx);
+}
+
+// What an agent is told to do about a closed thread: without it, an agent whose thread the
+// operator stopped can simply start another one for the same matter.
+const CLOSED_ADVICE = 'Do not start a new thread for the same matter; tell your operator instead.';
+
+// A status phrase as an AGENT reads it (`tmx wait`'s lines): the operator's close also says what
+// to do next. Every other kind reads as statusPhrase gives it.
+export function agentStatusPhrase(kind, ctx = {}) {
+  const phrase = statusPhrase(kind, ctx);
+  return kind === 'closed-operator' ? `${phrase}. ${CLOSED_ADVICE}` : phrase;
 }
 
 // code -> (ctx) => string. ctx: { target?: string, who?: string } (target = what the caller typed).
@@ -83,7 +98,7 @@ const REFUSAL = Object.assign(Object.create(null), {
   'empty': () => 'refused: the message is empty',
   'too-large': () => `refused: the message is larger than ${MAX_BODY_BYTES} bytes`,
   'unreachable': ({ target } = {}) => `${target ?? 'the target box'} is unreachable right now; try again shortly`,
-  'closed': () => 'refused: this thread is closed',
+  'closed': () => `refused: this thread is closed. ${CLOSED_ADVICE}`,
   'not-a-participant': () => 'refused: this session is not part of that thread',
 });
 export const REFUSAL_CODES = Object.freeze(Object.keys(REFUSAL));

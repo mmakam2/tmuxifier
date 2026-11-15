@@ -244,6 +244,9 @@ test('operatorStatus: every server status phrase reads "waiting" where agents re
     }
   }
   expect(operatorStatus(statusPhrase('queued-working', ctx))).toBe('waiting: billing/main is working');
+  // The phrases without a leading "queued" pass through as they are.
+  expect(operatorStatus(statusPhrase('nothing-new', ctx))).toBe('nothing new since the last reply');
+  expect(operatorStatus(statusPhrase('closed', ctx))).toBe('closed');
   expect(operatorStatus('queued')).toBe('waiting');
   // Only a leading word is replaced: a box or session named "queued" is left alone.
   expect(operatorStatus('delivered 3 s ago, no reply yet')).toBe('delivered 3 s ago, no reply yet');

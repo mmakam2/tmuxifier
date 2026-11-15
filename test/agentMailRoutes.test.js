@@ -6,7 +6,7 @@ import { buildServer } from '../src/server/server.js';
 import { createStore } from '../src/server/store.js';
 import { createDeviceStore } from '../src/server/deviceStore.js';
 import { hashPassword } from '../src/server/auth.js';
-import { createMailHarness } from './helpers/agentMailHarness.js';
+import { createMailHarness, mark } from './helpers/agentMailHarness.js';
 
 // The browser routes over the real mail store, policy store and hub (the harness) and a real
 // box store; only `forward` and `kick` are stubs, as they belong to the ssh layer.
@@ -172,6 +172,26 @@ test('threads list is newest first and carries no bodies; one thread carries the
   expect(one.messages.map((m) => m.body)).toEqual(['SECRET-BODY', '<b>x</b>']);
   expect(one.messages[0]).toMatchObject({ id: expect.stringMatching(/^m-/), kind: 'task', from: 'starter', state: 'queued' });
   expect((await route('GET', '/api/mail/threads/t-aaaaaaaa')).statusCode).toBe(404);
+});
+
+test('the thread list describes the thread\'s newest message whoever sent it, and a closed thread by its short phrase', async () => {
+  const { orders, billing } = await boot();
+  await h.setPolicy(orders.id, { send: true, sendTo: [billing.id] });
+  await h.setPolicy(billing.id, { receive: true, receiveFrom: [orders.id] });
+  h.marks[orders.id] = { main: mark('working') };
+  h.marks[billing.id] = { main: mark('working') };
+  const O = { boxId: orders.id, session: 'main' };
+  const B = { boxId: billing.id, session: 'main' };
+  const sent = await h.hub.send(O, 'billing/main', 'ping');
+  expect(sent).toMatchObject({ ok: true });
+  await h.hub.reply(B, sent.threadId, 'pong');
+  await h.hub.inbox(O); // the starter has the reply
+  h.clock += 12_000;
+  const status = async () => (await route('GET', '/api/mail/threads')).json().threads[0].status;
+  // An agent on orders would read "nothing new since the last reply"; the operator reads the message.
+  expect(await status()).toBe('delivered 12 s ago, no reply yet');
+  await route('POST', `/api/mail/threads/${sent.threadId}/close`);
+  expect(await status()).toBe('closed by the operator');
 });
 
 test('close is 200 once and 404 the second time; a malformed id is 404 without a lookup', async () => {

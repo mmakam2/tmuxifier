@@ -1934,7 +1934,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   app.get('/api/mail/threads', { preHandler: requireAuth }, async (req, reply) => {
     if (mailRefused(req, reply)) return;
     const boxes = await store.listBoxes();
-    return { threads: agentMail.store.threads().map((t) => mailThreadView(t, agentMail.hub.threadStatus(t, 'starter', boxes))) };
+    return { threads: agentMail.store.threads().map((t) => mailThreadView(t, agentMail.hub.threadStatus(t, 'operator', boxes))) };
   });
   app.get('/api/mail/threads/:id', { preHandler: requireAuth }, async (req, reply) => {
     if (mailRefused(req, reply)) return;

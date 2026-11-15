@@ -4,6 +4,8 @@ import { renderReply, renderWho, wakeText } from '../src/server/agentMailText.js
 import { createMailHarness, O, B, mark } from './helpers/agentMailHarness.js';
 
 const R = { boxId: 'b', session: 'review' };
+// What an agent is told about a thread its operator closed (the browser shows the phrase alone).
+const CLOSED_BY_OPERATOR = 'closed by the operator. Do not start a new thread for the same matter; tell your operator instead.';
 
 let h; let marks; let store; let hub; let setPolicy; let ac;
 
@@ -423,8 +425,48 @@ describe('agentMailHub delivery: waitReplies', () => {
     const own = new AbortController();
     const p = hub.waitReplies(O, [s.threadId], 60_000, own.signal);
     own.abort(); // while the hub is still reading boxes and policy
-    expect(await p).toEqual({ got: false, text: `thread ${s.threadId}: queued: orders/main is working` });
+    // The line is about the caller's own newest message, not the reply it never took.
+    expect(await p).toEqual({ got: false, text: `thread ${s.threadId}: queued: billing/main is working` });
     expect(msgs(s.threadId)[1].state).toBe('queued');
+  });
+
+  test('a lead waiting on two threads again after one reply: that thread reads "nothing new", not "no reply yet"', async () => {
+    marks.b.review = mark('working');
+    const t1 = (await hub.send(O, 'billing', 'one')).threadId;
+    const t2 = (await hub.send(O, 'billing/review', 'two')).threadId;
+    await hub.read(B, t1);
+    h.clock += 5000;
+    await hub.reply(B, t1, 'answer one');
+    const first = await hub.waitReplies(O, [t1, t2], 60_000, ac.signal);
+    expect(first).toEqual({ got: true, text: renderReply({ from: 'billing/main', threadId: t1, body: 'answer one' }) });
+    h.clock += 30_000;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const again = watch(hub.waitReplies(O, [t1, t2], 90_000, ac.signal));
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(again.value).toEqual({
+      got: false,
+      text: `thread ${t1}: nothing new since the last reply\nthread ${t2}: queued: billing/review is working`,
+    });
+    // The browser's list still describes the thread's newest message, whoever sent it.
+    expect(hub.threadStatus(store.thread(t1), 'operator')).toBe('delivered 30 s ago, no reply yet');
+    // The other side, whose newest message it is, reads where that message stands.
+    expect(hub.threadStatus(store.thread(t1), 'peer')).toBe('delivered 30 s ago, no reply yet');
+    // Once the lead writes again, its line is about that message.
+    expect(await hub.reply(O, t1, 'and one more thing')).toMatchObject({ ok: true });
+    expect(hub.threadStatus(store.thread(t1), 'starter')).toBe('queued: billing/main is working');
+    expect(hub.threadStatus(store.thread(t1), 'operator')).toBe('queued: billing/main is working');
+  });
+
+  test('a reply handed to the caller\'s waiter and not confirmed yet also reads "nothing new"', async () => {
+    const t1 = (await hub.send(O, 'billing', 'one')).threadId;
+    marks.o.main = mark('ready');
+    const w = hub.waitMail(O, '%7', ac.signal);
+    await hub.reply(B, t1, 'answer one');
+    expect((await w).text).toContain('answer one');
+    expect(msgs(t1)[1].state).toBe('handed');
+    expect(hub.threadStatus(store.thread(t1), 'starter')).toBe('nothing new since the last reply');
+    const r = await hub.waitReplies(O, [t1], 1000, ac.signal);
+    expect(r).toEqual({ got: false, text: `thread ${t1}: nothing new since the last reply` });
   });
 
   test('waitReplies on a thread the caller is not part of is refused at once and logged', async () => {
@@ -469,15 +511,17 @@ describe('agentMailHub delivery: closing', () => {
     await flush();
     expect(wr.done).toBe(false);
     expect(await hub.closeThread(s.threadId)).toBe(true);
-    expect((await wr.p)).toEqual({ got: false, text: `thread ${s.threadId}: closed by the operator` });
+    expect((await wr.p)).toEqual({ got: false, text: `thread ${s.threadId}: ${CLOSED_BY_OPERATOR}` });
     expect(store.thread(s.threadId)).toMatchObject({ state: 'closed', reason: 'operator' });
     expect(msgs(s.threadId)[0].state).toBe('dropped');
+    // the browser's list shows the phrase alone
+    expect(hub.threadStatus(store.thread(s.threadId), 'operator')).toBe('closed by the operator');
     // a second close, and an unknown id, are false
     expect(await hub.closeThread(s.threadId)).toBe(false);
     expect(await hub.closeThread('t-zzzzzzzz')).toBe(false);
     expect(store.thread(s.threadId).reason).toBe('operator');
     // a wait on a closed thread returns at once
-    expect(await hub.waitReplies(O, [s.threadId], 60_000, ac.signal)).toEqual({ got: false, text: `thread ${s.threadId}: closed by the operator` });
+    expect(await hub.waitReplies(O, [s.threadId], 60_000, ac.signal)).toEqual({ got: false, text: `thread ${s.threadId}: ${CLOSED_BY_OPERATOR}` });
     // and nothing is handed from it
     marks.b.main = mark('ready');
     const w = watch(hub.waitMail(B, '%1', ac.signal));
@@ -613,7 +657,7 @@ describe('agentMailHub delivery: every wait settles exactly once and leaves no t
     await vi.advanceTimersByTimeAsync(0);
     await hub.closeThread(tid);
     await vi.advanceTimersByTimeAsync(0);
-    expect(closed.value).toEqual({ got: false, text: `thread ${tid}: closed by the operator` });
+    expect(closed.value).toEqual({ got: false, text: `thread ${tid}: ${CLOSED_BY_OPERATOR}` });
     expect(vi.getTimerCount()).toBe(0);
     expect(getEventListeners(ac.signal, 'abort')).toHaveLength(0);
   });

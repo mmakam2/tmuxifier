@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   MAX_BODY_BYTES, WAKE_INLINE_CHARS, MAIL_TAG_RE, STATUS_KINDS, REFUSAL_CODES,
-  cleanBody, bodyProblem, wakeText, statusPhrase, refusalText,
+  cleanBody, bodyProblem, wakeText, statusPhrase, agentStatusPhrase, refusalText,
   renderThread, renderWho, renderInbox, renderReply,
 } from '../src/server/agentMailText.js';
 
@@ -69,6 +69,17 @@ describe('statusPhrase / refusalText', () => {
     expect(statusPhrase('closed-operator', ctx)).toBe('closed by the operator');
     expect(statusPhrase('closed-withdrawn', ctx)).toBe('closed: permission withdrawn');
     expect(statusPhrase('closed-box-removed', ctx)).toBe('closed: box removed');
+    expect(statusPhrase('closed', ctx)).toBe('closed');
+    expect(statusPhrase('nothing-new', ctx)).toBe('nothing new since the last reply');
+  });
+  test('an agent reading a closed thread is told not to start another and to tell its operator; the status phrase itself stays short', () => {
+    const advice = 'Do not start a new thread for the same matter; tell your operator instead.';
+    expect(refusalText('closed')).toBe(`refused: this thread is closed. ${advice}`);
+    expect(agentStatusPhrase('closed-operator', ctx)).toBe(`closed by the operator. ${advice}`);
+    expect(statusPhrase('closed-operator', ctx)).toBe('closed by the operator');
+    // Every other kind reads the same for an agent as for the operator.
+    for (const k of STATUS_KINDS) if (k !== 'closed-operator') expect(agentStatusPhrase(k, ctx)).toBe(statusPhrase(k, ctx));
+    expect(() => agentStatusPhrase('nope', ctx)).toThrow();
   });
   test('every refusal code and status kind has wording, and an unknown one throws', () => {
     for (const k of STATUS_KINDS) expect(statusPhrase(k, ctx).length).toBeGreaterThan(0);
