@@ -36,10 +36,13 @@ export type MailForwardState = 'off' | 'down' | 'error' | 'up';
 /**
  * `shares a connection with <label>`: an earlier box in the list holds this box's ssh connection.
  * `connection not resolved`: this box's ssh connection could not be resolved, so it runs nothing.
- * `waiting for another box's connection to resolve`: no forward starts until every box resolves.
+ * `waiting for <label>'s connection to resolve`, `waiting for <a> and <b>'s connections to resolve`,
+ * `waiting for <a>, <b> and N more's connections to resolve`: no forward starts until every box
+ * resolves; the reason names the boxes that do not. Labels are the operator's text: render as text.
  */
 export type MailForwardError = 'socket path too long' | 'bad home' | 'forward failed' | 'not verified' | 'listen failed'
-  | 'connection not resolved' | "waiting for another box's connection to resolve"
+  | 'connection not resolved'
+  | `waiting for ${string}'s connection to resolve` | `waiting for ${string}'s connections to resolve`
   | `shares a connection with ${string}`;
 export interface MailStatus {
   state: MailForwardState;

@@ -56,13 +56,22 @@ import { mapWithConcurrency } from './concurrency.js';
 // its ensure also cancels, by their full specs, the entries the group's other boxes may have left
 // on the master (a master that outlived a restart).
 // It fails closed on a ControlPath that does not resolve (a timeout, a spawn error, a failing
-// `Match exec`): that box runs nothing at all for mail in the sync, reads `error`,
-// `connection not resolved`, keeps a verified forward of its own exactly as it is (or has its
-// listener closed when it has none), and is asked again on the next sync. And while any enabled
-// box is unresolved, no forward STARTS: a box without a forward verified in this process waits
-// (`error`, `waiting for another box's connection to resolve`, nothing run), while one with a
-// verified forward carries on with its checks and rechecks. So nothing is forwarded until every
-// enabled box's grouping is known, and a box the grouping would refuse can never forward first.
+// `Match exec`): that box runs nothing at all for mail in the sync, on any machine or master,
+// reads `error`, `connection not resolved`, and is asked again on the next sync. Its listener is
+// closed in that same sync and it holds no verified forward from then on. The ControlPath is
+// cached per connection fields, so a box that has a verified forward can be unresolved only
+// because its connection fields changed: that forward is on the machine it no longer names.
+// Closing the listener is local and cuts that forward off at once (the old master still holds
+// its entry, which now leads nowhere); what cancels that entry is kept, and the cancel goes out
+// once, with the old spec, in the teardown phase of the first sync in which the new fields
+// resolve. And while any enabled box is unresolved, no forward STARTS: a box without a forward
+// verified in this process waits (`error`, nothing run), while one with a verified forward
+// carries on with its checks and rechecks. So nothing is forwarded until every enabled box's
+// grouping is known, and a box the grouping would refuse can never forward first. A waiting box
+// names the unresolved boxes, in list order, by label: `waiting for <label>'s connection to
+// resolve`, `waiting for <a> and <b>'s connections to resolve`, `waiting for <a>, <b> and N
+// more's connections to resolve`; except that one with a failure of its own since its last
+// success (`not verified`, `forward failed`, ...) keeps showing that failure.
 // The remote rm of the box-side file, in a teardown, runs only when the leaving box's ControlPath
 // is known and no enabled box has it (and every enabled box's ControlPath resolved): the file is
 // reachable only through a forward on that master, and no box that could forward there remains.
@@ -78,7 +87,8 @@ import { mapWithConcurrency } from './concurrency.js';
 // command, 10 s for a remote one), one box's failure is its own, and a sync that arrives while one
 // runs is skipped. State is keyed by box id; a box whose connection fields (host, user, port,
 // proxyJump) changed is a new machine: the old master's forward is cancelled and the new one is
-// ensured, so the old host can never keep speaking as this box.
+// ensured, and until the new fields resolve the box's listener is closed (above), so the old
+// host can never keep speaking as this box.
 
 export const ENSURE_REMOTE = 'mkdir -p "$HOME/.tmuxifier-mail" && chmod 700 "$HOME/.tmuxifier-mail" && rm -f "$HOME/.tmuxifier-mail/sock" && printf \'__MAILHOME__ %s\\n\' "$HOME" && if [ -x "$HOME/.tmuxifier-mail/tmx" ]; then echo \'__MAILTOOLS__ yes\'; else echo \'__MAILTOOLS__ no\'; fi';
 export const REMOVE_REMOTE = 'rm -f "$HOME/.tmuxifier-mail/sock"';
@@ -97,6 +107,16 @@ export function verifyRemote(nonce) {
 }
 
 const sigOf = (box) => JSON.stringify([box.host ?? null, box.user ?? null, box.port ?? null, box.proxyJump ?? null]);
+
+// How a status reason names a box. A label is the operator's text: the client renders it as text.
+const nameOf = (box) => box.label || box.host || box.id;
+
+// The reason of a box that waits for the unresolved ones, given their names in list order.
+function waitingFor(names) {
+  if (names.length === 1) return `waiting for ${names[0]}'s connection to resolve`;
+  if (names.length === 2) return `waiting for ${names[0]} and ${names[1]}'s connections to resolve`;
+  return `waiting for ${names[0]}, ${names[1]} and ${names.length - 2} more's connections to resolve`;
+}
 
 function pidOf(res) {
   const m = /pid=(\d+)/.exec(String(res?.stdout ?? '')) || /pid=(\d+)/.exec(String(res?.stderr ?? ''));
@@ -148,6 +168,10 @@ export function createAgentMailForward({
     return {
       sig: sigOf(box), socketPath: socketPathOf(box.id), listener: null,
       state: 'down', error: undefined, installed: null,
+      // Why nothing was run for this box in the last sync, when that was not its own doing
+      // (unresolved, or waiting for an unresolved box); shown in place of `error`, which stays
+      // the box's own reason.
+      gate: null,
       pid: null, checkedAt: 0, checkedWall: 0, fails: 0, retryAt: 0,
       made: null, // { cancelArgv, removeArgv } once a forward was attempted on this machine
     };
@@ -255,7 +279,7 @@ export function createAgentMailForward({
       e.listener = null;
     }
     Object.assign(e, {
-      state: 'error', error: `shares a connection with ${holder.label || holder.host || holder.id}`,
+      state: 'error', error: `shares a connection with ${nameOf(holder)}`,
       pid: null, made: null, fails: 0, retryAt: 0,
     });
   }
@@ -341,8 +365,9 @@ export function createAgentMailForward({
 
     // Teardown phase, before any holder's work: boxes turned off or removed; a forward of a box's
     // own on a machine it no longer names (connection fields changed); and a forward a box made
-    // before it was refused. The last two by their own spec, never the rm; an unresolved box's
-    // own forward is left exactly as it is.
+    // before it was refused. The last two by their own spec, never the rm. Nothing here is run
+    // for an unresolved box: its entry keeps its old `sig` and `made`, so the cancel of a forward
+    // on the machine it no longer names goes out in the first sync in which it resolves.
     const jobs = [];
     for (const [id, e] of entries) {
       if (want.has(id)) continue;
@@ -367,17 +392,23 @@ export function createAgentMailForward({
     }
     await each(jobs);
 
+    const unresolved = wanted.filter((b) => !resolved(b)).map(nameOf);
     const work = [];
     for (const b of wanted) {
       const e = entries.get(b.id);
+      e.gate = null;
       if (!resolved(b)) {
-        // Fail closed: nothing may be assumed about who else shares this connection.
-        if (e.pid === null && e.listener) {
+        // Fail closed: nothing may be assumed about who else shares this connection, and a
+        // forward this box verified is on a machine it no longer names (see the header). Nothing
+        // answers as it: the listener is closed, which is local, and the forward counts for
+        // nothing from here on.
+        if (e.listener) {
           try { await e.listener.close(); } catch { /* already gone */ }
           e.listener = null;
         }
+        e.pid = null;
         e.state = 'error';
-        e.error = 'connection not resolved';
+        e.gate = 'connection not resolved';
         continue;
       }
       const holder = holderOf(b);
@@ -386,9 +417,10 @@ export function createAgentMailForward({
         continue;
       }
       if (!allResolved && e.pid === null) {
-        // Would start a forward: it waits until every enabled box is grouped.
+        // Would start a forward: it waits until every enabled box is grouped. A failure of its
+        // own since its last success stays the reason shown.
         e.state = 'error';
-        e.error = 'waiting for another box\'s connection to resolve';
+        if (e.fails === 0) e.gate = waitingFor(unresolved);
         continue;
       }
       const cp = cpOf.get(b.id);
@@ -417,7 +449,7 @@ export function createAgentMailForward({
         for (const n of Object.values(hub.listening(boxId) ?? {})) listening += Number(n) || 0;
       } catch { /* the count is advisory */ }
       const out = { state: e.state, installed: e.installed, listening };
-      if (e.state === 'error') out.error = e.error;
+      if (e.state === 'error') out.error = e.gate ?? e.error;
       return out;
     },
     async stopAll() {

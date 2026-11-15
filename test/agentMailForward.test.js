@@ -135,6 +135,13 @@ function ping(socketPath, n) {
   });
 }
 
+// A request made on the box through its ~/.tmuxifier-mail/sock: the status it gets where the
+// master's forward leads, or null when the box-side socket leads nowhere or nothing answers.
+function viaBoxSocket(world, host) {
+  const b = world.box(host);
+  return b.file && b.linked && b.forward ? ping(b.forward, 'abcdef0123456789') : Promise.resolve(null);
+}
+
 const sockOf = (dataDir, id) => path.join(dataDir, 'mail', `${crypto.createHash('sha256').update(id).digest('hex').slice(0, 12)}.sock`);
 
 let cleanups = [];
@@ -774,7 +781,7 @@ test('a keeper start with one box unresolved: no forward starts; on the next syn
   world.resolveFailing.add(B_HOST);
   await fwd.sync(boxes, up);
   expect(world.calls).toEqual([]);
-  expect(fwd.status('o')).toMatchObject({ state: 'error', error: "waiting for another box's connection to resolve" });
+  expect(fwd.status('o')).toMatchObject({ state: 'error', error: "waiting for billing's connection to resolve" });
   expect(fwd.status('b')).toMatchObject(NOT_RESOLVED);
   world.resolveFailing.delete(B_HOST);
   await fwd.sync(boxes, up);
@@ -801,10 +808,168 @@ test('a verified forward keeps its checks and rechecks through a sync in which a
   expect(opsOn(world, O_HOST, n)).toEqual(['check', 'verify']);
   expect(fwd.status('o').state).toBe('up');
   expect(fwd.status('b')).toMatchObject(NOT_RESOLVED);
-  // billing's old forward is left exactly as it was: no cancel on either machine.
+  // billing ran nothing on either machine, so the old master still has its entry; but billing's
+  // listener is closed, so the old machine reaches nothing through it.
   expect(opsOn(world, B_HOST, n)).toEqual([]);
   expect(opsOn(world, 'billing2.example.com', n)).toEqual([]);
+  expect(world.box(B_HOST)).toMatchObject({ forwards: [sockOf(dataDir, 'b')], file: true, linked: true });
+  expect(await viaBoxSocket(world, B_HOST)).toBe(null);
+  // orders, on its own connection, keeps working on the next sync too, and still answers.
+  const n2 = world.calls.length;
+  await fwd.sync(moved, up);
+  expect(world.ops(n2)).toEqual(['check']);
+  expect(fwd.status('o')).toEqual({ state: 'up', installed: true, listening: 0 });
+  expect(await viaBoxSocket(world, O_HOST)).toBe(200);
+});
+
+test('a box re-addressed to a connection that does not resolve stops answering at once; the old forward is cancelled once, when the new address resolves', async () => {
+  const { dataDir, world, boxes, up, fwd } = await bench();
+  await fwd.sync(boxes, up);
+  expect(fwd.status('b').state).toBe('up');
+  const local = sockOf(dataDir, 'b');
+  expect(await viaBoxSocket(world, B_HOST)).toBe(200);
+  // The operator edits billing's host to one whose `ssh -G` fails.
+  const NEW_HOST = 'billing2.example.com';
+  world.add(NEW_HOST);
+  world.resolveFailing.add(NEW_HOST);
+  const moved = [boxes[0], { ...boxes[1], host: NEW_HOST }, boxes[2]];
+  const n = world.calls.length;
+  for (let i = 0; i < 2; i++) {
+    await fwd.sync(moved, up);
+    // No ssh command of any kind for billing, on the old machine or the new one ...
+    expect(opsOn(world, B_HOST, n)).toEqual([]);
+    expect(opsOn(world, NEW_HOST, n)).toEqual([]);
+    expect(fwd.status('b')).toEqual({ state: 'error', error: 'connection not resolved', installed: true, listening: 0 });
+    // ... so the old master still forwards the old machine's socket to billing's local path ...
+    expect(world.box(B_HOST)).toMatchObject({ forwards: [local], file: true, linked: true });
+    // ... but nothing of this process listens there: the old machine cannot speak as billing.
+    expect(fs.existsSync(local)).toBe(false);
+    expect(await ping(local, 'abcdef0123456789')).toBe(null);
+    expect(await viaBoxSocket(world, B_HOST)).toBe(null);
+  }
+  // The new address resolves: first the one cancel of the old spec on the old connection, in the
+  // teardown phase (before any box's work), then the ensure on the new machine.
+  world.resolveFailing.delete(NEW_HOST);
+  const n2 = world.calls.length;
+  await fwd.sync(moved, up);
+  expect(world.calls[n2]).toMatchObject({ op: 'cancel', host: B_HOST, spec: `/home/billing/.tmuxifier-mail/sock:${local}` });
+  expect(world.calls.slice(n2).filter((c) => c.host !== O_HOST).map((c) => `${c.op}@${c.host.split('.')[0]}`)).toEqual([
+    'cancel@billing',
+    'check@billing2', 'ensure@billing2', 'cancel@billing2', 'forward@billing2', 'verify@billing2',
+  ]);
+  expect(world.box(B_HOST).forwards).toEqual([]);
+  expect(world.box(NEW_HOST).forwards).toEqual([local]);
+  expect(fwd.status('b')).toEqual({ state: 'up', installed: true, listening: 0 });
+  expect(await viaBoxSocket(world, B_HOST)).toBe(null);
+  expect(await viaBoxSocket(world, NEW_HOST)).toBe(200);
+  // Once: nothing more goes to the old connection.
+  const n3 = world.calls.length;
+  await fwd.sync(moved, up);
+  expect(opsOn(world, B_HOST, n3)).toEqual([]);
+  expect(opsOn(world, NEW_HOST, n3)).toEqual(['check']);
+});
+
+test('a box moved to an unresolved connection and then moved back is ensured again on its old machine', async () => {
+  const { dataDir, world, boxes, up, fwd } = await bench();
+  await fwd.sync(boxes, up);
+  world.resolveFailing.add('billing2.example.com');
+  await fwd.sync([boxes[0], { ...boxes[1], host: 'billing2.example.com' }, boxes[2]], up);
+  expect(fwd.status('b')).toMatchObject(NOT_RESOLVED);
+  expect(await viaBoxSocket(world, B_HOST)).toBe(null);
+  // Back on its old address it holds no verified forward: the check alone does not bring it up.
+  const n = world.calls.length;
+  await fwd.sync(boxes, up);
+  expect(opsOn(world, B_HOST, n)).toEqual(['check', 'ensure', 'cancel', 'forward', 'verify']);
+  expect(fwd.status('b')).toEqual({ state: 'up', installed: true, listening: 0 });
   expect(world.box(B_HOST).forwards).toEqual([sockOf(dataDir, 'b')]);
+  expect(await viaBoxSocket(world, B_HOST)).toBe(200);
+});
+
+// Enables more boxes of the bench, each on a machine of its own.
+async function enable(t, extra) {
+  for (const b of extra) {
+    if (!t.world.box(b.host)) t.world.add(b.host);
+    if (!t.h.boxes.some((x) => x.id === b.id)) t.h.boxes.push({ id: b.id, label: b.label, sessionName: 'main' });
+    await t.h.setPolicy(b.id, { send: true });
+  }
+}
+
+test('the waiting reason names the unresolved boxes: one, two, then the first two and a count', async () => {
+  // A label is any printable text and goes out as it is; a box without one is named by its host.
+  const d = { id: 'd', label: 'it\'s <b>&"x"', host: 'd.example.com', sessionName: 'main' };
+  const e = { id: 'e', host: 'e.example.com', sessionName: 'main' };
+  const C_HOST = 'c.example.com';
+  // Five enabled boxes, each on a machine of its own. orders always resolves, has no forward yet,
+  // and waits. A resolved ControlPath is cached, so each case fails a subset of the one before.
+  const start = async () => {
+    const t = await bench();
+    await enable(t, [t.boxes[2], d, e]);
+    const boxes = [...t.boxes, d, e];
+    const waiting = async (failing) => {
+      t.world.resolveFailing = new Set(failing);
+      await t.fwd.sync(boxes, t.up);
+      for (const id of ['o', 'b', 'c', 'd', 'e']) {
+        const host = boxes.find((x) => x.id === id).host;
+        expect(t.fwd.status(id)).toMatchObject(failing.includes(host) ? NOT_RESOLVED : { state: 'error', error: t.fwd.status('o').error });
+      }
+      expect(t.world.calls).toEqual([]);
+      return t.fwd.status('o').error;
+    };
+    return waiting;
+  };
+  let waiting = await start();
+  expect(await waiting([B_HOST, C_HOST, d.host, e.host])).toBe("waiting for billing, third and 2 more's connections to resolve");
+  expect(await waiting([B_HOST, C_HOST, d.host])).toBe("waiting for billing, third and 1 more's connections to resolve");
+  expect(await waiting([B_HOST, C_HOST])).toBe("waiting for billing and third's connections to resolve");
+  expect(await waiting([B_HOST])).toBe("waiting for billing's connection to resolve");
+  waiting = await start();
+  expect(await waiting([d.host, e.host])).toBe('waiting for it\'s <b>&"x" and e.example.com\'s connections to resolve');
+  expect(await waiting([e.host])).toBe("waiting for e.example.com's connection to resolve");
+});
+
+test('a box held off after a failure of its own keeps showing that failure while it waits', async () => {
+  for (const [flaw, reason] of [[{ curl: false }, 'not verified'], [{ forwardFails: true }, 'forward failed']]) {
+    const t = await bench();
+    const { h, world, boxes, up, clock, fwd } = t;
+    await h.setPolicy('b', { receive: false });
+    Object.assign(world.box(O_HOST), flaw);
+    await fwd.sync(boxes, up);
+    expect(fwd.status('o')).toMatchObject({ state: 'error', error: reason });
+    // billing is enabled while its `ssh -G` fails, and so is a box with no failure of its own.
+    world.resolveFailing.add(B_HOST);
+    await h.setPolicy('b', { receive: true, receiveFrom: ['o'] });
+    await enable(t, [boxes[2]]);
+    const n = world.calls.length;
+    await fwd.sync(boxes, up); // within orders' hold-off
+    clock.t += 10_000; // past it: only the wait holds orders back now
+    await fwd.sync(boxes, up);
+    expect(world.ops(n)).toEqual([]);
+    expect(fwd.status('o')).toMatchObject({ state: 'error', error: reason });
+    expect(fwd.status('c')).toMatchObject({ state: 'error', error: "waiting for billing's connection to resolve" });
+    expect(fwd.status('b')).toMatchObject(NOT_RESOLVED);
+    // Everything resolves and the flaw is gone: orders retries and comes up.
+    world.resolveFailing.delete(B_HOST);
+    Object.assign(world.box(O_HOST), { curl: true, forwardFails: false });
+    await fwd.sync(boxes, up);
+    for (const id of ['o', 'b', 'c']) expect(fwd.status(id)).toEqual({ state: 'up', installed: true, listening: 0 });
+  }
+});
+
+test('a wait that ends inside a box\'s hold-off leaves that box showing its own failure, not the wait', async () => {
+  const t = await bench({ forward: { retryBaseMs: 60_000, retryCapMs: 60_000 } });
+  const { h, world, boxes, up, fwd } = t;
+  await h.setPolicy('b', { receive: false });
+  world.box(O_HOST).curl = false;
+  await fwd.sync(boxes, up);
+  world.resolveFailing.add(B_HOST);
+  await h.setPolicy('b', { receive: true, receiveFrom: ['o'] });
+  await fwd.sync(boxes, up);
+  world.resolveFailing.delete(B_HOST);
+  const n = world.calls.length;
+  await fwd.sync(boxes, up);
+  expect(opsOn(world, O_HOST, n)).toEqual([]); // still held off
+  expect(fwd.status('o')).toMatchObject({ state: 'error', error: 'not verified' });
+  expect(fwd.status('b').state).toBe('up');
 });
 
 test('a single box whose ControlPath fails to resolve once comes up on the next sync', async () => {

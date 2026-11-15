@@ -52,8 +52,14 @@ test('statusLine covers off, down, error, up with and without tools, and 0, 1 an
   // The fail-closed readings when a box's ssh connection cannot be resolved (agentMailForward.js).
   expect(statusLine({ state: 'error', installed: null, listening: 0, error: 'connection not resolved' }))
     .toBe('Socket not connected: connection not resolved');
-  expect(statusLine({ state: 'error', installed: null, listening: 0, error: "waiting for another box's connection to resolve" }))
-    .toBe("Socket not connected: waiting for another box's connection to resolve");
+  // A box that waits names the boxes it waits for: one, two, then the first two and a count.
+  for (const error of [
+    "waiting for billing's connection to resolve",
+    "waiting for billing and search's connections to resolve",
+    "waiting for billing, search and 2 more's connections to resolve",
+  ]) {
+    expect(statusLine({ state: 'error', installed: null, listening: 0, error })).toBe(`Socket not connected: ${error}`);
+  }
   expect(statusLine({ state: 'up', installed: false, listening: 0 })).toBe('Tools not installed: run setup on this box');
   expect(statusLine({ state: 'up', installed: true, listening: 0 })).toBe('Tools installed · socket connected · no sessions listening');
   expect(statusLine({ state: 'up', installed: true, listening: 1 })).toBe('Tools installed · socket connected · 1 session listening');
