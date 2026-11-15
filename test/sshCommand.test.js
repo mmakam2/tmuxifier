@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { buildAttachArgv, buildProbeArgv, buildSetupArgv, buildProvisionArgv, buildControlExitArgv, buildControlCheckArgv, buildControlPathArgv, sanitizeSession } from '../src/server/sshCommand.js';
+import { buildAttachArgv, buildProbeArgv, buildSetupArgv, buildProvisionArgv, buildControlExitArgv, buildControlCheckArgv, buildControlPathArgv, buildControlForwardArgv, buildControlCancelArgv, sanitizeSession } from '../src/server/sshCommand.js';
 
 test('buildAttachArgv does not expose an unused size parameter', () => {
   expect(buildAttachArgv).toHaveLength(2);
@@ -252,4 +252,67 @@ test('buildSetupArgv is non-interactive: BatchMode on, no -tt, script last', () 
 
 test('buildSetupArgv validates box fields (command-injection guard)', () => {
   expect(() => buildSetupArgv({ host: '-oProxyCommand=evil' }, 'x')).toThrow();
+});
+
+const FWD_BOX = { host: 'h', user: 'me', port: 2222 };
+const FWD_REMOTE = '/home/me/.tmuxifier-mail/sock';
+const FWD_LOCAL = '/srv/data/mail/abc.sock';
+
+test('buildControlForwardArgv: -O forward with -R remote:local on the box master socket', () => {
+  const argv = buildControlForwardArgv(FWD_BOX, FWD_REMOTE, FWD_LOCAL, { controlDir: '/run/cm' });
+  expect(argv[argv.indexOf('-O') + 1]).toBe('forward');
+  expect(argv[argv.indexOf('-R') + 1]).toBe('/home/me/.tmuxifier-mail/sock:/srv/data/mail/abc.sock');
+  expect(argv).toContain('ControlPath=/run/cm/%C'); expect(argv).not.toContain('BatchMode=yes');
+  expect(argv.at(-1)).toBe('me@h');
+  expect(argv[argv.indexOf('-p') + 1]).toBe('2222');
+});
+
+test('buildControlCancelArgv mirrors it with cancel', () => {
+  const opts = { controlDir: '/run/cm', sshConfigFile: '/tmp/cfg' };
+  const box = { ...FWD_BOX, proxyJump: 'gw' };
+  const fwd = buildControlForwardArgv(box, FWD_REMOTE, FWD_LOCAL, opts);
+  const cancel = buildControlCancelArgv(box, FWD_REMOTE, FWD_LOCAL, opts);
+  expect(cancel).toEqual(fwd.map((a) => (a === 'forward' ? 'cancel' : a)));
+  expect(cancel).toEqual([
+    '-F', '/tmp/cfg',
+    '-o', 'ControlPath=/run/cm/%C',
+    '-J', 'gw',
+    '-p', '2222',
+    '-O', 'cancel',
+    '-R', `${FWD_REMOTE}:${FWD_LOCAL}`,
+    'me@h',
+  ]);
+});
+
+test('both return null without a control dir and throw on an unsafe host', () => {
+  expect(buildControlForwardArgv(FWD_BOX, FWD_REMOTE, FWD_LOCAL, {})).toBeNull();
+  expect(buildControlCancelArgv(FWD_BOX, FWD_REMOTE, FWD_LOCAL)).toBeNull();
+  for (const build of [buildControlForwardArgv, buildControlCancelArgv]) {
+    expect(() => build({ host: '-oProxyCommand=x' }, FWD_REMOTE, FWD_LOCAL, { controlDir: '/run/cm' })).toThrow(/unsafe ssh host/);
+    // The box is checked even when multiplexing is off.
+    expect(() => build({ host: 'a b' }, FWD_REMOTE, FWD_LOCAL, {})).toThrow(/unsafe ssh host/);
+  }
+});
+
+test('a remote path with a space, a colon, "..", or over 100 characters is refused; so is a relative or colon-bearing local path', () => {
+  const opts = { controlDir: '/run/cm' };
+  const longest = `/${'a'.repeat(100)}`;
+  for (const build of [buildControlForwardArgv, buildControlCancelArgv]) {
+    expect(build(FWD_BOX, longest, FWD_LOCAL, opts)).toContain(`${longest}:${FWD_LOCAL}`);
+    for (const bad of [
+      '/home/my user/.tmuxifier-mail/sock',
+      '/home/me:x/.tmuxifier-mail/sock',
+      '/home/me/../root/.tmuxifier-mail/sock',
+      `/${'a'.repeat(101)}`,
+      'home/me/.tmuxifier-mail/sock',
+      '',
+      '/home/me/$(id)/sock',
+      undefined,
+    ]) {
+      expect(() => build(FWD_BOX, bad, FWD_LOCAL, opts)).toThrow('unsafe forward path');
+    }
+    for (const bad of ['data/mail/abc.sock', '/srv/da:ta/mail/abc.sock', '', null]) {
+      expect(() => build(FWD_BOX, FWD_REMOTE, bad, opts)).toThrow('unsafe forward path');
+    }
+  }
 });

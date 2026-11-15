@@ -141,13 +141,13 @@ export function buildSetupArgv(box, script, opts = {}) {
 // Send a control command (`exit`, `check`, …) to a box's persistent
 // ControlMaster. This talks to the local control socket only — no network auth,
 // no PTY — so it is safe to run regardless of the box's auth method.
-function buildControlCmdArgv(box, cmd, opts = {}) {
+function buildControlCmdArgv(box, cmd, opts = {}, extra = []) {
   assertBoxSafe(box);
   if (!opts.controlDir) return null;
   const argv = ['-o', `ControlPath=${path.join(opts.controlDir, '%C')}`];
   if (box.proxyJump) argv.push('-J', box.proxyJump);
   if (box.port) argv.push('-p', String(box.port));
-  argv.push('-O', cmd, target(box));
+  argv.push('-O', cmd, ...extra, target(box));
   if (opts.sshConfigFile) argv.unshift('-F', opts.sshConfigFile);
   return argv;
 }
@@ -168,6 +168,35 @@ export function buildControlExitArgv(box, opts = {}) {
 // file so it never tears down a working connection.
 export function buildControlCheckArgv(box, opts = {}) {
   return buildControlCmdArgv(box, 'check', opts);
+}
+
+// Agent mail (agentMailForward.js): add or remove the master's remote unix-socket forward
+// `-R <remotePath>:<localPath>`, which puts the backend's per-box listener on the box. Both ends
+// are checked here, immediately before they become one argv element: the remote path is built
+// from a $HOME the box reported, so it must be an absolute path of safe characters (no space,
+// no colon: ssh splits the spec at the colon) with no `..`, at most 101 characters, and the
+// local path must be absolute with no colon. Like every control command this talks to the local
+// control socket only.
+const FORWARD_REMOTE_RE = /^\/[A-Za-z0-9_./-]{1,100}$/;
+
+function forwardSpec(remotePath, localPath) {
+  const remote = typeof remotePath === 'string' ? remotePath : '';
+  const local = typeof localPath === 'string' ? localPath : '';
+  if (!FORWARD_REMOTE_RE.test(remote) || remote.includes('..')) throw new Error('unsafe forward path');
+  if (!path.isAbsolute(local) || local.includes(':')) throw new Error('unsafe forward path');
+  return `${remote}:${local}`;
+}
+
+export function buildControlForwardArgv(box, remotePath, localPath, opts = {}) {
+  assertBoxSafe(box);
+  const spec = forwardSpec(remotePath, localPath);
+  return buildControlCmdArgv(box, 'forward', opts, ['-R', spec]);
+}
+
+export function buildControlCancelArgv(box, remotePath, localPath, opts = {}) {
+  assertBoxSafe(box);
+  const spec = forwardSpec(remotePath, localPath);
+  return buildControlCmdArgv(box, 'cancel', opts, ['-R', spec]);
 }
 
 // Resolve the concrete ControlPath for a box by letting ssh expand the %C token

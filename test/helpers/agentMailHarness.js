@@ -13,12 +13,14 @@ export const O = { boxId: 'o', session: 'main' };
 export const B = { boxId: 'b', session: 'main' };
 export const mark = (state, cause = state === 'ready' ? 'stop' : 'prompt') => ({ state, cause, ts: 1 });
 
-// hubOptions go to createAgentMailHub (holdMs, for one). Call h.cleanup() in afterEach.
-export async function createMailHarness(hubOptions = {}) {
+// hubOptions go to createAgentMailHub (holdMs, marksOf, for instance). `world` replaces the bench's
+// boxes and policies ({ boxes, policies: { <box id>: policy } }), for a suite whose boxes come
+// from a fixture. Call h.cleanup() in afterEach.
+export async function createMailHarness(hubOptions = {}, world = {}) {
   const h = {};
   h.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mailhub-'));
   h.clock = 1_000_000;
-  h.boxes = [
+  h.boxes = world.boxes ?? [
     { id: 'o', label: 'orders', sessionName: 'main' },
     { id: 'b', label: 'billing', sessionName: 'main' },
   ];
@@ -38,8 +40,8 @@ export async function createMailHarness(hubOptions = {}) {
     ...hubOptions,
     ...opts,
   });
-  await h.setPolicy('o', { send: true, sendTo: ['b'] });
-  await h.setPolicy('b', { receive: true, receiveFrom: ['o'] });
+  const policies = world.policies ?? { o: { send: true, sendTo: ['b'] }, b: { receive: true, receiveFrom: ['o'] } };
+  for (const [id, policy] of Object.entries(policies)) await h.setPolicy(id, policy);
   h.hub = h.makeHub();
   h.cleanup = async () => {
     await h.store.whenIdle();
