@@ -82,6 +82,7 @@ const STATUS = Object.assign(Object.create(null), {
   'closed-operator': () => 'closed by the operator',
   'closed-withdrawn': () => 'closed: permission withdrawn',
   'closed-box-removed': () => 'closed: box removed',
+  'closed-storage-limit': () => 'closed: storage limit',
   'closed': () => 'closed', // a close whose reason this build does not know
 });
 export const STATUS_KINDS = Object.freeze(Object.keys(STATUS));
@@ -117,6 +118,7 @@ const REFUSAL = Object.assign(Object.create(null), {
   'own-session': () => 'refused: that is your own session',
   'empty': () => 'refused: the message is empty',
   'too-large': () => `refused: the message is larger than ${MAX_BODY_BYTES} bytes`,
+  'store-full': () => 'refused: the mail store is full, so no new thread can be started; tell your operator',
   'unreachable': ({ target } = {}) => `${target ?? 'the target box'} is unreachable right now; try again shortly`,
   'closed': () => `refused: this thread is closed. ${CLOSED_ADVICE}`,
   'not-a-participant': () => 'refused: this session is not part of that thread',

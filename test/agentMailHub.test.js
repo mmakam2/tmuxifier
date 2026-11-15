@@ -412,3 +412,94 @@ describe('agentMailHub: policy and who', () => {
     expect(await hub.who(O)).toEqual({ ok: true, text: renderWho([]) });
   });
 });
+
+describe('agentMailHub: the storage bound', () => {
+  const HOUR = 3_600_000;
+
+  test('1500 sends never leave more than 1000 threads: the longest idle are closed "storage limit" and deleted, and a wait on one ends with that', async () => {
+    const ids = [];
+    for (let i = 0; i < 1000; i++) {
+      h.clock += 10_000;
+      ids.push((await hub.send(O, 'billing', `task ${i}`)).threadId);
+    }
+    expect(store.count()).toBe(1000);
+    // The lead still waits on its oldest thread when the store has to make room.
+    const ac = new AbortController();
+    const waiting = hub.waitReplies(O, [ids[0], ids[999]], 540_000, ac.signal);
+    await new Promise((r) => setImmediate(r));
+    for (let i = 1000; i < 1500; i++) {
+      h.clock += 10_000;
+      const r = await hub.send(O, 'billing', `task ${i}`);
+      expect(r.ok, r.text).toBe(true);
+      ids.push(r.threadId);
+      expect(store.count()).toBe(1000);
+    }
+    expect(await waiting).toEqual({
+      got: false,
+      text: `thread ${ids[0]}: closed: storage limit\nthread ${ids[999]}: queued: billing/main is working`,
+    });
+    ac.abort();
+    // The survivors are the 1000 most recently active.
+    expect(store.threads().map((t) => t.id).sort()).toEqual(ids.slice(500).sort());
+    expect(store.refusals()).toEqual([]);
+    // A removed thread is gone for its participants too.
+    expect(await hub.reply(B, ids[0], 'late')).toEqual({ ok: false, text: refusalText('not-a-participant') });
+    await store.whenIdle();
+  }, 60_000);
+
+  test('a flood of threads all active within the hour: the send past the bound is refused "store-full" and logged, and passes once one has aged', async () => {
+    for (let i = 0; i < 1000; i++) expect((await hub.send(O, 'billing', `task ${i}`)).ok).toBe(true);
+    const first = store.threads().at(-1).id;
+    h.clock += HOUR; // exactly an hour: still recent
+    const full = await hub.send(O, 'billing', 'one too many');
+    expect(full).toEqual({ ok: false, text: 'refused: the mail store is full, so no new thread can be started; tell your operator' });
+    expect(full.text).toBe(refusalText('store-full'));
+    expect(store.count()).toBe(1000);
+    expect(store.refusals()[0]).toEqual({ at: h.clock, from: O, target: 'billing', reason: full.text });
+    // Replies in the threads that exist are not affected.
+    expect((await hub.reply(B, first, 'still talking')).ok).toBe(true);
+    // Once the others are more than an hour idle, a new thread takes the place of the longest idle.
+    h.clock += 1;
+    const again = await hub.send(O, 'billing', 'now it fits');
+    expect(again.ok, again.text).toBe(true);
+    expect(store.count()).toBe(1000);
+    expect(store.thread(first)).not.toBeNull(); // it was active a millisecond ago
+    await store.whenIdle();
+  }, 60_000);
+
+  test('a policy refusal comes before the storage bound, and a refused send prunes nothing', async () => {
+    for (let i = 0; i < 1000; i++) await hub.send(O, 'billing', `task ${i}`);
+    h.clock += 2 * HOUR;
+    await setPolicy('b', { receive: false, receiveFrom: ['o'] });
+    expect((await hub.send(O, 'billing', 'x')).text).toBe(refusalText('receive-off', { target: 'billing' }));
+    expect(store.count()).toBe(1000);
+    await store.whenIdle();
+  }, 60_000);
+
+  test('a hub built over a loaded store prunes it: boot enforces the bound', async () => {
+    for (let i = 0; i < 1200; i++) {
+      h.clock += 10_000;
+      store.createThread({ starter: O, peer: B });
+    }
+    expect(store.count()).toBe(1200);
+    await store.whenIdle();
+    // The next process: a new store over the same files, loaded, then its hub.
+    const { createAgentMailStore } = await import('../src/server/agentMailStore.js');
+    const reloaded = createAgentMailStore({ dataDir: h.dir, now: () => h.clock });
+    await reloaded.load();
+    expect(reloaded.count()).toBe(1200);
+    const hub2 = h.makeHub({ store: reloaded });
+    expect(reloaded.count()).toBe(1000);
+    expect(typeof hub2.prune).toBe('function');
+    await reloaded.whenIdle();
+    const again = createAgentMailStore({ dataDir: h.dir, now: () => h.clock });
+    await again.load();
+    expect(again.count()).toBe(1000);
+    // The daily prune is the same call: 100 more idle threads, then prune.
+    for (let i = 0; i < 100; i++) { h.clock += 10_000; reloaded.createThread({ starter: O, peer: B }); }
+    h.clock += 2 * HOUR;
+    hub2.prune();
+    expect(reloaded.count()).toBe(1000);
+    await reloaded.whenIdle();
+  }, 60_000);
+});

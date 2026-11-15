@@ -78,7 +78,10 @@ export function relAge(at: number, now: number): string {
   return `${Math.floor(h / 24)} d ago`;
 }
 
-const CLOSED: Record<string, string> = { 'operator': 'closed by you', 'permission withdrawn': 'closed: permission withdrawn', 'box removed': 'closed: box removed' };
+const CLOSED: Record<string, string> = {
+  'operator': 'closed by you', 'permission withdrawn': 'closed: permission withdrawn', 'box removed': 'closed: box removed',
+  'storage limit': 'closed: storage limit',
+};
 
 function threadState(state: string, reason: string | null | undefined): string {
   if (state === 'open') return 'open';

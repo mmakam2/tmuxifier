@@ -1,5 +1,6 @@
 import { SESSION_NAME_RE } from './sshCommand.js';
 import { mayStart } from './agentMailPolicy.js';
+import { STORAGE_REASON } from './agentMailStore.js';
 import {
   cleanBody, bodyProblem, statusPhrase, agentStatusPhrase, refusalText, renderThread, renderWho, renderInbox, renderReply, wakeText,
 } from './agentMailText.js';
@@ -11,7 +12,8 @@ import {
 //
 //   caller everywhere is { boxId, session }
 //   who(caller)                    sessions this one may start a thread with
-//   send(caller, target, body)     policy check, new thread, first message queued
+//   send(caller, target, body)     the caller's send switch, then the target, the policy and
+//                                  room in the store; new thread, first message queued
 //   reply(caller, threadId, body)  a post by a participant
 //   read(caller, threadId)         the whole thread; the caller's messages become delivered, and a
 //                                  dropped message addressed to it shows as [not delivered]
@@ -27,6 +29,7 @@ import {
 //   boxRemoved(boxId)              closes the box's threads, ends its waiters
 //   closeThread(threadId, reason)  the operator's close; false for an unknown or closed thread
 //   listening(boxId)               { [session]: connected waiters }
+//   prune()                        the store's retention, through the hub's close (below)
 //   threadStatus(thread, viewer)   where a thread stands, as one status phrase. `viewer` is
 //                                  'starter' or 'peer' for that participant (an agent: the phrase
 //                                  is about ITS newest message, see the function), anything else
@@ -60,6 +63,14 @@ import {
 // clears the timer and the abort listener and takes it out of its registry in the same
 // synchronous step, so nothing can be handed to a request that has already answered.
 //
+// The storage bound (design 6.3, agentMailStore.js's header). The store holds at most 1000
+// threads, and it is the hub that keeps it there, because closing an open thread to make room
+// must end the waits on it like any other close: `prune()` (once when the hub is created, which
+// is boot, and daily from index.js) and `store.hasRoom` before every new thread both close
+// through `endThread` with the reason `storage limit`. A send that finds no room even so (every
+// thread active within the hour: a flood) is refused `store-full` and logged like any refusal.
+// It is the last check of a send: a caller that policy refuses never prunes anything.
+//
 // `pending` is the hub's index of where undelivered mail may be: per recipient session, the ids
 // of threads that may hold a `queued`/`handed` message addressed to it. It is a SUPERSET: built
 // from the store once, when the hub is created (the store must be loaded by then), an id is added
@@ -80,6 +91,7 @@ const CLOSED_KIND = Object.assign(Object.create(null), {
   operator: 'closed-operator',
   'permission withdrawn': 'closed-withdrawn',
   'box removed': 'closed-box-removed',
+  [STORAGE_REASON]: 'closed-storage-limit',
 });
 const UNDELIVERED = ['queued', 'handed'];
 // What a recipient sees in place of a message that was dropped before it reached it.
@@ -266,6 +278,10 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
     }
     return ok;
   }
+
+  // How the store closes an open thread it is about to remove for storage.
+  const closeForStorage = (threadId) => endThread(threadId, STORAGE_REASON);
+  const prune = () => store.prune({ close: closeForStorage });
 
   // Closes an open thread whose permission is gone. True when the thread may carry mail.
   function keepIfPermitted(thread, policies) {
@@ -454,6 +470,9 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
     if (canTake(recipient)) deliverTo(recipient, boxes, policies);
   }
 
+  // Boot: the store as loaded is brought inside its bounds before anything is indexed.
+  prune();
+
   // The index, from the store as loaded.
   for (const t of store.threads()) {
     if (t.state !== 'open') continue;
@@ -509,6 +528,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
     const { reachable, running } = readMark(peer);
     if (!reachable) return refuse(me, typed, refusalText('unreachable', { target: typed }));
     if (!running) return refuse(me, typed, refusalText('no-agent', { who: nameOf(boxes, peer) }));
+    if (!store.hasRoom(closeForStorage)) return refuse(me, typed, refusalText('store-full'));
     const thread = store.createThread({ starter: me, peer });
     const m = store.addMessage(thread.id, { from: 'starter', body });
     queued(peer, thread.id, boxes, policies);
@@ -694,6 +714,6 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
 
   return {
     who, send, reply, read, inbox,
-    waitMail, waitReplies, ack, boxChanged, policyChanged, boxRemoved, closeThread, listening, threadStatus,
+    waitMail, waitReplies, ack, boxChanged, policyChanged, boxRemoved, closeThread, listening, threadStatus, prune,
   };
 }

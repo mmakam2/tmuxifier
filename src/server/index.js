@@ -281,8 +281,10 @@ if (config.agentMail) {
   }
 }
 if (agentMail) {
+  // The hub pruned the store once when it was created (boot); this is the daily run. Through the
+  // hub, so an open thread removed for storage is closed the way every thread is.
   const prune = setInterval(() => {
-    try { agentMail.store.prune(); } catch (err) { console.error(`[tmuxifier] agent mail prune failed: ${err?.message || err}`); }
+    try { agentMail.hub.prune(); } catch (err) { console.error(`[tmuxifier] agent mail prune failed: ${err?.message || err}`); }
   }, MAIL_PRUNE_MS);
   prune.unref();
 }

@@ -12,6 +12,15 @@ import { readJson, writeJson } from './jsonFile.js';
 // write in flight per thread, and any number of changes during it cost exactly one more write.
 // Thread ids come off disk filenames and are checked against ID_RE before they are ever joined
 // onto a path. Callers get deep copies, so nothing they hold can corrupt the store.
+//
+// Retention (design 6.3). Every thread is held in memory and read at boot, so the count is
+// bounded for real: `prune()` deletes threads idle 30 days, then, above MAX_THREADS, the
+// longest-idle closed threads, then the longest-idle OPEN ones, each closed with the reason
+// `storage limit` first. An open thread with activity in the last STORAGE_KEEP_MS is never
+// removed for storage, so an exchange in progress is never cut; when every thread is that recent
+// the store stays above the bound and `hasRoom()` is false, which is what refuses a new thread.
+// The store does not prune on its own: its owner (the mail hub) calls `prune` at boot and daily,
+// and `hasRoom` before every new thread, passing its own close so waits on a removed thread end.
 
 const ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'; // no i, l, o, 0, 1
 const ID_BODY = '[a-hj-km-np-z2-9]{8}';
@@ -24,9 +33,11 @@ export const MAX_MESSAGES = 500;
 export const MAX_THREADS = 1000;
 export const MAX_REFUSALS = 200;
 export const IDLE_DELETE_MS = 30 * 24 * 60 * 60 * 1000;
+export const STORAGE_KEEP_MS = 60 * 60 * 1000;
+export const STORAGE_REASON = 'storage limit';
 
 const MESSAGE_STATES = ['queued', 'handed', 'delivered', 'dropped'];
-const CLOSE_REASONS = ['operator', 'permission withdrawn', 'box removed'];
+const CLOSE_REASONS = ['operator', 'permission withdrawn', 'box removed', STORAGE_REASON];
 const SIDES = ['starter', 'peer'];
 const REFUSALS_FILE = 'refusals';
 
@@ -223,20 +234,38 @@ export function createAgentMailStore({ dataDir, now = () => Date.now(), randomBy
   const refusals = () => copy(refusalList);
 
   // ---- retention ----
-  function prune() {
+  const count = () => Object.keys(threadsById).length;
+
+  // Enforces the bounds (see the header). `room`: how many more threads must fit afterwards.
+  // `close(id)` closes an open thread that is about to be removed for storage; the hub passes
+  // its own close path. A thread is deleted whatever `close` did.
+  function prune({ close = (id) => closeThread(id, STORAGE_REASON), room = 0 } = {}) {
     const at = now();
     const drop = (id) => { delete threadsById[id]; schedule(id); };
     for (const t of Object.values(threadsById)) if (at - t.activeAt > IDLE_DELETE_MS) drop(t.id);
-    const all = Object.values(threadsById);
-    let excess = all.length - MAX_THREADS;
-    if (excess > 0) {
-      const closed = all.filter((t) => t.state === 'closed').sort((a, b) => a.activeAt - b.activeAt);
-      for (const t of closed) {
-        if (excess-- <= 0) break;
-        drop(t.id);
-      }
+    let excess = count() - (MAX_THREADS - room);
+    if (excess <= 0) return;
+    const longestIdle = (a, b) => a.activeAt - b.activeAt;
+    for (const t of Object.values(threadsById).filter((x) => x.state === 'closed').sort(longestIdle)) {
+      if (excess <= 0) return;
+      drop(t.id);
+      excess -= 1;
+    }
+    const idleOpen = Object.values(threadsById).filter((x) => x.state === 'open' && at - x.activeAt > STORAGE_KEEP_MS);
+    for (const t of idleOpen.sort(longestIdle)) {
+      if (excess <= 0) return;
+      try { close(t.id); } catch (e) { console.error(`[tmuxifier] agent mail: closing ${t.id} for storage failed: ${e.message}`); }
+      drop(t.id);
+      excess -= 1;
     }
   }
 
-  return { load, threads, thread, createThread, addMessage, setMessageState, closeThread, addRefusal, refusals, prune, whenIdle };
+  // True when one more thread fits, pruning first when it would not.
+  function hasRoom(close) {
+    if (count() < MAX_THREADS) return true;
+    prune(close ? { close, room: 1 } : { room: 1 });
+    return count() < MAX_THREADS;
+  }
+
+  return { load, threads, thread, count, createThread, addMessage, setMessageState, closeThread, addRefusal, refusals, prune, hasRoom, whenIdle };
 }

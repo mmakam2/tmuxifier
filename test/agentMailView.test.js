@@ -91,6 +91,8 @@ test('threadRow: title "orders/main → billing/main", message count, relative t
     .toMatchObject({ state: 'closed by you', status: 'closed by the operator' });
   expect(threadRow(thread({ state: 'closed', reason: 'permission withdrawn' }), boxes, now).state).toBe('closed: permission withdrawn');
   expect(threadRow(thread({ state: 'closed', reason: 'box removed' }), boxes, now).state).toBe('closed: box removed');
+  expect(threadRow(thread({ state: 'closed', reason: 'storage limit', status: 'closed: storage limit' }), boxes, now))
+    .toMatchObject({ state: 'closed: storage limit', status: 'closed: storage limit' });
   expect(threadRow(thread({ state: 'closed', reason: null }), boxes, now).state).toBe('closed');
 });
 
@@ -247,6 +249,7 @@ test('operatorStatus: every server status phrase reads "waiting" where agents re
   // The phrases without a leading "queued" pass through as they are.
   expect(operatorStatus(statusPhrase('nothing-new', ctx))).toBe('nothing new since the last reply');
   expect(operatorStatus(statusPhrase('closed', ctx))).toBe('closed');
+  expect(operatorStatus(statusPhrase('closed-storage-limit', ctx))).toBe('closed: storage limit');
   expect(operatorStatus('queued')).toBe('waiting');
   // Only a leading word is replaced: a box or session named "queued" is left alone.
   expect(operatorStatus('delivered 3 s ago, no reply yet')).toBe('delivered 3 s ago, no reply yet');

@@ -89,6 +89,7 @@ describe('statusPhrase / refusalText', () => {
     expect(statusPhrase('closed-operator', ctx)).toBe('closed by the operator');
     expect(statusPhrase('closed-withdrawn', ctx)).toBe('closed: permission withdrawn');
     expect(statusPhrase('closed-box-removed', ctx)).toBe('closed: box removed');
+    expect(statusPhrase('closed-storage-limit', ctx)).toBe('closed: storage limit');
     expect(statusPhrase('closed', ctx)).toBe('closed');
     expect(statusPhrase('nothing-new', ctx)).toBe('nothing new since the last reply');
   });
@@ -115,6 +116,9 @@ describe('statusPhrase / refusalText', () => {
   test('refusals name the target where one is given', () => {
     expect(refusalText('unknown-box', { target: 'zzz' })).toContain('zzz');
     expect(refusalText('send-off', {})).toMatch(/not allowed|off/i);
+  });
+  test('a full mail store is a refusal that says so and to tell the operator', () => {
+    expect(refusalText('store-full')).toBe('refused: the mail store is full, so no new thread can be started; tell your operator');
   });
   test('unreachable names the target box, not the mail service', () => {
     expect(refusalText('unreachable', { target: 'billing/main' })).toBe('billing/main is unreachable right now; try again shortly');

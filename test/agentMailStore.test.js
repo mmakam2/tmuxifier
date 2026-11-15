@@ -182,11 +182,73 @@ describe('agentMailStore', () => {
     expect(s.thread(closedIds[3])).not.toBeNull();
   });
 
-  test('over 1000 open threads nothing is deleted', () => {
+  test('over 1000 threads with none closed: the longest-idle open ones are closed "storage limit" and deleted, down to 1000', async () => {
     const s = make();
+    const ids = [];
+    for (let i = 0; i < 1500; i++) {
+      clock += 10_000; // 1500 threads over a little more than four hours
+      ids.push(s.createThread({ starter: A, peer: B }).id);
+    }
+    await s.whenIdle();
+    expect(s.count()).toBe(1500);
+    const closed = [];
+    s.prune({ close: (id) => { closed.push(id); return s.closeThread(id, 'storage limit'); } });
+    // The survivors are the 1000 most recently active; the 500 longest idle went, oldest first.
+    expect(s.count()).toBe(1000);
+    expect(s.threads().map((t) => t.id).sort()).toEqual(ids.slice(500).sort());
+    expect(closed).toEqual(ids.slice(0, 500));
+    await s.whenIdle();
+    expect(fs.readdirSync(mailDir()).filter((n) => n.startsWith('t-'))).toHaveLength(1000);
+    expect(fs.existsSync(path.join(mailDir(), `${ids[0]}.json`))).toBe(false);
+    // Without a close of the caller's, the store closes them itself; the result is the same.
+    const s2 = make();
+    await s2.load();
+    for (let i = 0; i < 300; i++) { clock += 10_000; s2.createThread({ starter: A, peer: B }); }
+    s2.prune();
+    expect(s2.count()).toBe(1000);
+    expect(s2.thread(ids[500])).toBeNull();
+    expect(s2.thread(ids[800])).not.toBeNull();
+  });
+
+  test('a thread active within the last hour is never removed for storage: a flood stays, and there is no room', () => {
+    const s = make();
+    const old = s.createThread({ starter: A, peer: B });
+    clock += 3_600_001; // just over an hour idle
     for (let i = 0; i < 1005; i++) s.createThread({ starter: A, peer: B });
+    clock += 3_600_000; // the flood is exactly an hour old: still recent
     s.prune();
-    expect(s.threads()).toHaveLength(1005);
+    // Only the one idle longer than the hour went; the rest stay above the bound.
+    expect(s.thread(old.id)).toBeNull();
+    expect(s.count()).toBe(1005);
+    expect(s.hasRoom()).toBe(false);
+    expect(s.count()).toBe(1005);
+    // A millisecond later they are no longer recent: room is made for exactly one more.
+    clock += 1;
+    expect(s.hasRoom()).toBe(true);
+    expect(s.count()).toBe(999);
+  });
+
+  test('hasRoom is true below 1000 without pruning, and at 1000 removes a closed thread before any open one', () => {
+    const s = make();
+    const closed = s.createThread({ starter: A, peer: B });
+    s.closeThread(closed.id, 'operator');
+    for (let i = 0; i < 998; i++) s.createThread({ starter: A, peer: B });
+    expect(s.count()).toBe(999);
+    expect(s.hasRoom()).toBe(true);
+    expect(s.count()).toBe(999); // nothing pruned
+    s.createThread({ starter: A, peer: B });
+    expect(s.hasRoom()).toBe(true); // the closed one went, though it was active this hour
+    expect(s.thread(closed.id)).toBeNull();
+    expect(s.count()).toBe(999);
+  });
+
+  test('"storage limit" is a close reason; an unknown reason still throws', () => {
+    const s = make();
+    const t = s.createThread({ starter: A, peer: B });
+    expect(s.closeThread(t.id, 'storage limit')).toBe(true);
+    expect(s.thread(t.id)).toMatchObject({ state: 'closed', reason: 'storage limit' });
+    const t2 = s.createThread({ starter: A, peer: B });
+    expect(() => s.closeThread(t2.id, 'because')).toThrow();
   });
 
   test('refusals keep the newest 200', async () => {
