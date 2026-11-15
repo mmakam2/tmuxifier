@@ -299,10 +299,14 @@ if (agentMail) {
 }
 const removeBox = createBoxRemoval({
   store, sessions, boxActions, statusChecker,
-  // The box's messaging policy, and its threads and waiters, go with it. The forward itself is
-  // cancelled by the next sweep's sync, which no longer finds the box.
+  // The box's messaging policy, and its threads and waiters, go with it. Each in its own try: a
+  // policy write that fails (a full disk) must not leave the box's threads open and its waiters
+  // held. The forward itself is cancelled by the next sweep's sync, which no longer finds the box.
   onRemoved: agentMail
-    ? async (box) => { await agentMail.policyStore.removeBox(box.id); await agentMail.hub.boxRemoved(box.id); }
+    ? async (box) => {
+      try { await agentMail.policyStore.removeBox(box.id); } catch (err) { console.error(`[tmuxifier] agent mail: dropping a removed box's policy failed: ${err?.message || err}`); }
+      try { await agentMail.hub.boxRemoved(box.id); } catch (err) { console.error(`[tmuxifier] agent mail: closing a removed box's threads failed: ${err?.message || err}`); }
+    }
     : null,
 });
 const localShellActions = createLocalShellActions();
