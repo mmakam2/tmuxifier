@@ -32,6 +32,10 @@ function createWorld() {
       return b;
     },
     box: (host) => boxes.get(host),
+    // Two ssh names for one machine whose ControlPath (%C: HostName, port, user) is the same: one
+    // master, one pid, one forward table and one ~/.tmuxifier-mail/sock. Like OpenSSH, a second
+    // forward for the same box path on that master leads to the forward already held.
+    alias(host, of) { boxes.set(host, boxes.get(of)); },
     newMaster(host) { const b = boxes.get(host); b.pid = nextPid++; b.forward = null; b.linked = false; },
     // Makes every run wait until the returned release() is called.
     hold() { let release; gate = new Promise((r) => { release = r; }); return () => { gate = null; release(); }; },
@@ -489,4 +493,92 @@ test('stopAll closes every listener and cancels nothing; a later sync does nothi
   expect(fs.existsSync(sockOf(dataDir, 'b'))).toBe(false);
   await fwd.sync(boxes, up);
   expect(world.calls.length).toBe(n);
+});
+
+// ---- two box entries on one ssh master (an alias of the same machine) ----
+
+const opsOn = (world, host, from = 0) => world.calls.slice(from).filter((c) => c.host === host).map((c) => c.op);
+
+test('two enabled boxes on one ssh master: the first keeps the forward, the second is refused naming it, with nothing run for it beyond the check', async () => {
+  const { dataDir, world, boxes, up, fwd } = await bench();
+  world.alias('billing.example.com', 'orders.example.com');
+  await fwd.sync(boxes, up);
+  expect(fwd.status('o')).toEqual({ state: 'up', installed: true, listening: 0 });
+  expect(fwd.status('b')).toEqual({ state: 'error', error: 'shares a connection with orders', installed: null, listening: 0 });
+  // No ensure (whose remote rm would delete the first box's socket file), no cancel, no forward.
+  expect(opsOn(world, 'billing.example.com')).toEqual(['check']);
+  expect(world.box('orders.example.com')).toMatchObject({ forward: sockOf(dataDir, 'o'), file: true, linked: true });
+  // The refused box has no listener: nothing can answer as it.
+  expect(fs.existsSync(sockOf(dataDir, 'b'))).toBe(false);
+  expect(await ping(sockOf(dataDir, 'o'), 'abcdef0123456789')).toBe(200);
+
+  // Stable: the holder keeps it, the other is refused again, and neither touches the master.
+  for (let i = 0; i < 3; i++) {
+    const n = world.calls.length;
+    await fwd.sync(boxes, up);
+    expect(opsOn(world, 'orders.example.com', n)).toEqual(['check']);
+    expect(opsOn(world, 'billing.example.com', n)).toEqual(['check']);
+    expect(fwd.status('o').state).toBe('up');
+    expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
+    expect(fs.existsSync(sockOf(dataDir, 'b'))).toBe(false);
+  }
+});
+
+test('the holder turned off: its forward is taken down first, then the other box gets the master', async () => {
+  const { h, dataDir, world, boxes, up, fwd } = await bench();
+  world.alias('billing.example.com', 'orders.example.com');
+  await fwd.sync(boxes, up);
+  expect(fwd.status('b').state).toBe('error');
+  await h.setPolicy('o', { send: false });
+  const n = world.calls.length;
+  await fwd.sync(boxes, up);
+  expect(world.calls.slice(n).map((c) => `${c.op}@${c.host.split('.')[0]}`)).toEqual([
+    'cancel@orders', 'rm@orders',
+    'check@billing', 'ensure@billing', 'cancel@billing', 'forward@billing', 'verify@billing',
+  ]);
+  expect(fwd.status('o').state).toBe('off');
+  expect(fwd.status('b')).toEqual({ state: 'up', installed: true, listening: 0 });
+  expect(world.box('billing.example.com').forward).toBe(sockOf(dataDir, 'b'));
+});
+
+test('the holder on a new master: the master is free again and the first box in the list takes it', async () => {
+  const { dataDir, world, boxes, up, fwd } = await bench();
+  world.alias('billing.example.com', 'orders.example.com');
+  // A tie on the first sync: the list order decides, here billing first.
+  await fwd.sync([boxes[1], boxes[0]], up);
+  expect(fwd.status('b').state).toBe('up');
+  expect(fwd.status('o')).toMatchObject({ state: 'error', error: 'shares a connection with billing' });
+  expect(opsOn(world, 'orders.example.com')).toEqual(['check']);
+  // The shared master is replaced: nobody holds the new one, so the list order decides again.
+  world.newMaster('orders.example.com');
+  await fwd.sync(boxes, up);
+  expect(fwd.status('o').state).toBe('up');
+  expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
+  expect(world.box('orders.example.com').forward).toBe(sockOf(dataDir, 'o'));
+});
+
+test('a box that was up on its own master and now shares one with the holder is refused, and its listener is closed', async () => {
+  const { dataDir, world, boxes, up, fwd } = await bench();
+  await fwd.sync(boxes, up);
+  expect(fwd.status('b').state).toBe('up');
+  expect(await ping(sockOf(dataDir, 'b'), 'abcdef0123456789')).toBe(200);
+  // billing's name now reaches the orders machine (its master is orders' master).
+  world.alias('billing.example.com', 'orders.example.com');
+  const n = world.calls.length;
+  await fwd.sync(boxes, up);
+  expect(opsOn(world, 'billing.example.com', n)).toEqual(['check']);
+  expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
+  expect(await ping(sockOf(dataDir, 'b'), 'abcdef0123456789')).toBe(null);
+  expect(fwd.status('o').state).toBe('up');
+});
+
+test('no master at the check for two boxes on one machine: the first brings it up, the second checks again and is refused', async () => {
+  const { dataDir, world, boxes, up, fwd } = await bench();
+  world.alias('billing.example.com', 'orders.example.com');
+  world.box('orders.example.com').pid = null;
+  await fwd.sync(boxes, up);
+  expect(fwd.status('o').state).toBe('up');
+  expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
+  expect(opsOn(world, 'billing.example.com')).toEqual(['check', 'check']);
+  expect(world.box('orders.example.com')).toMatchObject({ forward: sockOf(dataDir, 'o'), file: true, linked: true });
 });

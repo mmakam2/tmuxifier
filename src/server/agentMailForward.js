@@ -36,6 +36,23 @@ import { mapWithConcurrency } from './concurrency.js';
 // fresh master there is nothing to cancel), then forward, then the nonce call. The forward counts
 // as up only when this listener itself received the nonce: re-issuing a forward proves nothing.
 //
+// One forward per ssh master. Two box entries for one machine whose ssh names resolve to the same
+// HostName, port and user share a ControlPath (%C), so one master. Measured (Task 16, real sshd):
+// the second box's `-O forward` onto the same box path exits 0, but the master routes the box's
+// connections to the FIRST forward, so the second never verifies; and its failure path (the
+// ensure's rm, then its cancel, which OpenSSH matches by listen path) leaves no listener at all,
+// while the first still reads `up`. So the sync runs in two parts. First, every box in parallel up
+// to its `-O check` (after this sync's teardowns, so a forward leaving a master is gone first).
+// Then the claim: a box holds a master when its forward was made on the pid it still sees (or it
+// was not checked this sync); every other box claims in list order, and a claim on a held master
+// is refused with state `error`, reason `shares a connection with <holder's label>`, and nothing
+// run for it: no ensure, cancel or rm. A refused box's listener is closed and its `made` dropped,
+// so nothing answers as it and no later teardown can cancel or remove the holder's forward. The
+// holder keeps the master for as long as it sees that pid; when it is turned off, removed or on a
+// new master, the next box in list order takes it. A box with no master at its check is handled
+// after the others, one at a time, and checked again if an ensure ran since: that ensure may have
+// brought up the very master it shares.
+//
 // Everything that reaches a shell is a constant except the nonce, generated here and re-validated
 // immediately before it is interpolated. The box's $HOME is box output: it is accepted only as an
 // absolute path of safe characters, and used only as an argv element of `-O forward`/`-O cancel`,
@@ -97,6 +114,7 @@ export function createAgentMailForward({
   const mailDir = path.resolve(dataDir, 'mail');
   let running = null;
   let closed = false;
+  let ensures = 0; // ensures run by this keeper, so a sync can tell one ran since a point
 
   // run() is sshRun-shaped and never rejects; a throwing one is a failed command all the same.
   async function call(argv, timeout) {
@@ -118,6 +136,7 @@ export function createAgentMailForward({
       state: 'down', error: undefined, installed: null,
       pid: null, checkedAt: 0, checkedWall: 0, fails: 0, retryAt: 0,
       made: null, // { cancelArgv, removeArgv } once a forward was attempted on this machine
+      refused: false, // another box's forward holds this box's master (see refuse)
     };
   }
 
@@ -145,6 +164,7 @@ export function createAgentMailForward({
   }
 
   async function ensure(e, box) {
+    ensures += 1;
     const res = await call(buildProbeArgv(box, ENSURE_REMOTE, sshOpts), REMOTE_TIMEOUT_MS);
     if (res.code !== 0) return fail(e, 'forward failed');
     const { home, installed } = parseEnsure(res.stdout);
@@ -168,7 +188,22 @@ export function createAgentMailForward({
     return true;
   }
 
-  async function syncBox(box, snap) {
+  async function openListener(e, box) {
+    const l = makeListener({ hub, boxId: box.id, socketPath: e.socketPath });
+    try {
+      await l.listen();
+    } catch (err) {
+      try { await l.close(); } catch { /* never bound */ }
+      await fail(e, err?.message === 'socket path too long' ? 'socket path too long' : 'listen failed');
+      return false;
+    }
+    e.listener = l;
+    return true;
+  }
+
+  // Part one, every box in parallel: everything up to and including the master check. Returns
+  // { box, e, pid } for a box that goes on to the claim, or null when this sync is done with it.
+  async function prepare(box, snap) {
     let e = entries.get(box.id);
     if (!e) {
       e = newEntry(box);
@@ -176,31 +211,51 @@ export function createAgentMailForward({
     } else if (e.sig !== sigOf(box)) {
       // A new machine under the same id: take the forward off the old one's master.
       if (e.made) await call(e.made.cancelArgv, CONTROL_TIMEOUT_MS);
-      Object.assign(e, { sig: sigOf(box), made: null, pid: null, installed: null, fails: 0, retryAt: 0, state: 'down', error: undefined });
+      Object.assign(e, { sig: sigOf(box), made: null, pid: null, installed: null, fails: 0, retryAt: 0, state: 'down', error: undefined, refused: false });
     }
     try {
       if (!snap || snap.reachable !== true) {
         e.state = 'down';
-        return;
+        return null;
       }
       if (e.retryAt && now() < e.retryAt) {
         e.state = 'error';
-        return;
+        return null;
       }
-      if (!e.listener) {
-        const l = makeListener({ hub, boxId: box.id, socketPath: e.socketPath });
-        try {
-          await l.listen();
-        } catch (err) {
-          try { await l.close(); } catch { /* never bound */ }
-          await fail(e, err?.message === 'socket path too long' ? 'socket path too long' : 'listen failed');
-          return;
-        }
-        e.listener = l;
-      }
+      // A box refused on the last sync gets its listener back only once it holds the master.
+      if (!e.listener && !e.refused && !(await openListener(e, box))) return null;
       const checkArgv = buildControlCheckArgv(box, sshOpts);
-      if (!checkArgv) { await fail(e, 'forward failed'); return; }
-      let pid = pidOf(await call(checkArgv, CONTROL_TIMEOUT_MS));
+      if (!checkArgv) { await fail(e, 'forward failed'); return null; }
+      return { box, e, checkArgv, pid: pidOf(await call(checkArgv, CONTROL_TIMEOUT_MS)) };
+    } catch {
+      await fail(e, 'forward failed');
+      return null;
+    }
+  }
+
+  // Another box's forward is on this box's master: forwarding for this box too would route its
+  // requests to the other box's listener and, through the ensure's rm and a cancel, leave neither
+  // working (see the header). Nothing is run: no ensure, no cancel, no rm. Its listener is closed,
+  // and `made` dropped so a later teardown or connection change cannot cancel or remove the
+  // holder's forward, which on a shared master answers to the same box path.
+  async function refuse(e, holder) {
+    if (e.listener) {
+      try { await e.listener.close(); } catch { /* already gone */ }
+      e.listener = null;
+    }
+    Object.assign(e, {
+      state: 'error', error: `shares a connection with ${holder.label || holder.host || holder.id}`,
+      pid: null, made: null, refused: true, fails: 0, retryAt: 0,
+    });
+  }
+
+  // Part two, for a box that holds (or has just claimed) its master: the forward itself.
+  async function act({ box, e, checkArgv, pid }) {
+    try {
+      if (!e.listener) {
+        e.refused = false;
+        if (!(await openListener(e, box))) return;
+      }
       if (pid && pid === e.pid) {
         e.state = 'up';
         if (now() - e.checkedAt < recheckMs) return;
@@ -239,21 +294,54 @@ export function createAgentMailForward({
     } catch {
       return; // no policy, no decision: leave every forward as it is
     }
-    const want = new Map();
+    const want = new Map(); // in list order: the order decides who gets a shared master first
     for (const b of boxes) {
-      if (!b || typeof b.id !== 'string') continue;
+      if (!b || typeof b.id !== 'string' || want.has(b.id)) continue;
       const policy = policies && Object.hasOwn(policies, b.id) ? policies[b.id] : null;
       if (isEnabled(policy)) want.set(b.id, b);
     }
-    const jobs = [];
-    for (const [id, e] of entries) if (!want.has(id)) jobs.push(() => teardown(id, e));
-    for (const [id, b] of want) {
-      const snap = snapshot && typeof snapshot === 'object' && Object.hasOwn(snapshot, id) ? snapshot[id] : undefined;
-      jobs.push(() => syncBox(b, snap));
-    }
-    await mapWithConcurrency(jobs, CONCURRENCY, async (job) => {
-      try { await job(); } catch { /* one box's failure is its own */ }
+    const each = (jobs) => mapWithConcurrency(jobs, CONCURRENCY, async (job) => {
+      try { return await job(); } catch { return null; /* one box's failure is its own */ }
     });
+
+    // Teardowns first, so a forward leaving a master is gone before another box claims it.
+    const leaving = [...entries].filter(([id]) => !want.has(id));
+    await each(leaving.map(([id, e]) => () => teardown(id, e)));
+
+    const seen = (await each([...want.values()].map((b) => () => {
+      const snap = snapshot && typeof snapshot === 'object' && Object.hasOwn(snapshot, b.id) ? snapshot[b.id] : undefined;
+      return prepare(b, snap);
+    }))).filter(Boolean);
+
+    // One forward per master pid. A box holds its master when its forward was made on the pid it
+    // still sees; one not checked this sync (unreachable, held off) keeps what it had. The rest
+    // claim in list order; a claim on a held master is refused.
+    const holders = new Map();
+    const checkedIds = new Set(seen.map((p) => p.box.id));
+    for (const [id, b] of want) {
+      const e = entries.get(id);
+      if (!e?.pid || holders.has(e.pid)) continue;
+      const p = seen.find((x) => x.box.id === id);
+      if (p ? p.pid === e.pid : !checkedIds.has(id)) holders.set(e.pid, b);
+    }
+    const mine = (p) => !holders.has(p.pid) || holders.get(p.pid).id === p.box.id;
+    const now1 = [];
+    const later = []; // no master at the check: handled one at a time, below
+    for (const p of seen) {
+      if (!p.pid) { later.push(p); continue; }
+      if (!mine(p)) { await refuse(p.e, holders.get(p.pid)); continue; }
+      holders.set(p.pid, p.box);
+      now1.push(p);
+    }
+    const ensuresBefore = ensures;
+    await each(now1.map((p) => () => act(p)));
+    for (const p of later) {
+      // An ensure earlier in this sync may have brought up this box's master: look again.
+      if (ensures !== ensuresBefore) p.pid = pidOf(await call(p.checkArgv, CONTROL_TIMEOUT_MS));
+      if (p.pid && !mine(p)) { await refuse(p.e, holders.get(p.pid)); continue; }
+      await act(p);
+      if (p.e.pid) holders.set(p.e.pid, p.box);
+    }
   }
 
   return {

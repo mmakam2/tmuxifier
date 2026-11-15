@@ -33,7 +33,9 @@ export interface MailPair {
 }
 
 export type MailForwardState = 'off' | 'down' | 'error' | 'up';
-export type MailForwardError = 'socket path too long' | 'bad home' | 'forward failed' | 'not verified';
+/** `shares a connection with <label>`: another box's forward holds this box's ssh master. */
+export type MailForwardError = 'socket path too long' | 'bad home' | 'forward failed' | 'not verified' | 'listen failed'
+  | `shares a connection with ${string}`;
 export interface MailStatus {
   state: MailForwardState;
   /** null = not known yet. */

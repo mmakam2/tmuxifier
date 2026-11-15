@@ -33,8 +33,14 @@ const until = async (fn, ms) => {
   }
 };
 
-async function harness(forwardOptions = {}) {
+// `second`: a second box record for the SAME machine under another ssh name (as the e2e setup's
+// aliases are), with both switches on: same HostName, port and user, so one ControlMaster.
+async function harness(forwardOptions = {}, { second = false } = {}) {
   const lb = await setupLocalBox();
+  if (second) {
+    const opts = fs.readFileSync(lb.sshConfigFile, 'utf8').split('\n').filter((l) => l.trim() && !l.startsWith('Host ')).join('\n');
+    fs.appendFileSync(lb.sshConfigFile, `\nHost tmuxifierlocal-b\n${opts}\n`);
+  }
   const controlDir = path.join(lb.tmp, 'cm');
   fs.mkdirSync(controlDir, { mode: 0o700 });
   const sshOpts = { sshConfigFile: lb.sshConfigFile, controlDir, controlPersist: 60 };
@@ -42,6 +48,8 @@ async function harness(forwardOptions = {}) {
   const remote = (cmd, timeout = 10000) => run(buildProbeArgv(lb.box, cmd, sshOpts), { timeout });
   const dataDir = fs.mkdtempSync('/tmp/tmx-m-');
   const box = { id: 'b1', label: 'local', host: lb.box.host, sessionName: 'a' };
+  const box2 = second ? { id: 'b2', label: 'local-again', host: 'tmuxifierlocal-b', sessionName: 'a' } : null;
+  const allBoxes = second ? [box, box2] : [box];
 
   // tmx installed where setup puts it; sessions a and b each "running an agent" (a session-wide
   // marker, idle), on real tmux sessions of the fixture's server.
@@ -68,8 +76,8 @@ async function harness(forwardOptions = {}) {
   // The backend's view of the box's agents comes from a real status probe.
   let marks = null;
   const h = await createMailHarness(
-    { marksOf: (id) => (id === 'b1' ? marks : null) },
-    { boxes: [box], policies: { b1: { send: true, receive: true } } },
+    { marksOf: (id) => (id === 'b1' || id === 'b2' ? marks : null) },
+    { boxes: allBoxes, policies: second ? { b1: { send: true, receive: true }, b2: { send: true, receive: true } } : { b1: { send: true, receive: true } } },
   );
   const checker = createStatusChecker({ run: (argv) => run(argv), ...sshOpts });
   const refreshMarks = async () => {
@@ -85,8 +93,8 @@ async function harness(forwardOptions = {}) {
   });
   const forwards = [makeForward()];
   const fwd = forwards[0];
-  const snapshot = { b1: { reachable: true } };
-  const sync = (f = fwd) => f.sync([box], snapshot);
+  const snapshot = { b1: { reachable: true }, b2: { reachable: true } };
+  const sync = (f = fwd) => f.sync(allBoxes, snapshot);
 
   // tmx on the box, inside session `s`. Short sleeps and curl times keep the retries quick.
   const tmx = (s, args, { timeout = 30000, input } = {}) => {
@@ -106,7 +114,7 @@ async function harness(forwardOptions = {}) {
     await h.cleanup();
     fs.rmSync(dataDir, { recursive: true, force: true });
   };
-  return { lb, h, box, fwd, forwards, makeForward, sync, tmx, remote, refreshMarks, masterPid, boxSock, dataDir };
+  return { lb, h, box, box2, fwd, forwards, makeForward, sync, tmx, remote, refreshMarks, masterPid, boxSock, dataDir };
 }
 
 test('forward comes up on a live master and a box-side tmx send reaches the hub', async () => {
@@ -234,3 +242,30 @@ test('switches off: the socket file is gone from the box', async () => {
   expect(fs.readdirSync(path.join(dataDir, 'mail'))).toEqual([]);
   expect((await tmx('a', ['who'])).code).toBe(3);
 }, 60000);
+
+test('two box records for one machine (two ssh names, one master): the first holds the socket, the second is refused naming it', async () => {
+  const { h, fwd, sync, tmx, masterPid, boxSock, dataDir } = await harness({}, { second: true });
+  await sync();
+  expect(fwd.status('b1')).toEqual({ state: 'up', installed: true, listening: 0 });
+  expect(fwd.status('b2')).toEqual({ state: 'error', error: 'shares a connection with local', installed: null, listening: 0 });
+  // Really one master for both names (the premise), and only the holder has a listener.
+  const pid = await masterPid();
+  expect(pid).toMatch(/^\d+$/);
+  expect(fs.readdirSync(path.join(dataDir, 'mail'))).toHaveLength(1);
+
+  // A box-side request through the socket is the first box's: a thread started by tmx is b1's.
+  const send = async (text) => {
+    const sent = await tmx('a', ['send', './b', text]);
+    expect(sent.stderr).toBe('');
+    expect(sent.code).toBe(0);
+    return h.store.thread(/Thread (t-[a-z2-9]{8})\./.exec(sent.stdout)[1]);
+  };
+  expect((await send('first')).starter).toEqual({ boxId: 'b1', session: 'a' });
+
+  // Three more syncs: still the first box's, still working, the second still refused.
+  for (let i = 0; i < 3; i++) await sync();
+  expect(fwd.status('b1').state).toBe('up');
+  expect(fwd.status('b2')).toMatchObject({ state: 'error', error: 'shares a connection with local' });
+  expect(fs.lstatSync(boxSock).isSocket()).toBe(true);
+  expect((await send('still there')).starter).toEqual({ boxId: 'b1', session: 'a' });
+}, 90000);

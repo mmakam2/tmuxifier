@@ -46,6 +46,9 @@ test('statusLine covers off, down, error, up with and without tools, and 0, 1 an
     expect(statusLine({ state: 'error', installed: null, listening: 0, error })).toBe(`Socket not connected: ${error}`);
   }
   expect(statusLine({ state: 'error', installed: true, listening: 0 })).toBe('Socket not connected');
+  // A box whose ssh master already carries another box's forward (agentMailForward.js) names it.
+  expect(statusLine({ state: 'error', installed: null, listening: 0, error: 'shares a connection with orders' }))
+    .toBe('Socket not connected: shares a connection with orders');
   expect(statusLine({ state: 'up', installed: false, listening: 0 })).toBe('Tools not installed: run setup on this box');
   expect(statusLine({ state: 'up', installed: true, listening: 0 })).toBe('Tools installed · socket connected · no sessions listening');
   expect(statusLine({ state: 'up', installed: true, listening: 1 })).toBe('Tools installed · socket connected · 1 session listening');
