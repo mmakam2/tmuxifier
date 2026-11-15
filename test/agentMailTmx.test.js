@@ -574,15 +574,40 @@ describe('tmx: hook-wait', () => {
     expect(lockPid()).toBe(String(w2.pid));
   });
 
-  test('a waiter whose lock was taken over stands down at its next turn and leaves the lock alone', async () => {
+  test('a waiter whose lock was taken over by a live waiter stands down at its next turn and leaves the lock alone', async () => {
     await listener.listen();
     const w = start(['hook-wait']);
     await until(() => listening() === 1);
-    fs.writeFileSync(path.join(lockOf(), 'pid'), '999999\n'); // another waiter thought it dead
+    // A live process that reads as a waiter (its command line names hook-wait) took the lock.
+    const other = spawn('/bin/sh', ['-c', 'sleep 30', 'hook-wait'], { detached: true });
+    other.done = new Promise((r) => other.on('close', r));
+    children.push(other);
+    fs.writeFileSync(path.join(lockOf(), 'pid'), `${other.pid}\n`);
     await listener.close(); // the held wait is answered 204, so the loop turns
     const r = await w.done;
     expect(r).toMatchObject({ code: 0, stdout: '', stderr: '' });
-    expect(lockPid()).toBe('999999');
+    expect(lockPid()).toBe(String(other.pid));
+    expect(running(other)).toBe(true);
+  });
+
+  test('a waiter whose lock names a dead waiter, or has lost its pid, reclaims it at its next turn', async () => {
+    const hub = h.makeHub({ holdMs: 200 });
+    const short = createAgentMailListener({ hub, boxId: 'o', socketPath: sock });
+    extra.push(short);
+    await short.listen();
+    h.marks.o.main = mark('ready');
+    const w = start(['hook-wait']);
+    await until(() => lockPid() === String(w.pid));
+    fs.writeFileSync(path.join(lockOf(), 'pid'), '999999\n');
+    await until(() => lockPid() === String(w.pid));
+    fs.rmSync(path.join(lockOf(), 'pid'));
+    await until(() => lockPid() === String(w.pid));
+    expect(running(w)).toBe(true);
+    await until(() => (hub.listening('o').main ?? 0) === 1);
+    await hub.send(B, 'orders', 'still here');
+    const r = await w.done;
+    expect(r.code).toBe(2);
+    expect(r.stderr.endsWith('\n\nstill here\n')).toBe(true);
   });
 
   test('hook-wait exits promptly on SIGTERM, ends its request and removes its lock', async () => {
@@ -702,6 +727,37 @@ describe('tmx: hook-wait follows its Claude Code', () => {
     expect(lockClaude()).toBe(String(b.claude.pid));
     await until(() => listening() === 1);
     expect(b.result()).toBe(null);
+  });
+
+  test('a successor whose new directory a dying predecessor\'s cleanup deletes reclaims it; one waiter remains and a wake reaches it', async () => {
+    const hub = h.makeHub({ holdMs: 1000 });
+    const short = createAgentMailListener({ hub, boxId: 'o', socketPath: sock });
+    extra.push(short);
+    await short.listen();
+    h.marks.o.main = mark('ready');
+    // A's cleanup pauses between its "the lock names me" check and its delete.
+    const a = underClaude({ env: env({ TMUXIFIER_MAIL_TEST_CLEANUP_PAUSE: '2' }) });
+    await until(() => lockPid() !== null && lockClaude() === String(a.claude.pid));
+    const first = lockPid();
+    process.kill(Number(first), 'SIGTERM'); // A's cleanup checks the lock, then pauses
+    await sleep(300);
+    expect(isAlive(first)).toBe(true);
+    // B, under another Claude Code, takes the lock over while A is paused.
+    const b = underClaude();
+    await until(() => lockClaude() === String(b.claude.pid) && lockPid() !== first);
+    const second = lockPid();
+    // A wakes up and deletes B's directory.
+    await until(() => !fs.existsSync(lockOf()), 3000);
+    await until(() => !isAlive(first));
+    // B reclaims it at its next lock check.
+    await until(() => lockPid() === second && lockClaude() === String(b.claude.pid), 3000);
+    await until(() => (hub.listening('o').main ?? 0) === 1);
+    expect(b.result()).toBe(null);
+    expect(a.result()).toEqual({ code: 143, signal: null, err: '' });
+    await hub.send(B, 'orders', 'after the reclaim');
+    await until(() => b.result() !== null);
+    expect(b.result().code).toBe(2);
+    expect(b.result().err.endsWith('\n\nafter the reclaim\n')).toBe(true);
   });
 
   test('a second waiter of the same Claude Code stands down and leaves the first one alone', async () => {

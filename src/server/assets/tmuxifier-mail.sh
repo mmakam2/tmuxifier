@@ -38,10 +38,9 @@
 #                   checks that the process it watches (the wrapper, or itself) still has that
 #                   parent; when not, Claude Code is gone and the waiter exits 0 (so an orphan
 #                   can hold its request for up to one hold period after its Claude Code dies).
-#                   The parent is
-#                   read from /proc/<pid>/stat, so this is Linux-only, which is what boxes are;
-#                   without a readable /proc (or a parent of 0 or 1) there is no Claude pid and
-#                   no such check (fail open).
+#                   The parent is read from /proc/<pid>/stat, so this is Linux-only, which is
+#                   what boxes are; without a readable /proc (or a parent of 0 or 1) there is no
+#                   Claude pid and no such check (fail open).
 #                   The lock holds the owner's pid and, when known, its Claude pid. A lock is
 #                   taken over when its owner is dead or is no longer a hook-wait (a pid reused
 #                   after a reboot), or when the owner's Claude pid is known and either gone or
@@ -49,7 +48,11 @@
 #                   same pane always wins, a second waiter of the same Claude Code stands down, and
 #                   so does a waiter whose Claude Code runs under the owner's (a `claude -p` from
 #                   the owner's Bash tool inherits the pane and the hooks), or when that cannot
-#                   be told. A waiter removes its lock only when the lock names it.
+#                   be told. A waiter removes its lock only when the lock names it; since that
+#                   check and the delete are two steps, a successor can still lose its directory
+#                   to a dying predecessor's cleanup, and then reclaims it at its next lock check
+#                   (the top of a turn, and after each held request). A waiter stands down only
+#                   when the lock names another live waiter.
 #   tmx hook-ack    Claude Code UserPromptSubmit hook. Confirms each distinct
 #                   [tmuxifier-mail m-xxxxxxxx] tag in the prompt with POST /v1/ack. Its stdout
 #                   would become prompt context, so it prints nothing on either stream and always
@@ -61,7 +64,9 @@
 # TMUXIFIER_MAIL_TEST_MAX_TIME, likewise, replaces curl's -m for every user command (`wait`
 # included; not hook-wait's 330 s nor hook-ack's 3 s). TMUXIFIER_MAIL_TEST_NO_PROC=1 makes
 # hook-wait read no /proc/<pid>/stat, as on a box without /proc. TMUXIFIER_MAIL_TEST_CLAIM_PAUSE,
-# a number of seconds, makes hook-wait sleep between creating its lock and writing its pid.
+# a number of seconds, makes hook-wait sleep between creating its lock and writing its pid;
+# TMUXIFIER_MAIL_TEST_CLEANUP_PAUSE, likewise, between its exit cleanup's check that the lock
+# names it and the delete.
 
 umask 077
 set -f
@@ -365,11 +370,6 @@ lock_owner() {
   case $OWNER in ''|*[!0-9]*) OWNER= ;; esac
 }
 
-mine() {
-  lock_owner
-  [ "$OWNER" = "$$" ]
-}
-
 # A live hook-wait: the pid exists and, where /proc can tell, is still a hook-wait.
 alive() {
   kill -0 "$1" 2>/dev/null || return 1
@@ -386,6 +386,38 @@ claim() {
   esac
   [ -z "$CLAUDE" ] || printf '%s\n' "$CLAUDE" > "$LOCK/claude"
   printf '%s\n' "$$" > "$LOCK/pid"
+  # The writes can fail into a directory a dying predecessor's cleanup just removed; the loop's
+  # lock check then finds no pid and reclaims it.
+  return 0
+}
+
+# The loop's lock check. 0: the lock names this waiter, or it had lost its directory (gone, or
+# present without a pid, or naming a dead waiter) and reclaimed it. 1: another live waiter
+# holds it, or three attempts did not settle it: stand down, leaving the lock alone. A reclaim
+# never takes a lock from a live waiter, so two waiters can never take it from each other here.
+hold_lock() {
+  _try=0
+  while [ "$_try" -lt 3 ]; do
+    _try=$((_try + 1))
+    lock_owner
+    [ "$OWNER" = "$$" ] && return 0
+    if [ ! -d "$LOCK" ]; then
+      claim # lost to whoever made it first, if anyone: the next attempt reads it
+      continue
+    fi
+    if [ -z "$OWNER" ]; then
+      # Its owner may be between mkdir and writing its pid: give it a moment.
+      sleep "$(pace 1)"
+      lock_owner
+      [ "$OWNER" = "$$" ] && return 0
+    fi
+    [ -n "$OWNER" ] && alive "$OWNER" && return 1
+    # Still without a pid after the grace, or naming a dead waiter: stale.
+    rm -f "$LOCK/pid" "$LOCK/claude" "$LOCK/resp" "$LOCK/code" 2>/dev/null
+    rmdir "$LOCK" 2>/dev/null
+  done
+  lock_owner
+  [ "$OWNER" = "$$" ]
 }
 
 take_lock() {
@@ -423,8 +455,14 @@ cleanup() {
     lock_owner
     # Only a lock that names this waiter: a lock with no pid may be a successor's, between its
     # mkdir and its pid write (one this waiter never finished writing is taken over after the
-    # 1 s grace).
+    # 1 s grace). The check and the delete are two steps, so a successor that takes the lock
+    # over between them can still lose its directory here; its next lock check (hold_lock)
+    # finds the directory gone and reclaims it.
     if [ "$OWNER" = "$$" ]; then
+      case ${TMUXIFIER_MAIL_TEST_CLEANUP_PAUSE:-} in
+        ''|*[!0-9.]*) ;;
+        *) sleep "$TMUXIFIER_MAIL_TEST_CLEANUP_PAUSE" ;;
+      esac
       rm -f "$LOCK/pid" "$LOCK/claude" "$LOCK/resp" "$LOCK/code" 2>/dev/null
       rmdir "$LOCK" 2>/dev/null
     fi
@@ -459,10 +497,10 @@ hook_wait() {
   take_lock || exit 0
   _delay=2
   while :; do
-    # Taken over (this waiter was thought dead): stand down and leave the lock to its owner.
-    mine || { OWN=; exit 0; }
     # Orphaned: the Claude Code that started this waiter is gone.
     orphaned && exit 0
+    # Taken over: stand down and leave the lock to its owner (or reclaim a lost directory).
+    hold_lock || { OWN=; exit 0; }
     session_now # a renamed session is followed; on failure the last name is kept
     rm -f "$LOCK/resp" "$LOCK/code" 2>/dev/null
     hold curl -q -s --noproxy '*' --unix-socket "$SOCK" -m 330 -G -o "$LOCK/resp" -w '%{http_code}' \
@@ -470,7 +508,9 @@ hook_wait() {
       > "$LOCK/code" 2>/dev/null </dev/null
     _rc=$?
     # Taken over while the request was held: the files in the lock are no longer this waiter's.
-    mine || { OWN=; exit 0; }
+    # A directory lost meanwhile is reclaimed empty, so the answer below reads as a failure and
+    # the request is made again (the hub offers a message handed on this pane again).
+    hold_lock || { OWN=; exit 0; }
     _code=
     { read -r _code < "$LOCK/code"; } 2>/dev/null
     if [ "$_rc" = 0 ]; then
