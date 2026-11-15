@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { seedStatusParts, setupStartPayload, scriptSelection } from '../src/web/setupOptions.ts';
+import { seedStatusParts, setupStartPayload, scriptSelection, CLAUDE_SETUP_HINT } from '../src/web/setupOptions.ts';
 
 // These used to call a `seedStatusLine` export that production never used —
 // it existed only so this file could assert on a whole string (D3 in the
@@ -118,4 +118,11 @@ test('setupStartPayload carries the saved-script selection through untouched', (
   };
   expect(setupStartPayload(v)).toEqual(v);
   expect(setupStartPayload(v).tools).not.toBe(v.tools);
+});
+
+test('the Claude Code hint says everything ticking it installs, agent messaging included', () => {
+  expect(CLAUDE_SETUP_HINT).toBe(
+    'Claude Code also pushes this host’s statusline and the agent-state hooks; an existing install only gains what is missing. '
+    + 'Unless agent messaging is turned off for this Tmuxifier, it also installs the tmx command, a skill, a mail listener hook and one permission rule for tmx.',
+  );
 });

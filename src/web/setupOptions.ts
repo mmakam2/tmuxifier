@@ -57,6 +57,14 @@ export function scriptSelection(list: FleetScript[], selectedId: string): { scri
   return { scriptId: selectedId, scriptName: list.find((s) => s.id === selectedId)?.name ?? null };
 }
 
+// What ticking Claude Code does beyond installing the CLI. The agent-mail part
+// (claudeAgentMail.js: `tmx`, the skill, the hook entries, the `Bash(tmx *)`
+// rule) is installed on every box whatever its messaging switches say; only the
+// server-wide TMUXIFIER_AGENT_MAIL=off leaves it out, which this form is not
+// told, so the sentence states the condition rather than assuming it.
+export const CLAUDE_SETUP_HINT = 'Claude Code also pushes this host’s statusline and the agent-state hooks; an existing install only gains what is missing. '
+  + 'Unless agent messaging is turned off for this Tmuxifier, it also installs the tmx command, a skill, a mail listener hook and one permission rule for tmx.';
+
 // Two forms can be open at once (hub tab + box modal); a per-instance radio
 // name keeps their shell selections independent.
 let shellRadioSeq = 0;
@@ -90,10 +98,10 @@ export function createSetupOptionsForm(initial: { ohMyTmux?: boolean } = {}): {
   tools.element.classList.add('setup-section');
 
   // One knob for the Claude stack: the `claude` TOOLS entry means CLI install
-  // (skipped when already present) + statusline push + agent-state hooks. The
-  // hint names all three so the checkbox says what it does; the old separate
-  // "Push Claude Code statusline" checkbox is gone.
-  const claudeHint = el('div', { class: 'seed-status' }, ['Claude Code also pushes this host’s statusline and the agent-state hooks; an existing install only gains what is missing.']);
+  // (skipped when already present) + statusline push + agent-state hooks +
+  // the agent-mail phase. The hint names them all so the checkbox says what it
+  // does; the old separate "Push Claude Code statusline" checkbox is gone.
+  const claudeHint = el('div', { class: 'seed-status' }, [CLAUDE_SETUP_HINT]);
   tools.element.append(claudeHint);
 
   const seedInput = el('input', { type: 'checkbox' }) as HTMLInputElement;
