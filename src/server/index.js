@@ -53,6 +53,7 @@ import { createKnownHosts } from './knownHosts.js';
 import { createAiAuthSeeder } from './aiAuthSeed.js';
 import { createStatuslinePusher } from './claudeStatusline.js';
 import { createAgentHooksPusher } from './claudeAgentHooks.js';
+import { createAgentMailPusher } from './claudeAgentMail.js';
 import { createVoiceLinkPusher } from './claudeVoiceLink.js';
 import { createOpencodePluginPusher } from './opencodeAgentPlugin.js';
 import { createOscReporterPusher } from './oscReporter.js';
@@ -156,6 +157,13 @@ const agentHooksPusher = createAgentHooksPusher({
   runStdin: (box, script, input) => boxActions.execScriptStdin(box, script, input),
   readAsset: () => fs.promises.readFile(new URL('./assets/tmuxifier-agent-hook.sh', import.meta.url)),
 });
+const agentMailPusher = createAgentMailPusher({
+  runStdin: (box, script, input) => boxActions.execScriptStdin(box, script, input),
+  readAssets: async () => ({
+    script: await fs.promises.readFile(new URL('./assets/tmuxifier-mail.sh', import.meta.url)),
+    skill: await fs.promises.readFile(new URL('./assets/tmuxifier-mail-skill.md', import.meta.url)),
+  }),
+});
 const voiceLinkPusher = createVoiceLinkPusher({
   runStdin: (box, script, input) => boxActions.execScriptStdin(box, script, input),
 });
@@ -194,6 +202,7 @@ const setupManager = createSetupManager({
   ),
   pushStatusline: (box) => statuslinePusher.push(box),
   pushAgentHooks: (box) => agentHooksPusher.push(box),
+  pushAgentMail: (box) => agentMailPusher.push(box),
   pushVoiceLink: (box) => voiceLinkPusher.push(box),
   pushOpencodePlugin: (box) => opencodePluginPusher.push(box),
   pushOscReporter: (box) => oscReporterPusher.push(box),

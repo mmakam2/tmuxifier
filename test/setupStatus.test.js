@@ -97,6 +97,12 @@ test('the agent-hooks result renders through the shared push formatter', () => {
   expect(formatStatuslineResult({ target: 'agent-hooks', ok: false, skipped: 'no Claude on the box' })).toBe('agent-hooks skipped (no Claude on the box)');
 });
 
+test('phase agent-mail reads "Installing agent messaging…"', () => {
+  expect(setupStatusText({ status: 'running', phase: 'agent-mail', error: null, needs: null }))
+    .toBe('Installing agent messaging…');
+  expect(formatStatuslineResult({ target: 'agent-mail', ok: false, skipped: 'no curl on the box' })).toBe('agent-mail skipped (no curl on the box)');
+});
+
 test('running job in the opencode-plugin phase reads as installing the OpenCode plugin', () => {
   expect(setupStatusText({ status: 'running', phase: 'opencode-plugin', error: null, needs: null }))
     .toBe('Installing OpenCode plugin…');

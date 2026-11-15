@@ -2780,6 +2780,8 @@ function openProvisionPanel(box: Box, options: SetupOptionsValues) {
         if (slTxt) status.textContent = `${status.textContent} · ${slTxt}`;
         const ahTxt = formatStatuslineResult(job.agentHooks);
         if (ahTxt) status.textContent = `${status.textContent} · ${ahTxt}`;
+        const amTxt = formatStatuslineResult(job.agentMail);
+        if (amTxt) status.textContent = `${status.textContent} · ${amTxt}`;
         // Its own formatter, not the shared one: the voice-link phase reports
         // what happened to Claude's `voice` setting as well as to the device.
         const vlTxt = formatVoiceLinkResult(job.voiceLink);
@@ -2791,7 +2793,7 @@ function openProvisionPanel(box: Box, options: SetupOptionsValues) {
         const psTxt = formatStatuslineResult(job.postScript);
         if (psTxt) status.textContent = `${status.textContent} · ${psTxt}`;
         // An outcome deserves longer on screen than a bare success.
-        autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), (seedTxt || slTxt || ahTxt || vlTxt || ocTxt || orTxt || psTxt) ? 5000 : 2000);
+        autoCloseTimer = window.setTimeout(() => closeProvisionPanel(), (seedTxt || slTxt || ahTxt || amTxt || vlTxt || ocTxt || orTxt || psTxt) ? 5000 : 2000);
         return null;
       }
       if (job.status === 'needs-interactive') return 2500;

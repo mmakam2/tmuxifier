@@ -941,3 +941,61 @@ test('a throwing osc-reporter push is recorded, never promoted to a job failure'
   expect(job.status).toBe('done');
   expect(job.oscReporter).toEqual({ target: 'osc-reporter', ok: false, error: 'osc reporter push failed' });
 });
+
+// --- agent-mail phase --------------------------------------------------------
+
+test('agent-mail runs after agent-hooks and before voice-link, only with the claude selection', async () => {
+  const order = [];
+  let phaseSeen = null;
+  const m = make({
+    pushAgentHooks: async () => { order.push('agent-hooks'); return { target: 'agent-hooks', ok: true }; },
+    pushAgentMail: async (box) => {
+      phaseSeen = m.listJobs()[0].phase;
+      order.push(`agent-mail:${box.id}`);
+      return { target: 'agent-mail', ok: true };
+    },
+    pushVoiceLink: async () => { order.push('voice-link'); return { target: 'voice-link', ok: true }; },
+  });
+  const s = m.start(BOX, { tools: ['claude'] });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(order).toEqual(['agent-hooks', `agent-mail:${BOX.id}`, 'voice-link']);
+  expect(phaseSeen).toBe('agent-mail');
+  expect(job.agentMail).toEqual({ target: 'agent-mail', ok: true });
+  expect(m.listJobs()[0].agentMail).toEqual({ target: 'agent-mail', ok: true });
+
+  // The legacy statusline flag still asks for the Claude stack.
+  let calls = 0;
+  const m2 = make({ pushAgentMail: async () => { calls += 1; return { target: 'agent-mail', ok: true }; } });
+  await m2._settled(m2.start(BOX, { tools: [], claudeStatusline: true }).id);
+  expect(calls).toBe(1);
+  // Without the claude selection nothing claude-related runs.
+  const m3 = make({ pushAgentMail: async () => { calls += 1; return { target: 'agent-mail', ok: true }; } });
+  const s3 = m3.start(BOX, { tools: ['git', 'opencode'] });
+  await m3._settled(s3.id);
+  expect(calls).toBe(1);
+  expect(m3.getJob(s3.id).agentMail).toBeUndefined();
+  expect(m3.listJobs()[0].agentMail).toBe(null);
+});
+
+test('a throwing pushAgentMail is recorded and never fails the job; unwired, listJobs reports null', async () => {
+  const order = [];
+  const m = make({
+    pushAgentMail: async () => { throw new Error('boom'); },
+    pushVoiceLink: async () => { order.push('voice-link'); return { target: 'voice-link', ok: true }; },
+  });
+  const s = m.start(BOX, { tools: ['claude'] });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(job.agentMail).toEqual({ target: 'agent-mail', ok: false, error: 'agent mail push failed' });
+  expect(order).toEqual(['voice-link']);
+
+  const u = make({});
+  const su = u.start(BOX, { tools: ['claude'] });
+  await u._settled(su.id);
+  expect(u.getJob(su.id).status).toBe('done');
+  expect(u.getJob(su.id).agentMail).toBeUndefined();
+  expect(u.listJobs()[0].agentMail).toBe(null);
+});

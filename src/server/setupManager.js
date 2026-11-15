@@ -89,6 +89,10 @@ export function createSetupManager({
   // construct. Unlike seed/statusline there is NO options gate — the push is
   // always-on and the box decides via its own command -v claude check.
   pushAgentHooks = null,
+  // Post-setup agent mail push (claudeAgentMail.js): tmx, its skill, the mail hooks and the
+  // permission rule. Default null: an unwired manager skips the step. Same one-knob gate as
+  // the rest of the Claude stack; the box decides via its own command -v claude check.
+  pushAgentMail = null,
   // Post-setup voice-link push (claudeVoiceLink.js). Default null: an
   // unwired manager skips the step. Same one-knob gate as the statusline and
   // the hooks; the box decides via its own command -v claude check.
@@ -148,7 +152,7 @@ export function createSetupManager({
   }
   function persist() { prune(); save(ordered()); }
   function summary(j) {
-    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, needs: j.needs ?? null, seed: j.seed ?? null, statusline: j.statusline ?? null, agentHooks: j.agentHooks ?? null, voiceLink: j.voiceLink ?? null, opencodePlugin: j.opencodePlugin ?? null, oscReporter: j.oscReporter ?? null, postScript: j.postScript ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
+    return { id: j.id, boxId: j.boxId, boxLabel: j.boxLabel, status: j.status, phase: j.phase, options: j.options, error: j.error, needs: j.needs ?? null, seed: j.seed ?? null, statusline: j.statusline ?? null, agentHooks: j.agentHooks ?? null, agentMail: j.agentMail ?? null, voiceLink: j.voiceLink ?? null, opencodePlugin: j.opencodePlugin ?? null, oscReporter: j.oscReporter ?? null, postScript: j.postScript ?? null, createdAt: j.createdAt, finishedAt: j.finishedAt };
   }
   function appendLog(j, text) { if (text) j.log = (j.log + text).slice(-maxLogBytes); }
   function normalizeOptions(o = {}) {
@@ -251,6 +255,12 @@ export function createSetupManager({
       persist();
       try { j.agentHooks = await pushAgentHooks(box); }
       catch { j.agentHooks = { target: 'agent-hooks', ok: false, error: 'agent hooks push failed' }; }
+    }
+    if (pushAgentMail && wantsClaudeStack && box && !j.cancelled) {
+      j.phase = 'agent-mail';
+      persist();
+      try { j.agentMail = await pushAgentMail(box); }
+      catch { j.agentMail = { target: 'agent-mail', ok: false, error: 'agent mail push failed' }; }
     }
     if (pushVoiceLink && wantsClaudeStack && box && !j.cancelled) {
       j.phase = 'voice-link';
