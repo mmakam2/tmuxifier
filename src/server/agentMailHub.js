@@ -47,8 +47,10 @@ import {
 // thread whose permission is gone is closed instead. `ack` confirms a handed message; a waiter
 // that connects puts back to `queued` the session's handed messages that were handed on its own
 // pane or more than REOFFER_MS ago, so a wake lost inside a dying Claude Code is offered again.
-// The check runs when a message is queued (synchronously, inside send/reply), when a waiter or a
-// reply wait connects, and on `boxChanged`.
+// It also ends, idle, any older held waiter of the same session and pane: the box runs one
+// waiter per pane, so an older one is an orphan and must not be handed anything. The check runs
+// when a message is queued (synchronously, inside send/reply), when a waiter or a reply wait
+// connects, and on `boxChanged`.
 //
 // Every held request (waiter or reply wait) settles exactly once: whichever of delivery, its
 // timer, its abort signal, or its thread's close (box removal for a waiter) comes first. Settling
@@ -552,6 +554,10 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
   function waitMail(caller, pane, signal) {
     const me = callerOf(caller);
     if (!me || typeof pane !== 'string' || !PANE_RE.test(pane) || signal?.aborted) return Promise.resolve(IDLE());
+    // One waiter runs per pane (the box-side lock), so a new one proves the older waiters of
+    // this session's pane dead (an orphaned request): they end idle now, and mail is only ever
+    // handed to the newest waiter of a pane.
+    for (const w of [...(waiters.get(me.boxId, me.session) ?? [])]) if (w.pane === pane) w.settle(IDLE());
     const { held, promise } = hold(waiters, me, holdMs, signal, IDLE, IDLE());
     held.pane = pane;
     // Offer again: what was handed on this pane (that request has ended without an ack), or so

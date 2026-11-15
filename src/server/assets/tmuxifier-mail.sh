@@ -15,7 +15,9 @@
 #   tmx who|send|reply|wait|read|inbox ...   user commands (usage below). Exit 0 on a 2xx answer
 #                                            (printed to stdout), 1 on a refusal or bad input
 #                                            (to stderr), 2 on a usage error or outside tmux, 3
-#                                            when the socket stays unreachable after 5 attempts.
+#                                            when the socket stays unreachable after 5 attempts,
+#                                            or when a send/reply lost its connection after it
+#                                            went out (never retried: it may have arrived).
 #   tmx hook-wait   Claude Code SessionStart/Stop hook (asyncRewake). One waiter per pane, through
 #                   the lock directory $HOME/.tmuxifier-mail/wait.<pane digits>.lock holding its
 #                   pid. Holds GET /v1/wait: 200 prints the wake text to stderr and exits 2 (Claude
@@ -127,18 +129,26 @@ call() {
   return $_rc
 }
 
-# call with up to 5 attempts 1 s apart while the socket cannot be reached: no connection (7), a
-# connection closed without an answer (52/56: what an ssh forward whose far end is down gives),
-# or 503 busy. A 7 or a 503 never reached the mail hub; a 52/56 could also be a listener that
-# died mid-request, the one case where a retried send could arrive twice. Any other transport
-# failure (a timeout, say) is reported at once and never retried.
+# call with up to 5 attempts 1 s apart while the socket cannot be reached: no connection (7) or
+# 503 busy, which provably never reached the mail hub; and, for reads only, a connection closed
+# without an answer (52/56: what an ssh forward whose far end is down gives). With ONCE set (a
+# send or a reply, which must never arrive twice) a 52/56 may mean the message went out: no
+# retry, exit 3 with a warning saying how to check ($ONCE). Any other transport failure (a
+# timeout, say) is reported at once and never retried.
+ONCE=
 request() {
   _n=1
   while :; do
     call "$@"
     case $? in
       0) [ "$CODE" = 503 ] || return 0 ;;
-      7|52|56) ;;
+      7) ;;
+      52|56)
+        if [ -n "$ONCE" ]; then
+          printf 'tmx: the connection was lost before an answer came back, so the message may or may not have been sent; do not send it again without checking (%s)\n' "$ONCE" >&2
+          exit 3
+        fi
+        ;;
       *) printf 'tmx: mail service unreachable, try again shortly\n' >&2; exit 3 ;;
     esac
     if [ "$_n" -ge 5 ]; then
@@ -204,6 +214,7 @@ cmd_send() {
   _target=$1
   ready
   if [ "$#" = 2 ]; then take_body 1 "$2"; else take_body 0; fi
+  ONCE='ask the operator, or look for an answer with "tmx inbox"'
   request POST /v1/threads 30 --data-urlencode "to=$_target"
   finish
 }
@@ -214,6 +225,7 @@ cmd_reply() {
   _thread=$1
   ready
   if [ "$#" = 2 ]; then take_body 1 "$2"; else take_body 0; fi
+  ONCE="run \"tmx read $_thread\""
   request POST "/v1/threads/$_thread/messages" 30
   finish
 }

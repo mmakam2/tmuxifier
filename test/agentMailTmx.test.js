@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAgentMailListener } from '../src/server/agentMailListener.js';
 import { refusalText } from '../src/server/agentMailText.js';
-import { createMailHarness, B, mark } from './helpers/agentMailHarness.js';
+import { createMailHarness, O, B, mark } from './helpers/agentMailHarness.js';
 
 // The box-side `tmx` script (src/server/assets/tmuxifier-mail.sh) run by a real shell against
 // the real listener and hub. The listener is box `o` (`orders`), so the script speaks as
@@ -25,6 +25,7 @@ const TRACE = fileURLToPath(new URL('./fixtures/claude-hook-trace.jsonl', import
 const REAL_CURL = which('curl');
 const UNREACHABLE = 'tmx: mail service unreachable, try again shortly\n';
 const TAG_RE = /^\[tmuxifier-mail m-[a-z2-9]{8}\] /;
+const LOST = (check) => `tmx: the connection was lost before an answer came back, so the message may or may not have been sent; do not send it again without checking (${check})\n`;
 
 let h; let dir; let bin; let sock; let curlLog; let listener; let extra; let children;
 
@@ -299,6 +300,65 @@ describe('tmx: user commands', () => {
     expect(r2.code).toBe(0);
     expect(r2.stdout).toMatch(/^Sent\. Thread t-/);
     expect(curlCalls().length).toBeGreaterThan(1);
+  });
+});
+
+// The listener in front of a hub whose `name` call runs for real and then never answers: the
+// listener is closed under it (so the connection drops after the request went out) and a fresh,
+// ordinary listener opens on the same path at once, so a retry would go through.
+function dropAfter(name) {
+  const wrapped = { ...h.hub };
+  let dropped = false;
+  wrapped[name] = async (...args) => {
+    const out = await h.hub[name](...args);
+    if (dropped) return out;
+    dropped = true;
+    const gone = listener;
+    void (async () => {
+      await gone.close();
+      const again = createAgentMailListener({ hub: h.hub, boxId: 'o', socketPath: sock });
+      extra.push(again);
+      await again.listen();
+    })();
+    return new Promise(() => {});
+  };
+  listener = createAgentMailListener({ hub: wrapped, boxId: 'o', socketPath: sock });
+}
+
+describe('tmx: a connection lost after the request went out', () => {
+  test('a send is not retried: exit 3 with the warning, and exactly one thread exists', async () => {
+    dropAfter('send');
+    await listener.listen();
+    const r = await run(['send', 'billing', 'only once']);
+    expect(r.code).toBe(3);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe(LOST('ask the operator, or look for an answer with "tmx inbox"'));
+    expect(h.store.threads()).toHaveLength(1);
+    expect(h.store.threads()[0].messages.map((m) => m.body)).toEqual(['only once']);
+    expect(curlCalls()).toHaveLength(1);
+    await until(() => extra.length === 1);
+    expect((await run(['inbox'])).code).toBe(0); // the reopened listener was there for a retry
+    expect(h.store.threads()).toHaveLength(1);
+  });
+
+  test('a reply is not retried: exit 3 with the warning, and the thread holds it once', async () => {
+    const s = await h.hub.send(O, 'billing', 'question');
+    dropAfter('reply');
+    await listener.listen();
+    const r = await run(['reply', s.threadId, 'answer once']);
+    expect(r.code).toBe(3);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe(LOST(`run "tmx read ${s.threadId}"`));
+    expect(h.store.thread(s.threadId).messages.map((m) => m.body)).toEqual(['question', 'answer once']);
+    expect(curlCalls()).toHaveLength(1);
+  });
+
+  test('a read is retried and answered by the listener that came back', async () => {
+    dropAfter('inbox');
+    await listener.listen();
+    const r = await run(['inbox']);
+    expect(r).toMatchObject({ code: 0, stdout: 'inbox empty\n', stderr: '' });
+    expect(curlCalls().length).toBeGreaterThanOrEqual(2);
   });
 });
 

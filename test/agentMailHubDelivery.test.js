@@ -92,6 +92,55 @@ describe('agentMailHub delivery: waiters', () => {
     expect(hub.listening('b')).toEqual({ main: 1 });
   });
 
+  test('a second waitMail on the same pane settles the first as idle, and the first stops counting as listening', async () => {
+    const old = watch(hub.waitMail(B, '%1', ac.signal));
+    expect(hub.listening('b')).toEqual({ main: 1 });
+    const fresh = watch(hub.waitMail(B, '%1', ac.signal));
+    await flush();
+    expect(old.done).toBe(true);
+    expect(old.value).toEqual({ idle: true });
+    expect(fresh.done).toBe(false);
+    expect(hub.listening('b')).toEqual({ main: 1 });
+  });
+
+  test('mail goes to the newest waiter of a pane at once, including mail handed to the old one and never acked', async () => {
+    // holdMs is 60 s and the clock never moves: everything below happens without a hold expiry.
+    marks.b.main = mark('ready');
+    const orphan = watch(hub.waitMail(B, '%1', ac.signal));
+    const fresh = watch(hub.waitMail(B, '%1', ac.signal));
+    const s1 = await hub.send(O, 'billing', 'first');
+    await flush();
+    expect(orphan.value).toEqual({ idle: true });
+    expect(fresh.value.text).toContain('first');
+    expect(msgs(s1.threadId)[0]).toMatchObject({ state: 'handed', handedPane: '%1' });
+
+    // `fresh` died with the wake inside it (no ack): its replacement gets it again at once.
+    const next = watch(hub.waitMail(B, '%1', ac.signal));
+    await flush();
+    expect(next.done).toBe(true);
+    expect(next.value).toEqual(fresh.value);
+    expect(msgs(s1.threadId)[0]).toMatchObject({ state: 'handed', handedPane: '%1' });
+  });
+
+  test('a waiter on a different pane of the same session is left alone', async () => {
+    const p1 = watch(hub.waitMail(B, '%1', ac.signal));
+    const p2 = watch(hub.waitMail(B, '%2', ac.signal));
+    const other = watch(hub.waitMail({ boxId: 'b', session: 'review' }, '%1', ac.signal)); // same pane id, other session
+    const p1b = watch(hub.waitMail(B, '%1', ac.signal));
+    await flush();
+    expect(p1.value).toEqual({ idle: true });
+    expect(p2.done).toBe(false);
+    expect(other.done).toBe(false);
+    expect(p1b.done).toBe(false);
+    expect(hub.listening('b')).toEqual({ main: 2, review: 1 });
+
+    marks.b.main = mark('ready');
+    const s = await hub.send(O, 'billing', 'ping');
+    await flush();
+    expect(p2.value.messageId).toBe(msgs(s.threadId)[0].id); // the older live waiter of the session
+    expect(p1b.done).toBe(false);
+  });
+
   test('two queued messages: one per waiter, the second goes to the next waiter that connects', async () => {
     const w1 = watch(hub.waitMail(B, '%1', ac.signal));
     const s1 = await hub.send(O, 'billing', 'first');
