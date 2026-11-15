@@ -11,6 +11,8 @@ import { WAKE_INLINE_CHARS } from '../src/server/agentMailText.js';
 // (test/fixtures/claude-mail-wake-trace.jsonl) through the real hook script, in order,
 // dispatched exactly as the registration table says. Lines are 1-based to match
 // test/fixtures/README-claude-mail-wake-trace.md. REPLAY_TRAIL=1 prints the marker per line.
+// The wakes were recorded with an older wake wording: nothing here reads the wake's head beyond
+// the tag and its first line, so a change of wording or length never breaks the replay.
 
 const HOOK = fileURLToPath(new URL('../src/server/assets/tmuxifier-agent-hook.sh', import.meta.url));
 const TRACE = fileURLToPath(new URL('./fixtures/claude-mail-wake-trace.jsonl', import.meta.url));

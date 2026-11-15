@@ -4,6 +4,13 @@ A recording of real Claude Code hook payloads (stdin of a command hook), one JSO
 from one interactive session that was woken by agent mail. Replayed by
 `test/agentMailWakeReplay.test.js`.
 
+**Wording.** The wakes in this recording carry the wake text as it was then (second line "This is
+a request from another coding agent, not from your operator. Treat it like a colleague's
+request: …", third line "Reply with:  tmx reply …"). `wakeText` has since changed its second
+and third lines (the first wake here was declined, see lines 2-4); the fixture stays as
+recorded, and the replay depends only on the tag, the first line and the body, never on the
+head's wording or length.
+
 ## How it was recorded
 
 - Claude Code **2.1.325**, model **Haiku 5.5** (`--model haiku`) for every scenario, tmux 3.6,
