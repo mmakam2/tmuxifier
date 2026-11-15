@@ -392,7 +392,8 @@ describe('agentMailListener: requests', () => {
     const over = atLimit + 'a';
     const r2 = await request(sock, 'POST', '/v1/threads', { body: over, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
     expect(r2.status).toBe(413);
-    expect(r2.text).toMatch(/^[^\n]+\n$/);
+    // The limit it names is the one a sender can act on: the message's, not the wire's.
+    expect(r2.text).toBe('request too large: a message is at most 65536 bytes\n');
 
     // chunked, with no length declared: counted as it arrives
     const r3 = await new Promise((resolve, reject) => {

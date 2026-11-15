@@ -157,8 +157,13 @@ Cross-cutting invariants that tests alone have repeatedly failed to protect:
   the first enabled box of a group in the box list may forward. A refused box runs no ssh command
   for mail beyond one cancel, by its own spec, of a forward it made before it was refused (never
   the remote `rm`, which would break the holder); an unresolved one runs nothing, and while one
-  is unresolved no forward starts. Five fix commits landed here after the first build; read
-  `agentMailForward.js`'s header before touching `sync`.
+  is unresolved no forward starts. Read `agentMailForward.js`'s header before touching `sync`.
+- **A re-addressed box is another machine for mail.** When a box's host, user, port or jump host
+  changes, the first thing the next mail sync does for it, resolved or not, is close its listener
+  (every connection made through the old machine dies, every held request ends), and its local
+  socket path is named from the box id **and** those fields, so a forward entry an old master
+  still holds names a path nothing binds. Never keep a listener across a change of connection
+  fields, and never name a box's socket from its id alone.
 
 ## Architecture (`src/server/`)
 
@@ -270,7 +275,9 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
 - **Agent mail.** `GET /api/mail/threads`, `GET /api/mail/threads/:id`,
   `POST /api/mail/threads/:id/close` (the operator's Stop), `GET /api/mail/refusals`,
   `GET`/`PUT /api/boxes/:id/mail` (policy + pair results + forward status; the PUT carries
-  `mirror: { sendTo?, receiveFrom? }` and kicks a forward sync). Browser session only: absent from
+  `mirror: { sendTo?, receiveFrom? }` and kicks a forward sync, as does a `PATCH /api/boxes/:id`
+  that changed `host`, `user`, `port` or `proxyJump`). The thread list's `status` is
+  `hub.threadStatus(t, 'operator')`. Browser session only: absent from
   `DEVICE_ALLOWED_ROUTES` **and** 403 for a device id inside the handler; 404 when messaging is off.
   `GET /api/ui-config` carries `agentMail`. The boxes never reach these: their interface is the
   per-box listener (`agentMailListener.js`), never mounted on the web listener. Test:
@@ -540,7 +547,9 @@ gated by a per-box policy (operator guide `docs/agent-messaging.md`; design and 
 `index.js` builds it only when `config.agentMail` (`TMUXIFIER_AGENT_MAIL=off` builds none of it,
 leaves the setup phase unwired, and a construction failure runs the server with messaging off);
 calls `forward.sync` and `hub.boxChanged` from `onCycle` and `hub.boxChanged` from `onAgents`;
-and on shutdown stops the forward (closing every listener) **before** flushing the mail store, so
+runs `hub.prune()` daily (the hub prunes once itself when it is created, which is boot); tells
+the forward `markInstalled(box.id)` when the `agent-mail` setup phase reports `ok`; and on
+shutdown stops the forward (closing every listener) **before** flushing the mail store, so
 nothing is posted after the final write.
 
 - `agentMailPolicy.js` — pure: `EMPTY_POLICY`, `normalizePolicy` (refuses an unknown box id,
@@ -558,29 +567,48 @@ nothing is posted after the final write.
   so one file would be rewritten on every message) + `refusals.json`; coalesced writes, one in
   flight per file. States `queued`/`handed`/`delivered`/`dropped`; a close drops what is
   undelivered; `load()` turns `handed` back to `queued` (no waiter survives a restart). Bounds:
-  newest 500 messages per thread (`dropped` counts the rest), 30 days idle, above 1000 threads only
-  closed ones go, 200 refusals; `prune()` runs daily from `index.js`. Ids `t-`/`m-` + 8 chars of a
-  look-alike-free alphabet (`THREAD_ID_RE`, `MSG_ID_RE`). Not a debounced store: flushed through
-  its own `whenIdle()`. Test: `test/agentMailStore.test.js`.
+  newest 500 messages per thread (`dropped` counts the rest), 30 days idle, 200 refusals, and
+  1000 threads for real (every thread is in memory and read at boot): `prune({ close, room })`
+  deletes, above the bound, the longest-idle closed threads and then the longest-idle **open**
+  ones, each closed `storage limit` through `close` first, never one active within the last hour
+  (`STORAGE_KEEP_MS`); `hasRoom(close)` is what a new thread asks. The store never prunes on its
+  own: the hub calls both. Ids `t-`/`m-` + 8 chars of a look-alike-free alphabet (`THREAD_ID_RE`,
+  `MSG_ID_RE`). Not a debounced store: flushed through its own `whenIdle()`. Test:
+  `test/agentMailStore.test.js`.
 - `agentMailText.js` — every word an agent reads, and nothing else writes any: `wakeText` (its
   first line is the `[tmuxifier-mail m-…]` tag the hooks find; body inline up to 4000 chars),
-  `statusPhrase`, `refusalText`, `renderThread`/`renderWho`/`renderInbox`/`renderReply`,
-  `cleanBody` (control-strip only, 65536 UTF-8 bytes). The wake says the operator allowed the
-  sender and to always answer with `tmx reply`: the designed "not from your operator" wording made
-  a real Claude decline to act. Test: `test/agentMailText.test.js`.
+  `statusPhrase` (also what the drawer shows, so short) and `agentStatusPhrase` (the same, plus
+  what to do next after the operator's close), `refusalText`,
+  `renderThread`/`renderWho`/`renderInbox`/`renderReply`, `cleanBody` (control-strip only, 65536
+  UTF-8 bytes). `wakeText` and `renderInbox` word a message **by its kind**. A thread's first
+  message (`task`) says the operator allowed the sender and to always answer with `tmx reply`:
+  the designed "not from your operator" wording made a real Claude decline to act. Every later
+  one (`reply`) says neither: that authorisation is not true toward the thread's starter, and
+  "always answer" on a reply makes two agents acknowledge each other without end; it is input for
+  the thread's work, answered only when it asks something. Test: `test/agentMailText.test.js`.
 - `agentMailHub.js` — the delivery engine and the box-side operations (`who`, `send`, `reply`,
   `read`, `inbox`, `waitMail`, `waitReplies`, `ack`, `boxChanged`, `policyChanged`, `boxRemoved`,
-  `closeThread`). "Running an agent" = the box's parsed `agentMarks` hold a marker for the session
-  (`marksOf`, from the poller snapshot), **not** the dashboard's `present` flag. A queued message
+  `closeThread`, `prune`, `threadStatus`). "Running an agent" = the box's parsed `agentMarks` hold
+  a marker for the session (`marksOf`, from the poller snapshot), **not** the dashboard's
+  `present` flag. A queued message
   goes to an open `tmx wait` of that session on its thread, else to **one** waiter, and only while
   the marker is `ready`; the thread's permission is re-checked at every post, read, inbox,
   delivery and policy save, and a thread without it closes `permission withdrawn`. A new waiter of
   a pane ends the older ones of that pane, and re-queues what was handed on that pane or more than
   600 s ago. `pending` is a superset index of where undelivered mail may be, so `boxChanged` after
   every sweep reads only threads with mail for a session that can take it. Every held request
-  settles exactly once. Tests: `test/agentMailHub.test.js`, `test/agentMailHubDelivery.test.js`.
-- `agentMailListener.js` — per-box `node:http` on a unix socket `data/mail/<12 hex of sha256(box
-  id)>.sock`. **The socket is the identity**: `caller.boxId` is the listener's own. The wire format
+  settles exactly once. `send` checks the caller's own send switch before it looks the target up
+  (a box that may not send learns nothing about which boxes exist) and asks the store for room
+  last (`store-full` when 1000 threads are all active within the hour); every close, the storage
+  one included, goes through `endThread`, so waits on the thread end. `threadStatus(thread,
+  viewer)`: for a participant (`tmx wait`'s lines) it is about the newest message **that side**
+  sent, `nothing new since the last reply` when the other side's newest message has reached it;
+  for `'operator'` (the browser) it is the thread's newest message. Tests:
+  `test/agentMailHub.test.js`, `test/agentMailHubDelivery.test.js`.
+- `agentMailListener.js` — per-box `node:http` on a unix socket `data/mail/<12 hex>.sock` (the
+  forward keeper names it from the box id and its connection fields). **The socket is the
+  identity**: `caller.boxId` is the listener's own. `close()` destroys every connection and ends
+  every held request. The wire format
   table is its header (GET params in the query, POST params only as form fields, a repeated
   parameter refused); every parameter is allowlisted before any hub call; 64 open / 32 held
   requests, then 503. Test: `test/agentMailListener.test.js` (real socket, real hub).
@@ -590,11 +618,16 @@ nothing is posted after the final write.
   then **`-O cancel`**, then forward, then a nonce `curl` through the box socket: a forward counts
   as up only when this listener saw the nonce, because re-issuing a forward a master already holds
   exits 0 and does nothing. Same pid on `-O check` = nothing to do, except a nonce recheck every
-  10 min of silence; failures back off 30 s doubling to 30 min. The shared-connection rule is in
-  Load-bearing rules. The box's `$HOME` is box output (`HOME_RE`, ≤ 80 chars). `status(boxId)`
-  feeds the Edit Box line; `installed` is read only at an ensure. Tests:
-  `test/agentMailForward.test.js` and `test/agentMailForward.integration.test.js` (real sshd and
-  master via `localBox.js`, two box records on one master, master kill and keeper restart).
+  10 min of silence; failures back off 30 s doubling to 30 min. The shared-connection and
+  re-address rules are in Load-bearing rules. A box turned off or removed has its listener closed
+  first; one gone from the list gets the local `-O cancel` only, never a remote command. The
+  box's `$HOME` is box output (`HOME_RE`, ≤ 80 chars). `status(boxId)` feeds the Edit Box line;
+  `installed` comes from the tools line the ensure and every verify print, from
+  `markInstalled(boxId)` (setup's `agent-mail` phase reported `ok`), and is never reported
+  `false` while a session of the box is listening. Tests: `test/agentMailForward.test.js`
+  (a scripted model of what OpenSSH was measured to do) and
+  `test/agentMailForward.integration.test.js` (real sshd and masters via `localBox.js`: two box
+  records on one master, master kill and keeper restart, a re-address to a second master).
 - `claudeAgentMail.js` + `src/server/assets/tmuxifier-mail.sh` + `src/server/assets/tmuxifier-mail-skill.md`
   — the `agent-mail` setup phase, structural twin of `claudeAgentHooks.js`: both files on stdin
   (split at `SKILL_SEPARATOR`, each landed by rename), nothing interpolated, skips with no
@@ -605,7 +638,9 @@ nothing is posted after the final write.
   `permissions.allow`, touching nothing else in `permissions`. Test: `test/claudeAgentMail.test.js`.
   The `tmx` script: POSIX `sh`, curl over the socket, bodies only on curl's stdin, never
   evaluates an answer; `send`/`reply` are **never retried** once the request may have arrived
-  (exit 3). `hook-wait` follows its Claude Code via `/proc` (not `$PPID`, a dash wrapper that
+  (exit 3); with no socket file at all a user command says at once that messaging is not turned
+  on for the box (exit 3, no retry), while a file that does not answer is retried. `hook-wait`
+  follows its Claude Code via `/proc` (not `$PPID`, a dash wrapper that
   survives a `SIGKILL`ed Claude) and holds a per-pane lock whose every read and action goes
   through the decision table above `lock_decide`; `hook-ack` prints nothing and always exits 0.
   Test: `test/agentMailTmx.test.js` (the real script against the real listener).

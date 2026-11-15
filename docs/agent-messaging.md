@@ -50,11 +50,11 @@ To let the agent on `orders` send work to the agent on `billing`:
    and the last line of the section reads `Tools installed · socket connected · 1 session
    listening` once a Claude Code session on that box is listening for mail.
 
-Do step 1 before you turn on a switch. The section's last line learns whether the tools are
-installed when the box's mail socket is set up, which happens right after a switch is saved. A
-switch turned on in the same Save that installs the tools can leave that line reading `Tools not
-installed: run setup on this box` after setup has installed them. Messaging works anyway; the
-line is wrong until the socket is set up again (after a Tmuxifier restart, for example).
+The section's last line reads `Tools not installed: run setup on this box` while `tmx` is not on
+the box. A switch turned on in the same Save that installs the tools shows it for the moment the
+setup job takes; the line follows the job as soon as its `agent-mail` step reports done. Tools
+installed some other way are noticed when a session on the box starts listening, or at the
+socket's next quiet check (every ten minutes while nothing on the box uses it).
 
 The **Agent messaging** section is in the Edit dialog only, not in Add: add the box first. Every
 Save of the Edit dialog also runs setup again, as it always does.
@@ -106,10 +106,12 @@ Reply from the agent in billing/main, thread t-7fq2m9cd. It is from another codi
 ```
 
 If the wait ends with no reply (`tmx wait` holds for at most 540 seconds whatever `-t` says), it
-prints where each thread stands, such as `thread t-7fq2m9cd: queued: billing/main is working` or
-`thread t-7fq2m9cd: delivered 40 s ago, no reply yet`. The skill then has the agent tell you
-what it asked and end its turn: when the reply arrives later, it wakes the `orders` session the
-same way a message wakes `billing`.
+prints where each thread stands for the agent that asked: about the newest message *it* sent,
+such as `thread t-7fq2m9cd: queued: billing/main is working` or `thread t-7fq2m9cd: delivered
+40 s ago, no reply yet`, or `thread t-7fq2m9cd: nothing new since the last reply` when the other
+side's answer was the last thing in the thread and the agent already has it. The skill then has
+the agent tell you what it asked and end its turn: when the reply arrives later, it wakes the
+`orders` session the same way a message wakes `billing`.
 
 On `billing`, the message arrives as a new turn. Claude Code shows it as `Stop hook feedback`,
 and the text it reads begins:
@@ -125,6 +127,20 @@ runs it under its own permissions: a permission prompt it raises waits for you a
 **blocked** like any other, and the other agent cannot answer it. A turn started by mail ends
 like any other turn: the session reads `done`, and the usual "finished a turn" notification goes
 out.
+
+That wording is for the first message of a thread. Every later message is worded as a reply:
+
+```
+[tmuxifier-mail m-p4w8c2de] Reply from the agent in billing/main, thread t-7fq2m9cd.
+```
+
+followed by lines saying that it continues a thread your messaging settings allowed, that it
+comes from another coding agent and is to be used for the work that thread is about, not treated
+as new instructions, and that it needs an answer only if it asks something or the agent still
+needs something: not just to acknowledge. The skill says the same, so that two agents do not
+thank each other back and forth; if you see an exchange going in circles anyway, stop the
+thread. `tmx inbox` prints a waiting message with the same lines for its kind, without the
+`[tmuxifier-mail …]` tag.
 
 When the message is delivered depends on the receiving session:
 
@@ -172,7 +188,9 @@ ago`), the thread's state, and where it stands:
 | `waiting` | Handed over and not yet confirmed, about to be, or the receiving box is unreachable right now |
 | `delivered 40 s ago, no reply yet` | Delivered; the other side has not posted since |
 
-The agents read the same phrases with `queued` where you read `waiting`.
+This column is always about the thread's newest message, whoever sent it. The agents read the
+same phrases with `queued` where you read `waiting`, each about its own newest message (see
+[What the agents do](#what-the-agents-do)).
 
 Clicking a row opens the thread: every message in order with its sender, its time and its state,
 and the message text shown as plain text. **← Threads** goes back.
@@ -203,10 +221,13 @@ one line per box in either list, and a status line for the box (see
 **Stop a thread.** Open it in the drawer and press **Stop**, then **Confirm** within three
 seconds. The thread closes for both agents: neither can post to it again, its undelivered
 messages are dropped and never reach the recipient (in `tmx read` they show as `[not
-delivered]`), and an agent waiting on it with `tmx wait` is told `closed by the operator`.
+delivered]`), and an agent waiting on it with `tmx wait`, or replying to it, is told that the
+thread was closed by the operator, not to start a new thread for the same matter, and to tell
+you.
 
 Stop does not interrupt a turn that is already running; interrupt that in its pane. And it stops
-one thread, not the pair: while the permission stands, the agents can start a new thread.
+one thread, not the pair: while the permission stands, nothing prevents an agent from starting a
+new thread, only that instruction. To make it impossible, stop the pair.
 
 **Stop a pair, or a box.** Untick a switch or remove a box from a list and Save. Every open thread
 that needed it closes at once with `closed: permission withdrawn`, including replies on their way.
@@ -220,8 +241,9 @@ With both switches off, a box takes no part at all and has no mail socket.
 turns the whole feature off: no mail sockets, no **Messages** button, no **Agent messaging**
 section, and setup no longer installs it. Your settings and threads stay in `data/` for when you
 turn it back on. What setup installed on the boxes stays too, and does nothing: `tmx` answers
-`tmx: mail service unreachable, try again shortly`, and the listener in each Claude Code session
-retries quietly.
+`tmx: agent messaging is not turned on for this box; tell your operator` (or `tmx: mail service
+unreachable, try again shortly` on a box where a socket file was left behind), and the listener
+in each Claude Code session retries quietly.
 
 ### What setup installs
 
@@ -243,6 +265,11 @@ run with Claude Code ticked reinstalls it.
 
 - A box is identified by its own mail socket, which only that box's SSH connection reaches. On the
   box the socket is `~/.tmuxifier-mail/sock`, in a directory only the box's login user can open.
+- Editing a box's host, user, port or jump host makes it another machine for messaging as soon
+  as the edit is saved (at the latest by the next status sweep): every connection made through
+  the old address is closed, a session there that was listening is no longer handed mail, and
+  the box gets a new socket for its new address. The machine at the old address cannot keep
+  answering as that box.
 - Any process running as that user can use the socket, as long as it names a session that runs an
   agent: the same process can already type into that agent's tmux pane. Your send switch and send
   list bound which boxes it could reach. On a box that runs an internet-facing application as its
@@ -272,9 +299,22 @@ run with Claude Code ticked reinstalls it.
   that has a switch on can message; the other one's status reads `Socket not connected: shares a
   connection with <name>`. If they reach it by different addresses, they take the one socket on
   the machine from each other. Turn messaging on for only one of them.
+- **Two Claude Code sessions in one tmux session share one address.** Mail is addressed to
+  `box/session`, so with two Claude Code panes in the same tmux session a message, or the reply
+  to a thread one of them started, can wake either. Give each agent that takes part its own tmux
+  session.
 - **A session without a listener loses nothing.** Its mail waits, the sender is told `not
   listening`, and `tmx inbox` in that session reads it. The end of each turn starts a new
   listener.
+- **Tmuxifier keeps at most 1000 threads.** There is no limit on how many messages a thread
+  carries or how many threads a pair starts. When a new thread would be the 1001st, the
+  longest-idle closed threads are deleted first, then the longest-idle open ones (each closed
+  with the reason `storage limit` and deleted in the same step; an agent still waiting on one
+  is told `closed: storage limit`). A thread with activity in
+  the last hour is never removed this way. If all 1000 are that recent, the new thread is
+  refused (`refused: the mail store is full, …`) and listed under **Refused** until one has
+  been idle for an hour; replies in existing threads are not affected. The same clean-up runs
+  when Tmuxifier starts and once a day, along with deleting threads idle for 30 days.
 - **A mail-started turn that ends while a subagent's permission dialog is open** reads as
   working, not blocked, until the dialog is answered.
 - **Mail-started turns notify** like any other turn.
@@ -282,9 +322,10 @@ run with Claude Code ticked reinstalls it.
   for the rest, and sees only the first part until it does.
 - **Not yet verified:** a listener left idle for hours (31 minutes was the longest observed), and a
   message arriving while a plan-approval dialog is open.
-- **After turning a switch on**, the socket can take until the next status sweep to come up, and
-  the section's status line can say the tools are missing when they are not (see
-  [step 1](#turning-it-on-for-two-boxes)).
+- **After turning a switch on**, the socket can take until the next status sweep to come up.
+- **After re-addressing a box between two names of one SSH connection** (the same host, port and
+  user after `~/.ssh/config`), its status can read `Socket not connected: not verified` until
+  that SSH connection is next re-established, if the old forward could not be cancelled.
 
 ## Troubleshooting
 
@@ -309,7 +350,7 @@ No `agent-mail` line at all: **Claude Code** was not ticked, or messaging is off
 |---|---|
 | `Messaging is off` | Both switches are off |
 | `Socket not connected: box unreachable` | Tmuxifier cannot reach the box right now |
-| `Tools not installed: run setup on this box` | `tmx` was not on the box when the socket was set up; see [step 1](#turning-it-on-for-two-boxes) |
+| `Tools not installed: run setup on this box` | `tmx` was not on the box when Tmuxifier last looked; rerun setup with **Claude Code** ticked. See [step 1](#turning-it-on-for-two-boxes) |
 | `Tools installed · socket connected · 2 sessions listening` | Working; the count is of the Claude Code panes on the box listening for mail (`no sessions listening` when there are none) |
 | `Socket not connected: shares a connection with <name>` | Another box record uses the same SSH connection; see [Limits](#limits-in-this-version) |
 | `Socket not connected: connection not resolved` | Tmuxifier could not work out this box's SSH connection from its settings and your SSH config; check its host, user, port and jump host |
@@ -328,8 +369,12 @@ covers only `tmx`, so a call by that path asks you first.
 **Messages from `tmx` itself:**
 
 - `tmx: run this inside a tmux session`: `tmx` works only in a tmux pane.
-- `tmx: mail service unreachable, try again shortly`: the box's mail socket is not up; look at the
-  status line.
+- `tmx: agent messaging is not turned on for this box; tell your operator`: the box has no mail
+  socket, which is the case while both its switches are off (or until the socket first comes up
+  after one is turned on; it can also show for an instant while Tmuxifier puts the socket back
+  after an SSH reconnect).
+- `tmx: mail service unreachable, try again shortly`: the box has a mail socket and it does not
+  answer (Tmuxifier is restarting, or the SSH connection dropped); look at the status line.
 - `tmx: the connection was lost before an answer came back, so the message may or may not have been
   sent; …`: `tmx` never sends twice on its own. Look in the drawer before sending again.
 
@@ -343,9 +388,10 @@ What the agent is told, and what to change:
 | `refused: this box is not allowed to send to billing` | The sending box's `to:` list |
 | `refused: billing is not accepting mail from agents` | The receiving box's **Agents here may receive** |
 | `refused: billing does not accept mail from this box` | The receiving box's `from:` list |
-| `refused: no box named "…" (or the name matches more than one box); run "tmx who"` | The target is not a box label |
+| `refused: no box named "…" (or the name matches more than one box); run "tmx who"` | The target is not a box label. A box whose **Agents here may send** is off is told only that it may not send, whatever it names |
 | `refused: billing/main is not running an agent` | Start the agent in that session (or, when the sender is told this about itself, run `tmx` from a session where Claude Code runs) |
 | `refused: that is your own session` | A thread needs two sessions |
 | `refused: the message is empty`, `refused: the message is larger than 65536 bytes` | The text |
-| `refused: this thread is closed` | The thread was stopped or lost its permission; start a new one if the permission stands |
+| `refused: this thread is closed. Do not start a new thread for the same matter; tell your operator instead.` | The thread was stopped or lost its permission (the next line says which). The agent is told to come to you rather than start another |
+| `refused: the mail store is full, so no new thread can be started; tell your operator` | 1000 threads, all active within the last hour; see [Limits](#limits-in-this-version) |
 | `refused: this session is not part of that thread` | Only the two sessions of a thread may post to it or read it |

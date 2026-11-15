@@ -3,6 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { SESSION_NAME_RE } from './sshCommand.js';
 import { THREAD_ID_RE, MSG_ID_RE } from './agentMailStore.js';
+import { MAX_BODY_BYTES } from './agentMailText.js';
 
 // The per-box agent-mail listener (design 6.4, 6.5): plain HTTP on a unix socket, one per box,
 // forwarded onto the box as ~/.tmuxifier-mail/sock. The socket a request arrives on IS the box:
@@ -26,8 +27,9 @@ import { THREAD_ID_RE, MSG_ID_RE } from './agentMailStore.js';
 // UTF-8 percent-encoding, decoded with URLSearchParams. A parameter given twice is refused. Every
 // response is text/plain; charset=utf-8 and ends in exactly one newline (204 has no body). Bad
 // input is 400 `bad request: <reason>`, an unknown path or method 404, a body over
-// MAX_REQUEST_BYTES on the wire 413, more than `maxOpen` requests in progress or `maxHeld` held
-// ones 503.
+// MAX_REQUEST_BYTES on the wire 413 (its text names the message limit, MAX_BODY_BYTES: that is
+// the number a sender can act on, and no message within it comes near the wire limit even fully
+// percent-encoded), more than `maxOpen` requests in progress or `maxHeld` held ones 503.
 //
 // Held requests (/v1/wait, /v1/replies) get an AbortSignal that is aborted when the client's
 // connection closes before the response was written, and only then. close() aborts every held
@@ -262,7 +264,7 @@ export function createAgentMailListener({ hub, boxId, socketPath, maxOpen = 64, 
       await dispatch(req, res);
     } catch (e) {
       if (e instanceof BadRequest) answer(res, 400, `bad request: ${e.message}`);
-      else if (e instanceof TooLarge) answer(res, 413, `request too large: at most ${MAX_REQUEST_BYTES} bytes`, { Connection: 'close' });
+      else if (e instanceof TooLarge) answer(res, 413, `request too large: a message is at most ${MAX_BODY_BYTES} bytes`, { Connection: 'close' });
       else if (e instanceof Gone) res.destroy();
       else {
         console.error(`[tmuxifier] agent mail listener: ${e.message}`);
