@@ -114,7 +114,7 @@ async function harness(forwardOptions = {}, { second = false } = {}) {
     await h.cleanup();
     fs.rmSync(dataDir, { recursive: true, force: true });
   };
-  return { lb, h, box, box2, fwd, forwards, makeForward, sync, tmx, remote, refreshMarks, masterPid, boxSock, dataDir };
+  return { lb, h, box, box2, snapshot, fwd, forwards, makeForward, sync, tmx, remote, refreshMarks, masterPid, boxSock, dataDir };
 }
 
 test('forward comes up on a live master and a box-side tmx send reaches the hub', async () => {
@@ -268,4 +268,24 @@ test('two box records for one machine (two ssh names, one master): the first hol
   expect(fwd.status('b2')).toMatchObject({ state: 'error', error: 'shares a connection with local' });
   expect(fs.lstatSync(boxSock).isSocket()).toBe(true);
   expect((await send('still there')).starter).toEqual({ boxId: 'b1', session: 'a' });
+}, 90000);
+
+test('a restart over the live master whose holder is now second in the list: the first claims, cancels the stale entry, and its socket works', async () => {
+  const { h, box, box2, snapshot, fwd, forwards, makeForward, tmx, masterPid } = await harness({}, { second: true });
+  // The previous process: the second record held the master.
+  await fwd.sync([box2, box], snapshot);
+  expect(fwd.status('b2').state).toBe('up');
+  expect(fwd.status('b1')).toMatchObject({ state: 'error', error: 'shares a connection with local-again' });
+  const pid = await masterPid();
+  await fwd.stopAll(); // a restart: listeners closed, the master and its forward entry live on
+
+  const fwd2 = makeForward();
+  forwards.push(fwd2);
+  await fwd2.sync([box, box2], snapshot);
+  expect(await masterPid()).toBe(pid);
+  expect(fwd2.status('b1')).toEqual({ state: 'up', installed: true, listening: 0 });
+  expect(fwd2.status('b2')).toMatchObject({ state: 'error', error: 'shares a connection with local' });
+  const sent = await tmx('a', ['send', './b', 'after the restart']);
+  expect(sent.code).toBe(0);
+  expect(h.store.thread(/Thread (t-[a-z2-9]{8})\./.exec(sent.stdout)[1]).starter).toEqual({ boxId: 'b1', session: 'a' });
 }, 90000);
