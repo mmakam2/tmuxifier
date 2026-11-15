@@ -20,6 +20,7 @@ const SSH = { controlDir: '/run/cm', sshConfigFile: '/etc/test-ssh-config' };
 //            made; the box path's connections go to the FIRST (`forward` reads and sets it)
 //   file     a socket file exists at ~/.tmuxifier-mail/sock on the box
 //   linked   that file is the live forward's listener (a deleted-and-recreated or stale file is not)
+//   cp       the ControlPath `ssh -G` resolves for it (an alias shares it: one master)
 function createWorld() {
   const boxes = new Map();
   const calls = [];
@@ -29,7 +30,7 @@ function createWorld() {
     calls,
     add(host, over = {}) {
       const { forward = null, ...rest } = over;
-      const b = { pid: nextPid++, home: `/home/${host.split('.')[0]}`, tools: 'yes', forwards: [], file: false, linked: false, curl: true, forwardFails: false, ...rest };
+      const b = { pid: nextPid++, home: `/home/${host.split('.')[0]}`, cp: `/run/cm/${host}`, tools: 'yes', forwards: [], file: false, linked: false, curl: true, forwardFails: false, ...rest };
       Object.defineProperty(b, 'forward', {
         enumerable: true,
         get() { return b.forwards[0] ?? null; },
@@ -50,11 +51,21 @@ function createWorld() {
     throwing: false,
     // Host names whose next `-O check` says nothing useful (a mux timeout on a busy master).
     checkSilent: new Set(),
+    // `ssh -G` calls (kept out of `calls`: resolving the ControlPath connects to nothing).
+    resolves: [],
+    resolveFails: false,
     // The calls since `from`, as short names.
     ops(from = 0) { return calls.slice(from).map((c) => c.op); },
     async run(argv, opts = {}) {
       if (world.throwing) throw new Error('spawn ssh ENOENT');
       if (gate) await gate;
+      if (argv.includes('-G')) {
+        const host = argv.at(-1).replace(/^.*@/, '');
+        world.resolves.push(host);
+        if (world.resolveFails || !boxes.get(host)) return { code: 255, stdout: '', stderr: 'ssh: Could not resolve hostname\r\n' };
+        expect(argv).toContain('ControlPath=/run/cm/%C');
+        return { code: 0, stdout: `user me\nhostname ${host}\ncontrolpath ${boxes.get(host).cp}\nport 22\n`, stderr: '' };
+      }
       const o = argv.indexOf('-O');
       if (o !== -1) {
         const op = argv[o + 1];
@@ -508,164 +519,233 @@ test('stopAll closes every listener and cancels nothing; a later sync does nothi
   expect(world.calls.length).toBe(n);
 });
 
-// ---- two box entries on one ssh master (an alias of the same machine) ----
+// ---- two box entries on one ssh connection (an alias of the same machine) ----
+// The holder of a ControlPath is the first enabled box in the list that resolves to it.
 
 const opsOn = (world, host, from = 0) => world.calls.slice(from).filter((c) => c.host === host).map((c) => c.op);
+const O_HOST = 'orders.example.com';
+const B_HOST = 'billing.example.com';
+const SHARES_O = { state: 'error', error: 'shares a connection with orders' };
 
-test('two enabled boxes on one ssh master: the first keeps the forward, the second is refused naming it, with nothing run for it beyond the check', async () => {
+test('two enabled boxes on one ssh connection: the first in the list holds it, the second is refused and runs nothing', async () => {
   const { dataDir, world, boxes, up, fwd } = await bench();
-  world.alias('billing.example.com', 'orders.example.com');
+  world.alias(B_HOST, O_HOST);
   await fwd.sync(boxes, up);
   expect(fwd.status('o')).toEqual({ state: 'up', installed: true, listening: 0 });
   expect(fwd.status('b')).toEqual({ state: 'error', error: 'shares a connection with orders', installed: null, listening: 0 });
-  // No ensure (whose remote rm would delete the first box's socket file), no cancel, no forward.
-  expect(opsOn(world, 'billing.example.com')).toEqual(['check']);
-  expect(world.box('orders.example.com')).toMatchObject({ forward: sockOf(dataDir, 'o'), file: true, linked: true });
-  // The refused box has no listener: nothing can answer as it.
+  expect(opsOn(world, B_HOST)).toEqual([]);
+  // The holder's ensure cancels any entry billing could have left (the first cancel).
+  expect(opsOn(world, O_HOST)).toEqual(['check', 'ensure', 'cancel', 'cancel', 'forward', 'verify']);
+  expect(world.box(O_HOST)).toMatchObject({ forwards: [sockOf(dataDir, 'o')], file: true, linked: true });
   expect(fs.existsSync(sockOf(dataDir, 'b'))).toBe(false);
-  expect(await ping(sockOf(dataDir, 'o'), 'abcdef0123456789')).toBe(200);
-
-  // Stable: the holder keeps it, the other is refused again, and neither touches the master.
+  // The ControlPath is resolved once per box per connection fields.
+  expect(world.resolves.sort()).toEqual([B_HOST, O_HOST]);
   for (let i = 0; i < 3; i++) {
     const n = world.calls.length;
     await fwd.sync(boxes, up);
-    expect(opsOn(world, 'orders.example.com', n)).toEqual(['check']);
-    expect(opsOn(world, 'billing.example.com', n)).toEqual(['check']);
-    expect(fwd.status('o').state).toBe('up');
-    expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
-    expect(fs.existsSync(sockOf(dataDir, 'b'))).toBe(false);
+    expect(opsOn(world, O_HOST, n)).toEqual(['check']);
+    expect(opsOn(world, B_HOST, n)).toEqual([]);
+    expect(fwd.status('b')).toMatchObject(SHARES_O);
   }
+  expect(world.resolves).toHaveLength(2);
+  // The list order is the rule: listed the other way round, billing would hold.
+  const w2 = await bench();
+  w2.world.alias(B_HOST, O_HOST);
+  await w2.fwd.sync([w2.boxes[1], w2.boxes[0]], w2.up);
+  expect(w2.fwd.status('b').state).toBe('up');
+  expect(w2.fwd.status('o')).toMatchObject({ state: 'error', error: 'shares a connection with billing' });
+  expect(opsOn(w2.world, O_HOST)).toEqual([]);
 });
 
-test('the holder turned off: its forward is taken down first, then the other box gets the master', async () => {
+// Puts the holder into its retry hold-off: its master is replaced and the new forward never
+// verifies (one cancel for the failed forward, one for billing's possible entry, one on failure).
+async function holderFailing(t) {
+  t.world.alias(B_HOST, O_HOST);
+  await t.fwd.sync(t.boxes, t.up);
+  t.world.newMaster(O_HOST);
+  t.world.box(O_HOST).curl = false;
+  const n = t.world.calls.length;
+  await t.fwd.sync(t.boxes, t.up);
+  expect(opsOn(t.world, O_HOST, n)).toEqual(['check', 'ensure', 'cancel', 'cancel', 'forward', 'verify', 'cancel']);
+  expect(t.fwd.status('o')).toMatchObject({ state: 'error', error: 'not verified' });
+  expect(opsOn(t.world, B_HOST, n)).toEqual([]);
+  expect(t.fwd.status('b')).toMatchObject(SHARES_O);
+}
+
+async function holderRecovers(t) {
+  t.world.box(O_HOST).curl = true;
+  t.clock.t += 10_000; // past the hold-off
+  const n = t.world.calls.length;
+  await t.fwd.sync(t.boxes, t.up);
+  expect(t.fwd.status('o')).toEqual({ state: 'up', installed: true, listening: 0 });
+  expect(t.fwd.status('b')).toMatchObject(SHARES_O);
+  expect(opsOn(t.world, B_HOST, n)).toEqual([]);
+  expect(t.world.box(O_HOST).forward).toBe(sockOf(t.dataDir, 'o'));
+}
+
+test('case A: the master is replaced during the holder\'s hold-off: the other box runs nothing and the holder comes back', async () => {
+  const t = await bench();
+  await holderFailing(t);
+  t.world.newMaster(O_HOST);
+  const n = t.world.calls.length;
+  await t.fwd.sync(t.boxes, t.up);
+  expect(opsOn(t.world, O_HOST, n)).toEqual([]); // held off
+  expect(opsOn(t.world, B_HOST, n)).toEqual([]);
+  expect(t.fwd.status('b')).toMatchObject(SHARES_O);
+  await holderRecovers(t);
+});
+
+test('case B: the master dies and the holder\'s first ensure on the fresh one fails: the other box runs nothing', async () => {
+  const t = await bench();
+  t.world.alias(B_HOST, O_HOST);
+  await t.fwd.sync(t.boxes, t.up);
+  Object.assign(t.world.box(O_HOST), { pid: null, forwards: [], linked: false, curl: false });
+  const n = t.world.calls.length;
+  await t.fwd.sync(t.boxes, t.up);
+  expect(opsOn(t.world, O_HOST, n)).toEqual(['check', 'ensure', 'cancel', 'cancel', 'forward', 'verify', 'cancel']);
+  expect(opsOn(t.world, B_HOST, n)).toEqual([]);
+  expect(t.fwd.status('o')).toMatchObject({ state: 'error', error: 'not verified' });
+  expect(t.fwd.status('b')).toMatchObject(SHARES_O);
+  const n2 = t.world.calls.length;
+  await t.fwd.sync(t.boxes, t.up);
+  expect(opsOn(t.world, B_HOST, n2)).toEqual([]);
+  await holderRecovers(t);
+});
+
+test('case C: the holder is in its hold-off and the master is gone: the other box runs nothing (no remote rm)', async () => {
+  const t = await bench();
+  await holderFailing(t);
+  Object.assign(t.world.box(O_HOST), { pid: null, forwards: [], linked: false });
+  for (let i = 0; i < 2; i++) {
+    const n = t.world.calls.length;
+    await t.fwd.sync(t.boxes, t.up);
+    expect(opsOn(t.world, B_HOST, n)).toEqual([]);
+    expect(t.fwd.status('b')).toMatchObject(SHARES_O);
+  }
+  await holderRecovers(t);
+});
+
+test('the holder unreachable: the other box is still refused and silent', async () => {
+  const { world, boxes, fwd } = await bench();
+  world.alias(B_HOST, O_HOST);
+  const snap = { o: { reachable: false }, b: { reachable: true } };
+  for (let i = 0; i < 2; i++) await fwd.sync(boxes, snap);
+  expect(fwd.status('o').state).toBe('down');
+  expect(fwd.status('b')).toMatchObject(SHARES_O);
+  expect(world.calls).toEqual([]);
+});
+
+test('the operator enables an earlier box while a later one holds: the later one\'s forward is cancelled once, without the rm, then the earlier one comes up', async () => {
   const { h, dataDir, world, boxes, up, fwd } = await bench();
-  world.alias('billing.example.com', 'orders.example.com');
+  world.alias(B_HOST, O_HOST);
+  await h.setPolicy('o', { send: false });
   await fwd.sync(boxes, up);
-  expect(fwd.status('b').state).toBe('error');
+  expect(fwd.status('b').state).toBe('up');
+  await h.setPolicy('o', { send: true, sendTo: ['b'] });
+  const n = world.calls.length;
+  await fwd.sync(boxes, up);
+  const seq = world.calls.slice(n).map((c) => `${c.op}@${c.host.split('.')[0]}`);
+  expect(seq).toEqual([
+    'cancel@billing', // billing's own forward, by its own spec, in the teardown phase
+    'check@orders', 'ensure@orders', 'cancel@orders', 'cancel@orders', 'forward@orders', 'verify@orders',
+  ]);
+  expect(world.calls[n].spec).toBe(`/home/orders/.tmuxifier-mail/sock:${sockOf(dataDir, 'b')}`);
+  expect(fwd.status('o').state).toBe('up');
+  expect(fwd.status('b')).toMatchObject(SHARES_O);
+  expect(world.box(O_HOST).forwards).toEqual([sockOf(dataDir, 'o')]);
+  const n2 = world.calls.length;
+  await fwd.sync(boxes, up);
+  expect(opsOn(world, B_HOST, n2)).toEqual([]); // once
+});
+
+test('the holder turned off: no remote rm (billing shares the connection), and billing comes up', async () => {
+  const { h, dataDir, world, boxes, up, fwd } = await bench();
+  world.alias(B_HOST, O_HOST);
+  await fwd.sync(boxes, up);
   await h.setPolicy('o', { send: false });
   const n = world.calls.length;
   await fwd.sync(boxes, up);
   expect(world.calls.slice(n).map((c) => `${c.op}@${c.host.split('.')[0]}`)).toEqual([
-    'cancel@orders', 'rm@orders',
+    'cancel@orders',
     'check@billing', 'ensure@billing', 'cancel@billing', 'forward@billing', 'verify@billing',
   ]);
   expect(fwd.status('o').state).toBe('off');
   expect(fwd.status('b')).toEqual({ state: 'up', installed: true, listening: 0 });
-  expect(world.box('billing.example.com').forward).toBe(sockOf(dataDir, 'b'));
+  expect(world.box(B_HOST).forwards).toEqual([sockOf(dataDir, 'b')]);
 });
 
-test('the holder on a new master: the master is free again and the first box in the list takes it', async () => {
-  const { dataDir, world, boxes, up, fwd } = await bench();
-  world.alias('billing.example.com', 'orders.example.com');
-  // A tie on the first sync: the list order decides, here billing first.
-  await fwd.sync([boxes[1], boxes[0]], up);
-  expect(fwd.status('b').state).toBe('up');
-  expect(fwd.status('o')).toMatchObject({ state: 'error', error: 'shares a connection with billing' });
-  expect(opsOn(world, 'orders.example.com')).toEqual(['check']);
-  // The shared master is replaced: nobody holds the new one, so the list order decides again.
-  world.newMaster('orders.example.com');
+test('the former holder turned off during its hold-off: no cancel, no rm, and the current holder\'s socket still answers', async () => {
+  const { h, dataDir, world, boxes, up, fwd } = await bench();
+  world.alias(B_HOST, O_HOST);
+  await h.setPolicy('o', { send: false });
+  await fwd.sync(boxes, up);
+  // billing holds, then its repair fails: it is held off with a forward attempt on record.
+  world.newMaster(B_HOST);
+  world.box(B_HOST).curl = false;
+  await fwd.sync(boxes, up);
+  expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'not verified' });
+  // The operator turns orders back on: it is first, so it holds.
+  world.box(B_HOST).curl = true;
+  await h.setPolicy('o', { send: true, sendTo: ['b'] });
   await fwd.sync(boxes, up);
   expect(fwd.status('o').state).toBe('up');
-  expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
-  expect(world.box('orders.example.com').forward).toBe(sockOf(dataDir, 'o'));
-});
-
-test('a box that was up on its own master and now shares one with the holder is refused, and its listener is closed', async () => {
-  const { dataDir, world, boxes, up, fwd } = await bench();
-  await fwd.sync(boxes, up);
-  expect(fwd.status('b').state).toBe('up');
-  expect(await ping(sockOf(dataDir, 'b'), 'abcdef0123456789')).toBe(200);
-  // billing's name now reaches the orders machine (its master is orders' master).
-  world.alias('billing.example.com', 'orders.example.com');
+  // ... and turns billing off while billing's hold-off would still run.
+  await h.setPolicy('b', { receive: false });
   const n = world.calls.length;
   await fwd.sync(boxes, up);
-  expect(opsOn(world, 'billing.example.com', n)).toEqual(['check']);
-  expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
-  expect(await ping(sockOf(dataDir, 'b'), 'abcdef0123456789')).toBe(null);
-  expect(fwd.status('o').state).toBe('up');
+  expect(opsOn(world, B_HOST, n)).toEqual([]);
+  expect(fwd.status('b').state).toBe('off');
+  expect(world.box(O_HOST)).toMatchObject({ forwards: [sockOf(dataDir, 'o')], file: true, linked: true });
+  expect(await ping(sockOf(dataDir, 'o'), 'abcdef0123456789')).toBe(200);
 });
 
-test('no master at the check for two boxes on one machine: the first brings it up, the second checks again and is refused', async () => {
-  const { dataDir, world, boxes, up, fwd } = await bench();
-  world.alias('billing.example.com', 'orders.example.com');
-  world.box('orders.example.com').pid = null;
-  await fwd.sync(boxes, up);
-  expect(fwd.status('o').state).toBe('up');
-  expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
-  expect(opsOn(world, 'billing.example.com')).toEqual(['check', 'check']);
-  expect(world.box('orders.example.com')).toMatchObject({ forward: sockOf(dataDir, 'o'), file: true, linked: true });
-});
-
-test('the holder\'s check says nothing for a sync: it keeps the master and the other box still runs only its check', async () => {
-  const { world, boxes, up, fwd } = await bench();
-  world.alias('billing.example.com', 'orders.example.com');
-  await fwd.sync(boxes, up);
-  expect(fwd.status('o').state).toBe('up');
-  world.checkSilent.add('orders.example.com');
-  let n = world.calls.length;
-  await fwd.sync(boxes, up);
-  expect(opsOn(world, 'orders.example.com', n)).toEqual(['check']);
-  expect(opsOn(world, 'billing.example.com', n)).toEqual(['check']);
-  expect(fwd.status('o')).toMatchObject({ state: 'error', error: 'forward failed' });
-  expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
-  world.checkSilent.delete('orders.example.com');
-  n = world.calls.length;
-  await fwd.sync(boxes, up);
-  expect(opsOn(world, 'orders.example.com', n)).toEqual(['check']);
-  expect(opsOn(world, 'billing.example.com', n)).toEqual(['check']);
-  expect(fwd.status('o').state).toBe('up');
-  expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
-});
-
-test('the holder\'s own ensure fails: it keeps its claim through the hold-off, the other box stays refused, and the holder recovers', async () => {
-  const { world, boxes, up, clock, fwd } = await bench({ forward: { recheckMs: 0 } });
-  world.alias('billing.example.com', 'orders.example.com');
-  await fwd.sync(boxes, up);
-  // The box-side socket is broken under the live master, and the repair fails too.
-  Object.assign(world.box('orders.example.com'), { file: false, linked: false, curl: false });
-  let n = world.calls.length;
-  await fwd.sync(boxes, up);
-  // The ensure also cancels any entry billing could have left (the second cancel; see the next test).
-  expect(opsOn(world, 'orders.example.com', n)).toEqual(['check', 'verify', 'ensure', 'cancel', 'cancel', 'forward', 'verify', 'cancel']);
-  expect(opsOn(world, 'billing.example.com', n)).toEqual(['check']);
-  expect(fwd.status('o')).toMatchObject({ state: 'error', error: 'not verified' });
-  expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
-  // Held off: orders is not even checked, and billing still does not take the master.
-  n = world.calls.length;
-  await fwd.sync(boxes, up);
-  expect(opsOn(world, 'orders.example.com', n)).toEqual([]);
-  expect(opsOn(world, 'billing.example.com', n)).toEqual(['check']);
-  expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
-  // Past the hold-off, with the box healthy again: orders repairs its own forward.
-  world.box('orders.example.com').curl = true;
-  clock.t += 1000;
-  n = world.calls.length;
-  await fwd.sync(boxes, up);
-  expect(opsOn(world, 'orders.example.com', n)).toEqual(['check', 'ensure', 'cancel', 'cancel', 'forward', 'verify']);
-  expect(opsOn(world, 'billing.example.com', n)).toEqual(['check']);
-  expect(fwd.status('o').state).toBe('up');
-  expect(fwd.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
-});
-
-test('a restart over a live master whose holder is now second in the list: the first claims, cancels the stale entry, and comes up', async () => {
+test('a keeper restart with the master alive: the same holder as before, its own entry reissued', async () => {
   const { h, dataDir, world, boxes, up, clock, fwd } = await bench();
-  world.alias('billing.example.com', 'orders.example.com');
-  // The previous process: billing held the master.
-  await fwd.sync([boxes[1], boxes[0]], up);
-  expect(fwd.status('b').state).toBe('up');
+  world.alias(B_HOST, O_HOST);
+  await fwd.sync(boxes, up);
   await fwd.stopAll(); // a restart: listeners closed, nothing cancelled, the master lives on
-  expect(world.box('orders.example.com').forwards).toEqual([sockOf(dataDir, 'b')]);
-
   const fwd2 = createAgentMailForward({ run: world.run, policyStore: h.policyStore, hub: h.hub, dataDir, sshOpts: SSH, now: () => clock.t, retryBaseMs: 1000, retryCapMs: 4000 });
   cleanups.push(() => fwd2.stopAll());
   const n = world.calls.length;
   await fwd2.sync(boxes, up);
-  const mine = world.calls.slice(n).filter((c) => c.host === 'orders.example.com');
+  expect(opsOn(world, O_HOST, n)).toEqual(['check', 'ensure', 'cancel', 'cancel', 'forward', 'verify']);
+  expect(opsOn(world, B_HOST, n)).toEqual([]);
+  expect(fwd2.status('o').state).toBe('up');
+  expect(fwd2.status('b')).toMatchObject(SHARES_O);
+  expect(world.box(O_HOST).forwards).toEqual([sockOf(dataDir, 'o')]);
+});
+
+test('a restart after the operator enabled an earlier box: the former holder\'s stale entry is cancelled by the new holder', async () => {
+  const { h, dataDir, world, boxes, up, clock, fwd } = await bench();
+  world.alias(B_HOST, O_HOST);
+  await h.setPolicy('o', { send: false });
+  await fwd.sync(boxes, up); // billing holds
+  await fwd.stopAll();
+  await h.setPolicy('o', { send: true, sendTo: ['b'] }); // while the server was down
+  const fwd2 = createAgentMailForward({ run: world.run, policyStore: h.policyStore, hub: h.hub, dataDir, sshOpts: SSH, now: () => clock.t, retryBaseMs: 1000, retryCapMs: 4000 });
+  cleanups.push(() => fwd2.stopAll());
+  const n = world.calls.length;
+  await fwd2.sync(boxes, up);
+  const mine = world.calls.slice(n).filter((c) => c.host === O_HOST);
   expect(mine.map((c) => c.op)).toEqual(['check', 'ensure', 'cancel', 'cancel', 'forward', 'verify']);
   expect(mine[2].spec).toBe(`/home/orders/.tmuxifier-mail/sock:${sockOf(dataDir, 'b')}`); // billing's stale entry
-  expect(mine[3].spec).toBe(`/home/orders/.tmuxifier-mail/sock:${sockOf(dataDir, 'o')}`);
-  expect(opsOn(world, 'billing.example.com', n)).toEqual(['check']);
-  expect(fwd2.status('o')).toEqual({ state: 'up', installed: true, listening: 0 });
-  expect(fwd2.status('b')).toMatchObject({ state: 'error', error: 'shares a connection with orders' });
-  expect(world.box('orders.example.com').forwards).toEqual([sockOf(dataDir, 'o')]);
+  expect(opsOn(world, B_HOST, n)).toEqual([]);
+  expect(fwd2.status('o').state).toBe('up');
+  expect(world.box(O_HOST).forwards).toEqual([sockOf(dataDir, 'o')]);
+});
+
+test('a ControlPath that does not resolve: each box is its own group and acts alone (the behaviour before the rule)', async () => {
+  const { world, boxes, up, fwd } = await bench();
+  world.alias(B_HOST, O_HOST);
+  world.resolveFails = true;
+  await fwd.sync(boxes, up);
+  // Both run the full ensure; on one machine that is the old breakage, which is why resolving matters.
+  expect(opsOn(world, O_HOST)).toContain('ensure');
+  expect(opsOn(world, B_HOST)).toContain('ensure');
+  expect(fwd.status('b').error).not.toMatch(/shares a connection/);
+  expect(fwd.status('o').error ?? '').not.toMatch(/shares a connection/);
+  // Not cached: asked again on the next sync.
+  const r = world.resolves.length;
+  await fwd.sync(boxes, up);
+  expect(world.resolves.length).toBeGreaterThan(r);
 });

@@ -270,7 +270,7 @@ test('two box records for one machine (two ssh names, one master): the first hol
   expect((await send('still there')).starter).toEqual({ boxId: 'b1', session: 'a' });
 }, 90000);
 
-test('a restart over the live master whose holder is now second in the list: the first claims, cancels the stale entry, and its socket works', async () => {
+test('a restart with the list reordered over the live master: the new first box holds, cancels the old holder\'s stale entry, and its socket works', async () => {
   const { h, box, box2, snapshot, fwd, forwards, makeForward, tmx, masterPid } = await harness({}, { second: true });
   // The previous process: the second record held the master.
   await fwd.sync([box2, box], snapshot);
@@ -278,6 +278,7 @@ test('a restart over the live master whose holder is now second in the list: the
   expect(fwd.status('b1')).toMatchObject({ state: 'error', error: 'shares a connection with local-again' });
   const pid = await masterPid();
   await fwd.stopAll(); // a restart: listeners closed, the master and its forward entry live on
+  // In the new process the list order is the other way round, so b1 is the first enabled box.
 
   const fwd2 = makeForward();
   forwards.push(fwd2);
@@ -289,3 +290,43 @@ test('a restart over the live master whose holder is now second in the list: the
   expect(sent.code).toBe(0);
   expect(h.store.thread(/Thread (t-[a-z2-9]{8})\./.exec(sent.stdout)[1]).starter).toEqual({ boxId: 'b1', session: 'a' });
 }, 90000);
+
+test('two box records for one machine through a master kill and a keeper restart: the first record holds throughout', async () => {
+  const { h, fwd, sync, tmx, masterPid, refreshMarks, forwards, makeForward } = await harness({}, { second: true });
+  const starterOf = async (text) => {
+    const sent = await tmx('a', ['send', './b', text]);
+    expect(sent.stderr).toBe('');
+    expect(sent.code).toBe(0);
+    return h.store.thread(/Thread (t-[a-z2-9]{8})\./.exec(sent.stdout)[1]).starter;
+  };
+  const holds = (f) => {
+    expect(f.status('b1').state).toBe('up');
+    expect(f.status('b2')).toMatchObject({ state: 'error', error: 'shares a connection with local' });
+  };
+  await sync();
+  holds(fwd);
+  expect(await starterOf('before')).toEqual({ boxId: 'b1', session: 'a' });
+
+  // The master is killed; the next sweep's probe brings up a new one, and the next sync finds it.
+  const pid = await masterPid();
+  process.kill(Number(pid), 'SIGKILL');
+  expect(await until(async () => (await masterPid()) === null, 5000)).toBe(true);
+  await sync(); // the master is gone: the holder's ensure brings one up; b2 still runs nothing
+  holds(fwd);
+  expect(await refreshMarks()).toBeTruthy();
+  const pid2 = await masterPid();
+  expect(pid2).toMatch(/^\d+$/);
+  expect(pid2).not.toBe(pid);
+  await sync();
+  holds(fwd);
+  expect(await starterOf('after the master kill')).toEqual({ boxId: 'b1', session: 'a' });
+
+  // A keeper restart over that live master, same list.
+  await fwd.stopAll();
+  const fwd2 = makeForward();
+  forwards.push(fwd2);
+  await sync(fwd2);
+  expect(await masterPid()).toBe(pid2);
+  holds(fwd2);
+  expect(await starterOf('after the restart')).toEqual({ boxId: 'b1', session: 'a' });
+}, 120000);
