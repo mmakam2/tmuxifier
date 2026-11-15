@@ -1,6 +1,6 @@
 # Privacy Policy — tmuxifier console (Android app)
 
-_Last updated: 2026-08-16_
+_Last updated: 2026-11-15_
 
 Tmuxifier is self-hosted software. The Android app ("tmuxifier console", package
 `com.tmuxifier.console`) is a client for a Tmuxifier server that **you** run, on hardware you
@@ -43,6 +43,19 @@ configured:
 
 The app can be used without push; the notification permission is optional and may be declined
 or revoked in Android settings.
+
+## Agent messages (on your server, not in the app)
+
+The app neither shows nor sends agent messages. On your Tmuxifier server, agent messaging lets
+the Claude Code sessions on your boxes send each other tasks and replies; it is off for every box
+until the server's operator turns it on. When it is used:
+
+- Message text is stored in plaintext on the server, under `data/agent-mail/` (files readable by
+  the server's user only).
+- Messages travel only between the server and your boxes, over the SSH connections the server
+  already holds. They are not sent to the developer or to any other service.
+- A delivered message becomes part of the receiving Claude Code session's context, so that box's
+  Claude Code sends it to Anthropic under its own login, like anything else the agent reads.
 
 ## Permissions
 

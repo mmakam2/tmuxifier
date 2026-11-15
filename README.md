@@ -22,6 +22,7 @@ back into the same state.
 - [Themes](#themes)
 - [Android app (agent console)](#android-app-agent-console)
 - [MCP server](#mcp-server)
+- [Agent messaging](#agent-messaging)
 - [Status, health & Fleet Command](#status-health--fleet-command)
 - [Proxmox](#proxmox)
 - [Security](#security)
@@ -162,6 +163,7 @@ dashboard tabs are open. The full per-module map lives in [AGENTS.md](AGENTS.md)
 | [Status, health & Fleet Command](docs/fleet-and-health.md) | rate-limit-safe probing, health events, fleet jobs, themes |
 | [Proxmox](docs/proxmox.md) | LXC provisioning, guest lifecycle, deprovision |
 | [MCP server](docs/mcp.md) | enrolling, registering with Claude Code, the tool reference, what it cannot do |
+| [Agent messaging](docs/agent-messaging.md) | turning it on for two boxes, what agents type, the Messages drawer, stopping a thread, limits |
 | [Deployment](docs/DEPLOY.md) | systemd, passwordless SSH keys, TLS, OIDC behind a tunnel |
 
 ## How persistence works
@@ -242,6 +244,17 @@ its run-script banner on stdout, which is the protocol stream. It is a renderer 
 REST API the Android app uses, enrolled as a device (`npm run mcp-enroll`) and revocable from
 Settings → Devices; administration (credentials, deletion, deprovision) has no code path in
 it. Setup and the tool reference are in [the MCP guide](docs/mcp.md).
+
+## Agent messaging
+The Claude Code sessions on your boxes can hand each other work: the agent on one box runs
+`tmx send billing "…"`, Tmuxifier holds the message until the session on `billing` is idle and
+wakes it with it (nothing is typed into the terminal), and the answer comes back through
+`tmx reply`. Every message travels over the SSH connections Tmuxifier already holds. Each box is
+off until you turn on its send and receive switches and their box lists in the Edit dialog, and
+the **Messages** drawer shows every thread and every refused attempt, with a **Stop** per thread.
+Setup with Claude Code ticked installs the command, a skill and the hooks. Turning it on, what
+the agents do, and the limits of this first version are in [the agent messaging
+guide](docs/agent-messaging.md).
 
 ## Status, health & Fleet Command
 A single server-side loop probes every box over a shared SSH ControlMaster with adaptive

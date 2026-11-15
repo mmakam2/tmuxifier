@@ -78,7 +78,7 @@ version stays. On Arch, Alpine and openSUSE, npm comes from the distro's own pac
 ## The Claude Code checkbox
 
 The **Claude Code** entry in that tools checklist is one knob for the whole Claude stack.
-Ticking it makes the setup run do four things, each skipping cleanly when already present:
+Ticking it makes the setup run do five things, each skipping cleanly when already present:
 
 - **Install the CLI** if the box doesn't have it (an existing install is left untouched).
 - **Push this host's statusline**: merges a `statusLine` block into the box's
@@ -89,6 +89,14 @@ Ticking it makes the setup run do four things, each skipping cleanly when alread
   terminal output. The hook never blocks or modifies the agent: it only writes a one-line
   state file under `~/.tmuxifier-agent/`, and its settings.json entries are merged
   alongside any hooks you already have, never over them.
+- **Install agent messaging**: the `tmx` command (`~/.tmuxifier-mail/tmx`, linked from
+  `~/.local/bin/tmx`), a Claude Code skill that teaches the agent to use it, three hook entries
+  (`SessionStart` and `Stop` listen for mail, `UserPromptSubmit` confirms delivery) merged beside
+  your own hooks, and the permission rule `Bash(tmx *)` in `permissions.allow`. Until you turn
+  messaging on for the box, `tmx` reaches nothing and the listener only retries quietly; see
+  [Agent messaging](agent-messaging.md). It is
+  skipped, with the reason on the job's `agent-mail` line, on a box without `curl` or with
+  another `tmx` in `~/.local/bin`, and left out entirely when `TMUXIFIER_AGENT_MAIL=off`.
 - **Prepare the voice link**: writes a user-level ALSA config (`~/.asoundrc`) that makes the
   box's default microphone a pipe Tmuxifier feeds from your browser, creates that pipe under
   `~/.tmuxifier-voice/`, installs `alsa-utils`, and turns Claude Code's voice mode on in its
@@ -132,7 +140,7 @@ might have completed unattended.
 
 On a box with a pre-existing Claude install, ticking the checkbox simply adds whatever is
 missing. Unchecked means setup touches nothing Claude-related — no install, no statusline,
-no hook refresh, no voice link. So if the agent chip or badge is missing for a running claude:
+no hook refresh, no agent messaging, no voice link. So if the agent chip or badge is missing for a running claude:
 open the box's Edit dialog, tick **Claude Code**, save, and once the setup job reports done, restart
 claude in that session (Claude Code reads its hooks at startup).
 
@@ -281,7 +289,8 @@ on the box once everything else is installed. The order is deliberate:
 
 ```
 tools & shell framework → AI-auth seeding → Claude statusline → agent hooks
-  → voice link → OpenCode plugin → OSC reporter → your saved script → tmux session created
+  → agent messaging → voice link → OpenCode plugin → OSC reporter → your saved script
+  → tmux session created
 ```
 
 Your script runs *before* the box's tmux session exists, so anything it writes to

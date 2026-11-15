@@ -40,6 +40,9 @@ Configuration, secrets, and runtime state all live **inside the repo** (all giti
   | `fleet-jobs.json`, `setup-jobs.json`, `provision-jobs.json`, `proxmox-lifecycle-jobs.json`, `voice-jobs.json`, `apk-build-jobs.json` | job histories | — |
   | `health-events.json` | health event log | — |
   | `agent-seen.json` | per box, per session: marker ts of the newest finished turn the operator has seen | — |
+  | `agent-mail-policy.json` | per box: agent-messaging send/receive switches and their box lists | — |
+  | `agent-mail/` | agent messaging: one `t-*.json` per thread, plus `refusals.json` | message bodies **plaintext** by design |
+  | `mail/` | the per-box agent-mail listener sockets, `<12 hex>.sock` (directory `0o700`, sockets `0o600`) | — |
   | `ui-settings.json` | theme + working-agent animation | — |
   | `voice.json` | voice enable flag + model choice | — |
   | `icons/`, `app/`, `cm/` | scraped favicons; the published APK (served by `GET /api/devices/apk`, never committed); SSH ControlMaster sockets | — |
@@ -143,6 +146,19 @@ Cross-cutting invariants that tests alone have repeatedly failed to protect:
   phases record their result and never fail the job; a failed setup never removes the box.
 - **Every web fetch goes through `http.ts`** (the 401 → login seam); `test/webHttp.test.js`
   forbids hand-rolled `res.ok` checks elsewhere.
+- **Agent mail is never typed into a terminal.** A message reaches a Claude Code session only
+  through that session's own `asyncRewake` waiter (`tmx hook-wait`), and only while the session's
+  marker reads `ready`; working or blocked keeps it `queued`. Hand-off is `handed`, not
+  `delivered`: only the prompt hook's ack (`tmx hook-ack`), or the agent reading it through
+  `tmx wait`/`read`/`inbox`, delivers it, and an unconfirmed hand-off is offered again. The
+  socket a request arrives on is the box; the session it names is a claim checked against the
+  box's markers. Policy changes only through the browser-session routes.
+- **One ssh connection, one mail forward.** Mail boxes are grouped by resolved ControlPath; only
+  the first enabled box of a group in the box list may forward. A refused box runs no ssh command
+  for mail beyond one cancel, by its own spec, of a forward it made before it was refused (never
+  the remote `rm`, which would break the holder); an unresolved one runs nothing, and while one
+  is unresolved no forward starts. Five fix commits landed here after the first build; read
+  `agentMailForward.js`'s header before touching `sync`.
 
 ## Architecture (`src/server/`)
 
@@ -251,6 +267,14 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   with `liveHub.js`; logout closes every stream. `GET /api/status?box=` and
   `GET /api/health/series?box=` return one box in `{ [id]: … }` shape, which is what a nudged tab
   fetches. `POST /api/boxes/:id/agent-seen` publishes its box so other tabs drop `done` at once.
+- **Agent mail.** `GET /api/mail/threads`, `GET /api/mail/threads/:id`,
+  `POST /api/mail/threads/:id/close` (the operator's Stop), `GET /api/mail/refusals`,
+  `GET`/`PUT /api/boxes/:id/mail` (policy + pair results + forward status; the PUT carries
+  `mirror: { sendTo?, receiveFrom? }` and kicks a forward sync). Browser session only: absent from
+  `DEVICE_ALLOWED_ROUTES` **and** 403 for a device id inside the handler; 404 when messaging is off.
+  `GET /api/ui-config` carries `agentMail`. The boxes never reach these: their interface is the
+  per-box listener (`agentMailListener.js`), never mounted on the web listener. Test:
+  `test/agentMailRoutes.test.js`.
 - **Responses.** `/api/` sets `Cache-Control: no-store` unless a route already set its own (the
   icon routes do). Permissions-policy `microphone` is always `self`.
 
@@ -262,7 +286,9 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   `readdressBox` writes host + NetBox id together.
 - `sshCommand.js` — ssh argv builders; **every box field passes `assertBoxSafe` and is never
   shell-interpolated unquoted** (the command-injection surface). ControlMaster args,
-  `SESSION_NAME_RE`, `sanitizeSession`.
+  `SESSION_NAME_RE`, `sanitizeSession`. `buildControlForwardArgv`/`buildControlCancelArgv` (agent
+  mail's `-O forward|cancel -R <box path>:<local path>`) re-check both paths, the box one built
+  from a box-reported `$HOME`, right before they become one argv element.
 - `sshRun.js` — one-shot ssh, `sshStream` (streaming; `timeout: 0` = resident, no kill timer),
   `sshRunStdin`, `sshPipe`.
 - `boxActions.js` — per-box ops over the ControlMaster: tmux/framework/tool install
@@ -311,7 +337,8 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
 - `knownHosts.js` — best-effort `ssh-keygen -R`; called only on verified deprovision, a fresh
   provisioned IP, readdress (new address + released old IP literal), or explicit
   `POST /api/boxes/:id/forget-hostkey`.
-- `boxRemoval.js` — shared cleanup for removal and verified deprovision.
+- `boxRemoval.js` — shared cleanup for removal and verified deprovision. `onRemoved(box)` (best-effort,
+  awaited) drops the box's agent-mail policy and closes its threads.
 
 ### Setup jobs and the agent stacks
 
@@ -320,9 +347,10 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   `superseded`; `running` reconciles to `interrupted` on restart. `needs-interactive` records
   `job.needs`: `'sudo'` (password prompt) or `'ssh'` (`Permission denied (publickey,password)` —
   a key-only denial stays `error`). Phase order after the install script: `seeding` → `statusline`
-  → `agent-hooks` → `voice-link` → `opencode-plugin` → `osc-reporter` → `script` → `ensureSession` (last). The
+  → `agent-hooks` → `agent-mail` → `voice-link` → `opencode-plugin` → `osc-reporter` → `script` → `ensureSession` (last). The
   Claude phases are all gated by the one `claude` tools selection (a stale bundle's
-  `claudeStatusline` flag still counts); `opencode-plugin` by the `opencode` one (job field
+  `claudeStatusline` flag still counts); `agent-mail` (job field `agentMail`) is also left unwired
+  when messaging is off; `opencode-plugin` by the `opencode` one (job field
   `opencodePlugin`). `streamRemote` is shared by the install run and the script phase; only the install
   run sniffs stderr for prompts. Password-only boxes work only while a ControlMaster is alive.
 - `aiAuthSeed.js` — opt-in copy of the host's Claude (`TMUXIFIER_CLAUDE_OAUTH_TOKEN`) / Codex
@@ -355,7 +383,10 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   (`busy/<session><%pane>/` tokens: `sub.` bracketed by SubagentStart/Stop with a 120min TTL, `bg.` from
   PreToolUse `Bash` with a ~2min TTL) keeps `Stop`, `idle_prompt` and `agent_completed` from
   reading as a finished turn while background work runs; a `<task-notification>` resume clears only
-  `bg.` tokens, the operator's own prompt clears all. Fails open. Unit tests have twice been green
+  `bg.` tokens, the operator's own prompt clears all. A mail wake (a `<task-notification>` that
+  also carries `[tmuxifier-mail `) clears no tokens and exits without writing over a `blocked`
+  marker; else `working/resume`. Pinned by `test/fixtures/claude-mail-wake-trace.jsonl` (a real
+  Claude Code 2.1.325 recording, see its README) + `test/agentMailWakeReplay.test.js`. Fails open. Unit tests have twice been green
   while this was broken live — test against a real event trace;
   `test/fixtures/claude-hook-trace.jsonl` + `test/agentHooksReplay.test.js` is the acceptance test.
 - `claudeVoiceLink.js` / `voiceWriter.js` / `voiceLinks.js` — Claude Code `/voice` on a box.
@@ -459,7 +490,8 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   into history as `__local__` without putting it in the snapshot. `refreshAgents(boxId)` is the
   real-time path: one light probe patched into the snapshot and recorded with
   `history.recordAgents` (the Host Shell re-samples locally). `onCycle(boxes, snapshot)` runs
-  after every sweep.
+  after every sweep; `onAgents(boxId)` after every applied `refreshAgents` result (agent mail's
+  delivery re-check; never for the Host Shell).
 - `agentWatch.js` — real-time agent state, box → server. `createAgentWatch` keeps one resident ssh
   stream per reachable box over the ControlMaster, running `WATCH_REMOTE`: a POSIX `sh` loop
   (inline remote command, nothing installed, no setup rerun) that reads the same marker files
@@ -499,6 +531,84 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   the per-session `present` flag guards agent-done. `onEvent(cb)` is the push seam
   (`fcmPush.js`; `agent-blocked` pushes as "Claude needs you" / "OpenCode needs you"); browsers poll
   `GET /api/health/events`.
+
+### Agent messaging
+
+Claude Code sessions on different boxes send each other tasks and replies through Tmuxifier,
+gated by a per-box policy (operator guide `docs/agent-messaging.md`; design and build notes
+`docs/superpowers/specs/2026-11-14-agent-messaging-design.md`, `2026-11-15-…-build-notes.md`).
+`index.js` builds it only when `config.agentMail` (`TMUXIFIER_AGENT_MAIL=off` builds none of it,
+leaves the setup phase unwired, and a construction failure runs the server with messaging off);
+calls `forward.sync` and `hub.boxChanged` from `onCycle` and `hub.boxChanged` from `onAgents`;
+and on shutdown stops the forward (closing every listener) **before** flushing the mail store, so
+nothing is posted after the final write.
+
+- `agentMailPolicy.js` — pure: `EMPTY_POLICY`, `normalizePolicy` (refuses an unknown box id,
+  drops the box's own), `isEnabled`, `mayStart(policies, fromId, toId)`. A thread between two boxes
+  needs all four of sender's `send` + target in `sendTo` + target's `receive` + sender in
+  `receiveFrom`; two sessions of one box need only that box's two switches. Box ids are
+  user-controlled keys: `Object.hasOwn`, null-prototype maps. Test: `test/agentMailPolicy.test.js`.
+- `agentMailPolicyStore.js` — `data/agent-mail-policy.json`, kept out of `boxes.json` on purpose
+  (the box export, `store.js`'s field rebuild and the device-readable `GET /api/boxes` never see
+  it). Mutations serialised on one chain, adopted only if they persist. `set(id, raw, { knownIds,
+  mirror })`: the counterpart entry is written **per list** (`mirror.sendTo` →
+  their `receiveFrom`, `mirror.receiveFrom` → their `sendTo`), never the other box's switches.
+  Test: `test/agentMailPolicyStore.test.js`.
+- `agentMailStore.js` — `data/agent-mail/`: one file per thread (a thread can grow without bound,
+  so one file would be rewritten on every message) + `refusals.json`; coalesced writes, one in
+  flight per file. States `queued`/`handed`/`delivered`/`dropped`; a close drops what is
+  undelivered; `load()` turns `handed` back to `queued` (no waiter survives a restart). Bounds:
+  newest 500 messages per thread (`dropped` counts the rest), 30 days idle, above 1000 threads only
+  closed ones go, 200 refusals; `prune()` runs daily from `index.js`. Ids `t-`/`m-` + 8 chars of a
+  look-alike-free alphabet (`THREAD_ID_RE`, `MSG_ID_RE`). Not a debounced store: flushed through
+  its own `whenIdle()`. Test: `test/agentMailStore.test.js`.
+- `agentMailText.js` — every word an agent reads, and nothing else writes any: `wakeText` (its
+  first line is the `[tmuxifier-mail m-…]` tag the hooks find; body inline up to 4000 chars),
+  `statusPhrase`, `refusalText`, `renderThread`/`renderWho`/`renderInbox`/`renderReply`,
+  `cleanBody` (control-strip only, 65536 UTF-8 bytes). The wake says the operator allowed the
+  sender and to always answer with `tmx reply`: the designed "not from your operator" wording made
+  a real Claude decline to act. Test: `test/agentMailText.test.js`.
+- `agentMailHub.js` — the delivery engine and the box-side operations (`who`, `send`, `reply`,
+  `read`, `inbox`, `waitMail`, `waitReplies`, `ack`, `boxChanged`, `policyChanged`, `boxRemoved`,
+  `closeThread`). "Running an agent" = the box's parsed `agentMarks` hold a marker for the session
+  (`marksOf`, from the poller snapshot), **not** the dashboard's `present` flag. A queued message
+  goes to an open `tmx wait` of that session on its thread, else to **one** waiter, and only while
+  the marker is `ready`; the thread's permission is re-checked at every post, read, inbox,
+  delivery and policy save, and a thread without it closes `permission withdrawn`. A new waiter of
+  a pane ends the older ones of that pane, and re-queues what was handed on that pane or more than
+  600 s ago. `pending` is a superset index of where undelivered mail may be, so `boxChanged` after
+  every sweep reads only threads with mail for a session that can take it. Every held request
+  settles exactly once. Tests: `test/agentMailHub.test.js`, `test/agentMailHubDelivery.test.js`.
+- `agentMailListener.js` — per-box `node:http` on a unix socket `data/mail/<12 hex of sha256(box
+  id)>.sock`. **The socket is the identity**: `caller.boxId` is the listener's own. The wire format
+  table is its header (GET params in the query, POST params only as form fields, a repeated
+  parameter refused); every parameter is allowlisted before any hub call; 64 open / 32 held
+  requests, then 503. Test: `test/agentMailListener.test.js` (real socket, real hub).
+- `agentMailForward.js` — puts each enabled box's listener on the box as
+  `~/.tmuxifier-mail/sock` with `-O forward -R` on its ControlMaster, from `sync(boxes, snapshot)`
+  after each sweep (and a `kick` after a policy save). The ensure is mkdir + `rm` + print `$HOME`,
+  then **`-O cancel`**, then forward, then a nonce `curl` through the box socket: a forward counts
+  as up only when this listener saw the nonce, because re-issuing a forward a master already holds
+  exits 0 and does nothing. Same pid on `-O check` = nothing to do, except a nonce recheck every
+  10 min of silence; failures back off 30 s doubling to 30 min. The shared-connection rule is in
+  Load-bearing rules. The box's `$HOME` is box output (`HOME_RE`, ≤ 80 chars). `status(boxId)`
+  feeds the Edit Box line; `installed` is read only at an ensure. Tests:
+  `test/agentMailForward.test.js` and `test/agentMailForward.integration.test.js` (real sshd and
+  master via `localBox.js`, two box records on one master, master kill and keeper restart).
+- `claudeAgentMail.js` + `src/server/assets/tmuxifier-mail.sh` + `src/server/assets/tmuxifier-mail-skill.md`
+  — the `agent-mail` setup phase, structural twin of `claudeAgentHooks.js`: both files on stdin
+  (split at `SKILL_SEPARATOR`, each landed by rename), nothing interpolated, skips with no
+  `claude`, no `curl`, or a `~/.local/bin/tmx` that is not exactly its symlink. One
+  `settings.json` rewrite (jq → node → python3) merges `MAIL_HOOKS` (`SessionStart` + `Stop`:
+  `hook-wait` with `asyncRewake`; `UserPromptSubmit`: `hook-ack`), remove-then-append on the
+  string `tmuxifier-mail`, and set-adds `MAIL_PERMISSION_RULE` = `Bash(tmx *)` to
+  `permissions.allow`, touching nothing else in `permissions`. Test: `test/claudeAgentMail.test.js`.
+  The `tmx` script: POSIX `sh`, curl over the socket, bodies only on curl's stdin, never
+  evaluates an answer; `send`/`reply` are **never retried** once the request may have arrived
+  (exit 3). `hook-wait` follows its Claude Code via `/proc` (not `$PPID`, a dash wrapper that
+  survives a `SIGKILL`ed Claude) and holds a per-pane lock whose every read and action goes
+  through the decision table above `lock_decide`; `hook-ack` prints nothing and always exits 0.
+  Test: `test/agentMailTmx.test.js` (the real script against the real listener).
 
 ### Fleet Command
 
@@ -639,6 +749,16 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
   reconnect polls everything. `pollEvents` is single-flight.
 - **Agent state** — `agentState.ts` (pure: `AGENT_PRECEDENCE`, `latestAgents`, `worstAgent`,
   `agentChipText`, `agentCounts`, `agentCards`, `fmtAge`; every agent surface folds through it).
+- **Agent messaging** — rendered only when `GET /api/ui-config` says `agentMail: true`
+  (`mailEnabledFrom`: anything else is off). `agentMail.ts` (fetch layer), `agentMailView.ts`
+  (pure: every word the operator reads — pair lines, status line, thread rows; `operatorStatus`
+  turns the agents' `queued` into `waiting`; the per-list mirror marks), `agentMailSection.ts`
+  (the Edit Box section, edit mode only; `commit(boxId)` runs after the box save, sends nothing
+  until the policy has loaded, and only when it changed). The Messages drawer lives in `main.ts`
+  (Threads / Refused, a thread view, 5 s generation-guarded poll that repaints only on change,
+  Stop arm-then-fire), its markup in `index.html`, `#messages` in phone mode's `CLOSES_DRAWER`.
+  Message bodies come from AI agents on other machines: `textContent` only. Tests:
+  `test/agentMailView.test.js`, `test/e2e/agentMail.spec.ts`.
 - **Dashboard** — `dashboard.ts` (standby dashboard when no pane is docked; polls only while
   mounted; AGENTS board `dash-board`, columns in precedence order, a card docks the box on that
   session; fleet cards are a spec sheet, not live gauges), `truenasCard.ts`, `unifiCard.ts`,
@@ -832,7 +952,8 @@ Claude login (`docs/terminal.md#voice-dictation`).
 - `README.md` — overview, quickstart, architecture diagram, a short section per feature linking
   into `docs/`.
 - `docs/configuration.md`, `authentication.md`, `boxes-and-setup.md`, `terminal.md`,
-  `dashboard.md`, `fleet-and-health.md`, `proxmox.md`, `android-app.md`, `mcp.md`, `privacy.md` —
+  `dashboard.md`, `fleet-and-health.md`, `agent-messaging.md`, `proxmox.md`, `android-app.md`,
+  `mcp.md`, `privacy.md` —
   living user-facing guides; a feature change updates the matching guide.
 - `docs/DEPLOY.md` + `deploy/tmuxifier.service` — systemd deployment (no secrets in the unit;
   `HOME` set so ssh children find `~/.ssh`).

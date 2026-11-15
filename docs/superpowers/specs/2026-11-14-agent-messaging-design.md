@@ -2,6 +2,7 @@
 
 **Date:** 2026-11-14
 **Status:** design, approved by the operator on 2026-11-14. Nothing is built.
+**Build notes:** the build departed from this design in several places; see 2026-11-15-agent-messaging-build-notes.md.
 **Builds on:** `2026-11-14-agent-messaging-high-level-plan.md` (the plan),
 `2026-11-14-agent-messaging-spike1-results.md` and
 `2026-11-14-agent-messaging-spike1b-and-spike2-results.md` (the spikes). Where this document and
