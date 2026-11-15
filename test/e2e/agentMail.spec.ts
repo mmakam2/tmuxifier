@@ -128,7 +128,13 @@ function sendFromBox(session: string, to: string, body: string): { code: number;
   const cmd = `curl -s -m 10 -w '\\n%{http_code}' --unix-socket "$HOME/.tmuxifier-mail/sock" `
     + `--data-urlencode ${q(`session=${session}`)} --data-urlencode ${q(`to=${to}`)} --data-urlencode ${q(`body=${body}`)} `
     + 'http://mail/v1/threads';
-  const out = execFileSync('ssh', ['-F', cfg, host, cmd], { encoding: 'utf8' });
+  let out: string;
+  try {
+    out = execFileSync('ssh', ['-F', cfg, host, cmd], { encoding: 'utf8', timeout: 20000 });
+  } catch (e) {
+    const x = e as { status?: number | null; signal?: string | null; stdout?: string; stderr?: string };
+    throw new Error(`ssh to the box failed (exit ${x.status ?? 'none'}${x.signal ? `, ${x.signal}` : ''})\nstdout: ${x.stdout ?? ''}\nstderr: ${x.stderr ?? ''}`);
+  }
   const cut = out.lastIndexOf('\n');
   return { code: Number(out.slice(cut + 1).trim()), text: out.slice(0, cut).replace(/\n$/, '') };
 }
@@ -190,9 +196,13 @@ test('the Edit Box section saves a policy with its counterpart and shows the pai
     await expect.poll(() => textOf(page, '.box-mail .mail-pair')).toBe('db-primary   send ✓');
     await cancelModal(page);
   } finally {
-    await resetMail(page, ids);
-    await page.request.patch(`/api/boxes/${ids.localhost}`, { data: { user: boxBefore.user ?? null } });
-    expect(await boxRecord(page, ids.localhost)).toEqual(boxBefore);
+    // The box record first: a resetMail timeout must not leave user: root on the seeded box.
+    try {
+      await page.request.patch(`/api/boxes/${ids.localhost}`, { data: { user: boxBefore.user ?? null } });
+      expect(await boxRecord(page, ids.localhost)).toEqual(boxBefore);
+    } finally {
+      await resetMail(page, ids);
+    }
   }
 });
 
