@@ -128,6 +128,60 @@ test('a resume clears outstanding shell tokens — a re-invocation is the only c
   expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
 });
 
+// A delivered agent message wakes the agent through a Stop-hook block, which
+// arrives as a <task-notification> carrying the mail tag. It is not a shell
+// completion, so it must not clear `bg.` tokens, and it must not write over a
+// block the operator still owes an answer to.
+const WAKE = { hook_event_name: 'UserPromptSubmit', prompt: '<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>\n<system-reminder>\nStop hook blocking error from command "Stop": [tmuxifier-mail m-k3v9x2ab] Message from the agent in orders/main, thread t-7fq2m9cd.\n</system-reminder>' };
+const WAKE_JSON = JSON.stringify(WAKE);
+
+test('a mail wake keeps outstanding shell tokens, so the next stop still reads working', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('pretool', env, BG_TOOL);
+  await runHook('prompt', env, WAKE_JSON);
+  expect(await fs.readdir(busyDir(dir))).toHaveLength(1);
+  await runHook('stop', env);
+  expect(await marker(dir)).toMatch(/^web:working:\d+:prompt\n$/);
+});
+
+test('a mail wake over a ready marker writes working/resume', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('stop', env);
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
+  await runHook('prompt', env, WAKE_JSON);
+  expect(await marker(dir)).toMatch(/^web:working:\d+:resume\n$/);
+});
+
+test('a mail wake over a blocked marker changes nothing, including the timestamp and the blocked-owner record', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('permission', env, '{"hook_event_name":"PermissionRequest","tool_name":"Bash","agent_id":"sub1"}');
+  const file = path.join(dir, '.tmuxifier-agent', 'web');
+  const rec = path.join(dir, '.tmuxifier-agent', 'blocked', 'web');
+  await fs.writeFile(file, 'web:blocked:1000:permission\n'); // an old ts, so a rewrite is visible
+  const res = await runHook('prompt', env, WAKE_JSON);
+  expect(res.code).toBe(0);
+  expect(await marker(dir)).toBe('web:blocked:1000:permission\n');
+  expect((await fs.readFile(rec, 'utf8'))).toBe('sub1\n');
+});
+
+test('a task-notification without the mail tag still clears shell tokens', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('pretool', env, BG_TOOL);
+  await runHook('prompt', env, JSON.stringify({ hook_event_name: 'UserPromptSubmit', prompt: '<task-notification>\n<summary>Background command finished</summary>\n</task-notification>' }));
+  expect(await marker(dir)).toMatch(/^web:working:\d+:resume\n$/);
+  await runHook('stop', env);
+  expect(await marker(dir)).toMatch(/^web:ready:\d+:stop\n$/);
+});
+
+test('an operator prompt that merely quotes the tag is an operator prompt: every token is cleared', async () => {
+  const { dir, env } = await hookEnv('web');
+  await runHook('subagent-start', env, SUBAGENT('sub-1'));
+  await runHook('pretool', env, BG_TOOL);
+  await runHook('prompt', env, JSON.stringify({ hook_event_name: 'UserPromptSubmit', prompt: 'what does [tmuxifier-mail m-k3v9x2ab] mean in my pane?' }));
+  expect(await marker(dir)).toMatch(/^web:working:\d+:prompt\n$/);
+  await expect(fs.access(busyDir(dir))).rejects.toBeTruthy();
+});
+
 // The defect this pair pins down: every background subagent that finishes
 // resumes the main agent with a synthetic prompt, so a blanket clear on
 // UserPromptSubmit destroys the tokens of the siblings STILL RUNNING — and the

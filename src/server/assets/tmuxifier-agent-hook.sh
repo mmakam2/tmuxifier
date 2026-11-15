@@ -17,7 +17,8 @@
 #   blocked/permission, /question, /elicitation   Claude is waiting on the operator
 # Dispatch: start -> ready/start; stop -> ready/stop (working/prompt while
 # background work is outstanding); prompt -> working/prompt (working/resume for
-# a <task-notification>); permission -> blocked/question when the payload's
+# a <task-notification>; a mail wake, which also carries the [tmuxifier-mail tag,
+# keeps the busy tokens and leaves a blocked marker untouched); permission -> blocked/question when the payload's
 # tool_name is AskUserQuestion (Claude Code also fires PermissionRequest for
 # it), else blocked/permission; ask -> blocked/question; unblock -> working;
 # notify: permission_prompt -> blocked/permission, but only when the marker is
@@ -140,7 +141,16 @@ case "${1:-}" in
     # a human types, rather than to its 120min TTL. A pasted prompt that happens
     # to contain the marker only costs that reset, since every token still
     # expires on its own clock.
+    #
+    # A delivered agent message wakes the agent through a Stop-hook block, which
+    # reaches this hook as a <task-notification> carrying the mail tag. It is not
+    # a shell completion, so it clears nothing, and it never writes over a block:
+    # a wake that lands while a permission dialog is open must leave `blocked`
+    # (and its owner record) alone, hence the exit before the marker rewrite.
     case "$IN" in
+      *'<task-notification>'*'[tmuxifier-mail '*)
+        cur_state; [ "$CUR" = blocked ] && exit 0
+        CAUSE=resume ;;
       *'<task-notification>'*) rm -f "$BUSY"/bg.* 2>/dev/null; CAUSE=resume ;;
       *) rm -rf "$BUSY" 2>/dev/null; CAUSE=prompt ;;
     esac
