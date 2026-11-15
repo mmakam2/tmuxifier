@@ -13,7 +13,8 @@ import {
 //   who(caller)                    sessions this one may start a thread with
 //   send(caller, target, body)     policy check, new thread, first message queued
 //   reply(caller, threadId, body)  a post by a participant
-//   read(caller, threadId)         the whole thread; the caller's messages become delivered
+//   read(caller, threadId)         the whole thread; the caller's messages become delivered, and a
+//                                  dropped message addressed to it shows as [not delivered]
 //   inbox(caller)                  undelivered messages for the caller; they become delivered
 //
 // "Running an agent" means `Object.hasOwn(marksOf(boxId), session)`: a live marker, not the
@@ -43,6 +44,8 @@ const CLOSED_KIND = Object.assign(Object.create(null), {
   'box removed': 'closed-box-removed',
 });
 const UNDELIVERED = ['queued', 'handed'];
+// What a recipient sees in place of a message that was dropped before it reached it.
+const NOT_DELIVERED = '[not delivered]';
 
 // The target as it may appear in text and in the refusal log.
 export function cleanTarget(raw) {
@@ -179,6 +182,15 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
   }
   const sentText = (boxes, threadId, recipient) => `Sent. Thread ${threadId}. ${queuedStatus(boxes, recipient)}`;
 
+  // The thread as the participant on `side` may read it: a dropped message it did not send never
+  // reached it, so its body is withheld. The sender still sees its own words.
+  function viewFor(thread, side) {
+    return {
+      ...thread,
+      messages: thread.messages.map((m) => (m.state === 'dropped' && m.from !== side ? { ...m, body: NOT_DELIVERED } : m)),
+    };
+  }
+
   // Undelivered messages of `thread` addressed to the participant on `side`.
   const undeliveredFor = (thread, side) => thread.messages.filter((m) => m.from !== side && UNDELIVERED.includes(m.state));
 
@@ -235,7 +247,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
     const allowed = mayStart(policies, me.boxId, peer.boxId);
     if (!allowed.ok) return refuse(me, typed, refusalText(allowed.code, { target: typed }));
     const { reachable, running } = readMark(peer);
-    if (!reachable) return refuse(me, typed, refusalText('unreachable'));
+    if (!reachable) return refuse(me, typed, refusalText('unreachable', { target: typed }));
     if (!running) return refuse(me, typed, refusalText('no-agent', { who: nameOf(boxes, peer) }));
     const thread = store.createThread({ starter: me, peer });
     store.addMessage(thread.id, { from: 'starter', body });
@@ -276,7 +288,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
     if (thread.state === 'open' && keepIfPermitted(thread, policies)) {
       for (const m of undeliveredFor(thread, side)) markDelivered(thread.id, m.id);
     }
-    return { ok: true, text: renderThread(store.thread(thread.id), namesFn(boxes)) };
+    return { ok: true, text: renderThread(viewFor(store.thread(thread.id), side), namesFn(boxes)) };
   }
 
   async function inbox(caller) {

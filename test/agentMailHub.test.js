@@ -162,8 +162,9 @@ describe('agentMailHub: send', () => {
 
   test('target box unreachable (marksOf null) and target session without a marker are refused', async () => {
     delete marks.b;
-    const down = await hub.send(O, 'billing', 'ping');
-    expect(down).toEqual({ ok: false, text: refusalText('unreachable') });
+    const down = await hub.send(O, 'Billing', 'ping');
+    expect(down).toEqual({ ok: false, text: 'Billing is unreachable right now; try again shortly' });
+    expect(down.text).toBe(refusalText('unreachable', { target: 'Billing' }));
 
     marks.b = { main: mark('ready') };
     const noAgent = await hub.send(O, 'billing/review', 'ping');
@@ -280,6 +281,16 @@ describe('agentMailHub: reply', () => {
     expect(t).toMatchObject({ state: 'closed', reason: 'permission withdrawn' });
     expect(t.messages.map((m) => m.state)).toEqual(['dropped']);
     expect(store.refusals()[0]).toMatchObject({ from: B, target: s.threadId, reason: r.text });
+    // the recipient never reads the dropped body; the sender still sees its own words
+    const recipientView = await hub.read(B, s.threadId);
+    expect(recipientView.ok).toBe(true);
+    expect(recipientView.text).not.toContain('ping');
+    expect(recipientView.text).toContain('[not delivered]');
+    expect(recipientView.text).toContain('closed: permission withdrawn');
+    const senderView = await hub.read(O, s.threadId);
+    expect(senderView.text).toContain('ping');
+    expect(senderView.text).not.toContain('[not delivered]');
+    expect(store.thread(s.threadId).messages[0].body).toBe('ping');
     // turning it back on does not reopen the thread
     await setPolicy('b', { receive: true, receiveFrom: ['o'] });
     expect((await hub.reply(B, s.threadId, 'pong')).text).toBe(r.text);
@@ -343,6 +354,27 @@ describe('agentMailHub: read and inbox', () => {
     const r = await hub.read(B, s.threadId);
     expect(r.ok).toBe(true);
     expect(r.text).toContain('closed: permission withdrawn');
+    expect(r.text).not.toContain('ping');
+    expect(r.text).toContain('[not delivered]');
+  });
+
+  test('a thread closed by the operator hides dropped bodies from their recipient only', async () => {
+    const s = await hub.send(O, 'billing', 'task body');
+    await hub.read(B, s.threadId); // delivered: stays visible after the close
+    await hub.reply(B, s.threadId, 'answer body');
+    await hub.reply(O, s.threadId, 'follow-up body');
+    store.closeThread(s.threadId, 'operator');
+    expect(store.thread(s.threadId).messages.map((m) => m.state)).toEqual(['delivered', 'dropped', 'dropped']);
+    const forB = (await hub.read(B, s.threadId)).text;
+    expect(forB).toContain('task body');
+    expect(forB).toContain('answer body'); // its own words
+    expect(forB).not.toContain('follow-up body');
+    const forO = (await hub.read(O, s.threadId)).text;
+    expect(forO).toContain('task body');
+    expect(forO).toContain('follow-up body');
+    expect(forO).not.toContain('answer body');
+    expect(forO.match(/\[not delivered\]/g)).toHaveLength(1);
+    expect(forB.match(/\[not delivered\]/g)).toHaveLength(1);
   });
 });
 

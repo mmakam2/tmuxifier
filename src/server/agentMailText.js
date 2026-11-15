@@ -68,7 +68,8 @@ export function statusPhrase(kind, ctx = {}) {
 }
 
 // code -> (ctx) => string. ctx: { target?: string, who?: string } (target = what the caller typed).
-// The four policy codes are the ones agentMailPolicy.mayStart returns.
+// The four policy codes are the ones agentMailPolicy.mayStart returns. `unreachable` is about the
+// target box; the tmx script words its own "mail service unreachable".
 const REFUSAL = Object.assign(Object.create(null), {
   'send-off': () => 'refused: this box is not allowed to send mail to other agents',
   'receive-off': ({ target } = {}) => `refused: ${target ?? 'the target box'} is not accepting mail from agents`,
@@ -79,7 +80,7 @@ const REFUSAL = Object.assign(Object.create(null), {
   'own-session': () => 'refused: that is your own session',
   'empty': () => 'refused: the message is empty',
   'too-large': () => `refused: the message is larger than ${MAX_BODY_BYTES} bytes`,
-  'unreachable': () => 'the mail service is unreachable; try again shortly',
+  'unreachable': ({ target } = {}) => `${target ?? 'the target box'} is unreachable right now; try again shortly`,
   'closed': () => 'refused: this thread is closed',
   'not-a-participant': () => 'refused: this session is not part of that thread',
 });

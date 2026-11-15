@@ -82,6 +82,11 @@ describe('statusPhrase / refusalText', () => {
     expect(refusalText('unknown-box', { target: 'zzz' })).toContain('zzz');
     expect(refusalText('send-off', {})).toMatch(/not allowed|off/i);
   });
+  test('unreachable names the target box, not the mail service', () => {
+    expect(refusalText('unreachable', { target: 'billing/main' })).toBe('billing/main is unreachable right now; try again shortly');
+    expect(refusalText('unreachable', {})).toBe('the target box is unreachable right now; try again shortly');
+    expect(refusalText('unreachable', { target: 'billing' })).not.toMatch(/mail service/);
+  });
 });
 
 describe('renders', () => {
