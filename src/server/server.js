@@ -32,6 +32,8 @@ import { verifyAssertion, verifyRegistration, makeOriginCheck, SUPPORTED_ALGS } 
 import { createPasskeyChallenges } from './passkeyChallenges.js';
 import { createPairingCodes } from './pairingCodes.js';
 import { extractFcmAppConfig } from './fcmAppConfig.js';
+import { THREAD_ID_RE } from './agentMailStore.js';
+import { mayStart } from './agentMailPolicy.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': [
@@ -116,7 +118,7 @@ const NO_FLEET_SCRIPTS = {
   removeScript: async () => {},
 };
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, oidcClients = null, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, paneKindLocal = paneKindLocalDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, uiSettingsStore = null, deviceStore = null, deviceHostGuard = createDeviceHostGuard(), pairingCodes = null, apkBuildManager = null, voiceLinks = null, liveHub = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, oidcClients = null, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, paneKindLocal = paneKindLocalDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, uiSettingsStore = null, deviceStore = null, deviceHostGuard = createDeviceHostGuard(), pairingCodes = null, apkBuildManager = null, voiceLinks = null, liveHub = null, agentMail = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -1905,6 +1907,76 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return history.getEvents({ since });
   });
 
+  // ---- Agent messaging: browser routes (design 6.12) ----
+  // Browser session only. These are the sole way a box's messaging policy changes, so they are
+  // absent from DEVICE_ALLOWED_ROUTES (requireAuth answers a device token 403) AND refuse a
+  // device id here, in case the allowlist ever grows. agentMail is null when messaging is off.
+  const mailRefused = (req, reply) => {
+    if (req.deviceId) { reply.code(403).send({ error: 'browser session required' }); return true; }
+    if (!agentMail) { reply.code(404).send({ error: 'agent messaging is off' }); return true; }
+    return false;
+  };
+  const mailThreadView = (t, status) => ({
+    id: t.id, starter: t.starter, peer: t.peer, state: t.state, reason: t.reason ?? null,
+    createdAt: t.createdAt, activeAt: t.activeAt, count: t.messages.length, dropped: t.dropped, status,
+  });
+  async function mailBoxView(boxId) {
+    const policies = await agentMail.policyStore.all();
+    const policy = await agentMail.policyStore.get(boxId);
+    const others = [...new Set([...policy.sendTo, ...policy.receiveFrom])];
+    const pairs = others.map((other) => ({
+      boxId: other,
+      send: policy.sendTo.includes(other) ? mayStart(policies, boxId, other) : null,
+      receive: policy.receiveFrom.includes(other) ? mayStart(policies, other, boxId) : null,
+    }));
+    return { policy, pairs, status: agentMail.forward.status(boxId) };
+  }
+  app.get('/api/mail/threads', { preHandler: requireAuth }, async (req, reply) => {
+    if (mailRefused(req, reply)) return;
+    const boxes = await store.listBoxes();
+    return { threads: agentMail.store.threads().map((t) => mailThreadView(t, agentMail.hub.threadStatus(t, 'starter', boxes))) };
+  });
+  app.get('/api/mail/threads/:id', { preHandler: requireAuth }, async (req, reply) => {
+    if (mailRefused(req, reply)) return;
+    const t = THREAD_ID_RE.test(String(req.params.id)) ? agentMail.store.thread(req.params.id) : null;
+    if (!t) return reply.code(404).send({ error: 'unknown thread' });
+    return { thread: t };
+  });
+  app.post('/api/mail/threads/:id/close', { preHandler: requireAuth }, async (req, reply) => {
+    if (mailRefused(req, reply)) return;
+    if (!THREAD_ID_RE.test(String(req.params.id)) || !(await agentMail.hub.closeThread(req.params.id, 'operator'))) {
+      return reply.code(404).send({ error: 'no open thread with that id' });
+    }
+    return { ok: true };
+  });
+  app.get('/api/mail/refusals', { preHandler: requireAuth }, async (req, reply) => {
+    if (mailRefused(req, reply)) return;
+    return { refusals: agentMail.store.refusals() };
+  });
+  app.get('/api/boxes/:id/mail', { preHandler: requireAuth }, async (req, reply) => {
+    if (mailRefused(req, reply)) return;
+    if (!(await store.getBox(req.params.id))) return reply.code(404).send({ error: 'unknown box' });
+    return mailBoxView(req.params.id);
+  });
+  app.put('/api/boxes/:id/mail', { preHandler: requireAuth }, async (req, reply) => {
+    if (mailRefused(req, reply)) return;
+    const id = req.params.id;
+    if (!(await store.getBox(id))) return reply.code(404).send({ error: 'unknown box' });
+    const body = req.body;
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) return reply.code(400).send({ error: 'policy must be an object' });
+    const { mirror = [] } = body;
+    if (!Array.isArray(mirror) || !mirror.every((x) => typeof x === 'string')) return reply.code(400).send({ error: 'mirror must be an array of box ids' });
+    const knownIds = new Set((await store.listBoxes()).map((b) => b.id));
+    try {
+      await agentMail.policyStore.set(id, { send: body.send, sendTo: body.sendTo, receive: body.receive, receiveFrom: body.receiveFrom }, { knownIds, mirror });
+    } catch (e) {
+      return reply.code(400).send({ error: e?.message || 'invalid policy' });
+    }
+    await agentMail.hub.policyChanged();
+    void agentMail.kick();
+    return mailBoxView(id);
+  });
+
   // Client UI settings the browser needs at boot: terminal font/size
   // (validated/normalized server-side in config.js; the name is not secret),
   // the upload size limit, and voice dictation readiness.
@@ -1919,6 +1991,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       // itself (see voiceUi.ts's wireVoice/finishDictation).
       voice: (await voiceState()).enabled && Boolean(await currentEngine()),
       voiceMaxSeconds: config.voiceMaxSeconds ?? 120,
+      agentMail: Boolean(agentMail),
     };
   });
 

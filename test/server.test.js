@@ -182,7 +182,7 @@ test('/api/ui-config requires auth and returns terminal font defaults', async ()
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
   const res = await app.inject({ method: 'GET', url: '/api/ui-config', headers });
   expect(res.statusCode).toBe(200);
-  expect(res.json()).toEqual({ termFont: null, termFontSize: 12, uploadMaxBytes: 25 * 1024 * 1024, voice: false, voiceMaxSeconds: 120 });
+  expect(res.json()).toEqual({ termFont: null, termFontSize: 12, uploadMaxBytes: 25 * 1024 * 1024, voice: false, voiceMaxSeconds: 120, agentMail: false });
 });
 
 test('/api/ui-config reflects the configured terminal font', async () => {
@@ -190,7 +190,7 @@ test('/api/ui-config reflects the configured terminal font', async () => {
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
   const res = await app.inject({ method: 'GET', url: '/api/ui-config', headers });
-  expect(res.json()).toEqual({ termFont: 'Fira Code', termFontSize: 13, uploadMaxBytes: 25 * 1024 * 1024, voice: false, voiceMaxSeconds: 120 });
+  expect(res.json()).toEqual({ termFont: 'Fira Code', termFontSize: 13, uploadMaxBytes: 25 * 1024 * 1024, voice: false, voiceMaxSeconds: 120, agentMail: false });
 });
 
 // voice is advertised only when BOTH halves are true: config says voice is
