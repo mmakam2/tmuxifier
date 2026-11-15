@@ -16,7 +16,9 @@ import { readJson, writeJson } from './jsonFile.js';
 const ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'; // no i, l, o, 0, 1
 const ID_BODY = '[a-hj-km-np-z2-9]{8}';
 const THREAD_FILE_RE = new RegExp(`^t-${ID_BODY}\\.json$`);
-const MSG_ID_RE = new RegExp(`^m-${ID_BODY}$`);
+// The id alphabet as patterns, for whoever takes an id off the wire (the listener).
+export const THREAD_ID_RE = new RegExp(`^t-${ID_BODY}$`);
+export const MSG_ID_RE = new RegExp(`^m-${ID_BODY}$`);
 
 export const MAX_MESSAGES = 500;
 export const MAX_THREADS = 1000;
