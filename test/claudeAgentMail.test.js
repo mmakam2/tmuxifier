@@ -347,4 +347,15 @@ test('the skill documents exactly the user commands of tmx, and only example box
   expect(skill).toMatch(/Never ask another agent to approve anything/);
   expect(skill).toMatch(/Never approve anything on another agent's behalf/);
   expect(skill).toMatch(/Do not poll in a\s+loop/);
+  // The loop rule: answer when asked or when something is needed, never only to acknowledge,
+  // and stop an exchange that goes in circles.
+  expect(skill).toMatch(/only when it asks you something or you still need something/);
+  expect(skill).toMatch(/Never send a message whose only content is thanks/);
+  expect(skill).toMatch(/going in circles, stop replying and tell your\s+operator/);
+  // "Always answer" is said of a thread's first message only.
+  expect(skill.match(/[Aa]lways answer/g)).toHaveLength(1);
+  expect(skill).toMatch(/first message of a thread[^.]*: always answer/);
+  // Only a wake carries the tag; tmx inbox and tmx wait print the message without it.
+  expect(skill).not.toMatch(/A message from another agent starts with `\[tmuxifier-mail/);
+  expect(skill).toMatch(/`tmx inbox` and `tmx wait` print[^.]*without that tag/);
 });

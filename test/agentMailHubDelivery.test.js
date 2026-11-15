@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { getEventListeners } from 'node:events';
-import { renderReply, renderWho, wakeText } from '../src/server/agentMailText.js';
+import { renderInbox, renderReply, renderWho, wakeText } from '../src/server/agentMailText.js';
 import { createMailHarness, O, B, mark } from './helpers/agentMailHarness.js';
 
 const R = { boxId: 'b', session: 'review' };
@@ -47,6 +47,33 @@ describe('agentMailHub delivery: waiters', () => {
     expect(m).toMatchObject({ handedAt: h.clock, handedPane: '%1' });
     expect(s.text).toBe(`Sent. Thread ${s.threadId}. queued`);
     expect(hub.listening('b')).toEqual({});
+  });
+
+  test('a reply delivered by wake is worded as a reply, the first message as a task; inbox items likewise', async () => {
+    const s = await hub.send(O, 'billing', 'which version?');
+    await hub.read(B, s.threadId);
+    marks.o.main = mark('ready');
+    const w = hub.waitMail(O, '%7', ac.signal);
+    await hub.reply(B, s.threadId, 'it pins 4.2');
+    const got = await w;
+    const m = msgs(s.threadId)[1];
+    expect(m.kind).toBe('reply');
+    expect(got.text).toBe(wakeText({ messageId: m.id, threadId: s.threadId, from: 'billing/main', body: 'it pins 4.2', kind: 'reply' }));
+    expect(got.text.startsWith(`[tmuxifier-mail ${m.id}] Reply from the agent in billing/main, thread ${s.threadId}.`)).toBe(true);
+    expect(got.text).not.toMatch(/Always answer|allowed that agent to message you/);
+    expect(got.text).toContain('Do not reply just to acknowledge.');
+    expect(await hub.ack(O, m.id)).toBe(true);
+
+    // The same two messages through tmx inbox: the task with the task wording, the reply with the reply's.
+    const s2 = await hub.send(O, 'billing', 'second task');
+    const first = msgs(s2.threadId)[0];
+    expect((await hub.inbox(B)).text).toBe(renderInbox([{ messageId: first.id, threadId: s2.threadId, from: 'orders/main', body: 'second task', kind: 'task' }]));
+    marks.o.main = mark('working');
+    await hub.reply(B, s2.threadId, 'second answer');
+    const back = msgs(s2.threadId)[1];
+    const inbox = (await hub.inbox(O)).text;
+    expect(inbox).toBe(renderInbox([{ messageId: back.id, threadId: s2.threadId, from: 'billing/main', body: 'second answer', kind: 'reply' }]));
+    expect(inbox.startsWith(`reply ${back.id} from the agent in billing/main`)).toBe(true);
   });
 
   test('a working session keeps the message queued until boxChanged sees ready', async () => {

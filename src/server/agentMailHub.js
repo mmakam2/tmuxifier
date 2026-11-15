@@ -430,7 +430,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
         wait.settle({ got: true, text: renderReply({ from, threadId: thread.id, body: m.body }) });
       } else {
         store.setMessageState(thread.id, m.id, 'handed', { handedAt: now(), handedPane: waiter.pane });
-        waiter.settle({ text: wakeText({ messageId: m.id, threadId: thread.id, from, body: m.body }), messageId: m.id });
+        waiter.settle({ text: wakeText({ messageId: m.id, threadId: thread.id, from, body: m.body, kind: m.kind }), messageId: m.id });
       }
     }
   }
@@ -563,11 +563,11 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
       const pending = undeliveredFor(thread, side);
       if (pending.length === 0 || !keepIfPermitted(thread, policies)) continue;
       const from = nameOf(boxes, thread[otherSide(side)]);
-      for (const m of pending) items.push({ messageId: m.id, threadId: thread.id, from, body: m.body, at: m.at });
+      for (const m of pending) items.push({ messageId: m.id, threadId: thread.id, from, body: m.body, kind: m.kind, at: m.at });
     }
     items.sort((a, b) => a.at - b.at); // oldest first; stable within one timestamp
     for (const i of items) markDelivered(i.threadId, i.messageId);
-    return { ok: true, text: renderInbox(items.map(({ messageId, threadId, from, body }) => ({ messageId, threadId, from, body }))) };
+    return { ok: true, text: renderInbox(items.map(({ messageId, threadId, from, body, kind }) => ({ messageId, threadId, from, body, kind }))) };
   }
 
   // The waiter's held request. A malformed caller or pane, or an aborted signal, is answered idle
