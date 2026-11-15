@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { keyboardOpen, KB_OPEN_PX } from '../src/web/phoneMode.ts';
+import { keyboardOpen, KB_OPEN_PX, CLOSES_DRAWER } from '../src/web/phoneMode.ts';
 
 test('keyboardOpen: only a large layout-vs-visual delta reads as a keyboard', () => {
   expect(keyboardOpen(844, 844)).toBe(false);              // idle
@@ -17,4 +17,12 @@ test('keyboardOpen: zoom cannot read as a keyboard, because vvh is scale-correct
 
 test('threshold matches the spec', () => {
   expect(KB_OPEN_PX).toBe(150);
+});
+
+test('the Messages key closes the phone drawer like the Events key', () => {
+  // It opens a drawer on the right edge, outside the sidebar, as Events and Fleet Jobs do.
+  const selectors = CLOSES_DRAWER.split(',').map((x) => x.trim());
+  expect(selectors).toContain('#events');
+  expect(selectors).toContain('#fleet-jobs');
+  expect(selectors).toContain('#messages');
 });

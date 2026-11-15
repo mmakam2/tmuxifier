@@ -50,6 +50,23 @@
         <ul class="events-list"></ul>
       </div>
     </div>
+    <!-- Agent messages between boxes: every thread, every refused attempt, a
+         thread's messages and its Stop. Same drawer chrome; main.ts fills
+         .messages-content and opens it only while agent messaging is on. -->
+    <div id="messages-panel" class="fleet-panel messages-panel" role="dialog" aria-label="Messages">
+      <div class="fleet-panel-header">
+        <span class="fleet-panel-title">Messages</span>
+        <div class="pve-tabs messages-tabs" aria-label="Messages view">
+          <button type="button" id="messages-tab-threads" class="pve-tab messages-tab active" data-tab="threads" aria-selected="true">Threads</button>
+          <button type="button" id="messages-tab-refused" class="pve-tab messages-tab" data-tab="refused" aria-selected="false" tabindex="-1">Refused</button>
+        </div>
+        <button class="fleet-panel-close" title="Close" aria-label="Close messages">&#x2715;</button>
+      </div>
+      <div class="fleet-panel-body messages-body">
+        <p class="messages-error" aria-live="polite" hidden></p>
+        <div class="messages-content"></div>
+      </div>
+    </div>
     <script type="module" src="/main.ts"></script>
   </body>
 </html>

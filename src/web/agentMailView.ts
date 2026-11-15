@@ -97,7 +97,27 @@ export function threadRow(t: MailThreadSummary, boxes: readonly MailBoxRef[], no
   };
 }
 
-const MESSAGE_STATE: Record<string, string> = { queued: 'queued', handed: 'handed, not yet confirmed', delivered: 'delivered', dropped: 'dropped' };
+export interface MailThreadHead { title: string; state: string; dropped: string | null }
+
+/** The thread view's head: who talks to whom, the thread's state as in the list,
+ *  and how many older messages the store trimmed (null when none). */
+export function threadHead(t: Pick<MailThread, 'starter' | 'peer' | 'state' | 'reason' | 'dropped'>, boxes: readonly MailBoxRef[]): MailThreadHead {
+  const n = Number(t.dropped) || 0;
+  return {
+    title: `${participant(t.starter, boxes)} → ${participant(t.peer, boxes)}`,
+    state: threadState(t.state, t.reason),
+    dropped: n > 0 ? `${n} older ${n === 1 ? 'message is' : 'messages are'} no longer kept` : null,
+  };
+}
+
+// The Messages drawer's empty states and its one-line failures.
+export const MAIL_NO_THREADS = 'No messages yet.';
+export const MAIL_NO_REFUSALS = 'Nothing refused.';
+const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
+export function messagesLoadError(message: string): string { return `Messages could not be loaded: ${oneLine(message)}`; }
+export function stopFailedLine(message: string): string { return `Could not stop this thread: ${oneLine(message)}`; }
+
+const MESSAGE_STATE: Record<string, string> = { queued: 'waiting', handed: 'handed over', delivered: 'delivered', dropped: 'dropped' };
 
 const pad = (n: number) => String(n).padStart(2, '0');
 /** Local `YYYY-MM-DD HH:MM`. */

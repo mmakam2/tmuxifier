@@ -23,7 +23,7 @@ const SIDEBAR_COLLAPSED_KEY = 'tmuxifier.sidebarCollapsed';
 // Every icon control that must not close it (Reconnect's arm-then-fire, ✎, ✕,
 // ⚷, the sparkline cycle, the row checkbox) already calls stopPropagation on
 // its own click, so it never reaches this delegated listener at all.
-const CLOSES_DRAWER = [
+export const CLOSES_DRAWER = [
   '.box',
   '.local-shell',
   '#home',
@@ -32,6 +32,7 @@ const CLOSES_DRAWER = [
   '#add',
   '#fleet-jobs',
   '#events',
+  '#messages',
   '#proxmox',
   '#fleet-run',
 ].join(', ');

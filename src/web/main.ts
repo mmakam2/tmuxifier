@@ -21,7 +21,7 @@ import { createLiveQueue, openLiveLink, type LiveSocket } from './liveLink';
 import { partitionJobs, jobLamp, jobReadout, jobClock, runningCount } from './fleetJobs';
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { closeAllModals, registerModal } from './modalRegistry';
-import { openModal, makeRadio, modalOpen } from './dom';
+import { el, openModal, makeRadio, modalOpen, syncTabSelection, wireTabStrip } from './dom';
 import { freshBoxFrom } from './freshBox';
 import { armReduce, ARM_MS, IDLE as ARM_IDLE, type ArmState } from './arming';
 import { createSetupJobPoller } from './setupPoller';
@@ -33,7 +33,10 @@ import { createDashboard } from './dashboard';
 import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createAgentMailSection } from './agentMailSection';
-import { mailEnabledFrom } from './agentMailView';
+import { mailApi, type MailRefusal, type MailThread, type MailThreadSummary } from './agentMail';
+import {
+  mailEnabledFrom, messageRow, messagesLoadError, refusalRow, stopFailedLine, threadHead, threadRow, MAIL_NO_REFUSALS, MAIL_NO_THREADS,
+} from './agentMailView';
 import { createSetupOptionsForm, setupStartPayload, type SetupOptionsValues } from './setupOptions';
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
 import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore, instanceId, boxOfInstance, ordinalOfInstance, nextOrdinal } from './stageLayout';
@@ -1597,7 +1600,7 @@ async function renderDashboard() {
           </div>
         </div>
         <div class="actions"><button id="add">+ Add box</button></div>
-        <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button><button id="proxmox" type="button" class="proxmox-btn" title="Provision Proxmox LXC containers" hidden>Proxmox</button><button id="events" type="button" class="events-btn" title="Box health events (down/up/needs login/thresholds)">Events<span id="events-badge" class="events-badge" hidden></span></button></div>
+        <div class="fleet-actions"><button id="fleet-toggle" type="button" class="fleet-toggle">Fleet Command</button><button id="fleet-jobs" type="button" class="fleet-jobs-btn" title="Fleet job history">Fleet Jobs</button><button id="proxmox" type="button" class="proxmox-btn" title="Provision Proxmox LXC containers" hidden>Proxmox</button><button id="events" type="button" class="events-btn" title="Box health events (down/up/needs login/thresholds)">Events<span id="events-badge" class="events-badge" hidden></span></button>${agentMailEnabled ? '<button id="messages" type="button" class="events-btn" title="Agent messages between boxes">Messages</button>' : ''}</div>
         <div id="fleet-bar" class="fleet-bar" hidden></div>
         <div class="search-wrap">
           <input id="search" class="search" type="text" placeholder="Search…" aria-label="Search boxes" autocomplete="off" />
@@ -1727,6 +1730,12 @@ async function renderDashboard() {
     const panel = document.getElementById('events-panel')!;
     if (panel.classList.contains('open')) closeEventsPanel();
     else openEventsPanel();
+  });
+  // Rendered only while agent messaging is on (agentMailEnabled, read on every
+  // sign-in path before this render).
+  app.querySelector('#messages')?.addEventListener('click', () => {
+    if (messagesOpen()) closeMessagesPanel();
+    else openMessagesPanel();
   });
   app.querySelector('#proxmox')!.addEventListener('click', () => openProxmoxHub({
     openBox: (b) => openBox(b),
@@ -2026,6 +2035,7 @@ async function renderDashboard() {
     if (e.key !== 'Escape' || document.querySelector('.modal-backdrop')) return;
     if (document.getElementById('fleet-panel')?.classList.contains('open')) closeFleetJobsPanel();
     else if (document.getElementById('events-panel')?.classList.contains('open')) closeEventsPanel();
+    else if (messagesOpen()) closeMessagesPanel();
   });
 }
 
@@ -3881,6 +3891,7 @@ function openFleetScriptEditor(initial: string, targets: { id: string; label: st
 
 function openEventsPanel() {
   closeFleetJobsPanel(); // the drawers share the same edge; stacking hides one
+  closeMessagesPanel();
   const panel = document.getElementById('events-panel')!;
   panel.classList.add('open');
   document.getElementById('events')?.classList.add('active');
@@ -3934,6 +3945,323 @@ function renderEventsPanel() {
   // notifications fire separately from pollHealth, above).
   if (latestEventSeq) writeLastSeenSeq(latestEventSeq);
   updateEventsBadge();
+}
+
+// --- Messages drawer (agent messaging, design 6.11) -------------------------
+// The third drawer on the shared edge: every thread, every refused attempt, one
+// thread's messages and its Stop. While open it refetches what it shows every
+// 5 s, one request at a time; a response for a view the operator has since left
+// (another tab, another thread, the drawer closed) is dropped by the generation
+// check, and the current view is fetched again at once. A refetch repaints only
+// when what it would show changed, so a focused row, the message list's scroll
+// position and an armed Stop survive it.
+//
+// Every word comes from agentMailView.ts and reaches the DOM as text. Message
+// bodies are written by AI agents on other machines: they land in a pre-wrap
+// block via textContent, never as markup or links. Names resolve against
+// allBoxes at paint time; a box removed since reads "removed box".
+
+type MessagesTab = 'threads' | 'refused';
+const MESSAGES_POLL_MS = 5000;
+let messagesTab: MessagesTab = 'threads';
+let messagesThreadId: string | null = null; // set: the thread view (under the Threads tab)
+let messagesGen = 0; // bumped on every view change and on close
+let messagesInFlight = false;
+let messagesAgain = false; // a load was asked for while one was in flight
+let messagesTimer: ReturnType<typeof setInterval> | null = null;
+let messagesWired = false; // the panel is static (index.html), so its tab strip is wired once
+let mailThreads: MailThreadSummary[] | null = null;
+let mailRefusals: MailRefusal[] | null = null;
+let mailThread: MailThread | null = null;
+let mailListSig = ''; // what the list view last painted
+interface MailThreadDom {
+  id: string; sig: string;
+  back: HTMLButtonElement; title: HTMLElement; state: HTMLElement; stop: HTMLButtonElement;
+  note: HTMLElement; dropped: HTMLElement; list: HTMLElement;
+}
+let mailThreadDom: MailThreadDom | null = null;
+let mailStopArm: ArmState = ARM_IDLE;
+let mailStopArmTimer: ReturnType<typeof setTimeout> | null = null;
+let mailStopping: string | null = null; // the thread whose close request is in flight
+
+const messagesPanel = () => document.getElementById('messages-panel');
+const messagesOpen = () => !!messagesPanel()?.classList.contains('open');
+const messagesContent = () => document.querySelector('#messages-panel .messages-content') as HTMLElement | null;
+const errorText = (e: unknown) => (e instanceof Error && e.message ? e.message : 'request failed');
+
+function setMessagesError(text: string | null) {
+  const line = document.querySelector('#messages-panel .messages-error') as HTMLElement | null;
+  if (!line) return;
+  line.textContent = text ?? '';
+  line.hidden = !text;
+}
+
+function openMessagesPanel() {
+  if (!agentMailEnabled) return;
+  closeFleetJobsPanel(); // the drawers share the same edge; stacking hides one
+  closeEventsPanel();
+  const panel = messagesPanel();
+  if (!panel) return;
+  (panel.querySelector('.fleet-panel-close') as HTMLElement).onclick = () => closeMessagesPanel();
+  if (!messagesWired) {
+    messagesWired = true;
+    const strip = panel.querySelector('.messages-tabs') as HTMLElement;
+    const pick = (key: string | undefined) => showMessagesView(key === 'refused' ? 'refused' : 'threads', null);
+    for (const b of strip.querySelectorAll<HTMLElement>('[data-tab]')) b.addEventListener('click', () => pick(b.dataset.tab));
+    wireTabStrip(strip, panel.querySelector('.messages-content') as HTMLElement, pick);
+  }
+  panel.classList.add('open');
+  document.getElementById('messages')?.classList.add('active');
+  showMessagesView(messagesTab, null); // reopens on the tab last used, at its list
+  if (!messagesTimer) messagesTimer = setInterval(() => { void loadMessages(); }, MESSAGES_POLL_MS);
+}
+
+function closeMessagesPanel() {
+  if (messagesTimer) { clearInterval(messagesTimer); messagesTimer = null; }
+  messagesGen++; // a response still in flight is dropped
+  disarmMailStop();
+  const panel = messagesPanel();
+  if (!panel) return;
+  const hadFocus = panel.contains(document.activeElement);
+  panel.classList.remove('open');
+  document.getElementById('messages')?.classList.remove('active');
+  // Focus would otherwise be stranded on a control that just became hidden.
+  if (hadFocus) (document.getElementById('messages') as HTMLElement | null)?.focus();
+}
+
+// Leaving the workspace: close, and forget what the drawer showed.
+function resetMessagesPanel() {
+  closeMessagesPanel();
+  messagesTab = 'threads';
+  messagesThreadId = null;
+  mailThreads = null;
+  mailRefusals = null;
+  mailThread = null;
+  mailListSig = '';
+  mailThreadDom = null;
+  mailStopping = null;
+  messagesContent()?.replaceChildren();
+  setMessagesError(null);
+  const strip = document.querySelector('#messages-panel .messages-tabs') as HTMLElement | null;
+  if (strip) syncTabSelection(strip, 'threads');
+}
+
+function showMessagesView(tab: MessagesTab, threadId: string | null) {
+  const panel = messagesPanel();
+  if (!panel) return;
+  const hadFocus = panel.contains(document.activeElement);
+  const leaving = messagesThreadId;
+  disarmMailStop();
+  messagesTab = tab;
+  messagesThreadId = tab === 'threads' ? threadId : null;
+  messagesGen++;
+  mailListSig = '';
+  mailThreadDom = null;
+  if (mailThread?.id !== messagesThreadId) mailThread = null;
+  syncTabSelection(panel.querySelector('.messages-tabs') as HTMLElement, tab);
+  setMessagesError(null);
+  renderMessagesPanel();
+  void loadMessages();
+  // The control that was clicked may be gone (a row opens the thread, Back
+  // returns to the list): put focus on the matching control of the new view.
+  if (hadFocus && !panel.contains(document.activeElement)) {
+    const content = messagesContent();
+    const row = leaving ? content?.querySelector<HTMLElement>(`.mail-thread-row[data-id="${CSS.escape(leaving)}"]`) : null;
+    const built = mailThreadDom as MailThreadDom | null; // renderMessagesPanel() just built it for a thread view
+    const target = built?.back ?? row ?? panel.querySelector<HTMLElement>('.messages-tab.active');
+    target?.focus();
+  }
+}
+
+async function loadMessages(): Promise<void> {
+  if (!messagesOpen()) return;
+  if (messagesInFlight) { messagesAgain = true; return; }
+  messagesInFlight = true;
+  messagesAgain = false;
+  const gen = messagesGen;
+  const tab = messagesTab;
+  const threadId = messagesThreadId;
+  try {
+    if (threadId) {
+      const thread = await mailApi.thread(threadId);
+      if (gen !== messagesGen) return;
+      mailThread = thread;
+    } else if (tab === 'refused') {
+      const refusals = await mailApi.refusals();
+      if (gen !== messagesGen) return;
+      mailRefusals = refusals;
+    } else {
+      const threads = await mailApi.threads();
+      if (gen !== messagesGen) return;
+      mailThreads = threads;
+    }
+    setMessagesError(null);
+    renderMessagesPanel();
+  } catch (error) {
+    if (gen === messagesGen) setMessagesError(messagesLoadError(errorText(error)));
+  } finally {
+    messagesInFlight = false;
+    if (messagesOpen() && (messagesAgain || gen !== messagesGen)) void loadMessages();
+  }
+}
+
+// Paints the current view from what was last fetched.
+function renderMessagesPanel() {
+  const content = messagesContent();
+  if (!content) return;
+  if (messagesThreadId) renderMailThread(content, messagesThreadId);
+  else if (messagesTab === 'refused') renderMailRefusals(content);
+  else renderMailThreads(content);
+}
+
+function mailPlaceholder(content: HTMLElement, sig: string, text: string) {
+  if (mailListSig === sig) return;
+  mailListSig = sig;
+  content.replaceChildren(el('p', { class: 'messages-empty' }, [text]));
+}
+
+function renderMailThreads(content: HTMLElement) {
+  if (!mailThreads) return mailPlaceholder(content, 'threads:loading', 'Loading…');
+  const now = Date.now();
+  const rows = mailThreads.map((t) => ({ id: t.id, open: t.state === 'open', ...threadRow(t, allBoxes, now) }));
+  if (!rows.length) return mailPlaceholder(content, 'threads:empty', MAIL_NO_THREADS);
+  const sig = `threads:${JSON.stringify(rows)}`;
+  if (sig === mailListSig) return;
+  mailListSig = sig;
+  const prev = content.querySelector('.mail-threads');
+  const top = prev?.scrollTop ?? 0;
+  const focused = prev?.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.id : undefined;
+  const list = el('ul', { class: 'mail-threads', 'aria-label': 'Threads' }, rows.map((r) => el('li', {}, [
+    el('button', { type: 'button', class: 'mail-thread-row', 'data-id': r.id, onclick: () => showMessagesView('threads', r.id) }, [
+      el('span', { class: 'mail-thread-title' }, [r.title]),
+      el('span', { class: 'mail-thread-meta' }, [r.meta]),
+      el('span', { class: r.open ? 'mail-thread-state open' : 'mail-thread-state' }, [r.state]),
+      el('span', { class: 'mail-thread-status' }, [r.status]),
+    ]),
+  ])));
+  content.replaceChildren(list);
+  list.scrollTop = top;
+  if (focused) list.querySelector<HTMLElement>(`.mail-thread-row[data-id="${CSS.escape(focused)}"]`)?.focus();
+}
+
+function renderMailRefusals(content: HTMLElement) {
+  if (!mailRefusals) return mailPlaceholder(content, 'refused:loading', 'Loading…');
+  const now = Date.now();
+  const rows = mailRefusals.map((r) => ({ title: new Date(r.at).toLocaleString(), ...refusalRow(r, allBoxes, now) }));
+  if (!rows.length) return mailPlaceholder(content, 'refused:empty', MAIL_NO_REFUSALS);
+  const sig = `refused:${JSON.stringify(rows)}`;
+  if (sig === mailListSig) return;
+  mailListSig = sig;
+  const top = content.querySelector('.mail-refusals')?.scrollTop ?? 0;
+  const list = el('ul', { class: 'mail-refusals', 'aria-label': 'Refused' }, rows.map((r) => el('li', { class: 'mail-refusal' }, [
+    el('div', { class: 'mail-refusal-top' }, [
+      el('span', { class: 'mail-refusal-who' }, [r.who]),
+      el('span', { class: 'mail-refusal-arrow', 'aria-hidden': 'true' }, ['→']),
+      el('span', { class: 'mail-refusal-target' }, [r.target]),
+      el('span', { class: 'mail-refusal-when', title: r.title }, [r.when]),
+    ]),
+    el('div', { class: 'mail-refusal-reason' }, [r.reason]),
+  ])));
+  content.replaceChildren(list);
+  list.scrollTop = top;
+}
+
+function buildMailThreadDom(content: HTMLElement, id: string): MailThreadDom {
+  const back = el('button', { type: 'button', class: 'mail-back', 'aria-label': 'Back to threads', onclick: () => showMessagesView('threads', null) }, ['← Threads']);
+  const title = el('span', { class: 'mail-thread-title' });
+  const state = el('span', { class: 'mail-thread-state' });
+  const stop = el('button', { type: 'button', class: 'fleet-cancel mail-stop', hidden: true, onclick: () => armMailStop(id) }, ['Stop']);
+  stop.addEventListener('blur', () => { if (mailStopArm.armed) disarmMailStop(); });
+  const note = el('p', { class: 'mail-stop-note', 'aria-live': 'polite', hidden: true });
+  const dropped = el('p', { class: 'mail-dropped', hidden: true });
+  const list = el('ol', { class: 'mail-messages', 'aria-label': 'Messages in this thread' });
+  content.replaceChildren(el('div', { class: 'mail-thread', 'data-id': id }, [
+    el('div', { class: 'mail-thread-head' }, [back, title, state, stop]), note, dropped, list,
+  ]));
+  return { id, sig: '', back, title, state, stop, note, dropped, list };
+}
+
+const MESSAGE_TONES = new Set(['queued', 'handed', 'delivered', 'dropped']);
+
+function renderMailThread(content: HTMLElement, id: string) {
+  if (mailThreadDom?.id !== id) mailThreadDom = buildMailThreadDom(content, id);
+  const v = mailThreadDom;
+  const t = mailThread?.id === id ? mailThread : null;
+  if (!t) {
+    if (v.sig !== 'loading') { v.sig = 'loading'; v.list.replaceChildren(el('li', { class: 'messages-empty' }, ['Loading…'])); }
+    return;
+  }
+  const head = threadHead(t, allBoxes);
+  const open = t.state === 'open';
+  const rows = t.messages.map((m) => ({ tone: MESSAGE_TONES.has(m.state) ? m.state : '', ...messageRow(m, t, allBoxes) }));
+  const sig = JSON.stringify([head, open, mailStopping === id, rows]);
+  if (sig === v.sig) return;
+  const first = v.sig === '' || v.sig === 'loading';
+  v.sig = sig;
+  v.title.textContent = head.title;
+  v.state.textContent = head.state;
+  v.state.classList.toggle('open', open);
+  v.dropped.textContent = head.dropped ?? '';
+  v.dropped.hidden = !head.dropped;
+  if (!open && mailStopArm.armed === id) disarmMailStop();
+  v.stop.hidden = !open;
+  v.stop.disabled = mailStopping === id;
+  if (mailStopping === id) v.stop.textContent = 'Stopping…';
+  else if (mailStopArm.armed !== id) v.stop.textContent = 'Stop';
+  // Keep the reader where they were; one already at the end follows new messages.
+  const atEnd = v.list.scrollHeight - v.list.scrollTop - v.list.clientHeight < 4;
+  const top = v.list.scrollTop;
+  v.list.replaceChildren(...rows.map((r) => el('li', { class: 'mail-msg' }, [
+    el('div', { class: 'mail-msg-head' }, [
+      el('span', { class: 'mail-msg-who' }, [r.who]),
+      el('span', { class: 'mail-msg-when' }, [r.when]),
+      el('span', { class: r.tone ? `mail-msg-state ${r.tone}` : 'mail-msg-state' }, [r.state]),
+    ]),
+    el('pre', { class: 'mail-msg-body' }, [r.body]),
+  ])));
+  v.list.scrollTop = !first && atEnd ? v.list.scrollHeight : top;
+}
+
+function disarmMailStop() {
+  if (mailStopArmTimer) { clearTimeout(mailStopArmTimer); mailStopArmTimer = null; }
+  mailStopArm = armReduce(mailStopArm, { type: 'dismiss' }).state;
+  const v = mailThreadDom;
+  if (v) {
+    v.stop.classList.remove('armed');
+    if (mailStopping !== v.id) v.stop.textContent = 'Stop';
+  }
+}
+
+// Arm-then-fire, as the Fleet Jobs Cancel: Stop ends the thread for both agents
+// and drops what is undelivered, so the first click states it and waits.
+function armMailStop(threadId: string) {
+  const { state, fire } = armReduce(mailStopArm, { type: 'click', id: threadId, armable: true });
+  mailStopArm = state;
+  if (mailStopArmTimer) { clearTimeout(mailStopArmTimer); mailStopArmTimer = null; }
+  const v = mailThreadDom?.id === threadId ? mailThreadDom : null;
+  if (fire) {
+    mailStopping = threadId;
+    if (v) {
+      v.stop.disabled = true;
+      v.stop.classList.remove('armed');
+      v.stop.textContent = 'Stopping…';
+      v.note.hidden = true;
+    }
+    void mailApi.close(threadId).then(() => undefined, (error: unknown) => {
+      const cur = mailThreadDom?.id === threadId ? mailThreadDom : null;
+      if (cur) { cur.note.textContent = stopFailedLine(errorText(error)); cur.note.hidden = false; }
+    }).finally(() => {
+      if (mailStopping === threadId) mailStopping = null;
+      if (mailThreadDom?.id === threadId) mailThreadDom.sig = ''; // repaint the key on the refetch
+      void loadMessages();
+    });
+    return;
+  }
+  if (v) {
+    v.stop.classList.add('armed');
+    v.stop.textContent = 'Confirm';
+  }
+  mailStopArmTimer = setTimeout(disarmMailStop, ARM_MS);
 }
 
 // Generation-guarded job-detail poller (fleetPoll.ts): a stale response for a
@@ -4025,6 +4353,7 @@ function closeFleetJobsPanel() {
 
 function openFleetJobsPanel(jobId?: string) {
   closeEventsPanel(); // the drawers share the same edge; stacking hides one
+  closeMessagesPanel();
   const panel = document.getElementById('fleet-panel')!;
   panel.classList.add('open');
   document.getElementById('fleet-jobs')?.classList.add('active');
@@ -4484,6 +4813,7 @@ function teardownWorkspace(): void {
   touchComposer = null;
   closeFleetJobsPanel();
   closeEventsPanel();
+  resetMessagesPanel(); // closes it, stops its timer, disarms Stop, forgets what it showed
   closeProvisionPanel();
   closeAllModals(); // body-mounted modals (Proxmox hub, settings) survive the #app re-render
 }

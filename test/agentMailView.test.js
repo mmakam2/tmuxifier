@@ -2,6 +2,7 @@ import { test, expect } from 'vitest';
 import {
   nameOf, participant, pairLine, statusLine, threadRow, messageRow, refusalRow, policyChanged, relAge, mailEnabledFrom,
   NO_MIRROR, mirrorOnAdd, mirrorOnRemove, mirrorToSend,
+  threadHead, MAIL_NO_THREADS, MAIL_NO_REFUSALS, messagesLoadError, stopFailedLine,
 } from '../src/web/agentMailView.ts';
 
 const boxes = [
@@ -93,16 +94,20 @@ test('a participant whose box was removed reads "removed box/main"', () => {
   expect(threadRow(thread({ peer: { boxId: 'gone', session: 'main' } }), boxes, 1_000_000).title).toBe('orders/main → removed box/main');
 });
 
-test('messageRow names the sender side, the send time and the delivery state, and keeps the body as text', () => {
+test('messageRow: sender, delivery state in words ("waiting", "handed over", "delivered", "dropped"), body untouched', () => {
   const t = { ...thread(), v: 1, messages: [] };
   const at = new Date(2026, 10, 14, 9, 5).getTime();
-  const body = '<b>not markup</b>\nsecond line';
+  const body = '<b>not markup</b>\n  indented second line\thttps://example.com/x';
   expect(messageRow({ id: 'm-a', kind: 'task', from: 'starter', body, at, state: 'queued' }, t, boxes))
-    .toEqual({ who: 'orders/main', when: '2026-11-14 09:05', state: 'queued', body });
+    .toEqual({ who: 'orders/main', when: '2026-11-14 09:05', state: 'waiting', body });
   expect(messageRow({ id: 'm-b', kind: 'reply', from: 'peer', body: 'ok', at, state: 'handed', handedAt: at, handedPane: '%3' }, t, boxes))
-    .toMatchObject({ who: 'billing/main', state: 'handed, not yet confirmed' });
+    .toEqual({ who: 'billing/main', when: '2026-11-14 09:05', state: 'handed over', body: 'ok' });
   expect(messageRow({ id: 'm-c', kind: 'reply', from: 'peer', body: 'ok', at, state: 'delivered', deliveredAt: at }, t, boxes).state).toBe('delivered');
   expect(messageRow({ id: 'm-d', kind: 'reply', from: 'peer', body: 'ok', at, state: 'dropped' }, t, boxes).state).toBe('dropped');
+  // A state this bundle does not know (a newer server) passes through as it is.
+  expect(messageRow({ id: 'm-e', kind: 'reply', from: 'peer', body: 'ok', at, state: 'parked' }, t, boxes).state).toBe('parked');
+  // The sender of a removed box still reads as a participant.
+  expect(messageRow({ id: 'm-f', kind: 'reply', from: 'peer', body: 'ok', at, state: 'queued' }, { ...t, peer: { boxId: 'gone', session: 'w2' } }, boxes).who).toBe('removed box/w2');
 });
 
 test('refusalRow shows the server reason as it is', () => {
@@ -110,6 +115,38 @@ test('refusalRow shows the server reason as it is', () => {
   expect(refusalRow(r, boxes, 3 * 3600_000)).toEqual({
     when: '3 h ago', who: 'orders/main', target: 'billing/main', reason: 'refused: billing/main is not accepting mail from agents',
   });
+});
+
+test('refusalRow names the sender, the target as typed and the reason', () => {
+  // The target is what the agent typed: not resolved against the box list, not re-cased.
+  const r = { at: 60_000, from: { boxId: 's', session: 'w1' }, target: 'Billing/MAIN', reason: 'refused: there is no box named Billing' };
+  expect(refusalRow(r, boxes, 120_000)).toEqual({
+    when: '1 min ago', who: 'search/w1', target: 'Billing/MAIN', reason: 'refused: there is no box named Billing',
+  });
+  // A thread id typed as the target, from a box removed since.
+  expect(refusalRow({ at: 0, from: { boxId: 'gone', session: 'main' }, target: 't-abc23456', reason: 'refused: that thread is closed' }, boxes, 0))
+    .toEqual({ when: 'just now', who: 'removed box/main', target: 't-abc23456', reason: 'refused: that thread is closed' });
+});
+
+test('a thread with dropped older messages says how many are no longer kept', () => {
+  const t = (over) => ({ ...thread(), v: 1, messages: [], ...over });
+  expect(threadHead(t({ dropped: 5 }), boxes)).toEqual({
+    title: 'orders/main → billing/main', state: 'open', dropped: '5 older messages are no longer kept',
+  });
+  expect(threadHead(t({ dropped: 1 }), boxes).dropped).toBe('1 older message is no longer kept');
+  expect(threadHead(t({ dropped: 0 }), boxes).dropped).toBe(null);
+  // The full thread carries `reason` only once closed; the state reads as in the list.
+  expect(threadHead(t({ state: 'closed', reason: 'operator' }), boxes).state).toBe('closed by you');
+  expect(threadHead(t({ state: 'closed', reason: undefined }), boxes).state).toBe('closed');
+});
+
+test('the drawer: empty states and the one-line failures', () => {
+  expect(MAIL_NO_THREADS).toBe('No messages yet.');
+  expect(MAIL_NO_REFUSALS).toBe('Nothing refused.');
+  expect(messagesLoadError('agent messaging is off')).toBe('Messages could not be loaded: agent messaging is off');
+  expect(stopFailedLine('no open thread with that id')).toBe('Could not stop this thread: no open thread with that id');
+  // A message with a line break still makes one line.
+  expect(stopFailedLine('a\nb')).toBe('Could not stop this thread: a b');
 });
 
 test('policyChanged ignores list order and detects each field', () => {
