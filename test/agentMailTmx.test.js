@@ -746,10 +746,10 @@ describe('tmx: hook-wait follows its Claude Code', () => {
     const b = underClaude();
     await until(() => lockClaude() === String(b.claude.pid) && lockPid() !== first);
     const second = lockPid();
-    // A wakes up and deletes B's directory.
-    await until(() => !fs.existsSync(lockOf()), 3000);
-    await until(() => !isAlive(first));
-    // B reclaims it at its next lock check.
+    // A's pause ends: it deletes B's directory and exits (its delete runs before its exit).
+    await until(() => !isAlive(first), 4000);
+    expect(isAlive(second)).toBe(true);
+    // B claims it again at its next lock decision.
     await until(() => lockPid() === second && lockClaude() === String(b.claude.pid), 3000);
     await until(() => (hub.listening('o').main ?? 0) === 1);
     expect(b.result()).toBe(null);
@@ -758,6 +758,34 @@ describe('tmx: hook-wait follows its Claude Code', () => {
     await until(() => b.result() !== null);
     expect(b.result().code).toBe(2);
     expect(b.result().err.endsWith('\n\nafter the reclaim\n')).toBe(true);
+  });
+
+  test('an orphan whose request ends between a successor\'s rmdir and mkdir never claims; the successor holds the lock and gets the wake', async () => {
+    await listener.listen();
+    h.marks.o.main = mark('ready');
+    // A backs off 3 s after a failed answer, so a lock it wrongly claimed would outlast B's pause.
+    const a = underClaude({ env: env({ TMUXIFIER_MAIL_TEST_SLEEP: '3' }) });
+    await until(() => listening() === 1 && lockClaude() === String(a.claude.pid));
+    const first = lockPid();
+    a.claude.kill('SIGKILL'); // A is an orphan now, still holding its request
+    await a.claude.done;
+    // B, under another Claude Code, finds A's Claude Code gone, clears the lock and pauses before its mkdir.
+    const b = underClaude({ env: env({ TMUXIFIER_MAIL_TEST_CLEAR_PAUSE: '2' }) });
+    await until(() => !fs.existsSync(lockOf()));
+    // A's request ends now (204 from the closing listener): its lock decision finds no directory.
+    await listener.close();
+    await until(() => !isAlive(first));
+    expect(fs.existsSync(lockOf())).toBe(false); // the orphan did not claim it
+    const again = createAgentMailListener({ hub: h.hub, boxId: 'o', socketPath: sock });
+    extra.push(again);
+    await again.listen();
+    await until(() => lockPid() !== null && lockClaude() === String(b.claude.pid), 4000);
+    await until(() => listening() === 1);
+    expect(b.result()).toBe(null);
+    expect((await h.hub.send(B, 'orders', 'for the successor')).ok).toBe(true);
+    await until(() => b.result() !== null);
+    expect(b.result().code).toBe(2);
+    expect(b.result().err.endsWith('\n\nfor the successor\n')).toBe(true);
   });
 
   test('a second waiter of the same Claude Code stands down and leaves the first one alone', async () => {
