@@ -202,7 +202,9 @@ const setupManager = createSetupManager({
   ),
   pushStatusline: (box) => statuslinePusher.push(box),
   pushAgentHooks: (box) => agentHooksPusher.push(box),
-  pushAgentMail: (box) => agentMailPusher.push(box),
+  // TMUXIFIER_AGENT_MAIL=off is the hard disable: the phase is left unwired, so no box gets
+  // the waiter hook or the permission rule while messaging is off.
+  pushAgentMail: config.agentMail ? (box) => agentMailPusher.push(box) : null,
   pushVoiceLink: (box) => voiceLinkPusher.push(box),
   pushOpencodePlugin: (box) => opencodePluginPusher.push(box),
   pushOscReporter: (box) => oscReporterPusher.push(box),

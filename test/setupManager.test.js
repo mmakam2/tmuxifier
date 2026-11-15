@@ -999,3 +999,21 @@ test('a throwing pushAgentMail is recorded and never fails the job; unwired, lis
   expect(u.getJob(su.id).agentMail).toBeUndefined();
   expect(u.listJobs()[0].agentMail).toBe(null);
 });
+
+// index.js passes `pushAgentMail: null` when TMUXIFIER_AGENT_MAIL=off: the wiring is the switch.
+test('pushAgentMail passed as null (messaging off): no agent-mail phase is entered, the rest of the claude stack still runs', async () => {
+  const phases = [];
+  const m = make({
+    pushAgentMail: null,
+    pushAgentHooks: async () => { phases.push(m.listJobs()[0].phase); return { target: 'agent-hooks', ok: true }; },
+    pushVoiceLink: async () => { phases.push(m.listJobs()[0].phase); return { target: 'voice-link', ok: true }; },
+  });
+  const s = m.start(BOX, { tools: ['claude'] });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  expect(phases).toEqual(['agent-hooks', 'voice-link']);
+  expect(job.agentMail).toBeUndefined();
+  expect(m.listJobs()[0].agentMail).toBe(null);
+  expect(job.agentHooks).toEqual({ target: 'agent-hooks', ok: true });
+});
