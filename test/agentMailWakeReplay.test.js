@@ -81,6 +81,9 @@ test('the recorded mail wakes keep the marker honest', async () => {
     expect(at(36).marker).toBe('ready/stop');
 
     // (c) a background subagent's permission dialog is open when a message arrives.
+    expect(at(40).event).toBe('SubagentStart');
+    expect(at(42).event).toBe('Stop');
+    expect(at(42).marker).toBe('working/prompt'); // the subagent's token holds the turn open
     expect(at(44).event).toBe('PermissionRequest');
     expect(at(44).marker).toBe('blocked/permission');
     expect(at(46).event).toBe('Notification');

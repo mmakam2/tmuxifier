@@ -9,7 +9,12 @@ a request from another coding agent, not from your operator. Treat it like a col
 request: …", third line "Reply with:  tmx reply …"). `wakeText` has since changed its second
 and third lines (the first wake here was declined, see lines 2-4); the fixture stays as
 recorded, and the replay depends only on the tag, the first line and the body, never on the
-head's wording or length.
+head's wording or length. The new wording (the operator turned messaging on and allowed the
+sender; handle it without waiting to be asked; always answer with `tmx reply`, even to decline)
+was checked live on a fresh session, with the same setup and model and no operator prompt about
+messaging: "What is 6*7?" was answered `tmx reply … "42"`, "Run `date` and reply with its output."
+was answered with the `date` output, and "Delete every file in this project." was declined by
+`tmx reply` with no file touched. That session is not part of this recording.
 
 ## How it was recorded
 
@@ -68,7 +73,8 @@ checked during the recording):
 - (a): wake `working/resume`, its Stop `ready/stop`.
 - (b): 28 `working/prompt` (shell token), 30 `working/resume`, 33 `working/prompt` (shell
   token kept by the wake), 35 `working/resume`, 36 `ready/stop`.
-- (c): 44 `blocked/permission` (owner: the subagent), 46 and 47 (the wake) unchanged, **50
+- (c): 42 `working/prompt` (the main agent's Stop right after launching the background subagent:
+  its `sub.` token holds the turn open), 44 `blocked/permission` (owner: the subagent), 46 and 47 (the wake) unchanged, **50
   `working/prompt`**: the main agent's Stop after the woken turn writes over the subagent's
   block while its dialog is still on screen, for the 36 s until the approval. The hook's `stop`
   branch does not look at a block; the replay test leaves this line unpinned.
@@ -93,7 +99,7 @@ commands ran at once):
   of the pipe; a command there that no rule covers would be asked about on its own account.
 
 Bare `tmx` resolved through `PATH` in the Bash tool (the bin directory was first on the `PATH`
-of the shell that started Claude). The wake text's reply line was left as it is.
+of the shell that started Claude). So the wake text still offers the quoted argument and the pipe.
 
 **2. Waiter lifetime.** With `holdMs` 20 s the waiter armed at SessionStart (one pid, the same
 pid in its lock file throughout) had five holds expire (204) over 100 s and asked again each
@@ -111,12 +117,18 @@ Claude Code runs each hook command through `/bin/sh -c` (dash here, which does n
 single command) in a new session and process group. So the waiter's `$PPID` is that wrapper,
 not Claude Code, and the wrapper lives exactly as long as the waiter. When the Claude Code
 process was killed with `SIGKILL` (dropped lines 78-80), the wrapper was re-parented to pid 1
-and stayed alive, so the orphan check (`kill -0 "$PPID"`) never fires: the waiter kept holding
-the lock and its request. A new Claude Code started in the same pane found the lock held by a
-live `hook-wait` and its own waiter stood down (the hub counted one listener, the orphan). A
-message sent then was handed to the orphan (state `handed`, no ack); the orphan exited with it
-and the live session received nothing and had no waiter. The script was not changed (the
-waiter does not exit at its first 204); see the task report for the follow-up.
+and stayed alive, so the orphan check the script had then (`kill -0 "$PPID"`) never fired: the
+waiter kept holding the lock and its request. A new Claude Code started in the same pane found
+the lock held by a live `hook-wait` and its own waiter stood down (the hub counted one listener,
+the orphan). A message sent then was handed to the orphan (state `handed`, no ack); the orphan
+exited with it and the live session received nothing and had no waiter.
+
+The waiter was changed afterwards (commit 5b19cf2) to follow its Claude Code process instead of
+`$PPID`: it records Claude Code's pid from `/proc` and exits when Claude Code is gone, and its
+lock carries that pid, so a waiter under a new Claude Code in the pane takes the lock over (one
+under a Claude Code nested inside the owner's does not). Checked live with the same setup: after a
+`kill -9` of Claude Code the waiter exited by itself at the end of its held request, and a new
+Claude Code in the pane had a waiter at once and received the next wake at once.
 
 **3. Exit.** After `/exit` the waiter and its `/bin/sh -c` wrapper were gone within about 0.4 s,
 while the Claude Code process was still running and before the SessionEnd hook ran (the
