@@ -24,6 +24,7 @@ const SHELL = (process.env.TMX_TEST_SHELL || '/bin/sh').split(' ').map((a, i) =>
 const TRACE = fileURLToPath(new URL('./fixtures/claude-hook-trace.jsonl', import.meta.url));
 const REAL_CURL = which('curl');
 const UNREACHABLE = 'tmx: mail service unreachable, try again shortly\n';
+const NOT_ON = 'tmx: agent messaging is not turned on for this box; tell your operator\n';
 const TAG_RE = /^\[tmuxifier-mail m-[a-z2-9]{8}\] /;
 const LOST = (check) => `tmx: the connection was lost before an answer came back, so the message may or may not have been sent; do not send it again without checking (${check})\n`;
 
@@ -122,6 +123,18 @@ async function until(fn, ms = 4000) {
   }
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A socket file nothing listens on, as the box-side file is after its ssh master went away: a
+// process binds it and is killed before it can remove it.
+async function staleSocket(file) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const child = spawn(process.execPath, ['-e', 'require("node:net").createServer().listen(process.argv[1])', file], { stdio: 'ignore' });
+  const gone = new Promise((resolve) => child.on('close', resolve));
+  await until(() => fs.existsSync(file));
+  child.kill('SIGKILL');
+  await gone;
+  expect(fs.lstatSync(file).isSocket()).toBe(true);
+}
 const threadOf = (stdout) => /Thread (t-[a-z2-9]{8})\./.exec(stdout)[1];
 const listening = () => h.hub.listening('o').main ?? 0;
 
@@ -338,8 +351,26 @@ describe('tmx: user commands', () => {
     expect(curlCalls()).toEqual([]);
   });
 
-  test('socket missing: exits 3 after retries', async () => {
-    const r = await run(['send', 'billing', 'hi'], { env: env({ TMUXIFIER_MAIL_SOCK: path.join(dir, 'nothing-here') }) });
+  test('no socket file (messaging is not turned on for the box): says so and exits 3 at once, with no retries', async () => {
+    const off = env({ TMUXIFIER_MAIL_SOCK: path.join(dir, 'nothing-here'), TMUXIFIER_MAIL_TEST_SLEEP: '5' });
+    for (const args of [['send', 'billing', 'hi'], ['reply', 't-7fq2m9cd', 'hi'], ['who'], ['inbox'], ['read', 't-7fq2m9cd'], ['wait', 't-7fq2m9cd']]) {
+      fs.rmSync(curlLog, { force: true });
+      const r = await run(args, { env: off });
+      expect(r.code, args[0]).toBe(3);
+      expect(r.stdout, args[0]).toBe('');
+      expect(r.stderr, args[0]).toBe(NOT_ON);
+      expect(curlCalls(), args[0]).toHaveLength(1); // one attempt: nothing to wait for
+      expect(r.ms, args[0]).toBeLessThan(4000); // and no pause (a retry would sleep 5 s here)
+    }
+    // The default path, $HOME/.tmuxifier-mail/sock, reads the same way.
+    const r = await run(['inbox'], { env: env({ TMUXIFIER_MAIL_SOCK: undefined }) });
+    expect(r).toMatchObject({ code: 3, stdout: '', stderr: NOT_ON });
+  });
+
+  test('a socket file that exists but does not answer: unreachable, exit 3 after 5 attempts', async () => {
+    const stale = path.join(dir, 'stale', 'sock');
+    await staleSocket(stale);
+    const r = await run(['send', 'billing', 'hi'], { env: env({ TMUXIFIER_MAIL_SOCK: stale }) });
     expect(r.code).toBe(3);
     expect(r.stdout).toBe('');
     expect(r.stderr).toBe(UNREACHABLE);
@@ -356,8 +387,9 @@ describe('tmx: user commands', () => {
     expect(curlCalls()).toHaveLength(5);
     await busy.close();
 
-    // Down at first, up before the attempts run out.
+    // Down at first (the socket file is there, nothing answers), up before the attempts run out.
     fs.rmSync(curlLog);
+    await staleSocket(sock);
     const child = start(['send', 'billing', 'late but fine'], { env: env({ TMUXIFIER_MAIL_TEST_SLEEP: '0.3' }) });
     await until(() => curlCalls().length >= 1);
     await listener.listen();
@@ -443,7 +475,10 @@ describe('tmx: a connection lost after the request went out', () => {
   test('a read is retried and answered by the listener that came back', async () => {
     dropAfter('inbox');
     await listener.listen();
-    const r = await run(['inbox']);
+    // In this bench the socket file is the backend listener's own, so it is gone for a moment
+    // between the old listener and the new one (on a box it is sshd's and stays); the pause
+    // between attempts is long enough for the new one to be there.
+    const r = await run(['inbox'], { env: env({ TMUXIFIER_MAIL_TEST_SLEEP: '0.5' }) });
     expect(r).toMatchObject({ code: 0, stdout: 'inbox empty\n', stderr: '' });
     expect(curlCalls().length).toBeGreaterThanOrEqual(2);
   });

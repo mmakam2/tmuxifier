@@ -16,6 +16,8 @@
 #   tmx who|send|reply|wait|read|inbox ...   user commands (usage below). Exit 0 on a 2xx answer
 #                                            (printed to stdout), 1 on a refusal or bad input
 #                                            (to stderr), 2 on a usage error or outside tmux, 3
+#                                            when there is no socket file (messaging is not
+#                                            turned on for this box: said at once, no retry),
 #                                            when the socket stays unreachable after 5 attempts,
 #                                            or when a send/reply failed after connecting
 #                                            (never retried: it may have arrived).
@@ -170,7 +172,10 @@ call() {
 
 # call with up to 5 attempts 1 s apart while the socket cannot be reached: no connection (7) or
 # 503 busy, which provably never reached the mail hub; and, for reads only, a connection closed
-# without an answer (52/56: what an ssh forward whose far end is down gives). With ONCE set (a
+# without an answer (52/56: what an ssh forward whose far end is down gives). No connection with
+# no socket file at all is not a wait: Tmuxifier puts the file there when messaging is turned on
+# for the box and removes it when it is turned off, so the agent is told that, at once, exit 3
+# (a file that is there and does not answer is the unreachable case, with its retries). With ONCE set (a
 # send or a reply, which must never arrive twice) every other transport failure happened after
 # the connection was made (52/56, a timeout through a stalled forward, a send error...), so the
 # message may have arrived: no retry, exit 3 with a warning saying how to check ($ONCE). For a
@@ -183,7 +188,12 @@ request() {
     _rc=$?
     case $_rc in
       0) [ "$CODE" = 503 ] || return 0 ;;
-      7) ;;
+      7)
+        if [ ! -e "$SOCK" ]; then
+          printf 'tmx: agent messaging is not turned on for this box; tell your operator\n' >&2
+          exit 3
+        fi
+        ;;
       *)
         if [ -n "$ONCE" ]; then
           printf 'tmx: the connection was lost before an answer came back, so the message may or may not have been sent; do not send it again without checking (%s)\n' "$ONCE" >&2
