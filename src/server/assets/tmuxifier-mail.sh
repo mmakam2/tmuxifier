@@ -3,7 +3,8 @@
 #
 # tmx: agent mail on a Tmuxifier box (design 6.6, 6.7). Installed as ~/.tmuxifier-mail/tmx and
 # always run as `sh <path>`, so it never depends on the login shell. POSIX sh only (dash, bash
-# --posix, busybox ash); tools: curl, tmux, sed, grep, sort, mkdir, rm, sleep, cat, printf.
+# --posix, busybox ash); tools: curl, tmux, sed, grep (with -o), sort, mkdir, rm, sleep, cat,
+# printf.
 #
 # It speaks HTTP over the unix socket ${TMUXIFIER_MAIL_SOCK:-$HOME/.tmuxifier-mail/sock}, which
 # Tmuxifier forwards onto the box. Every parameter travels through `curl --data-urlencode` (`-G`
@@ -16,8 +17,8 @@
 #                                            (printed to stdout), 1 on a refusal or bad input
 #                                            (to stderr), 2 on a usage error or outside tmux, 3
 #                                            when the socket stays unreachable after 5 attempts,
-#                                            or when a send/reply lost its connection after it
-#                                            went out (never retried: it may have arrived).
+#                                            or when a send/reply failed after connecting
+#                                            (never retried: it may have arrived).
 #   tmx hook-wait   Claude Code SessionStart/Stop hook (asyncRewake). One waiter per pane, through
 #                   the lock directory $HOME/.tmuxifier-mail/wait.<pane digits>.lock holding its
 #                   pid. Holds GET /v1/wait: 200 prints the wake text to stderr and exits 2 (Claude
@@ -36,6 +37,8 @@
 # Test-only knob (read by nothing else): TMUXIFIER_MAIL_TEST_SLEEP, when set to a number of
 # seconds (digits and dots), replaces the duration of every sleep: the 1 s between attempts of a
 # user command, the waiter's back-off and its 1 s grace for a lock without a pid.
+# TMUXIFIER_MAIL_TEST_MAX_TIME, likewise, replaces curl's -m for every user command (`wait`
+# included; not hook-wait's 330 s nor hook-ack's 3 s).
 
 umask 077
 set -f
@@ -114,6 +117,10 @@ fold() {
 # none came); returns curl's exit status.
 call() {
   _method=$1 _path=$2 _max=$3
+  case ${TMUXIFIER_MAIL_TEST_MAX_TIME:-} in
+    ''|*[!0-9.]*) ;;
+    *) _max=$TMUXIFIER_MAIL_TEST_MAX_TIME ;;
+  esac
   shift 3
   [ "$_method" = GET ] && set -- -G "$@"
   if [ -n "${HAS_BODY:-}" ]; then
@@ -132,24 +139,29 @@ call() {
 # call with up to 5 attempts 1 s apart while the socket cannot be reached: no connection (7) or
 # 503 busy, which provably never reached the mail hub; and, for reads only, a connection closed
 # without an answer (52/56: what an ssh forward whose far end is down gives). With ONCE set (a
-# send or a reply, which must never arrive twice) a 52/56 may mean the message went out: no
-# retry, exit 3 with a warning saying how to check ($ONCE). Any other transport failure (a
-# timeout, say) is reported at once and never retried.
+# send or a reply, which must never arrive twice) every other transport failure happened after
+# the connection was made (52/56, a timeout through a stalled forward, a send error...), so the
+# message may have arrived: no retry, exit 3 with a warning saying how to check ($ONCE). For a
+# read, a failure other than 7/52/56 is reported as unreachable at once and never retried.
 ONCE=
 request() {
   _n=1
   while :; do
     call "$@"
-    case $? in
+    _rc=$?
+    case $_rc in
       0) [ "$CODE" = 503 ] || return 0 ;;
       7) ;;
-      52|56)
+      *)
         if [ -n "$ONCE" ]; then
           printf 'tmx: the connection was lost before an answer came back, so the message may or may not have been sent; do not send it again without checking (%s)\n' "$ONCE" >&2
           exit 3
         fi
+        case $_rc in
+          52|56) ;;
+          *) printf 'tmx: mail service unreachable, try again shortly\n' >&2; exit 3 ;;
+        esac
         ;;
-      *) printf 'tmx: mail service unreachable, try again shortly\n' >&2; exit 3 ;;
     esac
     if [ "$_n" -ge 5 ]; then
       printf 'tmx: mail service unreachable, try again shortly\n' >&2
@@ -330,7 +342,7 @@ cleanup() {
 
 # Runs a command in the background and waits for it, so a trapped signal interrupts the wait.
 hold() {
-  "$@" &
+  "$@" 3>&- &
   CHILD=$!
   wait "$CHILD"
   _rc=$?
@@ -339,7 +351,9 @@ hold() {
 }
 
 hook_wait() {
-  exec >/dev/null
+  # stderr is the wake channel (Claude Code shows all of it on exit 2): only the wake text goes
+  # out, on fd 3; every diagnostic of the shell or a tool lands in /dev/null.
+  exec 3>&2 >/dev/null 2>/dev/null
   in_tmux || exit 0
   command -v curl >/dev/null 2>&1 || exit 0
   session_now || exit 0
@@ -367,7 +381,7 @@ hook_wait() {
     { read -r _code < "$LOCK/code"; } 2>/dev/null
     if [ "$_rc" = 0 ]; then
       if [ "$_code" = 200 ] && [ -s "$LOCK/resp" ]; then
-        cat "$LOCK/resp" >&2
+        cat "$LOCK/resp" >&3
         exit 2
       fi
       if [ "$_code" = 204 ]; then

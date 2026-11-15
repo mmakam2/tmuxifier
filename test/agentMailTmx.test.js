@@ -353,6 +353,28 @@ describe('tmx: a connection lost after the request went out', () => {
     expect(curlCalls()).toHaveLength(1);
   });
 
+  test('a send or reply that times out after connecting is not called retryable: exit 3 with the warning, sent once', async () => {
+    // The hub takes the request and the answer never comes, as through a stalled ssh forward.
+    const wrapped = { ...h.hub };
+    for (const name of ['send', 'reply']) {
+      wrapped[name] = async (...args) => { await h.hub[name](...args); return new Promise(() => {}); };
+    }
+    listener = createAgentMailListener({ hub: wrapped, boxId: 'o', socketPath: sock });
+    await listener.listen();
+    const fast = env({ TMUXIFIER_MAIL_TEST_MAX_TIME: '0.5' });
+    const r = await run(['send', 'billing', 'only once'], { env: fast });
+    expect(r.code).toBe(3);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe(LOST('ask the operator, or look for an answer with "tmx inbox"'));
+    expect(h.store.threads()).toHaveLength(1);
+    const id = h.store.threads()[0].id;
+    const r2 = await run(['reply', id, 'answer once'], { env: fast });
+    expect(r2.code).toBe(3);
+    expect(r2.stderr).toBe(LOST(`run "tmx read ${id}"`));
+    expect(h.store.thread(id).messages.map((m) => m.body)).toEqual(['only once', 'answer once']);
+    expect(curlCalls()).toHaveLength(2);
+  });
+
   test('a read is retried and answered by the listener that came back', async () => {
     dropAfter('inbox');
     await listener.listen();
@@ -412,6 +434,32 @@ describe('tmx: hook-wait', () => {
     const r = await w.done;
     expect(r.code).toBe(2);
     expect(r.stderr).toContain('after the restart');
+  });
+
+  test('stray shell diagnostics never reach the wake text', async () => {
+    h.marks.o.main = mark('ready');
+    const w = start(['hook-wait']);
+    await until(() => fs.existsSync(path.join(lockOf(), 'pid')) && curlCalls().length >= 2);
+    // A directory where the waiter writes its status code: each turn's redirect now fails, and
+    // the shell says so on stderr, as would any failed redirect or sleep in the lock directory.
+    const calls = curlCalls().length;
+    await until(() => {
+      try {
+        fs.rmSync(path.join(lockOf(), 'code'), { force: true }); // the waiter rewrites it each turn
+        fs.mkdirSync(path.join(lockOf(), 'code'));
+        return true;
+      } catch { return false; }
+    });
+    await sleep(300);
+    expect(curlCalls().length).toBeLessThanOrEqual(calls + 1); // the failing turns never ran curl
+    fs.rmdirSync(path.join(lockOf(), 'code'));
+    await listener.listen();
+    await h.hub.send(B, 'orders', 'clean wake');
+    const r = await w.done;
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(TAG_RE);
+    expect(r.stderr.endsWith('\n\nclean wake\n')).toBe(true);
+    expect(r.stderr.split('[tmuxifier-mail ')).toHaveLength(2);
   });
 
   test('a second hook-wait for the same pane exits 0 at once; after the first dies its lock is taken over', async () => {
