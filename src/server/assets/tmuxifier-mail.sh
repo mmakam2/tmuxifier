@@ -36,7 +36,9 @@
 #                   when $PPID is such a wrapper (its command line names hook-wait), else $PPID
 #                   itself (a `sh -c` that execs, as bash does). At every turn of the loop it
 #                   checks that the process it watches (the wrapper, or itself) still has that
-#                   parent; when not, Claude Code is gone and the waiter exits 0. The parent is
+#                   parent; when not, Claude Code is gone and the waiter exits 0 (so an orphan
+#                   can hold its request for up to one hold period after its Claude Code dies).
+#                   The parent is
 #                   read from /proc/<pid>/stat, so this is Linux-only, which is what boxes are;
 #                   without a readable /proc (or a parent of 0 or 1) there is no Claude pid and
 #                   no such check (fail open).
@@ -44,7 +46,10 @@
 #                   taken over when its owner is dead or is no longer a hook-wait (a pid reused
 #                   after a reboot), or when the owner's Claude pid is known and either gone or
 #                   different from this waiter's own known Claude pid: a new Claude Code in the
-#                   same pane always wins, a second waiter of the same Claude Code stands down.
+#                   same pane always wins, a second waiter of the same Claude Code stands down, and
+#                   so does a waiter whose Claude Code runs under the owner's (a `claude -p` from
+#                   the owner's Bash tool inherits the pane and the hooks), or when that cannot
+#                   be told. A waiter removes its lock only when the lock names it.
 #   tmx hook-ack    Claude Code UserPromptSubmit hook. Confirms each distinct
 #                   [tmuxifier-mail m-xxxxxxxx] tag in the prompt with POST /v1/ack. Its stdout
 #                   would become prompt context, so it prints nothing on either stream and always
@@ -55,7 +60,8 @@
 # user command, the waiter's back-off and its 1 s grace for a lock without a pid.
 # TMUXIFIER_MAIL_TEST_MAX_TIME, likewise, replaces curl's -m for every user command (`wait`
 # included; not hook-wait's 330 s nor hook-ack's 3 s). TMUXIFIER_MAIL_TEST_NO_PROC=1 makes
-# hook-wait read no /proc/<pid>/stat, as on a box without /proc.
+# hook-wait read no /proc/<pid>/stat, as on a box without /proc. TMUXIFIER_MAIL_TEST_CLAIM_PAUSE,
+# a number of seconds, makes hook-wait sleep between creating its lock and writing its pid.
 
 umask 077
 set -f
@@ -338,6 +344,20 @@ orphaned() {
   [ "$PARENT" != "$CLAUDE" ]
 }
 
+# True when this waiter's Claude Code runs under process $1 (a `claude -p` started from the
+# Bash tool of the Claude Code that owns the lock inherits its pane and its hooks), or when that
+# cannot be told: the walk up the parents fails or takes more than 64 steps.
+descends_from() {
+  _a=$CLAUDE _n=0
+  while [ "$_a" -gt 1 ]; do
+    [ "$_n" -lt 64 ] || return 0
+    parent_of "$_a" || return 0
+    _a=$PARENT _n=$((_n + 1))
+    [ "$_a" = "$1" ] && return 0
+  done
+  return 1
+}
+
 # Sets OWNER to the pid in the lock (empty when there is none or it is not a number).
 lock_owner() {
   OWNER=
@@ -360,6 +380,10 @@ alive() {
 claim() {
   mkdir "$LOCK" 2>/dev/null || return 1
   OWN=1
+  case ${TMUXIFIER_MAIL_TEST_CLAIM_PAUSE:-} in
+    ''|*[!0-9.]*) ;;
+    *) sleep "$TMUXIFIER_MAIL_TEST_CLAIM_PAUSE" ;;
+  esac
   [ -z "$CLAUDE" ] || printf '%s\n' "$CLAUDE" > "$LOCK/claude"
   printf '%s\n' "$$" > "$LOCK/pid"
 }
@@ -380,6 +404,7 @@ take_lock() {
     case $_oc in ''|*[!0-9]*) return 1 ;; esac
     if kill -0 "$_oc" 2>/dev/null; then
       [ -n "$CLAUDE" ] && [ "$_oc" != "$CLAUDE" ] || return 1
+      descends_from "$_oc" && return 1
     fi
   fi
   rm -f "$LOCK/pid" "$LOCK/claude" "$LOCK/resp" "$LOCK/code" 2>/dev/null
@@ -396,7 +421,10 @@ cleanup() {
   if [ -n "$OWN" ]; then
     OWN=
     lock_owner
-    if [ -z "$OWNER" ] || [ "$OWNER" = "$$" ]; then
+    # Only a lock that names this waiter: a lock with no pid may be a successor's, between its
+    # mkdir and its pid write (one this waiter never finished writing is taken over after the
+    # 1 s grace).
+    if [ "$OWNER" = "$$" ]; then
       rm -f "$LOCK/pid" "$LOCK/claude" "$LOCK/resp" "$LOCK/code" 2>/dev/null
       rmdir "$LOCK" 2>/dev/null
     fi

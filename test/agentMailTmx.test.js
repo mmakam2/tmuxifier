@@ -140,7 +140,9 @@ function wakePayload(wake) {
 // written to its stdin, records hook n's wrapper pid in <dir>/<n>.pid and, if it is still
 // alive itself, the hook's exit as <dir>/<n>.json ({ code, signal, err }). It never exits on
 // its own: a test kills it. The hook command comes in the environment, not in its argv, so its
-// own command line does not name hook-wait (Claude Code's does not).
+// own command line does not name hook-wait (Claude Code's does not). A line `n` instead starts
+// a nested Claude Code as its child (as a `claude -p` run from the Bash tool would be), which
+// starts its own hook-wait and records under <dir>/n/ the same way.
 const FAKE_CLAUDE = `
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
@@ -157,7 +159,15 @@ const hook = () => {
   c.on('close', (code, signal) => fs.writeFileSync(out + '/' + i + '.json', JSON.stringify({ code, signal, err })));
 };
 hook();
-process.stdin.on('data', (d) => { for (const ch of String(d)) if (ch === '\\n') hook(); });
+process.stdin.on('data', (d) => {
+  for (const ch of String(d)) {
+    if (ch === '\\n') hook();
+    if (ch === 'n') {
+      fs.mkdirSync(out + '/n');
+      spawn(process.execPath, ['-e', process.env.FAKE_CLAUDE_SRC, out + '/n'], { stdio: ['pipe', 'ignore', 'inherit'] });
+    }
+  }
+});
 `;
 
 // execs: the hook command starts with `exec`, as a `sh -c` that execs its command (bash -c
@@ -165,14 +175,17 @@ process.stdin.on('data', (d) => { for (const ch of String(d)) if (ch === '\\n') 
 function underClaude({ env: e = env(), execs = false } = {}) {
   const out = fs.mkdtempSync(path.join(dir, 'claude-'));
   const cmd = `${execs ? 'exec ' : ''}${SHELL.map((a) => `'${a}'`).join(' ')} '${SCRIPT}' hook-wait`;
-  const claude = spawn(process.execPath, ['-e', FAKE_CLAUDE, out], { env: { ...e, FAKE_HOOK_CMD: cmd }, detached: true, stdio: ['pipe', 'ignore', 'inherit'] });
+  const claude = spawn(process.execPath, ['-e', FAKE_CLAUDE, out], { env: { ...e, FAKE_HOOK_CMD: cmd, FAKE_CLAUDE_SRC: FAKE_CLAUDE }, detached: true, stdio: ['pipe', 'ignore', 'inherit'] });
   claude.done = new Promise((resolve) => claude.on('close', resolve));
   children.push(claude);
-  hookGroups.push({ dir: out });
+  hookGroups.push({ dir: out }, { dir: path.join(out, 'n') });
+  const resultIn = (d) => (i = 1) => { try { return JSON.parse(fs.readFileSync(path.join(d, `${i}.json`), 'utf8')); } catch { return null; } };
   return {
     claude,
     spawnHook: () => claude.stdin.write('\n'),
-    result: (i = 1) => { try { return JSON.parse(fs.readFileSync(path.join(out, `${i}.json`), 'utf8')); } catch { return null; } },
+    spawnNested: () => claude.stdin.write('n'),
+    result: resultIn(out),
+    nestedResult: resultIn(path.join(out, 'n')),
   };
 }
 const lockClaude = () => { try { return fs.readFileSync(path.join(lockOf(), 'claude'), 'utf8').trim(); } catch { return null; } };
@@ -652,6 +665,43 @@ describe('tmx: hook-wait follows its Claude Code', () => {
     expect(b.result().err).toMatch(TAG_RE);
     expect(b.result().err.endsWith('\n\nfor the new session\n')).toBe(true);
     expect(fs.existsSync(lockOf())).toBe(false);
+  });
+
+  test('a waiter of a Claude Code nested under the owner\'s stands down and leaves the owner alone', async () => {
+    await listener.listen();
+    h.marks.o.main = mark('ready');
+    const a = underClaude();
+    await until(() => listening() === 1 && lockClaude() === String(a.claude.pid));
+    const first = lockPid();
+    a.spawnNested();
+    await until(() => a.nestedResult() !== null);
+    expect(a.nestedResult()).toEqual({ code: 0, signal: null, err: '' });
+    expect(lockPid()).toBe(first);
+    expect(lockClaude()).toBe(String(a.claude.pid));
+    expect(a.result()).toBe(null);
+    expect(listening()).toBe(1);
+    // Mail for the pane still wakes the outer Claude Code.
+    expect((await h.hub.send(B, 'orders', 'for the outer session')).ok).toBe(true);
+    await until(() => a.result() !== null);
+    expect(a.result().code).toBe(2);
+    expect(a.result().err.endsWith('\n\nfor the outer session\n')).toBe(true);
+  });
+
+  test('a waiter exiting while its successor sits between mkdir and its pid write leaves the successor\'s lock alone', async () => {
+    await listener.listen();
+    const a = underClaude();
+    await until(() => listening() === 1 && lockClaude() === String(a.claude.pid));
+    const first = lockPid();
+    // The successor, under another Claude Code, pauses right after its mkdir.
+    const b = underClaude({ env: env({ TMUXIFIER_MAIL_TEST_CLAIM_PAUSE: '1' }) });
+    await until(() => fs.existsSync(lockOf()) && lockPid() === null);
+    process.kill(Number(first), 'SIGTERM'); // the old owner exits through its cleanup now
+    await until(() => !isAlive(first));
+    expect(fs.existsSync(lockOf())).toBe(true);
+    await until(() => lockPid() !== null && lockPid() !== first);
+    expect(lockClaude()).toBe(String(b.claude.pid));
+    await until(() => listening() === 1);
+    expect(b.result()).toBe(null);
   });
 
   test('a second waiter of the same Claude Code stands down and leaves the first one alone', async () => {
