@@ -5,6 +5,7 @@ import { pve } from '../src/web/proxmox.ts';
 import { nbx } from '../src/web/netbox.ts';
 import { pk } from '../src/web/passkeys.ts';
 import { voiceApi } from '../src/web/voice.ts';
+import { mailApi } from '../src/web/agentMail.ts';
 
 // C2 (2026-07-29 review). api.ts owned the central 401 seam, but proxmox.ts,
 // netbox.ts, passkeys.ts and voice.ts each hand-rolled their own jr()/j() pair
@@ -34,6 +35,7 @@ const LAYERS = [
   ['nbx', () => nbx.get()],
   ['pk', () => pk.state()],
   ['voiceApi', () => voiceApi.status()],
+  ['mail', () => mailApi.threads()],
 ];
 
 for (const [name, call] of LAYERS) {

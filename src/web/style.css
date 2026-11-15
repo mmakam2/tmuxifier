@@ -2076,6 +2076,21 @@ button.empty-kbd:hover { color: var(--text); }
 .box-pve-association select { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); color: var(--text); font-family: var(--face); }
 .box-pve-association .pve-picker-grid { display: grid; grid-template-columns: 1fr 1fr 1.6fr; gap: 8px; align-items: start; }
 @media (max-width: 620px) { .box-pve-association .pve-picker-grid { grid-template-columns: 1fr; } }
+/* Edit Box: Agent messaging (agentMailSection.ts). The Proxmox section's seam
+   and eyebrow; box names are dark mode chips (4px, legend type); nothing here is
+   lit, since a policy is configuration, not machine state. */
+.box-mail { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+.box-mail .mail-row { display: flex; flex-direction: column; gap: 6px; }
+.box-mail .mail-list { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-left: 23px; }
+.box-mail .mail-lead { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: var(--dim); }
+.box-mail .mail-chip { display: inline-flex; align-items: center; gap: 2px; padding: 0 2px 0 6px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); font-family: var(--face); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; line-height: 1.8; white-space: nowrap; }
+.box-mail .mail-chip-x { padding: 0 4px; border: 0; border-radius: 4px; background: transparent; color: var(--dim); cursor: pointer; font-family: var(--face); font-size: 12px; line-height: 1; }
+.box-mail .mail-chip-x:hover { color: var(--crit); background: rgba(255, 255, 255, 0.035); }
+.box-mail .mail-add { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); color: var(--text); font-family: var(--face); font-size: 12.5px; }
+.box-mail .mail-add:disabled { color: var(--dim); }
+.box-mail .mail-pairs { display: flex; flex-direction: column; gap: 2px; padding-left: 23px; }
+.box-mail .mail-pair { font-size: 12.5px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.box-mail .mail-status { font-size: 11px; color: var(--dim); }
 @media (max-width: 720px) {
   .modal.pve-hub { width: 92vw; }
   .modal.settings-modal { width: 92vw; }

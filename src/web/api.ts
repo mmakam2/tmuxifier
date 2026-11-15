@@ -387,7 +387,7 @@ export const api = {
   async panePreview(boxId: string, session: string, signal?: AbortSignal) { return j<PaneSnapshot>(await fetch(`/api/boxes/${encodeURIComponent(boxId)}/pane?session=${encodeURIComponent(session)}&lines=40`, { signal })); },
   async localPanePreview(signal?: AbortSignal) { return j<PaneSnapshot>(await fetch('/api/local-shell/pane?lines=40', { signal })); },
   async healthEvents() { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?t=${Date.now()}`)); },
-  async uiConfig() { return j<{ termFont: string | null; termFontSize: number; uploadMaxBytes: number; voice: boolean; voiceMaxSeconds: number }>(await fetch('/api/ui-config')); },
+  async uiConfig() { return j<{ termFont: string | null; termFontSize: number; uploadMaxBytes: number; voice: boolean; voiceMaxSeconds: number; agentMail: boolean }>(await fetch('/api/ui-config')); },
   async uiSettings() { return j<UiSettings>(await fetch('/api/ui-settings')); },
   async patchUiSettings(patch: Partial<UiSettings>) {
     return j<UiSettings>(await fetch('/api/ui-settings', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }));

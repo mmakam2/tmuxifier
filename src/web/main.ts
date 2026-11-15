@@ -32,6 +32,7 @@ import { nbx } from './netbox';
 import { createDashboard } from './dashboard';
 import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
+import { createAgentMailSection } from './agentMailSection';
 import { createSetupOptionsForm, setupStartPayload, type SetupOptionsValues } from './setupOptions';
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
 import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore, instanceId, boxOfInstance, ordinalOfInstance, nextOrdinal } from './stageLayout';
@@ -96,6 +97,9 @@ let touchSyncCap: (() => void) | null = null;
 let touchComposer: { isOpen(): boolean; close(): void; appendDraft(t: string): void } | null = null;
 let lastPaneStates = ''; // pollStatus repaints only when a docked box's derived state flips
 let allBoxes: Box[] = [];
+// Whether the server runs agent messaging (GET /api/ui-config, read in start()).
+// Stays false when that read fails: the Edit Box section is then not offered.
+let agentMailEnabled = false;
 let latestStatus: Record<string, Status> = {};
 let latestSetups: SetupSummary[] = [];
 let fleetMode = false;
@@ -537,6 +541,7 @@ async function start() {
       const uiCfg = await api.uiConfig();
       setTerminalFont(uiCfg);
       setTerminalUploads(uiCfg);
+      agentMailEnabled = uiCfg.agentMail === true;
     } catch {}
     await loadUiSettings();
     renderDashboard();
@@ -3322,6 +3327,8 @@ function buildBoxDialog(box?: Box) {
   }
 
   const proxmoxAssociation = createProxmoxAssociationEditor(box ?? null);
+  // Edit mode only: messaging policy belongs to an existing box (its own route).
+  const mailSection = isEdit && agentMailEnabled ? createAgentMailSection(box!, allBoxes) : null;
 
   // Two-column body: compact fields pair up (Host|Label, Tag|User, Port|ProxyJump),
   // the session picker and Proxmox section span full width, and err/actions sit
@@ -3346,6 +3353,7 @@ function buildBoxDialog(box?: Box) {
     setupForm.element,
     proxmoxAssociation.element,
   );
+  if (mailSection) modalBody.append(mailSection.element);
 
   form.append(title, modalBody, err, actions);
 
@@ -3410,6 +3418,7 @@ function buildBoxDialog(box?: Box) {
         const updatedBox = await api.updateBox(box!.id, patch);
         try {
           await proxmoxAssociation.commit(box!.id);
+          await mailSection?.commit(box!.id);
         } catch (error) {
           await refresh();
           throw error;
