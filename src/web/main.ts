@@ -33,6 +33,7 @@ import { createDashboard } from './dashboard';
 import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createAgentMailSection } from './agentMailSection';
+import { mailEnabledFrom } from './agentMailView';
 import { createSetupOptionsForm, setupStartPayload, type SetupOptionsValues } from './setupOptions';
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
 import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore, instanceId, boxOfInstance, ordinalOfInstance, nextOrdinal } from './stageLayout';
@@ -97,8 +98,9 @@ let touchSyncCap: (() => void) | null = null;
 let touchComposer: { isOpen(): boolean; close(): void; appendDraft(t: string): void } | null = null;
 let lastPaneStates = ''; // pollStatus repaints only when a docked box's derived state flips
 let allBoxes: Box[] = [];
-// Whether the server runs agent messaging (GET /api/ui-config, read in start()).
-// Stays false when that read fails: the Edit Box section is then not offered.
+// Whether the server runs agent messaging (GET /api/ui-config). Read on every
+// path into the workspace by loadUiConfigFlags(), reset by teardownWorkspace();
+// false whenever it is not known, so the Edit Box section is then not offered.
 let agentMailEnabled = false;
 let latestStatus: Record<string, Status> = {};
 let latestSetups: SetupSummary[] = [];
@@ -495,6 +497,18 @@ function refitActiveTerminals() {
   for (const t of tabs.values()) t.term.refit();
 }
 
+// Feature flags from GET /api/ui-config that decide which workspace controls
+// exist (agent messaging). Same contract as loadUiSettings below, and called
+// beside it on every path into the workspace, before renderDashboard(): a
+// signed-out page load runs start(), whose ui-config read 401s, so a flag read
+// only there stayed false after an in-page sign-in until a reload. Best-effort:
+// a failed read leaves the flag off. (The terminal font and upload limit are
+// still read in start() only and share that gap.)
+async function loadUiConfigFlags(): Promise<void> {
+  agentMailEnabled = false;
+  try { agentMailEnabled = mailEnabledFrom(await api.uiConfig()); } catch {}
+}
+
 // Server-side UI prefs: theme + clawd animation. Best-effort — on failure the
 // mirror-painted theme and localStorage-seeded clawd pref stand.
 //
@@ -541,8 +555,8 @@ async function start() {
       const uiCfg = await api.uiConfig();
       setTerminalFont(uiCfg);
       setTerminalUploads(uiCfg);
-      agentMailEnabled = uiCfg.agentMail === true;
     } catch {}
+    await loadUiConfigFlags();
     await loadUiSettings();
     renderDashboard();
   } else await renderLogin();
@@ -655,7 +669,7 @@ async function renderLogin(reason: LoginReason = 'boot') {
   if (!withForm) { wirePasskeyButton(); return; }
   app.querySelector('#login')!.addEventListener('submit', async (e) => {
     e.preventDefault();
-    try { await api.login((app.querySelector('#pw') as HTMLInputElement).value); clearSignedOut(); await loadUiSettings(); renderDashboard(); }
+    try { await api.login((app.querySelector('#pw') as HTMLInputElement).value); clearSignedOut(); await loadUiConfigFlags(); await loadUiSettings(); renderDashboard(); }
     catch (ex) {
       // The server's error is always a fixed string on this route (e.g.
       // "invalid", "too many attempts", or "passkey required" against a
@@ -681,6 +695,7 @@ function wirePasskeyButton() {
       const credential = await getPasskey(options);
       await pk.loginFinish(serializeAssertion(credential));
       clearSignedOut();
+      await loadUiConfigFlags();
       await loadUiSettings();
       renderDashboard();
     } catch (e) {
@@ -4417,6 +4432,7 @@ window.addEventListener('tmuxifier:services-changed', () => {
 // and be restored on the way back in.
 function teardownWorkspace(): void {
   if (pollInterval) clearInterval(pollInterval);
+  agentMailEnabled = false; // a signed-out page offers no messaging; the next sign-in reads it again
   agentSwitcher?.cancel(); // body-mounted, so the #app re-render would not drop it
   lastFocusPair = '';
   stopLive();

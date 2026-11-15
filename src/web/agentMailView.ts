@@ -135,3 +135,9 @@ export function policyChanged(a: MailPolicy, b: MailPolicy): boolean {
   return a.send !== b.send || a.receive !== b.receive
     || !sameSet(a.sendTo, b.sendTo) || !sameSet(a.receiveFrom, b.receiveFrom);
 }
+
+/** Whether GET /api/ui-config says the server runs agent messaging. Only an
+ *  explicit `true` counts: an older server, a malformed value or a failed read is off. */
+export function mailEnabledFrom(cfg: unknown): boolean {
+  return !!cfg && typeof cfg === 'object' && (cfg as { agentMail?: unknown }).agentMail === true;
+}

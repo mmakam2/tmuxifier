@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest';
 import {
-  nameOf, participant, pairLine, statusLine, threadRow, messageRow, refusalRow, policyChanged, relAge,
+  nameOf, participant, pairLine, statusLine, threadRow, messageRow, refusalRow, policyChanged, relAge, mailEnabledFrom,
 } from '../src/web/agentMailView.ts';
 
 const boxes = [
@@ -121,4 +121,14 @@ test('policyChanged ignores list order and detects each field', () => {
   expect(policyChanged(base, { ...base, sendTo: ['b', 'o'] })).toBe(true);
   expect(policyChanged(base, { ...base, receiveFrom: [] })).toBe(true);
   expect(policyChanged(base, { ...base, receiveFrom: ['s'] })).toBe(true);
+});
+
+test('mailEnabledFrom: only an explicit true from /api/ui-config turns messaging on', () => {
+  expect(mailEnabledFrom({ termFont: null, agentMail: true })).toBe(true);
+  expect(mailEnabledFrom({ agentMail: false })).toBe(false);
+  // An older server without the field, a malformed value, or no config at all reads as off.
+  expect(mailEnabledFrom({ termFont: null })).toBe(false);
+  expect(mailEnabledFrom({ agentMail: 'true' })).toBe(false);
+  expect(mailEnabledFrom(null)).toBe(false);
+  expect(mailEnabledFrom(undefined)).toBe(false);
 });
