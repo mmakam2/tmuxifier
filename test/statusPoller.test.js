@@ -951,3 +951,47 @@ test('a refresh whose probe was refused a session slot reports the box and keeps
   expect(poller.getSnapshot().a).not.toHaveProperty('muxRefused');
   expect(poller.getSnapshot().a.agentMarks.web.state).toBe('blocked');
 });
+
+// --- onAgents: the agent-mail hub re-checks delivery after a real-time refresh ---
+
+test('onAgents fires once per applied refreshAgents and not when the probe returned null', async () => {
+  const calls = [];
+  let answer = light('blocked', 'permission', 101);
+  const history = createHealthHistory({ now: () => 5 });
+  const statusChecker = {
+    checkBox: async () => full('working', 'prompt', 100),
+    checkAgents: async () => answer,
+  };
+  const poller = createStatusPoller({
+    store: fakeStore([rtBox]), statusChecker, history,
+    // What onAgents sees must already be applied and recorded.
+    onAgents: (id) => calls.push([id, poller.getSnapshot()[id].agentMarks?.web?.state, history.getSeries(id).at(-1).agents.web.state]),
+  });
+  await poller.pollOnce();
+  expect(calls).toEqual([]);                          // a sweep is onCycle's, not onAgents'
+  expect(await poller.refreshAgents('a')).toBe(true);
+  expect(calls).toEqual([['a', 'blocked', 'blocked']]);
+  answer = null;
+  expect(await poller.refreshAgents('a')).toBe(false);
+  expect(await poller.refreshAgents('nope')).toBe(false);
+  expect(calls).toEqual([['a', 'blocked', 'blocked']]);
+  answer = light('ready', 'stop', 102);
+  expect(await poller.refreshAgents('a')).toBe(true);
+  expect(calls).toEqual([['a', 'blocked', 'blocked'], ['a', 'ready', 'done']]); // history shows a finished turn as done
+});
+
+test('a throwing onAgents does not fail refreshAgents', async () => {
+  let fired = 0;
+  const statusChecker = {
+    checkBox: async () => full('working', 'prompt', 100),
+    checkAgents: async () => light('blocked', 'permission', 101),
+  };
+  const poller = createStatusPoller({
+    store: fakeStore([rtBox]), statusChecker,
+    onAgents: () => { fired += 1; throw new Error('mail is broken'); },
+  });
+  await poller.pollOnce();
+  expect(await poller.refreshAgents('a')).toBe(true);
+  expect(fired).toBe(1);
+  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('blocked');
+});

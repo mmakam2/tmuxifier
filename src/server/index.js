@@ -32,6 +32,10 @@ import { createHealthHistory } from './healthHistory.js';
 import { createAgentSeenStore } from './agentSeenStore.js';
 import { createLocalShellActions } from './localShellActions.js';
 import { createBoxRemoval } from './boxRemoval.js';
+import { createAgentMailPolicyStore } from './agentMailPolicyStore.js';
+import { createAgentMailStore } from './agentMailStore.js';
+import { createAgentMailHub } from './agentMailHub.js';
+import { createAgentMailForward } from './agentMailForward.js';
 import { buildServer } from './server.js';
 import { createSecretBox } from './secretBox.js';
 import { createProxmoxStore } from './proxmoxStore.js';
@@ -215,7 +219,70 @@ const statusChecker = createStatusChecker({
   hasLiveSession: (box) => sessions.hasLiveSessionForBox(box.id),
   masterAlive: (box) => boxActions.isMasterAlive(box),
 });
-const removeBox = createBoxRemoval({ store, sessions, boxActions, statusChecker });
+// Agent messaging (agentMail*.js, design docs/superpowers/specs/2026-11-14-agent-messaging-design.md):
+// per-box policy, the mail store, the hub that answers the boxes' requests, and the forward that
+// puts each box's listener onto the box. Built here, before anything that can remove a box, and
+// awaited: the hub indexes undelivered mail when it is created, so the store must be loaded
+// first, and the status poller's first sweep (which calls into it) runs only after listen.
+// TMUXIFIER_AGENT_MAIL=off builds none of it and every hook below is a no-op. A failure to load
+// or construct runs the server with messaging off rather than not at all.
+const MAIL_PRUNE_MS = 24 * 60 * 60 * 1000;
+async function createAgentMail() {
+  const mailPolicyStore = createAgentMailPolicyStore({ dataDir: config.dataDir });
+  const mailStore = createAgentMailStore({ dataDir: config.dataDir });
+  await mailStore.load();
+  const mailHub = createAgentMailHub({
+    store: mailStore,
+    policyStore: mailPolicyStore,
+    listBoxes: () => store.listBoxes(),
+    // Late-bound on purpose: statusPoller is constructed further down this file, and the hub
+    // reads markers only when a request or a sweep reaches it, after listen.
+    marksOf: (id) => { const e = statusPoller.getSnapshot()[id]; return e?.reachable ? (e.agentMarks ?? {}) : null; },
+  });
+  const mailForward = createAgentMailForward({
+    run: (argv, opts) => sshRun(argv, opts),
+    policyStore: mailPolicyStore,
+    hub: mailHub,
+    dataDir: config.dataDir,
+    sshOpts: {
+      hostKeyPolicy: config.hostKeyPolicy,
+      sshConfigFile: config.sshConfigFile,
+      controlDir: config.controlDir,
+      controlPersist: config.controlPersist,
+    },
+  });
+  return {
+    hub: mailHub,
+    store: mailStore,
+    policyStore: mailPolicyStore,
+    forward: mailForward,
+    // Re-run the forward now (a switch was turned on in the browser) rather than at the next sweep.
+    kick: async () => mailForward.sync(await store.listBoxes(), statusPoller.getSnapshot()),
+  };
+}
+let agentMail = null;
+if (config.agentMail) {
+  try {
+    agentMail = await createAgentMail();
+  } catch (err) {
+    console.error(`[tmuxifier] agent mail could not start, running with messaging off: ${err?.message || err}`);
+    agentMail = null;
+  }
+}
+if (agentMail) {
+  const prune = setInterval(() => {
+    try { agentMail.store.prune(); } catch (err) { console.error(`[tmuxifier] agent mail prune failed: ${err?.message || err}`); }
+  }, MAIL_PRUNE_MS);
+  prune.unref();
+}
+const removeBox = createBoxRemoval({
+  store, sessions, boxActions, statusChecker,
+  // The box's messaging policy, and its threads and waiters, go with it. The forward itself is
+  // cancelled by the next sweep's sync, which no longer finds the box.
+  onRemoved: agentMail
+    ? async (box) => { await agentMail.policyStore.removeBox(box.id); await agentMail.hub.boxRemoved(box.id); }
+    : null,
+});
 const localShellActions = createLocalShellActions();
 // Voice links: one box-side writer per linked box, fed by /voice-link. The
 // host's own shell gets the same writer spawned locally.
@@ -396,7 +463,17 @@ const statusPoller = createStatusPoller({
   onCycle: (boxes, snapshot) => {
     agentWatch?.sync(boxes, snapshot);
     localMarkWatch?.ensure();
+    // Agent mail: keep the forwards in step with the sweep, then let each box's freshly read
+    // markers release queued mail. Each call isolated: the sweep never breaks because of mail.
+    if (agentMail) {
+      try { void agentMail.forward.sync(boxes, snapshot).catch(() => {}); } catch { /* never breaks the sweep */ }
+      for (const b of boxes) {
+        try { agentMail.hub.boxChanged(b.id); } catch { /* never breaks the sweep */ }
+      }
+    }
   },
+  // A real-time refresh re-read one box's markers: the same delivery check as after a sweep.
+  onAgents: agentMail ? (id) => agentMail.hub.boxChanged(id) : null,
   // A box whose shared connection has no session slot left gets its watch
   // stream's slot back, and no more light probes for a while.
   onMuxRefused: (boxId) => agentWatch?.yield(boxId),
@@ -429,7 +506,7 @@ const iconStore = createIconStore({
   cacheDir: path.join(config.dataDir, 'icons'),
 });
 
-const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, uiSettingsStore, deviceStore, apkBuildManager, voiceLinks, liveHub });
+const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, uiSettingsStore, deviceStore, apkBuildManager, voiceLinks, liveHub, agentMail });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });
@@ -470,6 +547,13 @@ app.listen({ host: config.bindAddress, port: config.port })
         // End the agent watch streams (each box-side loop then exits at its
         // next beat) and tell the tabs to reconnect rather than time out.
         () => { agentWatch?.stopAll(); localMarkWatch?.close(); liveHub.closeAll(1001, 'restarting'); return Promise.resolve(); },
+        // Agent mail, in order (the flushers above run in parallel): stop the forward first, which
+        // closes the listeners and ends their held requests, so nothing can add a message after
+        // the mail store's final flush.
+        ...(agentMail ? [async () => {
+          try { await agentMail.forward.stopAll(); } catch { /* flush the store regardless */ }
+          await agentMail.store.whenIdle();
+        }] : []),
       ],
       voiceEngine: { stop: async () => { if (voiceEngine) await voiceEngine.stop(); } },
     });

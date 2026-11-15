@@ -103,3 +103,50 @@ test('removal forgets the box in the status checker (backoff/cpu maps)', async (
   await removeBox('B1');
   expect(forgotten).toEqual(['B1']);
 });
+
+// Agent mail (index.js): the policy entry and the hub's threads and waiters go with the box.
+test('removeBox calls onRemoved with the removed box, after the store no longer lists it', async () => {
+  const box = { id: 'B1', host: '192.168.1.10' };
+  let listed = [box];
+  const seen = [];
+  const removeBox = createBoxRemoval({
+    store: {
+      getBox: async (id) => listed.find((b) => b.id === id),
+      removeBox: async (id) => { listed = listed.filter((b) => b.id !== id); },
+      listBoxes: async () => listed,
+    },
+    sessions: { closeGroup: () => {} },
+    boxActions: {},
+    onRemoved: async (b) => {
+      await tick();
+      seen.push([b, listed.map((x) => x.id)]);
+    },
+  });
+  await expect(removeBox('B1')).resolves.toEqual({ ok: true });
+  expect(seen).toEqual([[box, []]]);                  // awaited, and after the store removal
+  await removeBox('B1');                              // an absent box is not "removed" again
+  expect(seen).toHaveLength(1);
+});
+
+test('a throwing onRemoved still removes the box', async () => {
+  const box = { id: 'B1', host: '192.168.1.10' };
+  let listed = [box];
+  const calls = [];
+  let fired = 0;
+  const removeBox = createBoxRemoval({
+    store: {
+      getBox: async (id) => listed.find((b) => b.id === id),
+      removeBox: async (id) => { listed = listed.filter((b) => b.id !== id); },
+      listBoxes: async () => listed,
+    },
+    sessions: { closeGroup: () => {} },
+    boxActions: { killSession: async () => calls.push('kill'), exitMaster: async () => calls.push('master') },
+    statusChecker: { forgetBox: (id) => calls.push(['forget', id]) },
+    onRemoved: async () => { fired += 1; throw new Error('mail is broken'); },
+  });
+  await expect(removeBox('B1')).resolves.toEqual({ ok: true });
+  expect(fired).toBe(1);
+  expect(listed).toEqual([]);
+  await tick(); await tick();
+  expect(calls).toEqual([['forget', 'B1'], 'kill', 'master']); // the rest of the removal still ran
+});

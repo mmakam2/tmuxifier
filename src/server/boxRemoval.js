@@ -1,4 +1,7 @@
-export function createBoxRemoval({ store, sessions, boxActions, statusChecker = null }) {
+// `onRemoved(box)` is awaited once the store no longer lists the box (index.js uses it to drop
+// the box's agent-mail policy and close its threads). It is best-effort: a throw is swallowed
+// and the removal still answers { ok: true }.
+export function createBoxRemoval({ store, sessions, boxActions, statusChecker = null, onRemoved = null }) {
   return async function removeBox(id) {
     const box = await store.getBox(id);
     if (!box) return { ok: true };
@@ -9,6 +12,9 @@ export function createBoxRemoval({ store, sessions, boxActions, statusChecker = 
     // Drop the checker's per-box backoff/cpu state — ids are UUIDs, so a
     // removed box's entries would otherwise sit in those maps forever.
     statusChecker?.forgetBox?.(box.id);
+    if (onRemoved) {
+      try { await onRemoved(box); } catch { /* the box is gone either way */ }
+    }
     // Best-effort remote cleanup runs in the background: killing the on-box
     // tmux session and tearing down the ControlMaster each ride an ssh attempt
     // that takes up to 12s/6s against an unreachable host, and blocking the

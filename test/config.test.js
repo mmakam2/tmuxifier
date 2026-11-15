@@ -752,3 +752,18 @@ test('agentWatch defaults on and TMUXIFIER_AGENT_WATCH=off disables it', () => {
   expect(at({}, { agentWatch: true })).toBe(true);
   expect(at({ TMUXIFIER_AGENT_WATCH: 'off' }, { agentWatch: true })).toBe(true); // overrides win
 });
+
+// Agent messaging (agentMail*.js): on unless explicitly switched off, parsed like agentWatch.
+test('agentMail defaults on and TMUXIFIER_AGENT_MAIL=off turns it off', () => {
+  const at = (env, over = {}) => loadConfig(over, { env, cwd: '/app' }).agentMail;
+  expect(at({})).toBe(true);
+  for (const v of ['off', 'OFF', ' off ', 'false', '0', 'no']) expect(at({ TMUXIFIER_AGENT_MAIL: v })).toBe(false);
+  for (const v of ['on', 'true', '1', '', 'banana']) expect(at({ TMUXIFIER_AGENT_MAIL: v })).toBe(true);
+  expect(at({}, { agentMail: false })).toBe(false);
+  expect(at({}, { agentMail: 'off' })).toBe(false);
+  expect(at({}, { agentMail: true })).toBe(true);
+  expect(at({ TMUXIFIER_AGENT_MAIL: 'off' }, { agentMail: true })).toBe(true); // overrides win
+  // The two knobs are independent.
+  expect(loadConfig({}, { env: { TMUXIFIER_AGENT_WATCH: 'off' }, cwd: '/app' }).agentMail).toBe(true);
+  expect(loadConfig({}, { env: { TMUXIFIER_AGENT_MAIL: 'off' }, cwd: '/app' }).agentWatch).toBe(true);
+});

@@ -19,6 +19,10 @@ export function createStatusPoller({
   // Called with a box id when that box's light probe found its shared ssh
   // connection out of session slots (agentWatch.yield in index.js).
   onMuxRefused = null,
+  // Called with a box id right after a refreshAgents result for that box was
+  // applied and recorded: the agent-mail hub re-checks delivery on it
+  // (agentMailHub.boxChanged in index.js). Not for the Host Shell.
+  onAgents = null,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   now = () => Date.now(),
 }) {
@@ -260,6 +264,7 @@ export function createStatusPoller({
       snapshot = { ...snapshot, [box.id]: entry };
       applied.set(box.id, ++seq);
       if (history) { try { history.recordAgents(box, entry); } catch { /* history never affects status */ } }
+      if (onAgents) { try { onAgents(box.id); } catch { /* mail never affects status */ } }
       return true;
     }
     return false;

@@ -30,6 +30,9 @@ const DEFAULTS = {
   // reports marker changes between two status sweeps (agentWatch.js). Off
   // leaves agent state on the statusPollMs cadence, as before.
   agentWatch: true,
+  // Agent messaging (agentMail*.js): the per-box mail listeners, their forwards
+  // onto the boxes, and the mail store. Off constructs none of it.
+  agentMail: true,
   // How often the server sweeps the dashboard's service tiles (HTTP/TCP
   // liveness). Same single-loop rationale as statusPollMs. See serviceChecker.js.
   servicePollMs: 30000,
@@ -210,6 +213,7 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
     statusConcurrency: e.TMUXIFIER_STATUS_CONCURRENCY ? Number(e.TMUXIFIER_STATUS_CONCURRENCY) : undefined,
     statusPollMs: e.TMUXIFIER_STATUS_POLL_MS ? Number(e.TMUXIFIER_STATUS_POLL_MS) : undefined,
     agentWatch: e.TMUXIFIER_AGENT_WATCH,
+    agentMail: e.TMUXIFIER_AGENT_MAIL,
     servicePollMs: e.TMUXIFIER_SERVICE_POLL_MS ? Number(e.TMUXIFIER_SERVICE_POLL_MS) : undefined,
     controlPersist: e.TMUXIFIER_CONTROL_PERSIST ? Number(e.TMUXIFIER_CONTROL_PERSIST) : undefined,
     fleetConcurrency: e.TMUXIFIER_FLEET_CONCURRENCY ? Number(e.TMUXIFIER_FLEET_CONCURRENCY) : undefined,
@@ -280,6 +284,10 @@ export function loadConfig(overrides = {}, { env = process.env, cwd = process.cw
   merged.agentWatch = typeof merged.agentWatch === 'boolean'
     ? merged.agentWatch
     : !/^(off|false|0|no)$/i.test(String(merged.agentWatch ?? '').trim());
+  // Same parsing as agentWatch.
+  merged.agentMail = typeof merged.agentMail === 'boolean'
+    ? merged.agentMail
+    : !/^(off|false|0|no)$/i.test(String(merged.agentMail ?? '').trim());
   merged.servicePollMs = clampInt(merged.servicePollMs, 5000, 86400000, DEFAULTS.servicePollMs);
   merged.controlPersist = clampInt(merged.controlPersist, 0, 604800, DEFAULTS.controlPersist); // 0 = ssh "keep forever"
   merged.fleetConcurrency = clampInt(merged.fleetConcurrency, 1, 100, DEFAULTS.fleetConcurrency);
