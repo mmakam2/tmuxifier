@@ -113,9 +113,11 @@ function createWorld() {
       const n = /n=([a-f0-9]{16})"$/.exec(remote)?.[1];
       if (n && remote === verifyRemote(n)) {
         calls.push({ op: 'verify', host, nonce: n, argv, timeout: opts.timeout });
-        if (!b.curl || !b.file || !b.linked || !b.forward) return { code: 7, stdout: '', stderr: '' };
+        // The tools line is printed before curl runs, whatever curl then does.
+        const tools = `__MAILTOOLS__ ${b.tools}\n`;
+        if (!b.curl || !b.file || !b.linked || !b.forward) return { code: 7, stdout: tools, stderr: '' };
         const status = await ping(b.forward, n);
-        return { code: status ? 0 : 7, stdout: status === 200 ? 'ok\n' : '', stderr: '' };
+        return { code: status ? 0 : 7, stdout: tools + (status === 200 ? 'ok\n' : ''), stderr: '' };
       }
       throw new Error(`unexpected remote command ${remote}`);
     },
@@ -213,7 +215,13 @@ test('first sync on an enabled, reachable box: ensure, forward, verify, state up
   const local = sockOf(dataDir, 'o');
   expect(forward.spec).toBe(`/home/orders/.tmuxifier-mail/sock:${local}`);
   expect(cancel.spec).toBe(forward.spec);
-  expect(verify.argv.at(-1)).toBe(`curl -s -m 3 --unix-socket "$HOME/.tmuxifier-mail/sock" "http://mail/v1/ping?n=${verify.nonce}"`);
+  expect(verify.argv.at(-1)).toBe(
+    'if [ -x "$HOME/.tmuxifier-mail/tmx" ]; then echo \'__MAILTOOLS__ yes\'; else echo \'__MAILTOOLS__ no\'; fi; '
+    + `curl -s -m 3 --unix-socket "$HOME/.tmuxifier-mail/sock" "http://mail/v1/ping?n=${verify.nonce}"`,
+  );
+  // Constant but for the nonce, which is 16 lowercase hex digits or the command is not built.
+  expect(verifyRemote('0123456789abcdef').replace('0123456789abcdef', verify.nonce)).toBe(verify.argv.at(-1));
+  for (const bad of ['', 'xyz', '0123456789abcde', '0123456789abcdef0', '0123456789ABCDEF', '$(id)aaaaaaaaaaa', null]) expect(() => verifyRemote(bad)).toThrow();
   expect(fwd.status('o')).toEqual({ state: 'up', installed: true, listening: 0 });
   // The listener is real, on its own 0600 socket in a 0700 directory.
   expect(fs.statSync(path.dirname(local)).mode & 0o777).toBe(0o700);
@@ -428,6 +436,72 @@ test('__MAILTOOLS__ no reports installed: false', async () => {
   world.box('orders.example.com').tools = 'no';
   await fwd.sync([boxes[0]], { o: { reachable: true } });
   expect(fwd.status('o')).toEqual({ state: 'up', installed: false, listening: 0 });
+});
+
+// ---- the tools line (`installed`) ----
+
+test('markInstalled: setup that installed the tools turns "not installed" into installed at once, with no ssh call', async () => {
+  const { world, boxes, fwd } = await bench();
+  world.box('orders.example.com').tools = 'no';
+  await fwd.sync([boxes[0]], { o: { reachable: true } });
+  expect(fwd.status('o')).toEqual({ state: 'up', installed: false, listening: 0 });
+  const n = world.calls.length;
+  fwd.markInstalled('o');
+  expect(fwd.status('o')).toEqual({ state: 'up', installed: true, listening: 0 });
+  expect(world.calls.length).toBe(n);
+  // A box the keeper holds nothing for (switches off, unknown): nothing happens, nothing throws.
+  fwd.markInstalled('c');
+  fwd.markInstalled('nope');
+  fwd.markInstalled(undefined);
+  expect(fwd.status('c')).toEqual({ state: 'off', installed: null, listening: 0 });
+  expect(fwd.status('nope')).toEqual({ state: 'off', installed: null, listening: 0 });
+});
+
+test('the recheck re-reads the tools marker: installed after the forward came up is seen, and so is removed', async () => {
+  const { world, boxes, clock, fwd } = await bench({ forward: { recheckMs: 600000 } });
+  const snap = { o: { reachable: true } };
+  const b = world.box('orders.example.com');
+  b.tools = 'no';
+  await fwd.sync([boxes[0]], snap);
+  expect(fwd.status('o').installed).toBe(false);
+  // Setup run by hand, or by another Tmuxifier: nothing tells this keeper.
+  b.tools = 'yes';
+  let n = world.calls.length;
+  await fwd.sync([boxes[0]], snap);
+  expect(world.ops(n)).toEqual(['check']); // not due yet: nothing is read
+  expect(fwd.status('o').installed).toBe(false);
+  clock.t += 600000;
+  n = world.calls.length;
+  await fwd.sync([boxes[0]], snap);
+  expect(world.ops(n)).toEqual(['check', 'verify']);
+  expect(fwd.status('o')).toEqual({ state: 'up', installed: true, listening: 0 });
+  // ... and tools removed from the box are noticed the same way.
+  b.tools = 'no';
+  clock.t += 600000;
+  await fwd.sync([boxes[0]], snap);
+  expect(fwd.status('o').installed).toBe(false);
+  // A verify whose output carries no marker (ssh failed) leaves the reading as it was.
+  fwd.markInstalled('o');
+  b.curl = false;
+  world.throwing = true;
+  clock.t += 600000;
+  await fwd.sync([boxes[0]], snap);
+  expect(fwd.status('o').installed).toBe(true);
+});
+
+test('status never reports the tools missing while a session of the box is listening', async () => {
+  const { h, world, boxes, fwd } = await bench();
+  world.box('orders.example.com').tools = 'no';
+  await fwd.sync([boxes[0]], { o: { reachable: true } });
+  expect(fwd.status('o')).toEqual({ state: 'up', installed: false, listening: 0 });
+  // A waiter is `tmx hook-wait`: the tools are there, whatever the last ensure read.
+  const ac = new AbortController();
+  const held = h.hub.waitMail({ boxId: 'o', session: 'main' }, '%1', ac.signal);
+  expect(fwd.status('o')).toEqual({ state: 'up', installed: true, listening: 1 });
+  ac.abort();
+  await held;
+  // Between two waits of a session (a turn in progress) the line does not flip back.
+  expect(fwd.status('o')).toEqual({ state: 'up', installed: true, listening: 0 });
 });
 
 test('a recheck runs the nonce call alone, is skipped after traffic, and repairs a failed one with a full ensure', async () => {

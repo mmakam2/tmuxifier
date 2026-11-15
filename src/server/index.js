@@ -204,7 +204,16 @@ const setupManager = createSetupManager({
   pushAgentHooks: (box) => agentHooksPusher.push(box),
   // TMUXIFIER_AGENT_MAIL=off is the hard disable: the phase is left unwired, so no box gets
   // the waiter hook or the permission rule while messaging is off.
-  pushAgentMail: config.agentMail ? (box) => agentMailPusher.push(box) : null,
+  // A push that installed the tools tells the forward keeper at once, so the Edit Box line does
+  // not keep saying "Tools not installed" until the next ensure or recheck. `agentMail` is
+  // declared further down; this runs only when a setup job reaches the phase.
+  pushAgentMail: config.agentMail
+    ? async (box) => {
+      const result = await agentMailPusher.push(box);
+      if (result?.ok === true) agentMail?.forward.markInstalled(box.id);
+      return result;
+    }
+    : null,
   pushVoiceLink: (box) => voiceLinkPusher.push(box),
   pushOpencodePlugin: (box) => opencodePluginPusher.push(box),
   pushOscReporter: (box) => oscReporterPusher.push(box),

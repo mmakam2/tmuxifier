@@ -201,6 +201,27 @@ test('socket file deleted under a live master: the recheck repairs it', async ()
   expect((await tmx('a', ['who'])).code).toBe(0);
 }, 90000);
 
+test('the recheck reads whether tmx is on the box, under the box\'s real login shell', async () => {
+  const { lb, fwd, sync } = await harness({ recheckMs: 0 });
+  const tmxFile = path.join(lb.home, '.tmuxifier-mail', 'tmx');
+  await sync();
+  expect(fwd.status('b1')).toEqual({ state: 'up', installed: true, listening: 0 });
+  const saved = fs.readFileSync(tmxFile);
+  fs.unlinkSync(tmxFile);
+  await sync();
+  expect(fwd.status('b1')).toEqual({ state: 'up', installed: false, listening: 0 });
+  // Setup puts it back: the next recheck sees it, with no new master and no restart.
+  fs.writeFileSync(tmxFile, saved, { mode: 0o755 });
+  await sync();
+  expect(fwd.status('b1')).toEqual({ state: 'up', installed: true, listening: 0 });
+  // What setup's own success does at once.
+  fs.unlinkSync(tmxFile);
+  await sync();
+  expect(fwd.status('b1').installed).toBe(false);
+  fwd.markInstalled('b1');
+  expect(fwd.status('b1').installed).toBe(true);
+}, 60000);
+
 test('listener closed and reopened (a Tmuxifier restart): a waiting hook-wait still receives queued mail', async () => {
   const { h, fwd, forwards, makeForward, sync, tmx, masterPid } = await harness();
   await sync();

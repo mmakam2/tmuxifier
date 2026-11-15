@@ -23,6 +23,10 @@ import { mapWithConcurrency } from './concurrency.js';
 //     listener has had no request since the last check: the nonce call alone; on failure, the
 //     full ensure.
 //   - otherwise the full ensure, below. Success records the pid: state `up`.
+//   - `installed` (the Edit Box "Tools ..." line) is whether setup's tools are on the box. It is
+//     read from the tools line the ensure and every verify print (so a recheck sees tools
+//     installed or removed since), set by `markInstalled(boxId)` when this server's own setup
+//     phase installed them, and never reported false while a session of the box is listening.
 //   - any failure: `-O cancel` (when a forward was made), state `error` with a short reason, and
 //     no attempt for `retryBaseMs`, doubling per consecutive failure up to `retryCapMs`.
 //
@@ -90,7 +94,9 @@ import { mapWithConcurrency } from './concurrency.js';
 // ensured, and until the new fields resolve the box's listener is closed (above), so the old
 // host can never keep speaking as this box.
 
-export const ENSURE_REMOTE = 'mkdir -p "$HOME/.tmuxifier-mail" && chmod 700 "$HOME/.tmuxifier-mail" && rm -f "$HOME/.tmuxifier-mail/sock" && printf \'__MAILHOME__ %s\\n\' "$HOME" && if [ -x "$HOME/.tmuxifier-mail/tmx" ]; then echo \'__MAILTOOLS__ yes\'; else echo \'__MAILTOOLS__ no\'; fi';
+// Prints whether setup's tools are on the box, as one line. Part of the ensure and of every verify.
+const TOOLS_REMOTE = 'if [ -x "$HOME/.tmuxifier-mail/tmx" ]; then echo \'__MAILTOOLS__ yes\'; else echo \'__MAILTOOLS__ no\'; fi';
+export const ENSURE_REMOTE = `mkdir -p "$HOME/.tmuxifier-mail" && chmod 700 "$HOME/.tmuxifier-mail" && rm -f "$HOME/.tmuxifier-mail/sock" && printf '__MAILHOME__ %s\\n' "$HOME" && ${TOOLS_REMOTE}`;
 export const REMOVE_REMOTE = 'rm -f "$HOME/.tmuxifier-mail/sock"';
 
 const NONCE_RE = /^[a-f0-9]{16}$/;
@@ -100,10 +106,12 @@ const CONTROL_TIMEOUT_MS = 6000;
 const REMOTE_TIMEOUT_MS = 10000;
 const CONCURRENCY = 4;
 
-// The verify call through the box-side socket, for one nonce.
+// The verify call through the box-side socket, for one nonce. It prints the tools line first (so
+// it is a line of its own whatever curl prints), which is how a recheck learns that setup has
+// installed the tools since the forward came up. Constant but for the nonce.
 export function verifyRemote(nonce) {
   if (typeof nonce !== 'string' || !NONCE_RE.test(nonce)) throw new Error('bad nonce');
-  return `curl -s -m 3 --unix-socket "$HOME/.tmuxifier-mail/sock" "http://mail/v1/ping?n=${nonce}"`;
+  return `${TOOLS_REMOTE}; curl -s -m 3 --unix-socket "$HOME/.tmuxifier-mail/sock" "http://mail/v1/ping?n=${nonce}"`;
 }
 
 const sigOf = (box) => JSON.stringify([box.host ?? null, box.user ?? null, box.port ?? null, box.proxyJump ?? null]);
@@ -123,8 +131,9 @@ function pidOf(res) {
   return m ? m[1] : null;
 }
 
-// { home, installed } from the ensure command's output: exactly one home line, validated.
-function parseEnsure(stdout) {
+// { home, installed } from a remote command's output: exactly one home line, validated, and the
+// tools line (null when there is none: the command did not get that far).
+function parseRemote(stdout) {
   const homes = [];
   let installed = null;
   for (const raw of String(stdout ?? '').split('\n')) {
@@ -199,11 +208,14 @@ export function createAgentMailForward({
     e.checkedWall = Date.now(); // the listener's lastRequestAt() is wall-clock
   }
 
-  // The nonce call through the box-side socket; true only if this listener received it.
+  // The nonce call through the box-side socket; true only if this listener received it. Its
+  // output also says whether the tools are on the box now; without that line nothing is learned.
   async function verify(e, box) {
     const nonce = Buffer.from(randomBytes(8)).toString('hex');
     if (!NONCE_RE.test(nonce)) return false;
-    await call(buildProbeArgv(box, verifyRemote(nonce), sshOpts), REMOTE_TIMEOUT_MS);
+    const res = await call(buildProbeArgv(box, verifyRemote(nonce), sshOpts), REMOTE_TIMEOUT_MS);
+    const { installed } = parseRemote(res.stdout);
+    if (installed !== null) e.installed = installed;
     return e.listener.sawNonce(nonce);
   }
 
@@ -215,7 +227,7 @@ export function createAgentMailForward({
   async function ensure(e, box, stale = []) {
     const res = await call(buildProbeArgv(box, ENSURE_REMOTE, sshOpts), REMOTE_TIMEOUT_MS);
     if (res.code !== 0) return fail(e, 'forward failed');
-    const { home, installed } = parseEnsure(res.stdout);
+    const { home, installed } = parseRemote(res.stdout);
     e.installed = installed;
     if (!home) return fail(e, 'bad home');
     let forwardArgv;
@@ -448,9 +460,19 @@ export function createAgentMailForward({
       try {
         for (const n of Object.values(hub.listening(boxId) ?? {})) listening += Number(n) || 0;
       } catch { /* the count is advisory */ }
+      // A listening session is a running `tmx hook-wait`: the tools are on the box, whatever
+      // the last ensure or recheck read. Kept, so the line does not flip back between two waits
+      // of a session; the next read of the tools line replaces it.
+      if (listening > 0 && e.installed === false) e.installed = true;
       const out = { state: e.state, installed: e.installed, listening };
       if (e.state === 'error') out.error = e.gate ?? e.error;
       return out;
+    },
+    // Setup's `agent-mail` phase installed the tools on this box (index.js calls this on its
+    // `ok: true`): no ssh call, and nothing for a box the keeper holds no entry for.
+    markInstalled(boxId) {
+      const e = entries.get(boxId);
+      if (e) e.installed = true;
     },
     async stopAll() {
       closed = true;
