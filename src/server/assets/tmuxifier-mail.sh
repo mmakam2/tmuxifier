@@ -27,8 +27,24 @@
 #                   request and the back-off sleep, both run in the background and reaped with
 #                   `wait`, so a signal from its parent ends it at once (a shell defers traps
 #                   until a foreground child returns). Its lock is removed on every exit it
-#                   controls; a lock whose pid is dead, or is no longer a hook-wait (a pid reused
-#                   after a reboot), is taken over.
+#                   controls.
+#                   It follows its Claude Code, not its parent. Claude Code runs a hook command
+#                   through `/bin/sh -c` in a new session; a dash wrapper does not exec the
+#                   command, so $PPID is that wrapper, which lives exactly as long as the waiter
+#                   and survives a Claude Code killed with SIGKILL (it is re-parented, never
+#                   signalled). So at start the waiter records its Claude Code: $PPID's parent
+#                   when $PPID is such a wrapper (its command line names hook-wait), else $PPID
+#                   itself (a `sh -c` that execs, as bash does). At every turn of the loop it
+#                   checks that the process it watches (the wrapper, or itself) still has that
+#                   parent; when not, Claude Code is gone and the waiter exits 0. The parent is
+#                   read from /proc/<pid>/stat, so this is Linux-only, which is what boxes are;
+#                   without a readable /proc (or a parent of 0 or 1) there is no Claude pid and
+#                   no such check (fail open).
+#                   The lock holds the owner's pid and, when known, its Claude pid. A lock is
+#                   taken over when its owner is dead or is no longer a hook-wait (a pid reused
+#                   after a reboot), or when the owner's Claude pid is known and either gone or
+#                   different from this waiter's own known Claude pid: a new Claude Code in the
+#                   same pane always wins, a second waiter of the same Claude Code stands down.
 #   tmx hook-ack    Claude Code UserPromptSubmit hook. Confirms each distinct
 #                   [tmuxifier-mail m-xxxxxxxx] tag in the prompt with POST /v1/ack. Its stdout
 #                   would become prompt context, so it prints nothing on either stream and always
@@ -38,7 +54,8 @@
 # seconds (digits and dots), replaces the duration of every sleep: the 1 s between attempts of a
 # user command, the waiter's back-off and its 1 s grace for a lock without a pid.
 # TMUXIFIER_MAIL_TEST_MAX_TIME, likewise, replaces curl's -m for every user command (`wait`
-# included; not hook-wait's 330 s nor hook-ack's 3 s).
+# included; not hook-wait's 330 s nor hook-ack's 3 s). TMUXIFIER_MAIL_TEST_NO_PROC=1 makes
+# hook-wait read no /proc/<pid>/stat, as on a box without /proc.
 
 umask 077
 set -f
@@ -283,7 +300,43 @@ cmd_wait() {
 
 # ---- hook-wait ----
 
-LOCK= OWN= CHILD=
+LOCK= OWN= CHILD= CLAUDE= WATCH=
+
+# Sets PARENT to the parent pid of process $1 from /proc/$1/stat: the second field after the
+# last `)` (the command name before it may hold spaces and parentheses). Fails when unreadable.
+parent_of() {
+  PARENT=
+  [ "${TMUXIFIER_MAIL_TEST_NO_PROC:-}" = 1 ] && return 1
+  _st=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  _st=${_st##*)}
+  set -- $_st
+  case ${2:-} in ''|*[!0-9]*) return 1 ;; esac
+  PARENT=$2
+}
+
+# Sets CLAUDE (the Claude Code that started this waiter) and WATCH (the process whose parent
+# it is); both empty when that cannot be known.
+find_claude() {
+  CLAUDE= WATCH=
+  parent_of "$$" || return 0
+  _p=$PARENT
+  if grep -q hook-wait "/proc/$_p/cmdline" 2>/dev/null; then
+    parent_of "$_p" || return 0
+    WATCH=$_p
+  else
+    WATCH=$$
+  fi
+  case $PARENT in 0|1) return 0 ;; esac
+  CLAUDE=$PARENT
+}
+
+# True when the Claude Code this waiter belongs to is known and gone: the watched process has
+# a different parent now (re-parented after Claude Code died), or is gone itself.
+orphaned() {
+  [ -n "$CLAUDE" ] || return 1
+  parent_of "$WATCH" || return 0
+  [ "$PARENT" != "$CLAUDE" ]
+}
 
 # Sets OWNER to the pid in the lock (empty when there is none or it is not a number).
 lock_owner() {
@@ -307,6 +360,7 @@ alive() {
 claim() {
   mkdir "$LOCK" 2>/dev/null || return 1
   OWN=1
+  [ -z "$CLAUDE" ] || printf '%s\n' "$CLAUDE" > "$LOCK/claude"
   printf '%s\n' "$$" > "$LOCK/pid"
 }
 
@@ -318,8 +372,17 @@ take_lock() {
     sleep "$(pace 1)"
     lock_owner
   fi
-  [ -n "$OWNER" ] && alive "$OWNER" && return 1
-  rm -f "$LOCK/pid" "$LOCK/resp" "$LOCK/code" 2>/dev/null
+  if [ -n "$OWNER" ] && alive "$OWNER"; then
+    # A live owner keeps the lock unless it belongs to a Claude Code that is gone, or to
+    # another one than this waiter's (a new Claude Code in the same pane wins).
+    _oc=
+    { read -r _oc < "$LOCK/claude"; } 2>/dev/null
+    case $_oc in ''|*[!0-9]*) return 1 ;; esac
+    if kill -0 "$_oc" 2>/dev/null; then
+      [ -n "$CLAUDE" ] && [ "$_oc" != "$CLAUDE" ] || return 1
+    fi
+  fi
+  rm -f "$LOCK/pid" "$LOCK/claude" "$LOCK/resp" "$LOCK/code" 2>/dev/null
   rmdir "$LOCK" 2>/dev/null
   claim
 }
@@ -334,7 +397,7 @@ cleanup() {
     OWN=
     lock_owner
     if [ -z "$OWNER" ] || [ "$OWNER" = "$$" ]; then
-      rm -f "$LOCK/pid" "$LOCK/resp" "$LOCK/code" 2>/dev/null
+      rm -f "$LOCK/pid" "$LOCK/claude" "$LOCK/resp" "$LOCK/code" 2>/dev/null
       rmdir "$LOCK" 2>/dev/null
     fi
   fi
@@ -364,19 +427,22 @@ hook_wait() {
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  find_claude
   take_lock || exit 0
   _delay=2
   while :; do
     # Taken over (this waiter was thought dead): stand down and leave the lock to its owner.
     mine || { OWN=; exit 0; }
     # Orphaned: the Claude Code that started this waiter is gone.
-    if [ "$PPID" -gt 1 ] && ! kill -0 "$PPID" 2>/dev/null; then exit 0; fi
+    orphaned && exit 0
     session_now # a renamed session is followed; on failure the last name is kept
     rm -f "$LOCK/resp" "$LOCK/code" 2>/dev/null
     hold curl -q -s --noproxy '*' --unix-socket "$SOCK" -m 330 -G -o "$LOCK/resp" -w '%{http_code}' \
       --data-urlencode "session=$SESSION" --data-urlencode "pane=$TMUX_PANE" "$URL/v1/wait" \
       > "$LOCK/code" 2>/dev/null </dev/null
     _rc=$?
+    # Taken over while the request was held: the files in the lock are no longer this waiter's.
+    mine || { OWN=; exit 0; }
     _code=
     { read -r _code < "$LOCK/code"; } 2>/dev/null
     if [ "$_rc" = 0 ]; then

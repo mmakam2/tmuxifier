@@ -27,7 +27,7 @@ const UNREACHABLE = 'tmx: mail service unreachable, try again shortly\n';
 const TAG_RE = /^\[tmuxifier-mail m-[a-z2-9]{8}\] /;
 const LOST = (check) => `tmx: the connection was lost before an answer came back, so the message may or may not have been sent; do not send it again without checking (${check})\n`;
 
-let h; let dir; let bin; let sock; let curlLog; let listener; let extra; let children;
+let h; let dir; let bin; let sock; let curlLog; let listener; let extra; let children; let hookGroups;
 
 function writeExe(file, text) {
   fs.writeFileSync(file, text, { mode: 0o755 });
@@ -54,9 +54,16 @@ beforeEach(async () => {
   listener = createAgentMailListener({ hub: h.hub, boxId: 'o', socketPath: sock });
   extra = [];
   children = [];
+  hookGroups = [];
 });
 
 afterEach(async () => {
+  // The hook wrappers a fake Claude Code started lead their own sessions: kill those groups too.
+  for (const g of hookGroups) {
+    for (const f of fs.existsSync(g.dir) ? fs.readdirSync(g.dir).filter((n) => n.endsWith('.pid')) : []) {
+      try { process.kill(-Number(fs.readFileSync(path.join(g.dir, f), 'utf8')), 'SIGKILL'); } catch { /* gone */ }
+    }
+  }
   for (const c of children) {
     if (c.exitCode === null && c.signalCode === null) {
       try { process.kill(-c.pid, 'SIGKILL'); } catch { /* gone */ }
@@ -125,6 +132,51 @@ function wakePayload(wake) {
   payload.prompt = `<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>\n<system-reminder>\nStop hook blocking error from command "Stop": ${wake}\n</system-reminder>`;
   return JSON.stringify(payload);
 }
+
+// A stand-in for Claude Code that runs hooks the way the real one does (recorded live, Claude
+// Code 2.1.325): each hook command through `/bin/sh -c` in a new session (so a dash `-c`
+// wrapper sits between it and the waiter and outlives Claude Code when Claude Code is
+// killed), stdin and stderr piped. It starts one `hook-wait` at once and one more per line
+// written to its stdin, records hook n's wrapper pid in <dir>/<n>.pid and, if it is still
+// alive itself, the hook's exit as <dir>/<n>.json ({ code, signal, err }). It never exits on
+// its own: a test kills it. The hook command comes in the environment, not in its argv, so its
+// own command line does not name hook-wait (Claude Code's does not).
+const FAKE_CLAUDE = `
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const [out] = process.argv.slice(1);
+const cmd = process.env.FAKE_HOOK_CMD;
+let n = 0;
+const hook = () => {
+  const i = ++n;
+  const c = spawn('/bin/sh', ['-c', cmd], { detached: true, stdio: ['pipe', 'ignore', 'pipe'] });
+  c.stdin.end();
+  let err = '';
+  c.stderr.on('data', (d) => { err += d; });
+  fs.writeFileSync(out + '/' + i + '.pid', String(c.pid));
+  c.on('close', (code, signal) => fs.writeFileSync(out + '/' + i + '.json', JSON.stringify({ code, signal, err })));
+};
+hook();
+process.stdin.on('data', (d) => { for (const ch of String(d)) if (ch === '\\n') hook(); });
+`;
+
+// execs: the hook command starts with `exec`, as a `sh -c` that execs its command (bash -c
+// does) runs it, so the waiter's own parent is Claude Code.
+function underClaude({ env: e = env(), execs = false } = {}) {
+  const out = fs.mkdtempSync(path.join(dir, 'claude-'));
+  const cmd = `${execs ? 'exec ' : ''}${SHELL.map((a) => `'${a}'`).join(' ')} '${SCRIPT}' hook-wait`;
+  const claude = spawn(process.execPath, ['-e', FAKE_CLAUDE, out], { env: { ...e, FAKE_HOOK_CMD: cmd }, detached: true, stdio: ['pipe', 'ignore', 'inherit'] });
+  claude.done = new Promise((resolve) => claude.on('close', resolve));
+  children.push(claude);
+  hookGroups.push({ dir: out });
+  return {
+    claude,
+    spawnHook: () => claude.stdin.write('\n'),
+    result: (i = 1) => { try { return JSON.parse(fs.readFileSync(path.join(out, `${i}.json`), 'utf8')); } catch { return null; } },
+  };
+}
+const lockClaude = () => { try { return fs.readFileSync(path.join(lockOf(), 'claude'), 'utf8').trim(); } catch { return null; } };
+const isAlive = (pid) => { try { process.kill(Number(pid), 0); return true; } catch { return false; } };
 
 describe('tmx: user commands', () => {
   test('send prints the thread id and exits 0', async () => {
@@ -542,6 +594,100 @@ describe('tmx: hook-wait', () => {
     }
     expect(curlCalls()).toEqual([]);
     expect(fs.existsSync(path.join(dir, '.tmuxifier-mail'))).toBe(false);
+  });
+});
+
+describe('tmx: hook-wait follows its Claude Code', () => {
+  test('a waiter whose Claude Code is killed exits by itself at its next turn and frees the lock', async () => {
+    const hub = h.makeHub({ holdMs: 300 });
+    const short = createAgentMailListener({ hub, boxId: 'o', socketPath: sock });
+    extra.push(short);
+    await short.listen();
+    const a = underClaude();
+    await until(() => lockPid() !== null && lockClaude() !== null);
+    expect(lockClaude()).toBe(String(a.claude.pid)); // Claude Code, not the sh -c wrapper
+    const waiter = lockPid();
+    const turns = curlCalls().length;
+    await until(() => curlCalls().length >= turns + 3); // several holds answered 204: still the same waiter
+    expect(lockPid()).toBe(waiter);
+    expect(isAlive(waiter)).toBe(true);
+
+    a.claude.kill('SIGKILL'); // the waiter and its wrapper get no signal
+    await a.claude.done;
+    await until(() => !isAlive(waiter) && !fs.existsSync(lockOf()), 3000);
+    expect(fs.readdirSync(path.join(dir, '.tmuxifier-mail'))).toEqual([]);
+    expect(hub.listening('o').main ?? 0).toBe(0);
+  });
+
+  test('when the hook shell execs the command, the waiter follows its own parent', async () => {
+    const hub = h.makeHub({ holdMs: 300 });
+    const short = createAgentMailListener({ hub, boxId: 'o', socketPath: sock });
+    extra.push(short);
+    await short.listen();
+    const a = underClaude({ execs: true });
+    await until(() => lockPid() !== null && lockClaude() !== null);
+    expect(lockClaude()).toBe(String(a.claude.pid));
+    const waiter = lockPid();
+    a.claude.kill('SIGKILL');
+    await a.claude.done;
+    await until(() => !isAlive(waiter) && !fs.existsSync(lockOf()), 3000);
+  });
+
+  test('a waiter under a new Claude Code takes the lock from a live one; the old one stands down; mail goes to the new', async () => {
+    await listener.listen();
+    h.marks.o.main = mark('ready');
+    const a = underClaude();
+    await until(() => listening() === 1 && lockClaude() === String(a.claude.pid));
+    const first = lockPid();
+    const b = underClaude();
+    await until(() => lockClaude() === String(b.claude.pid));
+    expect(lockPid()).not.toBe(first);
+    await until(() => a.result() !== null);
+    expect(a.result()).toEqual({ code: 0, signal: null, err: '' }); // stood down, lock untouched
+    expect(lockClaude()).toBe(String(b.claude.pid));
+    await until(() => listening() === 1);
+    expect((await h.hub.send(B, 'orders', 'for the new session')).ok).toBe(true);
+    await until(() => b.result() !== null);
+    expect(b.result().code).toBe(2);
+    expect(b.result().err).toMatch(TAG_RE);
+    expect(b.result().err.endsWith('\n\nfor the new session\n')).toBe(true);
+    expect(fs.existsSync(lockOf())).toBe(false);
+  });
+
+  test('a second waiter of the same Claude Code stands down and leaves the first one alone', async () => {
+    await listener.listen();
+    const a = underClaude();
+    await until(() => listening() === 1 && lockClaude() !== null);
+    const first = lockPid();
+    a.spawnHook();
+    await until(() => a.result(2) !== null);
+    expect(a.result(2)).toEqual({ code: 0, signal: null, err: '' });
+    expect(lockPid()).toBe(first);
+    expect(a.result(1)).toBe(null);
+    expect(listening()).toBe(1);
+  });
+
+  test('with no readable /proc the waiter has no Claude pid and behaves as before', async () => {
+    const hub = h.makeHub({ holdMs: 300 });
+    const short = createAgentMailListener({ hub, boxId: 'o', socketPath: sock });
+    extra.push(short);
+    await short.listen();
+    const e = env({ TMUXIFIER_MAIL_TEST_NO_PROC: '1' });
+    const a = underClaude({ env: e });
+    await until(() => lockPid() !== null);
+    expect(lockClaude()).toBe(null);
+    const waiter = lockPid();
+    a.claude.kill('SIGKILL');
+    await a.claude.done;
+    const turns = curlCalls().length;
+    await until(() => curlCalls().length >= turns + 3); // turns go on: nothing tells it Claude Code is gone
+    expect(isAlive(waiter)).toBe(true);
+    expect(lockPid()).toBe(waiter);
+    // A waiter under another Claude Code finds a live owner and stands down, as before.
+    const b = underClaude({ env: e });
+    await until(() => b.result() !== null);
+    expect(b.result()).toEqual({ code: 0, signal: null, err: '' });
+    expect(lockPid()).toBe(waiter);
   });
 });
 
