@@ -45,16 +45,24 @@ import { mapWithConcurrency } from './concurrency.js';
 // at the box path) leaves no listener at all. On the master an entry is found by its whole spec,
 // box path and local path: `-O cancel` removes only the entry naming that local path. The rule:
 // boxes are grouped by their ControlPath, resolved locally with `ssh -G` (cached per connection
-// fields; one that does not resolve is a group of its own, which is the behaviour before this
-// rule). The holder of a group is the FIRST enabled box of it in the list, a pure function of the
+// fields). The holder of a group is the FIRST enabled box of it in the list, a pure function of the
 // list and the policies, recomputed every sync with no memory, so only the operator's enabling,
 // disabling, removing or re-addressing a box changes it; a failed check or ensure, a hold-off, a
 // new master, being unreachable or a restart never do. Every other box of the group is refused:
 // state `error`, `shares a connection with <holder's label>`, listener closed, and no ssh command
 // at all, except once, in the teardown phase before the holder's work, the cancel of a forward
-// of its own made before it was refused (by its own spec, never the rm). The holder runs the
-// single-box logic below, and its ensure also cancels, by their full specs, the entries the
-// group's other boxes may have left on the master (a master that outlived a restart).
+// of its own made before it was refused (by its own spec, never the rm; a forward cancelled
+// already on a failure is not cancelled again). The holder runs the single-box logic below, and
+// its ensure also cancels, by their full specs, the entries the group's other boxes may have left
+// on the master (a master that outlived a restart).
+// It fails closed on a ControlPath that does not resolve (a timeout, a spawn error, a failing
+// `Match exec`): that box runs nothing at all for mail in the sync, reads `error`,
+// `connection not resolved`, keeps a verified forward of its own exactly as it is (or has its
+// listener closed when it has none), and is asked again on the next sync. And while any enabled
+// box is unresolved, no forward STARTS: a box without a forward verified in this process waits
+// (`error`, `waiting for another box's connection to resolve`, nothing run), while one with a
+// verified forward carries on with its checks and rechecks. So nothing is forwarded until every
+// enabled box's grouping is known, and a box the grouping would refuse can never forward first.
 // The remote rm of the box-side file, in a teardown, runs only when the leaving box's ControlPath
 // is known and no enabled box has it (and every enabled box's ControlPath resolved): the file is
 // reachable only through a forward on that master, and no box that could forward there remains.
@@ -145,8 +153,15 @@ export function createAgentMailForward({
     };
   }
 
+  // Cancels this box's own forward entry once: a later teardown or refusal does not send it again.
+  async function cancelOwn(e) {
+    if (!e.made || e.made.cancelled) return;
+    e.made.cancelled = true;
+    await call(e.made.cancelArgv, CONTROL_TIMEOUT_MS);
+  }
+
   async function fail(e, reason) {
-    if (e.made) await call(e.made.cancelArgv, CONTROL_TIMEOUT_MS);
+    await cancelOwn(e);
     e.state = 'error';
     e.error = reason;
     e.pid = null;
@@ -284,7 +299,7 @@ export function createAgentMailForward({
     entries.delete(boxId);
     cps.delete(boxId);
     if (e.made) {
-      await call(e.made.cancelArgv, CONTROL_TIMEOUT_MS);
+      await cancelOwn(e);
       if (removeFile) await call(e.made.removeArgv, REMOTE_TIMEOUT_MS);
     }
     if (e.listener) {
@@ -311,7 +326,8 @@ export function createAgentMailForward({
       try { await job(); } catch { /* one box's failure is its own */ }
     });
 
-    // Groups and holders.
+    // Groups and holders. A box whose ControlPath did not resolve belongs to no group and runs
+    // nothing; while any enabled box is unresolved, no forward STARTS (see the header).
     const cpOf = new Map();
     await each(wanted.map((b) => async () => { cpOf.set(b.id, await controlPathOf(b)); }));
     const holderOfCp = new Map();
@@ -319,12 +335,14 @@ export function createAgentMailForward({
       const cp = cpOf.get(b.id);
       if (cp && !holderOfCp.has(cp)) holderOfCp.set(cp, b);
     }
-    const holderOf = (b) => (cpOf.get(b.id) ? holderOfCp.get(cpOf.get(b.id)) : b);
-    const allResolved = wanted.every((b) => cpOf.get(b.id));
+    const resolved = (b) => Boolean(cpOf.get(b.id));
+    const holderOf = (b) => holderOfCp.get(cpOf.get(b.id));
+    const allResolved = wanted.every(resolved);
 
     // Teardown phase, before any holder's work: boxes turned off or removed; a forward of a box's
     // own on a machine it no longer names (connection fields changed); and a forward a box made
-    // before it was refused. The last two by their own spec, never the rm.
+    // before it was refused. The last two by their own spec, never the rm; an unresolved box's
+    // own forward is left exactly as it is.
     const jobs = [];
     for (const [id, e] of entries) {
       if (want.has(id)) continue;
@@ -338,10 +356,11 @@ export function createAgentMailForward({
         entries.set(b.id, newEntry(b));
         continue;
       }
+      if (!resolved(b)) continue;
       const moved = e.sig !== sigOf(b);
       if (!moved && !(e.made && holderOf(b).id !== b.id)) continue;
       jobs.push(async () => {
-        if (e.made) await call(e.made.cancelArgv, CONTROL_TIMEOUT_MS);
+        await cancelOwn(e);
         e.made = null;
         if (moved) Object.assign(e, { sig: sigOf(b), pid: null, installed: null, fails: 0, retryAt: 0, state: 'down', error: undefined });
       });
@@ -351,13 +370,29 @@ export function createAgentMailForward({
     const work = [];
     for (const b of wanted) {
       const e = entries.get(b.id);
+      if (!resolved(b)) {
+        // Fail closed: nothing may be assumed about who else shares this connection.
+        if (e.pid === null && e.listener) {
+          try { await e.listener.close(); } catch { /* already gone */ }
+          e.listener = null;
+        }
+        e.state = 'error';
+        e.error = 'connection not resolved';
+        continue;
+      }
       const holder = holderOf(b);
       if (holder.id !== b.id) {
         await refuse(e, holder);
         continue;
       }
+      if (!allResolved && e.pid === null) {
+        // Would start a forward: it waits until every enabled box is grouped.
+        e.state = 'error';
+        e.error = 'waiting for another box\'s connection to resolve';
+        continue;
+      }
       const cp = cpOf.get(b.id);
-      const stale = cp ? wanted.filter((x) => x.id !== b.id && cpOf.get(x.id) === cp).map((x) => entries.get(x.id).socketPath) : [];
+      const stale = wanted.filter((x) => x.id !== b.id && cpOf.get(x.id) === cp).map((x) => entries.get(x.id).socketPath);
       const snap = snapshot && typeof snapshot === 'object' && Object.hasOwn(snapshot, b.id) ? snapshot[b.id] : undefined;
       work.push(() => syncBox(b, e, snap, stale));
     }

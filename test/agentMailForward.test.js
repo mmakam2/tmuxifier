@@ -53,7 +53,8 @@ function createWorld() {
     checkSilent: new Set(),
     // `ssh -G` calls (kept out of `calls`: resolving the ControlPath connects to nothing).
     resolves: [],
-    resolveFails: false,
+    resolveFails: false, // every `ssh -G` fails
+    resolveFailing: new Set(), // the host names whose `ssh -G` fails
     // The calls since `from`, as short names.
     ops(from = 0) { return calls.slice(from).map((c) => c.op); },
     async run(argv, opts = {}) {
@@ -62,7 +63,7 @@ function createWorld() {
       if (argv.includes('-G')) {
         const host = argv.at(-1).replace(/^.*@/, '');
         world.resolves.push(host);
-        if (world.resolveFails || !boxes.get(host)) return { code: 255, stdout: '', stderr: 'ssh: Could not resolve hostname\r\n' };
+        if (world.resolveFails || world.resolveFailing.has(host) || !boxes.get(host)) return { code: 255, stdout: '', stderr: 'ssh: Could not resolve hostname\r\n' };
         expect(argv).toContain('ControlPath=/run/cm/%C');
         return { code: 0, stdout: `user me\nhostname ${host}\ncontrolpath ${boxes.get(host).cp}\nport 22\n`, stderr: '' };
       }
@@ -500,10 +501,11 @@ test('a forward the box refuses is "forward failed"; without a control dir nothi
   expect(world.ops()).toEqual(['check', 'ensure', 'cancel', 'forward', 'cancel']);
   expect(fwd.status('o')).toMatchObject({ state: 'error', error: 'forward failed' });
 
+  // No control dir, no ControlPath to group by: it fails closed and runs nothing.
   const w2 = await bench({ forward: { sshOpts: {} } });
   await w2.fwd.sync([w2.boxes[0]], { o: { reachable: true } });
   expect(w2.world.calls).toEqual([]);
-  expect(w2.fwd.status('o')).toMatchObject({ state: 'error', error: 'forward failed' });
+  expect(w2.fwd.status('o')).toMatchObject({ state: 'error', error: 'connection not resolved' });
 });
 
 test('stopAll closes every listener and cancels nothing; a later sync does nothing', async () => {
@@ -734,18 +736,109 @@ test('a restart after the operator enabled an earlier box: the former holder\'s 
   expect(world.box(O_HOST).forwards).toEqual([sockOf(dataDir, 'o')]);
 });
 
-test('a ControlPath that does not resolve: each box is its own group and acts alone (the behaviour before the rule)', async () => {
-  const { world, boxes, up, fwd } = await bench();
+// ---- fail closed on a ControlPath that does not resolve ----
+
+const NOT_RESOLVED = { state: 'error', error: 'connection not resolved' };
+
+test('a box whose ControlPath does not resolve runs nothing; once resolved it is refused, still having run nothing', async () => {
+  const { h, dataDir, world, boxes, up, fwd } = await bench();
   world.alias(B_HOST, O_HOST);
-  world.resolveFails = true;
+  await h.setPolicy('b', { receive: false });
   await fwd.sync(boxes, up);
-  // Both run the full ensure; on one machine that is the old breakage, which is why resolving matters.
-  expect(opsOn(world, O_HOST)).toContain('ensure');
-  expect(opsOn(world, B_HOST)).toContain('ensure');
-  expect(fwd.status('b').error).not.toMatch(/shares a connection/);
-  expect(fwd.status('o').error ?? '').not.toMatch(/shares a connection/);
-  // Not cached: asked again on the next sync.
-  const r = world.resolves.length;
+  expect(fwd.status('o').state).toBe('up');
+  // billing is enabled while its `ssh -G` fails.
+  world.resolveFailing.add(B_HOST);
+  await h.setPolicy('b', { receive: true, receiveFrom: ['o'] });
+  const n = world.calls.length;
   await fwd.sync(boxes, up);
-  expect(world.resolves.length).toBeGreaterThan(r);
+  expect(opsOn(world, B_HOST, n)).toEqual([]);
+  expect(fwd.status('b')).toMatchObject(NOT_RESOLVED);
+  expect(fs.existsSync(sockOf(dataDir, 'b'))).toBe(false); // no listener opened
+  // orders has a verified forward: it carries on, untouched.
+  expect(opsOn(world, O_HOST, n)).toEqual(['check']);
+  expect(fwd.status('o').state).toBe('up');
+  expect(world.box(O_HOST)).toMatchObject({ forwards: [sockOf(dataDir, 'o')], file: true, linked: true });
+  expect(await ping(sockOf(dataDir, 'o'), 'abcdef0123456789')).toBe(200);
+  // Resolves work again: billing is grouped with orders and refused, having run nothing.
+  world.resolveFailing.delete(B_HOST);
+  const n2 = world.calls.length;
+  await fwd.sync(boxes, up);
+  expect(opsOn(world, B_HOST, n2)).toEqual([]);
+  expect(fwd.status('b')).toMatchObject(SHARES_O);
+  expect(fwd.status('o').state).toBe('up');
+});
+
+test('a keeper start with one box unresolved: no forward starts; on the next sync the first-listed box comes up alone', async () => {
+  const { dataDir, world, boxes, up, fwd } = await bench();
+  world.alias(B_HOST, O_HOST);
+  world.resolveFailing.add(B_HOST);
+  await fwd.sync(boxes, up);
+  expect(world.calls).toEqual([]);
+  expect(fwd.status('o')).toMatchObject({ state: 'error', error: "waiting for another box's connection to resolve" });
+  expect(fwd.status('b')).toMatchObject(NOT_RESOLVED);
+  world.resolveFailing.delete(B_HOST);
+  await fwd.sync(boxes, up);
+  expect(opsOn(world, B_HOST)).toEqual([]);
+  expect(fwd.status('o')).toEqual({ state: 'up', installed: true, listening: 0 });
+  expect(fwd.status('b')).toMatchObject(SHARES_O);
+  expect(world.box(O_HOST).forwards).toEqual([sockOf(dataDir, 'o')]);
+});
+
+test('a verified forward keeps its checks and rechecks through a sync in which a different box is unresolved', async () => {
+  const { dataDir, world, boxes, up, clock, fwd } = await bench({ forward: { recheckMs: 1000 } });
+  // Two machines: orders and billing are not aliases here.
+  await fwd.sync(boxes, up);
+  expect(fwd.status('o').state).toBe('up');
+  expect(fwd.status('b').state).toBe('up');
+  world.resolveFailing.add(B_HOST);
+  // A changed address for billing is a cache miss, and it does not resolve.
+  world.add('billing2.example.com');
+  const moved = [boxes[0], { ...boxes[1], host: 'billing2.example.com' }, boxes[2]];
+  world.resolveFailing.add('billing2.example.com');
+  clock.t += 1000; // orders is due a recheck
+  const n = world.calls.length;
+  await fwd.sync(moved, up);
+  expect(opsOn(world, O_HOST, n)).toEqual(['check', 'verify']);
+  expect(fwd.status('o').state).toBe('up');
+  expect(fwd.status('b')).toMatchObject(NOT_RESOLVED);
+  // billing's old forward is left exactly as it was: no cancel on either machine.
+  expect(opsOn(world, B_HOST, n)).toEqual([]);
+  expect(opsOn(world, 'billing2.example.com', n)).toEqual([]);
+  expect(world.box(B_HOST).forwards).toEqual([sockOf(dataDir, 'b')]);
+});
+
+test('a single box whose ControlPath fails to resolve once comes up on the next sync', async () => {
+  const { world, boxes, fwd } = await bench();
+  world.resolveFailing.add(O_HOST);
+  await fwd.sync([boxes[0]], { o: { reachable: true } });
+  expect(world.calls).toEqual([]);
+  expect(fwd.status('o')).toMatchObject(NOT_RESOLVED);
+  world.resolveFailing.delete(O_HOST);
+  await fwd.sync([boxes[0]], { o: { reachable: true } });
+  expect(world.ops()).toEqual(['check', 'ensure', 'cancel', 'forward', 'verify']);
+  expect(fwd.status('o').state).toBe('up');
+});
+
+test('a box that cancelled its forward on a failure and is then refused sends exactly one cancel in total', async () => {
+  const { h, world, boxes, up, fwd } = await bench();
+  world.alias(B_HOST, O_HOST);
+  await h.setPolicy('o', { send: false });
+  await fwd.sync(boxes, up); // billing holds
+  world.newMaster(B_HOST);
+  world.box(B_HOST).curl = false;
+  const n = world.calls.length;
+  await fwd.sync(boxes, up); // its repair fails: the failure cancels its forward
+  world.box(B_HOST).curl = true;
+  await h.setPolicy('o', { send: true, sendTo: ['b'] }); // orders, earlier in the list, now holds
+  await fwd.sync(boxes, up);
+  await fwd.sync(boxes, up);
+  // The forward billing made in the failing sync is cancelled exactly once, by the failure;
+  // the refusal sends nothing. (The cancel before `forward` is the ensure's routine one, sent
+  // while that forward did not exist yet.)
+  const mine = world.calls.slice(n).filter((c) => c.host === B_HOST);
+  expect(mine.map((c) => c.op)).toEqual(['check', 'ensure', 'cancel', 'forward', 'verify', 'cancel']);
+  const made = mine.findIndex((c) => c.op === 'forward');
+  expect(mine.slice(made).filter((c) => c.op === 'cancel')).toHaveLength(1);
+  expect(fwd.status('b')).toMatchObject(SHARES_O);
+  expect(fwd.status('o').state).toBe('up');
 });

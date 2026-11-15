@@ -33,8 +33,13 @@ export interface MailPair {
 }
 
 export type MailForwardState = 'off' | 'down' | 'error' | 'up';
-/** `shares a connection with <label>`: another box's forward holds this box's ssh master. */
+/**
+ * `shares a connection with <label>`: an earlier box in the list holds this box's ssh connection.
+ * `connection not resolved`: this box's ssh connection could not be resolved, so it runs nothing.
+ * `waiting for another box's connection to resolve`: no forward starts until every box resolves.
+ */
 export type MailForwardError = 'socket path too long' | 'bad home' | 'forward failed' | 'not verified' | 'listen failed'
+  | 'connection not resolved' | "waiting for another box's connection to resolve"
   | `shares a connection with ${string}`;
 export interface MailStatus {
   state: MailForwardState;
