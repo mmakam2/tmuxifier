@@ -12,7 +12,7 @@
 import type { Box } from './api';
 import { mailApi, type MailBoxView, type MailPolicy } from './agentMail';
 import {
-  mirrorOnAdd, mirrorOnRemove, mirrorToSend, nameOf, NO_MIRROR, pairLine, policyChanged, statusLine,
+  addableBoxes, mirrorOnAdd, mirrorOnRemove, mirrorToSend, nameOf, NO_MIRROR, pairLine, policyChanged, statusLine,
   type MailBoxRef, type MailListKey, type MailMirrorMarks,
 } from './agentMailView';
 import { el } from './dom';
@@ -56,10 +56,7 @@ export function createAgentMailSection(box: Box, boxes: readonly MailBoxRef[]) {
       });
       const add = el('select', { class: 'mail-add', 'aria-label': `Add a box to the ${listName}` }) as HTMLSelectElement;
       add.append(el('option', { value: '' }, ['add box']));
-      for (const b of boxes) {
-        if (b.id === box.id || ids.includes(b.id)) continue;
-        add.append(el('option', { value: b.id }, [b.label]));
-      }
+      for (const b of addableBoxes(boxes, box.id, ids)) add.append(el('option', { value: b.id }, [b.label]));
       add.disabled = add.options.length === 1;
       add.addEventListener('change', () => {
         const id = add.value;

@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import {
   nameOf, participant, pairLine, statusLine, threadRow, messageRow, refusalRow, policyChanged, relAge, mailEnabledFrom,
-  NO_MIRROR, mirrorOnAdd, mirrorOnRemove, mirrorToSend,
+  NO_MIRROR, mirrorOnAdd, mirrorOnRemove, mirrorToSend, addableBoxes,
   threadHead, operatorStatus, MAIL_NO_THREADS, MAIL_NO_REFUSALS, messagesLoadError, stopFailedLine,
 } from '../src/web/agentMailView.ts';
 import { STATUS_KINDS, statusPhrase } from '../src/server/agentMailText.js';
@@ -256,4 +256,15 @@ test('operatorStatus: every server status phrase reads "waiting" where agents re
   expect(operatorStatus('queuedx: odd')).toBe('queuedx: odd');
   // The thread row shows the operator form.
   expect(threadRow(thread(), boxes, 1_000_000).status).toBe('waiting: billing/main is working');
+});
+
+test('addableBoxes: the add-box dropdown lists the other boxes alphabetically, without the box itself or boxes already listed', () => {
+  const all = [
+    { id: 'z', label: 'zeta' }, { id: 'b10', label: 'box10' }, { id: 'me', label: 'orders' },
+    { id: 'B', label: 'Billing' }, { id: 'b2', label: 'box2' }, { id: 'a', label: 'alpha' }, { id: 's', label: 'search' },
+  ];
+  expect(addableBoxes(all, 'me', ['s']).map((b) => b.label)).toEqual(['alpha', 'Billing', 'box2', 'box10', 'zeta']);
+  // The input is not reordered: the caller's box list is shared with the rest of the page.
+  expect(all.map((b) => b.id)).toEqual(['z', 'b10', 'me', 'B', 'b2', 'a', 's']);
+  expect(addableBoxes(all, 'me', all.map((b) => b.id))).toEqual([]);
 });

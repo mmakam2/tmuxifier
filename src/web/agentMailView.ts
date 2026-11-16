@@ -18,6 +18,18 @@ export function nameOf(boxId: string, boxes: readonly MailBoxRef[]): string {
   return boxes.find((b) => b.id === boxId)?.label ?? 'removed box';
 }
 
+// What an "add box" dropdown offers: every other box that is not in that list
+// yet, alphabetically by label. Case is ignored and digits compare as numbers
+// (box2 before box10), so the order is the one an operator scans for, not the
+// order boxes were created in. Returns a new array: the caller's list is the
+// page's shared box list.
+const byLabel = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+export function addableBoxes<B extends MailBoxRef>(boxes: readonly B[], selfId: string, listed: readonly string[]): B[] {
+  return boxes
+    .filter((b) => b.id !== selfId && !listed.includes(b.id))
+    .sort((a, b) => byLabel.compare(a.label, b.label) || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
+}
+
 export function participant(p: MailParticipant, boxes: readonly MailBoxRef[]): string {
   return `${nameOf(p.boxId, boxes)}/${p.session}`;
 }
