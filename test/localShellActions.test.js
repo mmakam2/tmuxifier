@@ -166,7 +166,7 @@ test('installOpencodePlugin runs the install script locally with the plugin byte
   const actions = createLocalShellActions({
     runStdin: async (script, input, opts) => {
       calls.push({ script, input, opts });
-      return { code: 0, stdout: 'OPENCODEPLUGIN: applied\n', stderr: '' };
+      return { code: 0, stdout: 'OPENCODEPLUGIN: version 2.3.0\nOPENCODEPLUGIN: applied\n', stderr: '' };
     },
     readOpencodeAsset: async () => Buffer.from('plugin-body'),
   });

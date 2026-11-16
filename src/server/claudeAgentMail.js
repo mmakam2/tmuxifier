@@ -1,17 +1,29 @@
-// Push agent mail to a box (design 6.7, 6.9, 6.10): the `tmx` command, the Claude Code skill
-// that teaches an agent to use it, and in Claude's user settings.json three hook entries, one
+// Push agent mail to a box (design 6.7, 6.8, 6.9, 6.10): the `tmx` command, the skill that
+// teaches an agent to use it, and in Claude's user settings.json three hook entries, one
 // permission rule and two auto-mode classifier entries. Structural twin of claudeAgentHooks.js:
 // a pure remote-installer builder + a small DI pusher, run as the `agent-mail` setup phase
-// under the one `claude` tools selection.
+// when the job's tools include `claude` or `opencode`.
+//
+// The box decides which agents it has, by the test each agent's own installer uses: `claude`
+// (on PATH, or ~/.local/bin/claude), `opencode` (on PATH, or the native installer's own
+// ~/.opencode/bin/opencode). Both get `tmx` and the ~/.local/bin/tmx link. The Claude parts
+// (its skill directory, the settings.json merge below, the version gate and autoMode) run only
+// with `claude`. With `opencode` the same skill bytes are also written to
+// ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/skills/tmuxifier-mail/SKILL.md, where
+// OpenCode reads skills (recorded live on 2.3.0, test/fixtures/README-opencode-2.3-event-trace.md
+// F6; it also reads ~/.claude/skills, so a box with both sees one skill twice, same bytes).
+// OpenCode needs nothing in a settings file: its half of messaging is the plugin the
+// `opencode-plugin` phase installs, which is why an OpenCode-only box prints `opencode-only`
+// and the pusher's ok result says so in a note. With neither agent: `skipped-no-agent`.
 //
 // The installer script text goes into ssh argv and interpolates only this module's constants;
 // the bytes of both files arrive on stdin as `tmx + "\n" + SKILL_SEPARATOR + "\n" + skill`, and
-// the split is byte-exact (the "\n" before the separator line belongs to the framing). Both
-// files are written to a temp name and renamed into place, so a waiter running the old `tmx`
+// the split is byte-exact (the "\n" before the separator line belongs to the framing). Every
+// file is written to a temp name and renamed into place, so a waiter running the old `tmx`
 // is never handed a half-written file.
 //
-// The skips change nothing on the box: no claude (the agent-hooks installer's test), no curl
-// (tmx is curl over a unix socket), or a `~/.local/bin/tmx` that is not exactly our symlink
+// The skips change nothing on the box: neither agent, no curl (tmx is curl over a unix
+// socket), or a `~/.local/bin/tmx` that is not exactly our symlink
 // (a regular file, a symlink anywhere else, a dangling one, even a relative one to ours; a
 // box without `readlink` reads every existing link as foreign).
 //
@@ -189,9 +201,11 @@ export function buildAgentMailInstallScript() {
   return [
     'set -eu',
     'DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"',
+    'OCDIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"',
     'MAIL="$HOME/.tmuxifier-mail"',
     'LINK="$HOME/.local/bin/tmx"',
     'SKILLDIR="$DIR/skills/tmuxifier-mail"',
+    'OCSKILLDIR="$OCDIR/skills/tmuxifier-mail"',
     'SETTINGS="$DIR/settings.json"',
     `SEP=${sq(SKILL_SEPARATOR)}`,
     `RULE=${sq(MAIL_PERMISSION_RULE)}`,
@@ -199,12 +213,17 @@ export function buildAgentMailInstallScript() {
     `AALLOW=${sq(MAIL_AUTOMODE_ALLOW)}`,
     '',
     '# 1. Skips. Each drains stdin and changes nothing on the box.',
-    '# CLAUDE is the one found here; step 4 asks that same one for its version.',
+    '# CLAUDE is the one found here (empty without one); step 4 asks that same one for its',
+    '# version. OC is set when OpenCode is installed (the plugin installer\'s own test).',
+    'CLAUDE=',
     'if command -v claude >/dev/null 2>&1; then CLAUDE=claude',
     'elif [ -x "$HOME/.local/bin/claude" ]; then CLAUDE="$HOME/.local/bin/claude"',
-    'else',
+    'fi',
+    'OC=',
+    'if command -v opencode >/dev/null 2>&1 || [ -x "$HOME/.opencode/bin/opencode" ]; then OC=1; fi',
+    'if [ -z "$CLAUDE" ] && [ -z "$OC" ]; then',
     '  cat >/dev/null 2>&1 || true',
-    "  echo 'AGENTMAIL: skipped-no-claude'",
+    "  echo 'AGENTMAIL: skipped-no-agent'",
     '  exit 0',
     'fi',
     'if ! command -v curl >/dev/null 2>&1; then',
@@ -226,7 +245,7 @@ export function buildAgentMailInstallScript() {
     'IN="$MAIL/install.$$.tmp"',
     'TMP="$SETTINGS.tmuxifier-mail.$$.tmp"',
     'VF="$MAIL/version.$$.tmp"',
-    'trap \'rm -f "$IN" "$IN.a" "$VF" "$MAIL/tmx.$$.tmp" "$SKILLDIR/SKILL.md.$$.tmp" "$TMP"\' EXIT',
+    'trap \'rm -f "$IN" "$IN.a" "$VF" "$MAIL/tmx.$$.tmp" "$SKILLDIR/SKILL.md.$$.tmp" "$OCSKILLDIR/SKILL.md.$$.tmp" "$TMP"\' EXIT',
     'cat > "$IN"',
     'if ! grep -qx "$SEP" "$IN"; then',
     "  echo 'AGENTMAIL: error-bad-input'",
@@ -238,12 +257,26 @@ export function buildAgentMailInstallScript() {
     'head -c $((N - 1)) "$IN.a" > "$MAIL/tmx.$$.tmp"',
     'chmod 755 "$MAIL/tmx.$$.tmp"',
     'mv -f "$MAIL/tmx.$$.tmp" "$MAIL/tmx"',
-    'mkdir -p "$SKILLDIR"',
-    'sed "1,/^$SEP\\$/d" "$IN" > "$SKILLDIR/SKILL.md.$$.tmp"',
-    'chmod 644 "$SKILLDIR/SKILL.md.$$.tmp"',
-    'mv -f "$SKILLDIR/SKILL.md.$$.tmp" "$SKILLDIR/SKILL.md"',
+    '# The skill, by rename, into the directory of each agent the box has.',
+    'if [ -n "$CLAUDE" ]; then',
+    '  mkdir -p "$SKILLDIR"',
+    '  sed "1,/^$SEP\\$/d" "$IN" > "$SKILLDIR/SKILL.md.$$.tmp"',
+    '  chmod 644 "$SKILLDIR/SKILL.md.$$.tmp"',
+    '  mv -f "$SKILLDIR/SKILL.md.$$.tmp" "$SKILLDIR/SKILL.md"',
+    'fi',
+    'if [ -n "$OC" ]; then',
+    '  mkdir -p "$OCSKILLDIR"',
+    '  sed "1,/^$SEP\\$/d" "$IN" > "$OCSKILLDIR/SKILL.md.$$.tmp"',
+    '  chmod 644 "$OCSKILLDIR/SKILL.md.$$.tmp"',
+    '  mv -f "$OCSKILLDIR/SKILL.md.$$.tmp" "$OCSKILLDIR/SKILL.md"',
+    'fi',
     'mkdir -p "$HOME/.local/bin"',
     '[ -L "$LINK" ] || ln -s "$MAIL/tmx" "$LINK"',
+    '# OpenCode has no settings to merge: its half is the opencode-plugin phase.',
+    'if [ -z "$CLAUDE" ]; then',
+    "  echo 'AGENTMAIL: opencode-only'",
+    '  exit 0',
+    'fi',
     '',
     '# 3. The hook entries to merge. Quoted heredoc: $HOME stays literal.',
     "NEW=$(cat <<'TMUXIFIER_MAIL_HOOKS_EOF'",
@@ -320,8 +353,10 @@ export function buildAgentMailInstallScript() {
   ].join('\n');
 }
 
+export const OPENCODE_ONLY_NOTE = 'OpenCode\'s part arrives with the OpenCode plugin';
+
 const SKIPS = [
-  [/AGENTMAIL:\s*skipped-no-claude/, 'no Claude on the box'],
+  [/AGENTMAIL:\s*skipped-no-agent/, 'no Claude Code or OpenCode on the box'],
   [/AGENTMAIL:\s*skipped-no-curl/, 'no curl on the box'],
   [/AGENTMAIL:\s*skipped-foreign-tmx/, 'another tmx is in ~/.local/bin'],
 ];
@@ -346,6 +381,8 @@ export function createAgentMailPusher({ runStdin, readAssets }) {
       const out = String((res && res.stdout) || '');
       if (res && res.code === 0) {
         for (const [re, skipped] of SKIPS) if (re.test(out)) return { target: 'agent-mail', ok: false, skipped };
+        // tmx, its link and OpenCode's skill landed; nothing of Claude's was touched.
+        if (/AGENTMAIL:\s*opencode-only/.test(out)) return { target: 'agent-mail', ok: true, note: OPENCODE_ONLY_NOTE };
         if (/AGENTMAIL:\s*applied/.test(out)) {
           // Hooks and rule merged; autoMode left alone for an older or unreadable Claude Code.
           if (/AGENTMAIL:\s*automode-skipped/.test(out)) return { target: 'agent-mail', ok: true, note: AUTOMODE_NOTE };

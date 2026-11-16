@@ -37,13 +37,20 @@ const fakeClaude = (out = '2.1.325 (Claude Code)', tail = '') => `#!/bin/sh\npri
 // A box with a fake claude on PATH. `tools`: when given, PATH holds ONLY symlinks to these
 // commands (plus the fake claude), so a test can take away curl or force one merge tool.
 // `claude`: false for none, true for one that reports 2.1.325, or the fake's script text.
-async function claudeBox({ tools = null, claude = true } = {}) {
+// `opencode`: false for none, true for a fake `opencode` on PATH, 'native' for one only at
+// `$HOME/.opencode/bin/opencode` (the native installer's own place, off a non-interactive PATH).
+async function claudeBox({ tools = null, claude = true, opencode = false } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'am-'));
   const home = path.join(dir, 'home');
   const bin = path.join(dir, 'bin');
   await fs.mkdir(home);
   await fs.mkdir(bin);
   if (claude) await fs.writeFile(path.join(bin, 'claude'), claude === true ? fakeClaude() : claude, { mode: 0o755 });
+  if (opencode === true) await fs.writeFile(path.join(bin, 'opencode'), '#!/bin/sh\necho opencode v2.3.0\n', { mode: 0o755 });
+  if (opencode === 'native') {
+    await fs.mkdir(path.join(home, '.opencode', 'bin'), { recursive: true });
+    await fs.writeFile(path.join(home, '.opencode', 'bin', 'opencode'), '#!/bin/sh\necho opencode v2.3.0\n', { mode: 0o755 });
+  }
   if (tools) for (const t of tools) await fs.symlink(which(t), path.join(bin, t));
   const cfg = path.join(home, '.claude');
   return {
@@ -52,6 +59,8 @@ async function claudeBox({ tools = null, claude = true } = {}) {
     tmx: path.join(home, '.tmuxifier-mail', 'tmx'),
     link: path.join(home, '.local', 'bin', 'tmx'),
     skill: path.join(cfg, 'skills', 'tmuxifier-mail', 'SKILL.md'),
+    ocCfg: path.join(home, '.config', 'opencode'),
+    ocSkill: path.join(home, '.config', 'opencode', 'skills', 'tmuxifier-mail', 'SKILL.md'),
     env: { HOME: home, CLAUDE_CONFIG_DIR: cfg, PATH: tools ? bin : `${bin}:/usr/bin:/bin` },
   };
 }
@@ -69,12 +78,15 @@ const marked = (list) => list.filter((e) => typeof e === 'string' && e.includes(
 // A shell that expanded `$defaults` anywhere on the way would write this instead.
 const DEFAULTS_ENV = { defaults: 'EXPANDED-BY-THE-SHELL' };
 
-test('no claude: drains stdin, writes nothing, prints skipped-no-claude', async () => {
-  const b = await claudeBox({ claude: false });
-  const res = await install(b);
-  expect(res.code).toBe(0);
-  expect(res.stdout).toBe('AGENTMAIL: skipped-no-claude\n');
-  expect(await fs.readdir(b.home)).toEqual([]);
+test('neither Claude Code nor OpenCode: drains stdin, writes nothing, prints skipped-no-agent', async () => {
+  for (const shell of ['/bin/sh', '/usr/bin/bash', '/usr/bin/zsh']) {
+    const b = await claudeBox({ claude: false });
+    // Large enough that an undrained pipe would EPIPE or hang the writer.
+    const res = await install(b, stdinOf('#!/bin/sh\n# tmuxifier-mail\n', `${'x'.repeat(256 * 1024)}\n`), shell);
+    expect(res.code, shell).toBe(0);
+    expect(res.stdout, shell).toBe('AGENTMAIL: skipped-no-agent\n');
+    expect(await fs.readdir(b.home), shell).toEqual([]);
+  }
 });
 
 test('no curl: skipped-no-curl', async () => {
@@ -136,7 +148,142 @@ test('fresh box: tmx is 0755 with "# tmuxifier-mail" on line 2, the skill has fr
     expect(await fs.readdir(path.join(b.home, '.tmuxifier-mail')), shell).toEqual(['tmx']);
     expect(await fs.readdir(path.dirname(b.skill)), shell).toEqual(['SKILL.md']);
     expect((await fs.readdir(b.cfg)).sort(), shell).toEqual(['settings.json', 'skills']);
+    // Claude Code alone never writes where OpenCode reads skills.
+    expect(await exists(path.join(b.home, '.config')), shell).toBe(false);
   }
+});
+
+// --- OpenCode boxes (design 6.8, ruling R6: OpenCode reads <config dir>/skills/<name>/SKILL.md) ---
+
+const SHELLS = ['/bin/sh', '/usr/bin/bash', '/usr/bin/zsh'];
+const OC_NOTE = "OpenCode's part arrives with the OpenCode plugin";
+
+test('OpenCode only: tmx, the link and the skill in the OpenCode config dir, no ~/.claude, no JSON tool needed', async () => {
+  const assets = await readAssets();
+  for (const shell of SHELLS) {
+    // PATH holds no jq, node or python3: any settings merge would fail, so none may be tried.
+    const b = await claudeBox({ claude: false, opencode: true, tools: [...BASE_TOOLS, 'curl'] });
+    const res = await install(b, stdinOf(assets.script, assets.skill), shell);
+    expect(res.code, `${shell} ${res.stderr}`).toBe(0);
+    expect(res.stdout, shell).toBe('AGENTMAIL: opencode-only\n');
+    expect(await mode(b.tmx), shell).toBe(0o755);
+    expect((await fs.readFile(b.tmx)).equals(assets.script), shell).toBe(true);
+    expect(await fs.readlink(b.link), shell).toBe(path.join(b.home, '.tmuxifier-mail', 'tmx'));
+    expect((await fs.readFile(b.ocSkill)).equals(assets.skill), shell).toBe(true);
+    expect(await mode(b.ocSkill), shell).toBe(0o644);
+    expect(await mode(path.join(b.home, '.tmuxifier-mail')), shell).toBe(0o700);
+    // Nothing of Claude's is created, and no temp file is left behind.
+    expect(await exists(b.cfg), shell).toBe(false);
+    expect((await fs.readdir(b.home)).sort(), shell).toEqual(['.config', '.local', '.tmuxifier-mail']);
+    expect(await fs.readdir(path.dirname(b.ocSkill)), shell).toEqual(['SKILL.md']);
+    expect(await fs.readdir(path.join(b.home, '.tmuxifier-mail')), shell).toEqual(['tmx']);
+  }
+});
+
+test('OpenCode only through the pusher: ok, with the note that its half arrives with the plugin', async () => {
+  const b = await claudeBox({ claude: false, opencode: true });
+  const pusher = createAgentMailPusher({ runStdin: (box, script, input) => runShell(script, b.env, input), readAssets });
+  expect(await pusher.push({ id: 'orders' })).toEqual({ target: 'agent-mail', ok: true, note: OC_NOTE });
+  expect((await fs.readFile(b.ocSkill)).equals((await readAssets()).skill)).toBe(true);
+});
+
+test('OpenCode is found at its native installer location even off PATH', async () => {
+  const b = await claudeBox({ claude: false, opencode: 'native' });
+  const res = await install(b);
+  expect(res.code, res.stderr).toBe(0);
+  expect(res.stdout).toBe('AGENTMAIL: opencode-only\n');
+  expect(await exists(b.ocSkill)).toBe(true);
+  expect(await exists(b.cfg)).toBe(false);
+});
+
+test('OPENCODE_CONFIG_DIR, when set on the box, replaces ~/.config/opencode for the skill', async () => {
+  const b = await claudeBox({ claude: false, opencode: true });
+  const custom = path.join(b.home, 'custom-oc');
+  b.env = { ...b.env, OPENCODE_CONFIG_DIR: custom };
+  const res = await install(b);
+  expect(res.stdout).toBe('AGENTMAIL: opencode-only\n');
+  expect(await fs.readFile(path.join(custom, 'skills', 'tmuxifier-mail', 'SKILL.md'), 'utf8')).toContain('name: tmuxifier-mail');
+  expect(await exists(path.join(b.home, '.config'))).toBe(false);
+});
+
+test('both agents: the full Claude install plus the same skill bytes in the OpenCode config dir', async () => {
+  const assets = await readAssets();
+  for (const shell of SHELLS) {
+    const b = await claudeBox({ opencode: true });
+    const res = await install(b, stdinOf(assets.script, assets.skill), shell);
+    expect(res.code, `${shell} ${res.stderr}`).toBe(0);
+    expect(res.stdout, shell).toBe('AGENTMAIL: applied\n');
+    expect((await fs.readFile(b.skill)).equals(assets.skill), shell).toBe(true);
+    expect((await fs.readFile(b.ocSkill)).equals(assets.skill), shell).toBe(true);
+    expect(await readJson(b.settings), shell).toEqual({
+      hooks: MAIL_HOOKS,
+      permissions: { allow: [MAIL_PERMISSION_RULE] },
+      autoMode: OUR_AUTOMODE,
+    });
+    expect(await fs.readdir(path.dirname(b.ocSkill)), shell).toEqual(['SKILL.md']);
+  }
+  // Through the pusher the result is the Claude one: no OpenCode-only note.
+  const b = await claudeBox({ opencode: true });
+  const pusher = createAgentMailPusher({ runStdin: (box, script, input) => runShell(script, b.env, input), readAssets });
+  expect(await pusher.push({ id: 'orders' })).toEqual({ target: 'agent-mail', ok: true });
+});
+
+test('both agents with an old Claude Code: still the automode-skipped note, nothing about OpenCode', async () => {
+  const b = await claudeBox({ claude: fakeClaude('2.1.100 (Claude Code)'), opencode: true });
+  const pusher = createAgentMailPusher({ runStdin: (box, script, input) => runShell(script, b.env, input), readAssets });
+  expect(await pusher.push({ id: 'orders' })).toEqual({ target: 'agent-mail', ok: true, note: 'auto-mode entries need Claude Code 2.1.228 or later' });
+  expect(await exists(b.ocSkill)).toBe(true);
+});
+
+test('both agents and no JSON tool: error-no-json-tool as before, with tmx and both skills in place', async () => {
+  const b = await claudeBox({ opencode: true, tools: [...BASE_TOOLS, 'curl'] });
+  const res = await install(b);
+  expect(res.code).toBe(4);
+  expect(res.stdout).toBe('AGENTMAIL: error-no-json-tool\n');
+  expect(await exists(b.skill)).toBe(true);
+  expect(await exists(b.ocSkill)).toBe(true);
+  expect(await exists(b.settings)).toBe(false);
+});
+
+test('OpenCode only leaves a ~/.claude the box happens to have alone', async () => {
+  const b = await claudeBox({ claude: false, opencode: true });
+  await fs.mkdir(b.cfg, { recursive: true });
+  const before = '{"theme":"dark"}';
+  await fs.writeFile(b.settings, before);
+  const res = await install(b);
+  expect(res.stdout).toBe('AGENTMAIL: opencode-only\n');
+  expect(await fs.readFile(b.settings, 'utf8')).toBe(before);
+  expect(await fs.readdir(b.cfg)).toEqual(['settings.json']);
+});
+
+test('an OpenCode-only rerun replaces tmx and the skill by rename and carries the new text', async () => {
+  const b = await claudeBox({ claude: false, opencode: true });
+  expect((await install(b)).code).toBe(0);
+  const tmxIno = (await fs.stat(b.tmx)).ino;
+  const skillIno = (await fs.stat(b.ocSkill)).ino;
+  const next = stdinOf('#!/bin/sh\n# tmuxifier-mail\necho v2\n', '---\nname: tmuxifier-mail\ndescription: v2\n---\n');
+  expect((await install(b, next)).stdout).toBe('AGENTMAIL: opencode-only\n');
+  expect((await fs.stat(b.tmx)).ino).not.toBe(tmxIno);
+  expect((await fs.stat(b.ocSkill)).ino).not.toBe(skillIno);
+  expect(await fs.readFile(b.ocSkill, 'utf8')).toBe('---\nname: tmuxifier-mail\ndescription: v2\n---\n');
+  expect(await fs.readdir(path.dirname(b.ocSkill))).toEqual(['SKILL.md']);
+  expect(await fs.readdir(path.join(b.home, '.tmuxifier-mail'))).toEqual(['tmx']);
+});
+
+test('OpenCode only, foreign ~/.local/bin/tmx or no curl: still skipped, nothing written', async () => {
+  const f = await claudeBox({ claude: false, opencode: true });
+  await fs.mkdir(path.dirname(f.link), { recursive: true });
+  await fs.writeFile(f.link, '#!/bin/sh\necho other tmx\n', { mode: 0o755 });
+  const res = await install(f);
+  expect(res.code).toBe(0);
+  expect(res.stdout).toBe('AGENTMAIL: skipped-foreign-tmx\n');
+  expect((await fs.readdir(f.home)).sort()).toEqual(['.local']);
+
+  const c = await claudeBox({ claude: false, opencode: true, tools: BASE_TOOLS });
+  const res2 = await install(c);
+  expect(res2.code).toBe(0);
+  expect(res2.stdout).toBe('AGENTMAIL: skipped-no-curl\n');
+  expect(await fs.readdir(c.home)).toEqual([]);
 });
 
 test('the tmx on the box is byte-identical to the asset and the skill to its asset', async () => {
@@ -592,7 +739,9 @@ test('pusher maps applied → ok, each skip → skipped with its reason, a throw
   expect(seen[0].box).toEqual({ id: 'orders' });
   expect(seen[0].script).toBe(buildAgentMailInstallScript());
   expect(Buffer.from(seen[0].input).toString()).toBe(`S\n\n${SKILL_SEPARATOR}\nK\n`);
-  expect(await mk({ code: 0, stdout: 'AGENTMAIL: skipped-no-claude\n' }).push({ id: 'b' })).toEqual({ target: 'agent-mail', ok: false, skipped: 'no Claude on the box' });
+  expect(await mk({ code: 0, stdout: 'AGENTMAIL: skipped-no-agent\n' }).push({ id: 'b' })).toEqual({ target: 'agent-mail', ok: false, skipped: 'no Claude Code or OpenCode on the box' });
+  expect(await mk({ code: 0, stdout: 'AGENTMAIL: opencode-only\n' }).push({ id: 'b' })).toEqual({ target: 'agent-mail', ok: true, note: "OpenCode's part arrives with the OpenCode plugin" });
+  expect(await mk({ code: 1, stdout: 'AGENTMAIL: opencode-only\n' }).push({ id: 'b' })).toEqual({ target: 'agent-mail', ok: false, error: 'agent mail push failed' });
   expect(await mk({ code: 0, stdout: 'AGENTMAIL: skipped-no-curl\n' }).push({ id: 'b' })).toEqual({ target: 'agent-mail', ok: false, skipped: 'no curl on the box' });
   expect(await mk({ code: 0, stdout: 'AGENTMAIL: skipped-foreign-tmx\n' }).push({ id: 'b' })).toEqual({ target: 'agent-mail', ok: false, skipped: 'another tmx is in ~/.local/bin' });
   expect(await mk({ code: 4, stdout: 'AGENTMAIL: error-no-json-tool\n' }).push({ id: 'b' })).toEqual({ target: 'agent-mail', ok: false, error: 'no jq, node or python3 on the box' });

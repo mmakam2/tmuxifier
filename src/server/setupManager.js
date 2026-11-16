@@ -256,7 +256,11 @@ export function createSetupManager({
       try { j.agentHooks = await pushAgentHooks(box); }
       catch { j.agentHooks = { target: 'agent-hooks', ok: false, error: 'agent hooks push failed' }; }
     }
-    if (pushAgentMail && wantsClaudeStack && box && !j.cancelled) {
+    // Agent mail serves both agents: it also runs for the `opencode` selection alone (the
+    // box decides which of the two it has and installs only that agent's half). Every other
+    // Claude phase above and below stays behind `wantsClaudeStack`.
+    const wantsAgentMail = wantsClaudeStack || (j.options.tools || []).includes('opencode');
+    if (pushAgentMail && wantsAgentMail && box && !j.cancelled) {
       j.phase = 'agent-mail';
       persist();
       try { j.agentMail = await pushAgentMail(box); }

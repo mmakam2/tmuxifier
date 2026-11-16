@@ -970,13 +970,52 @@ test('agent-mail runs after agent-hooks and before voice-link, only with the cla
   const m2 = make({ pushAgentMail: async () => { calls += 1; return { target: 'agent-mail', ok: true }; } });
   await m2._settled(m2.start(BOX, { tools: [], claudeStatusline: true }).id);
   expect(calls).toBe(1);
-  // Without the claude selection nothing claude-related runs.
+  // Without the claude or opencode selection no agent mail runs.
   const m3 = make({ pushAgentMail: async () => { calls += 1; return { target: 'agent-mail', ok: true }; } });
-  const s3 = m3.start(BOX, { tools: ['git', 'opencode'] });
+  const s3 = m3.start(BOX, { tools: ['git', 'tmux'] });
   await m3._settled(s3.id);
   expect(calls).toBe(1);
   expect(m3.getJob(s3.id).agentMail).toBeUndefined();
   expect(m3.listJobs()[0].agentMail).toBe(null);
+});
+
+test('agent-mail also runs for the opencode selection alone, before opencode-plugin, and moves no other Claude phase', async () => {
+  const order = [];
+  let phaseSeen = null;
+  const m = make({
+    pushStatusline: async () => { order.push('statusline'); return { target: 'statusline', ok: true }; },
+    pushAgentHooks: async () => { order.push('agent-hooks'); return { target: 'agent-hooks', ok: true }; },
+    pushAgentMail: async (box) => {
+      phaseSeen = m.listJobs()[0].phase;
+      order.push(`agent-mail:${box.id}`);
+      return { target: 'agent-mail', ok: true, note: "OpenCode's part arrives with the OpenCode plugin" };
+    },
+    pushVoiceLink: async () => { order.push('voice-link'); return { target: 'voice-link', ok: true }; },
+    pushOpencodePlugin: async () => { order.push('opencode-plugin'); return { target: 'opencode-plugin', ok: true }; },
+  });
+  const s = m.start(BOX, { tools: ['opencode'] });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('done');
+  // The Claude-only phases stay behind the claude selection.
+  expect(order).toEqual([`agent-mail:${BOX.id}`, 'opencode-plugin']);
+  expect(phaseSeen).toBe('agent-mail');
+  expect(job.agentMail).toEqual({ target: 'agent-mail', ok: true, note: "OpenCode's part arrives with the OpenCode plugin" });
+  expect(job.statusline).toBeUndefined();
+  expect(job.agentHooks).toBeUndefined();
+  expect(job.voiceLink).toBeUndefined();
+
+  // Both selections: the one agent-mail run, then the rest in their usual order.
+  const both = [];
+  const m2 = make({
+    pushStatusline: async () => { both.push('statusline'); return { target: 'statusline', ok: true }; },
+    pushAgentHooks: async () => { both.push('agent-hooks'); return { target: 'agent-hooks', ok: true }; },
+    pushAgentMail: async () => { both.push('agent-mail'); return { target: 'agent-mail', ok: true }; },
+    pushVoiceLink: async () => { both.push('voice-link'); return { target: 'voice-link', ok: true }; },
+    pushOpencodePlugin: async () => { both.push('opencode-plugin'); return { target: 'opencode-plugin', ok: true }; },
+  });
+  await m2._settled(m2.start(BOX, { tools: ['claude', 'opencode'] }).id);
+  expect(both).toEqual(['statusline', 'agent-hooks', 'agent-mail', 'voice-link', 'opencode-plugin']);
 });
 
 test('a throwing pushAgentMail is recorded and never fails the job; unwired, listJobs reports null', async () => {
