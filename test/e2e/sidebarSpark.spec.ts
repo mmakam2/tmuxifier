@@ -38,11 +38,50 @@ async function setSparkFromUi(page: Page, on: boolean) {
   await page.keyboard.press('Escape'); // close the settings modal
 }
 
+// A graph needs two *plotted* samples, and a box's first sample carries no
+// metrics, so a freshly started e2e server can have a series too short to draw
+// even with the feature broken. "No graph" is only evidence once the series the
+// page paints from is long enough to draw one.
+type Series = Record<string, { cpuPct?: number | null }[]>;
+const plotted = (samples: Series[string] | undefined) => (samples ?? []).filter((s) => s.cpuPct != null).length;
+
+async function localhostId(page: Page): Promise<string> {
+  const id = await page.locator('.box', { hasText: 'localhost' }).first().getAttribute('data-id');
+  expect(id).toBeTruthy();
+  return id!;
+}
+
+// Wait until the server holds >= 2 plotted samples for the box (raw length is not
+// enough), reload, and wait for the page's own boot series fetch to come back
+// carrying them. Returns with the rows painted from that series, so a
+// `toHaveCount(0)` after it cannot pass merely because the series had not
+// arrived yet. The settle tick lets the page apply the response; if it ever
+// fell short the assertions below would only be as weak as before, never flaky.
+async function reloadWithPlottedSeries(page: Page, id: string) {
+  await expect.poll(async () => {
+    const series: Series = await (await page.request.get('/api/health/series')).json();
+    return plotted(series[id]);
+  }, { timeout: 30000, message: 'the e2e box never produced two plotted samples' }).toBeGreaterThanOrEqual(2);
+
+  // The boot fetch has no ?box=, which is how a nudged-tab refresh is told apart.
+  const loaded = page.waitForResponse((r) => {
+    const u = new URL(r.url());
+    return u.pathname === '/api/health/series' && !u.searchParams.has('box') && r.ok();
+  });
+  await page.reload();
+  const series: Series = await (await loaded).json();
+  expect(plotted(series[id])).toBeGreaterThanOrEqual(2);
+  await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
+  await page.evaluate(() => new Promise<void>((done) => setTimeout(done, 100)));
+}
+
 test('default is off: no graph, no gap, percentages stay', async ({ page }) => {
   await login(page);
   const stored = await (await page.request.get('/api/ui-settings')).json();
   expect(stored.sidebarSpark).toBe(false);
 
+  // Stored off + a series long enough to draw + a fresh load = still no graph.
+  await reloadWithPlottedSeries(page, await localhostId(page));
   await expect(page.locator('.box .spark-svg')).toHaveCount(0);
   await expect(page.locator('#boxes')).not.toHaveClass(/spark-(cpu|mem|disk)/);
   const spark = page.locator('.box .spark').first();
@@ -78,11 +117,32 @@ test('the checkbox applies live, persists across reload, and turns off again', a
   await expect(page.locator('.box .spark-svg')).toHaveCount(0);
   await expect(page.locator('#boxes')).not.toHaveClass(/spark-(cpu|mem|disk)/);
 
-  await page.reload();
-  await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
+  await reloadWithPlottedSeries(page, await localhostId(page));
   await expect(page.locator('.box .spark-svg')).toHaveCount(0);
   const stored = await (await page.request.get('/api/ui-settings')).json();
   expect(stored.sidebarSpark).toBe(false);
+});
+
+// The tint names the graphed metric and is the one thing the toggle must give
+// back exactly: off while on mem, then on, restores spark-mem (not a reset to
+// cpu). The metric lives in this context's localStorage, so it costs the shared
+// server nothing.
+test('turning the graph off and on again restores the metric the operator had picked', async ({ page }) => {
+  await login(page);
+  await setSparkFromUi(page, true);
+  await expect(page.locator('#boxes')).toHaveClass(/spark-cpu/);
+
+  // Nothing to click until two samples draw a graph.
+  await expect(page.locator('.spark .spark-svg path').first()).toHaveAttribute('d', /M/, { timeout: 30000 });
+  await page.locator('.spark .spark-svg').first().click();
+  await expect(page.locator('#boxes')).toHaveClass(/spark-mem/);
+
+  await setSparkFromUi(page, false);
+  await expect(page.locator('#boxes')).not.toHaveClass(/spark-(cpu|mem|disk)/);
+
+  await setSparkFromUi(page, true);
+  await expect(page.locator('#boxes')).toHaveClass(/spark-mem/);
+  await expect(page.locator('#boxes')).not.toHaveClass(/spark-cpu/);
 });
 
 test('phone width keeps the off state collapsed', async ({ page }) => {
