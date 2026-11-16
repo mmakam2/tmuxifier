@@ -109,7 +109,7 @@ function replay({ echo = 0 } = {}) {
       if (repeat) repeats++;
       applied = core.reducer.apply(rec.event);
       for (const old of recent) echoed.push(core.reducer.apply(old));
-      recent = [...recent, rec.event].slice(-echo);
+      recent = echo > 0 ? [...recent, rec.event].slice(-echo) : [];
     }
     const fold = foldForPanes(core.reducer, PANES, SINCE, 0);
     trail.push({ n, kind: rec.kind, type: rec.event?.type ?? '', fold, created: rec.event?.created, applied, repeat });
@@ -121,8 +121,9 @@ test('the recorded OpenCode 2.3.0 trace drives the per-pane markers through ever
   expect(PANES.map((p) => p.session)).toEqual(['octest', 'octest2']);
   expect(recs).toHaveLength(1983);
 
-  const { trail, setups, repeats } = replay();
+  const { trail, setups, repeats, echoed } = replay();
   expect(trail).toHaveLength(1983);
+  expect(echoed).toEqual([]); // the plain replay re-delivers nothing of its own
 
   const at = (n) => sc(trail[n - 1].fold.get('octest'));
   const at2 = (n) => sc(trail[n - 1].fold.get('octest2'));
@@ -377,6 +378,7 @@ test('the recorded OpenCode 2.3.0 trace drives the per-pane markers through ever
 test('a re-delivered event of the 2.3.0 trace changes nothing', () => {
   const plain = replay();
   const echoed = replay({ echo: 3 });
+  expect(plain.echoed).toEqual([]);
   expect(echoed.echoed.length).toBeGreaterThan(4000);
   expect(echoed.echoed.every((applied) => applied === false)).toBe(true);
   expect(echoed.trail.map((t) => t.fold)).toEqual(plain.trail.map((t) => t.fold));
