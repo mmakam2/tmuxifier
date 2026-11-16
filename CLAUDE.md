@@ -43,7 +43,7 @@ Configuration, secrets, and runtime state all live **inside the repo** (all giti
   | `agent-mail-policy.json` | per box: agent-messaging send/receive switches and their box lists | — |
   | `agent-mail/` | agent messaging: one `t-*.json` per thread, plus `refusals.json` | message bodies **plaintext** by design |
   | `mail/` | the per-box agent-mail listener sockets, `<12 hex>.sock` (directory `0o700`, sockets `0o600`) | — |
-  | `ui-settings.json` | theme + working-agent animation | — |
+  | `ui-settings.json` | theme + working-agent animation + sidebar graph flag | — |
   | `voice.json` | voice enable flag + model choice | — |
   | `icons/`, `app/`, `cm/` | scraped favicons; the published APK (served by `GET /api/devices/apk`, never committed); SSH ControlMaster sockets | — |
 
@@ -733,7 +733,8 @@ nothing is posted after the final write.
   and the lazily spawned whisper.cpp server. `POST /api/voice` transcribes and injects via the
   upload guard (`?inject=off` returns text only). Audio never leaves the host.
 - `uiSettingsStore.js` — `data/ui-settings.json` (`GET`/`PATCH /api/ui-settings`). Catalog-agnostic:
-  validates slug shape only; the client normalizes unknown ids. `null` = never set. Fails open.
+  validates slug shape only; the client normalizes unknown ids. `null` = never set. Fails open. The one
+  boolean, `sidebarSpark` (sidebar sparkline, off by default), is never `null`: only a literal `true` reads on.
 
 ## Web client (`src/web/`)
 
@@ -804,7 +805,8 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
   mounted; AGENTS board `dash-board`, columns in precedence order, a card docks the box on that
   session; fleet cards are a spec sheet, not live gauges), `truenasCard.ts`, `unifiCard.ts`,
   `immichCard.ts`, `serviceIcon.ts` (always `<img>`, hides on error), `sparkline.ts`,
-  `healthEvents.ts`, `notifyPrefs.ts`.
+  `sidebarSpark.ts` (the Appearance flag + tint-class helper: off empties each row's graph and drops the
+  `spark-*` tint; `main.ts` seeds it in `loadUiSettings` before the first render), `healthEvents.ts`, `notifyPrefs.ts`.
 - **Themes** — `themes.ts` (pure catalog; `DEFAULT_THEME_ID` = `vercel`, `ROOT_THEME_ID` =
   `instrument` which wears no `data-theme`; `normalizeThemeId`), `theme.ts` (`applyTheme`,
   `resolveScreenTheme`, CSS imports), `public/theme-boot.js` (pre-paint stamp from the

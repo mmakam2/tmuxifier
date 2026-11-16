@@ -53,8 +53,9 @@ re-arming them. To clear one immediately, unban the Tmuxifier host's IP on that 
 ## Box health history & events
 
 The dashboard keeps a rolling per-box health trend from the samples the 30-second status poll
-already collects — **no extra SSH**. Each box row shows a small sparkline of the last ~hour
-(click it to cycle CPU → memory → disk), and the sidebar's **Events** button opens an in-app
+already collects — **no extra SSH**. Each box row can show a small sparkline of the last ~hour
+(off by default; turn it on in **Settings → Appearance**, then click it to cycle CPU → memory → disk;
+the CPU/memory/disk figures in the row's meta line are always shown), and the sidebar's **Events** button opens an in-app
 timeline of transitions: box went down / recovered / needs login / host key changed, plus
 CPU/mem/disk crossing a warn threshold (default 90%, with hysteresis so a hovering value doesn't
 flap). Unseen events show as a count badge on the button and are marked seen when the panel is
@@ -173,8 +174,9 @@ the events log regardless of which kinds have notifications enabled.
 
 ## Appearance
 
-**Settings → Appearance** holds the two looks-only preferences: the **theme**, and the
-working-agent animation described above. Both are saved on the Tmuxifier host
+**Settings → Appearance** holds the looks-only preferences: the **theme**, the
+working-agent animation described above, and whether box rows show the usage graph (the sparkline
+described under [Box health history](#box-health-history--events), off by default). All are saved on the Tmuxifier host
 (`data/ui-settings.json`) rather than in the browser, so one pick follows you to every browser
 and device you sign in from — the browser you change it in switches instantly, the others follow
 on their next load. There is no Save button; if the save can't reach the server the choice still

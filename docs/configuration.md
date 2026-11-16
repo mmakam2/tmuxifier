@@ -125,8 +125,8 @@ only for https — plus a connection test; also powers `auto-static` IP allocati
 provisioning), **Proxmox** (host profiles and LXC secrets), **Passkeys** (enroll, remove, and the
 optional "require a passkey" sign-in policy), **Voice** (whisper.cpp install, model choice, and a
 mic test), **Notifications** (browser
-notification permission and per-event-kind toggles), and **Appearance** (the theme and the
-working-agent animation, both saved on the Tmuxifier host so every browser follows); see
+notification permission and per-event-kind toggles), and **Appearance** (the theme, the
+working-agent animation and the sidebar usage graph, all saved on the Tmuxifier host so every browser follows); see
 [Proxmox](proxmox.md) for NetBox and Proxmox details,
 [Authentication](authentication.md#passkeys) for the sign-in policy,
 [Terminal features](terminal.md#voice-dictation) for the voice install flow, and
