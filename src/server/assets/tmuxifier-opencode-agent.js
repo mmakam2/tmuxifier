@@ -111,19 +111,12 @@ const HINT_MAX = 500;
 // hints, seenIds and the session objects in them). Bump it whenever that shape
 // changes: a core loaded from newer bytes then starts fresh instead of reading
 // an older core's state it does not understand.
-export const STATE_VERSION = 3;
+export const STATE_VERSION = 4;
 
 // A Tmuxifier message id as agentMailStore.js mints it (`MSG_ID_RE` there):
 // `m-` and 8 characters of an alphabet without i, l, o, 0, 1. Spelled out here
 // because the asset imports nothing from the repo; a test pins the two equal.
 export const MAIL_MSG_ID_RE = /^m-[abcdefghjkmnpqrstuvwxyz23456789]{8}$/;
-
-// Is this inbox item one of our mail wakes? A `synthetic` item (never an
-// operator's `user` prompt) whose metadata names one of our message ids.
-function isMailWake(item) {
-  const id = item?.type === 'synthetic' ? item.payload?.metadata?.tmuxifierMail : null;
-  return typeof id === 'string' && MAIL_MSG_ID_RE.test(id);
-}
 
 // Turn activity: these `session.*` events only happen inside a turn, carry
 // `location.directory` and `data.sessionID`, and never follow the turn's end
@@ -181,10 +174,9 @@ function newSession(id) {
     cause: 'prompt',
     blocks: new Map(),
     shells: new Set(),
+    // 'user' or 'synthetic': the newest such inbox item. A mail wake is a
+    // synthetic item (fact 9), so the turn it starts reads as a resume.
     lastInbox: null,
-    // The newest user/synthetic inbox item was one of our mail wakes (fact 9);
-    // implies lastInbox === 'synthetic', so the turn it starts is a resume.
-    mailWake: false,
     // Epoch seconds of the newest operator evidence (session.viewed or a user
     // inbox item); 0 = none seen by this core.
     evidenceAt: 0,
@@ -236,7 +228,7 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
   const adopt = adoptable(state);
   const sessions = adopt ? state.sessions : new Map();
   const seenIds = adopt ? state.seenIds : new Set();
-  // sessionID -> { dir, lastInbox, mailWake, evidenceAt } from inbox items of sessions
+  // sessionID -> { dir, lastInbox, evidenceAt } from inbox items of sessions
   // not (yet) known: a resumed session (`opencode -c`) has no session.created,
   // and its execution.started carries no directory, so its first inbox item is
   // the only place its directory is named (fact 7), and a user item there is
@@ -294,7 +286,6 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
     hints.set(sid, {
       dir: prev?.dir ?? dir,
       lastInbox: known ? kind : prev?.lastInbox ?? null,
-      mailWake: known ? isMailWake(item) : prev?.mailWake === true,
       evidenceAt: kind === 'user' && Number.isFinite(at) ? Math.max(prevAt, at) : prevAt,
     });
     if (hints.size > HINT_MAX) hints.delete(hints.keys().next().value);
@@ -383,7 +374,6 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
         hints.delete(sid);
         s.dir = h.dir;
         s.lastInbox = h.lastInbox;
-        s.mailWake = h.mailWake === true;
         s.evidenceAt = Number.isFinite(h.evidenceAt) ? h.evidenceAt : 0;
       }
     }
@@ -398,10 +388,7 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
         break;
       case 'session.inbox.enqueued': {
         const kind = data.item?.type;
-        if (kind === 'user' || kind === 'synthetic') {
-          s.lastInbox = kind;
-          s.mailWake = isMailWake(data.item);
-        }
+        if (kind === 'user' || kind === 'synthetic') s.lastInbox = kind;
         // Only an operator's prompt is evidence: a mail wake, like OpenCode's
         // own notices, is a synthetic item, and nothing else here (shells,
         // blocks, state) reacts to it.
@@ -794,7 +781,12 @@ export function createMailSocketClient({
   // One request settled exactly once. `onResponse(res, finish)` reads the answer and calls
   // `finish(value)`; `failure(reason)` is the value of a call that got no answer. Whatever
   // settles it also destroys the request: a held wait must end its connection, and one that
-  // already has its answer has nothing left to read.
+  // already has its answer has nothing left to read. Every emitter has an `error` listener
+  // before anything can destroy it (the request's is attached before the timer, the abort or
+  // a response can run; the response's before `onResponse` sees it), and a branch that does
+  // not read the body drains it (`skip`) before it settles: this runs inside OpenCode's
+  // shared server, on Bun's node:http, whose order of events after a destroy is unmeasured,
+  // and an unhandled `error` there would take down every TUI's state.
   function call({ method, urlPath, body, signal, timeoutMs, onResponse, failure }) {
     return new Promise((resolve) => {
       let req = null;
@@ -820,6 +812,7 @@ export function createMailSocketClient({
           headers['Content-Length'] = Buffer.byteLength(body);
         }
         req = request({ socketPath: sockPath, path: urlPath, method, headers, agent: false }, (res) => {
+          try { res.on('error', () => finish(failure('connect'))); } catch { /* not an emitter */ }
           try { onResponse(res, finish); } catch { finish(failure('connect')); }
         });
         req.on('error', () => finish(failure('connect')));
@@ -833,6 +826,11 @@ export function createMailSocketClient({
     });
   }
 
+  // An answer whose body is not read: let it flow, so nothing waits on it.
+  function skip(res) {
+    try { res.resume(); } catch { /* already destroyed */ }
+  }
+
   function wait({ session, pane, signal } = {}) {
     if (!pathOk) return Promise.resolve(down('path'));
     if (typeof session !== 'string' || typeof pane !== 'string') return Promise.resolve(down('args'));
@@ -843,8 +841,8 @@ export function createMailSocketClient({
       timeoutMs: waitTimeoutMs,
       failure: down,
       onResponse(res, finish) {
-        if (res.statusCode === 204) { finish({ kind: 'idle' }); return; }
-        if (res.statusCode !== 200) { finish(down(`status ${res.statusCode}`)); return; }
+        if (res.statusCode === 204) { skip(res); finish({ kind: 'idle' }); return; }
+        if (res.statusCode !== 200) { skip(res); finish(down(`status ${res.statusCode}`)); return; }
         const chunks = [];
         let size = 0;
         res.on('data', (c) => {
@@ -874,7 +872,7 @@ export function createMailSocketClient({
       body: new URLSearchParams({ session, m: messageId }).toString(),
       timeoutMs: ackTimeoutMs,
       failure: () => false,
-      onResponse(res, finish) { finish(res.statusCode === 200); },
+      onResponse(res, finish) { skip(res); finish(res.statusCode === 200); },
     });
   }
 
@@ -918,9 +916,11 @@ export function createMailSocketClient({
 //                          freshest sync and derive. Failed -> off, dropped: no
 //                          synthetic, no ack; the message stays `handed` and the
 //                          hub re-offers it on the next wait of that pane (or
-//                          after REOFFER_MS). A message id already in flight ->
-//                          dropped too, and the session held off (never a
-//                          second synthetic for one message). Else -> posted.
+//                          after REOFFER_MS). Else -> posted. (A message id
+//                          cannot already be in flight here: an entry exists
+//                          only for its own tmux session, which arms no wait
+//                          while it does, and the hub hands a message only to
+//                          the session it is addressed to.)
 //   posted   An in-flight entry { messageId, tmuxSession, sessionID, inboxID,
 //            postedAt } exists and synthetic({ sessionID, text, delivery:
 //            'queue', resume: true, metadata: { tmuxifierMail } }) was called.
@@ -944,7 +944,7 @@ export function createMailSocketClient({
 // message id (F1: same id). The stream may deliver `inbox.delivered` before
 // synthetic resolves: a delivered/cancelled event matching no entry is kept in
 // `recent` (MAIL_RECENT_MS, at most MAIL_RECENT_MAX) and matched when the
-// entry learns its id. Nothing here reads the reducer's `mailWake` flag.
+// entry learns its id.
 //
 // Restart (F9, ruling R5). A restarted OpenCode server delivers a queued item
 // with only `inbox.delivered` for the old inboxID: no enqueued replay, no
@@ -1187,11 +1187,6 @@ export function createMailPart({
   function onMail(rec, r) {
     if (!stillEligible(rec)) {
       debug('mail dropped: the pane is no longer eligible or not ready', r.messageId);
-      return;
-    }
-    if (shared.inflight.has(r.messageId)) {
-      debug('mail dropped: already in flight', r.messageId);
-      holdSession(rec.session, 0, true);
       return;
     }
     const entry = { messageId: r.messageId, tmuxSession: rec.session, sessionID: rec.sessionID, inboxID: null, postedAt: clock() };
@@ -2108,7 +2103,8 @@ export function createCore({
     }
   }
 
-  // A copy: the part keeps the map it was given.
+  // Test seam only (nothing in the plugin calls it): the current mail targets,
+  // as a copy, since the part keeps the map it was given.
   function mailTargetsNow() {
     return new Map(targets);
   }
@@ -2443,6 +2439,17 @@ export const OPENCODE_MAIL_MIN = '2.3.0';
 const LIVE_MAX = 64;
 const VERSION_RE = /^\d{1,9}(?:\.\d{1,9}){0,7}$/;
 // The shape of a ctx's pieces ({ tagger, handler }); bump it when it changes.
+//
+// OBLIGATION (R41): the pieces are closures that outlive a reload. A setup
+// rerun hands the existing pieces to the new bytes, so the tagger, the
+// permission handler and the operator-rules check (createOperatorRules, made
+// lazily inside the handler) keep running the code of the bytes that first
+// built them until OpenCode restarts. So ANY later change to the tagger, the
+// permission handler or the operator-rules logic must (1) bump PIECES_VERSION,
+// so the new bytes build fresh pieces, and (2) first make the tagger's
+// tagged-env set process-wide (a Symbol.for global, like GLOBAL_KEY), so the
+// old and the new tagger do not both tag one shell during the overlap.
+// Otherwise the fix does not apply live.
 export const PIECES_VERSION = 1;
 
 // Numeric dotted comparison (2.10.1 > 2.3.0; a missing part is 0). Anything

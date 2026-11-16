@@ -393,7 +393,6 @@ test('a mail wake on an idle session reads working/resume, then ready/stop', () 
   // ours is the agent's own input, never operator evidence.
   expect(r.apply(event23(534))).toBe(false);
   expect(state23(r)).toEqual(before);
-  expect(r.sessions.get(S23).mailWake).toBe(true);
   expect(r.sessions.get(S23).lastInbox).toBe('synthetic');
   expect(r.sessions.get(S23).evidenceAt).toBe(evidence);
 
@@ -419,14 +418,12 @@ test('a mail wake never clears a running background shell', () => {
   expect(sc(state23(r))).toBe('working/prompt');
   expect([...r.sessions.get(S23).shells]).toEqual([SHELL]);
   expect(r.sessions.get(S23).executing).toBe(false);
-  expect(r.sessions.get(S23).mailWake).toBe(false); // 462, OpenCode's own ctrl+b notice, is not ours
   expect(state23(r).ts).toBe(Math.floor(event23(507).created / 1000)); // the turn's end moved it to working/prompt
 
   // Our wake lands in the idle-but-busy session: nothing moves, the shell stays.
   const T = event23(508).created + 10_000;
   const tsBefore = state23(r).ts;
   expect(r.apply(wake(T))).toBe(false);
-  expect(r.sessions.get(S23).mailWake).toBe(true);
   expect([...r.sessions.get(S23).shells]).toEqual([SHELL]);
   expect(sc(state23(r))).toBe('working/prompt');
   expect(state23(r).ts).toBe(tsBefore);
@@ -457,7 +454,6 @@ test('a mail wake while blocked stays blocked/<cause> until the block\'s own rep
   const held = [...r.sessions.get(S23).blocks];
 
   expect(r.apply(event23(280))).toBe(false);
-  expect(r.sessions.get(S23).mailWake).toBe(true);
   expect(state23(r)).toEqual(blocked); // neither the state, the cause nor the ts moved
   expect([...r.sessions.get(S23).blocks]).toEqual(held);
 
@@ -483,54 +479,6 @@ test('a mail wake while blocked stays blocked/<cause> until the block\'s own rep
   expect(sc(state23(q))).toBe('working/unblock');
 });
 
-test('a mail wake is recognised by its metadata and never by its text', () => {
-  const ours = (r) => r.sessions.get(S23).mailWake;
-  const r = at23(533);
-  let t = event23(534).created + 1000;
-  const feed = (e) => { r.apply(e); return ours(r); };
-
-  expect(feed(wake(t += 10))).toBe(true);
-  // A user item (the operator's prompt) is never a wake, even with our metadata.
-  expect(feed(wake(t += 10, { tmuxifierMail: 'm-bbbbbbbb' }, { type: 'user' }))).toBe(false);
-  expect(r.sessions.get(S23).lastInbox).toBe('user');
-  expect(feed(wake(t += 10))).toBe(true);
-  // OpenCode's own synthetic items (the finished-shell notice, the ctrl+b notice) are not ours.
-  expect(feed(reuse(510, t += 10))).toBe(false);
-  expect(r.sessions.get(S23).lastInbox).toBe('synthetic');
-  expect(feed(wake(t += 10))).toBe(true);
-  expect(feed(reuse(462, t += 10))).toBe(false);
-  // The text alone never makes a wake: the tag is in the text of an item with no metadata.
-  const textOnly = wake(t += 10, undefined);
-  delete textOnly.data.item.payload.metadata;
-  textOnly.data.item.payload.text = '[tmuxifier-mail m-bbbbbbbb] hello';
-  expect(feed(textOnly)).toBe(false);
-  expect(r.sessions.get(S23).lastInbox).toBe('synthetic'); // still a resume trigger
-  // Metadata that is not a message id of the store's alphabet.
-  for (const bad of ['m-BBBBBBBB', 'm-bbbbbbb', 'm-bbbbbbbbb', 'm-bbbbbbbi', 't-bbbbbbbb', 'm-bbbbbbbb\n', ' m-bbbbbbbb', '', 7, null, true, ['m-bbbbbbbb'], { id: 'm-bbbbbbbb' }]) {
-    feed(wake(t += 10));
-    expect(ours(r)).toBe(true);
-    expect(feed(wake(t += 10, { tmuxifierMail: bad })), JSON.stringify(bad)).toBe(false);
-  }
-  // Garbage around the metadata never throws and never makes one.
-  for (const payload of [null, 'x', 5, [], { metadata: null }, { metadata: 'm-bbbbbbbb' }, { metadata: ['m-bbbbbbbb'] }]) {
-    expect(feed(wake(t += 10))).toBe(true);
-    const e = wake(t += 10);
-    e.data.item.payload = payload;
-    expect(() => r.apply(e)).not.toThrow();
-    expect(ours(r), JSON.stringify(payload)).toBe(false);
-    expect(r.sessions.get(S23).lastInbox).toBe('synthetic'); // the item was still seen, as an item that is not ours
-  }
-  // An item whose kind is unknown leaves the flag as the last known item left it.
-  feed(wake(t += 10));
-  expect(feed(wake(t += 10, { tmuxifierMail: 'm-bbbbbbbb' }, { type: 'attachment' }))).toBe(true);
-  // Invariant: a wake is always a synthetic item, so it always reads as a resume.
-  expect(r.sessions.get(S23).lastInbox).toBe('synthetic');
-  // A fresh session starts with no wake.
-  const n = createReducer();
-  n.apply({ id: 'new1', type: 'session.created', data: { sessionID: 'ses_new' } });
-  expect(n.sessions.get('ses_new').mailWake).toBe(false);
-});
-
 test('a wake for a session the reducer does not know yet leaves a hint that seeds the session', () => {
   const r = createReducer({ now: () => 50 });
   const loc = { location: { directory: '/home/user/proj' } };
@@ -538,15 +486,10 @@ test('a wake for a session the reducer does not know yet leaves a hint that seed
   const ours = { type: 'synthetic', payload: { text: 'x', metadata: { tmuxifierMail: 'm-bbbbbbbb' } }, delivery: 'queue' };
   expect(r.apply(w('h1', ours))).toBe(false);
   expect(r.sessions.size).toBe(0);
-  expect(r.state.hints.get('ses_late')).toMatchObject({ lastInbox: 'synthetic', mailWake: true });
+  expect(r.state.hints.get('ses_late')).toMatchObject({ lastInbox: 'synthetic' });
   expect(r.apply({ id: 'h2', type: 'session.execution.started', data: { sessionID: 'ses_late' } })).toBe(true);
-  expect(r.sessions.get('ses_late').mailWake).toBe(true);
+  expect(r.sessions.get('ses_late').lastInbox).toBe('synthetic');
   expect(sc(r.derive('ses_late'))).toBe('working/resume');
-  // An ordinary synthetic after it replaces the hint's flag, as for a known session.
-  const q = createReducer({ now: () => 50 });
-  q.apply(w('h3', ours));
-  q.apply(w('h4', { type: 'synthetic', payload: { text: 'done' }, delivery: 'steer' }));
-  expect(q.state.hints.get('ses_late')).toMatchObject({ lastInbox: 'synthetic', mailWake: false });
 });
 
 test('MAIL_MSG_ID_RE agrees with the store\'s MSG_ID_RE on minted ids and near misses', async () => {

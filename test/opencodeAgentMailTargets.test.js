@@ -43,7 +43,7 @@ test('PANE_FORMAT gains #{pane_id} as its sixth field, and the state version mov
   expect(PANE_FORMAT).toBe(
     '#{session_name}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_id}',
   );
-  expect(STATE_VERSION).toBe(3); // Task 3 made it 2 (evidenceAt, the pane field), the mail wake flag 3
+  expect(STATE_VERSION).toBe(4); // Task 3 made it 2 (evidenceAt, the pane field), the mail wake flag 3, its removal 4
 });
 
 test('parsePanes drops a row whose pane id is not %N, and keeps pane otherwise', () => {

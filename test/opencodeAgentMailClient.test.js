@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -320,6 +321,79 @@ describe('createMailSocketClient: ack', () => {
     const t0 = Date.now();
     await listener.close();
     expect(Date.now() - t0).toBeLessThan(1000);
+  });
+});
+
+// A stand-in that sends a status line and headers promising a body, part of that body, and then
+// resets the connection. Bun's node:http inside OpenCode is unmeasured, so the client must give
+// every emitter a listener and never leave an `error` unhandled, whatever the order of events.
+async function resetting(status, { partial = 'par', length = 100 } = {}) {
+  const file = path.join(dir, `reset-${extras.length}.sock`);
+  const sockets = new Set();
+  const server = net.createServer((s) => {
+    sockets.add(s);
+    s.on('close', () => sockets.delete(s));
+    s.on('error', () => {});
+    s.once('data', () => {
+      const head = status === 204
+        ? 'HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n'
+        : `HTTP/1.1 ${status} X\r\nContent-Type: text/plain\r\nContent-Length: ${length}\r\nConnection: close\r\n\r\n${partial}`;
+      s.write(head, () => setTimeout(() => { try { s.resetAndDestroy(); } catch { s.destroy(); } }, 5));
+    });
+  });
+  await new Promise((resolve) => server.listen(file, resolve));
+  extras.push(() => new Promise((resolve) => { for (const s of sockets) s.destroy(); server.close(() => resolve()); }));
+  return file;
+}
+
+describe('createMailSocketClient: an answer cut off by a reset', () => {
+  test('wait and ack settle on a 204, 503 or 404 whose connection is reset mid-body, with no uncaught error', async () => {
+    const errors = [];
+    const onErr = (e) => errors.push(e);
+    process.on('uncaughtException', onErr);
+    try {
+      for (const status of [204, 503, 404, 200]) {
+        const file = await resetting(status);
+        const client = createMailSocketClient({ sockPath: file });
+        const r = await client.wait({ session: SESSION, pane: PANE });
+        if (status === 204) expect(r).toEqual({ kind: 'idle' });
+        else if (status === 200) expect(r).toMatchObject({ kind: 'down' });
+        else expect(r).toEqual({ kind: 'down', reason: `status ${status}` });
+        // ack reads only the status line: a 200 is true even when its body is cut off.
+        const a = await client.ack({ session: SESSION, messageId: MID });
+        expect(a, String(status)).toBe(status === 200);
+      }
+      // Give a late `error` from a destroyed response a chance to surface.
+      await new Promise((r) => setTimeout(r, 50));
+    } finally {
+      process.off('uncaughtException', onErr);
+    }
+    expect(errors).toEqual([]);
+  });
+
+  test('every response gets an error listener before the call settles, and an unread body is drained', async () => {
+    const seen = [];
+    const request = (opts, onRes) => {
+      const req = new (class extends EventEmitter {
+        write() {} end() {
+          setImmediate(() => {
+            const res = new EventEmitter();
+            res.statusCode = this.status;
+            res.resume = () => { seen.push(['resume', res.listenerCount('error')]); };
+            onRes(res);
+            seen.push(['after', res.listenerCount('error')]);
+          });
+        }
+        destroy() { seen.push(['destroy']); }
+      })();
+      req.status = opts.method === 'GET' ? 503 : 404;
+      return req;
+    };
+    const client = createMailSocketClient({ sockPath: sock, request });
+    expect(await client.wait({ session: SESSION, pane: PANE })).toEqual({ kind: 'down', reason: 'status 503' });
+    expect(await client.ack({ session: SESSION, messageId: MID })).toBe(false);
+    // resume (with an error listener already on), then the destroy, then nothing new.
+    expect(seen).toEqual([['resume', 1], ['destroy'], ['after', 1], ['resume', 1], ['destroy'], ['after', 1]]);
   });
 });
 
