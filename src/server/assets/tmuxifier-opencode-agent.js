@@ -95,7 +95,7 @@
 
 import { Buffer } from 'node:buffer';
 import { execFile } from 'node:child_process';
-import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -1528,9 +1528,10 @@ export function createPaneTagger({ paneOf, now = Date.now, ttlMs = 30000 } = {})
 // and `effect` is mutable.
 //
 // The handler acts only when action is `shell`, there is exactly ONE resource,
-// that resource is a plain tmx command (isPlainTmx), and the current effect is
-// not `deny`; then it sets `effect = 'allow'`. It never sets deny, never touches
-// another field, and never throws.
+// that resource is a plain tmx command (isPlainTmx) AND is byte for byte the
+// command the agent wrote (R29, below), and the current effect is not `deny`;
+// then it sets `effect = 'allow'`. It never sets deny, never touches another
+// field, and never throws.
 //
 // The operator's own rules win (operator ruling, 2026-11-16): in Claude Code an
 // `ask` rule beats `allow`, and the hook cannot tell OpenCode's default `ask`
@@ -1541,12 +1542,21 @@ export function createPaneTagger({ paneOf, now = Date.now, ttlMs = 30000 } = {})
 // The program is `tmx`, `~/.local/bin/tmx` or `$HOME/.local/bin/tmx`, then a
 // subcommand tmx knows (tmuxifier-mail.sh), then a blank or the end.
 const PLAIN_TMX_RE = /^[ \t]*(?:tmx|~\/\.local\/bin\/tmx|\$HOME\/\.local\/bin\/tmx)[ \t]+(?:who|send|reply|wait|read|inbox)(?=[ \t]|$)/;
-// What the rest of the command may not contain, anywhere, quoted or not:
-// `$` (so `$(`, `${`, `$VAR`: a variable argument would send the agent's own
-// environment to the other agent), backtick, `|`, `;`, `&`, `>`, `<`, a newline
-// and every other control byte except tab. Textual, not a shell parser: a
-// quoted `;` makes a command not plain, and OpenCode then decides as it would
-// have (an `ask` the operator answers). When in doubt, not plain.
+// The arguments after the subcommand, an ALLOWLIST (R28): blank-separated words,
+// each one or more of a bare character from a short inert set, a single-quoted
+// string, or a double-quoted string without `"`, `$`, backtick, `\` or `!`.
+// Everything else is refused, quoted or not: `(`, `)`, `*`, `?`, `[`, `{`, `~`,
+// `=`, `#`, `^`, `\` and an unbalanced quote are shell syntax in zsh and bash
+// (`=(cmd)`, `*(e:cmd:)`, `f(+cmd)` run code; a glob, a brace or a `~` expands).
+// Inside quotes they are inert, so a message may hold them. The single-character
+// alternation matters: `(?:[a-z]+|...)+` would backtrack catastrophically.
+const TMX_ARGS_RE = /^(?:[ \t]+(?:[A-Za-z0-9_@%+:,.\/-]|'[^']*'|"[^"$`\\!]*")+)*[ \t]*$/;
+// On top of the allowlist, kept from the first ruling: no `$` (so no `$(`,
+// `${`, `$VAR`: a variable argument would send the agent's own environment to
+// the other agent), backtick, `|`, `;`, `&`, `>`, `<`, newline or other control
+// byte except tab, even inside quotes. Textual, not a shell parser: a quoted `;`
+// makes a command not plain, and OpenCode then decides as it would have (an
+// `ask` the operator answers). When in doubt, not plain.
 const TMX_UNSAFE_RE = /[$`|;&<>\u0000-\u0008\u000a-\u001f\u007f]/;
 
 // True for exactly one `tmx <subcommand> ...` command with nothing in it that
@@ -1555,7 +1565,9 @@ export function isPlainTmx(command) {
   try {
     if (typeof command !== 'string') return false;
     const m = PLAIN_TMX_RE.exec(command);
-    return !!m && !TMX_UNSAFE_RE.test(command.slice(m[0].length));
+    if (!m) return false;
+    const rest = command.slice(m[0].length);
+    return !TMX_UNSAFE_RE.test(rest) && TMX_ARGS_RE.test(rest);
   } catch {
     return false;
   }
@@ -1624,6 +1636,14 @@ export function readJsonc(text) {
 
 const OPERATOR_CONFIG_MAX_BYTES = 1024 * 1024;
 const OPERATOR_CACHE_MAX = 512;
+// A file modified less than this long ago is read again every time: two edits
+// inside one filesystem timestamp tick can share (mtime, size, inode).
+const OPERATOR_RACY_MS = 2000;
+// Most entries looked at in one agent directory; more counts as rules.
+const OPERATOR_AGENT_DIR_MAX = 500;
+// Environment variables that carry OpenCode configuration or permissions
+// themselves: set and non-empty, the operator has rules (not read further).
+const OPERATOR_ENV_KEYS = ['OPENCODE_CONFIG', 'OPENCODE_CONFIG_CONTENT', 'OPENCODE_PERMISSION'];
 const OPERATOR_GLOBAL_FILES = ['opencode.json', 'opencode.jsonc'];
 const OPERATOR_PROJECT_FILES = [
   'opencode.json',
@@ -1631,6 +1651,7 @@ const OPERATOR_PROJECT_FILES = [
   path.join('.opencode', 'opencode.json'),
   path.join('.opencode', 'opencode.jsonc'),
 ];
+const OPERATOR_AGENT_DIRS = ['agent', 'agents'];
 
 const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
@@ -1658,6 +1679,10 @@ function configSetsShell(cfg) {
   return false;
 }
 
+// An agent definition in markdown carries its permissions in its frontmatter:
+// any mention of the word is treated as rules (fail closed).
+const agentFileSetsShell = (text) => text.includes('permission');
+
 // The directories OpenCode may read a global config from, or null when one
 // cannot be located (a relative path: fail closed). $OPENCODE_CONFIG_DIR names
 // the opencode directory itself (the installer puts plugins/ in it) and is read
@@ -1676,27 +1701,54 @@ function globalConfigDirs(home, env) {
 }
 
 // Does the operator have shell/bash permission rules in any config OpenCode
-// merges for a session in some directory? (R9, R26)
+// merges for a session in some directory? (R9, R26, R30, R31)
 //
-//   hasBashRules(dir)  true when ANY of these sets one: the global config dir's
-//                      opencode.json / opencode.jsonc, and, for `dir` and every
+//   hasBashRules(dir)  true when ANY of these sets one: the environment
+//                      (OPENCODE_CONFIG, OPENCODE_CONFIG_CONTENT or
+//                      OPENCODE_PERMISSION non-empty); the global config dir's
+//                      opencode.json / opencode.jsonc; and, for `dir` and every
 //                      parent up to `/`, opencode.json, opencode.jsonc,
-//                      .opencode/opencode.json and .opencode/opencode.jsonc.
-//                      A file sets one when `permission` is a string or an
-//                      object with `shell`, `bash` or `*`, or the same under any
-//                      `agent.<name>.permission`.
+//                      .opencode/opencode.json and .opencode/opencode.jsonc. A
+//                      file sets one when `permission` is a string or an object
+//                      with `shell`, `bash` or `*`, or the same under any
+//                      `agent.<name>.permission`. Also any agent markdown file
+//                      (*.md) whose text contains `permission` in the global
+//                      dir's agent/ or agents/ and in each level's
+//                      .opencode/agent/ or .opencode/agents/ (not recursive).
 //
-// Fail closed: a present file that cannot be stat'ed, read or parsed, one over
-// 1 MiB, a `dir` that is no absolute path, and a global dir that cannot be
-// located all answer true. A missing file (ENOENT/ENOTDIR) answers false. A
-// file's verdict is cached by (mtime, size, inode), so an edit applies to the
-// next command without a restart; a read failure is never cached.
+// Fail closed: a present file that cannot be stat'ed, read or parsed, one that
+// is not a regular file (a FIFO would block OpenCode's one shared server on a
+// synchronous read, /dev/zero never ends: checked from the stat before any
+// read), one over 1 MiB, an agent directory that cannot be listed or holds over
+// 500 entries, a `dir` that is no absolute path, and a global dir that cannot
+// be located all answer true. A missing file or directory (ENOENT/ENOTDIR)
+// answers false. A file's verdict is cached by (mtime, size, inode), so an edit
+// applies to the next command without a restart; a file modified less than 2 s
+// before `now()` is never cached (an in-place edit inside one timestamp tick
+// would otherwise keep a stale "no rules"), and a read failure never is.
 //
-// `fs` needs only `statSync` and `readFileSync`; tests inject their own.
-export function createOperatorRules({ home = os.homedir(), env = process.env, fs = { statSync, readFileSync } } = {}) {
+// `fs` needs `statSync` and `readFileSync`, and `readdirSync` for the agent
+// directories (absent: those are not looked at; the default has it). A residual
+// race remains between the stat and the read: a file swapped for a FIFO in that
+// instant would block the read.
+export function createOperatorRules({
+  home = os.homedir(),
+  env = process.env,
+  fs = { statSync, readFileSync, readdirSync },
+  now = Date.now,
+} = {}) {
   const cache = new Map(); // file -> { key, rules }
 
-  function fileHasRules(file) {
+  function clock() {
+    try {
+      const t = now();
+      if (Number.isFinite(t)) return t;
+    } catch { /* fall through to the real clock */ }
+    return Date.now();
+  }
+
+  // `verdict(text)` -> boolean for this kind of file.
+  function fileHasRules(file, verdict) {
     let st;
     try {
       st = fs.statSync(file);
@@ -1705,13 +1757,15 @@ export function createOperatorRules({ home = os.homedir(), env = process.env, fs
       return !(code === 'ENOENT' || code === 'ENOTDIR');
     }
     try {
+      if (typeof st.isFile !== 'function' || !st.isFile()) return true;
       if (!(st.size <= OPERATOR_CONFIG_MAX_BYTES)) return true;
       const key = Number.isFinite(st.mtimeMs) && Number.isFinite(st.size) ? `${st.mtimeMs}:${st.size}:${st.ino}` : null;
       const hit = key ? cache.get(file) : null;
       if (hit && hit.key === key) return hit.rules;
-      const cfg = readJsonc(fs.readFileSync(file, 'utf8'));
-      const rules = cfg === null ? true : configSetsShell(cfg);
-      if (key) {
+      const text = fs.readFileSync(file, 'utf8');
+      if (typeof text !== 'string' || text.length > OPERATOR_CONFIG_MAX_BYTES) return true;
+      const rules = verdict(text);
+      if (key && clock() - st.mtimeMs >= OPERATOR_RACY_MS) {
         cache.delete(file);
         cache.set(file, { key, rules });
         if (cache.size > OPERATOR_CACHE_MAX) cache.delete(cache.keys().next().value);
@@ -1723,17 +1777,46 @@ export function createOperatorRules({ home = os.homedir(), env = process.env, fs
     }
   }
 
+  const configVerdict = (text) => {
+    const cfg = readJsonc(text);
+    return cfg === null ? true : configSetsShell(cfg);
+  };
+
+  // Every *.md in `dir` (not recursive) through fileHasRules.
+  function agentDirHasRules(dir) {
+    if (typeof fs.readdirSync !== 'function') return false;
+    let names;
+    try {
+      names = fs.readdirSync(dir);
+    } catch (e) {
+      const code = e && e.code;
+      return !(code === 'ENOENT' || code === 'ENOTDIR');
+    }
+    if (!Array.isArray(names) || names.length > OPERATOR_AGENT_DIR_MAX) return true;
+    for (const name of names) {
+      if (typeof name !== 'string') return true;
+      if (/\.md$/i.test(name) && fileHasRules(path.join(dir, name), agentFileSetsShell)) return true;
+    }
+    return false;
+  }
+
   function hasBashRules(dir) {
     try {
       if (typeof dir !== 'string' || !path.isAbsolute(dir)) return true;
+      for (const key of OPERATOR_ENV_KEYS) {
+        const v = env?.[key];
+        if (v !== undefined && v !== null && v !== '') return true;
+      }
       const globals = globalConfigDirs(home, env);
       if (!globals) return true;
       for (const g of globals) {
-        for (const name of OPERATOR_GLOBAL_FILES) if (fileHasRules(path.join(g, name))) return true;
+        for (const name of OPERATOR_GLOBAL_FILES) if (fileHasRules(path.join(g, name), configVerdict)) return true;
+        for (const sub of OPERATOR_AGENT_DIRS) if (agentDirHasRules(path.join(g, sub))) return true;
       }
       let d = path.resolve(dir);
       for (;;) {
-        for (const rel of OPERATOR_PROJECT_FILES) if (fileHasRules(path.join(d, rel))) return true;
+        for (const rel of OPERATOR_PROJECT_FILES) if (fileHasRules(path.join(d, rel), configVerdict)) return true;
+        for (const sub of OPERATOR_AGENT_DIRS) if (agentDirHasRules(path.join(d, '.opencode', sub))) return true;
         const up = path.dirname(d);
         if (up === d) return false;
         d = up;
@@ -1773,19 +1856,76 @@ export function dirOfSession(reducer, sessionID) {
   }
 }
 
-// The `permission.evaluate` handler. `rules` is createOperatorRules' result and
-// `dirOf(sessionID)` the session's directory (dirOfSession's, bound to a
-// reducer). A session whose directory is unknown is treated as having rules:
-// nothing changes. Not registered on OpenCode here (the entry point does).
+const PERMISSION_PENDING_MAX = 256;
+
+// The `permission.evaluate` handler and the hook that feeds it (R29).
+// `evaluate`'s `resources` are what OpenCode's parser made of the command, and
+// it may drop what is not a command (a redirect, an assignment prefix such as
+// `PATH=/tmp/x tmx who`, a trailing `&`): a plain-looking resource is not proof
+// of a plain command. So the entry point also registers `beforeTool` on
+// `tool.execute.before` (which fires first, same millisecond, F4): for the
+// `shell` tool it remembers the raw `input.command` by call id (a bounded map
+// that ages out after `ttlMs`, newest `PERMISSION_PENDING_MAX` kept). `evaluate`
+// then allows only when a raw command is remembered for `evaluation.source.id`,
+// isPlainTmx(raw), there is exactly one resource, and that resource is `raw`
+// exactly. It consumes the record, so a call is answered once; a call with no
+// record (no beforeTool, an aged-out one, another action of the same call
+// before the shell action) is left to OpenCode.
+//
+// `rules` is createOperatorRules' result and `dirOf(sessionID)` the session's
+// directory (dirOfSession's, bound to a reducer). A session whose directory is
+// unknown is treated as having rules: nothing changes. Not registered on
+// OpenCode here (the entry point does).
 export function createPermissionHandler(options) {
-  const { rules = null, dirOf = null } = options ?? {};
-  return function evaluate(evaluation) {
+  const {
+    rules = null, dirOf = null, now = Date.now, ttlMs = 30000,
+  } = options ?? {};
+  const pending = new Map(); // call id -> { command, at }, oldest first
+
+  function clock() {
+    try {
+      const t = now();
+      if (Number.isFinite(t)) return t;
+    } catch { /* fall through to the real clock */ }
+    return Date.now();
+  }
+
+  function expire(t) {
+    for (const [id, rec] of pending) {
+      if (t - rec.at > ttlMs) pending.delete(id);
+      else break; // inserted in time order
+    }
+  }
+
+  function beforeTool(payload) {
+    try {
+      if (!payload || typeof payload !== 'object' || payload.tool !== 'shell') return;
+      const command = payload.input?.command;
+      const id = payload.id;
+      if (typeof command !== 'string' || typeof id !== 'string' || !id) return;
+      const t = clock();
+      expire(t);
+      pending.delete(id); // a re-announced call is the newest again
+      pending.set(id, { command, at: t });
+      if (pending.size > PERMISSION_PENDING_MAX) pending.delete(pending.keys().next().value);
+    } catch (e) {
+      debug('permission tool', e);
+    }
+  }
+
+  function evaluate(evaluation) {
     try {
       if (!evaluation || typeof evaluation !== 'object') return;
       if (evaluation.action !== 'shell') return;
+      const id = evaluation.source?.id;
+      if (typeof id !== 'string' || !id) return;
+      expire(clock());
+      const rec = pending.get(id);
+      if (!rec) return;
+      pending.delete(id);
       const resources = evaluation.resources;
       if (!Array.isArray(resources) || resources.length !== 1) return;
-      if (!isPlainTmx(resources[0])) return;
+      if (resources[0] !== rec.command || !isPlainTmx(rec.command)) return;
       if (evaluation.effect === 'deny' || evaluation.effect === 'allow') return;
       const dir = dirOf(evaluation.sessionID);
       if (typeof dir !== 'string' || !dir) return;
@@ -1794,7 +1934,9 @@ export function createPermissionHandler(options) {
     } catch (e) {
       debug('permission', e);
     }
-  };
+  }
+
+  return { beforeTool, evaluate };
 }
 
 export const GLOBAL_KEY = Symbol.for('tmuxifier.opencode-agent');
