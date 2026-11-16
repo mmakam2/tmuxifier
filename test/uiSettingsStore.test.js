@@ -64,6 +64,47 @@ test('sidebarSpark rejects non-booleans and stores nothing', async () => {
   expect((await store.read()).sidebarSpark).toBe(true);
 });
 
+test('a rejected mixed patch writes nothing, not even its valid keys', async () => {
+  await store.update({ theme: 'original', sidebarSpark: true });
+  // theme is valid and sorts first: a refactor that wrote between the two
+  // validation loops would persist 'vercel' before sidebarSpark threw.
+  await expect(store.update({ theme: 'vercel', sidebarSpark: 'yes' })).rejects.toThrow(/invalid sidebarSpark/);
+  await expect(store.update({ clawdAnim: 'pace', theme: 'Bad Theme!' })).rejects.toThrow(/invalid theme/);
+  expect(await store.read()).toEqual({ theme: 'original', clawdAnim: null, sidebarSpark: true });
+  // The file itself, not just read()'s view of it.
+  const onDisk = JSON.parse(await fs.readFile(path.join(dir, 'ui-settings.json'), 'utf8'));
+  expect(onDisk).toEqual({ theme: 'original', clawdAnim: null, sidebarSpark: true });
+});
+
+test('two overlapping updates both land (no lost key)', async () => {
+  const [a, b] = await Promise.all([
+    store.update({ theme: 'original' }),
+    store.update({ sidebarSpark: true }),
+  ]);
+  expect(await store.read()).toEqual({ theme: 'original', clawdAnim: null, sidebarSpark: true });
+  // Each call resolves with the state it produced, in call order: the second
+  // one's result already carries the first one's key.
+  expect(a).toEqual({ theme: 'original', clawdAnim: null, sidebarSpark: false });
+  expect(b).toEqual({ theme: 'original', clawdAnim: null, sidebarSpark: true });
+});
+
+test('overlapping updates of one key apply in call order', async () => {
+  await Promise.all(['original', 'vercel', 'instrument'].map((theme) => store.update({ theme })));
+  expect((await store.read()).theme).toBe('instrument');
+});
+
+test('a rejected update does not wedge or reorder the ones around it', async () => {
+  const results = await Promise.allSettled([
+    store.update({ theme: 'original' }),
+    store.update({ sidebarSpark: 'yes' }),
+    store.update({ clawdAnim: 'pace' }),
+  ]);
+  expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected', 'fulfilled']);
+  expect(await store.read()).toEqual({ theme: 'original', clawdAnim: 'pace', sidebarSpark: false });
+  await store.update({ sidebarSpark: true }); // the chain still accepts work afterwards
+  expect((await store.read()).sidebarSpark).toBe(true);
+});
+
 test('only a literal true in the file reads as on', async () => {
   for (const stored of ['true', 1, {}, null]) {
     await fs.writeFile(path.join(dir, 'ui-settings.json'), JSON.stringify({ sidebarSpark: stored }));

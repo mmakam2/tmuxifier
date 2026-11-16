@@ -37,11 +37,18 @@ export function createUiSettingsStore({ dataDir }) {
     return normalize(raw);
   }
 
-  return {
-    read,
-    async update(patch = {}) {
-      const current = await read();
+  // Every update is a read-merge-write, so two that overlap would both merge into
+  // the same snapshot and the second write would silently drop the first's key.
+  // One promise chain makes each update start after the previous one has been
+  // written (the way agentMailPolicyStore.js does). A rejected update (bad value,
+  // failed write) must not wedge the chain: the next one still runs.
+  let chain = Promise.resolve();
+
+  function apply(patch) {
+    return read().then(async (current) => {
       const next = { ...current };
+      // Both validation loops finish before the one write: a patch with any bad
+      // value stores nothing, valid keys included.
       for (const k of KEYS) {
         if (!(k in patch)) continue;
         const v = patch[k];
@@ -58,6 +65,15 @@ export function createUiSettingsStore({ dataDir }) {
       }
       await writeJson(file, next);
       return next;
+    });
+  }
+
+  return {
+    read,
+    update(patch = {}) {
+      const run = chain.then(() => apply(patch));
+      chain = run.catch(() => {});
+      return run;
     },
   };
 }

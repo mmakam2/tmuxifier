@@ -735,6 +735,8 @@ nothing is posted after the final write.
 - `uiSettingsStore.js` — `data/ui-settings.json` (`GET`/`PATCH /api/ui-settings`). Catalog-agnostic:
   validates slug shape only; the client normalizes unknown ids. `null` = never set. Fails open. The one
   boolean, `sidebarSpark` (sidebar sparkline, off by default), is never `null`: only a literal `true` reads on.
+  `update` is serialised on one promise chain (overlapping PATCHes both land) and validates the whole
+  patch before its one write, so a patch with any bad value stores nothing.
 
 ## Web client (`src/web/`)
 
