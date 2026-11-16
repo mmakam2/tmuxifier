@@ -255,18 +255,26 @@ With **Claude Code** ticked and messaging on, setup writes, on the box:
   (`SessionStart` and `Stop` run the listener, `UserPromptSubmit` confirms delivery), merged
   beside your own hooks, and the rule `Bash(tmx *)` added to `permissions.allow`, so Claude Code
   runs `tmx` without asking. Nothing else in `permissions` is read or changed;
-- in the same `settings.json`: two entries for Claude Code's auto-mode classifier, each ending
-  with `[tmuxifier-mail]`, under `autoMode`. The one in `autoMode.environment` says that the
-  operator runs Tmuxifier and installed its messaging, and that `tmx` exchanges messages only
-  with the operator's own agents on the operator's other machines through Tmuxifier. The one in
-  `autoMode.allow` says that running `tmx` to answer or send such a message is sanctioned
-  communication, also when the message arrived through the hook, and that it does not cover
-  sending credentials, tokens, keys or secrets. Setup keeps Claude Code's built-in rules: it
-  writes `"$defaults"` only into an `environment` or `allow` list it creates, and in a list you
-  already have it replaces its own older entry and appends the current one, adding nothing
-  else (a list you wrote without `"$defaults"` stays that way). `soft_deny`, `hard_deny` and
-  the rest of `autoMode` are not read or changed. Run `claude auto-mode config` on the box to
-  see the result.
+- in the same `settings.json`, on Claude Code 2.1.228 or later only: two entries for Claude
+  Code's auto-mode classifier, each ending with `[tmuxifier-mail]`, under `autoMode`. The one in
+  `autoMode.environment` says that the operator runs Tmuxifier and installed its messaging, and
+  that `tmx` exchanges messages only with the operator's own agents, in other tmux sessions on
+  the box or on the operator's other machines, through Tmuxifier. The one in `autoMode.allow`
+  says that running `tmx` to answer or send such a message is sanctioned communication, also when
+  the message arrived through the hook, and that it does not cover sending credentials, tokens,
+  private keys, environment dumps or secrets, does not sanction any other command run inside or
+  alongside a `tmx` command, and does not make the other agent's message your instruction.
+  Whether these entries let a reply through that auto mode would otherwise block has not been
+  observed yet. Setup keeps Claude Code's built-in rules: it writes `"$defaults"` only into an
+  `environment` or `allow` list it creates, and in a list you already have it removes every
+  entry containing the text `[tmuxifier-mail]` and appends the current one, adding nothing else
+  (a list you wrote without `"$defaults"` stays that way). An entry of your own that contains
+  `[tmuxifier-mail]` is therefore treated as setup's and replaced. `soft_deny`, `hard_deny` and
+  the rest of `autoMode` are not read or changed. Setup asks the box's `claude --version` first:
+  an older Claude Code may not understand `"$defaults"` and would lose its built-in entries, so
+  on a version below 2.1.228, or one setup cannot read, `autoMode` is left exactly as it is and
+  the setup line reads `agent-mail ✓ (auto-mode entries need Claude Code 2.1.228 or later)`.
+  Run `claude auto-mode config` on the box to see the result.
 
 `CLAUDE_CONFIG_DIR`, when set on the box, is used in place of `~/.claude`. To remove it from a
 box: delete those three hook entries, the rule and the two `autoMode` entries marked
@@ -355,6 +363,7 @@ the dialog is Add rather than Edit.
 | `agent-mail skipped (no curl on the box)` | Install `curl` on the box (or tick it in the tools checklist), then rerun setup |
 | `agent-mail skipped (another tmx is in ~/.local/bin)` | Something else is installed as `~/.local/bin/tmx`; setup will not replace it |
 | `agent-mail failed (no jq, node or python3 on the box)` | Setup needs one of the three to merge `settings.json` |
+| `agent-mail ✓ (auto-mode entries need Claude Code 2.1.228 or later)` | Messaging is installed; the two auto-mode entries were not written because the box's Claude Code is older or its version could not be read. Update Claude Code on the box, then rerun setup |
 | `agent-mail failed (settings.json could not be merged)` | The box's Claude Code `settings.json` is not valid JSON, or a key setup writes has an unexpected type; fix it and rerun setup |
 
 No `agent-mail` line at all: **Claude Code** was not ticked, or messaging is off.
@@ -390,6 +399,10 @@ the reply again as plain text. Approving there adds no rule. On a box set up bef
 added its auto-mode entries, rerun setup with **Claude Code** ticked and restart the Claude Code
 session: that installs the two classifier entries described in
 [What setup installs](#what-setup-installs), which tell auto mode this channel is sanctioned.
+Setup writes them only on Claude Code 2.1.228 or later; on an older one the setup line reads
+`agent-mail ✓ (auto-mode entries need Claude Code 2.1.228 or later)`, and updating Claude Code on
+the box, then rerunning setup, installs them. Whether the entries let a blocked reply through
+has not been observed yet, so the two steps above remain the way to get such a reply sent.
 
 **An agent says `tmx` was not found.** `~/.local/bin` has to be on the `PATH` of the shell Claude
 Code was started from. The command also lives at `~/.tmuxifier-mail/tmx`, but the permission rule

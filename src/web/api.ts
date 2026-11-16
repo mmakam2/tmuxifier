@@ -249,7 +249,8 @@ export interface SetupJob extends SetupSummary { log: string; }
 // because the saved-script phase reports the SCRIPT'S OWN NAME; SeedResult
 // narrows it to the fixed set the seed/statusline/hooks steps use, so those
 // keep their exhaustiveness while the script phase stays expressible.
-export interface PushResult { target: string; ok: boolean; skipped?: string; error?: string }
+// `note`: something an ok push did not do, e.g. agent-mail's auto-mode entries on an older Claude Code.
+export interface PushResult { target: string; ok: boolean; skipped?: string; error?: string; note?: string }
 export interface SeedResult extends PushResult { target: 'claude' | 'codex' | 'all' | 'statusline' | 'agent-hooks' | 'agent-mail' | 'opencode-plugin' }
 // The voice-link push reports one thing more than the others: what happened to
 // Claude Code's own `voice` setting on the box ('applied' when it was turned

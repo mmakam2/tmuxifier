@@ -80,12 +80,13 @@ export function formatSeedResults(seed: SeedResult[] | null | undefined): string
 // One-line summary of a single post-setup step's outcome — statusline,
 // agent-hooks, or the saved script, the shape is target-generic — e.g.
 // "statusline ✓" / "agent-hooks skipped (no Claude on the box)" /
-// "bootstrap failed (exited 2)". Empty string when the step never ran, so
+// "bootstrap failed (exited 2)"; an ok result with a note reads "agent-mail ✓ (<note>)".
+// Empty string when the step never ran, so
 // callers test it for truthiness and old jobs without the field render nothing.
 export function formatStatuslineResult(statusline: PushResult | null | undefined): string {
   if (!statusline) return '';
   const r = statusline;
-  return `${r.target} ${r.ok ? '✓' : r.skipped ? `skipped (${r.skipped})` : `failed (${r.error ?? 'failed'})`}`;
+  return `${r.target} ${r.ok ? (r.note ? `✓ (${r.note})` : '✓') : r.skipped ? `skipped (${r.skipped})` : `failed (${r.error ?? 'failed'})`}`;
 }
 
 // The voice-link phase's outcome, on the same shape as the line above plus the

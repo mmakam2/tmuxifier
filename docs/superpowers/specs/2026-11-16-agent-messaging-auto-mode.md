@@ -37,11 +37,18 @@ With Claude Code 2.1.325:
    in the box's Claude Code user `settings.json`, each ending with `[tmuxifier-mail]`
    (`MAIL_AUTOMODE_ENVIRONMENT`, `MAIL_AUTOMODE_ALLOW` in `src/server/claudeAgentMail.js`): an
    environment entry naming Tmuxifier's messaging as a key internal service that only reaches
-   the operator's own agents, and an allow entry saying a `tmx` message to another of the
-   operator's agents is sanctioned communication, including a reply to a hook-delivered message
-   and a `tmx` command that gathers ordinary project facts inline, and excluding credentials and
-   secrets. A list setup creates starts with `"$defaults"` so the built-in rules stay in effect;
-   a list the operator already has only loses its older marked entry and gains the current one.
+   the operator's own agents (in other tmux sessions on the box or on the operator's other
+   machines), and an allow entry saying a `tmx` message to another of the operator's agents is
+   sanctioned communication, including a reply to a hook-delivered message. The allow entry
+   sanctions the channel only: it excludes credentials, tokens, private keys, environment dumps
+   and secret stores, and says it does not sanction any other command run inside or alongside a
+   `tmx` command, since a peer could ask for `tmx reply <thread> "$(env)"`. A list setup creates
+   starts with `"$defaults"` so the built-in rules stay in effect; a list the operator already
+   has only loses its marked entries and gains the current one. The entries are written only
+   when the box's `claude --version` reads 2.1.228 or later (the version the documentation names
+   for `/auto-mode-setup`, which writes `"$defaults"` itself); setup never upgrades Claude Code,
+   and an older one might read `"$defaults"` as prose and lose its built-ins. Below that, or with
+   an unreadable version, `autoMode` is left exactly as it is and the result carries a note.
    `claude auto-mode config` against an installed config directory shows both entries and the
    built-ins (pinned by a test that runs when `claude` is on `PATH`).
 

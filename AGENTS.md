@@ -639,7 +639,9 @@ nothing is posted after the final write.
   `MAIL_AUTOMODE_ENVIRONMENT`/`MAIL_AUTOMODE_ALLOW` into `autoMode.environment`/`allow` (a list it
   creates is `["$defaults", ours]`; in the operator's own it drops elements containing
   `[tmuxifier-mail]` and appends ours, never adding `$defaults`); an `autoMode` that is not an
-  object or a list that is not all strings fails the merge closed. Test: `test/claudeAgentMail.test.js`.
+  object or a list that is not all strings fails the merge closed. Only for a box `claude --version`
+  of at least `AUTOMODE_MIN_CLAUDE` (2.1.228); below it or unreadable, `autoMode` is untouched and
+  the ok result carries `note`. Test: `test/claudeAgentMail.test.js`.
   The `tmx` script: POSIX `sh`, curl over the socket, bodies only on curl's stdin, never
   evaluates an answer; `send`/`reply` are **never retried** once the request may have arrived
   (exit 3); with no socket file at all a user command says at once that messaging is not turned

@@ -101,6 +101,11 @@ test('phase agent-mail reads "Installing agent messaging…"', () => {
   expect(setupStatusText({ status: 'running', phase: 'agent-mail', error: null, needs: null }))
     .toBe('Installing agent messaging…');
   expect(formatStatuslineResult({ target: 'agent-mail', ok: false, skipped: 'no curl on the box' })).toBe('agent-mail skipped (no curl on the box)');
+  expect(formatStatuslineResult({ target: 'agent-mail', ok: true })).toBe('agent-mail ✓');
+  expect(formatStatuslineResult({ target: 'agent-mail', ok: true, note: 'auto-mode entries need Claude Code 2.1.228 or later' }))
+    .toBe('agent-mail ✓ (auto-mode entries need Claude Code 2.1.228 or later)');
+  // A note never decorates a skip or a failure.
+  expect(formatStatuslineResult({ target: 'agent-mail', ok: false, error: 'agent mail push failed', note: 'x' })).toBe('agent-mail failed (agent mail push failed)');
 });
 
 test('running job in the opencode-plugin phase reads as installing the OpenCode plugin', () => {
