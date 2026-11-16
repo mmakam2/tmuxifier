@@ -419,7 +419,8 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   `opencode` (on PATH or `~/.opencode/bin`), else `skipped`; no settings merge (OpenCode
   auto-loads the directory) and no restart (its server hot-loads it). It also reads
   `opencode --version`, and the ok result carries a `note` below `OPENCODE_MAIL_MIN` (2.3.0; the
-  asset exports the same constant, pinned equal by test). The asset is a V2 plugin
+  asset exports the same constant, pinned equal by test) and for a version it could not read (the
+  plugin checks `ctx.app.version` itself at runtime, so that one may still listen). The asset is a V2 plugin
   (`default { id, setup }`, node builtins only) that runs inside OpenCode's **one shared
   `opencode serve` per user**, which outlives every TUI and gives no per-TUI handle — so its state
   part is an events reducer attributed by directory to the tmux sessions whose active pane
@@ -454,9 +455,13 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   tree, agent markdown, env), unreadable files counting as rules. OpenCode runs those hooks only
   in the instance owning the session's directory, so the entry point keeps every live `ctx`,
   registers the hooks on each, and arms mail only for hooked directories; taggers and handlers
-  are process-wide and survive hand-over. Acceptance: `test/fixtures/opencode-2.3-event-trace.jsonl`
-  (a real 2.3.0 recording; its README holds the measured facts F1–F10) replayed by the
-  `test/opencodeAgent*.test.js` suites. Design:
+  are process-wide and survive hand-over. Mail in projects already open when the plugin is
+  installed or updated may need an OpenCode restart. Acceptance:
+  `test/fixtures/opencode-2.3-event-trace.jsonl` (a real 2.3.0 recording; its README holds the
+  measured facts F1–F10), read by `test/opencodeAgentReducer.test.js`,
+  `test/opencodeAgentReplay23.test.js`, `test/opencodeAgentMailTargets.test.js`,
+  `test/opencodeAgentPaneTag.test.js`, `test/opencodeAgentPermission.test.js` and
+  `test/opencodeAgentRegistry.test.js`. Design:
   `docs/superpowers/specs/2026-11-16-opencode-agent-messaging-design.md`.
 - `oscReporter.js` + `src/server/assets/tmuxifier-osc-reporter.py` — the OSC 7501 ("Program
   Status") reporter for agents that emit it: Codex (native from 0.163; the 0.167 binary carries the sequences, but no live capture exists yet — the

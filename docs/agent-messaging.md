@@ -49,7 +49,7 @@ To let the agent on `orders` send work to the agent on `billing`:
 2. **Restart the agent** in every session that should take part. Claude Code reads its hooks
    and skills when it starts, so a `claude` that was already running neither receives mail nor
    knows the command. OpenCode loads the plugin and the skill on its own within seconds, but an
-   OpenCode project that was already open when setup first installed the plugin may need an
+   OpenCode project that was already open when setup installed or updated the plugin may need an
    OpenCode restart before it receives mail.
 3. **Edit `orders`.** In the **Agent messaging** section, tick **Agents here may send** and pick
    `billing` from the **add box** list after `to:`. Leave **When adding a box, also write the
@@ -191,7 +191,11 @@ ends with a line telling the agent to run `tmx read` for the rest.
 agent's shell commands from one server shared by all its windows, and that server's `$TMUX_PANE`
 is the first window's, forever. So the plugin sets `TMUXIFIER_MAIL_PANE` on each command the
 agent runs, to the pane of that agent's own tmux session, and `tmx` prefers it over `$TMUX_PANE`.
-When the plugin cannot say which tmux session the agent belongs to (see
+The plugin names a pane only for the OpenCode that is its tmux session's mail target: the
+OpenCode in the active pane of that tmux session's active window, once you have viewed or
+prompted it there. That holds for everything `tmx` does, sending, reading and replying as well as
+receiving. From an OpenCode in another window or pane of the session, or one you have not used
+yet, or when the plugin otherwise cannot say which tmux session the agent belongs to (see
 [Limits](#limits-in-this-version)), the value is `none`, and every `tmx` command that talks to
 Tmuxifier refuses at once, without sending anything:
 
@@ -341,26 +345,33 @@ For OpenCode, when `opencode` is on the box:
   (mode `0600`), so an OpenCode server that restarts does not lose track of them.
 
 The OpenCode plugin needs OpenCode **2.3.0 or later** for mail. Setup asks the box's OpenCode for
-its version; on an older one, or one whose version cannot be read, the plugin still reports
-state but never listens, and the `opencode-plugin` line says so (see
-[Troubleshooting](#troubleshooting)).
+its version; on an older one the plugin still reports state but never listens, and the
+`opencode-plugin` line carries a warning note (see [Troubleshooting](#troubleshooting)). A
+version setup could not read gets the same note, but the plugin checks OpenCode's version itself
+when it runs, so it may still listen.
 
 The plugin also decides whether OpenCode asks before running a `tmx` command, which is how it
 stands in for Claude Code's `Bash(tmx *)` rule. It allows a command without asking only when it is
 one plain `tmx who`, `send`, `reply`, `wait`, `read` or `inbox` (by `tmx`, `~/.local/bin/tmx` or
-`$HOME/.local/bin/tmx`) whose arguments are plain words or quoted text. Anything with `$`
-(command substitution or a variable), a backtick, a pipe, `;`, `&`, a redirect, a newline, or a
-quoted argument holding any of those, is not allowed automatically: OpenCode asks as it would
-for any other command, and the plugin never denies anything or overrides a deny. **If you have
-set any permission rule for shell commands yourself, the plugin does nothing at all** and
-OpenCode asks about every `tmx` command as you configured it: a `permission.shell` or
-`permission.bash` entry, a `permission` setting that covers every tool, or the same under an
-agent, in your global OpenCode config, in a project's `opencode.json` or `.opencode/` folder
-(that project's folder and every folder above it), in an agent definition file, or through the
-`OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT` or `OPENCODE_PERMISSION` environment variable. A
-config file it cannot read or parse counts as a rule. A change applies to the next command,
-without a restart. To have `tmx` run unprompted in that case, allow it in your own rule, for
-example `{"permission": {"shell": {"tmx *": "allow"}}}`.
+`$HOME/.local/bin/tmx`) whose arguments are plain words or quoted text. A command with a `$` in
+its arguments (command substitution or a variable), a backtick, a pipe, `;`, `&`, a redirect, a
+newline, or a quoted argument holding any of those, is not allowed by the plugin: OpenCode
+decides about it as it would without the plugin. On a default install OpenCode itself allows most
+commands, so the plugin only ever lifts an `ask` for a plain `tmx` command; it never denies
+anything and never overrides a deny.
+
+**If you have set a permission rule for shell commands yourself, the plugin does nothing**, and
+OpenCode decides about `tmx` commands as it does for any other command, under your rules. The
+plugin looks for such a rule in these places: your global OpenCode config (`opencode.json` or
+`opencode.jsonc` in `$OPENCODE_CONFIG_DIR`, and in `$XDG_CONFIG_HOME/opencode/` or
+`~/.config/opencode/`); a project's `opencode.json`, `opencode.jsonc` and `.opencode/` config, in
+the project's folder and every folder above it; agent definition files (an `agent/` or `agents/`
+folder) there and in the global config; and the `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT` and
+`OPENCODE_PERMISSION` environment variables. A rule is a `permission.shell` or `permission.bash`
+entry, a `permission` setting that covers every tool, or the same under an agent; a file it
+cannot read or parse counts as a rule. A rule set anywhere else, a system-wide config for
+example, may not be seen, and the plugin then still lifts the `ask` on a plain `tmx`. A change to
+a config file applies to the next command, without a restart.
 
 To remove it from a box: for Claude Code, delete those three hook entries, the rule and the two
 `autoMode` entries marked `[tmuxifier-mail]` from `settings.json`, and `rm -rf
@@ -393,12 +404,14 @@ describes (that also ends OpenCode's state reporting). Then `rm -rf ~/.tmuxifier
   nothing else.
 - Setup changes how Claude Code's auto mode judges `tmx` on that box: its two `autoMode`
   entries tell the classifier that messages sent with `tmx` are communication you sanctioned.
-- On OpenCode the plugin plays the part of that rule: it allows only a single plain `tmx`
-  command, never one with substitution, a pipe, `;`, a redirect or a quoted argument holding
-  shell characters, and it does nothing at all once you have set a shell permission rule of your
-  own (see [What setup installs](#what-setup-installs)). The plugin talks only to the box's mail
-  socket and to OpenCode through its plugin interface; it never reads OpenCode's server password
-  and never calls its HTTP server.
+- On OpenCode the plugin plays the part of that rule: it lifts an `ask` only for a single plain
+  `tmx` command, never for one with substitution, a pipe, `;`, a redirect or a quoted argument
+  holding shell characters (OpenCode decides about those as it would without the plugin), and it
+  does nothing at all once you have set a shell permission rule of your own (see
+  [What setup installs](#what-setup-installs)). Over the network or IPC the plugin talks only to
+  the box's mail socket and to OpenCode through its plugin interface; it never reads OpenCode's
+  server password and never calls its HTTP server. On the box it also runs `tmux list-panes`,
+  reads OpenCode's config files, and writes the state markers and its in-flight file.
 - Message text is stored in plaintext on the Tmuxifier host under `data/agent-mail/` (files
   `0600`). A delivered message becomes part of the receiving agent session's context, which that
   agent sends to its model provider under its own login like anything else it reads (Anthropic
@@ -408,8 +421,9 @@ describes (that also ends OpenCode's state reporting). Then `rm -rf ~/.tmuxifier
 
 - **Receivers are Claude Code and OpenCode 2.3.0 or later.** A message for a session running
   another agent (Codex, pi, Antigravity) is accepted, waits, and the sender is told it is not
-  listening. An OpenCode older than 2.3.0 can send, and read its inbox with `tmx inbox`, but is
-  never woken.
+  listening. Messaging from an OpenCode older than 2.3.0 is not supported: its plugin never
+  listens, and its `tmx` commands cannot be tied to the right tmux session. The same goes for an
+  OpenCode project folder whose plugin hooks are not active yet (see the restart note below).
 - **The Host Shell** neither sends nor receives.
 - **A busy or blocked session is never interrupted.** Mail waits for the turn to end or for you
   to answer the prompt. There is no way to deliver into a running turn.
@@ -433,12 +447,16 @@ describes (that also ends OpenCode's state reporting). Then `rm -rf ~/.tmuxifier
   a subfolder of the other's project. Windows in different project folders are fine, and each
   `tmx` speaks as its own session. Two OpenCode windows in one tmux session share that session's
   address, as two Claude Code panes do.
-- **OpenCode listens only for the window you are using.** Only the OpenCode in the active pane of
-  a tmux session's active window listens. Within a tmux session, mail goes to the OpenCode
-  session you last viewed or prompted, and until you view or prompt one after the window opens,
-  the tmux session is not listening: opening a session with `opencode -s` or continuing with
-  `opencode -c` counts for nothing, but the first prompt or the first finished turn on screen
-  does. The same holds after an OpenCode server restart.
+- **OpenCode listens, and speaks, only for the window you are using.** Only the OpenCode in the
+  active pane of a tmux session's active window listens. Within a tmux session, mail goes to the
+  OpenCode session you last viewed or prompted, and until you view or prompt one after the window
+  opens, the tmux session is not listening: opening a session with `opencode -s` or continuing
+  with `opencode -c` counts for nothing, but the first prompt or the first finished turn on
+  screen does. The same holds after an OpenCode server restart. It applies to what the agent
+  sends too: an OpenCode agent's `tmx` (sending, reading and replying, not just receiving) works
+  only from the OpenCode that is the active pane of its tmux session's active window, and only
+  after you have viewed or prompted it there. Otherwise `tmx` says the session cannot be
+  identified.
 - **A renamed tmux session stops listening until you use it again.** Prompt or view an OpenCode
   session in it once.
 - **OpenCode can deliver a message twice.** After an OpenCode server restart, when a turn holds
@@ -446,13 +464,12 @@ describes (that also ends OpenCode's state reporting). Then `rm -rf ~/.tmuxifier
   offers the message again while OpenCode may still deliver the first copy. Delivery is
   at-least-once here as for Claude Code, and the message id in the first line lets the agent see
   a repeat.
-- **A command typed with OpenCode's `!` prefix cannot use `tmx`.** It does not go through the
-  agent's tool, so it carries no pane and `tmx` refuses with the message above. Run it from a
-  normal shell instead.
+- **Do not use `tmx` from a command typed with OpenCode's `!` prefix.** It is not a command the
+  agent ran, so the plugin cannot name its pane. Run `tmx` from a normal shell instead.
 - **One OpenCode server per user is assumed.** OpenCode runs its plugin inside a single server
   shared by all of one user's windows, and messaging is built on that.
-- **After setup, OpenCode projects that were already open may need an OpenCode restart** before
-  they receive mail.
+- **After setup installs or updates the plugin, OpenCode projects that were already open may
+  need an OpenCode restart** before they receive mail.
 - **Tmuxifier keeps at most 1000 threads.** There is no limit on how many messages a thread
   carries or how many threads a pair starts. When a new thread would be the 1001st, the
   longest-idle closed threads are deleted first, then the longest-idle open ones (each closed
@@ -489,7 +506,7 @@ the dialog is Add rather than Edit.
 | `agent-mail failed (no jq, node or python3 on the box)` | Setup needs one of the three to merge `settings.json` |
 | `agent-mail ✓ (auto-mode entries need Claude Code 2.1.228 or later)` | Messaging is installed; the two auto-mode entries were not written because the box's Claude Code is older or its version could not be read. Update Claude Code on the box, then rerun setup |
 | `agent-mail ✓ (OpenCode's part arrives with the OpenCode plugin)` | The box has OpenCode and no Claude Code: `tmx` and OpenCode's skill are installed, and there is no Claude Code settings file to merge. The listener comes with the `opencode-plugin` line below |
-| `opencode-plugin ✓ (agent messaging needs OpenCode 2.3.0 or later)` | The plugin is installed and reports state, but the box's OpenCode is older than 2.3.0 or its version could not be read, so the plugin never listens for mail. Update OpenCode on the box, then rerun setup |
+| `opencode-plugin ✓ (agent messaging needs OpenCode 2.3.0 or later)` | The plugin is installed and reports state, but the box's OpenCode is older than 2.3.0, or setup could not read its version. On an older OpenCode the plugin never listens for mail: update OpenCode on the box, then rerun setup. When the version could not be read, the plugin checks it itself when it runs, so it may still listen |
 | `agent-mail failed (settings.json could not be merged)` | The box's Claude Code `settings.json` is not valid JSON, or a key setup writes has an unexpected type; fix it and rerun setup |
 
 No `agent-mail` line at all: neither **Claude Code** nor **OpenCode** was ticked, or messaging is off.
@@ -537,15 +554,15 @@ has not been observed yet, so the two steps above remain the way to get such a r
 
 **An agent says `tmx` was not found.** `~/.local/bin` has to be on the `PATH` of the shell Claude
 Code was started from, or of the shell that started the box's OpenCode server. The command also
-lives at `~/.tmuxifier-mail/tmx`, but the permission rule (and OpenCode's plugin) covers only
-`tmx`, so a call by that path asks you first.
+lives at `~/.tmuxifier-mail/tmx`, but Claude Code's permission rule covers only `tmx`, so a call
+by that path asks you first. OpenCode's plugin covers `tmx`, `~/.local/bin/tmx` and
+`$HOME/.local/bin/tmx`, and leaves a call by any other path to OpenCode.
 
 **Messages from `tmx` itself:**
 
 - `tmx: run this inside a tmux session`: `tmx` works only in a tmux pane.
 - `tmx: this agent's tmux session cannot be identified for messaging`: an OpenCode agent whose
-  tmux session Tmuxifier cannot name, or a command typed with OpenCode's `!` prefix; see
-  [Limits](#limits-in-this-version) and
+  tmux session Tmuxifier cannot name; see [Limits](#limits-in-this-version) and
   [Which session `tmx` speaks for under OpenCode](#which-session-tmx-speaks-for-under-opencode).
 - `tmx: agent messaging is not turned on for this box; tell your operator`: the box has no mail
   socket, which is the case while both its switches are off (or until the socket first comes up
