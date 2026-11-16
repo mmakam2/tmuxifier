@@ -37,8 +37,8 @@ On a phone (720px wide or narrower) the dashboard gets the whole screen under a 
 because the sidebar collapses into a drawer behind that bar's ☰ button — which makes a phone a
 decent standby monitor: fleet lamps, agent chips and service tiles, and nothing else. Tapping a
 fleet card still opens that box's terminal, and the drawer is how you get back to the box list,
-the nameplate, Settings, Fleet Command and Events. The box rows in that drawer, and the
-sparklines on them, are sized up into proper touch targets. See
+the nameplate, Settings, Fleet Command and Events. The box rows in that drawer, and their
+optional sparklines, are sized up into proper touch targets. See
 [phone mode](terminal.md#phone-mode) for the rest of the phone layout.
 
 ## Tile icons

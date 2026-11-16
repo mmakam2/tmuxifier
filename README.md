@@ -260,7 +260,7 @@ guide](docs/agent-messaging.md).
 A single server-side loop probes every box over a shared SSH ControlMaster with adaptive
 backoff and bounded fan-out, so status traffic stays low enough never to trip a box's
 `fail2ban`-style brute-force protection — no matter how many dashboard tabs are open. The same
-samples feed per-box health sparklines and an event timeline (down/up transitions, resource
+samples feed optional per-box health sparklines and an event timeline (down/up transitions, resource
 thresholds, and **Claude Code / OpenCode needs-you/finished** agent events, with optional browser
 notifications). **Fleet Command** runs a command or saved script across any selection of boxes
 as a persisted server-side job with per-box results. The full rate-limit-safety design is in

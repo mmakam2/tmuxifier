@@ -5,8 +5,9 @@ import { applyTheme, currentTheme } from './theme';
 import { api, type UiSettings } from './api';
 import { sidebarSparkOn, setSidebarSpark } from './sidebarSpark';
 
-// Settings → Appearance: theme + working-agent animation. Both persist
-// server-side (data/ui-settings.json) so every browser follows one setting;
+// Settings → Appearance: theme, working-agent animation and the sidebar usage
+// graph (a checkbox, off by default). All three persist server-side
+// (data/ui-settings.json) so every browser follows one setting;
 // no Save button — selecting a row applies instantly and PATCHes. A failed
 // save keeps the local apply (it works this session) and says so, rather
 // than yanking a theme the operator is already looking at.

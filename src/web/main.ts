@@ -519,8 +519,9 @@ async function loadUiConfigFlags(): Promise<void> {
   try { agentMailEnabled = mailEnabledFrom(await api.uiConfig()); } catch {}
 }
 
-// Server-side UI prefs: theme + clawd animation. Best-effort — on failure the
-// mirror-painted theme and localStorage-seeded clawd pref stand.
+// Server-side UI prefs: theme, clawd animation and the sidebar sparkline flag.
+// Best-effort — on failure the mirror-painted theme and localStorage-seeded
+// clawd pref stand, and the sparkline stays off (its default).
 //
 // Called from EVERY path that reaches the workspace, not just start(): a fresh
 // login transitions to the dashboard without a page load, so leaving this in

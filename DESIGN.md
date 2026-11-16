@@ -349,7 +349,8 @@ accent elsewhere).
 - **Icon keys** (row actions ✎ ↻ ✕ ⚷): flat legend-dim glyphs on 4px hit pads; hover
   raises one chassis step and brightens; destructive hover turns LED Red.
 - **Box rows** (the fleet cluster): 9px lamp, bone name, readout meta line with LED-colored
-  figures, amber sparkline; hover = Chassis Raised; attached = Lamp-and-Beacon.
+  figures, optional amber sparkline (off by default, Settings → Appearance); hover =
+  Chassis Raised; attached = Lamp-and-Beacon.
 - **Inputs**: recessed Screen Well glass, bone text, bezel border; focus lights the bezel
   amber with a soft outer glow — the input powers on. Placeholders legend-dim.
 - **Chips/badges**: 4px mode chips in legend type — lit (amber/orange/LED color at 12–16%
