@@ -513,6 +513,66 @@ describe('tmx: TMUXIFIER_MAIL_PANE', () => {
     expect(out).toMatchObject({ code: 2, stderr: 'tmx: run this inside a tmux session\n' });
   });
 
+  // OpenCode sets OPENCODE_TERMINAL=1 in every shell it runs (the agent's and the operator's `!`)
+  // and OPENCODE=1 in the agent's. There TMUX/TMUX_PANE are the shared server's (the first TUI's),
+  // so without the tag the user commands refuse instead of speaking as that session (R37).
+  test('under OpenCode without the variable every user command refuses, with no request', async () => {
+    await listener.listen();
+    const commands = [['who'], ['send', 'billing', 'hi'], ['reply', 't-7fq2m9cd', 'hi'], ['read', 't-7fq2m9cd'],
+      ['wait', 't-7fq2m9cd', '-t', '1'], ['inbox']];
+    for (const marker of [{ OPENCODE: '1' }, { OPENCODE_TERMINAL: '1' }, { OPENCODE: '1', OPENCODE_TERMINAL: '1' }]) {
+      for (const pane of [undefined, '']) {
+        for (const args of commands) {
+          const r = await run(args, { env: env({ ...marker, TMUXIFIER_MAIL_PANE: pane }) }); // valid TMUX + TMUX_PANE=%3
+          const what = `${JSON.stringify(marker)} ${JSON.stringify(pane)} ${args.join(' ')}`;
+          expect(r.code, what).toBe(2);
+          expect(r.stdout, what).toBe('');
+          expect(r.stderr, what).toBe(UNIDENTIFIED);
+        }
+      }
+    }
+    expect(curlCalls()).toEqual([]);
+    expect(h.store.count()).toBe(0);
+    // An empty marker is no marker.
+    const plain = await run(['send', 'billing', 'plain'], { env: env({ OPENCODE: '', OPENCODE_TERMINAL: '' }) });
+    expect(plain.code).toBe(0);
+    expect(h.store.thread(threadOf(plain.stdout)).starter).toEqual({ boxId: 'o', session: 'main' });
+  });
+
+  test('under OpenCode a tagged pane still works', async () => {
+    await listener.listen();
+    for (const marker of [{ OPENCODE: '1' }, { OPENCODE_TERMINAL: '1' }]) {
+      const r = await run(['send', 'billing', 'tagged'], { env: env({ ...marker, TMUXIFIER_MAIL_PANE: '%5', TMUX_PANE: '%3' }) });
+      expect(r.code).toBe(0);
+      expect(h.store.thread(threadOf(r.stdout)).starter).toEqual({ boxId: 'o', session: 'side' });
+    }
+  });
+
+  test('the OpenCode markers do not change hook-wait or hook-ack', async () => {
+    await listener.listen();
+    h.marks.o.main = mark('ready');
+    for (const marker of [{ OPENCODE: '1' }, { OPENCODE_TERMINAL: '1' }]) {
+      const w = start(['hook-wait'], { env: env(marker) }); // TMUX_PANE=%3 is main
+      await until(() => listening() === 1);
+      expect(curlCalls().at(-1)).toContain('session=main');
+      expect((await h.hub.send(B, 'orders', `to main ${JSON.stringify(marker)}`)).ok).toBe(true);
+      const r = await w.done;
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain('to main');
+      expect(await h.hub.ack(O, /^\[tmuxifier-mail (m-[a-z2-9]{8})\]/.exec(r.stderr)[1])).toBe(true);
+      h.marks.o.main = mark('ready');
+    }
+    const wake = '[tmuxifier-mail m-abcdefgh] Message from the agent in billing/main, thread t-abcdefgh.';
+    const before = curlCalls().length;
+    for (const marker of [{ OPENCODE: '1' }, { OPENCODE_TERMINAL: '1' }]) {
+      const a = await run(['hook-ack'], { stdin: wakePayload(wake), env: env(marker) });
+      expect(a).toMatchObject({ code: 0, stdout: '', stderr: '' });
+    }
+    const acks = curlCalls().slice(before);
+    expect(acks).toHaveLength(2);
+    for (const call of acks) expect(call).toContain('session=main');
+  });
+
   test('the help text and an unknown command are not user commands: exit 2 with the usage either way', async () => {
     for (const args of [[], ['help'], ['nonsense']]) {
       const r = await run(args, { env: env({ TMUXIFIER_MAIL_PANE: 'none' }) });

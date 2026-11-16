@@ -203,11 +203,21 @@ Tmuxifier refuses at once, without sending anything:
 tmx: this agent's tmux session cannot be identified for messaging
 ```
 
+`tmx` never falls back to `$TMUX_PANE` inside OpenCode. OpenCode marks every shell it starts
+(`OPENCODE_TERMINAL=1`, and `OPENCODE=1` for the agent's), and when `tmx` sees either mark without
+`TMUXIFIER_MAIL_PANE` it refuses with the same message. That covers an OpenCode project folder
+whose plugin hooks are not active yet, an OpenCode older than 2.3.0, a command typed with
+OpenCode's `!` prefix that the plugin did not tag, and any other shell the plugin missed: without
+the refusal each of them would speak as the first OpenCode window's tmux session. A Claude Code
+started from inside an OpenCode shell inherits the mark, so its `tmx` refuses too; start Claude
+Code from a normal shell.
+
 Outside OpenCode the variable is unset and nothing changes. You do not set it yourself. One
 thing to know: a tmux server started from inside an agent's command (an agent that runs
 `tmux new-session -d`, for example) is a child of that command, so its panes inherit the value
-the command had. A `tmx` run there speaks for the pane that variable names, or refuses, instead
-of for its own pane. Run `unset TMUXIFIER_MAIL_PANE` in such a shell first.
+and the marks the command had. A `tmx` run there speaks for the pane that variable names, or
+refuses, instead of for its own pane. Run `unset TMUXIFIER_MAIL_PANE OPENCODE OPENCODE_TERMINAL`
+in such a shell first.
 
 ## What you see
 
@@ -422,7 +432,7 @@ describes (that also ends OpenCode's state reporting). Then `rm -rf ~/.tmuxifier
 - **Receivers are Claude Code and OpenCode 2.3.0 or later.** A message for a session running
   another agent (Codex, pi, Antigravity) is accepted, waits, and the sender is told it is not
   listening. Messaging from an OpenCode older than 2.3.0 is not supported: its plugin never
-  listens, and its `tmx` commands cannot be tied to the right tmux session. The same goes for an
+  listens, and its `tmx` commands refuse (they cannot be tied to the right tmux session). The same goes for an
   OpenCode project folder whose plugin hooks are not active yet (see the restart note below).
 - **The Host Shell** neither sends nor receives.
 - **A busy or blocked session is never interrupted.** Mail waits for the turn to end or for you
@@ -457,6 +467,8 @@ describes (that also ends OpenCode's state reporting). Then `rm -rf ~/.tmuxifier
   only from the OpenCode that is the active pane of its tmux session's active window, and only
   after you have viewed or prompted it there. Otherwise `tmx` says the session cannot be
   identified.
+- **Within one tmux session, a wake goes to the OpenCode conversation you last viewed or
+  prompted,** which may not be the one on screen right after you switch conversations in the TUI.
 - **A renamed tmux session stops listening until you use it again.** Prompt or view an OpenCode
   session in it once.
 - **OpenCode can deliver a message twice.** After an OpenCode server restart, when a turn holds
@@ -465,7 +477,8 @@ describes (that also ends OpenCode's state reporting). Then `rm -rf ~/.tmuxifier
   at-least-once here as for Claude Code, and the message id in the first line lets the agent see
   a repeat.
 - **Do not use `tmx` from a command typed with OpenCode's `!` prefix.** It is not a command the
-  agent ran, so the plugin cannot name its pane. Run `tmx` from a normal shell instead.
+  agent ran, so the plugin may not name its pane, and `tmx` then refuses (`cannot be
+  identified`). Run `tmx` from a normal shell instead.
 - **One OpenCode server per user is assumed.** OpenCode runs its plugin inside a single server
   shared by all of one user's windows, and messaging is built on that.
 - **After setup installs or updates the plugin, OpenCode projects that were already open may

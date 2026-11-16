@@ -162,6 +162,7 @@ Cross-cutting invariants that tests alone have repeatedly failed to protect:
   for mail beyond one cancel, by its own spec, of a forward it made before it was refused (never
   the remote `rm`, which would break the holder); an unresolved one runs nothing, and while one
   is unresolved no forward starts. Read `agentMailForward.js`'s header before touching `sync`.
+- **tmx under OpenCode never falls back to `$TMUX_PANE`:** without `TMUXIFIER_MAIL_PANE` it refuses.
 - **A re-addressed box is another machine for mail.** When a box's host, user, port or jump host
   changes, the first thing the next mail sync does for it, resolved or not, is close its listener
   (every connection made through the old machine dies, every held request ends), and its local
@@ -689,7 +690,8 @@ nothing is posted after the final write.
   The `tmx` script: POSIX `sh`, curl over the socket, bodies only on curl's stdin, never
   evaluates an answer; the user commands (never `hook-wait`/`hook-ack`) take the calling pane from
   `TMUXIFIER_MAIL_PANE` when set, ahead of `TMUX_PANE`: a pane id replaces it and needs no `$TMUX`,
-  `none` or anything malformed exits 2 with no request; `send`/`reply` are **never retried** once
+  `none` or anything malformed exits 2 with no request, and so does an unset or empty one under
+  OpenCode (`OPENCODE` or `OPENCODE_TERMINAL` non-empty: `$TMUX_PANE` there is the first TUI's); `send`/`reply` are **never retried** once
   the request may have arrived (exit 3); with no socket file at all a user command says at once
   that messaging is not turned on for the box (exit 3, no retry), while a file that does not answer
   is retried. `hook-wait` follows its Claude Code via `/proc` (not `$PPID`, a dash wrapper that

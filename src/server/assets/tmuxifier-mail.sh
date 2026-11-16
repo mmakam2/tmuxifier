@@ -69,10 +69,18 @@
 # command with its own pane in TMUXIFIER_MAIL_PANE (design 6.9). The user commands (who, send,
 # reply, wait, read, inbox; never hook-wait or hook-ack, which Claude Code starts in its own
 # pane and which ignore the variable entirely) read it first:
-#   unset or empty          nothing changes: $TMUX and $TMUX_PANE decide.
+#   unset or empty          under OpenCode (OPENCODE or OPENCODE_TERMINAL non-empty: OpenCode
+#                           sets OPENCODE_TERMINAL=1 in every shell it runs, the agent's and the
+#                           operator's `!` ones, and OPENCODE=1 in the agent's) refused like
+#                           `none` below: $TMUX_PANE there is the first TUI's, never a fallback
+#                           (an un-hooked directory, an OpenCode without the hooks, a shell the
+#                           plugin did not tag). Elsewhere nothing changes: $TMUX and $TMUX_PANE
+#                           decide. (A Claude Code started from an OpenCode shell inherits the
+#                           marker and is refused too: fail closed.)
 #   a pane id (%N)          replaces $TMUX_PANE, and $TMUX is not required (the server may have
-#                           been started outside tmux; tmux resolves the pane on its default
-#                           server). A pane tmux cannot resolve is refused like `none`.
+#                           been started outside tmux; tmux then resolves the pane on the server
+#                           of $TMUX's socket when $TMUX is set, else on its default server). A
+#                           pane tmux cannot resolve is refused like `none`.
 #   `none`, or anything     "this agent's tmux session cannot be identified for messaging" on
 #   else                    stderr, exit 2, before any argument is read and with no request: the
 #                           plugin found no pane for the calling session, so $TMUX_PANE (the first
@@ -176,7 +184,10 @@ unidentified() {
 
 # User commands only: TMUXIFIER_MAIL_PANE (see the header) names the calling pane, or refuses.
 mail_pane() {
-  [ -n "${TMUXIFIER_MAIL_PANE:-}" ] || return 0
+  if [ -z "${TMUXIFIER_MAIL_PANE:-}" ]; then
+    [ -z "${OPENCODE:-}${OPENCODE_TERMINAL:-}" ] || unidentified
+    return 0
+  fi
   valid_pane "$TMUXIFIER_MAIL_PANE" || unidentified
   VIA_PANE=$TMUXIFIER_MAIL_PANE
 }
