@@ -31,30 +31,30 @@ function world() {
 const pane = (session, path, cmd = 'opencode', active = true) => ({ session, cmd, path, active });
 const sc = (f) => `${f.state}/${f.cause}`;
 
-test('PANE_FORMAT lists session, active flags, command and path, tab-separated', () => {
-  expect(PANE_FORMAT).toBe('#{session_name}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}');
+test('PANE_FORMAT lists session, active flags, command, path and pane id, tab-separated', () => {
+  expect(PANE_FORMAT).toBe('#{session_name}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_id}');
 });
 
 test('parsePanes returns every well-formed row, active only for the active pane of the active window, and rejects malformed rows', () => {
-  const text = 'web\t1\t1\topencode\t/home/user/proj\n' + 'web\t0\t1\tclaude\t/home/user/other\n' + 'dev\t1\t0\topencode\t/x\n' + 'bad\x01name\t1\t1\topencode\t/x\n' + 'short\t1\t1\n' + 'odd\t1\t1\tzsh\t/a\tb\n';
+  const text = 'web\t1\t1\topencode\t/home/user/proj\t%1\n' + 'web\t0\t1\tclaude\t/home/user/other\t%2\n' + 'dev\t1\t0\topencode\t/x\t%3\n' + 'bad\x01name\t1\t1\topencode\t/x\t%4\n' + 'short\t1\t1\n' + 'odd\t1\t1\tzsh\t/a\t%5\tb\n';
   expect(parsePanes(text)).toEqual([
-    { session: 'web', cmd: 'opencode', path: '/home/user/proj', active: true },
-    { session: 'web', cmd: 'claude', path: '/home/user/other', active: false },
-    { session: 'dev', cmd: 'opencode', path: '/x', active: false },
+    { session: 'web', cmd: 'opencode', path: '/home/user/proj', active: true, pane: '%1' },
+    { session: 'web', cmd: 'claude', path: '/home/user/other', active: false, pane: '%2' },
+    { session: 'dev', cmd: 'opencode', path: '/x', active: false, pane: '%3' },
   ]);
 });
 
 test('parsePanes rejects controls in any field, over-long names and paths, and caps the rows', () => {
-  const ok = (s, p = '/p') => `${s}\t1\t1\topencode\t${p}\n`;
+  const ok = (s, p = '/p') => `${s}\t1\t1\topencode\t${p}\t%1\n`;
   expect(parsePanes(ok('a b.c-d_e') + ok('x', '/a\x1bb') + ok('y\x7f') + ok('\t'.slice(1)))).toEqual([
-    { session: 'a b.c-d_e', cmd: 'opencode', path: '/p', active: true },
+    { session: 'a b.c-d_e', cmd: 'opencode', path: '/p', active: true, pane: '%1' },
   ]);
   expect(parsePanes(ok('n'.repeat(256)))).toHaveLength(1);
   expect(parsePanes(ok('n'.repeat(257)))).toEqual([]);
   expect(parsePanes(ok('p', '/' + 'p'.repeat(4095)))).toHaveLength(1);
   expect(parsePanes(ok('p', '/' + 'p'.repeat(4096)))).toEqual([]);
   expect(parsePanes(ok('crlf').replace('\n', '\r\n'))).toEqual([]); // a CR is a control
-  expect(parsePanes('nopath\t1\t1\topencode\t\n')).toEqual([]); // an empty path would match every directory
+  expect(parsePanes('nopath\t1\t1\topencode\t\t%1\n')).toEqual([]); // an empty path would match every directory
   let many = '';
   for (let k = 0; k < 600; k++) many += ok(`s${k}`);
   expect(parsePanes(many)).toHaveLength(500);
@@ -62,12 +62,12 @@ test('parsePanes rejects controls in any field, over-long names and paths, and c
 });
 
 test('a session whose active window runs claude is not folded even if another window runs opencode', () => {
-  const text = 'web\t1\t1\tclaude\t/home/user/proj\nweb\t0\t1\topencode\t/home/user/proj\n';
+  const text = 'web\t1\t1\tclaude\t/home/user/proj\t%1\nweb\t0\t1\topencode\t/home/user/proj\t%2\n';
   const panes = parsePanes(text);
   expect(panes.filter((p) => isOpencodeCmd(p.cmd)).map((p) => p.active)).toEqual([false]);
   expect(foldForPanes(createReducer(), panes, new Map(), 1).has('web')).toBe(false);
   // The opencode window becoming the active one is what makes it read opencode.
-  const back = parsePanes('web\t0\t1\tclaude\t/home/user/proj\nweb\t1\t1\topencode\t/home/user/proj\n');
+  const back = parsePanes('web\t0\t1\tclaude\t/home/user/proj\t%1\nweb\t1\t1\topencode\t/home/user/proj\t%2\n');
   expect(foldForPanes(createReducer(), back, new Map(), 1).get('web')).toEqual({ state: 'ready', cause: 'start', ts: 1 });
 });
 

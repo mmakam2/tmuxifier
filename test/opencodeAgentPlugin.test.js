@@ -33,7 +33,7 @@ afterEach(async () => {
   for (const d of tmps.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-const row = (session, cmd, p, wa = '1', pa = '1') => `${session}\t${wa}\t${pa}\t${cmd}\t${p}\n`;
+const row = (session, cmd, p, wa = '1', pa = '1', id = '%1') => `${session}\t${wa}\t${pa}\t${cmd}\t${p}\t${id}\n`;
 const markerDir = (home) => path.join(home, '.tmuxifier-agent');
 const marker = (home, name) => path.join(markerDir(home), name);
 const read = (home, name) => readFileSync(marker(home, name), 'utf8');
@@ -171,7 +171,7 @@ test('listPanes failing (null), hanging past the timeout, or returning garbage l
     async () => { throw new Error('boom'); },
     () => { throw new Error('sync boom'); },
     async () => 42,
-    async () => '\x00garbage\nweb\t1\t1\topencode\n\t\t\t\t\n',
+    async () => '\x00garbage\nweb\t1\t1\topencode\n\t\t\t\t\t\n',
   ]) {
     const { core, home } = await rig({ listPanes });
     await expect(core.sweep()).resolves.toBeUndefined();

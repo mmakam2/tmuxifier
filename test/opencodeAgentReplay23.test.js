@@ -23,8 +23,8 @@ import { takeOver, parsePanes, foldForPanes, markerLine } from '../src/server/as
 const TRACE = fileURLToPath(new URL('./fixtures/opencode-2.3-event-trace.jsonl', import.meta.url));
 
 const PANES = parsePanes(
-  'octest\t1\t1\topencode\t/home/user/proj\n' +
-  'octest2\t1\t1\topencode\t/home/user/proj2\n',
+  'octest\t1\t1\topencode\t/home/user/proj\t%1\n' +
+  'octest2\t1\t1\topencode\t/home/user/proj2\t%2\n',
 );
 const SINCE = new Map([['octest', 0], ['octest2', 0]]);
 const END_RE = /^session\.execution\.(succeeded|interrupted|failed)$/;

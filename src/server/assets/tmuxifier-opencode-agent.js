@@ -41,6 +41,15 @@
 //    hint (directory + inbox kind, at most 500, oldest dropped first) that
 //    seeds the session when it is created.
 //
+// 8. Operator evidence (agent messaging, spec §6.3): which OpenCode session
+//    a human is working in is `session.viewed` (OpenCode 2.3.0: it fires after
+//    a turn ends only while a TUI shows the session, has no `location`, and
+//    opening or continuing a session emits nothing) or a `user` inbox item (an
+//    operator prompt; `synthetic` items are OpenCode's own notices and our mail
+//    wakes, never evidence). It is recorded as `evidenceAt` on the session
+//    (epoch seconds), carried through the hint for a session not yet known, and
+//    never moves a state, a marker or a `ts`.
+//
 // A setup for another directory in the same process (fact 2, fixture line
 // 316) or a hot reload (fact 3) hands the reducer's state over to the next
 // core (`STATE_VERSION` guards the shape; an incompatible one starts fresh).
@@ -71,7 +80,7 @@ const HINT_MAX = 500;
 // hints, seenIds and the session objects in them). Bump it whenever that shape
 // changes: a core loaded from newer bytes then starts fresh instead of reading
 // an older core's state it does not understand.
-export const STATE_VERSION = 1;
+export const STATE_VERSION = 2;
 
 // Turn activity: these `session.*` events only happen inside a turn, carry
 // `location.directory` and `data.sessionID`, and never follow the turn's end
@@ -130,6 +139,9 @@ function newSession(id) {
     blocks: new Map(),
     shells: new Set(),
     lastInbox: null,
+    // Epoch seconds of the newest operator evidence (session.viewed or a user
+    // inbox item); 0 = none seen by this core.
+    evidenceAt: 0,
     ts: 0,
   };
 }
@@ -178,10 +190,11 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
   const adopt = adoptable(state);
   const sessions = adopt ? state.sessions : new Map();
   const seenIds = adopt ? state.seenIds : new Set();
-  // sessionID -> { dir, lastInbox } from inbox items of sessions not (yet)
-  // known: a resumed session (`opencode -c`) has no session.created, and its
-  // execution.started carries no directory, so its first inbox item is the
-  // only place its directory is named (fact 7).
+  // sessionID -> { dir, lastInbox, evidenceAt } from inbox items of sessions
+  // not (yet) known: a resumed session (`opencode -c`) has no session.created,
+  // and its execution.started carries no directory, so its first inbox item is
+  // the only place its directory is named (fact 7), and a user item there is
+  // the operator evidence the session starts with (fact 8).
   const hints = adopt ? state.hints : new Map();
   const reducer = {
     sessions,
@@ -226,12 +239,14 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
     if (seenIds.size > SEEN_MAX) seenIds.delete(seenIds.values().next().value);
   }
 
-  function hint(sid, dir, kind) {
+  function hint(sid, dir, kind, at = 0) {
     const prev = hints.get(sid);
     hints.delete(sid);
+    const prevAt = Number.isFinite(prev?.evidenceAt) ? prev.evidenceAt : 0;
     hints.set(sid, {
       dir: prev?.dir ?? dir,
       lastInbox: kind === 'user' || kind === 'synthetic' ? kind : prev?.lastInbox ?? null,
+      evidenceAt: kind === 'user' && Number.isFinite(at) ? Math.max(prevAt, at) : prevAt,
     });
     if (hints.size > HINT_MAX) hints.delete(hints.keys().next().value);
   }
@@ -260,6 +275,15 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
     const data = event.data && typeof event.data === 'object' ? event.data : {};
     const dir = str(event.location?.directory);
     let sid = sessionIdOf(event);
+    const ts = Number.isFinite(event.created) ? Math.floor(event.created / 1000) : now();
+
+    // Operator evidence only: no state, no ts, no marker, and a session nobody
+    // told the reducer about is not created for it (fact 8).
+    if (type === 'session.viewed') {
+      const viewed = sid ? sessions.get(sid) : null;
+      if (viewed) viewed.evidenceAt = Math.max(viewed.evidenceAt, ts);
+      return false;
+    }
 
     const midTurn = TURN_ACTIVITY_RE.test(type) && !!sid && !!dir && !sessions.get(sid)?.executing;
     if (!RELEVANT.has(type) && !midTurn) {
@@ -287,11 +311,10 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
     if (type === 'session.deleted') hints.delete(sid);
     if (type === 'session.deleted' && !sessions.has(sid)) return false;
     if (NEVER_CREATES.has(type) && !sessions.has(sid)) {
-      if (type === 'session.inbox.enqueued') hint(sid, dir, data.item?.type);
+      if (type === 'session.inbox.enqueued') hint(sid, dir, data.item?.type, ts);
       return false;
     }
 
-    const ts = Number.isFinite(event.created) ? Math.floor(event.created / 1000) : now();
     const affected = chainOf(sid);
     // A session.created that names a parent links this session under it: the
     // parent's chain must be compared too, or an already-running child would
@@ -311,6 +334,7 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
         hints.delete(sid);
         s.dir = h.dir;
         s.lastInbox = h.lastInbox;
+        s.evidenceAt = Number.isFinite(h.evidenceAt) ? h.evidenceAt : 0;
       }
     }
     if (!s.dir && dir) s.dir = dir;
@@ -325,6 +349,7 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
       case 'session.inbox.enqueued': {
         const kind = data.item?.type;
         if (kind === 'user' || kind === 'synthetic') s.lastInbox = kind;
+        if (kind === 'user') s.evidenceAt = Math.max(s.evidenceAt, ts);
         break;
       }
       case 'session.execution.started':
@@ -414,29 +439,33 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
 //   only then is a marker written, and a marker it no longer reads is deleted.
 
 // The `tmux list-panes -a -F` argument parsePanes reads.
-export const PANE_FORMAT = '#{session_name}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}';
+export const PANE_FORMAT = '#{session_name}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_id}';
 
 const PANES_MAX = 500;
 const NAME_MAX = 256;
 const PATH_MAX = 4096;
 const CONTROL_RE = /[\x00-\x1f\x7f]/;
+// A tmux pane id, `%` and the pane's number: what `-t` and the mail wait name.
+const PANE_ID_RE = /^%\d{1,9}$/;
 
 // tmux output is box output: untrusted. Rows with the wrong field count, any
-// C0 control or DEL, an empty or over-long name or path are dropped, never
-// repaired. Every surviving row is kept, `active` marking the active pane of
-// the active window (hosting needs the others).
+// C0 control or DEL, an empty or over-long name or path, or a pane id that is
+// not `%<digits>` are dropped, never repaired. Every surviving row is kept,
+// `active` marking the active pane of the active window (hosting needs the
+// others).
 export function parsePanes(text) {
   if (typeof text !== 'string') return [];
   const out = [];
   for (const line of text.split('\n')) {
     if (out.length >= PANES_MAX) break;
     const f = line.split('\t');
-    if (f.length !== 5) continue;
-    const [session, windowActive, paneActive, cmd, path] = f;
+    if (f.length !== 6) continue;
+    const [session, windowActive, paneActive, cmd, path, pane] = f;
     if (!session || session.length > NAME_MAX || CONTROL_RE.test(session)) continue;
     if (cmd.length > NAME_MAX || CONTROL_RE.test(cmd)) continue;
     if (!path || path.length > PATH_MAX || CONTROL_RE.test(path)) continue;
-    out.push({ session, cmd, path, active: windowActive === '1' && paneActive === '1' });
+    if (!PANE_ID_RE.test(pane)) continue;
+    out.push({ session, cmd, path, active: windowActive === '1' && paneActive === '1', pane });
   }
   return out;
 }
@@ -506,6 +535,73 @@ export function foldForPanes(reducer, panes, since = new Map(), now = Math.floor
     out.set(pane.session, best
       ? { state: best.d.state, cause: best.d.cause, ts: best.d.ts }
       : { state: 'ready', cause: 'start', ts: floor ?? now });
+  }
+  return out;
+}
+
+// Which tmux pane may receive mail for which OpenCode session (spec §6.3,
+// rules 1-3; rule 4, that the target reads `ready`, is checked by the waiter
+// each time it would hold a request). tmux session -> { pane, sessionID, dir }
+// for every tmux session that has exactly one target; one with none, or with
+// an ambiguous one, is absent.
+//
+// - Rule 1: only the active pane of the active window, running opencode.
+// - Rule 2: the target is the root session with the newest operator evidence
+//   (`evidenceAt`, fact 8) in the pane's directory tier (the same tier as
+//   foldForPanes: exact, else one above) not older than `since`, the moment
+//   this tmux session started hosting opencode. A session that merely persists
+//   in the directory never counts, and neither does a child (it rolls up into
+//   its parent). Two sessions tied on the newest second are ambiguous: nothing
+//   says which one the operator meant.
+// - Rule 3: any OTHER tmux session hosting opencode in any window or pane
+//   (hosting, not reading) whose own directory tier reaches the target makes
+//   it ambiguous, whoever has evidence: nothing in OpenCode names the TUI that
+//   viewed or prompted a session, so neither of two TUIs listens. Panes of the
+//   same tmux session never conflict with each other.
+//
+// Pure, and never throws: input it cannot read yields an empty map.
+export function mailTargets(reducer, panes, since = new Map()) {
+  const out = new Map();
+  try {
+    if (!(reducer?.sessions instanceof Map) || !Array.isArray(panes)) return out;
+    if (!(since instanceof Map)) since = new Map();
+    const roots = [];
+    for (const s of reducer.sessions.values()) {
+      if (s && s.parent === null && s.dir) roots.push(s);
+    }
+    const tiers = new Map(); // pane path -> root sessions in its directory tier
+    const tierOf = (panePath) => {
+      let t = tiers.get(panePath);
+      if (!t) {
+        t = roots.filter((r) => dirExact(r.dir, panePath));
+        if (t.length === 0) t = roots.filter((r) => dirUnder(r.dir, panePath));
+        tiers.set(panePath, t);
+      }
+      return t;
+    };
+    const hosting = panes.filter((p) => p && typeof p === 'object' && typeof p.session === 'string'
+      && typeof p.path === 'string' && isOpencodeCmd(p.cmd));
+    for (const pane of hosting) {
+      if (pane.active !== true || typeof pane.pane !== 'string' || !PANE_ID_RE.test(pane.pane)) continue;
+      const floor = Number.isFinite(since.get(pane.session)) ? since.get(pane.session) : 0;
+      let best = null;
+      let tied = false;
+      for (const c of tierOf(pane.path)) {
+        if (!(c.evidenceAt > 0) || c.evidenceAt < floor) continue;
+        if (!best || c.evidenceAt > best.evidenceAt) {
+          best = c;
+          tied = false;
+        } else if (c.evidenceAt === best.evidenceAt) {
+          tied = true;
+        }
+      }
+      if (!best || tied) continue;
+      if (hosting.some((o) => o.session !== pane.session && tierOf(o.path).includes(best))) continue;
+      out.set(pane.session, { pane: pane.pane, sessionID: best.id, dir: best.dir });
+    }
+  } catch (e) {
+    debug('mailTargets', e);
+    return new Map();
   }
   return out;
 }
