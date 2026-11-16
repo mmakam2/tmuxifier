@@ -376,14 +376,19 @@ anything and never overrides a deny.
 
 **If you have set a permission rule for shell commands yourself, the plugin does nothing**, and
 OpenCode decides about `tmx` commands as it does for any other command, under your rules. The
-plugin looks for such a rule in these places: your global OpenCode config (`opencode.json` or
-`opencode.jsonc` in `$OPENCODE_CONFIG_DIR`, and in `$XDG_CONFIG_HOME/opencode/` or
-`~/.config/opencode/`); a project's `opencode.json`, `opencode.jsonc` and `.opencode/` config, in
-the project's folder and every folder above it; agent definition files (an `agent/` or `agents/`
-folder) there and in the global config; and the `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT` and
-`OPENCODE_PERMISSION` environment variables. A rule is a `permission.shell` or `permission.bash`
-entry, a `permission` setting that covers every tool, or the same under an agent; a file it
-cannot read or parse counts as a rule. A rule set anywhere else, a system-wide config for
+plugin looks for such a rule in these places: your global OpenCode config (`opencode.json`,
+`opencode.jsonc` or the legacy `config.json` in `$OPENCODE_CONFIG_DIR`, and in
+`$XDG_CONFIG_HOME/opencode/` or `~/.config/opencode/`); a project's `opencode.json`,
+`opencode.jsonc` and `.opencode/` config, in the project's folder and every folder above it;
+agent and mode definition files (markdown in `.opencode/agent/`, `.opencode/agents/`,
+`.opencode/mode/` or `.opencode/modes/` at each of those project levels, and in `agent/`,
+`agents/`, `mode/` or `modes/` in the global config folder), including those in sub-folders; and
+the `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT` and `OPENCODE_PERMISSION` environment variables.
+A rule is a `permission.shell` or `permission.bash` entry, a `permission` setting that covers
+every tool, or the same under an agent; an agent or mode file counts when it mentions
+`permission` at all. A file it cannot read or parse counts as a rule, and so does a folder of
+agent files it cannot list, one more than four sub-folders deep, or one holding more than 500
+entries in all. A rule set anywhere else, a system-wide config for
 example, may not be seen, and the plugin then still lifts the `ask` on a plain `tmx`. A change to
 a config file applies to the next command, without a restart.
 

@@ -763,7 +763,8 @@ describe('createOperatorRules', () => {
     const w = world();
     put(path.join(w.globalDir, 'agent', 'plain.md'), '---\ndescription: x\nmodel: m\n---\nHello.\n');
     put(path.join(w.globalDir, 'agent', 'notes.txt'), 'permission: bash ask');
-    put(path.join(w.globalDir, 'agent', 'sub', 'deep.md'), 'permission: ask'); // not recursive
+    put(path.join(w.globalDir, 'agent', 'sub', 'deep.md'), 'no rules in a sub-directory either');
+    put(path.join(w.globalDir, 'agent', 'sub', 'deep.txt'), 'permission: ask');
     put(path.join(w.proj, 'agent', 'x.md'), 'permission: ask'); // not under .opencode
     put(path.join(w.proj, '.opencode', 'commands', 'x.md'), 'permission: ask');
     put(path.join(w.proj, '.opencode', 'agent', 'plain.md'), 'no rules here');
@@ -820,6 +821,91 @@ describe('createOperatorRules', () => {
     expect(rules.hasBashRules(w.proj)).toBe(true);
     rmSync(f);
     expect(rules.hasBashRules(w.proj)).toBe(false);
+  });
+
+  test('agent files in sub-directories count, at every agent location (OpenCode names them by path)', () => {
+    const body = '---\ndescription: team\npermission:\n  bash: ask\n---\n';
+    for (const [name, where] of [
+      ['global agent/team/', (w) => path.join(w.globalDir, 'agent', 'team', 'x.md')],
+      ['global agents/a/b/c/', (w) => path.join(w.globalDir, 'agents', 'a', 'b', 'c', 'x.md')],
+      ['project .opencode/agent/team/', (w) => path.join(w.proj, '.opencode', 'agent', 'team', 'x.md')],
+      ['a parent\'s .opencode/agents/team/', (w) => path.join(w.home, 'work', '.opencode', 'agents', 'team', 'x.md')],
+      ['four levels down', (w) => path.join(w.proj, '.opencode', 'agent', '1', '2', '3', '4', 'x.md')],
+    ]) {
+      const w = world();
+      put(where(w), body);
+      expect(rulesFor(w).hasBashRules(w.proj), name).toBe(true);
+    }
+  });
+
+  test('mode/ and modes/ markdown counts like agent markdown, globally and per project, recursively', () => {
+    const body = '---\npermission:\n  bash: ask\n---\n';
+    for (const [name, where] of [
+      ['global mode/', (w) => path.join(w.globalDir, 'mode', 'x.md')],
+      ['global modes/', (w) => path.join(w.globalDir, 'modes', 'x.md')],
+      ['project .opencode/mode/', (w) => path.join(w.proj, '.opencode', 'mode', 'x.md')],
+      ['project .opencode/modes/sub/', (w) => path.join(w.proj, '.opencode', 'modes', 'sub', 'x.md')],
+    ]) {
+      const w = world();
+      put(where(w), '---\nmodel: m\n---\n');
+      expect(rulesFor(w).hasBashRules(w.proj), `${name} (plain)`).toBe(false);
+      put(where(w), body);
+      expect(rulesFor(w).hasBashRules(w.proj), name).toBe(true);
+    }
+  });
+
+  test('a tree deeper than four sub-directories, or over 500 entries in all, is rules', () => {
+    const w = world();
+    put(path.join(w.proj, '.opencode', 'agent', '1', '2', '3', '4', '5', 'plain.md'), 'no rules');
+    expect(rulesFor(w).hasBashRules(w.proj)).toBe(true);
+    const w2 = world();
+    put(path.join(w2.proj, '.opencode', 'agent', '1', '2', '3', '4', 'plain.md'), 'no rules');
+    expect(rulesFor(w2).hasBashRules(w2.proj)).toBe(false);
+    // The 500 count spans the whole tree: 300 + 300 in two sub-directories is over.
+    const w3 = world();
+    const base = scopedFs();
+    const root = path.join(w3.proj, '.opencode', 'agent');
+    mkdirSync(path.join(root, 'a'), { recursive: true });
+    mkdirSync(path.join(root, 'b'), { recursive: true });
+    const many = (prefix) => Array.from({ length: 300 }, (_, i) => `${prefix}${i}.txt`);
+    const fs3 = { ...base, readdirSync: (p) => (p === path.join(root, 'a') ? many('a') : p === path.join(root, 'b') ? many('b') : base.readdirSync(p)) };
+    expect(createOperatorRules({ home: w3.home, env: {}, fs: fs3 }).hasBashRules(w3.proj)).toBe(true);
+    const fs4 = { ...base, readdirSync: (p) => (p === path.join(root, 'a') ? many('a') : base.readdirSync(p)) };
+    expect(createOperatorRules({ home: w3.home, env: {}, fs: fs4 }).hasBashRules(w3.proj)).toBe(false);
+  });
+
+  test('a sub-directory that cannot be listed, or an entry that cannot be stat\'ed, is rules; a vanished one is not', () => {
+    const w = world();
+    const root = path.join(w.proj, '.opencode', 'agent');
+    const sub = path.join(root, 'team');
+    put(path.join(sub, 'plain.md'), 'no rules');
+    const base = scopedFs();
+    const listFails = { ...base, readdirSync: (p) => { if (p === sub) throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); return base.readdirSync(p); } };
+    expect(createOperatorRules({ home: w.home, env: {}, fs: listFails }).hasBashRules(w.proj)).toBe(true);
+    const statFails = { ...base, statSync: (p) => { if (p === sub) throw Object.assign(new Error('EIO'), { code: 'EIO' }); return base.statSync(p); } };
+    expect(createOperatorRules({ home: w.home, env: {}, fs: statFails }).hasBashRules(w.proj)).toBe(true);
+    const gone = { ...base, statSync: (p) => { if (p === sub) throw enoent(p); return base.statSync(p); } };
+    expect(createOperatorRules({ home: w.home, env: {}, fs: gone }).hasBashRules(w.proj)).toBe(false);
+    // A symlink loop runs into the depth cap: rules, and it ends.
+    const w2 = world();
+    const r2 = path.join(w2.proj, '.opencode', 'agent');
+    mkdirSync(r2, { recursive: true });
+    symlinkSync(r2, path.join(r2, 'loop'));
+    expect(rulesFor(w2).hasBashRules(w2.proj)).toBe(true);
+  });
+
+  test('the legacy global config.json is read like opencode.json (fail closed)', () => {
+    const w = world();
+    put(path.join(w.globalDir, 'config.json'), { theme: 'x' });
+    expect(rulesFor(w).hasBashRules(w.proj)).toBe(false);
+    put(path.join(w.globalDir, 'config.json'), { permission: { bash: 'ask' } });
+    expect(rulesFor(w).hasBashRules(w.proj)).toBe(true);
+    put(path.join(w.globalDir, 'config.json'), '{ not json');
+    expect(rulesFor(w).hasBashRules(w.proj)).toBe(true);
+    // Only in the global config dirs: a project's config.json is not OpenCode's.
+    const w2 = world();
+    put(path.join(w2.proj, 'config.json'), { permission: { bash: 'ask' } });
+    expect(rulesFor(w2).hasBashRules(w2.proj)).toBe(false);
   });
 
   test('without readdirSync in the injected fs the agent directories are not looked at', () => {

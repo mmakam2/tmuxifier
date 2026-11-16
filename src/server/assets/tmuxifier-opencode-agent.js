@@ -1661,19 +1661,24 @@ const OPERATOR_CACHE_MAX = 512;
 // A file modified less than this long ago is read again every time: two edits
 // inside one filesystem timestamp tick can share (mtime, size, inode).
 const OPERATOR_RACY_MS = 2000;
-// Most entries looked at in one agent directory; more counts as rules.
+// Most entries looked at under one agent directory, sub-directories included;
+// more counts as rules. Deepest sub-directory looked into (the agent directory
+// itself is depth 0); a deeper one counts as rules.
 const OPERATOR_AGENT_DIR_MAX = 500;
+const OPERATOR_AGENT_DEPTH_MAX = 4;
 // Environment variables that carry OpenCode configuration or permissions
 // themselves: set and non-empty, the operator has rules (not read further).
 const OPERATOR_ENV_KEYS = ['OPENCODE_CONFIG', 'OPENCODE_CONFIG_CONTENT', 'OPENCODE_PERMISSION'];
-const OPERATOR_GLOBAL_FILES = ['opencode.json', 'opencode.jsonc'];
+// config.json is the legacy global name OpenCode still merges.
+const OPERATOR_GLOBAL_FILES = ['opencode.json', 'opencode.jsonc', 'config.json'];
 const OPERATOR_PROJECT_FILES = [
   'opencode.json',
   'opencode.jsonc',
   path.join('.opencode', 'opencode.json'),
   path.join('.opencode', 'opencode.jsonc'),
 ];
-const OPERATOR_AGENT_DIRS = ['agent', 'agents'];
+// Agent definitions in markdown, and modes (the older spelling of the same).
+const OPERATOR_AGENT_DIRS = ['agent', 'agents', 'mode', 'modes'];
 
 const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
@@ -1728,22 +1733,25 @@ function globalConfigDirs(home, env) {
 //   hasBashRules(dir)  true when ANY of these sets one: the environment
 //                      (OPENCODE_CONFIG, OPENCODE_CONFIG_CONTENT or
 //                      OPENCODE_PERMISSION non-empty); the global config dir's
-//                      opencode.json / opencode.jsonc; and, for `dir` and every
+//                      opencode.json / opencode.jsonc / config.json (the legacy
+//                      name); and, for `dir` and every
 //                      parent up to `/`, opencode.json, opencode.jsonc,
 //                      .opencode/opencode.json and .opencode/opencode.jsonc. A
 //                      file sets one when `permission` is a string or an object
 //                      with `shell`, `bash` or `*`, or the same under any
 //                      `agent.<name>.permission`. Also any agent markdown file
 //                      (*.md) whose text contains `permission` in the global
-//                      dir's agent/ or agents/ and in each level's
-//                      .opencode/agent/ or .opencode/agents/ (not recursive).
+//                      dir's agent/, agents/, mode/ or modes/ and in each
+//                      level's .opencode/ ones of the same names, recursively
+//                      (OpenCode names a nested file's agent by its path).
 //
 // Fail closed: a present file that cannot be stat'ed, read or parsed, one that
 // is not a regular file (a FIFO would block OpenCode's one shared server on a
 // synchronous read, /dev/zero never ends: checked from the stat before any
-// read), one over 1 MiB, an agent directory that cannot be listed or holds over
-// 500 entries, a `dir` that is no absolute path, and a global dir that cannot
-// be located all answer true. A missing file or directory (ENOENT/ENOTDIR)
+// read), one over 1 MiB, an agent directory that cannot be listed, a tree under
+// one that holds over 500 entries in all or goes deeper than 4 sub-directories,
+// an entry whose kind cannot be stat'ed, a `dir` that is no absolute path, and a
+// global dir that cannot be located all answer true. A missing file or directory (ENOENT/ENOTDIR)
 // answers false. A file's verdict is cached by (mtime, size, inode), so an edit
 // applies to the next command without a restart; a file modified less than 2 s
 // before `now()` is never cached (an in-place edit inside one timestamp tick
@@ -1804,9 +1812,12 @@ export function createOperatorRules({
     return cfg === null ? true : configSetsShell(cfg);
   };
 
-  // Every *.md in `dir` (not recursive) through fileHasRules.
-  function agentDirHasRules(dir) {
+  // Every *.md under `dir`, recursively, through fileHasRules. Another entry is
+  // stat'ed (following a symlink, as OpenCode's glob does) and descended into
+  // when it is a directory; `budget.left` counts entries across the whole tree.
+  function agentDirHasRules(dir, depth = 0, budget = { left: OPERATOR_AGENT_DIR_MAX }) {
     if (typeof fs.readdirSync !== 'function') return false;
+    if (depth > OPERATOR_AGENT_DEPTH_MAX) return true;
     let names;
     try {
       names = fs.readdirSync(dir);
@@ -1814,10 +1825,26 @@ export function createOperatorRules({
       const code = e && e.code;
       return !(code === 'ENOENT' || code === 'ENOTDIR');
     }
-    if (!Array.isArray(names) || names.length > OPERATOR_AGENT_DIR_MAX) return true;
+    if (!Array.isArray(names)) return true;
+    budget.left -= names.length;
+    if (budget.left < 0) return true;
     for (const name of names) {
       if (typeof name !== 'string') return true;
-      if (/\.md$/i.test(name) && fileHasRules(path.join(dir, name), agentFileSetsShell)) return true;
+      const full = path.join(dir, name);
+      if (/\.md$/i.test(name)) {
+        if (fileHasRules(full, agentFileSetsShell)) return true;
+        continue;
+      }
+      let st;
+      try {
+        st = fs.statSync(full);
+      } catch (e) {
+        const code = e && e.code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+        return true;
+      }
+      if (!st || typeof st.isDirectory !== 'function') return true;
+      if (st.isDirectory() && agentDirHasRules(full, depth + 1, budget)) return true;
     }
     return false;
   }
