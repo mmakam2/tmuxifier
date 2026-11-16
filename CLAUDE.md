@@ -825,7 +825,14 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
 - **Settings** — `settingsUi.ts` (tab order = `SECTIONS` key order: Boxes, Services, NetBox,
   Proxmox, Passkeys, Devices, Voice, Notifications, Appearance, Hotkeys), one `settings*.ts` per tab,
   `settingsForm.ts`, and fetch layers `netbox.ts`, `devices.ts`, `passkeys.ts` (also
-  `evaluateOrigin`, shared by login and Settings).
+  `evaluateOrigin`, shared by login and Settings). The Proxmox tab is split like the rest:
+  `settingsProxmox.ts` (DOM) over `settingsProxmoxView.ts` (pure, unit-tested: TLS-mode legend, host
+  state, key display, every form's validation). Its rules: a form is a real `<form>` behind a key and
+  at most one is open (`EditorSlot`); an endpoint edit drops the Inspect result (a fingerprint belongs
+  to one address); every host is tested when the tab opens and the failure is written in the row;
+  Remove/Clear arm-then-fire; its modifier is `bad`, never `err` (a bare `.err` is the login line's
+  centred rule). Styles are the `pvs-*` block, apart from the hub's `.pve-*`. e2e:
+  `test/e2e/settingsProxmox.spec.ts` against `test/helpers/fakePve.js`.
 
 ## Android app (`android/`)
 

@@ -5,7 +5,7 @@ import { registerModal } from './modalRegistry';
 import { renderBoxesSection } from './settingsBoxes';
 import { renderServicesSection } from './settingsServices';
 import { renderNetboxSection } from './settingsNetbox';
-import { renderProxmoxSection } from './settingsProxmox';
+import { renderProxmoxSection, disposeProxmoxSection } from './settingsProxmox';
 import { renderPasskeysSection } from './settingsPasskeys';
 import { renderDevicesSection, stopDevicesWatch } from './settingsDevices';
 import { renderVoiceSection, stopVoiceWatch } from './settingsVoice';
@@ -31,7 +31,8 @@ const SECTIONS: Record<SettingsTab, Section> = {
   boxes: { label: 'Boxes', render: (content) => renderBoxesSection(content) },
   services: { label: 'Services', render: async (content) => { await renderServicesSection(content); } },
   netbox: { label: 'NetBox', render: renderNetboxSection },
-  proxmox: { label: 'Proxmox', render: (content) => renderProxmoxSection(content) },
+  // Its render is async over four reads; dispose keeps a late one from painting over the next tab.
+  proxmox: { label: 'Proxmox', render: (content) => renderProxmoxSection(content), dispose: disposeProxmoxSection },
   passkeys: { label: 'Passkeys', render: (content) => renderPasskeysSection(content) },
   devices: { label: 'Devices', render: (content) => renderDevicesSection(content), dispose: stopDevicesWatch },
   // renderVoiceSection resolves with the status it painted (the install-settle

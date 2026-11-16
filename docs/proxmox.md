@@ -24,19 +24,31 @@ alongside the provisioning datastore privileges above. For a production token, d
 role** granting only those privileges on only the paths it needs rather than the broad lab roles.
 Use a privilege-separated token, not full `Administrator`.
 
-**2. Add the host.** **Settings (⚙) → Proxmox → Add a Proxmox host**: enter the endpoint
-(`host:8006`), the token id (`user@pam!tmuxifier`) and the secret. Click **Inspect** to fetch and
-**pin** the host's TLS certificate (Proxmox ships a self-signed cert; pinning is
-trust-on-first-use, like `ssh accept-new`). Save — Tmuxifier verifies the token before storing it.
-Removing a host profile and re-adding it later (any name) with the **same endpoint** re-homes any
-boxes still linked through the old profile automatically on the next status poll.
+**2. Add the host.** **Settings (⚙) → Proxmox**. With no hosts yet the add form is already open;
+otherwise press **+ Add host**. Enter the endpoint (`host:8006`) and click **Inspect** (or press
+Enter in the field): it reads the host's TLS certificate and decides how the host is verified. A
+CA-valid certificate verifies normally; a self-signed one — Proxmox's default — has its fingerprint
+**pinned**, trust-on-first-use like `ssh accept-new`, and the fingerprint is shown so you can compare
+it. Editing the endpoint afterwards discards the inspection, because a fingerprint belongs to one
+address. Then give the host a name, the token id (`user@pam!tmuxifier`) and the secret, and press
+**Add host** (Enter also submits). Tmuxifier verifies the token before storing it.
 
-**3. Review LXC secrets.** Same **Settings (⚙) → Proxmox** tab, below the host list. Tmuxifier's
-own host key is auto-detected and shown as the **default management key** — injected into every
-container so Tmuxifier can SSH in (set `TMUXIFIER_PVE_DEFAULT_PUBKEY` if your key isn't at
-`~/.ssh/id_*`). Optionally add more **public keys** (e.g. your laptop's) and/or an **optional root
-password**. Added keys and the password are encrypted at rest and shown masked after saving; the
-private half of any key stays in your own SSH setup — Tmuxifier never stores private keys.
+Each host in the list shows a lamp, how it is verified (**CA verified**, **pinned**, or the amber
+**not verified**) and the result of a connection test, which runs for every host whenever the tab
+opens: green with the Proxmox version, or red with the error Proxmox or the network returned.
+**Test** runs it again. **Remove** asks twice (the second press reads *Really remove?*; it disarms
+after a few seconds). Removing a host profile and re-adding it later (any name) with the **same
+endpoint** re-homes any boxes still linked through the old profile automatically on the next status
+poll.
+
+**3. Review the access new containers get.** Same tab, under **Access for new containers**.
+Tmuxifier's own host key is auto-detected and shown as the **default key** (with a **Copy** button)
+— injected into every container so Tmuxifier can SSH in (set `TMUXIFIER_PVE_DEFAULT_PUBKEY` if your
+key isn't at `~/.ssh/id_*`; a red lamp means none was found). Optionally add more **public keys**
+(e.g. your laptop's) with **+ Add key**, and/or an **optional root password** with **Set password**.
+Added keys and the password are encrypted at rest and never shown again — a key reads **sealed**, the
+password reads **Set** — and the private half of any key stays in your own SSH setup; Tmuxifier never
+stores private keys. Only one form is open at a time: opening another closes the first.
 
 **4. Define a preset and provision.** Back in the dashboard's **Proxmox** hub (the sidebar
 button appears once at least one host is configured in Settings): **Presets → Add** a
