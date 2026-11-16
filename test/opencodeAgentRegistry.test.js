@@ -219,29 +219,68 @@ describe('createRegistry', () => {
     expect(runCommand(a, 'ses_a', 'tmx who', 'call_3').effect).toBe('ask');
   });
 
-  test('synthetic goes through the ctx of the session\'s directory, else any live one', async () => {
+  test('synthetic goes through the hooked ctx of the session\'s directory; an unknown directory falls back to any live one', async () => {
     const { createRegistry } = await import(ASSET);
     const a = ocCtx('/home/user/proj');
     const b = ocCtx('/home/user/proj2');
-    const core = fakeCore({}, { ses_b: '/home/user/proj2', ses_x: '/elsewhere' });
+    const core = fakeCore({}, { ses_b: '/home/user/proj2' });
     const reg = createRegistry({ live: new Map([['/home/user/proj', a], ['/home/user/proj2', b]]), mail: true, current: () => core, rules: noRules });
+    reg.addAll();
+    await reg.settled();
+    await flush(0);
     const input = { sessionID: 'ses_b', text: 'hi', delivery: 'queue', resume: true, metadata: { tmuxifierMail: 'm-aaaaaaaa' } };
     await expect(reg.synthetic(input)).resolves.toEqual({ id: 'msg_proj2', sessionID: 'ses_b', type: 'synthetic' });
     expect(b.session.synthetic).toHaveBeenCalledWith(input);
     expect(b.session.synthetic.mock.contexts[0]).toBe(b.session); // called as OpenCode's method
     expect(a.session.synthetic).not.toHaveBeenCalled();
-    await expect(reg.synthetic({ sessionID: 'ses_x' })).resolves.toMatchObject({ id: 'msg_proj' });
     await expect(reg.synthetic({ sessionID: 'ses_unknown' })).resolves.toMatchObject({ id: 'msg_proj' });
-    expect(a.session.synthetic).toHaveBeenCalledTimes(2);
+    expect(a.session.synthetic).toHaveBeenCalledTimes(1);
   });
 
-  test('synthetic skips a ctx that cannot post, and with none left it rejects (never throws)', async () => {
+  test('R33: a known directory that is not hooked (not live, a rejected hook(), not settled, removed) makes synthetic reject, never fall back', async () => {
+    const { createRegistry } = await import(ASSET);
+    const a = ocCtx('/home/user/proj');
+    const bad = ocCtx('/home/user/bad');
+    bad.permission.hook = async () => { throw new Error('refused'); };
+    const slow = ocCtx('/home/user/slow');
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const slowHook = slow.shell.hook;
+    slow.shell.hook = async (...args) => { await gate; return slowHook(...args); };
+    const core = fakeCore({}, { ses_x: '/elsewhere', ses_bad: '/home/user/bad', ses_slow: '/home/user/slow', ses_a: '/home/user/proj' });
+    const live = new Map([['/home/user/proj', a], ['/home/user/bad', bad], ['/home/user/slow', slow]]);
+    const reg = createRegistry({ live, mail: true, current: () => core, rules: noRules });
+    reg.addAll();
+    await flush(10);
+    expect(reg.isHooked('/home/user/proj')).toBe(true);
+    expect(reg.isHooked('/home/user/bad')).toBe(false);
+    expect(reg.isHooked('/home/user/slow')).toBe(false);
+    expect(reg.isHooked('/elsewhere')).toBe(false);
+    for (const sid of ['ses_x', 'ses_bad', 'ses_slow']) await expect(reg.synthetic({ sessionID: sid }), sid).rejects.toThrow();
+    for (const c of [a, bad, slow]) expect(c.session.synthetic).not.toHaveBeenCalled();
+    release();
+    await reg.settled();
+    await flush(0);
+    expect(reg.isHooked('/home/user/slow')).toBe(true);
+    await expect(reg.synthetic({ sessionID: 'ses_slow' })).resolves.toMatchObject({ id: 'msg_slow' });
+    reg.remove(a);
+    expect(reg.isHooked('/home/user/proj')).toBe(false);
+    await expect(reg.synthetic({ sessionID: 'ses_a' })).rejects.toThrow();
+    reg.dispose();
+    expect(reg.isHooked('/home/user/slow')).toBe(false);
+  });
+
+  test('synthetic skips a ctx that cannot post for an unknown directory, and with none left it rejects (never throws)', async () => {
     const { createRegistry } = await import(ASSET);
     const old = ocCtx('/home/user/proj', { synthetic: false });
     const b = ocCtx('/home/user/proj2');
     const core = fakeCore({}, { ses_a: '/home/user/proj' });
     const reg = createRegistry({ live: new Map([['/home/user/proj', old], ['/home/user/proj2', b]]), mail: true, current: () => core, rules: noRules });
-    await expect(reg.synthetic({ sessionID: 'ses_a' })).resolves.toMatchObject({ id: 'msg_proj2' });
+    reg.addAll();
+    await reg.settled();
+    await flush(0);
+    await expect(reg.synthetic({ sessionID: 'ses_unknown' })).resolves.toMatchObject({ id: 'msg_proj2' });
+    await expect(reg.synthetic({ sessionID: 'ses_a' })).rejects.toThrow(); // its own ctx cannot post: no fallback
     const none = createRegistry({ live: new Map(), mail: true, current: () => core, rules: noRules });
     let p;
     expect(() => { p = none.synthetic({ sessionID: 'ses_a' }); }).not.toThrow();
@@ -249,9 +288,60 @@ describe('createRegistry', () => {
     const throwing = ocCtx('/home/user/proj');
     throwing.session.synthetic = () => { throw new Error('sync throw'); };
     const t = createRegistry({ live: new Map([['/home/user/proj', throwing]]), mail: true, current: () => core, rules: noRules });
+    t.addAll();
+    await t.settled();
+    await flush(0);
     let q;
     expect(() => { q = t.synthetic({ sessionID: 'ses_a' }); }).not.toThrow();
     await expect(q).rejects.toThrow('sync throw');
+  });
+
+  test('R32: a hand-over keeps each ctx\'s tagger, so a call announced before it is never tagged with a call announced after it', async () => {
+    const { createRegistry } = await import(ASSET);
+    // The reviewer's sequence: S1 (%1) and S2 (%2) in /p; S1 announces `tmx who`, a hand-over,
+    // S2 announces the same `tmx who`, then S1's shell is created.
+    const ctx = ocCtx('/p');
+    const live = new Map([['/p', ctx]]);
+    const core = fakeCore({ s1: '%1', s2: '%2' }, { s1: '/p', s2: '/p' });
+    const strict = { hasBashRules: () => true };
+    const r1 = createRegistry({ live, mail: true, current: () => core, rules: strict });
+    r1.addAll();
+    await flush(5);
+    ctx.fire('execute.before', { tool: 'shell', sessionID: 's1', id: 'c1', input: { command: 'tmx who' } });
+    const r2 = createRegistry({ live, mail: true, pieces: r1.pieces, current: () => core, rules: strict });
+    r2.addAll();
+    await r2.settled();
+    r1.dispose();
+    await flush(5);
+    expect(liveCounts(ctx)).toEqual([1, 1, 1]);
+    ctx.fire('execute.before', { tool: 'shell', sessionID: 's2', id: 'c2', input: { command: 'tmx who' } });
+    const s1shell = ctx.fire('create.before', { command: 'tmx who', env: {} });
+    // Two pending calls, one text, two panes: neither shell can be told apart (fail closed).
+    expect(s1shell.env.TMUXIFIER_MAIL_PANE).toBe('none');
+    expect(ctx.fire('create.before', { command: 'tmx who', env: {} }).env.TMUXIFIER_MAIL_PANE).toBe('none');
+  });
+
+  test('R32: while two registries overlap on a ctx, every hook fires twice and still acts once', async () => {
+    const { createRegistry } = await import(ASSET);
+    const ctx = ocCtx('/p');
+    const live = new Map([['/p', ctx]]);
+    const core = fakeCore({ s1: '%1', s2: '%2' }, { s1: '/p', s2: '/p' });
+    const r1 = createRegistry({ live, mail: true, current: () => core, rules: noRules });
+    r1.addAll();
+    await flush(5);
+    ctx.fire('execute.before', { tool: 'shell', sessionID: 's1', id: 'c1', input: { command: 'tmx who' } });
+    const r2 = createRegistry({ live, mail: true, pieces: r1.pieces, current: () => core, rules: noRules });
+    r2.addAll();
+    await r2.settled(); // r1 not disposed yet: the overlap
+    expect(liveCounts(ctx)).toEqual([2, 2, 2]);
+    ctx.fire('execute.before', { tool: 'shell', sessionID: 's2', id: 'c2', input: { command: 'tmx who' } });
+    const s1shell = ctx.fire('create.before', { command: 'tmx who', env: {} });
+    expect(s1shell.env.TMUXIFIER_MAIL_PANE).toBe('none'); // never overwritten by the second callback
+    // A lone call during the overlap: tagged once with its pane, allowed once.
+    ctx.fire('create.before', { command: 'tmx who', env: {} }); // drain the second record
+    const r = runCommand(ctx, 's1', 'tmx inbox', 'c3');
+    expect(r.env.TMUXIFIER_MAIL_PANE).toBe('%1');
+    expect(r.effect).toBe('allow');
   });
 
   test('dispose disposes every registration; remove(ctx) only that ctx\'s; a disposed registry adds nothing', async () => {
@@ -365,7 +455,7 @@ describe('the entry point', () => {
     const cleanupA1 = await mod.default.setup(a1);
     const cleanupB = await mod.default.setup(b);
     const a2 = ocCtx('/home/user/proj'); // the same directory set up again (a reload)
-    await mod.default.setup(a2);
+    const cleanupA2 = await mod.default.setup(a2);
     await flush(0);
     expect(liveCounts(a1)).toEqual([0, 0, 0]);
     expect(liveCounts(a2)).toEqual([1, 1, 1]);
@@ -384,9 +474,20 @@ describe('the entry point', () => {
     await cleanupA1(); // a stale ctx's cleanup changes nothing for the ctx that replaced it
     await flush(0);
     expect(liveCounts(a2)).toEqual([1, 1, 1]);
-    await cleanupC(); // the owner: everything stops
+    const coreC = globalThis[KEY];
+    await cleanupC(); // the owner, with a2 still live: a new core attached to a2 (R33)
     await flush(0);
-    for (const ctx of [a2, c]) expect(liveCounts(ctx)).toEqual([0, 0, 0]);
+    const coreA2 = globalThis[KEY];
+    expect(coreA2).not.toBe(coreC);
+    expect(coreA2.attachedCtx).toBe(a2);
+    expect(a2.signal.aborted).toBe(false);
+    expect(c.signal.aborted).toBe(true);
+    expect(liveCounts(c)).toEqual([0, 0, 0]);
+    expect(liveCounts(a2)).toEqual([1, 1, 1]);
+    expect([...coreA2.live.values()]).toEqual([a2]);
+    await cleanupA2(); // the last one: everything stops
+    await flush(0);
+    expect(liveCounts(a2)).toEqual([0, 0, 0]);
     expect(globalThis[KEY]).toBeUndefined();
   });
 
@@ -449,6 +550,181 @@ describe('the entry point', () => {
     await vi.waitFor(() => expect(core.dirOfSession('ses_b')).toBe('/home/user/proj2'));
     await expect(core.registry.synthetic({ sessionID: 'ses_b', text: 't' })).resolves.toMatchObject({ id: 'msg_proj2' });
     expect(a.session.synthetic).not.toHaveBeenCalled();
+  });
+
+  test('R32 through the entry point: a setup for another directory between a call\'s announcement and its shell keeps the tagger', async () => {
+    const mod = await import(ASSET);
+    fakeEnv();
+    vi.stubEnv('PATH', tmp()); // no tmux: the cores sweep nothing, the test sets the panes
+    const p = ocCtx('/p');
+    await mod.default.setup(p);
+    await flush(5);
+    const fake = (core) => {
+      core.paneOfSession = (sid) => ({ s1: '%1', s2: '%2' })[sid] ?? null;
+      core.dirOfSession = () => '/p';
+    };
+    fake(globalThis[KEY]);
+    p.fire('execute.before', { tool: 'shell', sessionID: 's1', id: 'c1', input: { command: 'tmx who' } });
+    const q = ocCtx('/q');
+    const cleanupQ = await mod.default.setup(q); // the hand-over, while s1's shell waits
+    fake(globalThis[KEY]);
+    await flush(5);
+    expect(liveCounts(p)).toEqual([1, 1, 1]);
+    p.fire('execute.before', { tool: 'shell', sessionID: 's2', id: 'c2', input: { command: 'tmx who' } });
+    expect(p.fire('create.before', { command: 'tmx who', env: {} }).env.TMUXIFIER_MAIL_PANE).toBe('none');
+    await cleanupQ();
+  });
+
+  test('R34: the old core\'s hooks are disposed only after the new core\'s settled (an overlap, never a gap)', async () => {
+    const mod = await import(ASSET);
+    fakeEnv();
+    vi.stubEnv('PATH', tmp());
+    const a = ocCtx('/home/user/proj');
+    await mod.default.setup(a);
+    await flush(5);
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const realHook = a.tool.hook;
+    a.tool.hook = async (...args) => { await gate; return realHook(...args); };
+    const b = ocCtx('/home/user/proj2');
+    const cleanupB = await mod.default.setup(b);
+    await flush(20);
+    // The new registration on `a` is pending: the old one is still in place.
+    expect(a.live('execute.before')).toHaveLength(1);
+    expect(a.regs.filter((r) => r.name === 'execute.before')[0].disposed).toBe(false);
+    release();
+    await flush(20);
+    const tools = a.regs.filter((r) => r.name === 'execute.before');
+    expect(tools).toHaveLength(2);
+    expect(tools[0].disposed).toBe(true);
+    expect(tools[1].disposed).toBe(false);
+    await cleanupB();
+  });
+
+  test('R33: a directory whose hook() was refused gets no wait and no wake; a hooked one beside it does', async () => {
+    const mod = await import(ASSET);
+    const env = fakeEnv();
+    const root = tmp();
+    const good = path.join(root, 'good');
+    const bad = path.join(root, 'bad');
+    mkdirSync(good);
+    mkdirSync(bad);
+    env.setPanes(row('web', 'opencode', good, '%4') + row('dev', 'opencode', bad, '%9'));
+    const listener = await mailListener(env.home);
+    const g = ocCtx(good);
+    const x = ocCtx(bad);
+    x.shell.hook = async () => { throw new Error('refused'); };
+    await mod.default.setup(g);
+    const cleanupX = await mod.default.setup(x);
+    const core = globalThis[KEY];
+    x.push(ev('session.created', { sessionID: 'ses_g' }, good));
+    x.push(ev('session.created', { sessionID: 'ses_x' }, bad));
+    x.push(ev('session.inbox.enqueued', { sessionID: 'ses_g', inboxID: 'i1', item: { type: 'user' } }, good));
+    x.push(ev('session.inbox.enqueued', { sessionID: 'ses_x', inboxID: 'i2', item: { type: 'user' } }, bad));
+    for (const sid of ['ses_g', 'ses_x']) {
+      x.push(ev('session.execution.started', { sessionID: sid }));
+      x.push(ev('session.execution.succeeded', { sessionID: sid }, null, Date.now() + 11_000));
+    }
+    await vi.waitFor(() => {
+      expect(core.paneOfSession('ses_g')).toBe('%4');
+      expect(core.paneOfSession('ses_x')).toBe('%9'); // a target all the same
+    });
+    await vi.waitFor(() => expect(listener.requests.some((u) => u.includes('session=web'))).toBe(true));
+    await flush(100);
+    expect(core.registry.isHooked(good)).toBe(true);
+    expect(core.registry.isHooked(bad)).toBe(false);
+    expect(listener.requests.filter((u) => u.includes('session=dev'))).toEqual([]);
+    await expect(core.registry.synthetic({ sessionID: 'ses_x', text: 't' })).rejects.toThrow();
+    expect(x.session.synthetic).not.toHaveBeenCalled();
+    expect(g.session.synthetic).not.toHaveBeenCalled(); // no fallback for a known directory
+    await cleanupX();
+    await listener.close();
+  });
+
+  test('R33: a target skipped while its directory\'s hooks were pending gets its wait as soon as they settle, without a new sweep', async () => {
+    const mod = await import(ASSET);
+    const env = fakeEnv();
+    const root = tmp();
+    const good = path.join(root, 'good');
+    mkdirSync(good);
+    env.setPanes(row('web', 'opencode', good, '%4'));
+    const listener = await mailListener(env.home);
+    const g = ocCtx(good);
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const realHook = g.shell.hook;
+    g.shell.hook = async (...args) => { await gate; return realHook(...args); };
+    const cleanup = await mod.default.setup(g);
+    const core = globalThis[KEY];
+    g.push(ev('session.created', { sessionID: 'ses_g' }, good));
+    g.push(ev('session.inbox.enqueued', { sessionID: 'ses_g', inboxID: 'i1', item: { type: 'user' } }, good));
+    g.push(ev('session.execution.started', { sessionID: 'ses_g' }));
+    g.push(ev('session.execution.succeeded', { sessionID: 'ses_g' }, null, Date.now() + 11_000));
+    await vi.waitFor(() => expect(core.paneOfSession('ses_g')).toBe('%4'));
+    await flush(150);
+    expect(core.registry.isHooked(good)).toBe(false);
+    expect(listener.requests).toEqual([]);
+    release();
+    await vi.waitFor(() => expect(listener.requests.some((u) => u.includes('session=web'))).toBe(true));
+    await cleanup();
+    await listener.close();
+  });
+
+  test('R33: past LIVE_MAX the oldest directory is dropped: its hooks go, it is not hooked, its session gets no wake', async () => {
+    const mod = await import(ASSET);
+    fakeEnv();
+    vi.stubEnv('PATH', tmp());
+    const ctxs = [];
+    for (let i = 0; i < 65; i++) {
+      const c = ocCtx(`/home/user/p${i}`);
+      ctxs.push(c);
+      await mod.default.setup(c);
+    }
+    await flush(50);
+    const core = globalThis[KEY];
+    expect(core.live.size).toBe(64);
+    expect(core.live.has('/home/user/p0')).toBe(false);
+    expect(liveCounts(ctxs[0])).toEqual([0, 0, 0]);
+    expect(liveCounts(ctxs[1])).toEqual([1, 1, 1]);
+    expect(core.registry.isHooked('/home/user/p0')).toBe(false);
+    expect(core.registry.isHooked('/home/user/p1')).toBe(true);
+    ctxs[64].push(ev('session.created', { sessionID: 'ses_0' }, '/home/user/p0'));
+    ctxs[64].push(ev('session.created', { sessionID: 'ses_1' }, '/home/user/p1'));
+    await vi.waitFor(() => expect(core.dirOfSession('ses_1')).toBe('/home/user/p1'));
+    await expect(core.registry.synthetic({ sessionID: 'ses_0' })).rejects.toThrow();
+    await expect(core.registry.synthetic({ sessionID: 'ses_1' })).resolves.toMatchObject({ id: 'msg_p1' });
+    for (const c of ctxs) if (c !== ctxs[1]) expect(c.session.synthetic).not.toHaveBeenCalled();
+  });
+
+  test('R33: the attached ctx\'s cleanup with others live hands over to the newest remaining one, mail still on', async () => {
+    const mod = await import(ASSET);
+    fakeEnv();
+    vi.stubEnv('PATH', tmp());
+    const a = ocCtx('/home/user/proj');
+    const b = ocCtx('/home/user/proj2');
+    const c = ocCtx('/home/user/proj3');
+    const cleanupA = await mod.default.setup(a);
+    await mod.default.setup(b);
+    const cleanupC = await mod.default.setup(c);
+    c.push(ev('session.created', { sessionID: 'ses_a' }, '/home/user/proj'));
+    const coreC = globalThis[KEY];
+    await vi.waitFor(() => expect(coreC.dirOfSession('ses_a')).toBe('/home/user/proj'));
+    await cleanupC();
+    await flush(20);
+    const next = globalThis[KEY];
+    expect(next).not.toBe(coreC);
+    expect(next.attachedCtx).toBe(b); // the newest remaining
+    expect(b.signal?.aborted).toBe(false);
+    expect(next.state.sessions).toBe(coreC.state.sessions); // a hand-over: the reducer goes on
+    expect(next.mailState).not.toBeNull();
+    expect(liveCounts(a)).toEqual([1, 1, 1]);
+    expect(liveCounts(b)).toEqual([1, 1, 1]);
+    expect(liveCounts(c)).toEqual([0, 0, 0]);
+    await expect(next.registry.synthetic({ sessionID: 'ses_a' })).resolves.toMatchObject({ id: 'msg_proj' });
+    await cleanupA(); // not attached: only `a` goes
+    await flush(20);
+    expect(globalThis[KEY]).toBe(next);
+    expect(liveCounts(a)).toEqual([0, 0, 0]);
   });
 
   test('end to end: two directories, a session in each, plain `tmx who` tagged with its own pane, allowed without rules, left `ask` under a project bash rule', async () => {

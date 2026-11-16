@@ -565,6 +565,27 @@ test('takeOver disposes the previous core\'s registry and inherits its live ctxs
   for (const c of [next, ...cores]) c.abort();
 });
 
+test('takeOver disposes the old registry only once the new one\'s registrations settled (R34); pieces are handed over unless their version changed (R32)', async () => {
+  const { takeOver, PIECES_VERSION } = await import(ASSET);
+  const home = tmp();
+  const opts = { home, listPanes: async () => '', setInterval: () => ({ unref() {} }), clearInterval: () => {} };
+  const dispose = vi.fn();
+  let release;
+  const settled = new Promise((r) => { release = r; });
+  const pieces = { version: PIECES_VERSION, map: new WeakMap() };
+  const next = takeOver({ abort() {}, registry: { dispose }, pieces }, { ...opts, registry: { settled: () => settled } });
+  await flush(10);
+  expect(dispose).not.toHaveBeenCalled();
+  release();
+  await flush(0);
+  expect(dispose).toHaveBeenCalledTimes(1);
+  expect(next.pieces).toBe(pieces);
+  const other = takeOver({ abort() {}, pieces: { version: PIECES_VERSION + 1, map: new WeakMap() } }, opts);
+  expect(other.pieces.version).toBe(PIECES_VERSION);
+  expect(other.pieces).not.toBe(pieces);
+  for (const c of [next, other]) c.abort();
+});
+
 test('setup twice with OpenCode 2.3.0 ctxs: the first core\'s hooks are disposed and the second core registers on both; the first cleanup takes its ctx off', async () => {
   const mod = await import(ASSET);
   fakeTmuxEnv();
@@ -725,7 +746,7 @@ test('an event stream that ends without an abort stops the sweep timer, deletes 
     yield ev('session.execution.started', T + 1, { sessionID: 'ses_a' });
     await ended;
   } } };
-  await mod.default.setup(ctx);
+  const cleanup1 = await mod.default.setup(ctx);
   const core1 = globalThis[KEY];
   await vi.waitFor(() => expect(read(env.home, 'web')).toBe(`web:working:${T + 1}:prompt\n`));
   writeFileSync(marker(env.home, 'dev'), 'dev:blocked:1:permission\n'); // the Claude hook took it over
@@ -750,6 +771,7 @@ test('an event stream that ends without an abort stops the sweep timer, deletes 
   expect(core2.since).toBe(core1.since);
   expect(core2.state.sessions).toBe(core1.state.sessions);
   await vi.waitFor(() => expect(read(env.home, 'web')).toBe(`web:working:${T + 1}:prompt\n`));
+  await cleanup1(); // the ended ctx leaves the live list: the last cleanup stops everything
   await cleanup2();
   expect(existsSync(marker(env.home, 'web'))).toBe(false);
 });
