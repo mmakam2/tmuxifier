@@ -4,17 +4,26 @@
 // a pure remote-installer builder + a small DI pusher, run as the `agent-mail` setup phase
 // when the job's tools include `claude` or `opencode`.
 //
-// The box decides which agents it has, by the test each agent's own installer uses: `claude`
-// (on PATH, or ~/.local/bin/claude), `opencode` (on PATH, or the native installer's own
-// ~/.opencode/bin/opencode). Both get `tmx` and the ~/.local/bin/tmx link. The Claude parts
-// (its skill directory, the settings.json merge below, the version gate and autoMode) run only
-// with `claude`. With `opencode` the same skill bytes are also written to
+// The phase acts on the TICKED selection, never on what merely happens to be installed (the
+// operator's standing rule: an unticked agent's files are never touched). The server writes
+// the selection into the script as two literal lines, `WANT_CLAUDE=1|0` and `WANT_OPENCODE=1|0`
+// (booleans only: nothing user-typed is interpolated). For each wanted agent the box then
+// decides whether it has it, by the test that agent's own installer uses: `claude` (on PATH,
+// or ~/.local/bin/claude), `opencode` (on PATH, or the native installer's own
+// ~/.opencode/bin/opencode). An agent that is not wanted is not even looked for. Either wanted-
+// and-present agent gets `tmx` and the ~/.local/bin/tmx link. The Claude parts (its skill
+// directory, the settings.json merge below, the version gate and autoMode) run only with a
+// wanted `claude`. With a wanted `opencode` the same skill bytes are also written to
 // ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/skills/tmuxifier-mail/SKILL.md, where
 // OpenCode reads skills (recorded live on 2.3.0, test/fixtures/README-opencode-2.3-event-trace.md
 // F6; it also reads ~/.claude/skills, so a box with both sees one skill twice, same bytes).
+// That write is best-effort when Claude's parts follow (an unwritable OpenCode config directory
+// must not cost Claude its hooks: `opencode-skill-failed`, a note on the ok result) and fails the
+// phase when it is the only agent (`error-opencode-skill`).
 // OpenCode needs nothing in a settings file: its half of messaging is the plugin the
-// `opencode-plugin` phase installs, which is why an OpenCode-only box prints `opencode-only`
-// and the pusher's ok result says so in a note. With neither agent: `skipped-no-agent`.
+// `opencode-plugin` phase installs, which is why an OpenCode-only run prints `opencode-only`
+// and the pusher's ok result says so in a note. With neither wanted agent present:
+// `skipped-no-agent`.
 //
 // The installer script text goes into ssh argv and interpolates only this module's constants;
 // the bytes of both files arrive on stdin as `tmx + "\n" + SKILL_SEPARATOR + "\n" + skill`, and
@@ -197,9 +206,13 @@ const PY_CHECK = 'import json,sys\nd=json.loads(open(sys.argv[1],"rb").read().de
 
 const sq = (s) => `'${s.replaceAll("'", "'\\''")}'`;
 
-export function buildAgentMailInstallScript() {
+// `claude`/`opencode`: the job's ticked selection (only a literal `true` counts). The default,
+// both, is for the tests' convenience; setupManager always passes the selection.
+export function buildAgentMailInstallScript({ claude = true, opencode = true } = {}) {
   return [
     'set -eu',
+    `WANT_CLAUDE=${claude === true ? 1 : 0}`,
+    `WANT_OPENCODE=${opencode === true ? 1 : 0}`,
     'DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"',
     'OCDIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"',
     'MAIL="$HOME/.tmuxifier-mail"',
@@ -213,14 +226,19 @@ export function buildAgentMailInstallScript() {
     `AALLOW=${sq(MAIL_AUTOMODE_ALLOW)}`,
     '',
     '# 1. Skips. Each drains stdin and changes nothing on the box.',
-    '# CLAUDE is the one found here (empty without one); step 4 asks that same one for its',
-    '# version. OC is set when OpenCode is installed (the plugin installer\'s own test).',
+    '# CLAUDE is the one found here (empty without one, or when not ticked); step 4 asks that',
+    '# same one for its version. OC is set when OpenCode is ticked and installed (the plugin',
+    '# installer\'s own test). An unticked agent is never looked for, so never touched.',
     'CLAUDE=',
-    'if command -v claude >/dev/null 2>&1; then CLAUDE=claude',
-    'elif [ -x "$HOME/.local/bin/claude" ]; then CLAUDE="$HOME/.local/bin/claude"',
+    'if [ "$WANT_CLAUDE" = 1 ]; then',
+    '  if command -v claude >/dev/null 2>&1; then CLAUDE=claude',
+    '  elif [ -x "$HOME/.local/bin/claude" ]; then CLAUDE="$HOME/.local/bin/claude"',
+    '  fi',
     'fi',
     'OC=',
-    'if command -v opencode >/dev/null 2>&1 || [ -x "$HOME/.opencode/bin/opencode" ]; then OC=1; fi',
+    'if [ "$WANT_OPENCODE" = 1 ]; then',
+    '  if command -v opencode >/dev/null 2>&1 || [ -x "$HOME/.opencode/bin/opencode" ]; then OC=1; fi',
+    'fi',
     'if [ -z "$CLAUDE" ] && [ -z "$OC" ]; then',
     '  cat >/dev/null 2>&1 || true',
     "  echo 'AGENTMAIL: skipped-no-agent'",
@@ -264,11 +282,19 @@ export function buildAgentMailInstallScript() {
     '  chmod 644 "$SKILLDIR/SKILL.md.$$.tmp"',
     '  mv -f "$SKILLDIR/SKILL.md.$$.tmp" "$SKILLDIR/SKILL.md"',
     'fi',
+    '# OpenCode\'s copy in a subshell whose every step is checked (set -e does not apply inside an',
+    '# `if` condition): with Claude\'s parts still to come a failure is only reported, so an',
+    '# unwritable OpenCode config directory never costs Claude its hooks; alone, it fails.',
+    'OCSKILL=',
     'if [ -n "$OC" ]; then',
-    '  mkdir -p "$OCSKILLDIR"',
-    '  sed "1,/^$SEP\\$/d" "$IN" > "$OCSKILLDIR/SKILL.md.$$.tmp"',
-    '  chmod 644 "$OCSKILLDIR/SKILL.md.$$.tmp"',
-    '  mv -f "$OCSKILLDIR/SKILL.md.$$.tmp" "$OCSKILLDIR/SKILL.md"',
+    '  if ! ( mkdir -p "$OCSKILLDIR" && sed "1,/^$SEP\\$/d" "$IN" > "$OCSKILLDIR/SKILL.md.$$.tmp" \\',
+    '      && chmod 644 "$OCSKILLDIR/SKILL.md.$$.tmp" && mv -f "$OCSKILLDIR/SKILL.md.$$.tmp" "$OCSKILLDIR/SKILL.md" ); then',
+    '    if [ -z "$CLAUDE" ]; then',
+    "      echo 'AGENTMAIL: error-opencode-skill'",
+    '      exit 5',
+    '    fi',
+    '    OCSKILL=failed',
+    '  fi',
     'fi',
     'mkdir -p "$HOME/.local/bin"',
     '[ -L "$LINK" ] || ln -s "$MAIL/tmx" "$LINK"',
@@ -350,10 +376,12 @@ export function buildAgentMailInstallScript() {
     'fi',
     "echo 'AGENTMAIL: applied'",
     "[ -n \"$AUTO\" ] || echo 'AGENTMAIL: automode-skipped'",
+    "[ -z \"$OCSKILL\" ] || echo 'AGENTMAIL: opencode-skill-failed'",
   ].join('\n');
 }
 
 export const OPENCODE_ONLY_NOTE = 'OpenCode\'s part arrives with the OpenCode plugin';
+export const OPENCODE_SKILL_NOTE = 'OpenCode skill could not be written';
 
 const SKIPS = [
   [/AGENTMAIL:\s*skipped-no-agent/, 'no Claude Code or OpenCode on the box'],
@@ -363,13 +391,15 @@ const SKIPS = [
 const ERRORS = [
   [/AGENTMAIL:\s*error-no-json-tool/, 'no jq, node or python3 on the box'],
   [/AGENTMAIL:\s*error-settings-merge/, 'settings.json could not be merged'],
+  [/AGENTMAIL:\s*error-opencode-skill/, 'OpenCode skill could not be written'],
 ];
 
 export function createAgentMailPusher({ runStdin, readAssets }) {
   const failed = { target: 'agent-mail', ok: false, error: 'agent mail push failed' };
   return {
-    // Never throws: every outcome is a result the setup job records.
-    async push(box) {
+    // Never throws: every outcome is a result the setup job records. `want` is the job's ticked
+    // selection, { claude, opencode } (see buildAgentMailInstallScript).
+    async push(box, want = { claude: true, opencode: true }) {
       let input;
       try {
         const { script, skill } = await readAssets();
@@ -377,16 +407,20 @@ export function createAgentMailPusher({ runStdin, readAssets }) {
         input = Buffer.concat([script, Buffer.from(`\n${SKILL_SEPARATOR}\n`), skill]);
       } catch { return { target: 'agent-mail', ok: false, error: 'agent mail asset unavailable' }; }
       let res;
-      try { res = await runStdin(box, buildAgentMailInstallScript(), input); } catch { return { ...failed }; }
+      const script = buildAgentMailInstallScript({ claude: want?.claude === true, opencode: want?.opencode === true });
+      try { res = await runStdin(box, script, input); } catch { return { ...failed }; }
       const out = String((res && res.stdout) || '');
       if (res && res.code === 0) {
         for (const [re, skipped] of SKIPS) if (re.test(out)) return { target: 'agent-mail', ok: false, skipped };
         // tmx, its link and OpenCode's skill landed; nothing of Claude's was touched.
         if (/AGENTMAIL:\s*opencode-only/.test(out)) return { target: 'agent-mail', ok: true, note: OPENCODE_ONLY_NOTE };
         if (/AGENTMAIL:\s*applied/.test(out)) {
-          // Hooks and rule merged; autoMode left alone for an older or unreadable Claude Code.
-          if (/AGENTMAIL:\s*automode-skipped/.test(out)) return { target: 'agent-mail', ok: true, note: AUTOMODE_NOTE };
-          return { target: 'agent-mail', ok: true };
+          // Hooks and rule merged; autoMode left alone for an older or unreadable Claude Code;
+          // OpenCode's skill copy (best-effort beside Claude) may have failed.
+          const notes = [];
+          if (/AGENTMAIL:\s*automode-skipped/.test(out)) notes.push(AUTOMODE_NOTE);
+          if (/AGENTMAIL:\s*opencode-skill-failed/.test(out)) notes.push(OPENCODE_SKILL_NOTE);
+          return notes.length ? { target: 'agent-mail', ok: true, note: notes.join('; ') } : { target: 'agent-mail', ok: true };
         }
       } else if (res) {
         for (const [re, error] of ERRORS) if (re.test(out)) return { target: 'agent-mail', ok: false, error };

@@ -670,14 +670,17 @@ nothing is posted after the final write.
   records on one master, master kill and keeper restart, a re-address to a second master).
 - `claudeAgentMail.js` + `src/server/assets/tmuxifier-mail.sh` + `src/server/assets/tmuxifier-mail-skill.md`
   — the `agent-mail` setup phase, structural twin of `claudeAgentHooks.js`: both files on stdin
-  (split at `SKILL_SEPARATOR`, each landed by rename), nothing interpolated. It runs for the
-  `claude` or the `opencode` selection and the box decides which agent it has (`claude` on PATH or
-  `~/.local/bin`; `opencode` on PATH or `~/.opencode/bin`): `tmx` and its link for either, the
-  Claude parts below only with `claude`, and with `opencode` the same skill bytes at
-  `${OPENCODE_CONFIG_DIR:-~/.config/opencode}/skills/tmuxifier-mail/SKILL.md`. It skips with
-  neither agent (`skipped-no-agent`), no `curl`, or a `~/.local/bin/tmx` that is not exactly its
-  symlink; an OpenCode-only box prints `opencode-only` and the ok result's `note` says OpenCode's
-  half arrives with the plugin. One `settings.json` rewrite (jq → node → python3) merges `MAIL_HOOKS` (`SessionStart` + `Stop`:
+  (split at `SKILL_SEPARATOR`, each landed by rename), nothing interpolated but the ticked
+  selection as two literal lines, `WANT_CLAUDE=1|0` / `WANT_OPENCODE=1|0`
+  (`push(box, { claude, opencode })`, from setupManager; the legacy `claudeStatusline` flag counts
+  as claude). An unticked agent is never looked for, so never touched; for a ticked one the box
+  decides (`claude` on PATH or `~/.local/bin`; `opencode` on PATH or `~/.opencode/bin`): `tmx` and
+  its link for either, the Claude parts below only with `claude`, and with `opencode` the same
+  skill bytes at `${OPENCODE_CONFIG_DIR:-~/.config/opencode}/skills/tmuxifier-mail/SKILL.md` —
+  best-effort beside Claude (`opencode-skill-failed` → a `note`), fatal alone
+  (`error-opencode-skill`). It skips with no ticked agent present (`skipped-no-agent`), no `curl`,
+  or a `~/.local/bin/tmx` that is not exactly its symlink; an OpenCode-only run prints
+  `opencode-only` and the ok result's `note` says OpenCode's half arrives with the plugin. One `settings.json` rewrite (jq → node → python3) merges `MAIL_HOOKS` (`SessionStart` + `Stop`:
   `hook-wait` with `asyncRewake`; `UserPromptSubmit`: `hook-ack`), remove-then-append on the
   string `tmuxifier-mail`, and set-adds `MAIL_PERMISSION_RULE` = `Bash(tmx *)` to
   `permissions.allow`, touching nothing else in `permissions`. The same rewrite merges

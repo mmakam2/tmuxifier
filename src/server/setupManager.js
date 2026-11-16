@@ -90,8 +90,9 @@ export function createSetupManager({
   // always-on and the box decides via its own command -v claude check.
   pushAgentHooks = null,
   // Post-setup agent mail push (claudeAgentMail.js): tmx, its skill, the mail hooks and the
-  // permission rule. Default null: an unwired manager skips the step. Same one-knob gate as
-  // the rest of the Claude stack; the box decides via its own command -v claude check.
+  // permission rule. Default null: an unwired manager skips the step. Called as
+  // pushAgentMail(box, { claude, opencode }) with the ticked selection when either the Claude
+  // stack or `opencode` is ticked; the box decides which of the ticked agents it has.
   pushAgentMail = null,
   // Post-setup voice-link push (claudeVoiceLink.js). Default null: an
   // unwired manager skips the step. Same one-knob gate as the statusline and
@@ -256,14 +257,16 @@ export function createSetupManager({
       try { j.agentHooks = await pushAgentHooks(box); }
       catch { j.agentHooks = { target: 'agent-hooks', ok: false, error: 'agent hooks push failed' }; }
     }
-    // Agent mail serves both agents: it also runs for the `opencode` selection alone (the
-    // box decides which of the two it has and installs only that agent's half). Every other
-    // Claude phase above and below stays behind `wantsClaudeStack`.
-    const wantsAgentMail = wantsClaudeStack || (j.options.tools || []).includes('opencode');
-    if (pushAgentMail && wantsAgentMail && box && !j.cancelled) {
+    // Agent mail serves both agents: it also runs for the `opencode` selection alone. It acts
+    // on the ticked selection, handed to it as { claude, opencode } (the same strict rule:
+    // an unticked agent's half is never touched, even on a box that has that agent); the box
+    // then decides which of the ticked agents it has. Every other Claude phase above and
+    // below stays behind `wantsClaudeStack`.
+    const wantsOpencode = (j.options.tools || []).includes('opencode');
+    if (pushAgentMail && (wantsClaudeStack || wantsOpencode) && box && !j.cancelled) {
       j.phase = 'agent-mail';
       persist();
-      try { j.agentMail = await pushAgentMail(box); }
+      try { j.agentMail = await pushAgentMail(box, { claude: wantsClaudeStack, opencode: wantsOpencode }); }
       catch { j.agentMail = { target: 'agent-mail', ok: false, error: 'agent mail push failed' }; }
     }
     if (pushVoiceLink && wantsClaudeStack && box && !j.cancelled) {

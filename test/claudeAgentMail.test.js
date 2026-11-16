@@ -235,6 +235,118 @@ test('both agents with an old Claude Code: still the automode-skipped note, noth
   expect(await exists(b.ocSkill)).toBe(true);
 });
 
+test('both agents, OpenCode config dir unwritable: Claude still gets everything, the result carries a note', async () => {
+  const b = await claudeBox({ opencode: true });
+  await fs.mkdir(path.dirname(b.ocCfg), { recursive: true });
+  await fs.writeFile(b.ocCfg, 'not a directory\n'); // a regular FILE where the directory goes
+  const res = await install(b);
+  expect(res.code, res.stderr).toBe(0);
+  expect(res.stdout).toBe('AGENTMAIL: applied\nAGENTMAIL: opencode-skill-failed\n');
+  expect(await exists(b.skill)).toBe(true);
+  expect(await readJson(b.settings)).toEqual({ hooks: MAIL_HOOKS, permissions: { allow: [MAIL_PERMISSION_RULE] }, autoMode: OUR_AUTOMODE });
+  expect(await fs.readFile(b.ocCfg, 'utf8')).toBe('not a directory\n');
+
+  const b2 = await claudeBox({ opencode: true });
+  await fs.mkdir(path.dirname(b2.ocCfg), { recursive: true });
+  await fs.writeFile(b2.ocCfg, 'x');
+  const pusher = createAgentMailPusher({ runStdin: (box, script, input) => runShell(script, b2.env, input), readAssets });
+  expect(await pusher.push({ id: 'orders' })).toEqual({ target: 'agent-mail', ok: true, note: 'OpenCode skill could not be written' });
+  expect(await readJson(b2.settings)).toMatchObject({ hooks: MAIL_HOOKS, permissions: { allow: [MAIL_PERMISSION_RULE] } });
+  // With an old Claude Code both notes are kept.
+  const b3 = await claudeBox({ claude: fakeClaude('2.1.100 (Claude Code)'), opencode: true });
+  await fs.mkdir(path.dirname(b3.ocCfg), { recursive: true });
+  await fs.writeFile(b3.ocCfg, 'x');
+  const pusher3 = createAgentMailPusher({ runStdin: (box, script, input) => runShell(script, b3.env, input), readAssets });
+  expect(await pusher3.push({ id: 'orders' }))
+    .toEqual({ target: 'agent-mail', ok: true, note: 'auto-mode entries need Claude Code 2.1.228 or later; OpenCode skill could not be written' });
+});
+
+test('OpenCode only, config dir unwritable: the phase fails, nothing of Claude\'s is created', async () => {
+  const b = await claudeBox({ claude: false, opencode: true });
+  await fs.mkdir(path.dirname(b.ocCfg), { recursive: true });
+  await fs.writeFile(b.ocCfg, 'x');
+  const res = await install(b);
+  expect(res.code).toBe(5);
+  expect(res.stdout).toBe('AGENTMAIL: error-opencode-skill\n');
+  expect(await exists(b.cfg)).toBe(false);
+  const pusher = createAgentMailPusher({ runStdin: (box, script, input) => runShell(script, b.env, input), readAssets });
+  expect(await pusher.push({ id: 'orders' })).toEqual({ target: 'agent-mail', ok: false, error: 'OpenCode skill could not be written' });
+});
+
+// Ruling R38: the phase acts on the ticked selection, never on what is merely installed.
+const tree = async (root) => {
+  const out = [];
+  const walk = async (d) => {
+    let ents;
+    try { ents = await fs.readdir(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) await walk(p);
+      else {
+        const st = await fs.lstat(p);
+        out.push(`${path.relative(root, p)} ${st.ino} ${st.mtimeMs} ${e.isFile() ? await fs.readFile(p, 'utf8') : ''}`);
+      }
+    }
+  };
+  await walk(root);
+  return out.sort();
+};
+const pushWith = (b, want) => createAgentMailPusher({ runStdin: (box, script, input) => runShell(script, b.env, input), readAssets }).push({ id: 'orders' }, want);
+
+test('the ticked selection: OpenCode only on a box with Claude Code touches nothing of Claude\'s', async () => {
+  const b = await claudeBox({ opencode: true });
+  await fs.mkdir(path.join(b.cfg, 'skills', 'other'), { recursive: true });
+  await fs.writeFile(b.settings, '{"theme":"dark","permissions":{"allow":[]}}');
+  await fs.writeFile(path.join(b.cfg, 'skills', 'other', 'SKILL.md'), 'mine');
+  const before = await tree(b.cfg);
+  expect(await pushWith(b, { claude: false, opencode: true })).toEqual({ target: 'agent-mail', ok: true, note: OC_NOTE });
+  expect(await tree(b.cfg)).toEqual(before);
+  expect(await exists(b.skill)).toBe(false);
+  expect(await exists(b.ocSkill)).toBe(true);
+  expect(await exists(b.tmx)).toBe(true);
+  // Without a ~/.claude at all, none is created.
+  const b2 = await claudeBox({ opencode: true });
+  expect((await pushWith(b2, { claude: false, opencode: true })).ok).toBe(true);
+  expect(await exists(b2.cfg)).toBe(false);
+});
+
+test('the ticked selection: Claude Code only on a box with OpenCode writes no OpenCode skill', async () => {
+  const b = await claudeBox({ opencode: true });
+  expect(await pushWith(b, { claude: true, opencode: false })).toEqual({ target: 'agent-mail', ok: true });
+  expect(await exists(b.skill)).toBe(true);
+  expect(await readJson(b.settings)).toMatchObject({ hooks: MAIL_HOOKS });
+  expect(await exists(path.join(b.home, '.config'))).toBe(false);
+  // An unwritable OpenCode config dir is never even looked at.
+  const b2 = await claudeBox({ opencode: true });
+  await fs.mkdir(path.dirname(b2.ocCfg), { recursive: true });
+  await fs.writeFile(b2.ocCfg, 'x');
+  expect(await pushWith(b2, { claude: true, opencode: false })).toEqual({ target: 'agent-mail', ok: true });
+});
+
+test('the ticked selection: both ticked installs both; a ticked agent that is absent is a skip', async () => {
+  const b = await claudeBox({ opencode: true });
+  expect(await pushWith(b, { claude: true, opencode: true })).toEqual({ target: 'agent-mail', ok: true });
+  expect(await exists(b.skill)).toBe(true);
+  expect(await exists(b.ocSkill)).toBe(true);
+  // Claude ticked on an OpenCode-only box, OpenCode ticked on a Claude-only box, nothing ticked.
+  for (const [box, want] of [[{ claude: false, opencode: true }, { claude: true, opencode: false }],
+    [{ claude: true, opencode: false }, { claude: false, opencode: true }],
+    [{ claude: true, opencode: true }, { claude: false, opencode: false }]]) {
+    const c = await claudeBox(box);
+    expect(await pushWith(c, want), JSON.stringify([box, want])).toEqual({ target: 'agent-mail', ok: false, skipped: 'no Claude Code or OpenCode on the box' });
+    expect(await fs.readdir(c.home)).toEqual([]);
+  }
+});
+
+test('the selection reaches the script only as two literal 0/1 lines', () => {
+  const lines = (want) => buildAgentMailInstallScript(want).split('\n').filter((l) => l.startsWith('WANT_'));
+  expect(lines({ claude: true, opencode: false })).toEqual(['WANT_CLAUDE=1', 'WANT_OPENCODE=0']);
+  expect(lines({ claude: false, opencode: true })).toEqual(['WANT_CLAUDE=0', 'WANT_OPENCODE=1']);
+  expect(lines()).toEqual(['WANT_CLAUDE=1', 'WANT_OPENCODE=1']);
+  // Only a literal `true` counts; nothing else is ever written into the script.
+  expect(lines({ claude: 'yes; rm -rf /', opencode: 1 })).toEqual(['WANT_CLAUDE=0', 'WANT_OPENCODE=0']);
+});
+
 test('both agents and no JSON tool: error-no-json-tool as before, with tmx and both skills in place', async () => {
   const b = await claudeBox({ opencode: true, tools: [...BASE_TOOLS, 'curl'] });
   const res = await install(b);

@@ -306,12 +306,14 @@ in each Claude Code session, and the OpenCode plugin, retry quietly.
 ### What setup installs
 
 With **Claude Code**, **OpenCode** or both ticked and messaging on, setup looks on the box for
-each agent (the same test its own installer uses: on `PATH`, or in `~/.local/bin` for `claude`
-and `~/.opencode/bin` for `opencode`) and writes, whichever it finds:
+each agent you ticked, and only those (the same test its own installer uses: on `PATH`, or in
+`~/.local/bin` for `claude` and `~/.opencode/bin` for `opencode`). An agent you did not tick is
+neither looked for nor touched, even when it is on the box. For whichever ticked agent it finds
+it writes:
 
 - `~/.tmuxifier-mail/tmx`, and a symlink to it at `~/.local/bin/tmx`.
 
-For Claude Code, when `claude` is on the box:
+For Claude Code, when it is ticked and `claude` is on the box:
 
 - the skill, `~/.claude/skills/tmuxifier-mail/SKILL.md`;
 - in `~/.claude/settings.json`: three hook entries whose command mentions `tmuxifier-mail`
@@ -341,12 +343,14 @@ For Claude Code, when `claude` is on the box:
 
 `CLAUDE_CONFIG_DIR`, when set on the box, is used in place of `~/.claude`.
 
-For OpenCode, when `opencode` is on the box:
+For OpenCode, when it is ticked and `opencode` is on the box:
 
 - the same skill text, `~/.config/opencode/skills/tmuxifier-mail/SKILL.md` (under
   `$OPENCODE_CONFIG_DIR` when that is set). OpenCode reads that folder on its own. It also reads
   `~/.claude/skills`, so on a box with both agents OpenCode may list the skill twice; the two
-  copies are the same text;
+  copies are the same text. With both agents ticked, a failure to write this file does not stop
+  Claude Code's half: the setup line reads `agent-mail ✓ (OpenCode skill could not be written)`.
+  With OpenCode alone it fails the step;
 - nothing in an OpenCode settings file: there is none to merge. The rest of OpenCode's side is
   the state plugin, `~/.config/opencode/plugins/tmuxifier-agent.js`, which the **OpenCode**
   setup step writes (see [The OpenCode checkbox](boxes-and-setup.md#the-opencode-checkbox)). It

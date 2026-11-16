@@ -1018,6 +1018,24 @@ test('agent-mail also runs for the opencode selection alone, before opencode-plu
   expect(both).toEqual(['statusline', 'agent-hooks', 'agent-mail', 'voice-link', 'opencode-plugin']);
 });
 
+// The phase acts on the ticked selection (the operator's "unticked touches nothing" rule), so
+// the manager hands it over: the legacy statusline flag counts as claude.
+test('agent-mail is handed the ticked selection', async () => {
+  const cases = [
+    [{ tools: ['claude'] }, { claude: true, opencode: false }],
+    [{ tools: ['opencode'] }, { claude: false, opencode: true }],
+    [{ tools: ['claude', 'opencode', 'git'] }, { claude: true, opencode: true }],
+    [{ tools: ['opencode'], claudeStatusline: true }, { claude: true, opencode: true }],
+    [{ tools: [], claudeStatusline: true }, { claude: true, opencode: false }],
+  ];
+  for (const [options, want] of cases) {
+    const seen = [];
+    const m = make({ pushAgentMail: async (box, w) => { seen.push(w); return { target: 'agent-mail', ok: true }; } });
+    await m._settled(m.start(BOX, options).id);
+    expect(seen, JSON.stringify(options)).toEqual([want]);
+  }
+});
+
 test('a throwing pushAgentMail is recorded and never fails the job; unwired, listJobs reports null', async () => {
   const order = [];
   const m = make({

@@ -208,8 +208,8 @@ const setupManager = createSetupManager({
   // not keep saying "Tools not installed" until the next ensure or recheck. `agentMail` is
   // declared further down; this runs only when a setup job reaches the phase.
   pushAgentMail: config.agentMail
-    ? async (box) => {
-      const result = await agentMailPusher.push(box);
+    ? async (box, want) => {
+      const result = await agentMailPusher.push(box, want);
       if (result?.ok === true) agentMail?.forward.markInstalled(box.id);
       return result;
     }
