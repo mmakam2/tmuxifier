@@ -1,7 +1,10 @@
 import { test, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createReducer, deriveState } from '../src/server/assets/tmuxifier-opencode-agent.js';
+import { createReducer, deriveState, MAIL_MSG_ID_RE } from '../src/server/assets/tmuxifier-opencode-agent.js';
+import { createAgentMailStore, MSG_ID_RE } from '../src/server/agentMailStore.js';
 
 // Drives the OpenCode reporter's pure reducer with the real OpenCode 2.2.6
 // recording (test/fixtures/opencode-event-trace.jsonl). Line numbers are the
@@ -311,5 +314,277 @@ test('createReducer adopts a same-version state as-is and starts fresh from anyt
   expect(b.apply(lineEvent(60))).toBe(false); // already seen
   for (const state of [{ ...a.state, version: STATE_VERSION + 1 }, { ...a.state, hints: {} }, 'x', null]) {
     expect(createReducer({ state }).sessions.size).toBe(0);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A Tmuxifier mail wake (an OpenCode `synthetic` inbox item we post) reads like
+// Claude Code's: it clears no background-shell bookkeeping, never writes over a
+// block, and otherwise the turn it starts is working/resume. The event shapes
+// are the real OpenCode 2.3.0 recording's (README Facts F1, F10 and the
+// scenario table in test/fixtures/README-opencode-2.3-event-trace.md); line
+// numbers are physical fixture lines.
+// ---------------------------------------------------------------------------
+
+const TRACE23 = fileURLToPath(new URL('./fixtures/opencode-2.3-event-trace.jsonl', import.meta.url));
+const LINES23 = readFileSync(TRACE23, 'utf8')
+  .split('\n')
+  .map((text, i) => ({ n: i + 1, text }))
+  .filter(({ text }) => text.trim())
+  .map(({ n, text }) => ({ n, rec: JSON.parse(text) }))
+  .filter(({ rec }) => rec.kind === 'event')
+  .map(({ n, rec }) => ({ n, event: rec.event }));
+const S23 = 'ses_e1b5dba6cffeeqBRex5168FE6A';
+
+function event23(n) {
+  const hit = LINES23.find((l) => l.n === n);
+  if (!hit) throw new Error(`fixture line ${n} is not an event`);
+  return hit.event;
+}
+
+// A reducer fed every event of the 2.3.0 recording up to physical line `n`.
+function at23(n) {
+  const r = createReducer();
+  for (const l of LINES23) if (l.n <= n) r.apply(l.event);
+  return r;
+}
+
+// Apply the fixture's lines `from..to` (inclusive) one by one.
+function replay23(r, from, to, each = () => {}) {
+  for (const l of LINES23) {
+    if (l.n < from || l.n > to) continue;
+    r.apply(l.event);
+    each(l.n);
+  }
+}
+
+let fresh = 0;
+// A copy of a recorded event under a new event id, `created` (ms) and data
+// patch, so it can be applied again after the recording's own copy.
+function reuse(n, created, patch = {}) {
+  const e = structuredClone(event23(n));
+  e.id = `evt_reuse_${++fresh}`;
+  e.created = created;
+  Object.assign(e.data, patch);
+  return e;
+}
+
+// Our wake exactly as OpenCode 2.3.0 enqueued it (line 534): no `location`,
+// our id only in `payload.metadata.tmuxifierMail` (F1).
+function wake(created, metadata = { tmuxifierMail: 'm-bbbbbbbb' }, patch = {}) {
+  const e = reuse(534, created);
+  e.data.inboxID = `msg_reuse_${fresh}`;
+  e.data.item.payload.metadata = metadata;
+  Object.assign(e.data.item, patch);
+  return e;
+}
+
+const state23 = (r) => r.derive(S23);
+
+test('a mail wake on an idle session reads working/resume, then ready/stop', () => {
+  // (g1, lines 531-809): the session finished its last turn at 508/510's end,
+  // then our wake is queued on the idle session.
+  const r = at23(533);
+  const before = state23(r);
+  expect(sc(before)).toBe('ready/stop');
+  const evidence = r.sessions.get(S23).evidenceAt;
+
+  // Enqueueing it changes nothing a marker shows (line 534), and an item of
+  // ours is the agent's own input, never operator evidence.
+  expect(r.apply(event23(534))).toBe(false);
+  expect(state23(r)).toEqual(before);
+  expect(r.sessions.get(S23).mailWake).toBe(true);
+  expect(r.sessions.get(S23).lastInbox).toBe('synthetic');
+  expect(r.sessions.get(S23).evidenceAt).toBe(evidence);
+
+  // It starts the turn (535): a resume, with the turn's own timestamp.
+  expect(r.apply(event23(535))).toBe(true);
+  expect(state23(r)).toEqual({ state: 'working', cause: 'resume', ts: Math.floor(event23(535).created / 1000) });
+
+  // The delivery and the tools' shells inside the turn (536-807) never end it.
+  replay23(r, 536, 807, (n) => expect(sc(state23(r)), `line ${n}`).toBe('working/resume'));
+  expect(r.sessions.get(S23).shells.size).toBe(0);
+
+  // The turn's end (808): finished again, no shell and no block left over.
+  expect(r.apply(event23(808))).toBe(true);
+  expect(state23(r)).toEqual({ state: 'ready', cause: 'stop', ts: Math.floor(event23(808).created / 1000) });
+  expect(r.sessions.get(S23).blocks.size).toBe(0);
+});
+
+test('a mail wake never clears a running background shell', () => {
+  // (d, lines 431-512): ctrl+b moves `sleep 25` to the background (shell
+  // sh_1e4a703a…), the turn ends (507) with the shell still running.
+  const r = at23(508);
+  const SHELL = 'sh_1e4a703a1001lq7oXK0Cg0pQV9';
+  expect(sc(state23(r))).toBe('working/prompt');
+  expect([...r.sessions.get(S23).shells]).toEqual([SHELL]);
+  expect(r.sessions.get(S23).executing).toBe(false);
+  expect(r.sessions.get(S23).mailWake).toBe(false); // 462, OpenCode's own ctrl+b notice, is not ours
+  expect(state23(r).ts).toBe(Math.floor(event23(507).created / 1000)); // the turn's end moved it to working/prompt
+
+  // Our wake lands in the idle-but-busy session: nothing moves, the shell stays.
+  const T = event23(508).created + 10_000;
+  const tsBefore = state23(r).ts;
+  expect(r.apply(wake(T))).toBe(false);
+  expect(r.sessions.get(S23).mailWake).toBe(true);
+  expect([...r.sessions.get(S23).shells]).toEqual([SHELL]);
+  expect(sc(state23(r))).toBe('working/prompt');
+  expect(state23(r).ts).toBe(tsBefore);
+
+  // Its turn reads as a resume, the shell is still held through it ...
+  expect(r.apply(reuse(535, T + 1000))).toBe(true);
+  expect(sc(state23(r))).toBe('working/resume');
+  expect([...r.sessions.get(S23).shells]).toEqual([SHELL]);
+
+  // ... and when the turn ends the shell still keeps the session working.
+  expect(r.apply(reuse(808, T + 5000))).toBe(true);
+  expect(sc(state23(r))).toBe('working/prompt');
+  expect(r.sessions.get(S23).executing).toBe(false);
+  expect([...r.sessions.get(S23).shells]).toEqual([SHELL]);
+
+  // Only the shell's own exit (509) lets go.
+  r.apply(event23(509));
+  expect(r.sessions.get(S23).shells.size).toBe(0);
+  expect(sc(state23(r))).toBe('ready/stop');
+});
+
+test('a mail wake while blocked stays blocked/<cause> until the block\'s own reply', () => {
+  // (b1, g3, lines 255-365): a permission prompt is open (276) when our wake
+  // is queued (280).
+  const r = at23(276);
+  const blocked = state23(r);
+  expect(blocked).toEqual({ state: 'blocked', cause: 'permission', ts: Math.floor(event23(276).created / 1000) });
+  const held = [...r.sessions.get(S23).blocks];
+
+  expect(r.apply(event23(280))).toBe(false);
+  expect(r.sessions.get(S23).mailWake).toBe(true);
+  expect(state23(r)).toEqual(blocked); // neither the state, the cause nor the ts moved
+  expect([...r.sessions.get(S23).blocks]).toEqual(held);
+
+  // Even a (late or duplicated) execution.started for the queued item does not
+  // turn the block into working.
+  expect(r.apply(reuse(535, event23(280).created + 100))).toBe(false);
+  expect(state23(r)).toEqual(blocked);
+
+  // The block's own reply (282) is what unblocks; the delivery (299) is no event for the marker.
+  r.apply(event23(282));
+  expect(sc(state23(r))).toBe('working/unblock');
+  replay23(r, 283, 299, (n) => expect(sc(state23(r)), `line ${n}`).toBe('working/unblock'));
+  r.apply(event23(364));
+  expect(sc(state23(r))).toBe('ready/stop');
+
+  // A question form blocks the same way (c, lines 414-416).
+  const q = at23(414);
+  expect(sc(state23(q))).toBe('blocked/question');
+  const qState = state23(q);
+  expect(q.apply(wake(event23(414).created + 100))).toBe(false);
+  expect(state23(q)).toEqual(qState);
+  q.apply(event23(416));
+  expect(sc(state23(q))).toBe('working/unblock');
+});
+
+test('a mail wake is recognised by its metadata and never by its text', () => {
+  const ours = (r) => r.sessions.get(S23).mailWake;
+  const r = at23(533);
+  let t = event23(534).created + 1000;
+  const feed = (e) => { r.apply(e); return ours(r); };
+
+  expect(feed(wake(t += 10))).toBe(true);
+  // A user item (the operator's prompt) is never a wake, even with our metadata.
+  expect(feed(wake(t += 10, { tmuxifierMail: 'm-bbbbbbbb' }, { type: 'user' }))).toBe(false);
+  expect(r.sessions.get(S23).lastInbox).toBe('user');
+  expect(feed(wake(t += 10))).toBe(true);
+  // OpenCode's own synthetic items (the finished-shell notice, the ctrl+b notice) are not ours.
+  expect(feed(reuse(510, t += 10))).toBe(false);
+  expect(r.sessions.get(S23).lastInbox).toBe('synthetic');
+  expect(feed(wake(t += 10))).toBe(true);
+  expect(feed(reuse(462, t += 10))).toBe(false);
+  // The text alone never makes a wake: the tag is in the text of an item with no metadata.
+  const textOnly = wake(t += 10, undefined);
+  delete textOnly.data.item.payload.metadata;
+  textOnly.data.item.payload.text = '[tmuxifier-mail m-bbbbbbbb] hello';
+  expect(feed(textOnly)).toBe(false);
+  expect(r.sessions.get(S23).lastInbox).toBe('synthetic'); // still a resume trigger
+  // Metadata that is not a message id of the store's alphabet.
+  for (const bad of ['m-BBBBBBBB', 'm-bbbbbbb', 'm-bbbbbbbbb', 'm-bbbbbbbi', 't-bbbbbbbb', 'm-bbbbbbbb\n', ' m-bbbbbbbb', '', 7, null, true, ['m-bbbbbbbb'], { id: 'm-bbbbbbbb' }]) {
+    feed(wake(t += 10));
+    expect(ours(r)).toBe(true);
+    expect(feed(wake(t += 10, { tmuxifierMail: bad })), JSON.stringify(bad)).toBe(false);
+  }
+  // Garbage around the metadata never throws and never makes one.
+  for (const payload of [null, 'x', 5, [], { metadata: null }, { metadata: 'm-bbbbbbbb' }, { metadata: ['m-bbbbbbbb'] }]) {
+    expect(feed(wake(t += 10))).toBe(true);
+    const e = wake(t += 10);
+    e.data.item.payload = payload;
+    expect(() => r.apply(e)).not.toThrow();
+    expect(ours(r), JSON.stringify(payload)).toBe(false);
+    expect(r.sessions.get(S23).lastInbox).toBe('synthetic'); // the item was still seen, as an item that is not ours
+  }
+  // An item whose kind is unknown leaves the flag as the last known item left it.
+  feed(wake(t += 10));
+  expect(feed(wake(t += 10, { tmuxifierMail: 'm-bbbbbbbb' }, { type: 'attachment' }))).toBe(true);
+  // Invariant: a wake is always a synthetic item, so it always reads as a resume.
+  expect(r.sessions.get(S23).lastInbox).toBe('synthetic');
+  // A fresh session starts with no wake.
+  const n = createReducer();
+  n.apply({ id: 'new1', type: 'session.created', data: { sessionID: 'ses_new' } });
+  expect(n.sessions.get('ses_new').mailWake).toBe(false);
+});
+
+test('a wake for a session the reducer does not know yet leaves a hint that seeds the session', () => {
+  const r = createReducer({ now: () => 50 });
+  const loc = { location: { directory: '/home/user/proj' } };
+  const w = (id, item) => ({ id, type: 'session.inbox.enqueued', data: { sessionID: 'ses_late', inboxID: `msg_${id}`, item }, ...loc });
+  const ours = { type: 'synthetic', payload: { text: 'x', metadata: { tmuxifierMail: 'm-bbbbbbbb' } }, delivery: 'queue' };
+  expect(r.apply(w('h1', ours))).toBe(false);
+  expect(r.sessions.size).toBe(0);
+  expect(r.state.hints.get('ses_late')).toMatchObject({ lastInbox: 'synthetic', mailWake: true });
+  expect(r.apply({ id: 'h2', type: 'session.execution.started', data: { sessionID: 'ses_late' } })).toBe(true);
+  expect(r.sessions.get('ses_late').mailWake).toBe(true);
+  expect(sc(r.derive('ses_late'))).toBe('working/resume');
+  // An ordinary synthetic after it replaces the hint's flag, as for a known session.
+  const q = createReducer({ now: () => 50 });
+  q.apply(w('h3', ours));
+  q.apply(w('h4', { type: 'synthetic', payload: { text: 'done' }, delivery: 'steer' }));
+  expect(q.state.hints.get('ses_late')).toMatchObject({ lastInbox: 'synthetic', mailWake: false });
+});
+
+test('MAIL_MSG_ID_RE agrees with the store\'s MSG_ID_RE on minted ids and near misses', async () => {
+  expect(MAIL_MSG_ID_RE.source).toBe('^m-[abcdefghjkmnpqrstuvwxyz23456789]{8}$');
+  expect(MAIL_MSG_ID_RE.flags).toBe(''); // stateful /g or /y would make .test() answer differently the second time
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'oc-mail-re-'));
+  const store = createAgentMailStore({ dataDir: dir });
+  try {
+    const thread = store.createThread({ starter: { boxId: 'box-a', session: 'one' }, peer: { boxId: 'box-b', session: 'two' } });
+    const minted = [];
+    for (let i = 0; i < 50; i++) minted.push(store.addMessage(thread.id, { from: i % 2 ? 'peer' : 'starter', body: `m${i}` }).id);
+    expect(new Set(minted).size).toBe(50);
+
+    const near = [];
+    const good = minted[0];
+    near.push(thread.id); // a thread id: the right alphabet under the other prefix
+    near.push(`t-${good.slice(2)}`, `M-${good.slice(2)}`, `m${good.slice(2)}`, `m_${good.slice(2)}`);
+    near.push(good.slice(0, -1), `${good}a`, `${good}${good.slice(2, 3)}`); // 7 and 9 characters
+    near.push('m-', 'm-aaaaaaa', 'm-aaaaaaaaa', '', ' ' + good, `${good} `, `${good}\n`, `\n${good}`, `${good}\n${good}`);
+    for (const ch of 'il' + 'o01') {
+      for (let pos = 0; pos < 8; pos++) near.push(`m-${good.slice(2, 2 + pos)}${ch}${good.slice(3 + pos)}`);
+    }
+    for (let pos = 0; pos < 8; pos++) {
+      const c = good[2 + pos];
+      if (c !== c.toUpperCase()) near.push(`m-${good.slice(2, 2 + pos)}${c.toUpperCase()}${good.slice(3 + pos)}`); // letters only
+    }
+    near.push(good.toUpperCase(), 'm-AAAAAAAA', 'm-éééééééé', 'm-aaaaaaa-', 'm-aaaa aaa');
+
+    let accepted = 0;
+    for (const id of [...minted, ...near]) {
+      expect(MAIL_MSG_ID_RE.test(id), JSON.stringify(id)).toBe(MSG_ID_RE.test(id));
+      if (MAIL_MSG_ID_RE.test(id)) accepted++;
+    }
+    expect(accepted).toBe(50); // every minted id, and no near miss
+    for (const id of minted) expect(MAIL_MSG_ID_RE.test(id)).toBe(true);
+    for (const id of near) expect(MAIL_MSG_ID_RE.test(id), JSON.stringify(id)).toBe(false);
+  } finally {
+    await store.whenIdle();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

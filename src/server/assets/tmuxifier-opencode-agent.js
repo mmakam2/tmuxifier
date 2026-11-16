@@ -50,6 +50,17 @@
 //    (epoch seconds), carried through the hint for a session not yet known, and
 //    never moves a state, a marker or a `ts`.
 //
+// 9. A Tmuxifier mail wake (agent messaging, spec §6.5) is an OpenCode
+//    `synthetic` inbox item we post, with our message id in
+//    `payload.metadata.tmuxifierMail`. Its `inbox.enqueued` carries no
+//    `location` (2.3.0 recording, README F1), so it is recognised there, on the
+//    session the reducer already knows, by that metadata matching
+//    MAIL_MSG_ID_RE and never by its text. It reads like Claude Code's mail
+//    wake: it touches no shell and no block (OpenCode brackets its shells with
+//    `shell.created`/`shell.exited`, so there is no token to clear), `blocked`
+//    outranks `working` in deriveState so it never turns a block into work, and
+//    the turn it starts is `working/resume` (a synthetic item is a resume).
+//
 // A setup for another directory in the same process (fact 2, fixture line
 // 316) or a hot reload (fact 3) hands the reducer's state over to the next
 // core (`STATE_VERSION` guards the shape; an incompatible one starts fresh).
@@ -80,7 +91,19 @@ const HINT_MAX = 500;
 // hints, seenIds and the session objects in them). Bump it whenever that shape
 // changes: a core loaded from newer bytes then starts fresh instead of reading
 // an older core's state it does not understand.
-export const STATE_VERSION = 2;
+export const STATE_VERSION = 3;
+
+// A Tmuxifier message id as agentMailStore.js mints it (`MSG_ID_RE` there):
+// `m-` and 8 characters of an alphabet without i, l, o, 0, 1. Spelled out here
+// because the asset imports nothing from the repo; a test pins the two equal.
+export const MAIL_MSG_ID_RE = /^m-[abcdefghjkmnpqrstuvwxyz23456789]{8}$/;
+
+// Is this inbox item one of our mail wakes? A `synthetic` item (never an
+// operator's `user` prompt) whose metadata names one of our message ids.
+function isMailWake(item) {
+  const id = item?.type === 'synthetic' ? item.payload?.metadata?.tmuxifierMail : null;
+  return typeof id === 'string' && MAIL_MSG_ID_RE.test(id);
+}
 
 // Turn activity: these `session.*` events only happen inside a turn, carry
 // `location.directory` and `data.sessionID`, and never follow the turn's end
@@ -139,6 +162,9 @@ function newSession(id) {
     blocks: new Map(),
     shells: new Set(),
     lastInbox: null,
+    // The newest user/synthetic inbox item was one of our mail wakes (fact 9);
+    // implies lastInbox === 'synthetic', so the turn it starts is a resume.
+    mailWake: false,
     // Epoch seconds of the newest operator evidence (session.viewed or a user
     // inbox item); 0 = none seen by this core.
     evidenceAt: 0,
@@ -190,7 +216,7 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
   const adopt = adoptable(state);
   const sessions = adopt ? state.sessions : new Map();
   const seenIds = adopt ? state.seenIds : new Set();
-  // sessionID -> { dir, lastInbox, evidenceAt } from inbox items of sessions
+  // sessionID -> { dir, lastInbox, mailWake, evidenceAt } from inbox items of sessions
   // not (yet) known: a resumed session (`opencode -c`) has no session.created,
   // and its execution.started carries no directory, so its first inbox item is
   // the only place its directory is named (fact 7), and a user item there is
@@ -239,13 +265,16 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
     if (seenIds.size > SEEN_MAX) seenIds.delete(seenIds.values().next().value);
   }
 
-  function hint(sid, dir, kind, at = 0) {
+  function hint(sid, dir, item, at = 0) {
     const prev = hints.get(sid);
     hints.delete(sid);
+    const kind = item?.type;
+    const known = kind === 'user' || kind === 'synthetic';
     const prevAt = Number.isFinite(prev?.evidenceAt) ? prev.evidenceAt : 0;
     hints.set(sid, {
       dir: prev?.dir ?? dir,
-      lastInbox: kind === 'user' || kind === 'synthetic' ? kind : prev?.lastInbox ?? null,
+      lastInbox: known ? kind : prev?.lastInbox ?? null,
+      mailWake: known ? isMailWake(item) : prev?.mailWake === true,
       evidenceAt: kind === 'user' && Number.isFinite(at) ? Math.max(prevAt, at) : prevAt,
     });
     if (hints.size > HINT_MAX) hints.delete(hints.keys().next().value);
@@ -311,7 +340,7 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
     if (type === 'session.deleted') hints.delete(sid);
     if (type === 'session.deleted' && !sessions.has(sid)) return false;
     if (NEVER_CREATES.has(type) && !sessions.has(sid)) {
-      if (type === 'session.inbox.enqueued') hint(sid, dir, data.item?.type, ts);
+      if (type === 'session.inbox.enqueued') hint(sid, dir, data.item, ts);
       return false;
     }
 
@@ -334,6 +363,7 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
         hints.delete(sid);
         s.dir = h.dir;
         s.lastInbox = h.lastInbox;
+        s.mailWake = h.mailWake === true;
         s.evidenceAt = Number.isFinite(h.evidenceAt) ? h.evidenceAt : 0;
       }
     }
@@ -348,13 +378,21 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
         break;
       case 'session.inbox.enqueued': {
         const kind = data.item?.type;
-        if (kind === 'user' || kind === 'synthetic') s.lastInbox = kind;
+        if (kind === 'user' || kind === 'synthetic') {
+          s.lastInbox = kind;
+          s.mailWake = isMailWake(data.item);
+        }
+        // Only an operator's prompt is evidence: a mail wake, like OpenCode's
+        // own notices, is a synthetic item, and nothing else here (shells,
+        // blocks, state) reacts to it.
         if (kind === 'user') s.evidenceAt = Math.max(s.evidenceAt, ts);
         break;
       }
       case 'session.execution.started':
         s.executing = true;
         s.started = true;
+        // A synthetic item (a finished background job, our mail wake) resumes
+        // the session; deriveState lets a block win over it (fact 9).
         s.cause = s.lastInbox === 'synthetic' ? 'resume' : 'prompt';
         break;
       default:
