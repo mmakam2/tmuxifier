@@ -146,13 +146,17 @@ Cross-cutting invariants that tests alone have repeatedly failed to protect:
   phases record their result and never fail the job; a failed setup never removes the box.
 - **Every web fetch goes through `http.ts`** (the 401 → login seam); `test/webHttp.test.js`
   forbids hand-rolled `res.ok` checks elsewhere.
-- **Agent mail is never typed into a terminal.** A message reaches a Claude Code session only
-  through that session's own `asyncRewake` waiter (`tmx hook-wait`), and only while the session's
-  marker reads `ready`; working or blocked keeps it `queued`. Hand-off is `handed`, not
-  `delivered`: only the prompt hook's ack (`tmx hook-ack`), or the agent reading it through
-  `tmx wait`/`read`/`inbox`, delivers it, and an unconfirmed hand-off is offered again. The
-  socket a request arrives on is the box; the session it names is a claim checked against the
-  box's markers. Policy changes only through the browser-session routes.
+- **Agent mail is never typed into a terminal.** A message reaches an agent session only
+  through that session's own waiter: Claude Code's `asyncRewake` hook (`tmx hook-wait`) or
+  OpenCode's state plugin (a held wait handed to `ctx.session.synthetic` with `delivery:
+  'queue'`, never `steer`), and only while the session's marker reads `ready`; working or
+  blocked keeps it `queued`. Hand-off is `handed`, not `delivered`: only the prompt hook's ack
+  (`tmx hook-ack`), the plugin's ack on OpenCode's `inbox.delivered` for the item it posted, or
+  the agent reading it through `tmx wait`/`read`/`inbox`, delivers it, and an unconfirmed
+  hand-off is offered again. The plugin never re-arms a pane's wait until its posted item has
+  settled: a new wait of a pane re-queues what was handed, so the ack would 404 and the message
+  go out twice. The socket a request arrives on is the box; the session it names is a claim
+  checked against the box's markers. Policy changes only through the browser-session routes.
 - **One ssh connection, one mail forward.** Mail boxes are grouped by resolved ControlPath; only
   the first enabled box of a group in the box list may forward. A refused box runs no ssh command
   for mail beyond one cancel, by its own spec, of a forward it made before it was refused (never
@@ -356,10 +360,11 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   a key-only denial stays `error`). Phase order after the install script: `seeding` → `statusline`
   → `agent-hooks` → `agent-mail` → `voice-link` → `opencode-plugin` → `osc-reporter` → `script` → `ensureSession` (last). The
   Claude phases are all gated by the one `claude` tools selection (a stale bundle's
-  `claudeStatusline` flag still counts); `agent-mail` (job field `agentMail`) is also left unwired
-  when messaging is off; `opencode-plugin` by the `opencode` one (job field
-  `opencodePlugin`). `streamRemote` is shared by the install run and the script phase; only the install
-  run sniffs stderr for prompts. Password-only boxes work only while a ControlMaster is alive.
+  `claudeStatusline` flag still counts); `agent-mail` (job field `agentMail`) runs for the
+  `claude` **or** the `opencode` selection and is left unwired when messaging is off;
+  `opencode-plugin` is gated by the `opencode` one (job field `opencodePlugin`). `streamRemote` is
+  shared by the install run and the script phase; only the install run sniffs stderr for prompts.
+  Password-only boxes work only while a ControlMaster is alive.
 - `aiAuthSeed.js` — opt-in copy of the host's Claude (`TMUXIFIER_CLAUDE_OAUTH_TOKEN`) / Codex
   (`~/.codex/auth.json`, never stored) credentials. Secrets travel stdin-only — never in script
   text, argv, logs, or responses. On the box the Claude token lives only in
@@ -408,13 +413,16 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   never queues audio. Read the file headers before touching any of this; test by replaying audio
   into a real `claude --debug`.
 - `opencodeAgentPlugin.js` + `src/server/assets/tmuxifier-opencode-agent.js` — the OpenCode
-  counterpart of the agent hook. The pusher writes the asset (stdin, tmp + `mv`) to
+  counterpart of the agent hook, and OpenCode's half of agent messaging. The pusher writes the
+  asset (stdin, tmp + `mv`) to
   `${OPENCODE_CONFIG_DIR:-~/.config/opencode}/plugins/tmuxifier-agent.js` when the box has
   `opencode` (on PATH or `~/.opencode/bin`), else `skipped`; no settings merge (OpenCode
-  auto-loads the directory) and no restart (its server hot-loads it). The asset is a V2 plugin
+  auto-loads the directory) and no restart (its server hot-loads it). It also reads
+  `opencode --version`, and the ok result carries a `note` below `OPENCODE_MAIL_MIN` (2.3.0; the
+  asset exports the same constant, pinned equal by test). The asset is a V2 plugin
   (`default { id, setup }`, node builtins only) that runs inside OpenCode's **one shared
-  `opencode serve` per user**, which outlives every TUI and gives no per-TUI handle — so it is an
-  events-only reducer (no hooks) attributed by directory to the tmux sessions whose active pane
+  `opencode serve` per user**, which outlives every TUI and gives no per-TUI handle — so its state
+  part is an events reducer attributed by directory to the tmux sessions whose active pane
   of the active window runs `opencode` there (two TUIs in one directory fold to one state), writes
   the same `<session>:<state>:<epoch>:<cause>` markers, and sweeps every 15 s (deletes a marker
   only if it still holds what this core wrote). A process-wide singleton (`Symbol.for`) hands
@@ -424,6 +432,32 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   OpenCode (nothing stays `blocked`); ctrl+b background shells keep `working`. Acceptance test:
   `test/fixtures/opencode-event-trace.jsonl` (a real 2.2.6 recording) replayed by
   `test/opencodeAgentReplay.test.js`. Design: `docs/superpowers/specs/2026-11-07-opencode-agent-state-design.md`.
+  **Mail part** (OpenCode ≥ `OPENCODE_MAIL_MIN` with `ctx.session.synthetic`; else inert, the
+  state part unaffected). Mail **targets** are per tmux session: the active pane of its active
+  window running `opencode`, mapped to the root OpenCode session with the newest operator
+  evidence (`session.viewed` or a `user` inbox item) since that tmux session began hosting
+  `opencode`; none on a tie, when another tmux session's `opencode` reaches the same session's
+  directory tier, or when the pane listing was incomplete (fail closed). One held
+  `GET /v1/wait` per target on `~/.tmuxifier-mail/sock` (one socket-wide backoff, 30 s → 30 min),
+  armed only while the target reads `ready`; a wake is `synthetic({ delivery: 'queue', resume:
+  true, metadata: { tmuxifierMail } })`, acked on `inbox.delivered`. The in-flight map
+  (inbox id → message id, tmux session) lives in `~/.tmuxifier-mail/opencode-inflight.json`
+  (0600): a restarted server delivers with no `inbox.enqueued` replay and no metadata, so a new
+  core adopts delivery from that file. The reducer reads a synthetic carrying our metadata as
+  `working/resume` that never overwrites `blocked`. A **pane tagger**
+  (`tool.execute.before` + `shell.create.before`, matched by command text) sets
+  `TMUXIFIER_MAIL_PANE` on each shell command to the calling session's target pane (a subagent
+  speaks for its root), else `none`, because the shared server's `TMUX_PANE` is the first TUI's.
+  A **permission handler** (`permission.evaluate`) sets `allow` only for one plain `tmx` command
+  (`isPlainTmx`, an argument allowlist) and never denies; it does nothing when
+  `createOperatorRules` finds any shell/bash permission rule (global and project configs up the
+  tree, agent markdown, env), unreadable files counting as rules. OpenCode runs those hooks only
+  in the instance owning the session's directory, so the entry point keeps every live `ctx`,
+  registers the hooks on each, and arms mail only for hooked directories; taggers and handlers
+  are process-wide and survive hand-over. Acceptance: `test/fixtures/opencode-2.3-event-trace.jsonl`
+  (a real 2.3.0 recording; its README holds the measured facts F1–F10) replayed by the
+  `test/opencodeAgent*.test.js` suites. Design:
+  `docs/superpowers/specs/2026-11-16-opencode-agent-messaging-design.md`.
 - `oscReporter.js` + `src/server/assets/tmuxifier-osc-reporter.py` — the OSC 7501 ("Program
   Status") reporter for agents that emit it: Codex (native from 0.163; the 0.167 binary carries the sequences, but no live capture exists yet — the
   test box needs a Codex sign-in; append its stream to the fixture when captured), pi (only with the
@@ -541,9 +575,9 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
 
 ### Agent messaging
 
-Claude Code sessions on different boxes send each other tasks and replies through Tmuxifier,
-gated by a per-box policy (operator guide `docs/agent-messaging.md`; design and build notes
-`docs/superpowers/specs/2026-11-14-agent-messaging-design.md`, `2026-11-15-…-build-notes.md`).
+Claude Code and OpenCode sessions on different boxes send each other tasks and replies through
+Tmuxifier, gated by a per-box policy (operator guide `docs/agent-messaging.md`; design and build
+notes `docs/superpowers/specs/2026-11-14-agent-messaging-design.md`, `2026-11-15-…-build-notes.md`).
 `index.js` builds it only when `config.agentMail` (`TMUXIFIER_AGENT_MAIL=off` builds none of it,
 leaves the setup phase unwired, and a construction failure runs the server with messaging off);
 calls `forward.sync` and `hub.boxChanged` from `onCycle` and `hub.boxChanged` from `onAgents`;
@@ -630,9 +664,14 @@ nothing is posted after the final write.
   records on one master, master kill and keeper restart, a re-address to a second master).
 - `claudeAgentMail.js` + `src/server/assets/tmuxifier-mail.sh` + `src/server/assets/tmuxifier-mail-skill.md`
   — the `agent-mail` setup phase, structural twin of `claudeAgentHooks.js`: both files on stdin
-  (split at `SKILL_SEPARATOR`, each landed by rename), nothing interpolated, skips with no
-  `claude`, no `curl`, or a `~/.local/bin/tmx` that is not exactly its symlink. One
-  `settings.json` rewrite (jq → node → python3) merges `MAIL_HOOKS` (`SessionStart` + `Stop`:
+  (split at `SKILL_SEPARATOR`, each landed by rename), nothing interpolated. It runs for the
+  `claude` or the `opencode` selection and the box decides which agent it has (`claude` on PATH or
+  `~/.local/bin`; `opencode` on PATH or `~/.opencode/bin`): `tmx` and its link for either, the
+  Claude parts below only with `claude`, and with `opencode` the same skill bytes at
+  `${OPENCODE_CONFIG_DIR:-~/.config/opencode}/skills/tmuxifier-mail/SKILL.md`. It skips with
+  neither agent (`skipped-no-agent`), no `curl`, or a `~/.local/bin/tmx` that is not exactly its
+  symlink; an OpenCode-only box prints `opencode-only` and the ok result's `note` says OpenCode's
+  half arrives with the plugin. One `settings.json` rewrite (jq → node → python3) merges `MAIL_HOOKS` (`SessionStart` + `Stop`:
   `hook-wait` with `asyncRewake`; `UserPromptSubmit`: `hook-ack`), remove-then-append on the
   string `tmuxifier-mail`, and set-adds `MAIL_PERMISSION_RULE` = `Bash(tmx *)` to
   `permissions.allow`, touching nothing else in `permissions`. The same rewrite merges
@@ -643,10 +682,12 @@ nothing is posted after the final write.
   of at least `AUTOMODE_MIN_CLAUDE` (2.1.228); below it or unreadable, `autoMode` is untouched and
   the ok result carries `note`. Test: `test/claudeAgentMail.test.js`.
   The `tmx` script: POSIX `sh`, curl over the socket, bodies only on curl's stdin, never
-  evaluates an answer; `send`/`reply` are **never retried** once the request may have arrived
-  (exit 3); with no socket file at all a user command says at once that messaging is not turned
-  on for the box (exit 3, no retry), while a file that does not answer is retried. `hook-wait`
-  follows its Claude Code via `/proc` (not `$PPID`, a dash wrapper that
+  evaluates an answer; the user commands (never `hook-wait`/`hook-ack`) take the calling pane from
+  `TMUXIFIER_MAIL_PANE` when set, ahead of `TMUX_PANE`: a pane id replaces it and needs no `$TMUX`,
+  `none` or anything malformed exits 2 with no request; `send`/`reply` are **never retried** once
+  the request may have arrived (exit 3); with no socket file at all a user command says at once
+  that messaging is not turned on for the box (exit 3, no retry), while a file that does not answer
+  is retried. `hook-wait` follows its Claude Code via `/proc` (not `$PPID`, a dash wrapper that
   survives a `SIGKILL`ed Claude) and holds a per-pane lock whose every read and action goes
   through the decision table above `lock_decide`; `hook-ack` prints nothing and always exits 0.
   Test: `test/agentMailTmx.test.js` (the real script against the real listener).

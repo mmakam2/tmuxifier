@@ -246,15 +246,15 @@ Settings → Devices; administration (credentials, deletion, deprovision) has no
 it. Setup and the tool reference are in [the MCP guide](docs/mcp.md).
 
 ## Agent messaging
-The Claude Code sessions on your boxes can hand each other work: the agent on one box runs
-`tmx send billing "…"`, Tmuxifier holds the message until the session on `billing` is idle and
-wakes it with it (nothing is typed into the terminal), and the answer comes back through
-`tmx reply`. Every message travels over the SSH connections Tmuxifier already holds. Each box is
-off until you turn on its send and receive switches and their box lists in the Edit dialog, and
-the **Messages** drawer shows every thread and every refused attempt, with a **Stop** per thread.
-Setup with Claude Code ticked installs the command, a skill and the hooks. Turning it on, what
-the agents do, and the limits of this first version are in [the agent messaging
-guide](docs/agent-messaging.md).
+The Claude Code and OpenCode (2.3.0 or later) sessions on your boxes can hand each other work:
+the agent on one box runs `tmx send billing "…"`, Tmuxifier holds the message until the session
+on `billing` is idle and wakes it with it (nothing is typed into the terminal), and the answer
+comes back through `tmx reply`. Every message travels over the SSH connections Tmuxifier already
+holds. Each box is off until you turn on its send and receive switches and their box lists in the
+Edit dialog, and the **Messages** drawer shows every thread and every refused attempt, with a
+**Stop** per thread. Setup with Claude Code or OpenCode ticked installs the command and a skill,
+plus Claude Code's hooks or the OpenCode plugin. Turning it on, what the agents do, and the
+limits of this first version are in [the agent messaging guide](docs/agent-messaging.md).
 
 ## Status, health & Fleet Command
 A single server-side loop probes every box over a shared SSH ControlMaster with adaptive

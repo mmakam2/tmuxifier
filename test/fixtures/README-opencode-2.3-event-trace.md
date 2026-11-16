@@ -8,6 +8,13 @@ receives (`kind: "event"`, with `tag` = the instance's directory basename), the 
 `session.experimental.idle` (`kind: "hook.<name>"`), its own `plugin.setup`/`plugin.cleanup`, the
 results of its probes (`kind: "probe.*"`), and `kind: "scenario"` marker lines written between steps.
 
+Used by (they read the recording, so a change to it must keep them green): `test/opencodeAgentReducer.test.js`
+and `test/opencodeAgentReplay23.test.js` (the state reducer), `test/opencodeAgentMailTargets.test.js`
+(which tmux session a pane's mail goes to), `test/opencodeAgentPaneTag.test.js` (`TMUXIFIER_MAIL_PANE`),
+`test/opencodeAgentPermission.test.js` (the `tmx` permission handler and the operator's rules) and
+`test/opencodeAgentRegistry.test.js` (hooks per directory). Operator guide:
+`docs/agent-messaging.md`.
+
 Setup: an isolated OpenCode (own `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME`, own service port,
 own tmux server) on a test box, so the operator's OpenCode server was never touched. The model was
 OpenCode's free default ("Big Pickle"), so the turns' text is real and not deterministic. TUIs were

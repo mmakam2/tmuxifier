@@ -94,9 +94,12 @@ Ticking it makes the setup run do five things, each skipping cleanly when alread
   (`SessionStart` and `Stop` listen for mail, `UserPromptSubmit` confirms delivery) merged beside
   your own hooks, and the permission rule `Bash(tmx *)` in `permissions.allow`. Until you turn
   messaging on for the box, `tmx` reaches nothing and the listener only retries quietly; see
-  [Agent messaging](agent-messaging.md). It is
-  skipped, with the reason on the job's `agent-mail` line, on a box without `curl` or with
-  another `tmx` in `~/.local/bin`, and left out entirely when `TMUXIFIER_AGENT_MAIL=off`.
+  [Agent messaging](agent-messaging.md). This phase also runs when only **OpenCode** is ticked
+  (see [The OpenCode checkbox](#the-opencode-checkbox)); the box decides which agent it has, and
+  the Claude Code parts above (skill, hooks, rule) are written only where `claude` is found. It
+  is skipped, with the reason on the job's `agent-mail` line, on a box with neither agent, on a
+  box without `curl`, or with another `tmx` in `~/.local/bin`, and left out entirely when
+  `TMUXIFIER_AGENT_MAIL=off`.
 - **Prepare the voice link**: writes a user-level ALSA config (`~/.asoundrc`) that makes the
   box's default microphone a pipe Tmuxifier feeds from your browser, creates that pipe under
   `~/.tmuxifier-voice/`, installs `alsa-utils`, and turns Claude Code's voice mode on in its
@@ -140,7 +143,7 @@ might have completed unattended.
 
 On a box with a pre-existing Claude install, ticking the checkbox simply adds whatever is
 missing. Unchecked means setup touches nothing Claude-related — no install, no statusline,
-no hook refresh, no agent messaging, no voice link. So if the agent chip or badge is missing for a running claude:
+no hook refresh, no Claude Code agent messaging, no voice link. So if the agent chip or badge is missing for a running claude:
 open the box's Edit dialog, tick **Claude Code**, save, and once the setup job reports done, restart
 claude in that session (Claude Code reads its hooks at startup).
 
@@ -151,7 +154,7 @@ no agent state at all; the next setup run with Claude Code ticked reinstalls it.
 ## The OpenCode checkbox
 
 The **OpenCode** entry in the tools checklist is the same kind of one knob for OpenCode. Ticking
-it makes the setup run do two things, each skipping cleanly when already present:
+it makes the setup run do three things, each skipping cleanly when already present:
 
 - **Install the CLI** if the box doesn't have it, with OpenCode's official installer. The binary
   lands in `~/.opencode/bin/opencode`. The installer is told not to edit your rc files; setup
@@ -159,29 +162,47 @@ it makes the setup run do two things, each skipping cleanly when already present
   `~/.bashrc` and `~/.zshrc`, and a re-run replaces that line rather than adding another. An
   existing install (on PATH or in `~/.opencode/bin`) is left untouched. Installing it from npm
   works the same for Tmuxifier: both report `opencode` as the pane's command.
-- **Install the agent-state plugin**: a small OpenCode plugin that records whether the agent
+- **Install the agent plugin**: a small OpenCode plugin that records whether the agent
   is working, needs you, or has finished, in the same one-line state files under
   `~/.tmuxifier-agent/` that the Claude Code hook writes. Like the hook, it is the **only**
-  source of OpenCode's state: nothing is read off the screen. It is written to
+  source of OpenCode's state: nothing is read off the screen. The same plugin is OpenCode's
+  half of [agent messaging](agent-messaging.md): it waits for mail on the box, wakes the
+  OpenCode session with it, and lets a plain `tmx` command run without a prompt unless you have
+  shell permission rules of your own. The messaging part needs OpenCode **2.3.0 or later**: setup
+  asks the box's OpenCode for its version, and on an older one (or one whose version cannot be
+  read) the plugin is installed and reports state but never listens, and the row reads
+  `opencode-plugin ✓ (agent messaging needs OpenCode 2.3.0 or later)`. The plugin is written to
   `~/.config/opencode/plugins/tmuxifier-agent.js` (or under `$OPENCODE_CONFIG_DIR` when that is
   set). OpenCode loads every file in that directory on its own, so there is no settings file to
   merge and nothing of yours is touched. A box without OpenCode reports
   `opencode-plugin skipped (no OpenCode on the box)` and the setup still succeeds.
+- **Install agent messaging** (the `agent-mail` step, which runs before the plugin step): the
+  `tmx` command and the skill that teaches the agent to use it, written to
+  `~/.config/opencode/skills/tmuxifier-mail/SKILL.md` (or under `$OPENCODE_CONFIG_DIR`). On a box
+  with OpenCode and no Claude Code the row reads `agent-mail ✓ (OpenCode's part arrives with the
+  OpenCode plugin)`: there is no OpenCode settings file to merge, and the listener is the plugin
+  above. With **Claude Code** ticked and OpenCode already on the box, this step writes OpenCode's
+  skill too, though the plugin step still runs only with OpenCode ticked. Like the Claude Code
+  one, it is left out entirely when `TMUXIFIER_AGENT_MAIL=off`.
 
 There is no restart step. OpenCode runs **one shared server process per user**
 (`opencode serve`), which every `opencode` TUI on the box connects to and which keeps running
 after the last TUI exits. The plugin runs inside that server, and the server watches its plugin
 directory, so it picks up a freshly written (or updated) plugin within seconds, even with TUIs
-already open.
+already open. One caveat for mail: an OpenCode project that was open when the plugin was first
+installed may need an OpenCode restart before it receives messages.
 
 That shared server is also why the plugin can't tell two TUIs in the same directory apart: it
 matches each OpenCode session to the tmux session whose **active pane runs `opencode` in the same
 directory**. Two TUIs started in one directory, in different tmux sessions, therefore both show
 the combined state of everything OpenCode is doing there. TUIs in different directories are
-tracked separately. When a TUI exits, its session's state is cleared within about 15 seconds.
+tracked separately. When a TUI exits, its session's state is cleared within about 15 seconds. For
+messaging the same ambiguity means neither of two such TUIs receives mail; see
+[its limits](agent-messaging.md#limits-in-this-version).
 
-Unchecked means setup touches nothing OpenCode-related — no install, no plugin refresh. To
-remove the plugin from a box: `rm ~/.config/opencode/plugins/tmuxifier-agent.js`, then stop
+Unchecked means setup installs and refreshes nothing OpenCode-related — no CLI, no plugin; the one
+exception is the skill file above, written when Claude Code is ticked and OpenCode is already on
+the box. To remove the plugin from a box: `rm ~/.config/opencode/plugins/tmuxifier-agent.js`, then stop
 the `opencode serve` process so the copy it already loaded stops reporting (it clears its own
 state files on the way out, and the next TUI starts a fresh server). With it removed, that box
 reports no OpenCode state at all; the next setup run with OpenCode ticked reinstalls it.
