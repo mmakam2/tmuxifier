@@ -356,6 +356,74 @@ describe('the core\'s mail targets, for the tagger', () => {
     expect(w.core.paneOfSession('ses_a')).toBeNull();
   });
 
+  // R24: a subagent runs inside its root's TUI, so its shell commands speak for the root's pane.
+  const child = (w, id, parentID, dir = CWD) =>
+    w.core.reducer.apply({ id: `e${Math.random()}`, type: 'session.created', created: 100_000, data: { sessionID: id, parentID }, location: { directory: dir } });
+
+  test('a child session, and a grandchild, speak for their root\'s pane (R24)', async () => {
+    const w = world(row('octest', 1, 1, 'opencode', CWD, '%3'));
+    child(w, 'ses_child', 'ses_a');
+    child(w, 'ses_grand', 'ses_child');
+    await w.core.sweep();
+    // Only the root is a target; its descendants resolve through the parent chain.
+    expect([...w.core.mailTargetsNow().values()].map((t) => t.sessionID)).toEqual(['ses_a']);
+    expect(w.core.paneOfSession('ses_a')).toBe('%3');
+    expect(w.core.paneOfSession('ses_child')).toBe('%3');
+    expect(w.core.paneOfSession('ses_grand')).toBe('%3');
+    const tagger = createPaneTagger({ paneOf: (id) => w.core.paneOfSession(id) });
+    tagger.beforeTool(tool('ses_grand', 'tmx inbox'));
+    expect(tagged(tagger, 'tmx inbox')).toBe('%3');
+  });
+
+  test('a descendant follows its root\'s target, and goes with it', async () => {
+    let text = row('octest', 1, 1, 'opencode', CWD, '%3');
+    const w = world(() => text);
+    child(w, 'ses_child', 'ses_a');
+    await w.core.sweep();
+    expect(w.core.paneOfSession('ses_child')).toBe('%3');
+    text = row('octest', 1, 1, 'opencode', CWD, '%8');
+    await w.core.sweep();
+    expect(w.core.paneOfSession('ses_child')).toBe('%8');
+    text = row('octest', 1, 1, 'zsh', CWD, '%8'); // the TUI exited: the root is no target
+    await w.core.sweep();
+    expect(w.core.paneOfSession('ses_child')).toBeNull();
+  });
+
+  test('a child of a session that is no target, or of one the reducer does not know, is `none` (R24)', async () => {
+    const w = world(row('octest', 1, 1, 'opencode', CWD, '%3'));
+    // A root with no operator evidence is no target, so neither is its child.
+    w.core.reducer.apply({ id: 'e-x', type: 'session.created', created: 100_000, data: { sessionID: 'ses_idle' }, location: { directory: CWD } });
+    child(w, 'ses_idle_child', 'ses_idle');
+    // A child whose parent never appeared.
+    child(w, 'ses_orphan', 'ses_missing');
+    await w.core.sweep();
+    expect(w.core.paneOfSession('ses_idle_child')).toBeNull();
+    expect(w.core.paneOfSession('ses_idle')).toBeNull();
+    expect(w.core.paneOfSession('ses_orphan')).toBeNull();
+    expect(w.core.paneOfSession('ses_missing')).toBeNull();
+    expect(w.core.paneOfSession('ses_a')).toBe('%3');
+  });
+
+  test('a parent cycle, a session its own parent and an absurdly deep chain are `none`, never a loop (R24)', async () => {
+    const w = world(row('octest', 1, 1, 'opencode', CWD, '%3'));
+    child(w, 'ses_x', 'ses_y');
+    child(w, 'ses_y', 'ses_x');
+    child(w, 'ses_self', 'ses_self');
+    // 100 levels down from the real root: far past anything a subagent tree has.
+    let parent = 'ses_a';
+    for (let i = 0; i < 100; i++) {
+      child(w, `ses_deep${i}`, parent);
+      parent = `ses_deep${i}`;
+    }
+    await w.core.sweep();
+    expect(w.core.paneOfSession('ses_x')).toBeNull();
+    expect(w.core.paneOfSession('ses_y')).toBeNull();
+    expect(w.core.paneOfSession('ses_self')).toBeNull();
+    expect(w.core.paneOfSession('ses_deep99')).toBeNull();
+    expect(w.core.paneOfSession('ses_deep3')).toBe('%3'); // a normal depth still resolves
+    expect(w.core.paneOfSession('ses_a')).toBe('%3');
+  });
+
   test('a core with no mail part still answers, and the tagger reads it', async () => {
     const w = world(row('octest', 1, 1, 'opencode', CWD, '%3') + row('other', 1, 1, 'zsh', '/tmp', '%4'));
     await w.core.sweep();

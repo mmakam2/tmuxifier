@@ -77,6 +77,8 @@
 //    `shell.create.before` follows in the same millisecond with `command` and a
 //    mutable `env` and nothing else (README F4): the two are matched by command
 //    text. Both fire only in the instance whose directory owns the session.
+//    A session's pane is its mail target's (R23); a subagent (child) session
+//    speaks for its root's, found through the reducer's parent chain (R24).
 //
 // A setup for another directory in the same process (fact 2, fixture line
 // 316) or a hot reload (fact 3) hands the reducer's state over to the next
@@ -1430,6 +1432,8 @@ export function createMailPart({
 
 export const MAIL_PANE_ENV = 'TMUXIFIER_MAIL_PANE';
 const TAG_PENDING_MAX = 256;
+// How far up the parent chain paneOfSession looks for a mail target.
+const MAIL_PARENT_DEPTH_MAX = 32;
 
 export function createPaneTagger({ paneOf, now = Date.now, ttlMs = 30000 } = {}) {
   let pending = []; // { id, command, pane, at }, oldest first
@@ -1604,18 +1608,32 @@ export function createCore({
     return new Map(targets);
   }
 
-  // R23: the pane of the tmux session whose current mail target is the OpenCode
-  // session `sessionID`, else null (a session that is no target, or one that
-  // two tmux sessions claim, has no pane to speak for).
+  // R23/R24: the pane of the tmux session whose current mail target is the
+  // OpenCode session `sessionID`, or, for a child (a subagent runs inside its
+  // root's TUI), the one whose target is the root the parent chain leads to.
+  // Null for a session whose chain ends at a root that is no target, reaches a
+  // parent the reducer does not know, loops back on itself, or is deeper than
+  // MAIL_PARENT_DEPTH_MAX hops; and for a target two tmux sessions claim (no
+  // pane to speak for).
   function paneOfSession(sessionID) {
-    if (typeof sessionID !== 'string') return null;
-    let pane = null;
-    for (const t of targets.values()) {
-      if (t.sessionID !== sessionID) continue;
-      if (pane !== null) return null;
-      pane = t.pane;
+    try {
+      if (typeof sessionID !== 'string') return null;
+      const seen = new Set();
+      let cur = sessionID;
+      for (let hops = 0; hops <= MAIL_PARENT_DEPTH_MAX; hops++) {
+        if (seen.has(cur)) return null;
+        seen.add(cur);
+        const claims = [...targets.values()].filter((t) => t.sessionID === cur);
+        if (claims.length > 0) return claims.length === 1 ? claims[0].pane : null;
+        const parent = reducer.sessions.get(cur)?.parent;
+        if (typeof parent !== 'string' || !parent) return null;
+        cur = parent;
+      }
+      return null;
+    } catch (e) {
+      debug('paneOfSession', e);
+      return null;
     }
-    return pane;
   }
 
   function mailCall(name, arg) {
