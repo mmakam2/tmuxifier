@@ -83,7 +83,7 @@
 
 import { Buffer } from 'node:buffer';
 import { execFile } from 'node:child_process';
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -500,20 +500,35 @@ const PANE_ID_RE = /^%\d{1,9}$/;
 // `active` marking the active pane of the active window (hosting needs the
 // others).
 export function parsePanes(text) {
-  if (typeof text !== 'string') return [];
+  return parsePanesChecked(text).panes;
+}
+
+// parsePanes plus whether the listing was read whole: `complete` is false when
+// any non-empty line was dropped or the row cap cut the listing short (and for
+// input that is not a string). The marker fold works with what survives; mail
+// targets need the whole listing (anti-goal 1: a hidden row could be the other
+// TUI that makes a target ambiguous), so the sweep gives mail none otherwise.
+export function parsePanesChecked(text) {
+  if (typeof text !== 'string') return { panes: [], complete: false };
   const out = [];
+  let complete = true;
   for (const line of text.split('\n')) {
-    if (out.length >= PANES_MAX) break;
+    if (line === '') continue;
+    if (out.length >= PANES_MAX) { complete = false; break; }
     const f = line.split('\t');
-    if (f.length !== 6) continue;
-    const [session, windowActive, paneActive, cmd, path, pane] = f;
-    if (!session || session.length > NAME_MAX || CONTROL_RE.test(session)) continue;
-    if (cmd.length > NAME_MAX || CONTROL_RE.test(cmd)) continue;
-    if (!path || path.length > PATH_MAX || CONTROL_RE.test(path)) continue;
-    if (!PANE_ID_RE.test(pane)) continue;
-    out.push({ session, cmd, path, active: windowActive === '1' && paneActive === '1', pane });
+    const row = f.length === 6 ? paneRow(f) : null;
+    if (row) out.push(row);
+    else complete = false;
   }
-  return out;
+  return { panes: out, complete };
+}
+
+function paneRow([session, windowActive, paneActive, cmd, path, pane]) {
+  if (!session || session.length > NAME_MAX || CONTROL_RE.test(session)) return null;
+  if (cmd.length > NAME_MAX || CONTROL_RE.test(cmd)) return null;
+  if (!path || path.length > PATH_MAX || CONTROL_RE.test(path)) return null;
+  if (!PANE_ID_RE.test(pane)) return null;
+  return { session, cmd, path, active: windowActive === '1' && paneActive === '1', pane };
 }
 
 // The TUI's #{pane_current_command}; the server's agentKindOf uses the same rule.
@@ -854,6 +869,521 @@ export function createMailSocketClient({
   return { wait, ack };
 }
 
+// ---------------------------------------------------------------------------
+// The mail part (agent messaging, spec §6.2-6.4).
+// ---------------------------------------------------------------------------
+//
+// The core's third component, beside the reducer and the marker sweep. After
+// every sweep the core calls `sync(targets, derive)` with mailTargets' map
+// (tmux session -> { pane, sessionID, dir }: spec rules 1-3, empty when the
+// listing was incomplete) and the reducer's `derive`; `handle` passes every
+// event to `onEvent`. The hub addresses a tmux session, so the state machine is
+// per tmux session (one pane each: mailTargets names the active pane, R15):
+//
+//   off      Nothing held, nothing in flight. -> waiting when sync() (or a
+//            pump after a timer or a settled item) finds: a target, a tmux
+//            name the hub accepts (MAIL_SESSION_RE, else the wait is a 400 that
+//            would back the whole socket off), derive(target.sessionID).state
+//            === 'ready' (rule 4), no socket backoff running, no hold-off for
+//            this session, and NO in-flight entry naming this tmux session.
+//   waiting  One held GET /v1/wait?session=&pane= with its own AbortController.
+//            sync() aborts it (-> off, never a backoff: our own abort is told
+//            by our own signal, not by the client's reason) when the target is
+//            gone, names another pane or another OpenCode session, or is not
+//            ready. Its answer:
+//              204 idle -> off; the socket counts as healthy. An idle that came
+//                          back within MAIL_IDLE_MIN_MS of arming (a listener
+//                          shutting down) holds the session off for the rest of
+//                          that second, so no answer can make a request loop.
+//              down     -> off; the socket backs off (below). Reason `path`
+//                          (a socket path the kernel cannot bind) never heals:
+//                          the part goes inert for good, one debug line.
+//              200 mail -> the socket counts as healthy; re-check the target
+//                          (same pane and session) and `ready` against the
+//                          freshest sync and derive. Failed -> off, dropped: no
+//                          synthetic, no ack; the message stays `handed` and the
+//                          hub re-offers it on the next wait of that pane (or
+//                          after REOFFER_MS). A message id already in flight ->
+//                          dropped too, and the session held off (never a
+//                          second synthetic for one message). Else -> posted.
+//   posted   An in-flight entry { messageId, tmuxSession, sessionID, inboxID,
+//            postedAt } exists and synthetic({ sessionID, text, delivery:
+//            'queue', resume: true, metadata: { tmuxifierMail } }) was called.
+//            No wait for this tmux session, whatever sync() says: a new wait of
+//            the pane makes the hub put the handed message back in the queue,
+//            so the ack would 404 and the message would be handed twice
+//            (spec 6.4 step 4). The target vanishing (the TUI exited) does not
+//            end it (Review Focus 4). It ends, -> off, by exactly one of:
+//              synthetic rejects/throws -> no ack; the session holds off
+//                          (30 s doubling to 30 min, reset by a synthetic that
+//                          works); the hub re-offers on the next wait.
+//              inbox.delivered for its inboxID -> POST /v1/ack, and the entry
+//                          is dropped only once the ack has answered (true or
+//                          not: a refused ack means the hub already re-queued).
+//              inbox.cancelled for its inboxID -> dropped, no ack.
+//              MAIL_REOFFER_MS after postedAt (the hub's own REOFFER_MS) ->
+//                          dropped, no ack (at-least-once, spec 6.4).
+//
+// Correlation. The entry learns its inboxID from synthetic's resolved `id`
+// (F1), or earlier from `session.inbox.enqueued` whose item metadata names its
+// message id (F1: same id). The stream may deliver `inbox.delivered` before
+// synthetic resolves: a delivered/cancelled event matching no entry is kept in
+// `recent` (MAIL_RECENT_MS, at most MAIL_RECENT_MAX) and matched when the
+// entry learns its id. Nothing here reads the reducer's `mailWake` flag.
+//
+// Restart (F9, ruling R5). A restarted OpenCode server delivers a queued item
+// with only `inbox.delivered` for the old inboxID: no enqueued replay, no
+// metadata. So every entry with a known inboxID is written to
+// ~/.tmuxifier-mail/opencode-inflight.json (0600, tmp + rename, only when that
+// directory exists: the forward creates it, we never do; removed when empty)
+// and a new part loads the entries younger than REOFFER_MS: it acks such a
+// delivery, and because a loaded entry blocks its tmux session's wait, the hub
+// never re-queues that message under it, so no second synthetic is posted.
+//
+// Hand-over (ruling R18). `state` ({ version, inflight, recent }) is the part's
+// shared memory; takeOver passes prev.mailState to the next core's part, which
+// adopts the same Maps (and merges the file). The aborted part holds nothing,
+// arms nothing and runs no timer, but a synthetic or an ack already in flight
+// finishes into the shared entries: its id is recorded, a delivery the new part
+// already saw is acked, and an entry it settles is dropped from the shared map.
+//
+// Socket backoff (ruling R19): one for the whole part, 30 s doubling to 30 min;
+// a failure while it runs does not double it again (the same outage), any 200
+// or 204 (and a 200 ack) resets it. While it runs no wait is armed at all.
+//
+// Nothing here throws into OpenCode: sync/onEvent/abort catch everything, every
+// promise chain ends in a catch, every timer callback is wrapped. Mail times are
+// milliseconds on the injected `now`/`setTimeout`/`clearTimeout`.
+
+// The hub's REOFFER_MS (agentMailHub.js; a test pins the two equal).
+export const MAIL_REOFFER_MS = 600000;
+export const MAIL_BACKOFF_MIN_MS = 30000;
+export const MAIL_BACKOFF_MAX_MS = 1800000;
+const MAIL_IDLE_MIN_MS = 1000;
+const MAIL_RECENT_MS = 120000;
+const MAIL_RECENT_MAX = 256;
+const MAIL_INFLIGHT_MAX = 64;
+const MAIL_FILE_MAX = 65536;
+const OC_ID_MAX = 256;
+// The shape of `state` a part hands over; bump it when that shape changes.
+export const MAIL_STATE_VERSION = 1;
+// The hub's SESSION_NAME_RE (sshCommand.js), pinned equal by a test: a tmux
+// session the hub cannot address is never armed.
+export const MAIL_SESSION_RE = /^[A-Za-z0-9_-]{1,64}$/;
+export const MAIL_INFLIGHT_FILE = 'opencode-inflight.json';
+
+// An OpenCode id (`msg_…`, `ses_…`): a short string without controls.
+const ocId = (v) => typeof v === 'string' && v.length > 0 && v.length <= OC_ID_MAX && !CONTROL_RE.test(v);
+
+function adoptableMail(state) {
+  try {
+    return !!state && typeof state === 'object' && state.version === MAIL_STATE_VERSION
+      && state.inflight instanceof Map && state.recent instanceof Map;
+  } catch {
+    return false;
+  }
+}
+
+const doubling = (failures) => Math.min(MAIL_BACKOFF_MIN_MS * 2 ** Math.max(0, failures - 1), MAIL_BACKOFF_MAX_MS);
+
+export function createMailPart({
+  home,
+  client,
+  synthetic,
+  state = null,
+  now = Date.now,
+  setTimeout: setT = globalThis.setTimeout,
+  clearTimeout: clearT = globalThis.clearTimeout,
+} = {}) {
+  const shared = adoptableMail(state)
+    ? state
+    : { version: MAIL_STATE_VERSION, inflight: new Map(), recent: new Map() };
+  const file = typeof home === 'string' && home ? path.join(home, '.tmuxifier-mail', MAIL_INFLIGHT_FILE) : null;
+  const waits = new Map(); // tmux session -> { session, pane, sessionID, ac, armedAt }
+  const holdOff = new Map(); // tmux session -> { until, failures }
+  const timers = new Set();
+  const entryTimers = new Map(); // message id -> timer
+  const backoff = { failures: 0, until: 0 };
+  let aborted = false;
+  let inert = false;
+  let last = { targets: new Map(), derive: () => null };
+
+  const part = { sync, onEvent, abort, state: shared };
+
+  function clock() {
+    try {
+      const t = now();
+      if (Number.isFinite(t)) return t;
+    } catch { /* fall through */ }
+    return Date.now();
+  }
+
+  function timer(ms, fn) {
+    if (aborted) return null;
+    let handle = null;
+    const run = () => {
+      timers.delete(handle);
+      if (aborted) return;
+      try { fn(); } catch (e) { debug('mail timer', e); }
+    };
+    try {
+      handle = setT(run, Math.max(0, ms));
+      if (handle && typeof handle.unref === 'function') handle.unref();
+      timers.add(handle);
+    } catch (e) {
+      debug('mail timer', e);
+      return null;
+    }
+    return handle;
+  }
+
+  function stopTimer(handle) {
+    if (handle === null || handle === undefined) return;
+    timers.delete(handle);
+    try { clearT(handle); } catch { /* best effort */ }
+  }
+
+  // ---- eligibility ----
+
+  function targetOf(session) {
+    const t = last.targets.get(session);
+    return t && typeof t === 'object' && typeof t.pane === 'string' && PANE_ID_RE.test(t.pane) && ocId(t.sessionID) ? t : null;
+  }
+
+  function ready(sessionID) {
+    try {
+      return last.derive(sessionID)?.state === 'ready';
+    } catch {
+      return false;
+    }
+  }
+
+  function stillEligible(rec) {
+    const t = targetOf(rec.session);
+    return !!t && t.pane === rec.pane && t.sessionID === rec.sessionID && ready(t.sessionID);
+  }
+
+  function inflightFor(session) {
+    for (const e of shared.inflight.values()) if (e.tmuxSession === session) return true;
+    return false;
+  }
+
+  // ---- waits ----
+
+  function pump() {
+    if (aborted || inert || clock() < backoff.until) return;
+    for (const session of last.targets.keys()) {
+      if (typeof session !== 'string' || waits.has(session) || !MAIL_SESSION_RE.test(session)) continue;
+      const t = targetOf(session);
+      if (!t || !ready(t.sessionID) || inflightFor(session)) continue;
+      const h = holdOff.get(session);
+      if (h && clock() < h.until) continue;
+      arm(session, t);
+      if (aborted || inert || clock() < backoff.until) return;
+    }
+  }
+
+  function arm(session, t) {
+    const rec = { session, pane: t.pane, sessionID: t.sessionID, ac: new AbortController(), armedAt: clock() };
+    waits.set(session, rec);
+    let p;
+    try {
+      p = Promise.resolve(client.wait({ session, pane: rec.pane, signal: rec.ac.signal }));
+    } catch {
+      p = Promise.resolve({ kind: 'down', reason: 'throw' });
+    }
+    p.then((r) => onWait(rec, r), () => onWait(rec, { kind: 'down', reason: 'reject' }))
+      .catch((e) => debug('mail wait', e));
+  }
+
+  function endWait(rec) {
+    if (waits.get(rec.session) === rec) waits.delete(rec.session);
+    try { rec.ac.abort(); } catch { /* already aborted */ }
+  }
+
+  function onWait(rec, r) {
+    // Our own abort (sync, abort()) ended it: nothing it says counts.
+    if (rec.ac.signal.aborted || waits.get(rec.session) !== rec) return;
+    waits.delete(rec.session);
+    if (aborted) return;
+    const kind = r && typeof r === 'object' ? r.kind : null;
+    if (kind === 'idle') {
+      socketOk();
+      const elapsed = clock() - rec.armedAt;
+      if (elapsed < MAIL_IDLE_MIN_MS) holdSession(rec.session, MAIL_IDLE_MIN_MS - elapsed, false);
+      pump();
+      return;
+    }
+    if (kind === 'mail' && typeof r.text === 'string' && typeof r.messageId === 'string' && MAIL_MSG_ID_RE.test(r.messageId)) {
+      socketOk();
+      onMail(rec, r);
+      pump();
+      return;
+    }
+    const reason = kind === 'down' && typeof r.reason === 'string' ? r.reason : 'unknown';
+    if (reason === 'path') {
+      inert = true;
+      debug('mail socket path unusable; mail part inert');
+      for (const w of [...waits.values()]) endWait(w);
+      return;
+    }
+    socketDown(reason);
+  }
+
+  function socketOk() {
+    backoff.failures = 0;
+    backoff.until = 0;
+  }
+
+  function socketDown(reason) {
+    const t = clock();
+    if (t < backoff.until) return; // the same outage, already being waited out
+    backoff.failures += 1;
+    const delay = doubling(backoff.failures);
+    backoff.until = t + delay;
+    debug('mail socket down', reason, `retry in ${delay} ms`);
+    timer(delay, pump);
+  }
+
+  // Keep `session` from arming for `ms`; `count` makes repeated hold-offs double.
+  function holdSession(session, ms, count) {
+    const prev = holdOff.get(session);
+    const failures = count ? (prev?.failures ?? 0) + 1 : prev?.failures ?? 0;
+    const delay = count ? doubling(failures) : ms;
+    holdOff.set(session, { until: clock() + delay, failures });
+    timer(delay, pump);
+  }
+
+  // ---- posting ----
+
+  function onMail(rec, r) {
+    if (!stillEligible(rec)) {
+      debug('mail dropped: the pane is no longer eligible or not ready', r.messageId);
+      return;
+    }
+    if (shared.inflight.has(r.messageId)) {
+      debug('mail dropped: already in flight', r.messageId);
+      holdSession(rec.session, 0, true);
+      return;
+    }
+    const entry = { messageId: r.messageId, tmuxSession: rec.session, sessionID: rec.sessionID, inboxID: null, postedAt: clock() };
+    shared.inflight.set(entry.messageId, entry);
+    armEntryTimer(entry);
+    let p;
+    try {
+      p = Promise.resolve(synthetic({
+        sessionID: rec.sessionID,
+        text: r.text,
+        delivery: 'queue',
+        resume: true,
+        metadata: { tmuxifierMail: r.messageId },
+      }));
+    } catch (e) {
+      p = Promise.reject(e);
+    }
+    p.then((res) => posted(entry, res), (e) => postFailed(entry, e)).catch((e) => debug('mail post', e));
+  }
+
+  function posted(entry, res) {
+    if (shared.inflight.get(entry.messageId) !== entry) return; // settled meanwhile
+    holdOff.delete(entry.tmuxSession);
+    let id = null;
+    try { id = res?.id; } catch { /* a throwing getter: no id */ }
+    if (entry.inboxID === null && ocId(id)) entry.inboxID = id;
+    save();
+    matchRecent(entry);
+  }
+
+  function postFailed(entry, e) {
+    debug('mail synthetic failed', e);
+    if (shared.inflight.get(entry.messageId) !== entry) return;
+    dropEntry(entry);
+    holdSession(entry.tmuxSession, 0, true);
+  }
+
+  function armEntryTimer(entry) {
+    stopTimer(entryTimers.get(entry.messageId));
+    const handle = timer(entry.postedAt + MAIL_REOFFER_MS - clock(), () => {
+      entryTimers.delete(entry.messageId);
+      if (shared.inflight.get(entry.messageId) !== entry || entry.acking) return;
+      debug('mail: no delivery within REOFFER_MS', entry.messageId);
+      dropEntry(entry);
+      pump();
+    });
+    if (handle !== null) entryTimers.set(entry.messageId, handle);
+  }
+
+  function dropEntry(entry) {
+    if (shared.inflight.get(entry.messageId) === entry) shared.inflight.delete(entry.messageId);
+    stopTimer(entryTimers.get(entry.messageId));
+    entryTimers.delete(entry.messageId);
+    save();
+  }
+
+  // ---- OpenCode's inbox events ----
+
+  function onEvent(event) {
+    try {
+      if (aborted || !event || typeof event !== 'object') return;
+      const type = event.type;
+      if (type !== 'session.inbox.enqueued' && type !== 'session.inbox.delivered' && type !== 'session.inbox.cancelled') return;
+      const data = event.data;
+      if (!data || typeof data !== 'object' || !ocId(data.inboxID)) return;
+      if (type === 'session.inbox.enqueued') {
+        const item = data.item;
+        const mid = item && item.type === 'synthetic' ? item.payload?.metadata?.tmuxifierMail : null;
+        if (typeof mid !== 'string' || !MAIL_MSG_ID_RE.test(mid)) return;
+        const entry = shared.inflight.get(mid);
+        // Not ours in flight, or already named: an enqueued replay posts nothing, ever.
+        if (!entry || entry.inboxID !== null || (ocId(data.sessionID) && data.sessionID !== entry.sessionID)) return;
+        entry.inboxID = data.inboxID;
+        save();
+        matchRecent(entry);
+        return;
+      }
+      const kind = type === 'session.inbox.delivered' ? 'delivered' : 'cancelled';
+      const entry = byInbox(data.inboxID);
+      if (entry) settle(entry, kind);
+      else remember(data.inboxID, kind);
+    } catch (e) {
+      debug('mail event', e);
+    }
+  }
+
+  function byInbox(inboxID) {
+    for (const e of shared.inflight.values()) if (e.inboxID === inboxID) return e;
+    return null;
+  }
+
+  function remember(inboxID, kind) {
+    const t = clock();
+    for (const [id, r] of shared.recent) {
+      if (t - r.at < MAIL_RECENT_MS) break;
+      shared.recent.delete(id);
+    }
+    shared.recent.delete(inboxID);
+    shared.recent.set(inboxID, { kind, at: t });
+    while (shared.recent.size > MAIL_RECENT_MAX) shared.recent.delete(shared.recent.keys().next().value);
+  }
+
+  function matchRecent(entry) {
+    const r = entry.inboxID === null ? null : shared.recent.get(entry.inboxID);
+    if (!r) return;
+    shared.recent.delete(entry.inboxID);
+    if (clock() - r.at < MAIL_RECENT_MS) settle(entry, r.kind);
+  }
+
+  function settle(entry, kind) {
+    if (entry.acking) return;
+    if (kind === 'cancelled') {
+      dropEntry(entry);
+      pump();
+      return;
+    }
+    entry.acking = true;
+    let p;
+    try {
+      p = Promise.resolve(client.ack({ session: entry.tmuxSession, messageId: entry.messageId }));
+    } catch {
+      p = Promise.resolve(false);
+    }
+    p.then((ok) => ok, () => false).then((ok) => {
+      if (ok === true) socketOk();
+      else debug('mail ack not confirmed', entry.messageId);
+      dropEntry(entry);
+      pump();
+    }).catch((e) => debug('mail ack', e));
+  }
+
+  // ---- the in-flight file (ruling R5) ----
+
+  function save() {
+    if (!file) return;
+    const tmp = `${file}.${process.pid}.tmp`;
+    try {
+      let isDir = false;
+      try { isDir = statSync(path.dirname(file)).isDirectory(); } catch { isDir = false; }
+      if (!isDir) return;
+      const entries = [];
+      for (const e of shared.inflight.values()) {
+        if (e.inboxID !== null) {
+          entries.push({ inboxID: e.inboxID, messageId: e.messageId, tmuxSession: e.tmuxSession, sessionID: e.sessionID, postedAt: e.postedAt });
+        }
+      }
+      if (entries.length === 0) {
+        try { unlinkSync(file); } catch { /* nothing to remove */ }
+        return;
+      }
+      try { unlinkSync(tmp); } catch { /* no leftover */ }
+      writeFileSync(tmp, `${JSON.stringify({ version: 1, entries })}\n`, { mode: 0o600, flag: 'wx' });
+      renameSync(tmp, file);
+    } catch (e) {
+      debug('mail save', e);
+      try { unlinkSync(tmp); } catch { /* nothing left behind */ }
+    }
+  }
+
+  // Our own file, but read like box output: every field allowlisted, sizes capped.
+  function load() {
+    if (!file) return;
+    try {
+      const st = statSync(file);
+      if (!st.isFile() || st.size > MAIL_FILE_MAX) return;
+      const doc = JSON.parse(readFileSync(file, 'utf8'));
+      if (!doc || doc.version !== 1 || !Array.isArray(doc.entries)) return;
+      const t = clock();
+      for (const raw of doc.entries.slice(0, MAIL_INFLIGHT_MAX)) {
+        if (!raw || typeof raw !== 'object') continue;
+        const { inboxID, messageId, tmuxSession, sessionID, postedAt } = raw;
+        if (!ocId(inboxID) || !ocId(sessionID) || typeof messageId !== 'string' || !MAIL_MSG_ID_RE.test(messageId)) continue;
+        if (typeof tmuxSession !== 'string' || !MAIL_SESSION_RE.test(tmuxSession)) continue;
+        if (!Number.isFinite(postedAt) || t - postedAt >= MAIL_REOFFER_MS) continue;
+        if (shared.inflight.has(messageId) || byInbox(inboxID)) continue;
+        shared.inflight.set(messageId, { messageId, tmuxSession, sessionID, inboxID, postedAt: Math.min(postedAt, t) });
+      }
+    } catch (e) {
+      if (e?.code !== 'ENOENT') debug('mail load', e);
+    }
+  }
+
+  // ---- the part's interface ----
+
+  function sync(targets, derive) {
+    try {
+      if (aborted) return;
+      last = {
+        targets: targets instanceof Map ? targets : new Map(),
+        derive: typeof derive === 'function' ? derive : () => null,
+      };
+      for (const rec of [...waits.values()]) if (!stillEligible(rec)) endWait(rec);
+      pump();
+    } catch (e) {
+      debug('mail sync', e);
+    }
+  }
+
+  function abort() {
+    if (aborted) return;
+    aborted = true;
+    try {
+      for (const rec of [...waits.values()]) endWait(rec);
+      waits.clear();
+      for (const handle of [...timers]) stopTimer(handle);
+      entryTimers.clear();
+    } catch (e) {
+      debug('mail abort', e);
+    }
+  }
+
+  try {
+    load();
+    for (const entry of shared.inflight.values()) armEntryTimer(entry);
+  } catch (e) {
+    debug('mail start', e);
+  }
+  return part;
+}
+
 export const GLOBAL_KEY = Symbol.for('tmuxifier.opencode-agent');
 
 // One live reporter: a reducer fed by the event stream, and a sweep that
@@ -862,6 +1392,13 @@ export const GLOBAL_KEY = Symbol.for('tmuxifier.opencode-agent');
 // started hosting opencode) and `state` (the reducer's, see STATE_VERSION)
 // are plain properties so a hand-over can pass them on to the next core;
 // `state` (a previous core's) seeds this core's reducer.
+//
+// The mail part (createMailPart) exists only when `synthetic` (OpenCode's
+// ctx.session.synthetic, supplied by the entry point) is a function and `home`
+// is set; `mail` replaces it for a test (`null`: none). `mailState` is a
+// previous core's `core.mailState` (the part's shared memory, see the part).
+// After every sweep's fold the core gives the part mailTargets' map, or an
+// empty one when the listing failed or was incomplete (parsePanesChecked).
 export function createCore({
   home = os.homedir(),
   listPanes = defaultListPanes,
@@ -871,8 +1408,27 @@ export function createCore({
   setInterval: startTimer = globalThis.setInterval,
   clearInterval: stopTimer = globalThis.clearInterval,
   state = null,
+  synthetic = null,
+  mail: mailOption = undefined,
+  mailState = null,
 } = {}) {
   const reducer = createReducer({ now, state });
+  let mail = null;
+  if (mailOption !== undefined) {
+    mail = mailOption && typeof mailOption === 'object' ? mailOption : null;
+  } else if (typeof synthetic === 'function' && typeof home === 'string' && home) {
+    try {
+      mail = createMailPart({
+        home,
+        synthetic,
+        state: mailState,
+        client: createMailSocketClient({ sockPath: path.join(home, '.tmuxifier-mail', 'sock') }),
+      });
+    } catch (e) {
+      debug('mail', e);
+      mail = null;
+    }
+  }
   const controller = new AbortController();
   const dir = path.join(home, '.tmuxifier-agent');
   let aborted = false;
@@ -899,8 +1455,24 @@ export function createCore({
     clear,
     written: new Map(),
     since: new Map(),
+    mailState: mail?.state ?? null,
     owner: Symbol('tmuxifier.opencode-agent.core'),
   };
+
+  // `panes` null: no usable, complete listing, so no mail targets at all.
+  function syncMail(panes) {
+    if (!mail) return;
+    try {
+      mail.sync(panes ? mailTargets(reducer, panes, core.since) : new Map(), reducer.derive);
+    } catch (e) {
+      debug('mail sync', e);
+    }
+  }
+
+  function mailCall(name, arg) {
+    if (!mail) return;
+    try { mail[name](arg); } catch (e) { debug('mail', name, e); }
+  }
 
   // { text, listAt, missing }: the listing (null when unusable), now() taken
   // just before it was requested, and whether tmux is missing altogether.
@@ -956,7 +1528,8 @@ export function createCore({
       debug('tmux not found; sweeps stopped until the next setup');
       stopSweeping();
     }
-    if (aborted || ended || text === null) return; // handed over, stopped, or tmux unusable: touch nothing
+    if (aborted || ended) return; // handed over or stopped: touch nothing
+    if (text === null) { syncMail(null); return; } // tmux unusable: no markers touched, no mail targets
     // A tmux session that starts hosting opencode in this listing did so after
     // the previous listing, the last one that showed it not hosting: that is
     // its `since`. Stamping this sweep's own time instead would exclude a
@@ -964,8 +1537,10 @@ export function createCore({
     // start (`ts >= since`). A core's first sweep has no previous listing.
     const sinceFloor = lastListAt ?? listAt - 2;
     lastListAt = listAt;
+    let complete = false;
+    let panes = [];
     try {
-      const panes = parsePanes(text);
+      ({ panes, complete } = parsePanesChecked(text));
       const t = now();
       const hosting = new Set();
       for (const p of panes) if (isOpencodeCmd(p.cmd)) hosting.add(p.session);
@@ -982,7 +1557,9 @@ export function createCore({
       for (const name of [...core.written.keys()]) if (!live.has(name)) release(name);
     } catch (e) {
       debug('sweep', e);
+      complete = false;
     }
+    syncMail(complete ? panes : null);
   }
 
   // At most one sweep in flight; any request made meanwhile reruns it once
@@ -1016,6 +1593,7 @@ export function createCore({
     } catch (e) {
       debug('apply', e);
     }
+    if (!aborted && !ended) mailCall('onEvent', event);
     if (changed && !aborted && !ended) await sweep();
   }
 
@@ -1049,6 +1627,8 @@ export function createCore({
       ended = true;
       debug('event stream ended; markers cleared, sweeps stopped until the next setup');
       stopSweeping();
+      // Without events no delivery can be seen: hold nothing (the state stays for a hand-over).
+      mailCall('abort');
       try { await inflight; } catch { /* sweeps never reject */ }
       if (!aborted) clear();
     }
@@ -1067,6 +1647,7 @@ export function createCore({
     aborted = true;
     try { controller.abort(); } catch { /* already aborted */ }
     stopSweeping();
+    mailCall('abort');
   }
 
   // Delete every marker this core wrote, under the content-equality rule.
@@ -1082,21 +1663,24 @@ export function createCore({
 // next core inheriting what `prev` wrote, when each tmux session started
 // hosting, and everything its reducer knows (a pending block or a mid-turn
 // session in another directory must survive OpenCode setting the plugin up
-// for a new one; an incompatible STATE_VERSION starts fresh). `opts` are
-// createCore's.
+// for a new one; an incompatible STATE_VERSION starts fresh), and the mail
+// part's in-flight items (prev.mailState; its abort ended every held wait).
+// `opts` are createCore's.
 export function takeOver(prev, opts = {}) {
   let written = null;
   let since = null;
   let state = null;
+  let mailState = null;
   if (prev && typeof prev === 'object') {
     try { prev.abort(); } catch { /* a foreign or older object */ }
     try {
       if (prev.written instanceof Map) written = prev.written;
       if (prev.since instanceof Map) since = prev.since;
       state = prev.state ?? null;
+      mailState = prev.mailState ?? null;
     } catch { /* a throwing getter: inherit nothing more */ }
   }
-  const core = createCore({ ...opts, state });
+  const core = createCore({ ...opts, state, mailState });
   if (written) core.written = written;
   if (since) core.since = since;
   return core;
