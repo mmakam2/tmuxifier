@@ -61,6 +61,13 @@
 //    outranks `working` in deriveState so it never turns a block into work, and
 //    the turn it starts is `working/resume` (a synthetic item is a resume).
 //
+// 10. The mail socket (agent messaging, spec §6.5): the box's listener, a
+//    plain HTTP server on the unix socket `~/.tmuxifier-mail/sock`. The plugin
+//    talks to it through `createMailSocketClient` (below): a held
+//    `GET /v1/wait?session=&pane=%N` that answers 200 with the wake text or 204
+//    idle, and `POST /v1/ack` (form body `session`, `m`). Every outcome is a
+//    resolved value, never a throw or a rejection (see the client's comment).
+//
 // A setup for another directory in the same process (fact 2, fixture line
 // 316) or a hot reload (fact 3) hands the reducer's state over to the next
 // core (`STATE_VERSION` guards the shape; an incompatible one starts fresh).
@@ -77,6 +84,7 @@
 import { Buffer } from 'node:buffer';
 import { execFile } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -698,6 +706,152 @@ export function defaultListPanes({ file = 'tmux', timeout = LIST_TIMEOUT_MS } = 
       resolve(e && e.code === 'ENOENT' ? TMUX_MISSING : null);
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// The mail socket client (agent messaging, spec §6.5).
+// ---------------------------------------------------------------------------
+
+// `sun_path` is 108 bytes on Linux, NUL included. A copy of
+// agentMailListener.js's `MAX_SOCKET_PATH_BYTES` (the asset imports nothing
+// from the repo); a test pins the two equal.
+export const MAX_SOCKET_PATH_BYTES = 107;
+
+// The most a response may carry: the listener's own request limit
+// (`MAX_REQUEST_BYTES`, pinned equal by a test). A wake is at most a few
+// thousand characters; anything larger is not ours.
+export const MAIL_BODY_CAP = 262144;
+
+// How long a `wait` may hold before the client gives up on the listener: the
+// hub's hold for a waiter (`holdMs` in agentMailHub.js, five minutes, pinned
+// by a test) plus a margin. The hub answers idle at its hold, so this fires
+// only for a listener that is alive but no longer answers.
+export const MAIL_WAIT_TIMEOUT_MS = 300000 + 30000;
+
+// An ack is a lookup and a write on the hub; it answers at once.
+export const MAIL_ACK_TIMEOUT_MS = 10000;
+
+// A wake's first line: `[tmuxifier-mail m-XXXXXXXX] ...` (agentMailText.js
+// `wakeText`). The id is checked with MAIL_MSG_ID_RE, never taken on trust.
+const WAKE_TAG_RE = /^\[tmuxifier-mail ([^\]\s]+)\]/;
+
+// A client for the box's mail listener over its unix socket, with `request`
+// (http.request, replaceable for a test) as the only way out.
+//
+//   wait({ session, pane, signal }) -> { kind: 'mail', text, messageId }
+//                                    | { kind: 'idle' }
+//                                    | { kind: 'down', reason }
+//   ack({ session, messageId })     -> boolean (true only for a 200)
+//
+// Never throws and never rejects: every failure is a resolved value
+// (`down`/`false`), because its caller is a loop inside someone else's
+// process and a stray rejection there is an unhandled one. `reason` is a
+// short word for a debug line: path (a socket path the kernel cannot bind),
+// args, aborted, connect (no listener, a refusal, a cut connection),
+// status <n>, parse (a 200 that is not a wake), size, timeout.
+//
+// Each call is its own connection, closed after its answer (`agent: false`,
+// so nothing is pooled across a listener restart). An aborted `signal`
+// destroys the request, which the listener sees as a closed connection and
+// ends the held wait. The wire format is the listener's header: GET
+// parameters only in the query, POST parameters only in an urlencoded body.
+export function createMailSocketClient({
+  sockPath,
+  request = http.request,
+  waitTimeoutMs = MAIL_WAIT_TIMEOUT_MS,
+  ackTimeoutMs = MAIL_ACK_TIMEOUT_MS,
+} = {}) {
+  const pathOk = typeof sockPath === 'string' && sockPath !== '' && Buffer.byteLength(sockPath) <= MAX_SOCKET_PATH_BYTES;
+  const down = (reason) => ({ kind: 'down', reason });
+
+  // One request settled exactly once. `onResponse(res, finish)` reads the answer and calls
+  // `finish(value)`; `failure(reason)` is the value of a call that got no answer. Whatever
+  // settles it also destroys the request: a held wait must end its connection, and one that
+  // already has its answer has nothing left to read.
+  function call({ method, urlPath, body, signal, timeoutMs, onResponse, failure }) {
+    return new Promise((resolve) => {
+      let req = null;
+      let timer = null;
+      let settled = false;
+      const onAbort = () => finish(failure('aborted'));
+      function finish(value) {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        try { signal.removeEventListener('abort', onAbort); } catch { /* no signal, or not an AbortSignal */ }
+        try { if (req) req.destroy(); } catch { /* already gone */ }
+        resolve(value);
+      }
+      try {
+        if (signal && typeof signal.addEventListener === 'function') {
+          if (signal.aborted) { finish(failure('aborted')); return; }
+          signal.addEventListener('abort', onAbort, { once: true });
+        }
+        const headers = { Accept: 'text/plain' };
+        if (body !== undefined) {
+          headers['Content-Type'] = 'application/x-www-form-urlencoded';
+          headers['Content-Length'] = Buffer.byteLength(body);
+        }
+        req = request({ socketPath: sockPath, path: urlPath, method, headers, agent: false }, (res) => {
+          try { onResponse(res, finish); } catch { finish(failure('connect')); }
+        });
+        req.on('error', () => finish(failure('connect')));
+        timer = setTimeout(() => finish(failure('timeout')), timeoutMs);
+        if (typeof timer.unref === 'function') timer.unref();
+        if (body !== undefined) req.write(body);
+        req.end();
+      } catch {
+        finish(failure('connect'));
+      }
+    });
+  }
+
+  function wait({ session, pane, signal } = {}) {
+    if (!pathOk) return Promise.resolve(down('path'));
+    if (typeof session !== 'string' || typeof pane !== 'string') return Promise.resolve(down('args'));
+    return call({
+      method: 'GET',
+      urlPath: `/v1/wait?${new URLSearchParams({ session, pane })}`,
+      signal,
+      timeoutMs: waitTimeoutMs,
+      failure: down,
+      onResponse(res, finish) {
+        if (res.statusCode === 204) { finish({ kind: 'idle' }); return; }
+        if (res.statusCode !== 200) { finish(down(`status ${res.statusCode}`)); return; }
+        const chunks = [];
+        let size = 0;
+        res.on('data', (c) => {
+          size += c.length;
+          if (size > MAIL_BODY_CAP) { chunks.length = 0; finish(down('size')); return; }
+          chunks.push(c);
+        });
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf8');
+          const text = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
+          const tag = WAKE_TAG_RE.exec(text.split('\n', 1)[0]);
+          if (tag && MAIL_MSG_ID_RE.test(tag[1])) finish({ kind: 'mail', text, messageId: tag[1] });
+          else finish(down('parse'));
+        });
+        // An answer cut short; a no-op once `end` has settled the call.
+        res.on('error', () => finish(down('connect')));
+        res.on('close', () => finish(down('connect')));
+      },
+    });
+  }
+
+  function ack({ session, messageId } = {}) {
+    if (!pathOk || typeof session !== 'string' || !(typeof messageId === 'string' && MAIL_MSG_ID_RE.test(messageId))) return Promise.resolve(false);
+    return call({
+      method: 'POST',
+      urlPath: '/v1/ack',
+      body: new URLSearchParams({ session, m: messageId }).toString(),
+      timeoutMs: ackTimeoutMs,
+      failure: () => false,
+      onResponse(res, finish) { finish(res.statusCode === 200); },
+    });
+  }
+
+  return { wait, ack };
 }
 
 export const GLOBAL_KEY = Symbol.for('tmuxifier.opencode-agent');
