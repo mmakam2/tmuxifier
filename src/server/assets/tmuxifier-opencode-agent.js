@@ -1510,6 +1510,293 @@ export function createPaneTagger({ paneOf, now = Date.now, ttlMs = 30000 } = {})
   return { beforeTool, beforeShell };
 }
 
+// ---------------------------------------------------------------------------
+// Permission: plain `tmx` is allowed unless the operator has shell rules
+// (agent messaging spec §6.7, rulings R8, R9, R26).
+// ---------------------------------------------------------------------------
+//
+// Claude Code gets `Bash(tmx *)` from setup. OpenCode has no settings entry to
+// merge, so the plugin answers `permission.evaluate` itself (the entry point
+// registers createPermissionHandler's function). The payload, measured on
+// OpenCode 2.3.0 (test/fixtures/README-opencode-2.3-event-trace.md F3):
+//
+//   { sessionID, agent, action: 'shell', resources: [...], source: { type:
+//     'tool', ... }, effect: 'allow' | 'ask' | 'deny' }
+//
+// `resources` holds one entry per command OpenCode's parser finds (`tmx who; id`
+// is `['tmx who', 'id']`, a `$( )` adds the inner command as a second entry),
+// and `effect` is mutable.
+//
+// The handler acts only when action is `shell`, there is exactly ONE resource,
+// that resource is a plain tmx command (isPlainTmx), and the current effect is
+// not `deny`; then it sets `effect = 'allow'`. It never sets deny, never touches
+// another field, and never throws.
+//
+// The operator's own rules win (operator ruling, 2026-11-16): in Claude Code an
+// `ask` rule beats `allow`, and the hook cannot tell OpenCode's default `ask`
+// from an operator's rule (`source` only says `{ type: 'tool' }`). So the
+// plugin reads the operator's OpenCode configuration itself (createOperatorRules)
+// and does nothing when any file OpenCode merges sets a shell rule.
+
+// The program is `tmx`, `~/.local/bin/tmx` or `$HOME/.local/bin/tmx`, then a
+// subcommand tmx knows (tmuxifier-mail.sh), then a blank or the end.
+const PLAIN_TMX_RE = /^[ \t]*(?:tmx|~\/\.local\/bin\/tmx|\$HOME\/\.local\/bin\/tmx)[ \t]+(?:who|send|reply|wait|read|inbox)(?=[ \t]|$)/;
+// What the rest of the command may not contain, anywhere, quoted or not:
+// `$` (so `$(`, `${`, `$VAR`: a variable argument would send the agent's own
+// environment to the other agent), backtick, `|`, `;`, `&`, `>`, `<`, a newline
+// and every other control byte except tab. Textual, not a shell parser: a
+// quoted `;` makes a command not plain, and OpenCode then decides as it would
+// have (an `ask` the operator answers). When in doubt, not plain.
+const TMX_UNSAFE_RE = /[$`|;&<>\u0000-\u0008\u000a-\u001f\u007f]/;
+
+// True for exactly one `tmx <subcommand> ...` command with nothing in it that
+// could run, redirect or expand into something else.
+export function isPlainTmx(command) {
+  try {
+    if (typeof command !== 'string') return false;
+    const m = PLAIN_TMX_RE.exec(command);
+    return !!m && !TMX_UNSAFE_RE.test(command.slice(m[0].length));
+  } catch {
+    return false;
+  }
+}
+
+// A JSON reader that tolerates what OpenCode's own accepts in `.jsonc`:
+// `//` and `/* */` comments and trailing commas, both only OUTSIDE strings
+// (a URL in a string holds `//`; an escaped quote does not end a string).
+// Returns the parsed plain object, or null for anything else: a parse failure,
+// an unterminated comment or string, an array or scalar at the top, a
+// non-string input. Never throws.
+export function readJsonc(text) {
+  try {
+    if (typeof text !== 'string') return null;
+    const n = text.length;
+    const out = [];
+    // out[comma] is the last comma written when nothing but blanks and
+    // comments followed it (so a `}` or `]` now makes it a trailing comma).
+    let comma = -1;
+    let last = ''; // the last significant (non-blank) character written
+    let i = text.charCodeAt(0) === 0xfeff ? 1 : 0;
+    while (i < n) {
+      const c = text[i];
+      if (c === '"') {
+        let j = i + 1;
+        while (j < n && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+        if (j >= n) return null;
+        out.push(text.slice(i, j + 1));
+        comma = -1;
+        last = '"';
+        i = j + 1;
+      } else if (c === '/' && text[i + 1] === '/') {
+        let j = i + 2;
+        while (j < n && text[j] !== '\n' && text[j] !== '\r') j++;
+        out.push(' ');
+        i = j;
+      } else if (c === '/' && text[i + 1] === '*') {
+        const end = text.indexOf('*/', i + 2);
+        if (end < 0) return null;
+        out.push(' ');
+        i = end + 2;
+      } else if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
+        out.push(c);
+        i++;
+      } else if (c === ',') {
+        // A comma straight after `{`, `[`, another comma or nothing is never a
+        // trailing one: leave it for JSON.parse to refuse.
+        comma = last === '' || last === '{' || last === '[' || last === ',' ? -1 : out.length;
+        out.push(',');
+        last = ',';
+        i++;
+      } else {
+        if ((c === '}' || c === ']') && comma >= 0) out[comma] = '';
+        comma = -1;
+        out.push(c);
+        last = c;
+        i++;
+      }
+    }
+    const value = JSON.parse(out.join(''));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+const OPERATOR_CONFIG_MAX_BYTES = 1024 * 1024;
+const OPERATOR_CACHE_MAX = 512;
+const OPERATOR_GLOBAL_FILES = ['opencode.json', 'opencode.jsonc'];
+const OPERATOR_PROJECT_FILES = [
+  'opencode.json',
+  'opencode.jsonc',
+  path.join('.opencode', 'opencode.json'),
+  path.join('.opencode', 'opencode.jsonc'),
+];
+
+const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+// Does this `permission` value (a config's or an agent's) say anything about
+// the shell? A string is a rule for every tool. An object does when it has the
+// key `shell` (OpenCode 2.3.0's name), `bash` (the older one) or `*`, or any
+// other glob key that could match either. Absent: no. A value of any other
+// type is no shape OpenCode documents: fail closed.
+function permissionSetsShell(permission) {
+  if (permission === undefined) return false;
+  if (!isPlainObject(permission)) return true;
+  return Object.keys(permission).some((k) => k === 'shell' || k === 'bash' || k.includes('*') || k.includes('?'));
+}
+
+// A parsed config: its own `permission`, or that of any `agent.<name>` (and
+// `mode.<name>`, the older spelling of the same thing).
+function configSetsShell(cfg) {
+  if (permissionSetsShell(cfg.permission)) return true;
+  for (const group of [cfg.agent, cfg.mode]) {
+    if (!isPlainObject(group)) continue;
+    for (const entry of Object.values(group)) {
+      if (isPlainObject(entry) && permissionSetsShell(entry.permission)) return true;
+    }
+  }
+  return false;
+}
+
+// The directories OpenCode may read a global config from, or null when one
+// cannot be located (a relative path: fail closed). $OPENCODE_CONFIG_DIR names
+// the opencode directory itself (the installer puts plugins/ in it) and is read
+// in addition to the default, never instead of it; the default is
+// $XDG_CONFIG_HOME/opencode, else ~/.config/opencode.
+function globalConfigDirs(home, env) {
+  const set = (v) => (typeof v === 'string' && v ? v : null);
+  const dirs = [];
+  const own = set(env?.OPENCODE_CONFIG_DIR);
+  if (own) dirs.push(own);
+  const xdg = set(env?.XDG_CONFIG_HOME);
+  if (xdg) dirs.push(path.join(xdg, 'opencode'));
+  else if (set(home)) dirs.push(path.join(home, '.config', 'opencode'));
+  if (dirs.length === 0 || !dirs.every((d) => path.isAbsolute(d))) return null;
+  return dirs;
+}
+
+// Does the operator have shell/bash permission rules in any config OpenCode
+// merges for a session in some directory? (R9, R26)
+//
+//   hasBashRules(dir)  true when ANY of these sets one: the global config dir's
+//                      opencode.json / opencode.jsonc, and, for `dir` and every
+//                      parent up to `/`, opencode.json, opencode.jsonc,
+//                      .opencode/opencode.json and .opencode/opencode.jsonc.
+//                      A file sets one when `permission` is a string or an
+//                      object with `shell`, `bash` or `*`, or the same under any
+//                      `agent.<name>.permission`.
+//
+// Fail closed: a present file that cannot be stat'ed, read or parsed, one over
+// 1 MiB, a `dir` that is no absolute path, and a global dir that cannot be
+// located all answer true. A missing file (ENOENT/ENOTDIR) answers false. A
+// file's verdict is cached by (mtime, size, inode), so an edit applies to the
+// next command without a restart; a read failure is never cached.
+//
+// `fs` needs only `statSync` and `readFileSync`; tests inject their own.
+export function createOperatorRules({ home = os.homedir(), env = process.env, fs = { statSync, readFileSync } } = {}) {
+  const cache = new Map(); // file -> { key, rules }
+
+  function fileHasRules(file) {
+    let st;
+    try {
+      st = fs.statSync(file);
+    } catch (e) {
+      const code = e && e.code;
+      return !(code === 'ENOENT' || code === 'ENOTDIR');
+    }
+    try {
+      if (!(st.size <= OPERATOR_CONFIG_MAX_BYTES)) return true;
+      const key = Number.isFinite(st.mtimeMs) && Number.isFinite(st.size) ? `${st.mtimeMs}:${st.size}:${st.ino}` : null;
+      const hit = key ? cache.get(file) : null;
+      if (hit && hit.key === key) return hit.rules;
+      const cfg = readJsonc(fs.readFileSync(file, 'utf8'));
+      const rules = cfg === null ? true : configSetsShell(cfg);
+      if (key) {
+        cache.delete(file);
+        cache.set(file, { key, rules });
+        if (cache.size > OPERATOR_CACHE_MAX) cache.delete(cache.keys().next().value);
+      }
+      return rules;
+    } catch (e) {
+      debug('operator rules', file, e);
+      return true;
+    }
+  }
+
+  function hasBashRules(dir) {
+    try {
+      if (typeof dir !== 'string' || !path.isAbsolute(dir)) return true;
+      const globals = globalConfigDirs(home, env);
+      if (!globals) return true;
+      for (const g of globals) {
+        for (const name of OPERATOR_GLOBAL_FILES) if (fileHasRules(path.join(g, name))) return true;
+      }
+      let d = path.resolve(dir);
+      for (;;) {
+        for (const rel of OPERATOR_PROJECT_FILES) if (fileHasRules(path.join(d, rel))) return true;
+        const up = path.dirname(d);
+        if (up === d) return false;
+        d = up;
+      }
+    } catch (e) {
+      debug('operator rules', e);
+      return true;
+    }
+  }
+
+  return { hasBashRules };
+}
+
+// The directory a session runs in: its own, else (a subagent) the nearest
+// ancestor's, up to MAIL_PARENT_DEPTH_MAX hops. Null for a session the reducer
+// does not know, a chain with no directory, a broken or looping chain.
+export function dirOfSession(reducer, sessionID) {
+  try {
+    if (typeof sessionID !== 'string' || !sessionID) return null;
+    const sessions = reducer?.sessions;
+    if (!(sessions instanceof Map)) return null;
+    const seen = new Set();
+    let cur = sessionID;
+    for (let hops = 0; hops <= MAIL_PARENT_DEPTH_MAX; hops++) {
+      if (seen.has(cur)) return null;
+      seen.add(cur);
+      const s = sessions.get(cur);
+      if (!s) return null;
+      if (typeof s.dir === 'string' && s.dir) return s.dir;
+      cur = s.parent;
+      if (typeof cur !== 'string' || !cur) return null;
+    }
+    return null;
+  } catch (e) {
+    debug('dirOfSession', e);
+    return null;
+  }
+}
+
+// The `permission.evaluate` handler. `rules` is createOperatorRules' result and
+// `dirOf(sessionID)` the session's directory (dirOfSession's, bound to a
+// reducer). A session whose directory is unknown is treated as having rules:
+// nothing changes. Not registered on OpenCode here (the entry point does).
+export function createPermissionHandler(options) {
+  const { rules = null, dirOf = null } = options ?? {};
+  return function evaluate(evaluation) {
+    try {
+      if (!evaluation || typeof evaluation !== 'object') return;
+      if (evaluation.action !== 'shell') return;
+      const resources = evaluation.resources;
+      if (!Array.isArray(resources) || resources.length !== 1) return;
+      if (!isPlainTmx(resources[0])) return;
+      if (evaluation.effect === 'deny' || evaluation.effect === 'allow') return;
+      const dir = dirOf(evaluation.sessionID);
+      if (typeof dir !== 'string' || !dir) return;
+      if (rules.hasBashRules(dir)) return;
+      evaluation.effect = 'allow';
+    } catch (e) {
+      debug('permission', e);
+    }
+  };
+}
+
 export const GLOBAL_KEY = Symbol.for('tmuxifier.opencode-agent');
 
 // One live reporter: a reducer fed by the event stream, and a sweep that
@@ -1584,6 +1871,7 @@ export function createCore({
     mailState: mail?.state ?? null,
     mailTargetsNow,
     paneOfSession,
+    dirOfSession: (sessionID) => dirOfSession(reducer, sessionID),
     owner: Symbol('tmuxifier.opencode-agent.core'),
   };
 
