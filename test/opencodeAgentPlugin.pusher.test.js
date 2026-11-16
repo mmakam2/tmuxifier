@@ -50,7 +50,7 @@ test('the install script interpolates nothing and reads the plugin from stdin', 
   expect(s).toContain('[ ! -x "$HOME/.opencode/bin/opencode" ]');
   // The only expansions are the box's own environment, never a caller value.
   const vars = new Set([...s.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*|\$)/g)].map((m) => m[1]));
-  expect([...vars].sort()).toEqual(['$', 'CFG', 'DIR', 'HOME', 'OCBIN', 'OCV', 'OPENCODE_CONFIG_DIR', 'VF']);
+  expect([...vars].sort()).toEqual(['$', 'CFG', 'DIR', 'HOME', 'OCBIN', 'OCV', 'OPENCODE_CONFIG_DIR', 'RAN', 'VF']);
   expect(s).toContain('OPENCODEPLUGIN: skipped-no-opencode');
   expect(s).toContain('OPENCODEPLUGIN: applied');
   expect(s).toContain('cat > "$DIR/tmuxifier-agent.js.$$.tmp"');
@@ -216,6 +216,34 @@ test('an OpenCode whose --version hangs is cut off: no version line, the plugin 
   expect(versionLine(res.stdout)).toEqual([]);
   expect(await fs.readFile(pluginPath(path.join(b.dir, '.config', 'opencode')), 'utf8')).toBe('PLUGIN');
 }, 40000);
+
+test('an OpenCode whose --version ignores TERM is KILLed shortly after the cut-off', async () => {
+  // The ignored disposition survives exec, so `sleep` ignores TERM too: only a KILL ends it.
+  const b = await opencodeBox("#!/bin/sh\ntrap '' TERM\nexec sleep 60\n");
+  const started = Date.now();
+  const res = await runShell(buildOpencodePluginInstallScript(), b.env(), 'PLUGIN');
+  expect(Date.now() - started).toBeLessThan(25000);
+  expect(res.code).toBe(0);
+  expect(res.stdout).toContain('OPENCODEPLUGIN: applied');
+  expect(versionLine(res.stdout)).toEqual([]);
+}, 40000);
+
+test('a `timeout` that refuses -k gets the plain form, and the version is still read once', async () => {
+  const b = await opencodeBox('#!/bin/sh\necho run >> "$HOME/runs"\necho opencode v2.3.0\n');
+  const bin = path.join(b.dir, 'bin');
+  // An old timeout: no -k (exit 125, as a usage error), otherwise the real one.
+  const realTimeout = (await new Promise((r) => execFile('/bin/sh', ['-c', 'command -v timeout'], (e, o) => r(o)))).trim();
+  await fs.writeFile(path.join(bin, 'timeout'), `#!/bin/sh\n[ "$1" = -k ] && exit 125\nexec ${realTimeout} "$@"\n`, { mode: 0o755 });
+  const res = await runShell(buildOpencodePluginInstallScript(), b.env(), 'PLUGIN');
+  expect(res.code, res.stderr).toBe(0);
+  expect(versionLine(res.stdout)).toEqual(['OPENCODEPLUGIN: version 2.3.0']);
+  expect(await fs.readFile(path.join(b.dir, 'runs'), 'utf8')).toBe('run\n');
+  // And with -k understood, it also runs exactly once.
+  const c = await opencodeBox('#!/bin/sh\necho run >> "$HOME/runs"\necho opencode v2.3.0\n');
+  const res2 = await runShell(buildOpencodePluginInstallScript(), c.env(), 'PLUGIN');
+  expect(versionLine(res2.stdout)).toEqual(['OPENCODEPLUGIN: version 2.3.0']);
+  expect(await fs.readFile(path.join(c.dir, 'runs'), 'utf8')).toBe('run\n');
+});
 
 test('the native-installer location is asked for its version too', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ocp-'));
