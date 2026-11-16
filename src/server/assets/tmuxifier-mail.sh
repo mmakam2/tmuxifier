@@ -63,6 +63,22 @@
 #                   would become prompt context, so it prints nothing on either stream and always
 #                   exits 0.
 #
+# Who is calling. A caller is a tmux pane: $TMUX_PANE (with $TMUX set), the pane of the agent's
+# own shell. Under OpenCode that is wrong: the agent's shell commands run from OpenCode's one
+# shared server, whose environment is the first TUI's forever, so the Tmuxifier plugin tags each
+# command with its own pane in TMUXIFIER_MAIL_PANE (design 6.9). The user commands (who, send,
+# reply, wait, read, inbox; never hook-wait or hook-ack, which Claude Code starts in its own
+# pane and which ignore the variable entirely) read it first:
+#   unset or empty          nothing changes: $TMUX and $TMUX_PANE decide.
+#   a pane id (%N)          replaces $TMUX_PANE, and $TMUX is not required (the server may have
+#                           been started outside tmux; tmux resolves the pane on its default
+#                           server). A pane tmux cannot resolve is refused like `none`.
+#   `none`, or anything     "this agent's tmux session cannot be identified for messaging" on
+#   else                    stderr, exit 2, before any argument is read and with no request: the
+#                           plugin found no pane for the calling session, so $TMUX_PANE (the first
+#                           TUI's) must not stand in for it. A malformed value is `none`.
+# Nothing but the pane id's digits is ever used from it, and it is validated like $TMUX_PANE.
+#
 # Test-only knob (read by nothing else): TMUXIFIER_MAIL_TEST_SLEEP, when set to a number of
 # seconds (digits and dots), replaces the duration of every sleep: the 1 s between attempts of a
 # user command, the waiter's back-off and its 1 s grace for a lock without a pid.
@@ -119,24 +135,50 @@ is_thread() {
   return 1
 }
 
-# Inside tmux: TMUX set and TMUX_PANE a pane id (%N, at most 9 digits). Sets PANE_DIGITS.
-in_tmux() {
-  [ -n "${TMUX:-}" ] || return 1
-  case ${TMUX_PANE:-} in
-    %*) PANE_DIGITS=${TMUX_PANE#%} ;;
+# A pane id: % and 1 to 9 digits. Nothing else is ever used to name a pane.
+valid_pane() {
+  case $1 in
+    %*) _d=${1#%} ;;
     *) return 1 ;;
   esac
-  case $PANE_DIGITS in
+  case $_d in
     ''|*[!0-9]*) return 1 ;;
   esac
-  [ "${#PANE_DIGITS}" -le 9 ]
+  [ "${#_d}" -le 9 ]
+}
+
+# Inside tmux: TMUX set and TMUX_PANE a pane id (%N, at most 9 digits), or, for a user command
+# the plugin tagged, VIA_PANE (TMUXIFIER_MAIL_PANE's pane id, see mail_pane) with no TMUX needed.
+# Sets PANE (the pane id) and PANE_DIGITS.
+VIA_PANE= # never from the environment
+in_tmux() {
+  if [ -n "$VIA_PANE" ]; then
+    PANE=$VIA_PANE
+  else
+    [ -n "${TMUX:-}" ] || return 1
+    PANE=${TMUX_PANE:-}
+  fi
+  valid_pane "$PANE" || return 1
+  PANE_DIGITS=${PANE#%}
 }
 
 # Sets SESSION to this pane's tmux session; fails (SESSION unchanged) when tmux cannot say.
 session_now() {
-  _s=$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null) || return 1
+  _s=$(tmux display-message -p -t "$PANE" '#{session_name}' 2>/dev/null) || return 1
   [ -n "$_s" ] || return 1
   SESSION=$_s
+}
+
+unidentified() {
+  printf "tmx: this agent's tmux session cannot be identified for messaging\n" >&2
+  exit 2
+}
+
+# User commands only: TMUXIFIER_MAIL_PANE (see the header) names the calling pane, or refuses.
+mail_pane() {
+  [ -n "${TMUXIFIER_MAIL_PANE:-}" ] || return 0
+  valid_pane "$TMUXIFIER_MAIL_PANE" || unidentified
+  VIA_PANE=$TMUXIFIER_MAIL_PANE
 }
 
 # ASCII lower case, surrounding blanks trimmed.
@@ -238,7 +280,11 @@ take_body() {
 }
 
 ready() {
-  in_tmux && session_now || { printf 'tmx: run this inside a tmux session\n' >&2; exit 2; }
+  if [ -n "$VIA_PANE" ]; then
+    in_tmux && session_now || unidentified
+  else
+    in_tmux && session_now || { printf 'tmx: run this inside a tmux session\n' >&2; exit 2; }
+  fi
   command -v curl >/dev/null 2>&1 || fail 'curl is not installed'
 }
 
@@ -539,7 +585,7 @@ hook_wait() {
     session_now # a renamed session is followed; on failure the last name is kept
     rm -f "$LOCK/resp" "$LOCK/code" 2>/dev/null
     hold curl -q -s --noproxy '*' --unix-socket "$SOCK" -m 330 -G -o "$LOCK/resp" -w '%{http_code}' \
-      --data-urlencode "session=$SESSION" --data-urlencode "pane=$TMUX_PANE" "$URL/v1/wait" \
+      --data-urlencode "session=$SESSION" --data-urlencode "pane=$PANE" "$URL/v1/wait" \
       > "$LOCK/code" 2>/dev/null </dev/null
     _rc=$?
     # The same decision after the held request: orphaned, taken over, or lost meanwhile. A
@@ -589,6 +635,7 @@ hook_ack() {
 
 case ${1:-} in
   who|send|reply|wait|read|inbox)
+    mail_pane
     _cmd=$1
     shift
     "cmd_$_cmd" "$@"

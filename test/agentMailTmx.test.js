@@ -422,6 +422,143 @@ function dropAfter(name) {
   listener = createAgentMailListener({ hub: wrapped, boxId: 'o', socketPath: sock });
 }
 
+// OpenCode runs every agent shell command from its one shared server, whose TMUX_PANE is the first
+// TUI's forever; the plugin therefore tags each command with its own pane in TMUXIFIER_MAIL_PANE
+// (spec 6.9). A valid pane id replaces TMUX_PANE for the user commands, and $TMUX is then not
+// required; `none` (or anything else that is not a pane id) says the session cannot be identified;
+// hook-wait and hook-ack never read the variable.
+describe('tmx: TMUXIFIER_MAIL_PANE', () => {
+  const UNIDENTIFIED = "tmx: this agent's tmux session cannot be identified for messaging\n";
+
+  // A tmux that knows three panes: %3 is orders/main, %5 is orders/side, %9 is a pane of a
+  // session with no agent. Anything else fails, as tmux does for a pane that is gone.
+  beforeEach(() => {
+    writeExe(path.join(bin, 'tmux'), [
+      '#!/bin/sh',
+      "[ \"$#\" = 5 ] && [ \"$1\" = display-message ] && [ \"$2\" = -p ] && [ \"$3\" = -t ] && [ \"$5\" = '#{session_name}' ] || exit 1",
+      'case $4 in',
+      "  '%3') printf '%s\\n' main ;;",
+      "  '%5') printf '%s\\n' side ;;",
+      "  '%9') printf '%s\\n' bystander ;;",
+      '  *) exit 1 ;;',
+      'esac',
+      '',
+    ].join('\n'));
+    h.marks.o.side = mark('working');
+  });
+
+  test('a valid pane id replaces TMUX_PANE for identity', async () => {
+    await listener.listen();
+    const r = await run(['send', 'billing', 'as side'], { env: env({ TMUXIFIER_MAIL_PANE: '%5', TMUX_PANE: '%3' }) });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(h.store.thread(threadOf(r.stdout)).starter).toEqual({ boxId: 'o', session: 'side' });
+    // The agent's own variable is never the one that counts, whatever its value or shape.
+    for (const pane of ['%9', undefined, '%3; rm -rf /', 'junk']) {
+      const r2 = await run(['send', 'billing', 'still side'], { env: env({ TMUXIFIER_MAIL_PANE: '%5', TMUX_PANE: pane }) });
+      expect(r2.code, String(pane)).toBe(0);
+      expect(h.store.thread(threadOf(r2.stdout)).starter.session, String(pane)).toBe('side');
+    }
+    // Every user command asks about that pane.
+    const who = await run(['who'], { env: env({ TMUXIFIER_MAIL_PANE: '%5', TMUX_PANE: '%3' }) });
+    expect(who.code).toBe(0);
+    expect(curlCalls().at(-1)).toContain('session=side');
+  });
+
+  test('$TMUX is not required when the pane id is given (the server may have started outside tmux)', async () => {
+    await listener.listen();
+    const r = await run(['send', 'billing', 'no tmux var'], { env: env({ TMUXIFIER_MAIL_PANE: '%5', TMUX: undefined, TMUX_PANE: undefined }) });
+    expect(r.code).toBe(0);
+    expect(h.store.thread(threadOf(r.stdout)).starter).toEqual({ boxId: 'o', session: 'side' });
+    // Without the variable the same environment is "outside tmux", as before.
+    const out = await run(['send', 'billing', 'x'], { env: env({ TMUX: undefined, TMUX_PANE: undefined }) });
+    expect(out).toMatchObject({ code: 2, stdout: '', stderr: 'tmx: run this inside a tmux session\n' });
+  });
+
+  test('every user command with `none`, or a value that is not a pane id, exits 2 saying so, with no request', async () => {
+    await listener.listen();
+    const commands = [['who'], ['who', 'billing'], ['send', 'billing', 'hi'], ['send'], ['reply', 't-7fq2m9cd', 'hi'], ['reply', 'nonsense'],
+      ['read', 't-7fq2m9cd'], ['wait', 't-7fq2m9cd', '-t', '1'], ['inbox']];
+    for (const value of ['none', '%', '%x', '%1234567890', '%3; rm -rf /', '%3 ', ' %3', '3', 'None', 'NONE', '%-1', '$(touch pwned)']) {
+      for (const args of commands) {
+        const r = await run(args, { env: env({ TMUXIFIER_MAIL_PANE: value }) });
+        const what = `${JSON.stringify(value)} ${args.join(' ')}`;
+        expect(r.code, what).toBe(2);
+        expect(r.stdout, what).toBe('');
+        expect(r.stderr, what).toBe(UNIDENTIFIED);
+      }
+    }
+    // `none` is final: the agent's own TMUX/TMUX_PANE (the first TUI's) are not a fallback.
+    const r = await run(['inbox'], { env: env({ TMUXIFIER_MAIL_PANE: 'none', TMUX_PANE: '%3' }) });
+    expect(r).toMatchObject({ code: 2, stdout: '', stderr: UNIDENTIFIED });
+    expect(curlCalls()).toEqual([]);
+    expect(fs.existsSync(path.join(dir, 'pwned'))).toBe(false);
+  });
+
+  test('a pane id that tmux cannot resolve is the same refusal, not a request as some other session', async () => {
+    await listener.listen();
+    const r = await run(['send', 'billing', 'hi'], { env: env({ TMUXIFIER_MAIL_PANE: '%77', TMUX_PANE: '%3' }) });
+    expect(r).toMatchObject({ code: 2, stdout: '', stderr: UNIDENTIFIED });
+    expect(curlCalls()).toEqual([]);
+  });
+
+  test('unset or empty changes nothing: TMUX and TMUX_PANE still decide', async () => {
+    await listener.listen();
+    for (const over of [{ TMUXIFIER_MAIL_PANE: undefined }, { TMUXIFIER_MAIL_PANE: '' }]) {
+      const r = await run(['send', 'billing', 'plain'], { env: env(over) });
+      expect(r.code).toBe(0);
+      expect(h.store.thread(threadOf(r.stdout)).starter).toEqual({ boxId: 'o', session: 'main' });
+    }
+    const out = await run(['send', 'billing', 'x'], { env: env({ TMUXIFIER_MAIL_PANE: '', TMUX: undefined }) });
+    expect(out).toMatchObject({ code: 2, stderr: 'tmx: run this inside a tmux session\n' });
+  });
+
+  test('the help text and an unknown command are not user commands: exit 2 with the usage either way', async () => {
+    for (const args of [[], ['help'], ['nonsense']]) {
+      const r = await run(args, { env: env({ TMUXIFIER_MAIL_PANE: 'none' }) });
+      expect(r.code).toBe(2);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(/^usage:/);
+    }
+  });
+
+  test('hook-wait and hook-ack ignore the variable entirely', async () => {
+    await listener.listen();
+    h.marks.o.main = mark('ready');
+    h.marks.o.side = mark('working');
+    for (const value of ['%5', 'none', 'junk']) {
+      const w = start(['hook-wait'], { env: env({ TMUXIFIER_MAIL_PANE: value }) }); // TMUX_PANE=%3 is main
+      await until(() => listening() === 1);
+      expect(lockPid()).toBe(String(w.pid)); // the lock is named from %3, not from the variable
+      expect(curlCalls().at(-1)).toContain('session=main');
+      expect(curlCalls().at(-1)).toContain('pane=%3');
+      expect((await h.hub.send(B, 'orders', `to main ${value}`)).ok).toBe(true);
+      const r = await w.done;
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain(`to main ${value}`);
+      // Delivered, so the next waiter is not offered it again.
+      expect(await h.hub.ack(O, /^\[tmuxifier-mail (m-[a-z2-9]{8})\]/.exec(r.stderr)[1])).toBe(true);
+      h.marks.o.main = mark('ready');
+    }
+    // Outside tmux it still does nothing, whatever the variable says.
+    const out = await run(['hook-wait'], { env: env({ TMUXIFIER_MAIL_PANE: '%5', TMUX: undefined, TMUX_PANE: undefined }) });
+    expect(out).toMatchObject({ code: 0, stdout: '', stderr: '' });
+
+    const wake = '[tmuxifier-mail m-abcdefgh] Message from the agent in billing/main, thread t-abcdefgh.';
+    const before = curlCalls().length;
+    for (const value of ['%5', 'none']) {
+      const a = await run(['hook-ack'], { stdin: wakePayload(wake), env: env({ TMUXIFIER_MAIL_PANE: value }) });
+      expect(a).toMatchObject({ code: 0, stdout: '', stderr: '' });
+    }
+    const acks = curlCalls().slice(before);
+    expect(acks).toHaveLength(2);
+    for (const call of acks) expect(call).toContain('session=main');
+    const quiet = await run(['hook-ack'], { stdin: wakePayload(wake), env: env({ TMUXIFIER_MAIL_PANE: '%5', TMUX: undefined, TMUX_PANE: undefined }) });
+    expect(quiet).toMatchObject({ code: 0, stdout: '', stderr: '' });
+    expect(curlCalls().slice(before)).toHaveLength(2);
+  });
+});
+
 describe('tmx: a connection lost after the request went out', () => {
   test('a send is not retried: exit 3 with the warning, and exactly one thread exists', async () => {
     dropAfter('send');

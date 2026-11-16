@@ -68,6 +68,16 @@
 //    idle, and `POST /v1/ack` (form body `session`, `m`). Every outcome is a
 //    resolved value, never a throw or a rejection (see the client's comment).
 //
+// 11. Which pane an agent's `tmx` speaks for (agent messaging, spec §6.9). The
+//    agent's shell commands run from the one shared server, whose TMUX_PANE is
+//    the first TUI's forever, so `createPaneTagger` (below) sets
+//    TMUXIFIER_MAIL_PANE on each shell command to the pane of the calling
+//    session's mail target, or `none`, and `tmx` prefers it. In 2.3.0
+//    `tool.execute.before` names the session, the call and `input.command`;
+//    `shell.create.before` follows in the same millisecond with `command` and a
+//    mutable `env` and nothing else (README F4): the two are matched by command
+//    text. Both fire only in the instance whose directory owns the session.
+//
 // A setup for another directory in the same process (fact 2, fixture line
 // 316) or a hot reload (fact 3) hands the reducer's state over to the next
 // core (`STATE_VERSION` guards the shape; an incompatible one starts fresh).
@@ -1384,6 +1394,118 @@ export function createMailPart({
   return part;
 }
 
+// ---------------------------------------------------------------------------
+// The pane tagger (agent messaging, spec §6.9, rulings R7 and R23).
+// ---------------------------------------------------------------------------
+//
+// One per plugin instance (OpenCode fires both hooks only in the instance whose
+// project directory owns the session, so calls of different directories never
+// meet in one tagger; calls of one directory still can, concurrently). The
+// entry point registers `beforeTool` on `tool.execute.before` and `beforeShell`
+// on `shell.create.before`.
+//
+//   beforeTool   For the `shell` tool only, with `input.command` a string:
+//                remember { call id, command, pane } where pane is
+//                `paneOf(sessionID)` (the pane of the tmux session whose mail
+//                target is that OpenCode session, else null) or `none`.
+//                A call id seen already is ignored (a hook registered twice).
+//   beforeShell  Match the shell's `command` to the oldest pending record with
+//                exactly that text (FIFO), use its record, and set
+//                `env.TMUXIFIER_MAIL_PANE` to its pane, or `none` when there is
+//                none. When several pending records carry that text and name
+//                DIFFERENT panes (two sessions ran one command at once, and
+//                nothing tells their shells apart) the answer is `none` for all
+//                of them, the survivors included: the first shell takes its own
+//                record, the others are marked `none`, so a later shell never
+//                inherits a pane that may belong to its neighbour. The same
+//                pane is that pane.
+//
+// Every shell it sees is tagged, a stale value already in `env` is overwritten,
+// and a payload without an `env` object is left alone. A record lives `ttlMs`
+// (a call whose shell is never created, a denied permission for instance, ages
+// out; until then it can make an identical command of another pane read
+// `none`, which fails closed), and at most TAG_PENDING_MAX are kept.
+//
+// Nothing here throws into OpenCode.
+
+export const MAIL_PANE_ENV = 'TMUXIFIER_MAIL_PANE';
+const TAG_PENDING_MAX = 256;
+
+export function createPaneTagger({ paneOf, now = Date.now, ttlMs = 30000 } = {}) {
+  let pending = []; // { id, command, pane, at }, oldest first
+  const seen = new Map(); // call id -> at, so a late duplicate of a consumed call is ignored
+
+  function clock() {
+    try {
+      const t = now();
+      if (Number.isFinite(t)) return t;
+    } catch { /* fall through to the real clock */ }
+    return Date.now();
+  }
+
+  function expire(t) {
+    pending = pending.filter((r) => t - r.at <= ttlMs);
+    for (const [id, at] of seen) if (t - at > ttlMs) seen.delete(id);
+  }
+
+  function paneFor(sessionID) {
+    try {
+      if (typeof paneOf !== 'function' || typeof sessionID !== 'string') return 'none';
+      const pane = paneOf(sessionID);
+      return typeof pane === 'string' && PANE_ID_RE.test(pane) ? pane : 'none';
+    } catch (e) {
+      debug('paneOf', e);
+      return 'none';
+    }
+  }
+
+  function beforeTool(payload) {
+    try {
+      if (!payload || typeof payload !== 'object' || payload.tool !== 'shell') return;
+      const command = payload.input?.command;
+      if (typeof command !== 'string') return;
+      const t = clock();
+      expire(t);
+      const id = typeof payload.id === 'string' && payload.id ? payload.id : null;
+      if (id !== null) {
+        if (seen.has(id)) return;
+        seen.set(id, t);
+        if (seen.size > TAG_PENDING_MAX) seen.delete(seen.keys().next().value);
+      }
+      pending.push({ id, command, pane: paneFor(payload.sessionID), at: t });
+      if (pending.length > TAG_PENDING_MAX) pending.splice(0, pending.length - TAG_PENDING_MAX);
+    } catch (e) {
+      debug('pane tag tool', e);
+    }
+  }
+
+  // The pane for a shell running `command`; consumes the record it used.
+  function take(command) {
+    expire(clock());
+    if (typeof command !== 'string') return 'none';
+    const same = pending.filter((r) => r.command === command);
+    if (same.length === 0) return 'none';
+    const first = same[0];
+    const ambiguous = same.some((r) => r.pane !== first.pane);
+    if (ambiguous) for (const r of same) r.pane = 'none';
+    pending.splice(pending.indexOf(first), 1);
+    return ambiguous ? 'none' : first.pane;
+  }
+
+  function beforeShell(payload) {
+    try {
+      if (!payload || typeof payload !== 'object') return;
+      const env = payload.env;
+      if (!env || typeof env !== 'object') return;
+      env[MAIL_PANE_ENV] = take(payload.command);
+    } catch (e) {
+      debug('pane tag shell', e);
+    }
+  }
+
+  return { beforeTool, beforeShell };
+}
+
 export const GLOBAL_KEY = Symbol.for('tmuxifier.opencode-agent');
 
 // One live reporter: a reducer fed by the event stream, and a sweep that
@@ -1456,17 +1578,44 @@ export function createCore({
     written: new Map(),
     since: new Map(),
     mailState: mail?.state ?? null,
+    mailTargetsNow,
+    paneOfSession,
     owner: Symbol('tmuxifier.opencode-agent.core'),
   };
 
+  // The targets of the last sweep: tmux session -> { pane, sessionID, dir }.
+  // Empty until a complete listing, after an unusable or incomplete one (R17),
+  // and once this core stopped. The pane tagger reads them (paneOfSession).
+  let targets = new Map();
+
   // `panes` null: no usable, complete listing, so no mail targets at all.
   function syncMail(panes) {
+    targets = panes ? mailTargets(reducer, panes, core.since) : new Map();
     if (!mail) return;
     try {
-      mail.sync(panes ? mailTargets(reducer, panes, core.since) : new Map(), reducer.derive);
+      mail.sync(targets, reducer.derive);
     } catch (e) {
       debug('mail sync', e);
     }
+  }
+
+  // A copy: the part keeps the map it was given.
+  function mailTargetsNow() {
+    return new Map(targets);
+  }
+
+  // R23: the pane of the tmux session whose current mail target is the OpenCode
+  // session `sessionID`, else null (a session that is no target, or one that
+  // two tmux sessions claim, has no pane to speak for).
+  function paneOfSession(sessionID) {
+    if (typeof sessionID !== 'string') return null;
+    let pane = null;
+    for (const t of targets.values()) {
+      if (t.sessionID !== sessionID) continue;
+      if (pane !== null) return null;
+      pane = t.pane;
+    }
+    return pane;
   }
 
   function mailCall(name, arg) {
@@ -1627,6 +1776,7 @@ export function createCore({
       ended = true;
       debug('event stream ended; markers cleared, sweeps stopped until the next setup');
       stopSweeping();
+      targets = new Map();
       // Without events no delivery can be seen: hold nothing (the state stays for a hand-over).
       mailCall('abort');
       try { await inflight; } catch { /* sweeps never reject */ }
@@ -1647,6 +1797,7 @@ export function createCore({
     aborted = true;
     try { controller.abort(); } catch { /* already aborted */ }
     stopSweeping();
+    targets = new Map();
     mailCall('abort');
   }
 
