@@ -123,6 +123,7 @@ test('setupStartPayload carries the saved-script selection through untouched', (
 test('the Claude Code hint says everything ticking it installs, agent messaging included', () => {
   expect(CLAUDE_SETUP_HINT).toBe(
     'Claude Code also pushes this host’s statusline and the agent-state hooks; an existing install only gains what is missing. '
-    + 'Unless agent messaging is turned off for this Tmuxifier, it also installs the tmx command, a skill, a mail listener hook and one permission rule for tmx.',
+    + 'Unless agent messaging is turned off for this Tmuxifier, it also installs the tmx command, a skill, a mail listener hook, one permission rule for tmx '
+    + 'and two auto-mode entries that tell Claude Code tmx messaging is sanctioned.',
   );
 });

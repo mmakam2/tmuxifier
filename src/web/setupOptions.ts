@@ -59,11 +59,12 @@ export function scriptSelection(list: FleetScript[], selectedId: string): { scri
 
 // What ticking Claude Code does beyond installing the CLI. The agent-mail part
 // (claudeAgentMail.js: `tmx`, the skill, the hook entries, the `Bash(tmx *)`
-// rule) is installed on every box whatever its messaging switches say; only the
+// rule, the two `autoMode` entries) is installed on every box whatever its messaging switches say; only the
 // server-wide TMUXIFIER_AGENT_MAIL=off leaves it out, which this form is not
 // told, so the sentence states the condition rather than assuming it.
 export const CLAUDE_SETUP_HINT = 'Claude Code also pushes this host’s statusline and the agent-state hooks; an existing install only gains what is missing. '
-  + 'Unless agent messaging is turned off for this Tmuxifier, it also installs the tmx command, a skill, a mail listener hook and one permission rule for tmx.';
+  + 'Unless agent messaging is turned off for this Tmuxifier, it also installs the tmx command, a skill, a mail listener hook, one permission rule for tmx '
+  + 'and two auto-mode entries that tell Claude Code tmx messaging is sanctioned.';
 
 // Two forms can be open at once (hub tab + box modal); a per-instance radio
 // name keeps their shell selections independent.

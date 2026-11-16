@@ -254,10 +254,23 @@ With **Claude Code** ticked and messaging on, setup writes, on the box:
 - in `~/.claude/settings.json`: three hook entries whose command mentions `tmuxifier-mail`
   (`SessionStart` and `Stop` run the listener, `UserPromptSubmit` confirms delivery), merged
   beside your own hooks, and the rule `Bash(tmx *)` added to `permissions.allow`, so Claude Code
-  runs `tmx` without asking. Nothing else in `permissions` is read or changed.
+  runs `tmx` without asking. Nothing else in `permissions` is read or changed;
+- in the same `settings.json`: two entries for Claude Code's auto-mode classifier, each ending
+  with `[tmuxifier-mail]`, under `autoMode`. The one in `autoMode.environment` says that the
+  operator runs Tmuxifier and installed its messaging, and that `tmx` exchanges messages only
+  with the operator's own agents on the operator's other machines through Tmuxifier. The one in
+  `autoMode.allow` says that running `tmx` to answer or send such a message is sanctioned
+  communication, also when the message arrived through the hook, and that it does not cover
+  sending credentials, tokens, keys or secrets. Setup keeps Claude Code's built-in rules: it
+  writes `"$defaults"` only into an `environment` or `allow` list it creates, and in a list you
+  already have it replaces its own older entry and appends the current one, adding nothing
+  else (a list you wrote without `"$defaults"` stays that way). `soft_deny`, `hard_deny` and
+  the rest of `autoMode` are not read or changed. Run `claude auto-mode config` on the box to
+  see the result.
 
 `CLAUDE_CONFIG_DIR`, when set on the box, is used in place of `~/.claude`. To remove it from a
-box: delete those three hook entries and the rule from `settings.json`, then `rm -rf
+box: delete those three hook entries, the rule and the two `autoMode` entries marked
+`[tmuxifier-mail]` from `settings.json`, then `rm -rf
 ~/.tmuxifier-mail ~/.claude/skills/tmuxifier-mail` and remove `~/.local/bin/tmx`. The next setup
 run with Claude Code ticked reinstalls it.
 
@@ -282,6 +295,8 @@ run with Claude Code ticked reinstalls it.
 - The rule `Bash(tmx *)` lets Claude Code run whatever `tmx` resolves to on its `PATH` without
   asking. Setup refuses to install over a `~/.local/bin/tmx` that is not its own, and checks
   nothing else.
+- Setup changes how Claude Code's auto mode judges `tmx` on that box: its two `autoMode`
+  entries tell the classifier that messages sent with `tmx` are communication you sanctioned.
 - Message text is stored in plaintext on the Tmuxifier host under `data/agent-mail/` (files
   `0600`). A delivered message becomes part of the receiving Claude Code session's context, which
   that box's Claude Code sends to Anthropic under its own login like anything else the agent
@@ -371,7 +386,10 @@ classifier decides, and it can refuse because nothing you typed asked for the me
 delivered text and the skill tell the agent to run commands first and send plain text, but an
 agent can still write the other form. To let the blocked reply through, open `/permissions` in
 that session, choose **Recently blocked** and approve the `tmx` row, or tell the agent to send
-the reply again as plain text. Approving there adds no rule.
+the reply again as plain text. Approving there adds no rule. On a box set up before Tmuxifier
+added its auto-mode entries, rerun setup with **Claude Code** ticked and restart the Claude Code
+session: that installs the two classifier entries described in
+[What setup installs](#what-setup-installs), which tell auto mode this channel is sanctioned.
 
 **An agent says `tmx` was not found.** `~/.local/bin` has to be on the `PATH` of the shell Claude
 Code was started from. The command also lives at `~/.tmuxifier-mail/tmx`, but the permission rule

@@ -635,7 +635,11 @@ nothing is posted after the final write.
   `settings.json` rewrite (jq → node → python3) merges `MAIL_HOOKS` (`SessionStart` + `Stop`:
   `hook-wait` with `asyncRewake`; `UserPromptSubmit`: `hook-ack`), remove-then-append on the
   string `tmuxifier-mail`, and set-adds `MAIL_PERMISSION_RULE` = `Bash(tmx *)` to
-  `permissions.allow`, touching nothing else in `permissions`. Test: `test/claudeAgentMail.test.js`.
+  `permissions.allow`, touching nothing else in `permissions`. The same rewrite merges
+  `MAIL_AUTOMODE_ENVIRONMENT`/`MAIL_AUTOMODE_ALLOW` into `autoMode.environment`/`allow` (a list it
+  creates is `["$defaults", ours]`; in the operator's own it drops elements containing
+  `[tmuxifier-mail]` and appends ours, never adding `$defaults`); an `autoMode` that is not an
+  object or a list that is not all strings fails the merge closed. Test: `test/claudeAgentMail.test.js`.
   The `tmx` script: POSIX `sh`, curl over the socket, bodies only on curl's stdin, never
   evaluates an answer; `send`/`reply` are **never retried** once the request may have arrived
   (exit 3); with no socket file at all a user command says at once that messaging is not turned
