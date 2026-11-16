@@ -179,6 +179,19 @@ describe('createPaneTagger', () => {
     expect(tagged(t, 'tmx who')).toBe('%5');
   });
 
+  test('one shell seen twice (one hook registered twice) keeps its first tag; another env object is tagged afresh', () => {
+    const t = createPaneTagger({ paneOf });
+    t.beforeTool(tool('ses_a', 'tmx who', 'call_1'));
+    const p = shell('tmx who');
+    t.beforeShell(p);
+    t.beforeShell(p); // the second call has no record left: without the guard it would write `none`
+    expect(p.env.TMUXIFIER_MAIL_PANE).toBe('%3');
+    t.beforeTool(tool('ses_b', 'tmx who', 'call_2'));
+    const q = shell('tmx who', { ...p.env }); // a copy carrying the first tag: a new object is tagged
+    t.beforeShell(q);
+    expect(q.env.TMUXIFIER_MAIL_PANE).toBe('%5');
+  });
+
   test('the pending list is bounded', () => {
     const t = createPaneTagger({ paneOf });
     for (let i = 0; i < 5000; i++) t.beforeTool(tool('ses_a', `cmd ${i}`, `call_${i}`));

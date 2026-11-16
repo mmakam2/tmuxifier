@@ -1422,8 +1422,9 @@ export function createMailPart({
 //                inherits a pane that may belong to its neighbour. The same
 //                pane is that pane.
 //
-// Every shell it sees is tagged, a stale value already in `env` is overwritten,
-// and a payload without an `env` object is left alone. A record lives `ttlMs`
+// Every shell it sees is tagged once (a second call on the same `env` object does
+// nothing), a stale value already in `env` is overwritten, and a payload without
+// an `env` object is left alone. A record lives `ttlMs`
 // (a call whose shell is never created, a denied permission for instance, ages
 // out; until then it can make an identical command of another pane read
 // `none`, which fails closed), and at most TAG_PENDING_MAX are kept.
@@ -1438,6 +1439,9 @@ const MAIL_PARENT_DEPTH_MAX = 32;
 export function createPaneTagger({ paneOf, now = Date.now, ttlMs = 30000 } = {}) {
   let pending = []; // { id, command, pane, at }, oldest first
   const seen = new Map(); // call id -> at, so a late duplicate of a consumed call is ignored
+  // The env objects already tagged: one shell seen twice (a hook registered twice) keeps its
+  // first tag instead of having it overwritten by a second, record-less `none`.
+  const tagged = new WeakSet();
 
   function clock() {
     try {
@@ -1501,7 +1505,9 @@ export function createPaneTagger({ paneOf, now = Date.now, ttlMs = 30000 } = {})
       if (!payload || typeof payload !== 'object') return;
       const env = payload.env;
       if (!env || typeof env !== 'object') return;
+      if (tagged.has(env)) return;
       env[MAIL_PANE_ENV] = take(payload.command);
+      tagged.add(env);
     } catch (e) {
       debug('pane tag shell', e);
     }
@@ -1952,7 +1958,8 @@ export const GLOBAL_KEY = Symbol.for('tmuxifier.opencode-agent');
 // ctx.session.synthetic, supplied by the entry point) is a function and `home`
 // is set; `mail` replaces it for a test (`null`: none). `mailState` is a
 // previous core's `core.mailState` (the part's shared memory, see the part).
-// After every sweep's fold the core gives the part mailTargets' map, or an
+// `live` and `registry` are the entry point's (see createRegistry), kept on
+// the core so the next hand-over finds them. After every sweep's fold the core gives the part mailTargets' map, or an
 // empty one when the listing failed or was incomplete (parsePanesChecked).
 export function createCore({
   home = os.homedir(),
@@ -1966,6 +1973,8 @@ export function createCore({
   synthetic = null,
   mail: mailOption = undefined,
   mailState = null,
+  live = null,
+  registry = null,
 } = {}) {
   const reducer = createReducer({ now, state });
   let mail = null;
@@ -2014,6 +2023,10 @@ export function createCore({
     mailTargetsNow,
     paneOfSession,
     dirOfSession: (sessionID) => dirOfSession(reducer, sessionID),
+    // The live OpenCode ctxs (createRegistry's `live`, handed over) and this
+    // core's registry of hooks on them; both set by the entry point.
+    live: live instanceof Map ? live : new Map(),
+    registry,
     owner: Symbol('tmuxifier.opencode-agent.core'),
   };
 
@@ -2264,25 +2277,237 @@ export function createCore({
 // session in another directory must survive OpenCode setting the plugin up
 // for a new one; an incompatible STATE_VERSION starts fresh), and the mail
 // part's in-flight items (prev.mailState; its abort ended every held wait).
-// `opts` are createCore's.
+// It also disposes `prev`'s registry (every hook it registered on OpenCode;
+// fire and forget, see createRegistry) and inherits its list of live ctxs
+// unless `opts.live` names one. `opts` are createCore's.
 export function takeOver(prev, opts = {}) {
   let written = null;
   let since = null;
   let state = null;
   let mailState = null;
+  let live = opts.live instanceof Map ? opts.live : null;
   if (prev && typeof prev === 'object') {
     try { prev.abort(); } catch { /* a foreign or older object */ }
+    try { prev.registry?.dispose?.(); } catch (e) { debug('registry dispose', e); }
     try {
       if (prev.written instanceof Map) written = prev.written;
       if (prev.since instanceof Map) since = prev.since;
       state = prev.state ?? null;
       mailState = prev.mailState ?? null;
+      if (!live && prev.live instanceof Map) live = prev.live;
     } catch { /* a throwing getter: inherit nothing more */ }
   }
-  const core = createCore({ ...opts, state, mailState });
+  const core = createCore({ ...opts, state, mailState, live });
   if (written) core.written = written;
   if (since) core.since = since;
   return core;
+}
+
+// ---------------------------------------------------------------------------
+// The hooks on OpenCode, one directory instance at a time (agent messaging
+// spec §6.10, rulings R13, R6, R7).
+// ---------------------------------------------------------------------------
+//
+// OpenCode 2.3.0 sets the plugin up once per project directory in one server
+// process, and its ctxs are not alike (test/fixtures/README-opencode-2.3-event-
+// trace.md F5): every instance's event stream sees every event, and
+// `ctx.session.synthetic` reaches a session of any directory, but
+// `tool.execute.before`, `shell.create.before` and `permission.evaluate` fire
+// ONLY in the instance whose directory owns the session (fixture lines 935-937
+// vs 981-983). So the entry point keeps every live ctx (`live`: directory ->
+// ctx, newest setup of a directory wins, at most LIVE_MAX) on the core, where a
+// hand-over finds it, and the core's registry puts the three hooks on each:
+//
+//   ctx.tool.hook('execute.before')      -> that ctx's pane tagger and permission handler
+//   ctx.shell.hook('create.before')      -> that ctx's pane tagger
+//   ctx.permission.hook('evaluate')      -> that ctx's permission handler
+//
+// One tagger and one handler per ctx (their command/call correlation is per
+// instance, R7) and one registration per ctx per registry: a tagger registered
+// twice would see each shell twice. The tagger's pane and the handler's
+// directory are read from the CURRENT global core at call time, never from the
+// core that registered them (a hand-over replaces the core). One
+// createOperatorRules per registry.
+//
+// Each `hook()` returns `Promise<Registration>` with `dispose()`. dispose() and
+// remove(ctx) chain onto those promises (a registration still pending is
+// disposed when it arrives) and never wait: a hand-over is synchronous. A
+// disposed registry registers nothing more. Every callback, registration and
+// dispose is wrapped: nothing throws or rejects into OpenCode.
+//
+// The mail part's wake call: `synthetic(input)` posts through the live ctx of
+// the session's directory (core.dirOfSession of input.sessionID), else through
+// any live ctx that can post; with none it rejects (the part holds off).
+//
+// The version gate: mail needs `ctx.session.synthetic` and OpenCode
+// OPENCODE_MAIL_MIN or newer (`ctx.app.version`, fixture line 1: { name: 'cli',
+// version: '2.3.0', channel: 'latest' }). The entry point decides once per core,
+// over every live ctx: when one fails, the core has no mail part and no hook is
+// registered anywhere; the state markers are written all the same.
+
+export const OPENCODE_MAIL_MIN = '2.3.0';
+const LIVE_MAX = 64;
+const VERSION_RE = /^\d{1,9}(?:\.\d{1,9}){0,7}$/;
+
+// Numeric dotted comparison (2.10.1 > 2.3.0; a missing part is 0). Anything
+// that is not digits and dots (a pre-release, a `v`, a blank) counts as below.
+export function versionAtLeast(version, min) {
+  if (typeof version !== 'string' || !VERSION_RE.test(version) || !VERSION_RE.test(min)) return false;
+  const a = version.split('.').map(Number);
+  const b = min.split('.').map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
+
+export function mailCapable(ctx) {
+  try {
+    return typeof ctx?.session?.synthetic === 'function' && versionAtLeast(ctx?.app?.version, OPENCODE_MAIL_MIN);
+  } catch {
+    return false;
+  }
+}
+
+// The key a ctx is listed under: its directory, else the ctx itself.
+function liveKey(ctx) {
+  try {
+    const dir = ctx.location?.directory;
+    if (typeof dir === 'string' && dir) return dir;
+  } catch { /* a throwing getter: keyed by itself */ }
+  return ctx;
+}
+
+function liveAdd(live, ctx) {
+  if (!ctx || typeof ctx !== 'object') return;
+  for (const [k, v] of live) if (v === ctx) live.delete(k);
+  const key = liveKey(ctx);
+  live.delete(key); // the newest setup of a directory is the newest entry
+  live.set(key, ctx);
+  while (live.size > LIVE_MAX) live.delete(live.keys().next().value);
+}
+
+function liveRemove(live, ctx) {
+  for (const [k, v] of live) if (v === ctx) live.delete(k);
+}
+
+export function createRegistry({
+  live = new Map(),
+  mail = true,
+  current = () => globalThis[GLOBAL_KEY],
+  rules = null,
+  now = Date.now,
+  ttlMs = 30000,
+} = {}) {
+  const regs = new Map(); // ctx -> [Promise<Registration | null>]
+  let disposed = false;
+  let operatorRules = rules;
+
+  function core() {
+    try { return current(); } catch { return null; }
+  }
+  function paneOf(sessionID) {
+    const c = core();
+    return typeof c?.paneOfSession === 'function' ? c.paneOfSession(sessionID) : null;
+  }
+  function dirOf(sessionID) {
+    const c = core();
+    return typeof c?.dirOfSession === 'function' ? c.dirOfSession(sessionID) : null;
+  }
+
+  function register(ctx, domain, name, cb) {
+    let p;
+    try {
+      p = Promise.resolve(ctx[domain].hook(name, cb));
+    } catch (e) {
+      p = Promise.reject(e);
+    }
+    return p.catch((e) => {
+      debug('hook', domain, name, e);
+      return null;
+    });
+  }
+
+  function add(ctx) {
+    try {
+      if (disposed || !mail || !ctx || typeof ctx !== 'object' || regs.has(ctx)) return;
+      if (!operatorRules) operatorRules = createOperatorRules();
+      const tagger = createPaneTagger({ paneOf, now, ttlMs });
+      const handler = createPermissionHandler({ rules: operatorRules, dirOf, now, ttlMs });
+      const onTool = (payload) => {
+        try { tagger.beforeTool(payload); } catch (e) { debug('hook tool', e); }
+        try { handler.beforeTool(payload); } catch (e) { debug('hook tool', e); }
+      };
+      const onShell = (payload) => {
+        try { tagger.beforeShell(payload); } catch (e) { debug('hook shell', e); }
+      };
+      const onEvaluate = (evaluation) => {
+        try { handler.evaluate(evaluation); } catch (e) { debug('hook evaluate', e); }
+      };
+      regs.set(ctx, [
+        register(ctx, 'tool', 'execute.before', onTool),
+        register(ctx, 'shell', 'create.before', onShell),
+        register(ctx, 'permission', 'evaluate', onEvaluate),
+      ]);
+    } catch (e) {
+      debug('registry add', e);
+    }
+  }
+
+  function addAll() {
+    try {
+      for (const ctx of [...live.values()]) add(ctx);
+    } catch (e) {
+      debug('registry add', e);
+    }
+  }
+
+  function release(list) {
+    for (const p of list) {
+      p.then((r) => {
+        if (r && typeof r.dispose === 'function') return r.dispose();
+        return undefined;
+      }).catch((e) => debug('hook dispose', e));
+    }
+  }
+
+  function remove(ctx) {
+    try {
+      const list = regs.get(ctx);
+      if (!list) return;
+      regs.delete(ctx);
+      release(list);
+    } catch (e) {
+      debug('registry remove', e);
+    }
+  }
+
+  function dispose() {
+    try {
+      disposed = true;
+      for (const list of regs.values()) release(list);
+      regs.clear();
+    } catch (e) {
+      debug('registry dispose', e);
+    }
+  }
+
+  function synthetic(input) {
+    try {
+      let dir = null;
+      try { dir = dirOf(input?.sessionID); } catch { /* fall back to any */ }
+      const own = typeof dir === 'string' ? live.get(dir) : undefined;
+      const ctx = mailCapable(own) ? own : [...live.values()].find(mailCapable);
+      if (!ctx) return Promise.reject(new Error('no live OpenCode instance can post a wake'));
+      return Promise.resolve(ctx.session.synthetic(input));
+    } catch (e) {
+      return Promise.reject(e);
+    }
+  }
+
+  return { live, add, addAll, remove, dispose, synthetic };
 }
 
 // The OpenCode V2 entry point. OpenCode sets the plugin up once per project
@@ -2291,22 +2516,40 @@ export function takeOver(prev, opts = {}) {
 // is a process-wide singleton: every setup takes over from whichever core
 // holds the global and becomes the owner. A cleanup acts only while its core
 // still owns the global.
+//
+// Every setup also lists its ctx in the live ctxs it inherits, decides the
+// mail gate over all of them, builds a registry, and has the new core register
+// on every live ctx (takeOver disposed the old core's registrations). A cleanup
+// takes its own ctx off the list and its hooks off OpenCode, whichever core
+// owns the global; the owner's cleanup stops everything.
 export default {
   id: 'tmuxifier-agent',
   async setup(ctx) {
     let core = null;
     try {
-      core = takeOver(globalThis[GLOBAL_KEY]);
+      const prev = globalThis[GLOBAL_KEY];
+      let live = null;
+      try { if (prev?.live instanceof Map) live = prev.live; } catch { /* a foreign object */ }
+      if (!live) live = new Map();
+      liveAdd(live, ctx);
+      const mail = live.size > 0 && [...live.values()].every(mailCapable);
+      const registry = createRegistry({ live, mail });
+      core = takeOver(prev, { live, registry, synthetic: mail ? (input) => registry.synthetic(input) : null });
       globalThis[GLOBAL_KEY] = core;
+      registry.addAll();
       core.attach(ctx).catch((e) => debug('attach', e));
     } catch (e) {
       debug('setup', e);
     }
     return async function cleanup() {
       try {
-        if (!core || globalThis[GLOBAL_KEY] !== core) return;
+        const owner = globalThis[GLOBAL_KEY];
+        try { if (owner?.live instanceof Map) liveRemove(owner.live, ctx); } catch { /* a foreign object */ }
+        try { owner?.registry?.remove?.(ctx); } catch { /* a foreign object */ }
+        if (!core || owner !== core) return;
         core.abort();
         core.clear();
+        try { core.registry?.dispose(); } catch { /* never surfaces */ }
         delete globalThis[GLOBAL_KEY];
       } catch (e) {
         debug('cleanup', e);

@@ -539,6 +539,80 @@ test('setup twice hands over: the second core inherits written/since, the first 
   expect(stopped).toEqual([started[0], started[1]]);
 });
 
+test('takeOver disposes the previous core\'s registry and inherits its live ctxs; opts.live wins; a broken registry never escapes', async () => {
+  const { takeOver } = await import(ASSET);
+  const home = tmp();
+  const opts = { home, listPanes: async () => '', setInterval: () => ({ unref() {} }), clearInterval: () => {} };
+  const live = new Map([['/proj', { location: { directory: '/proj' } }]]);
+  const dispose = vi.fn();
+  const prev = { abort() {}, live, registry: { dispose } };
+  const next = takeOver(prev, opts);
+  expect(dispose).toHaveBeenCalledTimes(1);
+  expect(next.live).toBe(live);
+  const mine = new Map();
+  expect(takeOver({ abort() {}, live, registry: { dispose } }, { ...opts, live: mine }).live).toBe(mine);
+  // A registry whose dispose throws, a throwing getter, an older core with neither: a fresh list.
+  const broken = [
+    { abort() {}, registry: { dispose() { throw new Error('dispose'); } }, live },
+    { abort() {}, get registry() { throw new Error('getter'); } },
+    { abort() {}, registry: 'old' },
+  ];
+  const cores = broken.map((b) => takeOver(b, opts));
+  expect(cores[0].live).toBe(live);
+  expect(cores[1].live).toBeInstanceOf(Map);
+  expect(cores[1].live.size).toBe(0);
+  expect(cores[2].registry).toBeNull();
+  for (const c of [next, ...cores]) c.abort();
+});
+
+test('setup twice with OpenCode 2.3.0 ctxs: the first core\'s hooks are disposed and the second core registers on both; the first cleanup takes its ctx off', async () => {
+  const mod = await import(ASSET);
+  fakeTmuxEnv();
+  const hooked = (dir) => {
+    const ctx = fakeCtx();
+    ctx.app = { name: 'cli', version: '2.3.0', channel: 'latest' };
+    ctx.location = { directory: dir };
+    ctx.session = { synthetic: async () => ({ id: 'msg_1' }) };
+    ctx.regs = [];
+    for (const d of ['tool', 'shell', 'permission']) {
+      ctx[d] = {
+        hook: async (name) => {
+          const r = { name, disposed: false };
+          ctx.regs.push(r);
+          return { dispose: async () => { r.disposed = true; } };
+        },
+      };
+    }
+    ctx.active = () => ctx.regs.filter((r) => !r.disposed).map((r) => r.name).sort();
+    return ctx;
+  };
+  const all = ['create.before', 'evaluate', 'execute.before'];
+  const ctx1 = hooked('/proj');
+  const cleanup1 = await mod.default.setup(ctx1);
+  const core1 = globalThis[KEY];
+  await flush(0);
+  expect(ctx1.active()).toEqual(all);
+  const ctx2 = hooked('/proj2');
+  const cleanup2 = await mod.default.setup(ctx2);
+  const core2 = globalThis[KEY];
+  await flush(0);
+  expect(core2.live).toBe(core1.live);
+  expect(core2.registry).not.toBe(core1.registry);
+  expect(ctx1.regs).toHaveLength(6);
+  expect(ctx1.active()).toEqual(all);
+  expect(ctx2.active()).toEqual(all);
+  await cleanup1(); // not the owner: core2 stays, ctx1 leaves
+  await flush(0);
+  expect(globalThis[KEY]).toBe(core2);
+  expect(ctx1.active()).toEqual([]);
+  expect(ctx2.active()).toEqual(all);
+  expect([...core2.live.values()]).toEqual([ctx2]);
+  await cleanup2();
+  await flush(0);
+  expect(ctx2.active()).toEqual([]);
+  expect(globalThis[KEY]).toBeUndefined();
+});
+
 test('a block raised in one directory survives a setup for another directory in the same process', async () => {
   const mod = await import(ASSET);
   const env = fakeTmuxEnv();
