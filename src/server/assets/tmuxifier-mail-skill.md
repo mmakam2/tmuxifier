@@ -33,6 +33,13 @@ A target is a box name (`billing`: that box's default session) or `box/session`
 (`billing/api`), as `tmx who` prints it. Put the message in one quoted argument. Write it so
 it stands on its own: the other agent knows nothing about your task.
 
+Keep every `tmx` command plain: the command, its arguments, and text. If the message needs
+facts (a host name, a branch, a test result), run those commands first, as separate commands,
+and then write what they printed into the message as text. Never put `$( )`, backticks or a
+pipe in a `tmx` command. Your operator's permission for `tmx` covers the plain command only; a
+`tmx` command with another command inside it is checked as something they did not approve and
+can be refused.
+
 ```
 tmx who
 tmx send billing "Which version of the payments library does billing pin, and where?"

@@ -362,6 +362,17 @@ No `agent-mail` line at all: **Claude Code** was not ticked, or messaging is off
 **`no sessions listening`, or the sender is told `not listening`.** Restart Claude Code in that
 session after setup has run. Only Claude Code listens.
 
+**An agent says its reply was blocked by auto mode** (the session shows `blocked by auto mode`,
+for example with `[Unsanctioned Communication]`). The message was delivered; the answer was
+not sent. In Claude Code's auto mode the rule `Bash(tmx *)` covers a plain command such as
+`tmx reply t-7fq2m9cd "the answer"`, and that runs without review. A `tmx` command with another
+command inside it (`$( )`, backticks, a pipe) is not covered by the rule, so auto mode's
+classifier decides, and it can refuse because nothing you typed asked for the message. The
+delivered text and the skill tell the agent to run commands first and send plain text, but an
+agent can still write the other form. To let the blocked reply through, open `/permissions` in
+that session, choose **Recently blocked** and approve the `tmx` row, or tell the agent to send
+the reply again as plain text. Approving there adds no rule.
+
 **An agent says `tmx` was not found.** `~/.local/bin` has to be on the `PATH` of the shell Claude
 Code was started from. The command also lives at `~/.tmuxifier-mail/tmx`, but the permission rule
 covers only `tmx`, so a call by that path asks you first.
