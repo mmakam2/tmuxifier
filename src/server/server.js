@@ -2008,9 +2008,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     };
   });
 
-  // Cross-device UI preferences (theme, clawd animation). Server is
-  // catalog-agnostic: shape-validated slugs only; the client normalizes
-  // unknown ids (see uiSettingsStore.js).
+  // Cross-device UI preferences (theme, clawd animation, sidebar sparkline).
+  // Server is catalog-agnostic: shape-validated slugs only (plus one boolean);
+  // the client normalizes unknown ids (see uiSettingsStore.js).
   if (uiSettingsStore) {
     app.get('/api/ui-settings', { preHandler: requireAuth }, async () => uiSettingsStore.read());
     app.patch('/api/ui-settings', { preHandler: requireAuth }, async (req, reply) => {

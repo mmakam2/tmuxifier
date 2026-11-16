@@ -37,13 +37,13 @@ test('both routes require auth', async () => {
 test('GET returns nulls when unset; PATCH persists and merges', async () => {
   const h = await headers();
   expect((await app.inject({ method: 'GET', url: '/api/ui-settings', headers: h })).json())
-    .toEqual({ theme: null, clawdAnim: null });
+    .toEqual({ theme: null, clawdAnim: null, sidebarSpark: false });
   const patched = await app.inject({ method: 'PATCH', url: '/api/ui-settings', headers: h, payload: { theme: 'original' } });
   expect(patched.statusCode).toBe(200);
-  expect(patched.json()).toEqual({ theme: 'original', clawdAnim: null });
+  expect(patched.json()).toEqual({ theme: 'original', clawdAnim: null, sidebarSpark: false });
   await app.inject({ method: 'PATCH', url: '/api/ui-settings', headers: h, payload: { clawdAnim: 'star' } });
   expect((await app.inject({ method: 'GET', url: '/api/ui-settings', headers: h })).json())
-    .toEqual({ theme: 'original', clawdAnim: 'star' });
+    .toEqual({ theme: 'original', clawdAnim: 'star', sidebarSpark: false });
 });
 
 test('PATCH rejects invalid slugs with 400 and stores nothing', async () => {
@@ -58,5 +58,16 @@ test('PATCH null clears', async () => {
   const h = await headers();
   await app.inject({ method: 'PATCH', url: '/api/ui-settings', headers: h, payload: { theme: 'original' } });
   const cleared = await app.inject({ method: 'PATCH', url: '/api/ui-settings', headers: h, payload: { theme: null } });
-  expect(cleared.json()).toEqual({ theme: null, clawdAnim: null });
+  expect(cleared.json()).toEqual({ theme: null, clawdAnim: null, sidebarSpark: false });
+});
+
+test('PATCH sidebarSpark persists a boolean and 400s anything else', async () => {
+  const h = await headers();
+  const on = await app.inject({ method: 'PATCH', url: '/api/ui-settings', headers: h, payload: { sidebarSpark: true } });
+  expect(on.statusCode).toBe(200);
+  expect(on.json().sidebarSpark).toBe(true);
+  const bad = await app.inject({ method: 'PATCH', url: '/api/ui-settings', headers: h, payload: { sidebarSpark: 'yes' } });
+  expect(bad.statusCode).toBe(400);
+  expect(bad.json().error).toMatch(/invalid sidebarSpark/);
+  expect((await app.inject({ method: 'GET', url: '/api/ui-settings', headers: h })).json().sidebarSpark).toBe(true);
 });
