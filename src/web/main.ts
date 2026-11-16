@@ -7,6 +7,7 @@ import { dotClassFor, dotTitleFor, metaSegmentsFor, agentBadgeFor } from './stat
 import { buildClawd, setClawdVariant, hasStoredClawdPref, loadClawdVariant, clawdMigrationPatch } from './clawd';
 import { applyTheme, currentTheme, themedLogo } from './theme';
 import { sparkline } from './sparkline';
+import { sidebarSparkOn, setSidebarSpark, onSidebarSparkChange, sparkListClass, type SparkMetric } from './sidebarSpark';
 import { formatEvent, relTime, unseenCountFiltered, notificationsToFire } from './healthEvents';
 import { loadNotifyPrefs, enabledKinds } from './notifyPrefs';
 import { toggleBox, setBoxes, groupState } from './fleetSelection';
@@ -115,7 +116,6 @@ let fleetScriptDraft = ''; // in-progress bash-script editor content; survives r
 // poll tick; the caches let repaints (search, fleet mode) redraw without a fetch.
 const SPARK_METRIC_KEY = 'tmuxifier.sparkMetric';
 const EVENTS_SEEN_KEY = 'tmuxifier.eventsSeen';
-type SparkMetric = 'cpuPct' | 'memPct' | 'diskPct';
 const SPARK_METRICS: SparkMetric[] = ['cpuPct', 'memPct', 'diskPct'];
 const SPARK_LABEL: Record<SparkMetric, string> = { cpuPct: 'CPU', memPct: 'memory', diskPct: 'disk' };
 let latestSeries: Record<string, Sample[]> = {};
@@ -163,8 +163,13 @@ function syncSparkMetricClass() {
   const list = app.querySelector('#boxes');
   if (!list) return;
   list.classList.remove('spark-cpu', 'spark-mem', 'spark-disk');
-  list.classList.add(`spark-${sparkMetric().replace('Pct', '')}`);
+  const c = sparkListClass(sidebarSparkOn(), sparkMetric());
+  if (c) list.classList.add(c);
 }
+
+// Settings → Appearance flips the flag: re-tint the list and paint (or empty)
+// every row's graph in place, no row rebuild.
+onSidebarSparkChange(() => { syncSparkMetricClass(); repaintSparklines(); });
 
 function repaintSparklines() {
   app.querySelectorAll('.box').forEach((li) => {
@@ -300,7 +305,9 @@ function applySparkline(li: HTMLElement, id: string) {
   const el = li.querySelector('.spark') as HTMLElement | null;
   if (!el) return;
   const metric = sparkMetric();
-  const d = sparkline(latestSeries[id] || [], metric);
+  // Off (the default) empties the span like a series with too few points; the
+  // CSS :empty rule then collapses it, so no gap is left in the row.
+  const d = sidebarSparkOn() ? sparkline(latestSeries[id] || [], metric) : '';
   if (!d) { el.replaceChildren(); el.removeAttribute('title'); el.removeAttribute('aria-label'); return; }
   el.title = `${SPARK_LABEL[metric]} trend — click to switch metric`;
   el.setAttribute('aria-label', `${SPARK_LABEL[metric]} trend — switch metric`);
@@ -527,6 +534,8 @@ async function loadUiSettings(): Promise<void> {
   try {
     const st = await api.uiSettings();
     applyTheme(st.theme);
+    // Before renderDashboard() on every path in, so the first row paint is right.
+    setSidebarSpark(st.sidebarSpark === true);
     // The decision itself is pure (clawdMigrationPatch, unit-tested); this
     // half only does the effects. The mirror is read as "its value, or null
     // when the key was never set" — the presence check is what lets the helper

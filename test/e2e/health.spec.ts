@@ -7,8 +7,20 @@ async function login(page) {
   await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
 }
 
+// The sparkline is opt-in (Settings → Appearance) and the setting is server-
+// global on a server shared by every spec, so this spec turns it on and the
+// hook below hands the default (off) back. Silent: the assertions are the proof.
+test.afterEach(async ({ page }) => {
+  try {
+    await page.request.post('/api/login', { data: { password: 'e2e' } });
+    await page.request.patch('/api/ui-settings', { data: { sidebarSpark: false } });
+  } catch { /* best-effort restore */ }
+});
+
 test('rows grow a sparkline; a down transition lands in the Events panel and clears the badge', async ({ page }) => {
   await login(page);
+  const on = await page.request.patch('/api/ui-settings', { data: { sidebarSpark: true } });
+  expect(on.ok()).toBeTruthy();
 
   // The server samples every status poll (2s in the e2e env); the client
   // refetches the series on load, so reload until two samples produce a path.

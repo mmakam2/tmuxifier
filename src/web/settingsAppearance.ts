@@ -2,7 +2,8 @@ import { el } from './dom';
 import { CLAWD_VARIANTS, buildClawdVariant, currentClawdVariant, setClawdVariant } from './clawd';
 import { THEMES } from './themes';
 import { applyTheme, currentTheme } from './theme';
-import { api } from './api';
+import { api, type UiSettings } from './api';
+import { sidebarSparkOn, setSidebarSpark } from './sidebarSpark';
 
 // Settings → Appearance: theme + working-agent animation. Both persist
 // server-side (data/ui-settings.json) so every browser follows one setting;
@@ -11,7 +12,7 @@ import { api } from './api';
 // than yanking a theme the operator is already looking at.
 export function renderAppearanceSection(content: HTMLElement): void {
   const note = el('p', { class: 'pve-sub appearance-save-note' }, ['']);
-  const save = (patch: { theme?: string; clawdAnim?: string }) => {
+  const save = (patch: Partial<UiSettings>) => {
     api.patchUiSettings(patch)
       .then(() => { note.textContent = ''; })
       .catch(() => { note.textContent = 'Couldn’t save to the server — applied in this browser for now.'; });
@@ -35,12 +36,22 @@ export function renderAppearanceSection(content: HTMLElement): void {
       radio, preview, el('span', {}, [label]), el('span', { class: 'appearance-desc' }, [description]),
     ]);
   });
+  const sparkBox = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  sparkBox.checked = sidebarSparkOn();
+  sparkBox.onchange = () => { setSidebarSpark(sparkBox.checked); save({ sidebarSpark: sparkBox.checked }); };
+  const sparkRow = el('label', { class: 'check-field appearance-row' }, [
+    sparkBox,
+    el('span', {}, ['Show the usage graph on box rows']),
+    el('span', { class: 'appearance-desc' }, ['A small CPU / memory / disk trend under each box’s name; click it to switch metric. The percentages in the meta line stay either way.']),
+  ]);
   content.replaceChildren(
     el('h3', {}, ['Appearance']),
     el('div', { class: 'pve-eyebrow' }, ['Theme']),
     ...themeRows,
     el('div', { class: 'pve-eyebrow' }, ['Working-agent animation']),
     ...clawdRows,
+    el('div', { class: 'pve-eyebrow' }, ['Sidebar']),
+    sparkRow,
     note,
     el('p', { class: 'pve-sub' }, ['Saved on the server: every browser follows on its next load; this one switches instantly. Animation applies to the sidebar badge, pane chips, and the dashboard fleet strip on their next status refresh. Reduced-motion keeps every choice still.']),
   );
