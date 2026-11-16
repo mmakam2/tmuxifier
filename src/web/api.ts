@@ -4,7 +4,7 @@ import type { PveGuestKind } from './proxmox';
 // validates slug SHAPE only and knows no catalog, so an unknown id reaches the
 // client and is normalized there; `null` means "never set" (see
 // uiSettingsStore.js).
-export interface UiSettings { theme: string | null; clawdAnim: string | null }
+export interface UiSettings { theme: string | null; clawdAnim: string | null; sidebarSpark: boolean }
 
 export interface PveBoxLink { hostId: string; node: string; vmid: number; kind: PveGuestKind; endpoint: string; }
 export interface Box {
