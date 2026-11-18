@@ -746,6 +746,17 @@ describe('nothing throws', () => {
     }
   });
 
+  test('the socket client: null arguments are values, never a throw (issue #18)', async () => {
+    expect(() => createMailSocketClient(null)).not.toThrow();
+    const nowhere = createMailSocketClient(null);
+    await expect(nowhere.wait({ session: 'main', pane: PANE })).resolves.toEqual({ kind: 'down', reason: 'path' });
+    const c = createMailSocketClient({ sockPath: sock });
+    expect(() => c.wait(null)).not.toThrow();
+    await expect(c.wait(null)).resolves.toEqual({ kind: 'down', reason: 'args' });
+    expect(() => c.ack(null)).not.toThrow();
+    await expect(c.ack(null)).resolves.toBe(false);
+  });
+
   test('malformed events and arguments return normally', async () => {
     await start();
     const p = makePart();
@@ -920,6 +931,26 @@ describe('the core', () => {
     expect(first.synthetic.calls).toHaveLength(1);
   });
 
+  test('the event stream ending on its own aborts the mail part: the held wait ends and nothing re-arms', async () => {
+    await start();
+    const { core } = await coreRig();
+    cores.push(core);
+    await core.sweep();
+    await until(() => listening() === 1, 'the wait');
+    let end;
+    const ended = new Promise((r) => { end = r; });
+    const ctx = { event: { subscribe: () => (async function* stream() { await ended; })() } };
+    const attached = core.attach(ctx);
+    end();
+    await attached;
+    await until(() => listening() === 0, 'the wait to end with the stream');
+    await core.sweep(); // an ended core sweeps nothing and syncs nothing
+    core.resyncMail();
+    await settle();
+    expect(listening()).toBe(0);
+    expect(log.filter((e) => e[0] === 'wait')).toHaveLength(1);
+  });
+
   test('takeOver aborts the old core\'s held wait', async () => {
     await start();
     const first = await coreRig();
@@ -929,5 +960,157 @@ describe('the core', () => {
     const next = await coreRig({ prev: first.core, opts: { synthetic: null } });
     cores.push(next.core);
     await until(() => listening() === 0, 'the old wait to end');
+  });
+});
+
+describe('hand-over wakes, hold-offs (issue #18)', () => {
+  // A client the test answers by hand: every wait and ack is a pending call it resolves.
+  function manualClient() {
+    const c = { waits: [], acks: [] };
+    c.wait = (a) => new Promise((resolve) => {
+      c.waits.push({ ...a, resolve });
+      a.signal?.addEventListener('abort', () => resolve({ kind: 'down', reason: 'aborted' }), { once: true });
+    });
+    c.ack = (a) => new Promise((resolve) => c.acks.push({ ...a, resolve }));
+    return c;
+  }
+  // A synthetic whose every call the test settles: calls[i].resolve(result) / .reject(err).
+  function heldSynthetic() {
+    const fn = (input) => new Promise((resolve, reject) => fn.calls.push({ input, resolve, reject }));
+    fn.calls = [];
+    return fn;
+  }
+  const tick = () => new Promise((r) => setImmediate(r));
+  const MAIL = (id) => ({ kind: 'mail', text: `[tmuxifier-mail ${id}] hi`, messageId: id });
+
+  test('an ack the aborted part finishes re-arms the new part at once, not at its next sync', async () => {
+    const client = manualClient();
+    const clock = fakeClock();
+    const a = makePart({ client, clock });
+    a.part.sync(MAIN(), derive);
+    await tick();
+    client.waits[0].resolve(MAIL('m-aaaaaaaa'));
+    await until(() => a.synthetic.calls.length === 1, 'synthetic');
+    await tick();
+    a.part.onEvent(delivered(SID, 'msg_test1'));
+    await until(() => client.acks.length === 1, 'the ack request');
+    a.part.abort();
+    const b = makePart({ client, clock, state: a.part.state });
+    b.part.sync(MAIN(), derive);
+    await tick();
+    expect(b.waits).toEqual([]); // still in flight: no wait
+    client.acks[0].resolve(true); // answers inside the aborted part
+    await until(() => b.waits.length === 1, 'the new part to re-arm without a sync');
+    expect(a.waits).toHaveLength(1);
+    expect(a.part.state.inflight.size).toBe(0);
+  });
+
+  test('an ack refused (false) inside the aborted part still drops the entry and wakes the new part', async () => {
+    const client = manualClient();
+    const clock = fakeClock();
+    const a = makePart({ client, clock });
+    a.part.sync(MAIN(), derive);
+    await tick();
+    client.waits[0].resolve(MAIL('m-aaaaaaaa'));
+    await until(() => a.synthetic.calls.length === 1, 'synthetic');
+    await tick();
+    a.part.onEvent(delivered(SID, 'msg_test1'));
+    await until(() => client.acks.length === 1, 'the ack request');
+    a.part.abort();
+    const b = makePart({ client, clock, state: a.part.state });
+    b.part.sync(MAIN(), derive);
+    client.acks[0].resolve(false);
+    await until(() => b.waits.length === 1, 'the re-arm');
+    expect(a.part.state.inflight.size).toBe(0);
+  });
+
+  test('a synthetic that fails inside the aborted part holds the new part off 30 s, then it re-arms', async () => {
+    const client = manualClient();
+    const clock = fakeClock();
+    const synthetic = heldSynthetic();
+    const a = makePart({ client, clock, synthetic });
+    a.part.sync(MAIN(), derive);
+    await tick();
+    client.waits[0].resolve(MAIL('m-aaaaaaaa'));
+    await until(() => synthetic.calls.length === 1, 'synthetic');
+    a.part.abort();
+    const b = makePart({ client, clock, state: a.part.state });
+    b.part.sync(MAIN(), derive);
+    await tick();
+    expect(b.waits).toEqual([]);
+    synthetic.calls[0].reject(new Error('refused'));
+    // (The other timer is the new part's REOFFER_MS timer of the entry it adopted; it finds the
+    // entry gone when it fires.)
+    await until(() => b.clock.delays().includes(MAIL_BACKOFF_MIN_MS), 'the new part\'s hold-off timer');
+    expect(b.waits).toEqual([]);
+    clock.advance(MAIL_BACKOFF_MIN_MS);
+    await until(() => b.waits.length === 1, 'the re-arm after the hold-off');
+  });
+
+  test('the old part\'s delivered arriving at the new part before the old synthetic resolves: acked once, by the new part', async () => {
+    const client = manualClient();
+    const clock = fakeClock();
+    const synthetic = heldSynthetic();
+    const a = makePart({ client, clock, synthetic });
+    a.part.sync(MAIN(), derive);
+    await tick();
+    client.waits[0].resolve(MAIL('m-aaaaaaaa'));
+    await until(() => synthetic.calls.length === 1, 'synthetic');
+    a.part.abort();
+    const b = makePart({ client, clock, state: a.part.state });
+    b.part.sync(MAIN(), derive);
+    b.part.onEvent(delivered(SID, 'msg_x1')); // no entry knows msg_x1 yet: remembered
+    await tick();
+    expect(client.acks).toEqual([]);
+    synthetic.calls[0].resolve({ id: 'msg_x1' }); // resolves inside the aborted part
+    await until(() => client.acks.length === 1, 'the ack');
+    expect(client.acks[0]).toMatchObject({ session: 'main', messageId: 'm-aaaaaaaa' });
+    client.acks[0].resolve(true);
+    await until(() => b.waits.length === 1, 'the re-arm');
+    await tick();
+    expect(client.acks).toHaveLength(1);
+  });
+
+  test('quick idles in a row double the hold-off (1 s, 2 s, 4 s ... 30 s); a slow idle ends the run', async () => {
+    const client = manualClient();
+    const clock = fakeClock();
+    const p = makePart({ client, clock });
+    p.part.sync(MAIN(), derive);
+    const seen = [];
+    for (let i = 0; i < 8; i++) {
+      await until(() => client.waits.length === i + 1, `wait ${i + 1}`);
+      client.waits[i].resolve({ kind: 'idle' });
+      await until(() => clock.timers.length === 1, `hold-off ${i + 1}`);
+      seen.push(clock.delays()[0]);
+      clock.advance(clock.delays()[0]);
+    }
+    expect(seen).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
+    await until(() => client.waits.length === 9, 'wait 9');
+    clock.advance(MAIL_BACKOFF_MIN_MS); // this one is held for a while
+    client.waits[8].resolve({ kind: 'idle' });
+    await until(() => client.waits.length === 10, 'a slow idle re-arms at once');
+    expect(clock.timers).toEqual([]);
+    client.waits[9].resolve({ kind: 'idle' }); // quick again: the run starts over at 1 s
+    await until(() => clock.timers.length === 1, 'the first hold-off of a new run');
+    expect(clock.delays()).toEqual([1000]);
+  });
+
+  test('a hold-off is dropped when the pane\'s target becomes another OpenCode session', async () => {
+    const client = manualClient();
+    const clock = fakeClock();
+    const synthetic = heldSynthetic();
+    const p = makePart({ client, clock, synthetic });
+    p.part.sync(MAIN(), derive);
+    await tick();
+    client.waits[0].resolve(MAIL('m-aaaaaaaa'));
+    await until(() => synthetic.calls.length === 1, 'synthetic');
+    synthetic.calls[0].reject(new Error('refused'));
+    await until(() => clock.timers.some((t) => t.at - clock.t === MAIL_BACKOFF_MIN_MS), 'the hold-off');
+    p.part.sync(MAIN(), derive);
+    await tick();
+    expect(client.waits).toHaveLength(1); // held off for the same OpenCode session
+    p.part.sync(T(['main', target({ sessionID: SID2 })]), derive);
+    await until(() => client.waits.length === 2, 'the new session to arm at once');
+    expect(client.waits[1]).toMatchObject({ session: 'main', pane: PANE });
   });
 });

@@ -95,7 +95,7 @@
 
 import { Buffer } from 'node:buffer';
 import { execFile } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants as fsConstants, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -122,7 +122,9 @@ export const MAIL_MSG_ID_RE = /^m-[abcdefghjkmnpqrstuvwxyz23456789]{8}$/;
 // `location.directory` and `data.sessionID`, and never follow the turn's end
 // in the 2.2.6 trace (unlike `session.renamed`, `session.viewed`). For a
 // session not executing they mean the core missed `execution.started`.
-const TURN_ACTIVITY_RE = /^session\.(step|tool|text)\./;
+// `reasoning` has no recording yet (a model that streams no reasoning emits
+// none); it is named after `text`, the shape the v2 events share.
+const TURN_ACTIVITY_RE = /^session\.(step|tool|text|reasoning)\./;
 
 // Events that only ever act on a session the reducer already knows: a reply
 // to a request it never saw, or an inbox item for a session it never saw (a
@@ -315,13 +317,15 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
     const data = event.data && typeof event.data === 'object' ? event.data : {};
     const dir = str(event.location?.directory);
     let sid = sessionIdOf(event);
-    const ts = Number.isFinite(event.created) ? Math.floor(event.created / 1000) : now();
+    // The clock is read only for an event that carries no time of its own, and
+    // only once that event is known to matter.
+    const tsOf = () => (Number.isFinite(event.created) ? Math.floor(event.created / 1000) : now());
 
     // Operator evidence only: no state, no ts, no marker, and a session nobody
     // told the reducer about is not created for it (fact 8).
     if (type === 'session.viewed') {
       const viewed = sid ? sessions.get(sid) : null;
-      if (viewed) viewed.evidenceAt = Math.max(viewed.evidenceAt, ts);
+      if (viewed) viewed.evidenceAt = Math.max(viewed.evidenceAt, tsOf());
       return false;
     }
 
@@ -333,6 +337,7 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
       return false;
     }
     if (type === 'form.created' && sid === 'global') return false; // MCP elicitation: no owner
+    const ts = tsOf();
 
     // A reply or a shell exit acts on whichever session holds the request or
     // the shell (`shell.exited` names no session at all).
@@ -555,6 +560,15 @@ export function dirUnder(dir, panePath) {
   return d !== '/' && trimSlash(panePath).startsWith(d + '/');
 }
 
+// The candidates of `list` in a pane's directory tier: those whose directory is
+// the pane's path, or, only when none is, those one above it. `dirOf(c)` reads
+// a candidate's directory. foldForPanes and mailTargets share it, so the two
+// can never disagree about which directory a pane belongs to.
+function tierOf(list, panePath, dirOf) {
+  const exact = list.filter((c) => dirExact(dirOf(c), panePath));
+  return exact.length > 0 ? exact : list.filter((c) => dirUnder(dirOf(c), panePath));
+}
+
 // blocked > working > ready/stop > ready/start: a fresh session that has not
 // started yet must never hide a finished, possibly unseen turn in the same
 // directory (fixture lines 336-342).
@@ -585,11 +599,9 @@ export function foldForPanes(reducer, panes, since = new Map(), now = Math.floor
   for (const pane of panes) {
     if (!pane.active || !isOpencodeCmd(pane.cmd)) continue;
     const floor = since.get(pane.session);
-    const exact = roots.some((c) => dirExact(c.dir, pane.path));
-    const inTier = exact ? dirExact : dirUnder;
     let best = null;
-    for (const c of roots) {
-      if (c.d.ts < (floor ?? 0) || !inTier(c.dir, pane.path)) continue;
+    for (const c of tierOf(roots, pane.path, (r) => r.dir)) {
+      if (c.d.ts < (floor ?? 0)) continue;
       if (!best || c.rank > best.rank || (c.rank === best.rank && c.d.ts > best.d.ts)) best = c;
     }
     out.set(pane.session, best
@@ -630,11 +642,10 @@ export function mailTargets(reducer, panes, since = new Map()) {
       if (s && s.parent === null && s.dir) roots.push(s);
     }
     const tiers = new Map(); // pane path -> root sessions in its directory tier
-    const tierOf = (panePath) => {
+    const tierAt = (panePath) => {
       let t = tiers.get(panePath);
       if (!t) {
-        t = roots.filter((r) => dirExact(r.dir, panePath));
-        if (t.length === 0) t = roots.filter((r) => dirUnder(r.dir, panePath));
+        t = tierOf(roots, panePath, (r) => r.dir);
         tiers.set(panePath, t);
       }
       return t;
@@ -646,7 +657,7 @@ export function mailTargets(reducer, panes, since = new Map()) {
       const floor = Number.isFinite(since.get(pane.session)) ? since.get(pane.session) : 0;
       let best = null;
       let tied = false;
-      for (const c of tierOf(pane.path)) {
+      for (const c of tierAt(pane.path)) {
         if (!(c.evidenceAt > 0) || c.evidenceAt < floor) continue;
         if (!best || c.evidenceAt > best.evidenceAt) {
           best = c;
@@ -656,7 +667,7 @@ export function mailTargets(reducer, panes, since = new Map()) {
         }
       }
       if (!best || tied) continue;
-      if (hosting.some((o) => o.session !== pane.session && tierOf(o.path).includes(best))) continue;
+      if (hosting.some((o) => o.session !== pane.session && tierAt(o.path).includes(best))) continue;
       out.set(pane.session, { pane: pane.pane, sessionID: best.id, dir: best.dir });
     }
   } catch (e) {
@@ -769,12 +780,13 @@ const WAKE_TAG_RE = /^\[tmuxifier-mail ([^\]\s]+)\]/;
 // destroys the request, which the listener sees as a closed connection and
 // ends the held wait. The wire format is the listener's header: GET
 // parameters only in the query, POST parameters only in an urlencoded body.
-export function createMailSocketClient({
-  sockPath,
-  request = http.request,
-  waitTimeoutMs = MAIL_WAIT_TIMEOUT_MS,
-  ackTimeoutMs = MAIL_ACK_TIMEOUT_MS,
-} = {}) {
+export function createMailSocketClient(options) {
+  const {
+    sockPath,
+    request = http.request,
+    waitTimeoutMs = MAIL_WAIT_TIMEOUT_MS,
+    ackTimeoutMs = MAIL_ACK_TIMEOUT_MS,
+  } = options ?? {};
   const pathOk = typeof sockPath === 'string' && sockPath !== '' && Buffer.byteLength(sockPath) <= MAX_SOCKET_PATH_BYTES;
   const down = (reason) => ({ kind: 'down', reason });
 
@@ -831,7 +843,10 @@ export function createMailSocketClient({
     try { res.resume(); } catch { /* already destroyed */ }
   }
 
-  function wait({ session, pane, signal } = {}) {
+  // `options ?? {}`, not a destructuring default: that covers only `undefined`,
+  // and a `null` argument would throw where every failure must be a value.
+  function wait(args) {
+    const { session, pane, signal } = args ?? {};
     if (!pathOk) return Promise.resolve(down('path'));
     if (typeof session !== 'string' || typeof pane !== 'string') return Promise.resolve(down('args'));
     return call({
@@ -864,7 +879,8 @@ export function createMailSocketClient({
     });
   }
 
-  function ack({ session, messageId } = {}) {
+  function ack(args) {
+    const { session, messageId } = args ?? {};
     if (!pathOk || typeof session !== 'string' || !(typeof messageId === 'string' && MAIL_MSG_ID_RE.test(messageId))) return Promise.resolve(false);
     return call({
       method: 'POST',
@@ -906,8 +922,13 @@ export function createMailSocketClient({
 //            ready. Its answer:
 //              204 idle -> off; the socket counts as healthy. An idle that came
 //                          back within MAIL_IDLE_MIN_MS of arming (a listener
-//                          shutting down) holds the session off for the rest of
-//                          that second, so no answer can make a request loop.
+//                          shutting down, or another process's wait of the
+//                          same pane superseding ours) holds the session off
+//                          for the rest of that second, and each further quick
+//                          idle in a row doubles that (2 s, 4 s ... capped at
+//                          MAIL_BACKOFF_MIN_MS), so no answer can make a
+//                          request loop, two processes included. Any other
+//                          answer (a slower idle, mail, down) ends the run.
 //              down     -> off; the socket backs off (below). Reason `path`
 //                          (a socket path the kernel cannot bind) never heals:
 //                          the part goes inert for good, one debug line.
@@ -932,6 +953,10 @@ export function createMailSocketClient({
 //              synthetic rejects/throws -> no ack; the session holds off
 //                          (30 s doubling to 30 min, reset by a synthetic that
 //                          works); the hub re-offers on the next wait.
+//
+// A hold-off belongs to the OpenCode session it was earned by: once the tmux
+// session's target names another one (a new OpenCode session in that pane),
+// the old hold-off is dropped and the new target arms at once.
 //              inbox.delivered for its inboxID -> POST /v1/ack, and the entry
 //                          is dropped only once the ack has answered (true or
 //                          not: a refused ack means the hub already re-queued).
@@ -961,6 +986,17 @@ export function createMailSocketClient({
 // arms nothing and runs no timer, but a synthetic or an ack already in flight
 // finishes into the shared entries: its id is recorded, a delivery the new part
 // already saw is acked, and an entry it settles is dropped from the shared map.
+// An entry dropped that way unblocks its tmux session, so the aborted part
+// tells the newest part through `state.wake` (each part sets it to its own when
+// it is built; a failed synthetic passes the session to hold off), and that
+// part re-arms at once instead of at its next sync. A field, not a new
+// MAIL_STATE_VERSION: an older part ignores it, and a newer one adopts the
+// older state all the same.
+//
+// One OpenCode server per user (the shared `opencode serve`): the in-flight file
+// has no owner field, so a second server process of the same user would
+// rewrite or remove the first one's entries, costing duplicate wakes, never a
+// lost message.
 //
 // Socket backoff (ruling R19): one for the whole part, 30 s doubling to 30 min;
 // a failure while it runs does not double it again (the same outage), any 200
@@ -1016,7 +1052,7 @@ export function createMailPart({
     : { version: MAIL_STATE_VERSION, inflight: new Map(), recent: new Map() };
   const file = typeof home === 'string' && home ? path.join(home, '.tmuxifier-mail', MAIL_INFLIGHT_FILE) : null;
   const waits = new Map(); // tmux session -> { session, pane, sessionID, ac, armedAt }
-  const holdOff = new Map(); // tmux session -> { until, failures }
+  const holdOff = new Map(); // tmux session -> { until, failures, quick, sessionID }
   const timers = new Set();
   const entryTimers = new Map(); // message id -> timer
   const backoff = { failures: 0, until: 0 };
@@ -1025,6 +1061,36 @@ export function createMailPart({
   let last = { targets: new Map(), derive: () => null };
 
   const part = { sync, onEvent, abort, state: shared };
+
+  // The newest part answers what an aborted part settles (see Hand-over).
+  function wake(failed) {
+    if (aborted) return;
+    try {
+      if (failed && typeof failed === 'object' && typeof failed.session === 'string') {
+        holdSession(failed.session, failed.sessionID, 'fail');
+      }
+      pump();
+    } catch (e) {
+      debug('mail wake', e);
+    }
+  }
+  try { shared.wake = wake; } catch (e) { debug('mail wake', e); }
+
+  // An entry just left the in-flight map: re-arm here, or, once aborted, have
+  // the newest part do it.
+  function kick(failed = null) {
+    if (!aborted) {
+      if (failed) holdSession(failed.session, failed.sessionID, 'fail');
+      pump();
+      return;
+    }
+    try {
+      const w = shared.wake;
+      if (typeof w === 'function' && w !== wake) w(failed);
+    } catch (e) {
+      debug('mail wake', e);
+    }
+  }
 
   function clock() {
     try {
@@ -1105,7 +1171,8 @@ export function createMailPart({
       const t = targetOf(session);
       if (!t || !ready(t.sessionID) || inflightFor(session)) continue;
       const h = holdOff.get(session);
-      if (h && clock() < h.until) continue;
+      if (h && h.sessionID !== t.sessionID) holdOff.delete(session); // earned by another OpenCode session
+      else if (h && clock() < h.until) continue;
       arm(session, t);
       if (aborted || inert || clock() < backoff.until) return;
     }
@@ -1138,16 +1205,19 @@ export function createMailPart({
     if (kind === 'idle') {
       socketOk();
       const elapsed = clock() - rec.armedAt;
-      if (elapsed < MAIL_IDLE_MIN_MS) holdSession(rec.session, MAIL_IDLE_MIN_MS - elapsed, false);
+      if (elapsed < MAIL_IDLE_MIN_MS) holdSession(rec.session, rec.sessionID, 'quick', MAIL_IDLE_MIN_MS - elapsed);
+      else endQuickRun(rec.session);
       pump();
       return;
     }
     if (kind === 'mail' && typeof r.text === 'string' && typeof r.messageId === 'string' && MAIL_MSG_ID_RE.test(r.messageId)) {
       socketOk();
+      endQuickRun(rec.session);
       onMail(rec, r);
       pump();
       return;
     }
+    endQuickRun(rec.session);
     const reason = kind === 'down' && typeof r.reason === 'string' ? r.reason : 'unknown';
     if (reason === 'path') {
       inert = true;
@@ -1173,13 +1243,33 @@ export function createMailPart({
     timer(delay, pump);
   }
 
-  // Keep `session` from arming for `ms`; `count` makes repeated hold-offs double.
-  function holdSession(session, ms, count) {
-    const prev = holdOff.get(session);
-    const failures = count ? (prev?.failures ?? 0) + 1 : prev?.failures ?? 0;
-    const delay = count ? doubling(failures) : ms;
-    holdOff.set(session, { until: clock() + delay, failures });
-    timer(delay, pump);
+  // Keep `session` from arming. `kind` 'fail' (a failed synthetic): 30 s
+  // doubling per failure. 'quick' (an idle within MAIL_IDLE_MIN_MS): `ms` the
+  // first time, then MAIL_IDLE_MIN_MS doubling per quick idle in a row, capped
+  // at MAIL_BACKOFF_MIN_MS. A record earned by another OpenCode session counts
+  // for nothing.
+  function holdSession(session, sessionID, kind, ms = 0) {
+    const found = holdOff.get(session);
+    const prev = found && found.sessionID === sessionID ? found : null;
+    let failures = prev?.failures ?? 0;
+    let quick = prev?.quick ?? 0;
+    let delay;
+    if (kind === 'fail') {
+      failures += 1;
+      delay = doubling(failures);
+    } else {
+      quick += 1;
+      delay = quick === 1 ? ms : Math.min(MAIL_IDLE_MIN_MS * 2 ** (quick - 1), MAIL_BACKOFF_MIN_MS);
+    }
+    const until = Math.max(clock() + delay, prev?.until ?? 0);
+    holdOff.set(session, { until, failures, quick, sessionID });
+    timer(until - clock(), pump);
+  }
+
+  // An answer that was not a quick idle ends a run of them.
+  function endQuickRun(session) {
+    const h = holdOff.get(session);
+    if (h) h.quick = 0;
   }
 
   // ---- posting ----
@@ -1221,7 +1311,7 @@ export function createMailPart({
     debug('mail synthetic failed', e);
     if (shared.inflight.get(entry.messageId) !== entry) return;
     dropEntry(entry);
-    holdSession(entry.tmuxSession, 0, true);
+    kick({ session: entry.tmuxSession, sessionID: entry.sessionID });
   }
 
   function armEntryTimer(entry) {
@@ -1300,7 +1390,7 @@ export function createMailPart({
     if (entry.acking) return;
     if (kind === 'cancelled') {
       dropEntry(entry);
-      pump();
+      kick();
       return;
     }
     entry.acking = true;
@@ -1314,7 +1404,7 @@ export function createMailPart({
       if (ok === true) socketOk();
       else debug('mail ack not confirmed', entry.messageId);
       dropEntry(entry);
-      pump();
+      kick();
     }).catch((e) => debug('mail ack', e));
   }
 
@@ -1443,6 +1533,20 @@ export function createMailPart({
 // Nothing here throws into OpenCode.
 
 export const MAIL_PANE_ENV = 'TMUXIFIER_MAIL_PANE';
+export const TAGGED_KEY = Symbol.for('tmuxifier.opencode-agent.tagged-env');
+
+// The process-wide set of env objects a tagger has tagged (any bytes, any version).
+function taggedEnvs() {
+  try {
+    const have = globalThis[TAGGED_KEY];
+    if (have instanceof WeakSet) return have;
+    const set = new WeakSet();
+    globalThis[TAGGED_KEY] = set;
+    return set;
+  } catch {
+    return new WeakSet();
+  }
+}
 const TAG_PENDING_MAX = 256;
 // How far up the parent chain paneOfSession looks for a mail target.
 const MAIL_PARENT_DEPTH_MAX = 32;
@@ -1451,8 +1555,10 @@ export function createPaneTagger({ paneOf, now = Date.now, ttlMs = 30000 } = {})
   let pending = []; // { id, command, pane, at }, oldest first
   const seen = new Map(); // call id -> at, so a late duplicate of a consumed call is ignored
   // The env objects already tagged: one shell seen twice (a hook registered twice) keeps its
-  // first tag instead of having it overwritten by a second, record-less `none`.
-  const tagged = new WeakSet();
+  // first tag instead of having it overwritten by a second, record-less `none`. Process-wide
+  // (R41): after a PIECES_VERSION bump the old bytes' tagger and the new one overlap on a ctx,
+  // and the shell must keep whichever tag came first.
+  const tagged = taggedEnvs();
 
   function clock() {
     try {
@@ -1666,6 +1772,10 @@ const OPERATOR_AGENT_DEPTH_MAX = 4;
 const OPERATOR_ENV_KEYS = ['OPENCODE_CONFIG', 'OPENCODE_CONFIG_CONTENT', 'OPENCODE_PERMISSION'];
 // config.json is the legacy global name OpenCode still merges.
 const OPERATOR_GLOBAL_FILES = ['opencode.json', 'opencode.jsonc', 'config.json'];
+// System-wide (managed) configuration directories, read like a global one. Whether
+// OpenCode 2.3.0 merges them is unverified; reading them can only make the
+// handler step back, never allow more.
+export const OPERATOR_SYSTEM_DIRS = Object.freeze(['/etc/opencode']);
 const OPERATOR_PROJECT_FILES = [
   'opencode.json',
   'opencode.jsonc',
@@ -1727,7 +1837,8 @@ function globalConfigDirs(home, env) {
 //
 //   hasBashRules(dir)  true when ANY of these sets one: the environment
 //                      (OPENCODE_CONFIG, OPENCODE_CONFIG_CONTENT or
-//                      OPENCODE_PERMISSION non-empty); the global config dir's
+//                      OPENCODE_PERMISSION non-empty); the system-wide
+//                      /etc/opencode and the global config dir's
 //                      opencode.json / opencode.jsonc / config.json (the legacy
 //                      name); and, for `dir` and every
 //                      parent up to `/`, opencode.json, opencode.jsonc,
@@ -1735,8 +1846,8 @@ function globalConfigDirs(home, env) {
 //                      file sets one when `permission` is a string or an object
 //                      with `shell`, `bash` or `*`, or the same under any
 //                      `agent.<name>.permission`. Also any agent markdown file
-//                      (*.md) whose text contains `permission` in the global
-//                      dir's agent/, agents/, mode/ or modes/ and in each
+//                      (*.md) whose text contains `permission` in those
+//                      dirs' agent/, agents/, mode/ or modes/ and in each
 //                      level's .opencode/ ones of the same names, recursively
 //                      (OpenCode names a nested file's agent by its path).
 //
@@ -1753,14 +1864,17 @@ function globalConfigDirs(home, env) {
 // would otherwise keep a stale "no rules"), and a read failure never is.
 //
 // `fs` needs `statSync` and `readFileSync`, and `readdirSync` for the agent
-// directories (absent: those are not looked at; the default has it). A residual
-// race remains between the stat and the read: a file swapped for a FIFO in that
-// instant would block the read.
+// directories (absent: every agent directory counts as rules). With `openSync`,
+// `fstatSync` and `closeSync` too (the default has them) a file is opened
+// O_NONBLOCK and its kind and size are checked on the open descriptor before
+// the read, so a file swapped for a FIFO after the stat cannot block it.
+// `systemDirs` are the system-wide config dirs (OPERATOR_SYSTEM_DIRS).
 export function createOperatorRules({
   home = os.homedir(),
   env = process.env,
-  fs = { statSync, readFileSync, readdirSync },
+  fs = { statSync, readFileSync, readdirSync, openSync, fstatSync, closeSync },
   now = Date.now,
+  systemDirs = OPERATOR_SYSTEM_DIRS,
 } = {}) {
   const cache = new Map(); // file -> { key, rules }
 
@@ -1787,7 +1901,7 @@ export function createOperatorRules({
       const key = Number.isFinite(st.mtimeMs) && Number.isFinite(st.size) ? `${st.mtimeMs}:${st.size}:${st.ino}` : null;
       const hit = key ? cache.get(file) : null;
       if (hit && hit.key === key) return hit.rules;
-      const text = fs.readFileSync(file, 'utf8');
+      const text = readChecked(file, st);
       if (typeof text !== 'string' || text.length > OPERATOR_CONFIG_MAX_BYTES) return true;
       const rules = verdict(text);
       if (key && clock() - st.mtimeMs >= OPERATOR_RACY_MS) {
@@ -1802,6 +1916,23 @@ export function createOperatorRules({
     }
   }
 
+  // The file's text, read through a non-blocking descriptor that must still be
+  // the regular file `st` described; null when it is not.
+  function readChecked(file, st) {
+    if (typeof fs.openSync !== 'function' || typeof fs.fstatSync !== 'function' || typeof fs.closeSync !== 'function') {
+      return fs.readFileSync(file, 'utf8');
+    }
+    const fd = fs.openSync(file, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    try {
+      const now = fs.fstatSync(fd);
+      if (!now || typeof now.isFile !== 'function' || !now.isFile()) return null;
+      if (now.ino !== st.ino || !(now.size <= OPERATOR_CONFIG_MAX_BYTES)) return null;
+      return fs.readFileSync(fd, 'utf8');
+    } finally {
+      try { fs.closeSync(fd); } catch { /* already closed */ }
+    }
+  }
+
   const configVerdict = (text) => {
     const cfg = readJsonc(text);
     return cfg === null ? true : configSetsShell(cfg);
@@ -1811,7 +1942,7 @@ export function createOperatorRules({
   // stat'ed (following a symlink, as OpenCode's glob does) and descended into
   // when it is a directory; `budget.left` counts entries across the whole tree.
   function agentDirHasRules(dir, depth = 0, budget = { left: OPERATOR_AGENT_DIR_MAX }) {
-    if (typeof fs.readdirSync !== 'function') return false;
+    if (typeof fs.readdirSync !== 'function') return true; // cannot look: rules
     if (depth > OPERATOR_AGENT_DEPTH_MAX) return true;
     let names;
     try {
@@ -1853,7 +1984,7 @@ export function createOperatorRules({
       }
       const globals = globalConfigDirs(home, env);
       if (!globals) return true;
-      for (const g of globals) {
+      for (const g of [...(Array.isArray(systemDirs) ? systemDirs : []), ...globals]) {
         for (const name of OPERATOR_GLOBAL_FILES) if (fileHasRules(path.join(g, name), configVerdict)) return true;
         for (const sub of OPERATOR_AGENT_DIRS) if (agentDirHasRules(path.join(g, sub))) return true;
       }
@@ -2340,6 +2471,11 @@ export function createCore({
 // once `opts.registry`'s own registrations have settled (R34: an overlap, not
 // a gap; at once without one), and inherits its list of live ctxs and their
 // pieces unless `opts.live` / `opts.pieces` name them. `opts` are createCore's.
+//
+// The next core is built BEFORE `prev` is aborted (nothing runs in between:
+// createCore starts no stream and no sweep), so a createCore that throws
+// leaves `prev` running and the throw reaches the caller, instead of leaving
+// the plugin with no running core until the next setup.
 export function takeOver(prev, opts = {}) {
   let written = null;
   let since = null;
@@ -2347,9 +2483,8 @@ export function takeOver(prev, opts = {}) {
   let mailState = null;
   let live = opts.live instanceof Map ? opts.live : null;
   let pieces = opts.pieces ?? null;
-  if (prev && typeof prev === 'object') {
-    try { prev.abort(); } catch { /* a foreign or older object */ }
-    disposeAfter(prev, opts.registry);
+  const known = !!prev && typeof prev === 'object';
+  if (known) {
     try {
       if (prev.written instanceof Map) written = prev.written;
       if (prev.since instanceof Map) since = prev.since;
@@ -2362,6 +2497,10 @@ export function takeOver(prev, opts = {}) {
   const core = createCore({ ...opts, state, mailState, live, pieces });
   if (written) core.written = written;
   if (since) core.since = since;
+  if (known) {
+    try { prev.abort(); } catch { /* a foreign or older object */ }
+    disposeAfter(prev, opts.registry);
+  }
   return core;
 }
 
@@ -2399,8 +2538,10 @@ export function takeOver(prev, opts = {}) {
 // remove(ctx) chain onto those promises (a registration still pending is
 // disposed when it arrives) and never wait. A hand-over disposes the old
 // registry only once the new one's registrations settled (R34: `settled()`),
-// so the hooks overlap rather than gap. A disposed registry registers nothing
-// more. Every callback, registration and dispose is wrapped: nothing throws or
+// so the hooks overlap rather than gap, but waits at most DISPOSE_WAIT_MS for
+// them. A disposed registry registers nothing more. A ctx with a refused
+// registration gives back the others and is tried again (REGISTER_TRIES), and
+// removing a hooked ctx has the core re-check its mail targets at once. Every callback, registration and dispose is wrapped: nothing throws or
 // rejects into OpenCode.
 //
 // Mail only for hooked directories (R33). `isHooked(dir)`: the live ctx of
@@ -2420,24 +2561,48 @@ export function takeOver(prev, opts = {}) {
 // over every live ctx: when one fails, the core has no mail part and no hook is
 // registered anywhere; the state markers are written all the same.
 
-// Dispose `prev`'s registry once `next`'s registrations settled, or at once.
-function disposeAfter(prev, next) {
+// Dispose `prev`'s registry once `next`'s registrations settled, or at once,
+// and at the latest after DISPOSE_WAIT_MS: a `hook()` that never settles must
+// not keep every older registry (and its hooks on OpenCode) alive.
+const DISPOSE_WAIT_MS = 10000;
+export function disposeAfter(prev, next, { waitMs = DISPOSE_WAIT_MS, setTimeout: setT = globalThis.setTimeout, clearTimeout: clearT = globalThis.clearTimeout } = {}) {
   try {
     const old = prev.registry;
     if (!old || typeof old.dispose !== 'function') return;
     let after = null;
     try { after = next?.settled?.(); } catch { /* at once */ }
-    const run = () => { try { old.dispose(); } catch (e) { debug('registry dispose', e); } };
-    if (after && typeof after.then === 'function') Promise.resolve(after).then(run, run).catch((e) => debug('registry dispose', e));
-    else run();
+    let done = false;
+    let handle = null;
+    const run = () => {
+      if (done) return;
+      done = true;
+      try { if (handle !== null) clearT(handle); } catch { /* best effort */ }
+      try { old.dispose(); } catch (e) { debug('registry dispose', e); }
+    };
+    if (after && typeof after.then === 'function') {
+      try {
+        handle = setT(run, waitMs);
+        if (handle && typeof handle.unref === 'function') handle.unref();
+      } catch (e) {
+        debug('registry dispose', e);
+      }
+      Promise.resolve(after).then(run, run).catch((e) => debug('registry dispose', e));
+    } else {
+      run();
+    }
   } catch (e) {
     debug('registry dispose', e);
   }
 }
 
 export const OPENCODE_MAIL_MIN = '2.3.0';
+// More project directories than this in one server: the oldest is dropped
+// from `live`, so isHooked() is false for it and its sessions get no mail
+// (fail closed) until OpenCode sets it up again.
 const LIVE_MAX = 64;
 const VERSION_RE = /^\d{1,9}(?:\.\d{1,9}){0,7}$/;
+// A semver pre-release (`-beta.1`) and/or build (`+abc`) suffix after the numbers.
+const VERSION_SUFFIX_RE = /^(\d{1,9}(?:\.\d{1,9}){0,7})(-[0-9A-Za-z.-]{1,64})?(\+[0-9A-Za-z.-]{1,64})?$/;
 // The shape of a ctx's pieces ({ tagger, handler }); bump it when it changes.
 //
 // OBLIGATION (R41): the pieces are closures that outlive a reload. A setup
@@ -2450,20 +2615,30 @@ const VERSION_RE = /^\d{1,9}(?:\.\d{1,9}){0,7}$/;
 // tagged-env set process-wide (a Symbol.for global, like GLOBAL_KEY), so the
 // old and the new tagger do not both tag one shell during the overlap.
 // Otherwise the fix does not apply live.
-export const PIECES_VERSION = 1;
+//
+// Version 2 (issue #18: O_NONBLOCK reads, /etc/opencode, a missing readdirSync
+// counts as rules) did (2): the set is TAGGED_KEY. Version 1's tagger kept its
+// own set, so during the one overlap from 1 to 2 a call announced before the
+// new hooks settled can still read `none` (tmx refuses: fail closed). From 2 on
+// the overlap is clean, so a later bump needs only (1).
+export const PIECES_VERSION = 2;
 
-// Numeric dotted comparison (2.10.1 > 2.3.0; a missing part is 0). Anything
-// that is not digits and dots (a pre-release, a `v`, a blank) counts as below.
+// Numeric dotted comparison (2.10.1 > 2.3.0; a missing part is 0). A semver
+// pre-release counts as below its own numbers and nothing else (2.3.0-beta <
+// 2.3.0 <= 2.3.1-beta), a build suffix is ignored, and anything else (a `v`, a
+// blank, a stray character) counts as below.
 export function versionAtLeast(version, min) {
-  if (typeof version !== 'string' || !VERSION_RE.test(version) || !VERSION_RE.test(min)) return false;
-  const a = version.split('.').map(Number);
+  if (typeof version !== 'string' || !VERSION_RE.test(min)) return false;
+  const m = VERSION_SUFFIX_RE.exec(version);
+  if (!m) return false;
+  const a = m[1].split('.').map(Number);
   const b = min.split('.').map(Number);
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
     const x = a[i] ?? 0;
     const y = b[i] ?? 0;
     if (x !== y) return x > y;
   }
-  return true;
+  return m[2] === undefined;
 }
 
 export function mailCapable(ctx) {
@@ -2504,6 +2679,12 @@ function liveRemove(live, ctx) {
   for (const [k, v] of live) if (v === ctx) live.delete(k);
 }
 
+// A ctx whose registrations OpenCode refused is tried again: REGISTER_RETRY_MS
+// doubling, at most REGISTER_TRIES tries in all (30 s, 1, 2, 4 min: under 8
+// min), while it is still live; until then its directory gets no mail.
+const REGISTER_RETRY_MS = 30000;
+const REGISTER_TRIES = 5;
+
 export function createRegistry({
   live = new Map(),
   mail = true,
@@ -2513,10 +2694,14 @@ export function createRegistry({
   onSettled = null,
   now = Date.now,
   ttlMs = 30000,
+  retryMs = REGISTER_RETRY_MS,
+  setTimeout: setT = globalThis.setTimeout,
+  clearTimeout: clearT = globalThis.clearTimeout,
 } = {}) {
   const store = adoptPieces(pieces);
   const regs = new Map(); // ctx -> [Promise<Registration | null>]
   const hooked = new Set(); // ctxs whose three registrations all settled
+  const tries = new Map(); // ctx -> { count, timer }: refused registrations
   let disposed = false;
   let operatorRules = rules;
 
@@ -2567,6 +2752,36 @@ export function createRegistry({
     try { onSettled(); } catch (e) { debug('registry settled', e); }
   }
 
+  function isLive(ctx) {
+    for (const v of live.values()) if (v === ctx) return true;
+    return false;
+  }
+
+  // Some registration of `list` was refused: give back the ones that worked
+  // and try the ctx again later (REGISTER_TRIES in all).
+  function refused(ctx, list) {
+    regs.delete(ctx);
+    release(list);
+    const t = tries.get(ctx) ?? { count: 1, timer: null };
+    tries.set(ctx, t);
+    if (t.count >= REGISTER_TRIES) {
+      debug('hooks refused; giving up until the next setup');
+      return;
+    }
+    const delay = retryMs * 2 ** (t.count - 1);
+    try {
+      t.timer = setT(() => {
+        t.timer = null;
+        if (disposed || !isLive(ctx)) return;
+        t.count += 1;
+        add(ctx);
+      }, delay);
+      if (t.timer && typeof t.timer.unref === 'function') t.timer.unref();
+    } catch (e) {
+      debug('registry retry', e);
+    }
+  }
+
   function add(ctx) {
     try {
       if (disposed || !mail || !ctx || typeof ctx !== 'object' || regs.has(ctx)) return;
@@ -2590,8 +2805,11 @@ export function createRegistry({
       Promise.all(list).then((rs) => {
         if (disposed || regs.get(ctx) !== list) return;
         if (rs.every((r) => r !== null)) {
+          tries.delete(ctx);
           hooked.add(ctx);
           notify();
+        } else {
+          refused(ctx, list);
         }
       }).catch((e) => debug('registry settle', e));
     } catch (e) {
@@ -2622,13 +2840,25 @@ export function createRegistry({
     }
   }
 
+  function stopRetry(ctx) {
+    const t = tries.get(ctx);
+    if (!t) return;
+    tries.delete(ctx);
+    try { if (t.timer !== null) clearT(t.timer); } catch { /* best effort */ }
+  }
+
+  // A ctx that was hooked has the core re-check its targets now (`onSettled`),
+  // so a wait of that directory ends at once instead of at the next sweep.
   function remove(ctx) {
     try {
-      hooked.delete(ctx);
+      stopRetry(ctx);
+      const was = hooked.delete(ctx);
       const list = regs.get(ctx);
-      if (!list) return;
-      regs.delete(ctx);
-      release(list);
+      if (list) {
+        regs.delete(ctx);
+        release(list);
+      }
+      if (was) notify();
     } catch (e) {
       debug('registry remove', e);
     }
@@ -2637,6 +2867,7 @@ export function createRegistry({
   function dispose() {
     try {
       disposed = true;
+      for (const ctx of [...tries.keys()]) stopRetry(ctx);
       hooked.clear();
       for (const list of regs.values()) release(list);
       regs.clear();
@@ -2694,13 +2925,18 @@ function install(prev, live, ctx) {
     onSettled: () => { if (core && globalThis[GLOBAL_KEY] === core) core.resyncMail(); },
   });
   registry.addAll();
-  core = takeOver(prev, {
-    live,
-    pieces,
-    registry,
-    synthetic: mail ? (input) => registry.synthetic(input) : null,
-    hooked: mail ? (dir) => registry.isHooked(dir) : null,
-  });
+  try {
+    core = takeOver(prev, {
+      live,
+      pieces,
+      registry,
+      synthetic: mail ? (input) => registry.synthetic(input) : null,
+      hooked: mail ? (dir) => registry.isHooked(dir) : null,
+    });
+  } catch (e) {
+    registry.dispose(); // `prev` keeps running with its own hooks
+    throw e;
+  }
   globalThis[GLOBAL_KEY] = core;
   core.attach(ctx).catch((e) => debug('attach', e));
   return core;

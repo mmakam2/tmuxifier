@@ -1,7 +1,7 @@
 import { test, expect, describe, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import {
-  mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
+  closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -13,6 +13,7 @@ import {
   createReducer,
   dirOfSession,
   isPlainTmx,
+  OPERATOR_SYSTEM_DIRS,
   readJsonc,
 } from '../src/server/assets/tmuxifier-opencode-agent.js';
 
@@ -42,7 +43,8 @@ function scopedFs(onRead = () => {}) {
   const inside = (p) => p === ROOT || p.startsWith(ROOT + path.sep);
   return {
     statSync: (p) => { if (!inside(p)) throw enoent(p); return statSync(p); },
-    readFileSync: (p, enc) => { onRead(p); if (!inside(p)) throw enoent(p); return readFileSync(p, enc); },
+    // A number is a descriptor the code opened through openSync (itself scoped by the path).
+    readFileSync: (p, enc) => { onRead(p); if (typeof p !== 'number' && !inside(p)) throw enoent(p); return readFileSync(p, enc); },
     readdirSync: (p) => { if (!inside(p)) throw enoent(p); return readdirSync(p); },
   };
 }
@@ -475,13 +477,14 @@ describe('createOperatorRules', () => {
 
   test('the walk reaches the filesystem root', () => {
     const seen = new Set();
-    const fs = { statSync: (p) => { seen.add(p); throw enoent(p); }, readFileSync: () => { throw enoent('x'); } };
+    const fs = { statSync: (p) => { seen.add(p); throw enoent(p); }, readFileSync: () => { throw enoent('x'); }, readdirSync: (p) => { throw enoent(p); } };
     const rules = createOperatorRules({ home: '/home/u', env: {}, fs });
     expect(rules.hasBashRules('/a/b')).toBe(false);
     for (const p of ['/a/b/opencode.json', '/a/b/opencode.jsonc', '/a/b/.opencode/opencode.json',
       '/a/b/.opencode/opencode.jsonc', '/a/opencode.json', '/a/.opencode/opencode.jsonc',
       '/opencode.json', '/opencode.jsonc', '/.opencode/opencode.json', '/.opencode/opencode.jsonc',
-      '/home/u/.config/opencode/opencode.json', '/home/u/.config/opencode/opencode.jsonc']) {
+      '/home/u/.config/opencode/opencode.json', '/home/u/.config/opencode/opencode.jsonc',
+      '/etc/opencode/opencode.json', '/etc/opencode/opencode.jsonc']) {
       expect(seen.has(p), p).toBe(true);
     }
   });
@@ -508,6 +511,7 @@ describe('createOperatorRules', () => {
     let broken = true;
     const fs = {
       statSync: scopedFs().statSync,
+      readdirSync: scopedFs().readdirSync,
       readFileSync: (p, enc) => {
         if (broken && p === f) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
         return readFileSync(p, enc);
@@ -522,11 +526,11 @@ describe('createOperatorRules', () => {
   test('a stat failure other than "no such file" is rules; a missing one is not', () => {
     const w = world();
     for (const code of ['EACCES', 'EIO', 'ELOOP']) {
-      const fs = { statSync: (p) => { throw Object.assign(new Error(code), { code }); }, readFileSync };
+      const fs = { statSync: (p) => { throw Object.assign(new Error(code), { code }); }, readFileSync, readdirSync: (p) => { throw Object.assign(new Error(code), { code }); } };
       expect(createOperatorRules({ home: w.home, env: {}, fs }).hasBashRules(w.proj), code).toBe(true);
     }
     for (const code of ['ENOENT', 'ENOTDIR']) {
-      const fs = { statSync: (p) => { throw Object.assign(new Error(code), { code }); }, readFileSync };
+      const fs = { statSync: (p) => { throw Object.assign(new Error(code), { code }); }, readFileSync, readdirSync: (p) => { throw Object.assign(new Error(code), { code }); } };
       expect(createOperatorRules({ home: w.home, env: {}, fs }).hasBashRules(w.proj), code).toBe(false);
     }
     const noCode = { statSync: () => { throw new Error('odd'); }, readFileSync };
@@ -908,11 +912,45 @@ describe('createOperatorRules', () => {
     expect(rulesFor(w2).hasBashRules(w2.proj)).toBe(false);
   });
 
-  test('without readdirSync in the injected fs the agent directories are not looked at', () => {
+  test('without readdirSync in the injected fs the agent directories cannot be looked at: rules (fail closed)', () => {
     const w = world();
-    put(path.join(w.proj, '.opencode', 'agent', 'x.md'), 'permission: ask');
     const { readdirSync: _drop, ...noReaddir } = scopedFs();
-    expect(createOperatorRules({ home: w.home, env: {}, fs: noReaddir }).hasBashRules(w.proj)).toBe(false);
+    expect(rulesFor(w).hasBashRules(w.proj)).toBe(false);
+    expect(createOperatorRules({ home: w.home, env: {}, fs: noReaddir }).hasBashRules(w.proj)).toBe(true);
+  });
+
+  test('the system-wide config dir (/etc/opencode) is read like a global one: its files and agent dirs', () => {
+    const w = world();
+    const sys = path.join(w.base, 'etc-opencode');
+    const rules = (over = {}) => createOperatorRules({ home: w.home, env: {}, fs: scopedFs(), systemDirs: [sys], ...over });
+    expect(rules().hasBashRules(w.proj)).toBe(false);
+    put(path.join(sys, 'opencode.json'), { permission: { bash: 'ask' } });
+    expect(rules().hasBashRules(w.proj)).toBe(true);
+    rmSync(path.join(sys, 'opencode.json'));
+    put(path.join(sys, 'agent', 'review.md'), '---\npermission:\n  bash: deny\n---\n');
+    expect(rules().hasBashRules(w.proj)).toBe(true);
+    expect(OPERATOR_SYSTEM_DIRS).toEqual(['/etc/opencode']);
+  });
+
+  test('a file swapped for a FIFO after the stat is rules and does not block (O_NONBLOCK, checked on the descriptor)', () => {
+    const w = world();
+    const f = path.join(w.proj, 'opencode.json');
+    put(f, { model: 'x' });
+    const fifo = path.join(w.base, 'fifo');
+    execFileSync('mkfifo', [fifo]);
+    const real = scopedFs();
+    // stat says the regular file; the open lands on the FIFO (the swap in between).
+    const fs = { ...real, openSync: (p, flags) => openSync(p === f ? fifo : p, flags), fstatSync, closeSync };
+    const t0 = Date.now();
+    expect(createOperatorRules({ home: w.home, env: {}, fs }).hasBashRules(w.proj)).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    // The same with a different regular file swapped in: another inode is rules too.
+    const other = path.join(w.base, 'other.json');
+    put(other, { model: 'y' });
+    const fs2 = { ...real, openSync: (p, flags) => openSync(p === f ? other : p, flags), fstatSync, closeSync };
+    expect(createOperatorRules({ home: w.home, env: {}, fs: fs2 }).hasBashRules(w.proj)).toBe(true);
+    // And the plain descriptor path reads a real file normally.
+    expect(createOperatorRules({ home: w.home, env: {}, fs: { ...real, openSync, fstatSync, closeSync } }).hasBashRules(w.proj)).toBe(false);
   });
 
   test('a directory that is not an absolute path is rules (cannot be located)', () => {
@@ -924,7 +962,7 @@ describe('createOperatorRules', () => {
   });
 
   test('a global directory that cannot be located is rules', () => {
-    const fs = { statSync: (p) => { throw enoent(p); }, readFileSync };
+    const fs = { statSync: (p) => { throw enoent(p); }, readFileSync, readdirSync: (p) => { throw enoent(p); } };
     expect(createOperatorRules({ home: '', env: {}, fs }).hasBashRules('/a')).toBe(true);
     expect(createOperatorRules({ home: 'rel', env: {}, fs }).hasBashRules('/a')).toBe(true);
     expect(createOperatorRules({ home: '/h', env: { OPENCODE_CONFIG_DIR: 'rel' }, fs }).hasBashRules('/a')).toBe(true);

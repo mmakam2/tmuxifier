@@ -127,6 +127,13 @@ describe('the version gate', () => {
     }
   });
 
+  test('a semver pre-release counts as below its own numbers only; a build suffix is ignored', async () => {
+    const { mailCapable } = await import(ASSET);
+    const ctx = (version) => ({ app: { version }, session: { synthetic() {} } });
+    for (const v of ['2.3.1-beta', '2.4.0-rc.1', '3.0.0-alpha.2', '2.3.0+build.7', '2.3.1-beta+abc']) expect(mailCapable(ctx(v)), v).toBe(true);
+    for (const v of ['2.3.0-beta', '2.3.0-rc.1+abc', '2.2.9-rc', '2.3.0-', '2.3.0-be ta', '2.3.0-beta\n', `2.3.1-${'x'.repeat(65)}`]) expect(mailCapable(ctx(v)), v).toBe(false);
+  });
+
   test('a ctx without session.synthetic, without app, or with throwing getters is off', async () => {
     const { mailCapable } = await import(ASSET);
     expect(mailCapable({ app: { version: '2.3.0' }, session: {} })).toBe(false);
@@ -769,5 +776,129 @@ describe('the entry point', () => {
     expect(one2.effect).toBe('allow');
     await cleanupA();
     await cleanupB();
+  });
+});
+
+describe('registration edge cases (issue #18)', () => {
+  // Timers the test runs by hand.
+  function manualTimers() {
+    const t = { list: [] };
+    t.setTimeout = (fn, ms) => { const h = { fn, ms, unref() {} }; t.list.push(h); return h; };
+    t.clearTimeout = (h) => { t.list = t.list.filter((x) => x !== h); };
+    t.runAll = () => { const due = t.list.splice(0); for (const h of due) h.fn(); return due.map((h) => h.ms); };
+    return t;
+  }
+
+  test('a refused registration gives back the others and is retried, 30 s doubling; it hooks once OpenCode accepts', async () => {
+    const { createRegistry } = await import(ASSET);
+    const a = ocCtx('/home/user/proj');
+    let refuse = 2;
+    const realHook = a.permission.hook;
+    a.permission.hook = async (...args) => { if (refuse > 0) { refuse -= 1; throw new Error('refused'); } return realHook(...args); };
+    const timers = manualTimers();
+    const settledCalls = [];
+    const reg = createRegistry({ live: new Map([['/home/user/proj', a]]), mail: true, current: () => fakeCore(), rules: noRules, onSettled: () => settledCalls.push(1), ...timers });
+    reg.addAll();
+    await flush(5);
+    expect(reg.isHooked('/home/user/proj')).toBe(false);
+    expect(liveCounts(a)).toEqual([0, 0, 0]); // the two that worked were given back
+    expect(timers.runAll()).toEqual([30000]);
+    await flush(5);
+    expect(reg.isHooked('/home/user/proj')).toBe(false);
+    expect(timers.runAll()).toEqual([60000]);
+    await flush(5);
+    expect(reg.isHooked('/home/user/proj')).toBe(true);
+    expect(liveCounts(a)).toEqual([1, 1, 1]);
+    expect(settledCalls).toHaveLength(1);
+    expect(timers.list).toEqual([]);
+  });
+
+  test('a ctx refused every time is tried five times in all, then left alone; a dead or removed ctx is not retried', async () => {
+    const { createRegistry } = await import(ASSET);
+    const a = ocCtx('/home/user/proj');
+    a.tool.hook = vi.fn(async () => { throw new Error('refused'); });
+    const timers = manualTimers();
+    const live = new Map([['/home/user/proj', a]]);
+    const reg = createRegistry({ live, mail: true, current: () => fakeCore(), rules: noRules, ...timers });
+    reg.addAll();
+    const delays = [];
+    for (let i = 0; i < 6; i++) {
+      await flush(5);
+      delays.push(...timers.runAll());
+    }
+    expect(delays).toEqual([30000, 60000, 120000, 240000]);
+    expect(a.tool.hook).toHaveBeenCalledTimes(5);
+
+    const b = ocCtx('/home/user/proj2');
+    b.tool.hook = vi.fn(async () => { throw new Error('refused'); });
+    live.set('/home/user/proj2', b);
+    reg.add(b);
+    await flush(5);
+    live.delete('/home/user/proj2'); // its cleanup ran
+    timers.runAll();
+    await flush(5);
+    expect(b.tool.hook).toHaveBeenCalledTimes(1);
+
+    const c = ocCtx('/home/user/proj3');
+    c.tool.hook = vi.fn(async () => { throw new Error('refused'); });
+    live.set('/home/user/proj3', c);
+    reg.add(c);
+    await flush(5);
+    expect(timers.list).toHaveLength(1);
+    reg.remove(c);
+    expect(timers.list).toEqual([]);
+    reg.add(ocCtx('/x')); // unrelated; dispose clears any retry
+    reg.dispose();
+    expect(timers.list).toEqual([]);
+  });
+
+  test('remove(ctx) of a hooked ctx has the core re-check its targets at once; of an unhooked one it does not', async () => {
+    const { createRegistry } = await import(ASSET);
+    const a = ocCtx('/home/user/proj');
+    const b = ocCtx('/home/user/proj2');
+    b.tool.hook = async () => { throw new Error('refused'); };
+    const calls = [];
+    const reg = createRegistry({ live: new Map([['/home/user/proj', a], ['/home/user/proj2', b]]), mail: true, current: () => fakeCore(), rules: noRules, onSettled: () => calls.push('sync'), setTimeout: () => null, clearTimeout: () => {} });
+    reg.addAll();
+    await flush(5);
+    expect(calls).toEqual(['sync']); // a settled
+    reg.remove(b);
+    expect(calls).toEqual(['sync']);
+    reg.remove(a);
+    expect(calls).toEqual(['sync', 'sync']);
+    reg.remove(a);
+    expect(calls).toEqual(['sync', 'sync']);
+  });
+
+  test('disposeAfter: a next registry that never settles still has the old one disposed after waitMs', async () => {
+    const { disposeAfter } = await import(ASSET);
+    const timers = manualTimers();
+    const old = { dispose: vi.fn() };
+    disposeAfter({ registry: old }, { settled: () => new Promise(() => {}) }, { waitMs: 10000, ...timers });
+    await flush(5);
+    expect(old.dispose).not.toHaveBeenCalled();
+    expect(timers.list.map((h) => h.ms)).toEqual([10000]);
+    timers.runAll();
+    expect(old.dispose).toHaveBeenCalledTimes(1);
+
+    const old2 = { dispose: vi.fn() };
+    disposeAfter({ registry: old2 }, { settled: () => Promise.resolve() }, { waitMs: 10000, ...timers });
+    await flush(5);
+    expect(old2.dispose).toHaveBeenCalledTimes(1);
+    expect(timers.list).toEqual([]); // the cap was cleared
+    timers.runAll();
+    expect(old2.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('takeOver: a createCore that throws leaves the previous core running and untouched', async () => {
+    const { takeOver } = await import(ASSET);
+    const prev = { abort: vi.fn(), registry: { dispose: vi.fn() }, written: new Map([['main', 'x']]) };
+    expect(() => takeOver(prev, { home: 42 })).toThrow();
+    expect(prev.abort).not.toHaveBeenCalled();
+    expect(prev.registry.dispose).not.toHaveBeenCalled();
+    const next = takeOver(prev, { home: tmp(), setInterval: () => null, clearInterval: () => {}, listPanes: async () => '' });
+    expect(prev.abort).toHaveBeenCalledTimes(1);
+    expect(next.written).toBe(prev.written);
+    next.abort();
   });
 });

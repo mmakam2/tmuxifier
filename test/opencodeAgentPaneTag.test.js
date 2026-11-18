@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import {
   createCore,
   createPaneTagger,
+  PIECES_VERSION,
+  TAGGED_KEY,
 } from '../src/server/assets/tmuxifier-opencode-agent.js';
 
 // The pane tagger (agent messaging, spec §6.9, ruling R7/R23). OpenCode runs every agent shell
@@ -190,6 +192,19 @@ describe('createPaneTagger', () => {
     const q = shell('tmx who', { ...p.env }); // a copy carrying the first tag: a new object is tagged
     t.beforeShell(q);
     expect(q.env.TMUXIFIER_MAIL_PANE).toBe('%5');
+  });
+
+  test('R41: the tagged-env set is process-wide: a second tagger (newer bytes, overlapping hooks) never re-tags a shell the first tagged', () => {
+    expect(PIECES_VERSION).toBe(2);
+    expect(globalThis[TAGGED_KEY] === undefined || globalThis[TAGGED_KEY] instanceof WeakSet).toBe(true);
+    const old = createPaneTagger({ paneOf });
+    const fresh = createPaneTagger({ paneOf }); // built after the call was announced: no record of it
+    old.beforeTool(tool('ses_a', 'tmx who', 'call_r41'));
+    const p = shell('tmx who');
+    old.beforeShell(p);
+    fresh.beforeShell(p); // without the shared set this writes `none` over `%3`
+    expect(p.env.TMUXIFIER_MAIL_PANE).toBe('%3');
+    expect(globalThis[TAGGED_KEY].has(p.env)).toBe(true);
   });
 
   test('the pending list is bounded', () => {

@@ -277,6 +277,29 @@ test('directory hints for unknown sessions stay bounded', () => {
   expect(r.sessions.get('ses_h599').dir).toBe('/d599');
 });
 
+test('a reload whose first event of a turn is a reasoning event still learns the turn (issue #18)', () => {
+  const r = createReducer({ now: () => 1 });
+  const loc = { location: { directory: '/home/user/proj' } };
+  expect(r.apply({ id: 'r1', type: 'session.reasoning.started', created: 20_000, data: { sessionID: 'ses_r' }, ...loc })).toBe(true);
+  expect(r.derive('ses_r')).toEqual({ state: 'working', cause: 'prompt', ts: 20 });
+  expect(r.apply({ id: 'r2', type: 'session.reasoning.delta', created: 20_500, data: { sessionID: 'ses_r' }, ...loc })).toBe(false);
+  // A look-alike outside the session namespace is no turn activity.
+  expect(r.apply({ id: 'r3', type: 'reasoning.started', created: 21_000, data: { sessionID: 'ses_q' }, ...loc })).toBe(false);
+  expect(r.sessions.has('ses_q')).toBe(false);
+});
+
+test('the clock is read only for a relevant event that carries no time of its own', () => {
+  let reads = 0;
+  const r = createReducer({ now: () => { reads += 1; return 7; } });
+  const loc = { location: { directory: '/home/user/proj' } };
+  r.apply({ id: 'c1', type: 'session.usage.updated', data: { sessionID: 'ses_c' }, ...loc });
+  r.apply({ id: 'c2', type: 'session.created', created: 5_000, data: { sessionID: 'ses_c' }, ...loc });
+  expect(reads).toBe(0);
+  r.apply({ id: 'c3', type: 'session.execution.started', data: { sessionID: 'ses_c' }, ...loc });
+  expect(reads).toBe(1);
+  expect(r.derive('ses_c')).toMatchObject({ state: 'working', ts: 7 });
+});
+
 test('turn activity on a session not executing marks it executing; on an executing one it changes nothing', () => {
   const r = createReducer({ now: () => 1 });
   const loc = { location: { directory: '/home/user/proj' } };
