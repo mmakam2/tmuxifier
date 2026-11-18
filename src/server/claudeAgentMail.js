@@ -62,6 +62,9 @@
 // Large integer literals in settings.json may lose precision under jq < 1.7 or node, as with
 // the agent-hooks merge; settings.json holds none in practice.
 
+// The version probe shares the OpenCode plugin installer's limit check and escape stripping.
+import { probeSeconds, STRIP_ESCAPES_SED, SET_ESCAPE_CHARS } from './opencodeAgentPlugin.js';
+
 const waiter = { hooks: [{ type: 'command', command: 'sh "$HOME/.tmuxifier-mail/tmx" hook-wait', asyncRewake: true, timeout: 2592000 }] };
 const ack = { hooks: [{ type: 'command', command: 'sh "$HOME/.tmuxifier-mail/tmx" hook-ack' }] };
 export const MAIL_HOOKS = Object.freeze({ SessionStart: [waiter], Stop: [waiter], UserPromptSubmit: [ack] });
@@ -208,7 +211,11 @@ const sq = (s) => `'${s.replaceAll("'", "'\\''")}'`;
 
 // `claude`/`opencode`: the job's ticked selection (only a literal `true` counts). The default,
 // both, is for the tests' convenience; setupManager always passes the selection.
-export function buildAgentMailInstallScript({ claude = true, opencode = true } = {}) {
+// `versionTimeout`/`killAfter`: the `claude --version` probe's limits in seconds, options only so
+// a test can make a hang cost a fraction of a second; the pusher always uses the defaults.
+export function buildAgentMailInstallScript({ claude = true, opencode = true, versionTimeout = 10, killAfter = 2 } = {}) {
+  const limit = probeSeconds(versionTimeout);
+  const grace = probeSeconds(killAfter);
   return [
     'set -eu',
     `WANT_CLAUDE=${claude === true ? 1 : 0}`,
@@ -313,15 +320,25 @@ export function buildAgentMailInstallScript({ claude = true, opencode = true } =
     '# 4. The autoMode entries only for a Claude Code that reads "$defaults" (AUTOMODE_MIN_CLAUDE).',
     '# Its first word must be X.Y.Z, at most nine digits a field; anything else, a failed or',
     '# hung run (cut off when `timeout` exists) included, leaves autoMode alone. Into a file, so a',
-    '# child that outlives a killed claude cannot hold the read open.',
+    '# child that outlives a killed claude cannot hold the read open. The word is read from the',
+    '# first line of the first 256 bytes once terminal escapes and control bytes are gone.',
+    `# Cut off after ${limit} s, and KILLed ${grace} s later if it ignores TERM (\`-k\`, which GNU and current`,
+    '# busybox `timeout` take; one that refuses `-k` on a no-op run gets the plain form).',
     'CV=',
     'if command -v timeout >/dev/null 2>&1; then',
-    '  timeout 10 "$CLAUDE" --version > "$VF" 2>/dev/null < /dev/null && CV=1',
+    '  if timeout -k 2 5 true >/dev/null 2>&1; then',
+    `    timeout -k ${grace} ${limit} "$CLAUDE" --version > "$VF" 2>/dev/null < /dev/null && CV=1`,
+    '  else',
+    `    timeout ${limit} "$CLAUDE" --version > "$VF" 2>/dev/null < /dev/null && CV=1`,
+    '  fi',
     'else',
     '  "$CLAUDE" --version > "$VF" 2>/dev/null < /dev/null && CV=1',
     'fi',
     'V=',
-    'if [ -n "$CV" ]; then { read -r V VTAIL || :; } < "$VF"; fi',
+    'if [ -n "$CV" ]; then',
+    ...SET_ESCAPE_CHARS.map((l) => `  ${l}`),
+    `  V=$(head -c 256 "$VF" | LC_ALL=C sed ${STRIP_ESCAPES_SED} -e 's/^ *//' -e 's/ .*$//' -e q)`,
+    'fi',
     'case $V in',
     '  *[!0-9.]*|.*|*.|*..*|*.*.*.*|*[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*) V= ;;',
     '  *.*.*) ;;',

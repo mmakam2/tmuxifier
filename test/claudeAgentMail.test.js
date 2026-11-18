@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest';
 import { execFile, execFileSync } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { promises as fs, accessSync, constants as fsConstants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,8 +28,23 @@ const stdinOf = (script, skill) => Buffer.concat([Buffer.from(script), Buffer.fr
 const SMALL = () => stdinOf('#!/bin/sh\n# tmuxifier-mail\necho tmx\n', '---\nname: tmuxifier-mail\ndescription: test\n---\n\nbody\n');
 
 // The commands every branch of the installer needs, without any JSON tool.
-const BASE_TOOLS = ['sh', 'cat', 'mkdir', 'chmod', 'mv', 'rm', 'ln', 'sed', 'head', 'wc', 'cp', 'readlink', 'grep', 'printf', 'timeout'];
+// `true` is what the installer's `timeout -k` capability check runs; `sleep` is not here, so a
+// fake that hangs names it by its full path (SLEEP).
+const BASE_TOOLS = ['sh', 'cat', 'mkdir', 'chmod', 'mv', 'rm', 'ln', 'sed', 'head', 'wc', 'cp', 'readlink', 'grep', 'printf', 'timeout', 'true'];
 const which = (t) => execFileSync('/bin/sh', ['-c', `command -v ${t}`]).toString().trim();
+// The executable file a tool resolves to on PATH (`command -v` answers a shell builtin such as
+// `true` or `printf` with its bare name, which would make a dangling symlink).
+const whichFile = (t) => {
+  for (const d of String(process.env.PATH).split(':')) {
+    const f = path.join(d, t);
+    try { accessSync(f, fsConstants.X_OK); return f; } catch { /* next */ }
+  }
+  return which(t);
+};
+const SLEEP = whichFile('sleep');
+// The version probe's limits as options, so a hang costs a fraction of a second; the pusher
+// always uses the defaults (10 s, KILL 2 s later).
+const FAST = { versionTimeout: 0.3, killAfter: 0.3 };
 
 // The fake claude's script: what `claude --version` prints and how it exits.
 const fakeClaude = (out = '2.1.325 (Claude Code)', tail = '') => `#!/bin/sh\nprintf '%s\\n' '${out}'\n${tail}`;
@@ -51,7 +66,7 @@ async function claudeBox({ tools = null, claude = true, opencode = false } = {})
     await fs.mkdir(path.join(home, '.opencode', 'bin'), { recursive: true });
     await fs.writeFile(path.join(home, '.opencode', 'bin', 'opencode'), '#!/bin/sh\necho opencode v2.3.0\n', { mode: 0o755 });
   }
-  if (tools) for (const t of tools) await fs.symlink(which(t), path.join(bin, t));
+  if (tools) for (const t of tools) await fs.symlink(whichFile(t), path.join(bin, t));
   const cfg = path.join(home, '.claude');
   return {
     home, cfg,
@@ -335,6 +350,19 @@ test('the ticked selection: both ticked installs both; a ticked agent that is ab
     const c = await claudeBox(box);
     expect(await pushWith(c, want), JSON.stringify([box, want])).toEqual({ target: 'agent-mail', ok: false, skipped: 'no Claude Code or OpenCode on the box' });
     expect(await fs.readdir(c.home)).toEqual([]);
+  }
+});
+
+test('the claude version probe is cut off after 10 s and KILLed 2 s later by default; the limits are checked numbers', () => {
+  const s = buildAgentMailInstallScript();
+  expect(s).toContain('timeout -k 2 10 "$CLAUDE" --version');
+  expect(s).toContain('  timeout 10 "$CLAUDE" --version');
+  expect(s).toContain('timeout -k 2 5 true');
+  expect(buildAgentMailInstallScript({ claude: true, opencode: true, versionTimeout: 10, killAfter: 2 })).toBe(s);
+  expect(buildAgentMailInstallScript(FAST)).toContain('timeout -k 0.3 0.3 "$CLAUDE" --version');
+  for (const bad of ['10; rm -rf /', '10', -1, 0, NaN, Infinity, 1e9, 0.0001, null]) {
+    expect(() => buildAgentMailInstallScript({ versionTimeout: bad }), String(bad)).toThrow();
+    expect(() => buildAgentMailInstallScript({ killAfter: bad }), String(bad)).toThrow();
   }
 });
 
@@ -726,8 +754,8 @@ for (const tool of ['jq', 'node', 'python3']) {
     await fs.writeFile(b.settings, JSON.stringify(GATE_BEFORE, null, 2));
     return b;
   };
-  const expectGate = async (b, written, label) => {
-    const res = await install(b);
+  const expectGate = async (b, written, label, opts) => {
+    const res = opts ? await runShell(buildAgentMailInstallScript(opts), b.env, SMALL()) : await install(b);
     expect(res.code, `${label} ${res.stderr}`).toBe(0);
     expect(res.stdout, label).toBe(written ? 'AGENTMAIL: applied\n' : 'AGENTMAIL: applied\nAGENTMAIL: automode-skipped\n');
     const raw = await fs.readFile(b.settings, 'utf8');
@@ -766,6 +794,16 @@ for (const tool of ['jq', 'node', 'python3']) {
       [fakeClaude('garbage output'), false],
       ['#!/bin/sh\n', false], // prints nothing at all
       [fakeClaude('2.1.325 (Claude Code)', 'exit 1\n'), false], // a version, but a failed run
+      // Terminal escapes and control bytes are stripped first: a coloured version reads as
+      // the version it shows, and an SGR's parameters never read as one.
+      [fakeClaude('\x1b[1;32m2.1.325\x1b[0m (Claude Code)'), true],
+      [fakeClaude('\x1b[38;5;208m2.1.300\x1b[0m'), true],
+      [fakeClaude('\x1b[2m2.1.227\x1b[0m (Claude Code)'), false],
+      [fakeClaude('\x1b]8;;https://example.com/\x072.1.300\x1b]8;;\x1b\\ (Claude Code)'), true],
+      [fakeClaude('2.1.300 (Claude Code)\r'), true],
+      [fakeClaude('2.1.300\t(Claude Code)'), true],
+      [fakeClaude('\x1b[1;32m\x1b[0m'), false],
+      [fakeClaude('\x1b[3;9;999m'), false],
     ];
     for (const [script, written] of cases) await expectGate(await gateBox(script), written, `${tool} ${JSON.stringify(script)}`);
     // No `timeout` on the box: the version is still read.
@@ -782,8 +820,33 @@ for (const tool of ['jq', 'node', 'python3']) {
   }, 60000);
 
   test(`autoMode with ${tool}: a claude --version that hangs is cut off and reads as unknown`, async () => {
-    await expectGate(await gateBox('#!/bin/sh\nexec sleep 60\n'), false, `${tool} hang`);
-  }, 30000);
+    const started = Date.now();
+    await expectGate(await gateBox(`#!/bin/sh\nprintf '2.1.325 (Claude Code)\\n'\nexec ${SLEEP} 60\n`), false, `${tool} hang`, FAST);
+    // It really hung (cut off at the limit, not failed at once).
+    expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+    expect(Date.now() - started).toBeLessThan(5000);
+  }, 10000);
+
+  test(`autoMode with ${tool}: a claude --version that ignores TERM is KILLed shortly after the cut-off`, async () => {
+    // The ignored disposition survives exec, so `sleep` ignores TERM too: only a KILL ends it.
+    const started = Date.now();
+    await expectGate(await gateBox(`#!/bin/sh\ntrap '' TERM\nprintf '2.1.325 (Claude Code)\\n'\nexec ${SLEEP} 60\n`), false, `${tool} TERM ignored`, FAST);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(500);
+    expect(Date.now() - started).toBeLessThan(5000);
+  }, 10000);
+
+  test(`autoMode with ${tool}: a \`timeout\` that refuses -k gets the plain form, and claude is asked once`, async () => {
+    const counting = `#!/bin/sh\necho run >> "$HOME/runs"\nprintf '%s\\n' '2.1.300 (Claude Code)'\n`;
+    const b = await gateBox(counting, [...BASE_TOOLS.filter((t) => t !== 'timeout'), 'curl', tool]);
+    // An old timeout: no -k (exit 125, as a usage error), otherwise the real one.
+    await fs.writeFile(path.join(b.env.PATH, 'timeout'), `#!/bin/sh\n[ "$1" = -k ] && exit 125\nexec ${whichFile('timeout')} "$@"\n`, { mode: 0o755 });
+    await expectGate(b, true, `${tool} no -k`);
+    expect(await fs.readFile(path.join(b.home, 'runs'), 'utf8')).toBe('run\n');
+    // And with -k understood, also exactly once.
+    const c = await gateBox(counting);
+    await expectGate(c, true, `${tool} -k`);
+    expect(await fs.readFile(path.join(c.home, 'runs'), 'utf8')).toBe('run\n');
+  });
 
   test(`autoMode with ${tool}: below the version the pusher still reports ok, with the note`, async () => {
     const b = await gateBox(fakeClaude('2.1.227 (Claude Code)'));

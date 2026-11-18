@@ -52,7 +52,32 @@ function printedVersion(out) {
   return m && NUM_RE.test(m[1]) ? m[1] : null;
 }
 
-export function buildOpencodePluginInstallScript() {
+// The version probe's limits, in seconds: cut off after `versionTimeout`, KILLed `killAfter`
+// later. Options only so a test can make a hang take a fraction of a second; the pusher always
+// uses the defaults. A positive decimal number, checked before it is interpolated.
+export function probeSeconds(v) {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0.01 || v > 600) throw new Error('probe limit outside its range');
+  const t = String(v);
+  if (!/^\d{1,3}(\.\d{1,3})?$/.test(t)) throw new Error('probe limit outside its alphabet');
+  return t;
+}
+
+// Box output may carry terminal escapes (a coloured `--version`), whose parameters would read as
+// a version. These sed expressions, run under LC_ALL=C with ESC and BEL set by the script, drop
+// OSC strings ended by BEL or ST, CSI sequences and every other ESC sequence, then turn each
+// remaining control byte into a space. claudeAgentMail.js imports them for its own probe.
+export const STRIP_ESCAPES_SED = [
+  '-e "s/${ESC}][^${BEL}${ESC}]*${BEL}//g"',
+  '-e "s/${ESC}][^${BEL}${ESC}]*${ESC}\\\\\\\\//g"',
+  '-e "s/${ESC}\\[[0-?]*[ -/]*[@-~]//g"',
+  '-e "s/${ESC}[ -/]*[0-~]//g"',
+  '-e "s/[[:cntrl:]]/ /g"',
+].join(' ');
+export const SET_ESCAPE_CHARS = ["ESC=$(printf '\\033')", "BEL=$(printf '\\007')"];
+
+export function buildOpencodePluginInstallScript({ versionTimeout = 10, killAfter = 2 } = {}) {
+  const limit = probeSeconds(versionTimeout);
+  const grace = probeSeconds(killAfter);
   return [
     'set -eu',
     'DIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/plugins"',
@@ -75,24 +100,26 @@ export function buildOpencodePluginInstallScript() {
     '',
     '# 3. The version OpenCode reports, for the messaging note. Into a file in its config dir (never',
     '# plugins/, which OpenCode loads), so a child outliving a killed opencode cannot hold a read',
-    '# open; only a run that exits 0 counts, the first dotted number of the first 256 bytes.',
+    '# open; only a run that exits 0 counts, the first dotted number of the first 256 bytes once',
+    '# terminal escapes and control bytes are gone (a coloured version line).',
     'OCBIN=opencode',
     'command -v opencode >/dev/null 2>&1 || OCBIN="$HOME/.opencode/bin/opencode"',
-    '# Cut off after 10 s, and KILLed 2 s later if it ignores TERM (`-k`, which GNU and current',
+    `# Cut off after ${limit} s, and KILLed ${grace} s later if it ignores TERM (\`-k\`, which GNU and current`,
     '# busybox `timeout` take; one that refuses `-k` on a no-op run gets the plain form).',
     'OCV=',
     'RAN=',
     'if command -v timeout >/dev/null 2>&1; then',
     '  if timeout -k 2 5 true >/dev/null 2>&1; then',
-    '    timeout -k 2 10 "$OCBIN" --version > "$VF" 2>/dev/null < /dev/null && RAN=1',
+    `    timeout -k ${grace} ${limit} "$OCBIN" --version > "$VF" 2>/dev/null < /dev/null && RAN=1`,
     '  else',
-    '    timeout 10 "$OCBIN" --version > "$VF" 2>/dev/null < /dev/null && RAN=1',
+    `    timeout ${limit} "$OCBIN" --version > "$VF" 2>/dev/null < /dev/null && RAN=1`,
     '  fi',
     'elif "$OCBIN" --version > "$VF" 2>/dev/null < /dev/null; then',
     '  RAN=1',
     'fi',
     'if [ -n "$RAN" ]; then',
-    "  OCV=$(head -c 256 \"$VF\" | sed -n 's/^[^0-9]*\\([0-9][0-9]*\\(\\.[0-9][0-9]*\\)*\\).*$/\\1/p' | head -n 1)",
+    ...SET_ESCAPE_CHARS.map((l) => `  ${l}`),
+    `  OCV=$(head -c 256 "$VF" | LC_ALL=C sed ${STRIP_ESCAPES_SED} | LC_ALL=C sed -n 's/^[^0-9]*\\([0-9][0-9]*\\(\\.[0-9][0-9]*\\)*\\).*$/\\1/p' | head -n 1)`,
     'fi',
     'if [ -n "$OCV" ]; then echo "OPENCODEPLUGIN: version $OCV"; fi',
     "echo 'OPENCODEPLUGIN: applied'",

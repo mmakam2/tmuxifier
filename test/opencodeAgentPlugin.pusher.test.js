@@ -50,7 +50,7 @@ test('the install script interpolates nothing and reads the plugin from stdin', 
   expect(s).toContain('[ ! -x "$HOME/.opencode/bin/opencode" ]');
   // The only expansions are the box's own environment, never a caller value.
   const vars = new Set([...s.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*|\$)/g)].map((m) => m[1]));
-  expect([...vars].sort()).toEqual(['$', 'CFG', 'DIR', 'HOME', 'OCBIN', 'OCV', 'OPENCODE_CONFIG_DIR', 'RAN', 'VF']);
+  expect([...vars].sort()).toEqual(['$', 'BEL', 'CFG', 'DIR', 'ESC', 'HOME', 'OCBIN', 'OCV', 'OPENCODE_CONFIG_DIR', 'RAN', 'VF']);
   expect(s).toContain('OPENCODEPLUGIN: skipped-no-opencode');
   expect(s).toContain('OPENCODEPLUGIN: applied');
   expect(s).toContain('cat > "$DIR/tmuxifier-agent.js.$$.tmp"');
@@ -168,7 +168,14 @@ test('the script prints the version OpenCode reports, digits and dots only, unde
     ['opencode v2.3.0', '2.3.0'],
     ['opencode v2.2.6', '2.2.6'],
     ['2.10.1', '2.10.1'],
-    ['opencode v2.4.0-beta.1 (build $(touch pwned))', '2.4.0'],
+    // Box output is never evaluated: if it were, these would create files in the box's HOME.
+    ['opencode v2.4.0-beta.1 (build $(touch "$HOME/pwned")) `touch "$HOME/pwned2"`', '2.4.0'],
+    // Terminal escapes are stripped before the first dotted number is looked for: an SGR's
+    // parameters, an OSC hyperlink's target, a charset switch and a CR never read as the version.
+    ['\x1b[1;32mopencode\x1b[0m v2.3.0', '2.3.0'],
+    ['\x1b[38;5;208mopencode\x1b[0m \x1b[2mv2.2.6\x1b[0m', '2.2.6'],
+    ['\x1b]8;;https://example.com/9.9\x07opencode\x1b]8;;\x1b\\ v2.3.1', '2.3.1'],
+    ['\x1b]0;opencode 7.7\x07\x1b(Bopencode v2.3.0\r', '2.3.0'],
   ];
   for (const shell of ['/bin/sh', '/usr/bin/bash', '/usr/bin/zsh']) {
     for (const [out, want] of cases) {
@@ -185,7 +192,18 @@ test('the script prints the version OpenCode reports, digits and dots only, unde
       // The plugin still lands, and nothing the version run left stays in the plugins dir.
       expect(await fs.readdir(path.join(b.dir, '.config', 'opencode', 'plugins')), `${shell} ${out}`).toEqual(['tmuxifier-agent.js']);
       expect((await fs.readdir(path.join(b.dir, '.config', 'opencode'))).sort(), `${shell} ${out}`).toEqual(['plugins']);
+      // Nothing the output carried ran: the box's HOME holds only what the test put there.
+      expect((await fs.readdir(b.dir)).sort(), `${shell} ${out}`).toEqual(['.config', 'bin']);
     }
+  }
+});
+
+test('an escape-only or control-only output is no version', async () => {
+  for (const out of ['\x1b[1;32m\x1b[0m', '\x1b]0;2.3.0\x07', '\x1b[38;5;208m']) {
+    const b = await opencodeBox(fakeOpencode(out));
+    const res = await runShell(buildOpencodePluginInstallScript(), b.env(), 'PLUGIN');
+    expect(res.code, JSON.stringify(out)).toBe(0);
+    expect(versionLine(res.stdout), JSON.stringify(out)).toEqual([]);
   }
 });
 
@@ -206,27 +224,52 @@ test('an OpenCode that prints no version or fails prints no version line and the
   }
 });
 
+// The probe's limits are options so the hang tests take a fraction of a second; production
+// (the pusher) always uses the defaults, 10 s and a KILL 2 s later.
+const FAST = { versionTimeout: 0.3, killAfter: 0.3 };
+
+test('the version probe is cut off after 10 s and KILLed 2 s later by default; the limits are checked numbers', () => {
+  const s = buildOpencodePluginInstallScript();
+  expect(s).toContain('timeout -k 2 10 "$OCBIN" --version');
+  expect(s).toContain('  timeout 10 "$OCBIN" --version');
+  expect(buildOpencodePluginInstallScript({})).toBe(s);
+  expect(buildOpencodePluginInstallScript({ versionTimeout: 10, killAfter: 2 })).toBe(s);
+  const fast = buildOpencodePluginInstallScript(FAST);
+  expect(fast).toContain('timeout -k 0.3 0.3 "$OCBIN" --version');
+  // The -k capability check is a no-op run and stays as it is.
+  expect(fast).toContain('timeout -k 2 5 true');
+  for (const bad of ['10; rm -rf /', '10', -1, 0, NaN, Infinity, 1e9, 0.0001, null]) {
+    expect(() => buildOpencodePluginInstallScript({ versionTimeout: bad }), String(bad)).toThrow();
+    expect(() => buildOpencodePluginInstallScript({ killAfter: bad }), String(bad)).toThrow();
+  }
+});
+
 test('an OpenCode whose --version hangs is cut off: no version line, the plugin still lands', async () => {
   const b = await opencodeBox('#!/bin/sh\nexec sleep 60\n');
   const started = Date.now();
-  const res = await runShell(buildOpencodePluginInstallScript(), b.env(), 'PLUGIN');
-  expect(Date.now() - started).toBeLessThan(30000);
+  const res = await runShell(buildOpencodePluginInstallScript(FAST), b.env(), 'PLUGIN');
+  const took = Date.now() - started;
+  // It really hung (cut off, not failed at once), and was cut off at the given limit.
+  expect(took).toBeGreaterThanOrEqual(250);
+  expect(took).toBeLessThan(5000);
   expect(res.code).toBe(0);
   expect(res.stdout).toContain('OPENCODEPLUGIN: applied');
   expect(versionLine(res.stdout)).toEqual([]);
   expect(await fs.readFile(pluginPath(path.join(b.dir, '.config', 'opencode')), 'utf8')).toBe('PLUGIN');
-}, 40000);
+}, 10000);
 
 test('an OpenCode whose --version ignores TERM is KILLed shortly after the cut-off', async () => {
   // The ignored disposition survives exec, so `sleep` ignores TERM too: only a KILL ends it.
   const b = await opencodeBox("#!/bin/sh\ntrap '' TERM\nexec sleep 60\n");
   const started = Date.now();
-  const res = await runShell(buildOpencodePluginInstallScript(), b.env(), 'PLUGIN');
-  expect(Date.now() - started).toBeLessThan(25000);
+  const res = await runShell(buildOpencodePluginInstallScript(FAST), b.env(), 'PLUGIN');
+  const took = Date.now() - started;
+  expect(took).toBeGreaterThanOrEqual(500);
+  expect(took).toBeLessThan(5000);
   expect(res.code).toBe(0);
   expect(res.stdout).toContain('OPENCODEPLUGIN: applied');
   expect(versionLine(res.stdout)).toEqual([]);
-}, 40000);
+}, 10000);
 
 test('a `timeout` that refuses -k gets the plain form, and the version is still read once', async () => {
   const b = await opencodeBox('#!/bin/sh\necho run >> "$HOME/runs"\necho opencode v2.3.0\n');
