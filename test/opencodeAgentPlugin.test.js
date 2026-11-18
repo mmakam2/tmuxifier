@@ -88,7 +88,7 @@ function fakeTmuxEnv() {
   const home = tmp();
   const bin = tmp();
   const panesFile = path.join(bin, 'panes.txt');
-  writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\n[ "$1 $2 $3" = "list-panes -a -F" ] || exit 2\ncat "$TMUXIFIER_FAKE_PANES"\n');
+  writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\n[ "$1 $2 $3 $4" = "-u list-panes -a -F" ] || exit 2\ncat "$TMUXIFIER_FAKE_PANES"\n');
   chmodSync(path.join(bin, 'tmux'), 0o755);
   vi.stubEnv('HOME', home);
   vi.stubEnv('PATH', `${bin}:${process.env.PATH}`);
@@ -209,7 +209,7 @@ test('listPanes failing (null), hanging past the timeout, or returning garbage l
   expect(log).not.toHaveBeenCalled();
 });
 
-test('defaultListPanes runs tmux list-panes -a -F PANE_FORMAT, resolves TMUX_MISSING on ENOENT and null on a timeout or a non-zero exit', async () => {
+test('defaultListPanes runs tmux -u list-panes -a -F PANE_FORMAT, resolves TMUX_MISSING on ENOENT and null on a timeout or a non-zero exit', async () => {
   const { defaultListPanes, PANE_FORMAT, TMUX_MISSING } = await import(ASSET);
   const bin = tmp();
   const script = (name, body) => {
@@ -219,7 +219,7 @@ test('defaultListPanes runs tmux list-panes -a -F PANE_FORMAT, resolves TMUX_MIS
     return p;
   };
   const echo = script('echo', 'printf "%s|" "$@"');
-  expect(await defaultListPanes({ file: echo })).toBe(`list-panes|-a|-F|${PANE_FORMAT}|`);
+  expect(await defaultListPanes({ file: echo })).toBe(`-u|list-panes|-a|-F|${PANE_FORMAT}|`);
   expect(await defaultListPanes({ file: path.join(bin, 'missing') })).toBe(TMUX_MISSING);
   expect(await defaultListPanes({ file: script('fail', 'echo partial; exit 1') })).toBeNull();
   expect(await defaultListPanes({ file: script('hang', 'exec sleep 30'), timeout: 200 })).toBeNull();
@@ -230,6 +230,38 @@ test('defaultListPanes runs tmux list-panes -a -F PANE_FORMAT, resolves TMUX_MIS
   // A PATH without tmux at all.
   vi.stubEnv('PATH', tmp());
   expect(await defaultListPanes()).toBe(TMUX_MISSING);
+});
+
+// A real tmux, not a stub: a tmux client whose locale is not UTF-8 prints
+// every control character of a format, PANE_FORMAT's tabs included, as `_`,
+// and then no row parses. OpenCode's server inherits whatever locale started
+// it (`opencode service restart` from an ssh shell with LANG=C, measured live
+// on 2.3.2 + tmux 3.5a: no marker, no mail). Private server on its own socket
+// under a private TMUX_TMPDIR; the wrapper pins the socket, so $TMUX can
+// never point a command at the operator's server.
+test('defaultListPanes parses a real tmux listing under LANG=C (tmux -u keeps the tabs)', async () => {
+  const { defaultListPanes, parsePanesChecked } = await import(ASSET);
+  const real = execFileSync('sh', ['-c', 'command -v tmux'], { encoding: 'utf8' }).trim();
+  expect(real).not.toBe(''); // this test needs a real tmux; it never skips
+  const dir = tmp();
+  const tmuxTmp = path.join(dir, 'tmuxtmp');
+  const sock = `oc-locale-${process.pid}`;
+  execFileSync('mkdir', ['-m', '700', tmuxTmp]);
+  const wrapper = path.join(dir, 'tmux');
+  writeFileSync(wrapper, `#!/bin/sh\nunset TMUX TMUX_PANE LC_CTYPE LC_ALL\nexport LANG=C TMUX_TMPDIR='${tmuxTmp}'\nexec '${real}' -L '${sock}' "$@"\n`);
+  chmodSync(wrapper, 0o755);
+  const env = { PATH: '/usr/bin:/bin', HOME: dir, TMUX_TMPDIR: tmuxTmp };
+  try {
+    execFileSync(wrapper, ['-f', '/dev/null', 'new-session', '-d', '-s', 'web', '-c', dir, 'sleep 60'], { env });
+    const text = await defaultListPanes({ file: wrapper });
+    expect(typeof text).toBe('string');
+    expect(text).toContain('\t');
+    const { panes, complete } = parsePanesChecked(text);
+    expect(complete).toBe(true);
+    expect(panes).toEqual([expect.objectContaining({ session: 'web', cmd: 'sleep', active: true })]);
+  } finally {
+    try { execFileSync(wrapper, ['kill-server'], { env, stdio: 'ignore' }); } catch { /* already gone */ }
+  }
 });
 
 test('tmux missing (ENOENT) makes the core inert: the timer stops and nothing sweeps again', async () => {

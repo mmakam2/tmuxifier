@@ -427,7 +427,9 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   part is an events reducer attributed by directory to the tmux sessions whose active pane
   of the active window runs `opencode` there (two TUIs in one directory fold to one state), writes
   the same `<session>:<state>:<epoch>:<cause>` markers, and sweeps every 15 s (deletes a marker
-  only if it still holds what this core wrote). A process-wide singleton (`Symbol.for`) hands
+  only if it still holds what this core wrote). It lists panes with `tmux -u` (as the OSC reporter
+  reads every format): a client outside tmux with a non-UTF-8 locale prints a format's tabs as `_`,
+  and the server inherits whatever locale started it. A process-wide singleton (`Symbol.for`) hands
   over to the newest `setup` (what it wrote, and its reducer state under `STATE_VERSION` — OpenCode
   re-runs `setup` in the same process for every new project directory), so a setup rerun upgrades
   it live. A reject/dismiss ends the turn in

@@ -409,7 +409,7 @@ describe('the entry point', () => {
     const bin = tmp();
     const panesFile = path.join(bin, 'panes.txt');
     writeFileSync(panesFile, '');
-    writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\n[ "$1 $2 $3" = "list-panes -a -F" ] || exit 2\ncat "$TMUXIFIER_FAKE_PANES"\n');
+    writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\n[ "$1 $2 $3 $4" = "-u list-panes -a -F" ] || exit 2\ncat "$TMUXIFIER_FAKE_PANES"\n');
     chmodSync(path.join(bin, 'tmux'), 0o755);
     vi.stubEnv('HOME', home);
     vi.stubEnv('PATH', `${bin}:${process.env.PATH}`);

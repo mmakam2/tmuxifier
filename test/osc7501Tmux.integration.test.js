@@ -68,7 +68,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const readIf = (f) => (existsSync(f) ? readFileSync(f, 'utf8') : null);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
-async function harness({ shell = false } = {}) {
+async function harness({ shell = false, locale = { LANG: 'C.UTF-8' } } = {}) {
   const tmuxBin = requireBinary('tmux');
   requireBinary('python3');
   const tmp = mkdtempSync(path.join(tmpdir(), 'osc-tmux-'));
@@ -93,7 +93,7 @@ async function harness({ shell = false } = {}) {
   copyFileSync(ASSET, installed);
   const env = {
     HOME: home, TMUX_TMPDIR: tmuxTmp, PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
-    SHELL: '/bin/bash', LANG: 'C.UTF-8', TMUXIFIER_OSC_DEBUG: '1',
+    SHELL: '/bin/bash', ...locale, TMUXIFIER_OSC_DEBUG: '1',
   };
   const tmux = (...args) => execFileSync(path.join(bin, 'tmux'), args, { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   const h = {
@@ -192,6 +192,24 @@ test('a setup rerun hands the listener over live: marker kept, fold continues, o
   h.report('state=clear');
   await waitFor(() => !existsSync(h.marker), { what: 'marker removal' });
   expect(h.fmt('#{pane_in_mode}')).toBe('0');
+});
+
+// A tmux client whose locale is not UTF-8 prints a format's control
+// characters, list_panes' tabs included, as `_`, and then no row splits. The
+// probe runs `sweep` under the box's login shell, whose locale may be C. The
+// loop is spared (run-shell gives it $TMUX, and a client inside tmux assumes
+// UTF-8), so the end-to-end sweep still attaches within a pass; this pins
+// list_panes itself, outside tmux. LC_ALL, because under a plain LANG=C
+// python coerces the locale to UTF-8 for itself and its children (PEP 538).
+test('list_panes splits a real listing under LC_ALL=C outside tmux (tmux -u keeps the tabs)', async () => {
+  const h = await harness({ locale: { LANG: 'C', LC_ALL: 'C' } });
+  expect(h.tmux('list-panes', '-a', '-F', '#{pane_id}\t#{session_name}')).toBe('%0_web\n'); // the hazard, as measured
+  const code = 'import importlib.util,sys\n'
+    + 'spec=importlib.util.spec_from_file_location("r",sys.argv[1]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\n'
+    + 'print(repr(m.list_panes()))';
+  const r = spawnSync('python3', ['-c', code, h.installed], { env: h.env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  expect(r.stderr).toBe('');
+  expect(r.stdout.trim()).toBe("([('%0', False, 'codex', 'web')], False)");
 });
 
 test('a probe-only chunk is not an observation: a foreign working marker survives it and the listener exit', async () => {

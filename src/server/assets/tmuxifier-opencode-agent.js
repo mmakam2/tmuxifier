@@ -718,10 +718,16 @@ export const TMUX_MISSING = Symbol.for('tmuxifier.opencode-agent.tmux-missing');
 // ENOENT (no tmux on PATH); null on a timeout, a non-zero exit or non-string
 // output (worth retrying next sweep); never rejects. `file`/`timeout` exist
 // for tests.
+//
+// `-u`: a tmux client whose locale is not UTF-8 (and that is not inside tmux)
+// prints every control character of a format as `_`, PANE_FORMAT's tabs
+// included, and then no row parses: no marker, no mail. OpenCode's server
+// inherits the locale of whatever started it; `opencode service restart` from
+// an ssh shell with LANG=C did exactly this (2.3.2, tmux 3.5a).
 export function defaultListPanes({ file = 'tmux', timeout = LIST_TIMEOUT_MS } = {}) {
   return new Promise((resolve) => {
     try {
-      execFile(file, ['list-panes', '-a', '-F', PANE_FORMAT],
+      execFile(file, ['-u', 'list-panes', '-a', '-F', PANE_FORMAT],
         { timeout, killSignal: 'SIGKILL', maxBuffer: 1 << 20, encoding: 'utf8', windowsHide: true },
         (err, stdout) => {
           if (err && err.code === 'ENOENT') resolve(TMUX_MISSING);

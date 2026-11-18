@@ -20,6 +20,7 @@ if [ "$STUB_TMUX_NOSERVER" = 1 ]; then
   echo "no server running on /tmp/x" >&2
   exit 1
 fi
+[ "$1" = -u ] && shift  # the reporter asks for UTF-8 output on every format it reads
 case "$1" in
   display-message)
     case "$*" in

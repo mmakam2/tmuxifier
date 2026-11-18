@@ -288,7 +288,7 @@ def resolve_session(pane_id):
     them (tmux's own choice for a bare pane target): the marker then follows
     whichever grouped session the operator last touched."""
     try:
-        r = subprocess.run(['tmux', 'display-message', '-p', '-t', pane_id, '#{session_name}'],
+        r = subprocess.run(['tmux', '-u', 'display-message', '-p', '-t', pane_id, '#{session_name}'],
                            capture_output=True, timeout=5)
         if r.returncode != 0:
             return None
@@ -718,9 +718,12 @@ def agent_kind(cmd, home):
 def list_panes():
     """(rows, no_server): rows is [(pane_id, piped, cmd, session)] or None when
     tmux could not be listed; no_server is True when there is no tmux server
-    (or no tmux at all)."""
+    (or no tmux at all). -u here and on every format this file reads: a tmux
+    client outside tmux whose locale is not UTF-8 prints a format's tabs (and
+    any non-ASCII byte of a session name) as `_`, and the probe runs `sweep`
+    under the box's login shell, whose locale may be C."""
     try:
-        r = subprocess.run(['tmux', 'list-panes', '-a', '-F',
+        r = subprocess.run(['tmux', '-u', 'list-panes', '-a', '-F',
                             '#{pane_id}\t#{pane_pipe}\t#{pane_current_command}\t#{session_name}'],
                            capture_output=True, timeout=5)
     except FileNotFoundError:
@@ -1031,7 +1034,7 @@ def run_attach(pane_id, home):
     if not sock:
         return 0
     try:
-        r = subprocess.run(['tmux', 'display-message', '-p', '-t', pane_id,
+        r = subprocess.run(['tmux', '-u', 'display-message', '-p', '-t', pane_id,
                             '#{socket_path}\t#{pane_id}\t#{pane_pipe}'],
                            capture_output=True, timeout=5)
     except Exception as e:
