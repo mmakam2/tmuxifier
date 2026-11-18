@@ -522,8 +522,13 @@ describes (that also ends OpenCode's state reporting). Then `rm -rf ~/.tmuxifier
 - **Mail-started turns notify** like any other turn.
 - **Long messages are cut in the wake** at 4000 characters. The agent is told to run `tmx read`
   for the rest, and sees only the first part until it does.
-- **Not yet verified:** a listener left idle for hours (31 minutes was the longest observed), and a
-  message arriving while a plan-approval dialog is open.
+- **An OpenCode left idle for about an hour stops listening.** OpenCode 2.3.2 unloads an idle
+  project folder (its log says `location services evicted`) even while a TUI is still open on it.
+  The session's state disappears from the dashboard and its mail waits as `queued` until the next
+  prompt or view in that TUI, which brings both back.
+- **A mail turn in OpenCode runs as the agent of the session's last prompt** (Build, Plan, …), not
+  the agent selected in the TUI since then. A Plan session answers mail in Plan.
+- **Not yet verified:** a message arriving while a plan-approval dialog is open.
 - **After turning a switch on**, the socket can take until the next status sweep to come up.
 - **After re-addressing a box between two names of one SSH connection** (the same host, port and
   user after `~/.ssh/config`), its status can read `Socket not connected: not verified` until
