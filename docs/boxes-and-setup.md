@@ -297,8 +297,8 @@ python3 or tmux reports `osc-reporter skipped (no python3 on the box)` /
   the background, reporting the turn as finished and then working again when the command ends, so
   one prompt can read as two finished turns.
 - **Codex** reports natively from 0.163 on (the 0.167 binary carries the sequences), but this
-  has **not been captured live yet**: it still needs a Codex sign-in on the test box. On a box whose Node predates `process.execve`, Codex
-  runs as `node` and is not detected.
+  has **not been captured live yet**: it still needs a Codex sign-in on the test box. On a box
+  whose Node predates `process.execve`, Codex runs as `node` and is not detected.
 - **OpenCode** without the plugin: its root record aggregates **every session of the user's
   shared server**, so a pending permission in another TUI reads as `blocked` here. Tick the
   OpenCode checkbox for the plugin.

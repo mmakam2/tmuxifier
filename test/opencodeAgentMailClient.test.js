@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, getEventListeners } from 'node:events';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -77,6 +77,17 @@ async function silent() {
   await new Promise((resolve) => server.listen(file, resolve));
   extras.push(() => new Promise((resolve) => { for (const s of sockets) s.destroy(); server.close(() => resolve()); }));
   return file;
+}
+
+// A request function that records every client socket it opens.
+function tracked() {
+  const sockets = [];
+  const request = (opts, onRes) => {
+    const req = http.request(opts, onRes);
+    req.on('socket', (s) => sockets.push(s));
+    return req;
+  };
+  return { request, sockets };
 }
 
 async function until(pred, what) {
@@ -157,17 +168,23 @@ describe('createMailSocketClient: wait', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  test('a mail wake is not lost when the signal aborts after the answer: the result is the mail', async () => {
+  test('a mail wake is not lost when the signal aborts the instant its answer is read: the result is the mail', async () => {
     await start();
     h.marks.o.main = mark('ready');
-    const client = createMailSocketClient({ sockPath: sock });
     const ac = new AbortController();
+    // The abort fires inside the answer's own `end` event, right behind the client's `end`
+    // listener and before anything awaiting the call can run. Only a client that settles on
+    // `end` itself keeps the mail; one that settles any later (a microtask, `close`) reads it
+    // as aborted, and the wake the hub handed over is lost to it.
+    const request = (opts, onRes) => http.request(opts, (res) => { onRes(res); res.once('end', () => ac.abort()); });
+    const client = createMailSocketClient({ sockPath: sock, request });
     const w = client.wait({ session: SESSION, pane: PANE, signal: ac.signal });
     await until(() => waiting() === 1, 'the waiter to connect');
-    await h.hub.send(B, 'orders', 'ping');
+    const sent = await h.hub.send(B, 'orders', 'ping');
     const got = await w;
-    ac.abort();
+    expect(ac.signal.aborted, 'the abort fired').toBe(true);
     expect(got.kind).toBe('mail');
+    expect(got.messageId).toBe(h.store.thread(sent.threadId).messages[0].id);
   });
 
   test('an absent socket is down/connect', async () => {
@@ -309,18 +326,39 @@ describe('createMailSocketClient: ack', () => {
     expect(Date.now() - t0).toBeLessThan(2000);
   });
 
-  test('nothing is left open after a wake and its ack: the listener closes at once', async () => {
+  test('nothing is left open after a wake and its ack: every client socket is destroyed, the listener untouched', async () => {
     await start();
     h.marks.o.main = mark('ready');
-    const client = createMailSocketClient({ sockPath: sock });
+    const t = tracked();
+    const client = createMailSocketClient({ sockPath: sock, request: t.request });
     const w = client.wait({ session: SESSION, pane: PANE });
     await until(() => waiting() === 1, 'the waiter to connect');
     await h.hub.send(B, 'orders', 'ping');
     const got = await w;
     expect(await client.ack({ session: SESSION, messageId: got.messageId })).toBe(true);
-    const t0 = Date.now();
-    await listener.close();
-    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(t.sockets, 'one socket per request').toHaveLength(2);
+    // The listener keeps an idle kept-alive socket open for seconds, so a client that let one
+    // be kept alive (or pooled it) fails this; listener.close() would destroy it and hide that.
+    await until(() => t.sockets.every((s) => s.destroyed), 'every client socket to be destroyed');
+    expect(waiting(), 'no waiter left on the hub').toBe(0);
+  });
+
+  test('a call settled before its answer ends destroys the connection: an oversized body the server never finishes', async () => {
+    const closed = [];
+    const file = path.join(dir, 'endless.sock');
+    const server = net.createServer((s) => {
+      s.on('error', () => {});
+      s.on('close', () => closed.push(true));
+      s.once('data', () => {
+        // Promises more than the cap, sends just over it, and then holds the connection open.
+        s.write(`HTTP/1.1 200 OK\r\nContent-Length: ${MAIL_BODY_CAP * 2}\r\n\r\n[tmuxifier-mail ${MID}] ${'x'.repeat(MAIL_BODY_CAP)}`);
+      });
+    });
+    await new Promise((resolve) => server.listen(file, resolve));
+    extras.push(() => new Promise((resolve) => { server.close(() => resolve()); }));
+    const client = createMailSocketClient({ sockPath: file });
+    expect(await client.wait({ session: SESSION, pane: PANE })).toEqual({ kind: 'down', reason: 'size' });
+    await until(() => closed.length === 1, 'the server to see the connection closed');
   });
 });
 
@@ -464,5 +502,63 @@ describe('createMailSocketClient: never throws or rejects', () => {
     await start();
     const client = createMailSocketClient({ sockPath: sock });
     expect(await client.wait({ session: SESSION, pane: PANE, signal: {} })).toEqual({ kind: 'idle' });
+  });
+});
+
+// The abort listener a wait puts on its signal is removed whatever settles the call, so a
+// long-lived signal (the mail part's, one per part) does not collect one per wait.
+describe('createMailSocketClient: the abort listener', () => {
+  const listeners = (signal) => getEventListeners(signal, 'abort').length;
+
+  test('wait removes it when the answer settles the call: mail, idle, a refusal, an unparsable 200', async () => {
+    await start();
+    h.marks.o.main = mark('ready');
+    const ac = new AbortController();
+    const w = createMailSocketClient({ sockPath: sock }).wait({ session: SESSION, pane: PANE, signal: ac.signal });
+    await until(() => waiting() === 1, 'the waiter to connect');
+    expect(listeners(ac.signal), 'while the wait is held').toBe(1);
+    await h.hub.send(B, 'orders', 'ping');
+    expect((await w).kind).toBe('mail');
+    expect(listeners(ac.signal), 'after mail').toBe(0);
+    for (const [status, body, want] of [[204, undefined, { kind: 'idle' }], [503, 'busy\n', { kind: 'down', reason: 'status 503' }], [200, 'hello\n', { kind: 'down', reason: 'parse' }]]) {
+      const s = await stub((req, res) => { res.writeHead(status); res.end(body); });
+      const signal = new AbortController().signal;
+      expect(await createMailSocketClient({ sockPath: s.file }).wait({ session: SESSION, pane: PANE, signal }), String(status)).toEqual(want);
+      expect(listeners(signal), `after a ${status}`).toBe(0);
+    }
+  });
+
+  test('wait removes it on the safety timeout and on a connection error', async () => {
+    const file = await silent();
+    const a = new AbortController().signal;
+    expect(await createMailSocketClient({ sockPath: file, waitTimeoutMs: 50 }).wait({ session: SESSION, pane: PANE, signal: a })).toEqual({ kind: 'down', reason: 'timeout' });
+    expect(listeners(a), 'after a timeout').toBe(0);
+    const b = new AbortController().signal;
+    expect(await createMailSocketClient({ sockPath: path.join(dir, 'nothing-here', 'sock') }).wait({ session: SESSION, pane: PANE, signal: b })).toEqual({ kind: 'down', reason: 'connect' });
+    expect(listeners(b), 'after a connection error').toBe(0);
+    const c = new AbortController().signal;
+    const request = () => { throw new Error('boom'); };
+    expect(await createMailSocketClient({ sockPath: sock, request }).wait({ session: SESSION, pane: PANE, signal: c })).toEqual({ kind: 'down', reason: 'connect' });
+    expect(listeners(c), 'after a request function that throws').toBe(0);
+  });
+
+  test('wait leaves none after an abort, and adds none for a signal already aborted', async () => {
+    await start();
+    const ac = new AbortController();
+    const w = createMailSocketClient({ sockPath: sock }).wait({ session: SESSION, pane: PANE, signal: ac.signal });
+    await until(() => waiting() === 1, 'the waiter to connect');
+    ac.abort();
+    expect(await w).toEqual({ kind: 'down', reason: 'aborted' });
+    expect(listeners(ac.signal), 'after the abort').toBe(0);
+    const done = AbortSignal.abort();
+    expect(await createMailSocketClient({ sockPath: sock }).wait({ session: SESSION, pane: PANE, signal: done })).toEqual({ kind: 'down', reason: 'aborted' });
+    expect(listeners(done), 'an already aborted signal').toBe(0);
+  });
+
+  test('ack takes no signal: one passed to it is never listened on', async () => {
+    const s = await stub((req, res) => { res.writeHead(200); res.end('ok\n'); });
+    const signal = new AbortController().signal;
+    expect(await createMailSocketClient({ sockPath: s.file }).ack({ session: SESSION, messageId: MID, signal })).toBe(true);
+    expect(listeners(signal)).toBe(0);
   });
 });

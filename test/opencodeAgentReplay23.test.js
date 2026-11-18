@@ -90,7 +90,7 @@ function replay({ echo = 0 } = {}) {
   const setups = [];
   const ids = new Set();
   const trail = [];
-  const echoed = [];
+  const redelivered = []; // what apply() returned for each echo
   let recent = [];
   let repeats = 0;
   recs.forEach((rec, i) => {
@@ -108,22 +108,22 @@ function replay({ echo = 0 } = {}) {
       ids.add(rec.event.id);
       if (repeat) repeats++;
       applied = core.reducer.apply(rec.event);
-      for (const old of recent) echoed.push(core.reducer.apply(old));
+      for (const old of recent) redelivered.push(core.reducer.apply(old));
       recent = echo > 0 ? [...recent, rec.event].slice(-echo) : [];
     }
     const fold = foldForPanes(core.reducer, PANES, SINCE, 0);
     trail.push({ n, kind: rec.kind, type: rec.event?.type ?? '', fold, created: rec.event?.created, applied, repeat });
   });
-  return { trail, setups, repeats, echoed, core };
+  return { trail, setups, repeats, redelivered, core };
 }
 
 test('the recorded OpenCode 2.3.0 trace drives the per-pane markers through every scenario', () => {
   expect(PANES.map((p) => p.session)).toEqual(['octest', 'octest2']);
   expect(recs).toHaveLength(1983);
 
-  const { trail, setups, repeats, echoed } = replay();
+  const { trail, setups, repeats, redelivered } = replay();
   expect(trail).toHaveLength(1983);
-  expect(echoed).toEqual([]); // the plain replay re-delivers nothing of its own
+  expect(redelivered, 'the plain replay re-delivers nothing of its own').toEqual([]);
 
   const at = (n) => sc(trail[n - 1].fold.get('octest'));
   const at2 = (n) => sc(trail[n - 1].fold.get('octest2'));
@@ -140,7 +140,7 @@ test('the recorded OpenCode 2.3.0 trace drives the per-pane markers through ever
 
   // Hand-overs: 812 and 1240 are setups for another directory in the same
   // server, 1913 is the server restarted after its kill (new pid).
-  expect(setups).toEqual([
+  expect(setups, 'plugin.setup lines and whether each kept the pid').toEqual([
     { n: 1, samePid: false },
     { n: 812, samePid: true },
     { n: 1240, samePid: true },
@@ -149,7 +149,7 @@ test('the recorded OpenCode 2.3.0 trace drives the per-pane markers through ever
 
   // Events reach every plugin instance: 611 of the 1814 events are a repeat of
   // an earlier line's event id, and a repeat changes nothing at all.
-  expect(repeats).toBe(611);
+  expect(repeats, 'lines repeating an earlier line\'s event id').toBe(611);
   for (const t of trail) {
     if (!t.repeat) continue;
     expect(t.applied, `line ${t.n}`).toBe(false);
@@ -314,19 +314,21 @@ test('the recorded OpenCode 2.3.0 trace drives the per-pane markers through ever
   // recording before the server is killed (no execution.succeeded between 1597
   // and 1982): the operator prompts of f7-agent-scoped (1707) and
   // k-busy-then-queue (1844) join it, and the mail synthetic queued in it
-  // (1903) changes nothing. The session stays working, except while asking.
+  // (1903) changes nothing. The session stays working, except while asking. Which cause the
+  // marker carries while working is incidental here (the turn's last unblock), so only the state
+  // is pinned.
+  const working = (n, what) => expect(at(n), `${what} (line ${n})`).toMatch(/^working\//);
   const openFrom = find('f7-project-opencode-json', 'session.execution.started');
   const restartAt = setups.at(-1).n;
   for (let n = openFrom; n < restartAt; n++) {
     expect(trail[n - 1].type, `line ${n}`).not.toMatch(END_RE);
   }
-  expect(at(find('f7-agent-scoped', 'session.inbox.enqueued'))).toBe('working/unblock');
+  working(find('f7-agent-scoped', 'session.inbox.enqueued'), 'the f7-agent-scoped prompt joining the open turn');
   expect(at(find('f7-agent-scoped', 'permission.asked'))).toBe('blocked/permission');
   expect(at(find('f7-agent-scoped', 'permission.replied'))).toBe('working/unblock');
-  expect(at(find('k-busy-then-queue', 'session.inbox.enqueued', (e) => e.data?.item?.type === 'user'))).toBe('working/unblock');
-  const kQueued = find('k-busy-then-queue', 'session.inbox.enqueued', isMail);
-  expect(at(kQueued)).toBe('working/unblock');
-  expect(at(restartAt - 1)).toBe('working/unblock');
+  working(find('k-busy-then-queue', 'session.inbox.enqueued', (e) => e.data?.item?.type === 'user'), 'the k-busy-then-queue prompt joining the open turn');
+  working(find('k-busy-then-queue', 'session.inbox.enqueued', isMail), 'the mail synthetic queued in the open turn');
+  working(restartAt - 1, 'the last line before the restart');
 
   // (k) the server is killed and restarted (1907-1983): the new server is a
   // new process with nothing to take over from, delivers the old inbox item
@@ -359,12 +361,12 @@ test('the recorded OpenCode 2.3.0 trace drives the per-pane markers through ever
   const F8_RE = /^session\.(inbox\.delivered|viewed|renamed|instructions\.updated|usage\.updated|reasoning\..+|step\..+|tool\..+|text\..+)$/;
   const moved = trail.filter((t) => t.kind === 'event' && F8_RE.test(t.type)
     && JSON.stringify([...t.fold]) !== JSON.stringify([...trail[t.n - 2].fold])).map((t) => t.n);
-  expect(moved).toEqual([kStep]);
-  expect(trail.filter((t) => t.kind === 'event' && F8_RE.test(t.type)).length).toBe(1270);
+  expect(moved, 'lines where an F8 event moved a marker').toEqual([kStep]);
+  expect(trail.filter((t) => t.kind === 'event' && F8_RE.test(t.type)).length, 'F8 event lines').toBe(1270);
 
   // No execution end ever leaves a pane blocked.
   const ends = trail.filter((t) => t.kind === 'event' && END_RE.test(t.type));
-  expect(ends.length).toBeGreaterThan(30);
+  expect(ends.length, 'execution end lines (every copy; 21 distinct events)').toBe(32);
   for (const t of ends) {
     expect(at(t.n).startsWith('blocked'), `line ${t.n}`).toBe(false);
     expect(at2(t.n).startsWith('blocked'), `line ${t.n}`).toBe(false);
@@ -377,9 +379,12 @@ test('the recorded OpenCode 2.3.0 trace drives the per-pane markers through ever
 // re-delivery must report no change.
 test('a re-delivered event of the 2.3.0 trace changes nothing', () => {
   const plain = replay();
-  const echoed = replay({ echo: 3 });
-  expect(plain.echoed).toEqual([]);
-  expect(echoed.echoed.length).toBeGreaterThan(4000);
-  expect(echoed.echoed.every((applied) => applied === false)).toBe(true);
-  expect(echoed.trail.map((t) => t.fold)).toEqual(plain.trail.map((t) => t.fold));
+  const withEchoes = replay({ echo: 3 });
+  expect(plain.redelivered, 'the plain replay re-delivers nothing').toEqual([]);
+  expect(withEchoes.redelivered.length, 'echoes re-delivered').toBeGreaterThan(4000);
+  const changed = withEchoes.redelivered.flatMap((applied, i) => (applied === false ? [] : [i]));
+  expect(changed, 'indexes of echoes that reported a change').toEqual([]);
+  for (const t of withEchoes.trail) {
+    expect(t.fold, `line ${t.n} with echoes vs the plain replay`).toEqual(plain.trail[t.n - 1].fold);
+  }
 });

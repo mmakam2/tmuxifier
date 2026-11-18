@@ -261,7 +261,10 @@ and the message text shown as plain text. **← Threads** goes back.
 | `dropped` | Its thread was closed before it was delivered |
 
 A message handed over but never confirmed (the agent exited at that moment) is offered again
-when that pane listens again, or after 10 minutes to any listening pane of the session. In a rare
+when that pane listens again, or after 10 minutes to any listening pane of the session. The
+same 10 minutes apply when the receiving OpenCode moved to another pane, or another session
+became the tmux session's mail target, between the hand-over and the wake: the plugin drops that
+wake and the message waits for the re-offer. In a rare
 case that delivers a message twice; the message id in its first line lets the agent see that.
 
 **Refused** lists the newest 200 attempts Tmuxifier turned down: which session tried, the target
@@ -378,19 +381,25 @@ anything and never overrides a deny.
 OpenCode decides about `tmx` commands as it does for any other command, under your rules. The
 plugin looks for such a rule in these places: your global OpenCode config (`opencode.json`,
 `opencode.jsonc` or the legacy `config.json` in `$OPENCODE_CONFIG_DIR`, and in
-`$XDG_CONFIG_HOME/opencode/` or `~/.config/opencode/`); a project's `opencode.json`,
+`$XDG_CONFIG_HOME/opencode/` or `~/.config/opencode/`); the system-wide `/etc/opencode/`, read the
+same way; a project's `opencode.json`,
 `opencode.jsonc` and `.opencode/` config, in the project's folder and every folder above it;
 agent and mode definition files (markdown in `.opencode/agent/`, `.opencode/agents/`,
 `.opencode/mode/` or `.opencode/modes/` at each of those project levels, and in `agent/`,
-`agents/`, `mode/` or `modes/` in the global config folder), including those in sub-folders; and
+`agents/`, `mode/` or `modes/` in the global and system-wide config folders), including those in
+sub-folders; and
 the `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT` and `OPENCODE_PERMISSION` environment variables.
 A rule is a `permission.shell` or `permission.bash` entry, a `permission` setting that covers
 every tool, or the same under an agent; an agent or mode file counts when it mentions
 `permission` at all. A file it cannot read or parse counts as a rule, and so does a folder of
 agent files it cannot list, one more than four sub-folders deep, or one holding more than 500
-entries in all. A rule set anywhere else, a system-wide config for
-example, may not be seen, and the plugin then still lifts the `ask` on a plain `tmx`. A change to
-a config file applies to the next command, without a restart.
+entries in all. A rule set anywhere else, a remote or organisation config OpenCode fetches for
+example, is not seen, and the plugin then still lifts the `ask` on a plain `tmx`. A change to a
+config file applies to the next command, without a restart.
+
+`tmx` is run by name, so in a shell where something else answers to `tmx` first (a shell function
+or alias of that name, defined earlier in a long-lived shell session), that runs instead and the
+plugin's allow applies to it. Do not define a `tmx` function or alias in a box's shell.
 
 To remove it from a box: for Claude Code, delete those three hook entries, the rule and the two
 `autoMode` entries marked `[tmuxifier-mail]` from `settings.json`, and `rm -rf
@@ -487,7 +496,14 @@ describes (that also ends OpenCode's state reporting). Then `rm -rf ~/.tmuxifier
   a repeat.
 - **Do not use `tmx` from a command typed with OpenCode's `!` prefix.** It is not a command the
   agent ran, so the plugin may not name its pane, and `tmx` then refuses (`cannot be
-  identified`). Run `tmx` from a normal shell instead.
+  identified`). Run `tmx` from a normal shell instead. In the rare case that you type, with `!`,
+  exactly the command the agent is starting at the same instant, your shell can take the agent's
+  pane and the agent's command reads `cannot be identified`; within one OpenCode project folder
+  the worst case is the same tmux session's pane.
+- **One OpenCode server per user.** The plugin keeps the wakes it has posted but not yet
+  confirmed in `~/.tmuxifier-mail/opencode-inflight.json`. A second OpenCode server process
+  of the same user on one box would overwrite that file, which can deliver a message twice (never
+  lose one). OpenCode normally runs one shared server per user.
 - **One OpenCode server per user is assumed.** OpenCode runs its plugin inside a single server
   shared by all of one user's windows, and messaging is built on that.
 - **After setup installs or updates the plugin, OpenCode projects that were already open may

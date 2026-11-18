@@ -191,7 +191,9 @@ test('evidence older than since does not count; evidence at since does', () => {
   w.inbox('ses_b', 60, '/proj');
   const panes = panesOf(row('web', '1', '1', 'opencode', '/proj', '%1'));
   const at = (n) => mailTargets(w.r, panes, new Map([['web', n]])).get('web')?.sessionID;
-  expect(at(55)).toBe('ses_b'); // ses_a's prompt predates this TUI, ses_b's does not
+  // A floor between the two prompts: ses_b's, after it, still counts. (ses_a's, before it, would
+  // lose to the newer ses_b anyway, so this line does not show the filter; at(61) does.)
+  expect(at(55)).toBe('ses_b');
   expect(at(60)).toBe('ses_b');
   expect(at(61)).toBe(undefined); // both predate it: not listening
   expect(at(50)).toBe('ses_b');
@@ -333,10 +335,18 @@ test('only the active pane of the active window of an opencode session is a targ
 test('mailTargets leaves the reducer and the marker fold untouched', () => {
   const w = world();
   w.created('ses_a', 10, '/proj');
+  w.created('ses_child', 11, '/proj', 'ses_a');
   w.inbox('ses_a', 50, '/proj');
+  w.start('ses_a', 51);
+  w.viewed('ses_a', 52_000);
   const panes = panesOf(row('web', '1', '1', 'opencode', '/proj', '%1'));
+  // A deep copy of everything the reducer holds (sessions with their blocks and shells, the
+  // inbox hints, the seen event ids): toEqual compares Maps and Sets by content.
   const fold = foldForPanes(w.r, panes, SINCE0('web'), 100);
-  mailTargets(w.r, panes, SINCE0('web'));
+  const before = structuredClone(w.r.state);
+  expect(before.sessions.size, 'the snapshot holds the sessions').toBe(2);
+  expect(mailTargets(w.r, panes, SINCE0('web')).get('web').sessionID).toBe('ses_a');
+  expect(w.r.state, 'the reducer state after mailTargets').toEqual(before);
   expect(foldForPanes(w.r, panes, SINCE0('web'), 100)).toEqual(fold);
 });
 

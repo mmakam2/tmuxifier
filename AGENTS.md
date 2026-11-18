@@ -452,8 +452,8 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   speaks for its root), else `none`, because the shared server's `TMUX_PANE` is the first TUI's.
   A **permission handler** (`permission.evaluate`) sets `allow` only for one plain `tmx` command
   (`isPlainTmx`, an argument allowlist) and never denies; it does nothing when
-  `createOperatorRules` finds any shell/bash permission rule (global and project configs up the
-  tree, agent markdown, env), unreadable files counting as rules. OpenCode runs those hooks only
+  `createOperatorRules` finds any shell/bash permission rule (`/etc/opencode`, global and
+  project configs up the tree, agent markdown, env), unreadable files counting as rules. OpenCode runs those hooks only
   in the instance owning the session's directory, so the entry point keeps every live `ctx`,
   registers the hooks on each, and arms mail only for hooked directories; taggers and handlers
   are process-wide and survive hand-over. Mail in projects already open when the plugin is
