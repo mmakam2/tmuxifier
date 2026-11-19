@@ -2,10 +2,51 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A single-user web dashboard for managing headless boxes over SSH. Each box opens a
-browser terminal backed by a tmux session that lives **on the box**, so closing the tab,
-losing the network, or restarting Tmuxifier leaves your work running — reconnecting drops you
-back into the same state.
+**A self-hosted command center for AI coding agents running across your own machines.**
+
+Tmuxifier runs Claude Code, OpenCode, Codex, pi and Antigravity in persistent tmux sessions on
+your headless boxes, shows you the moment one of them is working, finished, or waiting on you,
+lets agents on different boxes hand each other work, and manages the boxes they run on — from
+first SSH setup to Proxmox provisioning, fleet-wide commands and health monitoring. Drive it from
+a browser, an Android phone, or another agent through its MCP server.
+
+It is one Node process for one operator, self-contained in its repo folder, and it stores **no
+SSH secrets**: it shells out to your OpenSSH client and your existing keys, agent and
+`~/.ssh/config`. Every session lives in tmux **on the box**, so closing the tab, losing the
+network, or restarting Tmuxifier leaves the agents working — reconnecting drops you back into
+the same state.
+
+## What it does
+
+**Supervise agents**
+- **Live agent state** for every session and split pane — *working*, *needs you*, *done*,
+  *idle* — reported by the agents themselves (Claude Code hooks, an OpenCode plugin, an OSC 7501
+  reporter for Codex, pi and Antigravity) and pushed to the browser in about a second.
+- An **agents board**, sidebar chips, an event timeline, browser notifications and phone push
+  when an agent needs you.
+- An **agent switcher** (hold Ctrl+Shift, tap K) that jumps to any agent session on any box,
+  with a live preview.
+
+**Orchestrate agents**
+- **Agent messaging**: an agent on one box runs `tmx send billing "…"`, Tmuxifier wakes the
+  agent on `billing` when it is idle, and the answer comes back with `tmx reply` — gated per
+  box, with every thread visible and stoppable in the Messages drawer.
+- An **MCP server** that lets Claude Code (or any MCP client) drive the fleet: read panes, send
+  prompts and keys, wait for an agent to finish, run fleet commands, provision guests.
+- An **Android agent console** for checking on and answering agents from a phone.
+
+**Manage the fleet**
+- **Persistent browser terminals** (xterm.js, up to four splits) that reattach to the box's own
+  tmux session, with uploads, clipboard and local voice dictation.
+- **Server-side setup jobs** that install tmux, shell frameworks, Node and the agent CLIs, seed
+  your Claude/Codex credentials if you choose, and wire up agent state and messaging.
+- **Fleet Command** — one command or saved script across any selection of boxes, as a persisted
+  job with per-box results.
+- **Health monitoring** — reachability, CPU/memory/disk, sparklines and events, probed over one
+  shared SSH connection per box so it never trips `fail2ban`.
+- **Proxmox and NetBox** — provision LXC containers from presets with NetBox IP allocation,
+  power and re-address guests, deprovision with IP release.
+- A **standby dashboard** with service tiles and live Pi-hole, TrueNAS, UniFi and Immich cards.
 
 ## Contents
 
@@ -16,15 +57,16 @@ back into the same state.
 - [Authentication](#authentication)
 - [Architecture](#architecture)
 - [Documentation](#documentation)
-- [How persistence works](#how-persistence-works)
-- [Standby dashboard](#standby-dashboard)
-- [Terminal features](#terminal-features)
-- [Themes](#themes)
-- [Android app (agent console)](#android-app-agent-console)
-- [MCP server](#mcp-server)
+- [Agent supervision](#agent-supervision)
 - [Agent messaging](#agent-messaging)
+- [MCP server](#mcp-server)
+- [Android app (agent console)](#android-app-agent-console)
+- [How persistence works](#how-persistence-works)
+- [Terminal features](#terminal-features)
 - [Status, health & Fleet Command](#status-health--fleet-command)
 - [Proxmox](#proxmox)
+- [Standby dashboard](#standby-dashboard)
+- [Themes](#themes)
 - [Security](#security)
 - [Deployment](#deployment)
 - [Attributions](#attributions)
@@ -104,22 +146,27 @@ relying-party-id rules passkeys live by, and the passkey security model are cove
 
 ## Architecture
 
-One Node process serves everything: a Fastify server hosts the REST API, the `/term`
-WebSocket, and the static web bundle. The browser side is a single-page TypeScript app;
-each terminal is an xterm.js pane fed by its own per-viewer PTY on the server, which
+One Node process serves everything: a Fastify server hosts the REST API, the `/term` and
+`/live` WebSockets, and the static web bundle. The browser side is a single-page TypeScript
+app; each terminal is an xterm.js pane fed by its own per-viewer PTY on the server, which
 shells out to **your** OpenSSH client — Tmuxifier stores no SSH secrets — and attaches a
-tmux session that lives on the box.
+tmux session that lives on the box. The Android app and the MCP server are further clients
+of the same REST API, each enrolled as a revocable device.
 
 ```mermaid
 flowchart LR
-  subgraph browser["Your browser"]
-    SPA["Single-page app — xterm.js terminals,<br/>standby dashboard, Fleet Command,<br/>Proxmox hub, settings"]
+  subgraph clients["Your devices"]
+    SPA["Web app — xterm.js terminals,<br/>agents board, Messages drawer,<br/>Fleet Command, Proxmox hub"]
+    APP["Android agent console"]
+    MCPC["MCP server<br/>(driven by another agent)"]
   end
 
   subgraph host["Tmuxifier host (self-contained in the repo folder)"]
     subgraph fastify["Fastify server"]
-      AUTH["Auth gate<br/>password / OIDC / passkeys"]
+      AUTH["Auth gate<br/>password / OIDC / passkeys /<br/>device tokens"]
       TERM["Per-viewer terminal PTYs"]
+      AGENT["Agent state<br/>watch streams · seen watermark ·<br/>live push · FCM"]
+      MAIL["Agent mail hub<br/>policy-gated threads"]
       JOBS["Persisted job managers<br/>box setup · Fleet Command ·<br/>provision · lifecycle · voice install"]
       POLL["Status poller · health events ·<br/>service checks (HTTP/TCP, Pi-hole,<br/>TrueNAS, UniFi, Immich)"]
       PROX["Proxmox + NetBox API clients<br/>(TLS pinned, tokens sealed)"]
@@ -130,15 +177,17 @@ flowchart LR
   end
 
   subgraph net["Your network"]
-    BOX["Headless boxes<br/>tmux sessions live here"]
+    BOX["Headless boxes<br/>tmux sessions + AI agents live here<br/>(agent hooks, plugin, OSC reporter, tmx)"]
     PVE["Proxmox VE"]
     NBX["NetBox"]
     LAN["LAN services"]
   end
 
-  SPA -->|"REST /api/* · WebSocket /term"| AUTH
-  AUTH --> TERM & JOBS & POLL & PROX & VOICE
-  TERM & JOBS & POLL -->|"ssh"| SSHC
+  SPA -->|"REST /api/* · WebSocket /term, /live"| AUTH
+  APP & MCPC -->|"REST /api/* · device token"| AUTH
+  AUTH --> TERM & AGENT & MAIL & JOBS & POLL & PROX & VOICE
+  TERM & AGENT & JOBS & POLL -->|"ssh"| SSHC
+  MAIL -->|"unix socket forwarded<br/>over the same connection"| SSHC
   SSHC --> BOX
   PROX --> PVE & NBX
   POLL --> LAN
@@ -149,7 +198,8 @@ Long-running work — box setup, Fleet Command runs, Proxmox provisioning and li
 the voice install — runs as persisted server-side jobs, so it survives the tab (and the
 network) that started it. Status probes and service checks likewise run on a server-side
 interval and serve a cached snapshot, so SSH and API traffic stays flat no matter how many
-dashboard tabs are open. The full per-module map lives in [AGENTS.md](AGENTS.md).
+dashboard tabs are open; agent state changes arrive between sweeps through one resident watch
+stream per box. The full per-module map lives in [AGENTS.md](AGENTS.md).
 
 ## Documentation
 
@@ -158,13 +208,72 @@ dashboard tabs are open. The full per-module map lives in [AGENTS.md](AGENTS.md)
 | [Configuration reference](docs/configuration.md) | every option, `config.json`, terminal fonts, the settings modal |
 | [Authentication](docs/authentication.md) | password & OIDC modes, passkeys, require-a-passkey |
 | [Boxes & setup jobs](docs/boxes-and-setup.md) | setup jobs, tools checklist, the Claude Code and OpenCode checkboxes, AI CLI auth seeding, post-setup script |
-| [Terminal features](docs/terminal.md) | splits, uploads & clipboard, voice dictation, voice link, host shell, reconnect |
-| [Standby dashboard](docs/dashboard.md) | service tiles, icons, Pi-hole/TrueNAS/UniFi/Immich cards |
-| [Status, health & Fleet Command](docs/fleet-and-health.md) | rate-limit-safe probing, health events, fleet jobs, themes |
-| [Proxmox](docs/proxmox.md) | LXC provisioning, guest lifecycle, deprovision |
-| [MCP server](docs/mcp.md) | enrolling, registering with Claude Code, the tool reference, what it cannot do |
 | [Agent messaging](docs/agent-messaging.md) | turning it on for two boxes, what agents type, the Messages drawer, stopping a thread, limits |
+| [MCP server](docs/mcp.md) | enrolling, registering with Claude Code, the tool reference, what it cannot do |
+| [Android app](docs/android-app.md) | getting the app, pairing, push notifications |
+| [Terminal features](docs/terminal.md) | splits, agent switcher, uploads & clipboard, voice dictation, voice link, host shell, reconnect |
+| [Status, health & Fleet Command](docs/fleet-and-health.md) | rate-limit-safe probing, health and agent events, fleet jobs, themes |
+| [Proxmox](docs/proxmox.md) | LXC provisioning, guest lifecycle, re-address, deprovision |
+| [Standby dashboard](docs/dashboard.md) | agents board, service tiles, icons, Pi-hole/TrueNAS/UniFi/Immich cards |
 | [Deployment](docs/DEPLOY.md) | systemd, passwordless SSH keys, TLS, OIDC behind a tunnel |
+
+## Agent supervision
+Every agent session on every box reports one of four states — **working**, **needs you** (a
+permission prompt, a question, a sign-in), **done** (finished a turn you haven't looked at yet)
+and **idle** — per tmux session and per split pane. The state comes from the agent itself,
+never from scraping the screen: ticking **Claude Code** in a box's setup installs its hooks,
+ticking **OpenCode** installs an agent-state plugin, and every setup installs an OSC 7501
+reporter that covers **Codex**, **pi** and **Antigravity**. A resident watch stream on each
+box's existing SSH connection carries a change to the browser in about a second.
+
+Those states drive the sidebar chips, the **agents board** on the standby dashboard, the agent
+switcher, the health event timeline, and notifications — in the browser and, through the
+Android app, as phone push. A **done** clears only when you actually look at it from a visible,
+focused tab, and an agent in a session you are attached to never notifies. How each agent is
+wired up is in [boxes & setup jobs](docs/boxes-and-setup.md); the events and notifications are
+in [status, health & Fleet Command](docs/fleet-and-health.md).
+
+## Agent messaging
+The Claude Code and OpenCode (2.3.0 or later) sessions on your boxes can hand each other work:
+the agent on one box runs `tmx send billing "…"`, Tmuxifier holds the message until the session
+on `billing` is idle and wakes it with it (nothing is typed into the terminal), and the answer
+comes back through `tmx reply`. Every message travels over the SSH connections Tmuxifier already
+holds. Each box is off until you turn on its send and receive switches and their box lists in the
+Edit dialog, and the **Messages** drawer shows every thread and every refused attempt, with a
+**Stop** per thread. Setup with Claude Code or OpenCode ticked installs the command and a skill,
+plus Claude Code's hooks or the OpenCode plugin. Turning it on, what the agents do, and the
+limits of this first version are in [the agent messaging guide](docs/agent-messaging.md).
+
+## MCP server
+`src/mcp/index.js` is a dependency-free stdio [MCP](https://modelcontextprotocol.io) server
+that lets Claude Code (or any MCP client) operate the fleet: list boxes and their agent states
+(Claude Code, OpenCode, Codex, pi or Antigravity), read panes, send prompts and keys to the agent sessions on boxes, run
+fleet commands, start setup jobs, provision guests and operate guest power — with blocking `wait_for_agent` /
+`wait_for_job` tools so one call replaces a polling loop. Register that file as the command —
+`claude mcp add tmuxifier -- node /path/to/tmuxifier/src/mcp/index.js` — from any directory;
+`npm run mcp` is for a manual smoke test only, and then as `npm run -s mcp`, because npm prints
+its run-script banner on stdout, which is the protocol stream. It is a renderer of the same
+REST API the Android app uses, enrolled as a device (`npm run mcp-enroll`) and revocable from
+Settings → Devices; administration (credentials, deletion, deprovision) has no code path in
+it. Setup and the tool reference are in [the MCP guide](docs/mcp.md).
+
+## Android app (agent console)
+A native Kotlin/Compose companion in [`android/`](android/) for driving **agent sessions from a
+phone**: fleet glance with waiting-first sorting, a read-only pane snapshot
+rendered as native text (tmux stays the terminal emulator — phone viewing can never resize
+your desktop windows), a semantic action row, a local-until-send composer, and FCM push when
+an agent needs you. Devices enroll with a single-use **pairing code** minted in Settings →
+Devices, where the signed APK is also downloadable once one has been published on your server.
+
+Three ways to get the app. Run `npm run fetch-apk` on your server — it downloads the published
+build into `data/app/` against a pinned digest, needs no toolchain, and Settings → Devices
+offers the download link at once. Or join the **[internal testing
+track](https://play.google.com/apps/internaltest/4701129402312577506)** for the same
+Play-signed build with auto-updates — it carries nothing project-specific, so it works against
+*your* server once you pair it. Or build one on the server (Settings → Devices → **Build app**,
+which needs the Android SDK on the host). Either way the app talks only to the Tmuxifier you
+pair it with; only push notifications need Google Play Services on the phone — a de-googled
+phone gets everything else. Details in [the Android app guide](docs/android-app.md).
 
 ## How persistence works
 Each terminal runs `ssh -tt <box> "tmux -u new-session -A -s <session>"`, so the session
@@ -185,15 +294,6 @@ A saved Fleet Command script can also be selected to run as the last step of set
 tools and credentials, before the tmux session. The setup-job lifecycle, the tools checklist,
 and the seeding security model are in [boxes & setup jobs](docs/boxes-and-setup.md).
 
-## Standby dashboard
-When no terminal is docked, the stage shows a standby dashboard: **service tiles** for your
-homelab's web services (with automatically resolved logos and server-side liveness checks), a
-**fleet overview** card per box, and an **infrastructure readout** of Proxmox node health and
-NetBox IPAM utilization. Four credentialed tile kinds go beyond up/down: **Pi-hole**,
-**TrueNAS**, **UniFi**, and **Immich** render live stat cards from their APIs — all read-only,
-with each secret AES-256-GCM encrypted at rest. Per-integration setup walkthroughs are in the
-[dashboard guide](docs/dashboard.md).
-
 ## Terminal features
 Up to four terminals share the stage in nested, resizable splits. Pasting an image or dropping a
 file onto a terminal uploads it to the box over the existing SSH connection and types the quoted
@@ -206,62 +306,12 @@ box row has a
 **Reconnect** action, plus a confirm-gated **Forget host key** for a box you rebuilt. Details
 in [terminal features](docs/terminal.md).
 
-## Themes
-**Settings → Appearance** re-skins the whole app — chrome, standby dashboard, terminal glass and
-the Fleet script editor — switching between the built-in **Vercel** (pure black, hairline gray,
-deployment blue — the default), **Bench Instrument** (charcoal chassis, amber phosphor) and
-**Original** (deep navy, cyan glow) looks, saved on the Tmuxifier host so
-every browser you sign in from follows the same pick; details, and how to add a theme, are in
-[appearance & themes](docs/fleet-and-health.md#appearance).
-
-## Android app (agent console)
-A native Kotlin/Compose companion in [`android/`](android/) for driving **Claude Code
-sessions from a phone**: fleet glance with waiting-first sorting, a read-only pane snapshot
-rendered as native text (tmux stays the terminal emulator — phone viewing can never resize
-your desktop windows), a semantic action row, a local-until-send composer, and FCM push when
-an agent needs you. Devices enroll with a single-use **pairing code** minted in Settings →
-Devices, where the signed APK is also downloadable once one has been published on your server.
-
-Three ways to get the app. Run `npm run fetch-apk` on your server — it downloads the published
-build into `data/app/` against a pinned digest, needs no toolchain, and Settings → Devices
-offers the download link at once. Or join the **[internal testing
-track](https://play.google.com/apps/internaltest/4701129402312577506)** for the same
-Play-signed build with auto-updates — it carries nothing project-specific, so it works against
-*your* server once you pair it. Or build one on the server (Settings → Devices → **Build app**,
-which needs the Android SDK on the host). Either way the app talks only to the Tmuxifier you
-pair it with; only push notifications need Google Play Services on the phone — a de-googled
-phone gets everything else. Details in [the Android app guide](docs/android-app.md).
-
-## MCP server
-`src/mcp/index.js` is a dependency-free stdio [MCP](https://modelcontextprotocol.io) server
-that lets Claude Code (or any MCP client) operate the fleet: list boxes and their agent states
-(Claude Code, OpenCode, Codex, pi or Antigravity), read panes, send prompts and keys to the agent sessions on boxes, run
-fleet commands, start setup jobs, provision guests and operate guest power — with blocking `wait_for_agent` /
-`wait_for_job` tools so one call replaces a polling loop. Register that file as the command —
-`claude mcp add tmuxifier -- node /path/to/tmuxifier/src/mcp/index.js` — from any directory;
-`npm run mcp` is for a manual smoke test only, and then as `npm run -s mcp`, because npm prints
-its run-script banner on stdout, which is the protocol stream. It is a renderer of the same
-REST API the Android app uses, enrolled as a device (`npm run mcp-enroll`) and revocable from
-Settings → Devices; administration (credentials, deletion, deprovision) has no code path in
-it. Setup and the tool reference are in [the MCP guide](docs/mcp.md).
-
-## Agent messaging
-The Claude Code and OpenCode (2.3.0 or later) sessions on your boxes can hand each other work:
-the agent on one box runs `tmx send billing "…"`, Tmuxifier holds the message until the session
-on `billing` is idle and wakes it with it (nothing is typed into the terminal), and the answer
-comes back through `tmx reply`. Every message travels over the SSH connections Tmuxifier already
-holds. Each box is off until you turn on its send and receive switches and their box lists in the
-Edit dialog, and the **Messages** drawer shows every thread and every refused attempt, with a
-**Stop** per thread. Setup with Claude Code or OpenCode ticked installs the command and a skill,
-plus Claude Code's hooks or the OpenCode plugin. Turning it on, what the agents do, and the
-limits of this first version are in [the agent messaging guide](docs/agent-messaging.md).
-
 ## Status, health & Fleet Command
 A single server-side loop probes every box over a shared SSH ControlMaster with adaptive
 backoff and bounded fan-out, so status traffic stays low enough never to trip a box's
 `fail2ban`-style brute-force protection — no matter how many dashboard tabs are open. The same
 samples feed optional per-box health sparklines and an event timeline (down/up transitions, resource
-thresholds, and **Claude Code / OpenCode needs-you/finished** agent events, with optional browser
+thresholds, and **agent needs-you / finished / exited** events, with optional browser
 notifications). **Fleet Command** runs a command or saved script across any selection of boxes
 as a persisted server-side job with per-box results. The full rate-limit-safety design is in
 [status, health & Fleet Command](docs/fleet-and-health.md).
@@ -276,6 +326,24 @@ NetBox-managed VLAN/IP (next free address allocated, old record released, live r
 running container), and a confirm-gated **Deprovision** that destroys the guest and releases its
 NetBox IP. Token permissions, presets, the shell-framework update
 clamps, and the lifecycle rules are in [the Proxmox guide](docs/proxmox.md).
+
+## Standby dashboard
+When no terminal is docked, the stage shows a standby dashboard: an **agents board** with every
+agent session sorted into needs-you, done, working and idle columns (a card docks that session),
+**service tiles** for your homelab's web services (with automatically resolved logos and
+server-side liveness checks), a **fleet overview** card per box, and an **infrastructure
+readout** of Proxmox node health and NetBox IPAM utilization. Four credentialed tile kinds go
+beyond up/down: **Pi-hole**, **TrueNAS**, **UniFi**, and **Immich** render live stat cards from
+their APIs — all read-only, with each secret AES-256-GCM encrypted at rest. Per-integration
+setup walkthroughs are in the [dashboard guide](docs/dashboard.md).
+
+## Themes
+**Settings → Appearance** re-skins the whole app — chrome, standby dashboard, terminal glass and
+the Fleet script editor — switching between the built-in **Vercel** (pure black, hairline gray,
+deployment blue — the default), **Bench Instrument** (charcoal chassis, amber phosphor) and
+**Original** (deep navy, cyan glow) looks, saved on the Tmuxifier host so
+every browser you sign in from follows the same pick; details, and how to add a theme, are in
+[appearance & themes](docs/fleet-and-health.md#appearance).
 
 ## Security
 Tmuxifier can SSH into your whole fleet, so the login gate is the crown jewel. It binds to
