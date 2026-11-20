@@ -46,7 +46,7 @@ test('containerMatches: empty or blank term matches everything', () => {
 });
 
 test('containerMatches: label, host name, node, vmid, and state — case-insensitive substrings', () => {
-  expect(containerMatches(C, 'DATUM')).toBe(true);
+  expect(containerMatches(C, 'APP01')).toBe(true);
   expect(containerMatches(C, 'lab')).toBe(true);
   expect(containerMatches(C, 'pve-n02')).toBe(true);
   expect(containerMatches(C, '160')).toBe(true);
