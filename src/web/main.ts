@@ -503,7 +503,24 @@ function getSearchTerm(): string {
   return input ? input.value.trim().toLowerCase() : '';
 }
 
+// The clear key exists only while there is something to clear — a search
+// term or an agent-strip filter — so an unfiltered list keeps the plain
+// recessed strip. Every filter change flows through filterAndPaint(), which
+// calls this, so the key can never outlive (or miss) a filter.
+function syncSearchClear() {
+  const input = app.querySelector('#search') as HTMLInputElement | null;
+  const clear = app.querySelector('#search-clear') as HTMLButtonElement | null;
+  if (!input || !clear) return;
+  const searching = input.value !== '';
+  const filtering = agentFilter !== null;
+  clear.hidden = !searching && !filtering;
+  const label = searching && filtering ? 'Clear search and filter' : filtering ? 'Clear filter' : 'Clear search';
+  clear.title = label;
+  clear.setAttribute('aria-label', label);
+}
+
 function filterAndPaint() {
+  syncSearchClear();
   const term = getSearchTerm();
   const filtered = allBoxes.filter(b => boxMatchesSearch(b, term) && agentFilterMatches(b));
   lastAgentFilterKey = agentFilterKey();
@@ -1773,15 +1790,15 @@ async function renderDashboard() {
   });
   const searchInput = app.querySelector('#search') as HTMLInputElement;
   const searchClear = app.querySelector('#search-clear') as HTMLButtonElement;
-  // The clear key only exists while there is something to clear, so an empty
-  // field keeps the plain recessed strip it has always been.
-  const syncSearchClear = () => { searchClear.hidden = searchInput.value === ''; };
-  searchInput.addEventListener('input', () => { syncSearchClear(); filterAndPaint(); });
+  // filterAndPaint() re-syncs the clear key, so typing only needs to repaint.
+  searchInput.addEventListener('input', () => filterAndPaint());
+  // The ✕ resets the whole box list: the search term AND the agent-strip
+  // filter (#21). repaintAgentStrip(true) un-presses the segment and repaints.
   searchClear.addEventListener('click', () => {
     searchInput.value = '';
-    syncSearchClear();
+    agentFilter = null;
     searchInput.focus();
-    filterAndPaint();
+    repaintAgentStrip(true);
   });
   app.querySelector('#fleet-toggle')!.addEventListener('click', () => {
     fleetMode = !fleetMode;

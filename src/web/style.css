@@ -488,20 +488,27 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .boxes { list-style: none; margin: 0; padding: 0; flex: 1; overflow-y: auto; }
 /* Attention strip: lit chips, one per agent state with sessions in it, in
    precedence order — the sidebar's answer to "does anything need me". Each is
-   a filter key; the engaged one takes a solid bezel in its own color and a
-   stronger fill, the chip vocabulary's "lit" pushed one step, not a commit key. */
+   a filter key, and an engaged key must read as engaged at a glance (#22): it
+   inverts — a solid fill in its own state color under a chassis-dark legend —
+   and travels down 1px with an inset lip. A brighter tint was tried first and
+   was too close to the resting chip to tell apart. `--seg` carries the state
+   color so the inverted rule can fill with it while the legend goes dark. */
 .agent-strip { display: flex; flex-wrap: wrap; gap: 4px; }
 .agent-strip-seg {
+  --seg: var(--dim);
   font-family: var(--face); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
   line-height: 1.6; padding: 1px 7px; border-radius: 4px; cursor: pointer; white-space: nowrap;
-  border: 1px solid var(--border); background: transparent; color: var(--dim);
+  border: 1px solid var(--border); background: transparent; color: var(--seg);
 }
-.agent-strip-seg[data-state='blocked'] { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 50%, transparent); background: color-mix(in srgb, var(--crit) 12%, transparent); }
-.agent-strip-seg[data-state='done'] { color: var(--commit); border-color: color-mix(in srgb, var(--commit) 50%, transparent); background: color-mix(in srgb, var(--commit) 10%, transparent); }
-.agent-strip-seg[data-state='working'] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.agent-strip-seg[data-state='blocked'] { --seg: var(--crit); border-color: color-mix(in srgb, var(--seg) 50%, transparent); background: color-mix(in srgb, var(--seg) 12%, transparent); }
+.agent-strip-seg[data-state='done'] { --seg: var(--commit); border-color: color-mix(in srgb, var(--seg) 50%, transparent); background: color-mix(in srgb, var(--seg) 10%, transparent); }
+.agent-strip-seg[data-state='working'] { --seg: var(--accent); border-color: color-mix(in srgb, var(--seg) 35%, transparent); background: color-mix(in srgb, var(--seg) 7%, transparent); }
 .agent-strip-seg:hover { filter: brightness(1.2); }
 .agent-strip-seg:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
-.agent-strip-seg.active { border-color: currentColor; background: color-mix(in srgb, currentColor 22%, transparent); }
+.agent-strip-seg.active {
+  border-color: var(--seg); background: var(--seg); color: var(--bg);
+  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--bg) 60%, transparent); transform: translateY(1px);
+}
 .boxes-empty { padding: 18px 10px; color: var(--dim); font-size: 12.5px; line-height: 1.55; text-align: center; }
 .box-group { list-style: none; margin: 0 0 4px; padding: 0; }
 /* Group headers speak the engraved-legend voice. */

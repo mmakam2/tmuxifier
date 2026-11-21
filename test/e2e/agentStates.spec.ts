@@ -373,3 +373,65 @@ test('a board card does not reuse a parked terminal that is attached to another 
     for (const s of [session2, sessionX]) { try { onBox(`tmux kill-session -t '=${s}'`); } catch { /* gone */ } }
   }
 });
+
+// #21 + #22: the engaged strip segment is unmistakable (inverted: a solid
+// fill in its own state color under a chassis-dark legend), and the search
+// field's ✕ is the one key that resets the whole box list — search term AND
+// agent filter — shown whenever either is active.
+test('an engaged strip filter reads inverted, and the search ✕ clears it too', async ({ page }) => {
+  test.setTimeout(120000);
+  try {
+    onBox(`tmux has-session -t '=${session}' 2>/dev/null || tmux new-session -d -s '${session}'`);
+    onBox(`tmux respawn-pane -k -t '=${session}:' bash -c 'exec -a claude sleep 600'`);
+    writeMarker(session, 'blocked', now(), 'permission');
+
+    await login(page);
+    const seg = page.locator('#agent-strip .agent-strip-seg[data-state="blocked"]');
+    await reloadUntil(page, async () => { await expect(seg).toBeVisible({ timeout: 5000 }); });
+    const clear = page.locator('#search-clear');
+    const pressed = page.locator('#agent-strip .agent-strip-seg[aria-pressed="true"]');
+    const rows = page.locator('#boxes .box');
+    const allRows = await rows.count();
+
+    // ── Engaged = inverted: the fill is the segment's own (opaque) text color
+    // from rest, and the legend is no longer that color.
+    const look = () => seg.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { bg: cs.backgroundColor, fg: cs.color };
+    });
+    const rest = await look();
+    await seg.click();
+    await expect(seg).toHaveAttribute('aria-pressed', 'true');
+    const on = await look();
+    expect(on.bg).toBe(rest.fg);
+    expect(on.fg).not.toBe(rest.fg);
+
+    // ── A filter alone shows the ✕, and the ✕ clears it.
+    await expect(page.locator('#search')).toHaveValue('');
+    await expect(clear).toBeVisible();
+    await clear.click();
+    await expect(pressed).toHaveCount(0);
+    await expect(clear).toBeHidden();
+    await expect(rows).toHaveCount(allRows);
+    expect((await look()).bg).toBe(rest.bg);
+
+    // ── Search + filter: one ✕ clears both.
+    await seg.click();
+    await page.fill('#search', 'localhost');
+    await expect(rows).toHaveCount(1);
+    await clear.click();
+    await expect(page.locator('#search')).toHaveValue('');
+    await expect(pressed).toHaveCount(0);
+    await expect(clear).toBeHidden();
+    await expect(rows).toHaveCount(allRows);
+
+    // ── Toggling the segment off by hand hides the ✕ again.
+    await seg.click();
+    await expect(clear).toBeVisible();
+    await seg.click();
+    await expect(clear).toBeHidden();
+  } finally {
+    try { fs.rmSync(path.join(markerDir, session), { force: true }); } catch { /* gone */ }
+    try { onBox(`tmux respawn-pane -k -t '=${session}:' "$(tmux show-options -gv default-shell)" -l`); } catch { /* no session */ }
+  }
+});

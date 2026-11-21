@@ -114,8 +114,10 @@ cleared within about 15 seconds.
 The state shows in several places. The sidebar badge beside each box shows its worst state
 (`blocked > done > working > idle`), with ` ×N` when several sessions carry a state and a tooltip
 listing them. The **attention strip** above the box list shows counts (`2 need you · 3 working ·
-1 done`); each segment filters the list to boxes with any session in that state (click again to
-clear; it expands collapsed groups). The standby dashboard has an **Agents** board with Needs you /
+1 done`); each segment filters the list to boxes with any session in that state. The engaged
+segment inverts to a solid fill in its state color; click it again, or the search field's ✕
+(which clears the search term and the filter together), to clear it. A filter expands collapsed
+groups. The standby dashboard has an **Agents** board with Needs you /
 Done / Working / Idle columns, and a card opens that box on that session. The session picker shows
 each session's state, and the pane header chip reads `working`, `blocked · <cause>`, `done` or
 `idle`. This is ground truth and the **only** source: a small Claude Code hook (or, for OpenCode,
