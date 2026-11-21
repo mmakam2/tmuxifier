@@ -339,7 +339,10 @@ describe('tmx: user commands', () => {
       const all = r.stderr.split('\n');
       const at = all.indexOf('  tmx send [--fresh [--project <name>]] <target> ["text"]');
       expect(at).toBeGreaterThan(0);
-      expect(all[at + 1]).toBe(`${' '.repeat(37)}--fresh starts a new agent on the box`);
+      expect(all[at + 1]).toBe(`${' '.repeat(37)}start a thread; text from the argument or stdin; prints the id`);
+      expect(all[at + 2]).toBe(`${' '.repeat(37)}--fresh starts a new agent on the box`);
+      // the descriptions share one column
+      expect(all.find((l) => l.startsWith('  tmx who ')).indexOf('who this')).toBe(37);
     }
     expect(curlCalls()).toEqual([]);
   });
@@ -505,14 +508,33 @@ describe('tmx: send --fresh', () => {
     expect(w.store.threads()).toEqual([]);
   });
 
-  test('the script checks letters, digits, - and length; the listener is the authority on the rest', async () => {
-    // A leading - passes the script's check and is refused by the listener, before the hub.
-    const dash = await frun(['send', '--fresh', '--project', '-web', 'billing', 'x']);
-    expect(dash.code).toBe(1);
-    expect(dash.stdout).toBe('');
-    expect(dash.stderr).toBe('bad request: fresh is not a project name\n');
-    expect(curlCalls()).toHaveLength(1);
+  test('a misplaced option, or an option where a project name goes, is its own usage error', async () => {
+    for (const [args, message] of [
+      [['send', 'billing', '--fresh'], 'options come before the target'],
+      [['send', 'billing', '--project'], 'options come before the target'],
+      [['send', '--fresh', '--project', 'web', 'billing', '--project'], 'options come before the target'],
+      [['send', '--fresh', '--project', '--fresh', 'billing', 'x'], '--project needs a project name'],
+      [['send', '--fresh', '--project', '-web', 'billing', 'x'], '--project needs a project name'],
+    ]) {
+      const r = await frun(args);
+      expect(r.code, args.join(' ')).toBe(2);
+      expect(r.stdout, args.join(' ')).toBe('');
+      expect(r.stderr, args.join(' ')).toBe(`tmx: ${message}\n`);
+    }
+    expect(curlCalls()).toEqual([]);
     expect(hubCalls).toEqual([]);
+  });
+
+  test('a text that only starts with an option name is a text, and is sent', async () => {
+    for (const body of ['--fresh is the flag to use', '--project web', '--freshly']) {
+      const r = await frun(['send', 'billing', body]);
+      expect(r.code, r.stderr).toBe(0);
+      expect(w.store.thread(threadOf(r.stdout)).messages[0].body).toBe(body);
+    }
+    expect(sends.map((a) => a[2])).toEqual(['--fresh is the flag to use', '--project web', '--freshly']);
+  });
+
+  test('the listener is the authority on a project name the script lets through', async () => {
     // 24 characters is a project name: the hub answers, with the box's own refusal.
     const name = 'a'.repeat(24);
     const long = await frun(['send', '--fresh', '--project', name, 'billing', 'x']);

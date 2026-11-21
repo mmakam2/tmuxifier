@@ -115,6 +115,7 @@ usage() {
 usage:
   tmx who [box]                      who this session may message, and who is listening
   tmx send [--fresh [--project <name>]] <target> ["text"]
+                                     start a thread; text from the argument or stdin; prints the id
                                      --fresh starts a new agent on the box
   tmx reply <thread> ["text"]        answer, or ask a question back
   tmx wait <thread>... [-t seconds]  block until a reply arrives on any of them (default 90 s)
@@ -328,9 +329,11 @@ cmd_who() {
 }
 
 # tmx send [--fresh [--project <name>]] <target> ["text"]. --fresh asks the box for a new agent
-# (the `fresh` field: empty, or the project name). The name is checked here only for its
-# characters and length, a courtesy: the listener is the authority (PROJECT_NAME_RE) and refuses
-# what this lets through, a name that does not start with a letter or digit.
+# (the `fresh` field: empty, or the project name). The name is checked here for its characters,
+# its first one and its length, as a courtesy that says so before any request: the listener is
+# the authority (PROJECT_NAME_RE). An option after the target is refused rather than sent as the
+# message text (only an argument that is exactly `--fresh` or `--project`: a text that merely
+# starts with one is a text).
 cmd_send() {
   _fresh= _project= _named=
   while [ "$#" -gt 0 ]; do
@@ -342,6 +345,7 @@ cmd_send() {
         ;;
       --project)
         [ "$#" -ge 2 ] || misuse '--project needs a project name'
+        case $2 in -*) misuse '--project needs a project name' ;; esac
         [ -z "$_named" ] || misuse '--project is given more than once'
         case $2 in
           ''|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*)
@@ -355,6 +359,9 @@ cmd_send() {
     esac
   done
   case $# in 1|2) ;; *) usage ;; esac
+  if [ "$#" = 2 ]; then
+    case $2 in --fresh|--project) misuse 'options come before the target' ;; esac
+  fi
   _target=$1
   if [ -n "$_named" ] && [ -z "$_fresh" ]; then
     misuse '--project goes with --fresh: tmx send --fresh --project <name> <box> ["text"]'

@@ -51,9 +51,9 @@ tmx wait t-7fq2m9cd
 ## A box with no agent
 
 A box with no agent running can still take a message when its operator allows it: the send
-starts an agent there. `tmx who` shows such a box as `billing  can start an agent (projects:
-api, web)`. A plain `tmx send billing "..."` goes to the agent already running on that box, or
-starts one in the box's default project when there is none.
+starts an agent there. `tmx who` shows such a box as
+`billing  can start an agent (projects: api, web)`. A plain `tmx send billing "..."` goes to the
+agent already running on that box, or starts one in the box's default project when there is none.
 
 - `tmx send --fresh billing "..."` asks for a new agent even when one is running. Use it for
   work unrelated to what the running agent is doing, or when the task needs a clean context.
