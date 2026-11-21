@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
-import { resolveTarget } from '../src/server/agentMailHub.js';
+import { resolveTarget, WORKER_FAIL_MS, WORKER_STUCK_MS } from '../src/server/agentMailHub.js';
+import { WORKER_FAILED_REASON } from '../src/server/agentMailStore.js';
 import { refusalText, wakeText } from '../src/server/agentMailText.js';
 import { createMailHarness, O, B, mark } from './helpers/agentMailHarness.js';
 
@@ -117,7 +118,7 @@ describe('agentMailHub: a bare name finds the agent that can take mail', () => {
     h.marks.o = { side: mark('working') };
     h.sessions.o = [pane('main', 'zsh'), pane('side', 'claude')];
     const none = await hub.send(OWN_SIDE, '.', 'ping');
-    expect(none).toEqual({ ok: false, text: refusalText('no-other-agent', { target: '.' }) });
+    expect(none).toEqual({ ok: false, text: refusalText('no-other-agent', { target: 'orders' }) });
 
     h.marks.o = { side: mark('working'), other: mark('ready') };
     h.sessions.o = [pane('main', 'zsh'), pane('side', 'claude'), pane('other', 'claude')];
@@ -384,7 +385,206 @@ describe('agentMailHub: a send starts a worker', () => {
   test('own box, no other agent and no worker started: refused no-other-agent', async () => {
     await world({ ...RECORD, mailStart: false }, { policies: { o: { send: true, receive: true, sendTo: ['b'] }, b: { receive: true, receiveFrom: ['o'] } } });
     const r = await w.hub.send(O, '.', 'x');
-    expect(r).toEqual({ ok: false, text: refusalText('no-other-agent', { target: '.' }) });
-    expect(await w.hub.send(O, 'orders', 'x')).toEqual({ ok: false, text: refusalText('no-other-agent', { target: 'orders' }) });
+    // the box is named by its label, not by what the caller typed; the log keeps what was typed
+    expect(r).toEqual({ ok: false, text: 'refused: no other agent is running on orders' });
+    expect(w.store.refusals()[0]).toMatchObject({ target: '.', reason: r.text });
+    expect(await w.hub.send(O, 'ORDERS', 'x')).toEqual({ ok: false, text: refusalText('no-other-agent', { target: 'orders' }) });
+  });
+  test('the answer to a send that started a worker says it is starting', async () => {
+    await world();
+    const r = await w.hub.send(O, 'billing', 'x');
+    expect(r.ok, r.text).toBe(true);
+    expect(r.text).toBe(`Sent. Thread ${r.threadId}. queued: billing/worker-api-1 is starting`);
+  });
+
+  // A starter that runs `during()` while the real start is in flight, before it resolves.
+  const inFlight = (during) => ({ start: async (...a) => { const res = await w.workers.start(...a); await during(); return res; } });
+
+  test('the target box is removed while its worker starts: unknown-box, the worker stays up, no thread', async () => {
+    await world();
+    const hub = w.makeHub({ workers: inFlight(() => { w.boxes = w.boxes.filter((b) => b.id !== 'b'); }) });
+    const r = await hub.send(O, 'billing', 'x');
+    expect(r).toEqual({ ok: false, text: refusalText('unknown-box', { target: 'billing' }) });
+    expect(benchSessions()).toEqual(['worker-api-1']);
+    expect(w.store.threads()).toEqual([]);
+    expect(w.store.refusals()[0]).toMatchObject({ from: O, target: 'billing', reason: r.text });
+  });
+
+  test('the target\'s receive switch goes off while its worker starts: refused with mayStart\'s code, no thread', async () => {
+    await world();
+    const hub = w.makeHub({ workers: inFlight(() => w.setPolicy('b', { receive: false, receiveFrom: ['o'] })) });
+    const r = await hub.send(O, 'billing', 'x', { fresh: '' });
+    expect(r).toEqual({ ok: false, text: refusalText('receive-off', { target: 'billing' }) });
+    expect(benchSessions()).toEqual(['worker-api-1']);
+    expect(w.store.threads()).toEqual([]);
+  });
+
+  test('mailStart on but no projects: a bare send is no-agent, fresh "" is workers-off, a named project is no-project', async () => {
+    await world({ mailStart: true, projects: [] }, { policies: { o: { send: true, receive: true, sendTo: ['b'] }, b: { receive: true, receiveFrom: ['o'] } } });
+    const c = counting();
+    const hub = w.makeHub({ workers: c });
+    expect(await hub.send(O, 'billing', 'x')).toEqual({ ok: false, text: refusalText('no-agent', { who: 'billing/main' }) });
+    expect(await hub.send(O, '.', 'x')).toEqual({ ok: false, text: refusalText('no-other-agent', { target: 'orders' }) });
+    expect(await hub.send(O, 'billing', 'x', { fresh: '' })).toEqual({ ok: false, text: refusalText('workers-off', { target: 'billing' }) });
+    expect(c.calls).toBe(0);
+    expect(await hub.send(O, 'billing', 'x', { fresh: 'web' })).toEqual({ ok: false, text: refusalText('no-project', { target: 'billing', project: 'web' }) });
+    expect(benchSessions()).toEqual([]);
+    expect(w.store.threads()).toEqual([]);
+  });
+});
+
+// A worker that does not come up (agent workers spec 5.6): every `boxChanged` of the box looks at
+// each start the hub made there. A marker means it is up; 30 s with the session not listed, or
+// listed with a pane that does not run claude, closes its threads; 60 s listed on claude with no
+// marker reads as stuck at a start-up prompt. No listing changes nothing.
+describe('agentMailHub: a worker that does not come up', () => {
+  let w;
+  const WORKER = { boxId: 'b', session: 'worker-api-1' };
+  const RECORD = { mailStart: true, projects: [{ name: 'api' }] };
+  const FAILED = 'closed: the new agent did not start; tell your operator';
+  const STARTING = 'queued: billing/worker-api-1 is starting';
+  const STUCK = 'queued: billing/worker-api-1 is waiting for its operator at a start-up prompt';
+
+  beforeEach(async () => {
+    w = await createMailHarness({}, { workers: { b: RECORD }, installed: ['b'], sessions: { b: [pane('main', 'zsh')] } });
+    w.marks.b = {};
+  });
+  afterEach(async () => { await w.cleanup(); });
+
+  const status = (r) => w.hub.threadStatus(w.store.thread(r.threadId), 'starter');
+  const state = (r) => w.store.thread(r.threadId).state;
+  const at = (seconds, sessions) => {
+    w.clock = start + seconds * 1000;
+    if (sessions === null) delete w.sessions.b;
+    else if (sessions) w.sessions.b = sessions;
+    w.hub.boxChanged('b');
+  };
+  let start;
+  const send = async (body = 'build it', opts) => {
+    const r = await w.hub.send(O, 'billing', body, opts);
+    expect(r.ok, r.text).toBe(true);
+    start = start ?? w.clock;
+    return r;
+  };
+  beforeEach(() => { start = undefined; });
+
+  test('the thresholds', () => {
+    expect(WORKER_FAIL_MS).toBe(30000);
+    expect(WORKER_STUCK_MS).toBe(60000);
+  });
+
+  test('a listing older than the start (+5 s, not listed): the thread stays open, starting', async () => {
+    const r = await send();
+    at(5, [pane('main', 'zsh')]);
+    expect(state(r)).toBe('open');
+    expect(status(r)).toBe(STARTING);
+    expect(w.store.refusals()).toEqual([]);
+  });
+
+  test('+31 s, not listed: closed "worker did not start", the held wait ends with it, one refusal logged', async () => {
+    const r = await send();
+    const wait = w.hub.waitReplies(O, [r.threadId], 60000);
+    await new Promise((res) => setImmediate(res)); // the wait is held
+    at(31, [pane('main', 'zsh')]);
+    expect(w.store.thread(r.threadId)).toMatchObject({ state: 'closed', reason: WORKER_FAILED_REASON });
+    expect(await wait).toEqual({ got: false, text: `thread ${r.threadId}: ${FAILED}` });
+    expect(w.store.refusals()).toEqual([{ at: w.clock, from: O, target: 'billing', reason: FAILED }]);
+    // the entry is gone: a later look closes and logs nothing more
+    at(40, [pane('main', 'zsh')]);
+    expect(w.store.refusals()).toHaveLength(1);
+  });
+
+  test('+31 s, listed with a shell pane: the same close; listed on claude: still open', async () => {
+    const one = await send('one', { fresh: '' });
+    at(31, [pane('main', 'zsh'), pane('worker-api-1', 'zsh')]);
+    expect(state(one)).toBe('closed');
+    expect(w.store.thread(one.threadId).reason).toBe(WORKER_FAILED_REASON);
+
+    start = undefined;
+    const two = await send('two', { fresh: '' });
+    const two2 = w.store.thread(two.threadId).peer.session;
+    at(31, [pane('main', 'zsh'), pane('worker-api-1', 'zsh'), pane(two2, 'claude')]);
+    expect(state(two)).toBe('open');
+    expect(w.hub.threadStatus(w.store.thread(two.threadId), 'starter')).toBe(`queued: billing/${two2} is starting`);
+  });
+
+  test('+61 s, listed on claude with no marker: stuck at a start-up prompt; a marker later delivers', async () => {
+    const r = await send();
+    at(61, [pane('main', 'zsh'), pane('worker-api-1', 'claude')]);
+    expect(state(r)).toBe('open');
+    expect(status(r)).toBe(STUCK);
+    expect(w.hub.threadStatus(w.store.thread(r.threadId), 'operator')).toBe(STUCK);
+
+    w.marks.b = { 'worker-api-1': mark('ready', 'start') };
+    at(90);
+    const got = await w.hub.waitMail(WORKER, '%3');
+    const m = w.store.thread(r.threadId).messages[0];
+    expect(got.messageId).toBe(m.id);
+    expect(await w.hub.ack(WORKER, m.id)).toBe(true);
+    expect(w.store.thread(r.threadId).messages[0].state).toBe('delivered');
+  });
+
+  test('a marker at +2 s drops the entry: a later listing without the session closes nothing', async () => {
+    const r = await send();
+    w.marks.b = { 'worker-api-1': mark('working') };
+    at(2, [pane('main', 'zsh'), pane('worker-api-1', 'claude')]);
+    w.marks.b = {};
+    at(45, [pane('main', 'zsh')]);
+    expect(state(r)).toBe('open');
+    expect(status(r)).toBe('queued: billing/worker-api-1 is not running an agent');
+    expect(w.store.refusals()).toEqual([]);
+  });
+
+  test('no listing (+90 s): nothing changes; the next listing decides', async () => {
+    const r = await send();
+    at(90, null);
+    expect(state(r)).toBe('open');
+    expect(status(r)).toBe(STARTING);
+    at(91, [pane('main', 'zsh')]);
+    expect(state(r)).toBe('closed');
+  });
+
+  test('an entry holding two threads (two bare sends joined): both close, one refusal each', async () => {
+    const one = await send('one');
+    const two = await send('two');
+    expect(w.store.thread(two.threadId).peer).toEqual(WORKER);
+    at(31, [pane('main', 'zsh')]);
+    expect(state(one)).toBe('closed');
+    expect(state(two)).toBe('closed');
+    expect(w.store.refusals().map((x) => x.reason)).toEqual([FAILED, FAILED]);
+  });
+
+  test('an entry holding no thread (the store filled after the start) is dropped under the same rules', async () => {
+    let room = [true, false];
+    const hub = w.makeHub({ store: { ...w.store, hasRoom: () => (room.length ? room.shift() : true) } });
+    const full = await hub.send(O, 'billing', 'x');
+    expect(full).toEqual({ ok: false, text: refusalText('store-full') });
+    start = w.clock;
+    w.clock = start + 31000;
+    hub.boxChanged('b'); // not listed: dropped, with nothing to close or log
+    expect(w.store.refusals()).toHaveLength(1);
+    // dropped, so a bare send no longer joins it: it starts worker-api-2 beside the leftover
+    w.sessions.b = [pane('main', 'zsh'), pane('worker-api-1', 'zsh')];
+    room = [];
+    const r = await hub.send(O, 'billing', 'y');
+    expect(r.ok, r.text).toBe(true);
+    expect(w.store.thread(r.threadId).peer).toEqual({ boxId: 'b', session: 'worker-api-2' });
+  });
+
+  test('after a restart (a second hub, no entry): not running an agent; the marker and a waiter deliver', async () => {
+    const r = await send();
+    const hub2 = w.makeHub();
+    expect(hub2.threadStatus(w.store.thread(r.threadId), 'starter', w.boxes)).toBe('queued: billing/worker-api-1 is not running an agent');
+    w.clock = start + 120000;
+    hub2.boxChanged('b');
+    expect(state(r)).toBe('open');
+    w.marks.b = { 'worker-api-1': mark('ready', 'start') };
+    w.sessions.b = [pane('main', 'zsh'), pane('worker-api-1', 'claude')];
+    hub2.boxChanged('b');
+    const got = await hub2.waitMail(WORKER, '%3');
+    const m = w.store.thread(r.threadId).messages[0];
+    expect(got.messageId).toBe(m.id);
+    expect(await hub2.ack(WORKER, m.id)).toBe(true);
+    expect(w.store.thread(r.threadId).messages[0].state).toBe('delivered');
   });
 });
