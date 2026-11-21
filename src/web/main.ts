@@ -34,6 +34,7 @@ import { createDashboard } from './dashboard';
 import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createAgentMailSection } from './agentMailSection';
+import { createAgentWorkersSection } from './agentWorkersSection';
 import { mailApi, type MailRefusal, type MailThread, type MailThreadSummary } from './agentMail';
 import {
   mailEnabledFrom, messageRow, messagesLoadError, refusalRow, stopFailedLine, threadHead, threadRow, MAIL_NO_REFUSALS, MAIL_NO_THREADS,
@@ -3364,6 +3365,8 @@ function buildBoxDialog(box?: Box) {
   const proxmoxAssociation = createProxmoxAssociationEditor(box ?? null);
   // Edit mode only: messaging policy belongs to an existing box (its own route).
   const mailSection = isEdit && agentMailEnabled ? createAgentMailSection(box!, allBoxes) : null;
+  // Edit mode only, shown whether or not messaging is on (its own route).
+  const workersSection = isEdit ? createAgentWorkersSection(box!) : null;
 
   // Two-column body: compact fields pair up (Host|Label, Tag|User, Port|ProxyJump),
   // the session picker and Proxmox section span full width, and err/actions sit
@@ -3389,6 +3392,7 @@ function buildBoxDialog(box?: Box) {
     proxmoxAssociation.element,
   );
   if (mailSection) modalBody.append(mailSection.element);
+  if (workersSection) modalBody.append(workersSection.element);
 
   form.append(title, modalBody, err, actions);
 
@@ -3454,6 +3458,7 @@ function buildBoxDialog(box?: Box) {
         try {
           await proxmoxAssociation.commit(box!.id);
           await mailSection?.commit(box!.id);
+          await workersSection?.commit(box!.id);
         } catch (error) {
           await refresh();
           throw error;

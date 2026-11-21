@@ -1739,10 +1739,10 @@ button.empty-kbd:hover { color: var(--text); }
    rule at all and fell through to the browser's default light-grey field —
    two pale boxes in a recessed dark panel. They share this recipe rather than
    copying it, so the recess can only ever be defined once. */
-.fleet-input, .fs-name, .fs-note { width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); border-top-color: var(--seam); background: var(--screen); box-shadow: var(--recess); color: var(--text); font-family: var(--face); font-size: 12.5px; outline: none; }
-.fleet-input::placeholder, .fs-name::placeholder, .fs-note::placeholder { color: var(--dim); }
-.fleet-input:focus, .fs-name:focus, .fs-note:focus { border-color: var(--accent-deep); box-shadow: var(--recess), 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent); }
-.fleet-input:focus-visible, .fs-name:focus-visible, .fs-note:focus-visible { outline: none; } /* carries its own ring above */
+.fleet-input, .fs-name, .fs-note, .wk-input { width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); border-top-color: var(--seam); background: var(--screen); box-shadow: var(--recess); color: var(--text); font-family: var(--face); font-size: 12.5px; outline: none; }
+.fleet-input::placeholder, .fs-name::placeholder, .fs-note::placeholder, .wk-input::placeholder { color: var(--dim); }
+.fleet-input:focus, .fs-name:focus, .fs-note:focus, .wk-input:focus { border-color: var(--accent-deep); box-shadow: var(--recess), 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent); }
+.fleet-input:focus-visible, .fs-name:focus-visible, .fs-note:focus-visible, .wk-input:focus-visible { outline: none; } /* carries its own ring above */
 /* RUN ON N BOXES — the cluster's safety-orange commit key. */
 .fleet-run {
   width: 100%;
@@ -2215,6 +2215,27 @@ button.empty-kbd:hover { color: var(--text); }
 .box-mail .mail-pairs { display: flex; flex-direction: column; gap: 2px; padding-left: 23px; }
 .box-mail .mail-pair { font-size: 12.5px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .box-mail .mail-status { font-size: 11px; color: var(--dim); }
+/* Edit Box: Agent workers (agentWorkersSection.ts). The same seam and eyebrow as
+   the messaging section above; inputs share the glass recipe (.wk-input joins
+   .fleet-input). A project row is name | directory | remove, with the trust tick
+   and the row's problem line under it; the problem line is LED red only while
+   something is wrong (`bad`), and empty otherwise. */
+.wk-section { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+.wk-section .wk-lead { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: var(--dim); }
+.wk-section .wk-projects { display: flex; flex-direction: column; gap: 10px; }
+.wk-section .wk-row { display: grid; grid-template-columns: 9em minmax(0, 1fr) auto; grid-template-areas: 'name dir remove' 'trust trust trust' 'note note note'; gap: 6px; align-items: center; }
+.wk-section .wk-name { grid-area: name; min-width: 0; }
+.wk-section .wk-dir { grid-area: dir; min-width: 0; font-family: var(--face-code); }
+.wk-section .wk-remove { grid-area: remove; padding: 4px 6px; border: 0; border-radius: 4px; background: transparent; color: var(--dim); cursor: pointer; font-family: var(--face); font-size: 14px; line-height: 1; }
+.wk-section .wk-remove:hover { color: var(--crit); background: rgba(255, 255, 255, 0.035); }
+.wk-section .wk-trust { grid-area: trust; }
+.wk-section .wk-row > .wk-note { grid-area: note; }
+.wk-section .wk-note { font-size: 11px; color: var(--dim); overflow-wrap: anywhere; }
+.wk-section .wk-note:empty { display: none; }
+.wk-section .wk-note.bad { color: var(--crit); }
+.wk-section .wk-add:disabled { opacity: 0.45; cursor: default; transform: none; }
+.wk-section .wk-max-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text); }
+.wk-section .wk-max { width: 4.5em; font-variant-numeric: tabular-nums; }
 @media (max-width: 720px) {
   .modal.pve-hub { width: 92vw; }
   .modal.settings-modal { width: 92vw; }
