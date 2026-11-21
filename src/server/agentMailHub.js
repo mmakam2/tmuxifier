@@ -2,6 +2,7 @@ import { SESSION_NAME_RE } from './sshCommand.js';
 import { mayStart } from './agentMailPolicy.js';
 import { STORAGE_REASON } from './agentMailStore.js';
 import { agentKindOf } from './healthHistory.js';
+import { START_CODES } from './agentWorkers.js';
 import {
   cleanBody, bodyProblem, statusPhrase, agentStatusPhrase, refusalText, renderThread, renderWho, renderInbox, renderReply, wakeText,
 } from './agentMailText.js';
@@ -13,8 +14,10 @@ import {
 //
 //   caller everywhere is { boxId, session }
 //   who(caller)                    sessions this one may start a thread with
-//   send(caller, target, body)     the caller's send switch, then the target, the policy and
-//                                  room in the store; new thread, first message queued
+//   send(caller, target, body, { fresh })
+//                                  the caller's send switch, then the target, the policy and
+//                                  room in the store; new thread, first message queued. May
+//                                  start a worker for it (below)
 //   reply(caller, threadId, body)  a post by a participant
 //   read(caller, threadId)         the whole thread; the caller's messages become delivered, and a
 //                                  dropped message addressed to it shows as [not delivered]
@@ -47,6 +50,26 @@ import {
 // mail waiter. With no listing (`sessionsOf` null) every marker counts. The caller's own session
 // never does. The configured session wins when it is one, else the only one; two or more is
 // `several-agents`. An explicit `box/session` or `./session` keeps the plain marker test.
+//
+// A send STARTS A WORKER (agent workers spec 5.3) when a bare target finds no session that can
+// take mail, or when it asks for one (`fresh`: '' for the box's default project, else a project
+// name; `undefined` is not asking, and `fresh` with a `box/session` target is `fresh-needs-box`).
+// Every check above still comes first, in its order. A bare send first joins the box's pending
+// bare start, the newest worker a bare send started that has no marker yet, or one still being
+// started: two bare sends arriving together get one worker and two threads. A fresh send always
+// starts its own. Otherwise, in this order: no starter (`workers`/`workerStore` null) or the
+// box's `mailStart` off is `workers-off` for fresh and, for a bare name, `no-agent` as before
+// (`no-other-agent` on the caller's own box, where `no-agent` would name the configured session,
+// possibly the caller's own); the box's mail tools not installed (`mailInstalled`) is
+// `mail-not-set-up`, since a worker with no waiter hook could never take the message; no room in
+// the store is `store-full`, asked before the start so a refusal starts nothing; then the
+// starter (agentWorkers.js), whose refusals each have their own wording (`bad-mode` and anything
+// unknown read `start-failed`). After the start the store is asked for room again, right before
+// the thread is made; a `store-full` then leaves the worker up (the operator sees it). The
+// message is queued for the worker and reaches it through the delivery below, unchanged: the
+// worker's own SessionStart arms its waiter and its first marker lets the hub hand it over.
+// `starts` keeps, in memory only, each start the hub made: { boxId, session, threadIds, at, bare,
+// stuck }, `at` being when the start returned.
 //
 // Everything a request carries is box output. Session names are validated, never rewritten;
 // the typed target is control-stripped and cut to 200 characters before it reaches any text
@@ -187,8 +210,11 @@ const MAIL_KINDS = new Set(['claude', 'opencode', null]);
 
 // `holdMs` is how long a waiter is held before it is answered idle (design 6.7: five minutes).
 // `sessionsOf(boxId)` is the box's session rows ({ name, paneCmd }[]) or null when not known.
+// `workers` is the starter ({ start }), `workerStore` the worker settings ({ get }), and
+// `mailInstalled(boxId)` whether the box's mail tools are installed; without the first two no
+// send starts a worker.
 // Create the hub after `store.load()`: its delivery index is built from the store here.
-export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, sessionsOf = () => null, now = () => Date.now(), holdMs = 300000 }) {
+export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, sessionsOf = () => null, workers = null, workerStore = null, mailInstalled = () => false, now = () => Date.now(), holdMs = 300000 }) {
   // ---- callers ----
 
   // A copy of the caller when it is well formed, else null.
@@ -241,6 +267,58 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
     if (can.includes(box.sessionName)) return { session: box.sessionName };
     if (can.length === 1) return { session: can[0] };
     return can.length > 1 ? { several: true } : {};
+  }
+
+  // ---- agent workers (header) ----
+
+  const starts = []; // each start the hub made for mail, oldest first
+  const bareStarting = new Map(); // box id -> the start a bare send has under way there
+
+  // The pending bare start of `boxId`, resolved as `{ entry }`, or null when there is none.
+  function bareJob(boxId) {
+    const marks = marksOf(boxId);
+    const up = (s) => marks !== null && typeof marks === 'object' && Object.hasOwn(marks, s.session);
+    const entry = starts.findLast((s) => s.bare && s.boxId === boxId && !up(s));
+    if (entry) return Promise.resolve({ entry });
+    return bareStarting.get(boxId) ?? null;
+  }
+
+  // Asks the starter for a worker on `box`. Resolves `{ entry }` (the new `starts` entry) or
+  // `{ code }`. The entry is pushed, and a bare start stops being under way, in one step, so a
+  // bare send always finds one or the other.
+  function beginStart(box, fresh) {
+    const bare = fresh === undefined;
+    const done = (res) => {
+      if (bare && bareStarting.get(box.id) === job) bareStarting.delete(box.id);
+      if (!res || res.ok !== true || typeof res.session !== 'string' || !SESSION_NAME_RE.test(res.session)) {
+        return { code: START_CODES.includes(res?.code) && res.code !== 'bad-mode' ? res.code : 'start-failed' };
+      }
+      const entry = { boxId: box.id, session: res.session, threadIds: [], at: now(), bare, stuck: false };
+      starts.push(entry);
+      return { entry };
+    };
+    const job = new Promise((resolve) => { resolve(workers.start(box, { project: bare ? undefined : fresh || undefined })); })
+      .then(done, () => done(null));
+    if (bare) bareStarting.set(box.id, job);
+    return job;
+  }
+
+  // The worker a send that found no agent goes to: `{ entry }`, or `{ text }`, the refusal.
+  // `fresh` as send's; `noAgent` is what a bare send is refused with when no start is allowed.
+  async function workerFor(box, typed, fresh, noAgent) {
+    const bare = fresh === undefined;
+    const ctx = { target: typed, project: cleanTarget(fresh) };
+    let job = bare ? bareJob(box.id) : null;
+    if (!job) {
+      const record = workers && workerStore ? await workerStore.get(box.id) : null;
+      if (record?.mailStart !== true) return { text: bare ? noAgent : refusalText('workers-off', ctx) };
+      if (!mailInstalled(box.id)) return { text: refusalText('mail-not-set-up', ctx) };
+      if (!store.hasRoom(closeForStorage)) return { text: refusalText('store-full') };
+      // A bare start may have begun while the record was read.
+      job = (bare ? bareJob(box.id) : null) ?? beginStart(box, fresh);
+    }
+    const got = await job;
+    return got.entry ? got : { text: refusalText(got.code, ctx) };
   }
 
   // ---- held requests ----
@@ -539,7 +617,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
     return { ok: true, text: renderWho(rows) };
   }
 
-  async function send(caller, target, rawBody) {
+  async function send(caller, target, rawBody, { fresh } = {}) {
     const me = callerOf(caller);
     if (!me) return badCaller();
     const typed = cleanTarget(target);
@@ -564,18 +642,31 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
     if (!allowed.ok) return refuse(me, typed, refusalText(allowed.code, { target: typed }));
     const { reachable, running } = readMark(peer);
     if (!reachable) return refuse(me, typed, refusalText('unreachable', { target: typed }));
-    if (to.bare) {
-      const pick = bareSession(to.box, me);
+    if (fresh !== undefined && !to.bare) return refuse(me, typed, refusalText('fresh-needs-box'));
+    let start = null; // the `starts` entry of the worker this send goes to
+    let pick = {};
+    if (to.bare && fresh === undefined) {
+      pick = bareSession(to.box, me);
       if (pick.several) return refuse(me, typed, refusalText('several-agents', { target: typed }));
-      // No session of the box can take mail.
-      if (!pick.session) return refuse(me, typed, refusalText('no-agent', { who: nameOf(boxes, peer) }));
-      peer.session = pick.session;
-    } else if (!running) {
+    } else if (!to.bare && !running) {
       return refuse(me, typed, refusalText('no-agent', { who: nameOf(boxes, peer) }));
+    }
+    if (pick.session) {
+      peer.session = pick.session;
+    } else if (to.bare) {
+      // No session of the box can take mail, or a fresh one was asked for.
+      const noAgent = peer.boxId === me.boxId
+        ? refusalText('no-other-agent', { target: typed })
+        : refusalText('no-agent', { who: nameOf(boxes, peer) });
+      const got = await workerFor(to.box, typed, fresh, noAgent);
+      if (got.text) return refuse(me, typed, got.text);
+      start = got.entry;
+      peer.session = start.session;
     }
     if (!store.hasRoom(closeForStorage)) return refuse(me, typed, refusalText('store-full'));
     const thread = store.createThread({ starter: me, peer });
     const m = store.addMessage(thread.id, { from: 'starter', body });
+    start?.threadIds.push(thread.id);
     queued(peer, thread.id, boxes, policies);
     return { ok: true, threadId: thread.id, text: sentText(boxes, thread.id, m.id) };
   }

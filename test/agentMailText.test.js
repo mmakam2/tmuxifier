@@ -129,13 +129,14 @@ describe('statusPhrase / refusalText', () => {
     expect(refusalText('start-failed', r)).toBe('starting an agent on billing failed; try again shortly, then tell your operator');
     expect(refusalText('several-agents', r)).toBe('refused: billing runs more than one agent; name one (run "tmx who")');
     expect(refusalText('fresh-needs-box', r)).toBe('refused: --fresh takes a box name, not a session');
+    expect(refusalText('no-other-agent', r)).toBe('refused: no other agent is running on billing');
   });
   test('the new kinds and codes are listed, and an agent reads each status as the operator does', () => {
     for (const k of ['queued-starting', 'queued-startup-prompt', 'closed-worker-failed']) {
       expect(STATUS_KINDS).toContain(k);
       expect(agentStatusPhrase(k, ctx)).toBe(statusPhrase(k, ctx));
     }
-    for (const c of ['workers-off', 'mail-not-set-up', 'setup-running', 'no-project', 'worker-cap', 'no-dir', 'no-agent-binary', 'no-tmux', 'start-failed', 'several-agents', 'fresh-needs-box']) {
+    for (const c of ['workers-off', 'mail-not-set-up', 'setup-running', 'no-project', 'worker-cap', 'no-dir', 'no-agent-binary', 'no-tmux', 'start-failed', 'several-agents', 'fresh-needs-box', 'no-other-agent']) {
       expect(REFUSAL_CODES).toContain(c);
     }
   });

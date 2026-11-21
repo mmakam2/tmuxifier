@@ -128,6 +128,8 @@ const REFUSAL = Object.assign(Object.create(null), {
   'not-in-receive-list': ({ target } = {}) => `refused: ${target ?? 'the target box'} does not accept mail from this box`,
   'unknown-box': ({ target } = {}) => `refused: no box named "${target ?? ''}" (or the name matches more than one box); run "tmx who"`,
   'no-agent': ({ who } = {}) => `refused: ${who ?? 'that session'} is not running an agent`,
+  // A bare name of the caller's own box where no other session can take mail and none is started.
+  'no-other-agent': ({ target } = {}) => `refused: no other agent is running on ${target ?? 'the target box'}`,
   'own-session': () => 'refused: that is your own session',
   'empty': () => 'refused: the message is empty',
   'too-large': () => `refused: the message is larger than ${MAX_BODY_BYTES} bytes`,

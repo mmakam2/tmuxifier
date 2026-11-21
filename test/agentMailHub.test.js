@@ -96,7 +96,7 @@ describe('agentMailHub: send', () => {
     expect(ownDot).toEqual({ ok: false, text: refusalText('own-session') });
     await setPolicy('o', { send: true, receive: true, sendTo: ['b'] });
     const bareOwn = await hub.send(O, 'orders', 'ping');
-    expect(bareOwn).toEqual({ ok: false, text: refusalText('no-agent', { who: 'orders/main' }) });
+    expect(bareOwn).toEqual({ ok: false, text: refusalText('no-other-agent', { target: 'orders' }) });
     await setPolicy('o', { send: true, sendTo: ['b'] });
 
     const empty = await hub.send(O, 'billing', ' \n\t\x00 ');
@@ -111,7 +111,7 @@ describe('agentMailHub: send', () => {
       { at: h.clock, from: O, target: cleanTyped, reason: refusalText('unknown-box', { target: cleanTyped }) },
       { at: h.clock, from: O, target: 'orders/main', reason: refusalText('own-session') },
       { at: h.clock, from: O, target: './main', reason: refusalText('own-session') },
-      { at: h.clock, from: O, target: 'orders', reason: refusalText('no-agent', { who: 'orders/main' }) },
+      { at: h.clock, from: O, target: 'orders', reason: refusalText('no-other-agent', { target: 'orders' }) },
       { at: h.clock, from: O, target: 'billing', reason: refusalText('empty') },
       { at: h.clock, from: O, target: 'billing', reason: refusalText('too-large') },
     ]);
