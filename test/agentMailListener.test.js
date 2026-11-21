@@ -208,8 +208,8 @@ describe('agentMailListener: requests', () => {
     expect(h.store.threads()).toEqual([]);
 
     // the caller's box comes from the listener, never the request: a boxId field changes nothing,
-    // so `orders` is still this session's own
-    const own = await post('/v1/threads', { session: 'main', to: 'orders', body: 'hi', boxId: 'b' });
+    // so `orders/main` is still this session's own
+    const own = await post('/v1/threads', { session: 'main', to: 'orders/main', body: 'hi', boxId: 'b' });
     expect(own.status).toBe(403);
     expect(own.text).toBe(`${refusalText('own-session')}\n`);
   });

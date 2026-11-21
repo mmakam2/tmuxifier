@@ -33,19 +33,19 @@ describe('agentMailHub: send', () => {
     expect(store.thread(bare.threadId).peer).toEqual({ boxId: 'b', session: 'work' });
     const named = await hub.send(O, 'billing/review', 'two');
     expect(store.thread(named.threadId).peer).toEqual({ boxId: 'b', session: 'review' });
-    expect(resolveTarget('billing', boxes, 'o')).toEqual({ box: boxes[1], session: 'work' });
-    expect(resolveTarget('  billing/review  ', boxes, 'o')).toEqual({ box: boxes[1], session: 'review' });
+    expect(resolveTarget('billing', boxes, 'o')).toEqual({ box: boxes[1], session: 'work', bare: true });
+    expect(resolveTarget('  billing/review  ', boxes, 'o')).toEqual({ box: boxes[1], session: 'review', bare: false });
   });
 
   test('label matching ignores case; a label containing a slash and a space resolves; "db primary/review" splits at the last slash', async () => {
     const lab = { id: 'l', label: 'lab/db primary', sessionName: 'main' };
     const db = { id: 'd', label: 'DB Primary', sessionName: 'main' };
     boxes.push(lab, db);
-    expect(resolveTarget('BILLING', boxes, 'o')).toEqual({ box: boxes[1], session: 'main' });
-    expect(resolveTarget('Lab/DB Primary', boxes, 'o')).toEqual({ box: lab, session: 'main' });
-    expect(resolveTarget('lab/db primary/review', boxes, 'o')).toEqual({ box: lab, session: 'review' });
-    expect(resolveTarget('db primary/review', boxes, 'o')).toEqual({ box: db, session: 'review' });
-    expect(resolveTarget('db primary', boxes, 'o')).toEqual({ box: db, session: 'main' });
+    expect(resolveTarget('BILLING', boxes, 'o')).toEqual({ box: boxes[1], session: 'main', bare: true });
+    expect(resolveTarget('Lab/DB Primary', boxes, 'o')).toEqual({ box: lab, session: 'main', bare: true });
+    expect(resolveTarget('lab/db primary/review', boxes, 'o')).toEqual({ box: lab, session: 'review', bare: false });
+    expect(resolveTarget('db primary/review', boxes, 'o')).toEqual({ box: db, session: 'review', bare: false });
+    expect(resolveTarget('db primary', boxes, 'o')).toEqual({ box: db, session: 'main', bare: true });
     // the right side of the split must be a valid session name; no other match is attempted
     expect(resolveTarget('db primary/bad name', boxes, 'o')).toBeNull();
     expect(resolveTarget('nosuch/main', boxes, 'o')).toBeNull();
@@ -66,9 +66,9 @@ describe('agentMailHub: send', () => {
   });
 
   test('"." and "./review" address the caller own box', async () => {
-    expect(resolveTarget('.', boxes, 'o')).toEqual({ box: boxes[0], session: 'main' });
-    expect(resolveTarget('./review', boxes, 'o')).toEqual({ box: boxes[0], session: 'review' });
-    expect(resolveTarget('./review', boxes, 'b')).toEqual({ box: boxes[1], session: 'review' });
+    expect(resolveTarget('.', boxes, 'o')).toEqual({ box: boxes[0], session: 'main', bare: true });
+    expect(resolveTarget('./review', boxes, 'o')).toEqual({ box: boxes[0], session: 'review', bare: false });
+    expect(resolveTarget('./review', boxes, 'b')).toEqual({ box: boxes[1], session: 'review', bare: false });
     expect(resolveTarget('./', boxes, 'o')).toBeNull();
     expect(resolveTarget('./bad name', boxes, 'o')).toBeNull();
     expect(resolveTarget('.', boxes, 'gone')).toBeNull();
@@ -88,10 +88,16 @@ describe('agentMailHub: send', () => {
     const unknown = await hub.send(O, typed, 'ping');
     expect(unknown).toEqual({ ok: false, text: refusalText('unknown-box', { target: cleanTyped }) });
 
-    const own = await hub.send(O, 'orders', 'ping');
+    // an explicit own session is refused; a bare own-box name skips the caller's own session and
+    // finds no other agent here (agent workers spec 5.3)
+    const own = await hub.send(O, 'orders/main', 'ping');
     expect(own).toEqual({ ok: false, text: refusalText('own-session') });
-    const ownDot = await hub.send(O, '.', 'ping');
+    const ownDot = await hub.send(O, './main', 'ping');
     expect(ownDot).toEqual({ ok: false, text: refusalText('own-session') });
+    await setPolicy('o', { send: true, receive: true, sendTo: ['b'] });
+    const bareOwn = await hub.send(O, 'orders', 'ping');
+    expect(bareOwn).toEqual({ ok: false, text: refusalText('no-agent', { who: 'orders/main' }) });
+    await setPolicy('o', { send: true, sendTo: ['b'] });
 
     const empty = await hub.send(O, 'billing', ' \n\t\x00 ');
     expect(empty).toEqual({ ok: false, text: refusalText('empty') });
@@ -103,8 +109,9 @@ describe('agentMailHub: send', () => {
     expect(store.threads()).toHaveLength(1);
     expect(store.refusals().reverse()).toEqual([
       { at: h.clock, from: O, target: cleanTyped, reason: refusalText('unknown-box', { target: cleanTyped }) },
-      { at: h.clock, from: O, target: 'orders', reason: refusalText('own-session') },
-      { at: h.clock, from: O, target: '.', reason: refusalText('own-session') },
+      { at: h.clock, from: O, target: 'orders/main', reason: refusalText('own-session') },
+      { at: h.clock, from: O, target: './main', reason: refusalText('own-session') },
+      { at: h.clock, from: O, target: 'orders', reason: refusalText('no-agent', { who: 'orders/main' }) },
       { at: h.clock, from: O, target: 'billing', reason: refusalText('empty') },
       { at: h.clock, from: O, target: 'billing', reason: refusalText('too-large') },
     ]);

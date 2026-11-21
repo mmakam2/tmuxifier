@@ -1,6 +1,7 @@
 import { SESSION_NAME_RE } from './sshCommand.js';
 import { mayStart } from './agentMailPolicy.js';
 import { STORAGE_REASON } from './agentMailStore.js';
+import { agentKindOf } from './healthHistory.js';
 import {
   cleanBody, bodyProblem, statusPhrase, agentStatusPhrase, refusalText, renderThread, renderWho, renderInbox, renderReply, wakeText,
 } from './agentMailText.js';
@@ -39,6 +40,13 @@ import {
 // dashboard's `present` flag (design 6.5). `marksOf` returning null means the box is
 // unreachable. who/send/reply need a running agent; read/inbox need only a valid name, so an
 // agent that has just exited can still collect what was sent to it.
+//
+// A send to a BARE target (`.` or a box name alone; agent workers spec 5.3) picks its session
+// among those that can take mail: a marker, and a pane (`sessionsOf`, the snapshot's session
+// rows) running claude, opencode or something unknown; Codex, pi and agy write markers but run no
+// mail waiter. With no listing (`sessionsOf` null) every marker counts. The caller's own session
+// never does. The configured session wins when it is one, else the only one; two or more is
+// `several-agents`. An explicit `box/session` or `./session` keeps the plain marker test.
 //
 // Everything a request carries is box output. Session names are validated, never rewritten;
 // the typed target is control-stripped and cut to 200 characters before it reaches any text
@@ -150,32 +158,37 @@ const canon = (s) => s.trim().toLowerCase(); // as store.js compares labels
 // Target grammar (design 6.5): `.` / `./<session>` is the caller's own box; otherwise the whole
 // string is a label (case-insensitive), else it splits at the LAST `/` into label and session.
 // A bare label means the box's configured session. No match, or more than one, is null.
+// `bare` is true for `.` and a whole-label match: send may then pick another session (header).
 export function resolveTarget(target, boxes, callerBoxId) {
   if (typeof target !== 'string' || !Array.isArray(boxes)) return null;
   const t = target.trim();
   if (t === '') return null;
-  const at = (box, session) => (typeof session === 'string' && SESSION_NAME_RE.test(session) ? { box, session } : null);
+  const at = (box, session, bare) => (typeof session === 'string' && SESSION_NAME_RE.test(session) ? { box, session, bare } : null);
   if (t === '.' || t.startsWith('./')) {
     const own = boxes.find((b) => b && b.id === callerBoxId);
     if (!own) return null;
-    return at(own, t === '.' ? own.sessionName : t.slice(2));
+    return t === '.' ? at(own, own.sessionName, true) : at(own, t.slice(2), false);
   }
   const byLabel = (label) => {
     const want = canon(label);
     return want === '' ? [] : boxes.filter((b) => b && typeof b.label === 'string' && canon(b.label) === want);
   };
   const whole = byLabel(t);
-  if (whole.length === 1) return at(whole[0], whole[0].sessionName);
+  if (whole.length === 1) return at(whole[0], whole[0].sessionName, true);
   if (whole.length > 1) return null;
   const cut = t.lastIndexOf('/');
   if (cut <= 0) return null;
   const left = byLabel(t.slice(0, cut));
-  return left.length === 1 ? at(left[0], t.slice(cut + 1)) : null;
+  return left.length === 1 ? at(left[0], t.slice(cut + 1), false) : null;
 }
 
+// Agent kinds whose sessions run a mail waiter, plus unknown (null): spec 5.3.
+const MAIL_KINDS = new Set(['claude', 'opencode', null]);
+
 // `holdMs` is how long a waiter is held before it is answered idle (design 6.7: five minutes).
+// `sessionsOf(boxId)` is the box's session rows ({ name, paneCmd }[]) or null when not known.
 // Create the hub after `store.load()`: its delivery index is built from the store here.
-export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now = () => Date.now(), holdMs = 300000 }) {
+export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, sessionsOf = () => null, now = () => Date.now(), holdMs = 300000 }) {
   // ---- callers ----
 
   // A copy of the caller when it is well formed, else null.
@@ -206,6 +219,28 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
     if (marks === null || typeof marks !== 'object') return { reachable: false, running: false, mark: null };
     const running = Object.hasOwn(marks, session);
     return { reachable: true, running, mark: running ? marks[session] : null };
+  }
+
+  // The sessions of `boxId` that could take mail, without `me`'s own (header). `marks` is the
+  // box's marker map, already read.
+  function mailSessions(boxId, marks, me) {
+    const rows = sessionsOf(boxId);
+    const paneOf = new Map();
+    if (Array.isArray(rows)) {
+      for (const r of rows) if (r && typeof r.name === 'string' && !paneOf.has(r.name)) paneOf.set(r.name, r.paneCmd);
+    }
+    return Object.keys(marks).filter((s) => SESSION_NAME_RE.test(s)
+      && !(boxId === me.boxId && s === me.session)
+      && (!Array.isArray(rows) || MAIL_KINDS.has(agentKindOf(paneOf.get(s)))));
+  }
+
+  // The session a bare target reaches: `{ session }`, `{ several: true }`, or `{}` for none.
+  function bareSession(box, me) {
+    const marks = marksOf(box.id);
+    const can = mailSessions(box.id, marks, me);
+    if (can.includes(box.sessionName)) return { session: box.sessionName };
+    if (can.length === 1) return { session: can[0] };
+    return can.length > 1 ? { several: true } : {};
   }
 
   // ---- held requests ----
@@ -519,7 +554,9 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
     const to = resolveTarget(target, boxes, me.boxId);
     if (!to) return refuse(me, typed, refusalText('unknown-box', { target: typed }));
     const peer = { boxId: to.box.id, session: to.session };
-    if (peer.boxId === me.boxId && peer.session === me.session) return refuse(me, typed, refusalText('own-session'));
+    // A bare target never picks the caller's own session (bareSession), so only an explicit one
+    // can name it.
+    if (!to.bare && peer.boxId === me.boxId && peer.session === me.session) return refuse(me, typed, refusalText('own-session'));
     const body = cleanBody(rawBody);
     const problem = bodyProblem(body);
     if (problem) return refuse(me, typed, refusalText(problem === 'empty' ? 'empty' : 'too-large'));
@@ -527,7 +564,15 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, now
     if (!allowed.ok) return refuse(me, typed, refusalText(allowed.code, { target: typed }));
     const { reachable, running } = readMark(peer);
     if (!reachable) return refuse(me, typed, refusalText('unreachable', { target: typed }));
-    if (!running) return refuse(me, typed, refusalText('no-agent', { who: nameOf(boxes, peer) }));
+    if (to.bare) {
+      const pick = bareSession(to.box, me);
+      if (pick.several) return refuse(me, typed, refusalText('several-agents', { target: typed }));
+      // No session of the box can take mail.
+      if (!pick.session) return refuse(me, typed, refusalText('no-agent', { who: nameOf(boxes, peer) }));
+      peer.session = pick.session;
+    } else if (!running) {
+      return refuse(me, typed, refusalText('no-agent', { who: nameOf(boxes, peer) }));
+    }
     if (!store.hasRoom(closeForStorage)) return refuse(me, typed, refusalText('store-full'));
     const thread = store.createThread({ starter: me, peer });
     const m = store.addMessage(thread.id, { from: 'starter', body });

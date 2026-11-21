@@ -15,7 +15,9 @@ export const mark = (state, cause = state === 'ready' ? 'stop' : 'prompt') => ({
 
 // hubOptions go to createAgentMailHub (holdMs, marksOf, for instance). `world` replaces the bench's
 // boxes and policies ({ boxes, policies: { <box id>: policy } }), for a suite whose boxes come
-// from a fixture. Call h.cleanup() in afterEach.
+// from a fixture, and may give the boxes' session listings (`sessions: { <box id>: { name,
+// paneCmd }[] }`, mutable as `h.sessions`); a box with no listing reads as unknown (`null`).
+// Call h.cleanup() in afterEach.
 export async function createMailHarness(hubOptions = {}, world = {}) {
   const h = {};
   h.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mailhub-'));
@@ -25,6 +27,7 @@ export async function createMailHarness(hubOptions = {}, world = {}) {
     { id: 'b', label: 'billing', sessionName: 'main' },
   ];
   h.marks = { o: { main: mark('working') }, b: { main: mark('working') } };
+  h.sessions = world.sessions ?? {};
   h.store = createAgentMailStore({ dataDir: h.dir, now: () => h.clock });
   await h.store.load();
   h.policyStore = createAgentMailPolicyStore({ dataDir: h.dir });
@@ -36,6 +39,7 @@ export async function createMailHarness(hubOptions = {}, world = {}) {
     policyStore: h.policyStore,
     listBoxes: async () => h.boxes.map((b) => ({ ...b })),
     marksOf: (id) => (Object.hasOwn(h.marks, id) ? h.marks[id] : null),
+    sessionsOf: (id) => (Object.hasOwn(h.sessions, id) ? h.sessions[id] : null),
     now: () => h.clock,
     ...hubOptions,
     ...opts,
