@@ -25,6 +25,11 @@ import { CLAUDE_TOKEN_FILE, CLAUDE_TOKEN_RC_LINE } from '../../src/server/aiAuth
 // `run(shell, remote)` runs the script as ssh would, `<shell> -c <remote>`, with
 // PATH=<bin>:/usr/bin:/bin: ~/.local/bin is not on it, as on a box, so only the rc files of an
 // interactive shell can find the agent. SHELL is the script's own shell, as sshd sets it.
+// `run(shell, remote, { path })` replaces only what follows <bin> (a test's farm of chosen
+// tools): <bin>, the pinned tmux wrapper, stays first on every PATH the script runs with.
+// tmux gives a session the PATH of the client that created it, so the panes the script starts
+// get that PATH too: a farm must hold what the rc files and the stand-in run (`cat`, `mv`,
+// `sleep`).
 //
 // The server is started here, before any script runs, with `default-shell` set to
 // `defaultShell` and `exit-empty off`: otherwise the script's own new-session would start it
@@ -109,10 +114,11 @@ export function createWorkerBench({ defaultShell }) {
     home,
     env,
     tmux,
-    run(shell, remote) {
+    run(shell, remote, { path: rest } = {}) {
       const shellBin = requireBinary(shell);
+      const PATH = rest === undefined ? env.PATH : `${bin}:${rest}`;
       const r = spawnSync(shellBin, ['-c', remote], {
-        env: { ...env, SHELL: shellBin },
+        env: { ...env, PATH, SHELL: shellBin },
         cwd: home,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
