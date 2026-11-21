@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { resolveTarget, WORKER_FAIL_MS, WORKER_STUCK_MS } from '../src/server/agentMailHub.js';
 import { WORKER_FAILED_REASON } from '../src/server/agentMailStore.js';
-import { refusalText, wakeText } from '../src/server/agentMailText.js';
+import { refusalText, wakeText, renderWho } from '../src/server/agentMailText.js';
 import { createMailHarness, O, B, mark } from './helpers/agentMailHarness.js';
 
 // Which session a send to a bare box name reaches (agent workers spec 5.3): the configured
@@ -659,5 +659,104 @@ describe('agentMailHub: a worker that does not come up', () => {
     expect(got.messageId).toBe(m.id);
     expect(await hub2.ack(WORKER, m.id)).toBe(true);
     expect(w.store.thread(r.threadId).messages[0].state).toBe('delivered');
+  });
+});
+
+// `tmx who` also lists the boxes a send could start an agent on (agent workers spec 5.3): one
+// line each after the session rows, for a box the caller may send to that is reachable, whose
+// record has `mailStart` on and at least one project, and whose mail tools are installed.
+describe('agentMailHub: who lists boxes that can start an agent', () => {
+  let w;
+  const RECORD = { mailStart: true, projects: [{ name: 'api' }, { name: 'web' }] };
+  const NOBODY = renderWho([]);
+  const STARTER = 'billing  can start an agent (projects: api, web)';
+
+  async function world(record = RECORD, extra = {}) {
+    w = await createMailHarness({}, {
+      workers: { b: record, o: record },
+      installed: ['b', 'o'],
+      sessions: { b: [], o: [pane('main', 'claude')] },
+      ...extra,
+    });
+    w.marks.b = {};
+    return w;
+  }
+  afterEach(async () => { if (w) await w.cleanup(); w = null; });
+  const whoText = async () => {
+    const r = await w.hub.who(O);
+    expect(r.ok, r.text).toBe(true);
+    return r.text;
+  };
+
+  test('a reachable box with no session, mailStart on and projects: a starter line, projects in order', async () => {
+    await world();
+    expect(await whoText()).toBe(STARTER);
+    await w.workerStore.set('b', { mailStart: true, projects: [{ name: 'web', dir: '/opt/web' }, { name: 'api', dir: '/opt/billing-api' }, { name: 'ops', dir: '/opt/ops' }] });
+    expect(await whoText()).toBe('billing  can start an agent (projects: web, api, ops)');
+  });
+
+  test('session rows come first, the starter line after them', async () => {
+    await world();
+    w.marks.b = { side: mark('ready'), main: mark('working') };
+    expect((await whoText()).split('\n')).toEqual([
+      'billing/main  working, not listening',
+      'billing/side  idle, not listening',
+      STARTER,
+    ]);
+  });
+
+  test('mailStart off: no line', async () => {
+    await world({ ...RECORD, mailStart: false });
+    expect(await whoText()).toBe(NOBODY);
+  });
+
+  test('mail tools not installed on the box: no line', async () => {
+    await world();
+    w.installed.delete('b');
+    expect(await whoText()).toBe(NOBODY);
+    w.installed.add('b');
+    expect(await whoText()).toBe(STARTER);
+  });
+
+  test('no project: no line, though mailStart is on', async () => {
+    await world({ mailStart: true, projects: [] });
+    expect(await whoText()).toBe(NOBODY);
+  });
+
+  test('a box with no worker record at all: no line', async () => {
+    await world();
+    await w.workerStore.removeBox('b');
+    expect(await whoText()).toBe(NOBODY);
+  });
+
+  test('an unreachable box (its markers unknown): no line', async () => {
+    await world();
+    delete w.marks.b;
+    expect(await whoText()).toBe(NOBODY);
+  });
+
+  test('a box the policy does not let the caller message: no line', async () => {
+    await world();
+    await w.setPolicy('b', { receive: false, receiveFrom: ['o'] });
+    expect(await whoText()).toBe(NOBODY);
+    await w.setPolicy('b', { receive: true, receiveFrom: [] });
+    expect(await whoText()).toBe(NOBODY);
+    await w.setPolicy('b', { receive: true, receiveFrom: ['o'] });
+    expect(await whoText()).toBe(STARTER);
+    await w.setPolicy('o', { send: false, sendTo: ['b'] });
+    expect(await whoText()).toBe(NOBODY);
+  });
+
+  test('the caller\'s own box gets a line when its own two switches allow it', async () => {
+    await world();
+    expect(await whoText()).toBe(STARTER);
+    await w.setPolicy('o', { send: true, receive: true, sendTo: ['b'] });
+    expect((await whoText()).split('\n')).toEqual(['orders  can start an agent (projects: api, web)', STARTER]);
+  });
+
+  test('without a starter or a worker store: no line', async () => {
+    await world();
+    expect(await w.makeHub({ workers: null }).who(O)).toEqual({ ok: true, text: NOBODY });
+    expect(await w.makeHub({ workerStore: null }).who(O)).toEqual({ ok: true, text: NOBODY });
   });
 });

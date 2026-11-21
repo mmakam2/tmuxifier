@@ -13,7 +13,8 @@ import {
 // `caller.session` is a claim checked against the backend's own agent markers.
 //
 //   caller everywhere is { boxId, session }
-//   who(caller)                    sessions this one may start a thread with
+//   who(caller)                    sessions this one may start a thread with, and boxes it may
+//                                  start an agent on
 //   send(caller, target, body, { fresh })
 //                                  the caller's send switch, then the target, the policy and
 //                                  room in the store; new thread, first message queued. May
@@ -75,6 +76,10 @@ import {
 // Once the start resolves, `send` reads the boxes and the policies again: a box no longer listed
 // is `unknown-box`, a pair `mayStart` no longer allows is refused with its code, and either way
 // the worker is left up and no thread is made. `no-other-agent` names the box by its label.
+// `who` also lists each box the caller may start a thread with (`mayStart`, the caller's own box
+// included) that is reachable and where a send could start an agent (the `canStart` test and
+// `mailInstalled`), as `{ box: <label>, projects: <names in order> }`, after the session rows
+// (`renderWho`). An unreachable box lists nothing, a starter line included.
 //
 // A worker that does not come up (agent workers spec 5.6). `boxChanged(boxId)` first looks at
 // each `starts` entry of the box, with no timer of its own: the server calls it for every box
@@ -343,6 +348,11 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
     return job;
   }
 
+  // Whether messages may start agents on a box with this worker record: `mailStart` on and a
+  // project to start one in. A project asked for by name (`named`) needs no project of the
+  // record: the starter answers `no-project` for it. `who` and `send` share this test.
+  const canStart = (record, named = false) => record?.mailStart === true && (record.projects.length > 0 || named);
+
   // The worker a send that found no agent goes to: `{ entry }`, or `{ text }`, the refusal.
   // `fresh` as send's; `noAgent` is what a bare send is refused with when no start is allowed.
   async function workerFor(box, typed, fresh, noAgent) {
@@ -352,8 +362,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
     if (!job) {
       const record = workers && workerStore ? await workerStore.get(box.id) : null;
       // With no project only a named one may be asked for, and it is `no-project` (header).
-      const canStart = record?.mailStart === true && (record.projects.length > 0 || Boolean(fresh));
-      if (!canStart) return { text: bare ? noAgent : refusalText('workers-off', ctx) };
+      if (!canStart(record, Boolean(fresh))) return { text: bare ? noAgent : refusalText('workers-off', ctx) };
       if (!mailInstalled(box.id)) return { text: refusalText('mail-not-set-up', ctx) };
       if (!store.hasRoom(closeForStorage)) return { text: refusalText('store-full') };
       // A bare start may have begun while the record was read.
@@ -648,11 +657,14 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
     const denied = agentCheck(me, boxes);
     if (denied) return refuse(me, '', denied);
     const rows = [];
+    const starters = [];
     for (const box of boxes) {
       if (!box || typeof box.id !== 'string') continue;
       if (!mayStart(policies, me.boxId, box.id).ok) continue;
       const marks = marksOf(box.id);
       if (marks === null || typeof marks !== 'object') continue;
+      const record = workers && workerStore ? await workerStore.get(box.id) : null;
+      if (canStart(record) && mailInstalled(box.id)) starters.push({ box: labelOf(boxes, box.id) || box.id, projects: record.projects.map((p) => p.name) });
       for (const session of Object.keys(marks).filter((s) => SESSION_NAME_RE.test(s)).sort()) {
         if (box.id === me.boxId && session === me.session) continue;
         const state = marks[session]?.state;
@@ -660,7 +672,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
         rows.push({ box: labelOf(boxes, box.id) || box.id, session, state: STATE_WORD[state], listening: waitersOf(box.id, session) > 0 });
       }
     }
-    return { ok: true, text: renderWho(rows) };
+    return { ok: true, text: renderWho(rows, starters) };
   }
 
   async function send(caller, target, rawBody, { fresh } = {}) {
