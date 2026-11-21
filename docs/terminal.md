@@ -65,6 +65,10 @@ session: the terminal drops and reconnects to a fresh, empty session of the same
 disappears from the list on the strength of the click alone — Tmuxifier confirms the kill against
 the box first, so a failed attempt (the box went away, say) leaves the row right where it was.
 
+**Starting Claude.** When a box has worker projects, its pane picker ends with one **Start
+Claude in `<project>`** row per project: it starts a Claude Code in a new tmux session on the box
+and points the pane at it. See [Agent workers](boxes-and-setup.md#agent-workers).
+
 ## Several panes of one box
 
 A box isn't limited to one pane on the stage. Drag its sidebar row onto a copy of itself that's

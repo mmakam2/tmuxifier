@@ -41,6 +41,7 @@ Configuration, secrets, and runtime state all live **inside the repo** (all giti
   | `health-events.json` | health event log | — |
   | `agent-seen.json` | per box, per session: marker ts of the newest finished turn the operator has seen | — |
   | `agent-mail-policy.json` | per box: agent-messaging send/receive switches and their box lists | — |
+  | `agent-workers.json` | per box: worker projects (name, directory, trust tick), the "messages may start an agent" switch and the cap | nothing sealed |
   | `agent-mail/` | agent messaging: one `t-*.json` per thread, plus `refusals.json` | message bodies **plaintext** by design |
   | `mail/` | the per-box agent-mail listener sockets, `<12 hex>.sock` (directory `0o700`, sockets `0o600`) | — |
   | `ui-settings.json` | theme + working-agent animation + sidebar graph flag | — |
@@ -115,7 +116,8 @@ Cross-cutting invariants that tests alone have repeatedly failed to protect:
   the session **last**.
 - **A running setup job gates the box.** `/term`, the pane sizing viewer, `/voice-link`, session
   create, window select and kill all refuse (`1008 'setting up'` / 409) while that box's setup
-  job is `running`. `mode=provision` and the read-only probe stay ungated.
+  job is `running`, and so does the worker starter (`setup-running`). `mode=provision` and the
+  read-only probe stay ungated.
 - **One tmux attach per viewer**, keyed `terminalKey(boxId, clientId)`; never pass `-D` and never
   write `window-size` into the operator's tmux config — sizing is tmux's own `latest`.
 - **Box output is untrusted input.** Everything parsed from a probe (`__META__`, `__AGENT__`,
@@ -169,6 +171,13 @@ Cross-cutting invariants that tests alone have repeatedly failed to protect:
   socket path is named from the box id **and** those fields, so a forward entry an old master
   still holds names a path nothing binds. Never keep a listener across a change of connection
   fields, and never name a box's socket from its id alone.
+- **A worker is started by a script that holds nothing a lead sent.** A lead names a box and at
+  most a project; the project is a lookup key into the box's record (`PROJECT_NAME_RE`), never a
+  path. The directory is the operator's, validated on write and re-validated (`isWorkerDir`)
+  immediately before it is single-quoted into the script. The launch word is a constant looked up
+  in `WORKER_AGENTS`, and the message is never in the script or typed into a terminal. No worker
+  starts while the box's setup job runs. No registry of workers is kept: the box's own tmux
+  listing is the list (`worker-<project>-<n>`, counted by name **and** a pane running `claude`).
 
 ## Architecture (`src/server/`)
 
@@ -357,7 +366,8 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   provisioned IP, readdress (new address + released old IP literal), or explicit
   `POST /api/boxes/:id/forget-hostkey`.
 - `boxRemoval.js` — shared cleanup for removal and verified deprovision. `onRemoved(box)` (best-effort,
-  awaited) drops the box's agent-mail policy and closes its threads.
+  awaited) drops the box's worker settings (messaging on or off), its agent-mail policy and closes
+  its threads.
 
 ### Setup jobs and the agent stacks
 
@@ -547,7 +557,9 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   real-time path: one light probe patched into the snapshot and recorded with
   `history.recordAgents` (the Host Shell re-samples locally). `onCycle(boxes, snapshot)` runs
   after every sweep; `onAgents(boxId)` after every applied `refreshAgents` result (agent mail's
-  delivery re-check; never for the Host Shell).
+  delivery re-check; never for the Host Shell). `listingSeq(boxId)` counts a box's status reads
+  applied under the ordering rule: the worker starter's only evidence that a listing was read
+  after one of its starts.
 - `agentWatch.js` — real-time agent state, box → server. `createAgentWatch` keeps one resident ssh
   stream per reachable box over the ControlMaster, running `WATCH_REMOTE`: a POSIX `sh` loop
   (inline remote command, nothing installed, no setup rerun) that reads the same marker files
@@ -594,9 +606,10 @@ Claude Code and OpenCode sessions on different boxes send each other tasks and r
 Tmuxifier, gated by a per-box policy (operator guide `docs/agent-messaging.md`; design and build
 notes `docs/superpowers/specs/2026-11-14-agent-messaging-design.md`, `2026-11-15-…-build-notes.md`).
 `index.js` builds it only when `config.agentMail` (`TMUXIFIER_AGENT_MAIL=off` builds none of it,
-leaves the setup phase unwired, and a construction failure runs the server with messaging off);
-calls `forward.sync` and `hub.boxChanged` from `onCycle` and `hub.boxChanged` from `onAgents`;
-runs `hub.prune()` daily (the hub prunes once itself when it is created, which is boot); tells
+leaves the setup phase unwired, and a construction failure runs the server with messaging off;
+the worker store and starter below are built either way, and the hub gets them, `sessionsOf` and
+`mailInstalled` only when messaging is on); calls `forward.sync` and `hub.boxChanged` from
+`onCycle` and `hub.boxChanged` from `onAgents`; runs `hub.prune()` daily (the hub prunes once itself when it is created, which is boot); tells
 the forward `markInstalled(box.id)` when the `agent-mail` setup phase reports `ok`; and on
 shutdown stops the forward (closing every listener) **before** flushing the mail store, so
 nothing is posted after the final write.
@@ -622,8 +635,9 @@ nothing is posted after the final write.
   ones, each closed `storage limit` through `close` first, never one active within the last hour
   (`STORAGE_KEEP_MS`); `hasRoom(close)` is what a new thread asks. The store never prunes on its
   own: the hub calls both. Ids `t-`/`m-` + 8 chars of a look-alike-free alphabet (`THREAD_ID_RE`,
-  `MSG_ID_RE`). Not a debounced store: flushed through its own `whenIdle()`. Test:
-  `test/agentMailStore.test.js`.
+  `MSG_ID_RE`). Close reasons: `operator`, `permission withdrawn`, `box removed`, `storage limit`,
+  `worker did not start` (`WORKER_FAILED_REASON`). Not a debounced store: flushed through its own
+  `whenIdle()`. Test: `test/agentMailStore.test.js`.
 - `agentMailText.js` — every word an agent reads, and nothing else writes any: `wakeText` (its
   first line is the `[tmuxifier-mail m-…]` tag the hooks find; body inline up to 4000 chars),
   `statusPhrase` (also what the drawer shows, so short) and `agentStatusPhrase` (the same, plus
@@ -634,7 +648,11 @@ nothing is posted after the final write.
   the designed "not from your operator" wording made a real Claude decline to act. Every later
   one (`reply`) says neither: that authorisation is not true toward the thread's starter, and
   "always answer" on a reply makes two agents acknowledge each other without end; it is input for
-  the thread's work, answered only when it asks something. Test: `test/agentMailText.test.js`.
+  the thread's work, answered only when it asks something. Starting an agent keeps its words here
+  too: the worker refusals (`workers-off`, `mail-not-set-up`, `no-project`, `worker-cap`,
+  `no-dir`, `start-failed`, …), the status kinds `queued-starting`, `queued-startup-prompt` and
+  `closed-worker-failed`, and the starter lines of `renderWho(rows, starters)`. Test:
+  `test/agentMailText.test.js`.
 - `agentMailHub.js` — the delivery engine and the box-side operations (`who`, `send`, `reply`,
   `read`, `inbox`, `waitMail`, `waitReplies`, `ack`, `boxChanged`, `policyChanged`, `boxRemoved`,
   `closeThread`, `prune`, `threadStatus`). "Running an agent" = the box's parsed `agentMarks` hold
@@ -652,14 +670,28 @@ nothing is posted after the final write.
   one included, goes through `endThread`, so waits on the thread end. `threadStatus(thread,
   viewer)`: for a participant (`tmx wait`'s lines) it is about the newest message **that side**
   sent, `nothing new since the last reply` when the other side's newest message has reached it;
-  for `'operator'` (the browser) it is the thread's newest message. Tests:
-  `test/agentMailHub.test.js`, `test/agentMailHubDelivery.test.js`.
+  for `'operator'` (the browser) it is the thread's newest message. **Starting an agent** (read
+  the header before changing it): a bare target (`.` or a label alone) goes to a session that can
+  take mail (a marker **and** a pane from `sessionsOf` running claude, opencode or unknown; never
+  the caller's own; the configured session first, else the only one, else `several-agents`). With
+  none, or with `send(…, { fresh })` (`''` the default project, else a project name), it starts a
+  worker through the injected starter, only when the box's `mailStart` is on with a project and
+  `mailInstalled` is true. Room in the store is asked before the start, and the boxes and policy
+  are read again after it (box gone or permission withdrawn: refused, the worker stays up). A
+  second bare send joins the box's pending bare start; `fresh` always starts its own. The
+  in-memory `starts` list is judged at every `boxChanged`: a marker means up; 30 s without the
+  session on `claude`, on two consecutive looks, closes its threads `worker did not start`;
+  60 s on `claude` with no marker reads `queued-startup-prompt`. `who` lists the boxes a send can
+  start an agent on. `createAgentMailHub`'s signature must stay on one line:
+  `test/opencodeAgentMailClient.test.js` regex-matches it in the source. Tests:
+  `test/agentMailHub.test.js`, `test/agentMailHubDelivery.test.js`, `test/agentMailHubWorkers.test.js`.
 - `agentMailListener.js` — per-box `node:http` on a unix socket `data/mail/<12 hex>.sock` (the
   forward keeper names it from the box id and its connection fields). **The socket is the
   identity**: `caller.boxId` is the listener's own. `close()` destroys every connection and ends
   every held request. The wire format
   table is its header (GET params in the query, POST params only as form fields, a repeated
-  parameter refused); every parameter is allowlisted before any hub call; 64 open / 32 held
+  parameter refused); every parameter is allowlisted before any hub call (`POST /v1/threads`'s
+  optional `fresh` is empty or a `PROJECT_NAME_RE` name, else 400); 64 open / 32 held
   requests, then 503. Test: `test/agentMailListener.test.js` (real socket, real hub).
 - `agentMailForward.js` — puts each enabled box's listener on the box as
   `~/.tmuxifier-mail/sock` with `-O forward -R` on its ControlMaster, from `sync(boxes, snapshot)`
@@ -709,7 +741,51 @@ nothing is posted after the final write.
   is retried. `hook-wait` follows its Claude Code via `/proc` (not `$PPID`, a dash wrapper that
   survives a `SIGKILL`ed Claude) and holds a per-pane lock whose every read and action goes
   through the decision table above `lock_decide`; `hook-ack` prints nothing and always exits 0.
-  Test: `test/agentMailTmx.test.js` (the real script against the real listener).
+  `tmx send [--fresh [--project <name>]] <target> ["text"]`: options come before the target, `--project`
+  needs `--fresh`, and `--fresh` refuses `box/session`, each exit 2 before any request; spelled
+  without `=` so the OpenCode plugin's `TMX_ARGS_RE` allowlist stays as it is (pinned by
+  `test/opencodeAgentPermission.test.js`). The skill's "A box with no agent" section says when to
+  ask for a fresh worker. Test: `test/agentMailTmx.test.js` (the real script against the real listener).
+
+### Agent workers
+
+An interactive Claude Code that Tmuxifier starts on a box in its own tmux session, when a send
+finds no agent on it, when a lead asks (`tmx send --fresh`) or when the operator picks **Start
+Claude in <project>** (operator guide: "Starting an agent on a box that has none" in
+`docs/agent-messaging.md` and "Agent workers" in `docs/boxes-and-setup.md`; design and build notes
+`docs/superpowers/specs/2026-11-19-agent-workers-design.md`, `2026-11-21-agent-workers-build-notes.md`).
+`index.js` builds the store and starter whether or not messaging is on (the operator's Start and
+the Edit Box section need no messaging); a construction failure runs the server without them and
+their routes answer 503. Interactive Claude Code only: no headless mode, no other agent.
+
+- `agentWorkerRules.js` — pure: `PROJECT_NAME_RE`, `isWorkerDir` (the one definition of a safe
+  directory, used on write and again by the starter), `normalizeWorkers` (explicit values are
+  validated, never rewritten: 0-8 projects, `max` 1-8 default 3, `trust` and `mailStart` on only
+  for a literal `true`), `workerSessionName` (the lowest free `worker-<project>-<n>`),
+  `runningWorkers` (by name prefix **and** a pane running `claude`, so a leftover shell does not
+  use up the cap) and the closed `WORKER_MODES`/`WORKER_AGENTS` tables. Test:
+  `test/agentWorkerRules.test.js`.
+- `agentWorkerStore.js` — `data/agent-workers.json`, kept out of `boxes.json` on purpose (the box
+  export and the device-readable `GET /api/boxes` never see it). The twin of
+  `agentMailPolicyStore.js`: null-prototype map, mutations serialised on one chain and adopted
+  only if they persist. A stored entry that no longer passes the rules is absent on load, never
+  handed to a starter. Test: `test/agentWorkerStore.test.js`.
+- `agentWorkers.js` — `buildWorkerStartRemote` is the one remote script (`set -eu`; tmux, `[ -d ]`,
+  the agent binary, the optional trust write, an exact-target `has-session`, then `new-session -d`
+  running `exec "$SHELL" -ic 'exec claude'`: a plain `claude` command fails, tmux runs it with no
+  rc files, so no `PATH` and no token), each step one `WORKER: <code>` line that
+  `parseWorkerResult` allowlists. The trust write (`WORKER-TRUST:`; jq → node → python3) reads
+  first and writes only when the key is not already `true`, never through a symlink, and a failed
+  write never fails the start. `createAgentWorkers(…).start(box, { project, mode })` refuses in
+  order (mode, setup running, no listing, project, the `max` cap), runs the script once and once
+  more on `exists`, serialises per box, and never throws; its result is `{ ok, session, project,
+  trust }` or `{ ok: false, code }` (`START_CODES`). It remembers its own starts for up to 60 s
+  because the listing it reads lags them, and trusts the box's listing for them once two newer
+  status reads have been applied (`listingSeq`), so a killed worker stops counting once the list
+  shows it gone. Read its header before touching it. Tests: `test/agentWorkers.test.js`,
+  `test/agentWorkerScript.integration.test.js`, `test/agentWorkerTrust.integration.test.js`,
+  `test/agentWorkers.integration.test.js` (a real private tmux through
+  `test/helpers/workerBench.js`, never the default tmux server).
 
 ### Fleet Command
 
@@ -863,6 +939,17 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
   Stop arm-then-fire), its markup in `index.html`, `#messages` in phone mode's `CLOSES_DRAWER`.
   Message bodies come from AI agents on other machines: `textContent` only. Tests:
   `test/agentMailView.test.js`, `test/e2e/agentMail.spec.ts`.
+- **Agent workers** — `agentWorkers.ts` (fetch layer), `agentWorkersView.ts` (pure: the server's
+  rules copied and pinned equal by test, every message the Edit Box section shows,
+  `startTargetsOf`), `agentWorkersSection.ts` (the Edit Box section, edit mode only, same
+  `element`/`commit(boxId)` contract as `agentMailSection.ts`; a problem throws `Box saved, but
+  the agent worker settings were not: …`). The pane picker's **Start Claude in <project>** rows are
+  `SessionTarget`s of kind `start` (`value` `start:<project>`, `session: ''`: every consumer of a
+  pick or a kill must handle that kind itself, and `canKillTarget` gives it no ×). `main.ts`
+  appends them in `paneHeaderModelFor` from the projects `refreshWorkerProjects` re-reads each time
+  a picker is reached for, and `startWorker` starts the worker and switches the pane through
+  `switchPaneSession`. No start rows in phone mode or on the Host Shell. Tests:
+  `test/agentWorkersView.test.js`, `test/sessionPicker.test.js`, `test/e2e/agentWorkers.spec.ts`.
 - **Dashboard** — `dashboard.ts` (standby dashboard when no pane is docked; polls only while
   mounted; AGENTS board `dash-board`, columns in precedence order, a card docks the box on that
   session; fleet cards are a spec sheet, not live gauges), `truenasCard.ts`, `unifiCard.ts`,

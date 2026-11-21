@@ -241,8 +241,10 @@ comes back through `tmx reply`. Every message travels over the SSH connections T
 holds. Each box is off until you turn on its send and receive switches and their box lists in the
 Edit dialog, and the **Messages** drawer shows every thread and every refused attempt, with a
 **Stop** per thread. Setup with Claude Code or OpenCode ticked installs the command and a skill,
-plus Claude Code's hooks or the OpenCode plugin. Turning it on, what the agents do, and the
-limits of this first version are in [the agent messaging guide](docs/agent-messaging.md).
+plus Claude Code's hooks or the OpenCode plugin. A box you allow can also start a Claude Code of
+its own when a message arrives and none is running, or when you pick **Start Claude** in a pane's
+session picker. Turning it on, what the agents do, and the limits of this first version are in
+[the agent messaging guide](docs/agent-messaging.md).
 
 ## MCP server
 `src/mcp/index.js` is a dependency-free stdio [MCP](https://modelcontextprotocol.io) server

@@ -30,7 +30,9 @@ permission to start a thread, the commands, the drawer, is the same for both.
 - Every thread and every refused attempt shows in the **Messages** drawer, and you can stop any
   thread there.
 - It works between agent sessions that are already running (Claude Code, or OpenCode 2.3.0 or
-  later). It never starts a session.
+  later). It starts a session only on a box where you have allowed that: a send to a box with no
+  agent can start a Claude Code there (see [Starting an agent on a box that has
+  none](#starting-an-agent-on-a-box-that-has-none)).
 
 Messaging is on in Tmuxifier by default. `TMUXIFIER_AGENT_MAIL=off` in `.env` removes it
 entirely (see [Turning it off](#turning-it-off)).
@@ -94,7 +96,9 @@ version of the payments library it pins" is enough. The commands:
 
 ```
 tmx who [box]                      who this session may message, and who is listening
-tmx send <target> ["text"]         start a thread; text from the argument or stdin; prints the id
+tmx send [--fresh [--project <name>]] <target> ["text"]
+                                   start a thread; text from the argument or stdin; prints the id
+                                   --fresh starts a new agent on the box
 tmx reply <thread> ["text"]        answer, or ask a question back
 tmx wait <thread>... [-t seconds]  block until a reply arrives on any of them (default 90 s)
 tmx read <thread>                  print the whole thread
@@ -103,7 +107,10 @@ tmx inbox                          print messages waiting for this session
 
 A target is a box's label, in any case, which means that box's configured tmux session (the
 **tmux session** field of its Edit dialog); `box/session` for another session on that box; or
-`./session` for another session on the agent's own box. A typical exchange on `orders`:
+`./session` for another session on the agent's own box. When the box has no agent in its
+configured session, a bare box name goes to the one agent running elsewhere on the box, or starts
+one (see [Starting an agent on a box that has none](#starting-an-agent-on-a-box-that-has-none)).
+A typical exchange on `orders`:
 
 ```
 $ tmx who
@@ -172,7 +179,7 @@ When the message is delivered depends on the receiving session:
 | Working | The message waits, and the session is woken about a second after the turn ends (at the next status poll with `TMUXIFIER_AGENT_WATCH=off`) |
 | Blocked on a prompt | The message waits. Nothing is typed and nothing is answered |
 | Running an agent but not listening | The message waits, the sender is told `not listening`, and `tmx inbox` in that session reads it |
-| Not running an agent | The send is refused |
+| Not running an agent | The send is refused. A bare box name on a box you allowed to start an agent starts one instead (see [below](#starting-an-agent-on-a-box-that-has-none)) |
 | On a box Tmuxifier cannot reach | The send is refused: `billing is unreachable right now; try again shortly` |
 
 "Not listening" means the session runs an agent that has no mail listener: a Claude Code
@@ -219,6 +226,218 @@ and the marks the command had. A `tmx` run there speaks for the pane that variab
 refuses, instead of for its own pane. Run `unset TMUXIFIER_MAIL_PANE OPENCODE OPENCODE_TERMINAL`
 in such a shell first.
 
+## Starting an agent on a box that has none
+
+A message can only reach a box where an agent is running. You can let a box start one when it
+is needed. Tmuxifier then starts an ordinary, interactive Claude Code in its own tmux session on
+the box, in a project folder you chose, and delivers the message once it is up. Nobody is
+attached when it starts. You can open it at any time, watch it, type into it and answer its
+prompts, exactly as with a session you started yourself. This guide calls it a **worker**.
+
+A worker starts in one of three ways:
+
+- an agent sends a message to a box that has no agent running (`tmx send billing "…"`);
+- an agent asks for a fresh one (`tmx send --fresh billing "…"`);
+- you pick **Start Claude in `<project>`** in a pane's session picker (see [Agent
+  workers](boxes-and-setup.md#agent-workers) in the boxes guide).
+
+Nothing starts until you give the box a project folder. The first two ways stay off until you
+also tick a switch on the box.
+
+### Turning it on for a box
+
+To let agents start a worker on `billing`:
+
+1. **Set the box up for messaging**, as in [step 1](#turning-it-on-for-two-boxes) above: tick
+   **Claude Code**, save, and wait for the setup job to report `agent-mail ✓`. Claude Code has to
+   be installed on the box, and `billing` has to be allowed to receive from the box that sends
+   (steps 3 and 4 above). A worker gets its messages through the same hooks as any Claude Code
+   session, so a send to a box where the messaging tools are missing is refused.
+2. **Edit `billing`.** In the **Agent workers** section press **Add project**. Give it a name
+   (`api`) and the folder on the box where Claude Code should work (`/opt/billing-api`). Add one
+   project per folder; the first in the list is the default.
+3. Tick **Let agent messages start an agent here**. This tick is shown only while messaging is
+   on.
+4. **Save.** The worker settings are saved right after the box itself.
+
+| Setting | What it means |
+|---|---|
+| Name | What an agent types after `--project`. Lowercase letters, digits and dashes, at most 24, starting with a letter or digit. One box cannot have two projects of the same name |
+| Directory | An absolute folder on the box, such as `/opt/billing-api`: letters, digits, `.`, `_`, `-` and `/` only, no spaces, no `..`, no trailing `/`. It has to exist when the worker starts |
+| Skip Claude's folder-trust question | Off by default. See [Folder trust](#folder-trust) |
+| Let agent messages start an agent here | Off by default. Without it, a message or `--fresh` never starts a worker on this box. It has no effect on your own **Start** |
+| At most N worker sessions | How many workers may run on the box at once, 1 to 8 (3 by default) |
+
+A box can have up to 8 projects. A box with the tick on and no project does not start agents. The
+settings are kept in `data/agent-workers.json`, outside the box list, so exporting boxes never
+includes them. Removing a box removes its settings.
+
+The permission to send is unchanged. An agent on `orders` can start a worker on `billing` only
+when it could start a thread with `billing`: `orders` may send to it and `billing` accepts from
+`orders`.
+
+### What a send does now
+
+| The agent sends to | Agents running on the box | Result |
+|---|---|---|
+| `billing/main` | any | That session, as before. With no agent there the send is refused. A session you name is never started |
+| `billing` | one, in the box's configured session | That session, as before |
+| `billing` | none in the configured session, one elsewhere on the box | That one (this used to be refused) |
+| `billing` | none in the configured session, two or more elsewhere | Refused: name one (`tmx who`) |
+| `billing` | none | A new worker in the box's first project, when the box allows it. Otherwise refused, as before |
+| `--fresh billing` | any | A new worker in the box's first project |
+| `--fresh --project web billing` | any | A new worker in the project `web` |
+
+"An agent" here is a session that can take mail: one whose agent state Tmuxifier reads and whose
+pane runs Claude Code, OpenCode or something it cannot tell. A session running Codex, pi or
+Antigravity reports a state but never listens, so it does not count: a box whose only agent is
+one of those gets a worker rather than a message that waits for ever. The sending session never
+counts either. An agent on `orders` that sends to `orders` (or `.`) with no other agent there
+starts a worker beside itself, or, when `orders` does not start agents, is refused with
+`no other agent is running on orders`.
+
+Two bare sends to a box that arrive while its new worker has not reported a state yet go to the
+same worker. A `--fresh` send always starts its own.
+
+When the worker is up, the message reaches it like any other: Claude Code's `SessionStart` hook
+arms the listener, the first state marker lets Tmuxifier hand the message over, and the prompt
+hook confirms it. The text of a message is never put in the command that starts the worker and
+is never typed into the terminal.
+
+### Asking for a fresh worker: `--fresh` and `--project`
+
+```
+tmx send [--fresh [--project <name>]] <box> ["text"]
+```
+
+`tmx who` lists, after the sessions, each box the agent may send to that can start an agent, with
+the project names it can use:
+
+```
+$ tmx who
+billing  can start an agent (projects: api, web)
+$ tmx send --fresh --project web billing "Check that the staging site builds and report any errors."
+Sent. Thread t-4hq8w2xe. queued: billing/worker-web-1 is starting
+$ tmx wait t-4hq8w2xe
+```
+
+- Use `--fresh` for work that has nothing to do with what the running agent is doing, or when
+  the task needs a clean context. A worker knows nothing but the message: not the lead's task,
+  not earlier threads. The skill tells agents to put everything it needs in the text.
+- Options come before the box name. `tmx send billing --fresh` is refused (`tmx: options come
+  before the target`) and sends nothing, rather than sending `--fresh` as the message.
+- `--project` needs `--fresh`, and the name has to be one `tmx who` lists. `--fresh` takes a box
+  name, never `box/session`.
+- An agent names a box and at most a project. It cannot choose a folder, a command or a flag.
+
+Boxes set up before this feature have the older `tmx` and skill. A plain `tmx send billing`
+needs nothing new on the sending box, but `--fresh` does: set the sending box up again and
+restart its agent.
+
+### How many workers, and what they are called
+
+A worker's tmux session is named `worker-<project>-<n>`: `worker-api-1`, then `worker-api-2`
+while the first is still there. The number is the lowest one that no session on the box uses.
+
+**At most N worker sessions** counts the sessions on the box whose name starts with `worker-`
+and whose active pane runs Claude Code. This includes a session you named like that yourself.
+When the box is at its limit, a send that would start a worker is refused (`refused: billing
+already runs as many started agents as its operator allows`), and pressing **Start** shows an error message
+instead. Workers stay until you close them: close one with the **×** in a pane's session picker,
+or with `/exit` inside it (see [A worker's name can outlive its
+Claude](#a-workers-name-can-outlive-its-claude)).
+
+A worker runs with the box's own Claude Code settings, permissions and permission mode, as the
+box's login user. A prompt it raises waits for you and shows as **blocked** like any other, and
+the usual notification goes out. It appears in the sidebar, on the agents board, in the agent
+switcher and in the session picker, like any session with an agent state.
+
+### Folder trust
+
+The first time Claude Code runs in a folder it has not seen, it asks whether you trust the files
+there, and a worker that nobody is watching would wait at that question. There are two ways
+through:
+
+- **Do nothing.** Tmuxifier writes nothing on the box. The worker waits at the question and is
+  reported as stuck (see below). Open the session and answer once; Claude Code remembers the
+  answer for that folder.
+- **Tick Skip Claude's folder-trust question** on the project. Before it launches the worker,
+  Tmuxifier sets `hasTrustDialogAccepted` for that folder in `~/.claude.json` on the box. It
+  reads the file first and writes only when the key is not already `true`, because running
+  Claude Code sessions rewrite that file; it keeps every other key and the file's mode. Ticking
+  the box is your consent: tick it only for folders where you would answer yes.
+
+The write needs `jq`, `node` or `python3` on the box (in that order of preference). It does
+nothing, and the worker simply waits at the question, when none of them is there, when
+`~/.claude.json` is not valid JSON, or when it is a symbolic link (Tmuxifier never writes through
+a link). A failed write does not stop the worker from starting. The key is not part of a
+documented Claude Code interface: if a Claude Code update stops honouring it, workers wait at the
+question, and say so. Tmuxifier writes `~/.claude.json` in the login user's home; it has not
+checked where Claude Code looks when `CLAUDE_CONFIG_DIR` is set on the box.
+
+### A start that is stuck or fails
+
+The send is answered as soon as the worker has been started, not when it is ready. Where it goes
+from there shows in the Messages drawer and in `tmx wait`:
+
+| Where it stands | Meaning |
+|---|---|
+| `waiting: billing/worker-api-1 is starting` | Claude Code is coming up. Normal for the first seconds |
+| `waiting: billing/worker-api-1 is waiting for its operator at a start-up prompt` | The session is up, runs Claude Code and has reported nothing for a minute: it is at the folder-trust question or a sign-in. Open it and answer. The message stays queued and is delivered as soon as the session reports that it is ready. Agents read this line with `queued` in place of `waiting` |
+| thread `closed: the new agent did not start` | Claude Code ended right after the start: a broken install, or an answer of "No" at the trust question. The thread is closed, the sender's `tmx wait` ends with `closed: the new agent did not start; tell your operator`, and the attempt is listed under **Refused** |
+
+Tmuxifier reports a failed start only after it has looked at the box twice, 30 seconds or more
+after the start, so the thread can take up to about a minute to close. A start that cannot even
+begin is refused straight away, and the refusal is under **Refused** too: the folder is missing
+on the box (`the project directory is missing`), Claude Code or tmux is not installed on it, the
+box's setup job is running, the box is at its limit, the box is unreachable, or the start itself
+failed. See
+[Refusals](#refusals). While a setup job runs on a box, no worker starts there.
+
+A start can take a few seconds, so Tmuxifier checks again afterwards that the target box still
+exists and that the thread is still allowed. When you removed the box or withdrew the permission
+in that time, the send is refused and the worker stays up; close it yourself.
+
+Tmuxifier keeps no record of workers apart from what the box's tmux shows, and it keeps the
+progress of a start in memory only. After a Tmuxifier restart a message queued for a worker
+that never came up reads `waiting: billing/worker-api-1 is not running an agent` until the
+worker reports a state or you stop the thread.
+
+### Starting one yourself
+
+In a pane's session picker, below the session rows, each project of the box has a row **Start
+Claude in `<project>`**. Choosing it starts a worker and points that pane at the new session.
+It uses the same starter as a message does, with two differences: it ignores **Let agent
+messages start an agent here**, and it works with messaging off. The limit on worker sessions,
+and the rule that nothing starts while a setup job runs, apply to it too. A refusal shows as an
+error message in the corner. Nothing in the row shows that a start is under way for the few
+seconds it takes. Details are in [Agent workers](boxes-and-setup.md#agent-workers). A worker you
+start yourself is not tracked for a stuck start: you are looking at it.
+
+### A worker's name can outlive its Claude
+
+A browser pane reattaches to its session by name and reconnects without limit, and a saved
+layout is restored by name. So when a worker's Claude Code ends while a pane is on its session
+(`/exit`, "No" at the trust question, the **×** pressed from that pane), the pane's reconnect
+creates the session again under the same name, as a plain shell. This is how every session
+behaves, and starting a worker from a pane makes it the usual case.
+
+Such a leftover `worker-api-1` keeps its number, so a new worker never takes its name, and does
+not count against the limit. If you start Claude Code by hand in it, it counts again. Close it
+with the **×** in the session picker of a pane that is showing another session.
+
+### What is not in this version
+
+- **Headless workers** (`claude -p`). A worker is an interactive session you can open.
+- **OpenCode, Codex, pi or Antigravity as a worker.** Only Claude Code starts. OpenCode takes
+  mail only for a session you have viewed or prompted, which a worker nobody touched is not.
+- **Restarting or resuming a worker** that ended, or keeping one across a reboot of the box.
+- **Closing workers automatically.** They stay until you close them.
+- **A push notification for a worker stuck at a start-up prompt.** It shows in the thread's
+  status and in the Messages drawer only.
+- **Starting workers from the Android app or the MCP server**, and from the Host Shell.
+- **A worker under a login shell other than zsh or bash** has not been tried.
+
 ## What you see
 
 ### The Messages drawer
@@ -236,6 +455,7 @@ ago`), the thread's state, and where it stands:
 | `closed by you` | You pressed **Stop** |
 | `closed: permission withdrawn` | A switch or list entry it needed was removed |
 | `closed: box removed` | One of its boxes was removed from Tmuxifier |
+| `closed: the new agent did not start` | The worker Tmuxifier started for it never came up (see [A start that is stuck or fails](#a-start-that-is-stuck-or-fails)) |
 
 | Where it stands | Meaning |
 |---|---|
@@ -243,6 +463,8 @@ ago`), the thread's state, and where it stands:
 | `waiting: billing/main is waiting on its operator` | The session is blocked on a prompt |
 | `waiting: billing/main is not listening` | See the table above |
 | `waiting: billing/main is not running an agent` | The agent has exited since the thread started |
+| `waiting: billing/worker-api-1 is starting` | Tmuxifier started a worker for the thread and it has not reported a state yet |
+| `waiting: billing/worker-api-1 is waiting for its operator at a start-up prompt` | The new worker is up and stopped at a question only you can answer |
 | `waiting` | Handed over and not yet confirmed, about to be, or the receiving box is unreachable right now |
 | `delivered 40 s ago, no reply yet` | Delivered; the other side has not posted since |
 
@@ -275,7 +497,11 @@ as it typed it (a thread id, for a reply), when, and the reason exactly as the a
 
 The **Agent messaging** section holds the two switches, their lists, the matching-entry tick,
 one line per box in either list, and a status line for the box (see
-[Troubleshooting](#troubleshooting) for what each status line means).
+[Troubleshooting](#troubleshooting) for what each status line means). Next to it, the **Agent
+workers** section holds the box's projects and whether a message may start an agent there (see
+[Starting an agent on a box that has none](#starting-an-agent-on-a-box-that-has-none)). That
+section is in the dialog whether or not messaging is on; its tick for messages is shown only while
+messaging is on.
 
 ## Stopping things
 
@@ -305,6 +531,10 @@ turn it back on. What setup installed on the boxes stays too, and does nothing: 
 `tmx: agent messaging is not turned on for this box; tell your operator` (or `tmx: mail service
 unreachable, try again shortly` on a box where a socket file was left behind), and the listener
 in each Claude Code session, and the OpenCode plugin, retry quietly.
+
+Workers are not part of that switch. With messaging off no message can start one, since there is
+no messaging, and the **Let agent messages start an agent here** tick is not shown, but the
+**Agent workers** section and the **Start Claude in `<project>`** rows keep working.
 
 ### What setup installs
 
@@ -370,7 +600,8 @@ when it runs, so it may still listen.
 The plugin also decides whether OpenCode asks before running a `tmx` command, which is how it
 stands in for Claude Code's `Bash(tmx *)` rule. It allows a command without asking only when it is
 one plain `tmx who`, `send`, `reply`, `wait`, `read` or `inbox` (by `tmx`, `~/.local/bin/tmx` or
-`$HOME/.local/bin/tmx`) whose arguments are plain words or quoted text. A command with a `$` in
+`$HOME/.local/bin/tmx`) whose arguments are plain words or quoted text (`--fresh` and `--project
+<name>` are plain words, which is why they are spelled without an `=`). A command with a `$` in
 its arguments (command substitution or a variable), a backtick, a pipe, `;`, `&`, a redirect, a
 newline, or a quoted argument holding any of those, is not allowed by the plugin: OpenCode
 decides about it as it would without the plugin. On a default install OpenCode itself allows most
@@ -440,12 +671,22 @@ describes (that also ends OpenCode's state reporting). Then `rm -rf ~/.tmuxifier
   the box's mail socket and to OpenCode through its plugin interface; it never reads OpenCode's
   server password and never calls its HTTP server. On the box it also runs `tmux list-panes`,
   reads OpenCode's config files, and writes the state markers and its in-flight file.
+- A worker is started by a script that holds nothing a lead sent. An agent names a box and at
+  most a project; the project is only a name that Tmuxifier looks up, the folder is the one you
+  typed in Edit (checked again just before it reaches the box's shell), and the command that
+  starts Claude Code is fixed. The message is never in that command. A message starts a worker
+  only on a box where you ticked the switch. The settings change, and the **Start** row works,
+  only from a signed-in browser: the Android app and the MCP server can neither read nor change
+  those settings nor start a worker. Ticking **Skip Claude's folder-trust question** lets Claude Code work in that folder
+  without asking you; tick it only for folders you trust.
 - Message text is stored in plaintext on the Tmuxifier host under `data/agent-mail/` (files
   `0600`). A delivered message becomes part of the receiving agent session's context, which that
   agent sends to its model provider under its own login like anything else it reads (Anthropic
   for Claude Code; whichever provider OpenCode is set up with). Do not send secrets in a message.
 
 ## Limits in this version
+
+Starting an agent on a box has its own list: see [What is not in this version](#what-is-not-in-this-version).
 
 - **Receivers are Claude Code and OpenCode 2.3.0 or later.** A message for a session running
   another agent (Codex, pi, Antigravity) is accepted, waits, and the sender is told it is not
@@ -627,8 +868,20 @@ What the agent is told, and what to change:
 | `refused: billing is not accepting mail from agents` | The receiving box's **Agents here may receive** |
 | `refused: billing does not accept mail from this box` | The receiving box's `from:` list |
 | `refused: no box named "…" (or the name matches more than one box); run "tmx who"` | The target is not a box label. A box whose **Agents here may send** is off is told only that it may not send, whatever it names |
-| `refused: billing/main is not running an agent` | Start the agent in that session (or, when the sender is told this about itself, run `tmx` from a session where Claude Code or OpenCode runs) |
+| `refused: billing/main is not running an agent` | Start the agent in that session (or, when the sender is told this about itself, run `tmx` from a session where Claude Code or OpenCode runs). A send to the bare box name `billing` gets this only on a box that does not start agents; see [Starting an agent on a box that has none](#starting-an-agent-on-a-box-that-has-none) |
 | `refused: that is your own session` | A thread needs two sessions |
+| `refused: no other agent is running on orders` | A bare send to the sender's own box found no other agent there and the box starts none. Start one by hand, or allow workers on the box |
+| `refused: billing runs more than one agent; name one (run "tmx who")` | The box's configured session has no agent and two or more other sessions do. Send to `billing/<session>` |
+| `refused: billing does not start agents on request` | `--fresh` to a box without **Let agent messages start an agent here**, or with no project |
+| `refused: agent messaging is not set up on billing; tell your operator` | The box's messaging tools are not installed: set it up with **Claude Code** ticked |
+| `refused: billing has no project named "web"; run "tmx who"` | The project name is not one of the box's projects (**Agent workers** in its Edit dialog) |
+| `refused: billing already runs as many started agents as its operator allows` | **At most N worker sessions** is reached. Close a worker or raise the limit |
+| `refused: the project directory is missing on billing; tell your operator` | The folder of the project does not exist on the box |
+| `refused: Claude Code is not installed on billing; tell your operator` | Tick **Claude Code** in the box's setup, or install it |
+| `refused: tmux is not installed on billing; tell your operator` | Install tmux on the box |
+| `billing is being set up right now; try again shortly` | The box's setup job is running; no worker starts until it ends |
+| `starting an agent on billing failed; try again shortly, then tell your operator` | The start did not complete: the box answered nothing usable, or another start took the name first. Look at the box, then try again |
+| `refused: --fresh takes a box name, not a session` | `--fresh` with `billing/main` or `./main` |
 | `refused: the message is empty`, `refused: the message is larger than 65536 bytes` | The text |
 | `refused: this thread is closed. Do not start a new thread for the same matter; tell your operator instead.` | The thread was stopped or lost its permission (the next line says which). The agent is told to come to you rather than start another |
 | `refused: the mail store is full, so no new thread can be started; tell your operator` | 1000 threads, all active within the last hour; see [Limits](#limits-in-this-version) |

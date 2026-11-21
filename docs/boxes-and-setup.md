@@ -339,3 +339,65 @@ editing it between clicking Provision and the phase starting means the edited
 version runs. One deleted in that window is reported as
 `bootstrap skipped (saved script no longer exists)`. The *name* recorded on the job
 is frozen, so renaming a script later never rewrites what a past job says it ran.
+
+## Agent workers
+
+A **worker** is a Claude Code that Tmuxifier starts for you on a box, in its own tmux session and
+in a project folder you chose, with nobody attached. You can open it afterwards like any session.
+An agent on another box can ask for one with a message, and you can start one yourself from a
+pane. This page covers the two places where you set it up and use it; what agents can do with
+workers, the folder-trust tick, and what happens when a start goes wrong are in the
+[agent messaging guide](agent-messaging.md#starting-an-agent-on-a-box-that-has-none).
+
+### The Edit Box section
+
+The **Agent workers** section is in the Edit dialog only, not in Add, below the Proxmox and
+messaging sections. It shows whether or not agent messaging is on, because starting a worker from
+a pane needs no messaging. It saves right after the box itself, in the same Save.
+
+```
+Agent workers
+  Projects
+    api    /opt/billing-api    Skip Claude's folder-trust question [ ]    ×
+    web    /opt/billing-web    Skip Claude's folder-trust question [x]    ×
+    Add project
+  [ ] Let agent messages start an agent here
+  At most  3  worker sessions
+```
+
+- **Projects.** A name and an absolute folder on the box, one row per project (up to 8). The first
+  row is the default project. A row that cannot be saved says why under itself (a name is
+  lowercase letters, digits and dashes, up to 24; a folder has no spaces, no `..`, no trailing
+  `/`), and Save then tells you that the box was saved but the worker settings were not.
+- **Skip Claude's folder-trust question.** Per project, off by default. It writes one key into
+  `~/.claude.json` on the box before a worker starts there, so the worker does not stop at Claude
+  Code's trust question. See [Folder trust](agent-messaging.md#folder-trust).
+- **Let agent messages start an agent here.** Shown only while messaging is on. When it is off, a
+  message to this box never starts a worker. It does not affect the **Start** rows below.
+- **At most N worker sessions.** A whole number from 1 to 8. It also limits **Start**.
+
+The settings live in `data/agent-workers.json` (mode `0600`, nothing in it is secret), apart from
+the box list: the box export never includes them. Removing a box removes its entry. The Android
+app and the MCP server cannot read or change them.
+
+### The Start rows in the session picker
+
+A pane's session picker lists the box's sessions and windows. When the box has projects, it ends
+with one row per project, **Start Claude in `<project>`**, set off from the sessions by a line.
+Choosing one starts a worker in that project and then points *this pane* at the new session
+(`worker-<project>-<n>`), the same pane-local switch as picking any other session.
+
+- It starts a worker whether or not messaging is on and whether or not the messages tick is set,
+  but it obeys **At most N worker sessions**: at the limit, an error message appears in the corner
+  and nothing starts.
+- While the box's setup job is running, it refuses, as a terminal does.
+- The row has no **×**: it names no session. There is no sign of progress for the few seconds a
+  start takes, and a second pick in the same pane while one is under way does nothing.
+- The picker reads the box's projects each time it opens, so a project you just saved appears the
+  next time you open it.
+- There are no start rows on a phone-width layout, where the picker has no session list, or for
+  the Host Shell.
+
+A worker you start this way is not tracked for a stuck start, because you are looking at it. If
+Claude Code stops at a question, answer it in the pane. Closing a worker is the **×** beside its
+session in the picker (see [Killing a session or window](terminal.md)).
