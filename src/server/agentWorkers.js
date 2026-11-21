@@ -259,16 +259,21 @@ export function parseWorkerTrust(stdout) {
 //     A listed name is taken; it is running when its pane runs `claude` (runningWorkers), or
 //     while the start is younger than START_SETTLE_MS, because the pane may still be the shell
 //     reading its rc files before it becomes the agent.
-// A read the poller declines (it overlapped a newer one) does not advance the clock, nor does
-// a failed one, so a start whose follow-up probe was not applied falls back to the rule for
-// fewer than 2 reads. The memory is per process: after a restart the box's own listing is the
+// A read the poller declines (it overlapped one already applied) does not advance the clock,
+// so a start whose follow-up probe was declined falls back to the rule for fewer than 2 reads.
+// A failed read that is applied in order does advance it (statusPoller.js `settle`), but it
+// leaves the box's listing unknown, so the next `start` answers `unreachable` before the names
+// are looked at. The memory is per process: after a restart the box's own listing is the
 // only count, which is what the design asks for.
 
 export const START_CODES = Object.freeze([
   'bad-mode', 'setup-running', 'unreachable', 'no-project', 'worker-cap',
   'no-tmux', 'no-dir', 'no-agent-binary', 'start-failed',
 ]);
-export const START_TIMEOUT_MS = 20000;
+// One run of the start script over ssh. A start may run it twice (an `exists` retry), and both
+// runs must fit inside the 30 s a lead's `tmx send` waits for its answer (`request POST
+// /v1/threads 30` in tmuxifier-mail.sh), with room left for the hub's own reads: 2 x 12 s.
+export const START_TIMEOUT_MS = 12000;
 export const START_MEMORY_MS = 60000;
 export const START_SETTLE_MS = 15000;
 // Reads applied since a start after which the listing is the authority on it (see above).

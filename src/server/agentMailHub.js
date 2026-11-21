@@ -58,24 +58,31 @@ import {
 // Every check above still comes first, in its order. A bare send first joins the box's pending
 // bare start, the newest worker a bare send started that has no marker yet, or one still being
 // started: two bare sends arriving together get one worker and two threads. A fresh send always
-// starts its own. Otherwise, in this order: no starter (`workers`/`workerStore` null) or the
-// box's `mailStart` off is `workers-off` for fresh and, for a bare name, `no-agent` as before
-// (`no-other-agent` on the caller's own box, where `no-agent` would name the configured session,
-// possibly the caller's own); the box's mail tools not installed (`mailInstalled`) is
-// `mail-not-set-up`, since a worker with no waiter hook could never take the message; no room in
-// the store is `store-full`, asked before the start so a refusal starts nothing; then the
-// starter (agentWorkers.js), whose refusals each have their own wording (`bad-mode` and anything
-// unknown read `start-failed`). After the start the store is asked for room again, right before
-// the thread is made; a `store-full` then leaves the worker up (the operator sees it). The
-// message is queued for the worker and reaches it through the delivery below, unchanged: the
-// worker's own SessionStart arms its waiter and its first marker lets the hub hand it over.
+// starts its own. Otherwise, in this order: no starter (`workers`/`workerStore` null, or a
+// `workerStore.get` that rejects, logged with console.error) or the box's `mailStart` off is
+// `workers-off` for fresh and, for a bare name, `no-agent` as before (`no-other-agent` on the
+// caller's own box, where `no-agent` would name the configured session, possibly the caller's
+// own); the box's mail tools not installed (`mailInstalled`) is `mail-not-set-up`, since a
+// worker with no waiter hook could never take the message; no room in the store is
+// `store-full`, asked before the start so a refusal starts nothing; then the starter
+// (agentWorkers.js), whose refusals each have their own wording (`bad-mode` and anything unknown
+// read `start-failed`). The refusals of this paragraph name the box by its label, not by what
+// the caller typed (a `.` would read as "."); the refusal log keeps what was typed. After the
+// start the store is asked for room again, right before the thread is made; a `store-full` then
+// leaves the worker up (the operator sees it). The message is queued for the worker and reaches
+// it through the delivery below, unchanged: the worker's own SessionStart arms its waiter and
+// its first marker lets the hub hand it over.
 // `starts` keeps, in memory only, each start the hub made: { boxId, session, threadIds, at, bare,
 // stuck }, `at` being when the start returned. A box whose record has `mailStart` on but no
 // project starts nothing: a bare send there is `no-agent` (`no-other-agent`) and a fresh one
 // with no project name `workers-off`; `no-project` is only for a project named and not there.
 // Once the start resolves, `send` reads the boxes and the policies again: a box no longer listed
 // is `unknown-box`, a pair `mayStart` no longer allows is refused with its code, and either way
-// the worker is left up and no thread is made. `no-other-agent` names the box by its label.
+// the worker is left up and no thread is made. A joined entry that a `boxChanged` during those
+// reads judged failed and dropped, with still no marker for its session, is `start-failed`, and
+// no thread is made: its own threads were closed by that look, and one made now would stay open
+// on a worker nobody watches. Nothing awaits between that check and the thread's entry in
+// `threadIds`. `no-other-agent` names the box by its label.
 // `who` also lists each box the caller may start a thread with (`mayStart`, the caller's own box
 // included) that is reachable and where a send could start an agent (the `canStart` test and
 // `mailInstalled`), as `{ box: <label>, projects: <names in order> }`, after the session rows
@@ -92,16 +99,21 @@ import {
 //     listed with a pane kind other than claude           of the entry is closed
 //                                                         WORKER_FAILED_REASON, one refusal
 //                                                         logged per thread closed (from its
-//                                                         starter, target the box label); the
-//                                                         entry is dropped
+//                                                         starter, target the box label; none
+//                                                         for one already closed); the entry
+//                                                         is dropped
 //   age >= WORKER_STUCK_MS, listed on claude, no marker   `stuck`: a start-up prompt holds it
 //
 // Two looks, because `age` is the entry's age at the look, not the listing's: a sweep that read
 // the box before the start can finish 30 s after it. The first failing look only sets
 // `failedSeen`; any look that does not find it failing (a claude pane, no listing, too young)
-// clears it. Sweeps are serialised and a real-time read is fresh, so the second failing look
-// reads a listing taken after the first. `boxRemoved` drops the box's entries and its bare start
-// under way; a start under way when its box is removed is not recorded.
+// clears it. What makes the second look read a newer listing is the poller's ordering rule
+// (statusPoller.js): a read is applied only if it STARTED after the previously applied one was
+// applied, so the read behind the second look started after the read behind the first was
+// applied. That holds only while `boxChanged` is called at most once per applied read, as
+// index.js does (after each sweep, and after each applied real-time refresh via `onAgents`):
+// two calls for one read would be two looks at one listing. `boxRemoved` drops the box's entries
+// and its bare start under way; a start under way when its box is removed is not recorded.
 //
 // An entry may hold no thread (the store filled after the start); it is dropped the same way,
 // with nothing to close. While an entry is there and the session has no marker, a queued
@@ -353,14 +365,27 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
   // record: the starter answers `no-project` for it. `who` and `send` share this test.
   const canStart = (record, named = false) => record?.mailStart === true && (record.projects.length > 0 || named);
 
+  // The box's worker record, or null without a starter. A read that rejects is logged and reads
+  // as null: the box is one that does not start agents (header).
+  async function recordOf(boxId) {
+    if (!workers || !workerStore) return null;
+    try {
+      return await workerStore.get(boxId);
+    } catch (e) {
+      console.error(`[tmuxifier] agent workers: the worker settings of box ${JSON.stringify(boxId)} could not be read: ${e?.message ?? e}`);
+      return null;
+    }
+  }
+
   // The worker a send that found no agent goes to: `{ entry }`, or `{ text }`, the refusal.
-  // `fresh` as send's; `noAgent` is what a bare send is refused with when no start is allowed.
-  async function workerFor(box, typed, fresh, noAgent) {
+  // `where` is the box's label, which the refusals name; `fresh` as send's; `noAgent` is what a
+  // bare send is refused with when no start is allowed.
+  async function workerFor(box, where, fresh, noAgent) {
     const bare = fresh === undefined;
-    const ctx = { target: typed, project: cleanTarget(fresh) };
+    const ctx = { target: where, project: cleanTarget(fresh) };
     let job = bare ? bareJob(box.id) : null;
     if (!job) {
-      const record = workers && workerStore ? await workerStore.get(box.id) : null;
+      const record = await recordOf(box.id);
       // With no project only a named one may be asked for, and it is `no-project` (header).
       if (!canStart(record, Boolean(fresh))) return { text: bare ? noAgent : refusalText('workers-off', ctx) };
       if (!mailInstalled(box.id)) return { text: refusalText('mail-not-set-up', ctx) };
@@ -663,7 +688,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
       if (!mayStart(policies, me.boxId, box.id).ok) continue;
       const marks = marksOf(box.id);
       if (marks === null || typeof marks !== 'object') continue;
-      const record = workers && workerStore ? await workerStore.get(box.id) : null;
+      const record = await recordOf(box.id);
       if (canStart(record) && mailInstalled(box.id)) starters.push({ box: labelOf(boxes, box.id) || box.id, projects: record.projects.map((p) => p.name) });
       for (const session of Object.keys(marks).filter((s) => SESSION_NAME_RE.test(s)).sort()) {
         if (box.id === me.boxId && session === me.session) continue;
@@ -713,10 +738,11 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
       peer.session = pick.session;
     } else if (to.bare) {
       // No session of the box can take mail, or a fresh one was asked for.
+      const where = labelOf(boxes, peer.boxId);
       const noAgent = peer.boxId === me.boxId
-        ? refusalText('no-other-agent', { target: labelOf(boxes, peer.boxId) })
+        ? refusalText('no-other-agent', { target: where })
         : refusalText('no-agent', { who: nameOf(boxes, peer) });
-      const got = await workerFor(to.box, typed, fresh, noAgent);
+      const got = await workerFor(to.box, where, fresh, noAgent);
       if (got.text) return refuse(me, typed, got.text);
       start = got.entry;
       peer.session = start.session;
@@ -727,6 +753,10 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
       if (!boxes.some((b) => b && b.id === peer.boxId)) return refuse(me, typed, refusalText('unknown-box', { target: typed }));
       const still = mayStart(policies, me.boxId, peer.boxId);
       if (!still.ok) return refuse(me, typed, refusalText(still.code, { target: typed }));
+      // A `boxChanged` during those reads may have judged a joined start failed and dropped it,
+      // closing the threads it held then: with no marker either, this send makes no thread on it.
+      // From here to the thread's entry in `start.threadIds` nothing awaits.
+      if (!starts.includes(start) && !readMark(peer).running) return refuse(me, typed, refusalText('start-failed', { target: where }));
     }
     if (!store.hasRoom(closeForStorage)) return refuse(me, typed, refusalText('store-full'));
     const thread = store.createThread({ starter: me, peer });
@@ -893,8 +923,9 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
         drop();
         const target = cleanTarget(labelOf(lastBoxes, boxId) || boxId);
         for (const id of entry.threadIds) {
+          // Only a thread this close ends: one the operator already stopped logs nothing.
           const t = store.thread(id);
-          if (!t || !endThread(id, WORKER_FAILED_REASON)) continue;
+          if (!t || t.state !== 'open' || !endThread(id, WORKER_FAILED_REASON)) continue;
           store.addRefusal({ from: t.starter, target, reason: statusPhrase('closed-worker-failed') });
         }
       } else if (age >= WORKER_STUCK_MS && onClaude) {

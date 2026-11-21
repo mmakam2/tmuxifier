@@ -534,6 +534,26 @@ describe('tmx: send --fresh', () => {
     expect(sends.map((a) => a[2])).toEqual(['--fresh is the flag to use', '--project web', '--freshly']);
   });
 
+  test('who <box> matches a starter line on its whole box name, a label with a "/" included', async () => {
+    w.marks.b = {}; // no session on billing: its starter line is the only line for it
+    w.sessions.b = [];
+    const one = await frun(['who', 'billing']);
+    expect(one.code, one.stderr).toBe(0);
+    expect(one.stdout).toBe('billing  can start an agent (projects: api, web)\n');
+    expect((await frun(['who', 'orders'])).stdout).toMatch(/^nobody: /);
+
+    w.boxes[1].label = 'billing/west';
+    const slash = await frun(['who', 'billing/west']);
+    expect(slash.code, slash.stderr).toBe(0);
+    expect(slash.stdout).toBe('billing/west  can start an agent (projects: api, web)\n');
+    // the part before the "/" is not the box's name
+    expect((await frun(['who', 'billing'])).stdout).toMatch(/^nobody: /);
+    // and a session row of that box is still matched on all before its last "/"
+    w.marks.b = { main: mark('ready') };
+    expect((await frun(['who', 'billing/west'])).stdout)
+      .toBe('billing/west/main  idle, not listening\nbilling/west  can start an agent (projects: api, web)\n');
+  });
+
   test('the listener is the authority on a project name the script lets through', async () => {
     // 24 characters is a project name: the hub answers, with the box's own refusal.
     const name = 'a'.repeat(24);

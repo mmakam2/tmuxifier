@@ -24,8 +24,13 @@ export function createAgentWorkerStore({ dataDir }) {
     for (const id of Object.keys(doc.boxes)) {
       // A file is not proof: an entry that no longer passes the rules (edited by hand, or
       // written by an older version) is absent, so a directory that would not be accepted on
-      // write never reaches a starter.
-      try { m[id] = normalizeWorkers(doc.boxes[id]); } catch { /* absent */ }
+      // write never reaches a starter. Logged, because the next write leaves it out of the
+      // file for good.
+      try {
+        m[id] = normalizeWorkers(doc.boxes[id]);
+      } catch (e) {
+        console.error(`[tmuxifier] agent workers: dropped the stored settings of box ${JSON.stringify(id)}: ${e.message}`);
+      }
     }
     boxes = m;
     return boxes;

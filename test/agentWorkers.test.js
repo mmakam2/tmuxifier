@@ -65,12 +65,12 @@ const hasSession = (name) => {
   try { bench.tmux('has-session', '-t', `=${name}`); return true; } catch { return false; }
 };
 
-test('no project name starts the first project, with the 20 s script timeout', async () => {
+test('no project name starts the first project, with the 12 s script timeout', async () => {
   await saveDefault();
   const r = await starter().start(BOX);
   expect(r).toEqual({ ok: true, session: 'worker-api-1', project: 'api', trust: null });
   expect(hasSession('worker-api-1')).toBe(true);
-  expect(calls).toEqual([{ box: 'b1', opts: { timeoutMs: 20000 } }]);
+  expect(calls).toEqual([{ box: 'b1', opts: { timeoutMs: 12000 } }]);
 });
 
 test('a named project starts that project', async () => {

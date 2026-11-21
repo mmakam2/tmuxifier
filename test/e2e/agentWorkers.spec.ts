@@ -356,6 +356,8 @@ test('the picker\'s start row starts worker-api-1 and moves the pane there; a se
     // The pane really attaches there: its terminal reopens on the worker's session.
     let attached = page.waitForEvent('websocket', { predicate: (ws) => /\/term\?.*[?&]session=worker-api-1(&|$)/.test(ws.url()), timeout: 20000 });
     await row.locator('.session-picker-pick').click();
+    // The pick says at once that the start began (an info toast, not an error).
+    await expect(page.locator('.toast-info', { hasText: 'Starting Claude in api…' })).toBeVisible({ timeout: 5000 });
     await attached;
     await expect.poll(() => currentSession(pane), { timeout: 20000 }).toBe('worker-api-1');
     expect(hasSession('worker-api-1')).toBe(true);

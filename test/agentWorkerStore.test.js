@@ -122,7 +122,21 @@ describe('agentWorkerStore', () => {
         good: { projects: [{ name: 'billing', dir: '/opt/billing-api', trust: false }], mailStart: true, max: 2 },
       },
     }));
-    expect(await s.get('bad')).toEqual(EMPTY_WORKERS);
+    const logged = [];
+    const saved = console.error;
+    console.error = (...a) => { logged.push(a.join(' ')); };
+    try {
+      expect(await s.get('bad')).toEqual(EMPTY_WORKERS);
+    } finally {
+      console.error = saved;
+    }
+    // One line per dropped entry, naming the box and the rule: the next write deletes it for good.
+    expect(logged).toEqual([
+      '[tmuxifier] agent workers: dropped the stored settings of box "bad": bad directory for project billing',
+      '[tmuxifier] agent workers: dropped the stored settings of box "huge": max must be 1 to 8',
+      '[tmuxifier] agent workers: dropped the stored settings of box "junk": workers must be an object',
+      '[tmuxifier] agent workers: dropped the stored settings of box "nul": workers must be an object',
+    ]);
     expect(await s.get('huge')).toEqual(EMPTY_WORKERS);
     expect(await s.get('junk')).toEqual(EMPTY_WORKERS);
     expect(await s.get('nul')).toEqual(EMPTY_WORKERS);

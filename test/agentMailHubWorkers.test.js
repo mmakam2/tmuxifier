@@ -419,6 +419,39 @@ describe('agentMailHub: a send starts a worker', () => {
     expect(w.store.threads()).toEqual([]);
   });
 
+  test('the start refusals name the box by its label, not what was typed; the log keeps what was typed', async () => {
+    await world(RECORD, { policies: { o: { send: true, receive: true, sendTo: ['b'] }, b: { receive: true, receiveFrom: ['o'] } } });
+    w.installed.delete('o');
+    expect(await w.hub.send(O, '.', 'x', { fresh: '' })).toEqual({ ok: false, text: 'refused: agent messaging is not set up on orders; tell your operator' });
+    w.installed.add('o');
+    expect(await w.hub.send(O, ' Orders ', 'x', { fresh: 'nope' })).toEqual({ ok: false, text: refusalText('no-project', { target: 'orders', project: 'nope' }) });
+    await w.workerStore.set('o', { mailStart: false, projects: [] });
+    await w.workerStore.set('b', { mailStart: false, projects: [] });
+    expect(await w.hub.send(O, '.', 'x', { fresh: '' })).toEqual({ ok: false, text: 'refused: orders does not start agents on request' });
+    expect(await w.hub.send(O, 'BILLING', 'x', { fresh: '' })).toEqual({ ok: false, text: refusalText('workers-off', { target: 'billing' }) });
+    expect(w.store.refusals().map((r) => r.target)).toEqual(['BILLING', '.', ' Orders ', '.']); // newest first
+  });
+
+  test('a worker store whose read rejects: the box does not start agents, and one line is logged per failed read', async () => {
+    await world(RECORD, { policies: { o: { send: true, receive: true, sendTo: ['b'] }, b: { receive: true, receiveFrom: ['o'] } } });
+    const c = counting();
+    const hub = w.makeHub({ workers: c, workerStore: { get: async () => { throw new Error('disk gone'); } } });
+    const logged = [];
+    const saved = console.error;
+    console.error = (...a) => { logged.push(a.join(' ')); };
+    try {
+      expect(await hub.send(O, 'billing', 'x')).toEqual({ ok: false, text: refusalText('no-agent', { who: 'billing/main' }) });
+      expect(await hub.send(O, '.', 'x')).toEqual({ ok: false, text: refusalText('no-other-agent', { target: 'orders' }) });
+      expect(await hub.send(O, 'billing', 'x', { fresh: '' })).toEqual({ ok: false, text: refusalText('workers-off', { target: 'billing' }) });
+      expect(logged).toHaveLength(3);
+      for (const line of logged) expect(line).toMatch(/^\[tmuxifier\] agent workers: .*disk gone$/);
+    } finally {
+      console.error = saved;
+    }
+    expect(c.calls).toBe(0);
+    expect(benchSessions()).toEqual([]);
+  });
+
   test('mailStart on but no projects: a bare send is no-agent, fresh "" is workers-off, a named project is no-project', async () => {
     await world({ mailStart: true, projects: [] }, { policies: { o: { send: true, receive: true, sendTo: ['b'] }, b: { receive: true, receiveFrom: ['o'] } } });
     const c = counting();
@@ -594,6 +627,41 @@ describe('agentMailHub: a worker that does not come up', () => {
     expect(w.store.refusals().map((x) => x.reason)).toEqual([FAILED, FAILED]);
   });
 
+  test('a thread the operator stopped before the second failing look: no refusal is logged for it', async () => {
+    const r = await send();
+    at(31, [pane('main', 'zsh')]);
+    expect(await w.hub.closeThread(r.threadId)).toBe(true);
+    at(32, [pane('main', 'zsh')]);
+    expect(w.store.thread(r.threadId)).toMatchObject({ state: 'closed', reason: 'operator' });
+    expect(w.store.refusals()).toEqual([]);
+  });
+
+  test('a bare send whose joined entry the second failing look drops while the send is in flight: refused start-failed, no thread', async () => {
+    let armed = 0;
+    let hub;
+    hub = w.makeHub({
+      listBoxes: async () => {
+        if (armed > 0 && --armed === 0) {
+          w.clock = start + 32000;
+          hub.boxChanged('b'); // the second failing look, between the join and the thread
+        }
+        return w.boxes.map((b) => ({ ...b }));
+      },
+    });
+    const one = await hub.send(O, 'billing', 'one');
+    expect(one.ok, one.text).toBe(true);
+    start = w.clock;
+    w.clock = start + 31000;
+    hub.boxChanged('b'); // the first failing look
+    expect(w.store.thread(one.threadId).state).toBe('open');
+    armed = 2; // send's own read of the boxes, then its read again after the join
+    const two = await hub.send(O, 'billing', 'two');
+    expect(two).toEqual({ ok: false, text: refusalText('start-failed', { target: 'billing' }) });
+    expect(w.store.thread(one.threadId)).toMatchObject({ state: 'closed', reason: WORKER_FAILED_REASON });
+    expect(w.store.threads()).toHaveLength(1);
+    expect(w.store.refusals().map((x) => x.reason)).toEqual([two.text, FAILED]); // newest first
+  });
+
   test('an entry holding no thread (the store filled after the start) is dropped under the same rules', async () => {
     let room = [true, false];
     const hub = w.makeHub({ store: { ...w.store, hasRoom: () => (room.length ? room.shift() : true) } });
@@ -752,6 +820,22 @@ describe('agentMailHub: who lists boxes that can start an agent', () => {
     expect(await whoText()).toBe(STARTER);
     await w.setPolicy('o', { send: true, receive: true, sendTo: ['b'] });
     expect((await whoText()).split('\n')).toEqual(['orders  can start an agent (projects: api, web)', STARTER]);
+  });
+
+  test('a worker store whose read rejects: no line, the session rows stay, one line logged per box read', async () => {
+    await world();
+    w.marks.b = { main: mark('ready') };
+    const hub = w.makeHub({ workerStore: { get: async () => { throw new Error('disk gone'); } } });
+    const logged = [];
+    const saved = console.error;
+    console.error = (...a) => { logged.push(a.join(' ')); };
+    try {
+      expect(await hub.who(O)).toEqual({ ok: true, text: 'billing/main  idle, not listening' });
+    } finally {
+      console.error = saved;
+    }
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatch(/^\[tmuxifier\] agent workers: .*disk gone$/);
   });
 
   test('without a starter or a worker store: no line', async () => {

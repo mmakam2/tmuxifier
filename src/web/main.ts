@@ -1259,6 +1259,8 @@ async function startWorker(id: string, t: SessionTarget) {
   if (startingPanes.has(id) || !t.project) return;
   startingPanes.add(id);
   const gen = workerReadGen;
+  // The start takes seconds: say it began, so the pick does not look ignored.
+  showToast(`Starting Claude in ${t.project}…`);
   try {
     const { session } = await workersApi.start(boxOfInstance(id), t.project);
     // Logged out, or undocked, while the start ran: the worker is up, but there

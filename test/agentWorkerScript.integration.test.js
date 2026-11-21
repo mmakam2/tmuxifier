@@ -82,6 +82,22 @@ for (const scriptShell of SCRIPT_SHELLS) {
   }
 }
 
+// A KNOWN LIMITATION, pinned as it is today (the launch line is not changed for it): with tmux's
+// default-shell `sh` (dash on Debian and Ubuntu), the launch line's `"$SHELL" -ic` is an
+// interactive dash, which reads no rc file (only $ENV), so a `claude` found only through the rc
+// files' ~/.local/bin line is not found and the pane ends. The script still answers `started`:
+// its own check finds the agent in ~/.local/bin. The operator guide says to use bash or zsh.
+test('known limitation: tmux default-shell sh prints started, but the agent found only via ~/.local/bin never comes up', async () => {
+  const b = bench('sh');
+  const dir = projectDir(b);
+  const r = b.run('sh', buildWorkerStartRemote({ session: SESSION, dir }));
+  expect(r).toEqual({ code: 0, stdout: 'WORKER: started\n' });
+  // Give the pane the time the other cases need to write their line (they do it well inside 5 s).
+  await new Promise((res) => setTimeout(res, 2000));
+  expect(b.standInLog(SESSION)).toBeNull();
+  expect(sessionsOf(b)).toEqual([]); // the pane's shell exited, and the session with it
+});
+
 for (const scriptShell of SCRIPT_SHELLS) {
   test(`script under ${scriptShell}: a missing directory is no-dir, a missing agent is no-agent-binary`, () => {
     const b = bench('bash');

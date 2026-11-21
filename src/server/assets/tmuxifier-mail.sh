@@ -313,12 +313,19 @@ cmd_who() {
   request GET /v1/who 30
   case $CODE in 2??) ;; *) finish ;; esac
   [ "$#" = 1 ] || finish
-  # Only the rows of that box: "<box>/<session>  <state>, ..."; sessions never contain a "/".
+  # Only the lines of that box. A session row is "<box>/<session>  <state>, ..." and sessions
+  # never contain a "/", so its box is all before the last "/". A starter line is
+  # "<box>  can start an agent (...)": its box is the whole first field, a "/" in a label
+  # included.
   _want=$(fold "$1")
   _rows=$(printf '%s' "$RESP" | while IFS= read -r _line; do
     _entry=${_line%%"  "*}
     [ "$_entry" != "$_line" ] || continue
-    [ "$(fold "${_entry%/*}")" = "$_want" ] && printf '%s\n' "$_line"
+    case ${_line#*"  "} in
+      'can start an agent ('*) _box=$_entry ;;
+      *) _box=${_entry%/*} ;;
+    esac
+    [ "$(fold "$_box")" = "$_want" ] && printf '%s\n' "$_line"
   done)
   if [ -n "$_rows" ]; then
     printf '%s\n' "$_rows"
