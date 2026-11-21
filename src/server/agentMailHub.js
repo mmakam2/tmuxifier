@@ -83,12 +83,20 @@ import {
 //   what the box shows                                    what happens
 //   a marker for the session                              the entry is dropped (it is up)
 //   no listing (`sessionsOf` null)                        nothing
-//   age >= WORKER_FAIL_MS, the session not listed, or     each thread of the entry is closed
-//     listed with a pane kind other than claude           WORKER_FAILED_REASON, one refusal
+//   age >= WORKER_FAIL_MS, the session not listed, or     on two consecutive looks: each thread
+//     listed with a pane kind other than claude           of the entry is closed
+//                                                         WORKER_FAILED_REASON, one refusal
 //                                                         logged per thread closed (from its
 //                                                         starter, target the box label); the
 //                                                         entry is dropped
 //   age >= WORKER_STUCK_MS, listed on claude, no marker   `stuck`: a start-up prompt holds it
+//
+// Two looks, because `age` is the entry's age at the look, not the listing's: a sweep that read
+// the box before the start can finish 30 s after it. The first failing look only sets
+// `failedSeen`; any look that does not find it failing (a claude pane, no listing, too young)
+// clears it. Sweeps are serialised and a real-time read is fresh, so the second failing look
+// reads a listing taken after the first. `boxRemoved` drops the box's entries and its bare start
+// under way; a start under way when its box is removed is not recorded.
 //
 // An entry may hold no thread (the store filled after the start); it is dropped the same way,
 // with nothing to close. While an entry is there and the session has no marker, a queued
@@ -303,6 +311,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
 
   const starts = []; // each start the hub made for mail, oldest first
   const bareStarting = new Map(); // box id -> the start a bare send has under way there
+  const removals = new Map(); // box id -> how many times boxRemoved ran for it
 
   // The pending bare start of `boxId`, resolved as `{ entry }`, or null when there is none.
   function bareJob(boxId) {
@@ -318,13 +327,14 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
   // bare send always finds one or the other.
   function beginStart(box, fresh) {
     const bare = fresh === undefined;
+    const removed = removals.get(box.id) ?? 0;
     const done = (res) => {
       if (bare && bareStarting.get(box.id) === job) bareStarting.delete(box.id);
       if (!res || res.ok !== true || typeof res.session !== 'string' || !SESSION_NAME_RE.test(res.session)) {
         return { code: START_CODES.includes(res?.code) && res.code !== 'bad-mode' ? res.code : 'start-failed' };
       }
-      const entry = { boxId: box.id, session: res.session, threadIds: [], at: now(), bare, stuck: false };
-      starts.push(entry);
+      const entry = { boxId: box.id, session: res.session, threadIds: [], at: now(), bare, stuck: false, failedSeen: false };
+      if ((removals.get(box.id) ?? 0) === removed) starts.push(entry);
       return { entry };
     };
     const job = new Promise((resolve) => { resolve(workers.start(box, { project: bare ? undefined : fresh || undefined })); })
@@ -859,11 +869,15 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
     for (const entry of starts.filter((s) => s.boxId === boxId)) {
       const drop = () => { starts.splice(starts.indexOf(entry), 1); };
       if (marks !== null && typeof marks === 'object' && Object.hasOwn(marks, entry.session)) { drop(); continue; }
-      if (!Array.isArray(rows)) continue;
+      if (!Array.isArray(rows)) { entry.failedSeen = false; continue; }
       const row = rows.find((r) => r && r.name === entry.session);
       const onClaude = row !== undefined && agentKindOf(row.paneCmd) === 'claude';
       const age = now() - entry.at;
-      if (age >= WORKER_FAIL_MS && !onClaude) {
+      const failing = age >= WORKER_FAIL_MS && !onClaude;
+      // The first failing look may have read a listing older than the start (header).
+      if (failing && !entry.failedSeen) { entry.failedSeen = true; continue; }
+      entry.failedSeen = false;
+      if (failing) {
         drop();
         const target = cleanTarget(labelOf(lastBoxes, boxId) || boxId);
         for (const id of entry.threadIds) {
@@ -896,6 +910,10 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
   }
 
   async function boxRemoved(boxId) {
+    // Its starts: boxChanged never runs for it again, and a send must not join one later.
+    for (let i = starts.length - 1; i >= 0; i--) if (starts[i].boxId === boxId) starts.splice(i, 1);
+    bareStarting.delete(boxId);
+    removals.set(boxId, (removals.get(boxId) ?? 0) + 1);
     await refreshBoxes();
     for (const t of store.threads()) {
       if (t.state === 'open' && (t.starter.boxId === boxId || t.peer.boxId === boxId)) endThread(t.id, 'box removed');

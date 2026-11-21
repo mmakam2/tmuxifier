@@ -473,7 +473,7 @@ describe('agentMailHub: a worker that does not come up', () => {
     expect(WORKER_STUCK_MS).toBe(60000);
   });
 
-  test('a listing older than the start (+5 s, not listed): the thread stays open, starting', async () => {
+  test('too young to judge (+5 s, not listed): the thread stays open, starting', async () => {
     const r = await send();
     at(5, [pane('main', 'zsh')]);
     expect(state(r)).toBe('open');
@@ -481,22 +481,58 @@ describe('agentMailHub: a worker that does not come up', () => {
     expect(w.store.refusals()).toEqual([]);
   });
 
-  test('+31 s, not listed: closed "worker did not start", the held wait ends with it, one refusal logged', async () => {
+  test('a stale listing first seen at +35 s does not close; a second failing look does', async () => {
+    const r = await send();
+    at(35, [pane('main', 'zsh')]); // e.g. a sweep that read the box before the start
+    expect(state(r)).toBe('open');
+    expect(status(r)).toBe(STARTING);
+    expect(w.store.refusals()).toEqual([]);
+    at(36, [pane('main', 'zsh')]);
+    expect(w.store.thread(r.threadId)).toMatchObject({ state: 'closed', reason: WORKER_FAILED_REASON });
+    expect(w.store.refusals()).toEqual([{ at: w.clock, from: O, target: 'billing', reason: FAILED }]);
+  });
+
+  test('a failing look, then the session listed on claude: cleared; a later single failing look does not close', async () => {
+    const r = await send();
+    at(35, [pane('main', 'zsh')]);
+    at(36, [pane('main', 'zsh'), pane('worker-api-1', 'claude')]);
+    at(37, [pane('main', 'zsh')]);
+    expect(state(r)).toBe('open');
+    at(38, [pane('main', 'zsh')]);
+    expect(state(r)).toBe('closed');
+  });
+
+  test('a failing look, then no listing: not closed, and cleared', async () => {
+    const r = await send();
+    at(35, [pane('main', 'zsh')]);
+    at(36, null);
+    expect(state(r)).toBe('open');
+    at(37, [pane('main', 'zsh')]);
+    expect(state(r)).toBe('open');
+    at(38, [pane('main', 'zsh')]);
+    expect(state(r)).toBe('closed');
+  });
+
+  test('+31 s, not listed on two looks: closed "worker did not start", the held wait ends with it, one refusal logged', async () => {
     const r = await send();
     const wait = w.hub.waitReplies(O, [r.threadId], 60000);
     await new Promise((res) => setImmediate(res)); // the wait is held
     at(31, [pane('main', 'zsh')]);
+    expect(state(r)).toBe('open');
+    at(32, [pane('main', 'zsh')]);
     expect(w.store.thread(r.threadId)).toMatchObject({ state: 'closed', reason: WORKER_FAILED_REASON });
     expect(await wait).toEqual({ got: false, text: `thread ${r.threadId}: ${FAILED}` });
     expect(w.store.refusals()).toEqual([{ at: w.clock, from: O, target: 'billing', reason: FAILED }]);
-    // the entry is gone: a later look closes and logs nothing more
+    // the entry is gone: later looks close and log nothing more
     at(40, [pane('main', 'zsh')]);
+    at(41, [pane('main', 'zsh')]);
     expect(w.store.refusals()).toHaveLength(1);
   });
 
-  test('+31 s, listed with a shell pane: the same close; listed on claude: still open', async () => {
+  test('+31 s, listed with a shell pane on two looks: the same close; listed on claude: still open', async () => {
     const one = await send('one', { fresh: '' });
     at(31, [pane('main', 'zsh'), pane('worker-api-1', 'zsh')]);
+    at(32, [pane('main', 'zsh'), pane('worker-api-1', 'zsh')]);
     expect(state(one)).toBe('closed');
     expect(w.store.thread(one.threadId).reason).toBe(WORKER_FAILED_REASON);
 
@@ -504,6 +540,7 @@ describe('agentMailHub: a worker that does not come up', () => {
     const two = await send('two', { fresh: '' });
     const two2 = w.store.thread(two.threadId).peer.session;
     at(31, [pane('main', 'zsh'), pane('worker-api-1', 'zsh'), pane(two2, 'claude')]);
+    at(32, [pane('main', 'zsh'), pane('worker-api-1', 'zsh'), pane(two2, 'claude')]);
     expect(state(two)).toBe('open');
     expect(w.hub.threadStatus(w.store.thread(two.threadId), 'starter')).toBe(`queued: billing/${two2} is starting`);
   });
@@ -530,17 +567,19 @@ describe('agentMailHub: a worker that does not come up', () => {
     at(2, [pane('main', 'zsh'), pane('worker-api-1', 'claude')]);
     w.marks.b = {};
     at(45, [pane('main', 'zsh')]);
+    at(46, [pane('main', 'zsh')]);
     expect(state(r)).toBe('open');
     expect(status(r)).toBe('queued: billing/worker-api-1 is not running an agent');
     expect(w.store.refusals()).toEqual([]);
   });
 
-  test('no listing (+90 s): nothing changes; the next listing decides', async () => {
+  test('no listing (+90 s): nothing changes; the next two listings decide', async () => {
     const r = await send();
     at(90, null);
     expect(state(r)).toBe('open');
     expect(status(r)).toBe(STARTING);
     at(91, [pane('main', 'zsh')]);
+    at(92, [pane('main', 'zsh')]);
     expect(state(r)).toBe('closed');
   });
 
@@ -549,6 +588,7 @@ describe('agentMailHub: a worker that does not come up', () => {
     const two = await send('two');
     expect(w.store.thread(two.threadId).peer).toEqual(WORKER);
     at(31, [pane('main', 'zsh')]);
+    at(32, [pane('main', 'zsh')]);
     expect(state(one)).toBe('closed');
     expect(state(two)).toBe('closed');
     expect(w.store.refusals().map((x) => x.reason)).toEqual([FAILED, FAILED]);
@@ -561,11 +601,44 @@ describe('agentMailHub: a worker that does not come up', () => {
     expect(full).toEqual({ ok: false, text: refusalText('store-full') });
     start = w.clock;
     w.clock = start + 31000;
-    hub.boxChanged('b'); // not listed: dropped, with nothing to close or log
+    hub.boxChanged('b');
+    hub.boxChanged('b'); // not listed on two looks: dropped, with nothing to close or log
     expect(w.store.refusals()).toHaveLength(1);
     // dropped, so a bare send no longer joins it: it starts worker-api-2 beside the leftover
     w.sessions.b = [pane('main', 'zsh'), pane('worker-api-1', 'zsh')];
     room = [];
+    const r = await hub.send(O, 'billing', 'y');
+    expect(r.ok, r.text).toBe(true);
+    expect(w.store.thread(r.threadId).peer).toEqual({ boxId: 'b', session: 'worker-api-2' });
+  });
+
+  test('boxRemoved drops the box\'s starts: a re-added box of the same id does not join a ghost', async () => {
+    const r = await send();
+    await w.hub.boxRemoved('b');
+    expect(w.store.thread(r.threadId).reason).toBe('box removed');
+    const again = await w.hub.send(O, 'billing', 'y');
+    expect(again.ok, again.text).toBe(true);
+    expect(w.store.thread(again.threadId).peer).toEqual({ boxId: 'b', session: 'worker-api-2' });
+  });
+
+  test('a box removed while its bare start is under way: the start is not recorded, nothing joins it', async () => {
+    const saved = w.boxes;
+    let removeDuring = true;
+    const hub = w.makeHub({
+      workers: {
+        start: async (...a) => {
+          const res = await w.workers.start(...a);
+          if (removeDuring) {
+            removeDuring = false;
+            w.boxes = saved.filter((b) => b.id !== 'b');
+            await hub.boxRemoved('b');
+          }
+          return res;
+        },
+      },
+    });
+    expect(await hub.send(O, 'billing', 'x')).toEqual({ ok: false, text: refusalText('unknown-box', { target: 'billing' }) });
+    w.boxes = saved; // re-added under the same id
     const r = await hub.send(O, 'billing', 'y');
     expect(r.ok, r.text).toBe(true);
     expect(w.store.thread(r.threadId).peer).toEqual({ boxId: 'b', session: 'worker-api-2' });
