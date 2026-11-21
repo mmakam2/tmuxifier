@@ -63,7 +63,9 @@
 // the closed WORKER_AGENTS table by an own-key lookup. Nothing a lead sent is in the script.
 
 import { SESSION_NAME_RE, shSingleQuote } from './sshCommand.js';
-import { WORKER_AGENTS, isWorkerDir } from './agentWorkerRules.js';
+import {
+  WORKER_AGENTS, WORKER_MODES, isWorkerDir, runningWorkers, workerSessionName,
+} from './agentWorkerRules.js';
 
 export const WORKER_CODES = Object.freeze(['started', 'exists', 'no-tmux', 'no-dir', 'no-agent-binary']);
 export const WORKER_TRUST_CODES = Object.freeze(['written', 'already', 'failed', 'no-json-tool']);
@@ -218,4 +220,104 @@ export function parseWorkerResult(stdout) {
 // (trust was off, or the script ended before the block).
 export function parseWorkerTrust(stdout) {
   return lastCode(stdout, TRUST_LINE_RE, WORKER_TRUST_CODES);
+}
+
+// The starter (design section 5.2): the one `start` the mail hub and the operator's route call.
+//
+//   start(box, { project, mode = 'interactive' })
+//     -> { ok: true, session, project, trust }   trust: parseWorkerTrust's code, or null
+//      | { ok: false, code }                     one of START_CODES
+//
+// Checks, in this order, before anything reaches the box: `mode` in WORKER_MODES (bad-mode);
+// the box's setup job not running (setup-running: rc files before sessions); a listing for the
+// box (unreachable: `sessionsOf` is the poller's view, null when the last sweep could not
+// reach it); the project in the box's record, no name meaning the first (no-project); fewer
+// running workers than the record's `max` (worker-cap). Then the script, once, with the
+// lowest free `worker-<project>-<n>`; on `exists` (a session the listing did not show) once
+// more with the next number. A second `exists`, a non-zero exit (a launch that lost a race
+// fails under `set -e` with no result line), an unparseable result, or any throw or rejection
+// on the way is `start-failed`: `start` never throws.
+//
+// Calls for one box run one after another on a per-box chain, so two sends arriving together
+// never race for one name. The listing lags a start (it is the last sweep's), so a name this
+// starter started in the last START_MEMORY_MS counts as taken and as running whatever the
+// listing says: without it, two sends together would both see no worker under a cap of one,
+// and the second would try the first's name. The memory is per process: after a restart the
+// box's own listing is the only count, which is what the design asks for.
+
+export const START_CODES = Object.freeze([
+  'bad-mode', 'setup-running', 'unreachable', 'no-project', 'worker-cap',
+  'no-tmux', 'no-dir', 'no-agent-binary', 'start-failed',
+]);
+export const START_TIMEOUT_MS = 20000;
+export const START_MEMORY_MS = 60000;
+
+export function createAgentWorkers({ execCommand, workerStore, setupRunning, sessionsOf, now = () => Date.now() }) {
+  const chains = new Map(); // box id -> tail of that box's chain
+  const started = new Map(); // box id -> Map(session name -> when this starter started it)
+
+  const fail = (code) => ({ ok: false, code });
+
+  // The names this starter started on the box within START_MEMORY_MS; older ones are dropped.
+  function recentNames(boxId) {
+    const mine = started.get(boxId);
+    if (!mine) return new Set();
+    const cutoff = now() - START_MEMORY_MS;
+    for (const [name, at] of mine) if (at <= cutoff) mine.delete(name);
+    if (mine.size === 0) started.delete(boxId);
+    return new Set(mine.keys());
+  }
+
+  function remember(boxId, session) {
+    if (!started.has(boxId)) started.set(boxId, new Map());
+    started.get(boxId).set(session, now());
+  }
+
+  async function runScript(box, session, project) {
+    const remote = buildWorkerStartRemote({ session, dir: project.dir, agent: 'claude', trust: project.trust });
+    const res = await execCommand(box, remote, { timeoutMs: START_TIMEOUT_MS });
+    if (!res || res.code !== 0) return { code: null, stdout: '' };
+    return { code: parseWorkerResult(res.stdout), stdout: res.stdout };
+  }
+
+  async function startNow(box, { project, mode = 'interactive' } = {}) {
+    if (!WORKER_MODES.includes(mode)) return fail('bad-mode');
+    if (setupRunning(box.id)) return fail('setup-running');
+    const sessions = sessionsOf(box.id);
+    if (!Array.isArray(sessions)) return fail('unreachable');
+    const record = await workerStore.get(box.id);
+    const proj = project == null
+      ? record.projects[0]
+      : record.projects.find((p) => p.name === project);
+    if (!proj) return fail('no-project');
+
+    const recent = recentNames(box.id);
+    const listed = sessions.filter((s) => s && typeof s.name === 'string');
+    const running = runningWorkers(listed.filter((s) => !recent.has(s.name))) + recent.size;
+    if (running >= record.max) return fail('worker-cap');
+
+    const taken = [...listed.map((s) => s.name), ...recent];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const session = workerSessionName(proj.name, taken);
+      const { code, stdout } = await runScript(box, session, proj);
+      if (code === 'started') {
+        remember(box.id, session);
+        return { ok: true, session, project: proj.name, trust: parseWorkerTrust(stdout) };
+      }
+      if (code !== 'exists') return fail(code === null ? 'start-failed' : code);
+      taken.push(session);
+    }
+    return fail('start-failed');
+  }
+
+  function start(box, opts) {
+    const key = box?.id;
+    const prev = chains.get(key) ?? Promise.resolve();
+    const run = prev.then(() => startNow(box, opts)).catch(() => fail('start-failed'));
+    chains.set(key, run);
+    run.then(() => { if (chains.get(key) === run) chains.delete(key); });
+    return run;
+  }
+
+  return { start };
 }

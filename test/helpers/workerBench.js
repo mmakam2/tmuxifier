@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, chmodSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -51,34 +51,33 @@ function requireBinary(name) {
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export function createWorkerBench({ defaultShell }) {
-  const tmuxBin = requireBinary('tmux');
-  const defaultShellBin = requireBinary(defaultShell);
-  const tmp = mkdtempSync(path.join(tmpdir(), 'worker-bench-'));
-  const home = path.join(tmp, 'home');
-  const tmuxTmp = path.join(tmp, 'tmuxtmp');
-  const bin = path.join(tmp, 'bin');
-  const localBin = path.join(home, '.local', 'bin');
-  const standinDir = path.join(home, 'standin');
-  for (const d of [home, tmuxTmp, bin, localBin, standinDir]) mkdirSync(d, { recursive: true });
+// The box's files, shared with any test that shapes another fixture home like a seeded box
+// (test/agentWorkers.integration.test.js writes them into localBox.js's home).
 
-  const socket = `worker-bench-${randomUUID().slice(0, 8)}`;
-  const wrapper = path.join(bin, 'tmux');
-  writeFileSync(wrapper, `#!/bin/sh\nexec '${tmuxBin}' -L '${socket}' "$@"\n`);
-  chmodSync(wrapper, 0o755);
-
+// The two tagged lines setup writes on a box, appended (a fixture's own rc content is kept).
+export function writeWorkerRcFiles(home) {
   const rc = `${CLAUDE_TOKEN_RC_LINE}\nexport PATH="$HOME/.local/bin:$PATH" # tmuxifier-local-bin\n`;
-  for (const f of ['.profile', '.bashrc', '.zshrc']) writeFileSync(path.join(home, f), rc);
+  for (const f of ['.profile', '.bashrc', '.zshrc']) appendFileSync(path.join(home, f), rc);
+}
+
+export function writeWorkerToken(home) {
   const tokenFile = path.join(home, CLAUDE_TOKEN_FILE);
   mkdirSync(path.dirname(tokenFile), { recursive: true, mode: 0o700 });
   writeFileSync(tokenFile, 'bench-fake-token\n', { mode: 0o600 });
+}
 
-  // The stand-in asks the pinned wrapper (absolute path) for its own session name, then writes
-  // its line through a temp file and a rename so a reader never sees half of it.
+// ~/.local/bin/claude. `tmux` is the absolute tmux the stand-in asks for its own session name
+// (the bench's pinned wrapper; a box's own tmux, which reaches the pane's server through the
+// pane's $TMUX). Its line goes through a temp file and a rename so a reader never sees half of
+// it, into <home>/standin/<session>.
+export function writeStandIn(home, { tmux }) {
+  const localBin = path.join(home, '.local', 'bin');
+  const standinDir = path.join(home, 'standin');
+  for (const d of [localBin, standinDir]) mkdirSync(d, { recursive: true });
   const standIn = path.join(localBin, 'claude');
   writeFileSync(standIn, [
     '#!/bin/sh',
-    `s="$('${wrapper}' display-message -p -t "$TMUX_PANE" '#{session_name}')"`,
+    `s="$('${tmux}' display-message -p -t "$TMUX_PANE" '#{session_name}')"`,
     'if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then t=set; else t=unset; fi',
     'if [ -t 0 ]; then y=yes; else y=no; fi',
     `printf 'token=%s cwd=%s tty=%s\\n' "$t" "$(pwd)" "$y" > '${standinDir}/.tmp.'"$s"`,
@@ -87,6 +86,31 @@ export function createWorkerBench({ defaultShell }) {
     '',
   ].join('\n'));
   chmodSync(standIn, 0o755);
+}
+
+// The stand-in's line for `session`, or null while it has not written one.
+export function readStandInLog(home, session) {
+  const f = path.join(home, 'standin', session);
+  return existsSync(f) ? readFileSync(f, 'utf8').trim() : null;
+}
+
+export function createWorkerBench({ defaultShell }) {
+  const tmuxBin = requireBinary('tmux');
+  const defaultShellBin = requireBinary(defaultShell);
+  const tmp = mkdtempSync(path.join(tmpdir(), 'worker-bench-'));
+  const home = path.join(tmp, 'home');
+  const tmuxTmp = path.join(tmp, 'tmuxtmp');
+  const bin = path.join(tmp, 'bin');
+  for (const d of [home, tmuxTmp, bin]) mkdirSync(d, { recursive: true });
+
+  const socket = `worker-bench-${randomUUID().slice(0, 8)}`;
+  const wrapper = path.join(bin, 'tmux');
+  writeFileSync(wrapper, `#!/bin/sh\nexec '${tmuxBin}' -L '${socket}' "$@"\n`);
+  chmodSync(wrapper, 0o755);
+
+  writeWorkerRcFiles(home);
+  writeWorkerToken(home);
+  writeStandIn(home, { tmux: wrapper });
 
   const env = {
     HOME: home,
@@ -127,8 +151,7 @@ export function createWorkerBench({ defaultShell }) {
       return { code: r.status, stdout: r.stdout };
     },
     standInLog(session) {
-      const f = path.join(standinDir, session);
-      return existsSync(f) ? readFileSync(f, 'utf8').trim() : null;
+      return readStandInLog(home, session);
     },
     // Kill the private server (its panes get SIGHUP), then make sure every pane process is
     // gone, the stand-ins' `sleep 600` above all, before the temp tree is removed.
