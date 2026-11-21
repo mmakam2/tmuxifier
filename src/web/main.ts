@@ -35,6 +35,8 @@ import { openSettingsModal } from './settingsUi';
 import { createProxmoxAssociationEditor } from './proxmoxAssociation';
 import { createAgentMailSection } from './agentMailSection';
 import { createAgentWorkersSection } from './agentWorkersSection';
+import { workersApi } from './agentWorkers';
+import { startTargetsOf } from './agentWorkersView';
 import { mailApi, type MailRefusal, type MailThread, type MailThreadSummary } from './agentMail';
 import {
   mailEnabledFrom, messageRow, messagesLoadError, refusalRow, stopFailedLine, threadHead, threadRow, MAIL_NO_REFUSALS, MAIL_NO_THREADS,
@@ -89,6 +91,15 @@ let focusedPaneId: string | null = null; // the pane instance typing targets and
 // Per-pane session OVERRIDES only — absence means "the box's configured
 // session". Runtime authority; persistStage mirrors it into the v3 payload.
 const paneSessions = new Map<string, string>();
+// Agent workers (design 5.4): per box, the projects a pane picker offers a
+// Start row for, as of the last time a picker on that box was reached for. A
+// failed read leaves the box with none. `workerReadGen` drops a read or a start
+// answer that lands after logout. `startingPanes` holds the panes with a start in flight, so a
+// second pick of a start row there does nothing.
+const workerProjects = new Map<string, { name: string }[]>();
+const workerProjectReads = new Map<string, Promise<void>>();
+let workerReadGen = 0;
+const startingPanes = new Set<string>();
 // The phone shell's drawer/media-query controller. Owned by renderDashboard (it
 // binds to elements inside #app) and disposed in teardownWorkspace, so a
 // re-login never leaves a listener bound to a detached layout.
@@ -1201,7 +1212,7 @@ function paneHeaderModelFor(id: string): PaneHeaderModel {
   const boxId = boxOfInstance(id);
   // Latest health sample carries every session's agent entry; the header picks
   // its own pane's session out of it (and the picker rows carry the rest).
-  return paneHeaderModel({
+  const model = paneHeaderModel({
     local: isLocalPane(id),
     label: isLocalPane(id) ? 'Host Shell' : box?.label ?? boxId,
     user: box?.user,
@@ -1217,6 +1228,47 @@ function paneHeaderModelFor(id: string): PaneHeaderModel {
     // so the `?? false` is a boot-order guard, not a default policy.
     phone: phoneCtl?.matches() ?? false,
   });
+  // Start rows go after the session and window rows, only where the model
+  // offers a picker at all (never phone mode, never the Host Shell).
+  const projects = workerProjects.get(boxId);
+  if (!model.targets || isLocalPane(id) || !projects?.length) return model;
+  return { ...model, targets: { ...model.targets, options: [...model.targets.options, ...startTargetsOf(projects)] } };
+}
+
+// Re-read the box's worker projects as its picker is reached for; repaints the
+// headers when the answer lands. One read per box at a time.
+function refreshWorkerProjects(boxId: string): Promise<void> {
+  const inFlight = workerProjectReads.get(boxId);
+  if (inFlight) return inFlight;
+  const gen = workerReadGen;
+  const read = workersApi.get(boxId).then(
+    (r) => { if (gen === workerReadGen) workerProjects.set(boxId, r.workers.projects.map((p) => ({ name: p.name }))); },
+    () => { if (gen === workerReadGen) workerProjects.delete(boxId); },
+  ).finally(() => {
+    if (workerProjectReads.get(boxId) === read) workerProjectReads.delete(boxId);
+    if (gen === workerReadGen) updatePaneHeaders();
+  });
+  workerProjectReads.set(boxId, read);
+  return read;
+}
+
+// A start row was picked: start a worker in its project, then point this pane
+// at the new session through the same pane-local override a picked session
+// uses. A failure is shown where a picker kill failure is.
+async function startWorker(id: string, t: SessionTarget) {
+  if (startingPanes.has(id) || !t.project) return;
+  startingPanes.add(id);
+  const gen = workerReadGen;
+  try {
+    const { session } = await workersApi.start(boxOfInstance(id), t.project);
+    // Logged out, or undocked, while the start ran: the worker is up, but there
+    // is no pane left to move.
+    if (gen === workerReadGen && panesOf(stageRoot).includes(id)) switchPaneSession(id, session);
+  } catch (e: any) {
+    if (gen === workerReadGen) showToast(e?.message || 'start failed', 'error');
+  } finally {
+    startingPanes.delete(id);
+  }
 }
 
 // Point THIS pane at another session — pane-local by spec decision 3: no
@@ -1244,6 +1296,9 @@ async function killTarget(id: string, t: SessionTarget) {
   // malformed window target with no id must never fall back to killing the
   // whole session it belongs to.
   if (t.kind === 'window' && !t.windowId) throw new Error('missing window id');
+  // A start row names no session (its session is ''); canKillTarget gives it no
+  // ×, and this keeps an empty name from ever reaching the kill route.
+  if (t.kind === 'start') throw new Error('nothing to kill');
   try {
     await api.killTarget(boxOfInstance(id), t.session, t.kind === 'window' ? t.windowId : undefined);
   } catch (e: any) {
@@ -1265,6 +1320,8 @@ async function killTarget(id: string, t: SessionTarget) {
 // pane's own PTY, so selecting the window beforehand means the reopen lands
 // already on it.
 async function selectTarget(id: string, t: SessionTarget) {
+  // A start row is an action, not a place: its session is '' until the start answers.
+  if (t.kind === 'start') { await startWorker(id, t); return; }
   if (t.kind === 'window' && t.windowId) {
     try {
       // The session goes with the id: a grouped session shares its windows, so
@@ -1321,7 +1378,10 @@ function paneHooks(): PaneHooks {
           onSelectTarget: (t: SessionTarget) => void selectTarget(id, t),
           // Same gate as the callback above: the model decides whether a switch
           // is on offer, so a pane with no dropdown never probes for one.
-          onWillOpenTarget: (opts?: { waitMs?: number }) => freshProbe.refresh(boxOfInstance(id), opts),
+          onWillOpenTarget: (opts?: { waitMs?: number }) => {
+            void refreshWorkerProjects(boxOfInstance(id));
+            return freshProbe.refresh(boxOfInstance(id), opts);
+          },
           onKillTarget: (t: SessionTarget) => killTarget(id, t),
         } : {}),
         ...(split ? { onUndock: () => undockBox(id), undockLabel: `Undock ${model.title}` } : {}),
@@ -4799,6 +4859,9 @@ function teardownWorkspace(): void {
   // the way back. Keeping them here would strand a PARKED pane's override —
   // persistStage never wrote one — on an id a later login could re-mint.
   paneSessions.clear();
+  workerReadGen += 1;
+  workerProjects.clear();
+  workerProjectReads.clear();
   // #app is about to be replaced with app.innerHTML elsewhere (renderLogin),
   // which drops this DOM but not a document-level listener registered on it —
   // only destroy() removes a picker's outside-click handler.

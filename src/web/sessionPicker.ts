@@ -12,7 +12,8 @@ import { agentChipText } from './agentState';
 
 // tmux destroys a session when its last window is killed. This does not
 // special-case that — it just refuses to let it be a surprise, by letting the
-// arm legend say so.
+// arm legend say so. Only window rows count: a start row (session '') is never
+// a window and never shares one's session.
 export function isSoleWindow(targets: SessionTarget[], t: SessionTarget): boolean {
   if (t.kind !== 'window') return false;
   return targets.filter((x) => x.kind === 'window' && x.session === t.session).length === 1;
@@ -30,8 +31,16 @@ export function killLegend(t: SessionTarget, sole: boolean): string {
 // session for exactly this class of reason: a grouped session shares its window
 // objects, so '@7' alone names two rows, and an arm keyed by id could migrate
 // onto a different session between the arming click and the firing one.
+// A start row's value is 'start:<project>', which no session or window value
+// can collide with.
 export function rowKey(t: SessionTarget): string {
   return t.value;
+}
+
+// A start row names no session on the box yet, so there is nothing to kill.
+// The pane header's picker passes this as `canKill`.
+export function canKillTarget(t: SessionTarget): boolean {
+  return t.kind !== 'start';
 }
 
 // How long the open path waits for a fresh probe before showing the list it
@@ -170,7 +179,7 @@ export function buildSessionPicker(deps: SessionPickerDeps): SessionPicker {
     trigger.textContent = (opts.find((t) => t.value === current?.value)?.label ?? '').replace(/^[\s ]*→[\s ]*/, '').trim() || '—';
     list.replaceChildren(...opts.map((t) => {
       const li = document.createElement('li');
-      li.className = 'session-picker-row';
+      li.className = t.kind === 'start' ? 'session-picker-row start' : 'session-picker-row';
       li.dataset.key = rowKey(t);
 
       const pick = document.createElement('button');

@@ -1,5 +1,6 @@
 import { test, expect } from 'vitest';
-import { isSoleWindow, killLegend, rowKey } from '../src/web/sessionPicker.ts';
+import { isSoleWindow, killLegend, rowKey, canKillTarget } from '../src/web/sessionPicker.ts';
+import { startTargetsOf } from '../src/web/agentWorkersView.ts';
 import { WINDOW_INDENT } from '../src/web/paneHeader.ts';
 
 const s = (name) => ({ kind: 'session', value: `s:${name}`, label: name, session: name });
@@ -48,4 +49,25 @@ test('the legend strips the real window indent from labels before confirmation',
   expect(legend).toContain('2: claude');
   expect(legend).not.toMatch(/→/);
   expect(legend).not.toContain(WINDOW_INDENT);
+});
+
+test('start rows are neither sessions nor windows to the sole-window rule', () => {
+  // A start row carries session: '' and names nothing on the box; appending them
+  // must not change which window is the last of its session.
+  const rows = [s('web'), w('web', '@1', '1: zsh'), s('other'), w('other', '@2', '1: bash'), w('other', '@3', '2: vim')];
+  const withStarts = [...rows, ...startTargetsOf([{ name: 'api' }, { name: 'web' }])];
+  for (const t of rows) expect(isSoleWindow(withStarts, t)).toBe(isSoleWindow(rows, t));
+  for (const t of withStarts.slice(rows.length)) expect(isSoleWindow(withStarts, t)).toBe(false);
+});
+
+test('a start row is keyed by its value', () => {
+  const [start] = startTargetsOf([{ name: 'api' }]);
+  expect(rowKey(start)).toBe('start:api');
+});
+
+test('a start row has no kill; session and window rows do', () => {
+  const [start] = startTargetsOf([{ name: 'api' }]);
+  expect(canKillTarget(start)).toBe(false);
+  expect(canKillTarget(s('web'))).toBe(true);
+  expect(canKillTarget(w('web', '@1', '1: zsh'))).toBe(true);
 });

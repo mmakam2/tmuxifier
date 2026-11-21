@@ -7,7 +7,8 @@
 // The record loads when the modal opens. Until it has loaded (or when the load
 // failed) commit does nothing: it must never save a record the operator did not
 // see. commit sends the PUT only when the edited record differs from the loaded
-// one, and refuses (throws the row's own message) while any row has a problem.
+// one, and refuses while any row has a problem, throwing the row's own message
+// behind the same "Box saved, but…" prefix a failed PUT gets.
 // Rows are built once per add/remove and edited in place, so typing never loses
 // focus; every message comes from agentWorkersView.ts.
 import type { Box } from './api';
@@ -112,14 +113,15 @@ export function createAgentWorkersSection(box: Box) {
     element: section,
     async commit(boxId: string) {
       if (!loaded || !draft || !workersChanged(loaded, draft)) return;
+      // The box is already saved when this runs, so every refusal says so.
+      const notSaved = (why: string) => new Error(`Box saved, but the agent worker settings were not: ${why}`);
       const problem = workersProblem(draft);
-      if (problem) throw new Error(problem);
+      if (problem) throw notSaved(problem);
       let saved: WorkerSettings;
       try {
         saved = (await workersApi.save(boxId, draft)).workers;
       } catch (error) {
-        const why = error instanceof Error && error.message ? error.message : 'request failed';
-        throw new Error(`Box saved, but the agent worker settings were not: ${why}`);
+        throw notSaved(error instanceof Error && error.message ? error.message : 'request failed');
       }
       loaded = copy(saved);
     },

@@ -1296,6 +1296,9 @@ button.empty-kbd:hover { color: var(--text); }
 .session-picker-pick:hover, .session-picker-pick:focus-visible { background: var(--panel-2); }
 .session-picker-pick[disabled] { color: var(--dim); cursor: not-allowed; }
 .session-picker-row.current .session-picker-pick { color: var(--accent); }
+/* Start rows (agent workers) are actions, not sessions: a hairline sets them
+   apart from the session and window rows above. */
+.session-picker-row:not(.start) + .session-picker-row.start { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
 .session-picker-kill {
   flex: 0 0 auto; font-family: var(--face); font-size: 12px; line-height: 1;
   padding: 4px 6px; background: none; border: 0; border-radius: 4px;

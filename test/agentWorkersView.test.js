@@ -3,7 +3,7 @@ import * as webView from '../src/web/agentWorkersView.ts';
 import * as serverRules from '../src/server/agentWorkerRules.js';
 
 const {
-  projectProblem, maxProblem, workersChanged, workersProblem, startLabel,
+  projectProblem, maxProblem, workersChanged, workersProblem, startLabel, startTargetsOf,
 } = webView;
 
 const NAME_MSG = 'Name: lowercase letters, digits and dashes, up to 24';
@@ -95,4 +95,12 @@ test('workersProblem reports the first problem, rows before max', () => {
 
 test('startLabel names the project', () => {
   expect(startLabel('api')).toBe('Start Claude in api');
+});
+
+test('startTargetsOf gives one start row per project, in the order listed', () => {
+  expect(startTargetsOf([{ name: 'api' }, { name: 'web' }])).toEqual([
+    { kind: 'start', value: 'start:api', label: 'Start Claude in api', session: '', project: 'api' },
+    { kind: 'start', value: 'start:web', label: 'Start Claude in web', session: '', project: 'web' },
+  ]);
+  expect(startTargetsOf([])).toEqual([]);
 });

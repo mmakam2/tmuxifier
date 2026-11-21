@@ -5,7 +5,7 @@ import { dotClassFor, dotTitleFor } from './statusDot';
 import { buildClawd } from './clawd';
 import type { Status, TmuxWindow, AgentEntry, AgentState, AgentCause } from './api';
 import { agentChipText } from './agentState';
-import { buildSessionPicker, type SessionPicker } from './sessionPicker';
+import { buildSessionPicker, canKillTarget, type SessionPicker } from './sessionPicker';
 
 export type ConnKind = 'connecting' | 'open' | 'retrying' | 'setup';
 export interface PaneConn { kind: ConnKind; attempt?: number }
@@ -93,9 +93,14 @@ export function paneHeaderModel(i: PaneHeaderInput): PaneHeaderModel {
 // One row of the session dropdown. A row is either a session or one of its
 // windows; `value` is the <option> value and `session` is the session the row
 // resolves to, so a caller never has to re-derive which session a window is in.
+// The pane header's picker also offers `start` rows (agentWorkersView.ts's
+// startTargetsOf): an action that names no session on the box yet, so its
+// `session` is '' and it carries the `project` to start a worker in instead.
+// Every consumer that acts on a pick or a kill must handle that kind on its own
+// rather than read it as a session or a window.
 export interface SessionTarget {
-  kind: 'session' | 'window';
-  // 's:<session>' | 'w:<session>:<@id>'. The window value carries its session
+  kind: 'session' | 'window' | 'start';
+  // 's:<session>' | 'w:<session>:<@id>' | 'start:<project>'. The window value carries its session
   // even though `@id` looks unique: a grouped session (`new-session -t web -s
   // webclone`) SHARES window objects, so the same id legitimately appears under
   // two session names. Without the session in the value the two rows would be
@@ -111,6 +116,8 @@ export interface SessionTarget {
   // Session rows only: the session's agent state, for the row's dot/label.
   agent?: AgentState;
   agentCause?: AgentCause;
+  // Start rows only: the project whose worker the row starts.
+  project?: string;
 }
 export interface SessionTargetList { options: SessionTarget[]; value: string }
 
@@ -237,6 +244,8 @@ export function buildPaneHeader(model: PaneHeaderModel, actions: PaneHeaderActio
       onSelect: (t) => actions.onSelectTarget!(t),
       onKill: async (t) => { await actions.onKillTarget?.(t); },
       onWillOpen: (opts) => actions.onWillOpenTarget?.(opts) ?? Promise.resolve(),
+      // A start row names nothing on the box, so it gets no ×.
+      canKill: canKillTarget,
     });
     picker.el.addEventListener('click', (e) => e.stopPropagation());
   }

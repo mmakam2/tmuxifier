@@ -12,6 +12,7 @@
 // Explicit values are validated, never rewritten: nothing here trims or
 // lower-cases what the operator typed.
 import type { WorkerProject, WorkerSettings } from './agentWorkers';
+import type { SessionTarget } from './paneHeader';
 
 export const PROJECT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
 export const WORKER_DIR_RE = /^\/[A-Za-z0-9._/-]{1,199}$/;
@@ -64,4 +65,11 @@ export function workersChanged(a: WorkerSettings, b: WorkerSettings): boolean {
 
 export function startLabel(project: string): string {
   return `Start Claude in ${project}`;
+}
+
+/** The pane picker's start rows (design 5.4), one per project in the order listed,
+ *  appended after the session and window rows. A project name is a lookup key the
+ *  server resolves; the row never carries a directory. */
+export function startTargetsOf(projects: readonly { name: string }[]): SessionTarget[] {
+  return projects.map((p) => ({ kind: 'start', value: `start:${p.name}`, label: startLabel(p.name), session: '', project: p.name }));
 }
