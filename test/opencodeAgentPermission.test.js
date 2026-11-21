@@ -79,6 +79,12 @@ describe('isPlainTmx', () => {
     ]) expect(isPlainTmx(c), c).toBe(true);
   });
 
+  test('tmx send --fresh --project is plain; the = spelling is not (agent workers spec 5.3)', () => {
+    expect(isPlainTmx('tmx send --fresh billing "do x"')).toBe(true);
+    expect(isPlainTmx('tmx send --fresh --project api billing "do x"')).toBe(true);
+    expect(isPlainTmx('tmx send --fresh=api billing "do x"')).toBe(false);
+  });
+
   test('anything that can run, pipe, chain or redirect something else is not plain', () => {
     for (const c of [
       'tmx reply t "$(env)"',

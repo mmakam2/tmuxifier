@@ -114,7 +114,8 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   tmx who [box]                      who this session may message, and who is listening
-  tmx send <target> ["text"]         start a thread; text from the argument or stdin; prints the id
+  tmx send [--fresh [--project <name>]] <target> ["text"]
+                                     --fresh starts a new agent on the box
   tmx reply <thread> ["text"]        answer, or ask a question back
   tmx wait <thread>... [-t seconds]  block until a reply arrives on any of them (default 90 s)
   tmx read <thread>                  print the whole thread
@@ -126,6 +127,12 @@ EOF
 fail() {
   printf 'tmx: %s\n' "$1" >&2
   exit 1
+}
+
+# A usage error with its own words: exit 2, before any request.
+misuse() {
+  printf 'tmx: %s\n' "$1" >&2
+  exit 2
 }
 
 # Seconds to sleep: $1, or the test override.
@@ -320,13 +327,49 @@ cmd_who() {
   exit 0
 }
 
+# tmx send [--fresh [--project <name>]] <target> ["text"]. --fresh asks the box for a new agent
+# (the `fresh` field: empty, or the project name). The name is checked here only for its
+# characters and length, a courtesy: the listener is the authority (PROJECT_NAME_RE) and refuses
+# what this lets through, a name that does not start with a letter or digit.
 cmd_send() {
+  _fresh= _project= _named=
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --fresh)
+        [ -z "$_fresh" ] || misuse '--fresh is given more than once'
+        _fresh=1
+        shift
+        ;;
+      --project)
+        [ "$#" -ge 2 ] || misuse '--project needs a project name'
+        [ -z "$_named" ] || misuse '--project is given more than once'
+        case $2 in
+          ''|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*)
+            misuse 'a project name is lower-case letters, digits and -, at most 24 characters' ;;
+        esac
+        [ "${#2}" -le 24 ] || misuse 'a project name is lower-case letters, digits and -, at most 24 characters'
+        _named=1 _project=$2
+        shift 2
+        ;;
+      *) break ;;
+    esac
+  done
   case $# in 1|2) ;; *) usage ;; esac
   _target=$1
+  if [ -n "$_named" ] && [ -z "$_fresh" ]; then
+    misuse '--project goes with --fresh: tmx send --fresh --project <name> <box> ["text"]'
+  fi
+  case $_target in
+    */*) [ -z "$_fresh" ] || misuse '--fresh takes a box name, not box/session' ;;
+  esac
   ready
   if [ "$#" = 2 ]; then take_body 1 "$2"; else take_body 0; fi
   ONCE='ask the operator, or look for an answer with "tmx inbox"'
-  request POST /v1/threads 30 --data-urlencode "to=$_target"
+  if [ -n "$_fresh" ]; then
+    request POST /v1/threads 30 --data-urlencode "to=$_target" --data-urlencode "fresh=$_project"
+  else
+    request POST /v1/threads 30 --data-urlencode "to=$_target"
+  fi
   finish
 }
 

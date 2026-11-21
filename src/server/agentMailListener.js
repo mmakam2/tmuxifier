@@ -4,6 +4,7 @@ import path from 'node:path';
 import { SESSION_NAME_RE } from './sshCommand.js';
 import { THREAD_ID_RE, MSG_ID_RE } from './agentMailStore.js';
 import { MAX_BODY_BYTES } from './agentMailText.js';
+import { PROJECT_NAME_RE } from './agentWorkerRules.js';
 
 // The per-box agent-mail listener (design 6.4, 6.5): plain HTTP on a unix socket, one per box,
 // forwarded onto the box as ~/.tmuxifier-mail/sock. The socket a request arrives on IS the box:
@@ -15,7 +16,7 @@ import { MAX_BODY_BYTES } from './agentMailText.js';
 // Wire format (the box-side `tmx` client is written against exactly this):
 //   GET  /v1/ping?n=<16 lowercase hex>          200 ok (n optional; the last 8 are kept for sawNonce)
 //   GET  /v1/who?session=                       200 | 403
-//   POST /v1/threads            session,to,body 200 | 403
+//   POST /v1/threads            session,to,body[,fresh] 200 | 403
 //   POST /v1/threads/<id>/messages session,body 200 | 403
 //   GET  /v1/threads/<id>?session=              200 | 403
 //   GET  /v1/inbox?session=                     200 | 403
@@ -24,7 +25,10 @@ import { MAX_BODY_BYTES } from './agentMailText.js';
 //   POST /v1/ack                session,m       200 ok | 404
 // GET parameters come in the query string and a GET has no body; POST parameters come only in an
 // application/x-www-form-urlencoded body (a query string on a POST is refused). Both are strict
-// UTF-8 percent-encoding, decoded with URLSearchParams. A parameter given twice is refused. Every
+// UTF-8 percent-encoding, decoded with URLSearchParams. A parameter given twice is refused.
+// `fresh` (agent workers spec 5.3) asks for a new agent on the target box: absent is not asking,
+// empty is the box's default project, anything else must be a project name (PROJECT_NAME_RE) and
+// is only a lookup key for the hub; any other value is a 400 before the hub is called. Every
 // response is text/plain; charset=utf-8 and ends in exactly one newline (204 has no body). Bad
 // input is 400 `bad request: <reason>`, an unknown path or method 404, a body over
 // MAX_REQUEST_BYTES on the wire 413 (its text names the message limit, MAX_BODY_BYTES: that is
@@ -216,7 +220,9 @@ export function createAgentMailListener({ hub, boxId, socketPath, maxOpen = 64, 
       case 'who': return text(await hub.who(caller()));
       case 'send': {
         const me = caller();
-        return text(await hub.send(me, one(params, 'to') ?? '', one(params, 'body') ?? ''));
+        const fresh = one(params, 'fresh');
+        if (fresh !== undefined && fresh !== '' && !PROJECT_NAME_RE.test(fresh)) throw new BadRequest('fresh is not a project name');
+        return text(await hub.send(me, one(params, 'to') ?? '', one(params, 'body') ?? '', { fresh }));
       }
       case 'reply': {
         const me = caller();

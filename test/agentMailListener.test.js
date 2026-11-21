@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -10,23 +10,26 @@ import { createMailHarness, O, mark } from './helpers/agentMailHarness.js';
 
 // The per-box mail listener over a real unix socket, in front of the real hub from the harness.
 // `counted` wraps the hub's request methods in pass-throughs that record each call (and the
-// signal a held call was given), so a test can prove a request never reached the hub.
+// signal a held call was given, and every send's arguments), so a test can prove a request
+// never reached the hub, or what it reached it with.
 
 const HUB_CALLS = ['who', 'send', 'reply', 'read', 'inbox', 'waitMail', 'waitReplies', 'ack'];
 
 function counted(hub) {
   const calls = [];
   const signals = [];
+  const sends = [];
   const wrapped = { ...hub };
   for (const name of HUB_CALLS) {
     wrapped[name] = (...args) => {
       calls.push(name);
       if (name === 'waitMail') signals.push(args[2]);
       if (name === 'waitReplies') signals.push(args[3]);
+      if (name === 'send') sends.push(args);
       return hub[name](...args);
     };
   }
-  return { hub: wrapped, calls, signals };
+  return { hub: wrapped, calls, signals, sends };
 }
 
 // One HTTP request over the socket. `form` is an object sent form-encoded; `body` raw.
@@ -462,5 +465,111 @@ describe('agentMailListener: requests', () => {
       expect(r.headers['content-type']).toBe('text/plain; charset=utf-8');
     }
     expect(c.calls).toEqual([]);
+  });
+});
+
+// `fresh` on POST /v1/threads (agent workers spec 5.3): absent, empty or a project name, checked
+// against PROJECT_NAME_RE before the hub is called. A harness with workers on billing (b): a real
+// starter over a private tmux bench (test/helpers/workerBench.js).
+describe('agentMailListener: fresh', () => {
+  let w; let wc; let wsock; let wl;
+  const benchSessions = () => {
+    try {
+      return w.bench.tmux('list-sessions', '-F', '#{session_name}').split('\n').filter(Boolean).sort();
+    } catch { return []; } // no sessions at all
+  };
+
+  beforeEach(async () => {
+    w = await createMailHarness({}, {
+      workers: { b: { mailStart: true, projects: [{ name: 'api' }, { name: 'web' }] } },
+      installed: ['b'],
+      sessions: { b: [{ name: 'main', paneCmd: 'claude' }], o: [{ name: 'main', paneCmd: 'claude' }] },
+    });
+    wc = counted(w.hub);
+    wsock = path.join(dir, 'mail', 'w.sock');
+    wl = createAgentMailListener({ hub: wc.hub, boxId: 'o', socketPath: wsock });
+    extra.push(wl);
+    await wl.listen();
+  });
+  afterEach(async () => {
+    await wl.close();
+    await w.cleanup();
+  });
+  const send = (form) => request(wsock, 'POST', '/v1/threads', { form });
+
+  test('no fresh: today\'s behaviour, the running agent gets it and the hub is called with fresh undefined', async () => {
+    const r = await send({ session: 'main', to: 'billing', body: 'x' });
+    expect(r.status, r.text).toBe(200);
+    const [thread] = w.store.threads();
+    expect(thread.peer).toEqual({ boxId: 'b', session: 'main' });
+    expect(wc.sends).toEqual([[O, 'billing', 'x', { fresh: undefined }]]);
+    expect(wc.sends[0][3].fresh).toBeUndefined();
+    expect(benchSessions()).toEqual([]);
+  });
+
+  test('fresh= starts a worker in the default project, even beside a running agent', async () => {
+    const r = await send({ session: 'main', to: 'billing', body: 'x', fresh: '' });
+    expect(r.status, r.text).toBe(200);
+    const [thread] = w.store.threads();
+    expect(r.text).toMatch(new RegExp(`^Sent\\. Thread ${thread.id}\\. `));
+    expect(thread.peer).toEqual({ boxId: 'b', session: 'worker-api-1' });
+    expect(wc.sends).toEqual([[O, 'billing', 'x', { fresh: '' }]]);
+    expect(benchSessions()).toEqual(['worker-api-1']);
+  });
+
+  test('fresh=web starts worker-web-1', async () => {
+    const r = await send({ session: 'main', to: 'billing', body: 'x', fresh: 'web' });
+    expect(r.status, r.text).toBe(200);
+    expect(w.store.threads()[0].peer).toEqual({ boxId: 'b', session: 'worker-web-1' });
+    expect(wc.sends[0][3]).toEqual({ fresh: 'web' });
+    expect(benchSessions()).toEqual(['worker-web-1']);
+  });
+
+  test('a 24-character name is a project name: it reaches the hub, which refuses an unknown project', async () => {
+    const name = 'a'.repeat(24);
+    const r = await send({ session: 'main', to: 'billing', body: 'x', fresh: name });
+    expect(r.status).toBe(403);
+    expect(r.text).toBe(`${refusalText('no-project', { target: 'billing', project: name })}\n`);
+    expect(wc.sends[0][3]).toEqual({ fresh: name });
+  });
+
+  test('fresh that is not a project name, or given twice, is 400 before any hub call', async () => {
+    for (const fresh of ['API', 'a'.repeat(25), '../x', '-web', 'web/x', 'a b', 'wéb', ' web', 'web\n']) {
+      const r = await send({ session: 'main', to: 'billing', body: 'x', fresh });
+      expect(r.status, JSON.stringify(fresh)).toBe(400);
+      expect(r.text, JSON.stringify(fresh)).toBe('bad request: fresh is not a project name\n');
+    }
+    const twice = await request(wsock, 'POST', '/v1/threads', {
+      body: 'session=main&to=billing&body=x&fresh=&fresh=web',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    expect(twice.status).toBe(400);
+    expect(twice.text).toBe('bad request: fresh is given more than once\n');
+    expect(wc.calls).toEqual([]);
+    expect(w.store.threads()).toEqual([]);
+    expect(w.store.refusals()).toEqual([]);
+    expect(benchSessions()).toEqual([]);
+  });
+});
+
+describe('agentMailListener: a hub call that rejects', () => {
+  test('a send whose hub call rejects is 500 internal error, logged, and the listener keeps serving', async () => {
+    const failing = { ...h.hub, send: async () => { throw new Error('worker settings unreadable'); } };
+    const fsock = path.join(dir, 'mail', 'f.sock');
+    const fl = createAgentMailListener({ hub: failing, boxId: 'o', socketPath: fsock });
+    extra.push(fl);
+    await fl.listen();
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const r = await request(fsock, 'POST', '/v1/threads', { form: { session: 'main', to: 'billing', body: 'x', fresh: '' } });
+      expect(r.status).toBe(500);
+      expect(r.text).toBe('internal error\n');
+      expect(r.headers['content-type']).toBe('text/plain; charset=utf-8');
+      expect(err).toHaveBeenCalledTimes(1);
+      expect(err.mock.calls[0][0]).toContain('worker settings unreadable');
+    } finally {
+      err.mockRestore();
+    }
+    expect((await request(fsock, 'GET', '/v1/ping')).status).toBe(200);
   });
 });

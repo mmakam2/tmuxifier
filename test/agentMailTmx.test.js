@@ -336,6 +336,10 @@ describe('tmx: user commands', () => {
       expect(r.stdout).toBe('');
       const lines = r.stderr.split('\n').filter((l) => /^\s*tmx \S/.test(l));
       expect(lines.map((l) => l.trim().split(/\s+/)[1])).toEqual(['who', 'send', 'reply', 'wait', 'read', 'inbox']);
+      const all = r.stderr.split('\n');
+      const at = all.indexOf('  tmx send [--fresh [--project <name>]] <target> ["text"]');
+      expect(at).toBeGreaterThan(0);
+      expect(all[at + 1]).toBe(`${' '.repeat(37)}--fresh starts a new agent on the box`);
     }
     expect(curlCalls()).toEqual([]);
   });
@@ -397,6 +401,137 @@ describe('tmx: user commands', () => {
     expect(r2.code).toBe(0);
     expect(r2.stdout).toMatch(/^Sent\. Thread t-/);
     expect(curlCalls().length).toBeGreaterThan(1);
+  });
+});
+
+// `tmx send --fresh [--project <name>]` (agent workers spec 5.3) against a listener whose hub
+// starts workers on billing (b) for real: a real starter over a private tmux bench
+// (test/helpers/workerBench.js). `sends` records the arguments of every hub send, `hubCalls` every
+// hub call, so a test can prove a usage error never reached the listener's hub.
+describe('tmx: send --fresh', () => {
+  let w; let wsock; let sends; let hubCalls;
+  beforeEach(async () => {
+    w = await createMailHarness({ holdMs: 60_000 }, {
+      workers: { b: { mailStart: true, projects: [{ name: 'api' }, { name: 'web' }] } },
+      installed: ['b'],
+      sessions: { b: [{ name: 'main', paneCmd: 'claude' }], o: [{ name: 'main', paneCmd: 'claude' }] },
+    });
+    wsock = path.join(dir, 'w', 'sock');
+    sends = [];
+    hubCalls = [];
+    const hub = { ...w.hub };
+    for (const name of ['who', 'send', 'reply', 'read', 'inbox', 'waitMail', 'waitReplies', 'ack']) {
+      hub[name] = (...args) => {
+        hubCalls.push(name);
+        if (name === 'send') sends.push(args);
+        return w.hub[name](...args);
+      };
+    }
+    const l = createAgentMailListener({ hub, boxId: 'o', socketPath: wsock });
+    extra.push(l);
+    await l.listen();
+  });
+  afterEach(async () => { await w.cleanup(); });
+
+  const fenv = (over = {}) => env({ TMUXIFIER_MAIL_SOCK: wsock, ...over });
+  const frun = (args, opts = {}) => run(args, { ...opts, env: fenv() });
+  const peerOf = (r) => w.store.thread(threadOf(r.stdout)).peer;
+
+  test('send --fresh sends fresh= and prints the thread id of a new worker in the default project', async () => {
+    const r = await frun(['send', '--fresh', 'billing', 'build it']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^Sent\. Thread t-[a-z2-9]{8}\./);
+    expect(r.stderr).toBe('');
+    expect(peerOf(r)).toEqual({ boxId: 'b', session: 'worker-api-1' });
+    expect(sends).toEqual([[O, 'billing', 'build it', { fresh: '' }]]);
+    const calls = curlCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('--data-urlencode fresh= ');
+    expect(calls[0]).not.toContain('build it');
+  });
+
+  test('send --fresh --project web sends fresh=web and the worker is worker-web-1', async () => {
+    const r = await frun(['send', '--fresh', '--project', 'web', 'billing', 'build it']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(peerOf(r)).toEqual({ boxId: 'b', session: 'worker-web-1' });
+    expect(sends.map((a) => a[3])).toEqual([{ fresh: 'web' }]);
+    expect(curlCalls()[0]).toContain('--data-urlencode fresh=web ');
+  });
+
+  test('a body on stdin still works with --fresh', async () => {
+    const body = 'line one "quoted" $(x)\nline two';
+    const r = await frun(['send', '--fresh', '--project', 'api', 'billing'], { stdin: `${body}\n` });
+    expect(r.code, r.stderr).toBe(0);
+    const t = w.store.thread(threadOf(r.stdout));
+    expect(t.peer).toEqual({ boxId: 'b', session: 'worker-api-1' });
+    expect(t.messages[0].body).toBe(body);
+    expect(curlCalls()[0]).not.toContain('line one');
+  });
+
+  test('send without --fresh is unchanged: no fresh field, the running agent gets it', async () => {
+    const r = await frun(['send', 'billing', 'hi']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(peerOf(r)).toEqual({ boxId: 'b', session: 'main' });
+    expect(sends).toEqual([[O, 'billing', 'hi', { fresh: undefined }]]);
+    expect(curlCalls()[0]).not.toContain('fresh');
+  });
+
+  test('usage errors exit 2 and make no request', async () => {
+    for (const args of [
+      ['send', '--project', 'web', 'billing', 'x'], // --project without --fresh
+      ['send', '--fresh', '--project'], // --project with no name
+      ['send', '--fresh', '--project', 'web'], // a name and no target left
+      ['send', '--fresh', '--project', '', 'billing', 'x'],
+      ['send', '--fresh', '--project', 'WEB', 'billing'],
+      ['send', '--fresh', '--project', 'we_b', 'billing', 'x'],
+      ['send', '--fresh', '--project', 'web.x', 'billing', 'x'],
+      ['send', '--fresh', '--project', '../x', 'billing', 'x'],
+      ['send', '--fresh', '--project', 'wéb', 'billing', 'x'],
+      ['send', '--fresh', '--project', 'a'.repeat(25), 'billing', 'x'],
+      ['send', '--fresh', '--project', 'web', '--project', 'api', 'billing', 'x'],
+      ['send', '--fresh', '--fresh', 'billing', 'x'],
+      ['send', '--fresh', 'billing/side', 'x'], // --fresh takes a box, never box/session
+      ['send', '--fresh', '--project', 'web', 'billing/main', 'x'],
+      ['send', '--fresh'],
+      ['send', '--fresh', 'billing', 'a', 'b'],
+    ]) {
+      const r = await frun(args);
+      expect(r.code, args.join(' ')).toBe(2);
+      expect(r.stdout, args.join(' ')).toBe('');
+      expect(r.stderr, args.join(' ')).toMatch(/^(tmx: |usage:)/);
+    }
+    expect(curlCalls()).toEqual([]);
+    expect(hubCalls).toEqual([]);
+    expect(w.store.threads()).toEqual([]);
+  });
+
+  test('the script checks letters, digits, - and length; the listener is the authority on the rest', async () => {
+    // A leading - passes the script's check and is refused by the listener, before the hub.
+    const dash = await frun(['send', '--fresh', '--project', '-web', 'billing', 'x']);
+    expect(dash.code).toBe(1);
+    expect(dash.stdout).toBe('');
+    expect(dash.stderr).toBe('bad request: fresh is not a project name\n');
+    expect(curlCalls()).toHaveLength(1);
+    expect(hubCalls).toEqual([]);
+    // 24 characters is a project name: the hub answers, with the box's own refusal.
+    const name = 'a'.repeat(24);
+    const long = await frun(['send', '--fresh', '--project', name, 'billing', 'x']);
+    expect(long.code).toBe(1);
+    expect(long.stderr).toBe(`${refusalText('no-project', { target: 'billing', project: name })}\n`);
+    expect(sends.map((a) => a[3])).toEqual([{ fresh: name }]);
+  });
+
+  test('a --fresh send is never retried once the request may have arrived', async () => {
+    const wrapped = { ...w.hub, send: async (...args) => { await w.hub.send(...args); return new Promise(() => {}); } };
+    const stalled = path.join(dir, 'stalled', 'sock');
+    const l = createAgentMailListener({ hub: wrapped, boxId: 'o', socketPath: stalled });
+    extra.push(l);
+    await l.listen();
+    const r = await run(['send', '--fresh', 'billing', 'only once'], { env: fenv({ TMUXIFIER_MAIL_SOCK: stalled, TMUXIFIER_MAIL_TEST_MAX_TIME: '0.5' }) });
+    expect(r.code).toBe(3);
+    expect(r.stderr).toBe(LOST('ask the operator, or look for an answer with "tmx inbox"'));
+    expect(w.store.threads()).toHaveLength(1);
+    expect(curlCalls()).toHaveLength(1);
   });
 });
 

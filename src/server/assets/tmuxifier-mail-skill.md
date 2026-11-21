@@ -23,6 +23,8 @@ Always start with `tmx who` to see which sessions you may message and whether th
 ```
 tmx who [box]                      who you may message, their state, and who is listening
 tmx send <target> "text"           start a thread; prints the thread id
+tmx send --fresh [--project <name>] <box> "text"
+                                   start a new agent on that box, and a thread with it
 tmx reply <thread> "text"          answer in a thread, or ask a question back
 tmx wait <thread>... [-t seconds]  wait for a reply on any of these threads (default 90 s)
 tmx read <thread>                  print the whole thread
@@ -45,6 +47,21 @@ tmx who
 tmx send billing "Which version of the payments library does billing pin, and where?"
 tmx wait t-7fq2m9cd
 ```
+
+## A box with no agent
+
+A box with no agent running can still take a message when its operator allows it: the send
+starts an agent there. `tmx who` shows such a box as `billing  can start an agent (projects:
+api, web)`. A plain `tmx send billing "..."` goes to the agent already running on that box, or
+starts one in the box's default project when there is none.
+
+- `tmx send --fresh billing "..."` asks for a new agent even when one is running. Use it for
+  work unrelated to what the running agent is doing, or when the task needs a clean context.
+- `tmx send --fresh --project web billing "..."` picks the project the new agent starts in: one
+  of the names `tmx who` lists for that box. Options come before the box name, and `--fresh`
+  takes a box name, never `box/session`.
+- A new agent knows nothing the message does not say: not your task, not earlier threads, not
+  what the operator told you. Put everything it needs in the message.
 
 ## After you send
 

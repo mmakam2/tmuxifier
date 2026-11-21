@@ -140,6 +140,15 @@ test('a foreign ~/.local/bin/tmx is left alone: skipped-foreign-tmx and no setti
   }
 });
 
+test('the skill tells an agent about starting one on a box with none (agent workers spec 5.3)', async () => {
+  const skill = (await readAssets()).skill.toString('utf8');
+  expect(skill).toContain('tmx send --fresh [--project <name>] <box> "text"');
+  expect(skill).toContain('--fresh');
+  expect(skill).toContain('--project');
+  expect(skill).toContain('can start an agent');
+  expect(skill).toContain('A new agent knows nothing the message does not say');
+});
+
 test('fresh box: tmx is 0755 with "# tmuxifier-mail" on line 2, the skill has front matter, the symlink points at it, the directory is 0700', async () => {
   for (const shell of ['/bin/sh', '/usr/bin/bash', '/usr/bin/zsh']) {
     const b = await claudeBox();
