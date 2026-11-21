@@ -176,8 +176,9 @@ Cross-cutting invariants that tests alone have repeatedly failed to protect:
   path. The directory is the operator's, validated on write and re-validated (`isWorkerDir`)
   immediately before it is single-quoted into the script. The launch word is a constant looked up
   in `WORKER_AGENTS`, and the message is never in the script or typed into a terminal. No worker
-  starts while the box's setup job runs. No registry of workers is kept: the box's own tmux
-  listing is the list (`worker-<project>-<n>`, counted by name **and** a pane running `claude`).
+  starts while the box's setup job runs. No persisted registry of workers is kept: the box's own
+  tmux listing is the list (`worker-<project>-<n>`, counted by name **and** a pane running
+  `claude`); the starter's 60 s memory of its own starts is the only addition (read its header).
 
 ## Architecture (`src/server/`)
 
@@ -681,8 +682,11 @@ nothing is posted after the final write.
   second bare send joins the box's pending bare start; `fresh` always starts its own. The
   in-memory `starts` list is judged at every `boxChanged`: a marker means up; 30 s without the
   session on `claude`, on two consecutive looks, closes its threads `worker did not start`;
-  60 s on `claude` with no marker reads `queued-startup-prompt`. `who` lists the boxes a send can
-  start an agent on. `createAgentMailHub`'s signature must stay on one line:
+  60 s on `claude` with no marker reads `queued-startup-prompt`. The two looks hold only while
+  `boxChanged` runs at most once per applied status read (index.js: after each sweep and each
+  applied refresh). Start refusals name the box by its label (the log keeps the typed target);
+  a `workerStore.get` that rejects reads as a box that starts none. `who` lists the boxes a send
+  can start an agent on. `createAgentMailHub`'s signature must stay on one line:
   `test/opencodeAgentMailClient.test.js` regex-matches it in the source. Tests:
   `test/agentMailHub.test.js`, `test/agentMailHubDelivery.test.js`, `test/agentMailHubWorkers.test.js`.
 - `agentMailListener.js` — per-box `node:http` on a unix socket `data/mail/<12 hex>.sock` (the
@@ -768,15 +772,17 @@ their routes answer 503. Interactive Claude Code only: no headless mode, no othe
 - `agentWorkerStore.js` — `data/agent-workers.json`, kept out of `boxes.json` on purpose (the box
   export and the device-readable `GET /api/boxes` never see it). The twin of
   `agentMailPolicyStore.js`: null-prototype map, mutations serialised on one chain and adopted
-  only if they persist. A stored entry that no longer passes the rules is absent on load, never
-  handed to a starter. Test: `test/agentWorkerStore.test.js`.
+  only if they persist. A stored entry that no longer passes the rules is absent on load (one
+  `console.error` line names the box and the rule), never handed to a starter. Test:
+  `test/agentWorkerStore.test.js`.
 - `agentWorkers.js` — `buildWorkerStartRemote` is the one remote script (`set -eu`; tmux, `[ -d ]`,
   the agent binary, the optional trust write, an exact-target `has-session`, then `new-session -d`
   running `exec "$SHELL" -ic 'exec claude'`: a plain `claude` command fails, tmux runs it with no
-  rc files, so no `PATH` and no token), each step one `WORKER: <code>` line that
-  `parseWorkerResult` allowlists. The trust write (`WORKER-TRUST:`; jq → node → python3) reads
-  first and writes only when the key is not already `true`, never through a symlink, and a failed
-  write never fails the start. `createAgentWorkers(…).start(box, { project, mode })` refuses in
+  rc files, so no `PATH` and no token); a run prints ONE `WORKER: <code>` result line (the first
+  step that does not pass, `exists` or `started`), which `parseWorkerResult` allowlists. The
+  trust write (`WORKER-TRUST:`; jq → node → python3) reads first and writes only when the key is
+  not already `true`, never through a symlink, and a failed write never fails the start.
+  `createAgentWorkers(…).start(box, { project, mode })` refuses in
   order (mode, setup running, no listing, project, the `max` cap), runs the script once and once
   more on `exists`, serialises per box, and never throws; its result is `{ ok, session, project,
   trust }` or `{ ok: false, code }` (`START_CODES`). It remembers its own starts for up to 60 s

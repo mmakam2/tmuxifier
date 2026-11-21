@@ -17,19 +17,25 @@ placeholders.
 
 1. **A failed start is judged on two looks [5.6].** The design closes a thread when, 30 s after
    the start, the session is not listed or its pane does not run `claude`. As built, the hub
-   closes it only on a second failing look after the first one at 30 s or more. The age it
-   checks is the start's age at the look, not the listing's, and a sweep can read a box before
-   the session existed and be applied 30 s later: a healthy worker's thread would have been
-   closed. A genuine failure is therefore reported one look later, up to about a minute after
-   the start. Any look that does not fail (a `claude` pane, no listing, too young) clears the
-   first. The stuck report (60 s, on `claude`, no marker) is unchanged.
+   closes it only on a second failing look after the first one at 30 s or more. The age it checks
+   is the start's age at the look, not the listing's, and a sweep can read a box before the
+   session existed and be applied 30 s later: a healthy worker's thread would have been closed. A
+   genuine failure is therefore reported one look later: with the default 30 s status poll the
+   first failing look lands 30-60 s after the start and the close 60-90 s after it, so up to about
+   a minute and a half. A thread the operator stopped before the second look gets no refusal
+   entry. Any look that does not fail (a `claude` pane, no listing, too young) clears the first.
+   The stuck report (60 s, on `claude`, no marker) is unchanged.
 
-2. **The send checks again after the start [5.3].** A start can take up to 20 s. Once it has
-   resolved, `send` reads the boxes and the policies again: a target box that is no longer listed
-   is refused `unknown-box`, and a pair that `mayStart` no longer allows is refused with its own
-   code. The worker is left running either way and no thread is made. Without this, a box
-   removal or a withdrawn permission during the start was missed by the sweeps and left an open
-   thread.
+2. **The send checks again after the start [5.3].** A start can take up to about 25 s: the
+   script's limit is 12 s (`START_TIMEOUT_MS`), and it runs twice on an `exists` retry, so both
+   runs fit inside the 30 s a lead's `tmx send` waits. Once it has resolved, `send` reads the
+   boxes and the policies again: a target box that is no longer listed is refused
+   `unknown-box`, and a pair that `mayStart` no longer allows is refused with its own code. The
+   worker is left running either way and no thread is made. Without this, a box removal or a
+   withdrawn permission during the start was missed by the sweeps and left an open thread. A
+   bare send that joined a start which a `boxChanged` during those reads judged failed and
+   dropped (its session still with no marker) is refused `start-failed`, with no thread made,
+   rather than left open as `queued-no-agent` on a worker nobody watches.
 
 3. **A box with the tick on and no projects [5.1, 5.3].** It is treated as not starting agents.
    A bare send there is refused as it was before (`no-agent`, or `no-other-agent` on the
@@ -43,7 +49,11 @@ placeholders.
    no other agent and no start, the answer is a new refusal, `no other agent is running on
    <box>`, naming the box by its label (a send to `.` would otherwise read `…running on .`). The
    old wording, "is not running an agent" about the session that is running, was untrue to the
-   agent. One existing test was updated for this.
+   agent. One existing test was updated for this. Every refusal of a start (`workers-off`,
+   `mail-not-set-up`, `setup-running`, `no-project`, `worker-cap`, `no-dir`, `no-agent-binary`,
+   `no-tmux`, `start-failed`) names the box by its label the same way, so `tmx send --fresh .`
+   on a box that starts none reads `refused: orders does not start agents on request`; the
+   refusal log keeps the target as typed.
 
 5. **A symbolic `~/.claude.json` is never written [5.5].** The design keeps the file's mode and
    says a failed write is not an error. As built, a `~/.claude.json` that is a symbolic link, or
@@ -69,7 +79,9 @@ placeholders.
 8. **`tmx who` [5.3].** A box gets its `can start an agent (projects: …)` line only when it is
    reachable, the caller may start a thread with it (the caller's own box included), its record
    has the tick on and a project, and its mail tools are installed. An unreachable box lists
-   nothing.
+   nothing. `tmx who <box>` matches a starter line on its whole first field, so a label with a
+   `/` in it is matched exactly. A worker store whose read rejects makes the box one that does
+   not start agents, for `who` and `send` alike, with one `console.error` line.
 
 9. **Wording [9].** The design left it to the build. Two refusals read as "try again" and carry no
    `refused:`: `setup-running` and `start-failed`. `bad-mode` and any code the hub does not know
@@ -104,29 +116,36 @@ placeholders.
 
 - **A worker's name can outlive its Claude [5.8]**, as designed. The leftover shell keeps its
   number and does not count against the cap.
-- **A box whose default shell is `sh` (dash)** may not start `claude`. Under dash `sh -ic` reads
-  only `$ENV`, so a `claude` in `~/.local/bin` is not found; the script still prints `started`
-  and only the failed-start check catches it. The approved launch line is `-ic`; `-lic` would
-  read `.profile` under dash but changes which rc files bash reads.
+- **A box whose tmux `default-shell` is `sh` (dash)** does not start a `claude` that is only in
+  `~/.local/bin`. Under dash `sh -ic` reads only `$ENV`, so it is not found; the script still
+  prints `started` and only the failed-start check catches it. Pinned as it is by a "known
+  limitation" case in `test/agentWorkerScript.integration.test.js` (dash as `/bin/sh`: `WORKER:
+  started`, the stand-in never comes up, the session ends). The approved launch line is `-ic`;
+  `-lic` would read `.profile` under dash but changes which rc files bash reads.
 - **The trust key is undocumented**, as the design says. The write also goes to `~/.claude.json`
   in the login user's home, and was not checked against a box with `CLAUDE_CONFIG_DIR` set.
 - **The cap can be exceeded by one for a moment.** The retry after `exists` (a lost race for a
   name) does not ask for the cap again.
 - **The failed-start check looks at the pane command.** A Claude Code installed through npm can
   report `node` as its pane command, and a worker stopped at a start-up dialog would then read as
-  "did not start". A listing cut at 200 rows reads as "not listed", which the two-look rule
-  softens for a passing glitch only.
+  "did not start". Such a worker would also not count toward the cap, which counts `worker-*`
+  sessions whose pane runs `claude`. A listing cut at 200 rows reads as "not listed", which the
+  two-look rule softens for a passing glitch only.
 - **A reused session name** can attach an older start's entry to a new worker of the same name:
   the hub looks the entry up by `find`, not `findLast`.
 - **No record survives a Tmuxifier restart.** The hub's list of starts and the starter's memory
   are in memory only. A message queued for a worker that never came up reads `is not running an
   agent` until the worker reports or the thread is stopped.
-- **The operator's Start gives no sign of progress** for the few seconds it takes, and the
-  picker's Start rows follow a saved project the next time the picker opens.
-- **A stored entry that fails the rules is dropped without a word** when `data/agent-workers.json`
-  is loaded, and the next write removes it for good. `removeBox` of an unknown id still writes
-  the file. The store's first load can overwrite a map written in the meantime, as
-  `agentMailPolicyStore.js` can.
+- **A shutdown of Tmuxifier while a start is in flight can lose the thread.** The worker is left
+  running on the box, no thread is made for it, and the lead's `tmx send` exits 3 (the request
+  may have arrived, so it is never retried).
+- **The operator's Start shows only an info toast** (`Starting Claude in <project>…`) for the
+  few seconds it takes, and the picker's Start rows follow a saved project the next time the
+  picker opens.
+- **A stored entry that fails the rules is dropped** when `data/agent-workers.json` is loaded,
+  with one `console.error` line naming the box id and the rule, and the next write removes it for
+  good. `removeBox` of an unknown id still writes the file. The store's first load can overwrite a
+  map written in the meantime, as `agentMailPolicyStore.js` can.
 - **Two counters per removed box id** live for the life of the process, one in the hub (`removals`)
   and one in the status poller (`listings`).
 - **Not in this version** (design 3, 10): headless workers, a worker other than Claude Code,
@@ -147,6 +166,10 @@ spec runs the real server and the real starter the same way.
 - **The real `tmx hook-wait`** (not the stub) taking a message queued before the worker's
   `SessionStart`.
 - **A worker under a default shell other than zsh or bash**, dash included, on a real box.
+- **`tmx send --fresh` from a lead in auto mode**, against the classifier entry that now names
+  it (the `--fresh` clause of `MAIL_AUTOMODE_ALLOW`).
+- **`tmx who <box>` on a box with only a starter line**, from a real agent (unit-tested only).
+- **A restart of Tmuxifier mid-start.**
 - **The skill's new section** and the wording of the new refusals and status lines were pinned by
   unit tests only; no real agent has read them.
 - **`src/server/index.js`'s wiring** has no test, because nothing can test it without booting the

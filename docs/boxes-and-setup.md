@@ -367,8 +367,9 @@ Agent workers
 
 - **Projects.** A name and an absolute folder on the box, one row per project (up to 8). The first
   row is the default project. A row that cannot be saved says why under itself (a name is
-  lowercase letters, digits and dashes, up to 24; a folder has no spaces, no `..`, no trailing
-  `/`), and Save then tells you that the box was saved but the worker settings were not.
+  lowercase letters, digits and dashes, up to 24; a folder has no spaces, no `..` path segment, no
+  `//` and no trailing `/`), and Save then tells you that the box was saved but the worker
+  settings were not.
 - **Skip Claude's folder-trust question.** Per project, off by default. It writes one key into
   `~/.claude.json` on the box before a worker starts there, so the worker does not stop at Claude
   Code's trust question. See [Folder trust](agent-messaging.md#folder-trust).
@@ -391,8 +392,8 @@ Choosing one starts a worker in that project and then points *this pane* at the 
   but it obeys **At most N worker sessions**: at the limit, an error message appears in the corner
   and nothing starts.
 - While the box's setup job is running, it refuses, as a terminal does.
-- The row has no **×**: it names no session. There is no sign of progress for the few seconds a
-  start takes, and a second pick in the same pane while one is under way does nothing.
+- The row has no **×**: it names no session. Picking it shows `Starting Claude in <project>…` in
+  the corner at once; a second pick in the same pane while one is under way does nothing.
 - The picker reads the box's projects each time it opens, so a project you just saved appears the
   next time you open it.
 - There are no start rows on a phone-width layout, where the picker has no session list, or for
