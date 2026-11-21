@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createAgentMailStore } from '../src/server/agentMailStore.js';
+import { createAgentMailStore, WORKER_FAILED_REASON } from '../src/server/agentMailStore.js';
 
 const A = { boxId: 'box-a', session: 'orders' };
 const B = { boxId: 'box-b', session: 'billing' };
@@ -249,6 +249,20 @@ describe('agentMailStore', () => {
     expect(s.thread(t.id)).toMatchObject({ state: 'closed', reason: 'storage limit' });
     const t2 = s.createThread({ starter: A, peer: B });
     expect(() => s.closeThread(t2.id, 'because')).toThrow();
+  });
+
+  test('a worker that did not start is a close reason that drops what was not delivered', () => {
+    expect(WORKER_FAILED_REASON).toBe('worker did not start');
+    const s = make();
+    const t = s.createThread({ starter: A, peer: B });
+    const m1 = s.addMessage(t.id, { from: 'starter', body: 'a' });
+    s.addMessage(t.id, { from: 'starter', body: 'b' });
+    s.setMessageState(t.id, m1.id, 'delivered', { deliveredAt: 1 });
+    expect(s.closeThread(t.id, WORKER_FAILED_REASON)).toBe(true);
+    expect(s.thread(t.id)).toMatchObject({ state: 'closed', reason: 'worker did not start' });
+    expect(s.thread(t.id).messages.map((m) => m.state)).toEqual(['delivered', 'dropped']);
+    const t2 = s.createThread({ starter: A, peer: B });
+    expect(() => s.closeThread(t2.id, 'worker did not start!')).toThrow();
   });
 
   test('refusals keep the newest 200', async () => {

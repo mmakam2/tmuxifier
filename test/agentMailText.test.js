@@ -113,6 +113,32 @@ describe('statusPhrase / refusalText', () => {
     expect(Object.isFrozen(STATUS_KINDS)).toBe(true);
     expect(Object.isFrozen(REFUSAL_CODES)).toBe(true);
   });
+  test('the wording for started agents is verbatim', () => {
+    expect(statusPhrase('queued-starting', ctx)).toBe('queued: billing/main is starting');
+    expect(statusPhrase('queued-startup-prompt', ctx)).toBe('queued: billing/main is waiting for its operator at a start-up prompt');
+    expect(statusPhrase('closed-worker-failed', ctx)).toBe('closed: the new agent did not start; tell your operator');
+    const r = { target: 'billing', project: 'api' };
+    expect(refusalText('workers-off', r)).toBe('refused: billing does not start agents on request');
+    expect(refusalText('mail-not-set-up', r)).toBe('refused: agent messaging is not set up on billing; tell your operator');
+    expect(refusalText('setup-running', r)).toBe('billing is being set up right now; try again shortly');
+    expect(refusalText('no-project', r)).toBe('refused: billing has no project named "api"; run "tmx who"');
+    expect(refusalText('worker-cap', r)).toBe('refused: billing already runs as many started agents as its operator allows');
+    expect(refusalText('no-dir', r)).toBe('refused: the project directory is missing on billing; tell your operator');
+    expect(refusalText('no-agent-binary', r)).toBe('refused: Claude Code is not installed on billing; tell your operator');
+    expect(refusalText('no-tmux', r)).toBe('refused: tmux is not installed on billing; tell your operator');
+    expect(refusalText('start-failed', r)).toBe('starting an agent on billing failed; try again shortly, then tell your operator');
+    expect(refusalText('several-agents', r)).toBe('refused: billing runs more than one agent; name one (run "tmx who")');
+    expect(refusalText('fresh-needs-box', r)).toBe('refused: --fresh takes a box name, not a session');
+  });
+  test('the new kinds and codes are listed, and an agent reads each status as the operator does', () => {
+    for (const k of ['queued-starting', 'queued-startup-prompt', 'closed-worker-failed']) {
+      expect(STATUS_KINDS).toContain(k);
+      expect(agentStatusPhrase(k, ctx)).toBe(statusPhrase(k, ctx));
+    }
+    for (const c of ['workers-off', 'mail-not-set-up', 'setup-running', 'no-project', 'worker-cap', 'no-dir', 'no-agent-binary', 'no-tmux', 'start-failed', 'several-agents', 'fresh-needs-box']) {
+      expect(REFUSAL_CODES).toContain(c);
+    }
+  });
   test('refusals name the target where one is given', () => {
     expect(refusalText('unknown-box', { target: 'zzz' })).toContain('zzz');
     expect(refusalText('send-off', {})).toMatch(/not allowed|off/i);
@@ -158,6 +184,26 @@ describe('renders', () => {
     expect(s).toContain('billing/main');
     expect(s).toContain('not listening');
     expect(s.split('\n').length).toBe(2);
+  });
+  test('renderWho lists the boxes that can start an agent after the session rows', () => {
+    const rows = [{ box: 'billing', session: 'main', state: 'ready', listening: true }];
+    const starters = [{ box: 'orders', projects: ['api', 'web'] }, { box: 'ledger', projects: ['batch'] }];
+    expect(renderWho(rows, starters)).toBe([
+      'billing/main  ready, listening',
+      'orders  can start an agent (projects: api, web)',
+      'ledger  can start an agent (projects: batch)',
+    ].join('\n'));
+    // No sessions but a box that can start one: only the starter lines, no "nobody:" line.
+    expect(renderWho([], starters)).toBe([
+      'orders  can start an agent (projects: api, web)',
+      'ledger  can start an agent (projects: batch)',
+    ].join('\n'));
+    // Neither: unchanged.
+    const nobody = 'nobody: no session is available to this one (see the operator\'s mail settings)';
+    expect(renderWho([], [])).toBe(nobody);
+    expect(renderWho([])).toBe(nobody);
+    // Rows alone: unchanged by the default.
+    expect(renderWho(rows)).toBe('billing/main  ready, listening');
   });
   test('renderInbox', () => {
     expect(renderInbox([])).toMatch(/empty/i);

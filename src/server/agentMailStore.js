@@ -35,9 +35,11 @@ export const MAX_REFUSALS = 200;
 export const IDLE_DELETE_MS = 30 * 24 * 60 * 60 * 1000;
 export const STORAGE_KEEP_MS = 60 * 60 * 1000;
 export const STORAGE_REASON = 'storage limit';
+// The close of a thread whose target was an agent Tmuxifier started, when that start never became one.
+export const WORKER_FAILED_REASON = 'worker did not start';
 
 const MESSAGE_STATES = ['queued', 'handed', 'delivered', 'dropped'];
-const CLOSE_REASONS = ['operator', 'permission withdrawn', 'box removed', STORAGE_REASON];
+const CLOSE_REASONS = ['operator', 'permission withdrawn', 'box removed', STORAGE_REASON, WORKER_FAILED_REASON];
 const SIDES = ['starter', 'peer'];
 const REFUSALS_FILE = 'refusals';
 

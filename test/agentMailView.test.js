@@ -93,6 +93,8 @@ test('threadRow: title "orders/main → billing/main", message count, relative t
   expect(threadRow(thread({ state: 'closed', reason: 'box removed' }), boxes, now).state).toBe('closed: box removed');
   expect(threadRow(thread({ state: 'closed', reason: 'storage limit', status: 'closed: storage limit' }), boxes, now))
     .toMatchObject({ state: 'closed: storage limit', status: 'closed: storage limit' });
+  expect(threadRow(thread({ state: 'closed', reason: 'worker did not start', status: 'closed: the new agent did not start; tell your operator' }), boxes, now))
+    .toMatchObject({ state: 'closed: the new agent did not start', status: 'closed: the new agent did not start; tell your operator' });
   expect(threadRow(thread({ state: 'closed', reason: null }), boxes, now).state).toBe('closed');
 });
 

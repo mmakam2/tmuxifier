@@ -92,7 +92,7 @@ export function relAge(at: number, now: number): string {
 
 const CLOSED: Record<string, string> = {
   'operator': 'closed by you', 'permission withdrawn': 'closed: permission withdrawn', 'box removed': 'closed: box removed',
-  'storage limit': 'closed: storage limit',
+  'storage limit': 'closed: storage limit', 'worker did not start': 'closed: the new agent did not start',
 };
 
 function threadState(state: string, reason: string | null | undefined): string {

@@ -77,11 +77,15 @@ export function wakeText({ messageId, threadId, from, body, kind }) {
 }
 
 // kind -> (ctx) => string. ctx: { who: '<box label>/<session>', seconds: number }.
+// `queued-starting` and `queued-startup-prompt` are about a session Tmuxifier started for a send
+// (agent workers); `closed-worker-failed` is the close when that start never became an agent.
 const STATUS = Object.assign(Object.create(null), {
   'queued-working': ({ who }) => `queued: ${who} is working`,
   'queued-blocked': ({ who }) => `queued: ${who} is waiting on its operator`,
   'queued-not-listening': ({ who }) => `queued: ${who} is not listening`,
   'queued-no-agent': ({ who }) => `queued: ${who} is not running an agent`,
+  'queued-starting': ({ who }) => `queued: ${who} is starting`,
+  'queued-startup-prompt': ({ who }) => `queued: ${who} is waiting for its operator at a start-up prompt`,
   'queued': () => 'queued',
   'delivered-no-reply': ({ seconds }) => `delivered ${seconds} s ago, no reply yet`,
   // For a participant whose own newest message has been answered and who has that answer.
@@ -90,6 +94,7 @@ const STATUS = Object.assign(Object.create(null), {
   'closed-withdrawn': () => 'closed: permission withdrawn',
   'closed-box-removed': () => 'closed: box removed',
   'closed-storage-limit': () => 'closed: storage limit',
+  'closed-worker-failed': () => 'closed: the new agent did not start; tell your operator',
   'closed': () => 'closed', // a close whose reason this build does not know
 });
 export const STATUS_KINDS = Object.freeze(Object.keys(STATUS));
@@ -112,7 +117,8 @@ export function agentStatusPhrase(kind, ctx = {}) {
   return kind === 'closed-operator' ? `${phrase}. ${CLOSED_ADVICE}` : phrase;
 }
 
-// code -> (ctx) => string. ctx: { target?: string, who?: string } (target = what the caller typed).
+// code -> (ctx) => string. ctx: { target?: string, who?: string, project?: string } (target = what
+// the caller typed; project = the project name it asked for, shown quoted).
 // The four policy codes are the ones agentMailPolicy.mayStart returns. `unreachable` is about the
 // target box; the tmx script words its own "mail service unreachable".
 const REFUSAL = Object.assign(Object.create(null), {
@@ -129,6 +135,19 @@ const REFUSAL = Object.assign(Object.create(null), {
   'unreachable': ({ target } = {}) => `${target ?? 'the target box'} is unreachable right now; try again shortly`,
   'closed': () => `refused: this thread is closed. ${CLOSED_ADVICE}`,
   'not-a-participant': () => 'refused: this session is not part of that thread',
+  // Starting an agent on request (agent workers). `setup-running` and `start-failed` are the two
+  // that read as "try again", so they carry no "refused:".
+  'workers-off': ({ target } = {}) => `refused: ${target ?? 'the target box'} does not start agents on request`,
+  'mail-not-set-up': ({ target } = {}) => `refused: agent messaging is not set up on ${target ?? 'the target box'}; tell your operator`,
+  'setup-running': ({ target } = {}) => `${target ?? 'the target box'} is being set up right now; try again shortly`,
+  'no-project': ({ target, project } = {}) => `refused: ${target ?? 'the target box'} has no project named "${project ?? ''}"; run "tmx who"`,
+  'worker-cap': ({ target } = {}) => `refused: ${target ?? 'the target box'} already runs as many started agents as its operator allows`,
+  'no-dir': ({ target } = {}) => `refused: the project directory is missing on ${target ?? 'the target box'}; tell your operator`,
+  'no-agent-binary': ({ target } = {}) => `refused: Claude Code is not installed on ${target ?? 'the target box'}; tell your operator`,
+  'no-tmux': ({ target } = {}) => `refused: tmux is not installed on ${target ?? 'the target box'}; tell your operator`,
+  'start-failed': ({ target } = {}) => `starting an agent on ${target ?? 'the target box'} failed; try again shortly, then tell your operator`,
+  'several-agents': ({ target } = {}) => `refused: ${target ?? 'the target box'} runs more than one agent; name one (run "tmx who")`,
+  'fresh-needs-box': () => 'refused: --fresh takes a box name, not a session',
 });
 export const REFUSAL_CODES = Object.freeze(Object.keys(REFUSAL));
 
@@ -155,9 +174,15 @@ export function renderThread(thread, names) {
 }
 
 // rows: [{ box: label, session, state: string (agent state as the dashboard words it), listening: boolean }]
-export function renderWho(rows) {
-  if (rows.length === 0) return 'nobody: no session is available to this one (see the operator\'s mail settings)';
-  return rows.map((r) => `${r.box}/${r.session}  ${r.state}, ${r.listening ? 'listening' : 'not listening'}`).join('\n');
+// starters: [{ box: label, projects: string[] }] - boxes where a send can start an agent; one line
+// each after the session rows. With no rows but a starter, only the starter lines: a box that can
+// start an agent is somebody.
+export function renderWho(rows, starters = []) {
+  if (rows.length === 0 && starters.length === 0) return 'nobody: no session is available to this one (see the operator\'s mail settings)';
+  return [
+    ...rows.map((r) => `${r.box}/${r.session}  ${r.state}, ${r.listening ? 'listening' : 'not listening'}`),
+    ...starters.map((s) => `${s.box}  can start an agent (projects: ${s.projects.join(', ')})`),
+  ].join('\n');
 }
 
 // items: [{ messageId, threadId, from: '<label>/<session>', body, kind }]

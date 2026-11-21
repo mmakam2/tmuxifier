@@ -62,7 +62,7 @@ export interface MailBoxView {
 }
 
 export interface MailParticipant { boxId: string; session: string }
-export type MailCloseReason = 'operator' | 'permission withdrawn' | 'box removed';
+export type MailCloseReason = 'operator' | 'permission withdrawn' | 'box removed' | 'storage limit' | 'worker did not start';
 export type MailThreadState = 'open' | 'closed';
 export type MailMessageState = 'queued' | 'handed' | 'delivered' | 'dropped';
 
