@@ -239,11 +239,30 @@ export function parseWorkerTrust(stdout) {
 // on the way is `start-failed`: `start` never throws.
 //
 // Calls for one box run one after another on a per-box chain, so two sends arriving together
-// never race for one name. The listing lags a start (it is the last sweep's), so a name this
-// starter started in the last START_MEMORY_MS counts as taken and as running whatever the
-// listing says: without it, two sends together would both see no worker under a cap of one,
-// and the second would try the first's name. The memory is per process: after a restart the
-// box's own listing is the only count, which is what the design asks for.
+// never race for one name.
+//
+// The listing lags a start: it is the poller's last applied read, which may have been taken
+// before the session existed. So the starter remembers what it started, START_MEMORY_MS per
+// name, with `seq`, the box's listing clock (`listingSeq`, statusPoller.listingSeq: how many
+// of the box's status reads have been applied, under the poller's rule that a read is applied
+// only if it STARTED after the previously applied one was applied) read once the session was
+// started. At the next start, `listingSeq` is read in the same synchronous step as the
+// listing, and for each remembered name:
+//   - less than 2 reads applied since (or no `listingSeq`): the listing may predate the
+//     session, so the name counts as taken and as running whatever the listing says. Without
+//     this two sends together would both see no worker under a cap of one, and the second
+//     would try the first's name. One read is not enough: it may have started before the start
+//     and only been applied after it.
+//   - 2 or more: the second began after the first was applied, so after the start; the
+//     listing is the authority. A name it does not show is forgotten now (the worker was
+//     killed or exited), and the next start may take its number and its place under the cap.
+//     A listed name is taken; it is running when its pane runs `claude` (runningWorkers), or
+//     while the start is younger than START_SETTLE_MS, because the pane may still be the shell
+//     reading its rc files before it becomes the agent.
+// A read the poller declines (it overlapped a newer one) does not advance the clock, nor does
+// a failed one, so a start whose follow-up probe was not applied falls back to the rule for
+// fewer than 2 reads. The memory is per process: after a restart the box's own listing is the
+// only count, which is what the design asks for.
 
 export const START_CODES = Object.freeze([
   'bad-mode', 'setup-running', 'unreachable', 'no-project', 'worker-cap',
@@ -251,26 +270,49 @@ export const START_CODES = Object.freeze([
 ]);
 export const START_TIMEOUT_MS = 20000;
 export const START_MEMORY_MS = 60000;
+export const START_SETTLE_MS = 15000;
+// Reads applied since a start after which the listing is the authority on it (see above).
+const LISTING_READS = 2;
 
-export function createAgentWorkers({ execCommand, workerStore, setupRunning, sessionsOf, now = () => Date.now() }) {
+export function createAgentWorkers({
+  execCommand, workerStore, setupRunning, sessionsOf, listingSeq = null, now = () => Date.now(),
+}) {
   const chains = new Map(); // box id -> tail of that box's chain
-  const started = new Map(); // box id -> Map(session name -> when this starter started it)
+  const started = new Map(); // box id -> Map(session name -> { at, seq }) of this starter's starts
 
   const fail = (code) => ({ ok: false, code });
 
-  // The names this starter started on the box within START_MEMORY_MS; older ones are dropped.
-  function recentNames(boxId) {
+  // The box's listing clock, or null without one (or with an answer that is not a count).
+  function clockOf(boxId) {
+    if (typeof listingSeq !== 'function') return null;
+    try {
+      const n = listingSeq(boxId);
+      return Number.isFinite(n) ? n : null;
+    } catch { return null; }
+  }
+
+  // The names this starter started on the box that count as taken and as running whatever the
+  // listing shows (see above). `clock` is clockOf(boxId), read with `listed`. Names older than
+  // START_MEMORY_MS, and names the listing has had time to show and does not, are dropped.
+  function heldNames(boxId, listed, clock) {
     const mine = started.get(boxId);
     if (!mine) return new Set();
-    const cutoff = now() - START_MEMORY_MS;
-    for (const [name, at] of mine) if (at <= cutoff) mine.delete(name);
+    const t = now();
+    const listedNames = new Set(listed.map((s) => s.name));
+    const held = new Set();
+    for (const [name, { at, seq }] of mine) {
+      if (at <= t - START_MEMORY_MS) mine.delete(name);
+      else if (clock === null || seq === null || clock - seq < LISTING_READS) held.add(name);
+      else if (!listedNames.has(name)) mine.delete(name);
+      else if (t - at < START_SETTLE_MS) held.add(name);
+    }
     if (mine.size === 0) started.delete(boxId);
-    return new Set(mine.keys());
+    return held;
   }
 
   function remember(boxId, session) {
     if (!started.has(boxId)) started.set(boxId, new Map());
-    started.get(boxId).set(session, now());
+    started.get(boxId).set(session, { at: now(), seq: clockOf(boxId) });
   }
 
   async function runScript(box, session, project) {
@@ -283,7 +325,9 @@ export function createAgentWorkers({ execCommand, workerStore, setupRunning, ses
   async function startNow(box, { project, mode = 'interactive' } = {}) {
     if (!WORKER_MODES.includes(mode)) return fail('bad-mode');
     if (setupRunning(box.id)) return fail('setup-running');
+    // The clock dates this listing: read in the same synchronous step, before any await.
     const sessions = sessionsOf(box.id);
+    const clock = clockOf(box.id);
     if (!Array.isArray(sessions)) return fail('unreachable');
     const record = await workerStore.get(box.id);
     const proj = project == null
@@ -291,12 +335,12 @@ export function createAgentWorkers({ execCommand, workerStore, setupRunning, ses
       : record.projects.find((p) => p.name === project);
     if (!proj) return fail('no-project');
 
-    const recent = recentNames(box.id);
     const listed = sessions.filter((s) => s && typeof s.name === 'string');
-    const running = runningWorkers(listed.filter((s) => !recent.has(s.name))) + recent.size;
+    const held = heldNames(box.id, listed, clock);
+    const running = runningWorkers(listed.filter((s) => !held.has(s.name))) + held.size;
     if (running >= record.max) return fail('worker-cap');
 
-    const taken = [...listed.map((s) => s.name), ...recent];
+    const taken = [...listed.map((s) => s.name), ...held];
     for (let attempt = 0; attempt < 2; attempt++) {
       const session = workerSessionName(proj.name, taken);
       const { code, stdout } = await runScript(box, session, proj);

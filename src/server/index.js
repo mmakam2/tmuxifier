@@ -262,6 +262,9 @@ try {
     workerStore,
     setupRunning: (boxId) => setupManager.currentForBox(boxId)?.status === 'running',
     sessionsOf,
+    // How many of the box's status reads have been applied: it tells the starter whether the
+    // listing was read after a start it remembers. Late-bound like sessionsOf.
+    listingSeq: (id) => statusPoller.listingSeq(id),
   });
   agentWorkers = { store: workerStore, starter };
 } catch (err) {

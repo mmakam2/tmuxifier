@@ -995,3 +995,88 @@ test('a throwing onAgents does not fail refreshAgents', async () => {
   expect(fired).toBe(1);
   expect(poller.getSnapshot().a.agentMarks.web.state).toBe('blocked');
 });
+
+// --- listingSeq: the listing's clock (agentWorkers.js reads it beside sessionsOf) -------
+
+test('listingSeq is 0 for an unknown box and advances with every applied sweep, probeOne and refreshAgents', async () => {
+  const statusChecker = {
+    checkBox: async () => full('working', 'prompt', 100),
+    checkAgents: async () => light('ready', 'stop', 101),
+  };
+  const poller = createStatusPoller({ store: fakeStore([rtBox]), statusChecker });
+  expect(poller.listingSeq('a')).toBe(0);
+  expect(poller.listingSeq('nope')).toBe(0);
+  await poller.pollOnce();
+  const swept = poller.listingSeq('a');
+  expect(swept).toBeGreaterThan(0);
+  await poller.probeOne('a');
+  const probed = poller.listingSeq('a');
+  expect(probed).toBeGreaterThan(swept);
+  expect(await poller.refreshAgents('a')).toBe(true);
+  const refreshed = poller.listingSeq('a');
+  expect(refreshed).toBeGreaterThan(probed);
+  await poller.pollOnce();
+  expect(poller.listingSeq('a')).toBeGreaterThan(refreshed);
+});
+
+test('listingSeq counts one box\'s applied reads: other boxes\' reads do not move it', async () => {
+  // The starter reads "advanced by 2" as "two reads of this box applied": a clock shared
+  // with every other box's reads would make one read look like many.
+  const statusChecker = { checkBox: async () => ({ reachable: true, tmux: true, sessions: [] }) };
+  const poller = createStatusPoller({ store: fakeStore([{ id: 'a', host: 'ha' }, { id: 'b', host: 'hb' }]), statusChecker });
+  await poller.pollOnce();
+  expect([poller.listingSeq('a'), poller.listingSeq('b')]).toEqual([1, 1]);
+  await poller.probeOne('b');
+  await poller.probeOne('b');
+  expect([poller.listingSeq('a'), poller.listingSeq('b')]).toEqual([1, 3]);
+  await poller.pollOnce();
+  expect([poller.listingSeq('a'), poller.listingSeq('b')]).toEqual([2, 4]);
+});
+
+test('listingSeq does not move for a read that was not applied, nor for a box PVE reports stopped', async () => {
+  const held = deferred();
+  let hold = false;
+  const statusChecker = {
+    checkBox: async () => {
+      const mine = full('working', 'prompt', 100);
+      if (hold) { hold = false; await held.promise; }
+      return mine;
+    },
+    checkAgents: async () => light('ready', 'stop', 101),
+  };
+  let pveState = 'running';
+  const poller = createStatusPoller({
+    store: fakeStore([rtBox]),
+    statusChecker,
+    statusEnricher: { ...enricherFor([]), collect: async () => [{ boxId: 'a', state: pveState, node: 'pve', vmid: 131 }] },
+  });
+  await poller.pollOnce();
+  hold = true;
+  const probe = poller.probeOne('a');             // reads, held
+  await new Promise((r) => setTimeout(r, 5));
+  expect(await poller.refreshAgents('a')).toBe(true);
+  const afterRefresh = poller.listingSeq('a');
+  held.resolve();
+  await probe;                                    // overlapped the refresh: its listing is not used
+  expect(poller.listingSeq('a')).toBe(afterRefresh);
+  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('ready');
+  pveState = 'stopped';
+  await poller.pollOnce();                        // no read at all
+  await poller.probeOne('a');
+  expect(poller.listingSeq('a')).toBe(afterRefresh);
+});
+
+test('listingSeq never goes down: a box that leaves the box list keeps its count', async () => {
+  let boxes = [rtBox];
+  const statusChecker = { checkBox: async () => full('working', 'prompt', 100) };
+  const poller = createStatusPoller({ store: { listBoxes: async () => boxes }, statusChecker });
+  await poller.pollOnce();
+  await poller.pollOnce();
+  expect(poller.listingSeq('a')).toBe(2);
+  boxes = [];
+  await poller.pollOnce();
+  expect(poller.listingSeq('a')).toBe(2);
+  boxes = [rtBox];
+  await poller.pollOnce();
+  expect(poller.listingSeq('a')).toBe(3);
+});

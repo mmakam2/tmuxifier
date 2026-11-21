@@ -49,8 +49,23 @@ export function createStatusPoller({
   // `seq` is the clock; `applied` holds, per box, when its agent fields were
   // last written. Full probes go through readBox so that two callers sharing
   // one in-flight probe also share its true start, not their own later one.
+  //
+  // `listings` counts, per box, the reads applied under that rule: a sweep, a
+  // probeOne or a refreshAgents whose read started after the previously
+  // applied one was applied. It is what listingSeq returns, and the agent
+  // worker starter's whole trust in the listing rests on it: two counted reads
+  // after a start mean the second one STARTED after the first was applied, so
+  // after the start (agentWorkers.js). Hence a per-box count and not `seq`,
+  // which every other box's reads advance too, and hence nothing else counts:
+  // a PVE-stopped entry (no read), a read whose answer was not used, and a read
+  // applied only because it or the snapshot was unreachable (it overlapped the
+  // previous apply, so its listing may be older than that one). It is never
+  // decremented or deleted, so it never goes down for a box, even one that left
+  // the box list (one number per removed box id, for the life of the process).
   let seq = 0;
   const applied = new Map();
+  const listings = new Map();
+  const countListing = (boxId) => { listings.set(boxId, (listings.get(boxId) ?? 0) + 1); };
   const reading = new Map(); // boxId -> { start, promise }: a full probe in flight
   function readBox(box) {
     let cur = reading.get(box.id);
@@ -71,12 +86,14 @@ export function createStatusPoller({
   // to a coalesced caller or keep it as a backoff's last-known status.
   function settle(boxId, start, status) {
     const live = snapshot[boxId];
-    if ((applied.get(boxId) ?? 0) > start && status?.reachable && live?.reachable) {
+    const ordered = (applied.get(boxId) ?? 0) < start;
+    if (!ordered && status?.reachable && live?.reachable) {
       const kept = { ...status, tmux: live.tmux, sessions: live.sessions };
       if (live.agentMarks) kept.agentMarks = live.agentMarks; else delete kept.agentMarks;
       return kept;
     }
     applied.set(boxId, ++seq);
+    if (ordered) countListing(boxId);
     return status;
   }
   // The Host Shell's equivalents (it is sampled, not probed, and lives only in
@@ -263,6 +280,7 @@ export function createStatusPoller({
       // A new object rather than a mutation, as in probeOne.
       snapshot = { ...snapshot, [box.id]: entry };
       applied.set(box.id, ++seq);
+      countListing(box.id);
       if (history) { try { history.recordAgents(box, entry); } catch { /* history never affects status */ } }
       if (onAgents) { try { onAgents(box.id); } catch { /* mail never affects status */ } }
       return true;
@@ -329,6 +347,10 @@ export function createStatusPoller({
     refreshAgents,
     refreshUntil,
     getSnapshot: () => snapshot,
+    // How many of this box's status reads have been applied under the ordering
+    // rule (see `listings` above); 0 for a box never read. Read it in the same
+    // synchronous step as the snapshot entry it is meant to date.
+    listingSeq: (boxId) => listings.get(boxId) ?? 0,
     async start() {
       await pollOnce(); // seed the cache so the first /api/status isn't empty
       timer = setIntervalFn(() => { pollOnce().catch(() => {}); }, intervalMs);

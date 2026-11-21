@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createWorkerBench } from './helpers/workerBench.js';
 import { createAgentWorkerStore } from '../src/server/agentWorkerStore.js';
-import { createAgentWorkers } from '../src/server/agentWorkers.js';
+import { createAgentWorkers, START_SETTLE_MS } from '../src/server/agentWorkers.js';
 
 // The starter (design section 5.2) over the real start script: `execCommand` runs each remote
 // through the worker bench (test/helpers/workerBench.js: a private tmux server on its own -L
@@ -178,6 +178,84 @@ test('after 60 s a start no longer counts on its own; an existing name is retrie
   // and the one retry takes worker-api-2.
   expect(await workers.start(BOX)).toMatchObject({ ok: true, session: 'worker-api-2' });
   expect(calls).toHaveLength(3);
+});
+
+// The listing clock (statusPoller.listingSeq): how many status reads of the box have been
+// applied. Two applied after a start mean the listing was read after the session existed, so
+// the listing, not the starter's memory, says what runs.
+function listingClock(start = 7) {
+  let n = start;
+  return { listingSeq: () => n, advance: (k) => { n += k; } };
+}
+
+test('START_SETTLE_MS is 15 s', () => {
+  expect(START_SETTLE_MS).toBe(15000);
+});
+
+test('with a listing clock, a start still counts while the listing has not been read twice since', async () => {
+  await saveDefault({ max: 1 });
+  const clock = listingClock();
+  const workers = starter({ sessionsOf: () => [], listingSeq: clock.listingSeq });
+  expect(await workers.start(BOX)).toMatchObject({ ok: true, session: 'worker-api-1' });
+  expect(await workers.start(BOX)).toEqual({ ok: false, code: 'worker-cap' });
+  clock.advance(1);
+  expect(await workers.start(BOX)).toEqual({ ok: false, code: 'worker-cap' });
+  expect(calls).toHaveLength(1);
+});
+
+test('two reads after a start, a name the listing does not show is forgotten: the next start reuses it', async () => {
+  await saveDefault({ max: 1 });
+  const clock = listingClock();
+  const workers = starter({ sessionsOf: () => [], listingSeq: clock.listingSeq });
+  expect(await workers.start(BOX)).toMatchObject({ ok: true, session: 'worker-api-1' });
+  bench.tmux('kill-session', '-t', '=worker-api-1');
+  clock.advance(2);
+  expect(await workers.start(BOX)).toMatchObject({ ok: true, session: 'worker-api-1' });
+  expect(hasSession('worker-api-1')).toBe(true);
+  expect(calls).toHaveLength(2);
+});
+
+test('two reads after a start, a listed name whose pane runs claude counts against the cap', async () => {
+  await saveDefault({ max: 1 });
+  const clock = listingClock();
+  let listing = [];
+  const workers = starter({ sessionsOf: () => listing, listingSeq: clock.listingSeq });
+  expect(await workers.start(BOX)).toMatchObject({ ok: true, session: 'worker-api-1' });
+  listing = [{ name: 'worker-api-1', paneCmd: 'claude' }];
+  clock.advance(2);
+  expect(await workers.start(BOX)).toEqual({ ok: false, code: 'worker-cap' });
+  expect(calls).toHaveLength(1);
+});
+
+test('two reads after a start, a listed name still at its shell counts for 15 s, then only as a taken name', async () => {
+  await saveDefault({ max: 1 });
+  const clock = listingClock();
+  let t = 1_000_000;
+  let listing = [];
+  const workers = starter({ sessionsOf: () => listing, listingSeq: clock.listingSeq, now: () => t });
+  expect(await workers.start(BOX)).toMatchObject({ ok: true, session: 'worker-api-1' });
+  listing = [{ name: 'worker-api-1', paneCmd: 'zsh' }];
+  clock.advance(2);
+  t += 5_000;
+  expect(await workers.start(BOX)).toEqual({ ok: false, code: 'worker-cap' });
+  t += 15_000;
+  // The shell is a leftover (design 5.8): it keeps its number and does not use up the cap.
+  expect(await workers.start(BOX)).toMatchObject({ ok: true, session: 'worker-api-2' });
+  expect(calls).toHaveLength(2);
+});
+
+test('the clock is read with the listing: a read applied while the start runs does not vouch for the older listing', async () => {
+  await saveDefault({ max: 1 });
+  const clock = listingClock();
+  let readLands = false;
+  // A status read applied while the start awaits the store, after it took the listing.
+  const workerStore = { get: async (id) => { if (readLands) clock.advance(1); return store.get(id); } };
+  const workers = starter({ workerStore, sessionsOf: () => [], listingSeq: clock.listingSeq });
+  expect(await workers.start(BOX)).toMatchObject({ ok: true, session: 'worker-api-1' });
+  clock.advance(1);
+  readLands = true;
+  expect(await workers.start(BOX)).toEqual({ ok: false, code: 'worker-cap' });
+  expect(calls).toHaveLength(1);
 });
 
 test('a second exists is start-failed', async () => {

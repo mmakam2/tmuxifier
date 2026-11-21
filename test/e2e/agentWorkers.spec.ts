@@ -23,11 +23,12 @@ import { writeWorkerRcFiles } from '../helpers/workerBench.js';
 // - Saving the Edit Box modal also saves the box (its User field writes `root` onto a seeded
 //   box with no user) and always starts a setup job on it, which gates a start
 //   (`setup-running`). A test that saves puts the box record back and waits for that job.
-// - The starter remembers every name it started on a box for START_MEMORY_MS (60 s,
-//   agentWorkers.js) and counts it as taken and running whatever the listing says, even after
-//   the session is killed. Tests that start workers therefore wait out that memory for their
-//   box first (`waitStarterMemory`), or a run after another within a minute would number its
-//   worker -3 and find a cap of one already reached.
+// - The starter counts what the server's listing of the box shows; a name it started counts
+//   on its own, whatever the listing says, only until two status reads of the box have been
+//   applied since (agentWorkers.js). So every start here is followed by a wait for the listing
+//   to show the worker running `claude`, and every test that starts workers first waits for a
+//   listing with no worker in it (`waitNoListedWorkers`): two applied reads after the previous
+//   test's last start, so nothing it started is still counted.
 // - A browser pane on a session recreates it when it ends (design 5.8), so cleanup leaves the
 //   page before it kills the `worker-*` sessions it made.
 
@@ -37,25 +38,10 @@ const home = process.env.E2E_BOX_HOME!;
 const projectDir = path.join(home, 'opt', 'billing-api');
 const RC_FILES = ['.profile', '.bashrc', '.zshrc'];
 const EMPTY = { projects: [], mailStart: false, max: 3 };
-const START_MEMORY_MS = 60000; // agentWorkers.js
 const CAP_MESSAGE = 'this box already runs as many started agents as its limit allows';
 
 let rcBefore: Record<string, string | null> = {};
 const madeFiles: string[] = [];
-// Box id -> when this file last started a worker on it. A file beside the fixture home, not a
-// module variable: Playwright evaluates the file afresh for each --repeat-each run and after a
-// failure, while the server's memory lives as long as the server, which is the run's fixture.
-const startsFile = path.join(path.dirname(home), 'agent-workers-e2e-starts.json');
-const lastStart = {
-  get(id: string): number | undefined {
-    try { return JSON.parse(fs.readFileSync(startsFile, 'utf8'))[id]; } catch { return undefined; }
-  },
-  set(id: string, at: number) {
-    let all: Record<string, number> = {};
-    try { all = JSON.parse(fs.readFileSync(startsFile, 'utf8')); } catch { /* first start */ }
-    fs.writeFileSync(startsFile, JSON.stringify({ ...all, [id]: at }));
-  },
-};
 
 // Makes `link` a symlink to a `sleep` that still sleeps when invoked by that name. A multicall
 // coreutils (uutils, Ubuntu 26.04's default) refuses an argv[0] it has no applet for, so the
@@ -186,15 +172,6 @@ async function waitNoListedWorkers(page: Page, id: string) {
   }, { timeout: 20000, intervals: [500, 1000] }).toEqual([]);
 }
 
-// See the header: the starter's per-box memory of what it started.
-async function waitStarterMemory(page: Page, id: string) {
-  const at = lastStart.get(id);
-  if (at !== undefined) {
-    const left = at + START_MEMORY_MS + 1000 - Date.now();
-    if (left > 0) await page.waitForTimeout(left);
-  }
-}
-
 async function openPane(page: Page, label: string) {
   await page.locator('.box .name', { hasText: new RegExp(`^${label}$`) }).click();
   const pane = page.locator('.stage-pane').first();
@@ -207,6 +184,15 @@ async function pickStart(page: Page, pane: ReturnType<Page['locator']>, project:
   const picker = pane.locator('.session-picker');
   await picker.locator('.session-picker-trigger').click();
   const row = picker.locator('.session-picker-row.start', { hasText: `Start Claude in ${project}` });
+  await expect(row).toHaveCount(1, { timeout: 10000 });
+  return row;
+}
+
+// Opens the pane's picker and returns the row of session `name`.
+async function sessionRow(pane: ReturnType<Page['locator']>, name: string) {
+  const picker = pane.locator('.session-picker');
+  await picker.locator('.session-picker-trigger').click();
+  const row = picker.locator(`.session-picker-row[data-key="s:${name}"]`);
   await expect(row).toHaveCount(1, { timeout: 10000 });
   return row;
 }
@@ -356,7 +342,6 @@ test('the picker\'s start row starts worker-api-1 and moves the pane there; a se
     await killWorkers();
     await waitNoListedWorkers(page, box.id);
     await waitSetupIdle(page, box.id);
-    await waitStarterMemory(page, box.id);
     await putWorkers(page, box.id, { projects: [{ name: 'api', dir: projectDir, trust: false }], mailStart: false, max: 3 });
 
     const pane = await openPane(page, 'localhost');
@@ -370,7 +355,6 @@ test('the picker\'s start row starts worker-api-1 and moves the pane there; a se
 
     // The pane really attaches there: its terminal reopens on the worker's session.
     let attached = page.waitForEvent('websocket', { predicate: (ws) => /\/term\?.*[?&]session=worker-api-1(&|$)/.test(ws.url()), timeout: 20000 });
-    lastStart.set(box.id, Date.now());
     await row.locator('.session-picker-pick').click();
     await attached;
     await expect.poll(() => currentSession(pane), { timeout: 20000 }).toBe('worker-api-1');
@@ -379,7 +363,6 @@ test('the picker\'s start row starts worker-api-1 and moves the pane there; a se
 
     const again = await pickStart(page, pane, 'api');
     attached = page.waitForEvent('websocket', { predicate: (ws) => /\/term\?.*[?&]session=worker-api-2(&|$)/.test(ws.url()), timeout: 20000 });
-    lastStart.set(box.id, Date.now());
     await again.locator('.session-picker-pick').click();
     await attached;
     await expect.poll(() => currentSession(pane), { timeout: 20000 }).toBe('worker-api-2');
@@ -395,18 +378,14 @@ test('the picker\'s start row starts worker-api-1 and moves the pane there; a se
 test('with a cap of one, a second start says the box is at its limit and starts nothing', async ({ page }) => {
   test.setTimeout(180000);
   await login(page);
-  // Its own box (an alias of the same fixture), so the starter's memory of the previous test's
-  // starts on localhost does not count here.
-  const box = await boxOf(page, 'db-primary');
+  const box = await boxOf(page, 'localhost');
   try {
     await killWorkers();
     await waitNoListedWorkers(page, box.id);
     await waitSetupIdle(page, box.id);
-    await waitStarterMemory(page, box.id);
     await putWorkers(page, box.id, { projects: [{ name: 'api', dir: projectDir, trust: false }], mailStart: false, max: 1 });
 
-    const pane = await openPane(page, 'db-primary');
-    lastStart.set(box.id, Date.now());
+    const pane = await openPane(page, 'localhost');
     await (await pickStart(page, pane, 'api')).locator('.session-picker-pick').click();
     await expect.poll(() => currentSession(pane), { timeout: 20000 }).toBe('worker-api-1');
     await expect.poll(() => paneCmdOf(page, box.id, 'worker-api-1'), { timeout: 20000, intervals: [500, 1000] }).toBe('claude');
@@ -414,6 +393,58 @@ test('with a cap of one, a second start says the box is at its limit and starts 
     await (await pickStart(page, pane, 'api')).locator('.session-picker-pick').click();
     await expect(page.locator('.toast-error', { hasText: CAP_MESSAGE })).toBeVisible({ timeout: 10000 });
     expect(await currentSession(pane)).toBe('worker-api-1');
+    expect(workerSessions()).toEqual(['worker-api-1']);
+  } finally {
+    await page.goto('about:blank');
+    await killWorkers();
+    await page.request.put(`/api/boxes/${box.id}/workers`, { data: EMPTY });
+  }
+});
+
+test('with a cap of one, a worker killed with the picker\'s × can be started again at once, under its own name', async ({ page }) => {
+  test.setTimeout(180000);
+  await login(page);
+  const box = await boxOf(page, 'localhost');
+  try {
+    await killWorkers();
+    await waitNoListedWorkers(page, box.id);
+    await waitSetupIdle(page, box.id);
+    await putWorkers(page, box.id, { projects: [{ name: 'api', dir: projectDir, trust: false }], mailStart: false, max: 1 });
+
+    const pane = await openPane(page, 'localhost');
+    const own = await currentSession(pane);
+    expect(own).toBeTruthy();
+    const firstStart = Date.now();
+    await (await pickStart(page, pane, 'api')).locator('.session-picker-pick').click();
+    await expect.poll(() => currentSession(pane), { timeout: 20000 }).toBe('worker-api-1');
+    await expect.poll(() => paneCmdOf(page, box.id, 'worker-api-1'), { timeout: 20000, intervals: [500, 1000] }).toBe('claude');
+
+    // Back to the pane's own session first: a pane on a session recreates it when it ends
+    // (design 5.8), and a recreated worker-api-1 shell would rightly keep its number.
+    await (await sessionRow(pane, own!)).locator('.session-picker-pick').click();
+    await expect.poll(() => currentSession(pane), { timeout: 20000 }).toBe(own);
+
+    // The ×: the first click arms, the second kills.
+    const kill = (await sessionRow(pane, 'worker-api-1')).locator('.session-picker-kill');
+    await kill.click();
+    await expect(kill).toHaveClass(/armed/);
+    await kill.click();
+    await expect.poll(() => hasSession('worker-api-1'), { timeout: 15000 }).toBe(false);
+    const trigger = pane.locator('.session-picker-trigger');
+    if ((await trigger.getAttribute('aria-expanded')) === 'true') await trigger.click();
+    await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    // The listing, not the starter's memory: the kill route's re-probe may have joined a read
+    // that began before the kill, and then the listing itself still shows the worker.
+    await waitNoListedWorkers(page, box.id);
+
+    // Inside START_MEMORY_MS (60 s, agentWorkers.js) of the first start, so it is the listing,
+    // not the memory running out, that lets the killed worker go.
+    expect(Date.now() - firstStart).toBeLessThan(60000);
+    await (await pickStart(page, pane, 'api')).locator('.session-picker-pick').click();
+    await expect.poll(() => currentSession(pane), { timeout: 20000 }).toBe('worker-api-1');
+    expect(hasSession('worker-api-1')).toBe(true);
+    await expect.poll(() => paneCmdOf(page, box.id, 'worker-api-1'), { timeout: 20000, intervals: [500, 1000] }).toBe('claude');
+    await expect(page.locator('.toast-error', { hasText: CAP_MESSAGE })).toHaveCount(0);
     expect(workerSessions()).toEqual(['worker-api-1']);
   } finally {
     await page.goto('about:blank');
