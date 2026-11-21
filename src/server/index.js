@@ -36,6 +36,8 @@ import { createAgentMailPolicyStore } from './agentMailPolicyStore.js';
 import { createAgentMailStore } from './agentMailStore.js';
 import { createAgentMailHub } from './agentMailHub.js';
 import { createAgentMailForward } from './agentMailForward.js';
+import { createAgentWorkerStore } from './agentWorkerStore.js';
+import { createAgentWorkers } from './agentWorkers.js';
 import { buildServer } from './server.js';
 import { createSecretBox } from './secretBox.js';
 import { createProxmoxStore } from './proxmoxStore.js';
@@ -239,6 +241,33 @@ const statusChecker = createStatusChecker({
   hasLiveSession: (box) => sessions.hasLiveSessionForBox(box.id),
   masterAlive: (box) => boxActions.isMasterAlive(box),
 });
+// A box's tmux sessions as the last status read saw them ({ name, paneCmd, ... }[]), or null when
+// there is no entry or the box was not reachable: never an older listing. The one function both
+// the worker starter and the mail hub read. Late-bound on purpose: statusPoller is constructed
+// further down this file, and this runs only when a request or a sweep reaches it, after listen.
+const sessionsOf = (id) => {
+  const e = statusPoller.getSnapshot()[id];
+  return e?.reachable && Array.isArray(e.sessions) ? e.sessions : null;
+};
+// Agent workers (agentWorker*.js, design docs/superpowers/specs/2026-11-19-agent-workers-design.md):
+// the per-box worker settings and the starter that runs an interactive agent on a box in its own
+// tmux session. Built whether or not messaging is on: the operator's Start and the Edit Box
+// section work either way, and the mail hub below gets the starter only when messaging is on. A
+// failure to build them runs the server without workers (the routes answer 503), never not at all.
+let agentWorkers = null;
+try {
+  const workerStore = createAgentWorkerStore({ dataDir: config.dataDir });
+  const starter = createAgentWorkers({
+    execCommand: (box, remote, opts) => boxActions.execCommand(box, remote, opts),
+    workerStore,
+    setupRunning: (boxId) => setupManager.currentForBox(boxId)?.status === 'running',
+    sessionsOf,
+  });
+  agentWorkers = { store: workerStore, starter };
+} catch (err) {
+  console.error(`[tmuxifier] agent workers could not start, running without them: ${err?.message || err}`);
+  agentWorkers = null;
+}
 // Agent messaging (agentMail*.js, design docs/superpowers/specs/2026-11-14-agent-messaging-design.md):
 // per-box policy, the mail store, the hub that answers the boxes' requests, and the forward that
 // puts each box's listener onto the box. Built here, before anything that can remove a box, and
@@ -251,6 +280,8 @@ async function createAgentMail() {
   const mailPolicyStore = createAgentMailPolicyStore({ dataDir: config.dataDir });
   const mailStore = createAgentMailStore({ dataDir: config.dataDir });
   await mailStore.load();
+  // Assigned below: the forward is created after the hub, which it is given.
+  let mailForward = null;
   const mailHub = createAgentMailHub({
     store: mailStore,
     policyStore: mailPolicyStore,
@@ -258,8 +289,14 @@ async function createAgentMail() {
     // Late-bound on purpose: statusPoller is constructed further down this file, and the hub
     // reads markers only when a request or a sweep reaches it, after listen.
     marksOf: (id) => { const e = statusPoller.getSnapshot()[id]; return e?.reachable ? (e.agentMarks ?? {}) : null; },
+    // Agent workers: a send to a box with no agent may start one (spec 5.3). Without a starter
+    // the hub refuses such a send as before.
+    sessionsOf,
+    workers: agentWorkers?.starter ?? null,
+    workerStore: agentWorkers?.store ?? null,
+    mailInstalled: (id) => mailForward?.status(id).installed === true,
   });
-  const mailForward = createAgentMailForward({
+  mailForward = createAgentMailForward({
     run: (argv, opts) => sshRun(argv, opts),
     policyStore: mailPolicyStore,
     hub: mailHub,
@@ -299,15 +336,19 @@ if (agentMail) {
 }
 const removeBox = createBoxRemoval({
   store, sessions, boxActions, statusChecker,
-  // The box's messaging policy, and its threads and waiters, go with it. Each in its own try: a
-  // policy write that fails (a full disk) must not leave the box's threads open and its waiters
-  // held. The forward itself is cancelled by the next sweep's sync, which no longer finds the box.
-  onRemoved: agentMail
-    ? async (box) => {
+  // The box's worker settings go with it, messaging on or off. So do its messaging policy, and
+  // its threads and waiters. Each in its own try: a policy write that fails (a full disk) must not
+  // leave the box's threads open and its waiters held. The forward itself is cancelled by the next
+  // sweep's sync, which no longer finds the box.
+  onRemoved: async (box) => {
+    if (agentWorkers) {
+      try { await agentWorkers.store.removeBox(box.id); } catch (err) { console.error(`[tmuxifier] agent workers: dropping a removed box's settings failed: ${err?.message || err}`); }
+    }
+    if (agentMail) {
       try { await agentMail.policyStore.removeBox(box.id); } catch (err) { console.error(`[tmuxifier] agent mail: dropping a removed box's policy failed: ${err?.message || err}`); }
       try { await agentMail.hub.boxRemoved(box.id); } catch (err) { console.error(`[tmuxifier] agent mail: closing a removed box's threads failed: ${err?.message || err}`); }
     }
-    : null,
+  },
 });
 const localShellActions = createLocalShellActions();
 // Voice links: one box-side writer per linked box, fed by /voice-link. The
@@ -532,7 +573,7 @@ const iconStore = createIconStore({
   cacheDir: path.join(config.dataDir, 'icons'),
 });
 
-const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, uiSettingsStore, deviceStore, apkBuildManager, voiceLinks, liveHub, agentMail });
+const app = buildServer({ config, store, sessions, localTmuxScope, statusChecker, statusPoller, history, servicesStore, serviceChecker, iconStore, boxActions, localShellActions, fleetManager, fleetScriptsStore, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, defaultPublicKey, removeBox, proxmoxInventory, lifecycleManager, knownHosts, setupManager, aiAuthSeeder, passkeyStore, voiceStore, voiceInstallManager, resolveVoice, getVoiceEngine, uiSettingsStore, deviceStore, apkBuildManager, voiceLinks, liveHub, agentMail, agentWorkers });
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.register(fastifyStatic, { root: dist, wildcard: false });

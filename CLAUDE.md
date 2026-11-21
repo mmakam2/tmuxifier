@@ -287,6 +287,13 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   `GET /api/ui-config` carries `agentMail`. The boxes never reach these: their interface is the
   per-box listener (`agentMailListener.js`), never mounted on the web listener. Test:
   `test/agentMailRoutes.test.js`.
+- **Agent workers.** `GET`/`PUT /api/boxes/:id/workers` (the record; `PUT` takes only
+  `projects`, `mailStart`, `max`, a rule failure is 400 with the rule's message; `GET` also
+  answers `mail`, whether messaging is on) and `POST /api/boxes/:id/workers/start` `{ project? }`
+  (the starter, `mailStart` not applied; 409 setup-running/worker-cap, 400 no-project, else 502,
+  each `{ error, code }`; a success awaits a best-effort `probeOne`). Browser session only, as
+  the mail routes; they work with messaging off, 503 only when the worker store or starter
+  could not be built. Test: `test/agentWorkerRoutes.test.js`.
 - **Responses.** `/api/` sets `Cache-Control: no-store` unless a route already set its own (the
   icon routes do). Permissions-policy `microphone` is always `self`.
 

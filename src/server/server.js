@@ -34,6 +34,7 @@ import { createPairingCodes } from './pairingCodes.js';
 import { extractFcmAppConfig } from './fcmAppConfig.js';
 import { THREAD_ID_RE } from './agentMailStore.js';
 import { mayStart } from './agentMailPolicy.js';
+import { PROJECT_NAME_RE, normalizeWorkers } from './agentWorkerRules.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': [
@@ -118,7 +119,7 @@ const NO_FLEET_SCRIPTS = {
   removeScript: async () => {},
 };
 
-export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, oidcClients = null, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, paneKindLocal = paneKindLocalDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, uiSettingsStore = null, deviceStore = null, deviceHostGuard = createDeviceHostGuard(), pairingCodes = null, apkBuildManager = null, voiceLinks = null, liveHub = null, agentMail = null, log = (msg) => console.error(msg) }) {
+export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, oidcClients = null, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, paneKindLocal = paneKindLocalDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, uiSettingsStore = null, deviceStore = null, deviceHostGuard = createDeviceHostGuard(), pairingCodes = null, apkBuildManager = null, voiceLinks = null, liveHub = null, agentMail = null, agentWorkers = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
     config.tlsCert && config.tlsKey
       ? { https: { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) } }
@@ -1988,6 +1989,68 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     await agentMail.hub.policyChanged();
     void agentMail.kick();
     return mailBoxView(id);
+  });
+
+  // ---- Agent workers: browser routes (agent workers design 5.1, 5.4) ----
+  // Browser session only, like the mail routes: a box's record holds directories that reach a
+  // shell on the box, so these are absent from DEVICE_ALLOWED_ROUTES AND refuse a device id here.
+  // `agentWorkers` ({ store, starter }) is built whether or not messaging is on; it is null only
+  // when it could not be built (503). The operator's start goes through the same starter as a
+  // mail start, with its cap, setup gate and checks, but `mailStart` does not apply to it.
+  const WORKER_START_FAILURES = Object.freeze(Object.assign(Object.create(null), {
+    'setup-running': [409, 'box setup is still running'],
+    'worker-cap': [409, 'this box already runs as many started agents as its limit allows'],
+    'no-project': [400, 'no such project'],
+    'no-dir': [502, 'the project directory does not exist on the box'],
+    'no-agent-binary': [502, 'Claude Code is not installed on the box'],
+    'no-tmux': [502, 'tmux is not installed on the box'],
+    unreachable: [502, 'box is unreachable'],
+    'start-failed': [502, 'starting the agent failed'],
+  }));
+  const isPlainBody = (b) => b !== null && typeof b === 'object' && !Array.isArray(b);
+  async function workersBox(req, reply) {
+    if (req.deviceId) { reply.code(403).send({ error: 'browser session required' }); return null; }
+    if (!agentWorkers) { reply.code(503).send({ error: 'agent workers are unavailable' }); return null; }
+    const box = await store.getBox(req.params.id);
+    if (!box) { reply.code(404).send({ error: 'box not found' }); return null; }
+    return box;
+  }
+  app.get('/api/boxes/:id/workers', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await workersBox(req, reply);
+    if (!box) return;
+    return { workers: await agentWorkers.store.get(box.id), mail: Boolean(agentMail) };
+  });
+  app.put('/api/boxes/:id/workers', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await workersBox(req, reply);
+    if (!box) return;
+    const body = req.body;
+    if (!isPlainBody(body)) return reply.code(400).send({ error: 'workers must be an object' });
+    // Only the record's three fields; anything else in the body is ignored. The rules run here
+    // too so a refused record is a 400 with the rule's message, and a write failure is not.
+    const raw = { projects: body.projects, mailStart: body.mailStart, max: body.max };
+    try { normalizeWorkers(raw); } catch (e) { return reply.code(400).send({ error: e?.message || 'invalid workers' }); }
+    return { workers: await agentWorkers.store.set(box.id, raw) };
+  });
+  app.post('/api/boxes/:id/workers/start', { preHandler: requireAuth }, async (req, reply) => {
+    const box = await workersBox(req, reply);
+    if (!box) return;
+    const body = req.body ?? {};
+    if (!isPlainBody(body)) return reply.code(400).send({ error: 'body must be an object' });
+    const { project } = body;
+    if (project !== undefined && (typeof project !== 'string' || !PROJECT_NAME_RE.test(project))) {
+      return reply.code(400).send({ error: 'project must be a project name' });
+    }
+    const r = await agentWorkers.starter.start(box, project === undefined ? {} : { project });
+    if (r?.ok === true) {
+      // Best-effort, as the window and kill routes: the next /api/status lists the new session.
+      try { await statusPoller?.probeOne?.(box.id); } catch { /* the next sweep will catch up */ }
+      return { ok: true, session: r.session };
+    }
+    const code = typeof r?.code === 'string' ? r.code : 'start-failed';
+    // `bad-mode` cannot arise from here (no mode is passed); it and any code without wording
+    // read as a failed start.
+    const [status, error] = WORKER_START_FAILURES[code] ?? WORKER_START_FAILURES['start-failed'];
+    return reply.code(status).send({ error, code });
   });
 
   // Client UI settings the browser needs at boot: terminal font/size
