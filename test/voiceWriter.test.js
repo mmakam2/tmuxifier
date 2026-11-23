@@ -12,8 +12,11 @@ const hasPython = (() => { try { execFileSync('python3', ['--version'], { stdio:
 // pointed at a temp dir. Returns the child so tests can stream stdin. The
 // remote `exec`s python3, so child.pid IS the writer's pid — which is what
 // the single-writer pidfile assertions below compare against.
+const spawned = [];
 function runWriter(home) {
-  return spawn('/bin/sh', ['-c', buildVoiceWriterRemote()], { env: { PATH: process.env.PATH, HOME: home }, stdio: ['pipe', 'ignore', 'pipe'] });
+  const child = spawn('/bin/sh', ['-c', buildVoiceWriterRemote()], { env: { PATH: process.env.PATH, HOME: home }, stdio: ['pipe', 'ignore', 'pipe'] });
+  spawned.push(child);
+  return child;
 }
 const exitOf = (child) => new Promise((r) => child.on('close', (c) => r(c)));
 async function home() {
@@ -99,6 +102,12 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) {
     const pid = await readPid(path.join(d, '.tmuxifier-voice', 'writer.pid'));
     if (pid > 0 && alive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch {} }
+  }
+  // ...and every writer the test started that is still running. The pidfile
+  // names one process at most: when a test fails between two writers, the one
+  // it does not name (yet) would otherwise outlive the run, blocked for good.
+  for (const c of spawned.splice(0)) {
+    if (c.exitCode === null && c.signalCode === null) { try { c.kill('SIGKILL'); } catch {} }
   }
 });
 // Non-blocking read of everything currently in the FIFO.
@@ -394,6 +403,128 @@ test.skipIf(!hasPython)('two writers started at once end with exactly one instan
   expect(await (pid === a.pid ? aExit : bExit)).toBe(0);
   await stopFeeder(pidfile);
   expect(await fs.readlink(dev)).toBe(absent);
+}, 20000);
+
+// A SIGTERM can land anywhere in the program's life, not only in the stream
+// loop: a successor re-sends it every 10 ms until the lock is free, so a
+// predecessor slowed by load takes one while it is still starting up, a repeat
+// while it is already leaving, or one while the interpreter is exiting. Each
+// of those once ended the process with a traceback (exit 1) or by the signal
+// itself, which is what made the test above fail under a loaded full suite.
+// The four tests below park the program at a known point by making a file it
+// reads a FIFO (an open for reading blocks until a writer exists), so the
+// signal lands where the test says and not where the scheduler happens to
+// put it.
+function stderrOf(child) {
+  let text = '';
+  child.stderr.on('data', (d) => { text += d; });
+  return () => text;
+}
+// The write end of the FIFO at `p`, once the program is blocked opening it
+// for reading (ENXIO until then).
+async function writeEnd(p) {
+  for (let i = 0; i < 300; i++) {
+    try { return fsSync.openSync(p, fsSync.constants.O_WRONLY | fsSync.constants.O_NONBLOCK); } catch (e) { if (e.code !== 'ENXIO') throw e; }
+    await tick(10);
+  }
+  throw new Error(`nothing opened ${p} for reading`);
+}
+const STILL_RUNNING = 'still running';
+const exitedWithin = (exited, ms) => Promise.race([exited, tick(ms).then(() => STILL_RUNNING)]);
+
+test.skipIf(!hasPython)('a SIGTERM during start-up is a shutdown, not a crash: the device ends parked and the exit is clean', async () => {
+  const dir = await home();
+  const { dev, absent, pidfile } = await fifoIn(dir, null);
+  const format = path.join(dir, '.tmuxifier-voice', 'format');
+  execFileSync('mkfifo', ['-m', '600', format]);          // parks start-up where it reads the mode, after its pidfile write
+  const child = runWriter(dir);
+  const err = stderrOf(child);
+  const exited = exitOf(child);
+  expect(await waitPid(pidfile, child.pid)).toBe(String(child.pid));
+  process.kill(child.pid, 'SIGTERM');
+  expect(await exitedWithin(exited, 200)).toBe(STILL_RUNNING);
+  const w = await writeEnd(format);
+  fsSync.writeSync(w, 's16le\n');
+  fsSync.closeSync(w);
+  expect(await exited).toBe(0);
+  expect(err()).toBe('');
+  expect(await fs.readlink(dev)).toBe(absent);
+  await expect(fs.access(pidfile)).rejects.toBeTruthy();
+}, 20000);
+
+test.skipIf(!hasPython)('a writer superseded while it is still starting up finishes starting, then leaves cleanly to its successor', async () => {
+  const dir = await home();
+  const { fifo, dev, absent, pidfile } = await fifoIn(dir, null);
+  const format = path.join(dir, '.tmuxifier-voice', 'format');
+  const next = path.join(dir, '.tmuxifier-voice', 'writer.next');
+  execFileSync('mkfifo', ['-m', '600', format]);
+  const a = runWriter(dir);
+  const aErr = stderrOf(a);
+  const aExit = exitOf(a);
+  expect(await waitPid(pidfile, a.pid)).toBe(String(a.pid));
+  const b = runWriter(dir);                               // cannot take the lock: names itself, then SIGTERMs a every 10 ms
+  const bExit = exitOf(b);
+  expect(await waitPid(next, b.pid)).toBe(String(b.pid));
+  expect(await exitedWithin(aExit, 200)).toBe(STILL_RUNNING);
+  const w = await writeEnd(format);                       // a holds the FIFO open now...
+  await fs.writeFile(format + '.plain', 's16le\n');
+  await fs.rename(format + '.plain', format);             // ...so b, opening by name later, finds a plain file
+  fsSync.writeSync(w, 's16le\n');
+  fsSync.closeSync(w);
+  expect(await aExit).toBe(0);
+  expect(aErr()).toBe('');
+  expect(await waitPid(pidfile, b.pid)).toBe(String(b.pid));
+  expect(await waitLink(dev, fifo)).toBe(true);
+  b.stdin.end();
+  expect(await bExit).toBe(0);
+  await stopFeeder(pidfile);
+  expect(await fs.readlink(dev)).toBe(absent);
+}, 20000);
+
+test.skipIf(!hasPython)('a second SIGTERM while the first is being acted on does not crash the shutdown', async () => {
+  const dir = await home();
+  const { fifo, dev, absent, pidfile } = await fifoIn(dir);
+  const next = path.join(dir, '.tmuxifier-voice', 'writer.next');
+  const child = runWriter(dir);
+  const err = stderrOf(child);
+  const exited = exitOf(child);
+  expect(await waitLink(dev, fifo)).toBe(true);           // past the start-up step that removes writer.next
+  execFileSync('mkfifo', ['-m', '600', next]);            // parks the way out where it reads writer.next
+  process.kill(child.pid, 'SIGTERM');
+  const w = await writeEnd(next);
+  process.kill(child.pid, 'SIGTERM');
+  expect(await exitedWithin(exited, 200)).toBe(STILL_RUNNING);
+  fsSync.writeSync(w, '0\n');                             // no successor: a shutdown
+  fsSync.closeSync(w);
+  expect(await exited).toBe(0);
+  expect(err()).toBe('');
+  expect(await fs.readlink(dev)).toBe(absent);
+  await expect(fs.access(pidfile)).rejects.toBeTruthy();
+}, 20000);
+
+test.skipIf(!hasPython)('a superseded writer exits 0 however many more SIGTERMs its successor sends', async () => {
+  const dir = await home();
+  const { fifo, dev } = await fifoIn(dir);
+  const next = path.join(dir, '.tmuxifier-voice', 'writer.next');
+  const child = runWriter(dir);
+  const err = stderrOf(child);
+  const exited = exitOf(child);
+  expect(await waitLink(dev, fifo)).toBe(true);
+  execFileSync('mkfifo', ['-m', '600', next]);
+  process.kill(child.pid, 'SIGTERM');
+  const w = await writeEnd(next);
+  // The successor's part, far faster than its real 10 ms: signals keep
+  // arriving while the program reads the claim, decides and exits.
+  let gone = false;
+  exited.then(() => { gone = true; });
+  const barrage = (async () => { while (!gone) { child.kill('SIGTERM'); await new Promise((r) => setImmediate(r)); } })();
+  await tick(50);
+  fsSync.writeSync(w, `${process.pid}\n`);                // a live successor: this test
+  fsSync.closeSync(w);
+  expect(await exited).toBe(0);
+  await barrage;
+  expect(err()).toBe('');
+  expect(await fs.readlink(dev)).toBe(fifo);              // left to the successor, not parked
 }, 20000);
 
 // A reader mid-recording must never see EOF: on EOF alsa-lib's file plugin

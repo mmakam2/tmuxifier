@@ -56,7 +56,10 @@
 // writer (or feeder) superseded that way exits AT ONCE — no silence tail,
 // no symlink restore, no pidfile removal — because the successor owns all
 // three by then. Without it, the predecessor's 2.5 s tail interleaved with
-// the successor's live audio in the same FIFO. A process SIGKILLed without
+// the successor's live audio in the same FIFO. (One superseded while it is
+// still starting up finishes starting first, a few milliseconds, and then
+// leaves the same way; the successor waits on the lock meanwhile.) A
+// superseded process always exits 0. A process SIGKILLed without
 // cleanup leaves the symlink on the FIFO until the next link or the next
 // ensure.sh: both repair it (the writer re-points unconditionally), the
 // kernel has already dropped its lock, and a dead pid in the file is stale.
@@ -90,10 +93,24 @@ export const WRITER_PROGRAM = [
   // blocking read, write or select — which PEP 475 would otherwise silently
   // resume — unwinds at once. BaseException, not Exception: readint()
   // catches Exception, and a takeover landing inside it must not be swallowed.
+  //
+  // It raises ONLY while armed, which is the stream block below and nothing
+  // else, and at most once per arming. Everywhere else it only sets `term`:
+  // a successor re-sends SIGTERM every 10 ms until the lock is free, so a
+  // slow predecessor takes one during start-up or a repeat on its way out,
+  // and a Gone raised there had nothing to catch it — the process died with
+  // a traceback and exit 1, and a shutdown landing in start-up left the
+  // device on a FIFO nobody fed. Start-up now runs to the stream block, which
+  // acts on the signal at once; the way out reads `term` where it matters.
   'class Gone(BaseException):',
   '    pass',
+  'armed = [False]',
+  'term = [False]',
   'def bye(signum, frame):',
-  '    raise Gone()',
+  '    term[0] = True',
+  '    if armed[0]:',
+  '        armed[0] = False',
+  '        raise Gone()',
   'signal.signal(signal.SIGTERM, bye)',
   'def readint(path):',
   '    try:',
@@ -327,63 +344,73 @@ export const WRITER_PROGRAM = [
   'pend = b""',
   'out = b""',
   'due = None',
+  // Two levels, so that the handler's Gone is caught wherever it lands in here:
+  // the inner one takes a fault, the outer one the takeover or the shutdown.
+  // The signal is ARMED (may raise) only in this block. One that arrived
+  // during start-up is acted on now.
   'try:',
-  '    while True:',
-  '        wait = None if due is None else max(0.0, due - time.monotonic())',
-  '        r = select.select([0], [], [], wait)[0]',
-  '        if not r:',
-  '            if out:',
-  '                put(out + bytes(PIECE - len(out)))',
-  '                out = b""',
-  '            due = None',
-  '            continue',
-  '        chunk = os.read(0, 65536)',
-  '        if not chunk:',
-  '            break',
-  '        pend += chunk',
-  '        even = len(pend) & ~1',
-  '        out += conv(pend[:even])',
-  '        pend = pend[even:]',
-  '        while len(out) >= PIECE:',
-  '            put(out[:PIECE])',
-  '            out = out[PIECE:]',
-  '        due = time.monotonic() + STEP if out else None',
-  '    if out:',
-  '        put(out + bytes(PIECE - len(out)))',
+  '    try:',
+  '        armed[0] = True',
+  '        if term[0]:',
+  '            armed[0] = False',
+  '            raise Gone()',
+  '        while True:',
+  '            wait = None if due is None else max(0.0, due - time.monotonic())',
+  '            r = select.select([0], [], [], wait)[0]',
+  '            if not r:',
+  '                if out:',
+  '                    put(out + bytes(PIECE - len(out)))',
+  '                    out = b""',
+  '                due = None',
+  '                continue',
+  '            chunk = os.read(0, 65536)',
+  '            if not chunk:',
+  '                break',
+  '            pend += chunk',
+  '            even = len(pend) & ~1',
+  '            out += conv(pend[:even])',
+  '            pend = pend[even:]',
+  '            while len(out) >= PIECE:',
+  '                put(out[:PIECE])',
+  '                out = out[PIECE:]',
+  '            due = time.monotonic() + STEP if out else None',
+  '        if out:',
+  '            put(out + bytes(PIECE - len(out)))',
   // The link is over. 2.5 s of paced silence first — past Claude Code's
   // 2.0 s silence-detection window — so a recording in flight ends on
   // silence; non-blocking, so a pipe nobody reads costs nothing.
-  '    t = time.monotonic()',
-  '    for _ in range(int(2.5 / STEP)):',
-  '        put(zeros)',
-  '        t = pace(t, STEP)',
+  '        t = time.monotonic()',
+  '        for _ in range(int(2.5 / STEP)):',
+  '            put(zeros)',
+  '            t = pace(t, STEP)',
   // Then become the resident feeder. The parent records the child's pid and
   // leaves (closing the ssh session), so a successor never finds a dead pid
   // in between; the child detaches from the session entirely and keeps the
   // device fed with paced silence, BLOCKING — zero CPU — while nobody reads.
   // That blocked write is the one state alsa-lib's file plugin neither hangs
   // on (a writerless FIFO) nor spins on (a source that never blocks).
-  '    child = os.fork()',
-  '    if child > 0:',
-  '        writeint(pidfile, child)',
-  '        os._exit(0)',
-  '    os.setsid()',
-  '    null = os.open("/dev/null", os.O_RDWR)',
-  '    os.dup2(null, 0)',
-  '    os.dup2(null, 1)',
-  '    os.dup2(null, 2)',
-  '    fl = fcntl.fcntl(fd, fcntl.F_GETFL)',
-  '    fcntl.fcntl(fd, fcntl.F_SETFL, fl & ~os.O_NONBLOCK)',
-  '    t = time.monotonic()',
-  '    while True:',
-  '        os.write(fd, zeros)',
-  '        now = time.monotonic()',
-  '        if now - t > 1.0:',
-  '            t = now',
-  '        t = pace(t, STEP)',
+  '        child = os.fork()',
+  '        if child > 0:',
+  '            writeint(pidfile, child)',
+  '            os._exit(0)',
+  '        os.setsid()',
+  '        null = os.open("/dev/null", os.O_RDWR)',
+  '        os.dup2(null, 0)',
+  '        os.dup2(null, 1)',
+  '        os.dup2(null, 2)',
+  '        fl = fcntl.fcntl(fd, fcntl.F_GETFL)',
+  '        fcntl.fcntl(fd, fcntl.F_SETFL, fl & ~os.O_NONBLOCK)',
+  '        t = time.monotonic()',
+  '        while True:',
+  '            os.write(fd, zeros)',
+  '            now = time.monotonic()',
+  '            if now - t > 1.0:',
+  '                t = now',
+  '            t = pace(t, STEP)',
+  '    except Exception:',
+  '        pass',
+  '    armed[0] = False',
   'except Gone:',
-  '    pass',
-  'except Exception:',
   '    pass',
   // Superseded: a live successor is named in writer.next — leave the device,
   // the FIFO and the pidfile to it (the lock goes with this exit). Otherwise
@@ -391,16 +418,27 @@ export const WRITER_PROGRAM = [
   // no NEW open blocks or spins on a writerless FIFO — and keep pacing
   // silence for as long as any reader already holds it (capped at 10 min),
   // since closing on a mid-recording reader hands it EOF, the spin.
+  //
+  // The signal is not armed here, so a further SIGTERM only sets `term`. It
+  // is cleared BEFORE writer.next is read: a successor writes its claim and
+  // then signals, so a signal the clear discards is one whose claim the read
+  // still sees. One that arrives later ends the hold on a reader — a
+  // successor already has the FIFO open, so that reader sees no EOF.
+  //
+  // os._exit, not sys.exit: Python puts SIGTERM back to its default action
+  // while it finalizes, and a repeat arriving then killed the process by the
+  // signal instead of letting it exit 0.
+  'term[0] = False',
   'nxt = readint(nextfile)',
   'if nxt > 0 and nxt != os.getpid() and alive(nxt):',
-  '    sys.exit(0)',
+  '    os._exit(0)',
   'point(absent)',
   'try:',
   '    fl = fcntl.fcntl(fd, fcntl.F_GETFL)',
   '    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)',
   '    t0 = time.monotonic()',
   '    t = t0',
-  '    while time.monotonic() - t0 < 600 and readers():',
+  '    while time.monotonic() - t0 < 600 and not term[0] and readers():',
   '        put(zeros)',
   '        t = pace(t, STEP)',
   'except BaseException:',
@@ -410,7 +448,7 @@ export const WRITER_PROGRAM = [
   '        os.remove(pidfile)',
   'except OSError:',
   '    pass',
-  'sys.exit(0)',
+  'os._exit(0)',
 ].join('\n');
 
 // The remote command. python3 only: there is no `cat` fallback any more,
