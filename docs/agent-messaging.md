@@ -775,10 +775,13 @@ Starting an agent on a box has its own list: see [What is not in this version](#
 - **Mail-started turns notify** like any other turn.
 - **Long messages are cut in the wake** at 4000 characters. The agent is told to run `tmx read`
   for the rest, and sees only the first part until it does.
-- **An OpenCode left idle for about an hour stops listening.** OpenCode 2.3.2 unloads an idle
-  project folder (its log says `location services evicted`) even while a TUI is still open on it.
-  The session's state disappears from the dashboard and its mail waits as `queued` until the next
-  prompt or view in that TUI, which brings both back.
+- **An OpenCode left idle for an hour stops listening, unless you tell OpenCode to keep its
+  folder loaded.** OpenCode unloads a project folder that has had no session activity for 60
+  minutes (its log says `location services evicted`), even while a TUI is still open on it. The
+  session's state disappears from the dashboard and its mail waits as `queued` until the next
+  prompt or view in that TUI, which brings both back. The time is OpenCode's own setting,
+  `experimental.location_idle_timeout`; see
+  [An idle OpenCode stops receiving mail](#an-idle-opencode-stops-receiving-mail) below.
 - **A mail turn in OpenCode runs as the agent of the session's last prompt** (Build, Plan, …), not
   the agent selected in the TUI since then. A Plan session answers mail in Plan.
 - **Not yet verified:** a message arriving while a plan-approval dialog is open.
@@ -827,8 +830,9 @@ that session after setup has run. For OpenCode, check in order: that the box's O
 or later (the `opencode-plugin` line says when it is not); that you have prompted, or let a
 turn finish in, an OpenCode session in that tmux session since its window opened; that no other
 tmux session runs OpenCode in the same project folder; that the OpenCode is in the tmux
-session's active pane. If setup has only just installed the plugin, restart OpenCode too. Only
-Claude Code and OpenCode listen.
+session's active pane; that the session has not sat idle for an hour
+([An idle OpenCode stops receiving mail](#an-idle-opencode-stops-receiving-mail)). If setup has
+only just installed the plugin, restart OpenCode too. Only Claude Code and OpenCode listen.
 
 **An agent says its reply was blocked by auto mode** (the session shows `blocked by auto mode`,
 for example with `[Unsanctioned Communication]`). The message was delivered; the answer was
@@ -868,6 +872,38 @@ by that path asks you first. OpenCode's plugin covers `tmx`, `~/.local/bin/tmx` 
   answer (Tmuxifier is restarting, or the SSH connection dropped); look at the status line.
 - `tmx: the connection was lost before an answer came back, so the message may or may not have been
   sent; …`: `tmx` never sends twice on its own. Look in the drawer before sending again.
+
+### An idle OpenCode stops receiving mail
+
+OpenCode unloads a project folder that has had no session activity for 60 minutes, even while a
+TUI is still open on it; an open TUI that is doing nothing does not count as activity. Its log
+(`~/.local/share/opencode/log/opencode.log` on the box) then says
+`location services evicted directory=<folder>`. From that moment the session has no state on the
+dashboard, `tmx who` no longer lists it, and mail for it waits (`queued` to the sender, `waiting`
+in the Messages drawer). The next prompt or view in that TUI loads the folder again and the
+waiting mail is delivered.
+
+The 60 minutes are OpenCode's own setting, `experimental.location_idle_timeout`. To keep a folder
+loaded, set it in OpenCode's config on the box:
+
+```json
+{ "experimental": { "location_idle_timeout": false } }
+```
+
+- In `~/.config/opencode/opencode.json` it applies to every folder; in a project's own
+  `opencode.json` to that folder only, and the project's value wins over the global one.
+- `false` never unloads. A duration, written like OpenCode's default `"60 minutes"`, unloads
+  after that long instead.
+- OpenCode picks a change up by itself within about a minute; no restart is needed.
+- A folder that stays loaded keeps its language servers, file watchers and MCP servers in
+  memory. That is the cost of `false` on a box with many project folders.
+
+Tmuxifier does not write this setting: the file is yours, and it changes how OpenCode treats
+every folder it applies to.
+
+Checked on OpenCode 2.3.2: with `"2 minutes"` in a project's `opencode.json` the folder was
+unloaded 2 min 48 s after its last turn; with `false` there and `"2 minutes"` in the global file
+it stayed loaded, until the project's value was removed and it was unloaded within the minute.
 
 ### Refusals
 
