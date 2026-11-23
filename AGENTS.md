@@ -439,7 +439,13 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   hangs `snd_pcm_open`, and a never-blocking source (`/dev/zero`) once OOMed the host. Two
   recipes (`direct` 48 kHz float / `s16le-rate`), chosen on the box by whether the pipe can be
   grown (pipe pages are per host uid in unprivileged LXCs). The writer is single-instance via
-  `flock` with an explicit handover. Requires python3 (`skipped-no-python3`). `voiceLinks.js`
+  `flock` with an explicit handover. A pid read from `writer.pid`/`writer.next` is a writer only
+  if that process has the FIFO open (`ours`), never because it is alive: both files outlive a
+  reboot, the boxes run this as root, and a reused pid was once SIGTERMed. `writer.py who`
+  answers `feeder <pid>` / `link <pid>` / `none`; `ensure.sh` starts a feeder only on `none`,
+  and the install parks the device only on `none`, leaves a `link` alone, and otherwise starts
+  a feeder that takes the old one over, so a setup rerun puts the box on the program it just
+  wrote (`feeder=ok|linked|failed` on the result line). Requires python3 (`skipped-no-python3`). `voiceLinks.js`
   holds one writer per box (`4001` newest wins, `4002` not set up, `4003` failed, `4004` idle),
   never queues audio. Read the file headers before touching any of this; test by replaying audio
   into a real `claude --debug`.

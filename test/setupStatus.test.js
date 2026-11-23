@@ -139,6 +139,8 @@ test('the voice-link result names the settings outcome as well as the device', (
   expect(formatVoiceLinkResult({ target: 'voice-link', ok: true, settings: 'applied' })).toBe('voice-link ✓ (settings applied)');
   expect(formatVoiceLinkResult({ target: 'voice-link', ok: true, settings: 'kept' })).toBe('voice-link ✓ (settings kept)');
   expect(formatVoiceLinkResult({ target: 'voice-link', ok: true, settings: 'error-no-json-tool' })).toBe('voice-link ✓ (settings error-no-json-tool)');
+  // A feeder that did not come up is a note on the ok result, read before the settings outcome.
+  expect(formatVoiceLinkResult({ target: 'voice-link', ok: true, settings: 'kept', note: 'the silence feeder did not start' })).toBe('voice-link ✓ (the silence feeder did not start) (settings kept)');
   // A skip or a failure never carries a settings outcome, so it reads exactly
   // like every other push result.
   expect(formatVoiceLinkResult({ target: 'voice-link', ok: false, skipped: 'no Claude on the box' })).toBe('voice-link skipped (no Claude on the box)');

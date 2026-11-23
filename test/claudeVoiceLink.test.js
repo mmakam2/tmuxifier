@@ -4,6 +4,8 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildVoiceLinkInstallScript, createVoiceLinkPusher } from '../src/server/claudeVoiceLink.js';
+import { buildVoiceWriterRemote } from '../src/server/voiceWriter.js';
+import { spawn } from 'node:child_process';
 
 function runShell(script, env, stdin) {
   return new Promise((resolve) => {
@@ -34,6 +36,23 @@ async function stopFeeder(dir) {
   settled.add(dir);
   return pid;
 }
+// The pid holding the device once a live writer other than `not` is in the
+// pidfile AND the device names the FIFO; 0 if that does not happen in ~4 s.
+async function waitFed(dir, not = 0) {
+  const d = path.join(dir, '.tmuxifier-voice');
+  for (let i = 0; i < 400; i++) {
+    const pid = await readPid(dir);
+    if (pid > 0 && pid !== not && alive(pid) && (await fs.readlink(path.join(d, 'mic')).catch(() => '')) === path.join(d, 'mic.fifo')) return pid;
+    await tick(10);
+  }
+  return 0;
+}
+// The capacity of the pipe behind the FIFO, as the kernel reports it now.
+function pipeCap(dir) {
+  const out = execFileSync('python3', ['-c', 'import os,fcntl,sys\nfd=os.open(sys.argv[1],os.O_RDONLY|os.O_NONBLOCK)\nprint(fcntl.fcntl(fd,1032))', path.join(dir, '.tmuxifier-voice', 'mic.fifo')]);
+  return Number(String(out).trim());
+}
+const extras = [];
 const boxes = [];
 const settled = new Set();
 // Every run of the install script goes through here: an install (re)starts a
@@ -56,6 +75,9 @@ afterEach(async () => {
     }
   }
   settled.clear();
+  for (const c of extras.splice(0)) {
+    if (c.exitCode === null && c.signalCode === null) { try { c.kill('SIGKILL'); } catch {} }
+  }
 });
 // A temp HOME with a stub `claude` on PATH — how the presence check is made to pass.
 async function claudeBox() {
@@ -206,8 +228,17 @@ test('a regular file where the device belongs is never clobbered', async () => {
   await fs.writeFile(path.join(d, 'mic'), 'not ours\n');
   const res = await install(b.env());
   expect(res.code).toBe(0);
+  // The install has waited for its feeder by now (feeder=ok), so this is no
+  // longer a read that merely beats the feeder's start-up to the file.
+  expect(res.stdout).toMatch(/feeder=ok/);
   expect(await fs.readFile(path.join(d, 'mic'), 'utf8')).toBe('not ours\n');
   expect(await isFifo(path.join(d, 'mic.fifo'))).toBe(true);
+  const pid = await readPid(b.dir);
+  expect(alive(pid)).toBe(true);
+  process.kill(pid, 'SIGTERM');                           // a shutdown parks the device: not this one either
+  for (let i = 0; i < 300 && alive(pid); i++) await tick(10);
+  expect(await fs.readFile(path.join(d, 'mic'), 'utf8')).toBe('not ours\n');
+  settled.add(b.dir);
 });
 
 test('a foreign ~/.asoundrc is never touched: skipped, no FIFO, no settings change', async () => {
@@ -281,11 +312,111 @@ test('ensure.sh is a no-op while a feeder is alive and restarts one after it is 
   await stopFeeder(b.dir);
 });
 
+// A box whose feeder has been resident for days is what a setup rerun meets.
+// The rerun once parked the device on the absent path and then started
+// nothing, ensure.sh finding a feeder alive: the feeder went on holding the
+// FIFO behind a device that no longer named it, so an unlinked Space press
+// failed to open, and the box kept running the OLD program however often
+// setup was rerun. (The older rerun test above never saw it: its feeder was
+// still starting, and pointed the device back itself.)
+test('a rerun over a resident feeder replaces it with one running the program just written, and the device stays fed', async () => {
+  const b = await claudeBox();
+  const d = path.join(b.dir, '.tmuxifier-voice');
+  const first = await install(b.env());
+  expect(first.stdout).toMatch(/VOICELINK: applied settings=applied pipe=\S+ feeder=ok/);
+  const old = await waitFed(b.dir);
+  expect(old).toBeGreaterThan(0);
+  await tick(300);                                        // long past its own start-up
+  const cap = pipeCap(b.dir);
+  // What is on disk is not what the resident feeder runs: prove the rerun's
+  // feeder is a new process started from the file the rerun wrote.
+  await fs.writeFile(path.join(d, 'writer.py'), 'raise SystemExit(9)\n');
+  const res = await install(b.env());
+  expect(res.code).toBe(0);
+  expect(res.stdout).toMatch(/VOICELINK: applied settings=kept pipe=\S+ feeder=ok/);
+  // No waiting: `feeder=ok` is the install saying all of this is already so.
+  const now = await readPid(b.dir);
+  expect(now).not.toBe(old);
+  expect(alive(now)).toBe(true);
+  expect(await fs.readlink(path.join(d, 'mic'))).toBe(path.join(d, 'mic.fifo'));
+  expect((await fs.readFile(`/proc/${now}/cmdline`, 'utf8')).split('\0')[1]).toBe(path.join(d, 'writer.py'));
+  expect(pipeCap(b.dir)).toBe(cap);                       // the pipe is the size a first install leaves
+  for (let i = 0; i < 300 && alive(old); i++) await tick(10);
+  expect(alive(old)).toBe(false);
+  await stopFeeder(b.dir);
+  expect(await fs.readlink(path.join(d, 'mic'))).toBe(path.join(d, 'mic.absent'));
+}, 20000);
+
+test('a rerun while a mic link is live leaves the link, its writer and its device alone', async () => {
+  const b = await claudeBox();
+  const d = path.join(b.dir, '.tmuxifier-voice');
+  await install(b.env());
+  expect(await waitFed(b.dir)).toBeGreaterThan(0);
+  const link = spawn('/bin/sh', ['-c', buildVoiceWriterRemote()], { env: { PATH: process.env.PATH, HOME: b.dir }, stdio: ['pipe', 'ignore', 'ignore'] });
+  extras.push(link);
+  const gone = new Promise((r) => link.on('close', r));
+  let pid = 0;
+  for (let i = 0; i < 300 && pid !== link.pid; i++) { pid = await readPid(b.dir); await tick(10); }
+  expect(pid).toBe(link.pid);
+  const cap = pipeCap(b.dir);
+  const res = await install(b.env());
+  expect(res.code).toBe(0);
+  expect(res.stdout).toMatch(/VOICELINK: applied settings=kept pipe=\S+ feeder=linked/);
+  // Choosing the recipe means asking whether a pipe can be grown. That was
+  // once asked of THIS pipe, which left a link in use with a pipe of 64 KB
+  // where its writer had sized it to two pieces: up to two seconds of stale
+  // audio queued ahead of the voice.
+  expect(pipeCap(b.dir)).toBe(cap);
+  expect(await readPid(b.dir)).toBe(link.pid);
+  expect(link.exitCode).toBe(null);
+  expect(await fs.readlink(path.join(d, 'mic'))).toBe(path.join(d, 'mic.fifo'));
+  link.kill('SIGTERM');                                   // a shutdown: parks the device, removes the pidfile
+  await gone;
+  expect(await fs.readlink(path.join(d, 'mic'))).toBe(path.join(d, 'mic.absent'));
+  settled.add(b.dir);
+}, 20000);
+
+test('a box whose feeder died without cleanup (device on a FIFO nobody feeds) is repaired by a rerun', async () => {
+  // What a SIGKILL, an OOM kill or a hard stop leaves: the device on the
+  // FIFO, a dead pid in the file. A capture open would block for good.
+  const b = await claudeBox();
+  const d = path.join(b.dir, '.tmuxifier-voice');
+  await install(b.env());
+  const first = await waitFed(b.dir);
+  process.kill(first, 'SIGKILL');
+  for (let i = 0; i < 300 && alive(first); i++) await tick(10);
+  expect(await fs.readlink(path.join(d, 'mic'))).toBe(path.join(d, 'mic.fifo'));
+  const res = await install(b.env());
+  expect(res.stdout).toMatch(/feeder=ok/);
+  const now = await readPid(b.dir);
+  expect(now).not.toBe(first);
+  expect(alive(now)).toBe(true);
+  expect(await fs.readlink(path.join(d, 'mic'))).toBe(path.join(d, 'mic.fifo'));
+  await stopFeeder(b.dir);
+}, 20000);
+
+test('ensure.sh is not fooled by a pid reused after a reboot: a live process that is not a writer is no feeder, and is left alone', async () => {
+  const b = await claudeBox();
+  const d = path.join(b.dir, '.tmuxifier-voice');
+  await install(b.env());
+  expect(await waitFed(b.dir)).toBeGreaterThan(0);
+  await stopFeeder(b.dir);
+  const other = spawn('sleep', ['60'], { stdio: 'ignore' });
+  extras.push(other);
+  await fs.writeFile(path.join(d, 'writer.pid'), String(other.pid));
+  settled.delete(b.dir);
+  await runShell(`sh "${path.join(d, 'ensure.sh')}"`, b.env());
+  const pid = await waitFed(b.dir, other.pid);
+  expect(pid).toBeGreaterThan(0);
+  expect(other.exitCode === null && other.signalCode === null).toBe(true);
+  await stopFeeder(b.dir);
+}, 20000);
+
 test('malformed settings.json: merge parse failure is reported, device installed anyway', async () => {
   const b = await claudeBox();
 
   // Build a custom tools bin with node/python3/claude/essential-commands but NOT jq
-  const toolsToLink = ['node', 'python3', 'claude', 'sh', 'mkdir', 'chmod', 'mkfifo', 'rm', 'mv', 'ln', 'echo', 'cat', 'grep', 'printf', 'setsid'];
+  const toolsToLink = ['node', 'python3', 'claude', 'sh', 'mkdir', 'chmod', 'mkfifo', 'rm', 'mv', 'ln', 'echo', 'cat', 'grep', 'printf', 'setsid', 'sleep'];
   for (const tool of toolsToLink) {
     try {
       const toolPath = execFileSync('command', ['-v', tool], { shell: true, stdio: 'pipe' }).toString().trim();
@@ -323,6 +454,11 @@ test('pusher maps applied → ok+settings, both skips → skipped, failure → e
   expect(await mk({ code: 0, stdout: 'VOICELINK: skipped-no-claude\n' }).push({ id: 'b' })).toEqual({ target: 'voice-link', ok: false, skipped: 'no Claude on the box' });
   expect(await mk({ code: 0, stdout: 'VOICELINK: skipped-asoundrc-exists\n' }).push({ id: 'b' })).toEqual({ target: 'voice-link', ok: false, skipped: 'the box has its own ~/.asoundrc' });
   expect(await mk({ code: 1, stdout: '' }).push({ id: 'b' })).toEqual({ target: 'voice-link', ok: false, error: 'voice link push failed' });
+  // The feeder outcome: ok and linked (a live mic link was left alone) add
+  // nothing; a feeder that did not come up is a note on an ok result.
+  expect(await mk({ code: 0, stdout: 'VOICELINK: applied settings=kept pipe=rate feeder=ok\n' }).push({ id: 'b' })).toEqual({ target: 'voice-link', ok: true, settings: 'kept', pipe: 'rate' });
+  expect(await mk({ code: 0, stdout: 'VOICELINK: applied settings=kept pipe=direct feeder=linked\n' }).push({ id: 'b' })).toEqual({ target: 'voice-link', ok: true, settings: 'kept', pipe: 'direct' });
+  expect(await mk({ code: 0, stdout: 'VOICELINK: applied settings=kept pipe=rate feeder=failed\n' }).push({ id: 'b' })).toEqual({ target: 'voice-link', ok: true, settings: 'kept', pipe: 'rate', note: 'the silence feeder did not start' });
   let seen;
   await createVoiceLinkPusher({ runStdin: async (box, script, input) => { seen = { box, script, input }; return { code: 0, stdout: 'VOICELINK: applied settings=applied\n' }; } }).push({ id: 'b' });
   expect(seen.script).toBe(buildVoiceLinkInstallScript());

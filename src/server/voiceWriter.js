@@ -66,6 +66,20 @@
 // Exit 4 = the lock could not be taken (its holder is not the pidfile's
 // pid), which voiceLinks.js reports as a writer failure.
 //
+// A pid read from writer.pid or writer.next is a WRITER only if that process
+// has the FIFO open (`ours`); being alive is not enough. Both files outlive a
+// reboot and the numbers in them do not: the pid goes to whatever starts
+// next, and the boxes run this as root. Checking only "alive" had a starting
+// writer SIGTERM that stranger, had ensure.sh decide a feeder was running
+// when none was (the device then sat on a FIFO nobody fed), and had a
+// shutdown leave the device on the FIFO because a stranger "took over".
+//
+// Run with the one argument `who` the program only reports who holds the
+// device and exits: `feeder <pid>` (a resident feeder: its stdin is
+// /dev/null), `link <pid>` (a writer a browser mic is feeding) or `none`.
+// ensure.sh starts a feeder only on `none`; the install (claudeVoiceLink.js)
+// leaves a `link` alone and replaces a `feeder` with the program it just wrote.
+//
 // The program text rides inside a single-quoted shell string, so it must
 // never contain a single quote (pinned by test/voiceWriter.test.js), and it
 // interpolates nothing: the paths are derived on the box from $HOME.
@@ -75,7 +89,7 @@ export const VOICE_FIFO_REL = '.tmuxifier-voice/mic.fifo';  // the real FIFO
 export const WRITER_EXIT_NOT_SET_UP = 3;
 
 export const WRITER_PROGRAM = [
-  'import array, fcntl, os, select, signal, stat, sys, time',
+  'import array, errno, fcntl, os, select, signal, stat, sys, time',
   'd = os.path.join(os.path.expanduser("~"), ".tmuxifier-voice")',
   'fifo = os.path.join(d, "mic.fifo")',
   'dev = os.path.join(d, "mic")',
@@ -95,7 +109,8 @@ export const WRITER_PROGRAM = [
   // catches Exception, and a takeover landing inside it must not be swallowed.
   //
   // It raises ONLY while armed, which is the stream block below and nothing
-  // else, and at most once per arming. Everywhere else it only sets `term`:
+  // else (less the fork inside it, see there), and at most once per arming.
+  // Everywhere else it only sets `term`:
   // a successor re-sends SIGTERM every 10 ms until the lock is free, so a
   // slow predecessor takes one during start-up or a repeat on its way out,
   // and a Gone raised there had nothing to catch it — the process died with
@@ -126,12 +141,32 @@ export const WRITER_PROGRAM = [
   '        os.replace(tp, path)',
   '    except OSError:',
   '        pass',
-  'def alive(pid):',
+  // Is `pid` a writer? Only if it has our FIFO open. Read from the fd links,
+  // never by signalling and never by touching what a stranger has open.
+  'real = os.path.realpath(fifo)',
+  'def ours(pid):',
   '    try:',
-  '        os.kill(pid, 0)',
-  '        return True',
+  '        for f in os.listdir("/proc/%d/fd" % pid):',
+  '            try:',
+  '                if os.readlink("/proc/%d/fd/%s" % (pid, f)) == real:',
+  '                    return True',
+  '            except OSError:',
+  '                pass',
   '    except OSError:',
-  '        return False',
+  '        pass',
+  '    return False',
+  // `who`: report the holder and leave, before anything is opened or locked.
+  'if len(sys.argv) > 1 and sys.argv[1] == "who":',
+  '    p = readint(pidfile)',
+  '    if p <= 0 or not ours(p):',
+  '        print("none")',
+  '        sys.exit(0)',
+  '    try:',
+  '        idle = os.readlink("/proc/%d/fd/0" % p) == "/dev/null"',
+  '    except OSError:',
+  '        idle = False',
+  '    print(("feeder %d" if idle else "link %d") % p)',
+  '    sys.exit(0)',
   // The FIFO is opened BEFORE the predecessor is told to go, so a reader
   // mid-recording never sees a writerless FIFO across the handover: on EOF
   // alsa-lib's file plugin stops blocking and hands the reader stale "audio"
@@ -157,7 +192,7 @@ export const WRITER_PROGRAM = [
   '    except OSError:',
   '        pass',
   '    old = readint(pidfile)',
-  '    if old > 0 and old != os.getpid() and alive(old):',
+  '    if old > 0 and old != os.getpid() and ours(old):',
   '        writeint(nextfile, os.getpid())',
   '        try:',
   '            os.kill(old, signal.SIGTERM)',
@@ -166,10 +201,10 @@ export const WRITER_PROGRAM = [
   '    time.sleep(0.01)',
   'if not got:',
   '    sys.exit(4)',
-  // A live pid in the file that did not hold the lock is an instance of the
-  // pre-lock program (v1.24.60): stop it the old way and wait for it.
+  // A writer named in the file that did not hold the lock is an instance of
+  // the pre-lock program (v1.24.60): stop it the old way and wait for it.
   'old = readint(pidfile)',
-  'if old > 0 and old != os.getpid() and alive(old):',
+  'if old > 0 and old != os.getpid() and ours(old):',
   '    writeint(nextfile, os.getpid())',
   '    try:',
   '        os.kill(old, signal.SIGTERM)',
@@ -250,10 +285,29 @@ export const WRITER_PROGRAM = [
   // dropped. Under an 8 KB pipe a 19200-byte read gets 8192 and is padded:
   // stretched, but intact and in order, which the transcription survives;
   // raising the soft limit on the host restores the full-read path.
+  //
+  // The pipe outlives its writers for as long as one hands over to the next,
+  // so this writer can inherit one that something grew under its predecessor
+  // and the predecessor then filled (a setup rerun's capacity probe did
+  // exactly that, v1.24.61-96: 64 KB, two seconds of stale audio queued ahead
+  // of the voice). A pipe holding more than the wanted size cannot be shrunk
+  // (EBUSY), so on that answer what is queued — stale by definition — is
+  // read away first. The predecessor is gone by now (the lock is ours), and a
+  // reader mid-recording only loses audio it should never have been handed.
+  'want = ((2 * READ + 4095) // 4096) * 4096',
   'try:',
-  '    fcntl.fcntl(fd, getattr(fcntl, "F_SETPIPE_SZ", 1031), ((2 * READ + 4095) // 4096) * 4096)',
-  'except OSError:',
-  '    pass',
+  '    fcntl.fcntl(fd, getattr(fcntl, "F_SETPIPE_SZ", 1031), want)',
+  'except OSError as e:',
+  '    if e.errno == errno.EBUSY:',
+  '        try:',
+  '            while os.read(fd, 65536):',
+  '                pass',
+  '        except OSError:',
+  '            pass',
+  '        try:',
+  '            fcntl.fcntl(fd, getattr(fcntl, "F_SETPIPE_SZ", 1031), want)',
+  '        except OSError:',
+  '            pass',
   'try:',
   '    CAP = fcntl.fcntl(fd, getattr(fcntl, "F_GETPIPE_SZ", 1032))',
   'except OSError:',
@@ -262,8 +316,13 @@ export const WRITER_PROGRAM = [
   'STEP = PIECE / float(BPS)',
   'zeros = bytes(PIECE)',
   // Atomic symlink swap: build it under a temp name, rename it over the
-  // device. Never fatal — a failure costs the link, not the process.
+  // device. Never fatal — a failure costs the link, not the process. Only a
+  // symlink or an absent path is ever replaced: anything else there is the
+  // operator's own (the install leaves it alone for the same reason), and
+  // the link then simply does not work.
   'def point(target):',
+  '    if os.path.lexists(dev) and not os.path.islink(dev):',
+  '        return',
   '    tmp = os.path.join(d, "mic.tmp")',
   '    try:',
   '        os.remove(tmp)',
@@ -328,7 +387,7 @@ export const WRITER_PROGRAM = [
   '        try:',
   '            for f in os.listdir("/proc/" + p + "/fd"):',
   '                try:',
-  '                    if os.readlink("/proc/" + p + "/fd/" + f) != fifo:',
+  '                    if os.readlink("/proc/" + p + "/fd/" + f) != real:',
   '                        continue',
   '                    for line in open("/proc/" + p + "/fdinfo/" + f):',
   '                        if line.startswith("flags:") and int(line.split()[1], 8) & 3 == 0:',
@@ -389,10 +448,24 @@ export const WRITER_PROGRAM = [
   // device fed with paced silence, BLOCKING — zero CPU — while nobody reads.
   // That blocked write is the one state alsa-lib's file plugin neither hangs
   // on (a writerless FIFO) nor spins on (a source that never blocks).
+  //
+  // The signal is DISARMED across the fork and the parent's pidfile write. A
+  // takeover that raised in the parent between the two ended it with the
+  // pidfile still naming it: the child held the lock under a pid nobody
+  // knew, and every later writer gave up with exit 4 until the feeder was
+  // killed by hand. Now the parent always records the child and leaves, and
+  // the successor's next signal, 10 ms on, finds the child by the pidfile.
+  // The child arms again at once, and acts on a signal the parent took just
+  // before the fork (it inherits `term`).
+  '        armed[0] = False',
   '        child = os.fork()',
   '        if child > 0:',
   '            writeint(pidfile, child)',
   '            os._exit(0)',
+  '        armed[0] = True',
+  '        if term[0]:',
+  '            armed[0] = False',
+  '            raise Gone()',
   '        os.setsid()',
   '        null = os.open("/dev/null", os.O_RDWR)',
   '        os.dup2(null, 0)',
@@ -412,8 +485,9 @@ export const WRITER_PROGRAM = [
   '    armed[0] = False',
   'except Gone:',
   '    pass',
-  // Superseded: a live successor is named in writer.next — leave the device,
-  // the FIFO and the pidfile to it (the lock goes with this exit). Otherwise
+  // Superseded: a live successor is named in writer.next (a successor has
+  // the FIFO open before it names itself, so `ours` holds for it) — leave the
+  // device, the FIFO and the pidfile to it (the lock goes with this exit). Otherwise
   // this is a shutdown (or a fault): park the device on the absent path so
   // no NEW open blocks or spins on a writerless FIFO — and keep pacing
   // silence for as long as any reader already holds it (capped at 10 min),
@@ -430,7 +504,7 @@ export const WRITER_PROGRAM = [
   // signal instead of letting it exit 0.
   'term[0] = False',
   'nxt = readint(nextfile)',
-  'if nxt > 0 and nxt != os.getpid() and alive(nxt):',
+  'if nxt > 0 and nxt != os.getpid() and ours(nxt):',
   '    os._exit(0)',
   'point(absent)',
   'try:',

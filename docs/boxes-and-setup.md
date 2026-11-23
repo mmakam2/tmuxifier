@@ -117,7 +117,10 @@ Ticking it makes the setup run do five things, each skipping cleanly when alread
   feeder costs nothing while nobody is listening (its write just blocks), a link takes it over
   and hands back to it when the link ends, and a `SessionStart` hook the step adds to Claude
   Code's settings re-starts it after a reboot (`~/.tmuxifier-voice/ensure.sh`, a no-op while one
-  is running). The device the config names, `~/.tmuxifier-voice/mic`, is a symlink onto the
+  is running). Re-running setup with Claude Code ticked replaces the running feeder with the
+  program that run installs, without a gap in the feed; a mic link that is live at that moment
+  is left alone and hands over to a current feeder when it ends. If the new feeder does not
+  come up, the step still reports ✓ and adds "the silence feeder did not start". The device the config names, `~/.tmuxifier-voice/mic`, is a symlink onto the
   real pipe (`mic.fifo`, beside it) while something feeds it, and onto a path that does not exist
   after a clean shutdown — so a press then fails with an error rather than a hang (a pipe nobody
   feeds blocks forever) or a crash (a source that never blocks, such as `/dev/zero`, makes ALSA

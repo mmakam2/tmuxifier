@@ -109,7 +109,33 @@ afterEach(async () => {
   for (const c of spawned.splice(0)) {
     if (c.exitCode === null && c.signalCode === null) { try { c.kill('SIGKILL'); } catch {} }
   }
+  // ...and a feeder a test found by other means than the pidfile.
+  for (const pid of strays.splice(0)) { if (alive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch {} } }
 });
+const strays = [];
+// A process that is alive and has nothing to do with the voice link: what a
+// pid left in writer.pid or writer.next names after a reboot handed the
+// number to something else.
+function bystander() {
+  const c = spawn('sleep', ['60'], { stdio: 'ignore' });
+  spawned.push(c);
+  return c;
+}
+const untouched = (c) => c.exitCode === null && c.signalCode === null;
+// The first child of `pid`, from /proc, up to ~`ms`.
+async function childOf(pid, ms = 6000) {
+  for (let i = 0; i < ms / 10; i++) {
+    for (const p of await fs.readdir('/proc')) {
+      if (!/^\d+$/.test(p)) continue;
+      try {
+        const stat = await fs.readFile(`/proc/${p}/stat`, 'utf8');
+        if (Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]) === pid) return Number(p);
+      } catch { /* gone */ }
+    }
+    await tick(10);
+  }
+  return 0;
+}
 // Non-blocking read of everything currently in the FIFO.
 function drain(fd) {
   const chunks = [];
@@ -519,13 +545,236 @@ test.skipIf(!hasPython)('a superseded writer exits 0 however many more SIGTERMs 
   exited.then(() => { gone = true; });
   const barrage = (async () => { while (!gone) { child.kill('SIGTERM'); await new Promise((r) => setImmediate(r)); } })();
   await tick(50);
-  fsSync.writeSync(w, `${process.pid}\n`);                // a live successor: this test
-  fsSync.closeSync(w);
-  expect(await exited).toBe(0);
-  await barrage;
-  expect(err()).toBe('');
-  expect(await fs.readlink(dev)).toBe(fifo);              // left to the successor, not parked
+  // A live successor: this test. It holds the FIFO, as a successor does
+  // before it names itself — which is what makes a pid in writer.next one.
+  const mine = fsSync.openSync(fifo, fsSync.constants.O_RDWR | fsSync.constants.O_NONBLOCK);
+  try {
+    fsSync.writeSync(w, `${process.pid}\n`);
+    fsSync.closeSync(w);
+    expect(await exited).toBe(0);
+    await barrage;
+    expect(err()).toBe('');
+    expect(await fs.readlink(dev)).toBe(fifo);            // left to the successor, not parked
+  } finally {
+    fsSync.closeSync(mine);
+  }
 }, 20000);
+
+// The pidfile and writer.next outlive a reboot, and the pids in them do not:
+// the number goes to whatever starts next. A pid read from either file is a
+// writer only if that process holds the FIFO open. Checking no more than
+// "is it alive" once had a starting writer SIGTERM whatever process had
+// inherited the number (the boxes run this as root), and had a shutdown
+// leave the device on a FIFO nobody fed because a stranger "took over".
+test.skipIf(!hasPython)('a pidfile naming a live process that is not a writer: the writer starts, and that process is never signalled', async () => {
+  const dir = await home();
+  const { fifo, dev, pidfile } = await fifoIn(dir);
+  const other = bystander();
+  await fs.writeFile(pidfile, String(other.pid));
+  const child = runWriter(dir);
+  const exited = exitOf(child);
+  expect(await waitPid(pidfile, child.pid)).toBe(String(child.pid));
+  expect(await waitLink(dev, fifo)).toBe(true);
+  await tick(400);                                        // past the 300 ms the pre-lock path waits on a predecessor
+  expect(untouched(other)).toBe(true);
+  child.stdin.end();
+  expect(await exited).toBe(0);
+  await stopFeeder(pidfile);
+}, 20000);
+
+test.skipIf(!hasPython)('a held lock with a pidfile naming a stranger: the starter gives up (exit 4) without signalling the stranger', async () => {
+  const dir = await home();
+  const { fifo, dev, pidfile } = await fifoIn(dir);
+  const a = runWriter(dir);
+  const aExit = exitOf(a);
+  expect(await waitPid(pidfile, a.pid)).toBe(String(a.pid));
+  expect(await waitLink(dev, fifo)).toBe(true);
+  const other = bystander();
+  await fs.writeFile(pidfile, String(other.pid));
+  const b = runWriter(dir);
+  expect(await exitOf(b)).toBe(4);
+  expect(untouched(other)).toBe(true);
+  expect(untouched(a)).toBe(true);
+  await fs.writeFile(pidfile, String(a.pid));
+  a.stdin.end();
+  expect(await aExit).toBe(0);
+  await stopFeeder(pidfile);
+}, 20000);
+
+test.skipIf(!hasPython)('a stale writer.next naming a stranger does not turn a shutdown into a takeover: the device is parked', async () => {
+  const dir = await home();
+  const { fifo, dev, absent, pidfile } = await fifoIn(dir);
+  const next = path.join(dir, '.tmuxifier-voice', 'writer.next');
+  const child = runWriter(dir);
+  const exited = exitOf(child);
+  expect(await waitLink(dev, fifo)).toBe(true);           // past the start-up step that removes writer.next
+  const other = bystander();
+  await fs.writeFile(next, String(other.pid));
+  process.kill(child.pid, 'SIGTERM');
+  expect(await exited).toBe(0);
+  expect(await fs.readlink(dev)).toBe(absent);
+  await expect(fs.access(pidfile)).rejects.toBeTruthy();
+  expect(untouched(other)).toBe(true);
+}, 20000);
+
+// `who` is how ensure.sh and the install ask who holds the device, without
+// signalling anyone: the pidfile's process when it has the FIFO open — a
+// link while a browser mic feeds it, a feeder once its stdin is /dev/null.
+const who = (dir) => String(execFileSync('python3', ['-c', WRITER_PROGRAM, 'who'], { env: { PATH: process.env.PATH, HOME: dir } })).trim();
+test.skipIf(!hasPython)('who: none on an idle box and for a stranger in the pidfile, a link while stdin is fed, a feeder after it', async () => {
+  const dir = await home();
+  const { fifo, dev, pidfile } = await fifoIn(dir, 's16le-rate');
+  expect(who(dir)).toBe('none');
+  const other = bystander();
+  await fs.writeFile(pidfile, String(other.pid));
+  expect(who(dir)).toBe('none');
+  const child = runWriter(dir);
+  const exited = exitOf(child);
+  expect(await waitPid(pidfile, child.pid)).toBe(String(child.pid));
+  expect(who(dir)).toBe(`link ${child.pid}`);
+  expect(await waitLink(dev, fifo)).toBe(true);           // asking changed nothing: the writer still holds the device
+  child.stdin.end();
+  expect(await exited).toBe(0);
+  const feeder = await readPid(pidfile);
+  expect(feeder).not.toBe(child.pid);
+  expect(who(dir)).toBe(`feeder ${feeder}`);
+  expect(alive(feeder)).toBe(true);
+  await stopFeeder(pidfile);
+  expect(who(dir)).toBe('none');
+  expect(untouched(other)).toBe(true);
+}, 20000);
+
+test.skipIf(!hasPython)('a regular file where the device belongs is the operator\'s: the writer runs and never replaces it', async () => {
+  const dir = await home();
+  const { dev, pidfile } = await fifoIn(dir);
+  await fs.rm(dev);
+  await fs.writeFile(dev, 'not ours\n');
+  const child = runWriter(dir);
+  const exited = exitOf(child);
+  expect(await waitPid(pidfile, child.pid)).toBe(String(child.pid));
+  await tick(200);                                        // well past the start-up step that points the device
+  expect(await fs.readFile(dev, 'utf8')).toBe('not ours\n');
+  process.kill(child.pid, 'SIGTERM');                     // a shutdown parks the device: not this one either
+  expect(await exited).toBe(0);
+  expect(await fs.readFile(dev, 'utf8')).toBe('not ours\n');
+}, 20000);
+
+// The pipe is sized to two pieces so that nothing stale queues ahead of the
+// voice. Something else can grow it while a writer holds it (a setup rerun's
+// capacity probe did, on every box with a resident feeder), the holder then
+// fills it, and a pipe holding more than the wanted size cannot be shrunk
+// (EBUSY). The next writer empties it first: what is queued is stale by
+// definition.
+test.skipIf(!hasPython)('a pipe grown and filled under a predecessor is emptied and brought back to size by the next writer', async () => {
+  const dir = await home();
+  const { fifo, dev, pidfile } = await fifoIn(dir, 's16le-rate');
+  const a = runWriter(dir);
+  const aExit = exitOf(a);
+  expect(await waitPid(pidfile, a.pid)).toBe(String(a.pid));
+  expect(await waitLink(dev, fifo)).toBe(true);
+  const sized = pipeCap(fifo);
+  // Grow it and fill it with a marker byte. Prints the new capacity, or
+  // nothing where this account may not grow a pipe (the case cannot arise there).
+  const grown = String(execFileSync('python3', ['-c', [
+    'import os, fcntl, sys',
+    'fd = os.open(sys.argv[1], os.O_RDWR | os.O_NONBLOCK)',
+    'try:',
+    '    fcntl.fcntl(fd, 1031, 65536)',
+    'except OSError:',
+    '    sys.exit(0)',
+    'try:',
+    '    while True:',
+    '        os.write(fd, bytes([0x55]) * 640)',
+    'except OSError:',
+    '    pass',
+    'print(fcntl.fcntl(fd, 1032))',
+  ].join('\n'), fifo])).trim();
+  if (grown && Number(grown) > sized) {
+    expect(pipeCap(fifo)).toBe(Number(grown));
+    const b = runWriter(dir);
+    const bExit = exitOf(b);
+    expect(await waitPid(pidfile, b.pid)).toBe(String(b.pid));
+    expect(await waitLink(dev, fifo)).toBe(true);
+    expect(await aExit).toBe(0);
+    await tick(100);                                      // past the start-up step that sizes the pipe
+    expect(pipeCap(fifo)).toBe(sized);
+    const fd = fsSync.openSync(fifo, fsSync.constants.O_RDONLY | fsSync.constants.O_NONBLOCK);
+    try {
+      expect(drain(fd).includes(0x55)).toBe(false);       // nothing stale is left for a reader
+    } finally {
+      fsSync.closeSync(fd);
+    }
+    b.stdin.end();
+    expect(await bExit).toBe(0);
+  } else {
+    a.stdin.end();
+    expect(await aExit).toBe(0);
+  }
+  await stopFeeder(pidfile);
+}, 20000);
+
+// When its link ends, a writer forks the resident feeder and the parent
+// records the child's pid. A takeover that reached the parent between those
+// two steps once ended it on the spot: the pidfile kept naming a dead
+// process while the child held the lock, so every later writer gave up with
+// exit 4 — no link could open on the box until the feeder was killed by hand.
+// The test parks the parent in that gap (the pidfile's temp file is a FIFO:
+// an open for writing blocks until someone reads it).
+test.skipIf(!hasPython)('a takeover that lands while the writer hands over to its feeder is not lost: the pidfile names the feeder and a successor takes it over', async () => {
+  const dir = await home();
+  const { fifo, dev, absent, pidfile } = await fifoIn(dir, 's16le-rate');
+  const next = path.join(dir, '.tmuxifier-voice', 'writer.next');
+  const a = runWriter(dir);
+  const aErr = stderrOf(a);
+  const aExit = exitOf(a);
+  expect(await waitPid(pidfile, a.pid)).toBe(String(a.pid));
+  expect(await waitLink(dev, fifo)).toBe(true);
+  execFileSync('mkfifo', ['-m', '600', pidfile + '.tmp']);
+  a.stdin.end();                                          // 2.5 s tail, fork, then the parked pidfile write
+  const feeder = await childOf(a.pid);
+  expect(feeder).toBeGreaterThan(0);
+  strays.push(feeder);
+  // A successor's part, as this test: hold the FIFO, name yourself, signal.
+  const mine = fsSync.openSync(fifo, fsSync.constants.O_RDWR | fsSync.constants.O_NONBLOCK);
+  let handed = '';
+  try {
+    await fs.writeFile(next, `${process.pid}\n`);
+    process.kill(a.pid, 'SIGTERM');
+    expect(await exitedWithin(aExit, 200)).toBe(STILL_RUNNING);
+    // Let the pidfile write through, and read what it wrote.
+    const r = fsSync.openSync(pidfile + '.tmp', fsSync.constants.O_RDONLY | fsSync.constants.O_NONBLOCK);
+    try {
+      const buf = Buffer.alloc(32);
+      for (let i = 0; i < 300 && !handed; i++) {
+        let n = 0;
+        try { n = fsSync.readSync(r, buf, 0, buf.length, null); } catch (e) { if (e.code !== 'EAGAIN') throw e; }
+        if (n > 0) handed = buf.toString('utf8', 0, n).trim(); else await tick(10);
+      }
+      expect(await aExit).toBe(0);
+    } finally {
+      fsSync.closeSync(r);
+    }
+  } finally {
+    fsSync.closeSync(mine);
+  }
+  expect(aErr()).toBe('');
+  expect(Number(handed)).toBe(feeder);
+  expect(alive(feeder)).toBe(true);
+  // The rename put the test's FIFO where the pidfile lives; restore what a
+  // plain write would have left, and drop the test's claim.
+  await fs.rm(pidfile, { force: true });
+  await fs.writeFile(pidfile, handed);
+  await fs.rm(next, { force: true });
+  const b = runWriter(dir);
+  const bExit = exitOf(b);
+  expect(await waitPid(pidfile, b.pid)).toBe(String(b.pid));
+  expect(await waitDead(feeder)).toBe(true);
+  expect(await waitLink(dev, fifo)).toBe(true);
+  b.stdin.end();
+  expect(await bExit).toBe(0);
+  await stopFeeder(pidfile);
+  expect(await fs.readlink(dev)).toBe(absent);
+}, 30000);
 
 // A reader mid-recording must never see EOF: on EOF alsa-lib's file plugin
 // stops blocking and hands the reader stale "audio" at CPU speed. So the

@@ -24,25 +24,48 @@
 //     voice.enabled=true only when no `voice` key exists, so a deliberate
 //     /voice off stays off. Same jq → node → python3 chain the statusline push
 //     uses; a box with none reports it, and still gets the device and FIFO.
-//  4. The writer program and ensure.sh under ~/.tmuxifier-voice/, and the
-//     feeder started right away.
+//  4. The writer program and ensure.sh under ~/.tmuxifier-voice/, and a
+//     feeder running THAT program before the script returns.
+//
+// A rerun meets a box that is already in use, so the script first asks who
+// holds the device (`writer.py who`, voiceWriter.js) and acts on the answer:
+//  - `link`: a browser mic is feeding it right now. Nothing is parked and
+//    nothing is started; that writer becomes the feeder when the link ends.
+//  - `feeder`: the device is left where it is and a new feeder is started,
+//    which takes the old one over by the writer's own handover. Without this
+//    a box kept running the program of its first install for as long as its
+//    feeder lived, whatever a rerun wrote to disk.
+//  - `none`: the device is parked on the absent path, then a feeder started.
+// The device is parked ONLY on `none`. A rerun once parked it every time and
+// then left the starting to ensure.sh, which starts nothing while a feeder is
+// alive: the feeder went on holding the FIFO behind a device that no longer
+// named it, and an unlinked Space press failed to open until the next link.
+// The script then waits (up to ~3 s) until a NEW holder has the device on
+// the FIFO and reports it as `feeder=ok`, else `feeder=failed`.
 
 import { WRITER_PROGRAM } from './voiceWriter.js';
 
-// ensure.sh, installed beside the writer program: (re)start the resident
-// silence feeder unless a feeder or a live link writer already holds the
-// pidfile. Run at the end of every install and by a Claude Code SessionStart
-// hook, so a reboot never leaves Claude with a device nobody feeds. Quoted
-// heredoc on the box: $HOME and $D expand when it RUNS, not when it is written.
+// ensure.sh, installed beside the writer program: start the resident silence
+// feeder unless a feeder or a live link writer already holds the device. Run
+// by a Claude Code SessionStart hook, so a reboot never leaves Claude with a
+// device nobody feeds; the install runs it with `restart`, which starts one
+// regardless (it takes over from the feeder already there). "Holds the
+// device" is the writer's own answer (`who`), never `kill -0` on the pidfile:
+// the file outlives a reboot, the pid in it goes to something else, and a
+// live stranger then read as a feeder — nothing was started and the device
+// sat on a FIFO nobody fed. Quoted heredoc on the box: $HOME and $D expand
+// when it RUNS, not when it is written.
 const ENSURE_SH = [
   '#!/bin/sh',
   '# tmuxifier-voice-link: keep the idle capture device fed with paced silence.',
   'D="$HOME/.tmuxifier-voice"',
   '[ -p "$D/mic.fifo" ] || exit 0',
   '[ -f "$D/writer.py" ] || exit 0',
-  'P=$(cat "$D/writer.pid" 2>/dev/null || echo)',
-  'if [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then exit 0; fi',
   'command -v python3 >/dev/null 2>&1 || exit 0',
+  'if [ "${1:-}" != restart ]; then',
+  '  W=$(python3 "$D/writer.py" who 2>/dev/null) || W=none',
+  '  [ "$W" = none ] || exit 0',
+  'fi',
   'if command -v setsid >/dev/null 2>&1; then',
   '  setsid python3 "$D/writer.py" </dev/null >/dev/null 2>&1 &',
   'else',
@@ -141,12 +164,6 @@ export function buildVoiceLinkInstallScript() {
     '  if [ -e "$FIFO" ]; then rm -f "$DEV"; else mv "$DEV" "$FIFO"; fi',
     'fi',
     'if [ ! -p "$FIFO" ]; then rm -f "$FIFO"; mkfifo -m 600 "$FIFO"; fi',
-    '# Only ever replace an absent path or a symlink (a dangling one included:',
-    '# -e follows; so is the v1.24.59 /dev/zero link, which is re-pointed). A',
-    '# regular file here belongs to the operator and is left alone — the link',
-    '# then simply does not work, the same posture the foreign-.asoundrc guard',
-    '# above takes.',
-    'if [ ! -e "$DEV" ] || [ -L "$DEV" ]; then ln -sfn "$ABSENT" "$DEV"; fi',
     '# The writer program and ensure.sh, so the box can (re)start the resident',
     '# silence feeder on its own. Quoted heredocs: nothing expands.',
     "cat > \"$VDIR/writer.py\" <<'TMUXIFIER_WRITER_EOF'",
@@ -157,15 +174,32 @@ export function buildVoiceLinkInstallScript() {
     ...ENSURE_SH,
     'TMUXIFIER_ENSURE_EOF',
     'chmod 700 "$VDIR/ensure.sh"',
+    '# Who holds the device right now: "link <pid>" (a browser mic is feeding',
+    '# it), "feeder <pid>" or "none". Asked of the program just written.',
+    'HELD=$(python3 "$VDIR/writer.py" who 2>/dev/null || echo none)',
+    '# Park the device on the absent path only while nothing holds it: under a',
+    '# live feeder or link the park would outlast this run, the device no',
+    '# longer naming the FIFO its holder feeds. Only ever replace an absent',
+    '# path or a symlink (a dangling one included: -e follows; so is the',
+    '# v1.24.59 /dev/zero link, which is re-pointed). A regular file here',
+    '# belongs to the operator and is left alone — the link then simply does',
+    '# not work, the same posture the foreign-.asoundrc guard above takes.',
+    'if [ "$HELD" = none ]; then',
+    '  if [ ! -e "$DEV" ] || [ -L "$DEV" ]; then ln -sfn "$ABSENT" "$DEV"; fi',
+    'fi',
     '',
     '# 4. ALSA: default = plug -> file(infile=DEV) -> null. Atomic write.',
     '#    DEV, not FIFO: alsa-lib opens infile once, so the indirection is what',
     '#    lets the same recipe fail cleanly when idle and read the FIFO when linked.',
     '#    Direct recipe when the pipe can be trusted to hold one 19200-byte read',
-    '#    (see the notes on the two recipes), else the rate recipe.',
+    '#    (see the notes on the two recipes), else the rate recipe. Whether a',
+    '#    pipe can be grown is asked of a pipe of this probe\'s own — the limit',
+    '#    is per user, not per pipe — and never of the FIFO: on a rerun that',
+    '#    one is in use, and growing it left its writer with 64 KB to fill',
+    '#    where it had sized two pieces, stale audio ahead of every recording.',
     "MODE=$(python3 -c '",
     'import os, fcntl, sys',
-    'fd = os.open(sys.argv[1], os.O_RDWR | os.O_NONBLOCK)',
+    'fd = os.pipe()[1]',
     'try:',
     '    fcntl.fcntl(fd, 1031, 40960)',
     'except OSError:',
@@ -182,7 +216,7 @@ export function buildVoiceLinkInstallScript() {
     'except Exception:',
     '    pass',
     'print("auto" if cap >= 40960 and (soft == 0 or ident) else "s16le-rate")',
-    "' \"$FIFO\" 2>/dev/null || echo s16le-rate)",
+    "' 2>/dev/null || echo s16le-rate)",
     'printf \'%s\\n\' "$MODE" > "$VDIR/format.tmp" && mv "$VDIR/format.tmp" "$VDIR/format"',
     'TMP="$RC.tmuxifier.tmp"',
     '{',
@@ -232,11 +266,33 @@ export function buildVoiceLinkInstallScript() {
     '  RESULT=error-no-json-tool',
     'fi',
     '',
-    '# 6. Start the resident feeder now, so the box reads silence when nothing',
-    '#    is linked from this moment on (a reboot re-runs this from the hook).',
-    'sh "$VDIR/ensure.sh" >/dev/null 2>&1 || true',
+    '# 6. A resident feeder running the program written above, so the box',
+    '#    reads silence when nothing is linked from this moment on (a reboot',
+    '#    re-runs ensure.sh from the hook). A live link is left alone: its',
+    '#    writer becomes the feeder when the link ends. Otherwise a feeder is',
+    '#    started — it takes over from one already there — and the run waits',
+    '#    until a holder other than the one found above has the device on the',
+    '#    FIFO. A device that is the operator\'s own file is never ours to point.',
+    'FEED=linked',
+    'case "$HELD" in',
+    '  link*) ;;',
+    '  *)',
+    '    FEED=failed',
+    '    sh "$VDIR/ensure.sh" restart >/dev/null 2>&1 || true',
+    '    i=0',
+    '    while [ "$i" -lt 30 ]; do',
+    '      NOW=$(python3 "$VDIR/writer.py" who 2>/dev/null || echo none)',
+    '      if [ "$NOW" != none ] && [ "$NOW" != "$HELD" ]; then',
+    '        if [ -e "$DEV" ] && [ ! -L "$DEV" ]; then FEED=ok; break; fi',
+    '        if [ "$DEV" -ef "$FIFO" ]; then FEED=ok; break; fi',
+    '      fi',
+    '      sleep 0.1 2>/dev/null || sleep 1 2>/dev/null || true',
+    '      i=$((i + 1))',
+    '    done',
+    '    ;;',
+    'esac',
     'if [ "$MODE" = auto ]; then PIPE=direct; else PIPE=rate; fi',
-    'echo "VOICELINK: applied settings=$RESULT pipe=$PIPE"',
+    'echo "VOICELINK: applied settings=$RESULT pipe=$PIPE feeder=$FEED"',
   ].join('\n');
 }
 
@@ -249,8 +305,10 @@ export function createVoiceLinkPusher({ runStdin }) {
         if (/VOICELINK:\s*skipped-no-claude/.test(out)) return { target: 'voice-link', ok: false, skipped: 'no Claude on the box' };
         if (/VOICELINK:\s*skipped-asoundrc-exists/.test(out)) return { target: 'voice-link', ok: false, skipped: 'the box has its own ~/.asoundrc' };
         if (/VOICELINK:\s*skipped-no-python3/.test(out)) return { target: 'voice-link', ok: false, skipped: 'no python3 on the box' };
-        const m = /VOICELINK:\s*applied settings=(\S+)(?:\s+pipe=(\S+))?/.exec(out);
-        if (m) return { target: 'voice-link', ok: true, settings: m[1], ...(m[2] ? { pipe: m[2] } : {}) };
+        const m = /VOICELINK:\s*applied settings=(\S+)(?:\s+pipe=(\S+))?(?:\s+feeder=(\S+))?/.exec(out);
+        // The device and settings landed either way, so a feeder that did not
+        // come up is a note on an ok result, never a failed phase.
+        if (m) return { target: 'voice-link', ok: true, settings: m[1], ...(m[2] ? { pipe: m[2] } : {}), ...(m[3] === 'failed' ? { note: 'the silence feeder did not start' } : {}) };
       }
       return { target: 'voice-link', ok: false, error: 'voice link push failed' };
     },
