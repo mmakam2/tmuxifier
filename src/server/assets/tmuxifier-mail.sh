@@ -58,10 +58,14 @@
 #                   cleanup removes the lock only when it names the waiter; that check and the
 #                   delete are two steps, so a successor can lose its new directory to a dying
 #                   predecessor's cleanup, and its next decision claims it again.
+#                   Before any of that, a waiter whose Claude Code has no controlling terminal
+#                   and is known not to run under the pane's first process (`foreign`: a
+#                   `claude -p` left in the background and re-parented away, which still carries
+#                   the pane's $TMUX_PANE) exits 0 without reading the lock.
 #   tmx hook-ack    Claude Code UserPromptSubmit hook. Confirms each distinct
 #                   [tmuxifier-mail m-xxxxxxxx] tag in the prompt with POST /v1/ack. Its stdout
 #                   would become prompt context, so it prints nothing on either stream and always
-#                   exits 0.
+#                   exits 0. Under a `foreign` Claude Code it confirms nothing.
 #
 # Who is calling. A caller is a tmux pane: $TMUX_PANE (with $TMUX set), the pane of the agent's
 # own shell. Under OpenCode that is wrong: the agent's shell commands run from OpenCode's one
@@ -443,23 +447,25 @@ LOCK= OWN= CHILD= CLAUDE= WATCH=
 
 # Sets PARENT to the parent pid of process $1 from /proc/$1/stat: the second field after the
 # last `)` (the command name before it may hold spaces and parentheses). Fails when unreadable.
+# Also sets TTY_NR, the fifth: the process's controlling terminal, 0 when it has none.
 parent_of() {
-  PARENT=
+  PARENT= TTY_NR=
   [ "${TMUXIFIER_MAIL_TEST_NO_PROC:-}" = 1 ] && return 1
   _st=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
   _st=${_st##*)}
   set -- $_st
   case ${2:-} in ''|*[!0-9]*) return 1 ;; esac
-  PARENT=$2
+  PARENT=$2 TTY_NR=${5:-}
 }
 
-# Sets CLAUDE (the Claude Code that started this waiter) and WATCH (the process whose parent
-# it is); both empty when that cannot be known.
+# Sets CLAUDE (the Claude Code that started this hook) and WATCH (the process whose parent
+# it is); both empty when that cannot be known. $1 is the hook's name, `hook-wait` or
+# `hook-ack`: the word a `sh -c` wrapper's command line carries.
 find_claude() {
   CLAUDE= WATCH=
   parent_of "$$" || return 0
   _p=$PARENT
-  if grep -q hook-wait "/proc/$_p/cmdline" 2>/dev/null; then
+  if grep -q "$1" "/proc/$_p/cmdline" 2>/dev/null; then
     parent_of "$_p" || return 0
     WATCH=$_p
   else
@@ -477,18 +483,45 @@ orphaned() {
   [ "$PARENT" != "$CLAUDE" ]
 }
 
-# True when this waiter's Claude Code runs under process $1 (a `claude -p` started from the
-# Bash tool of the Claude Code that owns the lock inherits its pane and its hooks), or when that
-# cannot be told: the walk up the parents fails or takes more than 64 steps.
-descends_from() {
-  _a=$CLAUDE _n=0
-  while [ "$_a" -gt 1 ]; do
+# Walks up the parents of this hook's Claude Code looking for process $1. Sets WALK: `yes`
+# when $1 is that Claude Code or one of its ancestors, `no` when the walk reaches init without
+# meeting it, `unknown` when a parent cannot be read or after 64 steps.
+walk_to() {
+  _a=$CLAUDE _n=0 WALK=unknown
+  while [ "$_a" != "$1" ]; do
+    case $_a in 0|1) WALK=no; return 0 ;; esac
     [ "$_n" -lt 64 ] || return 0
     parent_of "$_a" || return 0
     _a=$PARENT _n=$((_n + 1))
-    [ "$_a" = "$1" ] && return 0
   done
-  return 1
+  WALK=yes
+}
+
+# True when this waiter's Claude Code runs under process $1 (a `claude -p` started from the
+# Bash tool of the Claude Code that owns the lock inherits its pane and its hooks), or when that
+# cannot be told.
+descends_from() {
+  walk_to "$1"
+  [ "$WALK" != no ]
+}
+
+# True only when this hook's Claude Code is known NOT to be the pane's own: it has no
+# controlling terminal, and the walk up its parents reaches init without meeting the pane's
+# first process (`#{pane_pid}`). Everything started in a pane inherits $TMUX and $TMUX_PANE, so
+# a `claude -p` that a plugin or a script left running in the background, re-parented away
+# from the pane, fires these hooks as if it were the pane's Claude Code: its waiter would take
+# the lock from the real one and then die with its Claude Code, leaving the pane with no waiter
+# until the next turn. False when anything cannot be told (no Claude pid, no pane pid from
+# tmux, an unreadable /proc), and for a Claude Code with a terminal of its own: an interactive
+# one under screen or dtach started in the pane hangs off init too.
+foreign() {
+  [ -n "$CLAUDE" ] || return 1
+  parent_of "$CLAUDE" || return 1
+  [ "$TTY_NR" = 0 ] || return 1
+  _pp=$(tmux display-message -p -t "$PANE" '#{pane_pid}' 2>/dev/null) || return 1
+  case $_pp in ''|*[!0-9]*) return 1 ;; esac
+  walk_to "$_pp"
+  [ "$WALK" = no ]
 }
 
 # Sets OWNER to the pid in the lock (empty when there is none or it is not a number).
@@ -644,7 +677,8 @@ hook_wait() {
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  find_claude
+  find_claude hook-wait
+  foreign && exit 0
   lock_decide new || exit 0
   _delay=2
   while :; do
@@ -690,6 +724,8 @@ hook_ack() {
   in_tmux || exit 0
   command -v curl >/dev/null 2>&1 || exit 0
   session_now || exit 0
+  find_claude hook-ack
+  foreign && exit 0
   _ids=$(printf '%s' "$_payload" | grep -o "\\[tmuxifier-mail m-$ID_BRE\\]" | sed 's/^\[tmuxifier-mail //; s/\]$//' | sort -u)
   _n=0
   for _m in $_ids; do

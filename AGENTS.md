@@ -107,7 +107,8 @@ Cross-cutting invariants that tests alone have repeatedly failed to protect:
 - **tmux targets are exact.** Always `-t '=name'` (a bare name prefix-matches: `web` hits `web2`).
   Window targets are session-qualified, `-t '=<session>:@<id>'`: window ids name window *objects*,
   which grouped sessions share, so a bare `@7` can move the wrong session. Never fall back to a
-  bare id. Window rows in the UI encode the session too (`w:<session>:<@id>`).
+  bare id. A command with no target answers for the session's **active** pane, not for
+  `$TMUX_PANE`: anything about "this pane" (`#{pane_pid}`) names it with `-t "$TMUX_PANE"`. Window rows in the UI encode the session too (`w:<session>:<@id>`).
 - **Validate, never rewrite, explicit names.** `SESSION_NAME_RE`/`WINDOW_ID_RE` reject bad
   input on every route. `sanitizeSession` silently rewrites — fine for best-effort teardown,
   wrong for anything the user asked for explicitly.
@@ -417,7 +418,18 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   `bg.` tokens, the operator's own prompt clears all. A mail wake (a `<task-notification>` that
   also carries `[tmuxifier-mail `) clears no tokens and exits without writing over a `blocked`
   marker; else `working/resume`. Pinned by `test/fixtures/claude-mail-wake-trace.jsonl` (a real
-  Claude Code 2.1.325 recording, see its README) + `test/agentMailWakeReplay.test.js`. Fails open. Unit tests have twice been green
+  Claude Code 2.1.325 recording, see its README) + `test/agentMailWakeReplay.test.js`.
+  The hook acts only for the pane's own Claude Code (`own_claude`, `/proc` only, no forks, never
+  by process name): a `claude -p` run in the pane inherits `$TMUX_PANE` and fires the same
+  hooks, so one whose Claude Code has no controlling terminal and does not descend from the
+  pane's first process (`#{pane_pid}`), or runs under the pane's recorded owner
+  (`owner/<session><%pane>`: pid and start time, written only by a hook with no controlling
+  terminal, so one run by hand never claims the pane), writes nothing. One outside the pane's
+  process tree **with** a terminal (screen or dtach started in the pane) is left as it was.
+  Pinned by `test/fixtures/claude-nested-trace.jsonl` (a real Claude Code 2.1.330
+  recording with the process chain of every event, see its README) +
+  `test/agentHooksNestedReplay.test.js`, and against a real tmux and a live `/proc` by
+  `test/agentHookNested.integration.test.js`. Fails open. Unit tests have twice been green
   while this was broken live — test against a real event trace;
   `test/fixtures/claude-hook-trace.jsonl` + `test/agentHooksReplay.test.js` is the acceptance test.
 - `claudeVoiceLink.js` / `voiceWriter.js` / `voiceLinks.js` — Claude Code `/voice` on a box.
@@ -745,6 +757,9 @@ nothing is posted after the final write.
   is retried. `hook-wait` follows its Claude Code via `/proc` (not `$PPID`, a dash wrapper that
   survives a `SIGKILL`ed Claude) and holds a per-pane lock whose every read and action goes
   through the decision table above `lock_decide`; `hook-ack` prints nothing and always exits 0.
+  Both exit at once, the lock unread and nothing posted, under a Claude Code that has no
+  controlling terminal and provably does not run under the pane's first process (`foreign`: a
+  `claude -p` left in the background).
   `tmx send [--fresh [--project <name>]] <target> ["text"]`: options come before the target, `--project`
   needs `--fresh`, and `--fresh` refuses `box/session`, each exit 2 before any request; spelled
   without `=` so the OpenCode plugin's `TMX_ARGS_RE` allowlist stays as it is (pinned by

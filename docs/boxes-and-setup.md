@@ -88,7 +88,12 @@ Ticking it makes the setup run do five things, each skipping cleanly when alread
   badge, and the "claude is waiting for input" notifications read. There is no guessing from
   terminal output. The hook never blocks or modifies the agent: it only writes a one-line
   state file under `~/.tmuxifier-agent/`, and its settings.json entries are merged
-  alongside any hooks you already have, never over them.
+  alongside any hooks you already have, never over them. The state is that of the pane's own
+  Claude Code. A `claude -p` run inside that session (by the agent through its Bash tool, or
+  left running in the background by a plugin or a script) fires the same hooks, and the hook
+  ignores it: it cannot change or clear the session's state, and its mail listener and
+  delivery confirmation stand down the same way. Boxes set up before v1.24.95 get this with
+  their next setup run with Claude Code ticked; a running claude need not be restarted.
 - **Install agent messaging**: the `tmx` command (`~/.tmuxifier-mail/tmx`, linked from
   `~/.local/bin/tmx`), a Claude Code skill that teaches the agent to use it, three hook entries
   (`SessionStart` and `Stop` listen for mail, `UserPromptSubmit` confirms delivery) merged beside

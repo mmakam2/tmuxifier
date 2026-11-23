@@ -62,7 +62,10 @@ afterEach(async () => {
   // The hook wrappers a fake Claude Code started lead their own sessions: kill those groups too.
   for (const g of hookGroups) {
     for (const f of fs.existsSync(g.dir) ? fs.readdirSync(g.dir).filter((n) => n.endsWith('.pid')) : []) {
-      try { process.kill(-Number(fs.readFileSync(path.join(g.dir, f), 'utf8')), 'SIGKILL'); } catch { /* gone */ }
+      const pid = Number(fs.readFileSync(path.join(g.dir, f), 'utf8'));
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* gone */ }
+      // A stand-in started `away` leads no group of its own: by pid as well.
+      try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
     }
   }
   for (const c of children) {
@@ -161,11 +164,13 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const [out] = process.argv.slice(1);
 const cmd = process.env.FAKE_HOOK_CMD;
+fs.writeFileSync(out + '/claude.pid', String(process.pid));
 let n = 0;
 const hook = () => {
   const i = ++n;
   const c = spawn('/bin/sh', ['-c', cmd], { detached: true, stdio: ['pipe', 'ignore', 'pipe'] });
-  c.stdin.end();
+  c.stdin.on('error', () => {});
+  c.stdin.end(process.env.FAKE_HOOK_STDIN || '');
   let err = '';
   c.stderr.on('data', (d) => { err += d; });
   fs.writeFileSync(out + '/' + i + '.pid', String(c.pid));
@@ -185,10 +190,22 @@ process.stdin.on('data', (d) => {
 
 // execs: the hook command starts with `exec`, as a `sh -c` that execs its command (bash -c
 // does) runs it, so the waiter's own parent is Claude Code.
-function underClaude({ env: e = env(), execs = false } = {}) {
+// hook, stdin: the hook it runs (default hook-wait) and what it writes to the hook's stdin.
+// away: it is started by a shell that exits at once, so by the time it starts its hook it has
+// been re-parented away from this process (as a `claude -p` a plugin nohups is from its pane).
+// Nothing can be written to it then, and it exits by itself once its hook has.
+// term (with away): it runs under script(1), so it has a terminal of its own, as an
+// interactive Claude Code under screen or dtach has; that one stays up until the test ends.
+function underClaude({ env: e = env(), execs = false, hook = 'hook-wait', stdin = '', away = false, term = false } = {}) {
   const out = fs.mkdtempSync(path.join(dir, 'claude-'));
-  const cmd = `${execs ? 'exec ' : ''}${SHELL.map((a) => `'${a}'`).join(' ')} '${SCRIPT}' hook-wait`;
-  const claude = spawn(process.execPath, ['-e', FAKE_CLAUDE, out], { env: { ...e, FAKE_HOOK_CMD: cmd, FAKE_CLAUDE_SRC: FAKE_CLAUDE }, detached: true, stdio: ['pipe', 'ignore', 'inherit'] });
+  const cmd = `${execs ? 'exec ' : ''}${SHELL.map((a) => `'${a}'`).join(' ')} '${SCRIPT}' ${hook}`;
+  const fe = { ...e, FAKE_HOOK_CMD: cmd, FAKE_CLAUDE_SRC: FAKE_CLAUDE, FAKE_HOOK_STDIN: stdin };
+  const left = term
+    ? '(sleep 0.3; exec script -qc "\\"$0\\" -e \\"eval(process.env.FAKE_CLAUDE_SRC)\\" \\"$2\\"" /dev/null </dev/null >/dev/null 2>&1) &'
+    : '(sleep 0.3; exec "$0" -e "$1" "$2" </dev/null >/dev/null 2>&1) &';
+  const claude = away
+    ? spawn('/bin/sh', ['-c', left, process.execPath, FAKE_CLAUDE, out], { env: fe, detached: true, stdio: 'ignore' })
+    : spawn(process.execPath, ['-e', FAKE_CLAUDE, out], { env: fe, detached: true, stdio: ['pipe', 'ignore', 'inherit'] });
   claude.done = new Promise((resolve) => claude.on('close', resolve));
   children.push(claude);
   hookGroups.push({ dir: out }, { dir: path.join(out, 'n') });
@@ -1231,6 +1248,91 @@ describe('tmx: hook-wait follows its Claude Code', () => {
     await until(() => b.result() !== null);
     expect(b.result()).toEqual({ code: 0, signal: null, err: '' });
     expect(lockPid()).toBe(waiter);
+  });
+});
+
+describe("tmx: only the pane's own Claude Code", () => {
+  // A tmux that also answers `#{pane_pid}`: the pane's first process is this test process, so
+  // a stand-in Claude Code started from here runs under the pane and one re-parented away
+  // does not.
+  beforeEach(() => {
+    writeExe(path.join(bin, 'tmux'), [
+      '#!/bin/sh',
+      "[ \"$#\" = 5 ] && [ \"$1\" = display-message ] && [ \"$2\" = -p ] && [ \"$3\" = -t ] && [ \"$4\" = '%3' ] || exit 1",
+      'case $5 in',
+      "  '#{session_name}') printf '%s\\n' main ;;",
+      `  '#{pane_pid}') printf '%s\\n' ${process.pid} ;;`,
+      '  *) exit 1 ;;',
+      'esac',
+      '',
+    ].join('\n'));
+  });
+
+  test('a waiter of a Claude Code re-parented away from the pane exits at once and leaves the owner alone', async () => {
+    await listener.listen();
+    h.marks.o.main = mark('ready');
+    const a = underClaude();
+    await until(() => listening() === 1 && lockClaude() === String(a.claude.pid));
+    const first = lockPid();
+    const b = underClaude({ away: true });
+    await until(() => b.result() !== null);
+    expect(b.result()).toEqual({ code: 0, signal: null, err: '' });
+    expect(lockPid()).toBe(first);
+    expect(lockClaude()).toBe(String(a.claude.pid));
+    expect(a.result()).toBe(null);
+    expect(listening()).toBe(1);
+    // Mail for the pane still wakes its own Claude Code.
+    expect((await h.hub.send(B, 'orders', 'for the pane')).ok).toBe(true);
+    await until(() => a.result() !== null);
+    expect(a.result().code).toBe(2);
+    expect(a.result().err.endsWith('\n\nfor the pane\n')).toBe(true);
+  });
+
+  test('with no waiter in the pane such a waiter still claims nothing; the pane\'s own then does', async () => {
+    await listener.listen();
+    h.marks.o.main = mark('ready');
+    const b = underClaude({ away: true });
+    await until(() => b.result() !== null);
+    expect(b.result()).toEqual({ code: 0, signal: null, err: '' });
+    expect(fs.existsSync(lockOf())).toBe(false);
+    expect(listening()).toBe(0);
+    // Run from here, the script's Claude Code is this process, the pane's first: it claims.
+    const w = start(['hook-wait']);
+    await until(() => listening() === 1);
+    expect(lockPid()).toBe(String(w.pid));
+  });
+
+  test('a Claude Code outside the pane\'s process tree that has a terminal of its own keeps its waiter (screen, dtach)', async () => {
+    await listener.listen();
+    h.marks.o.main = mark('ready');
+    const b = underClaude({ away: true, term: true });
+    await until(() => listening() === 1 && lockPid() !== null);
+    expect(b.result()).toBe(null);
+    expect((await h.hub.send(B, 'orders', 'for the multiplexed session')).ok).toBe(true);
+    await until(() => b.result() !== null);
+    expect(b.result().code).toBe(2);
+    expect(b.result().err.endsWith('\n\nfor the multiplexed session\n')).toBe(true);
+  });
+
+  test('hook-ack under such a Claude Code confirms nothing; the pane\'s own then does', async () => {
+    await listener.listen();
+    h.marks.o.main = mark('ready');
+    const w = start(['hook-wait']);
+    await until(() => listening() === 1);
+    const sent = await h.hub.send(B, 'orders', 'confirm me');
+    const wake = (await w.done).stderr;
+    const msg = () => h.store.thread(sent.threadId).messages[0];
+    expect(msg().state).toBe('handed');
+    const before = curlCalls().length;
+    const b = underClaude({ away: true, hook: 'hook-ack', stdin: wakePayload(wake) });
+    await until(() => b.result() !== null);
+    expect(b.result()).toEqual({ code: 0, signal: null, err: '' });
+    expect(curlCalls().length).toBe(before);
+    expect(msg().state).toBe('handed');
+    const own = underClaude({ hook: 'hook-ack', stdin: wakePayload(wake) });
+    await until(() => own.result() !== null);
+    expect(own.result()).toEqual({ code: 0, signal: null, err: '' });
+    expect(msg().state).toBe('delivered');
   });
 });
 

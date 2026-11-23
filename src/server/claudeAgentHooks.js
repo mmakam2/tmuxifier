@@ -50,9 +50,12 @@ export const HOOK_EVENTS = [
 ];
 
 // The command value, written LITERALLY — its ${...} is expanded later by the
-// shell Claude Code spawns for the hook, not at install time.
+// shell Claude Code spawns for the hook, not at install time. The hook script
+// recognises that shell by this text (`…tmuxifier-agent-hook.sh" <arg>` at the
+// end of its command line), so the shape is pinned by the nested-trace replay.
+export const hookCommand = (arg) => 'sh "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tmuxifier-agent-hook.sh" ' + arg;
 const hookEntry = (arg, matcher) => {
-  const entry = { hooks: [{ type: 'command', command: 'sh "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tmuxifier-agent-hook.sh" ' + arg }] };
+  const entry = { hooks: [{ type: 'command', command: hookCommand(arg) }] };
   return matcher ? { matcher, ...entry } : entry;
 };
 

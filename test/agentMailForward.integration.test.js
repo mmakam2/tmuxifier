@@ -13,11 +13,16 @@ import { createAgentMailForward } from '../src/server/agentMailForward.js';
 // whole feature end to end through it: tmx on the box -> ~/.tmuxifier-mail/sock -> the master's
 // -R forward -> the per-box listener -> the hub, and back to a box-side hook-wait.
 //
-// tmx finds its session with `tmux display-message -t "$TMUX_PANE"`, so it runs over ssh with
-// TMUX and TMUX_PANE set to a real pane of the fixture's own tmux server (TMUX_TMPDIR is private
-// to the fixture), not typed into a pane with send-keys: that gives each run its own exit code,
-// stdout and stderr, exactly, with no prompt or rc file in the loop, while the session lookup is
-// still tmux's own answer for a real pane.
+// tmx finds its session with `tmux display-message -t "$TMUX_PANE"`, so a user command runs over
+// ssh with TMUX and TMUX_PANE set to a real pane of the fixture's own tmux server (TMUX_TMPDIR
+// is private to the fixture), not typed into a pane with send-keys: that gives each run its own
+// exit code, stdout and stderr, exactly, with no prompt or rc file in the loop, while the
+// session lookup is still tmux's own answer for a real pane.
+//
+// The two hooks (hook-wait, hook-ack) cannot run that way: a process outside the pane that only
+// carries its TMUX_PANE is exactly what they refuse to act for (a `claude -p` left in the
+// background). They run where Claude Code runs them, inside the session, as the one command of
+// a new pane of it (`inPane`), with their output and exit code in files of the fixture home.
 
 const ASSET = fileURLToPath(new URL('../src/server/assets/tmuxifier-mail.sh', import.meta.url));
 
@@ -102,8 +107,28 @@ async function harness(forwardOptions = {}, { second = false, other = false } = 
   const snapshot = { b1: { reachable: true }, b2: { reachable: true } };
   const sync = (f = fwd) => f.sync(allBoxes, snapshot);
 
+  // A hook, as the one command of a new pane of session `s`: the pane's first process is
+  // `sh <home>/run-<n>.sh` (a name that says nothing of the hook, as Claude Code's command line
+  // does not) and tmx is its child. Resolves like `run` once the script has written its code.
+  let runs = 0;
+  const inPane = async (s, args, { timeout = 30000, input = '' } = {}) => {
+    const base = path.join(lb.home, `run-${runs += 1}`);
+    fs.writeFileSync(`${base}.in`, input);
+    fs.writeFileSync(`${base}.sh`, [
+      `TMUXIFIER_MAIL_TEST_SLEEP=0.2 TMUXIFIER_MAIL_TEST_MAX_TIME=5 sh "$HOME/.tmuxifier-mail/tmx" ${args.map(shSingleQuote).join(' ')} > '${base}.out' 2> '${base}.err' < '${base}.in'`,
+      `echo $? > '${base}.code.tmp'`,
+      `mv '${base}.code.tmp' '${base}.code'`,
+      '',
+    ].join('\n'));
+    const made = await remote(`tmux split-window -d -t ${shSingleQuote(panes[s])} ${shSingleQuote(`sh ${base}.sh`)}`);
+    if (made.code !== 0) throw new Error(`could not start a pane in session ${s}`);
+    if (!(await until(() => fs.existsSync(`${base}.code`), timeout))) throw new Error(`tmx ${args[0]} in session ${s} did not finish in ${timeout} ms`);
+    return { code: Number(fs.readFileSync(`${base}.code`, 'utf8')), stdout: fs.readFileSync(`${base}.out`, 'utf8'), stderr: fs.readFileSync(`${base}.err`, 'utf8') };
+  };
+
   // tmx on the box, inside session `s`. Short sleeps and curl times keep the retries quick.
   const tmx = (s, args, { timeout = 30000, input } = {}) => {
+    if (args[0] === 'hook-wait' || args[0] === 'hook-ack') return inPane(s, args, { timeout, input });
     const cmd = `TMUX=${shSingleQuote(tmuxEnv)} TMUX_PANE=${shSingleQuote(panes[s])} TMUXIFIER_MAIL_TEST_SLEEP=0.2 TMUXIFIER_MAIL_TEST_MAX_TIME=5 `
       + `sh "$HOME/.tmuxifier-mail/tmx" ${args.map(shSingleQuote).join(' ')}`;
     const argv = buildProbeArgv(lb.box, cmd, sshOpts);

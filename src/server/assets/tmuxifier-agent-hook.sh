@@ -54,11 +54,27 @@
 # agent_id, run_in_background and notification_type. It is never eval'd —
 # only substring-matched — and every value taken from it is re-sanitized
 # before it reaches a path.
+#
+# Whose hook this is. Everything started in a pane inherits $TMUX and $TMUX_PANE, so a
+# `claude -p` run there (from the session's Bash tool, or left behind in the background by a
+# plugin or a script) fires these same hooks: its SessionStart, prompt and Stop would write over
+# the session's marker and its SessionEnd would delete it. So the hook acts only for the pane's
+# own Claude Code (`own_claude`, read from /proc with no fork unless the owner record changes)
+# and exits 0, having written nothing, when the Claude Code that started it
+#   - does not descend from the pane's first process (`#{pane_pid}`) and has no controlling
+#     terminal: it was re-parented away (or it is gone and this hook is an orphan); or
+#   - runs under the pane's owner: the Claude Code recorded in owner/<session><pane> (pid and
+#     start time, so a reused pid never matches) is one of its ancestors.
+# The owner record is written by a hook that found its Claude Code under the pane, when the
+# record changed and when the hook itself has no controlling terminal (Claude Code starts a
+# hook in a new session; one run by hand from the pane's shell must not claim the pane for
+# that shell). Nothing here goes by a process name: a wrapper script or launcher called
+# `claude` is not a Claude Code, and it never runs this hook.
+# It fails OPEN: without a pane id, a pane pid or a readable /proc, and for a Claude Code that
+# is outside the pane's process tree but has a terminal (screen or dtach started in the pane),
+# the hook acts as it always did.
+# Test-only knob (read by nothing else): TMUXIFIER_AGENT_TEST_PROC replaces /proc.
 [ -n "${TMUX:-}" ] || exit 0
-SESSION=$(tmux display-message -p '#S' 2>/dev/null) || exit 0
-[ -n "$SESSION" ] || exit 0
-DIR="$HOME/.tmuxifier-agent"
-SAFE=$(printf '%s' "$SESSION" | tr -c 'A-Za-z0-9._-' '_')
 # Allowlisted because it becomes part of a path and of the marker line.
 PANE=${TMUX_PANE:-}
 case "$PANE" in
@@ -66,6 +82,23 @@ case "$PANE" in
   %*) ;;
   *) PANE='' ;;
 esac
+# The session and, in the same call, the pid of the pane's first process. The pane is named
+# with -t: without a target tmux answers for the ACTIVE pane of the session's current window,
+# which is the right session but another pane's pid. A session name holds no colon, so the last
+# one splits the two; a tmux that answers with the name alone leaves the pane pid empty.
+if [ -n "$PANE" ]; then
+  SESSION=$(tmux display-message -p -t "$PANE" '#S:#{pane_pid}' 2>/dev/null) || exit 0
+else
+  SESSION=$(tmux display-message -p '#S' 2>/dev/null) || exit 0
+fi
+case "$SESSION" in
+  *:*) PANE_PID=${SESSION##*:} SESSION=${SESSION%:*} ;;
+  *) PANE_PID='' ;;
+esac
+case "$PANE_PID" in *[!0-9]*) PANE_PID='' ;; esac
+[ -n "$SESSION" ] || exit 0
+DIR="$HOME/.tmuxifier-agent"
+SAFE=$(printf '%s' "$SESSION" | tr -c 'A-Za-z0-9._-' '_')
 KEY="$SAFE$PANE"
 FILE="$DIR/$KEY"
 BUSY="$DIR/busy/$KEY"
@@ -80,6 +113,67 @@ cur_state() {
 
 # Runs BEFORE stdin is read: leaving a pipe unread is tolerated by Claude Code.
 if [ "${1:-}" = unblock ]; then cur_state; [ "$CUR" = blocked ] || exit 0; fi
+
+PROC=${TMUXIFIER_AGENT_TEST_PROC:-/proc}
+
+# Sets P_PARENT, P_TTY and P_START from $PROC/$1/stat: fields 4, 7 and 22. Field 2, the command
+# name, may hold spaces and parentheses, so everything up to the last ") " goes first. Fails
+# when the file cannot be read or is not a stat line.
+stat_of() {
+  _st=''
+  { IFS= read -r _st < "$PROC/$1/stat"; } 2>/dev/null
+  case "$_st" in *') '*) ;; *) return 1 ;; esac
+  _st=${_st##*) }
+  set -f; set -- $_st; set +f
+  P_PARENT=${2:-} P_TTY=${5:-} P_START=${20:-}
+  case "$P_PARENT" in ''|*[!0-9]*) return 1 ;; esac
+  case "$P_START" in ''|*[!0-9]*) return 1 ;; esac
+  return 0
+}
+
+# 0 when this hook belongs to the pane's own Claude Code, or when that cannot be told; 1 only on
+# evidence that it belongs to another one (the two cases in the header). $1 is the hook's event
+# argument. On 0 it records the pane's owner, see the header.
+own_claude() {
+  [ -n "$PANE" ] && [ -n "$PANE_PID" ] || return 0
+  # The Claude Code that started this hook. It runs a hook command through `/bin/sh -c`, and a
+  # shell that does not exec its one command (dash) stays as this script's parent: that shell's
+  # command line ends with this script's name and argument, and Claude Code is its parent. A
+  # shell that execs (bash) leaves Claude Code as $PPID. `read` drops the NULs between the
+  # arguments (zsh keeps them, hence the second pattern).
+  _mine=$PPID _c=''
+  { IFS= read -r _c < "$PROC/$PPID/cmdline"; } 2>/dev/null
+  case "$_c" in
+    *tmuxifier-agent-hook*" $1"|*tmuxifier-agent-hook*" $1"?)
+      stat_of "$PPID" || return 0
+      _mine=$P_PARENT ;;
+  esac
+  stat_of "$_mine" || return 0
+  _mine_start=$P_START _mine_tty=$P_TTY
+  _owner='' _owner_start=''
+  { read -r _owner _owner_start < "$DIR/owner/$KEY"; } 2>/dev/null
+  # Up the parents until the pane's first process. Each step is an ancestor of this hook's
+  # Claude Code. The recorded owner: it runs under the pane's own. Init: it is not under the
+  # pane, which is evidence only when it has no terminal either (a `claude -p` left in the
+  # background has none; an interactive one under screen or dtach hangs off init too, with one).
+  _a=$_mine _n=0
+  while [ "$_a" != "$PANE_PID" ]; do
+    _a=$P_PARENT
+    case "$_a" in 0|1) [ "$_mine_tty" = 0 ] && return 1; return 0 ;; esac
+    _n=$((_n + 1))
+    [ "$_n" -le 64 ] || return 0
+    stat_of "$_a" || return 0
+    [ "$_a" = "$_owner" ] && [ "$P_START" = "$_owner_start" ] && return 1
+  done
+  # Under the pane: record it as the owner. Through a rename, so a reader never sees half.
+  if [ "$_owner $_owner_start" != "$_mine $_mine_start" ] && stat_of self && [ "$P_TTY" = 0 ]; then
+    mkdir -p "$DIR/owner" 2>/dev/null \
+      && printf '%s %s\n' "$_mine" "$_mine_start" > "$DIR/owner/$KEY.$$.tmp" 2>/dev/null \
+      && mv "$DIR/owner/$KEY.$$.tmp" "$DIR/owner/$KEY" 2>/dev/null
+  fi
+  return 0
+}
+own_claude "${1:-}" || exit 0
 
 IN=$(cat 2>/dev/null) || IN=''
 
@@ -219,7 +313,7 @@ case "${1:-}" in
       *) exit 0 ;;
     esac ;;
   start) STATE=ready CAUSE=start ;;
-  end) rm -f "$FILE" "$DIR/blocked/$KEY"; rm -rf "$BUSY" 2>/dev/null; exit 0 ;;
+  end) rm -f "$FILE" "$DIR/blocked/$KEY" "$DIR/owner/$KEY"; rm -rf "$BUSY" 2>/dev/null; exit 0 ;;
   *) exit 0 ;;
 esac
 mkdir -p "$DIR"
@@ -229,7 +323,8 @@ if [ "$STATE" = blocked ]; then
 else
   rm -f "$DIR/blocked/$KEY" 2>/dev/null
 fi
-# Self-prune markers for sessions that died without a SessionEnd. Depth-capped:
-# the busy tokens below have their own, far shorter, TTL.
-find "$DIR" -maxdepth 1 -type f -mtime +7 -exec rm -f {} + 2>/dev/null || true
+# Self-prune markers, and owner records, for sessions that died without a
+# SessionEnd (a live session whose record goes writes it again at its next
+# hook). Depth-capped: the busy tokens below have their own, far shorter, TTL.
+find "$DIR" "$DIR/owner" -maxdepth 1 -type f -mtime +7 -exec rm -f {} + 2>/dev/null || true
 printf '%s:%s:%s:%s%s\n' "$SESSION" "$STATE" "$(date +%s)" "$CAUSE" "${PANE:+:$PANE}" > "$FILE.$$.tmp" && mv "$FILE.$$.tmp" "$FILE"
