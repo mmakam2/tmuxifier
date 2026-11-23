@@ -161,6 +161,13 @@ directory):
   answered it, and a new waiter of the same Claude Code was listening 1.5 s later.
 - `/exit` removed the marker, the owner record and the lock.
 
+And on a box, with the hook and `tmx` as a setup run installs them (hooks in
+`~/.claude/settings.json`, Claude Code 2.1.330 in auto mode, zsh as the pane's shell, other
+plugins' hooks beside ours): a `claude -p --debug` from the Bash tool and one left in the
+background each logged our hooks as run (`tmuxifier-agent-hook.sh start`, `prompt`, `stop`;
+`tmx hook-wait`, `hook-ack`), every one finished with status 0 within 35 ms, and the marker (same
+timestamp) and the waiter's lock were the same before and after.
+
 **7. `#{pane_pid}` needs `-t`.** Not from this recording (it had one pane): `tmux
 display-message -p '#{pane_pid}'` with no target answers for the **active** pane of the
 session's current window, not for `$TMUX_PANE`. `test/agentHookNested.integration.test.js` runs
