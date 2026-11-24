@@ -333,7 +333,10 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   its newest release (`--engine-strict`, best-effort). The `opencode` tool runs the native v2
   installer with `--no-modify-path` (binary in `~/.opencode/bin`); the PATH line is ours, one
   tagged line per rc file via `binPathBlock` (`# tmuxifier-opencode-bin`, beside claude/agy's
-  `# tmuxifier-local-bin`).
+  `# tmuxifier-local-bin`). The `pi` tool is an npm global like `codex`
+  (`@earendil-works/pi-coding-agent`), installed with `--engine-strict` so npm, not a copied
+  version number, refuses a box whose existing Node is older than pi needs (the job fails with a
+  line saying so). `TOOL_IMPLIES` is one level deep: a tool that needs node names curl too.
   `buildFrameworkUpdateClamps` disables shell-framework self-updaters on **every** setup, each
   guarded by evidence the framework is present (the oh-my-zsh guard's `^` anchor is load-bearing:
   stock `.zshrc` contains the commented template line).

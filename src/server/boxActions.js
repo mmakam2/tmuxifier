@@ -26,7 +26,7 @@ import { createSingleFlight } from './singleFlight.js';
 // Curated provision-time tools. Ids are the ONLY strings that ever reach the
 // generated shell script — resolveTools throws on anything not in the catalog,
 // which is what keeps the tools= query param out of command-injection territory.
-export const TOOL_IDS = ['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy', 'opencode'];
+export const TOOL_IDS = ['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy', 'opencode', 'pi'];
 
 // The Node major the `node` tool installs. Distro archives lag by years
 // (Ubuntu 24.04 and Debian 12 both ship 18) and the agent CLIs this catalog
@@ -38,8 +38,10 @@ export const TOOL_IDS = ['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', '
 export const NODE_MAJOR = 26;
 
 // gh and node fetch (GitHub's apt keyring, NodeSource's setup script) with
-// curl; codex is an npm global; claude/agy are curl installers.
-const TOOL_IMPLIES = { gh: ['curl'], node: ['curl'], codex: ['node'], claude: ['curl'], agy: ['curl'], opencode: ['curl'] };
+// curl; codex and pi are npm globals; claude/agy are curl installers.
+// Implications are one level deep (resolveTools does not follow them), so a
+// tool that needs node names curl too: node's own fetch is a curl.
+const TOOL_IMPLIES = { gh: ['curl'], node: ['curl'], codex: ['curl', 'node'], claude: ['curl'], agy: ['curl'], opencode: ['curl'], pi: ['curl', 'node'] };
 
 export function resolveTools(ids) {
   if (ids == null || ids === '') return [];
@@ -257,6 +259,20 @@ const TOOLS = {
     '  curl -fsSL https://opencode.ai/v2/install -o "$t"',
     '  bash "$t" --no-modify-path',
     '  rm -f "$t"',
+    'fi',
+  ],
+  // An npm global like codex. pi declares the Node it needs (>=22.19 at 1.6.0)
+  // and that floor moves with its releases, so npm enforces it: without
+  // --engine-strict npm installs pi on an older Node with only a warning and pi
+  // then fails to start. The `node` tool never upgrades a Node the box already
+  // has, so that box is refused here, in the job log, rather than left with a
+  // pi that cannot run. Agent state needs nothing from this block: the OSC
+  // reporter (oscReporter.js) runs on every setup and adds pi's rc line.
+  pi: () => [
+    'if ! command -v pi >/dev/null 2>&1; then',
+    "  SUDO=''",
+    "  if [ \"$(id -u)\" != '0' ]; then SUDO='sudo'; fi",
+    "  $SUDO npm install -g --engine-strict @earendil-works/pi-coding-agent || { echo 'tmuxifier: pi was not installed. If npm reported EBADENGINE above, the Node on this box is older than pi needs, and setup never upgrades a Node that is already installed.' >&2; exit 1; }",
     'fi',
   ],
 };

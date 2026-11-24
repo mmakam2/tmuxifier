@@ -59,7 +59,7 @@ usage.
 The Add/Edit Box modal (and the [Proxmox Provision form](proxmox.md)) also offer an **"Additional
 tools"** checklist that runs in the same provisioning step — a full system update/upgrade,
 curl, git, the GitHub CLI, Node.js 26 + npm, Bubblewrap, and the Codex, Claude Code,
-Antigravity and OpenCode CLIs — using the same idempotent multi-distro install script.
+Antigravity, OpenCode and pi CLIs — using the same idempotent multi-distro install script.
 
 Each tool is installed only if the box doesn't have it, at the newest version available from its
 source. A copy already on the box is never upgraded or reinstalled, including one older than the
@@ -74,6 +74,15 @@ keep their own current packages.
 A fresh NodeSource install then moves npm from the version bundled with Node to its newest
 release. If that release doesn't support the box's Node, npm refuses the install and the bundled
 version stays. On Arch, Alpine and openSUSE, npm comes from the distro's own package instead.
+
+**pi** is installed from npm (`@earendil-works/pi-coding-agent`) and ticks Node.js along with it.
+pi states the oldest Node it runs on (22.19 at pi 1.6.0), and setup has npm enforce that: on a box
+whose existing Node is older, the install is refused, the setup job fails with
+`tmuxifier: pi was not installed…` in its log, and nothing of pi is left behind. Setup never
+upgrades a Node that is already there, so upgrade Node on that box yourself and run setup again.
+The checkbox only installs the CLI: pi's agent state comes from the reporter described under
+[The OSC reporter](#the-osc-reporter-codex-pi-antigravity), which every setup run
+installs whether or not pi is ticked.
 
 ## The Claude Code checkbox
 

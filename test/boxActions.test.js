@@ -435,14 +435,32 @@ test('resolveTools parses CSV, dedupes, and orders by TOOL_IDS', () => {
 });
 
 test('resolveTools applies dependency implications', () => {
-  expect(resolveTools(['codex'])).toEqual(['node', 'codex']);
+  // node's NodeSource fetch is a curl, and implications are not followed
+  // transitively: codex alone once left a curl-less box failing at that fetch.
+  expect(resolveTools(['codex'])).toEqual(['curl', 'node', 'codex']);
+  expect(resolveTools(['pi'])).toEqual(['curl', 'node', 'pi']);
   expect(resolveTools(['claude'])).toEqual(['curl', 'claude']);
   expect(resolveTools(['agy'])).toEqual(['curl', 'agy']);
   expect(resolveTools(['gh'])).toEqual(['curl', 'gh']);
 });
 
 test('TOOL_IDS lists every tool in install order', () => {
-  expect(TOOL_IDS).toEqual(['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy', 'opencode']);
+  expect(TOOL_IDS).toEqual(['upgrade', 'curl', 'git', 'gh', 'node', 'bubblewrap', 'codex', 'claude', 'agy', 'opencode', 'pi']);
+});
+
+// pi is an npm global like codex, from the package that replaced the deprecated
+// @mariozechner one. Its engines field moves with its releases, so the Node
+// floor is npm's to enforce (--engine-strict), never a number copied in here:
+// without the flag npm installs it with a warning and pi then fails to start.
+test('the pi tool installs the npm package only when pi is missing, with node implied and the engine check on', () => {
+  const remote = buildEnsureTmuxRemote('web', undefined, { tools: ['pi'] });
+  expect(remote).toContain('if ! command -v pi >/dev/null 2>&1; then');
+  expect(remote).toContain('$SUDO npm install -g --engine-strict @earendil-works/pi-coding-agent');
+  expect(remote).not.toContain('@mariozechner');
+  expect(remote.indexOf('deb.nodesource.com')).toBeLessThan(remote.indexOf('npm install -g --engine-strict @earendil-works/pi-coding-agent'));
+  // A refusal says why in the job log and fails the install, as every other tool does.
+  expect(remote).toMatch(/pi-coding-agent \|\| \{ echo 'tmuxifier: pi was not installed[^']*' >&2; exit 1; \}/);
+  expect(buildEnsureTmuxRemote('web', undefined, { tools: ['codex'] })).not.toContain('pi-coding-agent');
 });
 
 test('the opencode tool downloads the v2 installer, runs it with --no-modify-path only when opencode is missing, and owns the PATH line', () => {
