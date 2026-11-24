@@ -50,6 +50,8 @@ async function login(page: Page) {
 async function openEditModal(page: Page, label = 'localhost') {
   await page.locator('.box', { has: page.locator('.name', { hasText: new RegExp(`^${label}$`) }) }).first().locator('.edit').click();
   await expect(page.getByRole('heading', { name: 'Edit box' })).toBeVisible();
+  // Agent messaging and agent workers are on the modal's Agents tab.
+  await page.getByRole('tab', { name: /^Agents/ }).click();
   return page.locator('.modal.box-modal');
 }
 

@@ -726,6 +726,10 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .modal .radio-group { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px; }
 .modal .radio-group input { accent-color: var(--accent); }
 .modal .radio-group legend { margin-bottom: 2px; font-size: 11px; color: var(--dim); letter-spacing: 0.04em; }
+/* A short choice on one line, its legend leading the row (floated, so it is a
+   row item rather than the fieldset's caption). */
+.modal .radio-group.radio-row { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.modal .radio-group.radio-row > legend { float: left; margin: 0; padding: 0; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .modal-actions button { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--key-border); border-bottom-color: var(--bg); background: var(--key-face); box-shadow: var(--key-edge); color: var(--muted); font-family: var(--face); font-size: 12.5px; cursor: pointer; }
 .modal-actions button:hover { color: var(--text); }
@@ -761,18 +765,49 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .device-row button:hover { color: var(--text); }
 .device-row button.danger { color: var(--crit); }
 .device-row button.danger.armed { font-weight: 700; border-color: color-mix(in srgb, var(--crit) 55%, transparent); background: color-mix(in srgb, var(--crit) 12%, transparent); }
-.modal.box-modal { width: 560px; max-height: 92vh; }
-/* Scrollable field area with pinned title/err/actions. The padding/margin pair
-   clears an appearing scrollbar so it never overlaps inputs (same trick as .pve-content). */
-.modal.box-modal .modal-body { display: flex; flex-direction: column; gap: 10px; overflow: auto; padding-right: 14px; margin-right: -14px; }
+.modal.box-modal { width: 560px; max-height: 90vh; align-self: flex-start; margin-top: 5vh; }
+/* Add/Edit Box is three tabs under one Save (boxModalView.ts). The panel is
+   hung from its top edge rather than centred: the tabs differ in height, and a
+   centred panel would move the tab strip out from under the pointer on every
+   switch. The tab strip carries the seam under the title, so the title drops
+   its own. */
+.modal.box-modal h2 { margin: 0; padding-bottom: 0; border-bottom: 0; }
+/* The mark on a tab that holds something Save will act on: a lit mode chip. */
+.box-tab-mark { margin-left: 6px; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); letter-spacing: 0.08em; font-variant-numeric: tabular-nums; text-shadow: none; }
+/* Scrollable tab area with pinned title/tabs/err/actions. It is as tall as the
+   open tab, down to a floor that keeps the shortest one from looking collapsed
+   and up to what the viewport leaves. The padding/margin pair clears an
+   appearing scrollbar so it never overlaps inputs (same trick as .pve-content). */
+.modal.box-modal .modal-body { flex: 0 1 auto; min-height: min(300px, 40vh); overflow: auto; padding: 6px 14px 2px 0; margin-right: -14px; }
+/* The empty error line would otherwise hold a blank band above the keys. */
+.modal.box-modal > .err:empty { display: none; }
+/* One section dialect in every tab: an engraved legend over its controls, a
+   seam and more room above each section than inside it. */
+.box-tab-panel { display: flex; flex-direction: column; gap: 12px; }
+.box-tab-panel > section { padding-top: 12px; }
+.box-tab-panel > section:first-child { padding-top: 0; border-top: 0; }
+.sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 12px; flex-wrap: wrap; }
 .modal .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
 @media (max-width: 620px) { .modal .field-grid { grid-template-columns: 1fr; } }
 .modal .setup-options { display: flex; flex-direction: column; gap: 12px; }
-.modal fieldset.setup-section { margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-well); display: flex; flex-direction: column; gap: 8px; }
-.modal fieldset.setup-section > legend { padding: 0 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: var(--dim); }
-.modal .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+/* A setup section is a seam and an engraved legend, the same as the hub's
+   groups and the modal's other sections: no box inside the panel. The legend
+   floats so it is laid out as the section's first row, under the seam and the
+   padding, instead of sitting on the fieldset's top border. */
+.modal fieldset.setup-section { margin: 0; min-width: 0; padding: 12px 0 0; border: 0; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+.modal fieldset.setup-section > legend { float: left; padding: 0; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.14em; color: var(--dim); }
+.box-tab-panel .setup-options > fieldset.setup-section:first-child, h3 + fieldset.setup-section { padding-top: 0; border-top: 0; }
+/* The hub's Provision tab stacks its own section directly over the form. */
+fieldset.setup-section + .setup-options { margin-top: 12px; }
+.modal .tools-group { display: flex; flex-direction: column; gap: 6px; }
+.modal .tools-group-label { font-size: 11px; color: var(--dim); letter-spacing: 0.04em; }
+.modal .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
 @media (max-width: 620px) { .modal .tools-grid { grid-template-columns: 1fr; } }
-.modal .seed-status { font-size: 12.5px; color: var(--dim); line-height: 1.4; }
+.modal .tools-notes { display: flex; flex-direction: column; gap: 6px; }
+/* Hints and status lines sit one step under the controls they explain. */
+.modal .seed-status, .modal .setup-hint { margin: 0; font-size: 11px; color: var(--dim); line-height: 1.5; }
+.modal .seed-status:empty { display: none; }
+.box-modal .setup-options select { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); color: var(--text); font-family: var(--face); }
 /* Unscoped so the dot colours in the Proxmox hub's Provision tab too; the
    higher specificity still beats the muted row colour above. */
 .seed-status .seed-dot.ok { color: var(--ok); }
@@ -2231,7 +2266,7 @@ button.empty-kbd:hover { color: var(--text); }
    and the row's problem line under it; the problem line is LED red only while
    something is wrong (`bad`), and empty otherwise. */
 .wk-section { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
-.wk-section .wk-lead { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: var(--dim); }
+.wk-section .wk-lead { font-size: 11px; color: var(--dim); letter-spacing: 0.04em; }
 .wk-section .wk-projects { display: flex; flex-direction: column; gap: 10px; }
 .wk-section .wk-row { display: grid; grid-template-columns: 9em minmax(0, 1fr) auto; grid-template-areas: 'name dir remove' 'trust trust trust' 'note note note'; gap: 6px; align-items: center; }
 .wk-section .wk-name { grid-area: name; min-width: 0; }

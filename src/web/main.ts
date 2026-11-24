@@ -42,6 +42,7 @@ import {
   mailEnabledFrom, messageRow, messagesLoadError, refusalRow, stopFailedLine, threadHead, threadRow, MAIL_NO_REFUSALS, MAIL_NO_THREADS,
 } from './agentMailView';
 import { createSetupOptionsForm, setupStartPayload, type SetupOptionsValues } from './setupOptions';
+import { BOX_MODAL_TAB_LABELS, boxModalTabs, setupSelectionCount, tabMark, type BoxModalTab } from './boxModalView';
 import { pk, getPasskey, serializeAssertion, hasWebAuthn, evaluateOrigin } from './passkeys';
 import { type PaneNode, type Edge, type DropSpec, panesOf, phonePaneOf, movePane, undockPane, replacePane, setRatio, toggleOrientation, serialize, restore, instanceId, boxOfInstance, ordinalOfInstance, nextOrdinal } from './stageLayout';
 import { chooseDuplicateSession } from './duplicateSession';
@@ -3447,9 +3448,11 @@ function buildBoxDialog(box?: Box) {
   // Edit mode only, shown whether or not messaging is on (its own route).
   const workersSection = isEdit ? createAgentWorkersSection(box!) : null;
 
-  // Two-column body: compact fields pair up (Host|Label, Tag|User, Port|ProxyJump),
-  // the session picker and Proxmox section span full width, and err/actions sit
-  // outside the scroll region so they are always visible (pinned footer).
+  // Three tabs, one Save (boxModalView.ts): the box's record, the setup run,
+  // and what its agents may do. On the Box tab the compact fields pair up
+  // (Host|Label, Tag|User, Port|ProxyJump) and the session picker and Proxmox
+  // section span full width. Title, tab strip, err and actions sit outside the
+  // scroll region, so they stay put whichever tab is open.
   const fieldGrid = document.createElement('div');
   fieldGrid.className = 'field-grid';
   fieldGrid.append(
@@ -3461,19 +3464,61 @@ function buildBoxDialog(box?: Box) {
     field('proxyJump', 'ProxyJump (optional)', { placeholder: 'jump host this server can reach' }),
   );
 
-  const modalBody = document.createElement('div');
-  modalBody.className = 'modal-body';
-  modalBody.append(
-    fieldGrid,
-    tagDatalist,
-    sessionWrap,
-    setupForm.element,
-    proxmoxAssociation.element,
-  );
-  if (mailSection) modalBody.append(mailSection.element);
-  if (workersSection) modalBody.append(workersSection.element);
+  // Edit-save always runs setup (see the submit handler), which the form's
+  // position on its own tab would otherwise hide: the Setup tab says so first.
+  const setupLead = el('p', { class: 'setup-hint' }, [isEdit
+    ? 'Save reruns setup on this box. Anything ticked here is installed if it is missing.'
+    : 'Setup runs once the box is added. Anything ticked here is installed if it is missing.']);
 
-  form.append(title, modalBody, err, actions);
+  const panels: Record<BoxModalTab, HTMLElement> = {
+    box: el('div', { class: 'box-tab-panel' }, [fieldGrid, tagDatalist, sessionWrap, proxmoxAssociation.element]),
+    setup: el('div', { class: 'box-tab-panel' }, [setupLead, setupForm.element]),
+    agents: el('div', { class: 'box-tab-panel' }, [...(mailSection ? [mailSection.element] : []), ...(workersSection ? [workersSection.element] : [])]),
+  };
+  const tabKeys = boxModalTabs(isEdit);
+  const tabStrip = el('div', { class: 'pve-tabs box-tabs' });
+  const modalBody = el('div', { class: 'modal-body' }, tabKeys.map((k) => panels[k]));
+
+  function selectTab(tab: BoxModalTab) {
+    for (const k of tabKeys) panels[k].hidden = k !== tab;
+    syncTabSelection(tabStrip, tab);
+    modalBody.scrollTop = 0;
+  }
+  // A tab that is not on screen is marked while it holds something Save will
+  // act on: a setup selection, or agent settings that were edited.
+  function paintTabMarks() {
+    const state = {
+      setupCount: setupSelectionCount(setupForm.values()),
+      agentsEdited: !!(mailSection?.changed() || workersSection?.changed()),
+    };
+    for (const k of tabKeys) {
+      const btn = tabStrip.querySelector<HTMLElement>(`[data-tab="${k}"]`)!;
+      const mark = tabMark(k, state);
+      btn.replaceChildren(BOX_MODAL_TAB_LABELS[k], ...(mark ? [el('span', { class: 'box-tab-mark', 'aria-hidden': 'true' }, [mark.text])] : []));
+      if (mark) btn.setAttribute('aria-label', mark.label); else btn.removeAttribute('aria-label');
+    }
+  }
+  for (const k of tabKeys) {
+    tabStrip.append(el('button', { type: 'button', class: 'pve-tab', 'data-tab': k, onclick: () => selectTab(k) }, [BOX_MODAL_TAB_LABELS[k]]));
+  }
+  wireTabStrip(tabStrip, modalBody, (k) => selectTab(k as BoxModalTab));
+  // Every edit inside the body is one of these three events; the sections'
+  // own handlers run first (they are on the targets), so the marks read the
+  // state the event just produced.
+  for (const type of ['change', 'input', 'click']) modalBody.addEventListener(type, paintTabMarks);
+  selectTab('box');
+  paintTabMarks();
+
+  // A refusal names a field on the Box tab; bring that tab back so the message
+  // in the footer and the field it is about are on screen together.
+  function refuse(message: string, input: HTMLInputElement) {
+    err.textContent = message;
+    submit.disabled = false;
+    selectTab('box');
+    input.focus();
+  }
+
+  form.append(title, tabStrip, modalBody, err, actions);
 
   // Pre-populate fields in edit mode
   if (isEdit) {
@@ -3528,18 +3573,23 @@ function buildBoxDialog(box?: Box) {
         const portRaw = fields.port.value.trim();
         if (portRaw) {
           const port = Number(portRaw);
-          if (!Number.isInteger(port) || port < 1 || port > 65535) { err.textContent = 'Port must be 1–65535'; submit.disabled = false; return; }
+          if (!Number.isInteger(port) || port < 1 || port > 65535) { refuse('Port must be 1–65535', fields.port); return; }
           patch.port = port;
         } else {
           patch.port = null;
         }
         const updatedBox = await api.updateBox(box!.id, patch);
+        // The box is saved; a section that then refuses is shown with its own
+        // tab open, since the footer message names a setting on it.
+        let committing: BoxModalTab = 'box';
         try {
           await proxmoxAssociation.commit(box!.id);
+          committing = 'agents';
           await mailSection?.commit(box!.id);
           await workersSection?.commit(box!.id);
         } catch (error) {
           await refresh();
+          selectTab(committing);
           throw error;
         }
         close();
@@ -3554,7 +3604,7 @@ function buildBoxDialog(box?: Box) {
         openProvisionPanel(updatedBox, so);
       } else {
         const host = fields.host.value.trim();
-        if (!host) { err.textContent = 'Host is required'; submit.disabled = false; return; }
+        if (!host) { refuse('Host is required', fields.host); return; }
         const spec: AddBoxSpec = { host };
         const label = fields.label.value.trim(); if (label) spec.label = label;
         const tag = canonicalTagForInput(fields.tag.value); if (tag) spec.tags = [tag];
@@ -3564,7 +3614,7 @@ function buildBoxDialog(box?: Box) {
         const portRaw = fields.port.value.trim();
         if (portRaw) {
           const port = Number(portRaw);
-          if (!Number.isInteger(port) || port < 1 || port > 65535) { err.textContent = 'Port must be 1–65535'; submit.disabled = false; return; }
+          if (!Number.isInteger(port) || port < 1 || port > 65535) { refuse('Port must be 1–65535', fields.port); return; }
           spec.port = port;
         }
         const newBox = await api.addBox(spec);

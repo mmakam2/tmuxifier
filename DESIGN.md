@@ -300,7 +300,9 @@ lit standby lamp beside it.
 The topology is unchanged from the product's working shape — fixed rail beside a fluid
 stage (`320px 1fr`, collapsing to 56px), right-side drawers (`min(560px, 92vw)`), centered
 modals in role widths (340px for a confirm, 560–760px for a form or a hub, 1040px for the
-fleet script editor — a workbench, not a dialog) — but the world reframes it: the rail is the **control
+fleet script editor — a workbench, not a dialog; a tabbed form whose tabs differ in height, the
+Add/Edit Box panel, hangs from its top edge instead, so its tab strip holds still under the
+pointer) — but the world reframes it: the rail is the **control
 cluster** (keys, lamps, the commit bar), the stage is the **screen bay** (a recessed
 display mounted in the chassis), and drawers/modals are **service panels** that open with
 mechanical directness (fast transforms, no bounce). Panel gutters are 12–16px; key rows

@@ -103,6 +103,8 @@ async function boxOf(page: Page, label: string) {
 async function openEditModal(page: Page, label = 'localhost') {
   await page.locator('.box', { has: page.locator('.name', { hasText: new RegExp(`^${label}$`) }) }).first().locator('.edit').click();
   await expect(page.getByRole('heading', { name: 'Edit box' })).toBeVisible();
+  // Agent messaging and agent workers are on the modal's Agents tab.
+  await page.getByRole('tab', { name: /^Agents/ }).click();
   return page.locator('.modal.box-modal');
 }
 
@@ -288,9 +290,14 @@ test('a bad name or directory shows the row\'s problem, and a save keeps the box
 
     // A box field changed in the same save (the tag: it does not touch how the box is reached):
     // the box is saved, the section is not.
+    // The tag is on the Box tab; Save is pressed from there, with the bad row out of sight.
+    await page.getByRole('tab', { name: /^Box/ }).click();
     await modal.getByLabel('Tag', { exact: true }).fill('e2etag');
     await page.getByRole('button', { name: 'Save' }).click();
     await expect(modal.locator('p.err')).toHaveText('Box saved, but the agent worker settings were not: Directory: an absolute path with no spaces', { timeout: 10000 });
+    // The refusal brings the tab it is about back, so the message and the row are seen together.
+    await expect(page.getByRole('tab', { name: /^Agents/ })).toHaveAttribute('aria-selected', 'true');
+    await expect(note).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Edit box' })).toBeVisible();
     expect((await boxOf(page, 'localhost')).tags).toEqual(['e2etag']);
     expect((await getWorkers(page, box.id)).workers).toEqual(EMPTY);

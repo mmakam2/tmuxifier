@@ -3,6 +3,20 @@
 What happens when a box is added: the server-side setup job, the tools checklist, the Claude
 Code statusline push, and AI CLI auth seeding. Part of the [Tmuxifier docs](../README.md).
 
+The Add box and Edit box dialogs are laid out as tabs under one **Save** (or **Add**):
+
+- **Box**: how the box is reached (host, label, tag, user, port, ProxyJump), its tmux session,
+  and its [Proxmox association](proxmox.md) when a Proxmox host is configured.
+- **Setup**: what the setup job installs: the terminal options, the tools checklist, AI CLI auth
+  seeding and the post-setup script, all described below.
+- **Agents** (Edit only): [agent messaging](agent-messaging.md) and [agent workers](#agent-workers).
+
+Save applies every tab at once, whichever one is open. A tab that is not open shows a mark while
+it holds something Save will act on: **Setup** shows how many things are ticked (a new box starts
+with one, Oh My Tmux), and **Agents** shows `edited` when its settings were changed. If a setting
+is refused, its tab is brought back with the message under it. Saving an existing box always runs
+its setup job again, ticked or not, which the Setup tab says in its first line.
+
 Each terminal runs `ssh -tt <box> "tmux -u new-session -A -s <session>"` (`-u` forces UTF-8
 output so glyphs survive a C/POSIX locale). `<session>` is the box's tmux session
 name — set per box in the Add/Edit dialog's **tmux session** dropdown, defaulting to `web`.
@@ -56,10 +70,12 @@ usage.
 
 ## Additional tools
 
-The Add/Edit Box modal (and the [Proxmox Provision form](proxmox.md)) also offer an **"Additional
-tools"** checklist that runs in the same provisioning step — a full system update/upgrade,
-curl, git, the GitHub CLI, Node.js 26 + npm, Bubblewrap, and the Codex, Claude Code,
-Antigravity, OpenCode and pi CLIs — using the same idempotent multi-distro install script.
+The Add/Edit Box modal's **Setup** tab (and the [Proxmox Provision form](proxmox.md)) also offer a
+**Tools** checklist that runs in the same provisioning step, in two groups. **System**: a full
+system update/upgrade, curl, git, the GitHub CLI, Node.js 26 + npm and Bubblewrap. **Agent CLIs**:
+Codex, Claude Code, Antigravity, OpenCode and pi. All of it uses the same idempotent multi-distro
+install script. Ticking Claude Code or OpenCode shows a line under the checklist saying what that
+checkbox does beyond installing the CLI.
 
 Each tool is installed only if the box doesn't have it, at the newest version available from its
 source. A copy already on the box is never upgraded or reinstalled, including one older than the
@@ -368,8 +384,8 @@ workers, the folder-trust tick, and what happens when a start goes wrong are in 
 
 ### The Edit Box section
 
-The **Agent workers** section is in the Edit dialog only, not in Add, below the Proxmox and
-messaging sections. It shows whether or not agent messaging is on, because starting a worker from
+The **Agent workers** section is in the Edit dialog only, not in Add, on its **Agents** tab below
+the messaging section. It shows whether or not agent messaging is on, because starting a worker from
 a pane needs no messaging. It saves right after the box itself, in the same Save.
 
 ```

@@ -69,8 +69,8 @@ setup job takes; the line follows the job as soon as its `agent-mail` step repor
 installed some other way are noticed when a session on the box starts listening, or at the
 socket's next quiet check (every ten minutes while nothing on the box uses it).
 
-The **Agent messaging** section is in the Edit dialog only, not in Add: add the box first. Every
-Save of the Edit dialog also runs setup again, as it always does.
+The **Agent messaging** section is on the **Agents** tab of the Edit dialog only, not in Add: add
+the box first. Every Save of the Edit dialog also runs setup again, as it always does.
 
 What a thread needs to start:
 

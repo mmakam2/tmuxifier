@@ -65,7 +65,7 @@ linked containers don't leave stale IPAM entries behind. An optional **DNS suffi
 `lan.example.com`) is appended to the hostname and written to the allocated record's
 `dns_name`; the provision form also previews the next available IP for auto-static presets
 (non-binding). Then **Provision → pick a preset → enter a
-hostname** (optionally a tag, oh-my-tmux/zsh/bash, and the same "Additional tools" checklist as the
+hostname** (optionally a tag, oh-my-tmux/zsh/bash, and the same Tools checklist as the
 Add/Edit Box modal — see [Boxes & setup jobs](boxes-and-setup.md)). Watch the live task log; once
 the container is up Tmuxifier installs tmux
 (and any selected frameworks/tools) over SSH, then an **Open terminal** button drops you into it.
@@ -145,7 +145,7 @@ actions. **Provisioning stays LXC-only** (see [Proxmox LXC provisioning](#proxmo
 above); a VM can be linked and lifecycle-managed, but Tmuxifier cannot create one for you.
 
 **Linking is explicit.** A provisioned container is linked automatically; any other box — container
-or VM — is linked by hand in **Edit box → Proxmox association** (pick host → node → guest, listed
+or VM — is linked by hand in **Edit box → Box → Proxmox association** (pick host → node → guest, listed
 with a CT/VM label and sorted by VMID; already-linked targets are disabled). Unlinking there never
 stops or destroys the guest — it only drops Tmuxifier's record. **Importing boxes never restores
 lifecycle authority:** an imported box starts unlinked and must be re-linked deliberately before any

@@ -66,6 +66,11 @@ export const CLAUDE_SETUP_HINT = 'Claude Code also pushes this host’s statusli
   + 'Unless agent messaging is turned off for this Tmuxifier, it also installs the tmx command, a skill, a mail listener hook, one permission rule for tmx '
   + 'and two auto-mode entries that tell Claude Code tmx messaging is sanctioned.';
 
+// The same for OpenCode, in the same order: what the checkbox adds to the CLI
+// (opencodeAgentPlugin.js), then what the agent-mail phase adds for it.
+export const OPENCODE_SETUP_HINT = 'OpenCode also gets Tmuxifier’s agent-state plugin; an existing install only gains what is missing. '
+  + 'Unless agent messaging is turned off for this Tmuxifier, it also installs the tmx command and a skill.';
+
 // Two forms can be open at once (hub tab + box modal); a per-instance radio
 // name keeps their shell selections independent.
 let shellRadioSeq = 0;
@@ -93,17 +98,15 @@ export function createSetupOptionsForm(initial: { ohMyTmux?: boolean } = {}): {
   const shNone = makeRadio(shellName, 'none', 'None', true);
   const shZsh = makeRadio(shellName, 'omz', 'Oh My Zsh', false);
   const shBash = makeRadio(shellName, 'omb', 'Oh My Bash', false);
-  const shellGroup = el('fieldset', { class: 'radio-group' }, [el('legend', {}, ['Shell framework']), shNone.wrap, shZsh.wrap, shBash.wrap]);
-
-  const tools = toolsCheckboxGroup();
-  tools.element.classList.add('setup-section');
+  // One line, not a stack: three short options read as one choice.
+  const shellGroup = el('fieldset', { class: 'radio-group radio-row' }, [el('legend', {}, ['Shell framework']), shNone.wrap, shZsh.wrap, shBash.wrap]);
 
   // One knob for the Claude stack: the `claude` TOOLS entry means CLI install
   // (skipped when already present) + statusline push + agent-state hooks +
   // the agent-mail phase. The hint names them all so the checkbox says what it
-  // does; the old separate "Push Claude Code statusline" checkbox is gone.
-  const claudeHint = el('div', { class: 'seed-status' }, [CLAUDE_SETUP_HINT]);
-  tools.element.append(claudeHint);
+  // does, and is shown while the box is ticked (provisionTools.ts); OpenCode's
+  // is the same kind of knob and gets the same kind of line.
+  const tools = toolsCheckboxGroup({ claude: CLAUDE_SETUP_HINT, opencode: OPENCODE_SETUP_HINT });
 
   const seedInput = el('input', { type: 'checkbox' }) as HTMLInputElement;
   const seedField = el('label', {

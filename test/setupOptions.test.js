@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { seedStatusParts, setupStartPayload, scriptSelection, CLAUDE_SETUP_HINT } from '../src/web/setupOptions.ts';
+import { seedStatusParts, setupStartPayload, scriptSelection, CLAUDE_SETUP_HINT, OPENCODE_SETUP_HINT } from '../src/web/setupOptions.ts';
 
 // These used to call a `seedStatusLine` export that production never used —
 // it existed only so this file could assert on a whole string (D3 in the
@@ -125,5 +125,14 @@ test('the Claude Code hint says everything ticking it installs, agent messaging 
     'Claude Code also pushes this host’s statusline and the agent-state hooks; an existing install only gains what is missing. '
     + 'Unless agent messaging is turned off for this Tmuxifier, it also installs the tmx command, a skill, a mail listener hook, one permission rule for tmx '
     + 'and two auto-mode entries that tell Claude Code tmx messaging is sanctioned.',
+  );
+});
+
+// The checkbox reads just "OpenCode" now; what it used to say in brackets, and
+// what the agent-mail phase adds for it, is this line, shown while it is ticked.
+test('the OpenCode hint says what ticking it installs beyond the CLI', () => {
+  expect(OPENCODE_SETUP_HINT).toBe(
+    'OpenCode also gets Tmuxifier’s agent-state plugin; an existing install only gains what is missing. '
+    + 'Unless agent messaging is turned off for this Tmuxifier, it also installs the tmx command and a skill.',
   );
 });

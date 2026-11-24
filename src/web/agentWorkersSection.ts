@@ -111,6 +111,8 @@ export function createAgentWorkersSection(box: Box) {
 
   return {
     element: section,
+    // Whether Save would send the record: what marks the modal's Agents tab.
+    changed: () => !!loaded && !!draft && workersChanged(loaded, draft),
     async commit(boxId: string) {
       if (!loaded || !draft || !workersChanged(loaded, draft)) return;
       // The box is already saved when this runs, so every refusal says so.

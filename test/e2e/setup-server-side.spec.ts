@@ -73,6 +73,8 @@ test('setup continues server-side after the panel is closed mid-run', async ({ p
     // ephemeral key is only authorized for that user, not root).
     await page.getByLabel('User').fill('');
     // Avoid any option that needs the network — see file header.
+    // The setup options are on the modal's Setup tab (boxModalView.ts).
+    await page.getByRole('tab', { name: /^Setup/ }).click();
     await page.getByLabel('Install Oh My Tmux if missing').uncheck();
 
     await page.getByRole('button', { name: 'Add', exact: true }).click();
@@ -210,8 +212,10 @@ test('the opencode-plugin phase records a skip on a box without OpenCode', async
     await page.getByLabel('Host or alias').fill('tmuxifierlocal-setupjob');
     await page.getByLabel('Label (optional)').fill(label);
     await page.getByLabel('User').fill('');
+    // The setup options are on the modal's Setup tab (boxModalView.ts).
+    await page.getByRole('tab', { name: /^Setup/ }).click();
     await page.getByLabel('Install Oh My Tmux if missing').uncheck();
-    await page.getByLabel('OpenCode (CLI + agent-state plugin)').check();
+    await page.getByLabel('OpenCode', { exact: true }).check();
     await page.getByRole('button', { name: 'Add', exact: true }).click();
 
     const panel = page.locator('#provision-panel');

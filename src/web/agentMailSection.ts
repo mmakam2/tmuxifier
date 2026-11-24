@@ -81,13 +81,14 @@ export function createAgentMailSection(box: Box, boxes: readonly MailBoxRef[]) {
     loaded = copyPolicy(view.policy);
     draft = copyPolicy(view.policy);
     const pairs = view.pairs.map((p) => el('div', { class: 'mail-pair' }, [pairLine(p, boxes, box.label)]));
+    // The status leads, beside the heading: it is the answer to "is this on",
+    // which is what the section is opened for.
     section.replaceChildren(
-      eyebrow(),
+      el('div', { class: 'sec-head' }, [eyebrow(), el('div', { class: 'mail-status' }, [statusLine(view.status)])]),
       listRow('send', 'sendTo', 'Agents here may send', 'to:', 'send list'),
       listRow('receive', 'receiveFrom', 'Agents here may receive', 'from:', 'receive list'),
       el('label', { class: 'check-field' }, [mirrorTick, el('span', {}, ['When adding a box, also write the matching entry on that box'])]),
       ...(pairs.length ? [el('div', { class: 'mail-pairs' }, pairs)] : []),
-      el('div', { class: 'mail-status' }, [statusLine(view.status)]),
     );
   }
 
@@ -98,6 +99,8 @@ export function createAgentMailSection(box: Box, boxes: readonly MailBoxRef[]) {
 
   return {
     element: section,
+    // Whether Save would send a policy: what marks the modal's Agents tab.
+    changed: () => !!loaded && !!draft && policyChanged(loaded, draft),
     async commit(boxId: string) {
       if (!loaded || !draft || !policyChanged(loaded, draft)) return;
       const body = { ...copyPolicy(draft), mirror: mirrorToSend(mirror, draft) };

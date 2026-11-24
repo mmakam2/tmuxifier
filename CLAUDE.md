@@ -996,8 +996,19 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
 - **Fleet** — `fleetSelection.ts`, `fleetHistory.ts`, `fleetEditor.ts` (CodeMirror), `fleetPoll.ts`
   (generation-guarded), `fleetJobs.ts` (drawer view-model), `fleetScripts.ts`/`fleetScriptRail.ts`
   (a run carries `scriptName` only while the buffer equals the saved body).
-- **Setup & Proxmox** — `setupOptions.ts` (shared setup form; post-setup script is an id lookup),
-  `provisionTools.ts`, `presetSummary.ts`, `setupStatus.ts`, `setupPoller.ts`,
+- **Box modal** — the Add/Edit Box modal in `main.ts` is three tabs under one Save, over the pure
+  `boxModalView.ts`: **Box** (connection fields, session picker, Proxmox association), **Setup**
+  (the shared setup form) and **Agents** (messaging + workers; Edit only). Panels are built once
+  and hidden, never re-rendered, so every tab keeps its state. A tab is marked while it holds
+  something Save will act on (`setupSelectionCount`, the sections' `changed()`); a refusal brings
+  its own tab back (`refuse` for the Box fields, `committing` for a section's commit). Edit-save
+  always runs setup, which the Setup tab's first line says. The panel hangs from its top edge
+  (`align-self: flex-start`) because the tabs differ in height. e2e: `test/e2e/boxModalTabs.spec.ts`;
+  specs that reach a setup option or an agent section click its tab first.
+- **Setup & Proxmox** — `setupOptions.ts` (shared setup form; post-setup script is an id lookup;
+  sections are borderless `fieldset.setup-section` with a floated legend, the hub's seam-and-eyebrow
+  dialect), `provisionTools.ts` (the Tools checklist in two groups, `TOOL_GROUPS`, each a contiguous
+  run of `TOOL_IDS`; a tool's note is shown only while it is ticked), `presetSummary.ts`, `setupStatus.ts`, `setupPoller.ts`,
   `interactiveLauncher.ts` (at most one interactive finish), `proxmox.ts`/`proxmoxUi.ts` (hub:
   Guests, Presets, Provision, Activity), `proxmoxPresets.ts`, `proxmoxGuests.ts` (no lifecycle
   actions for `mismatch`/`unknown`/templates; readdress for running/stopped LXC only),
