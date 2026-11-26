@@ -1,5 +1,6 @@
 import { buildProbeArgv, WINDOW_ID_RE, PANE_ID_RE } from './sshCommand.js';
 import { MUX_REFUSED_RE } from './agentWatch.js';
+import { agentKindOf } from './agentKind.js';
 
 // The activity field is `#{window_activity}` — the last time the session's
 // current window produced OUTPUT — and deliberately not `#{session_activity}`,
@@ -74,11 +75,11 @@ export const OSC_SWEEP =
   'if [ -f "$HOME/.tmuxifier-osc/reporter.py" ] && command -v python3 >/dev/null 2>&1; then python3 "$HOME/.tmuxifier-osc/reporter.py" sweep >/dev/null 2>&1 || true; fi; ';
 
 // One line per pane on the box: parseTmuxPanes reads the whole row, and
-// parseAgentMarks uses it to decide which per-pane markers still describe a
-// running agent. Session first and the command last, because session names
-// cannot contain a colon and commands can; the window id, pane id and pane
-// index between them are digits behind a sigil. `#{window_zoomed_flag}` is the
-// pane's WINDOW's flag: a zoomed window shows only its active pane.
+// parseAgentMarks and parsePaneMarks use it to decide which per-pane markers
+// still describe a running agent. Session first and the command last, because
+// session names cannot contain a colon and commands can; the window id, pane id
+// and pane index between them are digits behind a sigil. `#{window_zoomed_flag}`
+// is the pane's WINDOW's flag: a zoomed window shows only its active pane.
 export const PANE_FMT = '#{session_name}:#{window_id}:#{pane_id}:#{pane_index}:#{pane_active}:#{window_zoomed_flag}:#{pane_current_command}';
 export const PANE_ROWS_MAX = 400;
 
@@ -159,11 +160,11 @@ export const AGENT_MARK_CAUSES = ['prompt', 'resume', 'stop', 'start', 'permissi
 // whatever its marker says: the agent was killed before its SessionEnd hook ran.
 const SHELL_CMD_RE = /^-?(?:(?:ba|z|da|fi|k|a|tc|c|pw)?sh|nu)$/;
 
-// `__PANE__` rows as a set of "<session>:<pane>" keys for panes that can still
-// hold an agent. null means the listing cannot be trusted to be complete (absent
-// or at the row cap), and then no marker is discarded for being absent from it.
-function parseLivePanes(stdout) {
-  const { panes, complete } = parseTmuxPanes(stdout);
+// A parsed pane listing (parseTmuxPanes) as a set of "<session>:<pane>" keys for
+// the panes that can still hold an agent. null means the listing cannot be
+// trusted to be complete (absent or at the row cap), and then no marker is
+// discarded for being absent from it.
+function liveKeys({ panes, complete }) {
   if (!complete) return null;
   return new Set(panes.filter((p) => !SHELL_CMD_RE.test(p.cmd)).map((p) => `${p.session}:${p.pane}`));
 }
@@ -176,17 +177,42 @@ const foldMarks = (marks) => marks.reduce((best, m) => {
   return d < 0 || (d === 0 && m.ts > best.ts) ? m : best;
 });
 
-// Pull `__AGENT__` marker lines into { session: { state, cause, ts } }. Marker
-// content is a file on the box, so it is input: state and cause are closed
-// allowlists and ts must be a finite positive number; anything else drops
-// (never rewritten). Five fields is the Claude hook's per-pane format
-// (`...:<cause>:%<pane>`). Four fields is a session-wide marker: the OpenCode
+// One `__AGENT__ <marker contents>` line as { session, state, cause, ts, pane },
+// or null when it is not a usable marker. Marker content is a file on the box,
+// so it is input: state and cause are closed allowlists and ts must be a finite
+// positive number; anything else drops (never rewritten). Five fields is the
+// Claude hook's per-pane format (`...:<cause>:%<pane>`), and `pane` is then its
+// validated id. Four fields is a session-wide marker (`pane` null): the OpenCode
 // plugin and OSC reporter, or the Claude hook without a usable $TMUX_PANE. Three
 // fields is the legacy `<session>:<state>:<epoch>` a box writes until setup is
-// rerun: `working` maps to { working, prompt } and `waiting` to { ready, stop }.
-// Two fields, six or more, or a legacy word with a cause drop.
+// rerun, also session-wide: `working` maps to { working, prompt } and `waiting`
+// to { ready, stop }. Two fields, six or more, or a legacy word with a cause drop.
 // Colons cannot appear in tmux session names (the invariant STATUS_FMT
 // already relies on), so the split is unambiguous.
+function readMarkerLine(line) {
+  if (!line.startsWith('__AGENT__ ')) return null;
+  const parts = line.slice('__AGENT__ '.length).split(':');
+  if (parts.length < 3 || parts.length > 5) return null;
+  const [session, rawState, tsRaw, rawCause, pane] = parts;
+  const ts = Number(tsRaw);
+  if (!session || !Number.isFinite(ts) || ts <= 0) return null;
+  let state;
+  let cause;
+  if (parts.length === 3) {
+    if (rawState === 'working') { state = 'working'; cause = 'prompt'; }
+    else if (rawState === 'waiting') { state = 'ready'; cause = 'stop'; }
+    else return null;
+  } else {
+    if (!AGENT_MARK_STATES.includes(rawState) || !AGENT_MARK_CAUSES.includes(rawCause)) return null;
+    state = rawState;
+    cause = rawCause;
+  }
+  if (parts.length === 5 && !PANE_ID_RE.test(pane)) return null;
+  return { session, state, cause, ts, pane: parts.length === 5 ? pane : null };
+}
+
+// Pull `__AGENT__` marker lines into { session: { state, cause, ts } }, the
+// per-session reading (parsePaneMarks below is the per-pane one).
 //
 // Split panes share a session, so a session reads as the fold of its panes:
 // blocked, then working, then finished, newest first within a state. A pane
@@ -196,31 +222,16 @@ const foldMarks = (marks) => marks.reduce((best, m) => {
 // is ignored; otherwise it folds in with the panes.
 export function parseAgentMarks(stdout) {
   const lines = String(stdout).split(/\r?\n/);
-  const live = parseLivePanes(stdout);
+  const live = liveKeys(parseTmuxPanes(stdout));
   // Maps, not objects: the keys are box-controlled tmux session names.
   const sessionWide = new Map();
   const perPane = new Map();
   for (const line of lines) {
-    if (!line.startsWith('__AGENT__ ')) continue;
-    const parts = line.slice('__AGENT__ '.length).split(':');
-    if (parts.length < 3 || parts.length > 5) continue;
-    const [session, rawState, tsRaw, rawCause, pane] = parts;
-    const ts = Number(tsRaw);
-    if (!session || !Number.isFinite(ts) || ts <= 0) continue;
-    let state;
-    let cause;
-    if (parts.length === 3) {
-      if (rawState === 'working') { state = 'working'; cause = 'prompt'; }
-      else if (rawState === 'waiting') { state = 'ready'; cause = 'stop'; }
-      else continue;
-    } else {
-      if (!AGENT_MARK_STATES.includes(rawState) || !AGENT_MARK_CAUSES.includes(rawCause)) continue;
-      state = rawState;
-      cause = rawCause;
-    }
-    if (parts.length === 5) {
-      if (!PANE_ID_RE.test(pane)) continue;
-      if (live && !live.has(`${session}:${pane}`)) continue;
+    const m = readMarkerLine(line);
+    if (!m) continue;
+    const { session, state, cause, ts } = m;
+    if (m.pane !== null) {
+      if (live && !live.has(`${session}:${m.pane}`)) continue;
       if (!perPane.has(session)) perPane.set(session, []);
       perPane.get(session).push({ state, cause, ts });
     } else {
@@ -236,6 +247,54 @@ export function parseAgentMarks(stdout) {
     if (wide && (!marks.length || wide.ts >= Math.max(...marks.map((m) => m.ts)))) marks.push(wide);
     out[session] = foldMarks(marks);
   }
+  return Object.keys(out).length ? out : null;
+}
+
+// The same markers as { '%pane': { session, state, cause, ts } }: one entry per
+// pane, no fold, because the pane is the unit an agent runs in.
+//
+// A five-field marker counts only while the pane listing shows its pane in its
+// session with something other than a shell in the foreground (a killed agent
+// leaves its marker behind). A pane that moved sessions leaves its old file
+// behind, so two markers can name one pane; the old session's fails that test
+// and drops, and when both sessions list the pane (grouped sessions) the newer
+// wins. An absent or capped listing fails open, as in parseAgentMarks: no pane
+// marker is discarded for being absent from it.
+//
+// A session-wide marker (four fields, or the legacy three) is the compatibility
+// layer for boxes whose setup has not been rerun and for a Claude hook with no
+// usable $TMUX_PANE. It speaks for every agent pane of its session that has no
+// marker of its own, an agent pane being one `agentKindOf` knows by its command.
+// With no trustworthy listing there are no known panes to speak for, so it
+// applies to nothing. Delete this paragraph's rule once every box has been rerun.
+//
+// Null-prototype and null when empty, like parseAgentMarks.
+export function parsePaneMarks(stdout) {
+  const listing = parseTmuxPanes(stdout);
+  const live = liveKeys(listing);
+  const own = new Map();
+  const wide = new Map();
+  for (const line of String(stdout).split(/\r?\n/)) {
+    const m = readMarkerLine(line);
+    if (!m) continue;
+    const mark = { session: m.session, state: m.state, cause: m.cause, ts: m.ts };
+    if (m.pane === null) {
+      if (!wide.has(m.session) || mark.ts > wide.get(m.session).ts) wide.set(m.session, mark);
+    } else if (!live || live.has(`${m.session}:${m.pane}`)) {
+      if (!own.has(m.pane) || mark.ts > own.get(m.pane).ts) own.set(m.pane, mark);
+    }
+  }
+  const applied = new Map();
+  if (listing.complete) {
+    for (const p of listing.panes) {
+      const mark = wide.get(p.session);
+      if (!mark || own.has(p.pane) || agentKindOf(p.cmd) === null) continue;
+      // A pane listed in two grouped sessions can be spoken for by both.
+      if (!applied.has(p.pane) || mark.ts > applied.get(p.pane).ts) applied.set(p.pane, { ...mark });
+    }
+  }
+  const out = Object.create(null);
+  for (const [pane, mark] of [...applied, ...own]) out[pane] = mark;
   return Object.keys(out).length ? out : null;
 }
 
@@ -471,9 +530,12 @@ export function createStatusChecker({
       const metrics = parseMeta(res.stdout);
       deriveCpuPct(box, metrics);
       const agentMarks = parseAgentMarks(res.stdout);
-      const base = { reachable: true, ...tmuxState(res.stdout) };
-      const withMeta = metrics ? { ...base, metrics } : base;
-      return agentMarks ? { ...withMeta, agentMarks } : withMeta;
+      const paneMarks = parsePaneMarks(res.stdout);
+      const out = { reachable: true, ...tmuxState(res.stdout) };
+      if (metrics) out.metrics = metrics;
+      if (agentMarks) out.agentMarks = agentMarks;
+      if (paneMarks) out.paneMarks = paneMarks;
+      return out;
     } catch (e) {
       return { reachable: false, error: cleanStatusError((e && e.message) || e) || 'unreachable' };
     }
@@ -581,6 +643,8 @@ export function createStatusChecker({
         const out = tmuxState(res.stdout);
         const agentMarks = parseAgentMarks(res.stdout);
         if (agentMarks) out.agentMarks = agentMarks;
+        const paneMarks = parsePaneMarks(res.stdout);
+        if (paneMarks) out.paneMarks = paneMarks;
         // The connection had no session slot left and ssh went around it (see
         // agentWatch.js). The answer stands; the flag tells the caller to stop
         // watching this box for a while.

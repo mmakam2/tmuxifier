@@ -715,6 +715,15 @@ test('checkBox: attaches agentMarks when the probe carries __AGENT__ lines, omit
   expect(st2.agentMarks).toBeUndefined();
 });
 
+test('checkBox: attaches paneMarks beside agentMarks, omits them without a usable marker', async () => {
+  const run = async () => ({ code: 0, stdout: '__AGENT__ web:working:1718000000:prompt:%1\nweb:1:0:1718000000:claude\n__PANE__ web:@0:%1:1:1:0:claude\n', stderr: '' });
+  const st = await createStatusChecker({ run }).checkBox({ host: 'h' });
+  expect({ ...st.paneMarks }).toEqual({ '%1': { session: 'web', state: 'working', cause: 'prompt', ts: 1718000000 } });
+  expect(st.agentMarks).toEqual({ web: { state: 'working', cause: 'prompt', ts: 1718000000 } }); // still there until the readers move
+  const without = async () => ({ code: 0, stdout: 'web:1:0:1718000000:claude\n', stderr: '' });
+  expect((await createStatusChecker({ run: without }).checkBox({ host: 'h' })).paneMarks).toBeUndefined();
+});
+
 test('parseTmuxWindows maps one row per window and rejoins a colon-bearing name', () => {
   // Verified on tmux 3.5a: window names may contain colons ("we:ird name"),
   // session names may not — so the name is the LAST field and the tail rejoins.
@@ -1062,6 +1071,14 @@ test('checkAgents returns sessions, windows and markers from one light probe', a
   expect(res.sessions[0].windowList).toEqual([{ index: 0, id: '@1', active: true, name: 'work' }]);
   expect(res.agentMarks.main).toEqual({ state: 'blocked', ts: 1700000000, cause: 'permission' });
   expect(res).not.toHaveProperty('metrics');
+});
+
+test('checkAgents carries paneMarks exactly as checkBox does', async () => {
+  const stdout = '__AGENT__ main:blocked:1700000000:permission:%0\n__AGENT__ main:working:1700000005:prompt\n' + PANE_OUT + '\n';
+  const res = await createStatusChecker({ run: async () => ({ code: 0, stdout, stderr: '' }) }).checkAgents({ id: 'b1', host: 'h' });
+  expect({ ...res.paneMarks }).toEqual({ '%0': { session: 'main', state: 'blocked', cause: 'permission', ts: 1700000000 } });
+  const bare = await createStatusChecker({ run: async () => ({ code: 0, stdout: 'main:1:0:1700000000:zsh\n', stderr: '' }) }).checkAgents({ id: 'b1', host: 'h' });
+  expect(bare).not.toHaveProperty('paneMarks');
 });
 
 test('checkAgents reports a box without tmux and one with no markers', async () => {

@@ -627,14 +627,17 @@ const sess = (cmd = 'claude', attached = false) => [{ name: 'web', windows: 1, a
 const full = (state, cause, ts, extra = {}) => ({
   reachable: true, tmux: true, sessions: sess(), agentMarks: { web: { state, cause, ts } }, metrics: { cpus: 2 }, ...extra,
 });
-const light = (state, cause, ts) => ({ tmux: true, sessions: sess(), agentMarks: { web: { state, cause, ts } } });
+const light = (state, cause, ts, extra = {}) => ({ tmux: true, sessions: sess(), agentMarks: { web: { state, cause, ts } }, ...extra });
+// The per-pane half of a read: the pane listing and the markers keyed by pane id.
+const paneRow = (pane, cmd = 'claude', extra = {}) => ({ session: 'web', windowId: '@0', pane, index: Number(pane.slice(1)), active: pane === '%1', zoomed: false, cmd, ...extra });
+const paneRead = (state, cause, ts, panes = [paneRow('%1')]) => ({ panes, paneMarks: { '%1': { session: 'web', state, cause, ts } } });
 const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
 
 test('refreshAgents patches sessions and markers into the snapshot and records the edge', async () => {
   const history = createHealthHistory({ now: () => 5 });
   const statusChecker = {
-    checkBox: async () => full('working', 'prompt', 100),
-    checkAgents: async () => light('blocked', 'permission', 101),
+    checkBox: async () => full('working', 'prompt', 100, paneRead('working', 'prompt', 100)),
+    checkAgents: async () => light('blocked', 'permission', 101, paneRead('blocked', 'permission', 101, [paneRow('%1'), paneRow('%2', 'zsh')])),
   };
   const poller = createStatusPoller({ store: fakeStore([rtBox]), statusChecker, history });
   await poller.pollOnce();
@@ -643,6 +646,11 @@ test('refreshAgents patches sessions and markers into the snapshot and records t
   const after = poller.getSnapshot();
   expect(after).not.toBe(before);                    // readers never see a snapshot mutate
   expect(before.a.agentMarks.web.state).toBe('working');
+  // The pane listing and its markers are patched in with the sessions they describe.
+  expect(before.a.panes).toEqual([paneRow('%1')]);
+  expect(before.a.paneMarks['%1'].state).toBe('working');
+  expect(after.a.panes).toEqual([paneRow('%1'), paneRow('%2', 'zsh')]);
+  expect(after.a.paneMarks['%1']).toEqual({ session: 'web', state: 'blocked', cause: 'permission', ts: 101 });
   expect(after.a.agentMarks.web).toEqual({ state: 'blocked', cause: 'permission', ts: 101 });
   expect(after.a.metrics).toEqual({ cpus: 2 });      // the sweep's fields survive
   expect(after.a.reachable).toBe(true);
@@ -661,6 +669,24 @@ test('refreshAgents drops markers the box no longer has', async () => {
   expect(await poller.refreshAgents('a')).toBe(true);
   expect(poller.getSnapshot().a).not.toHaveProperty('agentMarks');
   expect(poller.getSnapshot().a.sessions[0].paneCmd).toBe('zsh');
+});
+
+test('refreshAgents never leaves a stale pane list or pane markers beside fresh sessions', async () => {
+  // A light probe whose pane listing was capped (or whose markers are gone)
+  // answers without `panes` / `paneMarks`. Keeping the sweep's would pair a
+  // fresh session list with panes and markers from before it.
+  const statusChecker = {
+    checkBox: async () => full('ready', 'stop', 100, paneRead('ready', 'stop', 100)),
+    checkAgents: async () => ({ tmux: true, sessions: sess('zsh') }),
+  };
+  const poller = createStatusPoller({ store: fakeStore([rtBox]), statusChecker });
+  await poller.pollOnce();
+  expect(poller.getSnapshot().a.panes).toHaveLength(1);
+  expect(await poller.refreshAgents('a')).toBe(true);
+  const entry = poller.getSnapshot().a;
+  expect(entry).not.toHaveProperty('panes');
+  expect(entry).not.toHaveProperty('paneMarks');
+  expect(entry.sessions[0].paneCmd).toBe('zsh');
 });
 
 test('refreshAgents never probes or marks down: unknown, unreachable and failed boxes are left to the sweep', async () => {
@@ -692,12 +718,13 @@ test('a sweep that read the box BEFORE a refresh cannot overwrite the refresh wi
   const history = createHealthHistory({ now: () => 5 });
   const slow = deferred();
   let sweeps = 0;
+  const refreshed = [paneRow('%1'), paneRow('%2', 'zsh')];
   const statusChecker = {
     checkBox: async (b) => {
       if (b.id === 'slow') { sweeps += 1; if (sweeps === 2) await slow.promise; return { reachable: true, tmux: true, sessions: [] }; }
-      return full('working', 'prompt', 100);
+      return full('working', 'prompt', 100, paneRead('working', 'prompt', 100));
     },
-    checkAgents: async () => light('blocked', 'permission', 101),
+    checkAgents: async () => light('blocked', 'permission', 101, paneRead('blocked', 'permission', 101, refreshed)),
   };
   const poller = createStatusPoller({ store: fakeStore([rtBox, { id: 'slow', host: 'hs' }]), statusChecker, history, concurrency: 4 });
   await poller.pollOnce();
@@ -707,9 +734,37 @@ test('a sweep that read the box BEFORE a refresh cannot overwrite the refresh wi
   slow.resolve();
   await sweep;
   expect(poller.getSnapshot().a.agentMarks.web.state).toBe('blocked');
+  // The panes and their markers are agent state like `sessions`: the unordered sweep keeps the refresh's.
+  expect(poller.getSnapshot().a.panes).toEqual(refreshed);
+  expect(poller.getSnapshot().a.paneMarks['%1'].state).toBe('blocked');
   expect(poller.getSnapshot().a.metrics).toEqual({ cpus: 2 }); // the sweep's own fields still land
   expect(history.getSeries('a').at(-1).agents.web.state).toBe('blocked');
   expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
+});
+
+test('a sweep that read the box BEFORE a refresh drops its own panes and paneMarks when the refreshed snapshot has none', async () => {
+  const slow = deferred();
+  let sweeps = 0;
+  const statusChecker = {
+    checkBox: async (b) => {
+      if (b.id === 'slow') { sweeps += 1; if (sweeps === 2) await slow.promise; return { reachable: true, tmux: true, sessions: [] }; }
+      return full('working', 'prompt', 100, paneRead('working', 'prompt', 100));
+    },
+    checkAgents: async () => ({ tmux: true, sessions: sess('zsh') }),
+  };
+  const poller = createStatusPoller({ store: fakeStore([rtBox, { id: 'slow', host: 'hs' }]), statusChecker, concurrency: 4 });
+  await poller.pollOnce();
+  const sweep = poller.pollOnce();
+  await new Promise((r) => setTimeout(r, 10));
+  expect(await poller.refreshAgents('a')).toBe(true);
+  slow.resolve();
+  await sweep;
+  const entry = poller.getSnapshot().a;
+  expect(entry.sessions[0].paneCmd).toBe('zsh');       // the refresh's reading stands...
+  expect(entry).not.toHaveProperty('panes');            // ...and the older sweep's panes do not sit beside it
+  expect(entry).not.toHaveProperty('paneMarks');
+  expect(entry).not.toHaveProperty('agentMarks');
+  expect(entry.metrics).toEqual({ cpus: 2 });
 });
 
 test('a sweep that read the box AFTER a refresh wins: it is the newer read', async () => {

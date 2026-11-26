@@ -81,7 +81,8 @@ export function createStatusPoller({
   }
   // The full-probe result to store for a box: `status` itself when its read
   // may be applied, otherwise `status` with the snapshot's current agent
-  // fields kept. Reachability and metrics are always the probe's own. Returns
+  // fields kept (sessions, panes, and the markers read for them). Reachability
+  // and metrics are always the probe's own. Returns
   // a new object when it changes anything — checkBox may hand the same result
   // to a coalesced caller or keep it as a backoff's last-known status.
   function settle(boxId, start, status) {
@@ -90,6 +91,8 @@ export function createStatusPoller({
     if (!ordered && status?.reachable && live?.reachable) {
       const kept = { ...status, tmux: live.tmux, sessions: live.sessions };
       if (live.agentMarks) kept.agentMarks = live.agentMarks; else delete kept.agentMarks;
+      if (live.panes) kept.panes = live.panes; else delete kept.panes;
+      if (live.paneMarks) kept.paneMarks = live.paneMarks; else delete kept.paneMarks;
       return kept;
     }
     applied.set(boxId, ++seq);
@@ -277,6 +280,10 @@ export function createStatusPoller({
       if (!cur?.reachable) return false;
       const entry = { ...cur, tmux: res.tmux, sessions: res.sessions };
       if (res.agentMarks) entry.agentMarks = res.agentMarks; else delete entry.agentMarks;
+      // The pane listing and its markers describe the same moment as `sessions`:
+      // a light probe that could not read them leaves none, never the sweep's.
+      if (res.panes) entry.panes = res.panes; else delete entry.panes;
+      if (res.paneMarks) entry.paneMarks = res.paneMarks; else delete entry.paneMarks;
       // A new object rather than a mutation, as in probeOne.
       snapshot = { ...snapshot, [box.id]: entry };
       applied.set(box.id, ++seq);

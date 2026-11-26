@@ -2,7 +2,7 @@ import { test, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createLocalAgentSampler, readAgentMarks, LOCAL_BOX_ID } from '../src/server/localAgent.js';
+import { createLocalAgentSampler, readAgentMarks, readMarks, LOCAL_BOX_ID } from '../src/server/localAgent.js';
 import { sampleOf } from '../src/server/healthHistory.js';
 
 function tmpHome() {
@@ -191,4 +191,79 @@ test('sample() folds Host Shell split panes and ignores a closed pane', async ()
       : { code: 0, stdout: 'local:1:0:1722600000:claude\n' }),
   });
   expect((await sampler.sample()).agentMarks.local).toEqual({ state: 'working', cause: 'prompt', ts: 100 });
+});
+
+// The per-pane reading beside the per-session one: the same files and the same
+// pane listing, parsed by the pane parsers.
+function localHome(files) {
+  const home = tmpHome();
+  const dir = path.join(home, '.tmuxifier-agent');
+  fs.mkdirSync(dir);
+  for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text);
+  return home;
+}
+const tmuxStub = (paneOut, lsOut = 'local:1:0:1722600000:claude\n') => async (args) => (args[0] === 'list-panes'
+  ? { code: 0, stdout: paneOut }
+  : { code: 0, stdout: lsOut });
+
+test('sample() returns panes and paneMarks beside agentMarks for a per-pane marker', async () => {
+  const home = localHome({ 'local%4': 'local:working:1722600005:prompt:%4\n' });
+  const sampler = createLocalAgentSampler({
+    home,
+    runTmux: tmuxStub('__PANE__ local:@0:%4:1:1:0:claude\n__PANE__ local:@0:%5:2:0:0:zsh\n'),
+  });
+  const s = await sampler.sample();
+  expect(s.panes).toEqual([
+    { session: 'local', windowId: '@0', pane: '%4', index: 1, active: true, zoomed: false, cmd: 'claude' },
+    { session: 'local', windowId: '@0', pane: '%5', index: 2, active: false, zoomed: false, cmd: 'zsh' },
+  ]);
+  expect({ ...s.paneMarks }).toEqual({ '%4': { session: 'local', state: 'working', cause: 'prompt', ts: 1722600005 } });
+  expect(s.agentMarks.local).toEqual({ state: 'working', cause: 'prompt', ts: 1722600005 });
+});
+
+test('sample() applies a session-wide marker to the Host Shell\'s agent panes with no marker of their own', async () => {
+  const home = localHome({ local: 'local:blocked:1722600009:question\n' });
+  const sampler = createLocalAgentSampler({
+    home,
+    runTmux: tmuxStub('__PANE__ local:@0:%1:1:1:0:codex\n__PANE__ local:@0:%2:2:0:0:zsh\n'),
+  });
+  expect({ ...(await sampler.sample()).paneMarks }).toEqual({ '%1': { session: 'local', state: 'blocked', cause: 'question', ts: 1722600009 } });
+});
+
+test('sample() reports an empty pane list for an empty tmux, and none when the pane listing cannot be trusted', async () => {
+  const noServer = createLocalAgentSampler({
+    home: tmpHome(),
+    runTmux: async () => ({ code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-0/default\n' }),
+  });
+  expect((await noServer.sample()).panes).toEqual([]);
+  // Sessions exist but list-panes failed or came back without rows: unknown, not empty.
+  const failed = createLocalAgentSampler({
+    home: tmpHome(),
+    runTmux: async (args) => (args[0] === 'list-panes' ? { code: 1, stdout: '', stderr: 'boom' } : { code: 0, stdout: 'local:1:0:1722600000:claude\n' }),
+  });
+  const s = await failed.sample();
+  expect(s.sessions).toHaveLength(1);
+  expect('panes' in s).toBe(false);
+  expect('paneMarks' in s).toBe(false);
+  // A listing cut off at the row cap is not the whole box either.
+  const capped = Array.from({ length: 400 }, (_, i) => `__PANE__ local:@0:%${i}:${i}:0:0:zsh`).join('\n');
+  expect('panes' in await createLocalAgentSampler({ home: tmpHome(), runTmux: tmuxStub(capped) }).sample()).toBe(false);
+});
+
+test('sample() carries no paneMarks without a usable marker', async () => {
+  const sampler = createLocalAgentSampler({ home: tmpHome(), runTmux: tmuxStub('__PANE__ local:@0:%1:1:1:0:claude\n') });
+  const s = await sampler.sample();
+  expect(s.panes).toHaveLength(1);
+  expect('paneMarks' in s).toBe(false);
+  expect('agentMarks' in s).toBe(false);
+});
+
+test('readMarks returns both readings from one read of the marker directory', async () => {
+  const home = localHome({ 'local%1': 'local:ready:1722600001:stop:%1\n' });
+  const rows = ['__PANE__ local:@0:%1:1:1:0:claude'];
+  const both = await readMarks(home, rows);
+  expect(both.agentMarks).toEqual({ local: { state: 'ready', cause: 'stop', ts: 1722600001 } });
+  expect({ ...both.paneMarks }).toEqual({ '%1': { session: 'local', state: 'ready', cause: 'stop', ts: 1722600001 } });
+  expect(await readMarks(tmpHome())).toBeNull();
+  expect(await readAgentMarks(home, rows)).toEqual(both.agentMarks);
 });

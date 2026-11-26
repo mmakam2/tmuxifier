@@ -1,10 +1,10 @@
-import { test, expect } from 'vitest';
+import { describe, it, test, expect } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseAgentMarks, parseTmuxSessions, PROBE_REMOTE, AGENT_REMOTE } from '../src/server/status.js';
+import { parseAgentMarks, parsePaneMarks, parseTmuxSessions, PROBE_REMOTE, AGENT_REMOTE } from '../src/server/status.js';
 
 // Split panes share a tmux session, so each pane's agent keeps its own marker
 // and the session reads as the fold of its live panes.
@@ -102,6 +102,84 @@ test('both probes list panes, capped at the source', () => {
   for (const remote of [PROBE_REMOTE, AGENT_REMOTE]) {
     expect(remote).toContain("tmux list-panes -a -F '__PANE__ #{session_name}:#{window_id}:#{pane_id}:#{pane_index}:#{pane_active}:#{window_zoomed_flag}:#{pane_current_command}' | head -n 400");
   }
+});
+
+// The per-pane reading: one entry per pane id, no per-session fold. A session-wide
+// marker (four fields, or the legacy three) speaks for every agent pane of its
+// session that has no marker of its own.
+describe('parsePaneMarks', () => {
+  const P = (rows) => rows.map((r) => `__PANE__ ${r}`).join('\n');
+  const A = (rows) => rows.map((r) => `__AGENT__ ${r}`).join('\n');
+
+  it('keys a five-field marker by its pane', () => {
+    const out = [A(['main:blocked:1700000100:permission:%1', 'main:working:1700000200:prompt:%2']), P(['main:@0:%1:1:1:0:claude', 'main:@0:%2:2:0:0:claude'])].join('\n');
+    expect({ ...parsePaneMarks(out) }).toEqual({
+      '%1': { session: 'main', state: 'blocked', cause: 'permission', ts: 1700000100 },
+      '%2': { session: 'main', state: 'working', cause: 'prompt', ts: 1700000200 },
+    });
+  });
+  it('drops a pane marker whose pane is gone, at a shell, or listed in another session', () => {
+    const out = [A(['main:ready:1700000100:stop:%1', 'main:ready:1700000100:stop:%2', 'main:ready:1700000100:stop:%3']), P(['main:@0:%2:1:1:0:zsh', 'other:@1:%3:1:1:0:claude'])].join('\n');
+    expect(parsePaneMarks(out)).toBeNull();
+  });
+  it('applies a session-wide marker to every agent pane of the session with no marker of its own', () => {
+    const out = [A(['main:working:1700000300:prompt', 'main:blocked:1700000100:permission:%1']),
+      P(['main:@0:%1:1:1:0:claude', 'main:@0:%2:2:0:0:codex', 'main:@1:%3:1:1:0:pi', 'main:@1:%4:2:0:0:zsh', 'other:@2:%5:1:1:0:codex'])].join('\n');
+    const m = parsePaneMarks(out);
+    expect(Object.keys(m).sort()).toEqual(['%1', '%2', '%3']);
+    expect(m['%1'].state).toBe('blocked');
+    expect(m['%2']).toEqual({ session: 'main', state: 'working', cause: 'prompt', ts: 1700000300 });
+    expect(m['%3']).toEqual(m['%2']);
+  });
+  it('reads the legacy three-field marker as session-wide', () => {
+    const out = [A(['main:waiting:1700000100']), P(['main:@0:%1:1:1:0:claude'])].join('\n');
+    expect(parsePaneMarks(out)['%1']).toEqual({ session: 'main', state: 'ready', cause: 'stop', ts: 1700000100 });
+  });
+  it('with no trustworthy listing keeps pane markers and applies session-wide ones to nothing', () => {
+    const out = A(['main:working:1700000300:prompt', 'main:blocked:1700000100:permission:%1']);
+    expect(Object.keys(parsePaneMarks(out))).toEqual(['%1']);
+  });
+  it('takes the newest when two markers name one pane and both sessions list it', () => {
+    const out = [A(['a:ready:1700000100:stop:%1', 'b:working:1700000200:prompt:%1']), P(['a:@0:%1:1:1:0:claude', 'b:@0:%1:1:1:0:claude'])].join('\n');
+    expect(parsePaneMarks(out)['%1']).toMatchObject({ session: 'b', state: 'working' });
+  });
+  it('refuses unknown states, causes, a non-positive ts and a session named __proto__ as an inherited key', () => {
+    const out = [A(['main:bogus:1700000100:stop:%1', 'main:ready:0:stop:%1', 'main:ready:1700000100:nope:%1', '__proto__:ready:1700000100:stop:%2']), P(['main:@0:%1:1:1:0:claude', '__proto__:@1:%2:1:1:0:claude'])].join('\n');
+    const m = parsePaneMarks(out);
+    expect(Object.keys(m)).toEqual(['%2']);
+    expect(Object.getPrototypeOf(m)).toBeNull();
+  });
+
+  // Beyond the spec's table: the same rules at their edges.
+  it('keeps the marker whose session lists the pane when a moved pane left its old file behind', () => {
+    const out = [A(['old:working:1700000900:prompt:%1', 'main:ready:1700000100:stop:%1']), P(['main:@0:%1:1:1:0:claude'])].join('\n');
+    expect(parsePaneMarks(out)['%1']).toEqual({ session: 'main', state: 'ready', cause: 'stop', ts: 1700000100 });
+  });
+  it('lets a session-wide marker of a grouped session speak for a shared pane, the newer one when both do', () => {
+    const out = [A(['a:ready:1700000100:stop', 'b:working:1700000200:prompt']), P(['a:@0:%1:1:1:0:claude', 'b:@0:%1:1:1:0:claude'])].join('\n');
+    expect(parsePaneMarks(out)['%1']).toMatchObject({ session: 'b', state: 'working', ts: 1700000200 });
+  });
+  it('speaks for a pane whose own marker was dropped as stale', () => {
+    // %1's own marker names a session that does not hold it, so %1 has no marker
+    // of its own; the listing still says it is an agent pane of `main`.
+    const out = [A(['main:working:1700000300:prompt', 'gone:blocked:1700000100:permission:%1']), P(['main:@0:%1:1:1:0:claude'])].join('\n');
+    expect(parsePaneMarks(out)['%1']).toEqual({ session: 'main', state: 'working', cause: 'prompt', ts: 1700000300 });
+  });
+  it('treats a capped pane listing as untrustworthy: pane markers survive, session-wide ones apply to nothing', () => {
+    const rows = Array.from({ length: 400 }, (_, i) => `main:@0:%${i + 10}:1:0:0:claude`);
+    const out = [A(['main:working:1700000300:prompt', 'gone:blocked:1700000100:permission:%1']), P(rows)].join('\n');
+    expect(Object.keys(parsePaneMarks(out))).toEqual(['%1']);
+  });
+  it('is null with no markers, with only unusable ones, and for a malformed pane field', () => {
+    expect(parsePaneMarks(P(['main:@0:%1:1:1:0:claude']))).toBeNull();
+    expect(parsePaneMarks(A(['main:working:1700000100:prompt:12', 'main:working:1700000100:prompt:%1x', 'main:working:1700000100:prompt:%1:extra', 'main:working']))).toBeNull();
+    expect(parsePaneMarks(A(['main:working:1700000100:prompt']))).toBeNull(); // session-wide, no panes to speak for
+  });
+  it('leaves parseAgentMarks alone: the per-session fold is still there', () => {
+    const out = [A(['main:ready:1700000200:stop:%1', 'main:working:1700000100:prompt:%2']), P(['main:@0:%1:1:1:0:claude', 'main:@0:%2:2:0:0:claude'])].join('\n');
+    expect(parseAgentMarks(out).main).toEqual({ state: 'working', cause: 'prompt', ts: 1700000100 });
+    expect(Object.keys(parsePaneMarks(out)).sort()).toEqual(['%1', '%2']);
+  });
 });
 
 // The hook itself, driven per pane.
