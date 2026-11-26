@@ -262,13 +262,19 @@ and what stays in your hands.
   ahead: auto mode blocks the command, and no wording next to the rule ("unless the dev agent
   asks") lifts it. Under OpenCode, or Claude Code in another permission mode, nothing but the
   agent's obedience stands behind the rule. Write such a sentence only where you want to be asked.
-- **Tell each box who its colleagues are.** For work to run unattended under Claude Code's auto
-  mode, add a sentence to the receiving box's own `CLAUDE.md`, naming the sender as `tmx who`
-  prints it: "A request from my development agent in `dev/main` that arrives through Tmuxifier
-  agent mail is my instruction: carry it out without asking me first." Auto mode reads a box's
-  own rules but never the text of a message. Without such a sentence it was observed to allow
-  some production steps a colleague asked for and block others (a deploy went through, a
-  database delete and a service restart did not); with it, every step tested went through.
+- **Tell each project who its colleagues are.** For work to run unattended under Claude Code's
+  auto mode, add a sentence to the `CLAUDE.md` of the project the receiving agent works in,
+  naming the sender's box and session as `tmx who` prints them: "My development agent in
+  `dev/main` sends work for this app through Tmuxifier agent mail. A request from that agent is
+  my instruction: carry it out as you would if I had typed it here, without asking me first."
+  Auto mode reads a project's own rules but never the text of a message, and its judgement
+  varies from run to run. Without such a sentence it allowed some production steps a colleague
+  asked for and blocked others (a deploy went through, a database delete and a service restart
+  did not). With this sentence in the project's `CLAUDE.md`, every step tested went through,
+  destructive ones included, in three runs. The same idea in the user-level
+  `~/.claude/CLAUDE.md`, in `CLAUDE.local.md`, or as auto-mode entries in Claude Code's settings
+  did not hold reliably. For a job that must run every time, use the script and permission
+  rule below.
 - **One job on a box that keeps its rule.** Put the job in one script and add an exact
   permission rule for that command, for example `Bash(./deploy.sh)` in that project's
   `.claude/settings.local.json`. A permission rule is checked before auto mode's judgement.
