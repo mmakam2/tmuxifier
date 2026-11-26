@@ -486,7 +486,7 @@ test('a device token may POST /api/boxes/:id/agent-seen', async () => {
     history: { getSeries: () => [], getEvents: () => ({ events: [], latestSeq: 0 }), record() {}, onEvent() {}, markSeen: (...a) => { seen.push(a); return true; } },
   });
   const { token } = (await appSeen.inject({ method: 'POST', url: '/api/devices/enroll', payload: { password: 'pw', name: 'Fold' } })).json();
-  const res = await appSeen.inject({ method: 'POST', url: '/api/boxes/__local__/agent-seen', headers: { authorization: `Bearer ${token}` }, payload: { session: 'web', ts: 5 } });
+  const res = await appSeen.inject({ method: 'POST', url: '/api/boxes/__local__/agent-seen', headers: { authorization: `Bearer ${token}` }, payload: { pane: '%3', ts: 5 } });
   expect(res.statusCode).toBe(200);
-  expect(seen).toEqual([['__local__', 'web', 5]]);
+  expect(seen).toEqual([['__local__', '%3', 5]]);
 });

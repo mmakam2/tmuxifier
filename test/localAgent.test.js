@@ -117,23 +117,29 @@ test('sample() leaves sessions out when tmux ls fails for any other reason', asy
     expect('sessions' in s).toBe(false);
     expect('tmux' in s).toBe(false);
     // ...and downstream that is "not observed": sampleOf sets no agents map.
-    expect('agents' in sampleOf(s, 1, { sessionName: 'local' })).toBe(false);
+    expect('agents' in sampleOf(s, 1)).toBe(false);
   }
 });
 
-test('the sample shape drives sampleOf exactly like a box probe result', async () => {
+test('the sample shape drives sampleOf like a box probe result', async () => {
   const home = tmpHome();
   fs.mkdirSync(path.join(home, '.tmuxifier-agent'));
   fs.writeFileSync(path.join(home, '.tmuxifier-agent', 'local'), 'local:working:1722600000');
   const sampler = createLocalAgentSampler({
     home,
-    runTmux: async () => ({ code: 0, stdout: 'local:1:0:1722600000:claude\n' }),
+    runTmux: async (args) => (args[0] === 'list-panes'
+      ? { code: 0, stdout: '__PANE__ local:@0:%3:0:1:0:claude\n' }
+      : { code: 0, stdout: 'local:1:0:1722600000:claude\n' }),
   });
-  const sample = sampleOf(await sampler.sample(), 123, { sessionName: 'local' });
+  const raw = await sampler.sample();
+  const sample = sampleOf(raw, 123);
   expect(sample.up).toBe(true);
-  expect(sample.agentPresent).toBe(true);
-  expect(sample.agent).toBe('working');
-  expect(sample.agentAttached).toBe(false);
+  // The sampler does not list windows, and a pane is placed through its
+  // window row, so no pane gets an entry from it alone.
+  expect(sample.agents).toEqual({});
+  // Given its session's window row, the session-wide marker speaks for the pane.
+  raw.sessions = raw.sessions.map((x) => ({ ...x, windowList: [{ id: '@0', index: 0, name: 'shell', active: true }] }));
+  expect(sampleOf(raw, 123).agents['%3']).toMatchObject({ session: 'local', agent: 'claude', state: 'working', attached: false, focused: true });
 });
 
 function withReporter(home) {

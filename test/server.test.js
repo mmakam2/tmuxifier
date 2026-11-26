@@ -1602,19 +1602,36 @@ test('POST /api/proxmox/lifecycle-jobs passes a readdress vlan through to the ma
   expect(calls).toContainEqual(['createLifecycleJob', { boxId: 'B1', action: 'readdress', vlan: 30 }]);
 });
 
-test('POST /api/boxes/:id/agent-seen validates, acknowledges, and refuses a ts ahead of the marker', async () => {
-  app = await makeApp({ history: { ...historyStub(), markSeen: (id, s, ts) => s === 'web' && ts <= 100 } });
+test('POST /api/boxes/:id/agent-seen validates the pane, acknowledges, and refuses a ts ahead of the marker', async () => {
+  const seen = [];
+  const published = [];
+  app = await makeApp({
+    history: { ...historyStub(), markSeen: (id, pane, ts) => { seen.push([id, pane, ts]); return pane === '%1' && ts <= 200; } },
+    liveHub: { publish: (id) => published.push(id), add() {}, closeAll() {}, size: () => 0 },
+  });
   const cookie = await login();
   const headers = { cookie: `${cookie.name}=${cookie.value}` };
   const box = (await app.inject({ method: 'POST', url: '/api/boxes', headers, payload: { host: 'h1' } })).json();
   const post = (url, payload) => app.inject({ method: 'POST', url, headers, payload });
-  const ok = await post(`/api/boxes/${box.id}/agent-seen`, { session: 'web', ts: 100 });
+  const ok = await post(`/api/boxes/${box.id}/agent-seen`, { pane: '%1', ts: 200 });
   expect(ok.statusCode).toBe(200);
   expect(ok.json()).toEqual({ ok: true });
-  expect((await post(`/api/boxes/${box.id}/agent-seen`, { session: 'web', ts: 101 })).statusCode).toBe(400);
-  expect((await post(`/api/boxes/${box.id}/agent-seen`, { session: 'bad name', ts: 100 })).statusCode).toBe(400);
-  expect((await post(`/api/boxes/${box.id}/agent-seen`, { session: 'web', ts: -1 })).statusCode).toBe(400);
-  expect((await post(`/api/boxes/${box.id}/agent-seen`, { session: 'web', ts: 1.5 })).statusCode).toBe(400);
-  expect((await post(`/api/boxes/nope/agent-seen`, { session: 'web', ts: 100 })).statusCode).toBe(404);
-  expect((await post(`/api/boxes/__local__/agent-seen`, { session: 'web', ts: 100 })).statusCode).toBe(200);
+  expect(seen).toEqual([[box.id, '%1', 200]]);
+  expect(published).toEqual([box.id]);
+  const ahead = await post(`/api/boxes/${box.id}/agent-seen`, { pane: '%1', ts: 201 });
+  expect(ahead.statusCode).toBe(400);
+  expect(ahead.json()).toEqual({ error: 'nothing to acknowledge' });
+  // The old body names a session: refused before the history is asked.
+  const old = await post(`/api/boxes/${box.id}/agent-seen`, { session: 'main', ts: 200 });
+  expect(old.statusCode).toBe(400);
+  expect(old.json()).toEqual({ error: 'invalid pane or ts' });
+  for (const pane of ['%1;rm', 'main', '%', '%1234567890', 12, '']) {
+    expect((await post(`/api/boxes/${box.id}/agent-seen`, { pane, ts: 200 })).statusCode).toBe(400);
+  }
+  expect((await post(`/api/boxes/${box.id}/agent-seen`, { pane: '%1', ts: -1 })).statusCode).toBe(400);
+  expect((await post(`/api/boxes/${box.id}/agent-seen`, { pane: '%1', ts: 1.5 })).statusCode).toBe(400);
+  expect(seen).toHaveLength(2);                      // only the two well-formed requests reached it
+  expect((await post(`/api/boxes/nope/agent-seen`, { pane: '%1', ts: 200 })).statusCode).toBe(404);
+  expect((await post(`/api/boxes/__local__/agent-seen`, { pane: '%1', ts: 200 })).statusCode).toBe(200);
+  expect(published).toEqual([box.id, '__local__']);
 });

@@ -117,10 +117,20 @@ export function createStatusPoller({
   ]).catch(() => null);
   // Only the Host Shell's own session is tracked. The client can open and
   // acknowledge just that one, so any other host tmux session would latch
-  // `done` forever with no way to clear it.
-  const ownOnly = (local) => (Array.isArray(local.sessions)
-    ? { ...local, sessions: local.sessions.filter((s) => s && s.name === localSession) }
-    : local);
+  // `done` forever with no way to clear it. Its panes and their markers are
+  // narrowed with it: the pane listing is what the history keys agents, edges
+  // and seen watermarks by.
+  const ownOnly = (local) => {
+    if (!Array.isArray(local.sessions)) return local;
+    const own = { ...local, sessions: local.sessions.filter((s) => s && s.name === localSession) };
+    if (Array.isArray(local.panes)) own.panes = local.panes.filter((p) => p && p.session === localSession);
+    if (local.paneMarks && typeof local.paneMarks === 'object') {
+      const marks = Object.create(null);
+      for (const [pane, m] of Object.entries(local.paneMarks)) if (m && m.session === localSession) marks[pane] = m;
+      if (Object.keys(marks).length) own.paneMarks = marks; else delete own.paneMarks;
+    }
+    return own;
+  };
 
   function pollOnce() {
     // Coalesce overlapping polls: the interval fires on a fixed cadence whether

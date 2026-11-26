@@ -10,7 +10,7 @@ import { createLoginRateLimiter } from './rateLimit.js';
 import { createOidcClient, OidcError, pkcePair, randomState } from './oidcAuth.js';
 import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildSelectWindowRemote, buildKillSessionRemote, buildKillWindowRemote, resolveTools } from './boxActions.js';
 import { LOCAL_BOX_ID } from './localAgent.js';
-import { assertBoxSafe, SESSION_NAME_RE, WINDOW_ID_RE } from './sshCommand.js';
+import { assertBoxSafe, SESSION_NAME_RE, WINDOW_ID_RE, PANE_ID_RE } from './sshCommand.js';
 import { createDeviceHostGuard } from './deviceHostGuard.js';
 import { provisionKey, terminalKey, localKey, LOCAL_GROUP, TERM_RELEASE_CODE } from './sessions.js';
 import { upsertConfigFile } from './configFile.js';
@@ -118,6 +118,20 @@ const NO_FLEET_SCRIPTS = {
   updateScript: async () => { throw new Error('saved scripts are unavailable'); },
   removeScript: async () => {},
 };
+
+// The agent state reported beside a pane capture: the latest sample's entry
+// for the captured session's focused agent pane (its current window's active
+// pane), or null when that pane runs no agent. The sample is keyed by pane id
+// and its entries are box-derived, so only own values are read.
+function focusedAgentOf(sample, session) {
+  const agents = sample?.agents;
+  if (!agents || typeof agents !== 'object') return null;
+  for (const pane of Object.keys(agents)) {
+    const e = agents[pane];
+    if (e && e.session === session && e.focused === true) return e;
+  }
+  return null;
+}
 
 export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, oidcClients = null, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, paneKindLocal = paneKindLocalDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, uiSettingsStore = null, deviceStore = null, deviceHostGuard = createDeviceHostGuard(), pairingCodes = null, apkBuildManager = null, voiceLinks = null, liveHub = null, agentMail = null, agentWorkers = null, log = (msg) => console.error(msg) }) {
   const httpsOpts =
@@ -1248,8 +1262,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       const picked = await boxActions.paneSnapshot(box, wanted, { lines, shared: true });
       if (!picked.ok) return reply.code(502).send({ error: picked.error });
       const latest = history ? (history.getSeries(box.id).at(-1) || null) : null;
-      // The agents map is box-controlled: own keys only.
-      const entry = latest?.agents && Object.hasOwn(latest.agents, wanted) ? latest.agents[wanted] : null;
+      const entry = focusedAgentOf(latest, wanted);
       return { ...picked, agent: entry?.state ?? null, agentCause: entry?.cause ?? null, sessionName: wanted };
     }
     const snap = await boxActions.paneSnapshot(box, box.sessionName, { lines });
@@ -1269,7 +1282,8 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       try { sessions.ensureSizedViewer({ box, session: box.sessionName, clientId: viewerId, cols, rows }); } catch {}
     }
     const last = history ? (history.getSeries(box.id).at(-1) || null) : null;
-    return { ...snap, agent: last?.agent ?? null, agentCause: last?.agents?.[box.sessionName]?.cause ?? null, sessionName: box.sessionName };
+    const entry = focusedAgentOf(last, box.sessionName);
+    return { ...snap, agent: entry?.state ?? null, agentCause: entry?.cause ?? null, sessionName: box.sessionName };
   });
 
   app.post('/api/boxes/:id/keys', { preHandler: requireAuth }, async (req, reply) => {
@@ -1889,18 +1903,18 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const box = req.query?.box;
     return box ? { [box]: history.getSeries(box) } : history.getSeries();
   });
-  // Acknowledge a finished/waiting turn so its agent-done / agent-input state
-  // drops to idle. The history owns the watermark; it refuses a ts ahead of the
-  // session's latest marker.
+  // Acknowledge one pane's finished turn so its `done` state drops to idle.
+  // The history owns the watermark; it refuses a ts ahead of the pane's latest
+  // marker, and a pane with no marker.
   app.post('/api/boxes/:id/agent-seen', { preHandler: requireAuth }, async (req, reply) => {
-    const { session, ts } = req.body || {};
-    if (typeof session !== 'string' || !SESSION_NAME_RE.test(session) || !Number.isSafeInteger(ts) || ts <= 0) {
-      return reply.code(400).send({ error: 'invalid session or ts' });
+    const { pane, ts } = req.body || {};
+    if (typeof pane !== 'string' || !PANE_ID_RE.test(pane) || !Number.isSafeInteger(ts) || ts <= 0) {
+      return reply.code(400).send({ error: 'invalid pane or ts' });
     }
     if (req.params.id !== LOCAL_BOX_ID && !(await store.getBox(req.params.id))) {
       return reply.code(404).send({ error: 'box not found' });
     }
-    if (!history?.markSeen(req.params.id, session, ts)) {
+    if (!history?.markSeen(req.params.id, pane, ts)) {
       return reply.code(400).send({ error: 'nothing to acknowledge' });
     }
     // markSeen already turned the latest sample idle; tell the other tabs so
@@ -2263,7 +2277,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const snap = await localShellActions.paneSnapshot({ lines });
     if (!snap.ok) return reply.code(502).send({ error: snap.error });
     const latest = history ? (history.getSeries(LOCAL_BOX_ID).at(-1) || null) : null;
-    const entry = latest?.agents && Object.hasOwn(latest.agents, localSession) ? latest.agents[localSession] : null;
+    const entry = focusedAgentOf(latest, localSession);
     return { ...snap, agent: entry?.state ?? null, agentCause: entry?.cause ?? null, sessionName: localSession };
   });
 

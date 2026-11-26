@@ -128,16 +128,21 @@ test('an unauthenticated logout does not close anybody else\'s stream', async ()
 
 test('acknowledging a finished turn nudges every tab about that box', async () => {
   const { app, port, cookie, boxId, box, history } = await fixture();
-  history.record({ [boxId]: { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'claude' }], agentMarks: { web: { state: 'ready', cause: 'stop', ts: 100 } } } }, [box]);
+  history.record({ [boxId]: {
+    reachable: true, tmux: true,
+    sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'claude', windowList: [{ id: '@0', index: 0, name: 'web', active: true }] }],
+    panes: [{ session: 'web', windowId: '@0', pane: '%1', index: 0, active: true, zoomed: false, cmd: 'claude' }],
+    paneMarks: { '%1': { session: 'web', state: 'ready', cause: 'stop', ts: 100 } },
+  } }, [box]);
   const ws = new WebSocket(`ws://127.0.0.1:${port}/live`, { headers: { cookie } });
   await opened(ws);
   const got = nextMessage(ws);
-  const res = await app.inject({ method: 'POST', url: `/api/boxes/${boxId}/agent-seen`, headers: { cookie }, payload: { session: 'web', ts: 100 } });
+  const res = await app.inject({ method: 'POST', url: `/api/boxes/${boxId}/agent-seen`, headers: { cookie }, payload: { pane: '%1', ts: 100 } });
   expect(res.statusCode).toBe(200);
   expect(await got).toBe(JSON.stringify({ box: boxId }));
   // And the series the tab then fetches already says idle.
   const series = await app.inject({ method: 'GET', url: `/api/health/series?box=${boxId}`, headers: { cookie } });
-  expect(series.json()[boxId].at(-1).agents.web.state).toBe('idle');
+  expect(series.json()[boxId].at(-1).agents['%1'].state).toBe('idle');
   ws.close();
 });
 

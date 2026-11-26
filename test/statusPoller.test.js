@@ -480,17 +480,27 @@ test('a throwing local sampler still records the real boxes', async () => {
   expect(bx.map((b) => b.id)).toEqual(['b1', '__local__']);
 });
 
+// A Host Shell sample: each named session has one window and one claude pane,
+// the Nth session's pane being %N; `marks` is keyed by session name.
+const localSample = (marks, names = ['local']) => {
+  const paneMarks = Object.create(null);
+  names.forEach((n, i) => { if (marks[n]) paneMarks[`%${i + 1}`] = { session: n, ...marks[n] }; });
+  return {
+    reachable: true,
+    tmux: true,
+    sessions: names.map((n, i) => ({ name: n, windows: 1, attached: false, activity: 1, paneCmd: 'claude', windowList: [{ id: `@${i}`, index: 0, name: n, active: true }] })),
+    panes: names.map((n, i) => ({ session: n, windowId: `@${i}`, pane: `%${i + 1}`, index: 0, active: true, zoomed: false, cmd: 'claude' })),
+    agentMarks: marks,
+    paneMarks,
+  };
+};
+
 // I1: the client can open and acknowledge only the Host Shell's own session,
 // so any other host tmux session would latch `done` with no way to clear it.
-const twoLocalSessions = () => ({
-  reachable: true,
-  tmux: true,
-  sessions: [
-    { name: 'local', windows: 1, attached: false, activity: 1, paneCmd: 'claude' },
-    { name: 'other', windows: 1, attached: false, activity: 1, paneCmd: 'claude' },
-  ],
-  agentMarks: { local: { state: 'ready', cause: 'stop', ts: 5 }, other: { state: 'ready', cause: 'stop', ts: 5 } },
-});
+const twoLocalSessions = () => localSample(
+  { local: { state: 'ready', cause: 'stop', ts: 5 }, other: { state: 'ready', cause: 'stop', ts: 5 } },
+  ['local', 'other'],
+);
 
 test('the __local__ sample is narrowed to the Host Shell session before recording', async () => {
   const calls = [];
@@ -503,8 +513,24 @@ test('the __local__ sample is narrowed to the Host Shell session before recordin
   await poller.pollOnce();
   const [snap] = calls[0];
   expect(snap.__local__.sessions.map((x) => x.name)).toEqual(['local']);
-  // Markers are kept as-is; sampleOf ignores them for unlisted sessions.
+  // The pane listing and the pane markers are narrowed the same way.
+  expect(snap.__local__.panes.map((p) => [p.session, p.pane])).toEqual([['local', '%1']]);
+  expect({ ...snap.__local__.paneMarks }).toEqual({ '%1': { session: 'local', state: 'ready', cause: 'stop', ts: 5 } });
+  // The per-session markers are kept as-is; sampleOf does not read them.
   expect(Object.keys(snap.__local__.agentMarks).sort()).toEqual(['local', 'other']);
+});
+
+test('a Host Shell sample whose markers are all for other sessions carries no paneMarks', async () => {
+  const calls = [];
+  const poller = createStatusPoller({
+    store: fakeStore([]),
+    statusChecker,
+    history: { record: (snap, bx) => calls.push([snap, bx]) },
+    localAgent: { sample: async () => localSample({ other: { state: 'working', cause: 'prompt', ts: 5 } }, ['local', 'other']) },
+  });
+  await poller.pollOnce();
+  expect(calls[0][0].__local__).not.toHaveProperty('paneMarks');
+  expect(calls[0][0].__local__.panes).toHaveLength(1);
 });
 
 test('a local sample with sessions local and other records an agents map of only local', async () => {
@@ -517,8 +543,8 @@ test('a local sample with sessions local and other records an agents map of only
   });
   await poller.pollOnce();
   const last = history.getSeries('__local__').at(-1);
-  expect(Object.keys(last.agents)).toEqual(['local']);
-  expect(last.agents.local.state).toBe('done');
+  expect(Object.keys(last.agents)).toEqual(['%1']);
+  expect(last.agents['%1']).toMatchObject({ session: 'local', state: 'done' });
 });
 
 // I2a: a lost sampler race must not prune the Host Shell's seen watermark.
@@ -540,11 +566,7 @@ test('a lost sampler race keeps the Host Shell seen watermark (real history)', a
   const saved = [];
   const seenStore = { load: () => null, save: (v) => saved.push(JSON.parse(JSON.stringify(v))) };
   const history = createHealthHistory({ seenStore });
-  let next = {
-    reachable: true,
-    sessions: [{ name: 'local', windows: 1, attached: false, activity: 1, paneCmd: 'claude' }],
-    agentMarks: { local: { state: 'ready', cause: 'stop', ts: 7 } },
-  };
+  let next = localSample({ local: { state: 'ready', cause: 'stop', ts: 7 } });
   const poller = createStatusPoller({
     store: fakeStore([{ id: 'b1', host: 'h1' }]),
     statusChecker,
@@ -552,17 +574,13 @@ test('a lost sampler race keeps the Host Shell seen watermark (real history)', a
     localAgent: { sample: async () => next },
   });
   await poller.pollOnce();
-  expect(history.markSeen('__local__', 'local', 7)).toBe(true);
+  expect(history.markSeen('__local__', '%1', 7)).toBe(true);
   next = null; // sampler loses its race / returns nothing
   await poller.pollOnce();
-  next = {
-    reachable: true,
-    sessions: [{ name: 'local', windows: 1, attached: false, activity: 1, paneCmd: 'claude' }],
-    agentMarks: { local: { state: 'ready', cause: 'stop', ts: 7 } },
-  };
+  next = localSample({ local: { state: 'ready', cause: 'stop', ts: 7 } });
   await poller.pollOnce();
-  expect(history.getSeries('__local__').at(-1).agents.local.state).toBe('idle');
-  expect(saved.at(-1)).toEqual({ __local__: { local: 7 } });
+  expect(history.getSeries('__local__').at(-1).agents['%1'].state).toBe('idle');
+  expect(saved.at(-1)).toEqual({ __local__: { '%1': 7 } });
 });
 
 test('probeOne overlapping pollOnce does not strip proxmoxState=stopped from other linked boxes or fire false down events', async () => {
@@ -623,14 +641,15 @@ test('probeOne overlapping pollOnce does not strip proxmoxState=stopped from oth
 // --- refreshAgents: the real-time path (agentWatch.js -> one light probe) ----
 
 const rtBox = { id: 'a', label: 'A', host: 'ha', sessionName: 'web' };
-const sess = (cmd = 'claude', attached = false) => [{ name: 'web', windows: 1, attached, paneCmd: cmd }];
-const full = (state, cause, ts, extra = {}) => ({
-  reachable: true, tmux: true, sessions: sess(), agentMarks: { web: { state, cause, ts } }, metrics: { cpus: 2 }, ...extra,
-});
-const light = (state, cause, ts, extra = {}) => ({ tmux: true, sessions: sess(), agentMarks: { web: { state, cause, ts } }, ...extra });
+const sess = (cmd = 'claude', attached = false) => [{ name: 'web', windows: 1, attached, paneCmd: cmd, windowList: [{ id: '@0', index: 0, name: 'web', active: true }] }];
 // The per-pane half of a read: the pane listing and the markers keyed by pane id.
 const paneRow = (pane, cmd = 'claude', extra = {}) => ({ session: 'web', windowId: '@0', pane, index: Number(pane.slice(1)), active: pane === '%1', zoomed: false, cmd, ...extra });
 const paneRead = (state, cause, ts, panes = [paneRow('%1')]) => ({ panes, paneMarks: { '%1': { session: 'web', state, cause, ts } } });
+// A read of box `a`: session `web` with claude in pane %1, and the marker for it.
+const full = (state, cause, ts, extra = {}) => ({
+  reachable: true, tmux: true, sessions: sess(), agentMarks: { web: { state, cause, ts } }, ...paneRead(state, cause, ts), metrics: { cpus: 2 }, ...extra,
+});
+const light = (state, cause, ts, extra = {}) => ({ tmux: true, sessions: sess(), agentMarks: { web: { state, cause, ts } }, ...paneRead(state, cause, ts), ...extra });
 const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
 
 test('refreshAgents patches sessions and markers into the snapshot and records the edge', async () => {
@@ -655,7 +674,7 @@ test('refreshAgents patches sessions and markers into the snapshot and records t
   expect(after.a.metrics).toEqual({ cpus: 2 });      // the sweep's fields survive
   expect(after.a.reachable).toBe(true);
   expect(history.getSeries('a')).toHaveLength(1);
-  expect(history.getSeries('a')[0].agents.web.state).toBe('blocked');
+  expect(history.getSeries('a')[0].agents['%1'].state).toBe('blocked');
   expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
 });
 
@@ -738,7 +757,7 @@ test('a sweep that read the box BEFORE a refresh cannot overwrite the refresh wi
   expect(poller.getSnapshot().a.panes).toEqual(refreshed);
   expect(poller.getSnapshot().a.paneMarks['%1'].state).toBe('blocked');
   expect(poller.getSnapshot().a.metrics).toEqual({ cpus: 2 }); // the sweep's own fields still land
-  expect(history.getSeries('a').at(-1).agents.web.state).toBe('blocked');
+  expect(history.getSeries('a').at(-1).agents['%1'].state).toBe('blocked');
   expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
 });
 
@@ -825,24 +844,24 @@ test('onCycle runs after every sweep with the boxes and the fresh snapshot, and 
 
 test('refreshAgents for the Host Shell samples locally and records without touching the snapshot', async () => {
   const history = createHealthHistory({ now: () => 5 });
-  let local = { reachable: true, tmux: true, sessions: [{ name: 'local', windows: 1, attached: false, paneCmd: 'claude' }, { name: 'other', windows: 1, attached: false, paneCmd: 'claude' }], agentMarks: { local: { state: 'working', cause: 'prompt', ts: 100 }, other: { state: 'working', cause: 'prompt', ts: 100 } } };
+  let local = localSample({ local: { state: 'working', cause: 'prompt', ts: 100 }, other: { state: 'working', cause: 'prompt', ts: 100 } }, ['local', 'other']);
   const poller = createStatusPoller({
     store: fakeStore([]), statusChecker: { checkBox: async () => ({ reachable: true }) }, history,
     localAgent: { sample: async () => local },
   });
   await poller.pollOnce();
-  local = { ...local, agentMarks: { local: { state: 'blocked', cause: 'question', ts: 101 }, other: { state: 'blocked', cause: 'question', ts: 101 } } };
+  local = localSample({ local: { state: 'blocked', cause: 'question', ts: 101 }, other: { state: 'blocked', cause: 'question', ts: 101 } }, ['local', 'other']);
   expect(await poller.refreshAgents('__local__')).toBe(true);
   expect(poller.getSnapshot()).toEqual({});           // the Host Shell never enters /api/status
   const last = history.getSeries('__local__').at(-1);
-  expect(last.agents.local.state).toBe('blocked');
-  expect(last.agents).not.toHaveProperty('other');    // only the Host Shell's own session is tracked
-  expect(history.getEvents().events.map((e) => [e.kind, e.boxId, e.session])).toEqual([['agent-blocked', '__local__', 'local']]);
+  expect(last.agents['%1']).toMatchObject({ session: 'local', state: 'blocked' });
+  expect(last.agents).not.toHaveProperty('%2');       // only the Host Shell's own session is tracked
+  expect(history.getEvents().events.map((e) => [e.kind, e.boxId, e.session, e.pane])).toEqual([['agent-blocked', '__local__', 'local', '%1']]);
 });
 
 test('a sweep whose Host Shell sample predates a local refresh does not move it backwards', async () => {
   const history = createHealthHistory({ now: () => 5 });
-  const mk = (state, cause, ts) => ({ reachable: true, tmux: true, sessions: [{ name: 'local', windows: 1, attached: false, paneCmd: 'claude' }], agentMarks: { local: { state, cause, ts } } });
+  const mk = (state, cause, ts) => localSample({ local: { state, cause, ts } });
   const held = deferred();
   let n = 0;
   const poller = createStatusPoller({
@@ -855,7 +874,7 @@ test('a sweep whose Host Shell sample predates a local refresh does not move it 
   expect(await poller.refreshAgents('__local__')).toBe(true); // n=3: blocked
   held.resolve();
   await sweep;
-  expect(history.getSeries('__local__').at(-1).agents.local.state).toBe('blocked');
+  expect(history.getSeries('__local__').at(-1).agents['%1'].state).toBe('blocked');
   expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
 });
 
@@ -904,7 +923,7 @@ test('an on-demand full probe that read before a refresh cannot put the older st
   expect(poller.getSnapshot().a.agentMarks.web.state).toBe('ready');
   slowSweep.resolve();
   await sweep;
-  expect(history.getSeries('a').at(-1).agents.web.state).toBe('done');
+  expect(history.getSeries('a').at(-1).agents['%1'].state).toBe('done');
   await poller.pollOnce();
   expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']); // once
 });
@@ -937,7 +956,7 @@ test('a sweep that joins an older in-flight probe does not treat that read as it
   await Promise.all([probe, sweep]);
   expect(fullReads).toBe(2);                       // the sweep did not start a second probe of `a`
   expect(poller.getSnapshot().a.agentMarks.web.state).toBe('ready');
-  expect(history.getSeries('a').at(-1).agents.web.state).toBe('done');
+  expect(history.getSeries('a').at(-1).agents['%1'].state).toBe('done');
   await poller.pollOnce();
   expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']);
 });
@@ -968,7 +987,7 @@ test('two overlapping refreshes of one box apply in read order, not finish order
 
 test('two overlapping Host Shell refreshes apply in read order too', async () => {
   const history = createHealthHistory({ now: () => 5 });
-  const mk = (state, cause, ts) => ({ reachable: true, tmux: true, sessions: [{ name: 'local', windows: 1, attached: false, paneCmd: 'claude' }], agentMarks: { local: { state, cause, ts } } });
+  const mk = (state, cause, ts) => localSample({ local: { state, cause, ts } });
   const first = deferred();
   let n = 0;
   const poller = createStatusPoller({
@@ -988,7 +1007,7 @@ test('two overlapping Host Shell refreshes apply in read order too', async () =>
   expect(await poller.refreshAgents('__local__')).toBe(true);
   first.resolve();
   await r1;
-  expect(history.getSeries('__local__').at(-1).agents.local.state).toBe('done');
+  expect(history.getSeries('__local__').at(-1).agents['%1'].state).toBe('done');
   await poller.pollOnce();
   expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']);
 });
@@ -1020,7 +1039,7 @@ test('onAgents fires once per applied refreshAgents and not when the probe retur
   const poller = createStatusPoller({
     store: fakeStore([rtBox]), statusChecker, history,
     // What onAgents sees must already be applied and recorded.
-    onAgents: (id) => calls.push([id, poller.getSnapshot()[id].agentMarks?.web?.state, history.getSeries(id).at(-1).agents.web.state]),
+    onAgents: (id) => calls.push([id, poller.getSnapshot()[id].agentMarks?.web?.state, history.getSeries(id).at(-1).agents['%1'].state]),
   });
   await poller.pollOnce();
   expect(calls).toEqual([]);                          // a sweep is onCycle's, not onAgents'

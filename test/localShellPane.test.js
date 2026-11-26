@@ -34,7 +34,11 @@ beforeEach(async () => {
   const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
   const history = {
     getSeries: (id) => (id === '__local__'
-      ? [{ t: 1, up: true, agents: { local: { state: 'done', cause: 'stop' }, other: { state: 'blocked' } } }]
+      ? [{ t: 1, up: true, agents: {
+        '%1': { session: 'local', focused: false, state: 'blocked', cause: 'question' },
+        '%2': { session: 'local', focused: true, state: 'done', cause: 'stop' },
+        '%3': { session: 'other', focused: true, state: 'blocked', cause: 'permission' },
+      } }]
       : []),
     getEvents: () => ({ events: [], latestSeq: 0 }), record() {}, onEvent() {},
   };

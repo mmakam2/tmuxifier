@@ -61,6 +61,8 @@ async function harness() {
   expect(made.code).toBe(0);
   const cmd = await remote(`tmux display-message -p -t '=${lb.session}:' '#{pane_current_command}'`);
   expect(cmd.stdout.trim()).toBe('claude');
+  const pane = (await remote(`tmux display-message -p -t '=${lb.session}:' '#{pane_id}'`)).stdout.trim();
+  expect(pane).toMatch(/^%\d+$/);
 
   const history = createHealthHistory();
   const published = [];
@@ -79,14 +81,15 @@ async function harness() {
     try { await sshRun(['-F', lb.sshConfigFile, '-o', `ControlPath=${path.join(controlDir, '%C')}`, '-O', 'exit', lb.box.host], { env: lb.env }); } catch { /* no master */ }
     await lb.cleanup();
   };
-  return { lb, box, history, published, poller, watch, writeMark };
+  return { lb, box, pane, history, published, poller, watch, writeMark };
 }
 
 test('a marker change on the box reaches the history in about a second, with no sweep in between', async () => {
-  const { lb, history, published, poller, watch, writeMark } = await harness();
+  const { lb, pane, history, published, poller, watch, writeMark } = await harness();
   writeMark('working', 'prompt', 100);
   await poller.pollOnce();                       // the one and only sweep
-  expect(history.getSeries('b1').at(-1).agents[lb.session].state).toBe('working');
+  // The session-wide marker speaks for the session's one agent pane.
+  expect(history.getSeries('b1').at(-1).agents[pane]).toMatchObject({ session: lb.session, agent: 'claude', state: 'working' });
   expect(watch.size()).toBe(1);
   // The stream reports once at start; let that settle so the next edge is ours.
   expect(await until(() => published.length >= 1, 8000)).toBe(true);
@@ -99,14 +102,14 @@ test('a marker change on the box reaches the history in about a second, with no 
   expect(took).toBeLessThan(5000);
   expect(published.length).toBeGreaterThan(base);
   const ev = history.getEvents().events.find((e) => e.kind === 'agent-blocked');
-  expect(ev).toMatchObject({ boxId: 'b1', session: lb.session, cause: 'permission', agent: 'claude' });
+  expect(ev).toMatchObject({ boxId: 'b1', pane, session: lb.session, cause: 'permission', agent: 'claude' });
   expect(poller.getSnapshot().b1.agentMarks[lb.session].state).toBe('blocked');
   expect(history.getSeries('b1')).toHaveLength(1); // still the sweep's single sample
 
   // And the turn finishing, the same way.
   writeMark('ready', 'stop', 102);
   expect(await until(() => history.getEvents().events.some((e) => e.kind === 'agent-input'), 6000)).toBe(true);
-  expect(history.getSeries('b1').at(-1).agents[lb.session].state).toBe('done');
+  expect(history.getSeries('b1').at(-1).agents[pane].state).toBe('done');
 }, 60000);
 
 test('exactly one loop runs on the box, and it exits once the stream is dropped', async () => {

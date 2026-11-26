@@ -1,8 +1,11 @@
 import { test, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { agentKindOf as agentKindOfModule } from '../src/server/agentKind.js';
-import { agentKindOf, sampleOf, deriveAgentState, classifyTransitions, initThresholdState, createHealthHistory } from '../src/server/healthHistory.js';
-import { parseTmuxSessions, parseAgentMarks } from '../src/server/status.js';
+import {
+  agentKindOf, sampleOf, onScreenPanes, agentEdges, deriveAgentState, classifyTransitions, initThresholdState, createHealthHistory,
+} from '../src/server/healthHistory.js';
+import { parseTmuxSessions, parseTmuxWindows, attachWindows, parseTmuxPanes, parsePaneMarks } from '../src/server/status.js';
+
 
 const TH = { cpu: 90, mem: 90, disk: 90, hysteresis: 5 };
 
@@ -181,114 +184,322 @@ test('one record() pass saves the events log once, not once per event', () => {
   expect(saves - before).toBe(1);
 });
 
-const AGENT = { sessionName: 'web' };
-const withAgent = (over) => ({ reachable: true, metrics: { boxNowSec: 1000 }, sessions: [{ name: 'web', attached: false, activity: 1000, paneCmd: 'claude' }], ...over });
 
-test('sampleOf: a claude pane with no marker carries NO agent state, only presence', () => {
-  // Hook-only statusing: pane output timing is never consulted, so a fresh
-  // pane and a long-quiet pane read identically — no working/waiting guess.
-  const busy = sampleOf(withAgent(), 5, AGENT);
-  expect(busy.agent).toBeUndefined();
-  expect(busy.agentPresent).toBe(true);
-  const idle = withAgent({ sessions: [{ name: 'web', attached: false, activity: 940, paneCmd: 'claude' }] });
-  const s = sampleOf(idle, 5, AGENT);
-  expect(s.agent).toBeUndefined();
-  expect(s.agentPresent).toBe(true);
+// --- agents per pane: the sample ---------------------------------------------
+
+// Pane markers as parsePaneMarks returns them: null-prototype, keyed by pane id.
+const marks = (o) => Object.assign(Object.create(null), Object.fromEntries(
+  Object.entries(o).map(([pane, [state, cause, ts, session = 'main']]) => [pane, { session, state, cause, ts }]),
+));
+
+// One attached session `main`: window 1 `api` in the background holding a
+// blocked claude, window 2 `frontend` in front holding a claude, a codex and a shell.
+const status = (over = {}) => ({
+  reachable: true, tmux: true,
+  sessions: [{ name: 'main', windows: 2, attached: true, activity: 0, paneCmd: 'zsh',
+    windowList: [{ id: '@0', index: 1, name: 'api', active: false }, { id: '@1', index: 2, name: 'frontend', active: true }] }],
+  panes: [
+    { session: 'main', windowId: '@0', pane: '%0', index: 1, active: true, zoomed: false, cmd: 'claude' },
+    { session: 'main', windowId: '@1', pane: '%1', index: 1, active: true, zoomed: false, cmd: 'claude' },
+    { session: 'main', windowId: '@1', pane: '%2', index: 2, active: false, zoomed: false, cmd: 'codex' },
+    { session: 'main', windowId: '@1', pane: '%3', index: 3, active: false, zoomed: false, cmd: 'zsh' },
+  ],
+  paneMarks: marks({ '%0': ['blocked', 'permission', 100], '%1': ['ready', 'stop', 200] }),
+  ...over,
+});
+// The same box with window 1 in front instead.
+const apiInFront = (over = {}) => {
+  const s = status(over);
+  s.sessions[0].windowList = [{ id: '@0', index: 1, name: 'api', active: true }, { id: '@1', index: 2, name: 'frontend', active: false }];
+  return s;
+};
+
+test('builds one entry per agent pane', () => {
+  const s = sampleOf(status(), 1, { seenOf: (p) => (p === '%1' ? 200 : undefined) });
+  expect(Object.keys(s.agents)).toEqual(['%0', '%1', '%2']);
+  expect(s.agents['%0']).toEqual({ session: 'main', windowId: '@0', windowIndex: 1, windowName: 'api', paneIndex: 1,
+    agent: 'claude', state: 'blocked', cause: 'permission', ts: 100, visible: false, focused: false, attached: true });
+  expect(s.agents['%1']).toMatchObject({ state: 'idle', visible: true, focused: true });
+  expect(s.agents['%2']).toMatchObject({ agent: 'codex', visible: true, focused: false });
+  expect('state' in s.agents['%2']).toBe(false);
+  expect('agent' in s).toBe(false);
+  expect('agentPresent' in s).toBe(false);
+  expect('agentAttached' in s).toBe(false);
+  // The map is null-prototype, like every map keyed by box output.
+  expect(Object.getPrototypeOf(s.agents)).toBe(null);
 });
 
-test('sampleOf: no box clock changes nothing — the marker is the only source either way', () => {
-  const noMeta = withAgent({ metrics: undefined });
-  expect(sampleOf(noMeta, 5, AGENT).agent).toBeUndefined();
-  expect(sampleOf(noMeta, 5, AGENT).agentPresent).toBe(true);
-  const marked = withAgent({ metrics: undefined, agentMarks: { web: { state: 'working', cause: 'prompt', ts: 990 } } });
-  expect(sampleOf(marked, 5, AGENT).agent).toBe('working');
+test('hides a pane behind a zoomed neighbour', () => {
+  const z = status();
+  z.panes = z.panes.map((p) => (p.windowId === '@1' ? { ...p, zoomed: true } : p));
+  const s = sampleOf(z, 1);
+  expect(s.agents['%1'].visible).toBe(true);
+  expect(s.agents['%2'].visible).toBe(false);
+  expect([...onScreenPanes(z)].sort()).toEqual(['%1']);
 });
 
-test('sampleOf ignores non-claude panes and the wrong session', () => {
-  const zsh = sampleOf(withAgent({ sessions: [{ name: 'web', attached: false, activity: 1000, paneCmd: 'zsh' }] }), 5, AGENT);
-  expect(zsh.agent).toBeUndefined();
-  expect(zsh.agentPresent).toBeUndefined();
-  expect(sampleOf(withAgent({ sessions: [{ name: 'other', attached: false, activity: 940, paneCmd: 'claude' }] }), 5, AGENT).agent).toBeUndefined();
-  expect(sampleOf(withAgent(), 5, {}).agent).toBeUndefined(); // no sessionName → no agent state
+test('on screen means visible in an attached session, and covers shell panes too', () => {
+  expect([...onScreenPanes(status())].sort()).toEqual(['%1', '%2', '%3']);
+  const detached = status();
+  detached.sessions[0].attached = false;
+  expect([...onScreenPanes(detached)]).toEqual([]);
+  const st = status(); delete st.panes;
+  expect([...onScreenPanes(st)]).toEqual([]);
+  expect([...onScreenPanes(undefined)]).toEqual([]);
 });
 
-test('sampleOf carries the configured session attached flag even without a claude pane', () => {
-  // Attachment is a SESSION property: it must survive the poll where claude
-  // exits, so agent-done suppression can honor it on both ends of the edge.
-  expect(sampleOf(withAgent({ sessions: [{ name: 'web', attached: true, activity: 940, paneCmd: 'claude' }] }), 5, AGENT).agentAttached).toBe(true);
-  expect(sampleOf(withAgent({ sessions: [{ name: 'web', attached: true, activity: 940, paneCmd: 'zsh' }] }), 5, AGENT).agentAttached).toBe(true);
-  expect(sampleOf(withAgent({ sessions: [{ name: 'web', attached: false, activity: 940, paneCmd: 'zsh' }] }), 5, AGENT).agent).toBeUndefined();
+test('carries no agents key when sessions are listed but panes are not', () => {
+  const st = status(); delete st.panes;
+  expect('agents' in sampleOf(st, 1)).toBe(false);
 });
+
+test('an empty session list is an empty map', () => {
+  expect(sampleOf({ reachable: true, tmux: false, sessions: [], panes: [] }, 1).agents).toEqual({});
+  // No sessions at all also means no panes, whatever the pane listing said.
+  expect(sampleOf({ reachable: true, tmux: true, sessions: [] }, 1).agents).toEqual({});
+});
+
+test('a failed probe carries no agents map at all', () => {
+  expect('agents' in sampleOf({ reachable: false }, 1)).toBe(false);
+});
+
+test('omits a pane whose window row is missing', () => {
+  const st = status(); st.sessions[0].windowList = st.sessions[0].windowList.slice(1);
+  expect(Object.keys(sampleOf(st, 1).agents)).toEqual(['%1', '%2']);
+});
+
+test('omits a pane whose session row is missing or whose session name cannot be targeted', () => {
+  const st = status();
+  st.panes.push({ session: 'gone', windowId: '@5', pane: '%5', index: 1, active: true, zoomed: false, cmd: 'claude' });
+  st.sessions.push({ name: 'bad name', windows: 1, attached: false, activity: 0, paneCmd: 'claude', windowList: [{ id: '@6', index: 1, name: 'x', active: true }] });
+  st.panes.push({ session: 'bad name', windowId: '@6', pane: '%6', index: 1, active: true, zoomed: false, cmd: 'claude' });
+  expect(Object.keys(sampleOf(st, 1).agents)).toEqual(['%0', '%1', '%2']);
+});
+
+test('a pane listed under two grouped sessions is one entry, under the session its marker names', () => {
+  const st = status();
+  st.sessions.push({ name: 'twin', windows: 2, attached: false, activity: 0, paneCmd: 'zsh', windowList: [{ id: '@0', index: 1, name: 'api', active: true }] });
+  st.panes.unshift({ session: 'twin', windowId: '@0', pane: '%0', index: 1, active: true, zoomed: false, cmd: 'claude' });
+  const a = sampleOf(st, 1).agents['%0'];
+  expect(a).toMatchObject({ session: 'main', visible: false, attached: true });   // main's flags, not twin's
+  // With no marker, the first session listing the pane is the one.
+  const nomark = { ...st, paneMarks: marks({}) };
+  expect(sampleOf(nomark, 1).agents['%0']).toMatchObject({ session: 'twin', visible: true, focused: true, attached: false });
+});
+
+test('a session named like an Object.prototype key is an ordinary session', () => {
+  const st = {
+    reachable: true, tmux: true,
+    sessions: [{ name: '__proto__', windows: 1, attached: false, activity: 0, paneCmd: 'claude', windowList: [{ id: '@0', index: 0, name: 'w', active: true }] },
+      { name: 'constructor', windows: 1, attached: false, activity: 0, paneCmd: 'claude', windowList: [{ id: '@1', index: 0, name: 'w', active: true }] }],
+    panes: [{ session: '__proto__', windowId: '@0', pane: '%0', index: 0, active: true, zoomed: false, cmd: 'claude' },
+      { session: 'constructor', windowId: '@1', pane: '%1', index: 0, active: true, zoomed: false, cmd: 'claude' }],
+    paneMarks: marks({ '%0': ['working', 'prompt', 10, '__proto__'] }),
+  };
+  const s = sampleOf(st, 1);
+  expect(s.agents['%0']).toMatchObject({ session: '__proto__', state: 'working', ts: 10 });
+  expect(s.agents['%1']).toMatchObject({ session: 'constructor' });
+  expect('state' in s.agents['%1']).toBe(false);
+  expect(Object.keys(JSON.parse(JSON.stringify(s.agents)))).toEqual(['%0', '%1']);
+});
+
+test('the marker is the sole source of state, and a marker for a shell pane is inert', () => {
+  const st = status({ paneMarks: marks({ '%0': ['working', 'prompt', 90], '%3': ['blocked', 'question', 95] }) });
+  const s = sampleOf(st, 1);
+  expect(s.agents['%0']).toMatchObject({ state: 'working', cause: 'prompt', ts: 90 });
+  expect('%3' in s.agents).toBe(false);
+  // A ready/start is idle: nothing finished, so nothing to acknowledge.
+  expect(sampleOf(status({ paneMarks: marks({ '%1': ['ready', 'start', 5] }) }), 1).agents['%1'].state).toBe('idle');
+});
+
+// The parsers and sampleOf together, over a probe's own output.
+const fromProbe = (stdout) => {
+  const sessions = attachWindows(parseTmuxSessions(stdout), parseTmuxWindows(stdout));
+  const { panes, complete } = parseTmuxPanes(stdout);
+  const out = { reachable: true, tmux: true, sessions };
+  if (complete) out.panes = panes;
+  const pm = parsePaneMarks(stdout);
+  if (pm) out.paneMarks = pm;
+  return out;
+};
+
+test('a probe\'s rows become pane entries: one session-wide marker speaks for both agent panes', () => {
+  const out = [
+    'web:1:1:1000:claude',
+    '__WIN__ web:0:@0:1:code',
+    '__PANE__ web:@0:%1:0:1:0:claude',
+    '__PANE__ web:@0:%2:1:0:0:claude',
+    '__AGENT__ web:ready:200:stop',
+  ].join('\n');
+  const s = sampleOf(fromProbe(out), 1);
+  expect(s.agents['%1']).toMatchObject({ session: 'web', windowIndex: 0, windowName: 'code', paneIndex: 0, state: 'done', ts: 200, visible: true, focused: true, attached: true });
+  expect(s.agents['%2']).toMatchObject({ paneIndex: 1, state: 'done', ts: 200, visible: true, focused: false });
+});
+
+// --- agents per pane: edges --------------------------------------------------
+
+test('a pane blocking in a background window notifies even while the session is attached', () => {
+  const before = sampleOf(status({ paneMarks: marks({ '%0': ['working', 'prompt', 90] }) }), 1).agents;
+  const next = sampleOf(status(), 2);
+  expect(agentEdges(before, next, onScreenPanes(status()))).toEqual([
+    { kind: 'agent-blocked', pane: '%0', session: 'main', windowId: '@0', window: '1:api', cause: 'permission', agent: 'claude' },
+  ]);
+});
+
+test('the same edge for a pane on screen is silent', () => {
+  const before = sampleOf(status({ paneMarks: marks({ '%1': ['working', 'prompt', 190] }) }), 1).agents;
+  const next = sampleOf(status({ paneMarks: marks({ '%1': ['blocked', 'permission', 200] }) }), 2);
+  expect(next.agents['%1']).toMatchObject({ state: 'blocked', visible: true, attached: true });
+  expect(agentEdges(before, next, onScreenPanes(status()))).toEqual([]);
+  // The same edge with nobody attached does notify, so the line above is the suppression.
+  const detached = (m) => { const s = status({ paneMarks: marks(m) }); s.sessions[0].attached = false; return s; };
+  const b2 = sampleOf(detached({ '%1': ['working', 'prompt', 190] }), 1).agents;
+  expect(agentEdges(b2, sampleOf(detached({ '%1': ['blocked', 'permission', 200] }), 2), new Set())).toEqual([
+    { kind: 'agent-blocked', pane: '%1', session: 'main', windowId: '@1', window: '2:frontend', paneIndex: 1, cause: 'permission', agent: 'claude' },
+  ]);
+});
+
+test('a finished turn off screen is agent-input and names the pane index when the window holds two agents', () => {
+  const before = sampleOf(apiInFront({ paneMarks: marks({ '%2': ['working', 'prompt', 190] }) }), 1).agents;
+  const next = sampleOf(apiInFront({ paneMarks: marks({ '%2': ['ready', 'stop', 200] }) }), 2);
+  expect(next.agents['%2']).toMatchObject({ state: 'done', visible: false });
+  expect(agentEdges(before, next, onScreenPanes(apiInFront()))).toEqual([
+    { kind: 'agent-input', pane: '%2', session: 'main', windowId: '@1', window: '2:frontend', paneIndex: 2, agent: 'codex' },
+  ]);
+});
+
+test('a window name that is empty is named `window`', () => {
+  const st = (m) => { const s = status({ paneMarks: marks(m) }); s.sessions[0].windowList[0].name = ''; return s; };
+  const before = sampleOf(st({ '%0': ['working', 'prompt', 90] }), 1).agents;
+  expect(agentEdges(before, sampleOf(st({ '%0': ['ready', 'stop', 95] }), 2), new Set())[0].window).toBe('1:window');
+});
+
+test('a pane that had a state and left the listing is agent-done; one now at a shell on screen is not', () => {
+  const before = sampleOf(status({ paneMarks: marks({ '%0': ['working', 'prompt', 90] }) }), 1).agents;
+  // Gone from the listing.
+  const gone = status({ paneMarks: marks({}) });
+  gone.panes = gone.panes.filter((p) => p.pane !== '%0');
+  expect(agentEdges(before, sampleOf(gone, 2), onScreenPanes(gone))).toEqual([
+    { kind: 'agent-done', pane: '%0', session: 'main', windowId: '@0', window: '1:api', agent: 'claude' },
+  ]);
+  // Back at its shell in a background window: still an exit.
+  const shell = status({ paneMarks: marks({}) });
+  shell.panes = shell.panes.map((p) => (p.pane === '%0' ? { ...p, cmd: 'zsh' } : p));
+  expect(agentEdges(before, sampleOf(shell, 2), onScreenPanes(shell)).map((e) => [e.kind, e.pane])).toEqual([['agent-done', '%0']]);
+  // Back at its shell with the operator now looking at its window: silent.
+  const looking = apiInFront({ paneMarks: marks({}) });
+  looking.panes = looking.panes.map((p) => (p.pane === '%0' ? { ...p, cmd: 'zsh' } : p));
+  expect(onScreenPanes(looking).has('%0')).toBe(true);
+  expect(agentEdges(before, sampleOf(looking, 2), onScreenPanes(looking))).toEqual([]);
+  // And one that was on screen when it last had a state is silent too.
+  const seenBefore = sampleOf(status({ paneMarks: marks({ '%1': ['working', 'prompt', 90] }) }), 1).agents;
+  const gone1 = status({ paneMarks: marks({}) });
+  gone1.panes = gone1.panes.filter((p) => p.pane !== '%1');
+  expect(agentEdges(seenBefore, sampleOf(gone1, 2), onScreenPanes(gone1))).toEqual([]);
+});
+
+test('a pane still running its agent with no marker is a gap, not an exit', () => {
+  const before = sampleOf(status({ paneMarks: marks({ '%0': ['working', 'prompt', 90] }) }), 1).agents;
+  const gap = status({ paneMarks: marks({}) });
+  const next = sampleOf(gap, 2);
+  expect('state' in next.agents['%0']).toBe(false);
+  expect(agentEdges(before, next, onScreenPanes(gap))).toEqual([]);
+});
+
+test('first appearance emits nothing', () => {
+  expect(agentEdges(undefined, sampleOf(status(), 1), new Set())).toEqual([]);
+});
+
+// --- edges through classifyTransitions (the sweep's path) ---------------------
 
 const A = (agents) => ({ up: true, agents });
-const E = (state, extra = {}) => ({ present: true, attached: false, state, ts: 1, ...extra });
+// A pane entry: its own session `web` and window unless told otherwise.
+const E = (state, extra = {}) => ({ session: 'web', windowId: '@0', windowIndex: 0, windowName: 'web', paneIndex: 0,
+  agent: 'claude', visible: true, focused: true, attached: false, state, ts: 1, ...extra });
+const ev = (kind, pane, extra = {}) => ({ kind, pane, session: 'web', windowId: '@0', window: '0:web', agent: 'claude', ...extra });
+const TWO = { session: 'web-2', windowId: '@1', windowName: 'two' };
+const evTwo = (kind, extra = {}) => ev(kind, '%2', { session: 'web-2', windowId: '@1', window: '0:two', ...extra });
+const seeded = (agents) => ({ ...initThresholdState(), agents });
 
-test('agent edges run per session and carry the session name', () => {
+test('agent edges run per pane and carry the pane and its place', () => {
   let st = initThresholdState();
-  let r = classifyTransitions(A({ web: E('working'), 'web-2': E('working') }), A({ web: E('working'), 'web-2': E('working') }), TH, st); st = r.state;
-  r = classifyTransitions(A({}), A({ web: E('blocked', { cause: 'permission' }), 'web-2': E('done') }), TH, st);
-  expect(r.events).toEqual([{ kind: 'agent-blocked', session: 'web', cause: 'permission' }, { kind: 'agent-input', session: 'web-2' }]);
+  let r = classifyTransitions(A({ '%1': E('working'), '%2': E('working', TWO) }), A({ '%1': E('working'), '%2': E('working', TWO) }), TH, st); st = r.state;
+  r = classifyTransitions(A({}), A({ '%1': E('blocked', { cause: 'permission' }), '%2': E('done', TWO) }), TH, st);
+  expect(r.events).toEqual([ev('agent-blocked', '%1', { cause: 'permission' }), evTwo('agent-input')]);
 });
 
-test('first appearance of a session emits nothing, even when it appears blocked', () => {
-  const r = classifyTransitions(A({}), A({ web: E('blocked', { cause: 'permission' }) }), TH, initThresholdState());
+test('first appearance of a pane emits nothing, even when it appears blocked', () => {
+  const r = classifyTransitions(A({}), A({ '%1': E('blocked', { cause: 'permission' }) }), TH, initThresholdState());
   expect(r.events).toEqual([]);
 });
 
 test('a failed probe does not replace the previous map, so the box coming back is not a first appearance', () => {
   let st = initThresholdState();
-  st = classifyTransitions(A({}), A({ web: E('working') }), TH, st).state;
-  st = classifyTransitions(A({ web: E('working') }), { up: false }, TH, st).state;   // no agents key
-  const r = classifyTransitions({ up: false }, A({ web: E('done') }), TH, st);
-  expect(r.events).toEqual([{ kind: 'up' }, { kind: 'agent-input', session: 'web' }]); // reachability edge first, as today
+  st = classifyTransitions(A({}), A({ '%1': E('working') }), TH, st).state;
+  st = classifyTransitions(A({ '%1': E('working') }), { up: false }, TH, st).state;   // no agents key
+  const r = classifyTransitions({ up: false }, A({ '%1': E('done') }), TH, st);
+  expect(r.events).toEqual([{ kind: 'up' }, ev('agent-input', '%1')]); // reachability edge first, as before
 });
 
 test('blocked → done without a working in between still fires agent-input', () => {
   let st = initThresholdState();
-  st = classifyTransitions(A({}), A({ web: E('blocked') }), TH, st).state;
-  expect(classifyTransitions(A({}), A({ web: E('done') }), TH, st).events).toEqual([{ kind: 'agent-input', session: 'web' }]);
+  st = classifyTransitions(A({}), A({ '%1': E('blocked') }), TH, st).state;
+  expect(classifyTransitions(A({}), A({ '%1': E('done') }), TH, st).events).toEqual([ev('agent-input', '%1')]);
 });
 
-test('attached suppresses agent-blocked and agent-input but is not a seen mark (the state stays done)', () => {
+test('on screen suppresses agent-blocked and agent-input but is not a seen mark (the state stays done)', () => {
   let st = initThresholdState();
-  st = classifyTransitions(A({}), A({ web: E('working') }), TH, st).state;
-  expect(classifyTransitions(A({}), A({ web: E('done', { attached: true }) }), TH, st).events).toEqual([]);
+  st = classifyTransitions(A({}), A({ '%1': E('working') }), TH, st).state;
+  expect(classifyTransitions(A({}), A({ '%1': E('done', { attached: true }) }), TH, st).events).toEqual([]);
+  // Attached but in a background window is not on screen.
+  expect(classifyTransitions(A({}), A({ '%1': E('done', { attached: true, visible: false, focused: false }) }), TH, st).events)
+    .toEqual([ev('agent-input', '%1')]);
 });
 
-test('a marker gap with the claude pane still present fires no agent-done; an exited claude does', () => {
+test('a marker gap with the agent pane still listed fires no agent-done; an exited agent does', () => {
   let st = initThresholdState();
-  st = classifyTransitions(A({}), A({ web: E('done') }), TH, st).state;
-  expect(classifyTransitions(A({}), A({ web: { present: true, attached: false } }), TH, st).events).toEqual([]);
-  expect(classifyTransitions(A({}), A({}), TH, st).events).toEqual([{ kind: 'agent-done', session: 'web' }]);
+  st = classifyTransitions(A({}), A({ '%1': E('done') }), TH, st).state;
+  const { state: _s, ts: _t, ...gap } = E('done');
+  expect(classifyTransitions(A({}), A({ '%1': gap }), TH, st).events).toEqual([]);
+  expect(classifyTransitions(A({}), A({}), TH, st).events).toEqual([ev('agent-done', '%1')]);
+  // Gone, but its pane is on screen now (at a shell the operator is looking at): silent.
+  expect(classifyTransitions(A({}), A({}), TH, st, new Set(['%1'])).events).toEqual([]);
 });
 
 test('a persisting blocker emits once', () => {
   let st = initThresholdState();
-  st = classifyTransitions(A({}), A({ web: E('working') }), TH, st).state;
-  let r = classifyTransitions(A({}), A({ web: E('blocked', { cause: 'question' }) }), TH, st); st = r.state;
+  st = classifyTransitions(A({}), A({ '%1': E('working') }), TH, st).state;
+  const r = classifyTransitions(A({}), A({ '%1': E('blocked', { cause: 'question' }) }), TH, st); st = r.state;
   expect(r.events).toHaveLength(1);
-  expect(classifyTransitions(A({}), A({ web: E('blocked', { cause: 'question' }) }), TH, st).events).toEqual([]);
+  expect(classifyTransitions(A({}), A({ '%1': E('blocked', { cause: 'question' }) }), TH, st).events).toEqual([]);
 });
 
-const seeded = (agents) => ({ ...initThresholdState(), agents });
-
-test('agent-input fires once on working to done when detached', () => {
-  const r1 = classifyTransitions(A({}), A({ web: E('done') }), TH, seeded({ web: E('working') }));
-  expect(r1.events).toContainEqual({ kind: 'agent-input', session: 'web' });
-  const r2 = classifyTransitions(A({}), A({ web: E('done') }), TH, r1.state);
+test('agent-input fires once on working to done off screen', () => {
+  const r1 = classifyTransitions(A({}), A({ '%1': E('done') }), TH, seeded({ '%1': E('working') }));
+  expect(r1.events).toContainEqual(ev('agent-input', '%1'));
+  const r2 = classifyTransitions(A({}), A({ '%1': E('done') }), TH, r1.state);
   expect(r2.events).toEqual([]);
 });
 
-test('multi-viewer tmux session (#{session_attached} >= 2) suppresses agent-input and agent-done', () => {
-  const box = { id: 'b1', label: 'web-01', host: 'h1', sessionName: 'web' };
+test('agent-done needs an up, running box: a stopped guest resets the map', () => {
+  expect(classifyTransitions(A({}), { up: true, stopped: true, agents: {} }, TH, seeded({ '%1': E('working') })).events).toEqual([]);
+  expect(classifyTransitions(A({}), A({}), TH, seeded({ '%1': E('working') })).events).toEqual([ev('agent-done', '%1')]);
+});
+
+const probeOut = (viewers, cmd, mark) => [
+  `web:1:${viewers}:1000:${cmd}`,
+  '__WIN__ web:0:@0:1:web',
+  `__PANE__ web:@0:%1:0:1:0:${cmd}`,
+  ...(mark ? [`__AGENT__ web:${mark}:%1`] : []),
+].join('\n');
+
+test('multi-viewer tmux session (#{session_attached} >= 2) suppresses agent-input and agent-done for a pane on screen', () => {
+  const box = { id: 'b1', label: 'web-01', host: 'h1' };
   const run = (viewers) => {
     const h = createHealthHistory({});
-    const working = { reachable: true, sessions: parseTmuxSessions(`web:1:${viewers}:1000:claude\n`), agentMarks: { web: { state: 'working', cause: 'prompt', ts: 990 } } };
-    const done = { reachable: true, sessions: parseTmuxSessions(`web:1:${viewers}:1005:claude\n`), agentMarks: { web: { state: 'ready', cause: 'stop', ts: 1005 } } };
-    const exited = { reachable: true, sessions: parseTmuxSessions(`web:1:${viewers}:1010:zsh\n`) };
-    h.record({ b1: working }, [box]);
-    h.record({ b1: done }, [box]);
-    h.record({ b1: exited }, [box]);
+    h.record({ b1: fromProbe(probeOut(viewers, 'claude', 'working:990:prompt')) }, [box]);
+    h.record({ b1: fromProbe(probeOut(viewers, 'claude', 'ready:1005:stop')) }, [box]);
+    h.record({ b1: fromProbe(probeOut(viewers, 'zsh')) }, [box]);
     return h.getEvents({}).events;
   };
   expect(run(2)).toEqual([]);
@@ -296,20 +507,20 @@ test('multi-viewer tmux session (#{session_attached} >= 2) suppresses agent-inpu
   expect(run(0).map((e) => e.kind).sort()).toEqual(['agent-done', 'agent-input']);
 });
 
-test('agent-done fires when claude exits on an up box, and either end attached silences it', () => {
-  const mk = (viewers, cmd) => ({ reachable: true, sessions: parseTmuxSessions(`web:1:${viewers}:1010:${cmd}\n`) });
-  const working = (viewers) => ({ reachable: true, sessions: parseTmuxSessions(`web:1:${viewers}:1000:claude\n`), agentMarks: { web: { state: 'working', cause: 'prompt', ts: 990 } } });
-  const run = (v0, v1) => classifyTransitions(sampleOf(working(v0), 5, {}), sampleOf(mk(v1, 'zsh'), 5, {}), TH, seeded(sampleOf(working(v0), 5, {}).agents)).events;
-  expect(run(0, 0)).toEqual([{ kind: 'agent-done', session: 'web', agent: 'claude' }]);
-  expect(run(1, 0)).toEqual([]); // prev attached
-  expect(run(0, 1)).toEqual([]); // next attached (session listed, pane now zsh)
-  // and the session vanishing entirely still fires
-  expect(classifyTransitions(A({}), A({}), TH, seeded({ web: E('working') })).events).toEqual([{ kind: 'agent-done', session: 'web' }]);
+test('agent-done fires when the agent exits on an up box, and either end on screen silences it', () => {
+  const run = (v0, v1) => {
+    const was = fromProbe(probeOut(v0, 'claude', 'working:990:prompt'));
+    const now = fromProbe(probeOut(v1, 'zsh'));
+    return classifyTransitions(sampleOf(was, 5), sampleOf(now, 5), TH, seeded(sampleOf(was, 5).agents), onScreenPanes(now)).events;
+  };
+  expect(run(0, 0)).toEqual([ev('agent-done', '%1')]);
+  expect(run(1, 0)).toEqual([]); // prev on screen
+  expect(run(0, 1)).toEqual([]); // next on screen (pane listed, now zsh)
 });
 
 test('stopping then starting a Proxmox box fires no stale agent-done', () => {
-  const ready = { reachable: true, sessions: parseTmuxSessions('web:1:0:1000:claude\n'), agentMarks: { web: { state: 'ready', cause: 'stop', ts: 990 } } };
-  const samples = [ready, { proxmoxState: 'stopped' }, { reachable: true, sessions: [] }].map((x) => sampleOf(x, 5, {}));
+  const ready = fromProbe(probeOut(0, 'claude', 'ready:990:stop'));
+  const samples = [ready, { proxmoxState: 'stopped' }, { reachable: true, sessions: [] }].map((x) => sampleOf(x, 5));
   const st = classifyTransitions(null, samples[0], TH, initThresholdState()).state;
   let r = classifyTransitions(samples[0], samples[1], TH, st);
   expect(r.events.map((e) => e.kind)).not.toContain('agent-done');
@@ -317,84 +528,43 @@ test('stopping then starting a Proxmox box fires no stale agent-done', () => {
   expect(r.events.map((e) => e.kind)).not.toContain('agent-done');
 });
 
-test('a plain down -> up keeps the previous map, so a claude gone across a reboot fires agent-done', () => {
-  const ready = sampleOf({ reachable: true, sessions: parseTmuxSessions('web:1:0:1000:claude\n'), agentMarks: { web: { state: 'ready', cause: 'stop', ts: 990 } } }, 5, {});
-  const down = sampleOf({ reachable: false }, 5, {});
-  const back = sampleOf({ reachable: true, sessions: [] }, 5, {});
+test('a plain down -> up keeps the previous map, so an agent gone across a reboot fires agent-done', () => {
+  const ready = sampleOf(fromProbe(probeOut(0, 'claude', 'ready:990:stop')), 5);
+  const down = sampleOf({ reachable: false }, 5);
+  const back = sampleOf({ reachable: true, sessions: [] }, 5);
   const st = classifyTransitions(null, ready, TH, initThresholdState()).state;
   const r = classifyTransitions(ready, down, TH, st);
   expect(classifyTransitions(down, back, TH, r.state).events.map((e) => e.kind)).toEqual(['up', 'agent-done']);
 });
 
 test('agent kinds never fire on the first sample (no prev)', () => {
-  expect(classifyTransitions(null, A({ web: E('done') }), TH, initThresholdState()).events).toEqual([]);
+  expect(classifyTransitions(null, A({ '%1': E('done') }), TH, initThresholdState()).events).toEqual([]);
 });
 
-// The old anti-blip streak is gone: only a hook marker produces 'working', so a
-// single-poll working -> done edge is a real turn ending and fires at once.
+// Only a hook marker produces 'working', so a single-poll working -> done edge
+// is a real turn ending and fires at once.
 test('a single-poll working sample followed by done fires agent-input immediately', () => {
-  let st = classifyTransitions(A({}), A({ web: E('done') }), TH, initThresholdState()).state;
-  st = classifyTransitions(A({}), A({ web: E('working') }), TH, st).state;
-  expect(classifyTransitions(A({}), A({ web: E('done') }), TH, st).events).toEqual([{ kind: 'agent-input', session: 'web' }]);
-});
-
-test('sustained work followed by quiet fires agent-input exactly once', () => {
-  let st = classifyTransitions(A({}), A({ web: E('done') }), TH, initThresholdState()).state;
-  st = classifyTransitions(A({}), A({ web: E('working') }), TH, st).state;
-  const second = classifyTransitions(A({}), A({ web: E('working') }), TH, st);
-  expect(second.events).toEqual([]);
-  const done = classifyTransitions(A({}), A({ web: E('done') }), TH, second.state);
-  expect(done.events).toEqual([{ kind: 'agent-input', session: 'web' }]);
-  expect(classifyTransitions(A({}), A({ web: E('done') }), TH, done.state).events).toEqual([]);
+  let st = classifyTransitions(A({}), A({ '%1': E('done') }), TH, initThresholdState()).state;
+  st = classifyTransitions(A({}), A({ '%1': E('working') }), TH, st).state;
+  expect(classifyTransitions(A({}), A({ '%1': E('done') }), TH, st).events).toEqual([ev('agent-input', '%1')]);
 });
 
 test('a long task fires once, not once per poll', () => {
-  let st = classifyTransitions(A({}), A({ web: E('working') }), TH, initThresholdState()).state;
+  let st = classifyTransitions(A({}), A({ '%1': E('working') }), TH, initThresholdState()).state;
   let fired = 0;
   for (let poll = 0; poll < 10; poll += 1) {
-    const r = classifyTransitions(A({}), A({ web: E('working') }), TH, st);
+    const r = classifyTransitions(A({}), A({ '%1': E('working') }), TH, st);
     st = r.state;
     fired += r.events.length;
   }
-  fired += classifyTransitions(A({}), A({ web: E('done') }), TH, st).events.length;
+  fired += classifyTransitions(A({}), A({ '%1': E('done') }), TH, st).events.length;
   expect(fired).toBe(1);
 });
 
-// Was "no prior history still fires (restart tolerance)". Per session, an edge
-// needs a previous entry: with one (working) a done fires; with none it is a
-// first appearance and stays silent.
 test('first appearance as done emits nothing, but a previous working entry makes done fire', () => {
-  expect(classifyTransitions(A({}), A({ web: E('done') }), TH, initThresholdState()).events).toEqual([]);
-  expect(classifyTransitions(A({}), A({ web: E('done') }), TH, seeded({ web: E('working') })).events)
-    .toEqual([{ kind: 'agent-input', session: 'web' }]);
-});
-
-test('sampleOf: the marker is the sole source of working/waiting, regardless of output timing', () => {
-  // Marker says waiting although output is fresh (the parked-pane blip shape).
-  const busy = withAgent({ agentMarks: { web: { state: 'ready', cause: 'stop', ts: 990 } } });
-  const s1 = sampleOf(busy, 5, AGENT);
-  expect(s1.agent).toBe('done');
-  expect(s1.agentPresent).toBe(true);
-  // Marker says working although output has been quiet for ages.
-  const quiet = withAgent({
-    sessions: [{ name: 'web', attached: false, activity: 100, paneCmd: 'claude' }],
-    agentMarks: { web: { state: 'working', cause: 'prompt', ts: 90 } },
-  });
-  expect(sampleOf(quiet, 5, AGENT).agent).toBe('working');
-});
-
-test('sampleOf: a marker for another session is ignored, and a stale marker for an exited claude is inert', () => {
-  const otherSession = withAgent({ agentMarks: { ops: { state: 'ready', cause: 'stop', ts: 990 } } });
-  const s = sampleOf(otherSession, 5, AGENT);
-  expect(s.agent).toBeUndefined();          // no marker for THIS session → no state
-  expect(s.agentPresent).toBe(true);
-  const noClaude = withAgent({
-    sessions: [{ name: 'web', attached: false, activity: 100, paneCmd: 'bash' }],
-    agentMarks: { web: { state: 'working', cause: 'prompt', ts: 90 } },
-  });
-  const dead = sampleOf(noClaude, 5, AGENT);
-  expect(dead.agent).toBeUndefined();       // paneCmd gate: marker without a claude pane is inert
-  expect(dead.agentPresent).toBeUndefined();
+  expect(classifyTransitions(A({}), A({ '%1': E('done') }), TH, initThresholdState()).events).toEqual([]);
+  expect(classifyTransitions(A({}), A({ '%1': E('done') }), TH, seeded({ '%1': E('working') })).events)
+    .toEqual([ev('agent-input', '%1')]);
 });
 
 test('deriveAgentState: start is idle, stop is done until seen, blocked and working pass through', () => {
@@ -406,135 +576,113 @@ test('deriveAgentState: start is idle, stop is done until seen, blocked and work
   expect(deriveAgentState({ state: 'ready', cause: 'stop', ts: 10 }, 10)).toBe('idle');
 });
 
-test('sampleOf builds a per-session agents map and keeps the legacy agent field for the configured session', () => {
-  const status = { reachable: true, tmux: true,
-    sessions: [
-      { name: 'web', windows: 1, attached: false, paneCmd: 'claude' },
-      { name: 'web-2', windows: 1, attached: true, paneCmd: 'claude' },
-      { name: 'build', windows: 1, attached: false, paneCmd: 'zsh' },
-      { name: 'bad name', windows: 1, attached: false, paneCmd: 'claude' },
-      { name: 'nomark', windows: 1, attached: false, paneCmd: 'claude' },
-    ],
-    agentMarks: { web: { state: 'ready', cause: 'stop', ts: 50 }, 'web-2': { state: 'blocked', cause: 'permission', ts: 60 }, 'bad name': { state: 'working', cause: 'prompt', ts: 1 }, stale: { state: 'working', cause: 'prompt', ts: 1 } } };
-  const s = sampleOf(status, 1, { sessionName: 'web', seenOf: (name) => (name === 'web' ? 50 : undefined) });
-  expect(s.agents).toEqual({
-    web: { present: true, agent: 'claude', attached: false, state: 'idle', cause: 'stop', ts: 50 },
-    'web-2': { present: true, agent: 'claude', attached: true, state: 'blocked', cause: 'permission', ts: 60 },
-    nomark: { present: true, agent: 'claude', attached: false },
-    build: { present: false, attached: false },
-  });
-  expect(s.agent).toBe('idle');
-  expect(s.agentPresent).toBe(true);
-});
+// --- the history: record, recordAgents, markSeen -------------------------------
 
-test('sampleOf: a failed probe carries no agents map at all; an empty session list carries an empty one', () => {
-  expect('agents' in sampleOf({ reachable: false }, 1)).toBe(false);
-  expect(sampleOf({ reachable: true, sessions: [] }, 1).agents).toEqual({});
-});
-
+// One pane per row, each session with one window named after it.
+function paneStatus(rows, extra = {}) {
+  const sessions = [];
+  const panes = [];
+  const paneMarks = Object.create(null);
+  for (const { session = 'web', pane = '%1', cmd = 'claude', attached = false, mark: m } of rows) {
+    if (!sessions.some((s) => s.name === session)) {
+      sessions.push({ name: session, windows: 1, attached, activity: 0, paneCmd: cmd, windowList: [{ id: '@0', index: 0, name: session, active: true }] });
+    }
+    panes.push({ session, windowId: '@0', pane, index: 0, active: true, zoomed: false, cmd });
+    if (m) paneMarks[pane] = { session, ...m };
+  }
+  return { reachable: true, tmux: true, sessions, panes, ...(Object.keys(paneMarks).length ? { paneMarks } : {}), ...extra };
+}
+const mark = (state, cause, ts) => ({ state, cause, ts });
+// The common case: pane %1, alone in session `web`.
+const one = (m, opts = {}) => paneStatus([{ mark: m, ...opts }]);
 function memSeenStore(init = {}) { let data = init; return { load: () => data, save: (m) => { data = m; }, whenIdle: async () => {}, get data() { return data; } }; }
-const claudeStatus = (marks, sessions = ['web']) => ({ reachable: true, tmux: true, sessions: sessions.map((n) => ({ name: n, windows: 1, attached: false, paneCmd: 'claude' })), agentMarks: marks });
 
-test('markSeen turns done into idle on the next record and persists; a ts ahead of the marker is refused', () => {
-  const store = memSeenStore();
-  const h = createHealthHistory({ seenStore: store, now: () => 1 });
-  const box = { id: 'b1', host: 'h', sessionName: 'web' };
-  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }) }, [box]);
-  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('done');
-  expect(h.markSeen('b1', 'web', 101)).toBe(false);
-  expect(h.markSeen('b1', 'nope', 100)).toBe(false);
-  expect(h.markSeen('b1', 'web', 100)).toBe(true);
-  expect(store.data).toEqual({ b1: { web: 100 } });
-  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }) }, [box]);
-  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('idle');
-});
-
-test('seen survives a failed probe and a non-claude pane, and is dropped only when the session is gone from a successful listing', () => {
-  const store = memSeenStore({ b1: { web: 100 } });
-  const h = createHealthHistory({ seenStore: store });
-  const box = { id: 'b1', host: 'h', sessionName: 'web' };
-  h.record({ b1: { reachable: false } }, [box]);
-  expect(store.data).toEqual({ b1: { web: 100 } });
-  h.record({ b1: { reachable: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'zsh' }] } }, [box]);
-  expect(store.data).toEqual({ b1: { web: 100 } });
-  h.record({ b1: { reachable: true, sessions: [] } }, [box]);
-  expect(store.data).toEqual({ b1: {} });
-});
-
-test('a seen session that finishes a new turn is done again, and the event carries the session', () => {
-  const store = memSeenStore({ b1: { web: 100 } });
+test('a seen pane that finishes a new turn is done again, and the event carries the pane and its place', () => {
+  const store = memSeenStore({ b1: { '%1': 100 } });
   const seen = [];
-  const h = createHealthHistory({ seenStore: store, onEvent: (e) => seen.push(e) });
-  const box = { id: 'b1', host: 'h', sessionName: 'web' };
-  h.record({ b1: claudeStatus({ web: { state: 'working', cause: 'prompt', ts: 150 } }) }, [box]);
-  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 200 } }) }, [box]);
-  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('done');
-  expect(seen.map((e) => [e.kind, e.session])).toEqual([['agent-input', 'web']]);
+  const h = createHealthHistory({ seenStore: store, onEvent: (e) => seen.push(e), now: () => 7 });
+  const box = { id: 'b1', label: 'web-01', host: 'h' };
+  h.record({ b1: one(mark('working', 'prompt', 150)) }, [box]);
+  h.record({ b1: one(mark('ready', 'stop', 200)) }, [box]);
+  expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('done');
+  expect(seen).toHaveLength(1);
+  expect(seen[0]).toEqual({ boxId: 'b1', label: 'web-01', host: 'h', t: 7, kind: 'agent-input', seq: 1,
+    session: 'web', pane: '%1', windowId: '@0', window: '0:web', agent: 'claude' });
 });
 
-test('a persisted agent-blocked event carries session and cause; whenIdle resolves without a store', async () => {
+test('record copies paneIndex onto the event when the window holds two agents', () => {
   const h = createHealthHistory();
-  const box = { id: 'b1', host: 'h', sessionName: 'web' };
-  h.record({ b1: claudeStatus({ web: { state: 'working', cause: 'prompt', ts: 150 } }) }, [box]);
-  h.record({ b1: claudeStatus({ web: { state: 'blocked', cause: 'permission', ts: 160 } }) }, [box]);
-  const ev = h.getEvents().events.find((e) => e.kind === 'agent-blocked');
-  expect(ev).toMatchObject({ boxId: 'b1', session: 'web', cause: 'permission' });
+  const box = { id: 'b1', host: 'h' };
+  const st = (m) => apiInFront({ paneMarks: marks(m) });
+  h.record({ b1: st({ '%2': ['working', 'prompt', 150] }) }, [box]);
+  h.record({ b1: st({ '%2': ['blocked', 'question', 160] }) }, [box]);
+  expect(h.getEvents().events[0]).toMatchObject({ kind: 'agent-blocked', pane: '%2', session: 'main', windowId: '@1', window: '2:frontend', paneIndex: 2, cause: 'question', agent: 'codex' });
+});
+
+test('a persisted agent-blocked event carries pane, session and cause; whenIdle resolves without a store', async () => {
+  const h = createHealthHistory();
+  const box = { id: 'b1', host: 'h' };
+  h.record({ b1: one(mark('working', 'prompt', 150)) }, [box]);
+  h.record({ b1: one(mark('blocked', 'permission', 160)) }, [box]);
+  const e = h.getEvents().events.find((x) => x.kind === 'agent-blocked');
+  expect(e).toMatchObject({ boxId: 'b1', pane: '%1', session: 'web', cause: 'permission' });
+  expect('paneIndex' in e).toBe(false);
   await expect(h.whenIdle()).resolves.toBeUndefined();
 });
 
-test('a removed box drops its seen entry', () => {
-  const store = memSeenStore({ b1: { web: 100 }, b2: { web: 5 } });
-  const h = createHealthHistory({ seenStore: store });
-  h.record({ b2: claudeStatus({}) }, [{ id: 'b2', host: 'h', sessionName: 'web' }]);
-  expect(store.data).toEqual({ b2: { web: 5 } });
+test('a status listing sessions but not panes neither emits nor replaces the baseline', () => {
+  const h = createHealthHistory();
+  const box = { id: 'b1', host: 'h' };
+  h.record({ b1: one(mark('working', 'prompt', 100)) }, [box]);
+  const noPanes = one(mark('working', 'prompt', 100));
+  delete noPanes.panes;
+  h.record({ b1: noPanes }, [box]);
+  expect(h.getEvents().events).toEqual([]);
+  expect('agents' in h.getSeries('b1').at(-1)).toBe(false);
+  h.record({ b1: paneStatus([{ pane: '%9', cmd: 'zsh' }]) }, [box]);      // %1 is gone now
+  expect(h.getEvents().events.map((e) => [e.kind, e.pane])).toEqual([['agent-done', '%1']]);
 });
 
-// T7c: a watermark loaded at boot applies to the very first record() — the
-// restart must not flash `done` for a turn the operator already saw.
 test('a watermark loaded from seenStore.load() yields idle on the FIRST record of a ready/stop marker', () => {
-  const store = memSeenStore({ b1: { web: 100 } });
+  const h = createHealthHistory({ seenStore: memSeenStore({ b1: { '%1': 100 } }) });
+  h.record({ b1: one(mark('ready', 'stop', 100)) }, [{ id: 'b1', host: 'h' }]);
+  expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('idle');
+});
+
+test('a removed box drops its seen entry', () => {
+  const store = memSeenStore({ b1: { '%1': 100 }, b2: { '%1': 5 } });
   const h = createHealthHistory({ seenStore: store });
-  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }) }, [{ id: 'b1', host: 'h', sessionName: 'web' }]);
-  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('idle');
+  h.record({ b2: paneStatus([]) }, [{ id: 'b2', host: 'h' }]);
+  expect(store.data).toEqual({ b2: { '%1': 5 } });
 });
 
 // A box listed in `boxes` with no status this pass (the Host Shell sampler
 // losing its race) is skipped, not pruned: its seen entry and series survive.
 test('a listed box with no status this pass keeps its seen entry and series', () => {
-  const store = memSeenStore({ b1: { web: 100 } });
+  const store = memSeenStore({ b1: { '%1': 100 } });
   const h = createHealthHistory({ seenStore: store });
-  const box = { id: 'b1', host: 'h', sessionName: 'web' };
-  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }) }, [box]);
+  const box = { id: 'b1', host: 'h' };
+  h.record({ b1: one(mark('ready', 'stop', 100)) }, [box]);
   h.record({}, [box]);
-  expect(store.data).toEqual({ b1: { web: 100 } });
+  expect(store.data).toEqual({ b1: { '%1': 100 } });
   expect(h.getSeries('b1')).toHaveLength(1);
-  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }) }, [box]);
-  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('idle');
+  h.record({ b1: one(mark('ready', 'stop', 100)) }, [box]);
+  expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('idle');
 });
 
-// M6: session names are box-controlled; prototype keys must neither vanish
-// nor poison the agents map.
-test('sampleOf keeps __proto__ and constructor sessions as own agents entries', () => {
-  const marks = parseAgentMarksForTest();
-  const s = sampleOf({ reachable: true, sessions: [
-    { name: '__proto__', windows: 1, attached: false, paneCmd: 'claude' },
-    { name: 'constructor', windows: 1, attached: false, paneCmd: 'claude' },
-    { name: 'web', windows: 1, attached: false, paneCmd: 'claude' },
-  ], agentMarks: marks }, 1, { sessionName: '__proto__' });
-  expect(Object.keys(s.agents).sort()).toEqual(['__proto__', 'constructor', 'web']);
-  expect(Object.hasOwn(s.agents, '__proto__')).toBe(true);
-  expect(s.agents.__proto__).toMatchObject({ present: true, state: 'working', ts: 10 });
-  // `constructor` has no marker: no inherited Object.prototype.constructor read as one.
-  expect(s.agents.constructor).toEqual({ present: true, agent: 'claude', attached: false });
-  expect(s.agents.web.state).toBe('done');
-  expect(s.agent).toBe('working');
-  // The map round-trips through JSON (the /api/status boundary) intact.
-  expect(Object.keys(JSON.parse(JSON.stringify(s.agents))).sort()).toEqual(['__proto__', 'constructor', 'web']);
+test('markSeen turns done into idle and persists; a ts ahead of the marker is refused', () => {
+  const store = memSeenStore();
+  const h = createHealthHistory({ seenStore: store, now: () => 1 });
+  const box = { id: 'b1', host: 'h' };
+  h.record({ b1: one(mark('ready', 'stop', 100)) }, [box]);
+  expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('done');
+  expect(h.markSeen('b1', '%1', 101)).toBe(false);
+  expect(h.markSeen('b1', '%7', 100)).toBe(false);
+  expect(h.markSeen('b1', '%1', 100)).toBe(true);
+  expect(store.data).toEqual({ b1: { '%1': 100 } });
+  h.record({ b1: one(mark('ready', 'stop', 100)) }, [box]);
+  expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('idle');
 });
-
-function parseAgentMarksForTest() {
-  return parseAgentMarks('__AGENT__ __proto__:working:10:prompt\n__AGENT__ web:ready:11:stop\n');
-}
 
 test('agentKindOf lives in agentKind.js and healthHistory re-exports the same function', () => {
   expect(agentKindOf).toBe(agentKindOfModule);
@@ -547,43 +695,39 @@ test('agentKindOf: claude and opencode panes are agents, shells and node are not
 });
 
 test('sampleOf: an opencode pane with a marker carries state and agent: opencode', () => {
-  const s = sampleOf(withAgent({
-    sessions: [{ name: 'web', attached: false, activity: 1000, paneCmd: 'opencode' }],
-    agentMarks: { web: { state: 'blocked', cause: 'permission', ts: 990 } },
-  }), 5, AGENT);
-  expect(s.agents.web).toEqual({ present: true, agent: 'opencode', state: 'blocked', cause: 'permission', ts: 990, attached: false });
-  expect(s.agent).toBe('blocked');
+  const s = sampleOf(one(mark('blocked', 'permission', 990), { cmd: 'opencode' }), 5);
+  expect(s.agents['%1']).toEqual({ session: 'web', windowId: '@0', windowIndex: 0, windowName: 'web', paneIndex: 0,
+    agent: 'opencode', state: 'blocked', cause: 'permission', ts: 990, visible: true, focused: true, attached: false });
 });
 
 test('agent events carry the agent kind, including agent-done after the pane is gone', () => {
-  const mk = (cmd, mark) => sampleOf({ reachable: true, sessions: [{ name: 'web', attached: false, paneCmd: cmd }], agentMarks: mark }, 5, AGENT);
-  const a = mk('opencode', { web: { state: 'working', cause: 'prompt', ts: 1 } });
-  const b = mk('opencode', { web: { state: 'blocked', cause: 'permission', ts: 2 } });
+  const a = sampleOf(one(mark('working', 'prompt', 1), { cmd: 'opencode' }), 5);
+  const b = sampleOf(one(mark('blocked', 'permission', 2), { cmd: 'opencode' }), 5);
   let st = initThresholdState();
   st = classifyTransitions(null, a, TH, st).state;
   const r = classifyTransitions(a, b, TH, st); st = r.state;
-  expect(r.events).toEqual([{ kind: 'agent-blocked', session: 'web', cause: 'permission', agent: 'opencode' }]);
+  expect(r.events).toEqual([ev('agent-blocked', '%1', { cause: 'permission', agent: 'opencode' })]);
   const gone = { up: true, agents: {} };
-  expect(classifyTransitions(b, gone, TH, st).events).toEqual([{ kind: 'agent-done', session: 'web', agent: 'opencode' }]);
+  expect(classifyTransitions(b, gone, TH, st).events).toEqual([ev('agent-done', '%1', { agent: 'opencode' })]);
 });
 
 test('record() keeps the agent kind on emitted and persisted agent events, and none on others', () => {
   const run = (cmd) => {
     const emitted = [];
     const h = createHealthHistory({ onEvent: (e) => emitted.push(e) });
-    const box = { id: 'b1', host: 'h', sessionName: 'web' };
-    const st = (marks) => ({ reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: cmd }], agentMarks: marks });
-    h.record({ b1: st({ web: { state: 'working', cause: 'prompt', ts: 150 } }) }, [box]);
-    h.record({ b1: st({ web: { state: 'blocked', cause: 'permission', ts: 160 } }) }, [box]);
+    const box = { id: 'b1', host: 'h' };
+    h.record({ b1: one(mark('working', 'prompt', 150), { cmd }) }, [box]);
+    h.record({ b1: one(mark('blocked', 'permission', 160), { cmd }) }, [box]);
     h.record({ b1: { reachable: false, error: 'x' } }, [box]);
     const persisted = h.getEvents().events.find((e) => e.kind === 'agent-blocked');
     return { emitted: emitted.find((e) => e.kind === 'agent-blocked'), persisted, down: emitted.find((e) => e.kind === 'down') };
   };
   for (const kind of ['opencode', 'claude']) {
     const r = run(kind);
-    for (const ev of [r.emitted, r.persisted]) expect(ev).toMatchObject({ agent: kind, session: 'web', cause: 'permission' });
+    for (const e of [r.emitted, r.persisted]) expect(e).toMatchObject({ agent: kind, pane: '%1', session: 'web', cause: 'permission' });
   }
-  expect('agent' in run('claude').down).toBe(false);
+  const down = run('claude').down;
+  for (const k of ['agent', 'pane', 'session', 'windowId', 'window']) expect(k in down).toBe(false);
 });
 
 test('agentKindOf: codex and pi are agents, lookalikes are not', () => {
@@ -618,8 +762,7 @@ test('agentKindOf: pinned to the OSC reporter asset OSC_AGENTS keys', () => {
 
 // --- recordAgents: the real-time path (a marker change between two sweeps) ---
 
-const RT_BOX = { id: 'b1', label: 'web-01', host: 'h1', sessionName: 'web' };
-const mark = (state, cause, ts) => ({ web: { state, cause, ts } });
+const RT_BOX = { id: 'b1', label: 'web-01', host: 'h1' };
 function rtHistory(extra = {}) {
   let t = 1000;
   const saved = [];
@@ -630,30 +773,37 @@ function rtHistory(extra = {}) {
 
 test('recordAgents rewrites the latest sample in place and emits the edge at once', () => {
   const { h, saved, pushed, tick } = rtHistory();
-  h.record({ b1: { ...claudeStatus(mark('working', 'prompt', 100)), metrics: { memTotalKb: 100, memAvailKb: 40 } } }, [RT_BOX]);
+  h.record({ b1: { ...one(mark('working', 'prompt', 100)), metrics: { memTotalKb: 100, memAvailKb: 40 } } }, [RT_BOX]);
   tick(3000);
-  expect(h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 101)))).toBe(true);
+  expect(h.recordAgents(RT_BOX, one(mark('blocked', 'permission', 101)))).toBe(true);
   const ring = h.getSeries('b1');
   // Not a new sample: the series keeps the sweep's cadence, time and metrics.
   expect(ring).toHaveLength(1);
   expect(ring[0].t).toBe(1000);
   expect(ring[0].memPct).toBe(60);
-  expect(ring[0].agents.web).toMatchObject({ state: 'blocked', cause: 'permission', ts: 101, agent: 'claude' });
-  expect(ring[0].agent).toBe('blocked');
+  expect(ring[0].agents['%1']).toMatchObject({ state: 'blocked', cause: 'permission', ts: 101, agent: 'claude' });
+  expect('agent' in ring[0]).toBe(false);
   const { events } = h.getEvents();
   expect(events).toHaveLength(1);
-  expect(events[0]).toMatchObject({ kind: 'agent-blocked', boxId: 'b1', label: 'web-01', session: 'web', cause: 'permission', agent: 'claude', t: 4000 });
+  expect(events[0]).toMatchObject({ kind: 'agent-blocked', boxId: 'b1', label: 'web-01', pane: '%1', session: 'web', windowId: '@0', window: '0:web', cause: 'permission', agent: 'claude', t: 4000 });
   expect(pushed).toHaveLength(1);
   expect(saved).toEqual([1]);
 });
 
+test('recordAgents notifies for a pane in a background window of an attached session', () => {
+  const { h } = rtHistory();
+  h.record({ b1: status({ paneMarks: marks({ '%0': ['working', 'prompt', 90] }) }) }, [RT_BOX]);
+  expect(h.recordAgents(RT_BOX, status())).toBe(true);
+  expect(h.getEvents().events.map((e) => [e.kind, e.pane, e.window])).toEqual([['agent-blocked', '%0', '1:api']]);
+});
+
 test('the sweep after a recordAgents sees the same state and does not notify twice', () => {
   const { h, tick } = rtHistory();
-  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)) }, [RT_BOX]);
-  h.recordAgents(RT_BOX, claudeStatus(mark('ready', 'stop', 105)));
+  h.record({ b1: one(mark('working', 'prompt', 100)) }, [RT_BOX]);
+  h.recordAgents(RT_BOX, one(mark('ready', 'stop', 105)));
   expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']);
   tick(30000);
-  h.record({ b1: claudeStatus(mark('ready', 'stop', 105)) }, [RT_BOX]);
+  h.record({ b1: one(mark('ready', 'stop', 105)) }, [RT_BOX]);
   expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']);
   expect(h.getSeries('b1')).toHaveLength(2);
 });
@@ -661,63 +811,65 @@ test('the sweep after a recordAgents sees the same state and does not notify twi
 test('recordAgents needs a sweep baseline and an up, running box', () => {
   const { h } = rtHistory();
   // Never swept: there is no sample to rewrite and no previous state to edge from.
-  expect(h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 1)))).toBe(false);
+  expect(h.recordAgents(RT_BOX, one(mark('blocked', 'permission', 1)))).toBe(false);
   expect(h.getSeries('b1')).toEqual([]);
   h.record({ b1: { reachable: false } }, [RT_BOX]);
-  expect(h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 1)))).toBe(false);
+  expect(h.recordAgents(RT_BOX, one(mark('blocked', 'permission', 1)))).toBe(false);
   h.record({ b1: { reachable: false, proxmoxState: 'stopped' } }, [RT_BOX]);
-  expect(h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 1)))).toBe(false);
+  expect(h.recordAgents(RT_BOX, one(mark('blocked', 'permission', 1)))).toBe(false);
   expect(h.getEvents().events.filter((e) => e.kind.startsWith('agent'))).toEqual([]);
 });
 
-test('recordAgents ignores a status whose session listing is unknown', () => {
+test('recordAgents ignores a status whose session or pane listing is unknown', () => {
   const { h } = rtHistory();
-  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)) }, [RT_BOX]);
+  h.record({ b1: one(mark('working', 'prompt', 100)) }, [RT_BOX]);
   // No `sessions` key = tmux could not be listed. That is not "every session
   // ended", so nothing may change and no agent-done may fire.
-  expect(h.recordAgents(RT_BOX, { reachable: true, agentMarks: mark('ready', 'stop', 101) })).toBe(false);
-  expect(h.getSeries('b1')[0].agents.web.state).toBe('working');
+  expect(h.recordAgents(RT_BOX, { reachable: true, paneMarks: marks({ '%1': ['ready', 'stop', 101, 'web'] }) })).toBe(false);
+  // Sessions but no `panes`: the pane listing was capped or failed.
+  const noPanes = one(mark('ready', 'stop', 101));
+  delete noPanes.panes;
+  expect(h.recordAgents(RT_BOX, noPanes)).toBe(false);
+  expect(h.getSeries('b1')[0].agents['%1'].state).toBe('working');
   expect(h.getEvents().events).toEqual([]);
 });
 
 test('recordAgents keeps the suppression and first-appearance rules', () => {
   const { h } = rtHistory();
-  const attached = (marks) => ({ ...claudeStatus(marks), sessions: [{ name: 'web', windows: 1, attached: true, paneCmd: 'claude' }] });
-  h.record({ b1: attached(mark('working', 'prompt', 100)) }, [RT_BOX]);
-  h.recordAgents(RT_BOX, attached(mark('blocked', 'permission', 101)));
+  h.record({ b1: one(mark('working', 'prompt', 100), { attached: true }) }, [RT_BOX]);
+  h.recordAgents(RT_BOX, one(mark('blocked', 'permission', 101), { attached: true }));
   expect(h.getEvents().events).toEqual([]); // the operator is looking at it
-  // A session that was not there at the last sample has no previous state.
-  h.recordAgents(RT_BOX, claudeStatus({ web: { state: 'working', cause: 'prompt', ts: 102 }, two: { state: 'blocked', cause: 'question', ts: 103 } }, ['web', 'two']));
+  // A pane that was not there at the last sample has no previous state.
+  const both = (twoMark) => paneStatus([{ mark: mark('working', 'prompt', 102) }, { session: 'two', pane: '%2', mark: twoMark }]);
+  h.recordAgents(RT_BOX, both(mark('blocked', 'question', 103)));
   expect(h.getEvents().events).toEqual([]);
   // ...but from then on it edges like any other.
-  h.recordAgents(RT_BOX, claudeStatus({ web: { state: 'working', cause: 'prompt', ts: 102 }, two: { state: 'working', cause: 'unblock', ts: 104 } }, ['web', 'two']));
-  h.recordAgents(RT_BOX, claudeStatus({ web: { state: 'working', cause: 'prompt', ts: 102 }, two: { state: 'ready', cause: 'stop', ts: 105 } }, ['web', 'two']));
-  expect(h.getEvents().events.map((e) => [e.kind, e.session])).toEqual([['agent-input', 'two']]);
+  h.recordAgents(RT_BOX, both(mark('working', 'unblock', 104)));
+  h.recordAgents(RT_BOX, both(mark('ready', 'stop', 105)));
+  expect(h.getEvents().events.map((e) => [e.kind, e.pane, e.session])).toEqual([['agent-input', '%2', 'two']]);
 });
 
 test('recordAgents reports an agent that exited', () => {
   const { h } = rtHistory();
-  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)) }, [RT_BOX]);
-  const shell = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'zsh' }] };
-  expect(h.recordAgents(RT_BOX, shell)).toBe(true);
-  expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-done']);
-  expect(h.getSeries('b1')[0]).not.toHaveProperty('agent');
-  expect(h.getSeries('b1')[0]).not.toHaveProperty('agentPresent');
+  h.record({ b1: one(mark('working', 'prompt', 100)) }, [RT_BOX]);
+  expect(h.recordAgents(RT_BOX, paneStatus([{ cmd: 'zsh' }]))).toBe(true);
+  expect(h.getEvents().events.map((e) => [e.kind, e.pane])).toEqual([['agent-done', '%1']]);
+  expect(h.getSeries('b1')[0].agents).toEqual({});
 });
 
 test('recordAgents leaves the metric thresholds and every other box alone', () => {
   const { h, tick } = rtHistory();
-  const hot = (marks) => ({ ...claudeStatus(marks), metrics: { cpuPct: 99 } });
+  const hot = (m) => ({ ...one(m), metrics: { cpuPct: 99 } });
   const b2 = { id: 'b2', label: 'db-01', host: 'h2' };
   const cool = { reachable: true, tmux: true, sessions: [], metrics: { cpuPct: 5 } };
-  h.record({ b1: { ...claudeStatus(mark('working', 'prompt', 100)), metrics: { cpuPct: 5 } }, b2: cool }, [RT_BOX, b2]);
+  h.record({ b1: { ...one(mark('working', 'prompt', 100)), metrics: { cpuPct: 5 } }, b2: cool }, [RT_BOX, b2]);
   tick(30000);
   h.record({ b1: hot(mark('working', 'prompt', 100)), b2: cool }, [RT_BOX, b2]); // first over-sample: no event yet
   // Three marker changes inside the interval. None is a CPU sample: the streak
   // must neither reach two (a false alarm) nor reset (a missed one).
-  h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 101)));
-  h.recordAgents(RT_BOX, claudeStatus(mark('working', 'unblock', 102)));
-  h.recordAgents(RT_BOX, claudeStatus(mark('ready', 'stop', 103)));
+  h.recordAgents(RT_BOX, one(mark('blocked', 'permission', 101)));
+  h.recordAgents(RT_BOX, one(mark('working', 'unblock', 102)));
+  h.recordAgents(RT_BOX, one(mark('ready', 'stop', 103)));
   expect(h.getEvents().events.filter((e) => e.kind === 'threshold')).toEqual([]);
   expect(h.getSeries('b1').at(-1).cpuPct).toBe(99);
   expect(h.getSeries('b2')).toHaveLength(2); // a single-box update prunes nobody
@@ -726,36 +878,33 @@ test('recordAgents leaves the metric thresholds and every other box alone', () =
   expect(h.getEvents().events.filter((e) => e.kind === 'threshold')).toHaveLength(1);
 });
 
-test('recordAgents drops the seen watermark of a session that is gone', () => {
-  const store = memSeenStore({ b1: { web: 100, old: 50 } });
-  const h = createHealthHistory({ seenStore: store, now: () => 1 });
-  h.record({ b1: claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }, ['web', 'old']) }, [RT_BOX]);
-  h.recordAgents(RT_BOX, claudeStatus({ web: { state: 'ready', cause: 'stop', ts: 100 } }, ['web']));
-  expect(store.data).toEqual({ b1: { web: 100 } });
-  // The watermark is honoured on this path too.
-  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('idle');
+test('recordAgents honours the seen watermark', () => {
+  const h = createHealthHistory({ seenStore: memSeenStore({ b1: { '%1': 100 } }), now: () => 1 });
+  h.record({ b1: one(mark('working', 'prompt', 90)) }, [RT_BOX]);
+  h.recordAgents(RT_BOX, one(mark('ready', 'stop', 100)));
+  expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('idle');
 });
 
 test('markSeen turns done into idle immediately, for every client reading the series', () => {
   const store = memSeenStore();
   const { h } = rtHistory({ seenStore: store });
-  h.record({ b1: claudeStatus(mark('ready', 'stop', 100)) }, [RT_BOX]);
-  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('done');
-  expect(h.markSeen('b1', 'web', 100)).toBe(true);
+  h.record({ b1: one(mark('ready', 'stop', 100)) }, [RT_BOX]);
+  expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('done');
+  expect(h.markSeen('b1', '%1', 100)).toBe(true);
   const last = h.getSeries('b1').at(-1);
-  expect(last.agents.web.state).toBe('idle');
-  expect(last.agent).toBe('idle');
+  expect(last.agents['%1'].state).toBe('idle');
+  expect(Object.getPrototypeOf(last.agents)).toBe(null);
   expect(h.getSeries('b1')).toHaveLength(1);
   // The acknowledged turn is the baseline now: a later prompt still notifies.
-  h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 110)));
+  h.recordAgents(RT_BOX, one(mark('blocked', 'permission', 110)));
   expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
 });
 
 test('markSeen below the marker ts leaves done alone', () => {
   const { h } = rtHistory({ seenStore: memSeenStore() });
-  h.record({ b1: claudeStatus(mark('ready', 'stop', 100)) }, [RT_BOX]);
-  expect(h.markSeen('b1', 'web', 90)).toBe(true); // an older turn's ack, accepted and inert
-  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('done');
+  h.record({ b1: one(mark('ready', 'stop', 100)) }, [RT_BOX]);
+  expect(h.markSeen('b1', '%1', 90)).toBe(true); // an older turn's ack, accepted and inert
+  expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('done');
 });
 
 // --- onChange: "this box's agents look different now" (the /live nudge seam) ---
@@ -766,67 +915,66 @@ test('onChange names a box whenever its agent map changes, from the sweep or the
   const off = h.onChange((id) => changed.push(id));
   const b2 = { id: 'b2', label: 'db-01', host: 'h2' };
   const plain = { reachable: true, tmux: true, sessions: [] };
-  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)), b2: plain }, [RT_BOX, b2]);
+  h.record({ b1: one(mark('working', 'prompt', 100)), b2: plain }, [RT_BOX, b2]);
   expect(changed.sort()).toEqual(['b1', 'b2']);          // first sight of each
   changed.length = 0;
-  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)), b2: plain }, [RT_BOX, b2]);
+  h.record({ b1: one(mark('working', 'prompt', 100)), b2: plain }, [RT_BOX, b2]);
   expect(changed).toEqual([]);                           // nothing moved
   // A change that raises no event (-> working) still has to reach the tabs.
-  h.record({ b1: claudeStatus(mark('ready', 'stop', 101)), b2: plain }, [RT_BOX, b2]);
-  h.recordAgents(RT_BOX, claudeStatus(mark('working', 'prompt', 102)));
+  h.record({ b1: one(mark('ready', 'stop', 101)), b2: plain }, [RT_BOX, b2]);
+  h.recordAgents(RT_BOX, one(mark('working', 'prompt', 102)));
   expect(changed).toEqual(['b1', 'b1']);
   expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']);
   changed.length = 0;
-  h.recordAgents(RT_BOX, claudeStatus(mark('working', 'prompt', 102)));
+  h.recordAgents(RT_BOX, one(mark('working', 'prompt', 102)));
   expect(changed).toEqual([]);                           // same again: no nudge
   // A viewer attaching changes what the board shows too.
-  h.recordAgents(RT_BOX, { ...claudeStatus(mark('working', 'prompt', 102)), sessions: [{ name: 'web', windows: 1, attached: true, paneCmd: 'claude' }] });
+  h.recordAgents(RT_BOX, one(mark('working', 'prompt', 102), { attached: true }));
   expect(changed).toEqual(['b1']);
   off();
-  h.recordAgents(RT_BOX, claudeStatus(mark('ready', 'stop', 103)));
+  h.recordAgents(RT_BOX, one(mark('ready', 'stop', 103)));
   expect(changed).toEqual(['b1']);
 });
 
 test('a throwing onChange listener never breaks a record', () => {
   const { h } = rtHistory();
   h.onChange(() => { throw new Error('boom'); });
-  expect(() => h.record({ b1: claudeStatus(mark('working', 'prompt', 100)) }, [RT_BOX])).not.toThrow();
-  expect(h.recordAgents(RT_BOX, claudeStatus(mark('ready', 'stop', 101)))).toBe(true);
-  expect(h.getSeries('b1').at(-1).agents.web.state).toBe('done');
+  expect(() => h.record({ b1: one(mark('working', 'prompt', 100)) }, [RT_BOX])).not.toThrow();
+  expect(h.recordAgents(RT_BOX, one(mark('ready', 'stop', 101)))).toBe(true);
+  expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('done');
 });
 
 test('recordAgents landing in an exiting agent\'s marker gap does not lose the exit', () => {
   // Claude's SessionEnd hook removes the marker while `claude` is still the
   // pane's foreground command, and the marker removal is exactly what triggers
-  // the real-time probe — so it lands in that gap every time. The session is
-  // present with no state there. If that wiped the edge baseline, the pane
+  // the real-time probe — so it lands in that gap every time. The pane is
+  // listed with no state there. If that wiped the edge baseline, the pane
   // flipping to the shell a moment later (no marker change, so only the sweep
   // sees it) would have nothing to compare against and never report the exit.
   const { h, tick } = rtHistory();
-  const noMarker = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'claude' }] };
-  const shell = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'zsh' }] };
-  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)) }, [RT_BOX]);
-  expect(h.recordAgents(RT_BOX, noMarker)).toBe(true);
+  h.record({ b1: one(mark('working', 'prompt', 100)) }, [RT_BOX]);
+  expect(h.recordAgents(RT_BOX, one(null))).toBe(true);
   // What is shown is the truth: an agent pane with no state.
-  expect(h.getSeries('b1').at(-1).agents.web).toEqual({ present: true, attached: false, agent: 'claude' });
+  expect(h.getSeries('b1').at(-1).agents['%1']).toEqual({ session: 'web', windowId: '@0', windowIndex: 0, windowName: 'web', paneIndex: 0,
+    agent: 'claude', visible: true, focused: true, attached: false });
   expect(h.getEvents().events).toEqual([]);
   tick(30000);
-  h.record({ b1: shell }, [RT_BOX]);
-  expect(h.getEvents().events.map((e) => [e.kind, e.session, e.agent])).toEqual([['agent-done', 'web', 'claude']]);
+  h.record({ b1: paneStatus([{ cmd: 'zsh' }]) }, [RT_BOX]);
+  expect(h.getEvents().events.map((e) => [e.kind, e.pane, e.session, e.agent])).toEqual([['agent-done', '%1', 'web', 'claude']]);
 });
 
 test('a marker gap bridged by recordAgents still edges correctly when the agent carries on', () => {
   const { h } = rtHistory();
-  const noMarker = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'claude' }] };
-  h.record({ b1: claudeStatus(mark('working', 'prompt', 100)) }, [RT_BOX]);
-  h.recordAgents(RT_BOX, noMarker);                 // restarting in place
-  h.recordAgents(RT_BOX, noMarker);                 // still in the gap: the bridge holds
-  h.recordAgents(RT_BOX, claudeStatus(mark('ready', 'start', 101)));
-  expect(h.getEvents().events).toEqual([]);         // a fresh start is idle: nothing to announce
-  h.recordAgents(RT_BOX, claudeStatus(mark('blocked', 'permission', 102)));
+  h.record({ b1: one(mark('working', 'prompt', 100)) }, [RT_BOX]);
+  h.recordAgents(RT_BOX, one(null));                 // restarting in place
+  h.recordAgents(RT_BOX, one(null));                 // still in the gap: the bridge holds
+  h.recordAgents(RT_BOX, one(mark('ready', 'start', 101)));
+  expect(h.getEvents().events).toEqual([]);          // a fresh start is idle: nothing to announce
+  h.recordAgents(RT_BOX, one(mark('blocked', 'permission', 102)));
   expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
-  // A session that never had a state gains none from the bridge.
-  h.recordAgents(RT_BOX, { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'claude' }, { name: 'new', windows: 1, attached: false, paneCmd: 'claude' }], agentMarks: mark('blocked', 'permission', 102) });
-  h.recordAgents(RT_BOX, { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 1, attached: false, paneCmd: 'claude' }, { name: 'new', windows: 1, attached: false, paneCmd: 'zsh' }], agentMarks: mark('blocked', 'permission', 102) });
+  // A pane that never had a state gains none from the bridge.
+  const pair = (cmd) => paneStatus([{ mark: mark('blocked', 'permission', 102) }, { session: 'new', pane: '%2', cmd }]);
+  h.recordAgents(RT_BOX, pair('claude'));
+  h.recordAgents(RT_BOX, pair('zsh'));
   expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
 });

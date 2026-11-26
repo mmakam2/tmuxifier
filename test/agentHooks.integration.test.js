@@ -3,7 +3,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { setupLocalBox } from './helpers/localBox.js';
 import { sshRun } from '../src/server/sshRun.js';
-import { PROBE_REMOTE, parseAgentMarks, parseTmuxWindows } from '../src/server/status.js';
+import { PROBE_REMOTE, parseAgentMarks, parseTmuxWindows, createStatusChecker } from '../src/server/status.js';
+import { sampleOf } from '../src/server/healthHistory.js';
 
 let lb; let teardown;
 afterEach(async () => {
@@ -61,7 +62,7 @@ test('hook script → marker file → PROBE_REMOTE → parseAgentMarks round tri
   expect(typeof w.name).toBe('string');
 });
 
-test('real tmux split: a working pane holds the session at working until the other side finishes too', async () => {
+test('real tmux split: each pane is its own agent entry with its own state, and the session folds them', async () => {
   lb = await setupLocalBox();
   teardown = lb.cleanup;
   const asset = await fs.readFile(new URL('../src/server/assets/tmuxifier-agent-hook.sh', import.meta.url), 'utf8');
@@ -71,9 +72,10 @@ test('real tmux split: a working pane holds the session at working until the oth
   await ssh('tmux split-window -d -t agenthooks');
   const panes = (await ssh("tmux list-panes -t agenthooks -F '#{pane_id}'")).stdout.trim().split('\n');
   expect(panes).toHaveLength(2);
-  // `sleep` stands in for the agent still running in the pane: a pane back at
-  // its shell is the stale case and must not count.
-  const fire = (pane, ev) => ssh(`tmux send-keys -t '${pane}' 'sh ~/tmuxifier-agent-hook.sh ${ev} </dev/null; exec sleep 300' Enter`);
+  // A `sleep` named claude stands in for the agent still running in the pane
+  // (pane_current_command is argv[0]): a pane back at its shell is the stale
+  // case and must not count, and only an agent's pane gets a sample entry.
+  const fire = (pane, ev) => ssh(`tmux send-keys -t '${pane}' 'sh ~/tmuxifier-agent-hook.sh ${ev} </dev/null; exec bash -c "exec -a claude sleep 300"' Enter`);
   const waitFor = async (pane, re) => {
     const file = path.join(lb.home, '.tmuxifier-agent', `agenthooks${pane}`);
     for (let i = 0; i < 40; i++) {
@@ -90,14 +92,24 @@ test('real tmux split: a working pane holds the session at working until the oth
   let cmds = '';
   for (let i = 0; i < 40; i++) {
     cmds = (await ssh("tmux list-panes -t agenthooks -F '#{pane_current_command}'")).stdout;
-    if (cmds.trim().split('\n').every((c) => c === 'sleep')) break;
+    if (cmds.trim().split('\n').every((c) => c === 'claude')) break;
     await new Promise((r) => setTimeout(r, 150));
   }
-  expect(cmds.trim().split('\n')).toEqual(['sleep', 'sleep']);
+  expect(cmds.trim().split('\n')).toEqual(['claude', 'claude']);
   const res = await ssh(PROBE_REMOTE);
   expect(parseAgentMarks(res.stdout).agenthooks).toMatchObject({ state: 'working', cause: 'prompt' });
+  // The same probe through the status checker, into a sample: one entry per
+  // split pane, each with its own marker's state.
+  const checker = createStatusChecker({ run: (argv) => sshRun(argv, { env: lb.env }), sshConfigFile: lb.sshConfigFile });
+  const agents = sampleOf(await checker.checkBox(lb.box), 1).agents;
+  expect(Object.keys(agents).sort()).toEqual([...panes].sort());
+  expect(agents[panes[0]]).toMatchObject({ session: 'agenthooks', agent: 'claude', state: 'working', cause: 'prompt' });
+  expect(agents[panes[1]]).toMatchObject({ session: 'agenthooks', agent: 'claude', state: 'done', cause: 'stop' });
   // Close the working pane: only the finished one is left.
   await ssh(`tmux kill-pane -t '${panes[0]}'`);
   const after = await ssh(PROBE_REMOTE);
   expect(parseAgentMarks(after.stdout).agenthooks).toMatchObject({ state: 'ready', cause: 'stop' });
+  const left = sampleOf(await checker.checkBox(lb.box), 2).agents;
+  expect(Object.keys(left)).toEqual([panes[1]]);
+  expect(left[panes[1]]).toMatchObject({ state: 'done', cause: 'stop' });
 });

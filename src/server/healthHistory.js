@@ -15,13 +15,70 @@ function cpuLoadPct(m) {
 export const AGENT_STATES = ['working', 'blocked', 'done', 'idle'];
 
 // Marker -> displayed state. `seenTs` is the operator's seen watermark for the
-// session (undefined = never seen).
+// pane (undefined = never seen).
 export function deriveAgentState(mark, seenTs) {
   if (mark.state === 'working') return 'working';
   if (mark.state === 'blocked') return 'blocked';
   if (mark.cause === 'start') return 'idle';
   if (seenTs != null && mark.ts <= seenTs) return 'idle';
   return 'done';
+}
+
+// Where each listed pane is, and whether it is on screen, from the status's
+// own rows: one placement per pane id. A pane joins its session row by name
+// and its window row through (session, window id); a pane whose session or
+// window row is missing (the listings are separate tmux calls, and the window
+// listing has its own row cap) has no placement, since nothing about it can be
+// shown or judged. A session whose name does not pass SESSION_NAME_RE is left
+// out too: every downstream route validates names and would reject it, so it
+// must not become something anyone acts on.
+//
+//   visible  its window is the session's current one, and the window is not
+//            zoomed or this is the window's active pane
+//   focused  its window is current and it is the window's active pane
+//   attached its session has a tmux client attached
+//
+// Grouped sessions (`new-session -t`) list one pane once per session of the
+// group. It still gets one placement: under the session its marker names when
+// that session lists it, else under the first session listing it, and every
+// flag describes that one session. Watching the pane through another session
+// of the group therefore neither acknowledges nor silences it, which errs
+// toward an extra notification, never a missed one.
+function placePanes(status) {
+  const s = status || {};
+  const placed = new Map();
+  if (!Array.isArray(s.sessions) || !Array.isArray(s.panes)) return placed;
+  // Maps, not objects: session names are box-controlled (`__proto__` is a
+  // valid one).
+  const sessions = new Map();
+  for (const sess of s.sessions) if (sess && SESSION_NAME_RE.test(String(sess.name))) sessions.set(sess.name, sess);
+  const marks = s.paneMarks && typeof s.paneMarks === 'object' ? s.paneMarks : null;
+  for (const row of s.panes) {
+    if (!row) continue;
+    const sess = sessions.get(row.session);
+    const win = sess && Array.isArray(sess.windowList) ? sess.windowList.find((w) => w && w.id === row.windowId) : undefined;
+    if (!win) continue;
+    const mark = marks && Object.hasOwn(marks, row.pane) ? marks[row.pane] : undefined;
+    if (placed.has(row.pane) && !(mark && mark.session === row.session)) continue;
+    const front = !!win.active;
+    placed.set(row.pane, {
+      row, win, mark,
+      visible: front && (!row.zoomed || !!row.active),
+      focused: front && !!row.active,
+      attached: !!sess.attached,
+    });
+  }
+  return placed;
+}
+
+// The panes the operator can see right now: visible in an attached session.
+// Every listed pane, agent or not, because the agent-done edge asks it about a
+// pane that has just stopped running an agent (and so has no entry any more).
+// An absent pane listing gives an empty set.
+export function onScreenPanes(status) {
+  const out = new Set();
+  for (const [pane, p] of placePanes(status)) if (p.visible && p.attached) out.add(pane);
+  return out;
 }
 
 // Project a status result (from the poll snapshot) into the compact numbers a
@@ -53,66 +110,54 @@ export function sampleOf(status, at, opts = {}) {
       : (m.diskTotalKb && m.diskUsedKb != null ? Math.round((m.diskUsedKb / m.diskTotalKb) * 100) : undefined);
     if (disk != null) sample.diskPct = disk;
   }
-  // Per-session agents. When the probe listed sessions, `sample.agents` is set
-  // (possibly {}), keyed by session name, one entry per LISTED session whose
-  // name passes SESSION_NAME_RE: `present` is whether its pane runs claude. A
-  // non-claude session still appears (`present: false`) so the agent-done edge
-  // can see its attachment on the very sample where claude has exited. A session with an
-  // unroundtrippable name is left out: every downstream route validates names
-  // and would reject it, so it must not become a key anyone acts on.
-  // `state`/`cause`/`ts` appear only when the on-box Claude Code hook wrote a
-  // marker (claudeAgentHooks.js) — hook-only statusing: pane output timing is
-  // never consulted, so a claude pane with no marker carries no state (the
-  // deliberate cue that the box needs a setup rerun). A marker for a session
-  // that is not listed, or whose pane is not claude, is stale and inert.
-  // The displayed state comes from deriveAgentState with the caller's seen
-  // watermark (`seenOf(session)`): `ready/stop` is `done` until the operator
+  // Agents, one entry per tmux PANE whose foreground command is an agent
+  // (agentKindOf), keyed by pane id. `sample.agents` is set (possibly {}) only
+  // when the probe listed sessions AND their panes — or listed no sessions,
+  // which means no panes. Sessions without a pane listing (it failed, or hit
+  // its row cap) give NO agents key: the listing cannot be trusted to be
+  // complete, so a pane missing from it is not an exit, and the edges below
+  // must neither run on it nor replace their baseline with it.
+  //
+  // The pane listing is the authority for which panes exist; a marker for a
+  // pane it does not list builds nothing. The entry carries the pane's place
+  // (session, window id/index/name, pane index) so every renderer can name it
+  // from the sample alone, and the flags of placePanes above. "On screen" is
+  // `visible && attached`.
+  //
+  // `state`/`cause`/`ts` appear only when a box-side writer (the Claude hook,
+  // the OpenCode plugin, the OSC reporter) left a marker for the pane: pane
+  // output timing is never consulted, so an agent pane with no marker carries
+  // no state (the deliberate cue that the box needs a setup rerun). The
+  // displayed state comes from deriveAgentState with the caller's seen
+  // watermark (`seenOf(paneId)`): `ready/stop` is `done` until the operator
   // has looked at that turn's end, `ready/start` is `idle` (nothing finished,
   // so nothing to acknowledge). The watermark is compared against the marker's
   // own ts and never against a clock, so time passing can never re-arm `done`;
   // only a new marker (a later ts) can.
-  // Legacy fields for the box's configured session (opts.sessionName):
-  // `agent` = agents[sessionName]?.state; `agentPresent` stays pane-based and
-  // its sole consumer is the agent-done edge, where it keeps a one-poll marker
-  // gap (claude restarting in place) from reading as the agent exiting.
-  // `agentAttached` is a SESSION property, set whenever the configured session
-  // exists, so suppression still sees attachment on the sample where claude
-  // has already exited.
-  const { sessionName, seenOf } = opts;
-  if (Array.isArray(s.sessions)) {
-    // Null-prototype and own-key reads for the same reason as
-    // parseAgentMarks: session names are box-controlled, and `__proto__` or
-    // `constructor` must neither vanish nor poison the map.
+  const { seenOf } = opts;
+  if (Array.isArray(s.sessions) && (Array.isArray(s.panes) || s.sessions.length === 0)) {
+    // Null-prototype, like every map keyed by box output.
     const agents = Object.create(null);
-    const marks = s.agentMarks && typeof s.agentMarks === 'object' ? s.agentMarks : null;
-    for (const sess of s.sessions) {
-      if (!sess || !SESSION_NAME_RE.test(String(sess.name))) continue;
-      const kind = agentKindOf(sess.paneCmd);
-      const present = kind !== null;
-      const entry = { present, attached: !!sess.attached };
-      if (present) entry.agent = kind;
-      if (!present) { agents[sess.name] = entry; continue; }
-      const mark = marks && Object.hasOwn(marks, sess.name) ? marks[sess.name] : undefined;
-      if (mark) {
-        const seen = typeof seenOf === 'function' ? seenOf(sess.name) : undefined;
-        entry.state = deriveAgentState(mark, seen);
-        entry.cause = mark.cause;
-        entry.ts = mark.ts;
+    for (const [pane, p] of placePanes(s)) {
+      const kind = agentKindOf(p.row.cmd);
+      if (kind === null) continue;
+      const entry = {
+        session: p.row.session,
+        windowId: p.row.windowId, windowIndex: p.win.index, windowName: p.win.name, paneIndex: p.row.index,
+        agent: kind,
+      };
+      if (p.mark) {
+        const seen = typeof seenOf === 'function' ? seenOf(pane) : undefined;
+        entry.state = deriveAgentState(p.mark, seen);
+        entry.cause = p.mark.cause;
+        entry.ts = p.mark.ts;
       }
-      agents[sess.name] = entry;
+      entry.visible = p.visible;
+      entry.focused = p.focused;
+      entry.attached = p.attached;
+      agents[pane] = entry;
     }
     sample.agents = agents;
-    if (sessionName) {
-      const sess = s.sessions.find((x) => x.name === sessionName);
-      if (sess) {
-        sample.agentAttached = !!sess.attached;
-        if (agentKindOf(sess.paneCmd)) {
-          sample.agentPresent = true;
-          const st = Object.hasOwn(agents, sessionName) ? agents[sessionName].state : undefined;
-          if (st) sample.agent = st;
-        }
-      }
-    }
   }
   return sample;
 }
@@ -120,7 +165,7 @@ export function sampleOf(status, at, opts = {}) {
 // The fields of a sample that describe agents and tmux, i.e. everything the
 // light probe behind recordAgents can refresh. All else (reachability, metrics,
 // time) belongs to the sweep.
-const AGENT_SAMPLE_KEYS = ['tmux', 'agents', 'agent', 'agentPresent', 'agentAttached'];
+const AGENT_SAMPLE_KEYS = ['tmux', 'agents'];
 
 export function initThresholdState() {
   // cpuSeeded: cpu% is delta-derived on cgroup hosts, so the sample right after
@@ -130,41 +175,64 @@ export function initThresholdState() {
   return { cpu: false, cpuStreak: 0, cpuSeeded: true, mem: false, disk: false, agents: undefined };
 }
 
-// Pure agent edge detector, per session over `sample.agents` (see sampleOf).
+// Where an agent event happened, from the entry that describes it: the pane,
+// its session and window, and `paneIndex` only when that window held more
+// than one agent entry in `agents` (the map the entry came from). The window's
+// name is `<index>:<name>`, `window` standing in for an empty name.
+function placeOf(pane, entry, agents) {
+  const out = {
+    pane, session: entry.session, windowId: entry.windowId,
+    window: `${entry.windowIndex}:${entry.windowName || 'window'}`,
+  };
+  let inWindow = 0;
+  for (const e of Object.values(agents)) if (e.session === entry.session && e.windowId === entry.windowId) inWindow += 1;
+  if (inWindow > 1) out.paneIndex = entry.paneIndex;
+  return out;
+}
+
+// Pure agent edge detector, per pane over `sample.agents` (see sampleOf).
 // `before` is the previous map, `next` the new sample (which must carry
-// `agents`). Shared by the sweep (classifyTransitions) and the real-time path
-// (recordAgents), so a marker change reads the same whichever one sees it.
-// A session with no previous entry (first appearance, restart) emits nothing.
+// `agents`), `onScreen` the panes on screen now (onScreenPanes of the status
+// `next` came from). Shared by the sweep (classifyTransitions) and the
+// real-time path (recordAgents), so a marker change reads the same whichever
+// one sees it. A pane with no previous entry (first appearance, restart)
+// emits nothing.
 //   agent-blocked: working|done|idle -> blocked (carries `cause`)
 //   agent-input:   working|blocked   -> done
-//   agent-done:    had a state, now absent from the map or no longer present (claude exited)
+//   agent-done:    had a state, now absent from the map (gone, or no longer
+//                  running an agent)
 // Hook state is the sole source (a single-poll edge is a real transition; the
 // box's own background-work gate in claudeAgentHooks.js keeps `Stop` pauses
 // awaiting background work from reading as done, so there is no settle window
-// here). blocked/input are suppressed while the session is attached — watching
-// the terminal is its own notification; agent-done checks BOTH ends, since the
-// user may attach in the final poll interval. agent-done also requires the
-// session to be ABSENT: a present entry with no state is a marker gap (claude
-// restarting in place) not an exit, and `!next.stopped` — a Proxmox-stopped
-// box carries no sessions, so absence there is not an observation.
-export function agentEdges(before, next) {
+// here). blocked/input are suppressed while the pane is ON SCREEN (visible in
+// an attached session) — watching it is its own notification — and only then:
+// an agent blocking in a background window notifies even while the operator is
+// attached and looking at another one. agent-done checks BOTH ends, since the
+// operator may switch to it in the final poll interval; the `now` end comes
+// from `onScreen`, because a pane that stopped running an agent has no entry.
+// agent-done also requires the pane to be ABSENT from the map: an entry with no
+// state is a marker gap (the agent restarting in place), not an exit; and
+// `!next.stopped` — a Proxmox-stopped box carries no sessions, so absence
+// there is not an observation. Event fields describe the current entry, or the
+// previous one for agent-done.
+export function agentEdges(before, next, onScreen = new Set()) {
   const events = [];
   const prev = before || Object.create(null);
-  for (const [session, now] of Object.entries(next.agents)) {
-    const was = Object.hasOwn(prev, session) ? prev[session].state : undefined;
-    if (!was || now.attached) continue;
+  for (const [pane, now] of Object.entries(next.agents)) {
+    const was = Object.hasOwn(prev, pane) ? prev[pane].state : undefined;
+    if (!was || (now.visible && now.attached)) continue;
     const agent = now.agent ? { agent: now.agent } : {};
     if (now.state === 'blocked' && (was === 'working' || was === 'done' || was === 'idle')) {
-      events.push({ kind: 'agent-blocked', session, cause: now.cause, ...agent });
+      events.push({ kind: 'agent-blocked', ...placeOf(pane, now, next.agents), cause: now.cause, ...agent });
     } else if (now.state === 'done' && (was === 'working' || was === 'blocked')) {
-      events.push({ kind: 'agent-input', session, ...agent });
+      events.push({ kind: 'agent-input', ...placeOf(pane, now, next.agents), ...agent });
     }
   }
   if (next.up && !next.stopped) {
-    for (const [session, was] of Object.entries(prev)) {
-      const now = Object.hasOwn(next.agents, session) ? next.agents[session] : undefined;
-      if (!was.state || was.attached || (now && (now.present || now.attached))) continue;
-      events.push({ kind: 'agent-done', session, ...(was.agent ? { agent: was.agent } : {}) });
+    for (const [pane, was] of Object.entries(prev)) {
+      if (!was.state || (was.visible && was.attached)) continue;
+      if (Object.hasOwn(next.agents, pane) || onScreen.has(pane)) continue;
+      events.push({ kind: 'agent-done', ...placeOf(pane, was, prev), ...(was.agent ? { agent: was.agent } : {}) });
     }
   }
   return events;
@@ -175,8 +243,10 @@ export function agentEdges(before, next) {
 // once; cpu additionally needs two consecutive over-samples (it is spiky). A
 // nullish `prev` means this is the box's first sample: seed the threshold state
 // to match current values but emit nothing (a restart must not replay
-// down/over for boxes already in that state). Returns { events, state }.
-export function classifyTransitions(prev, next, thresholds, state) {
+// down/over for boxes already in that state). `onScreen` is the set of panes
+// on screen in the status `next` came from (onScreenPanes), for agentEdges.
+// Returns { events, state }.
+export function classifyTransitions(prev, next, thresholds, state, onScreen = new Set()) {
   const st = { ...(state || initThresholdState()) };
   const events = [];
   const warn = { cpu: thresholds.cpu, mem: thresholds.mem, disk: thresholds.disk };
@@ -210,9 +280,11 @@ export function classifyTransitions(prev, next, thresholds, state) {
   // always the last one taken from a successful probe: a failed probe's sample
   // has no `agents` key, so it neither emits nor replaces it, and the box
   // coming back is compared against what it looked like before it went away
-  // rather than read as a first appearance.
+  // rather than read as a first appearance. A probe whose pane listing was
+  // absent or capped has no `agents` key either, so a listing that cannot be
+  // trusted to be complete never reads as every missing pane having exited.
   if (next.agents) {
-    events.push(...agentEdges(st.agents, next));
+    events.push(...agentEdges(st.agents, next, onScreen));
     st.agents = next.agents;
   }
   // A confirmed-stopped guest is a positive observation that nothing runs: reset
@@ -259,13 +331,12 @@ export function classifyTransitions(prev, next, thresholds, state) {
 // fcmPush.js subscribes to it when TMUXIFIER_FCM_CREDENTIALS is set, browser
 // notifications still poll client-side regardless.
 //
-// It also owns the agent "seen" watermarks (boxId -> session -> ts, persisted
-// through the optional seenStore): a session whose latest turn ended at or
-// before its watermark reads idle instead of done. markSeen() advances a
-// watermark (never past the live marker's ts). Entries are pruned only when a
-// SUCCESSFUL probe listed sessions and this one is absent — a failed probe, a
-// stopped guest or a non-Claude pane keeps them. Per-session edge events
-// persist their `session` and `cause`.
+// It also owns the agent "seen" watermarks (boxId -> pane id -> ts, persisted
+// through the optional seenStore): a pane whose latest turn ended at or before
+// its watermark reads idle instead of done. markSeen() advances a watermark
+// (never past the live marker's ts). Agent events persist the pane and its
+// place (`pane`, `session`, `windowId`, `window`, `paneIndex` when its window
+// held more than one agent) and their `cause`.
 export function createHealthHistory({
   maxSamples = 120,
   maxEvents = 200,
@@ -282,7 +353,7 @@ export function createHealthHistory({
   const loaded = load();
   const events = Array.isArray(loaded) ? loaded.slice(-maxEvents) : []; // oldest first
   let seq = events.reduce((m, e) => Math.max(m, e.seq || 0), 0);
-  const seen = new Map();        // boxId -> Map<session, ts>
+  const seen = new Map();        // boxId -> Map<pane id, ts>
   const loadedSeen = seenStore ? seenStore.load() : null;
   if (loadedSeen && typeof loadedSeen === 'object') {
     for (const [bid, m] of Object.entries(loadedSeen)) {
@@ -300,7 +371,6 @@ export function createHealthHistory({
   }
   const listeners = new Set();
   if (typeof onEvent === 'function') listeners.add(onEvent);
-  const configured = new Map();  // boxId -> the box's configured session name
   // "This box's agents look different now": fired from record() and
   // recordAgents() whenever a box's agent map changed, whether or not the
   // change raised an event (-> working, an attach, a first appearance raise
@@ -332,6 +402,16 @@ export function createHealthHistory({
     for (const fn of listeners) { try { fn(e); } catch { /* ignore */ } }
   }
 
+  // An edge's fields onto the event record, beside the box's.
+  function eventOf(box, at, ev) {
+    const out = { boxId: box.id, label: box.label || box.host, host: box.host, t: at, kind: ev.kind };
+    for (const k of ['session', 'pane', 'windowId', 'window', 'paneIndex', 'cause', 'agent']) {
+      if (ev[k] !== undefined) out[k] = ev[k];
+    }
+    return out;
+  }
+  const seenOf = (boxId) => (pane) => seen.get(boxId)?.get(pane);
+
   return {
     record(snapshot, boxes) {
       const at = now();
@@ -342,30 +422,19 @@ export function createHealthHistory({
         present.add(box.id);
         const status = snapshot[box.id];
         if (!status) continue;
-        const sample = sampleOf(status, at, { sessionName: box.sessionName, seenOf: (s) => seen.get(box.id)?.get(s) });
-        configured.set(box.id, box.sessionName);
+        const sample = sampleOf(status, at, { seenOf: seenOf(box.id) });
         const ring = series.get(box.id) || [];
         ring.push(sample);
         while (ring.length > maxSamples) ring.shift();
         series.set(box.id, ring);
 
         const prev = lastSample.get(box.id);
-        const { events: evs, state } = classifyTransitions(prev, sample, thresholds, threshState.get(box.id));
+        const { events: evs, state } = classifyTransitions(prev, sample, thresholds, threshState.get(box.id), onScreenPanes(status));
         threshState.set(box.id, state);
         lastSample.set(box.id, sample);
         if (agentsKey(prev) !== agentsKey(sample)) changed(box.id);
-        const seenForBox = seen.get(box.id);
-        if (seenForBox && Array.isArray(status.sessions)) {
-          const listed = new Set(status.sessions.map((x) => x && x.name));
-          for (const name of [...seenForBox.keys()]) {
-            if (!listed.has(name)) { seenForBox.delete(name); seenChanged = true; }
-          }
-        }
         for (const ev of evs) {
-          const out = { boxId: box.id, label: box.label || box.host, host: box.host, t: at, kind: ev.kind };
-          if (ev.session !== undefined) out.session = ev.session;
-          if (ev.cause !== undefined) out.cause = ev.cause;
-          if (ev.agent !== undefined) out.agent = ev.agent;
+          const out = eventOf(box, at, ev);
           if (ev.metric) { out.metric = ev.metric; out.value = ev.value; }
           // Cap the reason: it is raw ssh stderr, which can be huge — the log
           // is persisted and re-served whole on every events poll.
@@ -376,7 +445,7 @@ export function createHealthHistory({
       }
       if (emitted) save(events);
       for (const id of [...series.keys()]) {
-        if (!present.has(id)) { series.delete(id); lastSample.delete(id); threshState.delete(id); configured.delete(id); }
+        if (!present.has(id)) { series.delete(id); lastSample.delete(id); threshState.delete(id); }
       }
       for (const id of [...seen.keys()]) {
         if (!present.has(id)) { seen.delete(id); seenChanged = true; }
@@ -394,19 +463,18 @@ export function createHealthHistory({
     // Nothing is pruned (record() prunes boxes absent from its list; this one
     // is given a single box). Returns false, changing nothing, without a sweep
     // baseline, for a box whose last sample was down or stopped, or when the
-    // status carries no session listing.
+    // status carries no session listing or no complete pane listing.
     recordAgents(box, status) {
       const prev = lastSample.get(box.id);
       if (!prev || !prev.up || prev.stopped || !status) return false;
-      const fresh = sampleOf(status, prev.t, { sessionName: box.sessionName, seenOf: (s) => seen.get(box.id)?.get(s) });
+      const fresh = sampleOf(status, prev.t, { seenOf: seenOf(box.id) });
       if (!fresh.agents) return false;
-      configured.set(box.id, box.sessionName);
       const next = { ...prev };
       for (const k of AGENT_SAMPLE_KEYS) {
         if (fresh[k] !== undefined) next[k] = fresh[k]; else delete next[k];
       }
       const st = threshState.get(box.id) || initThresholdState();
-      const evs = agentEdges(st.agents, next);
+      const evs = agentEdges(st.agents, next, onScreenPanes(status));
       // The edge baseline, bridged across a marker gap. An agent pane with no
       // marker is a gap, not an exit (agentEdges says so too), and this path
       // lands in one systematically: an exiting agent removes its marker
@@ -414,49 +482,39 @@ export function createHealthHistory({
       // what triggered this very probe. Taking the gap as the baseline would
       // erase the session's state, and the exit itself — the pane becoming a
       // shell, no marker change, seen only by the next sweep — would then go
-      // unreported. So a session that had a state and now shows none keeps
-      // its previous state in the BASELINE only; the sample shows the truth.
+      // unreported. So a pane that had a state and now shows none keeps its
+      // previous state in the BASELINE only; the sample shows the truth.
+      // (Every entry runs an agent: a pane that stopped running one has no
+      // entry, and is the exit, not a gap.)
       const before = st.agents || Object.create(null);
       const baseline = Object.create(null);
-      for (const [session, now] of Object.entries(next.agents)) {
-        const was = Object.hasOwn(before, session) ? before[session] : undefined;
-        baseline[session] = now.present && !now.state && was && was.state
+      for (const [pane, now] of Object.entries(next.agents)) {
+        const was = Object.hasOwn(before, pane) ? before[pane] : undefined;
+        baseline[pane] = !now.state && was && was.state
           ? { ...now, state: was.state, cause: was.cause, ts: was.ts }
           : now;
       }
       threshState.set(box.id, { ...st, agents: baseline });
       replaceLast(box.id, next);
       if (agentsKey(prev) !== agentsKey(next)) changed(box.id);
-      const seenForBox = seen.get(box.id);
-      if (seenForBox && Array.isArray(status.sessions)) {
-        const listed = new Set(status.sessions.map((x) => x && x.name));
-        let dropped = false;
-        for (const name of [...seenForBox.keys()]) {
-          if (!listed.has(name)) { seenForBox.delete(name); dropped = true; }
-        }
-        if (dropped) persistSeen();
-      }
       const at = now();
-      for (const ev of evs) {
-        const out = { boxId: box.id, label: box.label || box.host, host: box.host, t: at, kind: ev.kind };
-        if (ev.session !== undefined) out.session = ev.session;
-        if (ev.cause !== undefined) out.cause = ev.cause;
-        if (ev.agent !== undefined) out.agent = ev.agent;
-        emit(out);
-      }
+      for (const ev of evs) emit(eventOf(box, at, ev));
       if (evs.length) save(events);
       return true;
     },
-    markSeen(boxId, session, ts) {
+    // Acknowledge one pane's finished turn: the pane must have a marker ts in
+    // the latest sample, a ts ahead of it is refused, and an older watermark
+    // is never lowered.
+    markSeen(boxId, pane, ts) {
       const last = lastSample.get(boxId);
       const agents = last?.agents;
-      const cur = agents && Object.hasOwn(agents, session) ? agents[session] : undefined;
+      const cur = agents && Object.hasOwn(agents, pane) ? agents[pane] : undefined;
       if (!cur || !Number.isFinite(cur.ts) || !Number.isFinite(ts) || ts > cur.ts) return false;
       let m = seen.get(boxId);
       if (!m) { m = new Map(); seen.set(boxId, m); }
-      const prior = m.get(session);
+      const prior = m.get(pane);
       if (prior !== undefined && prior >= ts) return true;
-      m.set(session, ts);
+      m.set(pane, ts);
       persistSeen();
       // Apply the acknowledgement to the latest sample now rather than at the
       // next sweep, so every client reading the series (the other tab, the
@@ -464,15 +522,14 @@ export function createHealthHistory({
       // a finished turn at or below the watermark is idle. The edge baseline
       // moves with it — done -> idle emits nothing either way.
       if (cur.state === 'done' && cur.ts <= ts) {
-        const nextAgents = Object.assign(Object.create(null), agents, { [session]: { ...cur, state: 'idle' } });
+        const nextAgents = Object.assign(Object.create(null), agents, { [pane]: { ...cur, state: 'idle' } });
         const next = { ...last, agents: nextAgents };
-        if (configured.get(boxId) === session && next.agent === 'done') next.agent = 'idle';
-        // Only this session moves in the baseline: another one may be bridged
+        // Only this pane moves in the baseline: another one may be bridged
         // across a marker gap there (see recordAgents) and must stay so.
         const st = threshState.get(boxId);
         if (st) {
           const base = Object.assign(Object.create(null), st.agents);
-          if (Object.hasOwn(base, session)) base[session] = { ...base[session], state: 'idle' };
+          if (Object.hasOwn(base, pane)) base[pane] = { ...base[pane], state: 'idle' };
           threshState.set(boxId, { ...st, agents: base });
         }
         replaceLast(boxId, next);

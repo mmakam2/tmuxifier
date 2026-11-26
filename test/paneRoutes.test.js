@@ -55,7 +55,14 @@ beforeEach(async () => {
   };
   const setupManager = { currentForBox: () => (setupRunning ? { status: 'running' } : null) };
   const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
-  const history = { getSeries: () => [{ t: 1, up: true, agent: 'waiting', agents: { main: { cause: 'permission' }, side: { state: 'blocked', cause: 'question' } } }], getEvents: () => ({ events: [], latestSeq: 0 }), record() {}, onEvent() {} };
+  // Pane-keyed, as the history keeps it: the state reported beside a capture
+  // is that of the captured session's focused agent pane.
+  const history = { getSeries: () => [{ t: 1, up: true, agents: {
+    '%0': { session: 'main', focused: false, state: 'working', cause: 'prompt' },
+    '%1': { session: 'main', focused: true, state: 'blocked', cause: 'permission' },
+    '%2': { session: 'side', focused: true, state: 'blocked', cause: 'question' },
+    '%3': { session: 'other', focused: false, state: 'done', cause: 'stop' },
+  } }], getEvents: () => ({ events: [], latestSeq: 0 }), record() {}, onEvent() {} };
   app = buildServer({
     config, store, sessions, statusChecker, boxActions, history, setupManager,
     deviceStore: createDeviceStore({ dataDir: dir }), passkeyStore: createPasskeyStore({ dataDir: dir }),
@@ -79,7 +86,7 @@ test('GET pane returns parsed snapshot plus agent state', async () => {
   expect(res.statusCode).toBe(200);
   expect(res.json()).toEqual({
     ok: true, width: 80, height: 24, cursorX: 3, cursorY: 10, alt: false, mouse: false,
-    content: 'hello\nworld', agent: 'waiting', agentCause: 'permission', sessionName: 'main',
+    content: 'hello\nworld', agent: 'blocked', agentCause: 'permission', sessionName: 'main',
   });
 });
 
