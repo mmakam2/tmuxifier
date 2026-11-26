@@ -1,5 +1,6 @@
 import { test, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { agentKindOf as agentKindOfModule } from '../src/server/agentKind.js';
 import { agentKindOf, sampleOf, deriveAgentState, classifyTransitions, initThresholdState, createHealthHistory } from '../src/server/healthHistory.js';
 import { parseTmuxSessions, parseAgentMarks } from '../src/server/status.js';
 
@@ -534,6 +535,10 @@ test('sampleOf keeps __proto__ and constructor sessions as own agents entries', 
 function parseAgentMarksForTest() {
   return parseAgentMarks('__AGENT__ __proto__:working:10:prompt\n__AGENT__ web:ready:11:stop\n');
 }
+
+test('agentKindOf lives in agentKind.js and healthHistory re-exports the same function', () => {
+  expect(agentKindOf).toBe(agentKindOfModule);
+});
 
 test('agentKindOf: claude and opencode panes are agents, shells and node are not', () => {
   expect(agentKindOf('claude')).toBe('claude'); expect(agentKindOf('claude-code')).toBe('claude');

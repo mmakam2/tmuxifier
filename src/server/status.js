@@ -1,4 +1,4 @@
-import { buildProbeArgv, WINDOW_ID_RE } from './sshCommand.js';
+import { buildProbeArgv, WINDOW_ID_RE, PANE_ID_RE } from './sshCommand.js';
 import { MUX_REFUSED_RE } from './agentWatch.js';
 
 // The activity field is `#{window_activity}` — the last time the session's
@@ -73,10 +73,13 @@ const AGENT_PROBE =
 export const OSC_SWEEP =
   'if [ -f "$HOME/.tmuxifier-osc/reporter.py" ] && command -v python3 >/dev/null 2>&1; then python3 "$HOME/.tmuxifier-osc/reporter.py" sweep >/dev/null 2>&1 || true; fi; ';
 
-// One line per pane on the box. parseAgentMarks reads these to decide which
-// per-pane markers still describe a running agent. Session first and the command
-// last, because session names cannot contain a colon and commands can.
-export const PANE_FMT = '#{session_name}:#{pane_id}:#{pane_current_command}';
+// One line per pane on the box: parseTmuxPanes reads the whole row, and
+// parseAgentMarks uses it to decide which per-pane markers still describe a
+// running agent. Session first and the command last, because session names
+// cannot contain a colon and commands can; the window id, pane id and pane
+// index between them are digits behind a sigil. `#{window_zoomed_flag}` is the
+// pane's WINDOW's flag: a zoomed window shows only its active pane.
+export const PANE_FMT = '#{session_name}:#{window_id}:#{pane_id}:#{pane_index}:#{pane_active}:#{window_zoomed_flag}:#{pane_current_command}';
 export const PANE_ROWS_MAX = 400;
 
 // One line per window on the box, appended to the same probe so windows cost no
@@ -155,21 +158,14 @@ export const AGENT_MARK_CAUSES = ['prompt', 'resume', 'stop', 'start', 'permissi
 // A pane whose foreground process is one of these has no agent in it any more,
 // whatever its marker says: the agent was killed before its SessionEnd hook ran.
 const SHELL_CMD_RE = /^-?(?:(?:ba|z|da|fi|k|a|tc|c|pw)?sh|nu)$/;
-const PANE_ID_RE = /^%\d+$/;
 
 // `__PANE__` rows as a set of "<session>:<pane>" keys for panes that can still
 // hold an agent. null means the listing cannot be trusted to be complete (absent
 // or at the row cap), and then no marker is discarded for being absent from it.
-function parseLivePanes(lines) {
-  const rows = lines.filter((l) => l.startsWith('__PANE__ '));
-  if (!rows.length || rows.length >= PANE_ROWS_MAX) return null;
-  const live = new Set();
-  for (const row of rows) {
-    const parts = row.slice('__PANE__ '.length).split(':');
-    if (parts.length < 3 || !PANE_ID_RE.test(parts[1])) continue;
-    if (!SHELL_CMD_RE.test(parts.slice(2).join(':'))) live.add(`${parts[0]}:${parts[1]}`);
-  }
-  return live;
+function parseLivePanes(stdout) {
+  const { panes, complete } = parseTmuxPanes(stdout);
+  if (!complete) return null;
+  return new Set(panes.filter((p) => !SHELL_CMD_RE.test(p.cmd)).map((p) => `${p.session}:${p.pane}`));
 }
 
 // Lower is more urgent. A finished turn outranks a session that merely started
@@ -200,7 +196,7 @@ const foldMarks = (marks) => marks.reduce((best, m) => {
 // is ignored; otherwise it folds in with the panes.
 export function parseAgentMarks(stdout) {
   const lines = String(stdout).split(/\r?\n/);
-  const live = parseLivePanes(lines);
+  const live = parseLivePanes(stdout);
   // Maps, not objects: the keys are box-controlled tmux session names.
   const sessionWide = new Map();
   const perPane = new Map();
@@ -361,6 +357,50 @@ export function parseTmuxSessions(stdout) {
   return out;
 }
 
+// Pull `__PANE__ <session>:<window id>:<pane id>:<index>:<active>:<zoomed>:<cmd>`
+// lines into flat rows. Every field is allowlisted, and a row that fails drops
+// alone (parseTmuxWindows' posture): the session by the session-row name rules,
+// the ids by WINDOW_ID_RE and PANE_ID_RE, the index as plain digits, both flags
+// as exactly 0 or 1. The command is last because it may hold colons, and is
+// cleaned like a window name. `complete` says whether the listing can be taken
+// as every pane on the box: false with no rows and at the row cap, where `head`
+// has cut it off. Rows are counted before validation, since the cap is on what
+// the box sent.
+export function parseTmuxPanes(stdout) {
+  const panes = [];
+  let rows = 0;
+  for (const line of String(stdout).split(/\r?\n/)) {
+    if (!line.startsWith('__PANE__ ')) continue;
+    rows += 1;
+    const parts = line.slice('__PANE__ '.length).split(':');
+    if (parts.length < 7) continue;
+    const [session, windowId, pane, indexRaw, activeRaw, zoomedRaw] = parts;
+    if (!session || session.length > SESSION_NAME_MAX || UNSAFE_NAME_RE.test(session)) continue;
+    if (!WINDOW_ID_RE.test(windowId) || !PANE_ID_RE.test(pane)) continue;
+    if (!DIGITS_RE.test(indexRaw) || !Number.isSafeInteger(Number(indexRaw))) continue;
+    if ((activeRaw !== '0' && activeRaw !== '1') || (zoomedRaw !== '0' && zoomedRaw !== '1')) continue;
+    panes.push({
+      session, windowId, pane, index: Number(indexRaw),
+      active: activeRaw === '1', zoomed: zoomedRaw === '1',
+      cmd: cleanWindowName(parts.slice(6).join(':')),
+    });
+  }
+  return { panes, complete: rows > 0 && rows < PANE_ROWS_MAX };
+}
+
+// The tmux half of a probe result, shared by the sweep's probe and checkAgents:
+// whether tmux is there, its sessions (with their windows nested) and its panes.
+// No sessions means no panes, so a box with nothing running reads as an empty
+// listing; otherwise `panes` is present only when the listing is complete, and
+// its absence means the panes could not be read this time.
+function tmuxState(stdout) {
+  if (noTmux(stdout)) return { tmux: false, sessions: [], panes: [] };
+  const sessions = attachWindows(parseTmuxSessions(stdout), parseTmuxWindows(stdout));
+  if (!sessions.length) return { tmux: true, sessions, panes: [] };
+  const { panes, complete } = parseTmuxPanes(stdout);
+  return complete ? { tmux: true, sessions, panes } : { tmux: true, sessions };
+}
+
 // ssh's stderr on a failed probe: sshd banners and login-shell noise come
 // first, ssh's own reason last, so the tail is kept. Newlines survive (the UI
 // shows this in a title); other controls and bidi overrides do not. The
@@ -431,9 +471,7 @@ export function createStatusChecker({
       const metrics = parseMeta(res.stdout);
       deriveCpuPct(box, metrics);
       const agentMarks = parseAgentMarks(res.stdout);
-      const base = noTmux(res.stdout)
-        ? { reachable: true, tmux: false, sessions: [] }
-        : { reachable: true, tmux: true, sessions: attachWindows(parseTmuxSessions(res.stdout), parseTmuxWindows(res.stdout)) };
+      const base = { reachable: true, ...tmuxState(res.stdout) };
       const withMeta = metrics ? { ...base, metrics } : base;
       return agentMarks ? { ...withMeta, agentMarks } : withMeta;
     } catch (e) {
@@ -540,9 +578,7 @@ export function createStatusChecker({
         const argv = buildProbeArgv(box, AGENT_REMOTE, { hostKeyPolicy, sshConfigFile, controlDir, controlPersist });
         const res = await run(argv);
         if (!res || res.code !== 0) return null;
-        const out = noTmux(res.stdout)
-          ? { tmux: false, sessions: [] }
-          : { tmux: true, sessions: attachWindows(parseTmuxSessions(res.stdout), parseTmuxWindows(res.stdout)) };
+        const out = tmuxState(res.stdout);
         const agentMarks = parseAgentMarks(res.stdout);
         if (agentMarks) out.agentMarks = agentMarks;
         // The connection had no session slot left and ssh went around it (see

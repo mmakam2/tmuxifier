@@ -187,7 +187,7 @@ test('sample() folds Host Shell split panes and ignores a closed pane', async ()
   const sampler = createLocalAgentSampler({
     home,
     runTmux: async (args) => (args[0] === 'list-panes'
-      ? { code: 0, stdout: '__PANE__ local:%1:claude\n__PANE__ local:%2:claude\n' }
+      ? { code: 0, stdout: '__PANE__ local:@0:%1:1:1:0:claude\n__PANE__ local:@0:%2:2:0:0:claude\n' }
       : { code: 0, stdout: 'local:1:0:1722600000:claude\n' }),
   });
   expect((await sampler.sample()).agentMarks.local).toEqual({ state: 'working', cause: 'prompt', ts: 100 });

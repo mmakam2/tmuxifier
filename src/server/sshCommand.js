@@ -32,6 +32,14 @@ export const SESSION_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 // tmux target.
 export const WINDOW_ID_RE = /^@\d{1,9}$/;
 
+// tmux's pane identifier: `%` plus digits, unique per tmux server and kept for
+// the pane's life however it is moved between windows or sessions, which is why
+// agent state is keyed by it and never by a session name or an index. Like
+// WINDOW_ID_RE it is the one statement of the rule: the probe parses against it
+// and every route that takes a pane id re-validates against it before the value
+// reaches a tmux target.
+export const PANE_ID_RE = /^%\d{1,9}$/;
+
 export function sanitizeSession(name) {
   const cleaned = String(name || '').replace(/[^A-Za-z0-9_-]/g, '-');
   return cleaned.length ? cleaned : 'web';

@@ -10,7 +10,7 @@ import { parseAgentMarks, parseTmuxSessions, PROBE_REMOTE, AGENT_REMOTE } from '
 // and the session reads as the fold of its live panes.
 
 const mark = (session, state, ts, cause, pane) => `__AGENT__ ${session}:${state}:${ts}:${cause}${pane ? `:${pane}` : ''}`;
-const paneRow = (session, pane, cmd = 'claude') => `__PANE__ ${session}:${pane}:${cmd}`;
+const paneRow = (session, pane, cmd = 'claude') => `__PANE__ ${session}:@0:${pane}:1:1:0:${cmd}`;
 const parse = (...lines) => parseAgentMarks(lines.join('\n'));
 
 test('a working pane outranks a finished pane in the same session', () => {
@@ -95,12 +95,12 @@ test('a session named __proto__ lands as an own key', () => {
 
 test('pane rows are not mistaken for tmux session rows', () => {
   expect(parseTmuxSessions(paneRow('web', '%1', 'claude'))).toEqual([]);
-  expect(parseTmuxSessions('__PANE__ web:1:0:5:claude')).toEqual([]);
+  expect(parseTmuxSessions('__PANE__ web:@0:%1:1:1:0:claude')).toEqual([]);
 });
 
 test('both probes list panes, capped at the source', () => {
   for (const remote of [PROBE_REMOTE, AGENT_REMOTE]) {
-    expect(remote).toContain("tmux list-panes -a -F '__PANE__ #{session_name}:#{pane_id}:#{pane_current_command}' | head -n 400");
+    expect(remote).toContain("tmux list-panes -a -F '__PANE__ #{session_name}:#{window_id}:#{pane_id}:#{pane_index}:#{pane_active}:#{window_zoomed_flag}:#{pane_current_command}' | head -n 400");
   }
 });
 

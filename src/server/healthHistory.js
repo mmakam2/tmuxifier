@@ -1,4 +1,8 @@
 import { SESSION_NAME_RE } from './sshCommand.js';
+import { agentKindOf } from './agentKind.js';
+
+// Defined in agentKind.js; re-exported because other modules import it from here.
+export { agentKindOf };
 
 // Mirrors src/web/statusDot.ts `cpuLoadPct`: normalize load average by core count
 // to a percent, only usable when both are present. Kept in sync by hand (server
@@ -27,19 +31,6 @@ export function deriveAgentState(mark, seenTs) {
 // true`) even though SSH can't reach it: an intentionally-stopped container is
 // not a failure, so classifyTransitions must not fire a false down/up pair
 // around the moment it stops or starts back up.
-// Which agent runs in a pane, by its foreground command. Keep the opencode
-// pattern identical to the plugin's own pane check, and the codex/pi/agy patterns
-// identical to the OSC reporter asset's `OSC_AGENTS` (pinned by a test).
-export function agentKindOf(paneCmd) {
-  const c = String(paneCmd || '');
-  if (/^claude(-|$)/.test(c)) return 'claude';
-  if (/^opencode(-|$)/.test(c)) return 'opencode';
-  if (/^codex(-|$)/.test(c)) return 'codex';
-  if (/^pi(-|$)/.test(c)) return 'pi';
-  if (/^agy(-|$)/.test(c)) return 'agy';
-  return null;
-}
-
 export function sampleOf(status, at, opts = {}) {
   const s = status || {};
   const stopped = s.proxmoxState === 'stopped';

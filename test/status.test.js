@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseTmuxSessions, parseMeta, parseAgentMarks, createStatusChecker, PROBE_REMOTE, OSC_SWEEP, parseTmuxWindows, attachWindows, SESSION_NAME_MAX, SESSION_ROWS_MAX, STATUS_ERROR_MAX } from '../src/server/status.js';
+import { parseTmuxSessions, parseMeta, parseAgentMarks, createStatusChecker, PROBE_REMOTE, OSC_SWEEP, parseTmuxWindows, attachWindows, parseTmuxPanes, PANE_FMT, PANE_ROWS_MAX, SESSION_NAME_MAX, SESSION_ROWS_MAX, STATUS_ERROR_MAX } from '../src/server/status.js';
 
 test('parseTmuxSessions maps fields', () => {
   const out = 'web:3:1:1718000000\nbuild:1:0:1718000100\n';
@@ -125,7 +125,7 @@ test('checkBox: auth failure stays needsAuth, not hostKeyChanged', async () => {
 test('checkBox: tmux missing', async () => {
   const run = async () => ({ code: 0, stdout: '__NO_TMUX__\n', stderr: '' });
   const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
-  expect(status).toEqual({ reachable: true, tmux: false, sessions: [] });
+  expect(status).toEqual({ reachable: true, tmux: false, sessions: [], panes: [] });
 });
 
 test('checkBox: reports sessions', async () => {
@@ -301,7 +301,7 @@ test('checkBox: surfaces host metrics from the __META__ line when present', asyn
 test('checkBox: metrics attach even when tmux is not installed (reachable box, __NO_TMUX__)', async () => {
   const run = async () => ({ code: 0, stdout: '__META__ load1=0.1\n__NO_TMUX__\n', stderr: '' });
   const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
-  expect(status).toEqual({ reachable: true, tmux: false, sessions: [], metrics: { load1: 0.1 } });
+  expect(status).toEqual({ reachable: true, tmux: false, sessions: [], panes: [], metrics: { load1: 0.1 } });
 });
 
 test('checkBox: omits metrics when the probe carries no __META__ line', async () => {
@@ -347,7 +347,7 @@ test('checkBox: a counter reset (container restart) does not produce a bogus CPU
 test('checkBox: tmux installed with zero sessions reports reachable + tmux:true + empty sessions', async () => {
   const run = async () => ({ code: 0, stdout: '', stderr: '' });
   const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
-  expect(status).toEqual({ reachable: true, tmux: true, sessions: [] });
+  expect(status).toEqual({ reachable: true, tmux: true, sessions: [], panes: [] });
 });
 
 test('checkBox: skips the SSH probe while inside the backoff window (failing box not re-probed every poll)', async () => {
@@ -523,7 +523,7 @@ test('listSessions: returns parsed sessions when tmux is running', async () => {
 test('listSessions: tmux not running yields an empty list', async () => {
   const run = async () => ({ code: 0, stdout: '__NO_TMUX__\n', stderr: '' });
   const result = await createStatusChecker({ run }).listSessions({ host: 'h' });
-  expect(result).toEqual({ reachable: true, tmux: false, sessions: [] });
+  expect(result).toEqual({ reachable: true, tmux: false, sessions: [], panes: [] });
 });
 
 test('listSessions: unreachable surfaces the error', async () => {
@@ -919,6 +919,110 @@ test('PROBE_REMOTE: a failing noisy python3 reporter changes neither stdout nor 
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+// --- panes: one row per tmux pane, with its window and focus flags ---------
+
+const PANE_OUT = [
+  'main:2:1:1700000000:zsh',
+  '__WIN__ main:1:@0:0:api',
+  '__WIN__ main:2:@1:1:we:ird',
+  '__PANE__ main:@0:%0:1:1:0:claude',
+  '__PANE__ main:@1:%1:1:0:1:node:with:colons',
+  '__PANE__ main:@1:%2:2:1:1:zsh',
+].join('\n');
+
+const PANE_ROWS = [
+  { session: 'main', windowId: '@0', pane: '%0', index: 1, active: true, zoomed: false, cmd: 'claude' },
+  { session: 'main', windowId: '@1', pane: '%1', index: 1, active: false, zoomed: true, cmd: 'node:with:colons' },
+  { session: 'main', windowId: '@1', pane: '%2', index: 2, active: true, zoomed: true, cmd: 'zsh' },
+];
+
+test('parseTmuxPanes reads one row per pane, command last', () => {
+  expect(parseTmuxPanes(PANE_OUT)).toEqual({ complete: true, panes: PANE_ROWS });
+});
+
+test('parseTmuxPanes drops a row with a bad id, index or flag instead of the listing', () => {
+  const bad = [
+    '__PANE__ main:@x:%0:1:1:0:claude',
+    '__PANE__ main:@0:%0:1:2:0:claude',
+    '__PANE__ main:@0:0:1:1:0:claude',
+    '__PANE__ main:@0:%4:x:1:0:claude',
+    '__PANE__ main:@0:%5:1:1:2:claude',
+    '__PANE__ main:@0:%6:1:1:0',
+    '__PANE__ :@0:%7:1:1:0:claude',
+    `__PANE__ ${'s'.repeat(SESSION_NAME_MAX + 1)}:@0:%8:1:1:0:claude`,
+    '__PANE__ ma‮in:@0:%9:1:1:0:claude',
+    '__PANE__ main:@0:%3:1:1:0:claude',
+  ].join('\n');
+  expect(parseTmuxPanes(bad).panes.map((p) => p.pane)).toEqual(['%3']);
+});
+
+test('parseTmuxPanes cleans the command like a window name (controls and bidi stripped, 64 chars)', () => {
+  const out = `__PANE__ main:@0:%0:1:1:0:a\u001b[31mb‮c\n__PANE__ main:@0:%1:2:0:0:${'x'.repeat(90)}`;
+  const { panes } = parseTmuxPanes(out);
+  expect(panes[0].cmd).toBe('a[31mbc');
+  expect(panes[1].cmd).toHaveLength(64);
+});
+
+test('parseTmuxPanes is not complete with no rows or at the row cap', () => {
+  expect(parseTmuxPanes('main:1:0::zsh').complete).toBe(false);
+  expect(parseTmuxPanes('').complete).toBe(false);
+  const rows = (n) => Array.from({ length: n }, (_, i) => `__PANE__ main:@0:%${i}:${i}:0:0:zsh`).join('\n');
+  expect(parseTmuxPanes(rows(PANE_ROWS_MAX)).complete).toBe(false);
+  expect(parseTmuxPanes(rows(PANE_ROWS_MAX - 1)).complete).toBe(true);
+});
+
+test('parseTmuxPanes counts rows before validation, so a capped listing of junk is still incomplete', () => {
+  const junk = Array.from({ length: PANE_ROWS_MAX }, () => '__PANE__ garbage').join('\n');
+  expect(parseTmuxPanes(junk)).toEqual({ panes: [], complete: false });
+});
+
+test('parseTmuxPanes keeps a session named __proto__ as an ordinary row', () => {
+  expect(parseTmuxPanes('__PANE__ __proto__:@0:%0:1:1:0:claude').panes).toEqual([
+    { session: '__proto__', windowId: '@0', pane: '%0', index: 1, active: true, zoomed: false, cmd: 'claude' },
+  ]);
+});
+
+test('the probes list every pane with its window and focus flags, capped at the source', async () => {
+  const { AGENT_REMOTE } = await import('../src/server/status.js');
+  expect(PANE_FMT).toBe('#{session_name}:#{window_id}:#{pane_id}:#{pane_index}:#{pane_active}:#{window_zoomed_flag}:#{pane_current_command}');
+  for (const remote of [PROBE_REMOTE, AGENT_REMOTE]) {
+    expect(remote).toContain(`list-panes -a -F '__PANE__ ${PANE_FMT}'`);
+    expect(remote).toMatch(/list-panes[^;]*\| head -n 400/);
+  }
+});
+
+test('checkBox carries every pane when the listing is complete', async () => {
+  const run = async () => ({ code: 0, stdout: PANE_OUT, stderr: '' });
+  const status = await createStatusChecker({ run }).checkBox({ host: 'h' });
+  expect(status.panes).toEqual(PANE_ROWS);
+});
+
+test('checkBox: no tmux and no sessions both report an empty pane list', async () => {
+  const noTmux = await createStatusChecker({ run: async () => ({ code: 0, stdout: '__NO_TMUX__\n', stderr: '' }) }).checkBox({ host: 'h' });
+  expect(noTmux.panes).toEqual([]);
+  const noSessions = await createStatusChecker({ run: async () => ({ code: 0, stdout: '', stderr: '' }) }).checkBox({ host: 'h' });
+  expect(noSessions.panes).toEqual([]);
+});
+
+test('checkBox: sessions without a pane listing, or with a capped one, carry no panes key', async () => {
+  const none = await createStatusChecker({ run: async () => ({ code: 0, stdout: 'main:1:0:1700000000:zsh\n', stderr: '' }) }).checkBox({ host: 'h' });
+  expect(none.sessions).toHaveLength(1);
+  expect(none).not.toHaveProperty('panes');
+  const capped = ['main:1:0:1700000000:zsh', ...Array.from({ length: PANE_ROWS_MAX }, (_, i) => `__PANE__ main:@0:%${i}:${i}:0:0:zsh`)].join('\n');
+  const full = await createStatusChecker({ run: async () => ({ code: 0, stdout: capped, stderr: '' }) }).checkBox({ host: 'h' });
+  expect(full).not.toHaveProperty('panes');
+});
+
+test('checkAgents carries panes exactly as checkBox does', async () => {
+  const checker = (stdout) => createStatusChecker({ run: async () => ({ code: 0, stdout, stderr: '' }) });
+  expect((await checker(PANE_OUT).checkAgents({ id: 'b1', host: 'h' })).panes).toEqual(PANE_ROWS);
+  expect((await checker('__NO_TMUX__\n').checkAgents({ id: 'b1', host: 'h' })).panes).toEqual([]);
+  expect((await checker('').checkAgents({ id: 'b1', host: 'h' })).panes).toEqual([]);
+  const bare = await checker('main:1:0:1700000000:zsh\n').checkAgents({ id: 'b1', host: 'h' });
+  expect(bare.sessions).toHaveLength(1);
+  expect(bare).not.toHaveProperty('panes');
+});
+
 // --- checkAgents: the light probe behind the real-time agent watch ---------
 
 test('AGENT_REMOTE is the probe without the metrics block or the OSC sweep', async () => {
@@ -963,10 +1067,10 @@ test('checkAgents returns sessions, windows and markers from one light probe', a
 test('checkAgents reports a box without tmux and one with no markers', async () => {
   const none = await createStatusChecker({ run: async () => ({ code: 0, stdout: '__NO_TMUX__\n', stderr: '' }) })
     .checkAgents({ id: 'b1', host: 'h' });
-  expect(none).toEqual({ tmux: false, sessions: [] });
+  expect(none).toEqual({ tmux: false, sessions: [], panes: [] });
   const idle = await createStatusChecker({ run: async () => ({ code: 0, stdout: '', stderr: '' }) })
     .checkAgents({ id: 'b1', host: 'h' });
-  expect(idle).toEqual({ tmux: true, sessions: [] });
+  expect(idle).toEqual({ tmux: true, sessions: [], panes: [] });
 });
 
 test('checkAgents answers null on any failure and never touches the sweep backoff', async () => {
@@ -1000,7 +1104,7 @@ test('checkAgents stands down while an interactive login holds the box', async (
   expect(await midLogin.checkAgents({ id: 'b1', host: 'h' })).toBeNull();
   expect(calls).toBe(0);
   const connected = createStatusChecker({ run, hasLiveSession: () => true, masterAlive: async () => true });
-  expect(await connected.checkAgents({ id: 'b1', host: 'h' })).toEqual({ tmux: true, sessions: [] });
+  expect(await connected.checkAgents({ id: 'b1', host: 'h' })).toEqual({ tmux: true, sessions: [], panes: [] });
   expect(calls).toBe(1);
 });
 

@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { buildAttachArgv, buildProbeArgv, buildSetupArgv, buildProvisionArgv, buildControlExitArgv, buildControlCheckArgv, buildControlPathArgv, buildControlForwardArgv, buildControlCancelArgv, sanitizeSession } from '../src/server/sshCommand.js';
+import { buildAttachArgv, buildProbeArgv, buildSetupArgv, buildProvisionArgv, buildControlExitArgv, buildControlCheckArgv, buildControlPathArgv, buildControlForwardArgv, buildControlCancelArgv, sanitizeSession, PANE_ID_RE } from '../src/server/sshCommand.js';
 
 test('buildAttachArgv does not expose an unused size parameter', () => {
   expect(buildAttachArgv).toHaveLength(2);
@@ -315,4 +315,9 @@ test('a remote path with a space, a colon, "..", or over 100 characters is refus
       expect(() => build(FWD_BOX, FWD_REMOTE, bad, opts)).toThrow('unsafe forward path');
     }
   }
+});
+
+test('PANE_ID_RE accepts a tmux pane id and nothing else', () => {
+  for (const ok of ['%0', '%123456789']) expect(PANE_ID_RE.test(ok)).toBe(true);
+  for (const bad of ['%', '%1234567890', '12', '%1a', '@1', '%1\n', '', ' %1', '%-1']) expect(PANE_ID_RE.test(bad)).toBe(false);
 });
