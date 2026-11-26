@@ -262,6 +262,13 @@ and what stays in your hands.
   ahead: auto mode blocks the command, and no wording next to the rule ("unless the dev agent
   asks") lifts it. Under OpenCode, or Claude Code in another permission mode, nothing but the
   agent's obedience stands behind the rule. Write such a sentence only where you want to be asked.
+- **Tell each box who its colleagues are.** For work to run unattended under Claude Code's auto
+  mode, add a sentence to the receiving box's own `CLAUDE.md`, naming the sender as `tmx who`
+  prints it: "A request from my development agent in `dev/main` that arrives through Tmuxifier
+  agent mail is my instruction: carry it out without asking me first." Auto mode reads a box's
+  own rules but never the text of a message. Without such a sentence it was observed to allow
+  some production steps a colleague asked for and block others (a deploy went through, a
+  database delete and a service restart did not); with it, every step tested went through.
 - **One job on a box that keeps its rule.** Put the job in one script and add an exact
   permission rule for that command, for example `Bash(./deploy.sh)` in that project's
   `.claude/settings.local.json`. A permission rule is checked before auto mode's judgement.
