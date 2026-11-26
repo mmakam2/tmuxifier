@@ -13,16 +13,26 @@ import { newestFirst } from './jobOrder.js';
 // required|askpass/i and /Permission denied \([^)]*(?:password|
 // keyboard-interactive)[^)]*\)/i), which backtracked per start position and
 // went quadratic on a run of `sudo:` or an unclosed `Permission denied (`.
-// Same matches, pinned against the old regexes by test/setupManager.test.js.
+// Same matches for that wording, pinned against the old regexes by
+// test/setupManager.test.js.
 // ASCII-only folding keeps indices stable, like the regexes' non-unicode /i.
 const asciiLower = (s) => s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
+
+// What a `sudo:` line says when sudo wants a password it cannot ask for.
+// Classic sudo: `a password is required` (under -n; its no-terminal message is
+// the unanchored phrase below). sudo-rs, the default sudo from Ubuntu 25.10,
+// says neither: `A terminal is required to authenticate` with no terminal and
+// `interactive authentication is required` under -n. Without those two a
+// sudo-rs box that needs a password failed as `setup exited 1`, with no
+// interactive finish offered.
+const SUDO_LINE_PHRASES = ['password is required', 'a terminal is required to authenticate', 'interactive authentication is required'];
 
 export function sudoPasswordPrompt(text) {
   const s = asciiLower(String(text));
   if (s.includes('a terminal is required to read the password') || s.includes('askpass')) return true;
   return s.split('\n').some((line) => {
     const at = line.indexOf('sudo:');
-    return at >= 0 && line.indexOf('password is required', at + 5) >= 0;
+    return at >= 0 && SUDO_LINE_PHRASES.some((phrase) => line.indexOf(phrase, at + 5) >= 0);
   });
 }
 

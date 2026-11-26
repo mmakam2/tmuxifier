@@ -73,6 +73,27 @@ test('sudo-password stderr -> needs-interactive', async () => {
   expect(job.needs).toBe('sudo');
 });
 
+// sudo-rs (the default sudo from Ubuntu 25.10) words both refusals differently
+// from classic sudo. The first stderr is a real setup job's whole log, from an
+// Ubuntu 26.04 box running sudo-rs 0.2.13.
+test('sudo-rs password stderr -> needs-interactive', async () => {
+  const m = make({ sshStream: sudoSsh('sudo: A terminal is required to authenticate\n'.repeat(3), 1) });
+  const s = m.start(BOX, { tools: [] });
+  await m._settled(s.id);
+  const job = m.getJob(s.id);
+  expect(job.status).toBe('needs-interactive');
+  expect(job.needs).toBe('sudo');
+});
+
+test('sudoPasswordPrompt reads sudo-rs wording, only on a sudo: line', () => {
+  expect(sudoPasswordPrompt('sudo: A terminal is required to authenticate\n')).toBe(true);
+  expect(sudoPasswordPrompt('sudo: interactive authentication is required\n')).toBe(true); // sudo -n
+  expect(sudoPasswordPrompt('E: apt failed\nsudo: A terminal is required to authenticate')).toBe(true);
+  expect(sudoPasswordPrompt('a terminal is required to authenticate')).toBe(false);
+  expect(sudoPasswordPrompt('interactive authentication is required sudo:')).toBe(false);
+  expect(sudoPasswordPrompt('sudo: unable to resolve host\ninteractive authentication is required')).toBe(false);
+});
+
 // The setup run is BatchMode, so ssh can never answer a password prompt itself.
 // When the box's sshd actually offers password auth, the interactive PTY finish
 // (buildProvisionArgv: -tt, no BatchMode) CAN answer it — so park the job for
