@@ -183,7 +183,7 @@ session and pane everywhere and is out of scope.
 Events carry the pane and enough to name it without a lookup:
 
 ```
-{ kind, boxId, label, host, t, session, pane: '%12', window: '2:frontend', paneIndex?, cause?, agent? }
+{ kind, boxId, label, host, t, session, pane: '%12', windowId: '@3', window: '2:frontend', paneIndex?, cause?, agent? }
 ```
 
 `paneIndex` is present only when the pane's window held more than one agent at the time. Every
@@ -240,10 +240,12 @@ the stream's vocabulary does not grow. The Host Shell stays on the sweep for thi
   zoomed window zoomed on the newly focused pane. All three ids are validated on the route and
   re-validated in the builder immediately before interpolation. Same gates as today (409 while
   setup runs, 502 on a failed command, a best-effort `probeOne` after).
-- `GET /api/boxes/:id/pane`: gains an optional `pane=%N`, browser session only, like `session`
-  (403 for a device token). It captures that pane by the same qualified target without changing
-  focus, and returns that pane's state as `agent`/`agentCause`. Without `pane`, it captures the
-  session's active pane as today and returns the state of that session's `focused` entry.
+- `GET /api/boxes/:id/pane`: the browser-only `session` parameter is replaced by `pane=%N`
+  (403 for a device token). The server takes that pane's session and window from its own latest
+  sample, captures the pane by the same qualified target without changing focus, and returns
+  that pane's state as `agent`/`agentCause`. Without `pane`, it captures the configured
+  session's active pane as today; the capture reports which pane that was, and the answer
+  carries that pane's state.
   `GET /api/local-shell/pane` follows the same rule. Both answers also carry `pane` (the id of
   the pane captured) and `agentTs` (its marker's `ts`, when it has one), so a client that only
   ever sees a capture can acknowledge it.
