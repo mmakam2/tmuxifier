@@ -124,7 +124,7 @@ describe('createMailSocketClient: wait', () => {
     expect(got).toEqual({
       kind: 'mail',
       messageId: m.id,
-      text: wakeText({ messageId: m.id, threadId: sent.threadId, from: 'billing/main', body: 'which version?\nsecond line', kind: 'task' }),
+      text: wakeText({ messageId: m.id, threadId: sent.threadId, from: 'billing/main', body: 'which version?\nsecond line', kind: 'task', role: 'peer' }),
     });
     expect(got.text.startsWith(`[tmuxifier-mail ${m.id}] `)).toBe(true);
     expect(got.text.endsWith('\n')).toBe(false);

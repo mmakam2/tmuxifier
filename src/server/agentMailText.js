@@ -72,12 +72,11 @@ const followupAnswer = (threadId) => `Reply when you have a result, a question o
 const reportAnswer = (threadId) => `Answer only if it asks you something or you still need something from that agent. ${PLAIN}  ${replyCmd(threadId)}. Do not reply just to acknowledge.`;
 
 // kind: the message's (`task` | `reply`; anything but `reply` reads as a task). role: the
-// reader's side of the thread (`starter` | `peer`). Until every caller passes one, an absent
-// role reads as the starter's for a reply and the peer's otherwise.
+// reader's side of the thread (`starter` | `peer`), required: a text worded for the wrong side
+// would hand a worker's report to its lead as work, so a caller that does not say throws.
 function wordingOf(kind, role) {
-  const side = role === undefined ? (kind === 'reply' ? 'starter' : 'peer') : role;
-  if (side !== 'starter' && side !== 'peer') throw new Error(`unknown mail role: ${String(role)}`);
-  if (side === 'starter') return 'report';
+  if (role !== 'starter' && role !== 'peer') throw new Error(`unknown mail role: ${String(role)}`);
+  if (role === 'starter') return 'report';
   return kind === 'reply' ? 'followup' : 'task';
 }
 

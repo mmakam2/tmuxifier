@@ -210,7 +210,10 @@ describe('agentMailHub: a send starts a worker', () => {
     const ac = new AbortController();
     const got = await w.hub.waitMail(WORKER, '%3', ac.signal);
     const m = w.store.thread(r.threadId).messages[0];
-    expect(got).toEqual({ messageId: m.id, text: wakeText({ messageId: m.id, threadId: r.threadId, from: 'orders/main', body: 'build the thing', kind: 'task' }) });
+    expect(got).toEqual({ messageId: m.id, text: wakeText({ messageId: m.id, threadId: r.threadId, from: 'orders/main', body: 'build the thing', kind: 'task', role: 'peer' }) });
+    // A session Tmuxifier started is the thread's peer: its first message is work from a colleague.
+    expect(got.text.split('\n')[0]).toBe(`[tmuxifier-mail ${m.id}] Message from the agent in orders/main, thread ${r.threadId}.`);
+    expect(got.text).toContain('Start now, without waiting to be asked');
     expect(m.state).toBe('handed');
   });
 

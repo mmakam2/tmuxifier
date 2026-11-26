@@ -636,10 +636,10 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
       const from = nameOf(boxes, thread[otherSide(side)]);
       if (wait) {
         markDelivered(thread.id, m.id);
-        wait.settle({ got: true, text: renderReply({ from, threadId: thread.id, body: m.body }) });
+        wait.settle({ got: true, text: renderReply({ from, threadId: thread.id, body: m.body, role: side }) });
       } else {
         store.setMessageState(thread.id, m.id, 'handed', { handedAt: now(), handedPane: waiter.pane });
-        waiter.settle({ text: wakeText({ messageId: m.id, threadId: thread.id, from, body: m.body, kind: m.kind }), messageId: m.id });
+        waiter.settle({ text: wakeText({ messageId: m.id, threadId: thread.id, from, body: m.body, kind: m.kind, role: side }), messageId: m.id });
       }
     }
   }
@@ -814,11 +814,11 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
       const pending = undeliveredFor(thread, side);
       if (pending.length === 0 || !keepIfPermitted(thread, policies)) continue;
       const from = nameOf(boxes, thread[otherSide(side)]);
-      for (const m of pending) items.push({ messageId: m.id, threadId: thread.id, from, body: m.body, kind: m.kind, at: m.at });
+      for (const m of pending) items.push({ messageId: m.id, threadId: thread.id, from, body: m.body, kind: m.kind, role: side, at: m.at });
     }
     items.sort((a, b) => a.at - b.at); // oldest first; stable within one timestamp
     for (const i of items) markDelivered(i.threadId, i.messageId);
-    return { ok: true, text: renderInbox(items.map(({ messageId, threadId, from, body, kind }) => ({ messageId, threadId, from, body, kind }))) };
+    return { ok: true, text: renderInbox(items.map(({ messageId, threadId, from, body, kind, role }) => ({ messageId, threadId, from, body, kind, role }))) };
   }
 
   // The waiter's held request. A malformed caller or pane, or an aborted signal, is answered idle
@@ -879,7 +879,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
     if (taken.length > 0) {
       taken.sort((a, b) => a.m.at - b.m.at);
       for (const { t, m } of taken) markDelivered(t.id, m.id);
-      const text = taken.map(({ t, side, m }) => renderReply({ from: nameOf(boxes, t[otherSide(side)]), threadId: t.id, body: m.body }));
+      const text = taken.map(({ t, side, m }) => renderReply({ from: nameOf(boxes, t[otherSide(side)]), threadId: t.id, body: m.body, role: side }));
       return { got: true, text: text.join('\n\n') };
     }
     if (closed) return { got: false, text: statusLines(me, ids, boxes) };
