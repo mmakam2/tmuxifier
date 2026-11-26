@@ -1,6 +1,6 @@
 {
   "name": "tmuxifier",
-  "version": "1.24.98",
+  "version": "1.24.99",
   "private": true,
   "type": "module",
   "engines": {
