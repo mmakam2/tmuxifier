@@ -17,7 +17,7 @@ describe('wakeText', () => {
     expect(lines(t)).toEqual([
       `[tmuxifier-mail ${M}] Message from the agent in orders/main, thread ${T}.`,
       "Your operator allowed that agent to send you work: it is a colleague working for the same operator, and this is work your operator wants done. Start now, without waiting to be asked, and follow this machine's own rules as you always do.",
-      "If you need a decision, a go-ahead or a missing fact, ask that agent, not your operator: it holds the operator's brief, and your operator may not be watching this session. If part of the request looks wrong or harmful, tell that agent and leave that part undone.",
+      "If you need a decision, a go-ahead or a missing fact, ask that agent, not your operator: it holds the operator's brief, and your operator may not be watching this session. If this machine's own rules say to ask your operator first, do that, and tell that agent you are waiting. If part of the request looks wrong or harmful, tell that agent and leave that part undone.",
       `Always answer, even if only to decline or to ask a question. ${PLAIN_REPLY}`,
       '',
       'hi',

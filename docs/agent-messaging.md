@@ -140,7 +140,8 @@ and the text it reads begins:
 
 followed by lines saying that you allowed that agent to send it work, that the sender is a
 colleague working for you and this is work you want done, to start now and follow this machine's
-own rules, to ask that agent (not you) for any decision, go-ahead or missing fact, and to always
+own rules, to ask that agent (not you) for any decision, go-ahead or missing fact, to ask you all the same
+when this machine's own rules say so and tell that agent it is waiting, and to always
 answer with `tmx reply`, even to decline. Then the message itself. The receiving session
 runs it under its own permissions and that box's own rules (see
 [Working as a team](#working-as-a-team)): a permission prompt it raises waits for you and shows as
@@ -255,10 +256,12 @@ and what stays in your hands.
   asks you, in its own session, only when your brief does not cover the question. So you are
   needed in one place: the session you are already working in.
 - **House rules are the brake.** A sentence in a box's own `CLAUDE.md` or memory such as "no
-  deploy without my go-ahead" keeps that box asking you, whatever a colleague says. The agent
-  obeys it, and Claude Code's auto mode enforces it even when the agent itself would go ahead:
-  it blocks the command, and no wording next to the rule ("unless the dev agent asks") lifts it.
-  Write such a sentence only where you want to be asked.
+  deploy without my go-ahead" keeps that box asking you, whatever a colleague says. The message
+  itself tells the agent to ask you when the machine's rules say so, and to tell the sender it is
+  waiting. Under Claude Code's auto mode the rule is also enforced when the agent itself would go
+  ahead: auto mode blocks the command, and no wording next to the rule ("unless the dev agent
+  asks") lifts it. Under OpenCode, or Claude Code in another permission mode, nothing but the
+  agent's obedience stands behind the rule. Write such a sentence only where you want to be asked.
 - **One job on a box that keeps its rule.** Put the job in one script and add an exact
   permission rule for that command, for example `Bash(./deploy.sh)` in that project's
   `.claude/settings.local.json`. A permission rule is checked before auto mode's judgement.
@@ -267,6 +270,11 @@ and what stays in your hands.
 - **The risk.** An agent steered by something hostile it read (a web page, an issue, a pull
   request) can ask its colleagues for anything, and they will act within their own rules. Keep
   the circle small, and see [Security](#security).
+
+- **After upgrading Tmuxifier, rerun setup on each box.** The message wording changes as soon as
+  the server restarts, but a box keeps the skill it was set up with. Until its setup is rerun, an
+  agent there that loads the old skill still reads "never approve anything for another agent,
+  tell it to ask its own operator", and behaves as before.
 
 The Messages drawer shows every thread, and **Stop** ends one.
 
