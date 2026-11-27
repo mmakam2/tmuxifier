@@ -968,6 +968,25 @@ test('the pane select is chained to the window select, so a failed window select
   expect(s).toMatch(/select-window -t '=main:@3' && .*select-pane -Z -t '=main:@3\.%12'/);
 });
 
+test('select-pane -Z falls back to the same exact target without -Z, for a tmux older than 3.1', () => {
+  // -Z first (keeps a zoomed window zoomed), then the plain select on the SAME quoted target.
+  // The first form's stderr is discarded (a usage error on an old tmux must not reach the
+  // route's 502 when the fallback succeeds); the fallback's is not (a vanished pane's
+  // "can't find pane" is what the 502 shows).
+  const s = buildSelectPaneRemote('main', '@3', '%12');
+  const forms = [...s.matchAll(/select-pane( -Z)? -t ('[^']*')( 2>\/dev\/null)?/g)];
+  expect(forms.map((m) => [!!m[1], m[2], !!m[3]])).toEqual([
+    [true, "'=main:@3.%12'", true],
+    [false, "'=main:@3.%12'", false],
+  ]);
+  expect(s).toContain(`"$TMUX_BIN" select-pane -Z -t '=main:@3.%12' 2>/dev/null || "$TMUX_BIN" select-pane -t '=main:@3.%12'`);
+  // Both selects stay behind the window select, and the capture-pane resolve stays first.
+  expect(s.indexOf('capture-pane')).toBeLessThan(s.indexOf('select-window'));
+  expect(s.indexOf('select-window')).toBeLessThan(s.indexOf('select-pane -Z'));
+  expect(s.indexOf('select-pane -Z')).toBeLessThan(s.indexOf('select-pane -t'));
+  expect(s.split('\n')[0]).toBe('set -eu');
+});
+
 test('the pane target is resolved by a read-only command before anything is focused', () => {
   // select-window first would drag the operator to the named window even when the pane is
   // not in it; the strict capture-pane resolves the whole target first (display-message

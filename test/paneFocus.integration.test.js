@@ -1,5 +1,7 @@
 import { test, expect, afterEach } from 'vitest';
 import path from 'node:path';
+import { mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { createWorkerBench } from './helpers/workerBench.js';
 import { buildSelectPaneRemote } from '../src/server/boxActions.js';
 
@@ -132,4 +134,101 @@ test('a session that does not exist fails, and a name that only prefixes a real 
   expect(f.select('mai', f.winB, f.b1).code).not.toBe(0);
 
   expect(f.focus()).toBe(before);
+});
+
+// A box whose tmux predates 3.1 (Ubuntu 20.04 ships 3.0a): `select-pane -Z` does not exist
+// there and exits non-zero with a usage line. The shim sits ahead of the bench's pinned tmux
+// on the script's PATH, rejects exactly that form and passes everything else through to the
+// private server, so the script's own tmux lookup lands on it and the rest is real tmux.
+// `lenientCapture` also answers `capture-pane` with success, standing in for a pane that
+// vanished between the script's check and its select (which the script cannot otherwise be
+// made to reach: the check is what catches a stale pane first).
+const USAGE = 'usage: select-pane [-DdeLlMmRU] [-T title] [-t target-pane]';
+
+function oldTmux(f, { lenientCapture = false } = {}) {
+  const real = path.join(f.b.env.PATH.split(':')[0], 'tmux');
+  const dir = path.join(f.b.home, 'old-tmux-bin');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, 'tmux'), [
+    '#!/bin/sh',
+    'if [ "${1:-}" = select-pane ]; then',
+    '  for a in "$@"; do',
+    `    if [ "$a" = -Z ]; then echo '${USAGE}' >&2; exit 1; fi`,
+    '  done',
+    'fi',
+    ...(lenientCapture ? ['if [ "${1:-}" = capture-pane ]; then exit 0; fi'] : []),
+    `exec '${real}' "$@"`,
+    '',
+  ].join('\n'));
+  chmodSync(path.join(dir, 'tmux'), 0o755);
+  const env = { ...f.b.env, PATH: `${dir}:${f.b.env.PATH}`, SHELL: '/bin/sh' };
+  return {
+    dir,
+    // The script as ssh would run it (`sh -c`), with stderr kept: that is what the route returns.
+    select(session, win, pane) {
+      const r = spawnSync('/bin/sh', ['-c', buildSelectPaneRemote(session, win, pane)], {
+        env, cwd: f.b.home, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000,
+      });
+      return { code: r.status, stderr: r.stderr };
+    },
+    run: (cmd) => spawnSync('/bin/sh', ['-c', cmd], { env, cwd: f.b.home, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000 }),
+  };
+}
+
+test('the old-tmux shim is what the script finds, and it rejects only select-pane -Z', () => {
+  const f = fixture();
+  const old = oldTmux(f);
+  expect(old.run('command -v tmux').stdout.trim()).toBe(path.join(old.dir, 'tmux'));
+  const z = old.run(`tmux select-pane -Z -t '=main:${f.winA}.${f.a2}'`);
+  expect(z.status).not.toBe(0);
+  expect(z.stderr.trim()).toBe(USAGE);
+  expect(f.activeIn(f.winA)).toBe(f.a1);
+  // Without -Z it is the private server's own select-pane.
+  expect(old.run(`tmux select-pane -t '=main:${f.winA}.${f.a2}'`).status).toBe(0);
+  expect(f.activeIn(f.winA)).toBe(f.a2);
+});
+
+test('on a tmux without select-pane -Z the pane is still focused, and nothing is printed', () => {
+  const f = fixture();
+  const old = oldTmux(f);
+  f.out('select-pane', '-t', `=main:${f.winA}.${f.a2}`);
+  f.out('select-window', '-t', `=main:${f.winB}`);
+  expect(f.focus()).toBe(`${f.winB} ${f.b1}`);
+
+  const r = old.select('main', f.winA, f.a1);
+
+  expect(r.code).toBe(0);
+  // The first attempt's usage error must not leak out of a script that then succeeded.
+  expect(r.stderr).toBe('');
+  expect(f.focus()).toBe(`${f.winA} ${f.a1}`);
+});
+
+test('on a tmux without select-pane -Z a stale pane still fails and focuses nothing', () => {
+  const f = fixture();
+  const old = oldTmux(f);
+  const before = f.focus();
+  const bActive = f.activeIn(f.winB);
+
+  const r = old.select('main', f.winB, f.a1);
+
+  expect(r.code).not.toBe(0);
+  expect(r.stderr).toContain("can't find pane");
+  expect(f.focus()).toBe(before);
+  expect(f.activeIn(f.winB)).toBe(bActive);
+});
+
+test('when both select-pane forms fail, the script reports the fallback\'s own error', () => {
+  const f = fixture();
+  // The pane closes after the script's check: capture-pane is answered "fine" by the shim,
+  // select-pane -Z is rejected, and the plain select meets tmux's real "can't find pane".
+  const old = oldTmux(f, { lenientCapture: true });
+  const closed = f.out('split-window', '-d', '-t', `=main:${f.winB}.${f.b1}`, '-P', '-F', '#{pane_id}', 'sleep 600');
+  f.out('kill-pane', '-t', closed);
+
+  const r = old.select('main', f.winB, closed);
+
+  expect(r.code).not.toBe(0);
+  expect(r.stderr).toContain(`can't find pane: ${closed}`);
+  // Not the first attempt's usage line: the failure shown is the real one.
+  expect(r.stderr).not.toContain('usage:');
 });

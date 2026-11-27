@@ -640,9 +640,16 @@ export function buildSelectWindowRemote(session, windowId) {
 //
 // `-Z` keeps a zoomed window zoomed, now on the pane just focused. Without it tmux
 // unzooms the window when another pane of it is selected, which would also change
-// what every attached client sees.
+// what every attached client sees. `select-pane -Z` only exists from tmux 3.1: an
+// older box (Ubuntu 20.04 ships 3.0a) answers it with a usage error, after the
+// window was already switched. So when the `-Z` form fails the same exact target is
+// selected again without `-Z`: that tmux still focuses the pane and loses only the
+// keep-zoom nicety. The first form's stderr is discarded, so its usage line never
+// reaches the route when the fallback succeeds; the fallback's is kept, so a pane that
+// really vanished still ends the script with its own non-zero status and tmux's own
+// "can't find pane" for the 502.
 //
-// The two selects are joined with `&&`: a failed select-window skips select-pane and
+// The selects are joined with `&&`: a failed select-window skips select-pane and
 // the script's exit status is the first failure's.
 export function buildSelectPaneRemote(session, windowId, paneId) {
   if (typeof session !== 'string' || !SESSION_NAME_RE.test(session)) throw new Error('invalid session name');
@@ -653,7 +660,7 @@ export function buildSelectPaneRemote(session, windowId, paneId) {
   return [
     ...tmuxBinPreamble(),
     `"$TMUX_BIN" capture-pane -p -t ${paneTarget} >/dev/null`,
-    `"$TMUX_BIN" select-window -t ${windowTarget} && "$TMUX_BIN" select-pane -Z -t ${paneTarget}`,
+    `"$TMUX_BIN" select-window -t ${windowTarget} && { "$TMUX_BIN" select-pane -Z -t ${paneTarget} 2>/dev/null || "$TMUX_BIN" select-pane -t ${paneTarget}; }`,
   ].join('\n');
 }
 
