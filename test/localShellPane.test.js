@@ -10,7 +10,7 @@ import { hashPassword } from '../src/server/auth.js';
 import { createDeviceStore } from '../src/server/deviceStore.js';
 import { createPasskeyStore } from '../src/server/passkeyStore.js';
 
-let app, dir, scripts, runResult, gate;
+let app, dir, scripts, runResult, gate, deps;
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-lsp-route-'));
   scripts = [];
@@ -50,10 +50,11 @@ beforeEach(async () => {
       : []),
     getEvents: () => ({ events: [], latestSeq: 0 }), record() {}, onEvent() {},
   };
-  app = buildServer({
+  deps = {
     config, store, sessions, statusChecker, boxActions, history, localShellActions,
     deviceStore: createDeviceStore({ dataDir: dir }), passkeyStore: createPasskeyStore({ dataDir: dir }),
-  });
+  };
+  app = buildServer(deps);
 });
 
 async function headers() {
@@ -303,6 +304,77 @@ test('POST /api/local-shell/window is 502 with tmux\'s words when the command fa
   expect(scripts.every((s) => !/new-session/.test(s))).toBe(true);
   runResult = { code: 1, stdout: '', stderr: '' };
   expect((await post({ windowId: '@1' })).json()).toEqual({ error: 'failed to select window' });
+});
+
+// After a jump the Host Shell's agent entries (`visible`/`focused`) are stale until
+// the next sweep, and nothing watches the Host Shell for window switches: the route
+// ends with a best-effort refresh of its agent state, as the box route ends with a
+// best-effort probeOne. Its own history change listener nudges the tabs.
+async function withPoller(refreshAgents) {
+  const calls = [];
+  const statusPoller = {
+    refreshAgents: async (id) => {
+      calls.push({ id, scriptsSoFar: scripts.length });
+      return refreshAgents ? refreshAgents(id) : true;
+    },
+  };
+  const server = buildServer({ ...deps, statusPoller });
+  const res = await server.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = res.cookies.find((x) => x.name === 'tmuxifier_session');
+  const send = (payload) => server.inject({ method: 'POST', url: '/api/local-shell/window', headers: { cookie: `${c.name}=${c.value}` }, payload });
+  return { calls, send };
+}
+
+test('POST /api/local-shell/window refreshes the Host Shell\'s agents once, after the select ran', async () => {
+  const { calls, send } = await withPoller();
+  const res = await send({ windowId: '@1', paneId: '%4' });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true, windowId: '@1', paneId: '%4' });
+  expect(calls).toEqual([{ id: '__local__', scriptsSoFar: 1 }]); // once, with the select already run
+  const win = await send({ windowId: '@3' });
+  expect(win.json()).toEqual({ ok: true, windowId: '@3' });
+  expect(calls.map((c) => c.id)).toEqual(['__local__', '__local__']);
+});
+
+test('POST /api/local-shell/window answers only after the refresh has settled', async () => {
+  let release;
+  const gateRefresh = new Promise((r) => { release = r; });
+  const { calls, send } = await withPoller(() => gateRefresh);
+  let answered = false;
+  const pending = send({ windowId: '@1' }).then((r) => { answered = true; return r; });
+  await expect.poll(() => calls.length).toBe(1);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(answered).toBe(false);
+  release(true);
+  expect((await pending).statusCode).toBe(200);
+});
+
+test('POST /api/local-shell/window does not refresh after a refused or failed select', async () => {
+  const { calls, send } = await withPoller();
+  expect((await send({ windowId: '7' })).statusCode).toBe(400);
+  expect((await send({ windowId: '@1', paneId: '4' })).statusCode).toBe(400);
+  expect((await send({})).statusCode).toBe(400);
+  runResult = { code: 1, stdout: '', stderr: "can't find pane: %4" };
+  expect((await send({ windowId: '@1', paneId: '%4' })).statusCode).toBe(502);
+  expect(calls).toEqual([]);
+});
+
+test('POST /api/local-shell/window still answers ok when the refresh resolves false, throws or rejects', async () => {
+  for (const refresh of [() => false, () => { throw new Error('sync boom'); }, async () => { throw new Error('boom'); }, () => Promise.reject(new Error('rejected'))]) {
+    const { calls, send } = await withPoller(refresh);
+    const res = await send({ windowId: '@1', paneId: '%4' });
+    expect([res.statusCode, res.json()]).toEqual([200, { ok: true, windowId: '@1', paneId: '%4' }]);
+    expect(calls).toHaveLength(1);
+  }
+});
+
+test('POST /api/local-shell/window answers ok with no poller wired, or one without refreshAgents', async () => {
+  expect((await post({ windowId: '@1', paneId: '%4' })).json()).toEqual({ ok: true, windowId: '@1', paneId: '%4' }); // the default app has none
+  const bare = buildServer({ ...deps, statusPoller: {} });
+  const login = await bare.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === 'tmuxifier_session');
+  const res = await bare.inject({ method: 'POST', url: '/api/local-shell/window', headers: { cookie: `${c.name}=${c.value}` }, payload: { windowId: '@1' } });
+  expect([res.statusCode, res.json()]).toEqual([200, { ok: true, windowId: '@1' }]);
 });
 
 test('POST /api/local-shell/window is 503 when the action is not wired', async () => {

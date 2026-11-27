@@ -2354,8 +2354,17 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   // Host Shell agent row. Browser-only, deliberately absent from
   // DEVICE_ALLOWED_ROUTES like the capture above. Only the local session is ever
   // targeted (a `session` in the body is not read), both ids are validated here
-  // and again in the builders, and it never creates the session. No setup gate
-  // and no re-probe: the Host Shell has no setup job, and it stays on the sweep.
+  // and again in the builders, and it never creates the session. No setup gate:
+  // the Host Shell has no setup job.
+  //
+  // A successful select ends with a best-effort refresh of the Host Shell's agent
+  // state, as the box route ends with a best-effort probeOne. Nothing watches the
+  // Host Shell for window switches, so without it the entries' `visible`/`focused`
+  // flags stay as they were until the next sweep and the pane just jumped to is not
+  // acknowledged. The history's own change listener nudges the open tabs when the
+  // agents map changes, so nothing is published here. The jump already happened: a
+  // refresh that resolves false, throws or has no poller behind it never turns it
+  // into an error.
   app.post('/api/local-shell/window', { preHandler: requireAuth }, async (req, reply) => {
     const { windowId, paneId } = req.body || {};
     if (typeof windowId !== 'string' || !WINDOW_ID_RE.test(windowId)) {
@@ -2368,6 +2377,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (typeof localShellActions?.selectWindow !== 'function') return reply.code(503).send({ error: 'window switching unavailable' });
     const res = await localShellActions.selectWindow({ windowId, paneId });
     if (!res.ok) return reply.code(502).send({ error: res.error });
+    try { await statusPoller?.refreshAgents?.(LOCAL_BOX_ID); } catch { /* the next sweep will catch up */ }
     return paneId === undefined ? { ok: true, windowId } : { ok: true, windowId, paneId };
   });
 
