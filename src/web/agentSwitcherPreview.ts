@@ -7,7 +7,8 @@ export const PREVIEW_REST_MS = 250;
 export const PREVIEW_CACHE_MS = 5000;
 
 export type PreviewView = { t: 'idle' } | { t: 'loading' } | { t: 'text'; text: string } | { t: 'error' };
-export interface PreviewTarget { boxId: string; session: string }
+// The pane the preview captures: one agent pane, by box and pane id.
+export interface PreviewTarget { boxId: string; pane: string }
 export interface PreviewDeps {
   fetch(target: PreviewTarget, signal: AbortSignal): Promise<string>;
   now(): number;
@@ -16,7 +17,7 @@ export interface PreviewDeps {
   onChange(): void;
 }
 
-const keyOf = (t: PreviewTarget) => `${t.boxId}\n${t.session}`;
+const keyOf = (t: PreviewTarget) => `${t.boxId}\n${t.pane}`;
 
 export function createPreviewScheduler(deps: PreviewDeps) {
   const cache = new Map<string, { text: string; at: number }>();

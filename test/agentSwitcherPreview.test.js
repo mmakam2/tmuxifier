@@ -35,8 +35,8 @@ function rig() {
   r.s = createPreviewScheduler(r.deps);
   return r;
 }
-const A = { boxId: 'b1', session: 'a' };
-const B = { boxId: 'b1', session: 'b' };
+const A = { boxId: 'b1', pane: '%1' };
+const B = { boxId: 'b1', pane: '%2' };
 const tick = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
 const abortErr = () => new DOMException('aborted', 'AbortError');
 
@@ -47,7 +47,7 @@ test('constants', () => {
 
 test('no fetch while tapping: five highlights 100 ms apart fire nothing', () => {
   const r = rig();
-  for (let i = 0; i < 5; i++) { r.s.highlight({ boxId: 'b1', session: `s${i}` }); r.advance(100); }
+  for (let i = 0; i < 5; i++) { r.s.highlight({ boxId: 'b1', pane: `%${10 + i}` }); r.advance(100); }
   expect(r.fetches.length).toBe(0);
   expect(r.s.view()).toEqual({ t: 'loading' });
 });
@@ -92,7 +92,7 @@ test('a result that arrives after the highlight moved is cached, not shown', asy
   r.s.highlight(A);
   expect(r.s.view()).toEqual({ t: 'text', text: 'late' });
   r.advance(1000);
-  expect(r.fetches.filter((f) => f.target.session === 'a').length).toBe(1);
+  expect(r.fetches.filter((f) => f.target.pane === '%1').length).toBe(1);
 });
 
 test('the cache expires after 5 s', async () => {
@@ -208,4 +208,27 @@ test('re-highlighting the same row after its snapshot aged out is still a no-op 
   expect(r.s.view()).toEqual({ t: 'text', text: 'one' });
   expect(r.fetches.length).toBe(1);
   expect(pending(r)).toBe(0);
+});
+
+test('the cache and the fetch key on box and pane', async () => {
+  const r = rig();
+  const sameBoxOtherPane = { boxId: 'b1', pane: '%2' };
+  const otherBoxSamePane = { boxId: 'b2', pane: '%1' };
+  r.s.highlight(A); r.advance(250);
+  expect(r.fetches[0].target).toEqual(A);
+  r.fetches[0].resolve('one'); await tick();
+  r.s.highlight(otherBoxSamePane);
+  expect(r.s.view()).toEqual({ t: 'loading' });
+  r.advance(250);
+  expect(r.fetches[1].target).toEqual(otherBoxSamePane);
+  r.fetches[1].resolve('two'); await tick();
+  r.s.highlight(sameBoxOtherPane);
+  expect(r.s.view()).toEqual({ t: 'loading' });
+  r.advance(250);
+  expect(r.fetches[2].target).toEqual(sameBoxOtherPane);
+  r.s.highlight(A);
+  expect(r.s.view()).toEqual({ t: 'text', text: 'one' });
+  r.s.highlight(otherBoxSamePane);
+  expect(r.s.view()).toEqual({ t: 'text', text: 'two' });
+  expect(r.fetches).toHaveLength(3);
 });

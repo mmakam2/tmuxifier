@@ -953,8 +953,11 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
   halves `agentSwitcherList.ts` (rows, MRU, highlight), `agentSwitcherChord.ts` (idle/open/drain
   reducer), `agentSwitcherPreview.ts` (250 ms rest, abort, 5 s cache), `agentSwitcherCommit.ts`
   (`planCommit`: focus / switch in place / replace / open) and `ansiStrip.ts`. `hotkeys.ts` is the combo model, validation and per-browser store. `termClose.ts`
-  mirrors `TERM_RELEASE_CODE`, sent for the pane a jump replaces. The MRU is fed by `noteFocusedSession`,
-  called only from `repaintStage` and `syncPaneFocus`. Inert in phone mode, under a coarse pointer,
+  mirrors `TERM_RELEASE_CODE`, sent for the pane a jump replaces. Rows, previews and the MRU are per
+  agent pane (`rowKey(boxId, pane)`; old session-keyed MRU entries never match); a commit docks by
+  `planCommit`, then shares `jumpToAgent`'s select, refresh and seen hold (`jumpToTarget`). The MRU
+  is fed by `noteFocusedSession` (the focused agent pane of the focused pane's session), called only
+  from `repaintStage`, `syncPaneFocus` and `repaintFromSeries`, never while a jump holds the box. Inert in phone mode, under a coarse pointer,
   with a modal open or while Settings records a combo. `settingsHotkeys.ts` is the Hotkeys tab.
 - **Voice** — `wavEncode.ts` (16 kHz mono WAV, so no ffmpeg), `voiceRecorder.ts`,
   `voiceWorklet.js` (real asset, keeps CSP `script-src 'self'`), `pcmStream.ts`, `voicePress.ts`

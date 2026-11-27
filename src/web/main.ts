@@ -1,7 +1,7 @@
 import { decideLogin, SIGNED_OUT_KEY, type LoginReason } from './loginRoute';
 import { api, onUnauthorized, type AddBoxSpec, type AuthInfo, type AgentState, type Box, type Status, type Sample, type HealthEvent, type PushResult, type SetupJob, type SetupSummary } from './api';
 import { AGENT_LABEL, AGENT_PRECEDENCE, agentChipText, agentCounts, agentRows, latestAgents, visibleDone, type AgentRow } from './agentState';
-import { createSeenHold, jumpTargetOf, needsSelect, sidebarAgents, sidebarSeries } from './agentJump';
+import { createSeenHold, jumpTargetOf, needsSelect, sidebarAgents, sidebarSeries, type JumpTarget } from './agentJump';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
 import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, formatVoiceLinkResult, blocksTerminal } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
@@ -55,7 +55,7 @@ import { createPhoneMode, type PhoneMode } from './phoneMode';
 import { buildTouchKeyBar, createStickyCtrl } from './touchKeys';
 import { hotkeys } from './hotkeys';
 import { createAgentSwitcher } from './agentSwitcher';
-import { bumpMru, liveRows, parseMru, rowKey, switcherRows, LOCAL_BOX, LOCAL_SESSION, MRU_STORAGE_KEY, type SwitcherRow } from './agentSwitcherList';
+import { bumpMru, focusedAgentKey, liveRows, parseMru, switcherRows, LOCAL_BOX, LOCAL_SESSION, MRU_STORAGE_KEY, type SwitcherRow } from './agentSwitcherList';
 import { planCommit } from './agentSwitcherCommit';
 import { previewText } from './ansiStrip';
 
@@ -152,8 +152,9 @@ const ackedSeen = new Map<string, number>();
 const seenHold = createSeenHold();
 // The agent switcher (agentSwitcher.ts). Its document listeners live for the
 // page's lifetime, so it is created once (renderDashboard re-runs on re-login).
-// agentMru is the per-browser most-recently-used order of (box, session) keys;
-// lastFocusPair is the (focused pane, its session) pair last bumped into it.
+// agentMru is the per-browser most-recently-used order of (box, agent pane)
+// keys; lastFocusPair is the (focused docked pane, focused agent pane of its
+// session) pair last seen by noteFocusedSession.
 let agentSwitcher: ReturnType<typeof createAgentSwitcher> | null = null;
 let agentMru: string[] = (() => {
   try { return parseMru(localStorage.getItem(MRU_STORAGE_KEY)); } catch { return []; }
@@ -967,6 +968,7 @@ function repaintFromSeries() {
   updatePaneHeaders(); // the agent chip's read arrives with the series
   if (dashTimer) dash?.update({ series: latestSeries });
   reportSeen();
+  noteFocusedSession(); // the series says which agent pane tmux has focused
 }
 
 async function pollHealth() {
@@ -1573,17 +1575,25 @@ function syncPaneFocus() {
   noteFocusedSession();
 }
 
-// The switcher's MRU "use": the (focused pane, its session) pair changed, by any
-// path. focusedPaneId is assigned in many places, so this runs in exactly two:
-// the last line of repaintStage() and of syncPaneFocus().
+// The switcher's MRU "use": the agent pane on screen in the focused docked pane
+// changed, by any path: the key is the `focused` agent pane of that pane's
+// session (focusedAgentKey), and a session with none bumps nothing.
+// focusedPaneId is assigned in many places and the focused agent pane moves
+// with the series, so this runs in exactly three: the last line of
+// repaintStage(), of syncPaneFocus() and of repaintFromSeries(). While a jump
+// holds the box (seenHold), the series in hand names the pane being LEFT, so
+// nothing is bumped until fresh data shows where the jump landed.
 function noteFocusedSession() {
   const iid = focusedPaneId;
   if (!iid || !panesOf(stageRoot).includes(iid)) { lastFocusPair = ''; return; }
-  const session = paneAgentSession(iid);
-  const pair = `${iid}\n${session}`;
+  const box = boxOfInstance(iid);
+  if (seenHold.held(box)) return;
+  const key = focusedAgentKey(box, latestAgents(latestSeries[box]), paneAgentSession(iid));
+  const pair = `${iid}\n${key ?? ''}`;
   if (pair === lastFocusPair) return;
   lastFocusPair = pair;
-  agentMru = bumpMru(agentMru, rowKey(boxOfInstance(iid), session));
+  if (key === null) return;
+  agentMru = bumpMru(agentMru, key);
   try { localStorage.setItem(MRU_STORAGE_KEY, JSON.stringify(agentMru)); } catch { /* per-viewer convenience only */ }
 }
 
@@ -2176,10 +2186,11 @@ async function renderDashboard() {
       live: (frozen) => liveRows(frozen, latestSeries),
       onOpen: () => { for (const h of paneHeaders.values()) h.closePicker(); },
       commit: commitSwitcherRow,
-      // Read-only captures: no cols/rows (never sizes a viewer), no seen ack.
+      // Read-only captures of that one pane: no cols/rows (never sizes a
+      // viewer), tmux's focus untouched, no seen ack.
       fetchPreview: async (t, signal) => previewText((t.boxId === LOCAL_BOX
-        ? await api.localPanePreview(signal)
-        : await api.panePreview(t.boxId, t.session, signal)).content, 40),
+        ? await api.localPanePreview(t.pane, signal)
+        : await api.panePreview(t.boxId, t.pane, signal)).content, 40),
       now: () => Date.now(),
     });
   }
@@ -2757,41 +2768,41 @@ function openPaneOnSession(boxId: string, session: string) {
   if (focusedPaneId && boxOfInstance(focusedPaneId) === boxId) switchPaneSession(focusedPaneId, session);
 }
 
-// A sidebar agent row's click (spec 2026-11-26 §7.3). The target comes from the
-// pane's entry in the latest sample, not from the row. 1. Dock the box on the
-// pane's session. 2. Unless the pane is already tmux's focused one, select its
-// window and pane on the box (the Host Shell's own route for __local__): every
-// client attached to that session follows, as with a window pick. A rejected
-// select (409 mid-setup, 502 pane or window gone) leaves the dock as it is and
-// says why. 3. Refresh as a window pick does; the acknowledgement then goes
-// through reportSeen once fresh data shows the pane visible.
+// A jump to an agent pane (spec 2026-11-26 §7.3), shared by a sidebar agent
+// row or board card (jumpToAgent) and the agent switcher (commitSwitcherRow).
+// The target comes from the pane's entry in the latest sample, never from the
+// row. 1. `dock`, the caller's own step, docks the box on the pane's session.
+// 2. Unless the pane is already tmux's focused one, select its window and pane
+// on the box (the Host Shell's own route for __local__): every client attached
+// to that session follows, as with a window pick. A rejected select (409
+// mid-setup, 502 pane or window gone) leaves the dock as it is and says why.
+// 3. Refresh as a window pick does; the acknowledgement then goes through
+// reportSeen once fresh data shows the pane visible.
 //
 // Docking repaints the stage, and a repaint acknowledges what the series in
 // hand says is visible, which is the window the jump is LEAVING. So the box's
-// acknowledgements are held (seenHold) from before the dock until a series
+// acknowledgements are held (seenHold) from BEFORE the dock until a series
 // fetched after the select settled shows the pane visible (any such series
 // after a refused select; HOLD_MAX_MS at most). The finally settles this jump
 // on every path, so the hold always ends with a later applied series.
-async function jumpToAgent(boxId: string, pane: string): Promise<void> {
-  const t = jumpTargetOf(boxId, sidebarAgents(boxId, latestAgents(latestSeries[boxId])), pane);
-  if (!t) return;
+async function jumpToTarget(t: JumpTarget, dock: () => void): Promise<void> {
   // Already tmux's focused pane: the window in front does not move, so what the
   // series says is visible is true, and there is nothing to refresh or hold.
-  if (!needsSelect(t)) { openPaneOnSession(boxId, t.session); return; }
-  const jump = seenHold.begin(boxId, t.pane);
+  if (!needsSelect(t)) { dock(); return; }
+  const jump = seenHold.begin(t.boxId, t.pane);
   let ok = false;
   try {
-    openPaneOnSession(boxId, t.session);
-    if (boxId === '__local__') await api.localSelectWindow(t.windowId, t.pane);
-    else await api.selectWindow(boxId, t.session, t.windowId, t.pane);
+    dock();
+    if (t.boxId === LOCAL_BOX) await api.localSelectWindow(t.windowId, t.pane);
+    else await api.selectWindow(t.boxId, t.session, t.windowId, t.pane);
     ok = true;
   } catch (e: any) {
     // The pane header snaps back exactly as after a failed window pick; the
-    // toast is what the click is answered with, the header being elsewhere.
+    // toast is what the jump is answered with, the header being elsewhere.
     updatePaneHeaders();
     showToast(e?.message || 'jump failed', 'error');
   } finally {
-    seenHold.settle(boxId, jump, ok, Date.now());
+    seenHold.settle(t.boxId, jump, ok, Date.now());
   }
   // Even after a failure: a 502 means the listing moved, and the refreshed
   // series drops the row that pointed at it. The series that shows the pane in
@@ -2799,15 +2810,37 @@ async function jumpToAgent(boxId: string, pane: string): Promise<void> {
   void pollStatus();
 }
 
-// The agent switcher's commit (agentSwitcherCommit.ts plans it). Unlike
-// openPaneOnSession it replaces the FOCUSED pane and closes the occupant for good
-// (a release close, so its session stops counting as attached and repeated hops
-// cannot pile parked instances up against the server's per-box viewer cap).
-// The switcher is off on a phone, so there is no phone branch here.
+// The pane's jump target from the latest sample, as the sidebar lists it.
+const agentTargetOf = (boxId: string, pane: string): JumpTarget | null =>
+  jumpTargetOf(boxId, sidebarAgents(boxId, latestAgents(latestSeries[boxId])), pane);
+
+// A sidebar agent row's or a board card's click: docks through openPaneOnSession.
+async function jumpToAgent(boxId: string, pane: string): Promise<void> {
+  const t = agentTargetOf(boxId, pane);
+  if (!t) return;
+  await jumpToTarget(t, () => openPaneOnSession(boxId, t.session));
+}
+
+// The agent switcher's commit: the same jump, docked by the switcher's own plan
+// (agentSwitcherCommit.ts planCommit, which still plans by session). A row
+// whose pane is no longer in the latest sample commits nothing.
 function commitSwitcherRow(row: SwitcherRow) {
+  const t = agentTargetOf(row.boxId, row.pane);
+  if (!t) return;
+  // /term refuses a name outside the charset; switchPaneSession refuses it too.
+  if (t.boxId !== LOCAL_BOX && !isSwitchableSession(t.session)) return;
+  void jumpToTarget(t, () => dockSwitcherTarget(t.boxId, t.session));
+}
+
+// The switcher's docking step. Unlike openPaneOnSession it replaces the FOCUSED
+// pane and closes the occupant for good (a release close, so its session stops
+// counting as attached and repeated hops cannot pile parked instances up
+// against the server's per-box viewer cap). The switcher is off on a phone, so
+// there is no phone branch here.
+function dockSwitcherTarget(boxId: string, session: string) {
   const panes = panesOf(stageRoot);
   const plan = planCommit({
-    target: { boxId: row.boxId, session: row.session },
+    target: { boxId, session },
     panes,
     focused: focusedPaneId,
     parked: [...tabs.keys()].filter((iid) => !panes.includes(iid)),
@@ -2822,17 +2855,15 @@ function commitSwitcherRow(row: SwitcherRow) {
   }
   if (plan.kind === 'switch') {
     focusedPaneId = plan.paneId;
-    switchPaneSession(plan.paneId, row.session);
+    switchPaneSession(plan.paneId, session);
     return;
   }
   const { iid } = plan;
-  // /term refuses a name outside the charset; switchPaneSession refuses it too.
-  if (row.boxId !== LOCAL_BOX && !isSwitchableSession(row.session)) return;
   // A parked terminal on another session would be reused as is by ensureTab.
   if (plan.resetTab) closeTab(iid, { keepPane: true });
-  if (row.boxId !== LOCAL_BOX) {
-    if (row.session === (boxFor(iid)?.sessionName || 'web')) paneSessions.delete(iid);
-    else paneSessions.set(iid, row.session);
+  if (boxId !== LOCAL_BOX) {
+    if (session === (boxFor(iid)?.sessionName || 'web')) paneSessions.delete(iid);
+    else paneSessions.set(iid, session);
   }
   stageRoot = plan.kind === 'open' ? iid : replacePane(stageRoot, plan.occupant, iid);
   focusedPaneId = iid;

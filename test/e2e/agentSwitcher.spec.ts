@@ -2,19 +2,23 @@ import { test, expect, type Page, type Locator } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { buildAgentPanes, resetAgentPanes, writePaneMarker, type AgentPaneLayout } from './agentPaneBox';
 
 // The agent switcher end to end (agentSwitcher.ts + its main.ts wiring): hold
-// Ctrl+Shift, tap K to step through every agent session in the fleet, release
-// a modifier to land on the highlighted one.
+// Ctrl+Shift, tap K to step through every agent PANE in the fleet, release a
+// modifier to land on the highlighted one.
 //
 // Fixture facts that shape every assertion (see agentStates.spec.ts):
 //  - The three seeded boxes (localhost, db-primary, untagged-worker) are ssh
-//    aliases of ONE tmux server, so every fixture session is a row under each
-//    box. Rows are targeted by data-box + data-session, never by index/count.
-//  - The e2e Host Shell reads this host's REAL tmux, so a Host Shell row may be
-//    in the list. No test may ever commit to a row it did not pick: a test that
-//    releases onto "whatever is highlighted" first seeds the MRU so the
-//    highlight is a fixture row, and the rest end on Escape / blur / logout.
+//    aliases of ONE tmux server, so every fixture pane is a row under each
+//    box. Rows are targeted by data-box + data-pane (the tmux pane id, the
+//    same on every alias), never by index/count.
+//  - The e2e Host Shell reads this host's REAL tmux, so Host Shell rows may be
+//    in the list. No test may ever commit to a row it did not pick, and none
+//    ever commits a Host Shell row (its window route would move the operator's
+//    own windows): a test that releases onto "whatever is highlighted" first
+//    seeds the MRU so the highlight is a fixture row, and the rest end on
+//    Escape / blur / logout.
 //  - The client's health series arrives at boot and then every 30 s (plus the
 //    /live nudges), so arrival is forced with reloads (rowsReady).
 //  - A pane made to look like Claude: `exec -a claude sleep` reads as `claude`
@@ -41,11 +45,18 @@ function writeMarker(name: string, state: string, epoch: number, cause: string) 
 const now = () => Math.floor(Date.now() / 1000);
 
 // `sleep 600` can run out over a long run; a test that finds a session gone
-// brings it back (its marker is still in place).
+// brings it back (its session-wide marker is still in place, and speaks for the
+// session's one agent pane). PA / PB are the two sessions' pane ids, read again
+// before every test because a recreated session hands out a new one.
+let PA = '';
+let PB = '';
+const paneIdOf = (s: string) => onBox(`tmux display-message -p -t '=${s}:' '#{pane_id}'`).trim();
 function ensureAgentSessions() {
   for (const [s, tag] of [[A, 'A'], [B, 'B']]) {
     onBox(`tmux has-session -t '=${s}' 2>/dev/null || tmux new-session -d -s '${s}' bash -c 'echo SWPREVIEW_${tag}; exec -a claude sleep 600'`);
   }
+  PA = paneIdOf(A);
+  PB = paneIdOf(B);
 }
 
 test.beforeAll(() => {
@@ -73,19 +84,21 @@ async function login(page: Page) {
   await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
 }
 
-const boxRow = (page: Page, label: string) =>
-  page.locator('.box', { has: page.locator('.name', { hasText: new RegExp(`^${label}$`) }) }).first();
+// A box's sidebar agent row for one pane: the switcher's rows are built from
+// the same series, so a row reading a state here is a switcher row too.
+const sidebarRow = (page: Page, boxId: string, pane: string) =>
+  page.locator(`li.box-agents[data-agents-for="${boxId}"] .box-agent[data-pane="${pane}"]`);
 
 // Reload until both alias boxes the tests hop between report both fixture
-// sessions: the switcher's rows are built from the same series as the badge.
+// panes in their state.
 async function rowsReady(page: Page) {
+  const ids = [await boxIdOf(page, 'localhost'), await boxIdOf(page, 'db-primary')];
   await expect(async () => {
     await page.reload();
     await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
-    for (const label of ['localhost', 'db-primary']) {
-      const badge = boxRow(page, label).locator('.badge[class*="badge-agent-"]');
-      await expect(badge).toHaveAttribute('title', new RegExp(`${A}: (working|blocked)`), { timeout: 4000 });
-      await expect(badge).toHaveAttribute('title', new RegExp(`${B}: blocked`), { timeout: 1000 });
+    for (const id of ids) {
+      await expect(sidebarRow(page, id, PA)).toHaveAttribute('data-state', /^(working|blocked)$/, { timeout: 4000 });
+      await expect(sidebarRow(page, id, PB)).toHaveAttribute('data-state', 'blocked', { timeout: 1000 });
     }
   }).toPass({ timeout: 45000 });
 }
@@ -140,29 +153,29 @@ const selected = (page: Page) => page.evaluate(() => {
   const rows = [...document.querySelectorAll('.agent-switcher-row')];
   const i = rows.findIndex((r) => r.getAttribute('aria-selected') === 'true');
   const r = rows[i];
-  return { index: i, count: rows.length, key: r ? `${r.getAttribute('data-box')}\n${r.getAttribute('data-session')}` : null };
+  return { index: i, count: rows.length, key: r ? `${r.getAttribute('data-box')}\n${r.getAttribute('data-pane')}` : null };
 });
 
 const holdMods = async (page: Page) => { await page.keyboard.down('Control'); await page.keyboard.down('Shift'); };
 const releaseMods = async (page: Page) => { await page.keyboard.up('Shift'); await page.keyboard.up('Control'); };
 
-// Hold the chord and tap K until the highlight is on (boxId, session), then
+// Hold the chord and tap K until the highlight is on (boxId, pane), then
 // release onto it. A miss cancels with Escape first, so a failing test never
 // lands on a row nobody picked.
-async function chordTo(page: Page, boxId: string, session: string) {
+async function chordTo(page: Page, boxId: string, pane: string) {
   await holdMods(page);
   let hit = false;
   try {
-    for (let i = 0; i < 12 && !hit; i++) {
+    for (let i = 0; i < 16 && !hit; i++) {
       await page.keyboard.press('KeyK');
-      hit = (await selected(page)).key === `${boxId}\n${session}`;
+      hit = (await selected(page)).key === `${boxId}\n${pane}`;
       if (!hit) await page.waitForTimeout(30);
     }
     if (!hit) await page.keyboard.press('Escape');
   } finally {
     await releaseMods(page);
   }
-  expect(hit, `no switcher row for ${boxId} / ${session}`).toBe(true);
+  expect(hit, `no switcher row for ${boxId} / ${pane}`).toBe(true);
 }
 
 // A quick tap: open and release before the 150 ms paint.
@@ -211,11 +224,11 @@ const clients = (session: string): number => {
   }
 };
 
-test('the chord opens, steps, and releases onto the highlighted session, replacing the focused pane', async ({ page }) => {
+test('the chord opens, steps, and releases onto the highlighted agent, replacing the focused pane', async ({ page }) => {
   await fresh(page);
   const db = await boxIdOf(page, 'db-primary');
   await dock(page, 'localhost');
-  await chordTo(page, db, A);
+  await chordTo(page, db, PA);
   await expect(page.locator('.stage-pane')).toHaveCount(1);
   const pane = page.locator('.stage-pane');
   await expect(pane.locator('.pane-title')).toHaveText('db-primary');
@@ -249,7 +262,7 @@ test('the pane it replaces is released: its socket closes and tmux drops the cli
     await expect.poll(() => frames.sockets.filter((s) => !s.closed && isOcc(s.url)).length).toBe(1);
     const occ = frames.sockets.find((s) => !s.closed && isOcc(s.url))!;
 
-    await chordTo(page, db, A);
+    await chordTo(page, db, PA);
     await expect(page.locator('.stage-pane .pane-title')).toHaveText('db-primary');
     await expect.poll(() => occ!.closed).toBe(true);
     // The grace window is 45 s; the release close drops the PTY at once.
@@ -265,14 +278,14 @@ test('a session already open in another pane just gets focus', async ({ page }) 
   const db = await boxIdOf(page, 'db-primary');
   const locPane = await dock(page, 'localhost');
   const dbPane = await dockBeside(page, 'db-primary');
-  await chordTo(page, db, A); // db-primary is focused: it switches in place
+  await chordTo(page, db, PA); // db-primary is focused: it switches in place
   await expectOnSession(dbPane, A);
   await expect(dbPane.locator('.xterm-rows')).toContainText('SWPREVIEW_A', { timeout: 15000 });
   await locPane.click();
   await expect(locPane).toHaveClass(/focused/);
   const sockets = frames.sockets.length;
 
-  await chordTo(page, db, A);
+  await chordTo(page, db, PA);
   await expect(dbPane).toHaveClass(/focused/);
   await expect(locPane).not.toHaveClass(/focused/);
   await expect(page.locator('.stage-pane')).toHaveCount(2);
@@ -285,7 +298,7 @@ test('same box, another session: the focused pane switches session in place', as
   await fresh(page);
   const loc = await boxIdOf(page, 'localhost');
   await dock(page, 'localhost');
-  await chordTo(page, loc, B);
+  await chordTo(page, loc, PB);
   await expect(page.locator('.stage-pane')).toHaveCount(1);
   const pane = paneOf(page, 'localhost');
   await expectOnSession(pane, B);
@@ -296,9 +309,9 @@ test('a quick tap flips to the previous session and back', async ({ page }) => {
   await fresh(page);
   const loc = await boxIdOf(page, 'localhost');
   const pane = await dock(page, 'localhost');
-  await chordTo(page, loc, A);
+  await chordTo(page, loc, PA);
   await expectOnSession(pane, A);
-  await chordTo(page, loc, B);
+  await chordTo(page, loc, PB);
   await expectOnSession(pane, B);
 
   await tap(page);
@@ -390,7 +403,7 @@ test('nothing docked: the session opens as the first pane', async ({ page }) => 
   await fresh(page);
   const loc = await boxIdOf(page, 'localhost');
   await expect(page.locator('.stage-pane')).toHaveCount(0);
-  await chordTo(page, loc, A);
+  await chordTo(page, loc, PA);
   await expect(page.locator('.stage-pane')).toHaveCount(1);
   const pane = paneOf(page, 'localhost');
   await expect(pane).toHaveCount(1);
@@ -404,7 +417,7 @@ test('a parked tab on another session is not reused under the new header', async
   await dock(page, 'localhost'); // on the configured session
   await page.click('#home'); // parks it, still connected
   await expect(page.locator('.stage-pane')).toHaveCount(0);
-  await chordTo(page, loc, A);
+  await chordTo(page, loc, PA);
   const pane = paneOf(page, 'localhost');
   await expect(pane).toHaveCount(1);
   await expectOnSession(pane, A);
@@ -420,10 +433,10 @@ test('no chord key reaches the PTY, and plain Ctrl+K still does', async ({ page 
   // Two panes on two agent sessions, so every release below lands on a pane
   // that is already open (a focus move, no new attach).
   const locPane = await dock(page, 'localhost');
-  await chordTo(page, loc, A);
+  await chordTo(page, loc, PA);
   await expect(locPane.locator('.xterm-rows')).toContainText('SWPREVIEW_A', { timeout: 15000 });
   const dbPane = await dockBeside(page, 'db-primary');
-  await chordTo(page, db, B);
+  await chordTo(page, db, PB);
   await expect(dbPane.locator('.xterm-rows')).toContainText('SWPREVIEW_B', { timeout: 15000 });
   await locPane.click();
   await expect(locPane).toHaveClass(/focused/);
@@ -555,7 +568,7 @@ test('clicking a row commits to it', async ({ page }) => {
   try {
     await page.keyboard.press('KeyK');
     await expect(page.locator('#agent-switcher')).toBeVisible();
-    await page.locator(`.agent-switcher-row[data-box="${db}"][data-session="${A}"]`).click();
+    await page.locator(`.agent-switcher-row[data-box="${db}"][data-pane="${PA}"]`).click();
     await expect(page.locator('#agent-switcher')).toHaveCount(0);
   } finally {
     await releaseMods(page);
@@ -582,12 +595,12 @@ test('a secondary click on a row commits to it (Ctrl+click on macOS)', async ({ 
   try {
     await page.keyboard.press('KeyK');
     await expect(page.locator('#agent-switcher')).toBeVisible();
-    expect((await selected(page)).key).not.toBe(`${db}\n${A}`);
+    expect((await selected(page)).key).not.toBe(`${db}\n${PA}`);
     // Anywhere else inside the overlay, the native menu is refused too.
     const notCancelled = await page.evaluate(() => document.querySelector('.agent-switcher-preview')!
       .dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })));
     expect(notCancelled).toBe(false);
-    await page.locator(`.agent-switcher-row[data-box="${db}"][data-session="${A}"]`).click({ button: 'right' });
+    await page.locator(`.agent-switcher-row[data-box="${db}"][data-pane="${PA}"]`).click({ button: 'right' });
     await expect(page.locator('#agent-switcher')).toHaveCount(0);
   } finally {
     await releaseMods(page);
@@ -609,9 +622,9 @@ test('a secondary click on a row commits to it (Ctrl+click on macOS)', async ({ 
 async function seedOnA(page: Page): Promise<Locator> {
   const loc = await boxIdOf(page, 'localhost');
   const pane = await dock(page, 'localhost');
-  await chordTo(page, loc, B);
+  await chordTo(page, loc, PB);
   await expectOnSession(pane, B);
-  await chordTo(page, loc, A);
+  await chordTo(page, loc, PA);
   await expectOnSession(pane, A);
   // The A socket is up (callers count sockets from here on).
   await expect(pane.locator('.xterm-rows')).toContainText('SWPREVIEW_A', { timeout: 15000 });
@@ -703,8 +716,8 @@ test('the order is frozen while open and a state change repaints the chip in pla
   test.setTimeout(90000);
   await fresh(page);
   const loc = await boxIdOf(page, 'localhost');
-  const keys = () => page.evaluate(() => [...document.querySelectorAll('.agent-switcher-row')].map((r) => `${r.getAttribute('data-box')}\n${r.getAttribute('data-session')}`));
-  const row = page.locator(`.agent-switcher-row[data-box="${loc}"][data-session="${A}"]`);
+  const keys = () => page.evaluate(() => [...document.querySelectorAll('.agent-switcher-row')].map((r) => `${r.getAttribute('data-box')}\n${r.getAttribute('data-pane')}`));
+  const row = page.locator(`.agent-switcher-row[data-box="${loc}"][data-pane="${PA}"]`);
   await holdMods(page);
   try {
     await page.keyboard.press('KeyK');
@@ -728,14 +741,14 @@ test('MRU survives a reload', async ({ page }) => {
   const loc = await boxIdOf(page, 'localhost');
   const db = await boxIdOf(page, 'db-primary');
   const locPane = await dock(page, 'localhost');
-  await chordTo(page, loc, A);
+  await chordTo(page, loc, PA);
   await expectOnSession(locPane, A);
-  await chordTo(page, db, B);
+  await chordTo(page, db, PB);
   const dbPane = paneOf(page, 'db-primary');
   await expectOnSession(dbPane, B);
 
   // Without the stored MRU the tap would land on a blocked sw-b row (the
-  // board's precedence), not on localhost's sw-a.
+  // board's precedence), not on localhost's sw-a pane.
   await rowsReady(page);
   await expectOnSession(dbPane, B);
   await tap(page);
@@ -789,9 +802,9 @@ test('held past 150 ms the overlay is visible; after a quick tap nothing is left
   const loc = await boxIdOf(page, 'localhost');
   const pane = await dock(page, 'localhost');
   // Seed the MRU so the tap below lands on a fixture row.
-  await chordTo(page, loc, B);
+  await chordTo(page, loc, PB);
   await expectOnSession(pane, B);
-  await chordTo(page, loc, A);
+  await chordTo(page, loc, PA);
   await expectOnSession(pane, A);
 
   await holdMods(page);
@@ -814,7 +827,7 @@ test('held past 150 ms the overlay is visible; after a quick tap nothing is left
 });
 
 // The preview (agentSwitcherPreview.ts scheduler, painted by agentSwitcher.ts):
-// the highlighted session's last screen lines as plain text, fetched only once
+// the highlighted pane's last screen lines as plain text, fetched only once
 // the highlight rests 250 ms, cached 5 s per open of the overlay.
 test.describe('preview', () => {
   const M = 'sw-m';
@@ -831,24 +844,24 @@ test.describe('preview', () => {
     page.on('request', (req) => { if (req.method() === 'POST' && req.url().includes('/agent-seen')) out.push(req.url()); });
     return out;
   }
-  // Box-route captures of one (box, session); unrelated requests are ignored.
-  const capturesOf = (reqs: string[], boxId: string, session: string) => reqs.filter((u) => {
+  // Box-route captures of one (box, pane); unrelated requests are ignored.
+  const capturesOf = (reqs: string[], boxId: string, pane: string) => reqs.filter((u) => {
     const url = new URL(u);
-    return url.pathname === `/api/boxes/${encodeURIComponent(boxId)}/pane` && url.searchParams.get('session') === session;
+    return url.pathname === `/api/boxes/${encodeURIComponent(boxId)}/pane` && url.searchParams.get('pane') === pane;
   });
 
   const body = (page: Page) => page.locator('#agent-switcher .agent-switcher-preview-body');
   const head = (page: Page) => page.locator('#agent-switcher .agent-switcher-preview-head');
 
-  // With the chord held: step until the highlight is on (boxId, session),
+  // With the chord held: step until the highlight is on (boxId, pane),
   // tapping fast enough (well under the 250 ms rest) that nothing in between
   // is fetched.
-  async function stepTo(page: Page, boxId: string, session: string) {
+  async function stepTo(page: Page, boxId: string, pane: string) {
     for (let i = 0; i < 24; i++) {
-      if ((await selected(page)).key === `${boxId}\n${session}`) return;
+      if ((await selected(page)).key === `${boxId}\n${pane}`) return;
       await page.keyboard.press('KeyK');
     }
-    expect((await selected(page)).key, `no switcher row for ${boxId} / ${session}`).toBe(`${boxId}\n${session}`);
+    expect((await selected(page)).key, `no switcher row for ${boxId} / ${pane}`).toBe(`${boxId}\n${pane}`);
   }
 
   test('tapping through rows fetches nothing; resting fetches once and shows the screen', async ({ page }) => {
@@ -862,31 +875,36 @@ test.describe('preview', () => {
         await page.waitForTimeout(60);
       }
       expect(reqs).toEqual([]);
-      await stepTo(page, loc, A);
+      await stepTo(page, loc, PA);
       await expect(body(page)).toContainText('SWPREVIEW_A', { timeout: 15000 });
       await expect(body(page)).toHaveAttribute('data-view', 'text');
       await expect(head(page)).toContainText('localhost');
+      // The row's name, as its sidebar row names it (`sw-a › 0:…`: the box's
+      // agents span several sessions).
+      await expect(head(page).locator('.agent-switcher-preview-session'))
+        .toHaveText((await sidebarRow(page, loc, PA).locator('.box-agent-name').textContent())!);
       await expect(head(page)).toContainText(A);
       await expect(head(page).locator('.agent-switcher-chip')).toHaveClass(/chip-agent-working/);
       await page.waitForTimeout(600); // a second request would have shown by now
-      expect(capturesOf(reqs, loc, A)).toHaveLength(1);
+      expect(capturesOf(reqs, loc, PA)).toHaveLength(1);
       await page.keyboard.press('Escape');
     } finally {
       await releaseMods(page);
     }
   });
 
-  test('the request names the session and 40 lines and never sizes anything', async ({ page }) => {
+  test('the request names the pane and 40 lines and never sizes anything', async ({ page }) => {
     const reqs = paneRequests(page);
     await fresh(page);
     const loc = await boxIdOf(page, 'localhost');
     await holdMods(page);
     try {
       await page.keyboard.press('KeyK');
-      await stepTo(page, loc, A);
-      await expect.poll(() => capturesOf(reqs, loc, A).length, { timeout: 5000 }).toBe(1);
-      const q = new URL(capturesOf(reqs, loc, A)[0]).searchParams;
-      expect(q.get('session')).toBe(A);
+      await stepTo(page, loc, PA);
+      await expect.poll(() => capturesOf(reqs, loc, PA).length, { timeout: 5000 }).toBe(1);
+      const q = new URL(capturesOf(reqs, loc, PA)[0]).searchParams;
+      expect(q.get('pane')).toBe(PA);
+      expect(q.has('session')).toBe(false);
       expect(q.get('lines')).toBe('40');
       expect(q.has('cols')).toBe(false);
       expect(q.has('rows')).toBe(false);
@@ -904,17 +922,17 @@ test.describe('preview', () => {
       onBox(`tmux kill-session -t '=${M}' 2>/dev/null; tmux new-session -d -s '${M}' 'bash ${scriptM}'`);
       await expect.poll(() => onBox(`tmux display-message -p -t '=${M}:' '#{pane_current_command}'`).trim()).toBe('claude');
       writeMarker(M, 'working', now() - 30, 'prompt');
+      const PM = paneIdOf(M);
       await login(page);
       const loc = await boxIdOf(page, 'localhost');
       await expect(async () => {
         await page.reload();
-        await expect(boxRow(page, 'localhost').locator('.badge[class*="badge-agent-"]'))
-          .toHaveAttribute('title', new RegExp(`${M}: working`), { timeout: 4000 });
+        await expect(sidebarRow(page, loc, PM)).toHaveAttribute('data-state', 'working', { timeout: 4000 });
       }).toPass({ timeout: 45000 });
       await holdMods(page);
       try {
         await page.keyboard.press('KeyK');
-        await stepTo(page, loc, M);
+        await stepTo(page, loc, PM);
         await expect(body(page)).toContainText('<b>bold</b> red', { timeout: 15000 });
         expect(await body(page).evaluate((el) => el.querySelector('b'))).toBeNull();
         expect(await body(page).evaluate((el) => el.textContent)).not.toContain('\x1b');
@@ -929,29 +947,29 @@ test.describe('preview', () => {
     }
   });
 
-  test('highlighting and previewing a done session never marks it seen', async ({ page }) => {
+  test('highlighting and previewing a done agent never marks it seen', async ({ page }) => {
     test.setTimeout(90000);
     const seen = seenPosts(page);
     const reqs = paneRequests(page);
-    const badgeReadsDone = async () => {
+    let loc = '';
+    const rowReadsDone = async () => {
       await expect(async () => {
         await page.reload();
-        await expect(boxRow(page, 'localhost').locator('.badge[class*="badge-agent-"]'))
-          .toHaveAttribute('title', new RegExp(`${A}: done`), { timeout: 4000 });
+        await expect(sidebarRow(page, loc, PA)).toHaveAttribute('data-state', 'done', { timeout: 4000 });
       }).toPass({ timeout: 45000 });
     };
     try {
       writeMarker(A, 'ready', now(), 'stop'); // ready/stop = done until seen
       await login(page);
-      const loc = await boxIdOf(page, 'localhost');
+      loc = await boxIdOf(page, 'localhost');
       await page.evaluate(() => localStorage.removeItem('tmuxifier.stageLayout'));
-      await badgeReadsDone();
+      await rowReadsDone();
       const pane = await dock(page, 'localhost'); // on the configured session, not sw-a
       await expectOnSession(pane, configured);
       await holdMods(page);
       try {
         await page.keyboard.press('KeyK');
-        await stepTo(page, loc, A);
+        await stepTo(page, loc, PA);
         await expect(body(page)).toContainText('SWPREVIEW_A', { timeout: 15000 });
         await expect(head(page).locator('.agent-switcher-chip')).toHaveClass(/chip-agent-done/);
         await page.waitForTimeout(1500);
@@ -959,12 +977,11 @@ test.describe('preview', () => {
       } finally {
         await releaseMods(page);
       }
-      expect(capturesOf(reqs, loc, A)).toHaveLength(1); // the preview did happen
+      expect(capturesOf(reqs, loc, PA)).toHaveLength(1); // the preview did happen
       await page.waitForTimeout(1000);
       expect(seen).toEqual([]);
-      await expect(boxRow(page, 'localhost').locator('.badge[class*="badge-agent-"]'))
-        .toHaveAttribute('title', new RegExp(`${A}: done`));
-      await badgeReadsDone(); // the server agrees: still done after a reload
+      await expect(sidebarRow(page, loc, PA)).toHaveAttribute('data-state', 'done');
+      await rowReadsDone(); // the server agrees: still done after a reload
       expect(seen).toEqual([]);
     } finally {
       writeMarker(A, 'working', now() - 60, 'prompt');
@@ -978,16 +995,16 @@ test.describe('preview', () => {
     await holdMods(page);
     try {
       await page.keyboard.press('KeyK');
-      await stepTo(page, loc, A);
+      await stepTo(page, loc, PA);
       await expect(body(page)).toContainText('SWPREVIEW_A', { timeout: 15000 });
-      await stepTo(page, loc, B);
+      await stepTo(page, loc, PB);
       await expect(body(page)).toContainText('SWPREVIEW_B', { timeout: 15000 });
-      await stepTo(page, loc, A);
+      await stepTo(page, loc, PA);
       await expect(body(page)).toContainText('SWPREVIEW_A', { timeout: 1000 });
       await page.waitForTimeout(600); // a refetch would have shown by now
-      expect(capturesOf(reqs, loc, A)).toHaveLength(1);
-      expect(capturesOf(reqs, loc, B)).toHaveLength(1);
-      expect([...capturesOf(reqs, loc, A), ...capturesOf(reqs, loc, B)]).toHaveLength(2);
+      expect(capturesOf(reqs, loc, PA)).toHaveLength(1);
+      expect(capturesOf(reqs, loc, PB)).toHaveLength(1);
+      expect([...capturesOf(reqs, loc, PA), ...capturesOf(reqs, loc, PB)]).toHaveLength(2);
       await page.keyboard.press('Escape');
     } finally {
       await releaseMods(page);
@@ -1002,7 +1019,7 @@ test.describe('preview', () => {
     await holdMods(page);
     try {
       await page.keyboard.press('KeyK');
-      await stepTo(page, db, A);
+      await stepTo(page, db, PA);
       await expect(body(page)).toHaveText('Preview unavailable', { timeout: 15000 });
       await expect(body(page)).toHaveAttribute('data-view', 'error');
     } finally {
@@ -1021,14 +1038,197 @@ test.describe('preview', () => {
     const loc = await boxIdOf(page, 'localhost');
     const pane = await dock(page, 'localhost');
     // Seed the MRU so the tap lands on a fixture row.
-    await chordTo(page, loc, B);
+    await chordTo(page, loc, PB);
     await expectOnSession(pane, B);
-    await chordTo(page, loc, A);
+    await chordTo(page, loc, PA);
     await expectOnSession(pane, A);
     reqs.length = 0;
     await tap(page);
     await expectOnSession(pane, B);
     await page.waitForTimeout(600); // past the 250 ms rest
     expect(reqs).toEqual([]);
+  });
+});
+
+// One row per agent PANE (spec 2026-11-26 §7.2): the shared fixture's session
+// (agentPaneBox.ts) holds window `api` (one fake claude, in front) and window
+// `front` (two, side by side, in the background); each pane echoes its own
+// tag. It is its own session, `sw-p`, so the configured session every other
+// test docks on is never rebuilt. The rows read only localhost's entries
+// (db-primary and untagged-worker list the same panes) and never a Host Shell
+// row.
+test.describe('agent panes', () => {
+  const P = 'sw-p';
+
+  async function panesFixture(page: Page, states: [one: string, twoA: string, twoB: string]) {
+    const layout = buildAgentPanes(P);
+    const t0 = now();
+    const marker = (pane: string, st: string) => {
+      const [state, cause] = st === 'done' ? ['ready', 'stop'] : st === 'blocked' ? ['blocked', 'permission'] : ['working', 'prompt'];
+      writePaneMarker(P, pane, state, t0, cause);
+    };
+    marker(layout.one.pane, states[0]);
+    marker(layout.twoA.pane, states[1]);
+    marker(layout.twoB.pane, states[2]);
+    const seenPosts: { pane: string; ts: number }[] = [];
+    const windowPosts: Record<string, unknown>[] = [];
+    page.on('request', (r) => {
+      if (r.method() !== 'POST') return;
+      if (/\/agent-seen$/.test(r.url())) seenPosts.push(r.postDataJSON());
+      if (/\/window$/.test(r.url())) windowPosts.push(r.postDataJSON());
+    });
+    let healthReads = 0;
+    page.on('response', (r) => { if (/\/api\/health\/series(\?|$)/.test(r.url())) healthReads++; });
+    const moreReads = async (n: number) => {
+      const target = healthReads + n;
+      await expect.poll(() => healthReads, { timeout: 35000 * n, intervals: [500] }).toBeGreaterThanOrEqual(target);
+    };
+    await fresh(page);
+    const loc = await boxIdOf(page, 'localhost');
+    await expect(async () => {
+      await page.reload();
+      await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
+      for (const [p, st] of [[layout.one.pane, states[0]], [layout.twoA.pane, states[1]], [layout.twoB.pane, states[2]]]) {
+        await expect(sidebarRow(page, loc, p)).toHaveAttribute('data-state', st, { timeout: 4000 });
+      }
+    }).toPass({ timeout: 45000 });
+    return { layout, t0, loc, seenPosts, windowPosts, moreReads };
+  }
+
+  const swRow = (page: Page, boxId: string, pane: string) =>
+    page.locator(`#agent-switcher .agent-switcher-row[data-box="${boxId}"][data-pane="${pane}"]`);
+  const body = (page: Page) => page.locator('#agent-switcher .agent-switcher-preview-body');
+  const inFront = () => onBox(`tmux display-message -p -t '=${P}:' '#{window_id} #{pane_id}'`).trim();
+
+  test('two panes of one window are two rows, each named as its sidebar row', async ({ page }) => {
+    test.setTimeout(120000);
+    let layout: AgentPaneLayout | null = null;
+    try {
+      const f = await panesFixture(page, ['working', 'blocked', 'done']);
+      layout = f.layout;
+      const { one, twoA, twoB } = f.layout;
+      await holdMods(page);
+      try {
+        await page.keyboard.press('KeyK');
+        await expect(page.locator('#agent-switcher')).toHaveCount(1);
+        for (const p of [one, twoA, twoB]) {
+          const row = swRow(page, f.loc, p.pane);
+          await expect(row).toHaveCount(1);
+          // The box's agents span several sessions (sw-a, sw-b, sw-p), so the
+          // name carries the session: `sw-p › 2:front.1`.
+          await expect(row.locator('.agent-switcher-session')).toHaveText(`${P} › ${p.name}`);
+          await expect(row.locator('.agent-switcher-session'))
+            .toHaveText((await sidebarRow(page, f.loc, p.pane).locator('.box-agent-name').textContent())!);
+          await expect(row).toHaveAttribute('data-session', P);
+        }
+        expect(twoA.name).toMatch(/^\d+:front\.\d+$/);
+        expect(twoB.name).toMatch(/^\d+:front\.\d+$/);
+        await expect(swRow(page, f.loc, twoA.pane).locator('.agent-switcher-chip')).toHaveText('blocked · permission');
+        await expect(swRow(page, f.loc, twoB.pane).locator('.agent-switcher-chip')).toHaveText('done');
+        await page.keyboard.press('Escape');
+      } finally {
+        await releaseMods(page);
+      }
+      await expect(page.locator('#agent-switcher')).toHaveCount(0);
+    } finally {
+      resetAgentPanes(layout, P);
+      try { onBox(`tmux kill-session -t '=${P}'`); } catch { /* gone */ }
+    }
+  });
+
+  test('the preview captures that one pane, and moves nothing on the box', async ({ page }) => {
+    test.setTimeout(120000);
+    let layout: AgentPaneLayout | null = null;
+    const reqs: string[] = [];
+    page.on('request', (req) => { if (/\/pane\?/.test(req.url())) reqs.push(req.url()); });
+    try {
+      const f = await panesFixture(page, ['working', 'working', 'working']);
+      layout = f.layout;
+      const { one, twoA, twoB } = f.layout;
+      const before = inFront();
+      expect(before).toBe(`${one.windowId} ${one.pane}`);
+      const stepTo = async (pane: string) => {
+        for (let i = 0; i < 24 && (await selected(page)).key !== `${f.loc}\n${pane}`; i++) await page.keyboard.press('KeyK');
+        expect((await selected(page)).key).toBe(`${f.loc}\n${pane}`);
+      };
+      await holdMods(page);
+      try {
+        await page.keyboard.press('KeyK');
+        await stepTo(twoA.pane);
+        await expect(body(page)).toContainText('AGENT_WINDOW_TWO_A', { timeout: 15000 });
+        await expect(body(page)).not.toContainText('AGENT_WINDOW_TWO_B');
+        await stepTo(twoB.pane);
+        await expect(body(page)).toContainText('AGENT_WINDOW_TWO_B', { timeout: 15000 });
+        await expect(body(page)).not.toContainText('AGENT_WINDOW_TWO_A');
+        await page.keyboard.press('Escape');
+      } finally {
+        await releaseMods(page);
+      }
+      const asked = reqs.map((u) => new URL(u)).filter((u) => u.pathname === `/api/boxes/${encodeURIComponent(f.loc)}/pane`);
+      expect(asked.filter((u) => u.searchParams.get('pane') === twoA.pane)).toHaveLength(1);
+      expect(asked.filter((u) => u.searchParams.get('pane') === twoB.pane)).toHaveLength(1);
+      // A capture never selects: tmux's focus in the session is where it was.
+      expect(inFront()).toBe(before);
+      expect(f.windowPosts).toEqual([]);
+    } finally {
+      resetAgentPanes(layout, P);
+      try { onBox(`tmux kill-session -t '=${P}'`); } catch { /* gone */ }
+    }
+  });
+
+  test('committing an agent in a background window switches to its session and selects its window and pane', async ({ page }) => {
+    test.setTimeout(120000);
+    let layout: AgentPaneLayout | null = null;
+    try {
+      const f = await panesFixture(page, ['working', 'working', 'blocked']);
+      layout = f.layout;
+      const { one, twoB } = f.layout;
+      const pane = await dock(page, 'localhost'); // the configured session
+      await chordTo(page, f.loc, twoB.pane); // same box: switches in place
+      await expect(page.locator('.stage-pane')).toHaveCount(1);
+      await expectOnSession(pane, P);
+      await expect.poll(() => f.windowPosts.length, { timeout: 10000 }).toBe(1);
+      expect(f.windowPosts[0]).toEqual({ session: P, windowId: twoB.windowId, paneId: twoB.pane });
+      await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_TWO_B', { timeout: 15000 });
+      await expect(pane.locator('.xterm-rows')).not.toContainText('AGENT_WINDOW_ONE');
+      expect(inFront()).toBe(`${twoB.windowId} ${twoB.pane}`);
+      expect(one.windowId).not.toBe(twoB.windowId);
+    } finally {
+      resetAgentPanes(layout, P);
+      try { onBox(`tmux kill-session -t '=${P}'`); } catch { /* gone */ }
+    }
+  });
+
+  // Spec 2026-11-26 §7.3 step 3, through the switcher: its commit docks the box
+  // (a repaint) while the series in hand still shows the window it is LEAVING
+  // in front; nothing of the box may be acknowledged until fresh data shows the
+  // target window there.
+  test('a switcher jump away from a done agent\'s window never acknowledges it', async ({ page }) => {
+    test.setTimeout(240000);
+    let layout: AgentPaneLayout | null = null;
+    try {
+      const f = await panesFixture(page, ['done', 'working', 'done']);
+      layout = f.layout;
+      const { one, twoB } = f.layout;
+      await expect(page.locator('.stage-pane')).toHaveCount(0); // not docked
+      await page.bringToFront();
+      expect(await page.evaluate(() => document.hasFocus())).toBe(true);
+
+      await chordTo(page, f.loc, twoB.pane); // nothing docked: opens as the first pane
+      await expect.poll(() => f.windowPosts.length, { timeout: 10000 }).toBe(1);
+      expect(f.windowPosts[0]).toEqual({ session: P, windowId: twoB.windowId, paneId: twoB.pane });
+      const pane = paneOf(page, 'localhost');
+      await expect(pane).toHaveCount(1);
+      await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_TWO_B', { timeout: 15000 });
+      await expect.poll(() => f.seenPosts.filter((p) => p.pane === twoB.pane).length, { timeout: 45000 }).toBe(1);
+      expect(f.seenPosts.filter((p) => p.pane === twoB.pane)).toEqual([{ pane: twoB.pane, ts: f.t0 }]);
+      await f.moreReads(1);
+      expect(f.seenPosts.filter((p) => p.pane === one.pane)).toEqual([]);
+      await expect(sidebarRow(page, f.loc, one.pane)).toHaveAttribute('data-state', 'done');
+      await expect(sidebarRow(page, f.loc, twoB.pane)).toHaveAttribute('data-state', 'idle', { timeout: 45000 });
+    } finally {
+      resetAgentPanes(layout, P);
+      try { onBox(`tmux kill-session -t '=${P}'`); } catch { /* gone */ }
+    }
   });
 });

@@ -7,7 +7,7 @@ import { test, expect, type Page, type Request } from '@playwright/test';
 //
 // The switcher is inert while any modal is open, so every "the chord opens it"
 // check closes Settings first. It needs no agent session to exist: with none it
-// still attaches #agent-switcher, reading "No other agent sessions". Every
+// still attaches #agent-switcher, reading "No other agents". Every
 // chord is ended with Escape BEFORE the modifiers are released, so a release can
 // never commit a row and move a pane.
 

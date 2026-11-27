@@ -1,5 +1,6 @@
-// The agent switcher's DOM half: a Cmd-Tab-style overlay over every agent session in the
-// fleet. Hold Ctrl+Shift and tap the combo key to step; release a modifier to commit.
+// The agent switcher's DOM half: a Cmd-Tab-style overlay over every agent pane in the
+// fleet (one row per pane, named as its sidebar row). Hold Ctrl+Shift and tap the combo
+// key to step; release a modifier to commit.
 // The pure pieces it runs are unit-tested: the held chord (agentSwitcherChord.ts), the
 // rows and their order (agentSwitcherList.ts), and what a commit does to the stage
 // (agentSwitcherCommit.ts, executed by main.ts through deps.commit).
@@ -25,9 +26,10 @@
 //  - Every string goes in through textContent. The preview is untrusted box output
 //    (agentSwitcherPreview.ts schedules it, ansiStrip.ts flattens it): plain text only.
 //  - One preview scheduler per open, disposed on unmount (commit, cancel, teardown), so
-//    no timer or request outlives the overlay. Nothing here acknowledges a session:
-//    highlighting or previewing a `done` row never marks it seen. Stepping and
-//    committing never wait on a preview.
+//    no timer or request outlives the overlay. Nothing here acknowledges an agent:
+//    highlighting or previewing a `done` row never marks it seen, and the preview
+//    captures its one pane without moving tmux's focus or sizing a viewer. Stepping
+//    and committing never wait on a preview.
 import { CHORD_IDLE, chordReduce, type ChordEffect, type ChordInput, type ChordState } from './agentSwitcherChord';
 import { initialIndex, stepIndex, type SwitcherRow } from './agentSwitcherList';
 import { createPreviewScheduler, type PreviewTarget } from './agentSwitcherPreview';
@@ -112,6 +114,9 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
 
   function paintRow(el: HTMLElement, r: SwitcherRow) {
     el.classList.toggle('gone', r.gone);
+    // The pane's place can move while the overlay is open (a moved pane keeps its id).
+    el.dataset.session = r.session;
+    (el.querySelector('.agent-switcher-session') as HTMLElement).textContent = r.name;
     const chip = el.querySelector('.agent-switcher-chip') as HTMLElement;
     chip.className = `agent-switcher-chip chip-agent-${r.state}`;
     chip.textContent = agentChipText(r.state, r.cause);
@@ -124,11 +129,11 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
     el.className = 'agent-switcher-row';
     el.setAttribute('role', 'option');
     el.dataset.box = r.boxId;
-    el.dataset.session = r.session;
+    el.dataset.pane = r.pane;
     el.append(
       span('agent-switcher-chip'),
       span('agent-switcher-box', r.label),
-      span('agent-switcher-session', r.session),
+      span('agent-switcher-session'),
       span('agent-switcher-kind'),
       span('agent-switcher-age'),
     );
@@ -143,7 +148,7 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
     return el;
   }
 
-  // The highlighted row, unless there is none or its session ended.
+  // The highlighted row, unless there is none or its pane's agent ended.
   function previewRow(): SwitcherRow | null {
     const r = index >= 0 ? latest[index] : undefined;
     return r && !r.gone ? r : null;
@@ -154,10 +159,10 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
   function syncPreview() {
     if (!preview) return;
     const r = previewRow();
-    const key = r ? `${r.boxId}\n${r.session}` : null;
+    const key = r ? r.key : null;
     if (key === previewKey) { paintPreview(); return; }
     previewKey = key;
-    preview.highlight(r ? { boxId: r.boxId, session: r.session } : null);
+    preview.highlight(r ? { boxId: r.boxId, pane: r.pane } : null);
   }
 
   function paintPreview() {
@@ -166,7 +171,7 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
     previewHead.hidden = !r;
     if (r) {
       (previewHead.querySelector('.agent-switcher-preview-box') as HTMLElement).textContent = r.label;
-      (previewHead.querySelector('.agent-switcher-preview-session') as HTMLElement).textContent = r.session;
+      (previewHead.querySelector('.agent-switcher-preview-session') as HTMLElement).textContent = r.name;
       const chip = previewHead.querySelector('.agent-switcher-chip') as HTMLElement;
       chip.className = `agent-switcher-chip chip-agent-${r.state}`;
       chip.textContent = agentChipText(r.state, r.cause);
@@ -203,10 +208,10 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
     const list = document.createElement('div');
     list.className = 'agent-switcher-list';
     list.setAttribute('role', 'listbox');
-    list.setAttribute('aria-label', 'Agent sessions');
+    list.setAttribute('aria-label', 'Agents');
     rowEls = frozen.map(buildRow);
     list.append(...rowEls);
-    if (index === -1) list.append(span('agent-switcher-empty', 'No other agent sessions'));
+    if (index === -1) list.append(span('agent-switcher-empty', 'No other agents'));
     const pane = document.createElement('div');
     pane.className = 'agent-switcher-preview';
     previewHead = document.createElement('div');

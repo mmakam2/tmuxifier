@@ -1,22 +1,33 @@
-// Pure list model for the agent switcher: one row per tmux session that has an
-// agent state, a most-recently-used order, and highlight stepping. No DOM; the
-// switcher UI consumes it.
-import type { AgentCause, AgentKind, AgentState, Sample } from './api';
-import { AGENT_PRECEDENCE, latestAgents } from './agentState';
+// Pure list model for the agent switcher: one row per tmux PANE that has an
+// agent state (spec 2026-11-26 §7.2), named as the sidebar names it
+// (agentState.ts agentRows), a most-recently-used order, and highlight stepping.
+// No DOM; the switcher UI consumes it.
+//
+// Rows and the MRU are keyed by box and pane id. A stored MRU from before holds
+// `box\nsession` keys: they never match a row and are left to age out, never
+// migrated. The Host Shell lists only the entries of its own session, `local`,
+// the rule agentJump.ts sidebarAgents keeps for the sidebar (restated here, not
+// imported: agentJump.ts imports this module). Pane maps are keyed by box
+// output, so they are read own-property only.
+import type { AgentCause, AgentEntry, AgentKind, AgentState, Sample } from './api';
+import { AGENT_PRECEDENCE, agentRows, latestAgents } from './agentState';
 
 export const LOCAL_BOX = '__local__';
 export const LOCAL_SESSION = 'local';
 export const MRU_STORAGE_KEY = 'tmuxifier.agentMru';
 export const MRU_CAP = 100;
 
-// A newline cannot occur in a box id or a session name, so keys never collide.
-export const rowKey = (boxId: string, session: string): string => `${boxId}\n${session}`;
+// A newline cannot occur in a box id or a pane id, so keys never collide.
+export const rowKey = (boxId: string, pane: string): string => `${boxId}\n${pane}`;
 
 export interface SwitcherRow {
   key: string;
   boxId: string;
   label: string;
+  pane: string;
   session: string;
+  windowId: string;
+  name: string;
   state: AgentState;
   cause?: AgentCause;
   agent?: AgentKind;
@@ -27,6 +38,27 @@ export interface SwitcherRow {
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const rank = (s: AgentState): number => AGENT_PRECEDENCE.indexOf(s);
+
+// The box's pane map as the switcher may list it: own entries only, and for the
+// Host Shell only those of the `local` session. Null-prototype.
+function listable(boxId: string, agents: Record<string, AgentEntry> | undefined): Record<string, AgentEntry> {
+  const out: Record<string, AgentEntry> = Object.create(null);
+  for (const [pane, e] of Object.entries(agents ?? {})) {
+    if (boxId === LOCAL_BOX && e?.session !== LOCAL_SESSION) continue;
+    out[pane] = e;
+  }
+  return out;
+}
+
+// The MRU key of the agent pane tmux has focused in `session` (the pane the
+// operator is looking at in a terminal on that session), or null when none of
+// the session's agent panes is focused.
+export function focusedAgentKey(boxId: string, agents: Record<string, AgentEntry> | undefined, session: string): string | null {
+  for (const [pane, e] of Object.entries(listable(boxId, agents))) {
+    if (e?.session === session && e.focused === true) return rowKey(boxId, pane);
+  }
+  return null;
+}
 
 export function switcherRows(i: {
   boxes: { id: string; label: string }[];
@@ -40,16 +72,14 @@ export function switcherRows(i: {
     const label = boxId === LOCAL_BOX ? 'Host Shell' : labels.get(boxId);
     if (label === undefined) continue;
     if (!samples.length || samples[samples.length - 1].up !== true) continue;
-    for (const [session, e] of Object.entries(latestAgents(samples))) {
-      if (!e?.state) continue;
-      if (boxId === LOCAL_BOX && session !== LOCAL_SESSION) continue;
+    for (const a of agentRows(listable(boxId, latestAgents(samples)))) {
       const row: SwitcherRow = {
-        key: rowKey(boxId, session), boxId, label, session, state: e.state, ts: e.ts ?? 0,
-        here: !!i.focused && i.focused.boxId === boxId && i.focused.session === session,
+        key: rowKey(boxId, a.pane), boxId, label, pane: a.pane, session: a.session, windowId: a.windowId,
+        name: a.name, state: a.state, agent: a.agent, ts: a.ts,
+        here: !!i.focused && i.focused.boxId === boxId && i.focused.session === a.session && a.focused,
         gone: false,
       };
-      if (e.cause) row.cause = e.cause;
-      if (e.agent) row.agent = e.agent;
+      if (a.cause) row.cause = a.cause;
       rows.push(row);
     }
   }
@@ -61,21 +91,32 @@ export function switcherRows(i: {
     const gb = group(b);
     if (ga !== gb) return ga - gb;
     if (ga === 1) return mruIndex.get(a.key)! - mruIndex.get(b.key)!;
-    return rank(a.state) - rank(b.state) || b.ts - a.ts || cmp(a.label, b.label) || cmp(a.session, b.session);
+    return rank(a.state) - rank(b.state) || b.ts - a.ts || cmp(a.label, b.label) || cmp(a.name, b.name) || cmp(a.pane, b.pane);
   });
   return rows;
 }
 
-// Same order and length as `frozen`; values refresh from the newest samples.
+// Same order and length as `frozen`; values refresh from the newest samples,
+// the pane's place (session, window, name) included: a pane id outlives a move.
+// A row whose pane left the map, or has no state any more, is `gone` and keeps
+// its last values.
 export function liveRows(frozen: SwitcherRow[], series: Record<string, Sample[]>): SwitcherRow[] {
+  const byBox = new Map<string, Map<string, ReturnType<typeof agentRows>[number]>>();
+  const rowsOf = (boxId: string) => {
+    let m = byBox.get(boxId);
+    if (!m) {
+      const samples = Object.hasOwn(series, boxId) ? series[boxId] : undefined;
+      m = new Map(agentRows(listable(boxId, latestAgents(samples))).map((a) => [a.pane, a]));
+      byBox.set(boxId, m);
+    }
+    return m;
+  };
   return frozen.map((r) => {
-    const e = latestAgents(series[r.boxId])[r.session];
-    if (!e?.state) return { ...r, gone: true };
-    const next: SwitcherRow = { ...r, state: e.state, ts: e.ts ?? 0, gone: false };
+    const a = rowsOf(r.boxId).get(r.pane);
+    if (!a) return { ...r, gone: true };
+    const next: SwitcherRow = { ...r, session: a.session, windowId: a.windowId, name: a.name, state: a.state, agent: a.agent, ts: a.ts, gone: false };
     delete next.cause;
-    delete next.agent;
-    if (e.cause) next.cause = e.cause;
-    if (e.agent) next.agent = e.agent;
+    if (a.cause) next.cause = a.cause;
     return next;
   });
 }

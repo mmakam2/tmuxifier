@@ -1,14 +1,8 @@
 import { test, expect } from 'vitest';
-import { AGENT_LABEL, worstAgent, agentChipText, agentCounts, agentCards, fmtAge, latestAgents, agentRows, worstOf, sessionAgents, windowAgents, visibleDone, eventPlace } from '../src/web/agentState.ts';
+import { AGENT_LABEL, agentChipText, agentCounts, agentCards, fmtAge, latestAgents, agentRows, worstOf, sessionAgents, windowAgents, visibleDone, eventPlace } from '../src/web/agentState.ts';
 
 const S = (agents) => [{ t: 1, up: true, agents }];
 const e = (over) => ({ session: 'main', windowId: '@1', windowIndex: 2, windowName: 'frontend', paneIndex: 1, agent: 'claude', state: 'working', ts: 10, visible: true, focused: false, attached: true, ...over });
-test('worstAgent folds by precedence and counts stateful sessions', () => {
-  const w = worstAgent({ web: { present: true, attached: false, state: 'done', ts: 1 }, 'web-2': { present: true, attached: false, state: 'blocked', cause: 'permission', ts: 2 }, nomark: { present: true, attached: false } });
-  expect(w).toEqual({ state: 'blocked', count: 2, sessions: [{ session: 'web-2', state: 'blocked', cause: 'permission' }, { session: 'web', state: 'done' }] });
-  expect(worstAgent({ nomark: { present: true, attached: false } })).toBeNull();
-  expect(worstAgent(undefined)).toBeNull();
-});
 test('agentChipText spells blocked with its cause', () => {
   expect(agentChipText('blocked', 'permission')).toBe('blocked · permission');
   expect(agentChipText('blocked')).toBe('blocked');

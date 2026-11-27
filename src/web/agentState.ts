@@ -31,27 +31,6 @@ export function latestAgents(samples: Sample[] | undefined): Record<string, Agen
   return last?.agents ?? {};
 }
 
-export interface WorstAgent {
-  state: AgentState;
-  count: number;
-  sessions: { session: string; state: AgentState; cause?: AgentCause }[];
-}
-
-// Legacy, keyed by session: every caller still folds the old shape and moves to
-// `worstOf` over a pane-keyed map, after which this and its tests are deleted.
-// Fold a box's sessions to its worst state. Sessions without a state (a claude
-// pane with no hook marker) do not count; null when none has one.
-export function worstAgent(agents: Record<string, AgentEntry> | undefined): WorstAgent | null {
-  const sessions: WorstAgent['sessions'] = [];
-  for (const [session, e] of Object.entries(agents ?? {})) {
-    if (!e?.state) continue;
-    sessions.push(e.cause ? { session, state: e.state, cause: e.cause } : { session, state: e.state });
-  }
-  if (!sessions.length) return null;
-  sessions.sort((a, b) => rank(a.state) - rank(b.state) || (a.session < b.session ? -1 : a.session > b.session ? 1 : 0));
-  return { state: sessions[0].state, count: sessions.length, sessions };
-}
-
 export function agentChipText(state: AgentState, cause?: AgentCause): string {
   return state === 'blocked' && cause ? `blocked · ${cause}` : state;
 }
