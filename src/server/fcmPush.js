@@ -35,14 +35,47 @@ export function buildServiceJwt({ clientEmail, privateKeyPem, tokenUri, nowSec }
   return `${input}.${sig}`;
 }
 
+// Where the agent is: `<session> › <window>` (U+203A; the window is `<index>:<name>`), plus
+// `.<paneIndex>` when the event carries one (only when that window held more than one agent). An
+// older log entry has no window and names the session alone; with no session there is no place.
+function placeOf(event) {
+  if (!event.session) return '';
+  let place = ` in ${event.session}`;
+  if (event.window) {
+    place += ` \u203A ${event.window}`;
+    if (Number.isInteger(event.paneIndex)) place += `.${event.paneIndex}`;
+  }
+  return place;
+}
+
 function pushBody(event) {
-  const where = event.session ? ` in ${event.session}` : '';
+  const where = placeOf(event);
   if (event.kind === 'agent-blocked') {
     const cause = String(event.cause || 'permission');
     return `${cause.charAt(0).toUpperCase()}${cause.slice(1)} prompt${where}`;
   }
   if (event.kind === 'agent-input') return `${agentLabel(event)} wants your input${where}.`;
   return `${agentLabel(event)} exited${where}.`;
+}
+
+// The payload the Android app jumps with: the box and kind, and where in it (session, pane, window)
+// when the event knows. FCM data values must all be strings.
+function dataOf(event) {
+  return {
+    boxId: String(event.boxId),
+    kind: String(event.kind),
+    ...(event.session ? { session: String(event.session) } : {}),
+    ...(event.pane ? { pane: String(event.pane) } : {}),
+    ...(event.windowId ? { windowId: String(event.windowId) } : {}),
+  };
+}
+
+// Android posts a notification that arrives while the app is in the background itself, so the
+// per-pane replacement key (a later push for the same pane replaces the earlier one) has to be
+// set here, not by the app. An event with no pane has no such key.
+function androidOf(event) {
+  if (!event.pane) return { priority: 'HIGH' };
+  return { priority: 'HIGH', notification: { tag: `${event.boxId}:${event.pane}` } };
 }
 
 export function buildFcmMessage({ projectId, fcmToken, event }) {
@@ -55,8 +88,8 @@ export function buildFcmMessage({ projectId, fcmToken, event }) {
           title: `${event.label} — ${titleOf(event)}`,
           body: pushBody(event),
         },
-        data: { boxId: String(event.boxId), kind: String(event.kind), ...(event.session ? { session: String(event.session) } : {}) },
-        android: { priority: 'HIGH' },
+        data: dataOf(event),
+        android: androidOf(event),
       },
     },
   };

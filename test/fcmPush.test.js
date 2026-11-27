@@ -1,4 +1,4 @@
-import { test, expect } from 'vitest';
+import { test, expect, describe } from 'vitest';
 import { generateKeyPairSync, createVerify } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -101,4 +101,60 @@ test('buildFcmMessage: titles and bodies name the agent', () => {
   expect(m({ kind: 'agent-done', session: 'w', agent: 'agy' }).body).toBe('Antigravity exited in w.');
   expect(m({ kind: 'agent-input', session: 'web-2' })).toEqual({ title: 'workbox — Claude is waiting', body: 'Claude wants your input in web-2.' });
   expect(m({ kind: 'agent-done', session: 'web-2', agent: 'opencode' }).body).toBe('OpenCode exited in web-2.');
+});
+
+// A pane event names the pane's place (`session › window`, plus `.paneIndex` when its window held
+// more than one agent) and carries what the Android app needs to jump to it.
+describe('buildFcmMessage: pane events', () => {
+  const base = { boxId: 'b1', label: 'web01', kind: 'agent-blocked', cause: 'permission', agent: 'claude', t: 5 };
+  const pane = { session: 'main', pane: '%12', windowId: '@3', window: '2:frontend', paneIndex: 1 };
+  const message = (event) => buildFcmMessage({ projectId: 'p', fcmToken: 't', event }).body.message;
+
+  test('names the pane and carries the jump payload and the per-pane replacement tag', () => {
+    const m = message({ ...base, ...pane });
+    expect(m.notification.body).toBe('Permission prompt in main › 2:frontend.1');
+    expect(m.data).toEqual({ boxId: 'b1', kind: 'agent-blocked', session: 'main', pane: '%12', windowId: '@3' });
+    // Android posts a background notification itself, so the per-pane replacement key must come from here.
+    expect(m.android).toEqual({ priority: 'HIGH', notification: { tag: 'b1:%12' } });
+  });
+
+  test('an event with no pane (older log entry, non-agent kind) keeps android as { priority } alone', () => {
+    const m = message({ ...base, session: 'main' });
+    expect(m.android).toEqual({ priority: 'HIGH' });
+    expect(m.data).toEqual({ boxId: 'b1', kind: 'agent-blocked', session: 'main' });
+    expect(message({ boxId: 'b1', label: 'web01', kind: 'down', t: 5 }).android).toEqual({ priority: 'HIGH' });
+  });
+
+  test('without paneIndex the place is the window alone', () => {
+    const { paneIndex, ...alone } = pane;
+    expect(message({ ...base, ...alone }).notification.body).toBe('Permission prompt in main › 2:frontend');
+  });
+
+  test('paneIndex 0 is a pane index, not an absent one', () => {
+    expect(message({ ...base, ...pane, paneIndex: 0 }).notification.body).toBe('Permission prompt in main › 2:frontend.0');
+  });
+
+  test('an event with no window (older log entry) names the session only', () => {
+    const { window, paneIndex, ...noWindow } = pane;
+    expect(message({ ...base, ...noWindow }).notification.body).toBe('Permission prompt in main');
+    expect(message({ ...base, session: 'main' }).notification.body).toBe('Permission prompt in main');
+  });
+
+  test('an event with no session names no place at all', () => {
+    expect(message({ ...base, cause: 'question' }).notification.body).toBe('Question prompt');
+    expect(message({ ...base, kind: 'agent-input' }).notification.body).toBe('Claude wants your input.');
+    expect(message({ ...base, kind: 'agent-done' }).notification.body).toBe('Claude exited.');
+  });
+
+  test('agent-input and agent-done name the pane too', () => {
+    expect(message({ ...base, ...pane, kind: 'agent-input' }).notification.body).toBe('Claude wants your input in main › 2:frontend.1.');
+    expect(message({ ...base, ...pane, kind: 'agent-done' }).notification.body).toBe('Claude exited in main › 2:frontend.1.');
+    expect(message({ ...base, ...pane, kind: 'agent-input', agent: 'opencode' }).notification.body).toBe('OpenCode wants your input in main › 2:frontend.1.');
+  });
+
+  test('every data value is a string (FCM refuses anything else)', () => {
+    const m = message({ ...base, ...pane, boxId: 7 });
+    expect(Object.values(m.data).every((v) => typeof v === 'string')).toBe(true);
+    expect(m.android.notification.tag).toBe('7:%12');
+  });
 });
