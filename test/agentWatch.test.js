@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   buildWatchScript, WATCH_REMOTE, createAgentWatch, createLocalMarkWatch,
 } from '../src/server/agentWatch.js';
+import { makeStubTmux } from './helpers/stubTmux.js';
 
 // The watch script is exercised for real under /bin/sh against a temp HOME —
 // the same text the server sends as the ssh remote command. Only the manager's
@@ -23,10 +24,16 @@ function tempHome() {
   return home;
 }
 
-// Run the real script; collect its stdout lines as they arrive.
-function runScript(home, opts) {
+// Run the real script; collect its stdout lines as they arrive. The script asks
+// tmux which window is in front, so the default environment gives it a private
+// TMUX_TMPDIR with no server in it: a run must never reach the operator's own
+// tmux server, and a live server's window switches would otherwise add `c`
+// lines to every count below. `extraEnv` replaces any of that (a stub `tmux`
+// first on PATH, a PATH with no tmux at all).
+function runScript(home, opts, extraEnv = {}) {
   const child = spawn('/bin/sh', ['-c', buildWatchScript(opts)], {
-    env: { HOME: home, PATH: process.env.PATH }, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { HOME: home, PATH: process.env.PATH, TMUX_TMPDIR: path.join(home, '.no-tmux-here'), ...extraEnv },
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
   const lines = [];
   let buf = '';
@@ -36,8 +43,35 @@ function runScript(home, opts) {
     buf = parts.pop();
     lines.push(...parts);
   });
+  let stderr = '';
+  child.stderr.on('data', (d) => { stderr += d.toString(); });
   cleanups.push(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } });
-  return { child, lines };
+  return { child, lines, stderr: () => stderr };
+}
+
+// A stub `tmux` first on PATH whose `list-panes` prints whatever `setPanes` last
+// wrote. The swap is a rename, so the loop never reads a half-written listing.
+function stubbedTmux(panes = '') {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-watch-stub-'));
+  cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const stub = makeStubTmux(dir, { panes: [panes] });
+  const setPanes = (text) => {
+    fs.writeFileSync(`${stub.panesFile}.new`, text);
+    fs.renameSync(`${stub.panesFile}.new`, stub.panesFile);
+  };
+  const calls = () => fs.readFileSync(stub.logFile, 'utf8').split('\n').filter(Boolean);
+  return { env: { PATH: `${dir}:${process.env.PATH}`, ...stub.env }, setPanes, calls };
+}
+
+// A PATH holding `head` and `sleep` and nothing else: no tmux anywhere.
+function pathWithoutTmux() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-watch-bare-'));
+  cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+  for (const tool of ['head', 'sleep']) {
+    const found = execFileSync('/bin/sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).trim();
+    fs.symlinkSync(found, path.join(dir, tool));
+  }
+  return dir;
 }
 
 const until = async (fn, ms = 6000) => {
@@ -114,6 +148,119 @@ test('the script text carries no single quote, so it survives the remote wrapper
   expect(() => buildWatchScript({ tickSec: '1; rm -rf /' })).toThrow();
   expect(() => buildWatchScript({ beatTicks: 0 })).toThrow();
 });
+
+// --- which window is in front --------------------------------------------
+//
+// Switching windows with tmux keys writes no marker, yet it changes which agent
+// panes are on screen. The loop adds one `tmux list-panes` signature to what it
+// compares, and the stream still says nothing but `c` and `h`.
+
+const LIST_PANES = 'tmux list-panes -a -F "#{pane_id}#{window_active}#{pane_active}#{window_zoomed_flag}"';
+const LIST_PANES_ARGV = 'list-panes -a -F #{pane_id}#{window_active}#{pane_active}#{window_zoomed_flag}';
+// %1 is the active pane of the window in front; %2 is in a window behind it.
+const FRONT_A = '%1110\n%2010\n';
+const FRONT_B = '%1010\n%2110\n';
+const quiet = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('the script asks tmux for one pane signature per tick, guarded, and still has no single quote', () => {
+  const script = buildWatchScript();
+  expect(script).toContain(LIST_PANES);
+  expect(script.split('list-panes')).toHaveLength(2);
+  expect(script).toContain('command -v tmux');
+  expect(script).not.toContain("'");
+  expect(WATCH_REMOTE).toBe(`exec sh -c '${script}'`);
+});
+
+test('a change in which window or pane is in front prints one more c, with no marker touched', async () => {
+  const home = tempHome();
+  const dir = path.join(home, '.tmuxifier-agent');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'main'), 'main:working:100:prompt\n');
+  const tmux = stubbedTmux(FRONT_A);
+  const { lines, stderr } = runScript(home, { beatTicks: 2 }, tmux.env);
+  expect(await until(() => count(lines, 'c') === 1)).toBe(true);
+  // The same listing every tick is not a change.
+  await quiet(2300);
+  expect(count(lines, 'c')).toBe(1);
+  // The operator switches windows: the markers are untouched, the listing is not.
+  tmux.setPanes(FRONT_B);
+  expect(await until(() => count(lines, 'c') === 2)).toBe(true);
+  await quiet(2300);
+  expect(count(lines, 'c')).toBe(2);        // one change, one line: it is not repeated every tick
+  // Focusing another pane of the window, zooming one, and a pane appearing are changes too.
+  tmux.setPanes('%1010\n%2100\n');
+  expect(await until(() => count(lines, 'c') === 3)).toBe(true);
+  tmux.setPanes('%1010\n%2101\n');
+  expect(await until(() => count(lines, 'c') === 4)).toBe(true);
+  tmux.setPanes('%1010\n%2101\n%3010\n');
+  expect(await until(() => count(lines, 'c') === 5)).toBe(true);
+  // A marker still counts, whatever tmux says.
+  fs.writeFileSync(path.join(dir, 'main'), 'main:blocked:101:permission\n');
+  expect(await until(() => count(lines, 'c') === 6)).toBe(true);
+  // Still only the two words, and nothing on stderr; tmux was asked exactly one thing per tick.
+  expect(lines.every((l) => l === 'c' || l === 'h')).toBe(true);
+  expect(count(lines, 'h')).toBeGreaterThan(0);
+  expect(stderr()).toBe('');
+  const calls = tmux.calls();
+  expect(calls.length).toBeGreaterThanOrEqual(6);
+  expect(new Set(calls)).toEqual(new Set([LIST_PANES_ARGV]));
+}, 40000);
+
+test('a marker and a tmux line can never be mistaken for one another', async () => {
+  // The two halves of the signature are compared apart. Joined without a
+  // boundary, "x1" + "" and "x" + "1" would be the same text and the second
+  // state would go unreported.
+  const home = tempHome();
+  const dir = path.join(home, '.tmuxifier-agent');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'main'), 'x1');
+  const tmux = stubbedTmux('');
+  const { lines } = runScript(home, { beatTicks: 1000 }, tmux.env);
+  expect(await until(() => count(lines, 'c') === 1)).toBe(true);
+  fs.writeFileSync(path.join(dir, 'main'), 'x');
+  tmux.setPanes('1');
+  expect(await until(() => count(lines, 'c') >= 2)).toBe(true);
+  // A marker whose content is a tmux line does not mask the line's change either.
+  fs.writeFileSync(path.join(dir, 'main'), '%1110');
+  expect(await until(() => count(lines, 'c') >= 3)).toBe(true);
+  const before = count(lines, 'c');
+  tmux.setPanes('%1110');
+  expect(await until(() => count(lines, 'c') > before)).toBe(true);
+}, 30000);
+
+test('with no tmux on PATH the loop behaves exactly as before', async () => {
+  const home = tempHome();
+  const dir = path.join(home, '.tmuxifier-agent');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'main'), 'main:working:100:prompt\n');
+  const { lines, stderr } = runScript(home, { beatTicks: 2 }, { PATH: pathWithoutTmux() });
+  expect(await until(() => count(lines, 'c') === 1)).toBe(true);
+  await quiet(2300);
+  expect(count(lines, 'c')).toBe(1);
+  fs.writeFileSync(path.join(dir, 'main'), 'main:blocked:101:permission\n');
+  expect(await until(() => count(lines, 'c') === 2)).toBe(true);
+  expect(await until(() => count(lines, 'h') >= 1)).toBe(true);
+  expect(lines.every((l) => l === 'c' || l === 'h')).toBe(true);
+  expect(stderr()).toBe('');
+}, 30000);
+
+test('a tmux with no server, or one that fails, changes nothing and never ends the loop', async () => {
+  const home = tempHome();
+  const dir = path.join(home, '.tmuxifier-agent');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'main'), 'main:working:100:prompt\n');
+  const tmux = stubbedTmux(FRONT_A);
+  const { child, lines, stderr } = runScript(home, { beatTicks: 1 }, { ...tmux.env, STUB_TMUX_NOSERVER: '1' });
+  expect(await until(() => count(lines, 'c') === 1)).toBe(true);
+  expect(await until(() => count(lines, 'h') >= 3)).toBe(true);
+  expect(count(lines, 'c')).toBe(1);        // "no server running" is the empty signature, every tick
+  expect(tmux.calls().length).toBeGreaterThanOrEqual(2);
+  expect(child.exitCode).toBe(null);        // still resident
+  fs.writeFileSync(path.join(dir, 'main'), 'main:blocked:101:permission\n');
+  expect(await until(() => count(lines, 'c') === 2)).toBe(true);
+  expect(lines.every((l) => l === 'c' || l === 'h')).toBe(true);
+  expect(stderr()).toBe('');                // tmux's complaint went nowhere
+}, 30000);
 
 // --- the manager ---------------------------------------------------------
 

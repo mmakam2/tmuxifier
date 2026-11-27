@@ -81,7 +81,7 @@ async function harness() {
     try { await sshRun(['-F', lb.sshConfigFile, '-o', `ControlPath=${path.join(controlDir, '%C')}`, '-O', 'exit', lb.box.host], { env: lb.env }); } catch { /* no master */ }
     await lb.cleanup();
   };
-  return { lb, box, pane, history, published, poller, watch, writeMark };
+  return { lb, box, pane, history, published, poller, watch, writeMark, remote };
 }
 
 test('a marker change on the box reaches the history in about a second, with no sweep in between', async () => {
@@ -125,4 +125,39 @@ test('exactly one loop runs on the box, and it exits once the stream is dropped'
   // hangup; it must end by itself at its next beat rather than stay resident.
   watch.stopAll();
   expect(await until(() => boxLoops(lb.home).length === 0, 30000)).toBe(true);
+}, 60000);
+
+test('a window switch with tmux keys, with no marker touched, reaches the history without a sweep', async () => {
+  const { lb, pane: paneA, history, published, poller, remote } = await harness();
+  const winA = (await remote(`tmux display-message -p -t '${paneA}' '#{window_id}'`)).stdout.trim();
+  expect(winA).toMatch(/^@\d+$/);
+  // A second agent pane in a window behind the first (-d keeps the first in front).
+  const made = await remote(`tmux new-window -d -t '=${lb.session}:' -P -F '#{window_id} #{pane_id}' bash -c 'exec -a claude sleep 600'`);
+  expect(made.code).toBe(0);
+  const [winB, paneB] = made.stdout.trim().split(' ');
+  expect(winB).toMatch(/^@\d+$/);
+  expect(paneB).toMatch(/^%\d+$/);
+  expect(winB).not.toBe(winA);
+
+  await poller.pollOnce();                       // the one and only sweep
+  const latest = () => history.getSeries('b1').at(-1).agents;
+  expect(latest()[paneA]).toMatchObject({ session: lb.session, agent: 'claude', visible: true });
+  expect(latest()[paneB]).toMatchObject({ session: lb.session, windowId: winB, agent: 'claude', visible: false });
+  // The stream reports once at start; let that settle so the next edge is ours.
+  expect(await until(() => published.length >= 1, 8000)).toBe(true);
+  const base = published.length;
+
+  // The operator presses prefix-n. tmux writes no marker for that, and nothing
+  // here does either: only the window in front changes.
+  const switched = await remote(`tmux select-window -t '=${lb.session}:${winB}'`);
+  expect(switched.code).toBe(0);
+  expect(await until(() => latest()[paneB].visible === true && latest()[paneA].visible === false, 8000)).toBe(true);
+  expect(published.length).toBeGreaterThan(base);
+  expect(history.getSeries('b1')).toHaveLength(1); // still the sweep's single sample
+
+  // And back again, the same way.
+  const back = await remote(`tmux select-window -t '=${lb.session}:${winA}'`);
+  expect(back.code).toBe(0);
+  expect(await until(() => latest()[paneA].visible === true && latest()[paneB].visible === false, 8000)).toBe(true);
+  expect(history.getSeries('b1')).toHaveLength(1);
 }, 60000);

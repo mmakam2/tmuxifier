@@ -37,7 +37,7 @@ const BEAT_MAX = 100000;
 
 // The loop, as POSIX sh. It runs under `sh`, not the login shell: an unmatched
 // glob is an error in zsh, and zsh does not word-split. Per tick it forks at
-// most `head` and `sleep`.
+// most `head`, `tmux` and `sleep`.
 //   - Only regular files directly in the marker directory are read, each capped
 //     at 200 bytes: the same files and the same cap as the probe's AGENT_PROBE.
 //     `[ -f ]` is load-bearing — reading a FIFO would block the loop forever,
@@ -46,6 +46,23 @@ const BEAT_MAX = 100000;
 //   - The signature is the marker CONTENT, so a rewrite with identical text is
 //     not a change, and busy tokens / block owners (subdirectories) are not
 //     watched: neither can alter the displayed state.
+//   - It also compares which window and pane are in front: one `tmux list-panes
+//     -a` per tick, a line per pane of its id, its window's active flag, its
+//     own active flag and its window's zoom flag. Which agent panes are on
+//     screen decides whether a finished turn reads as seen and whether a push
+//     is silenced, and switching windows with tmux keys writes no marker, so
+//     without this the change would wait for the next sweep. The listing is a
+//     second value, kept apart from the markers (`pan`/`lastp`) and compared
+//     on its own, so neither can stand in for the other: a marker whose text
+//     happens to be a tmux line does not mask a change. The call is guarded by
+//     `command -v tmux` and every error is silenced: no tmux, no server (tmux
+//     lists panes of a server that exists, it never starts one) or a failing
+//     call is the empty listing, exactly the loop as it was, and never ends it.
+//     Only the listing's text is compared; nothing of it is printed. Known
+//     limit: the call has no timeout of its own (`timeout` is not POSIX), so a
+//     tmux server that is stopped answers nothing and holds the loop, which
+//     then sends no beat; the server drops the stream as hung after `staleMs`,
+//     and the held loop ends only when the call returns and a write fails.
 //   - It reports once at start, so whatever changed while no stream was up is
 //     picked up the moment one is.
 //   - It beats every `beatTicks` ticks. The beat is what ends an orphan: with no
@@ -56,11 +73,12 @@ export function buildWatchScript({ tickSec = 1, beatTicks = 20 } = {}) {
   if (!Number.isInteger(tickSec) || tickSec < 1 || tickSec > TICK_MAX) throw new Error('invalid tickSec');
   if (!Number.isInteger(beatTicks) || beatTicks < 1 || beatTicks > BEAT_MAX) throw new Error('invalid beatTicks');
   return [
-    'd="$HOME/.tmuxifier-agent"; first=1; last=; n=0;',
+    'd="$HOME/.tmuxifier-agent"; first=1; last=; lastp=; n=0;',
     'while :; do',
     'set --; for f in "$d"/*; do [ -f "$f" ] && set -- "$@" "$f"; done;',
     'cur=; if [ "$#" -gt 0 ]; then cur=$(head -c 200 "$@" 2>/dev/null); fi;',
-    'if [ "$first" = 1 ] || [ "$cur" != "$last" ]; then first=0; last=$cur; n=0; echo c || exit 0; fi;',
+    'pan=; if command -v tmux >/dev/null 2>&1; then pan=$(tmux list-panes -a -F "#{pane_id}#{window_active}#{pane_active}#{window_zoomed_flag}" 2>/dev/null); fi;',
+    'if [ "$first" = 1 ] || [ "$cur" != "$last" ] || [ "$pan" != "$lastp" ]; then first=0; last=$cur; lastp=$pan; n=0; echo c || exit 0; fi;',
     `n=$((n+1)); if [ "$n" -ge ${beatTicks} ]; then n=0; echo h || exit 0; fi;`,
     `sleep ${tickSec} || exit 0;`,
     'done',
