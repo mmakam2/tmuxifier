@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createLocalAgentSampler, readAgentMarks, readMarks, LOCAL_BOX_ID } from '../src/server/localAgent.js';
 import { sampleOf } from '../src/server/healthHistory.js';
+import { WINDOW_FMT } from '../src/server/status.js';
 
 function tmpHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-localagent-'));
@@ -127,19 +128,99 @@ test('the sample shape drives sampleOf like a box probe result', async () => {
   fs.writeFileSync(path.join(home, '.tmuxifier-agent', 'local'), 'local:working:1722600000');
   const sampler = createLocalAgentSampler({
     home,
-    runTmux: async (args) => (args[0] === 'list-panes'
-      ? { code: 0, stdout: '__PANE__ local:@0:%3:0:1:0:claude\n' }
-      : { code: 0, stdout: 'local:1:0:1722600000:claude\n' }),
+    runTmux: async (args) => {
+      if (args[0] === 'list-panes') return { code: 0, stdout: '__PANE__ local:@0:%3:0:1:0:claude\n' };
+      if (args[0] === 'list-windows') return { code: 0, stdout: '__WIN__ local:0:@0:1:shell\n' };
+      return { code: 0, stdout: 'local:1:0:1722600000:claude\n' };
+    },
   });
   const raw = await sampler.sample();
   const sample = sampleOf(raw, 123);
   expect(sample.up).toBe(true);
-  // The sampler does not list windows, and a pane is placed through its
-  // window row, so no pane gets an entry from it alone.
-  expect(sample.agents).toEqual({});
-  // Given its session's window row, the session-wide marker speaks for the pane.
-  raw.sessions = raw.sessions.map((x) => ({ ...x, windowList: [{ id: '@0', index: 0, name: 'shell', active: true }] }));
-  expect(sampleOf(raw, 123).agents['%3']).toMatchObject({ session: 'local', agent: 'claude', state: 'working', attached: false, focused: true });
+  // The sampler lists windows, and a pane is placed through its window row, so
+  // the Host Shell's agent has an entry straight from the sampler's own output.
+  expect(sample.agents['%3']).toEqual({
+    session: 'local', windowId: '@0', windowIndex: 0, windowName: 'shell', paneIndex: 0,
+    agent: 'claude', state: 'working', cause: 'prompt', ts: 1722600000,
+    visible: true, focused: true, attached: false,
+  });
+});
+
+// The Host Shell's windows come from the same listing, format and parser the
+// probe uses, so a Host Shell agent row is labelled and jumpable like a box's.
+const WIN_ROWS = [
+  '__WIN__ local:0:@0:0:shell',
+  '__WIN__ local:1:@3:1:we:ird name',
+  '__WIN__ other:0:@5:1:vim',
+  '__WIN__ local:2:@x:0:bad id',       // not a window id: the row drops
+  '__WIN__ local:3:@7:2:bad flag',     // active is not 0/1: the row drops
+  'local:2:0:1722600000:claude',        // not a window row at all
+  '',
+].join('\n');
+const winStub = (winRes, lsOut = 'local:2:0:1722600000:claude\nother:1:0:1722600001:vim\n', calls = []) => async (args) => {
+  calls.push(args);
+  if (args[0] === 'list-windows') return winRes;
+  if (args[0] === 'list-panes') return { code: 0, stdout: '' };
+  return { code: 0, stdout: lsOut };
+};
+
+test('sample() lists windows with the probe\'s own format and nests them under their sessions', async () => {
+  const calls = [];
+  const s = await createLocalAgentSampler({ home: tmpHome(), runTmux: winStub({ code: 0, stdout: WIN_ROWS }, undefined, calls) }).sample();
+  expect(calls.filter((a) => a[0] === 'list-windows')).toEqual([['list-windows', '-a', '-F', `__WIN__ ${WINDOW_FMT}`]]);
+  expect(s.sessions.map((x) => [x.name, x.windowList])).toEqual([
+    ['local', [{ id: '@0', index: 0, name: 'shell', active: false }, { id: '@3', index: 1, name: 'we:ird name', active: true }]],
+    ['other', [{ id: '@5', index: 0, name: 'vim', active: true }]],
+  ]);
+});
+
+test('sample() takes at most 200 window rows, as the probe\'s head -n 200 does', async () => {
+  const rows = Array.from({ length: 250 }, (_, i) => `__WIN__ local:${i}:@${i}:${i === 0 ? 1 : 0}:w${i}`).join('\n');
+  const s = await createLocalAgentSampler({ home: tmpHome(), runTmux: winStub({ code: 0, stdout: rows }, 'local:250:0:1722600000:claude\n') }).sample();
+  expect(s.sessions[0].windowList).toHaveLength(200);
+  expect(s.sessions[0].windowList.at(-1).id).toBe('@199');
+});
+
+test('sample() leaves the sessions without windows when the window listing fails, and does not list windows for an empty tmux', async () => {
+  for (const winRes of [{ code: 1, stdout: '', stderr: 'boom' }, { code: 0, stdout: '' }]) {
+    const s = await createLocalAgentSampler({ home: tmpHome(), runTmux: winStub(winRes) }).sample();
+    expect(s.sessions.map((x) => x.name)).toEqual(['local', 'other']);
+    expect(s.sessions.every((x) => !('windowList' in x))).toBe(true);
+  }
+  const throwing = async (args) => {
+    if (args[0] === 'list-windows') throw new Error('boom');
+    return { code: 0, stdout: args[0] === 'ls' ? 'local:1:0:1722600000:claude\n' : '' };
+  };
+  const t = await createLocalAgentSampler({ home: tmpHome(), runTmux: throwing }).sample();
+  expect(t.sessions).toHaveLength(1);
+  expect('windowList' in t.sessions[0]).toBe(false);
+  // Nothing to nest windows under: no server, no list-windows call.
+  const calls = [];
+  const noServer = createLocalAgentSampler({
+    home: tmpHome(),
+    runTmux: async (args) => { calls.push(args[0]); return { code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-0/default\n' }; },
+  });
+  expect((await noServer.sample()).sessions).toEqual([]);
+  expect(calls).not.toContain('list-windows');
+});
+
+test('a Host Shell agent in a non-active window is placed, hidden, and named by its window', async () => {
+  const home = localHome({ 'local%4': 'local:blocked:1722600005:question:%4\n' });
+  const raw = await createLocalAgentSampler({
+    home,
+    runTmux: async (args) => {
+      if (args[0] === 'list-windows') return { code: 0, stdout: '__WIN__ local:0:@0:1:shell\n__WIN__ local:1:@1:0:agent\n' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '__PANE__ local:@0:%3:0:1:0:zsh\n__PANE__ local:@1:%4:0:1:0:claude\n' };
+      return { code: 0, stdout: 'local:2:1:1722600000:zsh\n' };
+    },
+  }).sample();
+  expect(sampleOf(raw, 1).agents).toEqual({
+    '%4': {
+      session: 'local', windowId: '@1', windowIndex: 1, windowName: 'agent', paneIndex: 0,
+      agent: 'claude', state: 'blocked', cause: 'question', ts: 1722600005,
+      visible: false, focused: false, attached: true,
+    },
+  });
 });
 
 function withReporter(home) {

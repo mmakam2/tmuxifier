@@ -1,7 +1,11 @@
 import { test, expect } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createStatusPoller } from '../src/server/statusPoller.js';
 import { createProxmoxInventory, mergeProxmoxStatus } from '../src/server/proxmoxInventory.js';
 import { createHealthHistory } from '../src/server/healthHistory.js';
+import { createLocalAgentSampler } from '../src/server/localAgent.js';
 
 const fakeStore = (boxes) => ({ listBoxes: async () => boxes });
 
@@ -481,7 +485,9 @@ test('a throwing local sampler still records the real boxes', async () => {
 });
 
 // A Host Shell sample: each named session has one window and one claude pane,
-// the Nth session's pane being %N; `marks` is keyed by session name.
+// the Nth session's pane being %N; `marks` is keyed by session name. It has the
+// shape localAgent's sampler returns: windows ride on their session's row
+// (`windowList`), so narrowing the sessions narrows the windows with them.
 const localSample = (marks, names = ['local']) => {
   const paneMarks = Object.create(null);
   names.forEach((n, i) => { if (marks[n]) paneMarks[`%${i + 1}`] = { session: n, ...marks[n] }; });
@@ -545,6 +551,39 @@ test('a local sample with sessions local and other records an agents map of only
   const last = history.getSeries('__local__').at(-1);
   expect(Object.keys(last.agents)).toEqual(['%1']);
   expect(last.agents['%1']).toMatchObject({ session: 'local', state: 'done' });
+});
+
+// The real sampler, not a fixture: its windows ride on the session rows, so the
+// narrowing to the Host Shell's own session needs nothing of its own for them,
+// and a pane of that session is placed through its window.
+test('the real Host Shell sampler, narrowed to the local session, records agents named by their windows', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tmuxifier-poller-local-'));
+  const dir = path.join(home, '.tmuxifier-agent');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'local%4'), 'local:blocked:50:question:%4\n');
+  fs.writeFileSync(path.join(dir, 'other%9'), 'other:working:60:prompt:%9\n');
+  const out = {
+    ls: 'local:2:0:1:zsh\nother:1:0:1:claude\n',
+    'list-windows': '__WIN__ local:0:@0:1:shell\n__WIN__ local:1:@1:0:agent\n__WIN__ other:0:@7:1:work\n',
+    'list-panes': '__PANE__ local:@0:%3:0:1:0:zsh\n__PANE__ local:@1:%4:0:1:0:claude\n__PANE__ other:@7:%9:0:1:0:claude\n',
+  };
+  const history = createHealthHistory();
+  const recorded = [];
+  const poller = createStatusPoller({
+    store: fakeStore([]),
+    statusChecker,
+    history: { record: (snap, bx) => { recorded.push(snap.__local__); history.record(snap, bx); }, recordAgents: history.recordAgents },
+    localAgent: createLocalAgentSampler({ home, runTmux: async (args) => ({ code: 0, stdout: out[args[0]] ?? '' }) }),
+  });
+  await poller.pollOnce();
+  expect(recorded[0].sessions.map((x) => [x.name, x.windowList.map((w) => w.id)])).toEqual([['local', ['@0', '@1']]]);
+  expect(history.getSeries('__local__').at(-1).agents).toEqual({
+    '%4': {
+      session: 'local', windowId: '@1', windowIndex: 1, windowName: 'agent', paneIndex: 0,
+      agent: 'claude', state: 'blocked', cause: 'question', ts: 50,
+      visible: false, focused: false, attached: false,
+    },
+  });
 });
 
 // I2a: a lost sampler race must not prune the Host Shell's seen watermark.

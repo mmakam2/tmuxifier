@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
-import { buildEnsureTmuxRemote } from './boxActions.js';
+import { buildEnsureTmuxRemote, buildSelectWindowRemote, buildSelectPaneRemote } from './boxActions.js';
 import { createAgentHooksPusher } from './claudeAgentHooks.js';
 import { createOpencodePluginPusher } from './opencodeAgentPlugin.js';
 import { createOscReporterPusher } from './oscReporter.js';
@@ -115,10 +115,14 @@ export function createLocalShellActions({ run = runLocalShellScript, runStdin = 
   return {
     // Read-only capture of the Host Shell session. Always the configured
     // localSession, never created here (creation is localTmuxScope's job).
-    // Concurrent captures of one depth share one run.
-    paneSnapshot({ lines = 200, timeoutMs = 8000 } = {}) {
-      return paneFlight(String(lines), async () => {
-        const res = await run(buildPaneSnapshotRemote(localSession, { lines }), { cwd, env, timeout: timeoutMs });
+    // Without a window and pane it is the session's active pane; with both it
+    // is that one pane by the exact, session-qualified target the box capture
+    // uses (buildPaneSnapshotRemote validates it and throws, never rewrites),
+    // and the answer's `pane` says which pane was read. Concurrent captures of
+    // one window, pane and depth share one run.
+    paneSnapshot({ lines = 200, timeoutMs = 8000, windowId, paneId } = {}) {
+      return paneFlight(`${windowId ?? ''}\n${paneId ?? ''}\n${lines}`, async () => {
+        const res = await run(buildPaneSnapshotRemote(localSession, { lines, windowId, paneId }), { cwd, env, timeout: timeoutMs });
         if (!res || res.code !== 0) {
           const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
           return { ok: false, error: msg || 'capture failed' };
@@ -127,6 +131,26 @@ export function createLocalShellActions({ run = runLocalShellScript, runStdin = 
         if (!snap) return { ok: false, error: 'unparseable snapshot' };
         return { ok: true, ...snap };
       });
+    },
+    // Switch the Host Shell's active window and, with a `paneId`, focus that pane
+    // of it: the jump behind a Host Shell agent row, the local counterpart of
+    // POST /api/boxes/:id/window. The scripts are the boxes' own
+    // (buildSelectWindowRemote / buildSelectPaneRemote, which read the target
+    // rules and the stale-pane behaviour) run over the local /bin/sh against the
+    // configured localSession only. Like the capture it never creates the
+    // session, and it never touches another one. An id the builders refuse
+    // rejects before anything runs; a failed command is `{ ok: false, error }`
+    // with tmux's own words.
+    async selectWindow({ windowId, paneId } = {}) {
+      const script = paneId === undefined
+        ? buildSelectWindowRemote(localSession, windowId)
+        : buildSelectPaneRemote(localSession, windowId, paneId);
+      const res = await run(script, { cwd, env, timeout: 15000 }); // the box route's own bound
+      if (!res || res.code !== 0) {
+        const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
+        return { ok: false, error: msg || (paneId === undefined ? 'failed to select window' : 'failed to select pane') };
+      }
+      return { ok: true };
     },
     async ensureReady(shell) {
       const script = buildEnsureLocalShellScript(shell, localSession);

@@ -11,11 +11,18 @@
 // The sample is always `reachable` (this host IS the server) and never
 // carries metrics, so classifyTransitions can structurally never emit
 // down/up/needs-auth/threshold events for it — only the agent edges.
+//
+// An agent is the pane's, and the health history places a pane through its
+// window's row on its session's row, so the sample lists the windows too
+// (`sessions[].windowList`, from the probe's own format and parser): without
+// them the Host Shell would show no agent at all. The listing is capped at the
+// probe's 200 rows; a pane whose window falls outside the cap is simply not
+// placed, never guessed at.
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { execFile } from 'node:child_process';
-import { STATUS_FMT, PANE_FMT, PANE_ROWS_MAX, parseTmuxSessions, parseTmuxPanes, parseAgentMarks, parsePaneMarks } from './status.js';
+import { STATUS_FMT, WINDOW_FMT, PANE_FMT, PANE_ROWS_MAX, parseTmuxSessions, parseTmuxWindows, attachWindows, parseTmuxPanes, parseAgentMarks, parsePaneMarks } from './status.js';
 
 // Matches LOCAL_GROUP in sessions.js and the client's pane id. Defined here
 // rather than imported from sessions.js so statusPoller's import chain stays
@@ -23,6 +30,7 @@ import { STATUS_FMT, PANE_FMT, PANE_ROWS_MAX, parseTmuxSessions, parseTmuxPanes,
 export const LOCAL_BOX_ID = '__local__';
 
 const MARK_MAX_BYTES = 200; // same cap the on-box probe applies (head -c 200)
+const WINDOW_ROWS_MAX = 200; // same cap the on-box probe applies (list-windows | head -n 200)
 const TMUX_TIMEOUT_MS = 5000;
 
 function runTmuxDefault(args) {
@@ -128,6 +136,19 @@ export function createLocalAgentSampler({ home = os.homedir(), runTmux = runTmux
         }
       } catch (err) {
         if (err && err.code === 'ENOENT') out.sessions = []; // tmux not installed
+      }
+      // Windows nest under their sessions. Best-effort, like the pane listing:
+      // a failed or empty listing leaves the session rows bare, and a pane
+      // whose window is not listed has no placement (so no agent entry). With
+      // no session there is nothing to nest under, so tmux is not asked.
+      if (out.sessions?.length) {
+        try {
+          const res = await runTmux(['list-windows', '-a', '-F', `__WIN__ ${WINDOW_FMT}`]);
+          if (res.code === 0) {
+            const rows = String(res.stdout).split('\n').slice(0, WINDOW_ROWS_MAX).join('\n');
+            out.sessions = attachWindows(out.sessions, parseTmuxWindows(rows));
+          }
+        } catch { /* no window listing: sessions stay bare */ }
       }
       // Best-effort: with no rows the parser keeps every pane marker.
       let paneRows = [];

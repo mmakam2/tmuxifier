@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildEnsureLocalShellScript, createLocalShellActions, runLocalScriptStdin } from '../src/server/localShellActions.js';
+import { buildSelectWindowRemote, buildSelectPaneRemote } from '../src/server/boxActions.js';
 import { buildAgentHooksInstallScript } from '../src/server/claudeAgentHooks.js';
 import { buildOpencodePluginInstallScript } from '../src/server/opencodeAgentPlugin.js';
 import { buildOscReporterInstallScript } from '../src/server/oscReporter.js';
@@ -280,4 +281,107 @@ test('paneSnapshot with no local session fails cleanly and does not create one',
     try { execFileSync('tmux', ['kill-server'], { env, stdio: 'ignore' }); } catch { /* none running */ }
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+// Everything below runs the REAL actions over a recording `run`: the Host Shell's
+// tmux is the machine's default server in production, so no test here may start
+// or talk to one.
+function recordingActions(result = { code: 0, stdout: '', stderr: '' }, extra = {}) {
+  const calls = [];
+  const actions = createLocalShellActions({
+    run: async (script, opts) => { calls.push({ script, opts }); return typeof result === 'function' ? result(script) : result; },
+    cwd: '/work', env: { A: 'b' },
+    ...extra,
+  });
+  return { actions, calls };
+}
+
+test('selectWindow selects the local session\'s window, then the pane, by the box builders\' exact targets', async () => {
+  const { actions, calls } = recordingActions();
+  await expect(actions.selectWindow({ windowId: '@1', paneId: '%4' })).resolves.toEqual({ ok: true });
+  expect(calls).toHaveLength(1);
+  const { script, opts } = calls[0];
+  // The one script the boxes use, not a second one.
+  expect(script).toBe(buildSelectPaneRemote('local', '@1', '%4'));
+  expect(script).toContain("select-window -t '=local:@1'");
+  expect(script).toContain("select-pane -Z -t '=local:@1.%4'");
+  expect(script.indexOf("select-window -t '=local:@1'")).toBeLessThan(script.indexOf("select-pane -Z -t '=local:@1.%4'"));
+  expect(script).not.toMatch(/new-session|has-session|respawn|kill-|send-keys/);
+  expect(opts).toEqual({ cwd: '/work', env: { A: 'b' }, timeout: 15000 });
+});
+
+test('selectWindow with no pane only selects the window', async () => {
+  const { actions, calls } = recordingActions();
+  await expect(actions.selectWindow({ windowId: '@1' })).resolves.toEqual({ ok: true });
+  expect(calls[0].script).toBe(buildSelectWindowRemote('local', '@1'));
+  expect(calls[0].script).toContain("select-window -t '=local:@1'");
+  expect(calls[0].script).not.toContain('select-pane');
+  expect(calls[0].script).not.toContain('new-session');
+});
+
+test('selectWindow targets the configured local session, exactly', async () => {
+  const { actions, calls } = recordingActions(undefined, { localSession: 'sess42' });
+  await actions.selectWindow({ windowId: '@2', paneId: '%9' });
+  expect(calls[0].script).toContain("select-window -t '=sess42:@2'");
+  expect(calls[0].script).toContain("select-pane -Z -t '=sess42:@2.%9'");
+});
+
+test('selectWindow rejects a bad id without running anything', async () => {
+  const { actions, calls } = recordingActions();
+  const bad = [
+    {}, { windowId: '7' }, { windowId: '@' }, { windowId: '@1;id' }, { windowId: 7 }, { windowId: null },
+    { windowId: '@1', paneId: '4' }, { windowId: '@1', paneId: '%' }, { windowId: '@1', paneId: "%4'; id" },
+    { windowId: '@1', paneId: 4 }, { windowId: '@1', paneId: null },
+  ];
+  for (const args of bad) await expect(actions.selectWindow(args), JSON.stringify(args)).rejects.toThrow(/invalid (window|pane) id/);
+  await expect(actions.selectWindow()).rejects.toThrow(/invalid window id/);
+  expect(calls).toEqual([]);
+  // A configured session name that cannot be an exact target is refused too, never rewritten.
+  const odd = recordingActions(undefined, { localSession: 'my work' });
+  await expect(odd.actions.selectWindow({ windowId: '@1' })).rejects.toThrow(/invalid session name/);
+  expect(odd.calls).toEqual([]);
+});
+
+test('selectWindow reports tmux\'s own words when the command fails', async () => {
+  const gone = recordingActions({ code: 1, stdout: '', stderr: "can't find pane: %4\n" });
+  await expect(gone.actions.selectWindow({ windowId: '@1', paneId: '%4' })).resolves.toEqual({ ok: false, error: "can't find pane: %4" });
+  const silent = recordingActions({ code: 1, stdout: '', stderr: '' });
+  await expect(silent.actions.selectWindow({ windowId: '@1' })).resolves.toEqual({ ok: false, error: 'failed to select window' });
+  await expect(silent.actions.selectWindow({ windowId: '@1', paneId: '%4' })).resolves.toEqual({ ok: false, error: 'failed to select pane' });
+  const nothing = recordingActions(() => undefined);
+  await expect(nothing.actions.selectWindow({ windowId: '@1' })).resolves.toEqual({ ok: false, error: 'failed to select window' });
+});
+
+test('paneSnapshot with a window and pane captures exactly that pane of the local session, and names it', async () => {
+  const { actions, calls } = recordingActions({ code: 0, stdout: '80 24 3 4 0 0 0 %4\nrow one\nrow two\n', stderr: '' });
+  const snap = await actions.paneSnapshot({ lines: 40, windowId: '@1', paneId: '%4' });
+  expect(snap).toEqual({ ok: true, width: 80, height: 24, cursorX: 3, cursorY: 4, alt: false, mouse: false, pane: '%4', content: 'row one\nrow two' });
+  expect(calls[0].script).toContain("display-message -p -t '=local:@1.%4'");
+  expect(calls[0].script).toContain("capture-pane -e -p -t '=local:@1.%4' -S -40");
+  expect(calls[0].script).not.toMatch(/select-|new-session|has-session/);
+});
+
+test('paneSnapshot validates an explicit target and never rewrites it', async () => {
+  const { actions, calls } = recordingActions();
+  await expect(actions.paneSnapshot({ windowId: '@1', paneId: 'x' })).rejects.toThrow(/invalid pane id/);
+  await expect(actions.paneSnapshot({ windowId: 'x', paneId: '%1' })).rejects.toThrow(/invalid window id/);
+  await expect(actions.paneSnapshot({ paneId: '%1' })).rejects.toThrow(/invalid window id/);
+  expect(calls).toEqual([]);
+});
+
+test('paneSnapshot concurrent captures share one run only when window, pane and depth all match', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const { actions, calls } = recordingActions(async () => { await gate; return { code: 0, stdout: '80 24 0 0 0 0 0 %4\nx\n', stderr: '' }; });
+  const same = [actions.paneSnapshot({ lines: 40, windowId: '@1', paneId: '%4' }), actions.paneSnapshot({ lines: 40, windowId: '@1', paneId: '%4' })];
+  const others = [
+    actions.paneSnapshot({ lines: 40, windowId: '@1', paneId: '%5' }),   // another pane
+    actions.paneSnapshot({ lines: 40, windowId: '@2', paneId: '%4' }),   // the pane in another window
+    actions.paneSnapshot({ lines: 80, windowId: '@1', paneId: '%4' }),   // another depth
+    actions.paneSnapshot({ lines: 40 }),                                  // the active pane
+  ];
+  await expect.poll(() => calls.length).toBe(5);
+  release();
+  await Promise.all([...same, ...others]);
+  expect(calls).toHaveLength(5);
 });

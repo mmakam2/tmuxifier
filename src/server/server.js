@@ -140,17 +140,24 @@ function agentFieldsOf(entry) {
   };
 }
 
-// The Host Shell's capture still reports the focused pane of its one session
-// (the latest sample's entry with `focused: true`); the box route reads the pane
-// the capture itself names.
-function focusedAgentOf(sample, session) {
-  const agents = sample?.agents;
-  if (!agents || typeof agents !== 'object') return null;
-  for (const pane of Object.keys(agents)) {
-    const e = agents[pane];
-    if (e && e.session === session && e.focused === true) return e;
+// A capture route's browser-only `?pane=%N`, resolved. The id is validated, never
+// rewritten; the pane's session and window come from the server's own latest
+// sample (a client names a pane, never a tmux target) and pass the capture
+// builder's validation again. `onlySession` is the one session a route may
+// capture (the Host Shell's `local`): a pane the sample places elsewhere is no
+// such pane for it. The sample holds every session the box lists, and the probe
+// keeps names a route would refuse (spaces, up to 256 characters): such a pane
+// cannot be addressed by an exact target, and a name is never rewritten into one
+// that can. Answers `{ entry }` or `{ status, error }`.
+function agentPaneOf(sample, wanted, onlySession = null) {
+  if (typeof wanted !== 'string' || !PANE_ID_RE.test(wanted)) return { status: 400, error: 'pane id must look like %12' };
+  const entry = agentEntryOf(sample, wanted);
+  if (!entry || (onlySession !== null && entry.session !== onlySession)) return { status: 404, error: 'no such agent pane' };
+  if (typeof entry.session !== 'string' || !SESSION_NAME_RE.test(entry.session)
+    || typeof entry.windowId !== 'string' || !WINDOW_ID_RE.test(entry.windowId)) {
+    return { status: 400, error: 'session name must be letters, digits, _ or -' };
   }
-  return null;
+  return { entry };
 }
 
 export function buildServer({ config, store, sessions, statusChecker, statusPoller, history, servicesStore = null, serviceChecker = null, iconStore = NO_ICONS, boxActions, localShellActions, fleetManager, fleetScriptsStore = NO_FLEET_SCRIPTS, proxmoxStore, provisionManager, makeProxmoxClient, inspectEndpoint, netboxStore, netboxTest = testNetbox, makeNetboxClient = createNetboxClient, netboxSummaryFn = netboxSummary, makePiholeClient = createPiholeClient, makeTruenasClient = createTruenasClient, makeUnifiClient = createUnifiClient, makeImmichClient = createImmichClient, defaultPublicKey = () => null, oidcClients = null, localSession = 'local', localTmuxScope = null, killLocalSession = killTmuxSession, removeBox = null, proxmoxInventory, lifecycleManager, saveUploadLocally = saveLocalUpload, injectLocalUpload = injectLocalUploadPath, injectLocalText = injectLocalTextDefault, paneKindLocal = paneKindLocalDefault, knownHosts, setupManager, aiAuthSeeder, passkeyStore = null, passkeyChallenges = null, voiceEngine = null, voiceStore = null, voiceInstallManager = null, resolveVoice = null, getVoiceEngine = null, modelInstalled = null, uiSettingsStore = null, deviceStore = null, deviceHostGuard = createDeviceHostGuard(), pairingCodes = null, apkBuildManager = null, voiceLinks = null, liveHub = null, agentMail = null, agentWorkers = null, log = (msg) => console.error(msg) }) {
@@ -1301,18 +1308,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     const wanted = req.query?.pane;
     if (wanted !== undefined) {
       if (req.deviceId) return reply.code(403).send({ error: 'browser session required' });
-      if (typeof wanted !== 'string' || !PANE_ID_RE.test(wanted)) {
-        return reply.code(400).send({ error: 'pane id must look like %12' });
-      }
-      const entry = agentEntryOf(latest, wanted);
-      if (!entry) return reply.code(404).send({ error: 'no such agent pane' });
-      // The sample holds every session the box lists, and the probe keeps names a
-      // route would refuse (spaces, up to 256 characters). Such a pane cannot be
-      // addressed by an exact target, and a name is never rewritten into one that can.
-      if (typeof entry.session !== 'string' || !SESSION_NAME_RE.test(entry.session)
-        || typeof entry.windowId !== 'string' || !WINDOW_ID_RE.test(entry.windowId)) {
-        return reply.code(400).send({ error: 'session name must be letters, digits, _ or -' });
-      }
+      const found = agentPaneOf(latest, wanted);
+      if (!found.entry) return reply.code(found.status).send({ error: found.error });
+      const { entry } = found;
       // Previews share an in-flight capture; the device read below never does.
       const picked = await boxActions.paneSnapshot(box, entry.session, {
         lines, shared: true, windowId: entry.windowId, paneId: wanted,
@@ -2326,15 +2324,51 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
 
   // Browser-only (deliberately absent from DEVICE_ALLOWED_ROUTES): the agent
   // switcher's Host Shell preview. Read-only; always the local session, any
-  // `session` query is ignored; never creates the session.
+  // `session` query is ignored; never creates the session. It follows the box
+  // route's rule (GET /api/boxes/:id/pane): `?pane=%N` captures that agent pane
+  // of the `__local__` series by its exact target, and without it the answer is
+  // the state of the pane the capture itself names. Either way the answer
+  // carries `pane` and, when the marker has one, `agentTs`.
   app.get('/api/local-shell/pane', { preHandler: requireAuth }, async (req, reply) => {
     if (typeof localShellActions?.paneSnapshot !== 'function') return reply.code(503).send({ error: 'capture unavailable' });
     const lines = req.query?.lines != null ? Number(req.query.lines) : 200;
+    // Read once, before the capture: `agentTs` is what a client posts to say
+    // "seen", and a marker newer than the screen it arrives with must never be
+    // acknowledged along with it.
+    const latest = history ? (history.getSeries(LOCAL_BOX_ID).at(-1) || null) : null;
+    const wanted = req.query?.pane;
+    if (wanted !== undefined) {
+      const found = agentPaneOf(latest, wanted, localSession);
+      if (!found.entry) return reply.code(found.status).send({ error: found.error });
+      const { entry } = found;
+      const snap = await localShellActions.paneSnapshot({ lines, windowId: entry.windowId, paneId: wanted });
+      if (!snap.ok) return reply.code(502).send({ error: snap.error });
+      return { ...snap, ...agentFieldsOf(entry), pane: wanted, sessionName: localSession };
+    }
     const snap = await localShellActions.paneSnapshot({ lines });
     if (!snap.ok) return reply.code(502).send({ error: snap.error });
-    const latest = history ? (history.getSeries(LOCAL_BOX_ID).at(-1) || null) : null;
-    const entry = focusedAgentOf(latest, localSession);
-    return { ...snap, agent: entry?.state ?? null, agentCause: entry?.cause ?? null, sessionName: localSession };
+    return { ...snap, ...agentFieldsOf(agentEntryOf(latest, snap.pane)), sessionName: localSession };
+  });
+
+  // The Host Shell's counterpart of POST /api/boxes/:id/window: the jump behind a
+  // Host Shell agent row. Browser-only, deliberately absent from
+  // DEVICE_ALLOWED_ROUTES like the capture above. Only the local session is ever
+  // targeted (a `session` in the body is not read), both ids are validated here
+  // and again in the builders, and it never creates the session. No setup gate
+  // and no re-probe: the Host Shell has no setup job, and it stays on the sweep.
+  app.post('/api/local-shell/window', { preHandler: requireAuth }, async (req, reply) => {
+    const { windowId, paneId } = req.body || {};
+    if (typeof windowId !== 'string' || !WINDOW_ID_RE.test(windowId)) {
+      return reply.code(400).send({ error: 'window id must look like @7' });
+    }
+    // Absent is the window-only select; anything else must be a pane id.
+    if (paneId !== undefined && (typeof paneId !== 'string' || !PANE_ID_RE.test(paneId))) {
+      return reply.code(400).send({ error: 'pane id must look like %12' });
+    }
+    if (typeof localShellActions?.selectWindow !== 'function') return reply.code(503).send({ error: 'window switching unavailable' });
+    const res = await localShellActions.selectWindow({ windowId, paneId });
+    if (!res.ok) return reply.code(502).send({ error: res.error });
+    return paneId === undefined ? { ok: true, windowId } : { ok: true, windowId, paneId };
   });
 
   app.patch('/api/local-shell', { preHandler: requireAuth }, async (req, reply) => {
