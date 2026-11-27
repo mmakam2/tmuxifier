@@ -1129,15 +1129,34 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
         error: String(res?.stderr || '').trim() || (paneId === undefined ? 'failed to select window' : 'failed to select pane'),
       });
     }
-    // Re-probe this one box so the client's next /api/status is authoritative
-    // about which window is now active. /api/status serves statusPoller's cached
-    // snapshot, which only moves on the poll interval (30s by default), so
-    // without this the client repaints from a snapshot whose `active` flag still
-    // names the PREVIOUS window and the dropdown visibly snaps back for up to a
-    // full interval. Best-effort in both directions: a deployment with no poller
-    // wired (tests) skips it, and a probe that throws or hangs must never turn a
-    // switch that already succeeded on the box into an error response.
+    // Two refreshes, because two things read what a select changed.
+    //
+    // probeOne re-probes this one box so the client's next /api/status is
+    // authoritative about which window is now active. /api/status serves
+    // statusPoller's cached snapshot, which only moves on the poll interval (30s by
+    // default), so without it the client repaints from a snapshot whose `active`
+    // flag still names the PREVIOUS window and the dropdown visibly snaps back for
+    // up to a full interval. But probeOne moves the snapshot only.
+    //
+    // refreshAgents is the light probe that also records the box's agents into the
+    // health history (history.recordAgents), and that series is where the browser
+    // reads per-pane agent state, `visible` and `focused` included. Without it the
+    // series keeps naming the window just left until the box watch stream nudges a
+    // light probe or the next sweep (always the sweep with the watch off), and the
+    // pane jumped to is not acknowledged for that long. It runs after probeOne,
+    // never beside it: a read is applied only if it started after the previously
+    // applied one (statusPoller.js, the ordering rule), and one that starts after
+    // probeOne has settled qualifies against probeOne's read, asking again if a
+    // sweep lands while it is out. This route does not publish to liveHub:
+    // the history's own change listener nudges the open tabs when the agents map
+    // changes.
+    //
+    // Best-effort in every direction: a deployment with no poller wired (tests), a
+    // poller without refreshAgents, a refresh that resolves false or throws must
+    // never turn a switch that already succeeded on the box into an error
+    // response. Neither runs after a failed select.
     try { await statusPoller?.probeOne?.(box.id); } catch { /* the next sweep will catch up */ }
+    try { await statusPoller?.refreshAgents?.(box.id); } catch { /* the next sweep will catch up */ }
     return paneId === undefined ? { ok: true, windowId } : { ok: true, windowId, paneId };
   });
   // The mic button's press-time verdict (spec 2026-09-04): 'claude' links the

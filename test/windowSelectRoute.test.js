@@ -8,12 +8,19 @@ import { createBoxActions } from '../src/server/boxActions.js';
 import { hashPassword } from '../src/server/auth.js';
 
 let app, dir, calls, boxId, failNext, setupRunning, probed, probeThrows, serverArgs;
+// The poller's two calls, in the order they happened. Each entry carries how many remote
+// scripts had run when it STARTED, so "after the select" is an observed fact, not an inference.
+let refreshed, refreshImpl, probeGate, order;
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-win-'));
   calls = [];
   failNext = false;
   probed = [];
   probeThrows = false;
+  refreshed = [];
+  refreshImpl = null;
+  probeGate = null;
+  order = [];
   const run = async (argv) => {
     calls.push(argv);
     if (failNext) { failNext = false; return { code: 1, stdout: '', stderr: 'no such window' }; }
@@ -34,12 +41,21 @@ beforeEach(async () => {
   const setupManager = { currentForBox: () => (setupRunning ? { status: 'running' } : null) };
   // Shaped like the real poller's probeOne (statusPoller.js): probes one box and
   // swaps that box's entry into the cached snapshot /api/status serves.
+  // refreshAgents is its light probe: it patches the snapshot and records the box's agents
+  // into the health history, which is where the browser reads per-pane agent state.
   const statusPoller = {
     getSnapshot: () => ({}),
     probeOne: async (id) => {
       probed.push(id);
+      order.push({ call: 'probeOne', id, scriptsSoFar: calls.length });
+      if (probeGate) await probeGate;
       if (probeThrows) throw new Error('probe blew up');
       return { reachable: true };
+    },
+    refreshAgents: async (id) => {
+      refreshed.push(id);
+      order.push({ call: 'refreshAgents', id, scriptsSoFar: calls.length });
+      return refreshImpl ? refreshImpl(id) : true;
     },
   };
   serverArgs = { config, store, sessions, statusChecker, statusPoller, boxActions, setupManager };
@@ -196,5 +212,113 @@ test('POST window maps a pane that left the window to 502 and does not re-probe'
   const res = await app.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'main', windowId: '@3', paneId: '%12' } });
   expect(res.statusCode).toBe(502);
   expect(res.json().error).toContain('no such window');
+  expect(probed).toEqual([]);
+});
+
+// A select also records the box's agents into the health history. probeOne only moves the
+// status snapshot (/api/status); the per-pane agent state the browser reads, `visible` and
+// `focused` included, comes from the history series. Without this the series keeps naming the
+// window the operator just left until the watch stream nudges a light probe or the next sweep
+// (always the sweep with TMUXIFIER_AGENT_WATCH=off), and the pane jumped to is not acknowledged.
+test('POST window probes and then refreshes the agents, each once, after the select ran', async () => {
+  const h = await headers();
+  const res = await app.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'web', windowId: '@2' } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true, windowId: '@2' });
+  expect(calls.length).toBeGreaterThan(0);
+  expect(calls.some((argv) => argv[argv.length - 1].includes("select-window -t '=web:@2'"))).toBe(true);
+  // Both calls started after the one remote script (the select) had run, and in this order.
+  expect(order).toEqual([
+    { call: 'probeOne', id: boxId, scriptsSoFar: calls.length },
+    { call: 'refreshAgents', id: boxId, scriptsSoFar: calls.length },
+  ]);
+});
+
+test('POST window with a paneId probes and then refreshes the agents, each once, after the select ran', async () => {
+  const h = await headers();
+  const res = await app.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'main', windowId: '@3', paneId: '%12' } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true, windowId: '@3', paneId: '%12' });
+  expect(calls.some((argv) => argv[argv.length - 1].includes("select-pane -Z -t '=main:@3.%12'"))).toBe(true);
+  expect(order).toEqual([
+    { call: 'probeOne', id: boxId, scriptsSoFar: calls.length },
+    { call: 'refreshAgents', id: boxId, scriptsSoFar: calls.length },
+  ]);
+});
+
+test('POST window refreshes only after the probe has settled, and answers only after the refresh has', async () => {
+  const h = await headers();
+  let releaseProbe, releaseRefresh;
+  probeGate = new Promise((r) => { releaseProbe = r; });
+  refreshImpl = () => new Promise((r) => { releaseRefresh = r; });
+  let answered = false;
+  const pending = app.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'web', windowId: '@2' } })
+    .then((r) => { answered = true; return r; });
+  await expect.poll(() => probed.length).toBe(1);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(refreshed).toEqual([]); // probeOne is still out: the refresh waits for it
+  releaseProbe();
+  await expect.poll(() => refreshed.length).toBe(1);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(answered).toBe(false); // the refresh is still out: the response waits for it
+  releaseRefresh(true);
+  const res = await pending;
+  expect([res.statusCode, res.json()]).toEqual([200, { ok: true, windowId: '@2' }]);
+});
+
+test('POST window still answers ok when the refresh resolves false, throws synchronously or rejects', async () => {
+  const h = await headers();
+  const variants = [
+    () => false,
+    () => { throw new Error('sync boom'); },
+    async () => { throw new Error('boom'); },
+    () => Promise.reject(new Error('rejected')),
+  ];
+  for (const impl of variants) {
+    refreshImpl = impl;
+    refreshed = [];
+    const win = await app.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'web', windowId: '@2' } });
+    expect([win.statusCode, win.json()]).toEqual([200, { ok: true, windowId: '@2' }]);
+    expect(refreshed).toEqual([boxId]);
+    refreshed = [];
+    const pane = await app.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'main', windowId: '@3', paneId: '%12' } });
+    expect([pane.statusCode, pane.json()]).toEqual([200, { ok: true, windowId: '@3', paneId: '%12' }]);
+    expect(refreshed).toEqual([boxId]);
+  }
+});
+
+test('POST window answers ok from a poller that has probeOne but no refreshAgents', async () => {
+  const probeOnly = buildServer({ ...serverArgs, statusPoller: { getSnapshot: () => ({}), probeOne: async (id) => { probed.push(id); return { reachable: true }; } } });
+  const h = await headers(probeOnly);
+  const res = await app.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'web', windowId: '@2' } });
+  expect(res.statusCode).toBe(200);
+  const probeOnlyRes = await probeOnly.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'web', windowId: '@2', paneId: '%5' } });
+  expect([probeOnlyRes.statusCode, probeOnlyRes.json()]).toEqual([200, { ok: true, windowId: '@2', paneId: '%5' }]);
+  expect(probed).toEqual([boxId, boxId]); // the probe still ran: the missing refresh took nothing else with it
+});
+
+test('POST window never refreshes the agents after a refused or failed select', async () => {
+  const h = await headers();
+  const post = (payload, url = winUrl()) => app.inject({ method: 'POST', url, headers: h, payload });
+  // 502: the select failed on the box, with and without a pane.
+  failNext = true;
+  expect((await post({ session: 'main', windowId: '@3' })).statusCode).toBe(502);
+  failNext = true;
+  expect((await post({ session: 'main', windowId: '@3', paneId: '%12' })).statusCode).toBe(502);
+  // 400: a bad pane id, window id or session name.
+  expect((await post({ session: 'main', windowId: '@3', paneId: '12' })).statusCode).toBe(400);
+  expect((await post({ session: 'main', windowId: '3' })).statusCode).toBe(400);
+  expect((await post({ windowId: '@3' })).statusCode).toBe(400);
+  // 404: no such box.
+  expect((await post({ session: 'main', windowId: '@3' }, '/api/boxes/nope/window')).statusCode).toBe(404);
+  // 409: the box's setup job is running.
+  setupRunning = true;
+  expect((await post({ session: 'main', windowId: '@3', paneId: '%12' })).statusCode).toBe(409);
+  setupRunning = false;
+  // 503: no way to run the select.
+  const unwired = buildServer({ ...serverArgs, boxActions: {} });
+  const res = await unwired.inject({ method: 'POST', url: winUrl(), headers: await headers(unwired), payload: { session: 'main', windowId: '@3' } });
+  expect(res.statusCode).toBe(503);
+  expect(refreshed).toEqual([]);
   expect(probed).toEqual([]);
 });
