@@ -1122,7 +1122,7 @@ function ensureDash() {
   if (!dash) {
     dash = createDashboard({
       onOpenBox: (id) => openPane(id),
-      onOpenSession: (id, session) => openPaneOnSession(id, session),
+      onOpenAgent: (id, pane) => { void jumpToAgent(id, pane); },
       onAddBox: () => openBoxDialog(),
       onAddService: () => openSettingsModal('services'),
     });
@@ -2690,13 +2690,14 @@ function openBox(b: Box) { openPane(b.id); }
 // the focused pane in a split, or become the single pane otherwise — the
 // confirmed "C replaces the focused pane" semantics.
 //
-// `session` (the agents board): when the box is NOT yet docked, the new pane is
-// born on that session — its override is set BEFORE the repaint, so the first
-// and only /term attach goes straight to it. Building it on the configured
-// session and switching afterwards would attach there first, which can CREATE
-// that session and run its startupCommand, only to tear the PTY down again.
-// Same rule as switchPaneSession: the configured name gets no override. When
-// the box is already docked this is ignored; openPaneOnSession re-points.
+// `session` (a jump to an agent pane, through openPaneOnSession): when the box
+// is NOT yet docked, the new pane is born on that session — its override is set
+// BEFORE the repaint, so the first and only /term attach goes straight to it.
+// Building it on the configured session and switching afterwards would attach
+// there first, which can CREATE that session and run its startupCommand, only
+// to tear the PTY down again. Same rule as switchPaneSession: the configured
+// name gets no override. When the box is already docked this is ignored;
+// openPaneOnSession re-points.
 function openPane(boxId: string, session?: string) {
   // Plain activation acts on the box: if any of its panes is already docked,
   // focus that one rather than hatching a second (docking a duplicate is the
@@ -2736,8 +2737,8 @@ function openPane(boxId: string, session?: string) {
   repaintStage();
 }
 
-// The agents board's card click and the first step of a sidebar agent row's
-// jump (jumpToAgent): dock (or focus) the box, then point that pane at the
+// The first step of a jump to an agent pane (jumpToAgent, from a sidebar agent
+// row or a board card): dock (or focus) the box, then point that pane at the
 // session. A duplicate pane already showing that session wins over re-pointing
 // the one openPane picked, so a click never yanks a pane off a session the
 // operator also has open. The Host Shell has one session and no picker, so it

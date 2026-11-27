@@ -167,16 +167,21 @@ test('agent states reach rows, strip, board, chips; a seen done turns idle', asy
     await prod.locator('.group-header').click(); // leave it expanded again
     await expect(prod).not.toHaveClass(/collapsed/);
 
-    // ── Standby dashboard board (no pane docked).
-    const card = page.locator(`.dash-board .dash-board-col[data-state="blocked"] .dash-card[data-box-id="${boxId}"][data-session="${session}"]`);
+    // ── Standby dashboard board (no pane docked): one card per agent pane, in
+    // its state's column, named as its sidebar row is. The fixture panes sit in
+    // two sessions, so the name carries its session. Cards are found by pane id
+    // AND box: the Host Shell's own cards (a different tmux server) can reuse a
+    // pane id, and nothing here may touch them.
+    const card = page.locator(`.dash-board .dash-board-col[data-state="blocked"] .dash-card[data-box-id="${boxId}"][data-pane="${pane1}"]`);
     await expect(card.locator('.dash-card-cause')).toHaveText('permission');
     await expect(card.locator('.dash-card-box')).toHaveText('localhost');
-    await expect(card.locator('.dash-card-session')).toHaveText(session);
+    await expect(card.locator('.dash-card-session')).toHaveText((await agentRow(pane1).locator('.box-agent-name').textContent())!);
+    await expect(card.locator('.dash-card-session')).toContainText(`${session} › `);
     await expect(card.locator('.dash-card-age')).not.toBeEmpty();
-    await expect(page.locator(`.dash-board .dash-board-col[data-state="done"] .dash-card[data-box-id="${boxId}"][data-session="${session2}"]`)).toHaveCount(1);
-    await expect(page.locator(`.dash-board .dash-card[data-session="${session}"]`)).toHaveCount(3);
+    await expect(page.locator(`.dash-board .dash-board-col[data-state="done"] .dash-card[data-box-id="${boxId}"][data-pane="${pane2}"]`)).toHaveCount(1);
+    await expect(page.locator(`.dash-board .dash-card[data-pane="${pane1}"]:not([data-box-id="__local__"])`)).toHaveCount(3); // the three alias boxes
 
-    // ── Clicking the card docks that box on that session; the pane chip.
+    // ── Clicking the card docks that box on its pane's session; the pane chip.
     await card.click();
     const pane = page.locator('.stage-pane').first();
     await expect(pane).toBeVisible();
@@ -594,24 +599,98 @@ test('header chip is the visible window\'s worst; picker rows carry each window\
   }
 });
 
-// A board card for a NON-configured session must dock the pane straight onto
-// that session: one /term attach, carrying `session=`. Building the pane on the
-// configured session first and switching after would attach there (which can
-// create that session and run its startupCommand) and then tear it down.
-test('a board card for another session docks the pane on it with a single /term attach', async ({ page }) => {
+// Spec 2026-11-26 §7.2: the standby board is one card per agent pane (the box,
+// then the pane's row name), in its state's column; the fleet card keeps a
+// single chip, the worst of the box. A card click is the sidebar row's jump.
+// Nothing here touches a Host Shell card: that is this machine's real `local`
+// session, and a jump there would move the operator's own windows.
+test('board: one card per agent pane, named as its row; a card click jumps to the pane', async ({ page }) => {
+  test.setTimeout(240000);
+  let layout: AgentPaneLayout | null = null;
+  const terms: string[] = [];
+  const windowPosts: Record<string, unknown>[] = [];
+  page.on('websocket', (ws) => { if (/\/term\?/.test(ws.url())) terms.push(ws.url()); });
+  page.on('request', (r: Request) => {
+    if (r.method() === 'POST' && /\/api\/boxes\/[^/]+\/window$/.test(r.url())) windowPosts.push(r.postDataJSON());
+  });
+  try {
+    layout = buildAgentPanes(session);
+    const { one, twoA, twoB } = layout;
+    const t0 = now();
+    // One agent per state column but idle. Window 2's blocked pane is the jump's
+    // target: window 1 is in front, so the jump has to select a window AND a pane.
+    writePaneMarker(session, one.pane, 'ready', t0, 'stop'); // ready/stop = done until seen
+    writePaneMarker(session, twoA.pane, 'working', t0, 'prompt');
+    writePaneMarker(session, twoB.pane, 'blocked', t0, 'question');
+
+    await login(page);
+    const row = page.locator('.box', { has: page.locator('.name', { hasText: /^localhost$/ }) }).first();
+    const boxId = (await row.getAttribute('data-id'))!;
+    // Scoped to the box: the Host Shell's cards can reuse a pane id.
+    const cards = page.locator(`.dash-board .dash-card[data-box-id="${boxId}"]`);
+    const cardIn = (state: string, pane: string) =>
+      page.locator(`.dash-board .dash-board-col[data-state="${state}"] .dash-card[data-box-id="${boxId}"][data-pane="${pane}"]`);
+    await reloadUntil(page, async () => { await expect(cards).toHaveCount(3, { timeout: 5000 }); });
+
+    // ── 1. One card per stateful pane, in its state's column, named as its row.
+    expect(await cards.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.pane).sort()))
+      .toEqual([one.pane, twoA.pane, twoB.pane].sort());
+    for (const [state, p] of [['done', one], ['working', twoA], ['blocked', twoB]] as const) {
+      const card = cardIn(state, p.pane);
+      await expect(card).toHaveCount(1);
+      await expect(card).toHaveAttribute('data-state', state);
+      await expect(card.locator('.dash-card-box')).toHaveText('localhost');
+      await expect(card.locator('.dash-card-session')).toHaveText(p.name);
+      await expect(card.locator('.dash-card-age')).not.toBeEmpty();
+    }
+    await expect(cardIn('blocked', twoB.pane).locator('.dash-card-cause')).toHaveText('question');
+    await expect(cardIn('done', one.pane).locator('.dash-card-cause')).toHaveCount(0); // blocked cards only
+    await expect(cardIn('working', twoA.pane).locator('.dash-card-cause')).toHaveCount(0);
+
+    // ── 2. The fleet card keeps ONE chip for the box: the worst of its panes.
+    const fleetCard = page.locator('.dash-box', { has: page.locator('.dash-box-name', { hasText: /^localhost$/ }) });
+    await expect(fleetCard.locator('.dash-chip')).toHaveText('BLOCKED · QUESTION');
+    await expect(fleetCard.locator('.dash-chip')).toHaveClass(/dash-chip-blocked/);
+
+    // ── 3. A card click is the row's jump: the window route gets session,
+    // window and pane, the terminal shows window 2, and the one attach is the
+    // dock's own.
+    expect(terms).toEqual([]); // standby: nothing attached yet
+    await cardIn('blocked', twoB.pane).click();
+    await expect.poll(() => windowPosts.length, { timeout: 10000 }).toBe(1);
+    expect(windowPosts[0]).toEqual({ session, windowId: twoB.windowId, paneId: twoB.pane });
+    const pane = page.locator('.stage-pane').first();
+    await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_TWO_B', { timeout: 15000 });
+    await expect(pane.locator('.xterm-rows')).not.toContainText('AGENT_WINDOW_ONE');
+    await expect(page.locator('.dash-board')).toHaveCount(0); // standby gone once docked
+    expect(onBox(`tmux display-message -p -t '=${session}:' '#{window_id} #{pane_id}'`).trim()).toBe(`${twoB.windowId} ${twoB.pane}`);
+    await page.waitForTimeout(1500); // every chance for a second attach to show up
+    expect(terms).toHaveLength(1);
+  } finally {
+    resetAgentPanes(layout, session);
+  }
+});
+
+// A board card for an agent in a NON-configured session must dock the box
+// straight onto that session: one /term attach, carrying `session=`. Building
+// the pane on the configured session first and switching after would attach
+// there (which can create that session and run its startupCommand) and then
+// tear it down.
+test('a board card for an agent in another session docks the box on it with a single /term attach', async ({ page }) => {
   test.setTimeout(120000);
   const terms: string[] = [];
   page.on('websocket', (ws) => { if (/\/term\?/.test(ws.url())) terms.push(ws.url()); });
   try {
     onBox(`tmux has-session -t '=${session2}' 2>/dev/null || tmux new-session -d -s '${session2}' bash -c 'exec -a claude sleep 600'`);
     expect(onBox(`tmux display-message -p -t '=${session2}:' '#{pane_current_command}'`).trim()).toBe('claude');
+    const pane2 = onBox(`tmux display-message -p -t '=${session2}:' '#{pane_id}'`).trim();
     // blocked, not done: docking a done pane would acknowledge it.
     writeMarker(session2, 'blocked', now(), 'question');
 
     await login(page);
     const row = page.locator('.box', { has: page.locator('.name', { hasText: /^localhost$/ }) }).first();
     const boxId = (await row.getAttribute('data-id'))!;
-    const card = page.locator(`.dash-board .dash-board-col[data-state="blocked"] .dash-card[data-box-id="${boxId}"][data-session="${session2}"]`);
+    const card = page.locator(`.dash-board .dash-board-col[data-state="blocked"] .dash-card[data-box-id="${boxId}"][data-pane="${pane2}"]`);
     await reloadUntil(page, async () => { await expect(card).toHaveCount(1, { timeout: 5000 }); });
     expect(terms).toEqual([]); // standby: nothing attached yet
 
@@ -635,9 +714,10 @@ test('a board card for another session docks the pane on it with a single /term 
 });
 
 // Issue #11. A pane parked on session X keeps its terminal attached to X. A
-// board card for the same box on session Y re-docks that instance; the parked
-// terminal must not come back under a header that says Y, or every keystroke
-// goes to a session the header does not show. The steps are the issue's own.
+// board card for the same box's agent in session Y re-docks that instance; the
+// parked terminal must not come back under a header that says Y, or every
+// keystroke goes to a session the header does not show. The steps are the
+// issue's own.
 test('a board card does not reuse a parked terminal that is attached to another session', async ({ page }) => {
   test.setTimeout(150000);
   const sessionX = `${session}-px`;
@@ -654,13 +734,14 @@ test('a board card does not reuse a parked terminal that is attached to another 
   try {
     onBox(`tmux has-session -t '=${sessionX}' 2>/dev/null || tmux new-session -d -s '${sessionX}' bash -c 'echo PARKED_X_SCREEN; exec sleep 600'`);
     onBox(`tmux has-session -t '=${session2}' 2>/dev/null || tmux new-session -d -s '${session2}' bash -c 'echo BOARD_Y_SCREEN; exec -a claude sleep 600'`);
+    const pane2 = onBox(`tmux display-message -p -t '=${session2}:' '#{pane_id}'`).trim();
     // blocked, not done: docking a done pane would acknowledge it.
     writeMarker(session2, 'blocked', now(), 'question');
 
     await login(page);
     const row = page.locator('.box', { has: page.locator('.name', { hasText: /^localhost$/ }) }).first();
     const boxId = (await row.getAttribute('data-id'))!;
-    const card = page.locator(`.dash-board .dash-board-col[data-state="blocked"] .dash-card[data-box-id="${boxId}"][data-session="${session2}"]`);
+    const card = page.locator(`.dash-board .dash-board-col[data-state="blocked"] .dash-card[data-box-id="${boxId}"][data-pane="${pane2}"]`);
     // Reloads happen only here, before anything is docked: a reload later would
     // throw the parked terminal away and with it the case under test.
     await reloadUntil(page, async () => { await expect(card).toHaveCount(1, { timeout: 5000 }); });
@@ -690,7 +771,7 @@ test('a board card does not reuse a parked terminal that is attached to another 
     await expect(card).toHaveCount(1, { timeout: 15000 });
     expect(clients(session2)).toBe(0); // nothing has attached Y yet
 
-    // 4. Click the card for box A on session Y.
+    // 4. Click the card of box A's agent in session Y.
     await card.click();
     const pane = paneOf('localhost');
     await expect(pane).toHaveCount(1);
