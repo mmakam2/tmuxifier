@@ -1,7 +1,7 @@
 import { SESSION_NAME_RE } from './sshCommand.js';
 import { mayStart } from './agentMailPolicy.js';
 import { STORAGE_REASON, WORKER_FAILED_REASON } from './agentMailStore.js';
-import { agentKindOf } from './healthHistory.js';
+import { agentKindOf } from './agentKind.js';
 import { START_CODES } from './agentWorkers.js';
 import {
   cleanBody, bodyProblem, statusPhrase, agentStatusPhrase, refusalText, renderThread, renderWho, renderInbox, renderReply, wakeText,
@@ -40,17 +40,24 @@ import {
 //                                  is about ITS newest message, see the function), anything else
 //                                  for the operator (the thread's newest message, short phrases)
 //
-// "Running an agent" means `Object.hasOwn(marksOf(boxId), session)`: a live marker, not the
-// dashboard's `present` flag (design 6.5). `marksOf` returning null means the box is
-// unreachable. who/send/reply need a running agent; read/inbox need only a valid name, so an
-// agent that has just exited can still collect what was sent to it.
+// Agent state is per PANE (pane-level design 8.1): `paneMarksOf(boxId)` is the box's
+// `{ '%N': { session, state, cause, ts } }` (null-prototype in production, read with own keys
+// only), `{}` when the box is reachable with no marker, null when it is unreachable. Mail stays
+// addressed to `box/session`. A session "runs an agent" when any pane mark names it
+// (`mark.session === session`): a live marker, not the dashboard's `present` flag (design 6.5).
+// Where a session needs one state word (who, the queued phrases) it is the summary of its
+// panes: blocked, then working, then ready (`who` shows ready as idle). who/send/reply need a
+// running agent; read/inbox need only a valid name, so an agent that has just exited can still
+// collect what was sent to it.
 //
 // A send to a BARE target (`.` or a box name alone; agent workers spec 5.3) picks its session
-// among those that can take mail: a marker, and a pane (`sessionsOf`, the snapshot's session
-// rows) running claude, opencode or something unknown; Codex, pi and agy write markers but run no
-// mail waiter. With no listing (`sessionsOf` null) every marker counts. The caller's own session
-// never does. The configured session wins when it is one, else the only one; two or more is
-// `several-agents`. An explicit `box/session` or `./session` keeps the plain marker test.
+// among those that can take mail: a session with a pane mark whose pane (`panesOf`, the
+// snapshot's pane rows) runs claude, opencode or something unknown, any pane of the session and
+// not only its active one; Codex, pi and agy write markers but run no mail waiter. A marked pane
+// the listing does not show is of unknown kind. With no pane listing (`panesOf` null) every
+// marked session counts. The caller's own session never does. The configured session wins when
+// it is one, else the only one; two or more is `several-agents`. An explicit `box/session` or
+// `./session` keeps the plain marker test.
 //
 // A send STARTS A WORKER (agent workers spec 5.3) when a bare target finds no session that can
 // take mail, or when it asks for one (`fresh`: '' for the box's default project, else a project
@@ -93,16 +100,16 @@ import {
 // after each sweep and after every real-time marker refresh. Age is `now() - at`.
 //
 //   what the box shows                                    what happens
-//   a marker for the session                              the entry is dropped (it is up)
-//   no listing (`sessionsOf` null)                        nothing
+//   a pane mark naming the session                        the entry is dropped (it is up)
+//   no pane listing (`panesOf` null)                      nothing
 //   age >= WORKER_FAIL_MS, the session not listed, or     on two consecutive looks: each thread
-//     listed with a pane kind other than claude           of the entry is closed
+//     listed with no pane running claude                  of the entry is closed
 //                                                         WORKER_FAILED_REASON, one refusal
 //                                                         logged per thread closed (from its
 //                                                         starter, target the box label; none
 //                                                         for one already closed); the entry
 //                                                         is dropped
-//   age >= WORKER_STUCK_MS, listed on claude, no marker   `stuck`: a start-up prompt holds it
+//   age >= WORKER_STUCK_MS, a pane on claude, no marker   `stuck`: a start-up prompt holds it
 //
 // Two looks, because `age` is the entry's age at the look, not the listing's: a sweep that read
 // the box before the start can finish 30 s after it. The first failing look only sets
@@ -127,11 +134,14 @@ import {
 // agentMailText.js. A refusal from a caller that fails validation is answered but not logged:
 // the log records a sender, and an invalid claim is not one.
 //
-// Delivery (design 6.7). A queued message for a session goes, oldest first, to an open
-// `waitReplies` of that session on its thread (state `delivered`), else to ONE connected waiter of
-// that session, and only while the session's marker reads `ready` (state `handed`, with
-// `handedAt`/`handedPane`). Either way the thread's permission is re-checked at that moment, and a
-// thread whose permission is gone is closed instead. `ack` confirms a handed message; a waiter
+// Delivery (design 6.7, pane-level design 8.1). A queued message for a session goes, oldest
+// first, to an open `waitReplies` of that session on its thread (state `delivered`), else to ONE
+// connected waiter of that session whose OWN pane's marker names the session and reads `ready`
+// (state `handed`, with `handedAt`/`handedPane`), the longest-held such waiter first. An idle
+// agent takes mail while a sibling pane of its session works; a waiter whose pane has no marker
+// (or one that is working or blocked) is never handed anything. Either way the thread's
+// permission is re-checked at that moment, and a thread whose permission is gone is closed
+// instead. `ack` confirms a handed message; a waiter
 // that connects puts back to `queued` the session's handed messages that were handed on its own
 // pane or more than REOFFER_MS ago, so a wake lost inside a dying Claude Code is offered again.
 // It also ends, idle, any older held waiter of the same session and pane: the box runs one
@@ -168,6 +178,8 @@ const TARGET_CONTROL_RE = /[\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u
 
 // marker state -> the word `who` shows (the dashboard's words for a session with no new turn)
 const STATE_WORD = Object.assign(Object.create(null), { ready: 'idle', working: 'working', blocked: 'blocked' });
+// How a session's panes sum up to its one state: the lowest rank wins.
+const STATE_RANK = Object.assign(Object.create(null), { blocked: 0, working: 1, ready: 2 });
 const CLOSED_KIND = Object.assign(Object.create(null), {
   operator: 'closed-operator',
   'permission withdrawn': 'closed-withdrawn',
@@ -264,12 +276,13 @@ export function resolveTarget(target, boxes, callerBoxId) {
 const MAIL_KINDS = new Set(['claude', 'opencode', null]);
 
 // `holdMs` is how long a waiter is held before it is answered idle (design 6.7: five minutes).
-// `sessionsOf(boxId)` is the box's session rows ({ name, paneCmd }[]) or null when not known.
+// `paneMarksOf(boxId)` is the box's pane marks (header) and `panesOf(boxId)` its pane rows
+// ({ session, pane, cmd, ... }[]), or null when the listing is not known or not complete.
 // `workers` is the starter ({ start }), `workerStore` the worker settings ({ get }), and
 // `mailInstalled(boxId)` whether the box's mail tools are installed; without the first two no
 // send starts a worker.
 // Create the hub after `store.load()`: its delivery index is built from the store here.
-export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, sessionsOf = () => null, workers = null, workerStore = null, mailInstalled = () => false, now = () => Date.now(), holdMs = 300000 }) {
+export function createAgentMailHub({ store, policyStore, listBoxes, paneMarksOf, panesOf = () => null, workers = null, workerStore = null, mailInstalled = () => false, now = () => Date.now(), holdMs = 300000 }) {
   // ---- callers ----
 
   // A copy of the caller when it is well formed, else null.
@@ -294,30 +307,61 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
 
   // ---- agent state ----
 
-  // { reachable, running, mark }: `running` is the brief's own-key test; mark is that marker.
-  function readMark({ boxId, session }) {
-    const marks = marksOf(boxId);
-    if (marks === null || typeof marks !== 'object') return { reachable: false, running: false, mark: null };
-    const running = Object.hasOwn(marks, session);
-    return { reachable: true, running, mark: running ? marks[session] : null };
+  // The box's pane marks, or null when it is unreachable.
+  function marksOf(boxId) {
+    const marks = paneMarksOf(boxId);
+    return marks !== null && typeof marks === 'object' ? marks : null;
   }
 
-  // The sessions of `boxId` that could take mail, without `me`'s own (header). `marks` is the
-  // box's marker map, already read.
-  function mailSessions(boxId, marks, me) {
-    const rows = sessionsOf(boxId);
-    const paneOf = new Map();
-    if (Array.isArray(rows)) {
-      for (const r of rows) if (r && typeof r.name === 'string' && !paneOf.has(r.name)) paneOf.set(r.name, r.paneCmd);
+  // The pane marks of `marks` (own keys only) that name `session`, as [pane, mark] pairs.
+  const marksNaming = (marks, session) => Object.keys(marks)
+    .filter((pane) => marks[pane] && marks[pane].session === session)
+    .map((pane) => [pane, marks[pane]]);
+
+  // A session's one state word, from its panes: blocked, then working, then ready. null when no
+  // pane mark naming it has a known state.
+  function sessionState(marks, session) {
+    let best = null;
+    for (const [, m] of marksNaming(marks, session)) {
+      const r = STATE_RANK[m.state];
+      if (r !== undefined && (best === null || r < STATE_RANK[best])) best = m.state;
     }
-    return Object.keys(marks).filter((s) => SESSION_NAME_RE.test(s)
-      && !(boxId === me.boxId && s === me.session)
-      && (!Array.isArray(rows) || MAIL_KINDS.has(agentKindOf(paneOf.get(s)))));
+    return best;
+  }
+
+  // { reachable, running, state }: `running` is "a pane mark names the session" (header).
+  function readMark({ boxId, session }) {
+    const marks = marksOf(boxId);
+    if (!marks) return { reachable: false, running: false, state: null };
+    const running = marksNaming(marks, session).length > 0;
+    return { reachable: true, running, state: running ? sessionState(marks, session) : null };
+  }
+
+  // Is this waiter's own pane marked `ready` for its own session? `marks` already read.
+  const paneReady = (marks, w) => marks !== null && Object.hasOwn(marks, w.pane)
+    && marks[w.pane]?.session === w.me.session && marks[w.pane].state === 'ready';
+
+  // The sessions of `boxId` that could take mail, without `me`'s own (header). `marks` is the
+  // box's pane marks, already read.
+  function mailSessions(boxId, marks, me) {
+    const rows = panesOf(boxId);
+    const cmdOf = new Map(); // pane id -> its command, from the listing
+    if (Array.isArray(rows)) {
+      for (const r of rows) if (r && typeof r.pane === 'string' && !cmdOf.has(r.pane)) cmdOf.set(r.pane, r.cmd);
+    }
+    const out = new Set();
+    for (const pane of Object.keys(marks)) {
+      const s = marks[pane]?.session;
+      if (typeof s !== 'string' || !SESSION_NAME_RE.test(s) || out.has(s)) continue;
+      if (boxId === me.boxId && s === me.session) continue;
+      if (!Array.isArray(rows) || MAIL_KINDS.has(agentKindOf(cmdOf.get(pane)))) out.add(s);
+    }
+    return [...out];
   }
 
   // The session a bare target reaches: `{ session }`, `{ several: true }`, or `{}` for none.
   function bareSession(box, me) {
-    const marks = marksOf(box.id);
+    const marks = marksOf(box.id) ?? Object.create(null);
     const can = mailSessions(box.id, marks, me);
     if (can.includes(box.sessionName)) return { session: box.sessionName };
     if (can.length === 1) return { session: can[0] };
@@ -333,7 +377,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
   // The pending bare start of `boxId`, resolved as `{ entry }`, or null when there is none.
   function bareJob(boxId) {
     const marks = marksOf(boxId);
-    const up = (s) => marks !== null && typeof marks === 'object' && Object.hasOwn(marks, s.session);
+    const up = (s) => marks !== null && marksNaming(marks, s.session).length > 0;
     const entry = starts.findLast((s) => s.bare && s.boxId === boxId && !up(s));
     if (entry) return Promise.resolve({ entry });
     return bareStarting.get(boxId) ?? null;
@@ -496,15 +540,15 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
   // Where a queued message for `recipient` stands.
   function queuedStatus(boxes, recipient) {
     const who = nameOf(boxes, recipient);
-    const { reachable, running, mark } = readMark(recipient);
+    const { reachable, running, state } = readMark(recipient);
     if (!reachable) return statusPhrase('queued');
     if (!running) {
       const entry = starts.find((s) => s.boxId === recipient.boxId && s.session === recipient.session);
       if (entry) return statusPhrase(entry.stuck ? 'queued-startup-prompt' : 'queued-starting', { who });
       return statusPhrase('queued-no-agent', { who });
     }
-    if (mark?.state === 'working') return statusPhrase('queued-working', { who });
-    if (mark?.state === 'blocked') return statusPhrase('queued-blocked', { who });
+    if (state === 'working') return statusPhrase('queued-working', { who });
+    if (state === 'blocked') return statusPhrase('queued-blocked', { who });
     return waitersOf(recipient.boxId, recipient.session) > 0 ? statusPhrase('queued') : statusPhrase('queued-not-listening', { who });
   }
 
@@ -605,9 +649,11 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
     if (set) for (const w of set) if (w.threadIds.includes(threadId)) return w;
     return null;
   };
-  const firstWaiter = (me) => {
+  // The longest-held waiter of `me` whose own pane reads ready (header), or null. `marks` is the
+  // box's pane marks, already read (null: unreachable).
+  const firstWaiter = (me, marks) => {
     const set = waiters.get(me.boxId, me.session);
-    if (set) for (const w of set) return w;
+    if (set) for (const w of set) if (paneReady(marks, w)) return w;
     return null;
   };
 
@@ -615,7 +661,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
   function canTake(me) {
     if (!pending.get(me.boxId, me.session)) return false;
     if (replyWaits.get(me.boxId, me.session)) return true;
-    return waitersOf(me.boxId, me.session) > 0 && readMark(me).mark?.state === 'ready';
+    return firstWaiter(me, marksOf(me.boxId)) !== null;
   }
 
   // Hands `me`'s queued mail, oldest first, to whoever can take it. Synchronous on the store.
@@ -625,11 +671,11 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
       for (const m of thread.messages) if (m.from !== side && m.state === 'queued') queue.push({ thread, side, m });
     }
     queue.sort((a, b) => a.m.at - b.m.at); // stable: one thread's messages keep their order
-    const ready = readMark(me).mark?.state === 'ready';
+    const marks = marksOf(me.boxId);
     const allowed = new Map(); // thread id -> the permission re-check, made once per thread
     for (const { thread, side, m } of queue) {
       const wait = replyWaitOn(me, thread.id);
-      const waiter = wait || !ready ? null : firstWaiter(me);
+      const waiter = wait ? null : firstWaiter(me, marks);
       if (!wait && !waiter) continue;
       if (!allowed.has(thread.id)) allowed.set(thread.id, keepIfPermitted(thread, policies));
       if (!allowed.get(thread.id)) continue;
@@ -687,12 +733,14 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
       if (!box || typeof box.id !== 'string') continue;
       if (!mayStart(policies, me.boxId, box.id).ok) continue;
       const marks = marksOf(box.id);
-      if (marks === null || typeof marks !== 'object') continue;
+      if (!marks) continue;
       const record = await recordOf(box.id);
       if (canStart(record) && mailInstalled(box.id)) starters.push({ box: labelOf(boxes, box.id) || box.id, projects: record.projects.map((p) => p.name) });
-      for (const session of Object.keys(marks).filter((s) => SESSION_NAME_RE.test(s)).sort()) {
+      // One row per session a pane mark names, with the summary of its panes.
+      const sessions = new Set(Object.keys(marks).map((pane) => marks[pane]?.session));
+      for (const session of [...sessions].filter((s) => typeof s === 'string' && SESSION_NAME_RE.test(s)).sort()) {
         if (box.id === me.boxId && session === me.session) continue;
-        const state = marks[session]?.state;
+        const state = sessionState(marks, session);
         if (!Object.hasOwn(STATE_WORD, state)) continue;
         rows.push({ box: labelOf(boxes, box.id) || box.id, session, state: STATE_WORD[state], listening: waitersOf(box.id, session) > 0 });
       }
@@ -823,7 +871,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
 
   // The waiter's held request. A malformed caller or pane, or an aborted signal, is answered idle
   // at once and never listens. No marker is required: a waiter armed at SessionStart may connect
-  // before the first sweep sees the agent, and handing needs a `ready` marker anyway.
+  // before the first sweep sees the agent, and handing needs a `ready` marker on its pane anyway.
   function waitMail(caller, pane, signal) {
     const me = callerOf(caller);
     if (!me || typeof pane !== 'string' || !PANE_RE.test(pane) || signal?.aborted) return Promise.resolve(IDLE());
@@ -904,16 +952,16 @@ export function createAgentMailHub({ store, policyStore, listBoxes, marksOf, ses
     return false;
   }
 
-  // The `starts` entries of `boxId` against its markers and listing (header table).
+  // The `starts` entries of `boxId` against its markers and pane listing (header table).
   function checkStarts(boxId) {
     const marks = marksOf(boxId);
-    const rows = sessionsOf(boxId);
+    const rows = panesOf(boxId);
     for (const entry of starts.filter((s) => s.boxId === boxId)) {
       const drop = () => { starts.splice(starts.indexOf(entry), 1); };
-      if (marks !== null && typeof marks === 'object' && Object.hasOwn(marks, entry.session)) { drop(); continue; }
+      if (marks !== null && marksNaming(marks, entry.session).length > 0) { drop(); continue; }
       if (!Array.isArray(rows)) { entry.failedSeen = false; continue; }
-      const row = rows.find((r) => r && r.name === entry.session);
-      const onClaude = row !== undefined && agentKindOf(row.paneCmd) === 'claude';
+      // Any pane of the session, not only its active one.
+      const onClaude = rows.some((r) => r && r.session === entry.session && agentKindOf(r.cmd) === 'claude');
       const age = now() - entry.at;
       const failing = age >= WORKER_FAIL_MS && !onClaude;
       // The first failing look may have read a listing older than the start (header).

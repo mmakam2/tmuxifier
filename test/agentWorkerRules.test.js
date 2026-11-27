@@ -130,17 +130,27 @@ describe('workerSessionName', () => {
 });
 
 describe('runningWorkers', () => {
-  test('counts worker sessions whose pane runs claude', () => {
+  const row = (session, pane, cmd) => ({ session, windowId: '@1', pane, index: 0, active: true, zoomed: false, cmd });
+  test('counts worker sessions with a pane running claude', () => {
     expect(runningWorkers([
-      { name: 'worker-api-1', paneCmd: 'claude' }, { name: 'worker-api-2', paneCmd: 'zsh' },
-      { name: 'worker-x', paneCmd: 'claude' }, { name: 'main', paneCmd: 'claude' }, { name: 'worker-web-1', paneCmd: 'codex' },
+      row('worker-api-1', '%1', 'claude'), row('worker-api-2', '%2', 'zsh'),
+      row('worker-x', '%3', 'claude'), row('main', '%4', 'claude'), row('worker-web-1', '%5', 'codex'),
     ])).toBe(2);
+  });
+  test('counts a worker session once when any of its panes runs claude', () => {
+    expect(runningWorkers([
+      { session: 'worker-site-1', pane: '%1', cmd: 'zsh' }, { session: 'worker-site-1', pane: '%2', cmd: 'claude' },
+      { session: 'worker-site-2', pane: '%3', cmd: 'zsh' }, { session: 'main', pane: '%4', cmd: 'claude' },
+    ])).toBe(1);
+    expect(runningWorkers([row('worker-a-1', '%1', 'claude'), row('worker-a-1', '%2', 'claude')])).toBe(1);
   });
   test('an empty listing, and a listing with malformed rows, count what is well formed', () => {
     expect(runningWorkers([])).toBe(0);
-    expect(runningWorkers([null, undefined, 7, {}, { name: 7, paneCmd: 'claude' }, { name: 'worker-a-1' }, { name: 'worker-a-2', paneCmd: 'claude' }])).toBe(1);
+    expect(runningWorkers([null, undefined, 7, {}, { session: 7, cmd: 'claude' }, { session: 'worker-a-1' }, { session: 'worker-a-2', cmd: 'claude' }])).toBe(1);
+    // the session rows' shape is not pane rows
+    expect(runningWorkers([{ name: 'worker-a-1', paneCmd: 'claude' }])).toBe(0);
   });
   test('claude with a version suffix is claude, and the prefix must lead the name', () => {
-    expect(runningWorkers([{ name: 'worker-a-1', paneCmd: 'claude-2.1' }, { name: 'my-worker-a-1', paneCmd: 'claude' }])).toBe(1);
+    expect(runningWorkers([{ session: 'worker-a-1', cmd: 'claude-2.1' }, { session: 'my-worker-a-1', cmd: 'claude' }])).toBe(1);
   });
 });

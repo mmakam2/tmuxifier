@@ -2,7 +2,7 @@ import { test, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createLocalAgentSampler, readAgentMarks, readMarks, LOCAL_BOX_ID } from '../src/server/localAgent.js';
+import { createLocalAgentSampler, readMarks, LOCAL_BOX_ID } from '../src/server/localAgent.js';
 import { sampleOf } from '../src/server/healthHistory.js';
 import { WINDOW_FMT } from '../src/server/status.js';
 
@@ -14,29 +14,35 @@ test('LOCAL_BOX_ID matches the client pane id', () => {
   expect(LOCAL_BOX_ID).toBe('__local__');
 });
 
-test('readAgentMarks parses a valid marker through the probe allowlist', async () => {
+// readMarks' answer as a plain object (it is null-prototype), or null.
+const readPlain = async (home, rows = ['__PANE__ local:@0:%1:1:1:0:claude']) => {
+  const out = await readMarks(home, rows);
+  return out && { ...out };
+};
+
+test('readMarks parses a valid marker through the probe allowlist', async () => {
   const home = tmpHome();
   fs.mkdirSync(path.join(home, '.tmuxifier-agent'));
   fs.writeFileSync(path.join(home, '.tmuxifier-agent', 'local'), 'local:working:1722600000\n');
-  expect(await readAgentMarks(home)).toEqual({ local: { state: 'working', cause: 'prompt', ts: 1722600000 } });
+  expect(await readPlain(home)).toEqual({ '%1': { session: 'local', state: 'working', cause: 'prompt', ts: 1722600000 } });
 });
 
-test('readAgentMarks returns null for a missing dir, malformed content, and bad state', async () => {
-  expect(await readAgentMarks(tmpHome())).toBeNull();
+test('readMarks returns null for a missing dir, malformed content, and bad state', async () => {
+  expect(await readPlain(tmpHome())).toBeNull();
 
   const home = tmpHome();
   fs.mkdirSync(path.join(home, '.tmuxifier-agent'));
   fs.writeFileSync(path.join(home, '.tmuxifier-agent', 'a'), 'not a marker at all');
   fs.writeFileSync(path.join(home, '.tmuxifier-agent', 'b'), 'local:reticulating:1722600000');
-  expect(await readAgentMarks(home)).toBeNull();
+  expect(await readPlain(home)).toBeNull();
 });
 
-test('readAgentMarks caps an oversized marker at 200 bytes (same as the on-box probe)', async () => {
+test('readMarks caps an oversized marker at 200 bytes (same as the on-box probe)', async () => {
   const home = tmpHome();
   fs.mkdirSync(path.join(home, '.tmuxifier-agent'));
   // 300 bytes of junk: the 200-byte cap truncates it and the parser drops it.
   fs.writeFileSync(path.join(home, '.tmuxifier-agent', 'big'), 'x'.repeat(300));
-  expect(await readAgentMarks(home)).toBeNull();
+  expect(await readPlain(home)).toBeNull();
 });
 
 // The 200-byte cap above is applied to the bytes AFTER the whole file has been
@@ -44,14 +50,14 @@ test('readAgentMarks caps an oversized marker at 200 bytes (same as the on-box p
 // the read itself: only regular files, only small ones. It follows symlinks,
 // matching the on-box probe's `[ -f "$f" ]`, and keeps readFile away from
 // entries it would block on or slurp.
-test('readAgentMarks skips directory and oversized entries, keeping the valid marker', async () => {
+test('readMarks skips directory and oversized entries, keeping the valid marker', async () => {
   const home = tmpHome();
   const dir = path.join(home, '.tmuxifier-agent');
   fs.mkdirSync(dir);
   fs.writeFileSync(path.join(dir, 'local'), 'local:working:1722600000\n');
   fs.writeFileSync(path.join(dir, 'huge'), 'x'.repeat(2000)); // past the read guard
   fs.mkdirSync(path.join(dir, 'subdir'));                     // not a regular file
-  expect(await readAgentMarks(home)).toEqual({ local: { state: 'working', cause: 'prompt', ts: 1722600000 } });
+  expect(await readPlain(home)).toEqual({ '%1': { session: 'local', state: 'working', cause: 'prompt', ts: 1722600000 } });
 });
 
 test('sample() reads tmux sessions via the shared STATUS_FMT parser', async () => {
@@ -264,7 +270,7 @@ test('a rejecting or synchronously throwing runSweep leaves the sample unchanged
   }
 });
 
-test('sample() folds Host Shell split panes and ignores a closed pane', async () => {
+test('sample() reads Host Shell split panes one by one and ignores a closed pane', async () => {
   const home = tmpHome();
   const dir = path.join(home, '.tmuxifier-agent');
   fs.mkdirSync(dir);
@@ -277,11 +283,13 @@ test('sample() folds Host Shell split panes and ignores a closed pane', async ()
       ? { code: 0, stdout: '__PANE__ local:@0:%1:1:1:0:claude\n__PANE__ local:@0:%2:2:0:0:claude\n' }
       : { code: 0, stdout: 'local:1:0:1722600000:claude\n' }),
   });
-  expect((await sampler.sample()).agentMarks.local).toEqual({ state: 'working', cause: 'prompt', ts: 100 });
+  expect({ ...(await sampler.sample()).paneMarks }).toEqual({
+    '%1': { session: 'local', state: 'working', cause: 'prompt', ts: 100 },
+    '%2': { session: 'local', state: 'ready', cause: 'stop', ts: 200 },
+  });
 });
 
-// The per-pane reading beside the per-session one: the same files and the same
-// pane listing, parsed by the pane parsers.
+// The per-pane reading: the marker files and the pane listing, parsed by the pane parsers.
 function localHome(files) {
   const home = tmpHome();
   const dir = path.join(home, '.tmuxifier-agent');
@@ -293,7 +301,7 @@ const tmuxStub = (paneOut, lsOut = 'local:1:0:1722600000:claude\n') => async (ar
   ? { code: 0, stdout: paneOut }
   : { code: 0, stdout: lsOut });
 
-test('sample() returns panes and paneMarks beside agentMarks for a per-pane marker', async () => {
+test('sample() returns panes and paneMarks for a per-pane marker, and no session-keyed map', async () => {
   const home = localHome({ 'local%4': 'local:working:1722600005:prompt:%4\n' });
   const sampler = createLocalAgentSampler({
     home,
@@ -305,7 +313,7 @@ test('sample() returns panes and paneMarks beside agentMarks for a per-pane mark
     { session: 'local', windowId: '@0', pane: '%5', index: 2, active: false, zoomed: false, cmd: 'zsh' },
   ]);
   expect({ ...s.paneMarks }).toEqual({ '%4': { session: 'local', state: 'working', cause: 'prompt', ts: 1722600005 } });
-  expect(s.agentMarks.local).toEqual({ state: 'working', cause: 'prompt', ts: 1722600005 });
+  expect('agentMarks' in s).toBe(false);
 });
 
 test('sample() applies a session-wide marker to the Host Shell\'s agent panes with no marker of their own', async () => {
@@ -345,12 +353,10 @@ test('sample() carries no paneMarks without a usable marker', async () => {
   expect('agentMarks' in s).toBe(false);
 });
 
-test('readMarks returns both readings from one read of the marker directory', async () => {
+test('readMarks returns the per-pane reading, null-prototype, from one read of the marker directory', async () => {
   const home = localHome({ 'local%1': 'local:ready:1722600001:stop:%1\n' });
-  const rows = ['__PANE__ local:@0:%1:1:1:0:claude'];
-  const both = await readMarks(home, rows);
-  expect(both.agentMarks).toEqual({ local: { state: 'ready', cause: 'stop', ts: 1722600001 } });
-  expect({ ...both.paneMarks }).toEqual({ '%1': { session: 'local', state: 'ready', cause: 'stop', ts: 1722600001 } });
+  const out = await readMarks(home, ['__PANE__ local:@0:%1:1:1:0:claude']);
+  expect(Object.getPrototypeOf(out)).toBeNull();
+  expect({ ...out }).toEqual({ '%1': { session: 'local', state: 'ready', cause: 'stop', ts: 1722600001 } });
   expect(await readMarks(tmpHome())).toBeNull();
-  expect(await readAgentMarks(home, rows)).toEqual(both.agentMarks);
 });

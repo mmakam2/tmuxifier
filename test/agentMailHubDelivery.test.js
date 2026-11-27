@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { getEventListeners } from 'node:events';
 import { renderInbox, renderReply, renderWho, wakeText } from '../src/server/agentMailText.js';
-import { createMailHarness, O, B, mark } from './helpers/agentMailHarness.js';
+import { createMailHarness, O, B, mark, paneMark } from './helpers/agentMailHarness.js';
 
 const R = { boxId: 'b', session: 'review' };
 // What an agent is told about a thread its operator closed (the browser shows the phrase alone).
@@ -238,6 +238,81 @@ describe('agentMailHub delivery: waiters', () => {
     expect((await rw).text).toContain('x');
     expect(hub.listening('b')).toEqual({});
     expect((await hub.who(O)).text).toContain('billing/review  idle, not listening');
+  });
+});
+
+// Agent state is per pane (pane-level design 8.1): mail goes to a waiter whose OWN pane's marker
+// reads ready, whatever the session's other panes are doing.
+describe('agentMailHub delivery: by pane', () => {
+  test('hands mail to the waiter whose own pane is ready while a sibling pane works', async () => {
+    h.paneMarks.b = { '%1': paneMark('main', 'working'), '%2': paneMark('main', 'ready') };
+    const w1 = watch(hub.waitMail(B, '%1', ac.signal)); // the older waiter, on the working pane
+    const w2 = watch(hub.waitMail(B, '%2', ac.signal));
+    const s = await hub.send(O, 'billing', 'ping');
+    await flush();
+    const m = msgs(s.threadId)[0];
+    expect(w2.done).toBe(true);
+    expect(w2.value).toEqual({ messageId: m.id, text: wakeText({ messageId: m.id, threadId: s.threadId, from: 'orders/main', body: 'ping', role: 'peer' }) });
+    expect(w1.done).toBe(false);
+    expect(m).toMatchObject({ state: 'handed', handedPane: '%2' });
+    expect(hub.listening('b')).toEqual({ main: 1 });
+  });
+
+  test('a waiter connecting on a ready pane takes the queued mail at once, a sibling pane working', async () => {
+    h.paneMarks.b = { '%1': paneMark('main', 'working'), '%2': paneMark('main', 'ready') };
+    const s = await hub.send(O, 'billing', 'ping');
+    expect(s.text).toBe(`Sent. Thread ${s.threadId}. queued: billing/main is working`); // the session's summary
+    const w = watch(hub.waitMail(B, '%2', ac.signal));
+    await flush();
+    expect(w.value.messageId).toBe(msgs(s.threadId)[0].id);
+    expect(msgs(s.threadId)[0]).toMatchObject({ state: 'handed', handedPane: '%2' });
+  });
+
+  test('keeps mail queued when the only waiter\'s pane is working or blocked', async () => {
+    h.paneMarks.b = { '%1': paneMark('main', 'working'), '%2': paneMark('main', 'ready') }; // nobody waits on %2
+    const w = watch(hub.waitMail(B, '%1', ac.signal));
+    const s = await hub.send(O, 'billing', 'ping');
+    expect(s.text).toBe(`Sent. Thread ${s.threadId}. queued: billing/main is working`);
+    hub.boxChanged('b');
+    await flush();
+    expect(w.done).toBe(false);
+    expect(msgs(s.threadId)[0].state).toBe('queued');
+
+    h.paneMarks.b['%1'] = paneMark('main', 'blocked', 'permission');
+    expect(hub.threadStatus(store.thread(s.threadId), 'starter')).toBe('queued: billing/main is waiting on its operator');
+    hub.boxChanged('b');
+    await flush();
+    expect(w.done).toBe(false);
+    expect(msgs(s.threadId)[0].state).toBe('queued');
+
+    // its own pane finishes the turn: now it is handed
+    h.paneMarks.b['%1'] = paneMark('main', 'ready');
+    hub.boxChanged('b');
+    expect((await w.p).messageId).toBe(msgs(s.threadId)[0].id);
+    expect(msgs(s.threadId)[0]).toMatchObject({ state: 'handed', handedPane: '%1' });
+  });
+
+  test('a waiter on a pane with no marker is never handed mail', async () => {
+    h.paneMarks.b = { '%1': paneMark('main', 'ready') };
+    const w = watch(hub.waitMail(B, '%3', ac.signal));
+    const s = await hub.send(O, 'billing', 'ping');
+    hub.boxChanged('b');
+    await flush();
+    expect(w.done).toBe(false);
+    expect(msgs(s.threadId)[0].state).toBe('queued');
+
+    // nor one whose pane's marker names another session
+    h.paneMarks.b['%3'] = paneMark('review', 'ready');
+    hub.boxChanged('b');
+    await flush();
+    expect(w.done).toBe(false);
+    expect(msgs(s.threadId)[0].state).toBe('queued');
+
+    // its pane's own marker arrives: handed
+    h.paneMarks.b['%3'] = paneMark('main', 'ready');
+    hub.boxChanged('b');
+    expect((await w.p).messageId).toBe(msgs(s.threadId)[0].id);
+    expect(msgs(s.threadId)[0]).toMatchObject({ state: 'handed', handedPane: '%3' });
   });
 });
 

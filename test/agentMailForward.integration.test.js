@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setupLocalBox } from './helpers/localBox.js';
-import { createMailHarness } from './helpers/agentMailHarness.js';
+import { createMailHarness, mark } from './helpers/agentMailHarness.js';
 import { sshRun, sshRunStdin } from '../src/server/sshRun.js';
 import { buildProbeArgv, buildControlCheckArgv, shSingleQuote } from '../src/server/sshCommand.js';
 import { createStatusChecker } from '../src/server/status.js';
@@ -62,16 +62,11 @@ async function harness(forwardOptions = {}, { second = false, other = false } = 
   const box2 = second ? { id: 'b2', label: 'local-again', host: 'tmuxifierlocal-b', sessionName: 'a' } : null;
   const allBoxes = second ? [box, box2] : [box];
 
-  // tmx installed where setup puts it; sessions a and b each "running an agent" (a session-wide
-  // marker, idle), on real tmux sessions of the fixture's server.
+  // tmx installed where setup puts it, and real tmux sessions a and b on the fixture's server.
   const mailDir = path.join(lb.home, '.tmuxifier-mail');
   fs.mkdirSync(mailDir, { recursive: true, mode: 0o700 });
   fs.copyFileSync(ASSET, path.join(mailDir, 'tmx'));
   fs.chmodSync(path.join(mailDir, 'tmx'), 0o755);
-  const markDir = path.join(lb.home, '.tmuxifier-agent');
-  fs.mkdirSync(markDir, { recursive: true });
-  const epoch = Math.floor(Date.now() / 1000);
-  for (const s of ['a', 'b']) fs.writeFileSync(path.join(markDir, s), `${s}:ready:${epoch}:stop\n`);
   const panes = {};
   let tmuxEnv = null;
   for (const s of ['a', 'b']) {
@@ -84,20 +79,29 @@ async function harness(forwardOptions = {}, { second = false, other = false } = 
     tmuxEnv = env;
   }
 
-  // The backend's view of the box's agents comes from a real status probe.
-  let marks = null;
+  // The backend's view of the box: reachable while a real status probe over the master answers,
+  // and then sessions a and b each run an idle agent in every pane of theirs (the harness's
+  // session shorthand, so a hook-wait's own pane is one of them). Agent state is per pane, and
+  // the hub hands mail only to a waiter whose own pane reads ready: the probe itself could not
+  // say so here, because the panes this fixture makes run a shell or `sh`, which the marker
+  // parser never takes for an agent's pane.
   const h = await createMailHarness(
-    { marksOf: (id) => (id === 'b1' || id === 'b2' ? marks : null) },
+    {},
     { boxes: allBoxes, policies: second ? { b1: { send: true, receive: true }, b2: { send: true, receive: true } } : { b1: { send: true, receive: true } } },
   );
+  const ids = second ? ['b1', 'b2'] : ['b1'];
+  for (const id of ids) delete h.marks[id];
   const checker = createStatusChecker({ run: (argv) => run(argv), ...sshOpts });
   const refreshMarks = async () => {
     const r = await checker.checkAgents(box);
-    marks = r?.agentMarks ?? null;
+    for (const id of ids) {
+      if (r) h.marks[id] = { a: mark('ready'), b: mark('ready') };
+      else delete h.marks[id];
+    }
     h.hub.boxChanged('b1');
-    return marks;
+    return r;
   };
-  expect(await refreshMarks()).toMatchObject({ a: { state: 'ready' }, b: { state: 'ready' } });
+  expect((await refreshMarks())?.sessions.map((x) => x.name).sort()).toEqual(['a', 'b']);
 
   const makeForward = (hub = h.hub) => createAgentMailForward({
     run, policyStore: h.policyStore, hub, dataDir, sshOpts, retryBaseMs: 100, retryCapMs: 1000, ...forwardOptions,

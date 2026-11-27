@@ -22,10 +22,10 @@
 // property name here.
 //
 // A worker is a tmux session named `worker-<project>-<n>`. What is running is counted from the
-// box's own session listing (the caller passes it in), so the count survives a restart of
+// box's own pane listing (the caller passes it in), so the count survives a restart of
 // Tmuxifier and needs no stored state.
 
-import { agentKindOf } from './healthHistory.js';
+import { agentKindOf } from './agentKind.js';
 
 export const PROJECT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
 export const WORKER_DIR_RE = /^\/[A-Za-z0-9._/-]{1,199}$/;
@@ -99,13 +99,15 @@ export function workerSessionName(project, sessionNames) {
   return `${WORKER_PREFIX}${project}-${n}`;
 }
 
-// Worker sessions whose active pane runs the agent. The pane command is part of the test
-// because a worker's name can outlive its Claude (design 5.8): a leftover shell is not counted.
-export function runningWorkers(sessions) {
-  let n = 0;
-  for (const s of sessions) {
-    if (s && typeof s.name === 'string' && s.name.startsWith(WORKER_PREFIX)
-      && agentKindOf(s.paneCmd) === WORKER_AGENTS.claude.kind) n += 1;
+// Worker sessions with any pane running the agent, each counted once, from pane rows
+// ({ session, cmd, ... }[]). The pane command is part of the test because a worker's name can
+// outlive its Claude (design 5.8): a leftover shell is not counted. Any pane, not only the
+// active one: an operator who splits a worker's window still has that worker running.
+export function runningWorkers(panes) {
+  const running = new Set();
+  for (const p of panes) {
+    if (p && typeof p.session === 'string' && p.session.startsWith(WORKER_PREFIX)
+      && agentKindOf(p.cmd) === WORKER_AGENTS.claude.kind) running.add(p.session);
   }
-  return n;
+  return running.size;
 }

@@ -126,6 +126,7 @@ test('checks run in order: setup before reachable before project', async () => {
   expect(await starter({ sessionsOf: () => null }).start(BOX)).toEqual({ ok: false, code: 'unreachable' });
 });
 
+// With no pane listing (`panesOf` not given, as here, or null) the session rows' active panes count.
 test('max running workers is worker-cap; leftover shells do not count and keep their numbers', async () => {
   await saveDefault({ max: 2 });
   const two = (paneCmd) => [
@@ -137,6 +138,26 @@ test('max running workers is worker-cap; leftover shells do not count and keep t
 
   const r = await starter({ sessionsOf: () => two('zsh') }).start(BOX);
   expect(r).toMatchObject({ ok: true, session: 'worker-api-3' });
+});
+
+test('the running count reads the pane rows: any pane of a worker session running claude counts it once', async () => {
+  await saveDefault({ max: 2 });
+  // The session rows show each worker's active pane, a shell; the pane rows show what runs behind it.
+  const sessions = [{ name: 'worker-api-1', paneCmd: 'zsh' }, { name: 'worker-api-2', paneCmd: 'zsh' }];
+  const pane = (session, id, cmd, active) => ({ session, windowId: '@1', pane: id, index: 0, active, zoomed: false, cmd });
+  const both = [
+    pane('worker-api-1', '%1', 'zsh', true), pane('worker-api-1', '%2', 'claude', false), pane('worker-api-1', '%3', 'claude', false),
+    pane('worker-api-2', '%4', 'zsh', true), pane('worker-api-2', '%5', 'claude', false),
+  ];
+  expect(await starter({ sessionsOf: () => sessions, panesOf: () => both }).start(BOX)).toEqual({ ok: false, code: 'worker-cap' });
+  expect(calls).toHaveLength(0);
+  // One worker left on claude: room for one more, and the names come from the session rows.
+  const one = both.filter((p) => p.session === 'worker-api-1');
+  expect(await starter({ sessionsOf: () => sessions, panesOf: () => [...one, pane('worker-api-2', '%4', 'zsh', true)] }).start(BOX))
+    .toMatchObject({ ok: true, session: 'worker-api-3' });
+  // A pane listing that is not known falls back to the session rows: both shells, nothing running.
+  expect(await starter({ sessionsOf: () => [...sessions, { name: 'worker-api-3', paneCmd: 'zsh' }], panesOf: () => null }).start(BOX))
+    .toMatchObject({ ok: true, session: 'worker-api-4' });
 });
 
 test('Review Focus 2: two starts made together get two names, one script each', async () => {

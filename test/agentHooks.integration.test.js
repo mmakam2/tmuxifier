@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { setupLocalBox } from './helpers/localBox.js';
 import { sshRun } from '../src/server/sshRun.js';
-import { PROBE_REMOTE, parseAgentMarks, parseTmuxWindows, createStatusChecker } from '../src/server/status.js';
+import { PROBE_REMOTE, parsePaneMarks, parseTmuxWindows, createStatusChecker } from '../src/server/status.js';
 import { sampleOf } from '../src/server/healthHistory.js';
 
 let lb; let teardown;
@@ -15,7 +15,7 @@ afterEach(async () => {
   teardown = null;
 });
 
-test('hook script → marker file → PROBE_REMOTE → parseAgentMarks round trip', async () => {
+test('hook script → marker file → PROBE_REMOTE → parsePaneMarks round trip', async () => {
   lb = await setupLocalBox();
   teardown = lb.cleanup;
   // Install the real asset into the box home (the same bytes setup pushes).
@@ -43,9 +43,9 @@ test('hook script → marker file → PROBE_REMOTE → parseAgentMarks round tri
   }
   // Full probe over real ssh: the marker line and the session line coexist.
   const res = await sshRun(['-F', lb.sshConfigFile, lb.box.host, PROBE_REMOTE], { env: lb.env });
-  const marks = parseAgentMarks(res.stdout);
+  const marks = parsePaneMarks(res.stdout);
   expect(marks).toBeTruthy();
-  expect(marks.agenthooks).toMatchObject({ state: 'ready', cause: 'stop' });
+  expect(marks[pane]).toMatchObject({ session: 'agenthooks', state: 'ready', cause: 'stop' });
   // The same probe pins WINDOW_FMT against REAL tmux. Every other window test
   // feeds parseTmuxWindows a hand-written __WIN__ line, so a wrong field order or
   // a specifier that expands differently from what we assume would pass all of
@@ -62,7 +62,7 @@ test('hook script → marker file → PROBE_REMOTE → parseAgentMarks round tri
   expect(typeof w.name).toBe('string');
 });
 
-test('real tmux split: each pane is its own agent entry with its own state, and the session folds them', async () => {
+test('real tmux split: each pane is its own agent entry with its own state', async () => {
   lb = await setupLocalBox();
   teardown = lb.cleanup;
   const asset = await fs.readFile(new URL('../src/server/assets/tmuxifier-agent-hook.sh', import.meta.url), 'utf8');
@@ -97,7 +97,10 @@ test('real tmux split: each pane is its own agent entry with its own state, and 
   }
   expect(cmds.trim().split('\n')).toEqual(['claude', 'claude']);
   const res = await ssh(PROBE_REMOTE);
-  expect(parseAgentMarks(res.stdout).agenthooks).toMatchObject({ state: 'working', cause: 'prompt' });
+  const marks = parsePaneMarks(res.stdout);
+  expect(Object.keys(marks).sort()).toEqual([...panes].sort());
+  expect(marks[panes[0]]).toMatchObject({ session: 'agenthooks', state: 'working', cause: 'prompt' });
+  expect(marks[panes[1]]).toMatchObject({ session: 'agenthooks', state: 'ready', cause: 'stop' });
   // The same probe through the status checker, into a sample: one entry per
   // split pane, each with its own marker's state.
   const checker = createStatusChecker({ run: (argv) => sshRun(argv, { env: lb.env }), sshConfigFile: lb.sshConfigFile });
@@ -108,7 +111,7 @@ test('real tmux split: each pane is its own agent entry with its own state, and 
   // Close the working pane: only the finished one is left.
   await ssh(`tmux kill-pane -t '${panes[0]}'`);
   const after = await ssh(PROBE_REMOTE);
-  expect(parseAgentMarks(after.stdout).agenthooks).toMatchObject({ state: 'ready', cause: 'stop' });
+  expect(Object.keys(parsePaneMarks(after.stdout))).toEqual([panes[1]]);
   const left = sampleOf(await checker.checkBox(lb.box), 2).agents;
   expect(Object.keys(left)).toEqual([panes[1]]);
   expect(left[panes[1]]).toMatchObject({ state: 'done', cause: 'stop' });

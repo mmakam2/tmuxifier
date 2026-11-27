@@ -6,7 +6,7 @@ import { agentKindOf } from './agentKind.js';
 // current window produced OUTPUT — and deliberately not `#{session_activity}`,
 // which tmux bumps on key input and on attach but never on output alone.
 // Agent working/waiting no longer derives from this timestamp (that heuristic
-// is gone — hook markers via parseAgentMarks below are the sole source); the
+// is gone — hook markers via parsePaneMarks below are the sole source); the
 // field remains as a general last-output reading for session listings and
 // diagnostics. Window vars resolve against the session's current window here,
 // matching `#{pane_current_command}` beside it, so both describe the same pane.
@@ -48,7 +48,7 @@ const META_PROBE =
   `echo; } 2>/dev/null;`;
 
 // Marker files written by the on-box Claude Code hook (claudeAgentHooks.js):
-// one `__AGENT__ <marker contents>` line each (see parseAgentMarks). Static and
+// one `__AGENT__ <marker contents>` line each (see parsePaneMarks). Static and
 // non-interpolated like META_PROBE — no box field reaches it — and fully
 // stderr-silenced so a missing dir or unreadable file can't disturb the
 // reachability classifier. head caps a corrupted marker before it can flood
@@ -75,8 +75,8 @@ export const OSC_SWEEP =
   'if [ -f "$HOME/.tmuxifier-osc/reporter.py" ] && command -v python3 >/dev/null 2>&1; then python3 "$HOME/.tmuxifier-osc/reporter.py" sweep >/dev/null 2>&1 || true; fi; ';
 
 // One line per pane on the box: parseTmuxPanes reads the whole row, and
-// parseAgentMarks and parsePaneMarks use it to decide which per-pane markers
-// still describe a running agent. Session first and the command last, because
+// parsePaneMarks uses it to decide which per-pane markers still describe a
+// running agent. Session first and the command last, because
 // session names cannot contain a colon and commands can; the window id, pane id
 // and pane index between them are digits behind a sigil. `#{window_zoomed_flag}`
 // is the pane's WINDOW's flag: a zoomed window shows only its active pane.
@@ -169,14 +169,6 @@ function liveKeys({ panes, complete }) {
   return new Set(panes.filter((p) => !SHELL_CMD_RE.test(p.cmd)).map((p) => `${p.session}:${p.pane}`));
 }
 
-// Lower is more urgent. A finished turn outranks a session that merely started
-// so a pane opening next to a finished one cannot hide that it finished.
-const markRank = (m) => (m.state === 'blocked' ? 0 : m.state === 'working' ? 1 : m.cause === 'start' ? 3 : 2);
-const foldMarks = (marks) => marks.reduce((best, m) => {
-  const d = markRank(m) - markRank(best);
-  return d < 0 || (d === 0 && m.ts > best.ts) ? m : best;
-});
-
 // One `__AGENT__ <marker contents>` line as { session, state, cause, ts, pane },
 // or null when it is not a usable marker. Marker content is a file on the box,
 // so it is input: state and cause are closed allowlists and ts must be a finite
@@ -211,55 +203,16 @@ function readMarkerLine(line) {
   return { session, state, cause, ts, pane: parts.length === 5 ? pane : null };
 }
 
-// Pull `__AGENT__` marker lines into { session: { state, cause, ts } }, the
-// per-session reading (parsePaneMarks below is the per-pane one).
-//
-// Split panes share a session, so a session reads as the fold of its panes:
-// blocked, then working, then finished, newest first within a state. A pane
-// marker counts only while `__PANE__` shows that pane in that session with
-// something other than a shell in the foreground. A session-wide marker older
-// than the newest live pane marker is a leftover from before setup was rerun and
-// is ignored; otherwise it folds in with the panes.
-export function parseAgentMarks(stdout) {
-  const lines = String(stdout).split(/\r?\n/);
-  const live = liveKeys(parseTmuxPanes(stdout));
-  // Maps, not objects: the keys are box-controlled tmux session names.
-  const sessionWide = new Map();
-  const perPane = new Map();
-  for (const line of lines) {
-    const m = readMarkerLine(line);
-    if (!m) continue;
-    const { session, state, cause, ts } = m;
-    if (m.pane !== null) {
-      if (live && !live.has(`${session}:${m.pane}`)) continue;
-      if (!perPane.has(session)) perPane.set(session, []);
-      perPane.get(session).push({ state, cause, ts });
-    } else {
-      sessionWide.set(session, { state, cause, ts });
-    }
-  }
-  // Null-prototype: a session named `__proto__` must land as an own key rather
-  // than reassign the map's prototype (and `constructor` must not read as inherited).
-  const out = Object.create(null);
-  for (const session of new Set([...sessionWide.keys(), ...perPane.keys()])) {
-    const marks = [...(perPane.get(session) ?? [])];
-    const wide = sessionWide.get(session);
-    if (wide && (!marks.length || wide.ts >= Math.max(...marks.map((m) => m.ts)))) marks.push(wide);
-    out[session] = foldMarks(marks);
-  }
-  return Object.keys(out).length ? out : null;
-}
-
-// The same markers as { '%pane': { session, state, cause, ts } }: one entry per
-// pane, no fold, because the pane is the unit an agent runs in.
+// Pull `__AGENT__` marker lines into { '%pane': { session, state, cause, ts } }:
+// one entry per pane, no fold, because the pane is the unit an agent runs in.
 //
 // A five-field marker counts only while the pane listing shows its pane in its
 // session with something other than a shell in the foreground (a killed agent
 // leaves its marker behind). A pane that moved sessions leaves its old file
 // behind, so two markers can name one pane; the old session's fails that test
 // and drops, and when both sessions list the pane (grouped sessions) the newer
-// wins. An absent or capped listing fails open, as in parseAgentMarks: no pane
-// marker is discarded for being absent from it.
+// wins. An absent or capped listing fails open: no pane marker is discarded for
+// being absent from it.
 //
 // A session-wide marker (four fields, or the legacy three) is the compatibility
 // layer for boxes whose setup has not been rerun and for a Claude hook with no
@@ -268,7 +221,8 @@ export function parseAgentMarks(stdout) {
 // With no trustworthy listing there are no known panes to speak for, so it
 // applies to nothing. Delete this paragraph's rule once every box has been rerun.
 //
-// Null-prototype and null when empty, like parseAgentMarks.
+// Null-prototype (a session or pane key is box output, so `__proto__` must land
+// as an own key, never reassign the prototype) and null when empty.
 export function parsePaneMarks(stdout) {
   const listing = parseTmuxPanes(stdout);
   const live = liveKeys(listing);
@@ -339,7 +293,7 @@ function muxStale(stderr) {
 
 // A window name is a string on the box, so it is input: control characters are
 // stripped and the length capped before it can reach a <select> in the browser.
-// parseAgentMarks' posture, for the same reason.
+// parsePaneMarks' posture, for the same reason.
 // The bidi controls go in with the C0/C1 set: U+202A-202E (embeddings and
 // overrides) and U+2066-2069 (isolates) are not control *characters*, so they
 // survived that strip, but they reorder rendered text -- a window name carrying
@@ -529,11 +483,9 @@ export function createStatusChecker({
       }
       const metrics = parseMeta(res.stdout);
       deriveCpuPct(box, metrics);
-      const agentMarks = parseAgentMarks(res.stdout);
       const paneMarks = parsePaneMarks(res.stdout);
       const out = { reachable: true, ...tmuxState(res.stdout) };
       if (metrics) out.metrics = metrics;
-      if (agentMarks) out.agentMarks = agentMarks;
       if (paneMarks) out.paneMarks = paneMarks;
       return out;
     } catch (e) {
@@ -641,8 +593,6 @@ export function createStatusChecker({
         const res = await run(argv);
         if (!res || res.code !== 0) return null;
         const out = tmuxState(res.stdout);
-        const agentMarks = parseAgentMarks(res.stdout);
-        if (agentMarks) out.agentMarks = agentMarks;
         const paneMarks = parsePaneMarks(res.stdout);
         if (paneMarks) out.paneMarks = paneMarks;
         // The connection had no session slot left and ssh went around it (see

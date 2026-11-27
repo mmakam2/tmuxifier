@@ -16,8 +16,8 @@ import { createWorkerBench } from './helpers/workerBench.js';
 // and the real starter, whose script runs in the worker bench (test/helpers/workerBench.js: a
 // private tmux server on its own -L socket under a private TMUX_TMPDIR and HOME). What the
 // poller would supply (the snapshot, probeOne) and the setup job table are plain objects a
-// test holds still. `sessionsOf` is built from the snapshot exactly as index.js builds it, and
-// box removal is wired with the same onRemoved index.js passes.
+// test holds still. `sessionsOf` and `panesOf` are built from the snapshot exactly as index.js
+// builds them, and box removal is wired with the same onRemoved index.js passes.
 
 let dir, bench, store, workerStore, app, browser, bearer;
 let snapshot, probes, probeThrows, setupJobs, execOverride;
@@ -62,6 +62,8 @@ async function boot({ withWorkers = true, withMail = false, starter = null } = {
   };
   // index.js's sessionsOf: null unless the snapshot entry is there and reachable.
   const sessionsOf = (id) => { const e = statusPoller.getSnapshot()[id]; return e?.reachable ? e.sessions : null; };
+  // index.js's panesOf: the pane rows only when the entry is reachable and carries them.
+  const panesOf = (id) => { const e = statusPoller.getSnapshot()[id]; return e?.reachable && Array.isArray(e.panes) ? e.panes : null; };
   workerStore = createAgentWorkerStore({ dataDir: dir });
   const agentWorkers = withWorkers
     ? {
@@ -71,6 +73,7 @@ async function boot({ withWorkers = true, withMail = false, starter = null } = {
         workerStore,
         setupRunning: (id) => setupManager.currentForBox(id)?.status === 'running',
         sessionsOf,
+        panesOf,
       }),
     }
     : null;
@@ -227,7 +230,11 @@ test('every start failure answers its status, the operator\'s wording and the co
   delete snapshot[orders.id];
   await expectFail(await start(orders.id), 502, 'unreachable', 'box is unreachable');
 
-  snapshot[orders.id] = { reachable: true, sessions: [{ name: 'worker-api-1', paneCmd: 'claude' }] };
+  snapshot[orders.id] = {
+    reachable: true,
+    sessions: [{ name: 'worker-api-1', paneCmd: 'claude' }],
+    panes: [{ session: 'worker-api-1', windowId: '@1', pane: '%1', index: 0, active: true, zoomed: false, cmd: 'claude' }],
+  };
   await expectFail(await start(orders.id), 409, 'worker-cap', 'this box already runs as many started agents as its limit allows');
   snapshot[orders.id] = { reachable: true, sessions: [] };
 

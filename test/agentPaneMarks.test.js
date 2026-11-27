@@ -4,94 +4,12 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseAgentMarks, parsePaneMarks, parseTmuxSessions, PROBE_REMOTE, AGENT_REMOTE } from '../src/server/status.js';
+import { parsePaneMarks, parseTmuxSessions, PROBE_REMOTE, AGENT_REMOTE } from '../src/server/status.js';
 
-// Split panes share a tmux session, so each pane's agent keeps its own marker
-// and the session reads as the fold of its live panes.
+// Split panes share a tmux session, so each pane's agent keeps its own marker,
+// read per pane (parsePaneMarks below).
 
-const mark = (session, state, ts, cause, pane) => `__AGENT__ ${session}:${state}:${ts}:${cause}${pane ? `:${pane}` : ''}`;
 const paneRow = (session, pane, cmd = 'claude') => `__PANE__ ${session}:@0:${pane}:1:1:0:${cmd}`;
-const parse = (...lines) => parseAgentMarks(lines.join('\n'));
-
-test('a working pane outranks a finished pane in the same session', () => {
-  const out = parse(mark('web', 'ready', 200, 'stop', '%1'), mark('web', 'working', 100, 'prompt', '%2'), paneRow('web', '%1'), paneRow('web', '%2'));
-  expect(out.web).toEqual({ state: 'working', cause: 'prompt', ts: 100 });
-});
-
-test('a blocked pane outranks a working pane', () => {
-  const out = parse(mark('web', 'working', 200, 'prompt', '%1'), mark('web', 'blocked', 100, 'question', '%2'), paneRow('web', '%1'), paneRow('web', '%2'));
-  expect(out.web).toEqual({ state: 'blocked', cause: 'question', ts: 100 });
-});
-
-test('once every pane has finished the session carries the newest finish', () => {
-  const out = parse(mark('web', 'ready', 200, 'stop', '%1'), mark('web', 'ready', 300, 'stop', '%2'), paneRow('web', '%1'), paneRow('web', '%2'));
-  expect(out.web).toEqual({ state: 'ready', cause: 'stop', ts: 300 });
-});
-
-test('a pane that just started does not hide another pane\'s finished turn', () => {
-  const out = parse(mark('web', 'ready', 200, 'stop', '%1'), mark('web', 'ready', 300, 'start', '%2'), paneRow('web', '%1'), paneRow('web', '%2'));
-  expect(out.web).toEqual({ state: 'ready', cause: 'stop', ts: 200 });
-});
-
-test('panes in different sessions fold separately', () => {
-  const out = parse(mark('a', 'ready', 200, 'stop', '%1'), mark('b', 'working', 100, 'prompt', '%2'), paneRow('a', '%1'), paneRow('b', '%2'));
-  expect(out.a.state).toBe('ready');
-  expect(out.b.state).toBe('working');
-});
-
-test('a closed pane no longer counts', () => {
-  const out = parse(mark('web', 'working', 100, 'prompt', '%1'), mark('web', 'ready', 200, 'stop', '%2'), paneRow('web', '%2'));
-  expect(out.web).toEqual({ state: 'ready', cause: 'stop', ts: 200 });
-});
-
-test('a pane back at its shell no longer counts, so a killed agent cannot pin the session', () => {
-  const out = parse(mark('web', 'working', 100, 'prompt', '%1'), mark('web', 'ready', 200, 'stop', '%2'), paneRow('web', '%1', 'zsh'), paneRow('web', '%2'));
-  expect(out.web).toEqual({ state: 'ready', cause: 'stop', ts: 200 });
-});
-
-test('a session with only stale pane markers has no state', () => {
-  expect(parse(mark('web', 'working', 100, 'prompt', '%1'), paneRow('other', '%9', 'bash'))).toBeNull();
-});
-
-test('a pane moved to another session stops counting for the old one', () => {
-  expect(parse(mark('web', 'working', 100, 'prompt', '%1'), paneRow('elsewhere', '%1'))).toBeNull();
-});
-
-test('no pane listing at all fails open: the markers still count', () => {
-  const out = parse(mark('web', 'ready', 200, 'stop', '%1'), mark('web', 'working', 100, 'prompt', '%2'));
-  expect(out.web.state).toBe('working');
-});
-
-test('a pane listing at the row cap is not trusted to be complete', () => {
-  const rows = Array.from({ length: 400 }, (_, i) => paneRow('other', `%${i + 10}`));
-  const out = parse(mark('web', 'working', 100, 'prompt', '%1'), ...rows);
-  expect(out.web.state).toBe('working');
-});
-
-test('a session-wide marker still works alone', () => {
-  expect(parse(mark('web', 'working', 100, 'prompt'), paneRow('web', '%1')).web).toEqual({ state: 'working', cause: 'prompt', ts: 100 });
-});
-
-test('a pre-upgrade session-wide marker is superseded by a newer pane marker', () => {
-  const out = parse(mark('web', 'working', 100, 'prompt'), mark('web', 'ready', 200, 'stop', '%1'), paneRow('web', '%1'));
-  expect(out.web).toEqual({ state: 'ready', cause: 'stop', ts: 200 });
-});
-
-test('a session-wide marker newer than the pane markers still folds in', () => {
-  const out = parse(mark('web', 'working', 300, 'prompt'), mark('web', 'ready', 200, 'stop', '%1'), paneRow('web', '%1'));
-  expect(out.web).toEqual({ state: 'working', cause: 'prompt', ts: 300 });
-});
-
-test('a malformed pane field drops the marker', () => {
-  expect(parse(mark('web', 'working', 100, 'prompt', '12'), paneRow('web', '%1'))).toBeNull();
-  expect(parse(mark('web', 'working', 100, 'prompt', '%1x'), paneRow('web', '%1'))).toBeNull();
-  expect(parse('__AGENT__ web:working:100:prompt:%1:extra', paneRow('web', '%1'))).toBeNull();
-});
-
-test('a session named __proto__ lands as an own key', () => {
-  const out = parse(mark('__proto__', 'working', 100, 'prompt', '%1'), paneRow('__proto__', '%1'));
-  expect(Object.hasOwn(out, '__proto__')).toBe(true);
-});
 
 test('pane rows are not mistaken for tmux session rows', () => {
   expect(parseTmuxSessions(paneRow('web', '%1', 'claude'))).toEqual([]);
@@ -174,11 +92,6 @@ describe('parsePaneMarks', () => {
     expect(parsePaneMarks(P(['main:@0:%1:1:1:0:claude']))).toBeNull();
     expect(parsePaneMarks(A(['main:working:1700000100:prompt:12', 'main:working:1700000100:prompt:%1x', 'main:working:1700000100:prompt:%1:extra', 'main:working']))).toBeNull();
     expect(parsePaneMarks(A(['main:working:1700000100:prompt']))).toBeNull(); // session-wide, no panes to speak for
-  });
-  it('leaves parseAgentMarks alone: the per-session fold is still there', () => {
-    const out = [A(['main:ready:1700000200:stop:%1', 'main:working:1700000100:prompt:%2']), P(['main:@0:%1:1:1:0:claude', 'main:@0:%2:2:0:0:claude'])].join('\n');
-    expect(parseAgentMarks(out).main).toEqual({ state: 'working', cause: 'prompt', ts: 1700000100 });
-    expect(Object.keys(parsePaneMarks(out)).sort()).toEqual(['%1', '%2']);
   });
 });
 

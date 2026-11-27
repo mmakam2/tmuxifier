@@ -22,7 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { execFile } from 'node:child_process';
-import { STATUS_FMT, WINDOW_FMT, PANE_FMT, PANE_ROWS_MAX, parseTmuxSessions, parseTmuxWindows, attachWindows, parseTmuxPanes, parseAgentMarks, parsePaneMarks } from './status.js';
+import { STATUS_FMT, WINDOW_FMT, PANE_FMT, PANE_ROWS_MAX, parseTmuxSessions, parseTmuxWindows, attachWindows, parseTmuxPanes, parsePaneMarks } from './status.js';
 
 // Matches LOCAL_GROUP in sessions.js and the client's pane id. Defined here
 // rather than imported from sessions.js so statusPoller's import chain stays
@@ -65,9 +65,9 @@ function isNoServer(res) {
 // one `__AGENT__ <content>` line — capped, newline-stripped — then the same
 // parsers that handle probe stdout apply their closed state set and numeric
 // timestamp allowlist. `paneRows` are the `__PANE__` lines the on-box probe would
-// have printed, which is how the parsers know which per-pane markers are live.
-// Both readings come from the one read of the directory: the per-session
-// `agentMarks` and the per-pane `paneMarks`. null when the directory is unreadable.
+// have printed, which is how the parser knows which per-pane markers are live.
+// Returns the per-pane reading (`paneMarks`, parsePaneMarks' shape), or null when
+// the directory is unreadable or holds no usable marker.
 export async function readMarks(home, paneRows = []) {
   const dir = path.join(home, '.tmuxifier-agent');
   let names;
@@ -86,13 +86,7 @@ export async function readMarks(home, paneRows = []) {
       lines.push('__AGENT__ ' + buf.subarray(0, MARK_MAX_BYTES).toString('utf8').replace(/\n/g, ''));
     } catch { /* unreadable marker: skip it, keep the rest */ }
   }
-  const text = [...lines, ...paneRows].join('\n');
-  return { agentMarks: parseAgentMarks(text), paneMarks: parsePaneMarks(text) };
-}
-
-// The per-session reading alone (what readMarks calls `agentMarks`).
-export async function readAgentMarks(home, paneRows = []) {
-  return (await readMarks(home, paneRows))?.agentMarks ?? null;
+  return parsePaneMarks([...lines, ...paneRows].join('\n'));
 }
 
 // The OSC reporter's `sweep` role (see oscReporter.js): attaches listeners to
@@ -167,9 +161,8 @@ export function createLocalAgentSampler({ home = os.homedir(), runTmux = runTmux
         }
       }
       try {
-        const marks = await readMarks(home, paneRows);
-        if (marks?.agentMarks) out.agentMarks = marks.agentMarks;
-        if (marks?.paneMarks) out.paneMarks = marks.paneMarks;
+        const paneMarks = await readMarks(home, paneRows);
+        if (paneMarks) out.paneMarks = paneMarks;
       } catch { /* marker dir unreadable: no agent state */ }
       return out;
     },

@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { resolveTarget, WORKER_FAIL_MS, WORKER_STUCK_MS } from '../src/server/agentMailHub.js';
 import { WORKER_FAILED_REASON } from '../src/server/agentMailStore.js';
 import { refusalText, wakeText, renderWho } from '../src/server/agentMailText.js';
-import { createMailHarness, O, B, mark } from './helpers/agentMailHarness.js';
+import { createMailHarness, O, B, mark, paneMark, paneRow } from './helpers/agentMailHarness.js';
 
 // Which session a send to a bare box name reaches (agent workers spec 5.3): the configured
 // session when it can take mail, else the one other session that can, else refused. A session
@@ -595,6 +595,40 @@ describe('agentMailHub: a worker that does not come up', () => {
     expect(got.messageId).toBe(m.id);
     expect(await w.hub.ack(WORKER, m.id)).toBe(true);
     expect(w.store.thread(r.threadId).messages[0].state).toBe('delivered');
+  });
+
+  test('a pane mark naming the worker session means up, on whichever pane it is', async () => {
+    const r = await send();
+    delete w.sessions.b;
+    w.panes.b = [paneRow('main', '%1', 'zsh'), paneRow('worker-api-1', '%3', 'zsh'), paneRow('worker-api-1', '%4', 'claude', { active: false })];
+    w.paneMarks.b = { '%4': paneMark('worker-api-1', 'working') };
+    at(2);
+    w.paneMarks.b = {};
+    w.panes.b = [paneRow('main', '%1', 'zsh')];
+    at(45);
+    at(46);
+    expect(state(r)).toBe('open');
+    expect(status(r)).toBe('queued: billing/worker-api-1 is not running an agent');
+  });
+
+  test('on claude is any pane of the worker session, not only its active one', async () => {
+    const r = await send();
+    delete w.sessions.b;
+    w.paneMarks.b = {};
+    // the active pane is a shell (the operator split the window); claude runs behind it
+    w.panes.b = [paneRow('main', '%1', 'zsh'), paneRow('worker-api-1', '%3', 'zsh'), paneRow('worker-api-1', '%4', 'claude', { active: false })];
+    at(31);
+    at(32);
+    expect(state(r)).toBe('open');
+    expect(status(r)).toBe(STARTING);
+    at(61);
+    expect(status(r)).toBe(STUCK);
+    // and with no pane on claude, two looks close it
+    w.panes.b = [paneRow('main', '%1', 'zsh'), paneRow('worker-api-1', '%3', 'zsh'), paneRow('worker-api-1', '%4', 'bash', { active: false })];
+    at(62);
+    expect(state(r)).toBe('open');
+    at(63);
+    expect(w.store.thread(r.threadId)).toMatchObject({ state: 'closed', reason: WORKER_FAILED_REASON });
   });
 
   test('a marker at +2 s drops the entry: a later listing without the session closes nothing', async () => {

@@ -242,12 +242,20 @@ const statusChecker = createStatusChecker({
   masterAlive: (box) => boxActions.isMasterAlive(box),
 });
 // A box's tmux sessions as the last status read saw them ({ name, paneCmd, ... }[]), or null when
-// there is no entry or the box was not reachable: never an older listing. The one function both
-// the worker starter and the mail hub read. Late-bound on purpose: statusPoller is constructed
+// there is no entry or the box was not reachable: never an older listing. The worker starter
+// reads it for which session names are taken. Late-bound on purpose: statusPoller is constructed
 // further down this file, and this runs only when a request or a sweep reaches it, after listen.
 const sessionsOf = (id) => {
   const e = statusPoller.getSnapshot()[id];
   return e?.reachable && Array.isArray(e.sessions) ? e.sessions : null;
+};
+// The box's pane rows ({ session, windowId, pane, index, active, zoomed, cmd }[]) from the same
+// read, or null when the box was not reachable or the pane listing was not complete (the
+// snapshot carries `panes` only then). Late-bound like sessionsOf; the starter reads it for its
+// running count, the mail hub for which sessions can take mail and whether a worker is on claude.
+const panesOf = (id) => {
+  const e = statusPoller.getSnapshot()[id];
+  return e?.reachable && Array.isArray(e.panes) ? e.panes : null;
 };
 // Agent workers (agentWorker*.js, design docs/superpowers/specs/2026-11-19-agent-workers-design.md):
 // the per-box worker settings and the starter that runs an interactive agent on a box in its own
@@ -262,6 +270,7 @@ try {
     workerStore,
     setupRunning: (boxId) => setupManager.currentForBox(boxId)?.status === 'running',
     sessionsOf,
+    panesOf,
     // How many of the box's status reads have been applied: it tells the starter whether the
     // listing was read after a start it remembers. Late-bound like sessionsOf.
     listingSeq: (id) => statusPoller.listingSeq(id),
@@ -290,11 +299,13 @@ async function createAgentMail() {
     policyStore: mailPolicyStore,
     listBoxes: () => store.listBoxes(),
     // Late-bound on purpose: statusPoller is constructed further down this file, and the hub
-    // reads markers only when a request or a sweep reaches it, after listen.
-    marksOf: (id) => { const e = statusPoller.getSnapshot()[id]; return e?.reachable ? (e.agentMarks ?? {}) : null; },
+    // reads markers only when a request or a sweep reaches it, after listen. The per-pane marks:
+    // `{}` for a reachable box with none, null for an unreachable one.
+    paneMarksOf: (id) => { const e = statusPoller.getSnapshot()[id]; return e?.reachable ? (e.paneMarks ?? {}) : null; },
+    // Which sessions can take mail, and whether a worker the hub started is on claude.
+    panesOf,
     // Agent workers: a send to a box with no agent may start one (spec 5.3). Without a starter
     // the hub refuses such a send as before.
-    sessionsOf,
     workers: agentWorkers?.starter ?? null,
     workerStore: agentWorkers?.store ?? null,
     mailInstalled: (id) => mailForward?.status(id).installed === true,

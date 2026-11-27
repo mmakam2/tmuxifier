@@ -90,7 +90,6 @@ export function createStatusPoller({
     const ordered = (applied.get(boxId) ?? 0) < start;
     if (!ordered && status?.reachable && live?.reachable) {
       const kept = { ...status, tmux: live.tmux, sessions: live.sessions };
-      if (live.agentMarks) kept.agentMarks = live.agentMarks; else delete kept.agentMarks;
       if (live.panes) kept.panes = live.panes; else delete kept.panes;
       if (live.paneMarks) kept.paneMarks = live.paneMarks; else delete kept.paneMarks;
       return kept;
@@ -289,7 +288,6 @@ export function createStatusPoller({
       const cur = snapshot[box.id];
       if (!cur?.reachable) return false;
       const entry = { ...cur, tmux: res.tmux, sessions: res.sessions };
-      if (res.agentMarks) entry.agentMarks = res.agentMarks; else delete entry.agentMarks;
       // The pane listing and its markers describe the same moment as `sessions`:
       // a light probe that could not read them leaves none, never the sweep's.
       if (res.panes) entry.panes = res.panes; else delete entry.panes;

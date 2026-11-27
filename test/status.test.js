@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseTmuxSessions, parseMeta, parseAgentMarks, createStatusChecker, PROBE_REMOTE, OSC_SWEEP, parseTmuxWindows, attachWindows, parseTmuxPanes, PANE_FMT, PANE_ROWS_MAX, SESSION_NAME_MAX, SESSION_ROWS_MAX, STATUS_ERROR_MAX } from '../src/server/status.js';
+import { parseTmuxSessions, parseMeta, parsePaneMarks, createStatusChecker, PROBE_REMOTE, OSC_SWEEP, parseTmuxWindows, attachWindows, parseTmuxPanes, PANE_FMT, PANE_ROWS_MAX, SESSION_NAME_MAX, SESSION_ROWS_MAX, STATUS_ERROR_MAX } from '../src/server/status.js';
 
 test('parseTmuxSessions maps fields', () => {
   const out = 'web:3:1:1718000000\nbuild:1:0:1718000100\n';
@@ -655,47 +655,53 @@ test('PROBE_REMOTE emits __AGENT__ lines from the marker dir, statically', () =>
   expect(PROBE_REMOTE).toContain('head -c 200');
 });
 
-test('parseAgentMarks extracts allowlisted marker lines', () => {
-  const out = '__META__ cpus=2\n__AGENT__ web:working:1718000000\n__AGENT__ ops:waiting:1718000001\nweb:2:1:1718000000:claude\n';
-  expect(parseAgentMarks(out)).toEqual({
-    web: { state: 'working', cause: 'prompt', ts: 1718000000 },
-    ops: { state: 'ready', cause: 'stop', ts: 1718000001 },
+// The marker allowlist, through parsePaneMarks. `agentPane` lists one agent pane per session so a
+// session-wide (four-field or legacy three-field) marker has a pane to speak for.
+const agentPane = (session, pane, cmd = 'claude') => `__PANE__ ${session}:@0:${pane}:1:1:0:${cmd}`;
+const marksOf = (...lines) => { const out = parsePaneMarks(lines.join('\n')); return out && { ...out }; };
+
+test('parsePaneMarks extracts allowlisted marker lines, the legacy three-field ones mapped', () => {
+  const out = marksOf('__META__ cpus=2', '__AGENT__ web:working:1718000000', '__AGENT__ ops:waiting:1718000001', 'web:2:1:1718000000:claude', agentPane('web', '%1'), agentPane('ops', '%2'));
+  expect(out).toEqual({
+    '%1': { session: 'web', state: 'working', cause: 'prompt', ts: 1718000000 },
+    '%2': { session: 'ops', state: 'ready', cause: 'stop', ts: 1718000001 },
   });
 });
 
-test('parseAgentMarks reads four-field markers and maps three-field legacy ones', () => {
-  const out = '__AGENT__ web:blocked:1718000000:permission\n__AGENT__ dev:ready:1718000001:start\n__AGENT__ old:waiting:1718000002\n__AGENT__ old2:working:1718000003\n';
-  expect(parseAgentMarks(out)).toEqual({
-    web: { state: 'blocked', cause: 'permission', ts: 1718000000 },
-    dev: { state: 'ready', cause: 'start', ts: 1718000001 },
-    old: { state: 'ready', cause: 'stop', ts: 1718000002 },
-    old2: { state: 'working', cause: 'prompt', ts: 1718000003 },
+test('parsePaneMarks reads four- and five-field markers', () => {
+  const out = marksOf('__AGENT__ web:blocked:1718000000:permission', '__AGENT__ dev:ready:1718000001:start:%2', '__AGENT__ old:waiting:1718000002', '__AGENT__ old2:working:1718000003', agentPane('web', '%1'), agentPane('dev', '%2'), agentPane('old', '%3'), agentPane('old2', '%4'));
+  expect(out).toEqual({
+    '%1': { session: 'web', state: 'blocked', cause: 'permission', ts: 1718000000 },
+    '%2': { session: 'dev', state: 'ready', cause: 'start', ts: 1718000001 },
+    '%3': { session: 'old', state: 'ready', cause: 'stop', ts: 1718000002 },
+    '%4': { session: 'old2', state: 'working', cause: 'prompt', ts: 1718000003 },
   });
 });
 
-test('parseAgentMarks drops unknown states and causes, and over-long lines', () => {
-  expect(parseAgentMarks('__AGENT__ web:waiting:1718000000:stop\n')).toBeNull();   // legacy word with a cause
-  expect(parseAgentMarks('__AGENT__ web:blocked:1718000000:sleepy\n')).toBeNull();
-  expect(parseAgentMarks('__AGENT__ web:blocked:1718000000:permission:extra\n')).toBeNull();
-  expect(parseAgentMarks('__AGENT__ web:done:1718000000:stop\n')).toBeNull();      // displayed states are not marker states
+test('parsePaneMarks drops unknown states and causes, and over-long lines', () => {
+  const p = agentPane('web', '%1');
+  expect(marksOf('__AGENT__ web:waiting:1718000000:stop', p)).toBeNull();   // legacy word with a cause
+  expect(marksOf('__AGENT__ web:blocked:1718000000:sleepy', p)).toBeNull();
+  expect(marksOf('__AGENT__ web:blocked:1718000000:permission:%1:extra', p)).toBeNull();
+  expect(marksOf('__AGENT__ web:done:1718000000:stop:%1', p)).toBeNull();      // displayed states are not marker states
 });
 
-test('parseAgentMarks drops bad state, bad ts, malformed lines, and returns null when nothing survives', () => {
-  expect(parseAgentMarks('__AGENT__ web:running:1718000000\n')).toBeNull();   // state not in allowlist
-  expect(parseAgentMarks('__AGENT__ web:working:soon\n')).toBeNull();          // non-numeric ts
-  expect(parseAgentMarks('__AGENT__ web:working:0\n')).toBeNull();             // non-positive ts
-  expect(parseAgentMarks('__AGENT__ web:working\n')).toBeNull();               // missing field
-  expect(parseAgentMarks('__AGENT__ :working:5\n')).toBeNull();                // empty session
-  expect(parseAgentMarks('web:2:1:1718000000:claude\n')).toBeNull();           // no marker line at all
+test('parsePaneMarks drops bad state, bad ts, malformed lines, and returns null when nothing survives', () => {
+  const p = agentPane('web', '%1');
+  expect(marksOf('__AGENT__ web:running:1718000000', p)).toBeNull();   // state not in allowlist
+  expect(marksOf('__AGENT__ web:working:soon', p)).toBeNull();          // non-numeric ts
+  expect(marksOf('__AGENT__ web:working:0', p)).toBeNull();             // non-positive ts
+  expect(marksOf('__AGENT__ web:working', p)).toBeNull();               // missing field
+  expect(marksOf('__AGENT__ :working:5:prompt:%1', agentPane('', '%1'))).toBeNull(); // empty session
+  expect(marksOf('web:2:1:1718000000:claude', p)).toBeNull();           // no marker line at all
 });
 
-test('parseAgentMarks keeps a __proto__-named session as an own key without touching the prototype', () => {
-  const out = parseAgentMarks('__AGENT__ __proto__:blocked:1718000000:permission\n__AGENT__ constructor:ready:1718000001:stop\n');
-  expect(Object.keys(out).sort()).toEqual(['__proto__', 'constructor']);
-  expect(Object.hasOwn(out, '__proto__')).toBe(true);
-  expect(out.__proto__).toEqual({ state: 'blocked', cause: 'permission', ts: 1718000000 });
-  expect(out.constructor).toEqual({ state: 'ready', cause: 'stop', ts: 1718000001 });
-  expect(parseAgentMarks('__AGENT__ web:working:5\n').constructor).toBeUndefined();
+test('parsePaneMarks keeps __proto__ and constructor as own keys and session names, never the prototype', () => {
+  const out = parsePaneMarks(['__AGENT__ __proto__:blocked:1718000000:permission:%1', '__AGENT__ constructor:ready:1718000001:stop:%2', agentPane('__proto__', '%1'), agentPane('constructor', '%2')].join('\n'));
+  expect(Object.getPrototypeOf(out)).toBeNull();
+  expect(out['%1']).toEqual({ session: '__proto__', state: 'blocked', cause: 'permission', ts: 1718000000 });
+  expect(out['%2']).toEqual({ session: 'constructor', state: 'ready', cause: 'stop', ts: 1718000001 });
+  expect(parsePaneMarks('__AGENT__ web:working:5:prompt:%1\n' + agentPane('web', '%1')).constructor).toBeUndefined();
 });
 
 test('parseTmuxSessions ignores __AGENT__ lines', () => {
@@ -705,21 +711,12 @@ test('parseTmuxSessions ignores __AGENT__ lines', () => {
   ]);
 });
 
-test('checkBox: attaches agentMarks when the probe carries __AGENT__ lines, omits them otherwise', async () => {
-  const withMark = async () => ({ code: 0, stdout: '__AGENT__ web:waiting:1718000000\nweb:1:0:1718000000:claude\n', stderr: '' });
-  const st = await createStatusChecker({ run: withMark }).checkBox({ host: 'h' });
-  expect(st.agentMarks).toEqual({ web: { state: 'ready', cause: 'stop', ts: 1718000000 } });
-  expect(st.sessions).toEqual([{ name: 'web', windows: 1, attached: false, activity: 1718000000, paneCmd: 'claude' }]);
-  const without = async () => ({ code: 0, stdout: 'web:1:0:1718000000:claude\n', stderr: '' });
-  const st2 = await createStatusChecker({ run: without }).checkBox({ host: 'h' });
-  expect(st2.agentMarks).toBeUndefined();
-});
-
-test('checkBox: attaches paneMarks beside agentMarks, omits them without a usable marker', async () => {
+test('checkBox: attaches paneMarks when the probe carries a usable marker, omits them otherwise; no session-keyed map', async () => {
   const run = async () => ({ code: 0, stdout: '__AGENT__ web:working:1718000000:prompt:%1\nweb:1:0:1718000000:claude\n__PANE__ web:@0:%1:1:1:0:claude\n', stderr: '' });
   const st = await createStatusChecker({ run }).checkBox({ host: 'h' });
   expect({ ...st.paneMarks }).toEqual({ '%1': { session: 'web', state: 'working', cause: 'prompt', ts: 1718000000 } });
-  expect(st.agentMarks).toEqual({ web: { state: 'working', cause: 'prompt', ts: 1718000000 } }); // still there until the readers move
+  expect(st.sessions).toEqual([{ name: 'web', windows: 1, attached: false, activity: 1718000000, paneCmd: 'claude' }]);
+  expect(st).not.toHaveProperty('agentMarks');
   const without = async () => ({ code: 0, stdout: 'web:1:0:1718000000:claude\n', stderr: '' });
   expect((await createStatusChecker({ run: without }).checkBox({ host: 'h' })).paneMarks).toBeUndefined();
 });
@@ -1059,7 +1056,7 @@ test('checkAgents returns sessions, windows and markers from one light probe', a
     seen.push(argv[argv.length - 1]);
     return {
       code: 0, stderr: '',
-      stdout: '__AGENT__ main:blocked:1700000000:permission\nmain:1:0:1700000001:claude\n__WIN__ main:0:@1:1:work\n',
+      stdout: '__AGENT__ main:blocked:1700000000:permission:%0\nmain:1:0:1700000001:claude\n__WIN__ main:0:@1:1:work\n__PANE__ main:@1:%0:0:1:0:claude\n',
     };
   };
   const { AGENT_REMOTE } = await import('../src/server/status.js');
@@ -1069,7 +1066,8 @@ test('checkAgents returns sessions, windows and markers from one light probe', a
   expect(res.sessions).toHaveLength(1);
   expect(res.sessions[0]).toMatchObject({ name: 'main', paneCmd: 'claude' });
   expect(res.sessions[0].windowList).toEqual([{ index: 0, id: '@1', active: true, name: 'work' }]);
-  expect(res.agentMarks.main).toEqual({ state: 'blocked', ts: 1700000000, cause: 'permission' });
+  expect(res.paneMarks['%0']).toEqual({ session: 'main', state: 'blocked', ts: 1700000000, cause: 'permission' });
+  expect(res).not.toHaveProperty('agentMarks');
   expect(res).not.toHaveProperty('metrics');
 });
 
@@ -1182,7 +1180,7 @@ test('checkAgents flags a probe that fell off the saturated shared connection, a
             expect(res.status).toBe(0);
             expect(res.stderr).toBe('');
             expect(parseTmuxSessions(res.stdout).map((s) => s.name)).toEqual(['main']);
-            expect(parseAgentMarks(res.stdout)).toBeNull();
+            expect(parsePaneMarks(res.stdout)).toBeNull();
           }
         } finally { f.cleanup(); }
       });
@@ -1191,9 +1189,9 @@ test('checkAgents flags a probe that fell off the saturated shared connection, a
     test(`${shell}: markers are read capped, and a FIFO or directory beside them is skipped`, () => {
       const f = fixture((d) => {
         fsSync.mkdirSync(pathMod.join(d, 'blocked'), { recursive: true });
-        fsSync.writeFileSync(pathMod.join(d, 'main'), 'main:blocked:1700000001:permission\n');
-        fsSync.writeFileSync(pathMod.join(d, 'two'), 'two:ready:1700000002:stop\n');
-        fsSync.writeFileSync(pathMod.join(d, 'huge'), `huge:working:1700000003:prompt${'x'.repeat(5000)}\n`);
+        fsSync.writeFileSync(pathMod.join(d, 'main%1'), 'main:blocked:1700000001:permission:%1\n');
+        fsSync.writeFileSync(pathMod.join(d, 'two%2'), 'two:ready:1700000002:stop:%2\n');
+        fsSync.writeFileSync(pathMod.join(d, 'huge%3'), `huge:working:1700000003:prompt:%3${'x'.repeat(5000)}\n`);
         execFileSync('mkfifo', [pathMod.join(d, 'trap')]);
       });
       try {
@@ -1201,9 +1199,10 @@ test('checkAgents flags a probe that fell off the saturated shared connection, a
           const res = f.run(shell, remote);
           expect(res.status).toBe(0);
           expect(res.stderr).toBe('');
-          const marks = parseAgentMarks(res.stdout);
-          expect(Object.keys(marks).sort()).toEqual(['main', 'two']); // `huge` overflows its cause and drops
-          expect(marks.main).toEqual({ state: 'blocked', cause: 'permission', ts: 1700000001 });
+          // The stub lists no panes, so no pane marker is ruled out for being absent.
+          const marks = parsePaneMarks(res.stdout);
+          expect(Object.keys(marks).sort()).toEqual(['%1', '%2']); // `huge` overflows its pane field and drops
+          expect(marks['%1']).toEqual({ session: 'main', state: 'blocked', cause: 'permission', ts: 1700000001 });
           const longest = Math.max(...res.stdout.split('\n').filter((l) => l.startsWith('__AGENT__ ')).map((l) => l.length));
           expect(longest).toBeLessThanOrEqual('__AGENT__ '.length + 200);
           expect(parseTmuxSessions(res.stdout).map((s) => s.name)).toEqual(['main']);

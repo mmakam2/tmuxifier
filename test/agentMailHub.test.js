@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { resolveTarget } from '../src/server/agentMailHub.js';
 import { refusalText, renderThread, renderWho } from '../src/server/agentMailText.js';
-import { createMailHarness, O, B, mark } from './helpers/agentMailHarness.js';
+import { createMailHarness, O, B, mark, paneMark, paneRow } from './helpers/agentMailHarness.js';
 
 let h; let boxes; let marks; let store; let hub; let setPolicy; let names;
 
@@ -151,7 +151,7 @@ describe('agentMailHub: send', () => {
     expect((await hub.send(O, 'nosuchbox', 'ping')).text).toBe(refusalText('unknown-box', { target: 'nosuchbox' }));
   });
 
-  test('target box unreachable (marksOf null) and target session without a marker are refused', async () => {
+  test('target box unreachable (paneMarksOf null) and target session without a marker are refused', async () => {
     delete marks.b;
     const down = await hub.send(O, 'Billing', 'ping');
     expect(down).toEqual({ ok: false, text: 'Billing is unreachable right now; try again shortly' });
@@ -417,6 +417,68 @@ describe('agentMailHub: policy and who', () => {
 
     await setPolicy('o', { send: false, receive: true, sendTo: ['b'] });
     expect(await hub.who(O)).toEqual({ ok: true, text: renderWho([]) });
+  });
+});
+
+// Agent state is per pane (pane-level design 8.1); mail is still addressed to sessions.
+describe('agentMailHub: panes and sessions', () => {
+  test('a session runs an agent when any pane mark names it', async () => {
+    h.paneMarks.b = {
+      '%1': paneMark('main', 'working'), '%2': paneMark('main', 'blocked', 'permission'),
+      '%3': paneMark('review', 'ready'), '%4': paneMark('review', 'working'),
+      '%5': paneMark('work', 'ready'), '%6': paneMark('work', 'ready'),
+    };
+    // one row per session; the word is the worst of its panes: blocked, then working, then idle
+    expect((await hub.who(O)).text).toBe(renderWho([
+      { box: 'billing', session: 'main', state: 'blocked', listening: false },
+      { box: 'billing', session: 'review', state: 'working', listening: false },
+      { box: 'billing', session: 'work', state: 'idle', listening: false },
+    ]));
+    const r = await hub.send(O, 'billing/review', 'x');
+    expect(r.ok).toBe(true);
+    expect(r.text).toBe(`Sent. Thread ${r.threadId}. queued: billing/review is working`);
+    expect((await hub.send(O, 'billing', 'y')).text).toMatch(/queued: billing\/main is waiting on its operator$/);
+    // a session no pane mark names runs nothing, even with marks on every other pane
+    expect(await hub.send(O, 'billing/other', 'z')).toEqual({ ok: false, text: refusalText('no-agent', { who: 'billing/other' }) });
+    // the caller is checked the same way: orders/main with no pane mark naming it is no agent
+    h.paneMarks.o = { '%7': paneMark('review', 'working') };
+    expect(await hub.send(O, 'billing', 'w')).toEqual({ ok: false, text: refusalText('no-agent', { who: 'orders/main' }) });
+    // an unreachable box (null) and a reachable one with no marker ({}) are told apart
+    h.paneMarks.o = { '%7': paneMark('main', 'working') };
+    h.paneMarks.b = {};
+    expect(await hub.send(O, 'billing/main', 'v')).toEqual({ ok: false, text: refusalText('no-agent', { who: 'billing/main' }) });
+    h.paneMarks.b = null;
+    expect(await hub.send(O, 'billing/main', 'v')).toEqual({ ok: false, text: refusalText('unreachable', { target: 'billing/main' }) });
+  });
+
+  test('a bare target still means sessions: configured first, else the only one, else several-agents', async () => {
+    // the configured session, whatever else runs
+    h.paneMarks.b = { '%1': paneMark('main', 'working'), '%2': paneMark('main', 'ready'), '%3': paneMark('side', 'ready') };
+    expect(store.thread((await hub.send(O, 'billing', 'one')).threadId).peer).toEqual(B);
+    // two agent panes in one other session are still one session
+    h.paneMarks.b = { '%3': paneMark('side', 'ready'), '%4': paneMark('side', 'working') };
+    expect(store.thread((await hub.send(O, 'billing', 'two')).threadId).peer).toEqual({ boxId: 'b', session: 'side' });
+    // two other sessions: several-agents
+    h.paneMarks.b = { '%3': paneMark('side', 'ready'), '%5': paneMark('other', 'ready') };
+    expect(await hub.send(O, 'Billing', 'three')).toEqual({ ok: false, text: refusalText('several-agents', { target: 'Billing' }) });
+  });
+
+  test('mail kinds are judged by any pane of the session, not only the active one', async () => {
+    // session main: the active pane is a shell, a background pane runs claude with a mark
+    h.panes.b = [paneRow('main', '%1', 'zsh'), paneRow('main', '%2', 'claude', { active: false })];
+    h.paneMarks.b = { '%2': paneMark('main', 'working') };
+    expect(store.thread((await hub.send(O, 'billing', 'one')).threadId).peer).toEqual(B);
+    // the active pane runs Codex (marked), a background pane runs claude (marked): main takes mail
+    h.panes.b = [paneRow('main', '%1', 'codex'), paneRow('main', '%2', 'claude', { active: false })];
+    h.paneMarks.b = { '%1': paneMark('main', 'ready'), '%2': paneMark('main', 'working') };
+    expect(store.thread((await hub.send(O, 'billing', 'two')).threadId).peer).toEqual(B);
+    // only Codex is marked; the unmarked shell beside it runs no agent: no session can take mail
+    h.panes.b = [paneRow('main', '%1', 'codex'), paneRow('main', '%2', 'zsh', { active: false })];
+    h.paneMarks.b = { '%1': paneMark('main', 'ready') };
+    expect(await hub.send(O, 'billing', 'three')).toEqual({ ok: false, text: refusalText('no-agent', { who: 'billing/main' }) });
+    // no pane listing (unknown, or not complete): every marked session counts, as before
+    h.panes.b = null;
+    expect(store.thread((await hub.send(O, 'billing', 'four')).threadId).peer).toEqual(B);
   });
 });
 

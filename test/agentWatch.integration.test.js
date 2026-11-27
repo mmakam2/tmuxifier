@@ -103,7 +103,7 @@ test('a marker change on the box reaches the history in about a second, with no 
   expect(published.length).toBeGreaterThan(base);
   const ev = history.getEvents().events.find((e) => e.kind === 'agent-blocked');
   expect(ev).toMatchObject({ boxId: 'b1', pane, session: lb.session, cause: 'permission', agent: 'claude' });
-  expect(poller.getSnapshot().b1.agentMarks[lb.session].state).toBe('blocked');
+  expect(poller.getSnapshot().b1.paneMarks[pane]).toMatchObject({ session: lb.session, state: 'blocked' });
   expect(history.getSeries('b1')).toHaveLength(1); // still the sweep's single sample
 
   // And the turn finishing, the same way.

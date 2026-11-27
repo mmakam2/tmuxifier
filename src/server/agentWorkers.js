@@ -232,7 +232,11 @@ export function parseWorkerTrust(stdout) {
 // the box's setup job not running (setup-running: rc files before sessions); a listing for the
 // box (unreachable: `sessionsOf` is the poller's view, null when the last sweep could not
 // reach it); the project in the box's record, no name meaning the first (no-project); fewer
-// running workers than the record's `max` (worker-cap). Then the script, once, with the
+// running workers than the record's `max` (worker-cap). Which session names are taken comes from
+// `sessionsOf`; which workers are running from `panesOf` (the poller's pane rows: a worker runs
+// when any pane of its session runs `claude`), read in the same synchronous step. With no pane
+// listing (`panesOf` absent or null: not known, or not complete) the session rows stand in, one
+// row per session for its active pane. Then the script, once, with the
 // lowest free `worker-<project>-<n>`; on `exists` (a session the listing did not show) once
 // more with the next number. A second `exists`, a non-zero exit (a launch that lost a race
 // fails under `set -e` with no result line), an unparseable result, or any throw or rejection
@@ -256,7 +260,7 @@ export function parseWorkerTrust(stdout) {
 //   - 2 or more: the second began after the first was applied, so after the start; the
 //     listing is the authority. A name it does not show is forgotten now (the worker was
 //     killed or exited), and the next start may take its number and its place under the cap.
-//     A listed name is taken; it is running when its pane runs `claude` (runningWorkers), or
+//     A listed name is taken; it is running when a pane of it runs `claude` (runningWorkers), or
 //     while the start is younger than START_SETTLE_MS, because the pane may still be the shell
 //     reading its rc files before it becomes the agent.
 // A read the poller declines (it overlapped one already applied) does not advance the clock,
@@ -280,7 +284,7 @@ export const START_SETTLE_MS = 15000;
 const LISTING_READS = 2;
 
 export function createAgentWorkers({
-  execCommand, workerStore, setupRunning, sessionsOf, listingSeq = null, now = () => Date.now(),
+  execCommand, workerStore, setupRunning, sessionsOf, panesOf = null, listingSeq = null, now = () => Date.now(),
 }) {
   const chains = new Map(); // box id -> tail of that box's chain
   const started = new Map(); // box id -> Map(session name -> { at, seq }) of this starter's starts
@@ -332,6 +336,7 @@ export function createAgentWorkers({
     if (setupRunning(box.id)) return fail('setup-running');
     // The clock dates this listing: read in the same synchronous step, before any await.
     const sessions = sessionsOf(box.id);
+    const panes = typeof panesOf === 'function' ? panesOf(box.id) : null;
     const clock = clockOf(box.id);
     if (!Array.isArray(sessions)) return fail('unreachable');
     const record = await workerStore.get(box.id);
@@ -342,7 +347,8 @@ export function createAgentWorkers({
 
     const listed = sessions.filter((s) => s && typeof s.name === 'string');
     const held = heldNames(box.id, listed, clock);
-    const running = runningWorkers(listed.filter((s) => !held.has(s.name))) + held.size;
+    const rows = Array.isArray(panes) ? panes : listed.map((s) => ({ session: s.name, cmd: s.paneCmd }));
+    const running = runningWorkers(rows.filter((p) => !(p && held.has(p.session)))) + held.size;
     if (running >= record.max) return fail('worker-cap');
 
     const taken = [...listed.map((s) => s.name), ...held];

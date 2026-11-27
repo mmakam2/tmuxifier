@@ -428,7 +428,7 @@ test('pollOnce feeds a __local__ pseudo-box to history when a local sampler is p
     sample: async () => ({
       reachable: true,
       sessions: [{ name: 'local', windows: 1, attached: false, activity: 1, paneCmd: 'claude' }],
-      agentMarks: { local: { state: 'working', ts: 1 } },
+      paneMarks: { '%1': { session: 'local', state: 'working', cause: 'prompt', ts: 1 } },
     }),
   };
   const boxes = [{ id: 'b1', host: 'h1' }];
@@ -440,7 +440,7 @@ test('pollOnce feeds a __local__ pseudo-box to history when a local sampler is p
   });
   await poller.pollOnce();
   const [snap, bx] = calls[0];
-  expect(snap.__local__.agentMarks.local.state).toBe('working');
+  expect(snap.__local__.paneMarks['%1'].state).toBe('working');
   expect(snap.b1).toBeDefined();
   expect(bx.at(-1)).toEqual({ id: '__local__', label: 'Host Shell', host: 'localhost', sessionName: 'local' });
   // The pseudo-box exists only in the history feed — never in /api/status.
@@ -496,7 +496,6 @@ const localSample = (marks, names = ['local']) => {
     tmux: true,
     sessions: names.map((n, i) => ({ name: n, windows: 1, attached: false, activity: 1, paneCmd: 'claude', windowList: [{ id: `@${i}`, index: 0, name: n, active: true }] })),
     panes: names.map((n, i) => ({ session: n, windowId: `@${i}`, pane: `%${i + 1}`, index: 0, active: true, zoomed: false, cmd: 'claude' })),
-    agentMarks: marks,
     paneMarks,
   };
 };
@@ -522,8 +521,6 @@ test('the __local__ sample is narrowed to the Host Shell session before recordin
   // The pane listing and the pane markers are narrowed the same way.
   expect(snap.__local__.panes.map((p) => [p.session, p.pane])).toEqual([['local', '%1']]);
   expect({ ...snap.__local__.paneMarks }).toEqual({ '%1': { session: 'local', state: 'ready', cause: 'stop', ts: 5 } });
-  // The per-session markers are kept as-is; sampleOf does not read them.
-  expect(Object.keys(snap.__local__.agentMarks).sort()).toEqual(['local', 'other']);
 });
 
 test('a Host Shell sample whose markers are all for other sessions carries no paneMarks', async () => {
@@ -686,9 +683,9 @@ const paneRow = (pane, cmd = 'claude', extra = {}) => ({ session: 'web', windowI
 const paneRead = (state, cause, ts, panes = [paneRow('%1')]) => ({ panes, paneMarks: { '%1': { session: 'web', state, cause, ts } } });
 // A read of box `a`: session `web` with claude in pane %1, and the marker for it.
 const full = (state, cause, ts, extra = {}) => ({
-  reachable: true, tmux: true, sessions: sess(), agentMarks: { web: { state, cause, ts } }, ...paneRead(state, cause, ts), metrics: { cpus: 2 }, ...extra,
+  reachable: true, tmux: true, sessions: sess(), ...paneRead(state, cause, ts), metrics: { cpus: 2 }, ...extra,
 });
-const light = (state, cause, ts, extra = {}) => ({ tmux: true, sessions: sess(), agentMarks: { web: { state, cause, ts } }, ...paneRead(state, cause, ts), ...extra });
+const light = (state, cause, ts, extra = {}) => ({ tmux: true, sessions: sess(), ...paneRead(state, cause, ts), ...extra });
 const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
 
 test('refreshAgents patches sessions and markers into the snapshot and records the edge', async () => {
@@ -703,13 +700,11 @@ test('refreshAgents patches sessions and markers into the snapshot and records t
   expect(await poller.refreshAgents('a')).toBe(true);
   const after = poller.getSnapshot();
   expect(after).not.toBe(before);                    // readers never see a snapshot mutate
-  expect(before.a.agentMarks.web.state).toBe('working');
   // The pane listing and its markers are patched in with the sessions they describe.
   expect(before.a.panes).toEqual([paneRow('%1')]);
   expect(before.a.paneMarks['%1'].state).toBe('working');
   expect(after.a.panes).toEqual([paneRow('%1'), paneRow('%2', 'zsh')]);
   expect(after.a.paneMarks['%1']).toEqual({ session: 'web', state: 'blocked', cause: 'permission', ts: 101 });
-  expect(after.a.agentMarks.web).toEqual({ state: 'blocked', cause: 'permission', ts: 101 });
   expect(after.a.metrics).toEqual({ cpus: 2 });      // the sweep's fields survive
   expect(after.a.reachable).toBe(true);
   expect(history.getSeries('a')).toHaveLength(1);
@@ -725,7 +720,8 @@ test('refreshAgents drops markers the box no longer has', async () => {
   const poller = createStatusPoller({ store: fakeStore([rtBox]), statusChecker });
   await poller.pollOnce();
   expect(await poller.refreshAgents('a')).toBe(true);
-  expect(poller.getSnapshot().a).not.toHaveProperty('agentMarks');
+  expect(poller.getSnapshot().a).not.toHaveProperty('paneMarks');
+  expect(poller.getSnapshot().a).not.toHaveProperty('panes');
   expect(poller.getSnapshot().a.sessions[0].paneCmd).toBe('zsh');
 });
 
@@ -791,7 +787,7 @@ test('a sweep that read the box BEFORE a refresh cannot overwrite the refresh wi
   expect(await poller.refreshAgents('a')).toBe(true);
   slow.resolve();
   await sweep;
-  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('blocked');
+  expect(poller.getSnapshot().a.paneMarks['%1'].state).toBe('blocked');
   // The panes and their markers are agent state like `sessions`: the unordered sweep keeps the refresh's.
   expect(poller.getSnapshot().a.panes).toEqual(refreshed);
   expect(poller.getSnapshot().a.paneMarks['%1'].state).toBe('blocked');
@@ -821,7 +817,6 @@ test('a sweep that read the box BEFORE a refresh drops its own panes and paneMar
   expect(entry.sessions[0].paneCmd).toBe('zsh');       // the refresh's reading stands...
   expect(entry).not.toHaveProperty('panes');            // ...and the older sweep's panes do not sit beside it
   expect(entry).not.toHaveProperty('paneMarks');
-  expect(entry).not.toHaveProperty('agentMarks');
   expect(entry.metrics).toEqual({ cpus: 2 });
 });
 
@@ -836,7 +831,7 @@ test('a sweep that read the box AFTER a refresh wins: it is the newer read', asy
   await poller.refreshAgents('a');
   state = ['ready', 'stop', 102];
   await poller.pollOnce();
-  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('ready');
+  expect(poller.getSnapshot().a.paneMarks['%1'].state).toBe('ready');
 });
 
 test('a refresh overtaken by a sweep re-reads instead of applying its older answer', async () => {
@@ -863,7 +858,7 @@ test('a refresh overtaken by a sweep re-reads instead of applying its older answ
   first.resolve();
   expect(await refresh).toBe(true);
   expect(lights).toBe(2);
-  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('ready');
+  expect(poller.getSnapshot().a.paneMarks['%1'].state).toBe('ready');
   // working -> done once. Never a stale "blocked" after the fact.
   expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']);
 });
@@ -959,7 +954,7 @@ test('an on-demand full probe that read before a refresh cannot put the older st
   expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']);
   slowProbe.resolve();
   await probe;
-  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('ready');
+  expect(poller.getSnapshot().a.paneMarks['%1'].state).toBe('ready');
   slowSweep.resolve();
   await sweep;
   expect(history.getSeries('a').at(-1).agents['%1'].state).toBe('done');
@@ -994,7 +989,7 @@ test('a sweep that joins an older in-flight probe does not treat that read as it
   held.resolve();
   await Promise.all([probe, sweep]);
   expect(fullReads).toBe(2);                       // the sweep did not start a second probe of `a`
-  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('ready');
+  expect(poller.getSnapshot().a.paneMarks['%1'].state).toBe('ready');
   expect(history.getSeries('a').at(-1).agents['%1'].state).toBe('done');
   await poller.pollOnce();
   expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']);
@@ -1019,7 +1014,7 @@ test('two overlapping refreshes of one box apply in read order, not finish order
   expect(await poller.refreshAgents('a')).toBe(true);   // r2 reads and applies `done`
   first.resolve();
   await r1;
-  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('ready');
+  expect(poller.getSnapshot().a.paneMarks['%1'].state).toBe('ready');
   await poller.pollOnce();
   expect(history.getEvents().events.map((e) => e.kind)).toEqual(['agent-input']);
 });
@@ -1062,7 +1057,7 @@ test('a refresh whose probe was refused a session slot reports the box and keeps
   expect(await poller.refreshAgents('a')).toBe(true);     // the data is still good
   expect(refusedBoxes).toEqual(['a']);
   expect(poller.getSnapshot().a).not.toHaveProperty('muxRefused');
-  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('blocked');
+  expect(poller.getSnapshot().a.paneMarks['%1'].state).toBe('blocked');
 });
 
 // --- onAgents: the agent-mail hub re-checks delivery after a real-time refresh ---
@@ -1078,7 +1073,7 @@ test('onAgents fires once per applied refreshAgents and not when the probe retur
   const poller = createStatusPoller({
     store: fakeStore([rtBox]), statusChecker, history,
     // What onAgents sees must already be applied and recorded.
-    onAgents: (id) => calls.push([id, poller.getSnapshot()[id].agentMarks?.web?.state, history.getSeries(id).at(-1).agents['%1'].state]),
+    onAgents: (id) => calls.push([id, poller.getSnapshot()[id].paneMarks?.['%1']?.state, history.getSeries(id).at(-1).agents['%1'].state]),
   });
   await poller.pollOnce();
   expect(calls).toEqual([]);                          // a sweep is onCycle's, not onAgents'
@@ -1106,7 +1101,7 @@ test('a throwing onAgents does not fail refreshAgents', async () => {
   await poller.pollOnce();
   expect(await poller.refreshAgents('a')).toBe(true);
   expect(fired).toBe(1);
-  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('blocked');
+  expect(poller.getSnapshot().a.paneMarks['%1'].state).toBe('blocked');
 });
 
 // --- listingSeq: the listing's clock (agentWorkers.js reads it beside sessionsOf) -------
@@ -1172,7 +1167,7 @@ test('listingSeq does not move for a read that was not applied, nor for a box PV
   held.resolve();
   await probe;                                    // overlapped the refresh: its listing is not used
   expect(poller.listingSeq('a')).toBe(afterRefresh);
-  expect(poller.getSnapshot().a.agentMarks.web.state).toBe('ready');
+  expect(poller.getSnapshot().a.paneMarks['%1'].state).toBe('ready');
   pveState = 'stopped';
   await poller.pollOnce();                        // no read at all
   await poller.probeOne('a');
