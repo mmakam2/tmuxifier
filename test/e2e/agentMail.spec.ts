@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { markerDir, now, onBox, writePaneMarker } from './agentPaneBox';
 
 // Agent messaging end to end (design 6.4, 6.5, 6.11): the Edit Box modal's policy section, the
 // Messages drawer with a thread view and Stop, and the Refused tab, against the real server,
@@ -10,8 +11,10 @@ import path from 'node:path';
 //
 // A message is sent "from the box" exactly as tmx would: curl on the box, over ssh, against the
 // forwarded socket ~/.tmuxifier-mail/sock (form fields session, to, body), the way
-// test/agentMailForward.integration.test.js drives it. "Running an agent" is a session-wide
-// marker in the fixture home's ~/.tmuxifier-agent, read by the server's 2 s status sweep.
+// test/agentMailForward.integration.test.js drives it. "Running an agent" is a pane that reads
+// as `claude` and carries its own marker in the fixture home's ~/.tmuxifier-agent (agent state
+// is per pane, see agentPaneBox.ts), read by the server's 2 s status sweep; a marker for a
+// session no live agent pane belongs to speaks for nothing.
 //
 // The one fixture fact that shapes this file: localhost, db-primary and untagged-worker are
 // three ssh aliases of ONE fixture account and home, so every box with a messaging switch on
@@ -33,9 +36,7 @@ import path from 'node:path';
 
 const cfg = process.env.E2E_SSH_CONFIG!;
 const host = process.env.E2E_BOX_HOST!;
-const home = process.env.E2E_BOX_HOME!;
 const boxSession = process.env.E2E_BOX_SESSION!; // every seeded box's configured session
-const markerDir = path.join(home, '.tmuxifier-agent');
 const LABELS = ['localhost', 'db-primary', 'untagged-worker'] as const;
 type Label = typeof LABELS[number];
 const OFF = { send: false, sendTo: [], receive: false, receiveFrom: [] };
@@ -104,22 +105,39 @@ async function resetMail(page: Page, ids: Record<Label, string>) {
   for (const label of LABELS) await waitMailState(page, ids[label], 'off');
 }
 
-function writeMarker(session: string, state: string, cause: string) {
-  fs.mkdirSync(markerDir, { recursive: true, mode: 0o700 });
-  const epoch = Math.floor(Date.now() / 1000);
-  fs.writeFileSync(path.join(markerDir, session), `${session}:${state}:${epoch}:${cause}\n`, { mode: 0o600 });
+// A session running an agent, as the server reads one: a pane that reads as `claude` (tmux's
+// pane_current_command is argv[0]'s basename) and a five-field marker for that pane. `keep` is
+// a session the fixture owns (the configured one: later specs attach to it), which goes back to
+// a login shell instead of being killed. Returns the pane's id.
+const agents = new Map<string, { pane: string; keep: boolean }>();
+function startAgent(session: string, state: string, cause: string, keep = false): string {
+  onBox(`tmux has-session -t '=${session}' 2>/dev/null || tmux new-session -d -s '${session}'`);
+  onBox(`tmux respawn-pane -k -t '=${session}:' bash -c 'exec -a claude sleep 600'`);
+  const pane = onBox(`tmux display-message -p -t '=${session}:' '#{pane_id}'`).trim();
+  writePaneMarker(session, pane, state, now(), cause);
+  agents.set(session, { pane, keep });
+  return pane;
 }
 
-function removeMarker(session: string) {
-  fs.rmSync(path.join(markerDir, session), { force: true });
+function stopAgent(session: string) {
+  const a = agents.get(session);
+  if (!a) return;
+  agents.delete(session);
+  fs.rmSync(path.join(markerDir(), `${session}${a.pane}`), { force: true });
+  try {
+    onBox(a.keep
+      ? `tmux respawn-pane -k -t '=${session}:' "$(tmux show-options -gv default-shell)" -l`
+      : `tmux kill-session -t '=${session}'`);
+  } catch { /* gone */ }
 }
 
-// Until the server's own snapshot of `id` (what the mail hub reads) holds these sessions' states.
+// Until the server's own snapshot of `id` (what the mail hub reads: its pane marks) holds these
+// sessions' states.
 async function waitMarks(page: Page, id: string, want: Record<string, string>) {
   await expect.poll(async () => {
     const res = await page.request.get(`/api/status?box=${encodeURIComponent(id)}`);
-    const marks = (await res.json())?.[id]?.agentMarks ?? {};
-    return Object.fromEntries(Object.keys(want).map((s) => [s, marks[s]?.state ?? null]));
+    const marks: { session: string; state: string }[] = Object.values((await res.json())?.[id]?.paneMarks ?? {});
+    return Object.fromEntries(Object.keys(want).map((s) => [s, marks.find((m) => m.session === s)?.state ?? null]));
   }, { timeout: 30000, intervals: [500, 1000] }).toEqual(want);
 }
 
@@ -217,8 +235,8 @@ test('a message sent from the box appears in the Messages drawer, and Stop close
     await resetMail(page, ids);
     // mailA is the caller, idle; the box's configured session (what a bare `localhost` names)
     // is the target, mid-turn, so the message stays queued and the row says why.
-    writeMarker('mailA', 'ready', 'stop');
-    writeMarker(boxSession, 'working', 'prompt');
+    startAgent('mailA', 'ready', 'stop');
+    startAgent(boxSession, 'working', 'prompt', true);
     await waitMarks(page, ids.localhost, { mailA: 'ready', [boxSession]: 'working' });
 
     // One box entry switched on, so its forward is the only one and owns the socket (header).
@@ -278,8 +296,8 @@ test('a message sent from the box appears in the Messages drawer, and Stop close
     expect(after.thread.messages.map((m: { state: string }) => m.state)).toEqual(['dropped']);
   } finally {
     if (threadId) await page.request.post(`/api/mail/threads/${threadId}/close`).catch(() => {});
-    removeMarker('mailA');
-    removeMarker(boxSession);
+    stopAgent('mailA');
+    stopAgent(boxSession);
     await resetMail(page, ids);
   }
 });
@@ -293,7 +311,7 @@ test('a refused send shows under Refused', async ({ page }) => {
   const reason = 'refused: this box is not allowed to send to untagged-worker';
   try {
     await resetMail(page, ids);
-    writeMarker(session, 'ready', 'stop');
+    startAgent(session, 'ready', 'stop');
     await waitMarks(page, ids.localhost, { [session]: 'ready' });
     // Only the sender is on, so its forward is the only one: send allowed, to nobody.
     await putMail(page, ids.localhost, { send: true, sendTo: [], receive: false, receiveFrom: [] });
@@ -315,7 +333,7 @@ test('a refused send shows under Refused', async ({ page }) => {
     // Newest first: it heads the list.
     await expect(panel.locator('li.mail-refusal').first().locator('.mail-refusal-who')).toHaveText(`localhost/${session}`);
   } finally {
-    removeMarker(session);
+    stopAgent(session);
     await resetMail(page, ids);
   }
 });
@@ -356,8 +374,8 @@ test('two box entries on one machine: the second reads that it shares a connecti
   let threadId: string | null = null;
   try {
     await resetMail(page, ids);
-    writeMarker('mailA', 'ready', 'stop');
-    writeMarker(boxSession, 'working', 'prompt');
+    startAgent('mailA', 'ready', 'stop');
+    startAgent(boxSession, 'working', 'prompt', true);
     await waitMarks(page, ids.localhost, { mailA: 'ready', [boxSession]: 'working' });
 
     // localhost first: it holds the shared ssh master's forward.
@@ -392,8 +410,8 @@ test('two box entries on one machine: the second reads that it shares a connecti
     expect((await (await page.request.get(`/api/mail/threads/${threadId}`)).json()).thread.starter).toEqual({ boxId: ids.localhost, session: 'mailA' });
   } finally {
     if (threadId) await page.request.post(`/api/mail/threads/${threadId}/close`).catch(() => {});
-    removeMarker('mailA');
-    removeMarker(boxSession);
+    stopAgent('mailA');
+    stopAgent(boxSession);
     await resetMail(page, ids);
   }
 });

@@ -1184,6 +1184,9 @@ test.describe('agent panes', () => {
       layout = f.layout;
       const { one, twoB } = f.layout;
       const pane = await dock(page, 'localhost'); // the configured session
+      const mru = () => page.evaluate(() => JSON.parse(localStorage.getItem('tmuxifier.agentMru') ?? '[]') as string[]);
+      const twoBKey = `${f.loc}\n${twoB.pane}`;
+      expect(await mru()).not.toContain(twoBKey);
       await chordTo(page, f.loc, twoB.pane); // same box: switches in place
       await expect(page.locator('.stage-pane')).toHaveCount(1);
       await expectOnSession(pane, P);
@@ -1193,6 +1196,11 @@ test.describe('agent panes', () => {
       await expect(pane.locator('.xterm-rows')).not.toContainText('AGENT_WINDOW_ONE');
       expect(inFront()).toBe(`${twoB.windowId} ${twoB.pane}`);
       expect(one.windowId).not.toBe(twoB.windowId);
+      // The MRU is fed once fresh data shows where the jump landed (never at the
+      // commit, which holds the box until then): the pane the chord committed is
+      // its most recent entry, in the box id + newline + pane id form the
+      // switcher's rows are keyed by.
+      await expect.poll(async () => (await mru())[0], { timeout: 45000 }).toBe(twoBKey);
     } finally {
       resetAgentPanes(layout, P);
       try { onBox(`tmux kill-session -t '=${P}'`); } catch { /* gone */ }

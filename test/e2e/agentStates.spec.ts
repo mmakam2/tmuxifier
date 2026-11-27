@@ -409,14 +409,16 @@ async function rowsFixture(page: Page, states: [one: string, twoA: string, twoB:
 
 // Spec 2026-11-26 §7.3 step 3: docking the box repaints the stage while the
 // series in hand still shows the window the jump is LEAVING; nothing of the box
-// may be acknowledged until fresh data shows the target window in front.
-test('a jump into an undocked box never acknowledges the window it leaves', async ({ page }) => {
+// may be acknowledged until fresh data shows the target window in front. And
+// once it does, looking at a window clears every agent visible in it: both
+// split panes of the window the jump lands in are `done` and both are acked.
+test('a jump into an undocked box acknowledges every done agent of the window it lands in, and none of the window it leaves', async ({ page }) => {
   test.setTimeout(240000);
   let layout: AgentPaneLayout | null = null;
   try {
-    const f = await rowsFixture(page, ['done', 'working', 'done']);
+    const f = await rowsFixture(page, ['done', 'done', 'done']);
     layout = f.layout;
-    const { one, twoB } = f.layout;
+    const { one, twoA, twoB } = f.layout;
     await expect(f.agentRow(one.pane)).toHaveAttribute('data-state', 'done');
     await expect(page.locator('.stage-pane')).toHaveCount(0); // not docked
     await page.bringToFront();
@@ -427,10 +429,15 @@ test('a jump into an undocked box never acknowledges the window it leaves', asyn
     const pane = page.locator('.stage-pane').first();
     await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_TWO_B', { timeout: 15000 });
     await expect.poll(() => f.seenPosts.filter((p) => p.pane === twoB.pane).length, { timeout: 45000 }).toBe(1);
+    await expect.poll(() => f.seenPosts.filter((p) => p.pane === twoA.pane).length, { timeout: 10000 }).toBe(1);
     await f.moreReads(1);
+    // Each split pane of the landing window, once, with its own marker ts.
+    expect(f.seenPosts.filter((p) => p.pane === twoB.pane)).toEqual([{ pane: twoB.pane, ts: f.t0 }]);
+    expect(f.seenPosts.filter((p) => p.pane === twoA.pane)).toEqual([{ pane: twoA.pane, ts: f.t0 }]);
     expect(f.seenPosts.filter((p) => p.pane === one.pane)).toEqual([]);
     await expect(f.agentRow(one.pane)).toHaveAttribute('data-state', 'done');
     await expect(f.agentRow(twoB.pane)).toHaveAttribute('data-state', 'idle', { timeout: 45000 });
+    await expect(f.agentRow(twoA.pane)).toHaveAttribute('data-state', 'idle', { timeout: 45000 });
   } finally {
     resetAgentPanes(layout, session);
   }
@@ -630,7 +637,14 @@ test('board: one card per agent pane, named as its row; a card click jumps to th
     const cards = page.locator(`.dash-board .dash-card[data-box-id="${boxId}"]`);
     const cardIn = (state: string, pane: string) =>
       page.locator(`.dash-board .dash-board-col[data-state="${state}"] .dash-card[data-box-id="${boxId}"][data-pane="${pane}"]`);
-    await reloadUntil(page, async () => { await expect(cards).toHaveCount(3, { timeout: 5000 }); });
+    // This pane's own cards, not just three of them: the previous test's agents
+    // (other pane ids) can still be in the server's cache for a second or two.
+    await reloadUntil(page, async () => {
+      await expect(cardIn('done', one.pane)).toHaveCount(1, { timeout: 5000 });
+      await expect(cardIn('working', twoA.pane)).toHaveCount(1, { timeout: 1000 });
+      await expect(cardIn('blocked', twoB.pane)).toHaveCount(1, { timeout: 1000 });
+      await expect(cards).toHaveCount(3, { timeout: 1000 });
+    });
 
     // ── 1. One card per stateful pane, in its state's column, named as its row.
     expect(await cards.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.pane).sort()))
@@ -666,6 +680,7 @@ test('board: one card per agent pane, named as its row; a card click jumps to th
     expect(onBox(`tmux display-message -p -t '=${session}:' '#{window_id} #{pane_id}'`).trim()).toBe(`${twoB.windowId} ${twoB.pane}`);
     await page.waitForTimeout(1500); // every chance for a second attach to show up
     expect(terms).toHaveLength(1);
+    expect(windowPosts).toHaveLength(1); // ...and for a duplicate select to land late
   } finally {
     resetAgentPanes(layout, session);
   }
