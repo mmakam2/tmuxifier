@@ -1,7 +1,7 @@
 import { decideLogin, SIGNED_OUT_KEY, type LoginReason } from './loginRoute';
 import { api, onUnauthorized, type AddBoxSpec, type AuthInfo, type AgentState, type Box, type Status, type Sample, type HealthEvent, type PushResult, type SetupJob, type SetupSummary } from './api';
 import { AGENT_LABEL, AGENT_PRECEDENCE, agentChipText, agentCounts, agentRows, latestAgents, visibleDone, type AgentRow } from './agentState';
-import { jumpTargetOf, needsSelect } from './agentJump';
+import { createSeenHold, jumpTargetOf, needsSelect, sidebarAgents, sidebarSeries } from './agentJump';
 import { openTerminal, openProvisionTerminal, setTerminalFont, setTerminalUploads } from './terminal';
 import { setupStatusText, setupStatusTone, setupActions, setupBadge, formatSeedResults, formatStatuslineResult, formatVoiceLinkResult, blocksTerminal } from './setupStatus';
 import { dotClassFor, dotTitleFor, metaSegmentsFor } from './statusDot';
@@ -146,6 +146,10 @@ let lastAgentFilterKey = '';
 // One POST per done marker: the server's watermark is idempotent, but a poll
 // tick every few seconds must not re-send what it already said.
 const ackedSeen = new Map<string, number>();
+// Boxes a jump is moving (agentJump.ts createSeenHold): reportSeen acknowledges
+// nothing of a held box, because the series in hand still shows the window the
+// jump is leaving. Every series fetch reports its start and its application.
+const seenHold = createSeenHold();
 // The agent switcher (agentSwitcher.ts). Its document listeners live for the
 // page's lifetime, so it is created once (renderDashboard re-runs on re-login).
 // agentMru is the per-browser most-recently-used order of (box, session) keys;
@@ -239,7 +243,7 @@ function buildAgentRow(boxId: string, pane: string): HTMLButtonElement {
 // `existing` is the box's current li.box-agents (or null); `place` puts a new
 // one where it belongs.
 function applyAgentRows(boxId: string, existing: HTMLElement | null, place: (li: HTMLElement) => void) {
-  const rows = agentRows(latestAgents(latestSeries[boxId]));
+  const rows = agentRows(sidebarAgents(boxId, latestAgents(latestSeries[boxId])));
   if (!rows.length) { existing?.remove(); return; }
   const listKey = rows.map(rowKeyOf).join('\n');
   if (existing && existing.dataset.rowsKey === listKey) return;
@@ -308,7 +312,7 @@ function agentStripText(state: AgentState, n: number): string {
 // even when another of its panes is blocked.
 function agentFilterMatches(b: Box): boolean {
   if (agentFilter === null) return true;
-  return Object.values(latestAgents(latestSeries[b.id])).some((e) => e?.state === agentFilter);
+  return Object.values(sidebarAgents(b.id, latestAgents(latestSeries[b.id]))).some((e) => e?.state === agentFilter);
 }
 
 function agentFilterKey(): string {
@@ -318,7 +322,8 @@ function agentFilterKey(): string {
 function repaintAgentStrip(refilter = false) {
   const strip = app.querySelector('#agent-strip') as HTMLElement | null;
   if (!strip) return;
-  const counts = agentCounts(latestSeries);
+  // Counted as the rows show them (sidebarSeries): never an agent no row lists.
+  const counts = agentCounts(sidebarSeries(latestSeries));
   const states = AGENT_PRECEDENCE.filter((st) => counts[st] > 0);
   const active = document.activeElement as HTMLElement | null;
   const refocus = active && strip.contains(active) ? active.dataset.state : undefined;
@@ -367,6 +372,8 @@ function reportSeen() {
   for (const iid of tabs.keys()) {
     if (phone ? iid !== focusedPaneId : !docked.includes(iid)) continue;
     const box = boxOfInstance(iid);
+    // A jump is moving this box's window: the series in hand is the old view.
+    if (seenHold.held(box)) continue;
     for (const { pane, ts } of visibleDone(latestAgents(latestSeries[box]), paneAgentSession(iid))) {
       if (!ts) continue; // no marker ts, nothing the server could compare
       const key = `${box}:${pane}`;
@@ -964,7 +971,9 @@ function repaintFromSeries() {
 
 async function pollHealth() {
   try {
+    const tick = seenHold.fetchStarted();
     latestSeries = await api.healthSeries();
+    seenHold.applied(null, tick, (id) => latestAgents(latestSeries[id]), Date.now()); // before the repaint, whose reportSeen it may free
     agentSwitcher?.refresh();
     repaintFromSeries();
   } catch {}
@@ -997,9 +1006,11 @@ async function liveRefresh(ids: string[] | null) {
       } catch {}
     }
     try {
+      const tick = seenHold.fetchStarted();
       const one = await api.healthSeriesOf(id);
       if (Array.isArray(one[id])) {
         latestSeries = { ...latestSeries, [id]: one[id] };
+        seenHold.applied(id, tick, (b) => latestAgents(latestSeries[b]), Date.now());
         agentSwitcher?.refresh();
       }
     } catch {}
@@ -2753,22 +2764,37 @@ function openPaneOnSession(boxId: string, session: string) {
 // select (409 mid-setup, 502 pane or window gone) leaves the dock as it is and
 // says why. 3. Refresh as a window pick does; the acknowledgement then goes
 // through reportSeen once fresh data shows the pane visible.
+//
+// Docking repaints the stage, and a repaint acknowledges what the series in
+// hand says is visible, which is the window the jump is LEAVING. So the box's
+// acknowledgements are held (seenHold) from before the dock until a series
+// fetched after the select settled shows the pane visible (any such series
+// after a refused select; HOLD_MAX_MS at most). The finally settles this jump
+// on every path, so the hold always ends with a later applied series.
 async function jumpToAgent(boxId: string, pane: string): Promise<void> {
-  const t = jumpTargetOf(boxId, latestAgents(latestSeries[boxId]), pane);
+  const t = jumpTargetOf(boxId, sidebarAgents(boxId, latestAgents(latestSeries[boxId])), pane);
   if (!t) return;
-  openPaneOnSession(boxId, t.session);
-  if (!needsSelect(t)) return;
+  // Already tmux's focused pane: the window in front does not move, so what the
+  // series says is visible is true, and there is nothing to refresh or hold.
+  if (!needsSelect(t)) { openPaneOnSession(boxId, t.session); return; }
+  const jump = seenHold.begin(boxId, t.pane);
+  let ok = false;
   try {
+    openPaneOnSession(boxId, t.session);
     if (boxId === '__local__') await api.localSelectWindow(t.windowId, t.pane);
     else await api.selectWindow(boxId, t.session, t.windowId, t.pane);
+    ok = true;
   } catch (e: any) {
     // The pane header snaps back exactly as after a failed window pick; the
     // toast is what the click is answered with, the header being elsewhere.
     updatePaneHeaders();
     showToast(e?.message || 'jump failed', 'error');
+  } finally {
+    seenHold.settle(boxId, jump, ok, Date.now());
   }
   // Even after a failure: a 502 means the listing moved, and the refreshed
-  // series drops the row that pointed at it.
+  // series drops the row that pointed at it. The series that shows the pane in
+  // front arrives with the box's next re-read (its /live nudge) or this poll.
   void pollStatus();
 }
 

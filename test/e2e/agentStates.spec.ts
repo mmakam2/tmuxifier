@@ -361,6 +361,145 @@ test('sidebar: one row per agent pane, per-pane seen, and a row click jumps to t
   }
 });
 
+// What the sidebar-row tests below share: the fixture, the requests the page
+// sends, and a wait on the page's own health reads (a fleet-wide poll or a
+// nudged single-box read), never on wall-clock time. None of them touches a
+// Host Shell row: the e2e server's Host Shell is this machine's real `local`
+// session, and a jump there would move the operator's own windows.
+async function rowsFixture(page: Page, states: [one: string, twoA: string, twoB: string]) {
+  const layout = buildAgentPanes(session);
+  const t0 = now();
+  // ready/stop reads `done` until seen.
+  const marker = (pane: string, st: string) => {
+    const [state, cause] = st === 'done' ? ['ready', 'stop'] : st === 'blocked' ? ['blocked', 'permission'] : ['working', 'prompt'];
+    writePaneMarker(session, pane, state, t0, cause);
+  };
+  marker(layout.one.pane, states[0]);
+  marker(layout.twoA.pane, states[1]);
+  marker(layout.twoB.pane, states[2]);
+  const seenPosts: { pane: string; ts: number }[] = [];
+  const windowPosts: Record<string, unknown>[] = [];
+  page.on('request', (r: Request) => {
+    if (r.method() !== 'POST') return;
+    if (/\/agent-seen$/.test(r.url())) seenPosts.push(r.postDataJSON());
+    if (/\/api\/boxes\/[^/]+\/window$/.test(r.url())) windowPosts.push(r.postDataJSON());
+  });
+  let healthReads = 0;
+  page.on('response', (r) => { if (/\/api\/health\/series(\?|$)/.test(r.url())) healthReads++; });
+  const moreReads = async (n: number) => {
+    const target = healthReads + n;
+    await expect.poll(() => healthReads, { timeout: 35000 * n, intervals: [500] }).toBeGreaterThanOrEqual(target);
+  };
+  await login(page);
+  const row = page.locator('.box', { has: page.locator('.name', { hasText: /^localhost$/ }) }).first();
+  const boxId = (await row.getAttribute('data-id'))!;
+  const group = page.locator(`li.box-agents[data-agents-for="${boxId}"]`);
+  const agentRow = (pane: string) => group.locator(`button.box-agent[data-pane="${pane}"]`);
+  await reloadUntil(page, async () => {
+    await expect(group.locator('button.box-agent')).toHaveCount(3, { timeout: 5000 });
+    await expect(agentRow(layout.twoB.pane)).toHaveAttribute('data-state', states[2], { timeout: 5000 });
+  });
+  return { layout, t0, seenPosts, windowPosts, moreReads, agentRow };
+}
+
+// Spec 2026-11-26 §7.3 step 3: docking the box repaints the stage while the
+// series in hand still shows the window the jump is LEAVING; nothing of the box
+// may be acknowledged until fresh data shows the target window in front.
+test('a jump into an undocked box never acknowledges the window it leaves', async ({ page }) => {
+  test.setTimeout(240000);
+  let layout: AgentPaneLayout | null = null;
+  try {
+    const f = await rowsFixture(page, ['done', 'working', 'done']);
+    layout = f.layout;
+    const { one, twoB } = f.layout;
+    await expect(f.agentRow(one.pane)).toHaveAttribute('data-state', 'done');
+    await expect(page.locator('.stage-pane')).toHaveCount(0); // not docked
+    await page.bringToFront();
+    expect(await page.evaluate(() => document.hasFocus())).toBe(true);
+
+    await f.agentRow(twoB.pane).click();
+    await expect.poll(() => f.windowPosts.length, { timeout: 10000 }).toBe(1);
+    const pane = page.locator('.stage-pane').first();
+    await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_TWO_B', { timeout: 15000 });
+    await expect.poll(() => f.seenPosts.filter((p) => p.pane === twoB.pane).length, { timeout: 45000 }).toBe(1);
+    await f.moreReads(1);
+    expect(f.seenPosts.filter((p) => p.pane === one.pane)).toEqual([]);
+    await expect(f.agentRow(one.pane)).toHaveAttribute('data-state', 'done');
+    await expect(f.agentRow(twoB.pane)).toHaveAttribute('data-state', 'idle', { timeout: 45000 });
+  } finally {
+    resetAgentPanes(layout, session);
+  }
+});
+
+// Rows repaint in place: a health read, even one that changes the focused
+// row's own state, keeps the very same button node and its keyboard focus.
+test('a focused agent row survives health reads, its own state change included', async ({ page }) => {
+  test.setTimeout(240000);
+  let layout: AgentPaneLayout | null = null;
+  try {
+    const f = await rowsFixture(page, ['working', 'working', 'working']);
+    layout = f.layout;
+    const { twoA } = f.layout;
+    await f.agentRow(twoA.pane).focus();
+    await f.agentRow(twoA.pane).evaluate((el) => { (el as unknown as { __e2eTag: string }).__e2eTag = 'kept'; });
+    const stillIt = () => page.evaluate((pane) => {
+      const a = document.activeElement as (HTMLElement & { __e2eTag?: string }) | null;
+      return a?.dataset.pane === pane && a.__e2eTag === 'kept' && a.isConnected;
+    }, twoA.pane);
+    await f.moreReads(1);
+    expect(await stillIt()).toBe(true);
+    writePaneMarker(session, twoA.pane, 'blocked', f.t0 + 1, 'question');
+    await expect(f.agentRow(twoA.pane)).toHaveAttribute('data-state', 'blocked', { timeout: 45000 });
+    await expect(f.agentRow(twoA.pane).locator('.badge-agent-blocked')).toHaveText('blocked · question');
+    expect(await stillIt()).toBe(true);
+    await f.moreReads(1);
+    expect(await stillIt()).toBe(true);
+  } finally {
+    resetAgentPanes(layout, session);
+  }
+});
+
+// A select the box refuses (409 while setup runs) is reported, moves nothing
+// and acknowledges nothing; a row whose pane is already focused sends no select.
+test('a refused jump is reported and changes nothing; a focused pane\'s row sends no select', async ({ page }) => {
+  test.setTimeout(240000);
+  let layout: AgentPaneLayout | null = null;
+  try {
+    const f = await rowsFixture(page, ['working', 'working', 'done']);
+    layout = f.layout;
+    const { one, twoB } = f.layout;
+    await page.bringToFront();
+    await page.locator('.box .name', { hasText: /^localhost$/ }).click();
+    const pane = page.locator('.stage-pane').first();
+    await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_ONE', { timeout: 15000 });
+    const where = () => onBox(`tmux display-message -p -t '=${session}:' '#{window_id} #{pane_id}'`).trim();
+    expect(where()).toBe(`${one.windowId} ${one.pane}`);
+
+    await page.route('**/api/boxes/*/window', (route) =>
+      route.fulfill({ status: 409, contentType: 'application/json', body: '{"error":"box is being set up"}' }));
+    await f.agentRow(twoB.pane).click();
+    await expect.poll(() => f.windowPosts.length, { timeout: 10000 }).toBe(1);
+    await expect(page.locator('.toast.toast-error')).toHaveText('box is being set up');
+    await f.moreReads(1);
+    await expect(page.locator('.stage-pane')).toHaveCount(1);
+    await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_ONE');
+    await expect(pane.locator('.xterm-rows')).not.toContainText('AGENT_WINDOW_TWO_B');
+    expect(where()).toBe(`${one.windowId} ${one.pane}`);
+    expect(f.seenPosts.filter((p) => p.pane === twoB.pane)).toEqual([]);
+    await expect(f.agentRow(twoB.pane)).toHaveAttribute('data-state', 'done');
+    await page.unroute('**/api/boxes/*/window');
+
+    // Window 1's only pane is tmux's focused one: its row docks and sends no select.
+    await expect(f.agentRow(one.pane)).toHaveAttribute('data-state', 'working');
+    await f.agentRow(one.pane).click();
+    await f.moreReads(1);
+    expect(f.windowPosts).toHaveLength(1);
+    expect(where()).toBe(`${one.windowId} ${one.pane}`);
+  } finally {
+    resetAgentPanes(layout, session);
+  }
+});
+
 // Spec 2026-11-26 §7.2: the pane header chip is what the terminal shows (the
 // worst state among the agents on screen in its session), while the picker is
 // the per-window summary: each window row the worst of its panes, the session
