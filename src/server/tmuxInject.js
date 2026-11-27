@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { sanitizeSession, shSingleQuote } from './sshCommand.js';
+import { sanitizeSession, shSingleQuote, SESSION_NAME_RE, WINDOW_ID_RE, PANE_ID_RE } from './sshCommand.js';
 
 // Pane-aware injection of an uploaded file's path into a tmux session
 // (spec: docs/superpowers/specs/2026-07-13-claude-aware-tmux-injection-design.md).
@@ -136,12 +136,34 @@ export function buildSendKeysRemote(session, text) {
 // Android client renders them as styled spans. -S bounds scrollback. The
 // geometry line also carries #{alternate_on} (parse trims accordingly) and the
 // pane's mouse flags, which tell the client whether wheel injection
-// (buildSendWheelRemote) would land.
-export function buildPaneSnapshotRemote(session, { lines = 200 } = {}) {
-  const q = sess(session);
+// (buildSendWheelRemote) would land, and #{pane_id}, which names the pane the
+// capture read: a session's active pane moves, so a client that wants to show
+// or acknowledge that pane's agent state needs the capture to say which it was.
+//
+// Without a window and pane the target is the session's active pane. With
+// both, it is that one pane by the same exact, session-qualified form the pane
+// focus script uses (`-t '=web:@3.%12'`, see boxActions.buildSelectPaneRemote
+// for why each part is exact), and nothing is focused: capture-pane and
+// display-message only read. An explicit target is validated and refused, never
+// rewritten (sess() would silently turn a bad session name into another one's),
+// and a pane is addressed only with its window, never alone: a pane id is
+// unique, but the qualified form is what pins it to the session the caller named.
+// The geometry line resolves its target leniently where capture-pane does not
+// (it exits 0 for a pane that is not there); the `&&` is what turns a vanished
+// pane into a failed script instead of another pane's geometry.
+export function buildPaneSnapshotRemote(session, { lines = 200, windowId, paneId } = {}) {
+  let q;
+  if (windowId === undefined && paneId === undefined) {
+    q = sess(session);
+  } else {
+    if (typeof session !== 'string' || !SESSION_NAME_RE.test(session)) throw new Error('invalid session name');
+    if (typeof windowId !== 'string' || !WINDOW_ID_RE.test(windowId)) throw new Error('invalid window id');
+    if (typeof paneId !== 'string' || !PANE_ID_RE.test(paneId)) throw new Error('invalid pane id');
+    q = shSingleQuote(`=${session}:${windowId}.${paneId}`);
+  }
   const n = Math.max(0, Math.min(2000, Math.trunc(Number(lines) || 0)));
   return [
-    `tmux display-message -p -t ${q} '#{pane_width} #{pane_height} #{cursor_x} #{cursor_y} #{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag}'`,
+    `tmux display-message -p -t ${q} '#{pane_width} #{pane_height} #{cursor_x} #{cursor_y} #{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag} #{pane_id}'`,
     `tmux capture-pane -e -p -t ${q} -S -${n}`,
   ].join(' && ');
 }
@@ -150,10 +172,15 @@ export function parsePaneSnapshot(raw) {
   const txt = String(raw ?? '');
   const nl = txt.indexOf('\n');
   const head = (nl === -1 ? txt : txt.slice(0, nl)).trim();
-  // The flag triple is optional: a box tmux too old for these format variables
-  // expands them to nothing, and the pane view must degrade, not 502.
-  const m = /^(\d+) (\d+) (\d+) (\d+)(?: (\d) (\d) (\d))?$/.exec(head);
+  // The flag triple and the pane id are each optional: a box tmux too old for
+  // these format variables expands them to nothing, and the pane view must
+  // degrade, not 502. An expanded-to-nothing variable still leaves its
+  // separating space, so the id may follow a run of them. A token after the
+  // flags that is not a pane id is a malformed line, not a missing id.
+  const m = /^(\d+) (\d+) (\d+) (\d+)(?: +(\d) (\d) (\d))?(?: +(\S+))?$/.exec(head);
   if (!m) return null;
+  const pane = m[8];
+  if (pane !== undefined && !PANE_ID_RE.test(pane)) return null;
   const height = Number(m[2]);
   const alt = m[5] === '1';
   // Wheel injection writes SGR-encoded reports, so plain X10-only tracking
@@ -169,7 +196,11 @@ export function parsePaneSnapshot(raw) {
     const rows = content.split('\n');
     if (rows.length > height) content = rows.slice(-height).join('\n');
   }
-  return { width: Number(m[1]), height, cursorX: Number(m[3]), cursorY: Number(m[4]), alt, mouse, content };
+  return {
+    width: Number(m[1]), height, cursorX: Number(m[3]), cursorY: Number(m[4]), alt, mouse,
+    ...(pane !== undefined ? { pane } : {}),
+    content,
+  };
 }
 
 // Scroll a mouse-aware TUI's own viewport: write SGR wheel reports into the

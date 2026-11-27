@@ -823,18 +823,21 @@ export function createBoxActions({ run, runStdin, pipe = null, hostKeyPolicy = '
     async paneKind(box, session, { timeoutMs = 8000 } = {}) {
       return paneKindVia((script) => runRemote(box, script, timeoutMs), session);
     },
-    // Read-only snapshot of the box session's active pane: tmux is the
-    // terminal emulator, this just ships its screen. Never attaches a client,
-    // so it can never resize the window under a desktop viewer.
-    // `shared` is the browser preview's opt-in (the pane route's `session`
-    // branch): concurrent captures of one box, session and depth then share one
-    // ssh run, because a client abort does not stop the server's ssh and
+    // Read-only snapshot of a pane: tmux is the terminal emulator, this just
+    // ships its screen. By default the box session's active pane; with `windowId`
+    // and `paneId` that exact pane (the browser preview of an agent pane, which
+    // the operator is not necessarily looking at). The answer carries `pane`, the
+    // id of the pane that was read. Never attaches a client, so it can never
+    // resize the window under a desktop viewer, and never focuses anything.
+    // `shared` is the browser preview's opt-in (the pane route's `pane`
+    // branch): concurrent captures of one box, session, pane and depth then share
+    // one ssh run, because a client abort does not stop the server's ssh and
     // previews would pile up. Every other caller runs its own capture. A device
     // read (the app, MCP read_pane) that joined one already in flight could
     // return a screen from before the keys that caller had just sent.
-    paneSnapshot(box, session, { lines = 200, timeoutMs = 8000, shared = false } = {}) {
+    paneSnapshot(box, session, { lines = 200, timeoutMs = 8000, shared = false, windowId, paneId } = {}) {
       const capture = async () => {
-        const res = await runRemote(box, buildPaneSnapshotRemote(session, { lines }), timeoutMs);
+        const res = await runRemote(box, buildPaneSnapshotRemote(session, { lines, windowId, paneId }), timeoutMs);
         if (!res || res.code !== 0) {
           const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
           return { ok: false, error: msg || 'capture failed' };
@@ -843,7 +846,8 @@ export function createBoxActions({ run, runStdin, pipe = null, hostKeyPolicy = '
         if (!snap) return { ok: false, error: 'unparseable snapshot' };
         return { ok: true, ...snap };
       };
-      return shared ? paneFlight(`${box.id}\n${session}\n${lines}`, capture) : capture();
+      // The pane is part of the key: two panes of one session are two screens.
+      return shared ? paneFlight(`${box.id}\n${session}\n${paneId ?? ''}\n${lines}`, capture) : capture();
     },
     // Text goes literal (-l) via the same builder dictation uses; a named key
     // must already be validated against NAMED_KEYS by the route — the builder

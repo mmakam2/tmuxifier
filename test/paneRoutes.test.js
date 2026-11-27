@@ -10,17 +10,18 @@ import { createDeviceStore } from '../src/server/deviceStore.js';
 import { createPasskeyStore } from '../src/server/passkeyStore.js';
 
 let gate = null;
-let app, dir, calls, boxId, failNext, noMouseNext, captureOut, sizedCalls, setupRunning;
+let app, dir, calls, boxId, failNext, noMouseNext, captureOut, sizedCalls, setupRunning, snapCalls;
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-pane-'));
   calls = [];
+  snapCalls = [];
   // Tests flip this to exercise the routes' 502 mapping — consumed by the very
   // next call so a test can fail exactly one ssh round trip.
   failNext = false;
   gate = null;
   // The wheel script's own box-side refusal (exit 93): pane not mouse-aware.
   noMouseNext = false;
-  captureOut = '80 24 3 10 0 0 0\nhello\nworld\n';
+  captureOut = '80 24 3 10 0 0 0 %1\nhello\nworld\n';
   // Real createBoxActions over a fake ssh transport (the run seam) — the argv
   // building, quoting, and parsing under test are the real code.
   const run = async (argv) => {
@@ -38,7 +39,9 @@ beforeEach(async () => {
     if (remote.includes('send-keys')) return { code: 0, stdout: '', stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
   };
-  const boxActions = createBoxActions({ run, runStdin: run, hostKeyPolicy: 'accept-new', controlDir: dir });
+  const real = createBoxActions({ run, runStdin: run, hostKeyPolicy: 'accept-new', controlDir: dir });
+  // Records how the route calls the capture, so the arguments the route derives are pinned beside the argv they become.
+  const boxActions = { ...real, paneSnapshot: (...args) => { snapCalls.push(args); return real.paneSnapshot(...args); } };
   const store = createStore({ dataDir: dir });
   const box = await store.addBox({ label: 'b1', host: '192.168.1.10', user: 'u', sessionName: 'main' });
   boxId = box.id;
@@ -55,14 +58,17 @@ beforeEach(async () => {
   };
   const setupManager = { currentForBox: () => (setupRunning ? { status: 'running' } : null) };
   const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
-  // Pane-keyed, as the history keeps it: the state reported beside a capture
-  // is that of the captured session's focused agent pane.
-  const history = { getSeries: () => [{ t: 1, up: true, agents: {
-    '%0': { session: 'main', focused: false, state: 'working', cause: 'prompt' },
-    '%1': { session: 'main', focused: true, state: 'blocked', cause: 'permission' },
-    '%2': { session: 'side', focused: true, state: 'blocked', cause: 'question' },
-    '%3': { session: 'other', focused: false, state: 'done', cause: 'stop' },
-  } }], getEvents: () => ({ events: [], latestSeq: 0 }), record() {}, onEvent() {} };
+  // Pane-keyed, as the history keeps it: a capture reports which pane it read
+  // and the answer carries THAT pane's entry. `%1` is main's active pane (what
+  // the default capture reads); `%12` is a pane of another session the browser
+  // previews by id; `%20` sits in a session whose name no route accepts.
+  const history = { getSeries: () => [{ t: 1, up: true, agents: Object.assign(Object.create(null), {
+    '%0': { session: 'main', windowId: '@1', paneIndex: 0, focused: false, state: 'working', cause: 'prompt' },
+    '%1': { session: 'main', windowId: '@1', paneIndex: 1, focused: true, state: 'blocked', cause: 'permission', ts: 100 },
+    '%2': { session: 'side', windowId: '@2', paneIndex: 0, focused: true, state: 'blocked', cause: 'question', ts: 150 },
+    '%12': { session: 'work', windowId: '@3', paneIndex: 1, focused: false, state: 'done', cause: 'stop', ts: 200 },
+    '%20': { session: 'my work', windowId: '@4', paneIndex: 0, focused: true, state: 'done', cause: 'stop', ts: 300 },
+  }) }], getEvents: () => ({ events: [], latestSeq: 0 }), record() {}, onEvent() {} };
   app = buildServer({
     config, store, sessions, statusChecker, boxActions, history, setupManager,
     deviceStore: createDeviceStore({ dataDir: dir }), passkeyStore: createPasskeyStore({ dataDir: dir }),
@@ -86,7 +92,7 @@ test('GET pane returns parsed snapshot plus agent state', async () => {
   expect(res.statusCode).toBe(200);
   expect(res.json()).toEqual({
     ok: true, width: 80, height: 24, cursorX: 3, cursorY: 10, alt: false, mouse: false,
-    content: 'hello\nworld', agent: 'blocked', agentCause: 'permission', sessionName: 'main',
+    content: 'hello\nworld', pane: '%1', agent: 'blocked', agentCause: 'permission', agentTs: 100, sessionName: 'main',
   });
 });
 
@@ -226,55 +232,163 @@ test('POST keys with whitespace-only text is a no-op: 200 skipped, no send-keys 
   expect(calls.length).toBe(0);
 });
 
-test('GET pane with session captures that session and reports its agent state', async () => {
-  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=side&lines=40`, headers: await headers() });
-  expect(res.statusCode).toBe(200);
-  expect(res.json()).toMatchObject({ content: 'hello\nworld', agent: 'blocked', agentCause: 'question', sessionName: 'side' });
-  const remote = calls.at(-1).at(-1);
-  expect(remote).toContain("capture-pane -e -p -t '=side:' -S -40");
-});
-
-test('GET pane with session: a session with no agent entry reports null state', async () => {
-  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=other`, headers: await headers() });
-  expect(res.json()).toMatchObject({ agent: null, agentCause: null, sessionName: 'other' });
-});
-
-test('GET pane with an invalid session is 400 and never reaches ssh', async () => {
+test('GET pane without ?pane answers the entry of the pane the capture reported', async () => {
   const h = await headers();
-  for (const s of ['bad name', 'a;b', '', 'x'.repeat(65)]) {
-    const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=${encodeURIComponent(s)}`, headers: h });
-    expect(res.statusCode, s).toBe(400);
+  captureOut = '80 24 0 0 0 0 0 %2\nside screen\n';
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane`, headers: h });
+  expect(res.statusCode).toBe(200);
+  // main is the configured session; the capture said it read %2, so %2's state is reported, not the session's.
+  expect(res.json()).toMatchObject({ pane: '%2', agent: 'blocked', agentCause: 'question', agentTs: 150, sessionName: 'main' });
+});
+
+test('GET pane without ?pane: an entry with no marker timestamp carries no agentTs', async () => {
+  captureOut = '80 24 0 0 0 0 0 %0\nx\n';
+  const body = (await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane`, headers: await headers() })).json();
+  expect(body).toMatchObject({ pane: '%0', agent: 'working', agentCause: 'prompt' });
+  expect('agentTs' in body).toBe(false);
+});
+
+test('GET pane without ?pane: a captured pane with no entry reports null state and no agentTs', async () => {
+  captureOut = '80 24 0 0 0 0 0 %9\nplain shell\n';
+  const body = (await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane`, headers: await headers() })).json();
+  expect(body).toMatchObject({ pane: '%9', agent: null, agentCause: null, sessionName: 'main' });
+  expect('agentTs' in body).toBe(false);
+});
+
+test('GET pane without ?pane: a capture that names no pane (an old tmux) reports null state and no pane', async () => {
+  captureOut = '80 24 0 0\nplain shell\n';
+  const body = (await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane`, headers: await headers() })).json();
+  expect(body).toMatchObject({ agent: null, agentCause: null, sessionName: 'main', content: 'plain shell' });
+  expect('pane' in body).toBe(false);
+  expect('agentTs' in body).toBe(false);
+});
+
+test('GET pane without ?pane: a capture with a malformed pane id is a 502, not a lookup', async () => {
+  captureOut = '80 24 0 0 0 0 0 %1x\nx\n';
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane`, headers: await headers() });
+  expect(res.statusCode).toBe(502);
+  expect(res.json().error).toBe('unparseable snapshot');
+});
+
+test('GET pane with ?pane captures that exact pane and reports its state', async () => {
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=%2512&lines=40`, headers: await headers() });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({
+    ok: true, width: 80, height: 24, cursorX: 3, cursorY: 10, alt: false, mouse: false, content: 'hello\nworld',
+    agent: 'done', agentCause: 'stop', agentTs: 200, pane: '%12', sessionName: 'work',
+  });
+  // The session and window come from the server's own sample, never from the request.
+  const remote = calls.at(-1).at(-1);
+  expect(remote).toContain("display-message -p -t '=work:@3.%12'");
+  expect(remote).toContain("capture-pane -e -p -t '=work:@3.%12' -S -40");
+  expect(calls.length).toBe(1);
+});
+
+test('GET pane with ?pane hands the capture the sample\'s session and window and asks for a shared run', async () => {
+  const h = await headers();
+  await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=%2512&lines=40`, headers: h });
+  expect(snapCalls.at(-1)[1]).toBe('work');
+  expect(snapCalls.at(-1)[2]).toEqual({ lines: 40, windowId: '@3', paneId: '%12', shared: true });
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=%252`, headers: h });
+  expect(res.json()).toMatchObject({ pane: '%2', sessionName: 'side', agent: 'blocked', agentCause: 'question', agentTs: 150 });
+  expect(calls.at(-1).at(-1)).toContain("capture-pane -e -p -t '=side:@2.%2' -S -200");
+});
+
+test('GET pane without ?pane captures the configured session unshared, with no window or pane', async () => {
+  await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?lines=40`, headers: await headers() });
+  expect(snapCalls.at(-1)[1]).toBe('main');
+  expect(snapCalls.at(-1)[2]).toEqual({ lines: 40 });
+});
+
+test('GET pane with ?pane for a pane that is not in the latest sample is 404 and never reaches ssh', async () => {
+  const h = await headers();
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=%2599`, headers: h });
+  expect(res.statusCode).toBe(404);
+  expect(res.json()).toEqual({ error: 'no such agent pane' });
+  // Inherited names are not panes either: the sample's map is read by own key only.
+  const proto = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=${encodeURIComponent('__proto__')}`, headers: h });
+  expect(proto.statusCode).toBe(400);
+  expect(calls.length).toBe(0);
+});
+
+test('GET pane with an invalid ?pane is 400 and never reaches ssh', async () => {
+  const h = await headers();
+  for (const p of ['12', '', '%', '%x', '%1x', '%12;id', "%1'", '%1234567890', ' %12']) {
+    const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=${encodeURIComponent(p)}`, headers: h });
+    expect(res.statusCode, JSON.stringify(p)).toBe(400);
   }
-  const twice = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=a&session=b`, headers: h });
+  const twice = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=%2512&pane=%252`, headers: h });
   expect(twice.statusCode).toBe(400);
   expect(calls.length).toBe(0);
 });
 
-test('GET pane with session from a device token is 403; without session it still works', async () => {
+test('GET pane with ?pane for a pane whose session no route accepts is 400, never rewritten into another session', async () => {
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=%2520`, headers: await headers() });
+  expect(res.statusCode).toBe(400);
+  expect(res.json().error).toMatch(/session/);
+  expect(calls.length).toBe(0);
+});
+
+test('GET pane with ?pane without a history is 404, not a crash', async () => {
+  const bare = buildServer({
+    config: { bindAddress: '127.0.0.1', port: 0, hostKeyPolicy: 'accept-new', graceSeconds: 45, passwordHash: await hashPassword('pw'), cookieSecret: 'test-secret', dataDir: dir, localShell: 'none', configPath: path.join(dir, 'config.json') },
+    store: createStore({ dataDir: dir }), sessions: {}, statusChecker: {}, boxActions: {}, setupManager: { currentForBox: () => null },
+    deviceStore: createDeviceStore({ dataDir: dir }), passkeyStore: createPasskeyStore({ dataDir: dir }),
+  });
+  const login = await bare.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
+  const c = login.cookies.find((x) => x.name === 'tmuxifier_session');
+  const res = await bare.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=%2512`, headers: { cookie: `${c.name}=${c.value}` } });
+  expect(res.statusCode).toBe(404);
+  expect(res.json()).toEqual({ error: 'no such agent pane' });
+});
+
+test('GET pane with ?pane from a device token is 403; without it the device read still works', async () => {
   const b = await bearer();
-  const refused = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=main`, headers: b });
+  const refused = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=%2512`, headers: b });
   expect(refused.statusCode).toBe(403);
   expect(refused.json()).toEqual({ error: 'browser session required' });
+  // The 403 comes before validation: a device learns nothing about what a pane id would have meant.
+  expect((await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=nope`, headers: b })).statusCode).toBe(403);
   expect(calls.length).toBe(0);
   expect((await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane`, headers: b })).statusCode).toBe(200);
 });
 
-test('GET pane with session ignores cols/rows: the switcher never sizes anything', async () => {
-  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=side&cols=48&rows=90&client=c`, headers: await headers() });
+test('GET pane: ?session is no longer special, the configured session is captured', async () => {
+  const h = await headers();
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=work&lines=40`, headers: h });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toMatchObject({ sessionName: 'main', pane: '%1', agent: 'blocked' });
+  expect(calls.at(-1).at(-1)).toContain("capture-pane -e -p -t '=main:' -S -40");
+  // Not validated either: it is not read at all, so a device token and a bad name both just get the default capture.
+  const b = await bearer();
+  expect((await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=work`, headers: b })).statusCode).toBe(200);
+  expect((await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=${encodeURIComponent('bad name')}`, headers: h })).statusCode).toBe(200);
+  expect(calls.every((a) => a.at(-1).includes("'=main:'"))).toBe(true);
+});
+
+test('GET pane with ?pane ignores cols/rows: the switcher never sizes anything', async () => {
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=%252&cols=48&rows=90&client=c`, headers: await headers() });
   expect(res.statusCode).toBe(200);
   expect(sizedCalls.length).toBe(0);
 });
 
-test('GET pane with session stays ungated while the box setup job runs', async () => {
+test('GET pane with ?pane stays ungated while the box setup job runs', async () => {
   setupRunning = true;
-  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=side`, headers: await headers() });
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=%252`, headers: await headers() });
   expect(res.statusCode).toBe(200);
 });
 
-test('concurrent captures of one box and session share one ssh', async () => {
+test('GET pane with ?pane maps a transport failure to 502 with an error body', async () => {
+  failNext = true;
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=%2512`, headers: await headers() });
+  expect(res.statusCode).toBe(502);
+  expect(res.json().error).toBe('boom');
+});
+
+test('concurrent captures of one box, session and pane share one ssh', async () => {
   const h = await headers();
   let open; gate = new Promise((r) => { open = r; });
-  const url = `/api/boxes/${boxId}/pane?session=side&lines=40`;
+  const url = `/api/boxes/${boxId}/pane?pane=%252&lines=40`;
   const both = Promise.all([app.inject({ method: 'GET', url, headers: h }), app.inject({ method: 'GET', url, headers: h })]);
   await new Promise((r) => setTimeout(r, 50));
   expect(calls.filter((a) => a.at(-1).includes('capture-pane')).length).toBe(1);
@@ -285,8 +399,33 @@ test('concurrent captures of one box and session share one ssh', async () => {
 test('captures of two sessions on one box are not coalesced', async () => {
   const h = await headers();
   let open; gate = new Promise((r) => { open = r; });
-  const get = (s) => app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=${s}&lines=40`, headers: h });
-  const both = Promise.all([get('side'), get('main')]);
+  const get = (p) => app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=${encodeURIComponent(p)}&lines=40`, headers: h });
+  const both = Promise.all([get('%2'), get('%1')]);
+  await new Promise((r) => setTimeout(r, 50));
+  expect(calls.filter((a) => a.at(-1).includes('capture-pane')).length).toBe(2);
+  open();
+  expect((await both).map((r) => r.statusCode)).toEqual([200, 200]);
+});
+
+test('captures of two panes of one session are not coalesced', async () => {
+  const h = await headers();
+  let open; gate = new Promise((r) => { open = r; });
+  const get = (p) => app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=${encodeURIComponent(p)}&lines=40`, headers: h });
+  const both = Promise.all([get('%0'), get('%1')]);
+  await new Promise((r) => setTimeout(r, 50));
+  const remotes = calls.map((a) => a.at(-1)).filter((r) => r.includes('capture-pane'));
+  expect(remotes.length).toBe(2);
+  expect(remotes.some((r) => r.includes("'=main:@1.%0'"))).toBe(true);
+  expect(remotes.some((r) => r.includes("'=main:@1.%1'"))).toBe(true);
+  open();
+  expect((await both).map((r) => r.statusCode)).toEqual([200, 200]);
+});
+
+test('captures of one pane at two depths are not coalesced', async () => {
+  const h = await headers();
+  let open; gate = new Promise((r) => { open = r; });
+  const get = (n) => app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=%252&lines=${n}`, headers: h });
+  const both = Promise.all([get(40), get(80)]);
   await new Promise((r) => setTimeout(r, 50));
   expect(calls.filter((a) => a.at(-1).includes('capture-pane')).length).toBe(2);
   open();
@@ -309,7 +448,7 @@ test('a device read after send-keys runs its own capture instead of joining one 
 
   const sent = await app.inject({ method: 'POST', url: `/api/boxes/${boxId}/keys`, headers: mcp, payload: { text: 'typed' } });
   expect(sent.statusCode).toBe(200);
-  captureOut = '80 24 3 10 0 0 0\ntyped\n'; // the box's screen now shows the keys
+  captureOut = '80 24 3 10 0 0 0 %1\ntyped\n'; // the box's screen now shows the keys
   const late = app.inject({ method: 'GET', url, headers: mcp });
   await new Promise((r) => setTimeout(r, 50));
   expect(captures()).toBe(2);
@@ -323,9 +462,9 @@ test('a device read does not join a browser preview of the same session and dept
   const h = await headers();
   const b = await bearer();
   let open; gate = new Promise((r) => { open = r; });
-  // Same box, same session (the configured `main`), same depth: one key in the single flight.
+  // Same box, same session (the configured `main`), same depth: the preview names its pane, the device read does not, and neither joins the other.
   const both = Promise.all([
-    app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=main&lines=200`, headers: h }),
+    app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?pane=%251&lines=200`, headers: h }),
     app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?lines=200`, headers: b }),
   ]);
   await new Promise((r) => setTimeout(r, 50));

@@ -119,10 +119,30 @@ const NO_FLEET_SCRIPTS = {
   removeScript: async () => {},
 };
 
-// The agent state reported beside a pane capture: the latest sample's entry
-// for the captured session's focused agent pane (its current window's active
-// pane), or null when that pane runs no agent. The sample is keyed by pane id
-// and its entries are box-derived, so only own values are read.
+// The agent state reported beside a pane capture is that of the pane the
+// capture read: the latest sample is keyed by pane id, and its map and entries
+// are derived from box output, so a pane id is only ever looked up by own key.
+function agentEntryOf(sample, pane) {
+  const agents = sample?.agents;
+  if (typeof pane !== 'string' || !agents || typeof agents !== 'object' || !Object.hasOwn(agents, pane)) return null;
+  const e = agents[pane];
+  return e && typeof e === 'object' ? e : null;
+}
+
+// The state fields every capture answer carries. `agentTs` (the marker's own
+// timestamp) is what a client posts back to acknowledge the pane, and exists
+// only when the entry has one; no entry reads as no state.
+function agentFieldsOf(entry) {
+  return {
+    agent: entry?.state ?? null,
+    agentCause: entry?.cause ?? null,
+    ...(Number.isFinite(entry?.ts) ? { agentTs: entry.ts } : {}),
+  };
+}
+
+// The Host Shell's capture still reports the focused pane of its one session
+// (the latest sample's entry with `focused: true`); the box route reads the pane
+// the capture itself names.
 function focusedAgentOf(sample, session) {
   const agents = sample?.agents;
   if (!agents || typeof agents !== 'object') return null;
@@ -1260,27 +1280,46 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   });
 
   // App-facing pane snapshot: read-only, bounded scrollback, agent state from
-  // the health series so the client needs no second request.
+  // the health series so the client needs no second request. Every answer says
+  // which pane it captured (`pane`) and that pane's marker timestamp
+  // (`agentTs`), so a client that only ever sees a capture can show and
+  // acknowledge that pane's state.
   app.get('/api/boxes/:id/pane', { preHandler: requireAuth }, async (req, reply) => {
     const box = await store.getBox(req.params.id);
     if (!box) return reply.code(404).send({ error: 'not found' });
     const lines = req.query?.lines != null ? Number(req.query.lines) : 200;
-    // Browser-only `session`: the agent switcher previews any session's screen.
-    // Validated, never rewritten; a device token (app, MCP) keeps today's
-    // box.sessionName-only contract. Read-only, so ungated by setup jobs, and
-    // it never sizes a viewer (the preview must not resize anyone's tmux).
-    const wanted = req.query?.session;
+    // Read once, before the capture, on both branches: the answer's `agentTs` is
+    // what a client posts to say "seen", and a marker newer than the screen it
+    // arrives with must never be acknowledged along with it.
+    const latest = history ? (history.getSeries(box.id).at(-1) || null) : null;
+    // Browser-only `pane`: the agent switcher previews any agent pane's screen.
+    // The pane id is validated, never rewritten; its session and window come from
+    // the server's own latest sample (a client names a pane, never a tmux target)
+    // and pass the capture builder's validation again. A device token (app, MCP)
+    // keeps today's box.sessionName-only contract. Read-only, so ungated by setup
+    // jobs, and it never sizes a viewer (the preview must not resize anyone's tmux).
+    const wanted = req.query?.pane;
     if (wanted !== undefined) {
       if (req.deviceId) return reply.code(403).send({ error: 'browser session required' });
-      if (typeof wanted !== 'string' || !SESSION_NAME_RE.test(wanted)) {
+      if (typeof wanted !== 'string' || !PANE_ID_RE.test(wanted)) {
+        return reply.code(400).send({ error: 'pane id must look like %12' });
+      }
+      const entry = agentEntryOf(latest, wanted);
+      if (!entry) return reply.code(404).send({ error: 'no such agent pane' });
+      // The sample holds every session the box lists, and the probe keeps names a
+      // route would refuse (spaces, up to 256 characters). Such a pane cannot be
+      // addressed by an exact target, and a name is never rewritten into one that can.
+      if (typeof entry.session !== 'string' || !SESSION_NAME_RE.test(entry.session)
+        || typeof entry.windowId !== 'string' || !WINDOW_ID_RE.test(entry.windowId)) {
         return reply.code(400).send({ error: 'session name must be letters, digits, _ or -' });
       }
       // Previews share an in-flight capture; the device read below never does.
-      const picked = await boxActions.paneSnapshot(box, wanted, { lines, shared: true });
+      const picked = await boxActions.paneSnapshot(box, entry.session, {
+        lines, shared: true, windowId: entry.windowId, paneId: wanted,
+      });
       if (!picked.ok) return reply.code(502).send({ error: picked.error });
-      const latest = history ? (history.getSeries(box.id).at(-1) || null) : null;
-      const entry = focusedAgentOf(latest, wanted);
-      return { ...picked, agent: entry?.state ?? null, agentCause: entry?.cause ?? null, sessionName: wanted };
+      // The target named its pane exactly, so the answer does too.
+      return { ...picked, ...agentFieldsOf(entry), pane: wanted, sessionName: entry.session };
     }
     const snap = await boxActions.paneSnapshot(box, box.sessionName, { lines });
     if (!snap.ok) return reply.code(502).send({ error: snap.error });
@@ -1298,9 +1337,9 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       && viewerId && setupManager?.currentForBox(box.id)?.status !== 'running') {
       try { sessions.ensureSizedViewer({ box, session: box.sessionName, clientId: viewerId, cols, rows }); } catch {}
     }
-    const last = history ? (history.getSeries(box.id).at(-1) || null) : null;
-    const entry = focusedAgentOf(last, box.sessionName);
-    return { ...snap, agent: entry?.state ?? null, agentCause: entry?.cause ?? null, sessionName: box.sessionName };
+    // The session's active pane moves, so the state is that of the pane the
+    // capture says it read; a tmux too old to say reads as no state.
+    return { ...snap, ...agentFieldsOf(agentEntryOf(latest, snap.pane)), sessionName: box.sessionName };
   });
 
   app.post('/api/boxes/:id/keys', { preHandler: requireAuth }, async (req, reply) => {

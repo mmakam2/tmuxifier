@@ -349,11 +349,40 @@ test('injectTextVia sh-quotes text containing quotes and semicolons', async () =
   expect(sendKeys).toContain(`'it'\\''s fine; rm -rf /'`);
 });
 
-test('buildPaneSnapshotRemote: geometry line with alt/mouse flags, then bounded capture, atomic on failure', () => {
+test('buildPaneSnapshotRemote: geometry line with alt/mouse flags and the pane id, then bounded capture, atomic on failure', () => {
   const s = buildPaneSnapshotRemote('main', { lines: 200 });
-  expect(s).toContain("display-message -p -t '=main:' '#{pane_width} #{pane_height} #{cursor_x} #{cursor_y} #{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag}'");
+  expect(s).toContain("display-message -p -t '=main:' '#{pane_width} #{pane_height} #{cursor_x} #{cursor_y} #{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag} #{pane_id}'");
   expect(s).toContain("capture-pane -e -p -t '=main:' -S -200");
   expect(s).toContain(' && '); // one failure fails the whole script (non-zero exit)
+});
+
+test('buildPaneSnapshotRemote targets the session\'s active pane by default and reports its id', () => {
+  const s = buildPaneSnapshotRemote('main', { lines: 40 });
+  expect(s).toContain(`-t '=main:' '#{pane_width} #{pane_height} #{cursor_x} #{cursor_y} #{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag} #{pane_id}'`);
+});
+
+test('buildPaneSnapshotRemote targets one pane exactly when given a window and a pane', () => {
+  const s = buildPaneSnapshotRemote('main', { lines: 40, windowId: '@3', paneId: '%12' });
+  expect(s).toContain(`capture-pane -e -p -t '=main:@3.%12' -S -40`);
+  // The geometry line asks about the very pane the capture reads.
+  expect(s).toContain(`display-message -p -t '=main:@3.%12' '#{pane_width}`);
+  expect(s).not.toContain(`'=main:'`);
+  expect(() => buildPaneSnapshotRemote('main', { paneId: '%12' })).toThrow();   // a pane needs its window
+  expect(() => buildPaneSnapshotRemote('main', { windowId: '@3' })).toThrow();  // and a window alone is no capture target
+});
+
+test('buildPaneSnapshotRemote validates an explicit pane target and never rewrites it', () => {
+  const ok = { windowId: '@3', paneId: '%12' };
+  // sanitizeSession would turn 'a b' into 'a-b' and capture a stranger's pane; an explicit name is refused.
+  expect(() => buildPaneSnapshotRemote('a b', ok)).toThrow(/session/);
+  expect(() => buildPaneSnapshotRemote("a'b", ok)).toThrow(/session/);
+  expect(() => buildPaneSnapshotRemote('', ok)).toThrow(/session/);
+  for (const w of ['3', '@', '@x', '@3;id', '@1234567890', '@3 ', 3, null]) {
+    expect(() => buildPaneSnapshotRemote('main', { windowId: w, paneId: '%12' }), String(w)).toThrow(/window/);
+  }
+  for (const p of ['12', '%', '%x', '%1x', "%1'", '%12;id', '%1234567890', 12, null]) {
+    expect(() => buildPaneSnapshotRemote('main', { windowId: '@3', paneId: p }), String(p)).toThrow(/pane/);
+  }
 });
 
 test('buildPaneSnapshotRemote clamps lines and quotes the session', () => {
@@ -377,6 +406,31 @@ test('parsePaneSnapshot splits geometry from content', () => {
   expect(parsePaneSnapshot('garbage\nstuff')).toBe(null);
   expect(parsePaneSnapshot('')).toBe(null);
   expect(parsePaneSnapshot(null)).toBe(null);
+});
+
+test('parsePaneSnapshot reads the pane id, and still parses a line without it or without the flags', () => {
+  expect(parsePaneSnapshot('80 24 0 0 0 0 0 %12\nhi').pane).toBe('%12');
+  expect(parsePaneSnapshot('80 24 0 0 0 0 0 %12\nhi')).toEqual({
+    width: 80, height: 24, cursorX: 0, cursorY: 0, alt: false, mouse: false, pane: '%12', content: 'hi',
+  });
+  expect(parsePaneSnapshot('80 24 0 0 0 0 0\nhi').pane).toBeUndefined();
+  expect('pane' in parsePaneSnapshot('80 24 0 0 0 0 0\nhi')).toBe(false);
+  expect(parsePaneSnapshot('80 24 0 0\nhi')).toMatchObject({ width: 80, height: 24 });
+  expect(parsePaneSnapshot('80 24 0 0 0 0 0 %1x\nhi')).toBeNull();
+});
+
+test('parsePaneSnapshot: a tmux that expands unknown format variables to nothing leaves runs of spaces around the pane id', () => {
+  // Only #{pane_id} is known: the three flag variables and nothing else collapse, so the id follows a run of spaces.
+  expect(parsePaneSnapshot('80 24 5 23    %7\nline1\n')).toEqual({
+    width: 80, height: 24, cursorX: 5, cursorY: 23, alt: false, mouse: false, pane: '%7', content: 'line1',
+  });
+  expect(parsePaneSnapshot('80 24 5 23 %7\nx\n')).toMatchObject({ pane: '%7' });
+});
+
+test('parsePaneSnapshot refuses a trailing token that is not a pane id, and any malformed flag run', () => {
+  for (const bad of ['80 24 0 0 0 0 0 12', '80 24 0 0 0 0 0 %', '80 24 0 0 0 0 0 %12 %13', '80 24 0 0 0 0 0 pane', '80 24 0 0 0 0 0 %1234567890', '80 24 0 0 0 0 %12', '80 24 0 0 1 %12']) {
+    expect(parsePaneSnapshot(`${bad}\nhi`), bad).toBeNull();
+  }
 });
 
 test('parsePaneSnapshot: alt screen ships only the visible screen — capture history above it is the primary screen (stale shell), not the app', () => {
