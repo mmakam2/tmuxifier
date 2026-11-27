@@ -33,22 +33,75 @@ export function untrustedText(text, max, { keep = 'head' } = {}) {
   return keep === 'tail' ? `\u2026${cps.slice(-max).join('')}` : `${cps.slice(0, max).join('')}\u2026`;
 }
 
-export function agentOf(sample, session) {
-  return session ? (sample?.agents?.[session]?.state ?? 'gone') : (sample?.agent ?? 'gone');
+// The agent entry a caller means in a health sample's `agents` map (keyed by pane
+// id, one entry per pane running an agent). With `pane`: that pane's entry, read
+// as an own key, when it belongs to `session` (a pane of another session is not
+// the one asked for). Without: the entry of `session`'s focused pane, which is
+// the pane read_pane shows and send_text types into. null when there is none.
+export function agentEntryOf(sample, { session, pane } = {}) {
+  const agents = sample?.agents;
+  if (!agents || typeof agents !== 'object') return null;
+  const mine = (e) => (e && typeof e === 'object' && e.session === session ? e : null);
+  if (pane != null) return Object.hasOwn(agents, pane) ? mine(agents[pane]) : null;
+  return Object.values(agents).find((e) => mine(e) && e.focused === true) ?? null;
 }
 
-// `agents: web=done, web-2=blocked(permission)` from a sample's per-session
-// map (sessions with no state omitted); the legacy single `agent: X` when the
-// server predates `agents`. Session names come from the box: sanitized.
-export function agentsSeg(sample) {
-  const a = sample?.agents;
-  if (a && typeof a === 'object') {
-    const entries = Object.entries(a)
-      .filter(([, v]) => v?.state)
-      .map(([name, v]) => `${untrustedText(name, SESSION_NAME_MAX)}=${v.state}${v.cause ? `(${v.cause})` : ''}`);
-    return entries.length ? `agents: ${entries.join(', ')}` : '';
+// The state of that entry; 'gone' when there is no such entry or it has no marker.
+export function agentOf(sample, where) {
+  return agentEntryOf(sample, where)?.state ?? 'gone';
+}
+
+// The naming rule of the browser's `agentRows` (src/web/agentState.ts, header
+// comment), written again here because src/mcp must not import src/web, and
+// pinned equal to it by test/agentNaming.test.js. A name is the window,
+// `<windowIndex>:<windowName>` (`window` when it is empty); `.<paneIndex>` is
+// added only when the box has more than one agent ENTRY, stateless ones counted,
+// in that session and window; `<session> › ` is prefixed only when the entries
+// span more than one session. Ordered by session (plain string compare, not a
+// locale one), window index, pane index.
+//
+// Every entry is listed, with or without a state; callers filter. Session and
+// window names are written by the box, so they are cleaned (`untrustedText`) as
+// they join a name; the ordering and the counting use the raw values.
+const WINDOW_NAME_MAX = 64;
+const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+export function agentNames(agents) {
+  const entries = [];
+  const perWindow = new Map(); // session -> windowId -> entries in that window
+  for (const [pane, e] of Object.entries(agents ?? {})) {
+    if (!e || typeof e !== 'object') continue;
+    entries.push([pane, e]);
+    const windows = perWindow.get(e.session) ?? new Map();
+    windows.set(e.windowId, (windows.get(e.windowId) ?? 0) + 1);
+    perWindow.set(e.session, windows);
   }
-  return sample?.agent ? `agent: ${sample.agent}` : '';
+  const acrossSessions = perWindow.size > 1;
+  entries.sort(([, a], [, b]) => cmp(a.session, b.session) || a.windowIndex - b.windowIndex || a.paneIndex - b.paneIndex);
+  return entries.map(([pane, e]) => {
+    let name = `${e.windowIndex}:${untrustedText(e.windowName, WINDOW_NAME_MAX) || 'window'}`;
+    if ((perWindow.get(e.session)?.get(e.windowId) ?? 0) > 1) name += `.${e.paneIndex}`;
+    if (acrossSessions) name = `${untrustedText(e.session, SESSION_NAME_MAX)} \u203a ${name}`;
+    const item = { pane, name };
+    if (e.state) item.state = e.state;
+    if (e.cause) item.cause = e.cause;
+    return item;
+  });
+}
+
+// A tmux pane id, as the server validates one (`PANE_ID_RE`, src/server/sshCommand.js;
+// the server is not importable here). Pinned equal by test/mcpTools.test.js.
+const PANE_ID = /^%\d{1,9}$/;
+
+// `agents: 2:frontend.1[%12]=blocked(permission) 2:frontend.2[%13]=working`: one
+// item per agent pane that has a state, named by `agentNames`, the pane id in
+// brackets so a caller can hand it to wait_for_agent, the cause only for a
+// blocked pane. Empty when no pane has a state (or the server sent no `agents`).
+export function agentsSeg(sample) {
+  const items = agentNames(sample?.agents)
+    .filter((a) => a.state)
+    .map((a) => `${a.name}${PANE_ID.test(a.pane) ? `[${a.pane}]` : ''}=${a.state}${a.state === 'blocked' && a.cause ? `(${a.cause})` : ''}`);
+  return items.length ? `agents: ${items.join(' ')}` : '';
 }
 
 export function clip(text, max) {
@@ -96,8 +149,13 @@ export function fleetOverview(boxes, statusMap = {}, seriesMap = {}) {
   return [`${boxes.length} boxes`, ...boxes.map((b) => boxLine(b, statusMap[b.id], (seriesMap[b.id] || []).at(-1)))].join('\n');
 }
 
+// The head names the pane the capture came from (`pane:%N`, when the server says
+// which) and that pane's agent state: the route reads both from the same entry.
 export function paneText(snap, box) {
-  const head = `pane ${box.label || box.host} session ${snap.sessionName} ${snap.width}x${snap.height} cursor ${snap.cursorX},${snap.cursorY} alt:${!!snap.alt} mouse:${!!snap.mouse} agent:${agentOf({ agent: snap.agent })}${snap.agentCause ? `(${snap.agentCause})` : ''}`;
+  const state = snap.agent ?? 'gone';
+  const pane = PANE_ID.test(snap.pane) ? ` pane:${snap.pane}` : '';
+  const cause = state === 'blocked' && snap.agentCause ? `(${snap.agentCause})` : '';
+  const head = `pane ${box.label || box.host} session ${snap.sessionName} ${snap.width}x${snap.height} cursor ${snap.cursorX},${snap.cursorY} alt:${!!snap.alt} mouse:${!!snap.mouse}${pane} agent:${state}${cause}`;
   return `${head}\n---\n${stripSgr(snap.content)}`;
 }
 

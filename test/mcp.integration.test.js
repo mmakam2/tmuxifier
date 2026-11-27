@@ -88,7 +88,7 @@ test('list_boxes shows the real box with its status and sample', async () => {
 
 test('read_pane sees real tmux output and send_text round-trips through the pane', async () => {
   const before = await mcp.call('read_pane', { box_id: box.id, lines: 20 });
-  expect(before.content[0].text).toMatch(new RegExp(`^pane local session ${lb.session} \\d+x\\d+ cursor \\d+,\\d+ alt:false mouse:false agent:gone\\n---\\n`));
+  expect(before.content[0].text).toMatch(new RegExp(`^pane local session ${lb.session} \\d+x\\d+ cursor \\d+,\\d+ alt:false mouse:false pane:%\\d+ agent:gone\\n---\\n`));
   expect(before.content[0].text).toContain('mcp-marker');
   // The fixture pane emits real SGR (see beforeAll); read_pane must strip it.
   expect(before.content[0].text).not.toContain('\x1b');
