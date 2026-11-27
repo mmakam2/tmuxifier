@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { stripSgr, agentOf, agentNames, agentsSeg, boxLine, fleetOverview, paneText, healthText, fleetCounts, jobLine, jobDetail, scriptsText, presetsText, guestsText, errorText, clip, untrustedText, ERROR_MAX, SESSION_NAME_MAX, SESSIONS_MAX } from '../src/mcp/shape.js';
+import { stripSgr, agentOf, agentEntryOf, agentNames, agentsSeg, boxLine, fleetOverview, paneText, healthText, fleetCounts, jobLine, jobDetail, scriptsText, presetsText, guestsText, errorText, clip, untrustedText, ERROR_MAX, SESSION_NAME_MAX, SESSIONS_MAX } from '../src/mcp/shape.js';
 import { PANE_ID_RE } from '../src/server/sshCommand.js';
 
 const box = { id: 'b1', label: 'web', host: '192.168.1.10', sessionName: 'web' };
@@ -43,20 +43,48 @@ test('agentOf with a session is the state of that session\'s focused agent pane'
   expect(agentOf(sample, { session: 'nope' })).toBe('gone');
 });
 
-test('agentOf with a pane is that pane\'s state, focused or not, when it belongs to the session', () => {
+test('agentOf with a pane and a session is that pane\'s state, focused or not, when it is in the session', () => {
   const sample = { agents: { '%1': pe({ state: 'idle' }), '%2': pe({ paneIndex: 2, state: 'blocked', focused: true }), '%5': pe({ session: 'other', state: 'done' }) } };
   expect(agentOf(sample, { session: 'main', pane: '%1' })).toBe('idle');
   expect(agentOf(sample, { session: 'main', pane: '%2' })).toBe('blocked');
   expect(agentOf(sample, { session: 'other', pane: '%5' })).toBe('done');
 });
 
-test('agentOf reads gone for an unknown pane, a pane of another session, no focused agent, or no state', () => {
+// Pane ids are unique per box, so a pane id taken from a listing needs no session
+// to be read; a session that is given must agree with the pane's own.
+test('agentOf with a pane and no session is that pane\'s state, whatever session it is in', () => {
+  const sample = { agents: { '%1': pe({ state: 'idle' }), '%2': pe({ paneIndex: 2, state: 'blocked', focused: true }), '%5': pe({ session: 'other', state: 'done' }) } };
+  expect(agentOf(sample, { pane: '%1' })).toBe('idle');
+  expect(agentOf(sample, { pane: '%2' })).toBe('blocked');
+  expect(agentOf(sample, { pane: '%5' })).toBe('done');
+  expect(agentOf(sample, { session: undefined, pane: '%5' })).toBe('done');
+});
+
+test('agentOf with a pane and a session that is not the pane\'s own reads gone', () => {
+  const sample = { agents: { '%1': pe({ state: 'idle' }), '%5': pe({ session: 'other', state: 'done' }) } };
+  expect(agentOf(sample, { session: 'main', pane: '%5' })).toBe('gone'); // %5 is in `other`
+  expect(agentOf(sample, { session: 'other', pane: '%1' })).toBe('gone'); // %1 is in `main`
+  expect(agentOf(sample, { session: 'nope', pane: '%1' })).toBe('gone');
+});
+
+test('agentOf reads gone for an unknown pane, no focused agent, or no state', () => {
   const sample = { agents: { '%1': pe({ state: 'idle' }), '%2': pe({ paneIndex: 2, state: undefined, focused: true }), '%5': pe({ session: 'other', state: 'done' }) } };
   expect(agentOf(sample, { session: 'main', pane: '%9' })).toBe('gone');
-  expect(agentOf(sample, { session: 'main', pane: '%5' })).toBe('gone'); // %5 is in `other`
+  expect(agentOf(sample, { pane: '%9' })).toBe('gone');
   expect(agentOf(sample, { session: 'other' })).toBe('gone'); // no focused pane in `other`
   expect(agentOf(sample, { session: 'main' })).toBe('gone'); // the focused pane has no marker
   expect(agentOf(sample, { session: 'main', pane: '%2' })).toBe('gone');
+  expect(agentOf(sample, { pane: '%2' })).toBe('gone');
+});
+
+test('agentEntryOf returns the entry itself, and null when there is none', () => {
+  const sample = { agents: { '%1': pe({ state: 'idle' }), '%5': pe({ session: 'other', state: 'done', focused: true }) } };
+  expect(agentEntryOf(sample, { pane: '%5' })).toBe(sample.agents['%5']);
+  expect(agentEntryOf(sample, { session: 'other' })).toBe(sample.agents['%5']);
+  expect(agentEntryOf(sample, { session: 'main', pane: '%5' })).toBeNull();
+  expect(agentEntryOf(sample, {})).toBeNull();
+  expect(agentEntryOf(sample)).toBeNull();
+  expect(agentEntryOf(null, { pane: '%5' })).toBeNull();
 });
 
 test('agentOf tolerates a missing sample, agents map or selector, and never reads the removed scalar sample.agent', () => {
@@ -67,9 +95,12 @@ test('agentOf tolerates a missing sample, agents map or selector, and never read
   expect(agentOf({ agents: { '%1': null, '%2': 'x', '%3': pe({ focused: true }) } }, { session: 'main' })).toBe('working');
 });
 
-test('agentOf reads a pane id as an own key (a prototype name is not a pane)', () => {
+test('agentOf reads a pane id as an own key (a prototype name is not a pane), with or without a session', () => {
   const sample = { agents: { '%1': pe() } };
-  for (const key of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) expect(agentOf(sample, { session: 'main', pane: key })).toBe('gone');
+  for (const key of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+    expect(agentOf(sample, { session: 'main', pane: key })).toBe('gone');
+    expect(agentOf(sample, { pane: key })).toBe('gone');
+  }
 });
 
 test('agentNames names every agent entry by the shared rule, stateless ones included, ordered by session, window, pane', () => {

@@ -35,14 +35,17 @@ export function untrustedText(text, max, { keep = 'head' } = {}) {
 
 // The agent entry a caller means in a health sample's `agents` map (keyed by pane
 // id, one entry per pane running an agent). With `pane`: that pane's entry, read
-// as an own key, when it belongs to `session` (a pane of another session is not
-// the one asked for). Without: the entry of `session`'s focused pane, which is
-// the pane read_pane shows and send_text types into. null when there is none.
+// as an own key; pane ids are unique per box, so no `session` is needed, and one
+// that is given must be the pane's own (a pane of another session is not the one
+// asked for). Without `pane`: the entry of `session`'s focused pane, which is the
+// pane read_pane shows and send_text types into. null when there is none.
 export function agentEntryOf(sample, { session, pane } = {}) {
   const agents = sample?.agents;
   if (!agents || typeof agents !== 'object') return null;
-  const mine = (e) => (e && typeof e === 'object' && e.session === session ? e : null);
+  const anySession = session == null;
+  const mine = (e) => (e && typeof e === 'object' && (anySession || e.session === session) ? e : null);
   if (pane != null) return Object.hasOwn(agents, pane) ? mine(agents[pane]) : null;
+  if (anySession) return null;
   return Object.values(agents).find((e) => mine(e) && e.focused === true) ?? null;
 }
 

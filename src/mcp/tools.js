@@ -1,7 +1,7 @@
 // The curated tool catalog: task-oriented, not a REST mirror. Every handler
 // calls the allowlisted client and renders through shape.js; every failure is
 // an isError tool result so the orchestrator can self-correct.
-import { fleetOverview, paneText, healthText, jobLine, jobDetail, scriptsText, presetsText, guestsText, errorText, agentOf, agentEntryOf } from './shape.js';
+import { fleetOverview, paneText, healthText, jobLine, jobDetail, scriptsText, presetsText, guestsText, errorText, agentOf, agentEntryOf, untrustedText, SESSION_NAME_MAX } from './shape.js';
 
 export const JOB_KINDS = ['fleet', 'setup', 'provision', 'lifecycle'];
 // `waiting` is a deprecated alias that expands to ['blocked', 'done', 'idle']
@@ -56,7 +56,7 @@ export const TOOL_DEFS = [
   { name: 'start_setup', description: 'Start a server-side setup job on a box: tmux, optional shell frameworks, the tool catalog, the Claude Code statusline/hooks, and an optional post-setup saved script. AI-auth seeding needs a browser session.', inputSchema: { type: 'object', required: ['box_id'], properties: { box_id: BOX_ID, oh_my_tmux: bool('Install oh-my-tmux'), oh_my_zsh: bool('Install oh-my-zsh'), oh_my_bash: bool('Install oh-my-bash'), tools: { type: 'array', items: { type: 'string', enum: SETUP_TOOLS }, description: 'Tool ids from the setup catalog (agy is the Antigravity CLI, pi the pi coding agent)' }, claude_statusline: bool('Push the Claude Code statusline (legacy flag; the claude tool implies it)'), script_id: str('Saved script id to run last'), script_name: str('Display label for that script') } } },
   { name: 'provision_guest', description: 'Create a Proxmox LXC container from a preset, link it as a box and start its setup. Returns the provision job id; follow it with wait_for_job.', inputSchema: { type: 'object', required: ['preset_id', 'hostname'], properties: { preset_id: str('Preset id from list_presets'), hostname: str('DNS label; becomes the box label'), vmid: int('Explicit vmid (default: next free)'), ip: str('CIDR override for static presets'), tags: { type: 'array', items: { type: 'string' } }, setup_options: { type: 'object', description: 'Setup options forwarded to the post-link setup job (same keys as start_setup, camelCase; seedAiAuth is refused)' } } } },
   { name: 'guest_power', description: 'Start, shut down, reboot or stop the Proxmox guest a box is linked to. Deprovisioning is not available through MCP.', inputSchema: { type: 'object', required: ['box_id', 'action'], properties: { box_id: BOX_ID, action: { type: 'string', enum: GUEST_ACTIONS } } } },
-  { name: 'wait_for_agent', description: `Block until an agent on the box enters one of \`until\` (default: blocked, done or idle — i.e. it needs input or finished) or the timeout passes. By default it waits on the focused agent pane of \`session\` (default: the box's configured session, named in the result's session line): the pane read_pane shows and send_text types into; its state reads gone when that pane runs no agent. \`pane\` (a tmux pane id such as %12, shown in brackets after each agent's name by list_boxes and box_health) waits on that pane instead, focused or not; it must be a pane of \`session\`, else it reads gone, and the result names it in a pane line. \`waiting\` is a deprecated alias for blocked+done+idle. ${AGENT_STATES_DOC} Timeout is not an error; the result reports timed_out.`, inputSchema: { type: 'object', required: ['box_id'], properties: { box_id: BOX_ID, session: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$', description: "tmux session to watch; defaults to the box's configured session" }, pane: { type: 'string', pattern: '^%\\d{1,9}$', description: "tmux pane id (%N) of an agent pane in that session, from list_boxes or box_health; defaults to the session's focused pane" }, until: { type: 'array', items: { type: 'string', enum: AGENT_STATES }, description: 'Target states (default ["blocked","done","idle"])' }, timeout_sec: TIMEOUT } } },
+  { name: 'wait_for_agent', description: `Block until an agent on the box enters one of \`until\` (default: blocked, done or idle — i.e. it needs input or finished) or the timeout passes. By default it waits on the focused agent pane of \`session\` (default: the box's configured session, named in the result's session line): the pane read_pane shows and send_text types into; its state reads gone when that pane runs no agent. \`pane\` (a tmux pane id such as %12, shown in brackets after each agent's name by list_boxes and box_health) waits on that pane instead, focused or not, in whatever session it is: pane ids are unique per box, so \`session\` is not needed and the result's session line names the pane's own session. A \`session\` that is also given must be that pane's session, else it reads gone. \`waiting\` is a deprecated alias for blocked+done+idle. ${AGENT_STATES_DOC} Timeout is not an error; the result reports timed_out.`, inputSchema: { type: 'object', required: ['box_id'], properties: { box_id: BOX_ID, session: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$', description: "tmux session to watch; defaults to the box's configured session. With pane, leave it out (the pane's own session is used) or name that pane's session" }, pane: { type: 'string', pattern: '^%\\d{1,9}$', description: "tmux pane id (%N) of an agent pane in any session, from list_boxes or box_health; defaults to the session's focused pane" }, until: { type: 'array', items: { type: 'string', enum: AGENT_STATES }, description: 'Target states (default ["blocked","done","idle"])' }, timeout_sec: TIMEOUT } } },
   { name: 'wait_for_job', description: 'Block until a job leaves the running state or the timeout passes. Timeout is not an error; the result reports timed_out.', inputSchema: { type: 'object', required: ['kind', 'id'], properties: { kind: KIND, id: str('Job id'), timeout_sec: TIMEOUT } } },
 ];
 
@@ -187,16 +187,25 @@ export function createToolRegistry({ client, sleep = (ms) => new Promise((r) => 
     },
     async wait_for_agent({ box_id, session, pane, until = ['blocked', 'done', 'idle'], timeout_sec }) {
       const targets = new Set(until.flatMap((s) => (s === 'waiting' ? ['blocked', 'done', 'idle'] : [s])));
-      const name = session ?? (((await client.listBoxes()) || []).find((b) => b.id === box_id)?.sessionName || 'web');
+      // A pane id names its pane on the whole box, so with no `session` it is read
+      // wherever it is (and the configured session is not looked up); a `session`
+      // that is given must be the pane's own. Without a pane the session is the one
+      // asked for, else the box's configured one.
+      const anySession = pane !== undefined && session === undefined;
+      const name = anySession ? undefined : (session ?? (((await client.listBoxes()) || []).find((b) => b.id === box_id)?.sessionName || 'web'));
       const where = { session: name, pane };
       let last;
       const r = await poll(async () => {
         last = (await client.getSeries(box_id))?.[box_id]?.at(-1);
         return agentOf(last, where);
       }, (s) => targets.has(s), timeout_sec);
-      const lines = [`state: ${r.value}`, `session: ${name}`];
+      const entry = agentEntryOf(last, where);
+      // The pane's own session is box text: cleaned like every name the box supplies.
+      const sessionShown = anySession ? (entry ? untrustedText(entry.session, SESSION_NAME_MAX) : '') : name;
+      const lines = [`state: ${r.value}`];
+      if (sessionShown) lines.push(`session: ${sessionShown}`);
       if (pane) lines.push(`pane: ${pane}`);
-      const cause = r.value === 'blocked' ? agentEntryOf(last, where)?.cause : undefined;
+      const cause = r.value === 'blocked' ? entry?.cause : undefined;
       if (cause) lines.push(`cause: ${cause}`);
       lines.push(`timed_out: ${r.timedOut}`, `waited_sec: ${r.elapsed}`);
       return ok(lines.join('\n'));
