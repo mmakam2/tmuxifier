@@ -9,7 +9,7 @@ import { buildClawd, setClawdVariant, hasStoredClawdPref, loadClawdVariant, claw
 import { applyTheme, currentTheme, themedLogo } from './theme';
 import { sparkline } from './sparkline';
 import { sidebarSparkOn, setSidebarSpark, onSidebarSparkChange, sparkListClass, type SparkMetric } from './sidebarSpark';
-import { formatEvent, relTime, unseenCountFiltered, notificationsToFire } from './healthEvents';
+import { formatEvent, relTime, unseenCountFiltered, notificationsToFire, notificationTag } from './healthEvents';
 import { loadNotifyPrefs, enabledKinds } from './notifyPrefs';
 import { toggleBox, setBoxes, groupState } from './fleetSelection';
 import { addRecent, parseRecent } from './fleetHistory';
@@ -1085,12 +1085,13 @@ async function pollEventsOnce() {
         permissionGranted: typeof Notification !== 'undefined' && Notification.permission === 'granted',
         enabled: enabledKinds(loadNotifyPrefs()),
       });
-      // fire is newest-first; walk oldest-first so a shared tag (`kind:boxId`)
-      // ends on the newest event, which wins the replacement.
+      // fire is newest-first; walk oldest-first so a shared tag (`kind:boxId`,
+      // or `kind:boxId:pane` for an agent event) ends on the newest event, which
+      // wins the replacement.
       for (const e of [...fire].reverse()) {
         const line = formatEvent(e);
         try {
-          const n = new Notification(`Tmuxifier — ${e.label || e.host}`, { body: line.text, tag: `${e.kind}:${e.boxId}` });
+          const n = new Notification(`Tmuxifier — ${e.label || e.host}`, { body: line.text, tag: notificationTag(e) });
           n.onclick = () => { window.focus(); n.close(); };
         } catch { /* notifications unavailable */ }
       }

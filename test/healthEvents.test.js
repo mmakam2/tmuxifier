@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { formatEvent, relTime, unseenCount, unseenCountFiltered } from '../src/web/healthEvents.ts';
+import { formatEvent, notificationTag, relTime, unseenCount, unseenCountFiltered } from '../src/web/healthEvents.ts';
 
 const base = { seq: 1, boxId: 'b1', label: 'web-01', host: 'h1', t: 0 };
 
@@ -45,6 +45,27 @@ test('formatEvent names the session when the event carries one', () => {
     .toBe('web-01 · main — Claude needs you: question');
   expect(formatEvent({ ...base, kind: 'agent-input', session: 'main' }).text).toBe('web-01 · main — Claude finished a turn');
   expect(formatEvent({ ...base, kind: 'agent-done', session: 'work-2' }).text).toBe('web-01 · work-2 — Claude exited');
+});
+
+test('agent event lines name the window and pane the event happened in', () => {
+  expect(formatEvent({ ...base, label: 'web01', kind: 'agent-blocked', session: 'main', window: '2:frontend', paneIndex: 1, cause: 'permission', agent: 'claude' }).text)
+    .toBe('web01 · main › 2:frontend.1 — Claude needs you: permission');
+  expect(formatEvent({ ...base, label: 'web01', kind: 'agent-input', session: 'main', agent: 'codex' }).text)
+    .toBe('web01 · main — Codex finished a turn');
+  // The window alone when its agent was the only one there; the session and window stay in order.
+  expect(formatEvent({ ...base, label: 'web01', kind: 'agent-done', session: 'main', window: '0:shell', agent: 'opencode' }).text)
+    .toBe('web01 · main › 0:shell — OpenCode exited');
+  // An event logged before panes were named carries a session and nothing more.
+  expect(formatEvent({ ...base, label: 'web01', kind: 'agent-input', session: 'main' }).text)
+    .toBe('web01 · main — Claude finished a turn');
+});
+
+test('notificationTag is per pane for an agent event and per box otherwise', () => {
+  expect(notificationTag({ kind: 'agent-blocked', boxId: 'b1', pane: '%12' })).toBe('agent-blocked:b1:%12');
+  expect(notificationTag({ kind: 'agent-blocked', boxId: 'b1', pane: '%13' })).not.toBe(notificationTag({ kind: 'agent-blocked', boxId: 'b1', pane: '%12' }));
+  expect(notificationTag({ kind: 'down', boxId: 'b1' })).toBe('down:b1');
+  // An event logged before panes were named has no pane: today's per-box tag.
+  expect(notificationTag({ kind: 'agent-input', boxId: 'b1', session: 'main' })).toBe('agent-input:b1');
 });
 
 test('an unknown event kind from a newer server renders a generic line instead of breaking the panel', () => {

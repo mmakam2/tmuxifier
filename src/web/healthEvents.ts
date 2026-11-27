@@ -1,5 +1,5 @@
 import type { AgentKind, HealthEvent, HealthEventKind } from './api';
-import { AGENT_LABEL } from './agentState';
+import { AGENT_LABEL, eventPlace } from './agentState';
 import { classifyError, CPU_ICON, MEM_ICON, DISK_ICON } from './statusDot';
 
 // Pure formatting for the in-app Events panel. Levels reuse the meta-line tiers
@@ -50,10 +50,20 @@ export function notificationsToFire(opts: {
   return { fire: [], nextCursor: Math.max(lastNotifiedSeq, lastSeenSeq) };
 }
 
+// The tag a browser notification replaces itself by: an agent event is per pane,
+// so two agents on one box no longer replace each other's notification. Any
+// other event, and an agent event logged before panes were named, stays per box.
+export function notificationTag(e: Pick<HealthEvent, 'kind' | 'boxId' | 'pane'>): string {
+  return e.pane ? `${e.kind}:${e.boxId}:${e.pane}` : `${e.kind}:${e.boxId}`;
+}
+
 export function formatEvent(e: HealthEvent): EventLine {
   const name = e.label || e.host;
-  // Agent events are per session; name it so two sessions on one box read apart.
-  const sess = e.session ? ` · ${e.session}` : '';
+  // Agent events are per pane; name where it happened (`main › 2:frontend.1`) so
+  // two agents on one box read apart. An event logged before panes were named
+  // carries a session only, which reads as it always did.
+  const place = eventPlace(e);
+  const sess = place ? ` · ${place}` : '';
   switch (e.kind) {
     case 'up': return { icon: '', text: `${name} — recovered`, level: 'ok' };
     case 'needs-auth': return { icon: '', text: `${name} — needs login`, level: 'auth' };
