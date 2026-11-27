@@ -190,6 +190,9 @@ test('agent states reach rows, strip, board, chips; a seen done turns idle', asy
     await expect(row2.locator('.session-picker-chip.chip-agent-done')).toHaveText('done', { timeout: 10000 });
     const row1 = picker.locator('.session-picker-pick', { hasText: new RegExp(`^${session}(?!-a2)`) }).first();
     await expect(row1.locator('.session-picker-chip.chip-agent-blocked')).toHaveText('blocked · permission');
+    // The session's only window holds that agent, so its window row says the same.
+    await expect(picker.locator(`.session-picker-row[data-key^="w:${session}:"] .session-picker-chip.chip-agent-blocked`))
+      .toHaveText('blocked · permission');
     await page.keyboard.press('Escape');
     await expect(picker.locator('.session-picker-pop')).toBeHidden();
 
@@ -353,6 +356,100 @@ test('sidebar: one row per agent pane, per-pane seen, and a row click jumps to t
     expect(seenPosts.filter((p) => p.pane === twoB.pane)).toEqual([{ pane: twoB.pane, ts: t0 + 1 }]);
     await expect(agentRow(twoB.pane)).toHaveAttribute('data-state', 'idle', { timeout: 45000 });
     expect(seenPosts.filter((p) => p.pane === twoA.pane)).toEqual([]); // blocked is not done
+  } finally {
+    resetAgentPanes(layout, session);
+  }
+});
+
+// Spec 2026-11-26 §7.2: the pane header chip is what the terminal shows (the
+// worst state among the agents on screen in its session), while the picker is
+// the per-window summary: each window row the worst of its panes, the session
+// row the worst of the session.
+test('header chip is the visible window\'s worst; picker rows carry each window\'s and the session\'s worst', async ({ page }) => {
+  test.setTimeout(240000);
+  let layout: AgentPaneLayout | null = null;
+  const windowPosts: Record<string, unknown>[] = [];
+  const seenPosts: unknown[] = [];
+  page.on('request', (r: Request) => {
+    if (r.method() !== 'POST') return;
+    if (/\/api\/boxes\/[^/]+\/window$/.test(r.url())) windowPosts.push(r.postDataJSON());
+    if (/\/agent-seen$/.test(r.url())) seenPosts.push(r.postDataJSON());
+  });
+  try {
+    layout = buildAgentPanes(session);
+    const { one, twoA, twoB } = layout;
+    const t0 = now();
+    // Window 1 (in front): one working agent. Window 2: a working and a blocked
+    // one, so its worst is not simply its first pane's. Nothing is `done`, which
+    // a focused client would acknowledge on sight.
+    writePaneMarker(session, one.pane, 'working', t0, 'prompt');
+    writePaneMarker(session, twoA.pane, 'working', t0, 'prompt');
+    writePaneMarker(session, twoB.pane, 'blocked', t0, 'question');
+
+    await login(page);
+    const row = page.locator('.box', { has: page.locator('.name', { hasText: /^localhost$/ }) }).first();
+    const boxId = (await row.getAttribute('data-id'))!;
+    const agentRows = page.locator(`li.box-agents[data-agents-for="${boxId}"] button.box-agent`);
+    // The data is in before the box is docked, so the chip below has a worse
+    // agent in the other window to (wrongly) pick up.
+    await reloadUntil(page, async () => {
+      await expect(agentRows).toHaveCount(3, { timeout: 5000 });
+      await expect(agentRows.and(page.locator(`[data-pane="${twoB.pane}"]`))).toHaveAttribute('data-state', 'blocked', { timeout: 5000 });
+    });
+
+    await page.locator('.box .name', { hasText: /^localhost$/ }).click();
+    const pane = page.locator('.stage-pane').first();
+    await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_ONE', { timeout: 15000 });
+    const chip = pane.locator('.pane-header .pane-chip');
+    const picker = pane.locator('.session-picker');
+    const pickerChip = (key: string) => picker.locator(`.session-picker-row[data-key="${key}"] .session-picker-chip`);
+    const sessionKey = `s:${session}`;
+    const win1 = `w:${session}:${one.windowId}`;
+    const win2 = `w:${session}:${twoA.windowId}`;
+
+    // ── 1. Window 1 in front: the chip is window 1's agent, and says nothing of
+    // the blocked agent behind it.
+    // (toContainText: the working chip also holds the sprite's glyphs.)
+    await expect(chip).toContainText('working', { timeout: 15000 });
+    await expect(chip).toHaveClass(/chip-agent-working/);
+    await expect(chip.locator('.clawd')).toHaveCount(1); // the working sprite
+    await expect(pane.locator('.pane-header .pane-chip.chip-agent-blocked')).toHaveCount(0);
+
+    // ── 2. The picker says what every window is doing, in or out of sight.
+    await picker.locator('.session-picker-trigger').click();
+    await expect(pickerChip(win1)).toHaveText('working', { timeout: 10000 });
+    await expect(pickerChip(win1)).toHaveClass(/chip-agent-working/);
+    await expect(pickerChip(win2)).toHaveText('blocked · question');
+    await expect(pickerChip(win2)).toHaveClass(/chip-agent-blocked/);
+    await expect(pickerChip(sessionKey)).toHaveText('blocked · question');
+    await expect(pickerChip(sessionKey)).toHaveClass(/chip-agent-blocked/);
+    await page.keyboard.press('Escape');
+    await expect(picker.locator('.session-picker-pop')).toBeHidden();
+
+    // ── 3. Pick window 2: the chip follows what the terminal now shows, the
+    // worst of its two panes.
+    await picker.locator('.session-picker-trigger').click();
+    await picker.locator(`.session-picker-row[data-key="${win2}"] .session-picker-pick`).click();
+    await expect.poll(() => windowPosts.length, { timeout: 10000 }).toBe(1);
+    await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_TWO_A', { timeout: 15000 });
+    await expect(pane.locator('.xterm-rows')).not.toContainText('AGENT_WINDOW_ONE');
+    await expect(chip).toHaveText('blocked · question', { timeout: 45000 });
+    await expect(chip).toHaveClass(/chip-agent-blocked/);
+    await expect(chip.locator('.clawd')).toHaveCount(0);
+
+    // ── 4. A window row repaints on its own while the picker is open: window 1's
+    // agent finishes behind the visible window. Its row follows, the session row
+    // keeps the blocked agent, the header (window 2) is untouched, and a done
+    // agent nobody is looking at is not acknowledged.
+    await picker.locator('.session-picker-trigger').click();
+    await expect(pickerChip(win1)).toHaveText('working', { timeout: 10000 });
+    writePaneMarker(session, one.pane, 'ready', t0 + 1, 'stop');
+    await expect(pickerChip(win1)).toHaveText('done', { timeout: 45000 });
+    await expect(pickerChip(win1)).toHaveClass(/chip-agent-done/);
+    await expect(pickerChip(win2)).toHaveText('blocked · question');
+    await expect(pickerChip(sessionKey)).toHaveText('blocked · question');
+    await expect(chip).toHaveText('blocked · question');
+    expect(seenPosts).toEqual([]);
   } finally {
     resetAgentPanes(layout, session);
   }

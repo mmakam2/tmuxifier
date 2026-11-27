@@ -42,34 +42,148 @@ test('chip precedence: pane state beats connection beats agent', () => {
     .toEqual({ kind: 'conn', text: 'setting up…', cls: 'chip-conn' });
 });
 
-const E = (state, cause) => ({ present: true, attached: false, state, cause, ts: 1 });
-const AG = { web: E('done'), 'web-2': E('blocked', 'permission'), idler: E('idle') };
+const win = (id, index, name, active = false) => ({ id, index, name, active });
 
-test('agent chip reads the pane\'s own session; working carries the sprite', () => {
-  expect(paneHeaderChip(box({ conn: { kind: 'open' }, sessionName: 'web-2', agents: AG })))
-    .toEqual({ kind: 'agent', text: 'blocked · permission', cls: 'chip-agent-blocked' });
-  expect(paneHeaderChip(box({ conn: { kind: 'open' }, sessionName: 'web', agents: AG })))
-    .toEqual({ kind: 'agent', text: 'done', cls: 'chip-agent-done' });
-  expect(paneHeaderChip(box({ conn: { kind: 'open' }, sessionName: undefined, agents: AG })))
-    .toEqual({ kind: 'agent', text: 'done', cls: 'chip-agent-done' });
-  expect(paneHeaderChip(box({ conn: { kind: 'open' }, sessionName: 'idler', agents: AG })))
-    .toEqual({ kind: 'agent', text: 'idle', cls: 'chip-agent-idle' });
-  expect(paneHeaderChip(box({ conn: { kind: 'open' }, sessionName: 'web', agents: { web: E('working') } })))
+// One agent pane of a box's latest health sample, keyed in the map by pane id.
+const e = (over = {}) => ({
+  session: 'web', windowId: '@0', windowIndex: 1, windowName: 'api', paneIndex: 1,
+  agent: 'claude', ts: 1, visible: true, focused: true, attached: false, ...over,
+});
+const AG = { '%1': e({ state: 'done' }) };
+const open = { conn: { kind: 'open' } };
+const chipOf = (agents, over = {}) => paneHeaderChip(box({ ...open, agents, ...over }));
+
+test('the chip is the worst state among the agents visible in the pane\'s session', () => {
+  const agents = {
+    '%1': e({ state: 'working' }),
+    // Worse, but on a window nobody is looking at: not in the chip.
+    '%2': e({ paneIndex: 2, state: 'blocked', cause: 'permission', visible: false }),
+    // Worse, but another session's agent.
+    '%3': e({ session: 'other', state: 'blocked' }),
+  };
+  expect(chipOf(agents, { sessionName: 'main' })).toBeNull(); // nothing of 'main' at all
+  expect(chipOf(agents, { sessionName: 'web' }))
     .toEqual({ kind: 'agent', text: 'working', cls: 'chip-agent-working', sprite: true });
-  // No entry (or no state) for the session -> no chip.
-  expect(paneHeaderChip(box({ conn: { kind: 'open' }, sessionName: 'other', agents: AG }))).toBeNull();
-  expect(paneHeaderChip(box({ conn: { kind: 'open' } }))).toBeNull();
+  expect(chipOf({ ...agents, '%1': e({ session: 'main', state: 'working' }) }, { sessionName: 'main' }))
+    .toEqual({ kind: 'agent', text: 'working', cls: 'chip-agent-working', sprite: true });
 });
 
-test('sessionTargets: session rows carry agent state, window rows do not', () => {
-  const status = { sessions: [{ name: 'web', windows: 1, windowList: [{ id: '@1', index: 0, name: 'sh', active: true }] }, { name: 'web-2', windows: 0 }] };
-  const rows = sessionTargets(status, 'web', AG);
-  expect(rows.find((r) => r.value === 's:web')).toMatchObject({ agent: 'done' });
-  expect(rows.find((r) => r.value === 's:web-2')).toMatchObject({ agent: 'blocked', agentCause: 'permission' });
-  const win = rows.find((r) => r.kind === 'window');
-  expect(win.agent).toBeUndefined();
-  expect(win.agentCause).toBeUndefined();
-  expect(sessionTargetList(status, 'web', AG).options.find((r) => r.value === 's:web-2').agent).toBe('blocked');
+test('the chip folds the visible agents by precedence: blocked, done, working, idle', () => {
+  const at = (...states) => Object.fromEntries(states.map((state, i) => [`%${i + 1}`, e({ paneIndex: i + 1, state })]));
+  expect(chipOf(at('idle', 'working', 'done', 'blocked'))?.cls).toBe('chip-agent-blocked');
+  expect(chipOf(at('idle', 'working', 'done'))?.cls).toBe('chip-agent-done');
+  expect(chipOf(at('idle', 'working'))?.cls).toBe('chip-agent-working');
+  expect(chipOf(at('idle'))?.cls).toBe('chip-agent-idle');
+});
+
+test('a blocked chip carries its cause; the sprite rides working only', () => {
+  const blocked = chipOf({ '%1': e({ state: 'blocked', cause: 'permission' }), '%2': e({ paneIndex: 2, state: 'working' }) });
+  expect(blocked).toEqual({ kind: 'agent', text: 'blocked · permission', cls: 'chip-agent-blocked' });
+  expect(blocked).not.toHaveProperty('sprite');
+  // A working agent beside a done one: the worst is done, so no sprite.
+  expect(chipOf({ '%1': e({ state: 'done' }), '%2': e({ paneIndex: 2, state: 'working' }) }))
+    .toEqual({ kind: 'agent', text: 'done', cls: 'chip-agent-done' });
+  expect(chipOf({ '%1': e({ state: 'idle' }) })).toEqual({ kind: 'agent', text: 'idle', cls: 'chip-agent-idle' });
+});
+
+test('the cause belongs to the worst agent, not to another visible one', () => {
+  // A working agent's own cause ('prompt') is never printed on a blocked chip.
+  const chip = chipOf({ '%1': e({ state: 'working', cause: 'prompt' }), '%2': e({ paneIndex: 2, state: 'blocked', cause: 'question' }) });
+  expect(chip?.text).toBe('blocked · question');
+});
+
+test('no visible agent with a state means no agent chip', () => {
+  // Every agent is on another window.
+  expect(chipOf({ '%1': e({ state: 'blocked', cause: 'permission', visible: false }) })).toBeNull();
+  // Visible, but no marker yet: stateless, so nothing to say.
+  expect(chipOf({ '%1': e() })).toBeNull();
+  // A stateless visible agent does not hide behind a stateful one that is not visible.
+  expect(chipOf({ '%1': e(), '%2': e({ paneIndex: 2, state: 'done', visible: false }) })).toBeNull();
+  // Another session's agents only, no agents, no map.
+  expect(chipOf({ '%1': e({ session: 'other', state: 'done' }) })).toBeNull();
+  expect(chipOf({})).toBeNull();
+  expect(paneHeaderChip(box(open))).toBeNull();
+});
+
+test('the chip reads the pane\'s own session, which defaults to web', () => {
+  const agents = { '%1': e({ session: 'web-2', state: 'blocked', cause: 'permission' }), '%2': e({ session: 'web', state: 'done' }), '%3': e({ session: 'idler', state: 'idle' }) };
+  expect(chipOf(agents, { sessionName: 'web-2' })).toEqual({ kind: 'agent', text: 'blocked · permission', cls: 'chip-agent-blocked' });
+  expect(chipOf(agents, { sessionName: 'web' })?.text).toBe('done');
+  expect(chipOf(agents, { sessionName: undefined })?.text).toBe('done');
+  expect(chipOf(agents, { sessionName: 'idler' })?.text).toBe('idle');
+  expect(chipOf(agents, { sessionName: 'nobody' })).toBeNull();
+});
+
+test('the header model carries the chip and the picker rows from the same pane map', () => {
+  const status = { reachable: true, tmux: true, sessions: [{ name: 'web', windows: 2, windowList: [win('@0', 1, 'api', true), win('@1', 2, 'front')] }] };
+  const agents = { '%1': e({ state: 'working' }), '%2': e({ windowId: '@1', windowIndex: 2, state: 'blocked', cause: 'question', visible: false }) };
+  const m = paneHeaderModel(box({ ...open, status, sessionName: 'web', agents }));
+  expect(m.chip).toMatchObject({ kind: 'agent', text: 'working' });
+  expect(m.targets.options.find((r) => r.value === 'w:web:@1')).toMatchObject({ agent: 'blocked', agentCause: 'question' });
+  expect(m.targets.options.find((r) => r.value === 's:web')).toMatchObject({ agent: 'blocked', agentCause: 'question' });
+});
+
+test('a window row carries the worst of its panes and a session row the worst of the session', () => {
+  const status = { sessions: [
+    { name: 'main', windows: 4, windowList: [win('@0', 1, 'api', true), win('@1', 2, 'front'), win('@2', 3, 'logs'), win('@3', 4, 'idle')] },
+    { name: 'web', windows: 1, windowList: [win('@9', 1, 'zsh', true)] },
+  ] };
+  const agents = {
+    '%1': e({ session: 'main', windowId: '@0', paneIndex: 1, state: 'blocked', cause: 'permission' }),
+    '%2': e({ session: 'main', windowId: '@0', paneIndex: 2, state: 'working', visible: false }),
+    '%3': e({ session: 'main', windowId: '@1', windowIndex: 2, state: 'working', visible: false }),
+    // An agent with no marker yet: no state, so no chip for its window.
+    '%4': e({ session: 'main', windowId: '@2', windowIndex: 3 }),
+    // Another session's agent never reaches main's rows.
+    '%5': e({ session: 'web', windowId: '@9', state: 'done' }),
+  };
+  const rows = Object.fromEntries(sessionTargets(status, 'main', agents).map((r) => [r.value, r]));
+  expect(rows['s:main']).toMatchObject({ agent: 'blocked', agentCause: 'permission' });
+  expect(rows['w:main:@0']).toMatchObject({ agent: 'blocked', agentCause: 'permission' });
+  expect(rows['w:main:@1']).toMatchObject({ agent: 'working' });
+  expect(rows['w:main:@1']).not.toHaveProperty('agentCause');
+  // No stateful agent in the window: the chip fields are absent, not undefined.
+  for (const v of ['w:main:@2', 'w:main:@3']) {
+    expect(rows[v]).not.toHaveProperty('agent');
+    expect(rows[v]).not.toHaveProperty('agentCause');
+  }
+  expect(rows['s:web']).toMatchObject({ agent: 'done' });
+  expect(rows['w:web:@9']).toMatchObject({ agent: 'done' });
+  expect(rows['s:web']).not.toHaveProperty('agentCause');
+});
+
+test('a session row folds in every window, visible or not', () => {
+  // Unlike the header chip, the picker answers "what is every window doing".
+  const status = { sessions: [{ name: 'main', windows: 2, windowList: [win('@0', 1, 'api', true), win('@1', 2, 'front')] }] };
+  const agents = {
+    '%1': e({ session: 'main', windowId: '@0', state: 'idle' }),
+    '%2': e({ session: 'main', windowId: '@1', windowIndex: 2, state: 'blocked', cause: 'elicitation', visible: false }),
+  };
+  const rows = Object.fromEntries(sessionTargets(status, 'main', agents).map((r) => [r.value, r]));
+  expect(rows['s:main']).toMatchObject({ agent: 'blocked', agentCause: 'elicitation' });
+  expect(rows['w:main:@0']).toMatchObject({ agent: 'idle' });
+  expect(rows['w:main:@1']).toMatchObject({ agent: 'blocked', agentCause: 'elicitation' });
+});
+
+test('a grouped session\'s shared window carries only that session\'s agents', () => {
+  const status = { sessions: [
+    { name: 'web', windows: 1, windowList: [win('@0', 1, 'zsh', true)] },
+    { name: 'webclone', windows: 1, windowList: [win('@0', 1, 'zsh', true)] },
+  ] };
+  const agents = { '%1': e({ session: 'webclone', windowId: '@0', state: 'working' }) };
+  const rows = Object.fromEntries(sessionTargets(status, 'web', agents).map((r) => [r.value, r]));
+  expect(rows['w:webclone:@0']).toMatchObject({ agent: 'working' });
+  expect(rows['s:webclone']).toMatchObject({ agent: 'working' });
+  expect(rows['w:web:@0']).not.toHaveProperty('agent');
+  expect(rows['s:web']).not.toHaveProperty('agent');
+});
+
+test('sessionTargetList passes the pane map through to its rows', () => {
+  const status = { sessions: [{ name: 'web', windows: 1, windowList: [win('@1', 1, 'sh', true)] }, { name: 'web-2', windows: 0 }] };
+  const agents = { '%1': e({ session: 'web-2', windowId: '@5', state: 'blocked', cause: 'permission' }) };
+  const list = sessionTargetList(status, 'web', agents);
+  expect(list.options.find((r) => r.value === 's:web-2')).toMatchObject({ agent: 'blocked', agentCause: 'permission' });
+  expect(list.options.find((r) => r.value === 'w:web:@1')).not.toHaveProperty('agent');
 });
 
 test('retrying without an attempt count defaults to ×1', () => {
@@ -77,8 +191,6 @@ test('retrying without an attempt count defaults to ×1', () => {
 });
 
 // --- sessionTargets: the dropdown's pure, hierarchical option list ----------
-
-const win = (id, index, name, active = false) => ({ id, index, name, active });
 
 test('sessionTargets lists sessions by name, each with its windows indented beneath it', () => {
   const status = { reachable: true, tmux: true, sessions: [

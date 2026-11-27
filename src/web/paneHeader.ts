@@ -4,7 +4,7 @@
 import { dotClassFor, dotTitleFor } from './statusDot';
 import { buildClawd } from './clawd';
 import type { Status, TmuxWindow, AgentEntry, AgentState, AgentCause } from './api';
-import { agentChipText } from './agentState';
+import { agentChipText, sessionAgents, windowAgents, worstOf } from './agentState';
 import { buildSessionPicker, canKillTarget, type SessionPicker } from './sessionPicker';
 
 export type ConnKind = 'connecting' | 'open' | 'retrying' | 'setup';
@@ -16,15 +16,16 @@ export interface PaneHeaderInput {
   user?: string;
   host?: string;
   status?: Status;
-  // The box's per-session agent map (latest health sample). The chip reads
-  // the entry for THIS pane's session, so duplicate panes on different
-  // sessions each show their own state.
+  // The box's agent map, keyed by tmux pane id (latest health sample). The chip
+  // folds the entries of THIS pane's session that are on screen, so duplicate
+  // panes on different sessions each show their own state; the picker rows fold
+  // the same map per session and per window.
   agents?: Record<string, AgentEntry>;
   conn?: PaneConn;
   state: 'terminal' | 'stopped' | 'setup';
-  sessionName?: string;
   // The session this PANE is attached to (per-pane since the duplicate-panes
   // change); absent means the store's default, 'web'.
+  sessionName?: string;
   // Phone mode (≤720px). The session picker is dropped entirely there: the
   // header row is the most contested space in the app, and sessions are
   // managed from the Edit Box modal off the box list instead.
@@ -52,20 +53,22 @@ export function isSwitchableSession(name: string): boolean {
 
 // One slot, strict precedence: a pane-level state (stopped container, box
 // mid-setup) outranks connection churn, which outranks the agent read — a
-// disconnected pane has no live agent worth reporting on. The agent chip reads
-// the state of THIS pane's own session. A session with no hook marker has no
-// state, so it renders no chip: the silence is the cue that the box needs a
-// setup rerun, not a state to invent.
+// disconnected pane has no live agent worth reporting on. The agent chip is the
+// worst state among the agents `visible` in THIS pane's session, that is, what
+// the terminal shows: agents in the session's other windows (or hidden by a
+// zoom) are on their picker and sidebar rows, not here. An agent with no hook
+// marker has no state and no agent chip: the silence is the cue that the box
+// needs a setup rerun, not a state to invent.
 export function paneHeaderChip(i: PaneHeaderInput): PaneChip | null {
   if (i.state === 'stopped') return { kind: 'state', text: 'stopped', cls: 'chip-state' };
   if (i.state === 'setup') return { kind: 'state', text: 'setting up', cls: 'chip-state' };
   if (i.conn?.kind === 'retrying') return { kind: 'conn', text: `reconnecting ×${i.conn.attempt ?? 1}`, cls: 'chip-conn' };
   if (i.conn?.kind === 'connecting') return { kind: 'conn', text: 'connecting…', cls: 'chip-conn' };
   if (i.conn?.kind === 'setup') return { kind: 'conn', text: 'setting up…', cls: 'chip-conn' };
-  const entry = i.agents?.[i.sessionName || 'web'];
-  if (entry?.state) {
-    const chip: PaneChip = { kind: 'agent', text: agentChipText(entry.state, entry.cause), cls: `chip-agent-${entry.state}` };
-    if (entry.state === 'working') chip.sprite = true; // Clawd rides working only
+  const worst = worstOf(sessionAgents(i.agents, i.sessionName || 'web').filter((e) => e.visible));
+  if (worst) {
+    const chip: PaneChip = { kind: 'agent', text: agentChipText(worst.state, worst.cause), cls: `chip-agent-${worst.state}` };
+    if (worst.state === 'working') chip.sprite = true; // Clawd rides working only
     return chip;
   }
   return null;
@@ -113,7 +116,9 @@ export interface SessionTarget {
   windowId?: string;
   disabled?: boolean;
   title?: string;       // why it is disabled
-  // Session rows only: the session's agent state, for the row's dot/label.
+  // Session and window rows: the worst state among the agents of the session or
+  // of that window (visible or not), for the row's chip. Absent when none of
+  // them has a state.
   agent?: AgentState;
   agentCause?: AgentCause;
   // Start rows only: the project whose worker the row starts.
@@ -127,6 +132,12 @@ export interface SessionTargetList { options: SessionTarget[]; value: string }
 export const WINDOW_INDENT = '  → ';
 
 const UNSWITCHABLE = 'name not switchable from here (allowed: letters, digits, _ -)';
+
+// A row's chip fields from the worst of its agents; none when no agent has a
+// state, so a row with nothing to say has no `agent` key at all.
+function chipFields(worst: ReturnType<typeof worstOf>): Pick<SessionTarget, 'agent' | 'agentCause'> {
+  return worst ? { agent: worst.state, ...(worst.cause ? { agentCause: worst.cause } : {}) } : {};
+}
 
 // The dropdown's rows: every session in name order, each followed by its
 // windows indented beneath it. The pane's own session is always present (it is
@@ -150,9 +161,7 @@ export function sessionTargets(status: Status | undefined, sessionName: string |
     // inherit that, EXCEPT the current session's, which need no PATCH at all.
     const locked = s.name !== current && !isSwitchableSession(s.name);
     const lock = locked ? { disabled: true, title: UNSWITCHABLE } : {};
-    const a = agents?.[s.name];
-    const agent = a?.state ? { agent: a.state, ...(a.cause ? { agentCause: a.cause } : {}) } : {};
-    out.push({ kind: 'session', value: `s:${s.name}`, label: s.name, session: s.name, ...lock, ...agent });
+    out.push({ kind: 'session', value: `s:${s.name}`, label: s.name, session: s.name, ...lock, ...chipFields(worstOf(sessionAgents(agents, s.name))) });
     for (const w of s.windowList ?? []) {
       out.push({
         kind: 'window',
@@ -161,6 +170,7 @@ export function sessionTargets(status: Status | undefined, sessionName: string |
         session: s.name,
         windowId: w.id,
         ...lock,
+        ...chipFields(worstOf(windowAgents(agents, s.name, w.id))),
       });
     }
   }

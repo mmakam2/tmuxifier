@@ -48,6 +48,17 @@ export function canKillTarget(t: SessionTarget): boolean {
 // enough that a box that has gone away is a slightly-late list, not a dead click.
 export const OPEN_REFRESH_WAIT_MS = 700;
 
+// What the rows' output depends on: the options (each row's chip fields
+// included, so a window row's chip repaints when its agents' worst state or
+// cause changes), which row is current, and which (if any) is armed.
+export function renderKey(list: SessionTargetList | null, armed: string | null): string {
+  return JSON.stringify([
+    list?.value ?? null,
+    armed ?? null,
+    (list?.options ?? []).map((t) => [t.value, t.label, t.disabled ?? false, t.title ?? '', t.agent ?? null, t.agentCause ?? null]),
+  ]);
+}
+
 export interface SessionPickerDeps {
   onSelect: (t: SessionTarget) => void;
   // Rejects on failure. The row is NOT removed optimistically: the list is a
@@ -168,11 +179,7 @@ export function buildSessionPicker(deps: SessionPickerDeps): SessionPicker {
 
   function render() {
     const opts = current?.options ?? [];
-    const key = JSON.stringify([
-      current?.value ?? null,
-      arm.armed ?? null,
-      opts.map((t) => [t.value, t.label, t.disabled ?? false, t.title ?? '', t.agent ?? null, t.agentCause ?? null]),
-    ]);
+    const key = renderKey(current, arm.armed);
     if (key === lastKey) return;
     lastKey = key;
     const focused = focusedRowButton();
@@ -186,8 +193,8 @@ export function buildSessionPicker(deps: SessionPickerDeps): SessionPicker {
       pick.type = 'button';
       pick.className = 'session-picker-pick';
       pick.textContent = t.label;
-      // Each session row carries its own agent state, so the picker doubles as
-      // the per-box list of what every session's Claude is doing.
+      // Each session and window row carries the worst state of its agents, so
+      // the picker doubles as the per-box list of what every window is doing.
       if (t.agent) {
         const chip = document.createElement('span');
         chip.className = `session-picker-chip chip-agent-${t.agent}`;

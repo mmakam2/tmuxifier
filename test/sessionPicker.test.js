@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { isSoleWindow, killLegend, rowKey, canKillTarget } from '../src/web/sessionPicker.ts';
+import { isSoleWindow, killLegend, rowKey, canKillTarget, renderKey } from '../src/web/sessionPicker.ts';
 import { startTargetsOf } from '../src/web/agentWorkersView.ts';
 import { WINDOW_INDENT } from '../src/web/paneHeader.ts';
 
@@ -70,4 +70,20 @@ test('a start row has no kill; session and window rows do', () => {
   expect(canKillTarget(start)).toBe(false);
   expect(canKillTarget(s('web'))).toBe(true);
   expect(canKillTarget(w('web', '@1', '1: zsh'))).toBe(true);
+});
+
+test('the render key changes with any row\'s chip, window rows included', () => {
+  // The popup skips its DOM rebuild when the key is unchanged, so a window row's
+  // chip is only repainted if its state and cause are in the key.
+  const list = (win) => ({ value: 's:web', options: [s('web'), { ...w('web', '@1', '1: zsh'), ...win }] });
+  const idle = renderKey(list({}), null);
+  expect(renderKey(list({}), null)).toBe(idle);
+  const working = renderKey(list({ agent: 'working' }), null);
+  const blocked = renderKey(list({ agent: 'blocked', agentCause: 'permission' }), null);
+  const question = renderKey(list({ agent: 'blocked', agentCause: 'question' }), null);
+  expect(new Set([idle, working, blocked, question]).size).toBe(4);
+  // And with the selected row and the armed row, as before.
+  expect(renderKey({ ...list({}), value: 'w:web:@1' }, null)).not.toBe(idle);
+  expect(renderKey(list({}), 'w:web:@1')).not.toBe(idle);
+  expect(renderKey(null, null)).not.toBe(idle);
 });
